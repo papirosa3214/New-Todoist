@@ -26,6 +26,7 @@ export function migrate() {
       initials TEXT DEFAULT '',
       status TEXT DEFAULT 'offline',
       api_token TEXT,
+      is_system_bot INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -100,6 +101,31 @@ export function migrate() {
   if (!userCols.some((c) => c.name === "api_token")) {
     db.exec("ALTER TABLE users ADD COLUMN api_token TEXT");
   }
+
+  // Additive migration: notifications.actor_id may be missing on a DB created
+  // before this column was added. actor_id tracks who performed the action.
+  const notifCols = db
+    .prepare("PRAGMA table_info(notifications)")
+    .all() as Array<{
+    name: string;
+  }>;
+  if (!notifCols.some((c) => c.name === "actor_id")) {
+    db.exec(
+      "ALTER TABLE notifications ADD COLUMN actor_id TEXT REFERENCES users(id)",
+    );
+  }
+
+  // Additive migration: users.is_system_bot may be missing on a DB created
+  // before this column was added. This flag marks the seeded system agents
+  // (Claude_Bot, Hermes) — it is set only here and in seed.ts, never via
+  // /api/auth/register, so a registered account can never grant itself
+  // "system bot" status.
+  if (!userCols.some((c) => c.name === "is_system_bot")) {
+    db.exec("ALTER TABLE users ADD COLUMN is_system_bot INTEGER DEFAULT 0");
+  }
+  // Unconditional (idempotent) so u2/u3 get flagged even on a DB that
+  // already had this column from an earlier partial migration.
+  db.exec("UPDATE users SET is_system_bot = 1 WHERE id IN ('u2','u3')");
 }
 
 export default db;

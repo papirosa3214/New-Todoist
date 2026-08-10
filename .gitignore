@@ -27,3 +27,6 @@ dist-ssr
 server/taskflow.db*
 server/node_modules
 mockup-reference/__pycache__
+
+# Claude Code worktrees
+.claude/

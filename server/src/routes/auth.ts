@@ -21,11 +21,19 @@ export function registerAuthRoutes(app: FastifyInstance) {
       name: string;
       email: string;
       password: string;
+      // Accepted but deliberately ignored below — registration is open, and
+      // trusting client-supplied role/type let anyone self-grant
+      // role:"owner" or type:"ai" (privilege escalation + impersonating a
+      // system agent). Every self-registered account is a plain human user;
+      // "system bot" is a separate, server-only flag (users.is_system_bot)
+      // that registration can never set.
       role?: string;
       type?: string;
     };
   }>("/api/auth/register", async (req, reply) => {
-    const { name, email, password, role = "agent", type = "human" } = req.body;
+    const { name, email, password } = req.body;
+    const role = "agent";
+    const type = "human";
     if (!name || !email || !password) {
       return reply.code(400).send({ error: "name, email, password required" });
     }

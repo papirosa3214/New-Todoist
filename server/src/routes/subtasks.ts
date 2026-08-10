@@ -7,6 +7,35 @@ import { broadcastToUsers } from "../ws.js";
 
 const uid = () => crypto.randomUUID();
 
+/** Get full task state with assignee info, labels, subtasks, and comments. */
+function getFullTask(taskId: string) {
+  const full = db
+    .prepare(
+      `SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.initials as assignee_initials
+       FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.id = ?`,
+    )
+    .get(taskId) as any;
+  if (!full) return undefined;
+
+  const labels = db
+    .prepare(
+      `SELECT l.* FROM labels l JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?`,
+    )
+    .all(taskId);
+  const subtasks = db
+    .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
+    .all(taskId)
+    .map((s: any) => ({ ...s, done: !!s.done }));
+  const comments = db
+    .prepare(
+      `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials
+       FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.task_id = ? ORDER BY c.created_at`,
+    )
+    .all(taskId);
+
+  return { ...full, labels, subtasks, comments };
+}
+
 /** The task a subtask belongs to, joined and ownership-checked in one query. */
 function getSubtaskWithTaskForUser(
   subtaskId: string,
@@ -74,9 +103,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           .prepare("SELECT * FROM subtasks WHERE id = ?")
           .get(id);
 
+        const fullTask = getFullTask(req.params.taskId);
         broadcastToUsers([task.creator_id, task.assignee_id], {
           type: "task:updated",
-          taskId: req.params.taskId,
+          task: fullTask,
         });
         return subtask;
       },
@@ -104,9 +134,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           req.params.id,
         );
 
+      const fullTask = getFullTask(subtask.task_id);
       broadcastToUsers([subtask.task_creator_id, subtask.task_assignee_id], {
         type: "task:updated",
-        taskId: subtask.task_id,
+        task: fullTask,
       });
       return db
         .prepare("SELECT * FROM subtasks WHERE id = ?")
@@ -122,9 +153,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (!subtask) return reply.code(404).send({ error: "Not found" });
 
       db.prepare("DELETE FROM subtasks WHERE id = ?").run(req.params.id);
+      const fullTask = getFullTask(subtask.task_id);
       broadcastToUsers([subtask.task_creator_id, subtask.task_assignee_id], {
         type: "task:updated",
-        taskId: subtask.task_id,
+        task: fullTask,
       });
       return { ok: true };
     },
@@ -171,12 +203,13 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             .get(req.userId) as any;
           const notifId = uid();
           db.prepare(
-            "INSERT INTO notifications (id, user_id, type, task_id, text) VALUES (?, ?, 'commented', ?, ?)",
+            "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'commented', ?, ?, ?)",
           ).run(
             notifId,
             notifyTarget,
             req.params.taskId,
             `${user?.name || "Кто-то"} прокомментировал: ${task.title}`,
+            req.userId,
           );
           broadcastToUsers([notifyTarget], {
             type: "notification:new",

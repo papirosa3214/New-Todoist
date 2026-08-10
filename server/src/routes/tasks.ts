@@ -13,6 +13,22 @@ const uid = () => crypto.randomUUID();
 
 const ALLOWED_STATUS = ["active", "completed"];
 
+// due_date is stored as plain "YYYY-MM-DD" text (see db.ts, and
+// src/lib/date.ts todayStr() on the frontend) — no time component, no
+// timezone. Reject anything that isn't that exact shape, including
+// calendar-invalid dates like "2026-02-30" that the regex alone would miss.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function isValidDateStr(s: string): boolean {
+  if (!DATE_RE.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return (
+    date.getUTCFullYear() === y &&
+    date.getUTCMonth() === m - 1 &&
+    date.getUTCDate() === d
+  );
+}
+
 function hydrateTask(task: any) {
   const labels = db
     .prepare(
@@ -109,6 +125,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
       priority?: number;
       assignee_id?: string;
       label_ids?: string[];
+      // Optional bulk-create for subtasks, created in the same transaction
+      // as the task (see below). Accepts either plain titles or objects
+      // shaped like { title } — TaskFormScreen currently sends plain
+      // strings (see localSubtasks), objects are accepted too so a future
+      // richer payload doesn't need a server change.
+      subtasks?: (string | { title?: string })[];
     };
   }>("/api/tasks", {
     preHandler: authPre,
@@ -121,8 +143,24 @@ export function registerTaskRoutes(app: FastifyInstance) {
         priority,
         assignee_id,
         label_ids,
+        subtasks,
       } = req.body;
-      if (!title) return reply.code(400).send({ error: "title required" });
+
+      const trimmedTitle = typeof title === "string" ? title.trim() : "";
+      if (!trimmedTitle)
+        return reply
+          .code(400)
+          .send({ error: "название задачи не может быть пустым" });
+
+      if (
+        due_date !== undefined &&
+        due_date !== null &&
+        (typeof due_date !== "string" || !isValidDateStr(due_date))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "некорректная дата (ожидается формат ГГГГ-ММ-ДД)" });
+      }
 
       if (priority !== undefined && !(priority >= 1 && priority <= 4)) {
         return reply
@@ -153,36 +191,84 @@ export function registerTaskRoutes(app: FastifyInstance) {
           return reply.code(400).send({ error: "invalid assignee_id" });
       }
 
-      const id = uid();
-      db.prepare(
-        `
-        INSERT INTO tasks (id, title, description, due_date, project_id, priority, assignee_id, creator_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      ).run(
-        id,
-        title,
-        description || null,
-        due_date || null,
-        project_id || null,
-        priority || 1,
-        assignee_id || null,
-        req.userId,
-      );
-
-      if (label_ids?.length) {
-        const ins = db.prepare(
-          "INSERT INTO task_labels (task_id, label_id) VALUES (?, ?)",
-        );
-        for (const lid of label_ids) ins.run(id, lid);
+      // Normalize+validate subtasks up front, before touching the DB, so a
+      // bad entry 400s cleanly instead of failing mid-transaction.
+      const subtaskTitles: string[] = [];
+      if (subtasks !== undefined) {
+        if (!Array.isArray(subtasks)) {
+          return reply
+            .code(400)
+            .send({ error: "subtasks должен быть массивом" });
+        }
+        for (const item of subtasks) {
+          const raw =
+            typeof item === "string"
+              ? item
+              : typeof item?.title === "string"
+                ? item.title
+                : "";
+          const t = raw.trim();
+          if (!t)
+            return reply
+              .code(400)
+              .send({ error: "у каждой подзадачи должно быть название" });
+          subtaskTitles.push(t);
+        }
       }
+
+      const id = uid();
+
+      // Task + labels + subtasks all land in one transaction — the frontend
+      // used to POST the task, then POST each subtask separately (see
+      // src/api/subtasks.ts createSubtaskRequest / TaskFormScreen), which
+      // could leave an orphaned half-task if a later request failed. The
+      // `subtasks` param lets a single request do it atomically instead;
+      // omitting it keeps the exact old behavior (no subtasks written here).
+      const createTaskTxn = db.transaction(() => {
+        db.prepare(
+          `
+          INSERT INTO tasks (id, title, description, due_date, project_id, priority, assignee_id, creator_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        ).run(
+          id,
+          trimmedTitle,
+          description || null,
+          due_date || null,
+          project_id || null,
+          priority || 1,
+          assignee_id || null,
+          req.userId,
+        );
+
+        if (label_ids?.length) {
+          const ins = db.prepare(
+            "INSERT INTO task_labels (task_id, label_id) VALUES (?, ?)",
+          );
+          for (const lid of label_ids) ins.run(id, lid);
+        }
+
+        if (subtaskTitles.length) {
+          const insSub = db.prepare(
+            "INSERT INTO subtasks (id, task_id, title, position) VALUES (?, ?, ?, ?)",
+          );
+          subtaskTitles.forEach((t, i) => insSub.run(uid(), id, t, i + 1));
+        }
+      });
+      createTaskTxn();
 
       // Create notification for assignee
       if (assignee_id && assignee_id !== req.userId) {
         const notifId = uid();
         db.prepare(
-          "INSERT INTO notifications (id, user_id, type, task_id, text) VALUES (?, ?, 'assigned', ?, ?)",
-        ).run(notifId, assignee_id, id, `Новая задача назначена: ${title}`);
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
+        ).run(
+          notifId,
+          assignee_id,
+          id,
+          `Новая задача назначена: ${trimmedTitle}`,
+          req.userId,
+        );
         broadcastToUsers([assignee_id], {
           type: "notification:new",
           notificationId: notifId,
@@ -206,7 +292,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     Body: Partial<{
       title: string;
       description: string;
-      due_date: string;
+      due_date: string | null;
       project_id: string;
       priority: number;
       assignee_id: string;
@@ -221,6 +307,28 @@ export function registerTaskRoutes(app: FastifyInstance) {
 
       const existing = getTaskForUser(id, req.userId);
       if (!existing) return reply.code(404).send({ error: "Not found" });
+
+      // title, when sent, must not be blank — trim now so the ALLOWED_FIELDS
+      // loop below writes the trimmed value.
+      if (body.title !== undefined) {
+        const trimmed = typeof body.title === "string" ? body.title.trim() : "";
+        if (!trimmed)
+          return reply
+            .code(400)
+            .send({ error: "название задачи не может быть пустым" });
+        body.title = trimmed;
+      }
+      // due_date, when sent, must be a real "YYYY-MM-DD" date or null
+      // (null clears the due date — see TaskFormScreen's dueDate state).
+      if (
+        body.due_date !== undefined &&
+        body.due_date !== null &&
+        (typeof body.due_date !== "string" || !isValidDateStr(body.due_date))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "некорректная дата (ожидается формат ГГГГ-ММ-ДД)" });
+      }
 
       if (body.status !== undefined && !ALLOWED_STATUS.includes(body.status)) {
         return reply.code(400).send({ error: "invalid status" });
@@ -293,12 +401,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
       if (body.assignee_id && body.assignee_id !== req.userId) {
         const notifId = uid();
         db.prepare(
-          "INSERT INTO notifications (id, user_id, type, task_id, text) VALUES (?, ?, 'assigned', ?, ?)",
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
         ).run(
           notifId,
           body.assignee_id,
           id,
           `Вас назначили на: ${existing.title || id}`,
+          req.userId,
         );
         broadcastToUsers([body.assignee_id], {
           type: "notification:new",

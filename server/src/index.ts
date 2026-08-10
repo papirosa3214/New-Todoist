@@ -10,6 +10,7 @@ import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerProjectLabelRoutes } from "./routes/projects.js";
 import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
+import { registerSearchRoutes } from "./routes/search.js";
 import { registerSeedRoutes } from "./seed.js";
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -33,6 +34,7 @@ registerTaskRoutes(app);
 registerProjectLabelRoutes(app);
 registerSubtaskCommentRoutes(app);
 registerNotificationRoutes(app);
+registerSearchRoutes(app);
 registerSeedRoutes(app);
 
 // Health
