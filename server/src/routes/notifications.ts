@@ -1,17 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
+import { authOrApiToken } from "../auth.js";
 
 export function registerNotificationRoutes(app: FastifyInstance) {
-  const authPre = async (req: any, reply: any) => {
-    try {
-      const token = req.headers.authorization?.replace("Bearer ", "");
-      if (!token) return reply.code(401).send({ error: "No token" });
-      req.userId = app.jwt.verify(token).id;
-    } catch { reply.code(401).send({ error: "Invalid token" }); }
-  };
+  const authPre = authOrApiToken;
 
   app.get("/api/notifications", { preHandler: authPre }, async (req: any) => {
-    return db.prepare(`
+    return db
+      .prepare(
+        `
       SELECT n.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials,
              t.title as task_title
       FROM notifications n
@@ -19,16 +16,34 @@ export function registerNotificationRoutes(app: FastifyInstance) {
       LEFT JOIN tasks t ON n.task_id = t.id
       WHERE n.user_id = ?
       ORDER BY n.created_at DESC
-    `).all(req.userId);
+    `,
+      )
+      .all(req.userId);
   });
 
-  app.post("/api/notifications/read-all", { preHandler: authPre }, async (req: any) => {
-    db.prepare("UPDATE notifications SET read = 1 WHERE user_id = ?").run(req.userId);
-    return { ok: true };
-  });
+  app.post(
+    "/api/notifications/read-all",
+    { preHandler: authPre },
+    async (req: any) => {
+      db.prepare("UPDATE notifications SET read = 1 WHERE user_id = ?").run(
+        req.userId,
+      );
+      return { ok: true };
+    },
+  );
 
-  app.patch<{ Params: { id: string } }>("/api/notifications/:id/read", { preHandler: authPre }, async (req) => {
-    db.prepare("UPDATE notifications SET read = 1 WHERE id = ?").run(req.params.id);
-    return { ok: true };
-  });
+  app.patch<{ Params: { id: string } }>(
+    "/api/notifications/:id/read",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const result = db
+        .prepare(
+          "UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?",
+        )
+        .run(req.params.id, req.userId);
+      if (result.changes === 0)
+        return reply.code(404).send({ error: "Not found" });
+      return { ok: true };
+    },
+  );
 }

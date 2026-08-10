@@ -3,6 +3,8 @@ import cors from "@fastify/cors";
 import fastifyJwt from "@fastify/jwt";
 import fastifyWebsocket from "@fastify/websocket";
 import { migrate } from "./db.js";
+import { resolveUserIdFromToken } from "./auth.js";
+import { addClient, removeClient } from "./ws.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerProjectLabelRoutes } from "./routes/projects.js";
@@ -17,7 +19,9 @@ const app = Fastify({ logger: true });
 
 // Plugins
 await app.register(cors, { origin: true, credentials: true });
-await app.register(fastifyJwt, { secret: process.env.JWT_SECRET || "taskflow-dev-secret-2026" });
+await app.register(fastifyJwt, {
+  secret: process.env.JWT_SECRET || "taskflow-dev-secret-2026",
+});
 await app.register(fastifyWebsocket);
 
 // DB
@@ -34,16 +38,23 @@ registerSeedRoutes(app);
 // Health
 app.get("/api/health", async () => ({ ok: true, ts: Date.now() }));
 
-// WebSocket for real-time
+// WebSocket for real-time. Auth via ?token=<jwt-or-api_token> — same token
+// accepted by the HTTP routes. The userId is derived from the token on the
+// server, never taken from the client-supplied query string, so a client
+// cannot subscribe to another user's event stream.
 app.register(async function (fastify) {
   fastify.get("/ws", { websocket: true }, (socket, req) => {
-    const userId = (req.query as any)?.userId;
-    if (userId) {
-      (global as any).__wsClients = (global as any).__wsClients || new Map();
-      (global as any).__wsClients.set(userId, socket);
-      socket.on("close", () => (global as any).__wsClients?.delete(userId));
+    const token = (req.query as any)?.token;
+    const userId = resolveUserIdFromToken(app, token);
+    if (!userId) {
+      socket.send(JSON.stringify({ type: "error", error: "unauthorized" }));
+      socket.close();
+      return;
     }
-    socket.on("message", (msg) => {
+
+    addClient(userId, socket as any);
+    socket.on("close", () => removeClient(userId, socket as any));
+    socket.on("message", (msg: Buffer) => {
       try {
         const data = JSON.parse(msg.toString());
         if (data.type === "ping") socket.send(JSON.stringify({ type: "pong" }));
@@ -52,15 +63,6 @@ app.register(async function (fastify) {
     socket.send(JSON.stringify({ type: "connected" }));
   });
 });
-
-// Broadcast helper
-export function broadcast(userId: string, event: any) {
-  const clients: Map<string, any> = (global as any).__wsClients;
-  const socket = clients?.get(userId);
-  if (socket?.readyState === 1) {
-    socket.send(JSON.stringify(event));
-  }
-}
 
 // Start
 app.listen({ port: PORT, host: HOST }).then((addr) => {

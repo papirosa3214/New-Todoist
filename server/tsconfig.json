@@ -9,8 +9,6 @@
     "rootDir": "src",
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
     "sourceMap": true
   },
   "include": ["src"]

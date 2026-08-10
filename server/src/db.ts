@@ -3,7 +3,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, "..", "taskflow.db");
+// Allow overriding the DB file (e.g. for smoke tests / alternate envs) without
+// touching the default location the app has always used.
+const DB_PATH = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.join(__dirname, "..", "taskflow.db");
 
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
@@ -86,6 +90,16 @@ export function migrate() {
       created_at TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  // Additive migration: users.api_token may be missing on a DB created
+  // before this column was added to the schema above (CREATE TABLE IF NOT
+  // EXISTS is a no-op on an existing table).
+  const userCols = db.prepare("PRAGMA table_info(users)").all() as Array<{
+    name: string;
+  }>;
+  if (!userCols.some((c) => c.name === "api_token")) {
+    db.exec("ALTER TABLE users ADD COLUMN api_token TEXT");
+  }
 }
 
 export default db;
