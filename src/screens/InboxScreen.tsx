@@ -1,22 +1,42 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAppStore } from "../store";
+import { useTasks } from "../api/tasks";
 import { Icon, Avatar } from "../components/UI";
 
 function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   const day = d.getDate();
-  const months = ["янв","фев","мар","апр","мая","июн","июл","авг","сен","окт","ноя","дек"];
+  const months = [
+    "янв",
+    "фев",
+    "мар",
+    "апр",
+    "мая",
+    "июн",
+    "июл",
+    "авг",
+    "сен",
+    "окт",
+    "ноя",
+    "дек",
+  ];
   return `${day} ${months[d.getMonth()]}`;
 }
 
-const PRIORITY_COLORS: Record<number, string> = { 1: "#E44332", 2: "#FF9A14", 3: "#4A9FD8", 4: "#A6A6A6" };
+const PRIORITY_COLORS: Record<number, string> = {
+  1: "#E44332",
+  2: "#FF9A14",
+  3: "#4A9FD8",
+  4: "#A6A6A6",
+};
 
 export function InboxScreen() {
-  const allTasks = useAppStore((s) => s.tasks);
-  const users = useAppStore((s) => s.users);
+  const { data: allTasks = [], isLoading, isError } = useTasks();
   const navigate = useNavigate();
-  const tasks = useMemo(() => allTasks.filter((t) => t.status === "active"), [allTasks]);
+  const tasks = useMemo(
+    () => allTasks.filter((t) => t.status === "active"),
+    [allTasks],
+  );
 
   return (
     <div className="px-4 pb-4">
@@ -29,9 +49,19 @@ export function InboxScreen() {
           <Icon name="dotsH" size={15} />
         </button>
       </div>
+
+      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isError && (
+        <p className="px-1 text-[13px] text-coral">
+          Не удалось загрузить задачи
+        </p>
+      )}
+      {!isLoading && !isError && tasks.length === 0 && (
+        <p className="px-1 text-[13px] text-dim">Задач пока нет</p>
+      )}
+
       <div className="space-y-[2px]">
         {tasks.map((task) => {
-          const assignee = users.find((u) => u.id === task.assigneeId);
           const hasSubtasks = task.subtasks.length > 0;
           const doneSub = task.subtasks.filter((s) => s.done).length;
           return (
@@ -42,7 +72,9 @@ export function InboxScreen() {
             >
               <div
                 className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
-                style={{ borderColor: PRIORITY_COLORS[task.priority] || "#4A9FD8" }}
+                style={{
+                  borderColor: PRIORITY_COLORS[task.priority] || "#4A9FD8",
+                }}
               />
               <div className="flex-1 min-w-0">
                 <div className="text-[15px] text-text leading-snug mb-1 truncate">
@@ -58,26 +90,36 @@ export function InboxScreen() {
                 <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                   {task.labels.map((l) => (
                     <span
-                      key={l}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-pink/15 text-pink"
+                      key={l.id}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+                      style={{
+                        backgroundColor: l.color + "26",
+                        color: l.color,
+                      }}
                     >
-                      <Icon name="tag" size={10} /> {l}
+                      <Icon name="tag" size={10} /> {l.name}
                     </span>
                   ))}
-                  {task.dueDate && (
+                  {task.due_date && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                      <Icon name="calendarSmall" size={10} /> {formatDue(task.dueDate)}
+                      <Icon name="calendarSmall" size={10} />{" "}
+                      {formatDue(task.due_date)}
                     </span>
                   )}
                   {hasSubtasks && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                      <Icon name="check" size={10} /> {doneSub}/{task.subtasks.length}
+                      <Icon name="check" size={10} /> {doneSub}/
+                      {task.subtasks.length}
                     </span>
                   )}
                 </div>
               </div>
-              {assignee && (
-                <Avatar initials={assignee.initials} color={assignee.avatarColor} size={24} />
+              {task.assignee_id && task.assignee_initials && (
+                <Avatar
+                  initials={task.assignee_initials}
+                  color={task.assignee_color || "#A6A6A6"}
+                  size={24}
+                />
               )}
             </button>
           );

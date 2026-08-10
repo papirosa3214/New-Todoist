@@ -1,9 +1,28 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAppStore } from "../store";
+import { useQueryClient } from "@tanstack/react-query";
+import { useProjects } from "../api/projects";
+import { useLabels, useCreateLabel } from "../api/labels";
+import { useAgents } from "../api/agents";
+import { useCreateTask } from "../api/tasks";
+import { createSubtaskRequest } from "../api/subtasks";
 import { Icon, Avatar } from "../components/UI";
+import { todayStr } from "../lib/date";
 
-const MONTHS = ["янв","фев","мар","апр","мая","июн","июл","авг","сен","окт","ноя","дек"];
+const MONTHS = [
+  "янв",
+  "фев",
+  "мар",
+  "апр",
+  "мая",
+  "июн",
+  "июл",
+  "авг",
+  "сен",
+  "окт",
+  "ноя",
+  "дек",
+];
 const PRIORITIES = [
   { key: 1, label: "P1", color: "#E44332" },
   { key: 2, label: "P2", color: "#FF9A14" },
@@ -22,28 +41,36 @@ function miniCal(year: number, month: number) {
 
 export function NewTaskScreen() {
   const navigate = useNavigate();
-  const users = useAppStore((s) => s.users);
-  const projects = useAppStore((s) => s.projects);
-  const labels = useAppStore((s) => s.labels);
-  const addTask = useAppStore((s) => s.addTask);
+  const { data: agents = [] } = useAgents();
+  const { data: projects = [] } = useProjects();
+  const { data: labels = [] } = useLabels();
+  const createTask = useCreateTask();
+  const createLabel = useCreateLabel();
+  const qc = useQueryClient();
 
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
   const [assignee, setAssignee] = useState<string | undefined>();
   const [priority, setPriority] = useState(1);
-  const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
+  const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
   const [subtasks, setSubtasks] = useState<string[]>([]);
   const [newSub, setNewSub] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const today = todayStr();
+  const todayDate = new Date(today + "T00:00:00");
 
   // Date picker
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [calYear, setCalYear] = useState(2026);
-  const [calMonth, setCalMonth] = useState(7);
-  const [dueDate, setDueDate] = useState("2026-08-11");
+  const [calYear, setCalYear] = useState(todayDate.getFullYear());
+  const [calMonth, setCalMonth] = useState(todayDate.getMonth());
+  const [dueDate, setDueDate] = useState(today);
 
-  // Project picker
+  // Project picker — default to the current user's first project, not a
+  // hardcoded id (which wouldn't belong to every user).
   const [showProjectPicker, setShowProjectPicker] = useState(false);
-  const [projectId, setProjectId] = useState("p1");
+  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const effectiveProjectId = projectId ?? projects[0]?.id;
 
   // Priority picker
   const [showPriorityPicker, setShowPriorityPicker] = useState(false);
@@ -51,12 +78,12 @@ export function NewTaskScreen() {
   // Assignee picker
   const [showAssigneePicker, setShowAssigneePicker] = useState(false);
 
-  const currentProject = projects.find((p) => p.id === projectId);
+  const currentProject = projects.find((p) => p.id === effectiveProjectId);
   const dueDateObj = dueDate ? new Date(dueDate + "T00:00:00") : null;
 
-  const toggleLabel = (name: string) => {
-    setSelectedLabels((prev) =>
-      prev.includes(name) ? prev.filter((l) => l !== name) : [...prev, name],
+  const toggleLabel = (id: string) => {
+    setSelectedLabelIds((prev) =>
+      prev.includes(id) ? prev.filter((l) => l !== id) : [...prev, id],
     );
   };
 
@@ -67,27 +94,41 @@ export function NewTaskScreen() {
     }
   };
 
-  const handleSave = () => {
-    if (!title.trim()) return;
-    addTask({
-      id: "t" + Date.now(),
-      title: title.trim(),
-      description: desc.trim() || undefined,
-      dueDate: dueDate || undefined,
-      projectId,
-      priority: priority as 1 | 2 | 3 | 4,
-      assigneeId: assignee,
-      labels: selectedLabels,
-      subtasks: subtasks.map((s, i) => ({
-        id: "st" + Date.now() + i,
-        title: s,
-        done: false,
-      })),
-      comments: [],
-      status: "active",
-      createdAt: new Date().toISOString().split("T")[0],
-    });
-    navigate("/inbox");
+  const handleCreateLabel = async () => {
+    const name = window.prompt("Название метки:");
+    if (!name?.trim()) return;
+    const label = await createLabel.mutateAsync({ name: name.trim() });
+    setSelectedLabelIds((prev) => [...prev, label.id]);
+  };
+
+  const handleSave = async () => {
+    if (!title.trim() || saving) return;
+    setSaving(true);
+    try {
+      const { task } = await createTask.mutateAsync({
+        title: title.trim(),
+        description: desc.trim() || undefined,
+        due_date: dueDate || undefined,
+        project_id: effectiveProjectId,
+        priority,
+        assignee_id: assignee,
+        label_ids: selectedLabelIds,
+      });
+
+      // The create-task endpoint has no bulk-subtask param — create them
+      // one by one against the dedicated subtask endpoint.
+      if (subtasks.length > 0) {
+        for (const s of subtasks) {
+          // eslint-disable-next-line no-await-in-loop
+          await createSubtaskRequest(task.id, s);
+        }
+        qc.invalidateQueries({ queryKey: ["tasks"] });
+      }
+
+      navigate("/inbox");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const calCells = miniCal(calYear, calMonth);
@@ -103,8 +144,12 @@ export function NewTaskScreen() {
           <Icon name="x" size={18} />
         </button>
         <h2 className="text-[17px] font-semibold">Новая задача</h2>
-        <button onClick={handleSave} className="text-[16px] font-semibold text-red active:opacity-70">
-          Готово
+        <button
+          onClick={handleSave}
+          disabled={!title.trim() || saving}
+          className="text-[16px] font-semibold text-red active:opacity-70 disabled:opacity-50"
+        >
+          {saving ? "Сохранение…" : "Готово"}
         </button>
       </div>
 
@@ -130,7 +175,12 @@ export function NewTaskScreen() {
 
       {/* ── Due date (tappable → inline calendar) ── */}
       <button
-        onClick={() => { setShowDatePicker(!showDatePicker); setShowProjectPicker(false); setShowPriorityPicker(false); setShowAssigneePicker(false); }}
+        onClick={() => {
+          setShowDatePicker(!showDatePicker);
+          setShowProjectPicker(false);
+          setShowPriorityPicker(false);
+          setShowAssigneePicker(false);
+        }}
         className="w-full flex items-center gap-3 py-3 text-left active:bg-card/50 rounded-lg transition-colors"
       >
         <Icon name="calendarSmall" size={18} className="text-dim" />
@@ -140,23 +190,45 @@ export function NewTaskScreen() {
             ? `${dueDateObj.getDate()} ${MONTHS[dueDateObj.getMonth()]}`
             : "Не установлен"}
         </span>
-        <Icon name={showDatePicker ? "chevronDown" : "chevron"} size={16} className="text-dim" />
+        <Icon
+          name={showDatePicker ? "chevronDown" : "chevron"}
+          size={16}
+          className="text-dim"
+        />
       </button>
 
       {showDatePicker && (
         <div className="bg-card rounded-2xl p-3 mb-3 animate-in">
           <div className="flex items-center justify-between mb-2">
-            <button onClick={() => calMonth === 0 ? (setCalMonth(11), setCalYear(calYear - 1)) : setCalMonth(calMonth - 1)} className="p-1">
+            <button
+              onClick={() =>
+                calMonth === 0
+                  ? (setCalMonth(11), setCalYear(calYear - 1))
+                  : setCalMonth(calMonth - 1)
+              }
+              className="p-1"
+            >
               <Icon name="chevronLeft" size={16} className="text-sub" />
             </button>
-            <span className="text-[13px] font-semibold">{MONTHS[calMonth]} {calYear}</span>
-            <button onClick={() => calMonth === 11 ? (setCalMonth(0), setCalYear(calYear + 1)) : setCalMonth(calMonth + 1)} className="p-1">
+            <span className="text-[13px] font-semibold">
+              {MONTHS[calMonth]} {calYear}
+            </span>
+            <button
+              onClick={() =>
+                calMonth === 11
+                  ? (setCalMonth(0), setCalYear(calYear + 1))
+                  : setCalMonth(calMonth + 1)
+              }
+              className="p-1"
+            >
               <Icon name="chevron" size={16} className="text-sub" />
             </button>
           </div>
           <div className="grid grid-cols-7 gap-0">
-            {["Вс","Пн","Вт","Ср","Чт","Пт","СБ"].map((d) => (
-              <div key={d} className="text-center text-[10px] text-dim py-1">{d}</div>
+            {["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "СБ"].map((d) => (
+              <div key={d} className="text-center text-[10px] text-dim py-1">
+                {d}
+              </div>
             ))}
             {calCells.map((day, i) => {
               if (day === null) return <div key={i} />;
@@ -165,9 +237,14 @@ export function NewTaskScreen() {
               return (
                 <button
                   key={i}
-                  onClick={() => { setDueDate(ds); setShowDatePicker(false); }}
+                  onClick={() => {
+                    setDueDate(ds);
+                    setShowDatePicker(false);
+                  }}
                   className={`h-[32px] text-[13px] rounded-full transition-all ${
-                    selected ? "bg-red text-white font-semibold" : "text-text active:bg-card2"
+                    selected
+                      ? "bg-red text-white font-semibold"
+                      : "text-text active:bg-card2"
                   }`}
                 >
                   {day}
@@ -176,7 +253,10 @@ export function NewTaskScreen() {
             })}
           </div>
           <button
-            onClick={() => { setDueDate(""); setShowDatePicker(false); }}
+            onClick={() => {
+              setDueDate("");
+              setShowDatePicker(false);
+            }}
             className="w-full text-center text-[13px] text-sub py-2 mt-1"
           >
             Убрать дату
@@ -188,13 +268,24 @@ export function NewTaskScreen() {
 
       {/* ── Project (tappable → picker) ── */}
       <button
-        onClick={() => { setShowProjectPicker(!showProjectPicker); setShowDatePicker(false); setShowPriorityPicker(false); setShowAssigneePicker(false); }}
+        onClick={() => {
+          setShowProjectPicker(!showProjectPicker);
+          setShowDatePicker(false);
+          setShowPriorityPicker(false);
+          setShowAssigneePicker(false);
+        }}
         className="w-full flex items-center gap-3 py-3 text-left active:bg-card/50 rounded-lg transition-colors"
       >
         <Icon name="hash" size={18} className="text-dim" />
         <span className="text-[15px] text-sub flex-1">Проект</span>
-        <span className="text-[14px] text-text">{currentProject?.name}</span>
-        <Icon name={showProjectPicker ? "chevronDown" : "chevron"} size={16} className="text-dim" />
+        <span className="text-[14px] text-text">
+          {currentProject?.name || "Без проекта"}
+        </span>
+        <Icon
+          name={showProjectPicker ? "chevronDown" : "chevron"}
+          size={16}
+          className="text-dim"
+        />
       </button>
 
       {showProjectPicker && (
@@ -202,14 +293,24 @@ export function NewTaskScreen() {
           {projects.map((p) => (
             <button
               key={p.id}
-              onClick={() => { setProjectId(p.id); setShowProjectPicker(false); }}
+              onClick={() => {
+                setProjectId(p.id);
+                setShowProjectPicker(false);
+              }}
               className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-card2 transition-colors"
             >
               <Icon name="hash" size={16} style={{ color: p.color }} />
               <span className="text-[14px] text-text flex-1">{p.name}</span>
-              {p.id === projectId && <Icon name="check" size={16} className="text-red" />}
+              {p.id === effectiveProjectId && (
+                <Icon name="check" size={16} className="text-red" />
+              )}
             </button>
           ))}
+          {projects.length === 0 && (
+            <div className="px-4 py-3 text-[13px] text-dim">
+              Проектов пока нет
+            </div>
+          )}
         </div>
       )}
 
@@ -217,18 +318,29 @@ export function NewTaskScreen() {
 
       {/* ── Priority (tappable → picker) ── */}
       <button
-        onClick={() => { setShowPriorityPicker(!showPriorityPicker); setShowDatePicker(false); setShowProjectPicker(false); setShowAssigneePicker(false); }}
+        onClick={() => {
+          setShowPriorityPicker(!showPriorityPicker);
+          setShowDatePicker(false);
+          setShowProjectPicker(false);
+          setShowAssigneePicker(false);
+        }}
         className="w-full flex items-center gap-3 py-3 text-left active:bg-card/50 rounded-lg transition-colors"
       >
         <Icon name="flag" size={18} className="text-dim" />
         <span className="text-[15px] text-sub flex-1">Приоритет</span>
         <span
           className="text-[12px] font-semibold text-white px-2 py-0.5 rounded"
-          style={{ backgroundColor: PRIORITIES.find((p) => p.key === priority)?.color }}
+          style={{
+            backgroundColor: PRIORITIES.find((p) => p.key === priority)?.color,
+          }}
         >
           {PRIORITIES.find((p) => p.key === priority)?.label}
         </span>
-        <Icon name={showPriorityPicker ? "chevronDown" : "chevron"} size={16} className="text-dim" />
+        <Icon
+          name={showPriorityPicker ? "chevronDown" : "chevron"}
+          size={16}
+          className="text-dim"
+        />
       </button>
 
       {showPriorityPicker && (
@@ -236,7 +348,10 @@ export function NewTaskScreen() {
           {PRIORITIES.map((p) => (
             <button
               key={p.key}
-              onClick={() => { setPriority(p.key); setShowPriorityPicker(false); }}
+              onClick={() => {
+                setPriority(p.key);
+                setShowPriorityPicker(false);
+              }}
               className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-card2 transition-colors"
             >
               <span
@@ -246,9 +361,17 @@ export function NewTaskScreen() {
                 {p.label}
               </span>
               <span className="text-[14px] text-text">
-                {p.key === 1 ? "Срочный" : p.key === 2 ? "Высокий" : p.key === 3 ? "Средний" : "Низкий"}
+                {p.key === 1
+                  ? "Срочный"
+                  : p.key === 2
+                    ? "Высокий"
+                    : p.key === 3
+                      ? "Средний"
+                      : "Низкий"}
               </span>
-              {p.key === priority && <Icon name="check" size={16} className="text-red ml-auto" />}
+              {p.key === priority && (
+                <Icon name="check" size={16} className="text-red ml-auto" />
+              )}
             </button>
           ))}
         </div>
@@ -257,17 +380,26 @@ export function NewTaskScreen() {
       <div className="h-px bg-stroke mb-2 mt-1" />
 
       {/* ── Assignee (tappable → picker) ── */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2 mt-2">Назначить</div>
+      <div className="text-[13px] text-sub font-semibold px-1 mb-2 mt-2">
+        Назначить
+      </div>
       <div className="bg-card rounded-2xl overflow-hidden mb-4">
         {showAssigneePicker ? (
           <>
-            {users.map((u) => (
+            {agents.map((u) => (
               <button
                 key={u.id}
-                onClick={() => { setAssignee(assignee === u.id ? undefined : u.id); setShowAssigneePicker(false); }}
+                onClick={() => {
+                  setAssignee(assignee === u.id ? undefined : u.id);
+                  setShowAssigneePicker(false);
+                }}
                 className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-card2 transition-colors"
               >
-                <Avatar initials={u.initials} color={u.avatarColor} size={32} />
+                <Avatar
+                  initials={u.initials}
+                  color={u.avatar_color}
+                  size={32}
+                />
                 <div className="flex-1">
                   <div className="text-[14px] text-text">{u.name}</div>
                 </div>
@@ -292,14 +424,18 @@ export function NewTaskScreen() {
           <>
             {assignee ? (
               (() => {
-                const u = users.find((us) => us.id === assignee);
+                const u = agents.find((us) => us.id === assignee);
                 if (!u) return null;
                 return (
                   <button
                     onClick={() => setShowAssigneePicker(true)}
                     className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-card2 transition-colors"
                   >
-                    <Avatar initials={u.initials} color={u.avatarColor} size={32} />
+                    <Avatar
+                      initials={u.initials}
+                      color={u.avatar_color}
+                      size={32}
+                    />
                     <div className="flex-1">
                       <div className="text-[14px] text-text">{u.name}</div>
                     </div>
@@ -329,11 +465,11 @@ export function NewTaskScreen() {
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">Метки</div>
       <div className="flex flex-wrap gap-2 mb-4">
         {labels.map((l) => {
-          const active = selectedLabels.includes(l.name);
+          const active = selectedLabelIds.includes(l.id);
           return (
             <button
               key={l.id}
-              onClick={() => toggleLabel(l.name)}
+              onClick={() => toggleLabel(l.id)}
               className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[13px] transition-all active:scale-95"
               style={{
                 backgroundColor: active ? l.color + "35" : "#242424",
@@ -348,15 +484,20 @@ export function NewTaskScreen() {
             </button>
           );
         })}
-        <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[13px] text-sub bg-card active:scale-95">
+        <button
+          onClick={handleCreateLabel}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-[13px] text-sub bg-card active:scale-95"
+        >
           + новая
-        </span>
+        </button>
       </div>
 
       <div className="h-px bg-stroke mb-2" />
 
       {/* ── Subtasks ── */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2 mt-2">Подзадачи</div>
+      <div className="text-[13px] text-sub font-semibold px-1 mb-2 mt-2">
+        Подзадачи
+      </div>
       {subtasks.map((s, i) => (
         <div key={i} className="flex items-center gap-3 py-2.5 px-1">
           <div className="w-[18px] h-[18px] rounded-full border-2 border-dim shrink-0" />

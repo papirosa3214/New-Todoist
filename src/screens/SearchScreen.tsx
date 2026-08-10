@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAppStore } from "../store";
+import { useTasks } from "../api/tasks";
 import { Icon } from "../components/UI";
 
 export function SearchScreen() {
   const navigate = useNavigate();
-  const tasks = useAppStore((s) => s.tasks);
+  const { data: tasks = [] } = useTasks();
   const [query, setQuery] = useState("");
 
   const results = query.trim()

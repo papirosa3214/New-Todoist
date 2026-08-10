@@ -1,8 +1,18 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { StatusBar, BottomNav, FAB, Panel } from "./UI";
 import { useEffect, useState } from "react";
+import { useCurrentUser } from "../api/auth";
+import { useNotificationsSocket } from "../api/ws";
 
-const HIDE_NAV = ["/login", "/register", "/task/new", "/notifications", "/agents", "/projects", "/search"];
+const HIDE_NAV = [
+  "/login",
+  "/register",
+  "/task/new",
+  "/notifications",
+  "/agents",
+  "/projects",
+  "/search",
+];
 
 function useIsMobile() {
   const [m, setM] = useState(
@@ -21,6 +31,8 @@ export function Layout() {
   const isMobile = useIsMobile();
   const hideNav = HIDE_NAV.some((p) => loc.pathname.startsWith(p));
   const hideFAB = hideNav || loc.pathname.startsWith("/settings");
+  const { data: currentUser } = useCurrentUser();
+  useNotificationsSocket(!!currentUser);
 
   /* ── Mobile: full-viewport, no frame ── */
   if (isMobile) {
