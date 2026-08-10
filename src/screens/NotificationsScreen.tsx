@@ -5,7 +5,7 @@ import {
   useMarkNotificationRead,
   formatRelativeTime,
 } from "../api/notifications";
-import { Icon, Avatar } from "../components/UI";
+import { Icon, Avatar, ScreenHeader } from "../components/UI";
 
 export function NotificationsScreen() {
   const navigate = useNavigate();
@@ -20,22 +20,30 @@ export function NotificationsScreen() {
 
   return (
     <div className="px-4 pb-4">
-      {/* Header */}
-      <div className="flex items-center h-[48px] mb-2 relative">
-        <button onClick={() => navigate(-1)} className="w-[36px] h-[36px]">
-          <Icon name="chevronLeft" size={22} />
-        </button>
-        <h2 className="absolute left-1/2 -translate-x-1/2 text-[17px] font-semibold">
-          Уведомления
-        </h2>
-        <button
-          onClick={() => markAllRead.mutate()}
-          disabled={markAllRead.isPending || notifications.every((n) => n.read)}
-          className="absolute right-0 text-[13px] text-sub disabled:opacity-40"
-        >
-          Прочитать все
-        </button>
-      </div>
+      <ScreenHeader
+        variant="compact"
+        leading={
+          <button
+            onClick={() => navigate(-1)}
+            className="w-11 h-11 -ml-2.5 flex items-center justify-center"
+            aria-label="Назад"
+          >
+            <Icon name="chevronLeft" size={22} />
+          </button>
+        }
+        title="Уведомления"
+        actions={
+          <button
+            onClick={() => markAllRead.mutate()}
+            disabled={
+              markAllRead.isPending || notifications.every((n) => n.read)
+            }
+            className="text-[13px] text-sub disabled:opacity-40"
+          >
+            Прочитать все
+          </button>
+        }
+      />
 
       {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
       {!isLoading && notifications.length === 0 && (

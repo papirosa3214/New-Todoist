@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useTask, useUpdateTask, useDeleteTask } from "../api/tasks";
 import { useUpdateSubtask } from "../api/subtasks";
 import { useAddComment } from "../api/comments";
-import { Icon, Avatar } from "../components/UI";
+import { Icon, Avatar, ScreenHeader } from "../components/UI";
 
 const PRIORITY_COLORS: Record<number, string> = {
   1: "#E44332",
@@ -75,33 +75,38 @@ export function TaskDetailScreen() {
 
   return (
     <div className="px-4 pb-4">
-      {/* Header */}
-      <div className="flex items-center justify-between h-[48px] mb-2">
-        <button
-          onClick={() => navigate(-1)}
-          className="w-[36px] h-[36px] rounded-full bg-card2 flex items-center justify-center"
-        >
-          <Icon name="chevronLeft" size={18} />
-        </button>
-        <div className="flex gap-2">
+      <ScreenHeader
+        variant="compact"
+        leading={
           <button
-            onClick={() => (editing ? saveEdit() : startEdit())}
-            className="w-[36px] h-[36px] rounded-full bg-card2 flex items-center justify-center"
+            onClick={() => navigate(-1)}
+            className="w-[44px] h-[44px] rounded-full bg-card2 flex items-center justify-center"
           >
-            <Icon
-              name={editing ? "check" : "edit"}
-              size={16}
-              className={editing ? "text-red" : "text-sub"}
-            />
+            <Icon name="chevronLeft" size={18} />
           </button>
-          <button
-            onClick={handleDelete}
-            className="w-[36px] h-[36px] rounded-full bg-card2 flex items-center justify-center"
-          >
-            <Icon name="trash" size={16} className="text-coral" />
-          </button>
-        </div>
-      </div>
+        }
+        title=""
+        actions={
+          <>
+            <button
+              onClick={() => (editing ? saveEdit() : startEdit())}
+              className="w-[44px] h-[44px] rounded-full bg-card2 flex items-center justify-center"
+            >
+              <Icon
+                name={editing ? "check" : "edit"}
+                size={16}
+                className={editing ? "text-red" : "text-sub"}
+              />
+            </button>
+            <button
+              onClick={handleDelete}
+              className="w-[44px] h-[44px] rounded-full bg-card2 flex items-center justify-center"
+            >
+              <Icon name="trash" size={16} className="text-coral" />
+            </button>
+          </>
+        }
+      />
 
       {/* Priority + Title */}
       <div className="flex items-start gap-3 mb-4">
@@ -121,7 +126,7 @@ export function TaskDetailScreen() {
           <textarea
             value={editTitle}
             onChange={(e) => setEditTitle(e.target.value)}
-            className="flex-1 bg-card rounded-lg px-2 py-1 text-[20px] font-semibold leading-snug outline-none resize-none"
+            className="flex-1 bg-card rounded-xl px-2 py-1 text-[20px] font-semibold leading-snug outline-none resize-none"
             rows={2}
             autoFocus
           />
@@ -140,7 +145,7 @@ export function TaskDetailScreen() {
           value={editDesc}
           onChange={(e) => setEditDesc(e.target.value)}
           placeholder="Описание"
-          className="w-full bg-card rounded-lg px-2 py-1.5 text-[14px] text-sub leading-relaxed mb-4 outline-none resize-none"
+          className="w-full bg-card rounded-xl px-2 py-1.5 text-[16px] text-sub leading-relaxed mb-4 outline-none resize-none"
           rows={3}
         />
       ) : (
@@ -260,7 +265,7 @@ export function TaskDetailScreen() {
             value={commentText}
             onChange={(e) => setCommentText(e.target.value)}
             placeholder="Написать комментарий…"
-            className="flex-1 bg-card rounded-xl px-3 py-2.5 text-[14px] text-text placeholder:text-dim outline-none"
+            className="flex-1 bg-card rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none"
           />
           <button
             type="submit"

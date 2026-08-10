@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useProjects, useCreateProject } from "../api/projects";
-import { Icon } from "../components/UI";
+import { Icon, ScreenHeader } from "../components/UI";
 
 const PROJECT_COLORS = [
   "#4A9FD8",
@@ -32,20 +32,27 @@ export function ProjectsScreen() {
 
   return (
     <div className="px-4 pb-4">
-      <div className="flex items-center h-[48px] mb-2 relative">
-        <button onClick={() => navigate(-1)} className="w-[36px] h-[36px]">
-          <Icon name="chevronLeft" size={22} />
-        </button>
-        <h2 className="absolute left-1/2 -translate-x-1/2 text-[17px] font-semibold">
-          Проекты
-        </h2>
-        <button
-          onClick={() => setShowCreate((v) => !v)}
-          className="absolute right-0 w-[36px] h-[36px] rounded-[10px] bg-card flex items-center justify-center"
-        >
-          <Icon name={showCreate ? "x" : "plus"} size={18} />
-        </button>
-      </div>
+      <ScreenHeader
+        variant="compact"
+        leading={
+          <button
+            onClick={() => navigate(-1)}
+            className="w-[44px] h-[44px] -ml-2.5 flex items-center justify-center"
+            aria-label="Назад"
+          >
+            <Icon name="chevronLeft" size={22} />
+          </button>
+        }
+        title="Проекты"
+        actions={
+          <button
+            onClick={() => setShowCreate((v) => !v)}
+            className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
+          >
+            <Icon name={showCreate ? "x" : "plus"} size={18} />
+          </button>
+        }
+      />
 
       {showCreate && (
         <form onSubmit={handleCreate} className="bg-card rounded-2xl p-4 mb-4">
@@ -54,7 +61,7 @@ export function ProjectsScreen() {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Название проекта"
-            className="w-full bg-card2 rounded-lg px-3 py-2.5 text-[14px] text-text placeholder:text-dim outline-none mb-3"
+            className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none mb-3"
           />
           <div className="flex items-center gap-2 mb-3">
             {PROJECT_COLORS.map((c) => (
@@ -74,7 +81,7 @@ export function ProjectsScreen() {
           <button
             type="submit"
             disabled={!name.trim() || createProject.isPending}
-            className="w-full h-[42px] bg-red rounded-xl text-[14px] font-semibold text-white disabled:opacity-50"
+            className="w-full h-12 bg-red rounded-xl text-[14px] font-semibold text-white disabled:opacity-50"
           >
             {createProject.isPending ? "Создаём…" : "Создать"}
           </button>

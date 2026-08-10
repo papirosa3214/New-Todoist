@@ -18,20 +18,22 @@ export function SearchScreen() {
 
   return (
     <div className="px-4 pb-4">
-      <div className="flex items-center gap-3 h-[48px] mb-4">
-        <div className="flex-1 flex items-center gap-2 bg-card rounded-xl px-3 py-2">
-          <Icon name="search" size={18} className="text-dim" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Найти задачу или проект"
-            className="flex-1 bg-transparent text-[15px] text-text placeholder:text-dim outline-none"
-            autoFocus
-          />
+      <div className="sticky top-0 z-20 bg-bg/90 backdrop-blur-xl border-b border-stroke mb-4">
+        <div className="flex items-center gap-3 h-[48px]">
+          <div className="flex-1 flex items-center gap-2 bg-card rounded-xl px-3 py-2">
+            <Icon name="search" size={18} className="text-dim" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Найти задачу или проект"
+              className="flex-1 bg-transparent text-[16px] text-text placeholder:text-dim outline-none"
+              autoFocus
+            />
+          </div>
+          <button onClick={() => navigate(-1)} className="text-[15px] text-sub">
+            Отмена
+          </button>
         </div>
-        <button onClick={() => navigate(-1)} className="text-[15px] text-sub">
-          Отмена
-        </button>
       </div>
 
       {results.length > 0 ? (

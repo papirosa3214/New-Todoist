@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useTasks } from "../api/tasks";
-import { Icon } from "../components/UI";
+import { Icon, ScreenHeader } from "../components/UI";
 import { todayStr } from "../lib/date";
 
 export function TodayScreen() {
@@ -16,18 +16,25 @@ export function TodayScreen() {
   if (!isLoading && tasks.length === 0) {
     return (
       <div className="px-4 pb-4 flex flex-col items-center">
-        <div className="flex items-center gap-2 self-start mb-6">
-          <div className="bg-card/60 rounded-full p-2">
-            <Icon name="calendarSmall" size={22} className="text-text" />
-          </div>
-          <h1 className="text-[28px] font-bold">Сегодня</h1>
-          <button className="ml-auto w-[36px] h-[36px] rounded-[10px] bg-card flex items-center justify-center">
-            <Icon name="dots" size={18} />
-          </button>
-          <button className="w-[36px] h-[36px] rounded-[10px] bg-card flex items-center justify-center">
-            <Icon name="search" size={18} />
-          </button>
-        </div>
+        <ScreenHeader
+          className="w-full"
+          leading={
+            <div className="bg-card/60 rounded-full p-2">
+              <Icon name="calendarSmall" size={22} className="text-text" />
+            </div>
+          }
+          title="Сегодня"
+          actions={
+            <>
+              <button className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center">
+                <Icon name="dots" size={18} />
+              </button>
+              <button className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center">
+                <Icon name="search" size={18} />
+              </button>
+            </>
+          }
+        />
         <div className="flex-1 flex flex-col items-center justify-center mt-8">
           <svg width="200" height="180" viewBox="0 0 200 180" className="mb-6">
             <circle cx="100" cy="80" r="48" fill="#2B2B2B" />
@@ -94,12 +101,14 @@ export function TodayScreen() {
 
   return (
     <div className="px-4 pb-4">
-      <div className="flex items-center gap-2 mb-6">
-        <div className="bg-card/60 rounded-full p-2">
-          <Icon name="calendarSmall" size={22} className="text-text" />
-        </div>
-        <h1 className="text-[28px] font-bold">Сегодня</h1>
-      </div>
+      <ScreenHeader
+        leading={
+          <div className="bg-card/60 rounded-full p-2">
+            <Icon name="calendarSmall" size={22} className="text-text" />
+          </div>
+        }
+        title="Сегодня"
+      />
       {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
       <div className="space-y-[2px]">
         {tasks.map((t) => (

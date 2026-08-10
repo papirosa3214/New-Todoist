@@ -6,7 +6,7 @@ import { useLabels, useCreateLabel } from "../api/labels";
 import { useAgents } from "../api/agents";
 import { useCreateTask } from "../api/tasks";
 import { createSubtaskRequest } from "../api/subtasks";
-import { Icon, Avatar } from "../components/UI";
+import { Icon, Avatar, ScreenHeader } from "../components/UI";
 import { todayStr } from "../lib/date";
 
 const MONTHS = [
@@ -135,23 +135,27 @@ export function NewTaskScreen() {
 
   return (
     <div className="px-4 pb-4 min-h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between h-[48px] mb-2">
-        <button
-          onClick={() => navigate(-1)}
-          className="w-[36px] h-[36px] rounded-full bg-card2 flex items-center justify-center active:scale-95"
-        >
-          <Icon name="x" size={18} />
-        </button>
-        <h2 className="text-[17px] font-semibold">Новая задача</h2>
-        <button
-          onClick={handleSave}
-          disabled={!title.trim() || saving}
-          className="text-[16px] font-semibold text-red active:opacity-70 disabled:opacity-50"
-        >
-          {saving ? "Сохранение…" : "Готово"}
-        </button>
-      </div>
+      <ScreenHeader
+        variant="compact"
+        leading={
+          <button
+            onClick={() => navigate(-1)}
+            className="w-[44px] h-[44px] rounded-full bg-card2 flex items-center justify-center active:scale-95"
+          >
+            <Icon name="x" size={18} />
+          </button>
+        }
+        title="Новая задача"
+        actions={
+          <button
+            onClick={handleSave}
+            disabled={!title.trim() || saving}
+            className="text-[16px] font-semibold text-red active:opacity-70 disabled:opacity-50"
+          >
+            {saving ? "Сохранение…" : "Готово"}
+          </button>
+        }
+      />
 
       {/* Title */}
       <textarea
@@ -167,7 +171,7 @@ export function NewTaskScreen() {
         value={desc}
         onChange={(e) => setDesc(e.target.value)}
         placeholder="Описание"
-        className="w-full bg-transparent text-[15px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px]"
+        className="w-full bg-transparent text-[16px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px]"
         rows={2}
       />
 
@@ -517,7 +521,7 @@ export function NewTaskScreen() {
           onChange={(e) => setNewSub(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && addSubtask()}
           placeholder="Добавить подзадачу..."
-          className="flex-1 bg-transparent text-[14px] text-dim placeholder:text-dim outline-none"
+          className="flex-1 bg-transparent text-[16px] text-dim placeholder:text-dim outline-none"
         />
         {newSub.trim() && (
           <button onClick={addSubtask} className="p-1">

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
-import { Icon, Avatar } from "../components/UI";
+import { Icon, Avatar, ScreenHeader } from "../components/UI";
 
 function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
@@ -40,15 +40,19 @@ export function InboxScreen() {
 
   return (
     <div className="px-4 pb-4">
-      <h1 className="text-[28px] font-bold mb-3 px-1">Входящие</h1>
-      <div className="flex gap-2 mb-3 px-1">
-        <button className="flex items-center gap-1.5 px-3 py-[6px] bg-card rounded-lg text-[13px] text-sub">
-          <Icon name="list" size={15} />
-        </button>
-        <button className="flex items-center gap-1.5 px-3 py-[6px] bg-card rounded-lg text-[13px] text-sub">
-          <Icon name="dotsH" size={15} />
-        </button>
-      </div>
+      <ScreenHeader
+        title="Входящие"
+        actions={
+          <>
+            <button className="flex items-center gap-1.5 px-3 py-[6px] bg-card rounded-lg text-[13px] text-sub">
+              <Icon name="list" size={15} />
+            </button>
+            <button className="flex items-center gap-1.5 px-3 py-[6px] bg-card rounded-lg text-[13px] text-sub">
+              <Icon name="dotsH" size={15} />
+            </button>
+          </>
+        }
+      />
 
       {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
       {isError && (

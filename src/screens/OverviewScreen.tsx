@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
-import { Icon, Avatar } from "../components/UI";
+import { Icon, Avatar, ScreenHeader } from "../components/UI";
 
 export function OverviewScreen() {
   const navigate = useNavigate();
@@ -25,33 +25,39 @@ export function OverviewScreen() {
 
   return (
     <div className="px-4 pb-4">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-2 bg-card px-3 py-1.5 rounded-full">
-          {user && (
-            <Avatar
-              initials={user.initials}
-              color={user.avatar_color}
-              size={28}
-            />
-          )}
-          <span className="text-[16px] font-semibold">{user?.name}</span>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => navigate("/notifications")}
-            className="w-[36px] h-[36px] rounded-[10px] bg-card flex items-center justify-center"
-          >
-            <Icon name="bell" size={18} />
-          </button>
-          <button
-            onClick={() => navigate("/settings")}
-            className="w-[36px] h-[36px] rounded-[10px] bg-card flex items-center justify-center"
-          >
-            <Icon name="settings" size={18} />
-          </button>
-        </div>
-      </div>
+      <ScreenHeader
+        className="mb-5"
+        title={
+          <span className="flex w-fit max-w-full items-center gap-2 bg-card px-3 py-1.5 rounded-full">
+            {user && (
+              <Avatar
+                initials={user.initials}
+                color={user.avatar_color}
+                size={28}
+              />
+            )}
+            <span className="min-w-0 truncate text-[16px] font-semibold">
+              {user?.name}
+            </span>
+          </span>
+        }
+        actions={
+          <>
+            <button
+              onClick={() => navigate("/notifications")}
+              className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
+            >
+              <Icon name="bell" size={18} />
+            </button>
+            <button
+              onClick={() => navigate("/settings")}
+              className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
+            >
+              <Icon name="settings" size={18} />
+            </button>
+          </>
+        }
+      />
 
       {/* Pro Banner */}
       <div className="bg-card rounded-2xl p-4 mb-4 flex items-center gap-3">

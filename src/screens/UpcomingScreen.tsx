@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useTasks } from "../api/tasks";
-import { Icon, Avatar } from "../components/UI";
+import { Icon, Avatar, ScreenHeader } from "../components/UI";
 import { todayStr } from "../lib/date";
 import type { ApiTask } from "../api/types";
 
@@ -137,25 +137,26 @@ export function UpcomingScreen() {
 
   return (
     <div className="px-4 pb-4">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-[17px] font-semibold">Предстоящее</h2>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setCalMode(calMode === "month" ? "week" : "month")}
-            className="w-[36px] h-[36px] rounded-[10px] bg-card flex items-center justify-center active:scale-95 transition-transform"
-          >
-            <Icon
-              name={calMode === "month" ? "grid" : "list"}
-              size={16}
-              className="text-text"
-            />
-          </button>
-          <button className="w-[36px] h-[36px] rounded-[10px] bg-card flex items-center justify-center active:scale-95 transition-transform">
-            <Icon name="dotsH" size={16} className="text-text" />
-          </button>
-        </div>
-      </div>
+      <ScreenHeader
+        title="Предстоящее"
+        actions={
+          <>
+            <button
+              onClick={() => setCalMode(calMode === "month" ? "week" : "month")}
+              className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center active:scale-95 transition-transform"
+            >
+              <Icon
+                name={calMode === "month" ? "grid" : "list"}
+                size={16}
+                className="text-text"
+              />
+            </button>
+            <button className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center active:scale-95 transition-transform">
+              <Icon name="dotsH" size={16} className="text-text" />
+            </button>
+          </>
+        }
+      />
 
       {calMode === "month" ? (
         <>

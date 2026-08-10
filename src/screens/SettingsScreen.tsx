@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { Icon } from "../components/UI";
+import { FieldGroup, Icon, ScreenHeader } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
 
 interface RowProps {
@@ -52,74 +52,81 @@ export function SettingsScreen() {
 
   return (
     <div className="px-4 pb-4">
-      <div className="flex items-center justify-center h-[48px] mb-2 relative">
-        <h2 className="text-[17px] font-semibold">Настройки</h2>
-        <button
-          onClick={() => navigate("/overview")}
-          className="absolute right-0 w-[36px] h-[36px] rounded-full bg-red flex items-center justify-center"
-        >
-          <Icon name="check" size={18} className="text-white" />
-        </button>
-      </div>
+      <ScreenHeader
+        variant="compact"
+        title="Настройки"
+        actions={
+          <button
+            onClick={() => navigate("/overview")}
+            className="w-[44px] h-[44px] flex items-center justify-center"
+            aria-label="Готово"
+          >
+            <span className="w-[36px] h-[36px] rounded-full bg-red flex items-center justify-center">
+              <Icon name="check" size={18} className="text-white" />
+            </span>
+          </button>
+        }
+      />
 
       {/* Account section */}
-      <div className="rounded-2xl overflow-hidden mb-4">
-        <Row
-          icon="person"
-          label={user ? user.name : "Аккаунт"}
-          value={user?.email}
-        />
-        <div className="h-px bg-stroke mx-4" />
-        <Row icon="gear" label="Основное" />
-        <div className="h-px bg-stroke mx-4" />
-        <Row icon="zap" label="Подписка" />
-        <div className="h-px bg-stroke mx-4" />
-        <Row icon="calendarSmall" label="Календарь" />
+      <div className="mb-4">
+        <FieldGroup>
+          <Row
+            icon="person"
+            label={user ? user.name : "Аккаунт"}
+            value={user?.email}
+          />
+          <Row icon="gear" label="Основное" />
+          <Row icon="zap" label="Подписка" />
+          <Row icon="calendarSmall" label="Календарь" />
+        </FieldGroup>
       </div>
 
       {/* User settings */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">
         Пользовательские настройки
       </div>
-      <div className="rounded-2xl overflow-hidden mb-4">
-        <Row icon="moon" label="Тема" value="Темный" />
-        <div className="h-px bg-stroke mx-4" />
-        <Row icon="image" label="Иконка" value="Todoist" />
-        <div className="h-px bg-stroke mx-4" />
-        <Row icon="grid" label="Навигация" />
-        <div className="h-px bg-stroke mx-4" />
-        <Row icon="plus" label="Быстрое добавление" />
+      <div className="mb-4">
+        <FieldGroup>
+          <Row icon="moon" label="Тема" value="Темный" />
+          <Row icon="image" label="Иконка" value="Todoist" />
+          <Row icon="grid" label="Навигация" />
+          <Row icon="plus" label="Быстрое добавление" />
+        </FieldGroup>
       </div>
 
       {/* Productivity */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">
         Продуктивность
       </div>
-      <div className="rounded-2xl overflow-hidden mb-4">
-        <Row icon="zap" label="Продуктивность" />
-        <div className="h-px bg-stroke mx-4" />
-        <Row icon="bell" label="Напоминания" />
-        <div className="h-px bg-stroke mx-4" />
-        <Row
-          icon="bell"
-          label="Уведомления"
-          onClick={() => navigate("/notifications")}
-        />
+      <div className="mb-4">
+        <FieldGroup>
+          <Row icon="zap" label="Продуктивность" />
+          <Row icon="bell" label="Напоминания" />
+          <Row
+            icon="bell"
+            label="Уведомления"
+            onClick={() => navigate("/notifications")}
+          />
+        </FieldGroup>
       </div>
 
       {/* Agents */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">
         Команда
       </div>
-      <div className="rounded-2xl overflow-hidden mb-4">
-        <Row icon="bot" label="Агенты" onClick={() => navigate("/agents")} />
-        <div className="h-px bg-stroke mx-4" />
-        <Row icon="link" label="Интеграции" />
+      <div className="mb-4">
+        <FieldGroup>
+          <Row icon="bot" label="Агенты" onClick={() => navigate("/agents")} />
+          <Row icon="link" label="Интеграции" />
+        </FieldGroup>
       </div>
 
       {/* Session */}
-      <div className="rounded-2xl overflow-hidden mb-4">
-        <Row icon="x" label="Выйти" danger onClick={logout} />
+      <div className="mb-4">
+        <FieldGroup>
+          <Row icon="x" label="Выйти" danger onClick={logout} />
+        </FieldGroup>
       </div>
     </div>
   );

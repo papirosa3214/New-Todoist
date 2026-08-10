@@ -1,5 +1,12 @@
 import { useLocation, useNavigate } from "react-router-dom";
-import { useMemo, type CSSProperties, type ReactElement } from "react";
+import {
+  Children,
+  useMemo,
+  type ComponentPropsWithoutRef,
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useTasks } from "../api/tasks";
 import { todayStr } from "../lib/date";
 
@@ -506,7 +513,7 @@ export function BottomNav() {
   );
 
   return (
-    <nav className="flex items-stretch h-[60px] pb-[18px] bg-bg/90 backdrop-blur-xl border-t border-stroke shrink-0">
+    <nav className="pb-nav-safe fixed inset-x-0 bottom-0 z-20 flex items-stretch h-[60px] bg-bg/90 backdrop-blur-xl border-t border-stroke">
       {NAV_ITEMS.map((item) => {
         const active = location.pathname === item.path;
         const isToday = item.path === "/today";
@@ -556,10 +563,78 @@ export function FAB({ onClick }: { onClick?: () => void }) {
   return (
     <button
       onClick={onClick ?? (() => navigate("/task/new"))}
-      className="absolute bottom-[92px] right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-[0_6px_16px_rgba(228,67,50,.45)] z-40 transition-transform active:scale-95"
+      className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-[0_6px_16px_rgba(228,67,50,.45)] z-30 transition-transform active:scale-95"
     >
       <Icon name="plus" size={26} className="text-white" />
     </button>
+  );
+}
+
+// ═══════════ SCREEN HEADER ═══════════
+// Sticky header for screen roots. Two variants matching the two header
+// shapes already used across the app:
+//   - "large" (default): big left-aligned title, e.g. Inbox/Today/
+//     Overview. `actions` (view-toggle buttons, icons, …) render as a row
+//     to the right of the title, same line.
+//   - "compact": iOS-nav-bar shape used by detail/secondary screens
+//     (Register, TaskDetail, NewTask, Settings, …) — an optional
+//     `leading` element (usually a back button) on the left, a title
+//     genuinely centered via absolute positioning, and `actions` pinned
+//     to the right.
+//
+// Usage:
+//   <ScreenHeader title="Входящие" actions={<>{viewToggleButtons}</>} />
+//
+//   <ScreenHeader
+//     variant="compact"
+//     leading={<BackButton onClick={() => navigate(-1)} />}
+//     title="Регистрация"
+//   />
+//
+// Renders `sticky top-0`, so drop it as the first child inside a screen's
+// existing `px-4 ...` root div — no extra wrapper/margin needed, it just
+// stays put at the top of the (document-level) scroll while the rest of
+// the screen's content scrolls underneath it.
+export function ScreenHeader({
+  title,
+  leading,
+  actions,
+  variant = "large",
+  className = "",
+}: {
+  title: ReactNode;
+  leading?: ReactNode;
+  actions?: ReactNode;
+  variant?: "large" | "compact";
+  className?: string;
+}) {
+  const isCompact = variant === "compact";
+  return (
+    <div
+      className={`sticky top-0 z-20 bg-bg/90 backdrop-blur-xl border-b border-stroke ${className}`}
+    >
+      <div
+        className={`flex items-center gap-2 relative ${
+          isCompact ? "h-[48px]" : "min-h-[56px] py-2"
+        }`}
+      >
+        {leading}
+        {isCompact ? (
+          <h2 className="absolute left-1/2 -translate-x-1/2 text-[17px] font-semibold whitespace-nowrap">
+            {title}
+          </h2>
+        ) : (
+          <h1 className="flex-1 min-w-0 truncate text-[28px] font-bold">
+            {title}
+          </h1>
+        )}
+        {actions && (
+          <div className="flex items-center gap-2 shrink-0 ml-auto">
+            {actions}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -605,5 +680,76 @@ export function Panel() {
         собран 1:1 по скриншотам от 10.08.2026
       </div>
     </aside>
+  );
+}
+
+// ═══════════ FORM PRIMITIVES ═══════════
+// Unified spacing/radius scale for forms across the app:
+//   - FieldGroup: bg-card rounded-2xl card wrapping a list of rows, with a
+//     single consistent inset divider (h-px bg-stroke mx-4) between them.
+//   - TextField: one icon+input row, fixed 52px height (comfortable >44px
+//     touch target), meant to live inside a FieldGroup.
+//   - Button: full-width h-12 (48px) CTA with a small variant set.
+
+export function FieldGroup({ children }: { children: ReactNode }) {
+  const items = Children.toArray(children);
+  return (
+    <div className="w-full bg-card rounded-2xl overflow-hidden">
+      {items.map((child, i) => (
+        <div key={i}>
+          {child}
+          {i < items.length - 1 && <div className="h-px bg-stroke mx-4" />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function TextField({
+  icon,
+  trailing,
+  className = "",
+  ...inputProps
+}: {
+  icon?: string;
+  trailing?: ReactNode;
+  className?: string;
+} & ComponentPropsWithoutRef<"input">) {
+  return (
+    <div className="flex items-center gap-3 px-4 h-[52px]">
+      {icon && <Icon name={icon} size={18} className="text-dim shrink-0" />}
+      <input
+        {...inputProps}
+        className={`flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none ${className}`}
+      />
+      {trailing}
+    </div>
+  );
+}
+
+type ButtonVariant = "primary" | "secondary" | "outline";
+
+const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
+  primary: "bg-red text-white",
+  secondary: "bg-card2 border border-stroke text-text",
+  outline: "border border-stroke text-sub bg-transparent",
+};
+
+export function Button({
+  variant = "primary",
+  className = "",
+  children,
+  ...props
+}: {
+  variant?: ButtonVariant;
+  className?: string;
+} & ComponentPropsWithoutRef<"button">) {
+  return (
+    <button
+      {...props}
+      className={`w-full h-12 rounded-xl text-[15px] font-semibold flex items-center justify-center gap-3 transition-opacity active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
+    >
+      {children}
+    </button>
   );
 }

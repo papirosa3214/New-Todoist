@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { Icon } from "../components/UI";
+import {
+  Button,
+  FieldGroup,
+  Icon,
+  TextField,
+  ScreenHeader,
+} from "../components/UI";
 import { useRegister } from "../api/auth";
 import { ApiError } from "../api/client";
 
@@ -37,77 +43,65 @@ export function RegisterScreen() {
   };
 
   return (
-    <div className="px-4 pb-4 flex flex-col min-h-full">
-      {/* Header */}
-      <div className="flex items-center h-[48px] mb-2 relative">
-        <button
-          onClick={() => navigate("/login")}
-          className="w-[36px] h-[36px]"
-        >
-          <Icon name="chevronLeft" size={22} />
-        </button>
-        <h2 className="absolute left-1/2 -translate-x-1/2 text-[17px] font-semibold">
-          Регистрация
-        </h2>
-      </div>
+    <div className="pb-bottom-safe px-5 flex flex-col min-h-[100dvh]">
+      <ScreenHeader
+        variant="compact"
+        leading={
+          <button
+            onClick={() => navigate("/login")}
+            className="w-11 h-11 -ml-2.5 flex items-center justify-center"
+            aria-label="Назад"
+          >
+            <Icon name="chevronLeft" size={22} />
+          </button>
+        }
+        title="Регистрация"
+      />
 
-      <div className="flex-1 flex flex-col items-center justify-center">
+      <div className="flex-1 flex flex-col items-center justify-start py-6">
         <h2 className="text-[20px] font-semibold mb-1">Создайте аккаунт</h2>
         <p className="text-[14px] text-sub mb-6">Присоединяйтесь к команде</p>
 
         <form onSubmit={handleSubmit} className="w-full">
           {/* Fields */}
-          <div className="w-full bg-card rounded-2xl overflow-hidden mb-4">
-            <div className="flex items-center gap-3 px-4 py-3.5">
-              <Icon name="person" size={18} className="text-dim" />
-              <input
+          <div className="mb-4">
+            <FieldGroup>
+              <TextField
+                icon="person"
                 required
                 autoComplete="name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Имя"
-                className="flex-1 bg-transparent text-[15px] text-text placeholder:text-dim outline-none"
               />
-            </div>
-            <div className="h-px bg-stroke mx-4" />
-            <div className="flex items-center gap-3 px-4 py-3.5">
-              <Icon name="mail" size={18} className="text-dim" />
-              <input
+              <TextField
+                icon="mail"
                 type="email"
                 required
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="Email"
-                className="flex-1 bg-transparent text-[15px] text-text placeholder:text-dim outline-none"
               />
-            </div>
-            <div className="h-px bg-stroke mx-4" />
-            <div className="flex items-center gap-3 px-4 py-3.5">
-              <Icon name="lock" size={18} className="text-dim" />
-              <input
+              <TextField
+                icon="lock"
                 type="password"
                 required
                 autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Пароль"
-                className="flex-1 bg-transparent text-[15px] text-text placeholder:text-dim outline-none"
               />
-            </div>
-            <div className="h-px bg-stroke mx-4" />
-            <div className="flex items-center gap-3 px-4 py-3.5">
-              <Icon name="lock" size={18} className="text-dim" />
-              <input
+              <TextField
+                icon="lock"
                 type="password"
                 required
                 autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Подтвердите пароль"
-                className="flex-1 bg-transparent text-[15px] text-text placeholder:text-dim outline-none"
               />
-            </div>
+            </FieldGroup>
           </div>
 
           {/* Role selection */}
@@ -124,7 +118,7 @@ export function RegisterScreen() {
                   key={r.key}
                   type="button"
                   onClick={() => setRole(r.key)}
-                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border transition-colors ${
+                  className={`flex-1 h-12 flex items-center justify-center gap-2 rounded-xl border transition-colors ${
                     role === r.key
                       ? "border-red text-red bg-red/10"
                       : "border-stroke text-sub bg-card"
@@ -142,13 +136,11 @@ export function RegisterScreen() {
           )}
 
           {/* Submit */}
-          <button
-            type="submit"
-            disabled={register.isPending}
-            className="w-full h-[50px] bg-red rounded-xl text-[16px] font-semibold text-white mb-4 disabled:opacity-60"
-          >
-            {register.isPending ? "Создаём…" : "Создать аккаунт"}
-          </button>
+          <div className="mb-4">
+            <Button type="submit" disabled={register.isPending}>
+              {register.isPending ? "Создаём…" : "Создать аккаунт"}
+            </Button>
+          </div>
         </form>
 
         <p className="text-[14px] text-sub">
