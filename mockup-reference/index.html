@@ -1,0 +1,1593 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Todoist · Макет 1:1 по референсам</title>
+<style>
+/* ============ ТОКЕНЫ (Todoist dark, по референсам 10.08.2026) ============ */
+:root{
+  --bg:#171717;            /* фон страницы — глубокий чаркоал */
+  --card:#242424;          /* карточки */
+  --card2:#2B2B2B;         /* чуть светлее (пилюли, кнопки) */
+  --stroke:rgba(255,255,255,.09);
+  --text:#FFFFFF;
+  --sub:#A6A6A6;           /* вторичный текст */
+  --dim:#717171;           /* третичный */
+  --red:#E44332;           /* акцент */
+  --orange:#FF9A14;
+  --pink:#FF7A8A;
+  --blue:#4A9FD8;
+  --purple:#A78BFA;
+  --yellow:#F7D038;
+  --coral:#FF6B6B;         /* иконки настроек */
+  --teal:#35B8A3;          /* аватар */
+  --green:#8FBF9F;         /* листья иллюстрации */
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Avenir Next","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  font-family:var(--font);
+  background:#0C0C0C;
+  color:var(--text);
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+::-webkit-scrollbar{display:none}
+button{font-family:inherit;background:none;border:none;color:inherit;cursor:pointer;padding:0}
+.ic{display:inline-flex;flex-shrink:0}
+.ic svg{width:100%;height:100%;display:block}
+
+/* ============ СЦЕНА ============ */
+.stage{
+  position:fixed;inset:0;
+  display:flex;align-items:flex-start;justify-content:center;
+  padding:24px 0 24px 0;
+}
+.phone{
+  width:390px;height:844px;
+  background:var(--bg);
+  border-radius:36px;
+  overflow:hidden;
+  position:relative;
+  box-shadow:0 24px 80px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.06);
+  flex-shrink:0;
+}
+
+/* ============ СТАТУС-БАР ============ */
+.statusbar{
+  position:absolute;top:0;left:0;right:0;z-index:60;
+  height:46px;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 24px;
+  pointer-events:none;
+}
+.sb-left{font-size:14.5px;font-weight:600;letter-spacing:.2px}
+.sb-right{display:flex;align-items:center;gap:5px}
+.sb-right .ic{opacity:.92}
+
+/* ============ ЭКРАНЫ ============ */
+.screen{position:absolute;inset:0;display:none;flex-direction:column}
+.screen.active{display:flex}
+.scroll{
+  flex:1;overflow-y:auto;overflow-x:hidden;
+  padding-bottom:110px;
+  scrollbar-width:none;
+}
+.screen .statusbar{position:sticky;top:0}
+.screen-head{position:relative;z-index:5;padding:8px 16px 0}
+
+/* --- заголовки главных вкладок: «Сегодня» / «Входящие» --- */
+.main-head{display:flex;align-items:center;justify-content:space-between;padding:12px 16px 6px}
+.main-head h1{font-size:28px;font-weight:800;letter-spacing:-.3px}
+.head-actions{display:flex;align-items:center;gap:8px}
+.pill-btn{
+  width:36px;height:36px;border-radius:10px;background:var(--card2);
+  display:flex;align-items:center;justify-content:center;color:var(--text);
+}
+.pill-btn:active{opacity:.75}
+
+/* --- центрированный заголовок: «Предстоящее» / «Настройки» --- */
+.center-head{
+  position:relative;display:flex;align-items:center;justify-content:center;
+  padding:12px 16px;height:52px;
+}
+.center-head h2{font-size:17px;font-weight:600}
+.center-head .left-slot{position:absolute;left:16px;display:flex;align-items:center;gap:8px}
+.center-head .right-slot{position:absolute;right:16px;display:flex;align-items:center;gap:8px}
+
+/* --- заголовок «Обзор»: аватар-пилюля + колокольчик + шестерёнка --- */
+.ov-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 4px}
+.user-pill{
+  display:flex;align-items:center;gap:9px;
+  background:var(--card);border:1px solid rgba(255,255,255,.11);
+  border-radius:21px;padding:4px 14px 4px 5px;height:42px;
+}
+.avatar{
+  width:32px;height:32px;border-radius:50%;background:var(--teal);
+  display:flex;align-items:center;justify-content:center;
+  font-size:15px;font-weight:700;color:#fff;
+}
+.user-pill span{font-size:15.5px;font-weight:600}
+.round-btn{
+  width:38px;height:38px;border-radius:50%;background:var(--card);
+  display:flex;align-items:center;justify-content:center;color:var(--text);
+}
+.round-btn:active{opacity:.75}
+
+/* --- красная круглая кнопка «галочка» --- */
+.check-btn{
+  width:38px;height:38px;border-radius:50%;background:var(--red);
+  display:flex;align-items:center;justify-content:center;color:#fff;
+  box-shadow:0 4px 12px rgba(228,67,50,.35);
+}
+.check-btn:active{opacity:.85}
+
+/* ============ КАРТОЧКИ И РЯДЫ ============ */
+.card{
+  background:var(--card);border-radius:14px;
+  margin:0 16px;
+  overflow:hidden;
+}
+.row{
+  display:flex;align-items:center;gap:12px;
+  min-height:47px;padding:0 14px;
+  width:100%;text-align:left;
+}
+.row + .row{border-top:1px solid var(--stroke)}
+.row .r-ic{color:var(--coral);display:flex;align-items:center}
+.row .r-tx{flex:1;font-size:15px;font-weight:500;color:var(--text)}
+.row .r-val{font-size:14px;color:var(--sub)}
+.row .r-chev{color:#6E6E6E;display:flex;align-items:center}
+.row:active{background:rgba(255,255,255,.04)}
+.sec-label{
+  font-size:13px;color:var(--sub);font-weight:600;
+  margin:20px 20px 6px;letter-spacing:.1px;
+}
+.sec-label:first-child{margin-top:14px}
+
+/* --- банан Pro --- */
+.pro-banner{
+  margin:14px 16px 12px;height:46px;border-radius:23px;
+  background:linear-gradient(90deg,#6E3A1D,#7F4624);
+  display:flex;align-items:center;gap:11px;
+  padding:0 18px;
+  color:#fff;
+}
+.pro-banner .spr{color:#FFC46B}
+.pro-banner b{flex:1;font-size:14px;font-weight:600;letter-spacing:.1px}
+.pro-banner .chev{color:rgba(255,255,255,.85)}
+
+/* ============ ЗАДАЧИ ============ */
+.date-label{
+  font-size:13px;font-weight:600;color:var(--sub);
+  padding:14px 18px 4px;
+}
+.task{
+  display:flex;align-items:flex-start;gap:12px;
+  padding:9px 16px;
+}
+.task + .task{border-top:1px solid rgba(255,255,255,.06)}
+.task .t-dot{margin-top:3px;flex-shrink:0}
+.task .t-main{flex:1;min-width:0}
+.task .t-title{
+  font-size:14.5px;line-height:1.32;color:#ECECEC;font-weight:500;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+.task .t-sub{
+  font-size:12px;line-height:1.35;color:var(--sub);margin-top:2px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+.task .t-meta{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin-top:5px}
+.tag-pill{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600}
+.t-date{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500}
+.t-count{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--sub);font-weight:500}
+.task .t-right{flex-shrink:0;text-align:right;margin-top:2px}
+.t-right .t-proj{font-size:11px;color:var(--orange);font-weight:600;line-height:1.35}
+.t-right .t-stat{font-size:11px;color:var(--orange);font-weight:600;line-height:1.35;display:inline-flex;align-items:center;gap:3px;justify-content:flex-end}
+.t-right .t-inbox{font-size:11px;color:#BDBDBD;font-weight:500;display:inline-flex;align-items:center;gap:4px}
+
+/* кружки задач */
+.circle{width:15px;height:15px;border-radius:50%;flex-shrink:0}
+.c-orange{background:var(--orange);border:2px solid var(--orange)}
+.c-pink{background:var(--pink);border:2px solid var(--pink)}
+.c-blue{background:var(--blue);border:2px solid var(--blue)}
+.c-gray{background:transparent;border:2px solid #8A8A8A}
+.c-brown{background:transparent;border:2px solid #B08968}
+.c-white{background:transparent;border:2px solid #CFCFCF}
+
+/* ============ КАЛЕНДАРЬ ============ */
+.cal-wrap{padding:0 16px 10px}
+.cal-month{
+  display:flex;align-items:center;gap:5px;
+  height:36px;font-size:13.5px;font-weight:700;color:var(--red);
+}
+.cal-weekdays{
+  display:grid;grid-template-columns:repeat(7,1fr);
+  height:22px;font-size:11px;color:#8F8F8F;font-weight:500;text-align:center;
+}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);margin-top:2px}
+.cal-cell{height:42px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:6px}
+.cal-cell .num{font-size:14px;color:#D9D9D9;width:28px;height:28px;line-height:28px;text-align:center;border-radius:50%}
+.cal-cell.today .num{background:var(--red);color:#fff;font-weight:700}
+.cal-cell.other .num{color:#6E6E6E}
+.cal-cell .dot{width:3.5px;height:3.5px;border-radius:50%;background:#8A8A8A;margin-top:2px}
+.cal-strip{display:grid;grid-template-columns:repeat(7,1fr);margin-top:4px}
+.cal-strip .cal-cell{height:52px}
+.cal-divider{height:1px;background:var(--stroke);margin:4px 0 0}
+
+/* ============ ВКЛАДКИ ============ */
+.tabbar{
+  position:absolute;left:0;right:0;bottom:0;z-index:50;
+  height:78px;padding-bottom:18px;
+  background:rgba(23,23,23,.92);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-top:1px solid rgba(255,255,255,.06);
+  display:flex;
+}
+.tab{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:#9A9A9A;font-size:10px;font-weight:600;
+  position:relative;
+}
+.tab .t-ic{display:flex;align-items:center;justify-content:center;height:24px;border-radius:9px;padding:0 10px}
+.tab.on{color:var(--text)}
+/* Входящие: красная пилюля */
+.tab[data-tab="inbox"].on .t-ic{background:rgba(228,67,50,.16);color:var(--red)}
+/* Сегодня: тёмная пилюля + бейдж */
+.tab[data-tab="today"].on .t-ic{background:rgba(255,255,255,.08)}
+.tab[data-tab="today"].on .t-ic{color:var(--text)}
+.badge{
+  position:absolute;top:4px;right:calc(50% - 22px);
+  min-width:16px;height:16px;border-radius:8px;
+  background:var(--red);color:#fff;font-size:9.5px;font-weight:700;
+  display:none;align-items:center;justify-content:center;padding:0 4px;
+}
+.tab[data-tab="today"].on .badge{display:flex}
+/* Предстоящее: красная иконка */
+.tab[data-tab="upcoming"].on .t-ic{color:var(--red)}
+/* Обзор: розово-красная иконка */
+.tab[data-tab="overview"].on .t-ic{color:#FF6B6B}
+
+/* ============ FAB ============ */
+.fab{
+  position:absolute;z-index:45;
+  width:58px;height:58px;border-radius:50%;
+  background:var(--red);color:#fff;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 8px 20px rgba(228,67,50,.45);
+  right:18px;bottom:92px;
+}
+.fab:active{transform:scale(.94)}
+.fab-q{width:40px;height:40px;right:auto;left:18px;bottom:96px;box-shadow:0 6px 14px rgba(0,0,0,.4)}
+
+/* ============ КОНТЕКСТНОЕ МЕНЮ ============ */
+.menu{
+  position:absolute;z-index:70;top:64px;right:14px;
+  background:#242424;border-radius:13px;padding:6px;
+  box-shadow:0 10px 30px rgba(0,0,0,.55);
+  min-width:238px;
+  display:none;
+}
+.menu.open{display:block}
+.menu button{
+  display:flex;align-items:center;gap:11px;width:100%;
+  padding:10px 12px;border-radius:9px;font-size:13.5px;color:#E8E8E8;
+}
+.menu button .ic{color:#9A9A9A}
+.menu button:active{background:rgba(255,255,255,.06)}
+.menu-backdrop{position:absolute;inset:0;z-index:65;display:none}
+.menu-backdrop.open{display:block}
+
+/* ============ МОДАЛКА «Отображение» ============ */
+.overlay{
+  position:absolute;inset:0;z-index:80;
+  background:rgba(0,0,0,.65);
+  display:none;flex-direction:column;justify-content:flex-end;
+}
+.overlay.open{display:flex}
+.sheet{
+  background:#1F1F1F;
+  border-radius:20px 20px 0 0;
+  max-height:78%;
+  display:flex;flex-direction:column;
+  padding-bottom:26px;
+}
+.sheet-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 18px 10px;position:relative;
+}
+.sheet-head .x-btn{
+  width:34px;height:34px;border-radius:50%;background:var(--card2);
+  display:flex;align-items:center;justify-content:center;color:var(--text);
+}
+.sheet-head h3{font-size:16px;font-weight:600;position:absolute;left:0;right:0;text-align:center;pointer-events:none}
+.sheet-body{overflow-y:auto;scrollbar-width:none}
+
+/* раскладка */
+.layouts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:12px}
+.layout{display:flex;flex-direction:column;align-items:center;gap:7px}
+.layout .mock{width:58px;height:102px;border-radius:11px;border:1.5px solid #4A4A4A;display:flex;align-items:center;justify-content:center}
+.layout.sel .mock{border-color:var(--red);background:rgba(228,67,50,.07)}
+.layout .l-lbl{font-size:12px;color:#D5D5D5;padding:2px 10px;border-radius:11px}
+.layout.sel .l-lbl{background:rgba(228,67,50,.16);color:var(--red);font-weight:600}
+.layout.sel .l-star{position:relative}
+.layout .l-star .star{position:absolute;top:-8px;right:-9px;color:var(--yellow)}
+
+/* мини-мокапы телефонов */
+.mock-list{display:flex;flex-direction:column;gap:8px;width:26px}
+.mock-list i{height:4px;border-radius:2px;background:#8A8A8A;display:block}
+.mock-board{display:flex;gap:5px;width:32px}
+.mock-board i{flex:1;height:56px;border-radius:4px;background:#3A3A3A;display:block}
+.mock-board i+span{display:flex;flex-direction:column;gap:4px;justify-content:center}
+.mock-board .bd{width:4px;height:4px;border-radius:50%;background:#8A8A8A;display:block}
+.mock-cal{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;width:30px}
+.mock-cal i{height:5px;border-radius:2px;background:#8A8A8A;display:block}
+
+/* переключатели */
+.switch{
+  width:43px;height:25px;border-radius:13px;background:var(--red);
+  position:relative;flex-shrink:0;
+}
+.switch::after{
+  content:"";position:absolute;top:2.5px;right:2.5px;
+  width:20px;height:20px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.3);
+}
+
+/* ============ ЭКРАН «Сегодня» пустой ============ */
+.empty-state{display:flex;flex-direction:column;align-items:center;padding:34px 40px 0;text-align:center}
+.empty-state h3{font-size:16.5px;font-weight:700;margin-top:26px}
+.empty-state p{font-size:13.5px;color:var(--sub);margin-top:8px;line-height:1.5;max-width:280px}
+
+/* ============ ПАНЕЛЬ РЕФЕРЕНСОВ (вне макета) ============ */
+.panel{
+  position:fixed;right:22px;top:22px;width:196px;
+  background:#101010;border:1px solid rgba(255,255,255,.1);border-radius:16px;
+  padding:14px;z-index:100;
+  box-shadow:0 16px 50px rgba(0,0,0,.5);
+}
+.panel h4{font-size:11px;color:#8F8F8F;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px}
+.pnl-btn{
+  display:flex;align-items:center;gap:9px;width:100%;
+  padding:7px 9px;border-radius:9px;margin-bottom:3px;
+  font-size:12px;color:#D5D5D5;text-align:left;
+}
+.pnl-btn:hover{background:#1C1C1C}
+.pnl-btn.on{background:#262626;color:#fff}
+.pnl-btn.on .n{background:var(--red);color:#fff}
+.pnl-btn .n{
+  width:19px;height:19px;border-radius:6px;background:#242424;color:#9A9A9A;
+  font-size:10.5px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.panel .note{font-size:10.5px;color:#5E5E5E;margin-top:8px;line-height:1.5;border-top:1px solid rgba(255,255,255,.07);padding-top:8px}
+
+@media (max-width:760px){
+  .panel{display:none}
+  .stage{padding:0}
+  .phone{width:100vw;height:100dvh;border-radius:0}
+}
+
+/* ============ ЭКРАН «Настройки» (v2, шторка-блюр) ============ */
+.settings-blur{
+  position:sticky;top:0;z-index:10;
+  background:rgba(23,23,23,.72);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-bottom:1px solid rgba(255,255,255,.07);
+}
+.logout-btn{
+  display:block;margin:26px 16px 0;width:calc(100% - 32px);
+  height:48px;border-radius:12px;background:#262626;
+  color:var(--red);font-size:15px;font-weight:600;
+}
+.logout-btn:active{background:#2E2E2E}
+.user-mail{font-size:12px;color:#6E6E6E;text-align:center;margin:14px 0 26px}
+
+/* бейдж «иконка приложения» в шторке настроек */
+.app-ico{
+  width:24px;height:24px;border-radius:6px;
+  background:linear-gradient(135deg,#3A3A3A,#2A2A2A);
+  border:1px solid rgba(255,255,255,.12);
+  display:flex;align-items:center;justify-content:center;
+  color:rgba(255,255,255,.35);
+}
+
+/* ============ ЭКРАНЫ АВТОРИЗАЦИИ (логин / регистрация) ============ */
+.auth-wrap{flex:1;display:flex;flex-direction:column;align-items:center;padding:44px 24px 24px;overflow-y:auto;scrollbar-width:none}
+.auth-logo{width:72px;height:72px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 12px 30px rgba(228,67,50,.38);flex-shrink:0}
+.auth-logo svg{width:34px;height:34px}
+.auth-app{font-size:28px;font-weight:800;letter-spacing:-.4px;margin-top:16px}
+.auth-head{font-size:20px;font-weight:600;margin-top:24px;text-align:center}
+.auth-sub{font-size:14px;color:var(--sub);margin-top:6px;text-align:center}
+.auth-card{width:100%;margin-top:24px}
+.field{display:flex;align-items:center;gap:11px;height:50px;padding:0 14px}
+.field + .field{border-top:1px solid var(--stroke)}
+.f-ic{color:var(--sub);display:flex;align-items:center}
+.f-ph{flex:1;font-size:15px;color:var(--sub);text-align:left}
+.f-eye{color:var(--dim);display:flex;align-items:center}
+.auth-btn{width:100%;height:50px;border-radius:12px;background:var(--red);color:#fff;font-size:16px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:16px;box-shadow:0 8px 20px rgba(228,67,50,.3)}
+.auth-btn:active{opacity:.85}
+.auth-divider{display:flex;align-items:center;gap:12px;width:100%;margin:22px 0;color:var(--dim);font-size:13px}
+.auth-divider::before,.auth-divider::after{content:"";flex:1;height:1px;background:var(--stroke)}
+.google-btn{width:100%;height:50px;border-radius:12px;background:#2B2B2B;border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;gap:10px;font-size:15px;font-weight:600;color:var(--text)}
+.google-btn:active{background:#333333}
+.auth-foot{font-size:14px;color:var(--sub);margin-top:auto;padding-top:30px;text-align:center}
+.auth-foot a{color:var(--red);font-weight:600;cursor:pointer}
+
+.reg-role-label{width:100%;font-size:13px;font-weight:600;color:var(--sub);margin:20px 2px 8px}
+.role-row{display:flex;gap:10px;width:100%}
+.role-opt{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;height:44px;border-radius:12px;background:var(--card);border:1.5px solid var(--stroke);font-size:13.5px;font-weight:600;color:var(--sub)}
+.role-opt.sel{border-color:var(--red);color:var(--red);background:rgba(228,67,50,.07)}
+.role-opt:active{opacity:.8}
+
+/* ============ ЭКРАН «НОВАЯ ЗАДАЧА» ============ */
+.nt-title{width:100%;background:none;border:none;outline:none;resize:none;font-family:inherit;font-size:20px;font-weight:600;color:var(--text);padding:16px 16px 2px;min-height:46px;display:block}
+.nt-title::placeholder{color:#8A8A8A}
+.nt-desc{width:100%;background:none;border:none;outline:none;resize:none;font-family:inherit;font-size:15px;color:var(--sub);padding:4px 16px 12px;min-height:42px;display:block}
+.nt-desc::placeholder{color:var(--sub)}
+.p1-pill{display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;background:var(--red);min-width:26px;height:20px;border-radius:10px;padding:0 7px;flex-shrink:0}
+.badge-pill{display:inline-flex;align-items:center;font-size:10.5px;font-weight:600;padding:2.5px 8px;border-radius:9px;background:rgba(255,255,255,.09);color:var(--sub);flex-shrink:0}
+.nt-add{border-top:1px dashed rgba(255,255,255,.14)!important}
+.tags-row{display:flex;gap:8px;padding:13px 14px;overflow-x:auto;scrollbar-width:none}
+.tag-pill-2{display:inline-flex;align-items:center;flex-shrink:0;font-size:12.5px;font-weight:600;color:var(--pink);background:rgba(255,122,138,.12);padding:6px 13px;border-radius:10px}
+.tag-pill-2.plus{color:var(--sub);background:rgba(255,255,255,.08)}
+
+/* ============ ЭКРАН «УВЕДОМЛЕНИЯ» ============ */
+.notif-row{align-items:flex-start!important;min-height:0!important;padding:12px 14px!important;gap:12px}
+.n-main{font-size:14px;font-weight:600;line-height:1.35;color:#ECECEC}
+.n-sub{font-size:12px;color:var(--sub);margin-top:2px;line-height:1.35}
+.n-time{font-size:12px;color:var(--dim);margin-top:4px}
+.n-dot{width:8px;height:8px;border-radius:50%;background:var(--red);flex-shrink:0;margin-top:5px}
+
+/* ============ ЭКРАН «АГЕНТЫ» ============ */
+.ag-row{min-height:60px;padding:10px 14px}
+.ag-status{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--sub);flex-shrink:0}
+.ag-dot{width:7px;height:7px;border-radius:50%;background:#4CD964;flex-shrink:0}
+.cap-tag{font-size:10.5px;font-weight:600;color:var(--sub);background:rgba(255,255,255,.07);padding:2px 8px;border-radius:8px}
+.inv-card{background:none;border:1.5px dashed rgba(255,255,255,.16);border-radius:14px;margin:0 16px}
+.inv-card .row{justify-content:center;gap:8px;min-height:52px}
+.role-info{padding:2px 14px}
+.ri-item{font-size:13px;color:var(--sub);line-height:1.5;padding:11px 0}
+.ri-item + .ri-item{border-top:1px solid var(--stroke)}
+.ri-item b{color:var(--text);font-weight:600}
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="phone" id="phone">
+
+    <!-- ================= ЭКРАН 1 · ОБЗОР ================= -->
+    <section class="screen" id="s-overview">
+      <div class="statusbar"><span class="sb-left">08:18</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="scroll">
+        <div class="ov-head">
+          <div class="user-pill">
+            <div class="avatar">М</div>
+            <span>Максим</span>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="round-btn" id="btnBell" style="width:38px;height:38px"><i class="ic" style="width:17px;height:17px" data-i="bell"></i></button>
+            <button class="round-btn" id="btnSettings3" style="width:38px;height:38px"><i class="ic" style="width:17px;height:17px" data-i="gear"></i></button>
+          </div>
+        </div>
+
+        <div class="pro-banner">
+          <span class="spr"><i class="ic" style="width:21px;height:21px" data-i="sparkle"></i></span>
+          <b>Перейти на тариф Pro</b>
+          <span class="chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+        </div>
+
+        <div class="card">
+          <button class="row">
+            <span class="r-ic" style="color:var(--orange)"><i class="ic" style="width:18px;height:18px" data-i="search"></i></span>
+            <span class="r-tx">Поиск</span>
+          </button>
+          <button class="row">
+            <span class="r-ic" style="color:var(--pink)"><i class="ic" style="width:18px;height:18px" data-i="grid2"></i></span>
+            <span class="r-tx">Фильтры и метки</span>
+          </button>
+          <button class="row">
+            <span class="r-ic" style="color:var(--pink)"><i class="ic" style="width:18px;height:18px" data-i="pulse"></i></span>
+            <span class="r-tx">Отчеты</span>
+          </button>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 18px 6px">
+          <span style="font-size:13px;font-weight:600;color:#E8E8E8">Избранное</span>
+          <span style="color:#8F8F8F;display:flex"><i class="ic" style="width:12px;height:12px" data-i="chevD"></i></span>
+        </div>
+        <div class="card">
+          <button class="row">
+            <span class="r-ic" style="color:var(--pink)"><i class="ic" style="width:16px;height:16px" data-i="tag"></i></span>
+            <span class="r-tx">Ипотека</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+          <button class="row">
+            <span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:16px;height:16px" data-i="tag"></i></span>
+            <span class="r-tx">лягушка</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+          <button class="row">
+            <span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:16px;height:16px" data-i="drop"></i></span>
+            <span class="r-tx">Лягушка на сегодня</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 18px 6px">
+          <span style="font-size:13px;font-weight:600;color:#E8E8E8">Мои проекты</span>
+          <span style="display:flex;align-items:center;gap:10px;color:#8F8F8F">
+            <i class="ic" style="width:14px;height:14px" data-i="chevR"></i>
+            <i class="ic" style="width:15px;height:15px" data-i="plus"></i>
+          </span>
+        </div>
+        <div class="card">
+          <button class="row">
+            <span class="r-ic" style="color:var(--orange)"><i class="ic" style="width:15px;height:15px" data-i="hash"></i></span>
+            <span class="r-tx">Клод и Максим</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+          <button class="row">
+            <span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:15px;height:15px" data-i="hash"></i></span>
+            <span class="r-tx">Цикл продаж</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+          <button class="row">
+            <span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:15px;height:15px" data-i="pencil"></i></span>
+            <span class="r-tx">Настройка проектов</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+        </div>
+      </div>
+
+      <button class="fab"><i class="ic" style="width:24px;height:24px" data-i="plus"></i></button>
+      <nav class="tabbar">
+        <button class="tab" data-tab="inbox"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="tray"></i></span>Входящие</button>
+        <button class="tab" data-tab="today"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="cal"></i></span><span class="badge">10</span>Сегодня</button>
+        <button class="tab" data-tab="upcoming"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="calGrid"></i></span>Предстоящее</button>
+        <button class="tab" data-tab="overview"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="list3"></i></span>Обзор</button>
+      </nav>
+    </section>
+
+    <!-- ================= ЭКРАН 7 · СЕГОДНЯ (пустой) ================= -->
+    <section class="screen" id="s-today">
+      <div class="statusbar"><span class="sb-left">08:17</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="menu-backdrop" id="menuBackdrop"></div>
+      <div class="menu" id="ctxMenu">
+        <button><span class="ic" style="width:15px;height:15px" data-i="chain"></span>Скопировать ссылку на Сегодня</button>
+        <button><span class="ic" style="width:15px;height:15px" data-i="copyStack"></span>Выбрать задачи</button>
+        <button><span class="ic" style="width:15px;height:15px" data-i="chart"></span>Посмотреть активность</button>
+      </div>
+
+      <div class="main-head">
+        <h1>Сегодня</h1>
+        <div class="head-actions">
+          <button class="pill-btn" id="btnTodayMenu"><i class="ic" style="width:17px;height:17px" data-i="list3"></i></button>
+          <button class="pill-btn"><i class="ic" style="width:16px;height:16px" data-i="dots3"></i></button>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <div class="empty-state">
+          <svg viewBox="0 0 240 200" width="218" height="182" aria-hidden="true">
+            <defs>
+              <linearGradient id="vaseG" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#B3C7D0"/><stop offset="1" stop-color="#8FA6B1"/>
+              </linearGradient>
+              <linearGradient id="mugG" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#F0E6CE"/><stop offset="1" stop-color="#E3D6B8"/>
+              </linearGradient>
+            </defs>
+            <!-- листья -->
+            <g fill="#8FBF9F" opacity=".95">
+              <path d="M118 80c-4-18-16-28-34-30 5 13 9 21 26 28z"/>
+              <path d="M122 82c7-15 22-21 37-17-9 10-15 17-32 21z"/>
+              <path d="M116 86c-13-10-28-12-40-5 9 8 18 12 36 12z"/>
+            </g>
+            <!-- ваза -->
+            <path d="M104 110h32v4c-2 10-4 15-4 26 0 11 7 16 7 24 0 15-13 22-23 22s-23-7-23-22c0-8 7-13 7-24 0-11-2-16-4-26z" fill="url(#vaseG)"/>
+            <ellipse cx="120" cy="108" rx="17" ry="4.5" fill="#BCCFD8"/>
+            <ellipse cx="112" cy="138" rx="7" ry="12" fill="#FFFFFF" opacity=".28"/>
+            <!-- цветы -->
+            <g>
+              <path d="M52 168c4-18 10-30 18-40" stroke="#7FA98F" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <circle cx="70" cy="126" r="6" fill="#F2C94C"/>
+              <circle cx="70" cy="126" r="2.4" fill="#D9A62E"/>
+              <path d="M186 170c-2-16-8-28-18-38" stroke="#7FA98F" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <circle cx="167" cy="130" r="5" fill="#F2C94C"/>
+              <path d="M60 178c6-10 16-16 26-18" stroke="#7FA98F" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <circle cx="88" cy="159" r="4" fill="#F2C94C"/>
+            </g>
+            <!-- кружка -->
+            <path d="M136 120h46v30c0 10-9 16-23 16s-23-6-23-16z" fill="url(#mugG)"/>
+            <path d="M182 129c11 0 14 6 14 14s-3 14-14 14" stroke="#8FBF9F" stroke-width="6" fill="none" stroke-linecap="round"/>
+            <!-- лицо на кружке -->
+            <g stroke="#7A6A4F" stroke-width="2.2" fill="none" stroke-linecap="round">
+              <path d="M151 132q4.5-5 9 0"/>
+              <path d="M165 132q4.5-5 9 0"/>
+              <path d="M157 144q5 5 10 0"/>
+            </g>
+            <!-- ложка -->
+            <g stroke="#C6CBD0" stroke-linecap="round">
+              <line x1="162" y1="118" x2="182" y2="80" stroke-width="5"/>
+              <ellipse cx="185" cy="75" rx="6" ry="9" fill="#C6CBD0" stroke="none" transform="rotate(20 185 75)"/>
+            </g>
+            <!-- красная точка -->
+            <circle cx="146" cy="106" r="3" fill="#E44332"/>
+            <!-- белая точка у ободка вазы -->
+            <circle cx="133" cy="110" r="2.2" fill="#FFFFFF" opacity=".8"/>
+          </svg>
+          <h3>Чёткое видение грядущего дня</h3>
+          <p>Все ваши задачи на сегодня отображаются здесь. Нажмите +, чтобы добавить задачу.</p>
+        </div>
+      </div>
+
+      <button class="fab fab-q"><i class="ic" style="width:17px;height:17px" data-i="question"></i></button>
+      <button class="fab"><i class="ic" style="width:24px;height:24px" data-i="plus"></i></button>
+      <nav class="tabbar">
+        <button class="tab" data-tab="inbox"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="tray"></i></span>Входящие</button>
+        <button class="tab" data-tab="today"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="cal"></i></span><span class="badge">10</span>Сегодня</button>
+        <button class="tab" data-tab="upcoming"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="calGrid"></i></span>Предстоящее</button>
+        <button class="tab" data-tab="overview"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="list3"></i></span>Обзор</button>
+      </nav>
+    </section>
+
+    <!-- ================= ЭКРАНЫ 4/6 · ПРЕДСТОЯЩЕЕ ================= -->
+    <section class="screen" id="s-upcoming">
+      <div class="statusbar"><span class="sb-left">08:17</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="center-head">
+        <h2>Предстоящее</h2>
+        <div class="right-slot">
+          <button class="pill-btn" id="btnViewOptions"><i class="ic" style="width:17px;height:17px" data-i="calGrid"></i></button>
+          <button class="pill-btn"><i class="ic" style="width:16px;height:16px" data-i="dots3"></i></button>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <div class="cal-wrap">
+          <div class="cal-month">
+            <span>Авг. 2026 г.</span>
+            <i class="ic" id="calChev" style="width:12px;height:12px" data-i="chevD"></i>
+          </div>
+          <div class="cal-weekdays">
+            <span>ВС</span><span>ПН</span><span>ВТ</span><span>СР</span><span>ЧТ</span><span>ПТ</span><span>СБ</span>
+          </div>
+          <div class="cal-grid" id="calGrid">
+            <div class="cal-cell"><span class="num">9</span></div>
+            <div class="cal-cell today"><span class="num">10</span></div>
+            <div class="cal-cell"><span class="num">11</span><span class="dot"></span></div>
+            <div class="cal-cell"><span class="num">12</span><span class="dot"></span></div>
+            <div class="cal-cell"><span class="num">13</span></div>
+            <div class="cal-cell"><span class="num">14</span></div>
+            <div class="cal-cell"><span class="num">15</span></div>
+            <div class="cal-cell"><span class="num">16</span></div>
+            <div class="cal-cell"><span class="num">17</span></div>
+            <div class="cal-cell"><span class="num">18</span></div>
+            <div class="cal-cell"><span class="num">19</span></div>
+            <div class="cal-cell"><span class="num">20</span></div>
+            <div class="cal-cell"><span class="num">21</span></div>
+            <div class="cal-cell"><span class="num">22</span></div>
+            <div class="cal-cell"><span class="num">23</span></div>
+            <div class="cal-cell"><span class="num">24</span></div>
+            <div class="cal-cell"><span class="num">25</span></div>
+            <div class="cal-cell"><span class="num">26</span></div>
+            <div class="cal-cell"><span class="num">27</span></div>
+            <div class="cal-cell"><span class="num">28</span></div>
+            <div class="cal-cell"><span class="num">29</span></div>
+            <div class="cal-cell"><span class="num">30</span></div>
+            <div class="cal-cell"><span class="num">31</span></div>
+            <div class="cal-cell other"><span class="num">1</span></div>
+            <div class="cal-cell other"><span class="num">2</span></div>
+            <div class="cal-cell other"><span class="num">3</span></div>
+            <div class="cal-cell other"><span class="num">4</span></div>
+            <div class="cal-cell other"><span class="num">5</span></div>
+            <div class="cal-cell other"><span class="num">6</span></div>
+            <div class="cal-cell other"><span class="num">7</span></div>
+            <div class="cal-cell other"><span class="num">8</span></div>
+            <div class="cal-cell other"><span class="num">9</span></div>
+            <div class="cal-cell other"><span class="num">10</span></div>
+            <div class="cal-cell other"><span class="num">11</span></div>
+            <div class="cal-cell other"><span class="num">12</span></div>
+          </div>
+          <div class="cal-strip" id="calStrip" style="display:none">
+            <div class="cal-cell"><span class="num">9</span></div>
+            <div class="cal-cell today"><span class="num">10</span></div>
+            <div class="cal-cell"><span class="num">11</span><span class="dot"></span></div>
+            <div class="cal-cell"><span class="num">12</span><span class="dot"></span></div>
+            <div class="cal-cell"><span class="num">13</span></div>
+            <div class="cal-cell"><span class="num">14</span></div>
+            <div class="cal-cell"><span class="num">15</span></div>
+          </div>
+          <div class="cal-divider"></div>
+        </div>
+
+        <div class="date-label" id="lblToday" style="display:none">10 авг. · сегодня · Понедельник</div>
+        <div class="date-label" id="lblTomorrow">11 авг. · завтра · Вторник</div>
+
+        <div class="task">
+          <span class="t-dot circle c-brown"></span>
+          <div class="t-main">
+            <div class="t-title">Судебное заседание</div>
+            <div class="t-sub">Кабинет 232. Слушание по моему делу, озвучить свои воз…</div>
+            <div class="t-meta">
+              <span class="tag-pill" style="color:var(--pink)"><i class="ic" style="width:11px;height:11px" data-i="shield"></i>Ипотека</span>
+            </div>
+          </div>
+          <div class="t-right">
+            <span class="t-inbox"><i class="ic" style="width:11px;height:11px" data-i="tray"></i>Входящие</span>
+          </div>
+        </div>
+
+        <div class="date-label">12 авг. · Среда</div>
+
+        <div class="task">
+          <span class="t-dot circle c-orange"></span>
+          <div class="t-main">
+            <div class="t-title">База знаний: единый источник правды и синхронизация через git</div>
+            <div class="t-sub">С чего начать разговор: спросить Клода «что там с базо…</div>
+            <div class="t-meta">
+              <span class="t-count"><i class="ic" style="width:10px;height:10px" data-i="lock"></i>0/1</span>
+              <span class="tag-pill" style="color:var(--pink)"><i class="ic" style="width:11px;height:11px" data-i="shield"></i>база-знаний</span>
+            </div>
+          </div>
+          <div class="t-right">
+            <div class="t-proj">Клод и Ма…</div>
+            <div class="t-stat">Ждёт реше…<i class="ic" style="width:10px;height:10px" data-i="hash"></i></div>
+          </div>
+        </div>
+
+        <div class="task">
+          <span class="t-dot circle c-orange"></span>
+          <div class="t-main">
+            <div class="t-title">Слить две папки уроков в одну + включить синхронизацию</div>
+            <div class="t-sub">~/kb/lessons (22 файла, 13 уникальных) → слить в ~/.clau…</div>
+          </div>
+          <div class="t-right">
+            <div class="t-proj">Клод и Ма…</div>
+            <div class="t-stat">Ждёт реше…<i class="ic" style="width:10px;height:10px" data-i="hash"></i></div>
+          </div>
+        </div>
+
+        <div class="date-label">13 авг. · Четверг</div>
+        <div class="date-label">14 авг. · Пятница</div>
+      </div>
+
+      <button class="fab"><i class="ic" style="width:24px;height:24px" data-i="plus"></i></button>
+      <nav class="tabbar">
+        <button class="tab" data-tab="inbox"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="tray"></i></span>Входящие</button>
+        <button class="tab" data-tab="today"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="cal"></i></span><span class="badge">10</span>Сегодня</button>
+        <button class="tab" data-tab="upcoming"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="calGrid"></i></span>Предстоящее</button>
+        <button class="tab" data-tab="overview"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="list3"></i></span>Обзор</button>
+      </nav>
+    </section>
+
+    <!-- ================= ЭКРАН 8 · ВХОДЯЩИЕ ================= -->
+    <section class="screen" id="s-inbox">
+      <div class="statusbar"><span class="sb-left">08:17</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="main-head">
+        <h1>Входящие</h1>
+        <div class="head-actions">
+          <button class="pill-btn"><i class="ic" style="width:17px;height:17px" data-i="list3"></i></button>
+          <button class="pill-btn"><i class="ic" style="width:16px;height:16px" data-i="dots3"></i></button>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <div class="task">
+          <span class="t-dot circle c-orange"></span>
+          <div class="t-main">
+            <div class="t-title">Оплатить коммуналку 1616,58 ₽ (Дыбенко 7к1, кв.159)</div>
+            <div class="t-sub">ЕИРЦ СПб, период июнь 2026. Срок оплаты до 15.07.2026.</div>
+            <div class="t-meta">
+              <span class="t-date" style="color:#E44332"><i class="ic" style="width:12px;height:12px" data-i="calMini"></i>8 авг.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="task">
+          <span class="t-dot circle c-pink"></span>
+          <div class="t-main">
+            <div class="t-title">Судебное заседание</div>
+            <div class="t-sub">Кабинет 232. Слушание по моему делу, озвучить свои воз…</div>
+            <div class="t-meta">
+              <span class="t-date" style="color:var(--yellow)"><i class="ic" style="width:12px;height:12px" data-i="calMini"></i>завтра</span>
+              <span class="tag-pill" style="color:var(--pink)"><i class="ic" style="width:11px;height:11px" data-i="shield"></i>Ипотека</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="task">
+          <span class="t-dot circle c-pink"></span>
+          <div class="t-main">
+            <div class="t-title">Снять показания счётчиков</div>
+            <div class="t-meta">
+              <span class="t-date" style="color:#E44332"><i class="ic" style="width:12px;height:12px" data-i="calMini"></i>8 авг.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="task">
+          <span class="t-dot circle c-orange"></span>
+          <div class="t-main">
+            <div class="t-title">Убраться в квартире</div>
+            <div class="t-sub">Генеральная уборка</div>
+            <div class="t-meta">
+              <span class="t-date" style="color:#E44332"><i class="ic" style="width:12px;height:12px" data-i="calMini"></i>8 авг.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="task">
+          <span class="t-dot circle c-pink"></span>
+          <div class="t-main">
+            <div class="t-title">Пройти идентификацию администратора дома через Госуслуги (ЕСИА) — закон вступает в силу 01.09.2026</div>
+            <div class="t-sub">С 1 сентября 2026 года вступает в силу ФЗ №569-ФЗ: обя…</div>
+            <div class="t-meta">
+              <span class="t-date" style="color:var(--purple)"><i class="ic" style="width:12px;height:12px" data-i="calMini"></i>Суббота</span>
+              <span class="tag-pill" style="color:var(--purple)"><i class="ic" style="width:11px;height:11px" data-i="tag"></i>госуслуги</span>
+              <span class="tag-pill" style="color:var(--purple)"><i class="ic" style="width:11px;height:11px" data-i="tag"></i>домен</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="task">
+          <span class="t-dot circle c-gray"></span>
+          <div class="t-main">
+            <div class="t-title">Выпустить ЭЦП в налоговой</div>
+            <div class="t-meta">
+              <span class="t-count"><i class="ic" style="width:10px;height:10px" data-i="circleMini"></i>0/1</span>
+              <span class="t-date" style="color:#E44332"><i class="ic" style="width:12px;height:12px" data-i="calMini"></i>8 авг.</span>
+            </div>
+          </div>
+          <div class="t-right"><span class="t-proj" style="color:#BDBDBD"><i class="ic" style="width:12px;height:12px" data-i="chevR"></i></span></div>
+        </div>
+
+        <div class="task">
+          <span class="t-dot circle c-gray"></span>
+          <div class="t-main">
+            <div class="t-title">Подготовить налоговую отчётность</div>
+            <div class="t-meta">
+              <span class="t-date" style="color:#E44332"><i class="ic" style="width:12px;height:12px" data-i="calMini"></i>8 авг.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="task">
+          <span class="t-dot circle c-gray"></span>
+          <div class="t-main">
+            <div class="t-title">Настройка ии</div>
+            <div class="t-meta">
+              <span class="t-count"><i class="ic" style="width:10px;height:10px" data-i="circleMini"></i>0/7</span>
+            </div>
+          </div>
+          <div class="t-right"><span class="t-proj" style="color:#BDBDBD"><i class="ic" style="width:12px;height:12px" data-i="chevR"></i></span></div>
+        </div>
+
+        <div class="task">
+          <span class="t-dot circle c-blue"></span>
+          <div class="t-main">
+            <div class="t-title">Отследить рассмотрение заявки в банке</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="fab"><i class="ic" style="width:24px;height:24px" data-i="plus"></i></button>
+      <nav class="tabbar">
+        <button class="tab" data-tab="inbox"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="tray"></i></span>Входящие</button>
+        <button class="tab" data-tab="today"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="cal"></i></span><span class="badge">10</span>Сегодня</button>
+        <button class="tab" data-tab="upcoming"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="calGrid"></i></span>Предстоящее</button>
+        <button class="tab" data-tab="overview"><span class="t-ic"><i class="ic" style="width:21px;height:21px" data-i="list3"></i></span>Обзор</button>
+      </nav>
+    </section>
+
+    <!-- ================= ЭКРАН 3 · НАСТРОЙКИ ================= -->
+    <section class="screen" id="s-settings">
+      <div class="statusbar"><span class="sb-left">08:18</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="center-head">
+        <h2>Настройки</h2>
+        <div class="right-slot"><button class="check-btn" id="btnSettings3Done"><i class="ic" style="width:17px;height:17px" data-i="check"></i></button></div>
+      </div>
+
+      <div class="scroll">
+        <div class="card">
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="person"></i></span><span class="r-tx">Аккаунт</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row" id="btnOpenAgents"><span class="r-ic" style="color:var(--purple)"><i class="ic" style="width:20px;height:20px" data-i="bot"></i></span><span class="r-tx">Агенты</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="gear"></i></span><span class="r-tx">Основное</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="wallet"></i></span><span class="r-tx">Подписка</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="calGrid"></i></span><span class="r-tx">Календарь</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+        </div>
+
+        <div class="sec-label">Пользовательские настройки</div>
+        <div class="card">
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="palette"></i></span><span class="r-tx">Тема</span><span class="r-val">Темный</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="bars"></i></span><span class="r-tx">Иконка</span><span class="r-val">Todoist</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="plane"></i></span><span class="r-tx">Навигация</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="phonePlus"></i></span><span class="r-tx">Быстрое добавление</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+        </div>
+
+        <div class="sec-label">Продуктивность</div>
+        <div class="card">
+          <button class="row" id="btnOpenSettings2"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="trend"></i></span><span class="r-tx">Продуктивность</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="alarm"></i></span><span class="r-tx">Напоминания</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="bell"></i></span><span class="r-tx">Уведомления</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= ЭКРАН 2 · НАСТРОЙКИ (шторка) ================= -->
+    <section class="screen" id="s-settings2">
+      <div class="statusbar"><span class="sb-left">08:18</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="settings-blur">
+        <div class="center-head">
+          <div class="left-slot">
+            <span class="app-ico"><i class="ic" style="width:14px;height:14px" data-i="chain"></i></span>
+          </div>
+          <h2>Настройки</h2>
+          <div class="right-slot"><button class="check-btn" id="btnSettings2Done"><i class="ic" style="width:17px;height:17px" data-i="check"></i></button></div>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <div class="sec-label">Продуктивность</div>
+        <div class="card">
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="trend"></i></span><span class="r-tx">Продуктивность</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="alarm"></i></span><span class="r-tx">Напоминания</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="bell"></i></span><span class="r-tx">Уведомления</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+        </div>
+
+        <div style="margin:18px 16px 0;padding:0 14px;display:flex;align-items:center;gap:12px">
+          <span style="width:30px;height:30px;border-radius:50%;background:conic-gradient(from 210deg,#A78BFA,#6FB7FF,#FF8FB8,#A78BFA);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2l2.5 7.5L22 12l-7.5 2.5L12 22l-2.5-7.5L2 12l7.5-2.5z" fill="#fff" opacity=".9"/></svg>
+          </span>
+          <span style="flex:1;font-size:15px;font-weight:500">Siri</span>
+          <span style="color:#6E6E6E;display:flex"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+        </div>
+
+        <div class="sec-label" style="margin-top:24px">Настройки</div>
+        <div class="card">
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="question"></i></span><span class="r-tx">Поддержка и обратная связь</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="info"></i></span><span class="r-tx">О сервисе</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row"><span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="gift"></i></span><span class="r-tx">Что нового</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          <button class="row">
+            <span class="r-ic"><i class="ic" style="width:20px;height:20px" data-i="sync"></i></span>
+            <span style="flex:1;min-width:0">
+              <div style="font-size:15px;font-weight:500">Синхронизация</div>
+              <div style="font-size:12px;color:var(--sub);margin-top:1px">Последняя синхронизация: 12 сек. назад</div>
+            </span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+        </div>
+
+        <button class="logout-btn">Выйти</button>
+        <div class="user-mail">Пользователь: m89818052377@gmail.com</div>
+      </div>
+    </section>
+
+    <!-- ================= ЭКРАН 9 · ЛОГИН ================= -->
+    <section class="screen" id="s-login">
+      <div class="statusbar"><span class="sb-left">08:18</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="auth-wrap">
+        <div class="auth-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </div>
+        <div class="auth-app">Todoist</div>
+        <div class="auth-head">Добро пожаловать!</div>
+        <div class="auth-sub">Войдите в свой аккаунт</div>
+
+        <div class="card auth-card">
+          <div class="field">
+            <span class="f-ic"><i class="ic" style="width:18px;height:18px" data-i="mail"></i></span>
+            <span class="f-ph">Email</span>
+          </div>
+          <div class="field">
+            <span class="f-ic"><i class="ic" style="width:18px;height:18px" data-i="lock"></i></span>
+            <span class="f-ph">Пароль</span>
+            <span class="f-eye"><i class="ic" style="width:17px;height:17px" data-i="eye"></i></span>
+          </div>
+        </div>
+
+        <button class="auth-btn" id="btnLogin">Войти</button>
+
+        <div class="auth-divider"><span>или</span></div>
+
+        <button class="google-btn"><span class="g"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"/><path fill="#FBBC05" d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09C6.22 6.86 8.87 4.75 12 4.75z"/></svg></span>
+          Войти через Google
+        </button>
+
+        <div class="auth-foot">Нет аккаунта? <a id="btnGoRegister">Зарегистрируйтесь</a></div>
+      </div>
+    </section>
+
+    <!-- ================= ЭКРАН 10 · РЕГИСТРАЦИЯ ================= -->
+    <section class="screen" id="s-register">
+      <div class="statusbar"><span class="sb-left">08:18</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="center-head">
+        <div class="left-slot">
+          <button class="pill-btn" id="btnRegBack"><i class="ic" style="width:17px;height:17px" data-i="chevL"></i></button>
+        </div>
+        <h2>Регистрация</h2>
+      </div>
+
+      <div class="auth-wrap" style="padding-top:22px">
+        <div class="auth-head" style="margin-top:0">Создайте аккаунт</div>
+        <div class="auth-sub">Присоединяйтесь к команде</div>
+
+        <div class="card auth-card">
+          <div class="field">
+            <span class="f-ic"><i class="ic" style="width:18px;height:18px" data-i="person"></i></span>
+            <span class="f-ph">Имя</span>
+          </div>
+          <div class="field">
+            <span class="f-ic"><i class="ic" style="width:18px;height:18px" data-i="mail"></i></span>
+            <span class="f-ph">Email</span>
+          </div>
+          <div class="field">
+            <span class="f-ic"><i class="ic" style="width:18px;height:18px" data-i="lock"></i></span>
+            <span class="f-ph">Пароль</span>
+          </div>
+          <div class="field">
+            <span class="f-ic"><i class="ic" style="width:18px;height:18px" data-i="lock"></i></span>
+            <span class="f-ph">Подтвердите пароль</span>
+          </div>
+        </div>
+
+        <div class="reg-role-label">Роль в команде</div>
+        <div class="role-row">
+          <button class="role-opt sel" id="roleOwner"><span style="display:flex"><i class="ic" style="width:16px;height:16px" data-i="crown"></i></span>Владелец</button>
+          <button class="role-opt" id="roleAgent"><span style="display:flex"><i class="ic" style="width:16px;height:16px" data-i="bot"></i></span>Агент</button>
+        </div>
+
+        <button class="auth-btn" id="btnRegisterDone">Создать аккаунт</button>
+
+        <div class="auth-foot">Уже есть аккаунт? <a id="btnGoLogin">Войти</a></div>
+      </div>
+    </section>
+
+    <!-- ================= ЭКРАН 11 · НОВАЯ ЗАДАЧА ================= -->
+    <section class="screen" id="s-newtask">
+      <div class="statusbar"><span class="sb-left">08:18</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="center-head">
+        <div class="left-slot">
+          <button class="pill-btn" id="btnNewTaskClose" style="border-radius:50%"><i class="ic" style="width:15px;height:15px" data-i="x"></i></button>
+        </div>
+        <h2>Новая задача</h2>
+        <div class="right-slot">
+          <button id="btnNewTaskDone" style="font-size:16px;font-weight:600;color:var(--red)">Готово</button>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <textarea class="nt-title" rows="1" placeholder="Название задачи"></textarea>
+        <textarea class="nt-desc" rows="2" placeholder="Описание"></textarea>
+
+        <div class="card" style="margin-top:4px">
+          <button class="row">
+            <span class="r-ic" style="color:var(--red)"><i class="ic" style="width:18px;height:18px" data-i="calMini"></i></span>
+            <span class="r-tx">Срок</span>
+            <span class="r-val" style="color:var(--red)">Завтра, 11 авг.</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+          <button class="row">
+            <span class="r-ic" style="color:var(--sub)"><i class="ic" style="width:18px;height:18px" data-i="hash"></i></span>
+            <span class="r-tx">Проект</span>
+            <span class="r-val">Входящие</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+          <button class="row">
+            <span class="r-ic" style="color:var(--sub)"><i class="ic" style="width:18px;height:18px" data-i="flag"></i></span>
+            <span class="r-tx">Приоритет</span>
+            <span class="p1-pill">P1</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+        </div>
+
+        <div class="sec-label">Назначить</div>
+        <div class="card">
+          <button class="row" style="min-height:52px">
+            <span class="avatar" style="width:32px;height:32px;font-size:14px;background:var(--teal)">М</span>
+            <span class="r-tx">Максим</span>
+            <span class="badge-pill">Владелец</span>
+            <span style="color:var(--red);display:flex;flex-shrink:0"><i class="ic" style="width:17px;height:17px" data-i="check"></i></span>
+          </button>
+          <button class="row" style="min-height:52px">
+            <span class="avatar" style="width:32px;height:32px;font-size:14px;background:var(--purple)">C</span>
+            <span class="r-tx">Claude_Bot</span>
+            <span class="badge-pill">Агент</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+          <button class="row" style="min-height:52px">
+            <span class="avatar" style="width:32px;height:32px;font-size:14px;background:var(--orange)">H</span>
+            <span class="r-tx">Hermes</span>
+            <span class="badge-pill">Агент</span>
+            <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+          </button>
+          <button class="row nt-add" style="min-height:48px">
+            <span class="r-ic" style="color:var(--sub)"><i class="ic" style="width:16px;height:16px" data-i="plus"></i></span>
+            <span class="r-tx" style="color:var(--sub);font-size:14px">Добавить агента</span>
+          </button>
+        </div>
+
+        <div class="sec-label">Метки</div>
+        <div class="card">
+          <div class="tags-row">
+            <span class="tag-pill-2">Ипотека</span>
+            <span class="tag-pill-2">база-знаний</span>
+            <span class="tag-pill-2 plus">+ новая</span>
+          </div>
+        </div>
+
+        <div class="sec-label">Подзадачи</div>
+        <div class="card">
+          <button class="row" style="min-height:48px">
+            <span class="circle c-gray" style="width:16px;height:16px;flex-shrink:0"></span>
+            <span class="r-tx" style="color:var(--sub);font-size:14px">Добавить подзадачу...</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= ЭКРАН 12 · УВЕДОМЛЕНИЯ ================= -->
+    <section class="screen" id="s-notifications">
+      <div class="statusbar"><span class="sb-left">08:18</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="center-head">
+        <div class="left-slot">
+          <button class="pill-btn" id="btnNotifBack"><i class="ic" style="width:17px;height:17px" data-i="chevL"></i></button>
+        </div>
+        <h2>Уведомления</h2>
+        <div class="right-slot">
+          <button style="font-size:13px;color:var(--sub)">Прочитать все</button>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <div class="card">
+          <button class="row notif-row">
+            <span class="avatar" style="width:36px;height:36px;font-size:15px;background:var(--purple)">C</span>
+            <span style="flex:1;min-width:0;text-align:left">
+              <div class="n-main">Claude_Bot назначен на задачу</div>
+              <div class="n-sub">Судебное заседание</div>
+              <div class="n-time">2 мин. назад</div>
+            </span>
+            <span class="n-dot"></span>
+          </button>
+          <button class="row notif-row">
+            <span class="avatar" style="width:36px;height:36px;font-size:15px;background:var(--orange)">H</span>
+            <span style="flex:1;min-width:0;text-align:left">
+              <div class="n-main">Hermes завершил задачу</div>
+              <div class="n-sub">Настройка ии</div>
+              <div class="n-time">15 мин. назад</div>
+            </span>
+            <span class="n-dot"></span>
+          </button>
+          <button class="row notif-row">
+            <span style="width:36px;height:36px;border-radius:50%;background:var(--card2);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ic" style="width:17px;height:17px" data-i="gear"></i></span>
+            <span style="flex:1;min-width:0;text-align:left">
+              <div class="n-main">Новая задача назначена вам</div>
+              <div class="n-sub">Оплатить коммуналку</div>
+              <div class="n-time">1 час назад</div>
+            </span>
+          </button>
+          <button class="row notif-row">
+            <span class="avatar" style="width:36px;height:36px;font-size:15px;background:var(--purple)">C</span>
+            <span style="flex:1;min-width:0;text-align:left">
+              <div class="n-main">Claude_Bot прокомментировал</div>
+              <div class="n-sub">База знаний: единый источник...</div>
+              <div class="n-time">2 часа назад</div>
+            </span>
+          </button>
+          <button class="row notif-row">
+            <span class="avatar" style="width:36px;height:36px;font-size:15px;background:var(--orange)">H</span>
+            <span style="flex:1;min-width:0;text-align:left">
+              <div class="n-main">Hermes создал подзадачу</div>
+              <div class="n-sub">Выпустить ЭЦП → Получить ЭЦП в налоговой</div>
+              <div class="n-time">Вчера</div>
+            </span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= ЭКРАН 13 · АГЕНТЫ ================= -->
+    <section class="screen" id="s-agents">
+      <div class="statusbar"><span class="sb-left">08:18</span>
+        <span class="sb-right">
+          <i class="ic" style="width:15px;height:15px" data-i="bellSlash"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="signal"></i>
+          <i class="ic" style="width:16px;height:13px" data-i="wifi"></i>
+          <i class="ic" style="width:28px;height:13px" data-i="battery"></i>
+        </span>
+      </div>
+
+      <div class="center-head">
+        <div class="left-slot">
+          <button class="pill-btn" id="btnAgentsBack"><i class="ic" style="width:17px;height:17px" data-i="chevL"></i></button>
+        </div>
+        <h2>Агенты</h2>
+        <div class="right-slot">
+          <button class="pill-btn"><i class="ic" style="width:16px;height:16px" data-i="plus"></i></button>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <div class="sec-label">Команда</div>
+        <div class="card">
+          <div class="row ag-row">
+            <span class="avatar" style="width:38px;height:38px;font-size:16px;background:var(--teal)">М</span>
+            <span style="flex:1;min-width:0;text-align:left">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:15px;font-weight:600">Максим</span>
+                <span class="badge-pill" style="background:var(--red);color:#fff">Владелец</span>
+              </div>
+            </span>
+            <span class="ag-status"><span class="ag-dot"></span>Онлайн</span>
+          </div>
+          <div class="row ag-row">
+            <span class="avatar" style="width:38px;height:38px;font-size:16px;background:var(--purple)">C</span>
+            <span style="flex:1;min-width:0;text-align:left">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:15px;font-weight:600">Claude_Bot</span>
+                <span class="badge-pill" style="background:var(--purple);color:#fff">Агент</span>
+              </div>
+              <div style="display:flex;gap:6px;margin-top:5px">
+                <span class="cap-tag">Код</span>
+                <span class="cap-tag">Ревью</span>
+              </div>
+            </span>
+            <span class="ag-status"><span class="ag-dot"></span>Онлайн</span>
+          </div>
+          <div class="row ag-row">
+            <span class="avatar" style="width:38px;height:38px;font-size:16px;background:var(--orange)">H</span>
+            <span style="flex:1;min-width:0;text-align:left">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:15px;font-weight:600">Hermes</span>
+                <span class="badge-pill" style="background:var(--orange);color:#fff">Агент</span>
+              </div>
+              <div style="display:flex;gap:6px;margin-top:5px">
+                <span class="cap-tag">DevOps</span>
+                <span class="cap-tag">Инфра</span>
+              </div>
+            </span>
+            <span class="ag-status"><span class="ag-dot"></span>Онлайн</span>
+          </div>
+        </div>
+
+        <div class="sec-label">Приглашения</div>
+        <div class="inv-card">
+          <button class="row">
+            <span class="r-ic" style="color:var(--sub)"><i class="ic" style="width:16px;height:16px" data-i="plus"></i></span>
+            <span class="r-tx" style="color:var(--sub);font-size:14px">Пригласить агента</span>
+          </button>
+        </div>
+
+        <div class="sec-label">Роль агента</div>
+        <div class="card role-info">
+          <div class="ri-item"><b>Владелец</b> — полный доступ ко всем задачам и настройкам</div>
+          <div class="ri-item"><b>Агент</b> — может редактировать назначенные задачи, добавлять комментарии, отмечать выполнение</div>
+          <div class="ri-item"><b>Наблюдатель</b> — только просмотр</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= МОДАЛКА 5 · ОТОБРАЖЕНИЕ ================= -->
+    <div class="overlay" id="overlayDisplay">
+      <div class="sheet">
+        <div class="sheet-head">
+          <button class="x-btn" id="btnCloseDisplay"><i class="ic" style="width:16px;height:16px" data-i="x"></i></button>
+          <h3>Отображение</h3>
+          <button class="check-btn" id="btnDisplayDone" style="width:34px;height:34px"><i class="ic" style="width:15px;height:15px" data-i="check"></i></button>
+        </div>
+        <div class="sheet-body">
+          <div class="sec-label" style="margin-top:10px">Раскладка</div>
+          <div class="card">
+            <div class="layouts">
+              <div class="layout sel">
+                <span class="l-star"><span class="mock">
+                  <span class="mock-list">
+                    <i style="width:26px"></i><i style="width:19px"></i><i style="width:23px"></i><i style="width:15px"></i>
+                  </span>
+                </span></span>
+                <span class="l-lbl">Список</span>
+              </div>
+              <div class="layout">
+                <span class="l-star"><span class="mock">
+                  <span class="mock-board"><i></i><span><span class="bd"></span><span class="bd"></span><span class="bd"></span></span></span>
+                </span></span>
+                <span class="l-lbl">Доска</span>
+              </div>
+              <div class="layout">
+                <span class="l-star"><span class="mock">
+                  <span class="mock-cal"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                </span><span class="star" style="position:absolute;top:-7px;right:-8px"><i class="ic" style="width:11px;height:11px" data-i="star"></i></span></span>
+                <span class="l-lbl">Календарь</span>
+              </div>
+            </div>
+            <div style="border-top:1px solid var(--stroke)">
+              <button class="row">
+                <span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:18px;height:18px" data-i="checkCircle"></i></span>
+                <span class="r-tx">Выполненные задачи</span>
+                <span class="switch"></span>
+              </button>
+              <button class="row">
+                <span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:18px;height:18px" data-i="speech"></i></span>
+                <span class="r-tx">Отзыв о выполненных задачах</span>
+                <span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="sec-label">Сортировать</div>
+          <div class="card">
+            <button class="row"><span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:18px;height:18px" data-i="stack"></i></span><span class="r-tx">Группировка</span><span class="r-val">Нет</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+            <button class="row"><span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:18px;height:18px" data-i="sort"></i></span><span class="r-tx">Сортировка</span><span class="r-val">Вручную</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          </div>
+
+          <div class="sec-label">Фильтр</div>
+          <div class="card">
+            <button class="row"><span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:18px;height:18px" data-i="calMini"></i></span><span class="r-tx">Срок</span><span class="r-val">Все</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+            <button class="row"><span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:18px;height:18px" data-i="refresh"></i></span><span class="r-tx">Дедлайн</span><span class="r-val">Все</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+            <button class="row"><span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:18px;height:18px" data-i="flag"></i></span><span class="r-tx">Приоритет</span><span class="r-val">Все</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+            <button class="row"><span class="r-ic" style="color:#9A9A9A"><i class="ic" style="width:18px;height:18px" data-i="tag"></i></span><span class="r-tx">Метка</span><span class="r-val">Все</span><span class="r-chev"><i class="ic" style="width:14px;height:14px" data-i="chevR"></i></span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= ПАНЕЛЬ РЕФЕРЕНСОВ ================= -->
+<div class="panel">
+  <h4>Экраны · референсы</h4>
+  <button class="pnl-btn" data-go="overview"><span class="n">1</span>Обзор</button>
+  <button class="pnl-btn" data-go="settings2"><span class="n">2</span>Настройки (старые)</button>
+  <button class="pnl-btn" data-go="settings"><span class="n">3</span>Настройки</button>
+  <button class="pnl-btn" data-go="upcoming" data-cal="month"><span class="n">4</span>Предстоящее · месяц</button>
+  <button class="pnl-btn" data-go="display"><span class="n">5</span>Отображение (модалка)</button>
+  <button class="pnl-btn" data-go="upcoming" data-cal="week"><span class="n">6</span>Предстоящее · неделя</button>
+  <button class="pnl-btn" data-go="today"><span class="n">7</span>Сегодня (пусто)</button>
+  <button class="pnl-btn" data-go="inbox"><span class="n">8</span>Входящие</button>
+  <button class="pnl-btn" data-go="login"><span class="n">9</span>Логин</button>
+  <button class="pnl-btn" data-go="register"><span class="n">10</span>Регистрация</button>
+  <button class="pnl-btn" data-go="newtask"><span class="n">11</span>Новая задача</button>
+  <button class="pnl-btn" data-go="notifications"><span class="n">12</span>Уведомления</button>
+  <button class="pnl-btn" data-go="agents"><span class="n">13</span>Агенты</button>
+  <div class="note">Макет 390×844 · Todoist dark<br>собран 1:1 по скриншотам от 10.08.2026</div>
+</div>
+
+<script>
+/* ================= ИКОНКИ (stroke-набор, currentColor) ================= */
+const ICONS = {
+  bellSlash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4a5 5 0 0 0-5 5v3.5L5 15h12l-2-3.5V9a5 5 0 0 0-5-5z"/><path d="M9.8 17.6a2.3 2.3 0 0 0 4.4 0"/><path d="M3.5 3.5l17 17"/></svg>',
+  signal:'<svg viewBox="0 0 16 13" fill="rgba(255,255,255,.9)"><rect x="0" y="6" width="2.5" height="5" rx="0.8"/><rect x="4.5" y="4" width="2.5" height="7" rx="0.8"/><rect x="9" y="2" width="2.5" height="9" rx="0.8"/><rect x="13.5" y="0" width="2.5" height="11" rx="0.8"/></svg>',
+  wifi:'<svg viewBox="0 0 16 13" fill="none" stroke="rgba(255,255,255,.9)" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 4.5a9 9 0 0 1 13 0"/><path d="M4 7.5a5.5 5.5 0 0 1 8 0"/><circle cx="8" cy="10.8" r="1.5" fill="rgba(255,255,255,.9)" stroke="none"/></svg>',
+  battery:'<svg viewBox="0 0 30 13" fill="none"><rect x="0.5" y="0.5" width="26" height="12" rx="3.5" fill="#4CD964" stroke="none"/><text x="13.5" y="9" text-anchor="middle" font-size="7" font-weight="700" fill="#fff" font-family="inherit">49%</text><rect x="28" y="3.5" width="2" height="6" rx="1" fill="rgba(255,255,255,.55)"/></svg>',
+  bell:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a5 5 0 0 0-5 5v3.5L5 15h14l-2-3.5V8a5 5 0 0 0-5-5z"/><path d="M9.8 17.6a2.3 2.3 0 0 0 4.4 0"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.6v2.6M12 18.8v2.6M2.6 12h2.6M18.8 12h2.6M5.5 5.5l1.9 1.9M16.6 16.6l1.9 1.9M18.5 5.5l-1.9 1.9M7.4 16.6l-1.9 1.9"/></svg>',
+  search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M15.8 15.8l4.4 4.4"/></svg>',
+  grid2:'<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.8"/></svg>',
+  pulse:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12h4l2.5-6 4 12 2.5-6 2 2.5h4"/></svg>',
+  tag:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h7l9 9-7 7-9-9z"/><circle cx="8.6" cy="8.6" r="1.3" fill="currentColor" stroke="none"/></svg>',
+  hash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 3.5l-2 17M17 3.5l-2 17M4.5 9h15M4.5 15h15"/></svg>',
+  pencil:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l1-4L16 5l3 3L8 19l-4 1z"/><path d="M13.5 7.5l3 3"/></svg>',
+  chevD:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l7 7 7-7"/></svg>',
+  chevR:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
+  plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 4.5v15M4.5 12h15"/></svg>',
+  cal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10.5h17M8.5 2.8v4.4M15.5 2.8v4.4"/></svg>',
+  calMini:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10.5h17M8.5 2.8v4.4M15.5 2.8v4.4"/></svg>',
+  calGrid:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10.5h17"/><rect x="7.5" y="13.5" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none"/><rect x="13.5" y="13.5" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none"/><rect x="7.5" y="17.2" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none"/><rect x="13.5" y="17.2" width="2.6" height="2.6" rx="0.6" fill="currentColor" stroke="none"/></svg>',
+  tray:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.5h16v11h-5a3 3 0 0 1-6 0H4z"/><path d="M4 15.5V19h16v-3.5"/></svg>',
+  list3:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 6.5h16M4 12h16M4 17.5h10"/></svg>',
+  dots3:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  shield:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.8l8 3v6.2c0 5-3.6 8-8 9.2-4.4-1.2-8-4.2-8-9.2V5.8z" opacity=".32"/><path d="M12 2.8l8 3v6.2c0 5-3.6 8-8 9.2-4.4-1.2-8-4.2-8-9.2V5.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+  lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
+  circleMini:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/></svg>',
+  chain:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1.4 1.4"/><path d="M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1.4-1.4"/></svg>',
+  copyStack:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.2"/><path d="M4 16V5.5A1.5 1.5 0 0 1 5.5 4H16"/></svg>',
+  chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 20v-8M10.5 20V5.5M16 20v-6M3 20h18"/></svg>',
+  question:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="8.6"/><path d="M9.4 9.2a2.6 2.6 0 1 1 3.9 2.3c-.9.5-1.3 1-1.3 1.9"/><circle cx="12" cy="16.9" r="1.15" fill="currentColor" stroke="none"/></svg>',
+  person:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20.5c1.3-4.2 4-5.9 7-5.9s5.7 1.7 7 5.9"/></svg>',
+  wallet:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13.5" rx="2.5"/><path d="M3 10.5h18"/><circle cx="16.3" cy="15" r="1.5" fill="currentColor" stroke="none"/></svg>',
+  palette:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.9 2-2 0-.6-.2-1-.6-1.4-.4-.4-.6-.8-.6-1.4 0-1.1.9-2 2-2h1.6A4.4 4.4 0 0 0 21 9.8C20.7 5.9 16.8 3 12 3z"/><circle cx="7.8" cy="10" r="1.2" fill="currentColor" stroke="none"/><circle cx="12.3" cy="7.3" r="1.2" fill="currentColor" stroke="none"/><circle cx="16.6" cy="10" r="1.2" fill="currentColor" stroke="none"/></svg>',
+  bars:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 20V12M12 20V5M18 20v-6"/></svg>',
+  plane:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5l18-7-4.5 15-4.5-6.5z" fill="currentColor" opacity=".9"/><path d="M12 13L21 4.5"/></svg>',
+  phonePlus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M12 8.5v6M9 11.5h6"/></svg>',
+  trend:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>',
+  alarm:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13.5" r="7"/><path d="M12 10.5v3.2l2.2 1.6M9 3.2L3.8 6M15 3.2l5.2 2.8"/></svg>',
+  sync:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.7"/><path d="M20 3.5v5.2h-5.2"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.3"/><path d="M4 20.5v-5.2h5.2"/></svg>',
+  gift:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4"/><path d="M5 12v7.5h14V12"/><path d="M12 8v11.5"/><path d="M12 8c-1.2-4.2-6.5-4-6.5-.8S12 8 12 8zM12 8c1.2-4.2 6.5-4 6.5-.8S12 8 12 8z"/></svg>',
+  info:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.6"/><path d="M12 11v5"/><circle cx="12" cy="7.9" r="1.15" fill="currentColor" stroke="none"/></svg>',
+  sparkle:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4z"/><path d="M19.5 15.5l.9 2.9 2.9.9-2.9.9-.9 2.9-.9-2.9-2.9-.9 2.9-.9z"/></svg>',
+  star:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.8l2.6 5.9 6.4.6-4.8 4.2 1.4 6.2L12 16.6l-5.6 3.1 1.4-6.2L3 9.3l6.4-.6z"/></svg>',
+  drop:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2.8s6.5 7 6.5 11.7a6.5 6.5 0 0 1-13 0C5.5 9.8 12 2.8 12 2.8z"/></svg>',
+  flag:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V4"/><path d="M6 5.2c5-2.6 9 2.2 12-.2v8.6c-3 2.4-7-2.4-12 .2"/></svg>',
+  refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 3.5v4.8h-4.8"/></svg>',
+  speech:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H11l-5 4v-4H4z"/><path d="M12 8.2v3"/><circle cx="12" cy="13.5" r="1.1" fill="currentColor" stroke="none"/></svg>',
+  checkCircle:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M8.2 12.4l2.6 2.6 5-5.4"/></svg>',
+  stack:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="10" height="10" rx="2"/><rect x="10.5" y="10.5" width="10" height="10" rx="2"/></svg>',
+  sort:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4v13M8 17l-3.5-3.5M8 17l3.5-3.5"/><path d="M16 20V7M16 7l-3.5 3.5M16 7l3.5 3.5"/></svg>',
+  chevL:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+  mail:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></svg>',
+  eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.8"/></svg>',
+  crown:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5l4.4 3.4L12 5.5l3.6 6.4L20 8.5l-1.5 9H5.5z"/><path d="M5.5 20.5h13"/></svg>',
+  bot:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8.5" width="16" height="10.5" rx="2.5"/><path d="M12 8.5V5M12 5l-2-2M12 5l2-2"/><circle cx="9" cy="13.2" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="13.2" r="1.2" fill="currentColor" stroke="none"/><path d="M9.5 16.4h5"/></svg>'
+};
+document.querySelectorAll('[data-i]').forEach(el=>{
+  const n=el.dataset.i;
+  if(ICONS[n]) el.innerHTML=ICONS[n];
+});
+
+/* ================= НАВИГАЦИЯ ================= */
+const screens=['overview','settings2','settings','upcoming','today','inbox','login','register','newtask','notifications','agents'];
+function show(id,opts={}){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  const el=document.getElementById('s-'+id);
+  if(el) el.classList.add('active');
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===id));
+  document.querySelectorAll('.pnl-btn').forEach(b=>{
+    const go=b.dataset.go;
+    b.classList.toggle('on', go===id || (go==='upcoming'&&id==='upcoming'));
+  });
+  const hasTabs=['overview','today','upcoming','inbox'].includes(id);
+  document.querySelectorAll('.tabbar').forEach(t=>t.style.display=hasTabs?'flex':'none');
+  const showFab=hasTabs;
+  document.querySelectorAll('.fab').forEach(f=>{
+    const isQ=f.classList.contains('fab-q');
+    f.style.display=(showFab && (isQ? id==='today' : true))?'flex':'none';
+  });
+  closeModal();closeMenu();
+  const sc=el&&el.querySelector('.scroll'); if(sc) sc.scrollTop=0;
+  if(id==='today'){menu.classList.add('open');mBack.classList.add('open');}
+  if(opts.cal) setCal(opts.cal);
+}
+function setCal(mode){
+  const grid=document.getElementById('calGrid'),strip=document.getElementById('calStrip'),
+        chev=document.getElementById('calChev'),
+        lblToday=document.getElementById('lblToday');
+  const month=mode==='month';
+  grid.style.display=month?'grid':'none';
+  strip.style.display=month?'none':'grid';
+  lblToday.style.display=month?'none':'block';
+  chev.innerHTML=ICONS[month?'chevD':'chevR'];
+}
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click',()=>show(t.dataset.tab));
+});
+document.querySelectorAll('.pnl-btn').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const go=b.dataset.go;
+    if(go==='display'){ show('upcoming',{cal:'week'}); openModal(); }
+    else show(go,{cal:b.dataset.cal||undefined});
+  });
+});
+document.getElementById('btnSettings3').addEventListener('click',()=>show('settings'));
+document.getElementById('btnSettings3Done').addEventListener('click',()=>show('overview'));
+document.getElementById('btnSettings2Done').addEventListener('click',()=>show('overview'));
+document.getElementById('btnOpenSettings2').addEventListener('click',()=>show('settings2'));
+document.getElementById('btnViewOptions').addEventListener('click',openModal);
+
+/* новые экраны: авторизация, новая задача, уведомления, агенты */
+document.getElementById('btnLogin').addEventListener('click',()=>show('overview'));
+document.getElementById('btnGoRegister').addEventListener('click',()=>show('register'));
+document.getElementById('btnGoLogin').addEventListener('click',()=>show('login'));
+document.getElementById('btnRegBack').addEventListener('click',()=>show('login'));
+document.getElementById('btnRegisterDone').addEventListener('click',()=>show('login'));
+document.querySelectorAll('.role-opt').forEach(r=>r.addEventListener('click',()=>{
+  document.querySelectorAll('.role-opt').forEach(x=>x.classList.remove('sel'));
+  r.classList.add('sel');
+}));
+document.getElementById('btnNewTaskDone').addEventListener('click',()=>show('inbox'));
+document.getElementById('btnNewTaskClose').addEventListener('click',()=>show('inbox'));
+document.getElementById('btnNotifBack').addEventListener('click',()=>show('overview'));
+document.getElementById('btnAgentsBack').addEventListener('click',()=>show('settings'));
+document.getElementById('btnOpenAgents').addEventListener('click',()=>show('agents'));
+document.getElementById('btnBell').addEventListener('click',()=>show('notifications'));
+document.querySelectorAll('.fab:not(.fab-q)').forEach(f=>f.addEventListener('click',()=>show('newtask')));
+
+/* контекстное меню «Сегодня» */
+const menu=document.getElementById('ctxMenu'),mBack=document.getElementById('menuBackdrop');
+document.getElementById('btnTodayMenu').addEventListener('click',()=>{
+  menu.classList.toggle('open');mBack.classList.toggle('open');
+});
+function closeMenu(){menu.classList.remove('open');mBack.classList.remove('open');}
+mBack.addEventListener('click',closeMenu);
+
+/* модалка «Отображение» */
+const ov=document.getElementById('overlayDisplay');
+function openModal(){ov.classList.add('open');}
+function closeModal(){ov.classList.remove('open');}
+document.getElementById('btnCloseDisplay').addEventListener('click',closeModal);
+document.getElementById('btnDisplayDone').addEventListener('click',closeModal);
+ov.addEventListener('click',e=>{ if(e.target===ov) closeModal(); });
+
+/* начальный экран: ?s=... */
+const qs=new URLSearchParams(location.search);
+let init=qs.get('s')||'overview';
+if(!screens.includes(init)) init='overview';
+show(init,{cal:qs.get('cal')||'month'});
+if(qs.get('modal')==='1') openModal();
+</script>
+</body>
+</html>
