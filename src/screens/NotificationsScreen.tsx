@@ -1,22 +1,110 @@
 import { useNavigate } from "react-router-dom";
+import type { ApiNotification } from "../api/types";
 import {
   useNotifications,
   useMarkAllNotificationsRead,
   useMarkNotificationRead,
+  useDeleteNotification,
   formatRelativeTime,
 } from "../api/notifications";
-import { Icon, Avatar, ScreenHeader } from "../components/UI";
+import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import { useGuardedCallback } from "../lib/useGuardedCallback";
+
+function NotificationRow({ n }: { n: ApiNotification }) {
+  const navigate = useNavigate();
+  const markRead = useMarkNotificationRead();
+  const deleteNotif = useDeleteNotification();
+
+  const handleOpen = useGuardedCallback(async () => {
+    if (!n.read) await markRead.mutateAsync(n.id);
+    if (n.task_id) navigate(`/task/${n.task_id}`);
+  });
+
+  const handleDelete = useGuardedCallback(async () => {
+    await deleteNotif.mutateAsync(n.id);
+  });
+
+  // Show the actor (the person who triggered the notification) — never
+  // fall back to n.user_name/user_color, which is the *recipient*.
+  // Falling back to the recipient would show the user their own avatar as
+  // if they were the author of the action on them, which is worse than no
+  // avatar at all. Older notifications (seeded, or created before actor_id
+  // existed) have actor_id/actor_name = null — those get the neutral gear
+  // placeholder below instead of any avatar (matches mockup-reference's
+  // no-actor row, e.g. "Новая задача назначена вам").
+  const hasActor = Boolean(
+    n.actor_id && n.actor_name && n.actor_name.trim().length > 0,
+  );
+
+  return (
+    <div className="flex items-start gap-3 py-3.5 px-4 group border-b border-stroke last:border-b-0 hover:bg-card2/50">
+      {hasActor ? (
+        <Avatar
+          initials={n.actor_initials || "?"}
+          color={n.actor_color || "#A6A6A6"}
+          size={36}
+        />
+      ) : (
+        <div className="w-[36px] h-[36px] rounded-full bg-card2 flex items-center justify-center shrink-0">
+          <Icon name="gear" size={17} className="text-dim" />
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <button
+          onClick={handleOpen}
+          className="w-full text-left"
+          title={n.task_title || undefined}
+        >
+          <div className="text-[14px] text-text leading-snug">{n.text}</div>
+          {n.task_title && (
+            <div className="text-[13px] text-sub mt-0.5">{n.task_title}</div>
+          )}
+          <div className="text-[12px] text-dim mt-0.5">
+            {formatRelativeTime(n.created_at)}
+          </div>
+        </button>
+        <ErrorBanner
+          error={markRead.error}
+          fallback="Не удалось отметить прочитанным"
+          variant="inline"
+          className="mt-1"
+        />
+        <ErrorBanner
+          error={deleteNotif.error}
+          fallback="Не удалось удалить уведомление"
+          variant="inline"
+          className="mt-1"
+        />
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        {!n.read && <div className="w-[8px] h-[8px] rounded-full bg-red" />}
+        <button
+          onClick={handleDelete}
+          disabled={deleteNotif.isPending}
+          className="w-11 h-11 flex items-center justify-center rounded-lg text-dim hover:bg-card2 hover:text-text disabled:opacity-40 -mr-2"
+          aria-label="Удалить уведомление"
+          title="Удалить"
+        >
+          <Icon name="trash" size={18} />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function NotificationsScreen() {
   const navigate = useNavigate();
-  const { data: notifications = [], isLoading } = useNotifications();
+  const {
+    data: notifications = [],
+    isLoading,
+    error: loadError,
+    isError: isLoadError,
+  } = useNotifications();
   const markAllRead = useMarkAllNotificationsRead();
-  const markRead = useMarkNotificationRead();
 
-  const handleOpen = (n: (typeof notifications)[number]) => {
-    if (!n.read) markRead.mutate(n.id);
-    if (n.task_id) navigate(`/task/${n.task_id}`);
-  };
+  const handleMarkAllRead = useGuardedCallback(async () => {
+    await markAllRead.mutateAsync();
+  });
 
   return (
     <div className="px-4 pb-4">
@@ -34,7 +122,7 @@ export function NotificationsScreen() {
         title="Уведомления"
         actions={
           <button
-            onClick={() => markAllRead.mutate()}
+            onClick={handleMarkAllRead}
             disabled={
               markAllRead.isPending || notifications.every((n) => n.read)
             }
@@ -45,48 +133,29 @@ export function NotificationsScreen() {
         }
       />
 
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      <ErrorBanner
+        error={isLoadError ? loadError : null}
+        fallback="Не удалось загрузить уведомления"
+        variant="inline"
+        className="mt-3"
+      />
+      <ErrorBanner
+        error={markAllRead.error}
+        fallback="Не удалось отметить все прочитанными"
+        variant="inline"
+        className="mt-2"
+      />
+
+      {isLoading && <p className="px-1 text-[13px] text-dim mt-3">Загрузка…</p>}
       {!isLoading && notifications.length === 0 && (
-        <p className="px-1 text-[13px] text-dim">Уведомлений пока нет</p>
+        <p className="px-1 text-[13px] text-dim mt-3">Уведомлений пока нет</p>
       )}
 
       {/* Notification list */}
       {notifications.length > 0 && (
-        <div className="bg-card rounded-2xl overflow-hidden">
+        <div className="bg-card rounded-2xl overflow-hidden mt-3">
           {notifications.map((n) => (
-            <button
-              key={n.id}
-              onClick={() => handleOpen(n)}
-              className="w-full flex items-start gap-3 py-3.5 px-4 text-left"
-            >
-              {n.user_name ? (
-                <Avatar
-                  initials={n.user_initials || "?"}
-                  color={n.user_color || "#A6A6A6"}
-                  size={36}
-                />
-              ) : (
-                <div className="w-[36px] h-[36px] rounded-full bg-card2 flex items-center justify-center">
-                  <Icon name="bell" size={18} className="text-dim" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="text-[14px] text-text leading-snug">
-                  {n.text}
-                </div>
-                {n.task_title && (
-                  <div className="text-[13px] text-sub mt-0.5">
-                    {n.task_title}
-                  </div>
-                )}
-                <div className="text-[12px] text-dim mt-0.5">
-                  {formatRelativeTime(n.created_at)}
-                </div>
-              </div>
-              {!n.read && (
-                <div className="w-[8px] h-[8px] rounded-full bg-red mt-2 shrink-0" />
-              )}
-            </button>
+            <NotificationRow key={n.id} n={n} />
           ))}
         </div>
       )}

@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
-import { Icon, Avatar, ScreenHeader } from "../components/UI";
+import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import { getPriorityColor } from "../lib/priority";
 
 function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
@@ -23,15 +24,8 @@ function formatDue(dateStr: string): string {
   return `${day} ${months[d.getMonth()]}`;
 }
 
-const PRIORITY_COLORS: Record<number, string> = {
-  1: "#E44332",
-  2: "#FF9A14",
-  3: "#4A9FD8",
-  4: "#A6A6A6",
-};
-
 export function InboxScreen() {
-  const { data: allTasks = [], isLoading, isError } = useTasks();
+  const { data: allTasks = [], isLoading, isError, error } = useTasks();
   const navigate = useNavigate();
   const tasks = useMemo(
     () => allTasks.filter((t) => t.status === "active"),
@@ -40,26 +34,14 @@ export function InboxScreen() {
 
   return (
     <div className="px-4 pb-4">
-      <ScreenHeader
-        title="Входящие"
-        actions={
-          <>
-            <button className="flex items-center gap-1.5 px-3 py-[6px] bg-card rounded-lg text-[13px] text-sub">
-              <Icon name="list" size={15} />
-            </button>
-            <button className="flex items-center gap-1.5 px-3 py-[6px] bg-card rounded-lg text-[13px] text-sub">
-              <Icon name="dotsH" size={15} />
-            </button>
-          </>
-        }
-      />
+      <ScreenHeader title="Входящие" />
 
       {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
-      {isError && (
-        <p className="px-1 text-[13px] text-coral">
-          Не удалось загрузить задачи
-        </p>
-      )}
+      <ErrorBanner
+        error={error}
+        fallback="Не удалось загрузить задачи"
+        variant="inline"
+      />
       {!isLoading && !isError && tasks.length === 0 && (
         <p className="px-1 text-[13px] text-dim">Задач пока нет</p>
       )}
@@ -77,7 +59,7 @@ export function InboxScreen() {
               <div
                 className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
                 style={{
-                  borderColor: PRIORITY_COLORS[task.priority] || "#4A9FD8",
+                  borderColor: getPriorityColor(task.priority),
                 }}
               />
               <div className="flex-1 min-w-0">

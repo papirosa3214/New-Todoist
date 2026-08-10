@@ -1,18 +1,37 @@
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, matchPath } from "react-router-dom";
 import { StatusBar, BottomNav, FAB, Panel } from "./UI";
 import { useEffect, useState } from "react";
 import { useCurrentUser } from "../api/auth";
 import { useNotificationsSocket } from "../api/ws";
 
-const HIDE_NAV = [
-  "/login",
-  "/register",
-  "/task/new",
-  "/notifications",
-  "/agents",
-  "/projects",
-  "/search",
-];
+// Bottom nav + FAB belong only to the app's four top-level tab screens —
+// the ones BottomNav itself renders a tab for (see NAV_ITEMS in UI.tsx) and
+// the only ones mockup-reference/index.html shows a tabbar/fab on (see
+// `.tabbar`/`.fab` in the "ЭКРАН 1/7/4·6/8" sections there). Every other
+// route reachable through this Layout — task detail, task new/edit,
+// settings, notifications, agents, projects list, project detail, search —
+// is a "drill-down" screen with its own compact header and back/close
+// button, and never shows nav or FAB in the mockup either.
+//
+// This used to be a blocklist of pathname *prefixes* (HIDE_NAV), checked
+// with `startsWith`. That shape is unreliable in two directions at once:
+//   - under-matches nested routes that don't share the listed prefix, e.g.
+//     "/task/:id/edit" and "/task/:id" don't start with "/task/new", so both
+//     leaked nav+FAB over their forms/cards (confirmed live: FAB physically
+//     overlapped the "+ новая" label-create button on the edit screen);
+//     "/settings" wasn't listed at all, so nav (not just FAB) leaked there.
+//   - over-matches by accident, e.g. "/projects" as a prefix happens to also
+//     swallow "/projects/:id" — correct here, but only by coincidence, not
+//     because the code expressed that intent anywhere.
+// An *allowlist* of the real route patterns (matched via react-router's own
+// matchPath, not string comparison) can only be wrong by omission, and the
+// four entries below are exhaustive by construction — every other screen in
+// App.tsx is deliberately absent.
+const TAB_ROUTES = ["/inbox", "/today", "/upcoming", "/overview"];
+
+function isTabRoute(pathname: string) {
+  return TAB_ROUTES.some((path) => matchPath({ path, end: true }, pathname));
+}
 
 function useIsMobile() {
   const [m, setM] = useState(
@@ -29,8 +48,14 @@ function useIsMobile() {
 export function Layout() {
   const loc = useLocation();
   const isMobile = useIsMobile();
-  const hideNav = HIDE_NAV.some((p) => loc.pathname.startsWith(p));
-  const hideFAB = hideNav || loc.pathname.startsWith("/settings");
+  // FAB never appears without nav (or vice versa) in the mockup — the four
+  // tab screens show both together, every drill-down screen shows neither —
+  // so one boolean drives both instead of carrying a second, independently
+  // driftable condition (the old `|| pathname.startsWith("/settings")` was
+  // exactly that: a patch for FAB alone that left nav itself still showing
+  // on /settings).
+  const hideNav = !isTabRoute(loc.pathname);
+  const hideFAB = hideNav;
   const { data: currentUser } = useCurrentUser();
   useNotificationsSocket(!!currentUser);
 

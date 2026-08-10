@@ -1,8 +1,14 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, FieldGroup, Icon, TextField } from "../components/UI";
+import {
+  Button,
+  ErrorBanner,
+  FieldGroup,
+  Icon,
+  TextField,
+} from "../components/UI";
 import { useLogin } from "../api/auth";
-import { ApiError } from "../api/client";
+import { useGuardedCallback } from "../lib/useGuardedCallback";
 
 export function LoginScreen() {
   const navigate = useNavigate();
@@ -10,18 +16,12 @@ export function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = useGuardedCallback(async (e: FormEvent) => {
     e.preventDefault();
-    setError(null);
-    try {
-      await login.mutateAsync({ email: email.trim(), password });
-      navigate("/inbox", { replace: true });
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось войти");
-    }
-  };
+    await login.mutateAsync({ email: email.trim(), password });
+    navigate("/inbox", { replace: true });
+  });
 
   return (
     <div className="pb-bottom-safe px-5 flex flex-col min-h-[100dvh]">
@@ -73,9 +73,12 @@ export function LoginScreen() {
             </FieldGroup>
           </div>
 
-          {error && (
-            <p className="text-[13px] text-coral mb-3 text-center">{error}</p>
-          )}
+          <ErrorBanner
+            error={login.error}
+            fallback="Не удалось войти"
+            variant="block"
+            className="mb-4"
+          />
 
           {/* Login button */}
           <div className="mb-4">

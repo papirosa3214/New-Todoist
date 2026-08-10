@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
 import { LoginScreen } from "./screens/LoginScreen";
@@ -13,7 +13,38 @@ import { TaskFormScreen } from "./screens/TaskFormScreen";
 import { NotificationsScreen } from "./screens/NotificationsScreen";
 import { AgentsScreen } from "./screens/AgentsScreen";
 import { ProjectsScreen } from "./screens/ProjectsScreen";
+import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
 import { SearchScreen } from "./screens/SearchScreen";
+import { Icon } from "./components/UI";
+
+// Catch-all for unknown routes: without this a bad/typo'd URL renders the
+// Routes tree with zero matches — a blank black screen with no explanation
+// and no way out. "/" resolves through the existing auth logic below (to
+// /inbox when logged in, /login otherwise), so it's always a safe target.
+function NotFoundScreen() {
+  const navigate = useNavigate();
+  return (
+    <div className="min-h-[100dvh] flex flex-col items-center justify-center gap-4 px-6 text-center bg-bg">
+      <div className="w-16 h-16 rounded-full bg-card flex items-center justify-center">
+        <Icon name="info" size={28} className="text-dim" />
+      </div>
+      <div>
+        <h1 className="text-[19px] font-semibold text-text mb-1">
+          Страница не найдена
+        </h1>
+        <p className="text-[14px] text-sub leading-relaxed max-w-[280px]">
+          Такого адреса нет в приложении. Возможно, ссылка устарела.
+        </p>
+      </div>
+      <button
+        onClick={() => navigate("/")}
+        className="h-12 px-6 rounded-xl bg-red text-[15px] font-semibold text-white"
+      >
+        На главную
+      </button>
+    </div>
+  );
+}
 
 export default function App() {
   return (
@@ -37,9 +68,13 @@ export default function App() {
           <Route path="/notifications" element={<NotificationsScreen />} />
           <Route path="/agents" element={<AgentsScreen />} />
           <Route path="/projects" element={<ProjectsScreen />} />
+          <Route path="/projects/:id" element={<ProjectTasksScreen />} />
           <Route path="/search" element={<SearchScreen />} />
         </Route>
       </Route>
+
+      {/* Unknown routes — outside auth/layout so it always renders. */}
+      <Route path="*" element={<NotFoundScreen />} />
     </Routes>
   );
 }

@@ -11,7 +11,16 @@
 import { useState, Children, type ReactNode } from "react";
 import { Icon } from "./UI";
 import { formatDueLabel, todayStr, tomorrowStr } from "../lib/date";
+import { useGuardedCallback } from "../lib/useGuardedCallback";
+import { PRIORITIES } from "../lib/priority";
 import type { ApiLabel } from "../api/types";
+
+// Re-exported so existing `import { PRIORITIES } from "../components/TaskFields"`
+// call sites (TaskDetailScreen) keep working. ../lib/priority.ts is the
+// canonical source now — see PRIORITY_COLORS/getPriorityColor there for
+// the flat color-only form (for screens that just need a dot's color, not
+// the full label/name/color metadata).
+export { PRIORITIES };
 
 // ═══════════ CARD (mockup .card — 14px radius, edge-to-edge dividers) ═══════════
 
@@ -85,13 +94,7 @@ export function FieldRow({
 }
 
 // ═══════════ PRIORITY ═══════════
-
-export const PRIORITIES = [
-  { key: 1, label: "P1", name: "Срочный", color: "#E44332" },
-  { key: 2, label: "P2", name: "Высокий", color: "#FF9A14" },
-  { key: 3, label: "P3", name: "Средний", color: "#4A9FD8" },
-  { key: 4, label: "P4", name: "Низкий", color: "#A6A6A6" },
-] as const;
+// (PRIORITIES itself now lives in ../lib/priority.ts — imported + re-exported above.)
 
 // mockup .p1-pill
 export function PriorityPill({ priority }: { priority: number }) {
@@ -327,9 +330,12 @@ export function LabelsField({
 }) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+  // `saving` here is display-only (spinner/disabled styling) — the actual
+  // re-entrancy guard against a double tap creating the label twice is
+  // useGuardedCallback's synchronous ref below, not this state.
   const [saving, setSaving] = useState(false);
 
-  const submit = async () => {
+  const submit = useGuardedCallback(async () => {
     const trimmed = name.trim();
     if (!trimmed) {
       setCreating(false);
@@ -343,7 +349,7 @@ export function LabelsField({
     } finally {
       setSaving(false);
     }
-  };
+  });
 
   return (
     <div className="w-full bg-card rounded-[14px] overflow-hidden">

@@ -2,45 +2,38 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Button,
+  ErrorBanner,
   FieldGroup,
   Icon,
   TextField,
   ScreenHeader,
 } from "../components/UI";
 import { useRegister } from "../api/auth";
-import { ApiError } from "../api/client";
+import { useGuardedCallback } from "../lib/useGuardedCallback";
 
 export function RegisterScreen() {
   const navigate = useNavigate();
   const register = useRegister();
-  const [role, setRole] = useState<"owner" | "agent">("owner");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = useGuardedCallback(async (e: FormEvent) => {
     e.preventDefault();
-    setError(null);
+    setLocalError(null);
     if (password !== confirmPassword) {
-      setError("Пароли не совпадают");
+      setLocalError("Пароли не совпадают");
       return;
     }
-    try {
-      await register.mutateAsync({
-        name: name.trim(),
-        email: email.trim(),
-        password,
-        role,
-      });
-      navigate("/inbox", { replace: true });
-    } catch (err) {
-      setError(
-        err instanceof ApiError ? err.message : "Не удалось зарегистрироваться",
-      );
-    }
-  };
+    await register.mutateAsync({
+      name: name.trim(),
+      email: email.trim(),
+      password,
+    });
+    navigate("/inbox", { replace: true });
+  });
 
   return (
     <div className="pb-bottom-safe px-5 flex flex-col min-h-[100dvh]">
@@ -104,36 +97,12 @@ export function RegisterScreen() {
             </FieldGroup>
           </div>
 
-          {/* Role selection */}
-          <div className="w-full mb-4">
-            <div className="text-[13px] text-sub font-semibold px-1 mb-2">
-              Роль в команде
-            </div>
-            <div className="flex gap-3">
-              {[
-                { key: "owner" as const, icon: "crown", label: "Владелец" },
-                { key: "agent" as const, icon: "bot", label: "Агент" },
-              ].map((r) => (
-                <button
-                  key={r.key}
-                  type="button"
-                  onClick={() => setRole(r.key)}
-                  className={`flex-1 h-12 flex items-center justify-center gap-2 rounded-xl border transition-colors ${
-                    role === r.key
-                      ? "border-red text-red bg-red/10"
-                      : "border-stroke text-sub bg-card"
-                  }`}
-                >
-                  <Icon name={r.icon} size={18} />
-                  <span className="text-[14px] font-medium">{r.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {error && (
-            <p className="text-[13px] text-coral mb-3 text-center">{error}</p>
-          )}
+          <ErrorBanner
+            error={localError || register.error}
+            fallback="Не удалось зарегистрироваться"
+            variant="block"
+            className="mb-4"
+          />
 
           {/* Submit */}
           <div className="mb-4">

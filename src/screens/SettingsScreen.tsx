@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { FieldGroup, Icon, ScreenHeader } from "../components/UI";
+import { FieldGroup, Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
 
 interface RowProps {
@@ -45,9 +45,31 @@ function Row({
   );
 }
 
+interface InfoRowProps {
+  icon: string;
+  iconColor?: string;
+  label: string;
+  value: string;
+}
+
+function InfoRow({ icon, iconColor = "#FF6B6B", label, value }: InfoRowProps) {
+  return (
+    <div className="w-full flex items-center gap-3 py-3 px-4 bg-card text-left">
+      <div
+        className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
+        style={{ backgroundColor: iconColor + "18" }}
+      >
+        <Icon name={icon} size={16} className="text-text" />
+      </div>
+      <span className="text-[15px] flex-1 text-text">{label}</span>
+      <span className="text-[13px] text-sub">{value}</span>
+    </div>
+  );
+}
+
 export function SettingsScreen() {
   const navigate = useNavigate();
-  const { data: user } = useCurrentUser();
+  const { data: user, error } = useCurrentUser();
   const logout = useLogout();
 
   return (
@@ -68,6 +90,12 @@ export function SettingsScreen() {
         }
       />
 
+      <ErrorBanner
+        error={error}
+        fallback="Не удалось загрузить профиль"
+        variant="block"
+      />
+
       {/* Account section */}
       <div className="mb-4">
         <FieldGroup>
@@ -76,9 +104,6 @@ export function SettingsScreen() {
             label={user ? user.name : "Аккаунт"}
             value={user?.email}
           />
-          <Row icon="gear" label="Основное" />
-          <Row icon="zap" label="Подписка" />
-          <Row icon="calendarSmall" label="Календарь" />
         </FieldGroup>
       </div>
 
@@ -88,37 +113,21 @@ export function SettingsScreen() {
       </div>
       <div className="mb-4">
         <FieldGroup>
-          <Row icon="moon" label="Тема" value="Темный" />
-          <Row icon="image" label="Иконка" value="Todoist" />
-          <Row icon="grid" label="Навигация" />
-          <Row icon="plus" label="Быстрое добавление" />
+          <InfoRow icon="moon" label="Тема" value="Темный" />
+          <InfoRow icon="image" label="Иконка" value="Todoist" />
         </FieldGroup>
       </div>
 
-      {/* Productivity */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
-        Продуктивность
-      </div>
+      {/* General */}
+      <div className="text-[13px] text-sub font-semibold px-1 mb-2">Общие</div>
       <div className="mb-4">
         <FieldGroup>
-          <Row icon="zap" label="Продуктивность" />
-          <Row icon="bell" label="Напоминания" />
           <Row
             icon="bell"
             label="Уведомления"
             onClick={() => navigate("/notifications")}
           />
-        </FieldGroup>
-      </div>
-
-      {/* Agents */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
-        Команда
-      </div>
-      <div className="mb-4">
-        <FieldGroup>
           <Row icon="bot" label="Агенты" onClick={() => navigate("/agents")} />
-          <Row icon="link" label="Интеграции" />
         </FieldGroup>
       </div>
 

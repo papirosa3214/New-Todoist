@@ -9,57 +9,144 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useTask, useUpdateTask, useDeleteTask } from "../api/tasks";
 import { useUpdateSubtask } from "../api/subtasks";
 import { useAddComment } from "../api/comments";
-import { Icon, Avatar, ScreenHeader } from "../components/UI";
+import { ApiError } from "../api/client";
+import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
 import { PRIORITIES, PriorityPill } from "../components/TaskFields";
-import { formatDueLabel } from "../lib/date";
+import { formatDueLabel, formatRelativeTime } from "../lib/date";
+import { useDialog } from "../components/Dialog";
+import { useGuardedCallback } from "../lib/useGuardedCallback";
+
+// ═══════════ SUBTASK ROW ═══════════
+// Its own component (not inlined in the .map() below) so each row gets its
+// own useGuardedCallback instance — one hook call per row instance, per
+// useGuardedCallback's own rule. A single guard hoisted out of the loop and
+// shared across rows would make tapping row 2 a silent no-op while row 1's
+// toggle is still in flight.
+function SubtaskToggleRow({
+  title,
+  done,
+  onToggle,
+}: {
+  title: string;
+  done: boolean;
+  onToggle: () => Promise<unknown>;
+}) {
+  const guardedToggle = useGuardedCallback(onToggle);
+  return (
+    <button
+      onClick={guardedToggle}
+      className="w-full flex items-center gap-3 py-3 px-4 text-left"
+    >
+      <div
+        className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center shrink-0 ${
+          done ? "bg-red border-red" : "border-dim"
+        }`}
+      >
+        {done && <Icon name="check" size={12} className="text-white" />}
+      </div>
+      <span
+        className={`text-[14px] ${done ? "line-through text-sub" : "text-text"}`}
+      >
+        {title}
+      </span>
+    </button>
+  );
+}
 
 export function TaskDetailScreen() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { data: task, isLoading, isError } = useTask(id);
+  const { data: task, isLoading, isError, error } = useTask(id);
   const updateTask = useUpdateTask();
   const deleteTask = useDeleteTask();
   const updateSubtask = useUpdateSubtask();
   const addComment = useAddComment(id || "");
+  const { confirm, alert, dialog } = useDialog();
 
   const [commentText, setCommentText] = useState("");
+
+  // These guarded handlers close over `task`, which is only defined once
+  // the query resolves — but the hooks themselves must run unconditionally,
+  // above the isLoading/isError/!task early returns below. Calling a hook
+  // only in the "task loaded" branch would change the hook count between
+  // renders the moment the task resolves (React: "Rendered more hooks than
+  // during the previous render"). Each body starts with `if (!task) return`
+  // so there's nothing to actually do before the task exists — the guard
+  // just can't be skipped structurally.
+  const handleDelete = useGuardedCallback(async () => {
+    if (!task) return;
+    const ok = await confirm({
+      title: "Удалить задачу без возможности отмены?",
+      confirmLabel: "Удалить",
+      cancelLabel: "Отмена",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      // Only the creator may delete (server enforces this with a 404, same
+      // as "not found", so an assignee-only task shows this rather than a
+      // 403).
+      await deleteTask.mutateAsync(task.id);
+      navigate(-1);
+    } catch {
+      await alert(
+        "Не удалось удалить задачу — возможно, вы не создатель этой задачи.",
+      );
+    }
+  });
+
+  const handleToggleStatus = useGuardedCallback(async () => {
+    if (!task) return;
+    const newStatus = task.status === "active" ? "completed" : "active";
+    await updateTask.mutateAsync({ id: task.id, status: newStatus });
+  });
+
+  const handleSubmitComment = useGuardedCallback(async (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = commentText.trim();
+    if (!trimmed) return;
+    await addComment.mutateAsync(trimmed);
+    setCommentText("");
+  });
 
   if (isLoading) {
     return <div className="px-4 py-8 text-center text-sub">Загрузка…</div>;
   }
 
-  if (!task || isError) {
+  if (isError) {
+    // A 404 (deleted task, stale link, someone else's task) is the common
+    // case here and isn't a connectivity problem — showing "проверьте
+    // соединение" for it would be misleading. useTask has retry: false, so
+    // any non-404 failure (offline, 5xx) falls through to the ErrorBanner
+    // below, which turns a raw ApiError/TypeError into real Russian copy.
+    if (error instanceof ApiError && error.status === 404) {
+      return (
+        <div className="px-4 py-8 text-center text-sub">Задача не найдена</div>
+      );
+    }
+    return (
+      <div className="px-4 py-8">
+        <ErrorBanner
+          error={error}
+          fallback="Не удалось загрузить задачу — проверьте соединение"
+          variant="block"
+        />
+      </div>
+    );
+  }
+
+  if (!task) {
     return (
       <div className="px-4 py-8 text-center text-sub">Задача не найдена</div>
     );
   }
-
-  const handleDelete = () => {
-    if (!confirm("Удалить задачу без возможности отмены?")) return;
-    // Only the creator may delete (server enforces this with a 404, same as
-    // "not found", so an assignee-only task shows this rather than a 403).
-    deleteTask.mutate(task.id, {
-      onSuccess: () => navigate(-1),
-      onError: () =>
-        alert(
-          "Не удалось удалить задачу — возможно, вы не создатель этой задачи.",
-        ),
-    });
-  };
-
-  const handleSubmitComment = (e: FormEvent) => {
-    e.preventDefault();
-    if (!commentText.trim()) return;
-    addComment.mutate(commentText.trim(), {
-      onSuccess: () => setCommentText(""),
-    });
-  };
 
   const priorityColor =
     PRIORITIES.find((p) => p.key === task.priority)?.color ?? "#A6A6A6";
 
   return (
     <div className="px-4 pb-4">
+      {dialog}
       <ScreenHeader
         variant="compact"
         leading={
@@ -92,10 +179,7 @@ export function TaskDetailScreen() {
       {/* Priority ring + Title */}
       <div className="flex items-start gap-3 mb-4">
         <button
-          onClick={() => {
-            const newStatus = task.status === "active" ? "completed" : "active";
-            updateTask.mutate({ id: task.id, status: newStatus });
-          }}
+          onClick={handleToggleStatus}
           className="mt-1 w-[22px] h-[22px] rounded-full border-2 shrink-0 flex items-center justify-center"
           style={{ borderColor: priorityColor }}
         >
@@ -109,6 +193,13 @@ export function TaskDetailScreen() {
           {task.title}
         </h1>
       </div>
+
+      <ErrorBanner
+        error={updateTask.error}
+        fallback="Не удалось обновить задачу"
+        variant="block"
+        className="mb-4"
+      />
 
       {/* Description */}
       {task.description && (
@@ -168,30 +259,22 @@ export function TaskDetailScreen() {
           </h3>
           <div className="bg-card rounded-2xl overflow-hidden">
             {task.subtasks.map((st) => (
-              <button
+              <SubtaskToggleRow
                 key={st.id}
-                onClick={() =>
-                  updateSubtask.mutate({ id: st.id, done: !st.done })
+                title={st.title}
+                done={st.done}
+                onToggle={() =>
+                  updateSubtask.mutateAsync({ id: st.id, done: !st.done })
                 }
-                className="w-full flex items-center gap-3 py-3 px-4 text-left"
-              >
-                <div
-                  className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center shrink-0 ${
-                    st.done ? "bg-red border-red" : "border-dim"
-                  }`}
-                >
-                  {st.done && (
-                    <Icon name="check" size={12} className="text-white" />
-                  )}
-                </div>
-                <span
-                  className={`text-[14px] ${st.done ? "line-through text-sub" : "text-text"}`}
-                >
-                  {st.title}
-                </span>
-              </button>
+              />
             ))}
           </div>
+          <ErrorBanner
+            error={updateSubtask.error}
+            fallback="Не удалось обновить подзадачу"
+            variant="block"
+            className="mt-2"
+          />
         </div>
       )}
 
@@ -209,16 +292,16 @@ export function TaskDetailScreen() {
             {task.comments.map((c) => (
               <div key={c.id} className="bg-card rounded-2xl p-3">
                 <div className="flex items-center gap-2 mb-1">
-                  {c.user_name && (
-                    <Avatar
-                      initials={c.user_initials || "?"}
-                      color={c.user_color || "#A6A6A6"}
-                      size={20}
-                    />
-                  )}
-                  <span className="text-[13px] font-medium">{c.user_name}</span>
+                  <Avatar
+                    initials={c.user_initials || "?"}
+                    color={c.user_color || "#A6A6A6"}
+                    size={20}
+                  />
+                  <span className="text-[13px] font-medium">
+                    {c.user_name || "Неизвестный"}
+                  </span>
                   <span className="text-[11px] text-dim ml-auto">
-                    {c.created_at}
+                    {formatRelativeTime(c.created_at)}
                   </span>
                 </div>
                 <p className="text-[14px] text-sub">{c.text}</p>
@@ -226,6 +309,12 @@ export function TaskDetailScreen() {
             ))}
           </div>
         )}
+        <ErrorBanner
+          error={addComment.error}
+          fallback="Не удалось отправить комментарий"
+          variant="block"
+          className="mb-2"
+        />
         <form
           onSubmit={handleSubmitComment}
           className="flex items-center gap-2"

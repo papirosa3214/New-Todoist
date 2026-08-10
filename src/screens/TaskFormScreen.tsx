@@ -8,18 +8,16 @@
 // CRUD идёт через живой API сразу, а не копится в локальном стейте.
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
 import { useProjects } from "../api/projects";
 import { useLabels, useCreateLabel } from "../api/labels";
 import { useAgents } from "../api/agents";
 import { useCreateTask, useTask, useUpdateTask } from "../api/tasks";
 import {
-  createSubtaskRequest,
   useCreateSubtask,
   useDeleteSubtask,
   useUpdateSubtask,
 } from "../api/subtasks";
-import { Icon, Avatar, ScreenHeader } from "../components/UI";
+import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
 import {
   Card,
   FieldRow,
@@ -29,18 +27,17 @@ import {
   SubtaskRow,
   AddSubtaskRow,
 } from "../components/TaskFields";
-import { todayStr } from "../lib/date";
+import { useGuardedCallback } from "../lib/useGuardedCallback";
 import type { UpdateTaskInput } from "../api/tasks";
 
 export function TaskFormScreen() {
   const { id } = useParams<{ id: string }>();
   const isEdit = !!id;
   const navigate = useNavigate();
-  const qc = useQueryClient();
 
-  const { data: agents = [] } = useAgents();
-  const { data: projects = [] } = useProjects();
-  const { data: labels = [] } = useLabels();
+  const { data: agents = [], isError: agentsError } = useAgents();
+  const { data: projects = [], isError: projectsError } = useProjects();
+  const { data: labels = [], isError: labelsError } = useLabels();
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
   const createLabel = useCreateLabel();
@@ -59,10 +56,14 @@ export function TaskFormScreen() {
   const [priority, setPriority] = useState(1);
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
   // Create mode only — subtasks of a not-yet-created task have no id to
-  // CRUD against, so they're held locally and posted right after the task
-  // itself is created (see handleSave).
+  // CRUD against, so they're held locally and sent as part of the atomic
+  // POST /api/tasks `subtasks` param (see handleSave).
   const [localSubtasks, setLocalSubtasks] = useState<string[]>([]);
-  const [dueDate, setDueDate] = useState<string | null>(todayStr());
+  // Owner 2026-08-10: a new task must start with NO due date (Todoist-style
+  // — undated tasks land in Inbox, "Сегодня" only shows what was actually
+  // put there). Edit mode overwrites this from existingTask.due_date right
+  // below, so an existing task keeps its own date.
+  const [dueDate, setDueDate] = useState<string | null>(null);
   // undefined = "not touched yet" (create mode falls back to the user's
   // first project); null = "explicitly no project" (a valid state only
   // reachable in edit mode, for a task that lives in Inbox).
@@ -71,7 +72,6 @@ export function TaskFormScreen() {
   );
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [showAssigneePicker, setShowAssigneePicker] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   // Snapshot the loaded task into local form state exactly once — further
@@ -90,6 +90,49 @@ export function TaskFormScreen() {
     }
   }, [isEdit, existingTask, hydrated]);
 
+  // useGuardedCallback is a hook (useRef × 3 + useCallback) — it MUST run
+  // on every render with a stable call order, so it has to sit above the
+  // early `return`s below (isEdit's loading/not-found/not-hydrated guards
+  // — those gate JSX, not hook calls). The closure references
+  // buildDirtyPatch/effectiveProjectId/localSubtasks, all declared further
+  // down: safe, because this inner function only actually runs on a click,
+  // long after the whole component body (and those consts) has finished
+  // executing for that render — a plain JS closure-over-later-const, not a
+  // hook-order issue.
+  //
+  // mutateAsync (not .mutate) is required — see useGuardedCallback's own
+  // doc: the lock has to cover the actual network round-trip, not just the
+  // synchronous call. No onError/try-catch needed: React Query populates
+  // createTask.error/updateTask.error before rejecting, and the
+  // ErrorBanner below reads straight from that mutation state (same
+  // pattern LabelsField already uses for its own submit).
+  const handleSave = useGuardedCallback(async () => {
+    if (!title.trim()) return;
+    if (isEdit && id) {
+      const patch = buildDirtyPatch();
+      if (Object.keys(patch).length > 0) {
+        await updateTask.mutateAsync({ id, ...patch });
+      }
+      navigate(`/task/${id}`);
+    } else {
+      // Server creates the task and its subtasks in one transaction (see
+      // AGENT-API.md §Tasks, `subtasks` param) — no follow-up requests, no
+      // half-created task if the connection drops mid-way.
+      await createTask.mutateAsync({
+        title: title.trim(),
+        description: desc.trim() || undefined,
+        due_date: dueDate || undefined,
+        project_id: effectiveProjectId ?? undefined,
+        priority,
+        assignee_id: assignee,
+        label_ids: selectedLabelIds,
+        subtasks: localSubtasks.length > 0 ? localSubtasks : undefined,
+      });
+      navigate("/inbox");
+    }
+  });
+  const isSaving = createTask.isPending || updateTask.isPending;
+
   if (isEdit && taskLoading) {
     return <div className="px-4 py-8 text-center text-sub">Загрузка…</div>;
   }
@@ -101,6 +144,13 @@ export function TaskFormScreen() {
   if (isEdit && !hydrated) {
     return <div className="px-4 py-8 text-center text-sub">Загрузка…</div>;
   }
+
+  // Projects/labels/agents failing to load (server down, offline) must not
+  // render as a quietly-empty-but-functional form — "Входящие" + "Меток
+  // пока нет" + "Выбрать исполнителя" all look like valid empty states
+  // otherwise, and the user only discovers the outage after filling the
+  // whole form and hitting «Готово».
+  const refDataError = agentsError || projectsError || labelsError;
 
   const effectiveProjectId = isEdit
     ? (projectId ?? null)
@@ -152,44 +202,6 @@ export function TaskFormScreen() {
     return patch;
   };
 
-  const handleSave = async () => {
-    if (!title.trim() || saving) return;
-    setSaving(true);
-    try {
-      if (isEdit && id) {
-        const patch = buildDirtyPatch();
-        if (Object.keys(patch).length > 0) {
-          await updateTask.mutateAsync({ id, ...patch });
-        }
-        navigate(`/task/${id}`);
-      } else {
-        const { task } = await createTask.mutateAsync({
-          title: title.trim(),
-          description: desc.trim() || undefined,
-          due_date: dueDate || undefined,
-          project_id: effectiveProjectId ?? undefined,
-          priority,
-          assignee_id: assignee,
-          label_ids: selectedLabelIds,
-        });
-
-        // The create-task endpoint has no bulk-subtask param — create them
-        // one by one against the dedicated subtask endpoint.
-        if (localSubtasks.length > 0) {
-          for (const s of localSubtasks) {
-            // eslint-disable-next-line no-await-in-loop
-            await createSubtaskRequest(task.id, s);
-          }
-          qc.invalidateQueries({ queryKey: ["tasks"] });
-        }
-
-        navigate("/inbox");
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <div className="px-4 pb-4 min-h-full">
       <ScreenHeader
@@ -206,12 +218,28 @@ export function TaskFormScreen() {
         actions={
           <button
             onClick={handleSave}
-            disabled={!title.trim() || saving}
+            disabled={!title.trim() || isSaving}
             className="text-[16px] font-semibold text-red active:opacity-70 disabled:opacity-50"
           >
-            {saving ? "Сохранение…" : "Готово"}
+            {isSaving ? "Сохранение…" : "Готово"}
           </button>
         }
+      />
+
+      {/* Save button lives in the fixed header above, not at the bottom of
+          the form — this is the closest position to "прямо над кнопкой
+          сохранения" that doesn't scroll the header out of first place. */}
+      <ErrorBanner
+        error={isEdit ? updateTask.error : createTask.error}
+        fallback="Не удалось сохранить задачу. Проверьте соединение."
+        variant="block"
+        className="mb-4"
+      />
+      <ErrorBanner
+        error={refDataError}
+        fallback="Не удалось загрузить проекты, метки или агентов. Проверьте соединение."
+        variant="block"
+        className="mb-4"
       />
 
       {/* Title */}
@@ -333,6 +361,14 @@ export function TaskFormScreen() {
                 />,
               ]}
         </Card>
+        <ErrorBanner
+          error={
+            createSubtask.error ?? updateSubtask.error ?? deleteSubtask.error
+          }
+          fallback="Не удалось изменить подзадачи. Проверьте соединение."
+          variant="block"
+          className="mt-2"
+        />
       </div>
 
       {/* ── Assignee (tappable → picker) ── */}
@@ -425,6 +461,12 @@ export function TaskFormScreen() {
           selectedIds={selectedLabelIds}
           onToggle={toggleLabel}
           onCreate={handleCreateLabel}
+        />
+        <ErrorBanner
+          error={createLabel.error}
+          fallback="Не удалось создать метку. Проверьте соединение."
+          variant="block"
+          className="mt-2"
         />
       </div>
     </div>

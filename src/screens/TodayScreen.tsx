@@ -1,40 +1,109 @@
 import { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
-import { Icon, ScreenHeader } from "../components/UI";
-import { todayStr } from "../lib/date";
+import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { todayStr, formatDueLabel } from "../lib/date";
+import { getPriorityColor } from "../lib/priority";
+import type { ApiTask } from "../api/types";
+
+// Одна строка задачи — используется и для просроченных, и для сегодняшних,
+// разница только в `overdue` (красная пометка «Просрочено, …» под текстом).
+function TaskRow({
+  task,
+  overdue,
+  onClick,
+}: {
+  task: ApiTask;
+  overdue: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-start gap-3 py-3 px-1 text-left border-b border-stroke/50 active:bg-card/50 transition-colors"
+    >
+      <div
+        className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
+        style={{ borderColor: getPriorityColor(task.priority) }}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-[15px] text-text leading-snug truncate">
+          {task.title}
+        </div>
+        {task.description && (
+          <div className="text-[13px] text-sub mt-0.5 truncate">
+            {task.description.substring(0, 60)}…
+          </div>
+        )}
+        {overdue && task.due_date && (
+          <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
+            <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
+            {formatDueLabel(task.due_date)}
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
 
 export function TodayScreen() {
-  const { data: allTasks = [], isLoading } = useTasks();
-  const tasks = useMemo(
+  const { data: allTasks = [], isLoading, isError, error } = useTasks();
+  const navigate = useNavigate();
+  const today = todayStr();
+
+  // Просроченные задачи (дедлайн раньше сегодня, ещё активные) теперь не
+  // пропадают из виду — попадают в «Сегодня» отдельным блоком выше обычных
+  // сегодняшних, отсортированы от самой давней просрочки к недавней.
+  const overdueTasks = useMemo(
     () =>
-      allTasks.filter(
-        (t) => t.due_date === todayStr() && t.status === "active",
-      ),
-    [allTasks],
+      allTasks
+        .filter(
+          (t) =>
+            t.status === "active" && t.due_date !== null && t.due_date < today,
+        )
+        .sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? "")),
+    [allTasks, today],
+  );
+  const todayTasks = useMemo(
+    () => allTasks.filter((t) => t.due_date === today && t.status === "active"),
+    [allTasks, today],
   );
 
-  if (!isLoading && tasks.length === 0) {
+  const isEmpty =
+    !isLoading &&
+    !isError &&
+    overdueTasks.length === 0 &&
+    todayTasks.length === 0;
+
+  const header = (
+    <ScreenHeader
+      className={isEmpty ? "w-full" : ""}
+      leading={
+        <div className="bg-card/60 rounded-full p-2">
+          <Icon name="calendarSmall" size={22} className="text-text" />
+        </div>
+      }
+      title="Сегодня"
+      actions={
+        <>
+          <button className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center active:scale-95 transition-transform">
+            <Icon name="dots" size={18} />
+          </button>
+          <button
+            onClick={() => navigate("/search")}
+            className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center active:scale-95 transition-transform"
+          >
+            <Icon name="search" size={18} />
+          </button>
+        </>
+      }
+    />
+  );
+
+  if (isEmpty) {
     return (
       <div className="px-4 pb-4 flex flex-col items-center">
-        <ScreenHeader
-          className="w-full"
-          leading={
-            <div className="bg-card/60 rounded-full p-2">
-              <Icon name="calendarSmall" size={22} className="text-text" />
-            </div>
-          }
-          title="Сегодня"
-          actions={
-            <>
-              <button className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center">
-                <Icon name="dots" size={18} />
-              </button>
-              <button className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center">
-                <Icon name="search" size={18} />
-              </button>
-            </>
-          }
-        />
+        {header}
         <div className="flex-1 flex flex-col items-center justify-center mt-8">
           <svg width="200" height="180" viewBox="0 0 200 180" className="mb-6">
             <circle cx="100" cy="80" r="48" fill="#2B2B2B" />
@@ -101,33 +170,41 @@ export function TodayScreen() {
 
   return (
     <div className="px-4 pb-4">
-      <ScreenHeader
-        leading={
-          <div className="bg-card/60 rounded-full p-2">
-            <Icon name="calendarSmall" size={22} className="text-text" />
-          </div>
-        }
-        title="Сегодня"
-      />
+      {header}
       {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      <ErrorBanner
+        error={error}
+        fallback="Не удалось загрузить задачи"
+        className="mt-2"
+      />
       <div className="space-y-[2px]">
-        {tasks.map((t) => (
-          <div
-            key={t.id}
-            className="flex items-start gap-3 py-3 px-1 border-b border-stroke/50"
-          >
-            <div className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 border-red shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-[15px] text-text leading-snug truncate">
-                {t.title}
-              </div>
-              {t.description && (
-                <div className="text-[13px] text-sub mt-0.5 truncate">
-                  {t.description.substring(0, 60)}…
-                </div>
-              )}
-            </div>
+        {overdueTasks.length > 0 && (
+          <div className="flex items-center gap-1.5 px-1 pt-2 pb-1">
+            <span className="text-[13px] font-semibold text-red">
+              Просрочено
+            </span>
           </div>
+        )}
+        {overdueTasks.map((t) => (
+          <TaskRow
+            key={t.id}
+            task={t}
+            overdue
+            onClick={() => navigate(`/task/${t.id}`)}
+          />
+        ))}
+        {overdueTasks.length > 0 && todayTasks.length > 0 && (
+          <div className="text-[13px] font-semibold text-sub px-1 pt-3 pb-1">
+            Сегодня
+          </div>
+        )}
+        {todayTasks.map((t) => (
+          <TaskRow
+            key={t.id}
+            task={t}
+            overdue={false}
+            onClick={() => navigate(`/task/${t.id}`)}
+          />
         ))}
       </div>
     </div>

@@ -1,10 +1,10 @@
 import { useNavigate } from "react-router-dom";
 import { useAgents } from "../api/agents";
-import { Icon, Avatar, ScreenHeader } from "../components/UI";
+import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
 
 export function AgentsScreen() {
   const navigate = useNavigate();
-  const { data: agents = [], isLoading } = useAgents();
+  const { data: agents = [], isLoading, error, isError } = useAgents();
 
   return (
     <div className="px-4 pb-4">
@@ -33,6 +33,13 @@ export function AgentsScreen() {
             </button>
           </>
         }
+      />
+
+      <ErrorBanner
+        error={isError ? error : null}
+        fallback="Не удалось загрузить список агентов"
+        variant="inline"
+        className="mt-3"
       />
 
       {/* Team */}
