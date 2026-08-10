@@ -1,9 +1,10 @@
 // ═══════════ Fetch wrapper for the TaskFlow API ═══════════
 //
-// Base URL comes from Vite env (VITE_API_URL). Falls back to the server's
-// own dev default (server/src/index.ts: PORT ?? 3001) so the app works
-// out of the box against `npm run dev` in server/ with no .env needed.
-const DEFAULT_BASE_URL = "http://localhost:3001";
+// Base URL comes from Vite env (VITE_API_URL). Falls back to same-origin
+// ("" → relative /api/... URLs, proxied to the server by vite dev — see
+// vite.config.ts) so the app works from any device on the LAN, not only
+// from the machine where "localhost" happens to be the server.
+const DEFAULT_BASE_URL = "";
 
 export const API_BASE_URL = (
   (import.meta.env.VITE_API_URL as string | undefined)?.trim() ||

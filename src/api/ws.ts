@@ -17,7 +17,8 @@ export function useNotificationsSocket(enabled: boolean) {
   useEffect(() => {
     const token = getToken();
     if (!enabled || !token) return;
-    const wsUrl = `${API_BASE_URL.replace(/^http/, "ws")}/ws?token=${encodeURIComponent(token)}`;
+    const httpBase = API_BASE_URL || window.location.origin;
+    const wsUrl = `${httpBase.replace(/^http/, "ws")}/ws?token=${encodeURIComponent(token)}`;
 
     let socket: WebSocket;
     try {
