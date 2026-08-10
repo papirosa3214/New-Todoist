@@ -50,3 +50,33 @@ export function formatDueLabel(dateStr: string): string {
   if (dateStr === tomorrowStr()) return `Завтра, ${day} ${month}.`;
   return `${day} ${month}.`;
 }
+
+// ═══════════ TIMESTAMPS (comments, notifications, activity, …) ═══════════
+// Canonical home for these two — they used to live only in
+// ../api/notifications.ts (re-exported from there for backward
+// compatibility so its existing import sites don't need touching).
+
+// `created_at` on every table is SQLite's `datetime('now')`:
+// "YYYY-MM-DD HH:MM:SS" in UTC with no timezone marker. `new Date(...)`
+// would parse that as *local* time, which is off by the local UTC offset
+// (e.g. 3h in Moscow). Normalize before parsing.
+export function parseServerDate(sqliteDatetime: string): Date {
+  return new Date(sqliteDatetime.replace(" ", "T") + "Z");
+}
+
+// "5 мин. назад" / "вчера" style relative label for any SQLite
+// `created_at` string. Use this instead of printing the raw value —
+// comments/notifications/activity should never show raw
+// "YYYY-MM-DD HH:MM:SS" to the user.
+export function formatRelativeTime(sqliteDatetime: string): string {
+  const d = parseServerDate(sqliteDatetime);
+  const diffMs = Date.now() - d.getTime();
+  const diffMin = Math.round(diffMs / 60000);
+  if (diffMin < 1) return "только что";
+  if (diffMin < 60) return `${diffMin} мин. назад`;
+  const diffH = Math.round(diffMin / 60);
+  if (diffH < 24) return `${diffH} ч. назад`;
+  const diffD = Math.round(diffH / 24);
+  if (diffD === 1) return "вчера";
+  return `${diffD} дн. назад`;
+}

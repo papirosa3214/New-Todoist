@@ -108,3 +108,87 @@
     bottom: calc(92px + env(safe-area-inset-bottom));
   }
 }
+
+/* ═══════════════ TAP FEEDBACK ═══════════════
+   One named set of press-feedback classes, replacing the ad-hoc mix that
+   had accumulated across the app (active:scale-95/90, active:opacity-80/70,
+   active:bg-white/10, active:bg-card2, active:bg-card/50 — seven different
+   values, none matching mockup-reference/index.html). Values below are
+   copied from that file's own :active rules, so a press reads exactly like
+   the reference wherever these are used. -webkit-tap-highlight-color is
+   suppressed globally (see GLOBAL RESET above); these four classes are the
+   deliberate replacement for it, same as the reference's own reset does
+   (mockup-reference/index.html line 26 also sets tap-highlight-color:
+   transparent and relies on per-component :active rules, not the system
+   highlight).
+
+   Pick by element shape, not by screen:
+     .tap-scale — icon/round/square buttons (pill-btn/round-btn/fab shape:
+       a button that is its own tappable card, not a full-bleed CTA or a
+       row in a list). Physical press via a scale dip.
+       Value: transform:scale(.94), from .fab:active (mockup line ~262).
+       <button className="tap-scale h-11 w-11 rounded-full ...">
+
+     .tap-row — one row inside a list/card (FieldGroup rows, settings
+       rows, task rows, sidebar/menu-drawer items). The row doesn't move,
+       its background washes very slightly.
+       Value: background:rgba(255,255,255,.04), from .row:active
+       (mockup line ~143).
+       <button className="tap-row w-full flex items-center gap-3 ...">
+
+     .tap-fade — full-width/solid CTA buttons and plain text links: the
+       shape must not change (it's often the width of the screen), so
+       opacity carries the feedback instead.
+       Value: opacity:.85, from .auth-btn:active / .check-btn:active
+       (mockup lines ~410 / ~125).
+       <button className="tap-fade w-full h-12 rounded-xl bg-red ...">
+
+     .tap-menu — a row inside a floating menu/sheet that already sits on
+       an elevated surface (mockup's #242424 .menu panel over the #171717
+       page background), so the wash needs to be one notch brighter than
+       .tap-row to still read.
+       Value: background:rgba(255,255,255,.06), from .menu button:active
+       (mockup line ~279).
+       <button className="tap-menu w-full flex items-center gap-3 ...">
+
+   No transition-property is declared on purpose: none of the reference's
+   :active rules animate (they snap instantly), and declaring one here
+   would fight any transition-* utility Tailwind emits for the same
+   element at equal specificity, in the same layer, with the winner
+   decided only by generation order. Elements that want an eased pressed
+   state should own that separately from whichever Tailwind transition-*
+   utility they already carry.
+
+   prefers-reduced-motion: only .tap-scale moves anything (a transform).
+   Under reduced motion its scale is disabled and it falls back to the
+   same opacity dip the reference's own pill-btn/round-btn use — opacity:
+   .75 (mockup lines ~89/~117) — so a press still visibly reads as a
+   press, just without motion.
+
+   :not(:disabled) guard: Chromium still matches :active on a disabled
+   <button> when the pointer is pressed directly over it (confirmed live —
+   an unguarded rule made a disabled Button get *brighter* under press,
+   0.5 -> 0.85, reading as "accepted"). The guard also keeps these classes
+   safely reusable on disabled-able rows the 13-screen rollout adds later;
+   it's a no-op on non-form elements like a `div role="button"` row. */
+@layer utilities {
+  .tap-scale:active:not(:disabled) {
+    transform: scale(0.94);
+  }
+  .tap-row:active:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.04);
+  }
+  .tap-fade:active:not(:disabled) {
+    opacity: 0.85;
+  }
+  .tap-menu:active:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tap-scale:active:not(:disabled) {
+      transform: none;
+      opacity: 0.75;
+    }
+  }
+}

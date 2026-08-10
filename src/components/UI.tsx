@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useTasks } from "../api/tasks";
 import { todayStr } from "../lib/date";
+import { getErrorMessage } from "../lib/errors";
 
 // ═══════════ SVG ICON STROKE SET ═══════════
 
@@ -522,7 +523,7 @@ export function BottomNav() {
           <button
             key={item.path}
             onClick={() => navigate(item.path)}
-            className={`flex-1 flex flex-col items-center justify-center gap-[2px] transition-colors ${
+            className={`flex-1 flex flex-col items-center justify-center gap-[2px] transition-colors tap-scale ${
               active ? "text-text" : "text-dim"
             }`}
           >
@@ -563,7 +564,7 @@ export function FAB({ onClick }: { onClick?: () => void }) {
   return (
     <button
       onClick={onClick ?? (() => navigate("/task/new"))}
-      className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-[0_6px_16px_rgba(228,67,50,.45)] z-30 transition-transform active:scale-95"
+      className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-[0_6px_16px_rgba(228,67,50,.45)] z-30 tap-scale"
     >
       <Icon name="plus" size={26} className="text-white" />
     </button>
@@ -666,7 +667,7 @@ export function Panel() {
         <button
           key={item.path}
           onClick={() => navigate(item.path)}
-          className="w-full flex items-center gap-2 px-2 py-[5px] rounded-lg hover:bg-card text-left text-[13px] text-sub hover:text-text transition-colors"
+          className="w-full flex items-center gap-2 px-2 py-[5px] rounded-lg tap-row text-left text-[13px] text-sub hover:text-text"
         >
           <span className="w-4 text-[11px] text-dim text-right shrink-0">
             {i + 1}
@@ -747,9 +748,67 @@ export function Button({
   return (
     <button
       {...props}
-      className={`w-full h-12 rounded-xl text-[15px] font-semibold flex items-center justify-center gap-3 transition-opacity active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
+      className={`w-full h-12 rounded-xl text-[15px] font-semibold flex items-center justify-center gap-3 tap-fade disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
     >
       {children}
     </button>
+  );
+}
+
+// ═══════════ ERROR BANNER ═══════════
+// Generalizes InboxScreen's inline query-error line (`<p className="px-1
+// text-[13px] text-coral">…</p>`) into a reusable primitive that also
+// covers mutation errors. Accepts the raw `error` — a caught exception, a
+// mutation's `.error`, or a plain string already extracted into local
+// state (e.g. the try/catch pattern in LoginScreen/RegisterScreen) — and
+// runs it through getErrorMessage itself, so callers never need to call
+// that separately. Renders nothing for a falsy/empty error, so it's safe
+// to mount unconditionally: `<ErrorBanner error={mutation.error} />` with
+// no surrounding `{mutation.isError && ...}` needed.
+//
+//   - variant="inline" (default): exact InboxScreen look — a plain coral
+//     line. Use for query-load errors and anywhere space is tight.
+//   - variant="block": a tinted rounded panel (same bg-X/opacity tint
+//     pattern as the app's label pills / UpcomingScreen's "Просрочено"
+//     chip), with an icon. Use directly above a form's submit/save button
+//     for mutation errors — the "офлайн жмёт «Сохранить»" case needs more
+//     visual weight than a thin text line under a long scrolling list.
+//
+// Always pass `fallback` — a specific, Russian, one-sentence description
+// of what failed ("Не удалось сохранить задачу"). The server's own error
+// strings are a mix of Russian and English (see getErrorMessage in
+// ../lib/errors); English ones are swapped for `fallback` automatically,
+// so a call site that omits it can end up showing only a generic
+// "Что-то пошло не так" for what might be a very common, specific failure.
+export function ErrorBanner({
+  error,
+  fallback,
+  variant = "inline",
+  className = "",
+}: {
+  error: unknown;
+  fallback?: string;
+  variant?: "inline" | "block";
+  className?: string;
+}) {
+  const message = getErrorMessage(error, fallback);
+  if (!message) return null;
+
+  if (variant === "block") {
+    return (
+      <div
+        role="alert"
+        className={`flex items-start gap-2 bg-coral/12 text-coral rounded-xl px-3 py-2.5 text-[13px] leading-relaxed ${className}`}
+      >
+        <Icon name="info" size={15} className="shrink-0 mt-[1px]" />
+        <span>{message}</span>
+      </div>
+    );
+  }
+
+  return (
+    <p role="alert" className={`px-1 text-[13px] text-coral ${className}`}>
+      {message}
+    </p>
   );
 }

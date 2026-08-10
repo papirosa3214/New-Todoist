@@ -30,6 +30,9 @@ export interface CreateTaskInput {
   priority?: number;
   assignee_id?: string;
   label_ids?: string[];
+  // Created atomically with the task in one transaction (server-side —
+  // see AGENT-API.md §Tasks) — either a plain title or `{ title }`.
+  subtasks?: (string | { title: string })[];
 }
 
 export function useCreateTask() {

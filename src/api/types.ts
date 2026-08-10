@@ -88,8 +88,13 @@ export interface ApiNotification {
   text: string;
   read: 0 | 1;
   created_at: string;
-  // LEFT JOIN users ON n.user_id — this is the *recipient*, not the actor
-  // who triggered the notification (server has no actor_id column).
+  // actor_id and actor_name — the user who triggered the notification.
+  // For old notifications created before this was added, they may be null/empty.
+  actor_id?: string | null;
+  actor_name?: string | null;
+  actor_color?: string | null;
+  actor_initials?: string | null;
+  // LEFT JOIN users ON n.user_id — this is the *recipient*.
   user_name?: string | null;
   user_color?: string | null;
   user_initials?: string | null;

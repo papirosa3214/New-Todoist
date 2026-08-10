@@ -18,8 +18,21 @@ export function useCreateProject() {
   });
 }
 
-// NOTE: the server has no PATCH /api/projects/:id — projects can only be
-// created or deleted, never renamed/recolored, from this API.
+export interface UpdateProjectInput {
+  id: string;
+  name: string;
+  color?: string;
+}
+
+export function useUpdateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: UpdateProjectInput) =>
+      api.patch<ApiProject>(`/api/projects/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+  });
+}
+
 export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
