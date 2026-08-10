@@ -95,17 +95,22 @@
    Layered as utilities (like the classes above) so normal Tailwind utility
    classes on the same element compose/override predictably. */
 @layer utilities {
-  .pb-nav-safe {
-    padding-bottom: max(18px, env(safe-area-inset-bottom));
+  /* Нижнее меню — «таблетка», висящая с зазором от края экрана, а не полоса
+     во всю ширину: высота 60 + зазор снизу. Зазор не меньше 8px, а на
+     устройствах с домашней полоской — по её высоте, чтобы меню не наезжало. */
+  .nav-pill-bottom {
+    bottom: max(8px, env(safe-area-inset-bottom));
   }
+  /* Отступ контента = высота меню (60) + его зазор снизу (8) + запас (8). */
   .pb-content-safe {
-    padding-bottom: calc(78px + env(safe-area-inset-bottom));
+    padding-bottom: calc(76px + env(safe-area-inset-bottom));
   }
   .pb-bottom-safe {
     padding-bottom: max(16px, env(safe-area-inset-bottom));
   }
+  /* Плавающая кнопка — над меню: 60 + 8 зазора + 16 воздуха. */
   .fab-safe-bottom {
-    bottom: calc(92px + env(safe-area-inset-bottom));
+    bottom: calc(84px + env(safe-area-inset-bottom));
   }
 }
 

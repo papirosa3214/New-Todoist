@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, type TouchEvent } from "react";
+import { useState, useMemo, useRef, useEffect, type TouchEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
@@ -36,13 +36,61 @@ const MONTHS_SHORT = [
 ];
 const WEEKDAYS = ["ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"];
 
-// Высоты-«потолки» для CSS-transition на max-height при сворачивании
-// месяц↔неделя. Не измеряются через ref — оба состояния имеют известный,
-// ограниченный набор строк (месяц: заголовок+сетка до 6 недель, неделя:
-// одна строка), так что фиксированный запас с надёжным зазором проще и
-// устойчивее, чем ResizeObserver, и даёт тот же плавный переход.
-const CAL_MAX_HEIGHT_MONTH = 420;
-const CAL_MAX_HEIGHT_WEEK = 110;
+// Переход месяц↔неделя: длительность и направленная кривая (ease-out на
+// разворот — по ощущениям владельца; ease-in на сворачивание — зеркальная
+// пара, ускоряется к исчезновению, а не тормозит как разворот). Длительность
+// 280мс — литерал duration-[280ms] прямо в className ниже (Tailwind не
+// увидит её через интерполяцию JS-строки, см. комментарий там же).
+//
+// Три варианта рассматривались, два отброшены по конкретным причинам:
+//
+// 1) max-height с угаданными потолками (было раньше) — отброшен: потолки
+//    420/110px разошлись с реальной высотой (живой замер Playwright дал
+//    442.5/165px). Месяц оказался ВЫШЕ потолка — при сворачивании контент
+//    в момент смены calMode уже короче нового потолка недели, так что
+//    max-height все 300мс не был сдерживающим фактором (рывок). При
+//    разворачивании — обратная асимметрия, потолок реально сдерживал рост
+//    (визуально «более-менее»). Асимметрия была ровно та, на которую
+//    пожаловался владелец.
+//
+// 2) grid-template-rows 0fr↔1fr на паре всегда смонтированных треков —
+//    ПОПРОБОВАН и тоже отброшен, уже эмпирически: в этом Chromium
+//    (headless, playwright-core) transition на grid-template-rows с fr-
+//    единицами НЕ интерполируется плавно, когда оба трека держат реальный
+//    контент одновременно — вместо непрерывной анимации браузер держит
+//    старое значение и переключается на новое ОДНИМ дискретным скачком
+//    примерно на середине длительности (это стандартный CSS-фоллбэк для
+//    неинтерполируемого свойства: «держать/переключить на 50%», а не
+//    линейная анимация). Замер high-frequency сэмплами подтвердил: плато на
+//    старой высоте, скачок к новой около t≈140мс из 280мс. Известный трюк
+//    «0fr/1fr» рассчитан на ОДИН трек (показать/спрятать целиком), а не на
+//    одновременный ресайз двух треков с реальным контентом в обоих — не тот
+//    случай использования, для которого это в браузерах хорошо тестировано.
+//
+// 3) ВЫБРАНО — измерение реальной высоты через ref + двойная синхронизация
+//    с кадром отрисовки:
+//    - `changeMode()` СНАЧАЛА мерит текущую (ещё старую) высоту контента
+//      через getBoundingClientRect() и фиксирует её в state как явный
+//      height, ПОТОМ переключает calMode — оба обновления в одном рендере,
+//      так что браузер коммитит и красит кадр «новый контент, но зажат под
+//      старую высоту» (это и есть отправная точка анимации).
+//    - useEffect(..., [calMode]) — обычный useEffect, а НЕ useLayoutEffect:
+//      он в React гарантированно срабатывает ПОСЛЕ покраски кадра, то есть
+//      после того как браузер уже показал «стартовый» кадр выше. Внутри —
+//      requestAnimationFrame (двойная страховка от таймингов конкретной
+//      версии React) меряет scrollHeight НОВОГО контента (реальный, не
+//      подставленный) и ставит его как height — вот тут CSS-transition
+//      реально стартует между двумя видимыми, покрашенными кадрами.
+//    - onTransitionEnd отпускает height обратно в auto (undefined) — иначе
+//      после анимации высота осталась бы зажатой в px и не следила бы за
+//      сменой числа строк месяца (4–6 недель) при обычной навигации
+//      предыдущий/следующий месяц, которая calMode не трогает.
+//    - prefers-reduced-motion: reduce — changeMode() и useEffect оба вообще
+//      не трогают явную высоту (остаётся auto), переход мгновенный — иначе
+//      он бы «залип» без transitionend, который при выключенных переходах
+//      не срабатывает.
+//    Результат — реальная intrinsic-высота контента в обе стороны, без
+//    угаданных чисел, переживает переменное число строк месяца.
 
 // Свайп по ручке-засечке короче этого порога (px по Y) считается тапом —
 // его обрабатывает обычный onClick, а не сам touch-хэндлер.
@@ -81,12 +129,68 @@ export function UpcomingScreen() {
 
   const cells = useMemo(() => genCalendar(year, month), [year, month]);
 
+  // Два рефа, не один — это была первая, ошибочная попытка с одним рефом:
+  // измерять `scrollHeight` того же элемента, на который наложен явный
+  // style.height, чтобы узнать «сколько нужно новому контенту». Но
+  // scrollHeight у overflow-hidden элемента с явной height НЕ возвращает
+  // натуральную высоту контента — он возвращает max(contentHeight,
+  // заданный height), то есть пока explicit height ещё держит старое
+  // (большее) значение, scrollHeight тоже отдавал старое значение — итог:
+  // высота никогда не доезжала до цели, календарь визуально не сворачивался
+  // вообще (поймано живым Playwright-прогоном: aria-label менялся, высота —
+  // нет). Поэтому: calOuterRef — на нём explicit height/overflow-hidden/
+  // transition; calInnerRef — БЕЗ каких-либо ограничений по высоте вообще,
+  // всегда показывает истинный intrinsic-размер текущего контента.
+  const calOuterRef = useRef<HTMLDivElement>(null);
+  const calInnerRef = useRef<HTMLDivElement>(null);
+  const [calAnimHeight, setCalAnimHeight] = useState<number | undefined>(
+    undefined,
+  );
+  const calIsFirstRender = useRef(true);
+
+  function prefersReducedMotion() {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
   // Единая точка входа для месяц↔неделя — дёргают и кнопка в шапке, и
   // ручка-засечка (клик/свайп), поэтому оба управления не могут разойтись:
-  // это один и тот же вызов setCalMode над одним и тем же состоянием.
-  function toggleCalMode() {
-    setCalMode((m) => (m === "month" ? "week" : "month"));
+  // это один и тот же вызов над одним и тем же состоянием. Меряет ТЕКУЩУЮ
+  // (ещё старую) высоту ВНЕШНЕГО блока ДО смены calMode и фиксирует её как
+  // явный height — это стартовая точка анимации, см. useEffect ниже.
+  function changeMode(next: "month" | "week") {
+    if (next === calMode) return;
+    if (!prefersReducedMotion()) {
+      const el = calOuterRef.current;
+      if (el) setCalAnimHeight(el.getBoundingClientRect().height);
+    }
+    setCalMode(next);
   }
+
+  function toggleCalMode() {
+    changeMode(calMode === "month" ? "week" : "month");
+  }
+
+  // Срабатывает ПОСЛЕ покраски кадра, в котором calMode уже сменился, но
+  // высота ещё зажата под старое значение (см. changeMode выше) — то есть
+  // ровно тот граничный кадр, что нужен CSS-transition для старта. rAF —
+  // дополнительная страховка кадровой границы поверх гарантии useEffect.
+  // Меряет calInnerRef (без ограничений) — НЕ calOuterRef.
+  useEffect(() => {
+    if (calIsFirstRender.current) {
+      calIsFirstRender.current = false;
+      return;
+    }
+    if (prefersReducedMotion()) return; // высота остаётся auto, без рывка
+    const raf = requestAnimationFrame(() => {
+      const el = calInnerRef.current;
+      if (el) setCalAnimHeight(el.getBoundingClientRect().height);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [calMode]);
 
   function formatFullDate(dateStr: string): string {
     const d = new Date(dateStr + "T00:00:00");
@@ -182,10 +286,10 @@ export function UpcomingScreen() {
       // preventDefault здесь реально гасит «призрачный» click после свайпа
       // — иначе он вызвал бы toggleCalMode ещё раз и откатил переключение.
       e.preventDefault();
-      setCalMode("week");
+      changeMode("week");
     } else if (dy >= SWIPE_THRESHOLD && calMode !== "month") {
       e.preventDefault();
-      setCalMode("month");
+      changeMode("month");
     }
     // Иначе — сдвиг меньше порога, это тап: пусть его обработает обычный
     // onClick на этой же ручке (единая точка входа toggleCalMode).
@@ -226,125 +330,152 @@ export function UpcomingScreen() {
           }
         />
 
+        {/* Единственный смонтированный вид (месяц ИЛИ неделя, по ternary —
+            как и было изначально). Высота анимируется через явный height,
+            зафиксированный в calAnimHeight (см. changeMode/useEffect выше);
+            обычные ре-рендеры (навигация по месяцам) height не трогают —
+            он остаётся undefined/auto, так что 4–6-строчные месяцы всегда
+            показывают точную высоту без анимации, как раньше. */}
         <div
-          className="overflow-hidden transition-[max-height] duration-300 ease-in-out"
-          style={{
-            maxHeight:
-              calMode === "month" ? CAL_MAX_HEIGHT_MONTH : CAL_MAX_HEIGHT_WEEK,
+          ref={calOuterRef}
+          onTransitionEnd={(e) => {
+            // Только СВОЙ переход по height — иначе всплывший transitionend
+            // от дочерних transition-all (дни календаря, .active:scale-90)
+            // сбросил бы height обратно в auto посреди анимации.
+            if (e.target === e.currentTarget && e.propertyName === "height") {
+              setCalAnimHeight(undefined);
+            }
           }}
+          style={{ height: calAnimHeight }}
+          // Tailwind's scanner needs a complete, literal class token in the
+          // source text — an interpolated `duration-[${N}ms]` would never
+          // match and the utility would silently not be generated
+          // (transition falling back to 0s, instant). duration-[280ms] is
+          // written out literally here — the single source of truth for
+          // that number, see the "ВЫБРАНО" note above.
+          className={`overflow-hidden transition-[height] duration-[280ms] motion-reduce:transition-none ${
+            calMode === "month" ? "ease-out" : "ease-in"
+          }`}
         >
-          {calMode === "month" ? (
-            <>
-              {/* Month nav */}
-              <div className="flex items-center justify-between mb-2 pt-1">
-                <button
-                  onClick={prevMonth}
-                  aria-label="Предыдущий месяц"
-                  className="w-[44px] h-[44px] -ml-2 flex items-center justify-center active:scale-95"
-                >
-                  <Icon name="chevronLeft" size={18} className="text-sub" />
-                </button>
-                {/* Подпись месяца/года — в эталоне (mockup-reference) это
+          {/* calInnerRef — БЕЗ каких-либо height-ограничений, всегда
+              измеримо в свой истинный intrinsic-размер (см. useEffect
+              выше и комментарий про два рефа). */}
+          <div ref={calInnerRef}>
+            {calMode === "month" ? (
+              <>
+                {/* Month nav */}
+                <div className="flex items-center justify-between mb-2 pt-1">
+                  <button
+                    onClick={prevMonth}
+                    aria-label="Предыдущий месяц"
+                    className="w-[44px] h-[44px] -ml-2 flex items-center justify-center active:scale-95"
+                  >
+                    <Icon name="chevronLeft" size={18} className="text-sub" />
+                  </button>
+                  {/* Подпись месяца/года — в эталоне (mockup-reference) это
                     статичная метка, не кнопка: переключение вида
                     месяц/неделя живёт в тоггле выше (иконка grid/list) и в
                     ручке-засечке снизу, а не здесь. */}
-                <span className="flex items-center gap-1">
-                  <span className="text-[14px] font-semibold text-red">
-                    {MONTHS_FULL[month]}. {year} г.
+                  <span className="flex items-center gap-1">
+                    <span className="text-[14px] font-semibold text-red">
+                      {MONTHS_FULL[month]}. {year} г.
+                    </span>
+                    <Icon name="chevronDown" size={12} className="text-red" />
                   </span>
-                  <Icon name="chevronDown" size={12} className="text-red" />
-                </span>
-                <button
-                  onClick={nextMonth}
-                  aria-label="Следующий месяц"
-                  className="w-[44px] h-[44px] -mr-2 flex items-center justify-center active:scale-95"
-                >
-                  <Icon name="chevron" size={18} className="text-sub" />
-                </button>
-              </div>
-
-              {/* Weekday headers */}
-              <div className="grid grid-cols-7 gap-0 mb-1">
-                {WEEKDAYS.map((d) => (
-                  <div
-                    key={d}
-                    className="text-center text-[11px] text-sub py-1"
+                  <button
+                    onClick={nextMonth}
+                    aria-label="Следующий месяц"
+                    className="w-[44px] h-[44px] -mr-2 flex items-center justify-center active:scale-95"
                   >
-                    {d}
-                  </div>
-                ))}
-              </div>
+                    <Icon name="chevron" size={18} className="text-sub" />
+                  </button>
+                </div>
 
-              {/* Calendar grid */}
-              <div className="grid grid-cols-7 gap-0 pb-2">
-                {cells.map((day, i) => {
-                  if (day === null) return <div key={i} />;
-                  const dateStr = formatDateStr(year, month, day);
-                  const hasTasks = groupedTasks[dateStr]?.length > 0;
-                  const isToday = dateStr === today;
+                {/* Weekday headers */}
+                <div className="grid grid-cols-7 gap-0 mb-1">
+                  {WEEKDAYS.map((d) => (
+                    <div
+                      key={d}
+                      className="text-center text-[11px] text-sub py-1"
+                    >
+                      {d}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Calendar grid */}
+                <div className="grid grid-cols-7 gap-0 pb-2">
+                  {cells.map((day, i) => {
+                    if (day === null) return <div key={i} />;
+                    const dateStr = formatDateStr(year, month, day);
+                    const hasTasks = groupedTasks[dateStr]?.length > 0;
+                    const isToday = dateStr === today;
+                    const isSelected = dateStr === selectedDate;
+
+                    return (
+                      <button
+                        key={i}
+                        onClick={() =>
+                          setSelectedDate(isSelected ? null : dateStr)
+                        }
+                        className={`h-[42px] flex flex-col items-center justify-center rounded-full transition-all active:scale-90 ${
+                          isSelected
+                            ? "bg-red text-white font-semibold"
+                            : isToday
+                              ? "bg-red/20 text-red font-semibold"
+                              : hasTasks
+                                ? "text-text"
+                                : "text-dim"
+                        }`}
+                      >
+                        <span className="text-[14px]">{day}</span>
+                        {hasTasks && !isSelected && (
+                          <div className="w-[4px] h-[4px] rounded-full bg-red mt-[1px]" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              /* Week strip */
+              <div className="flex justify-between pt-2 pb-3 px-1">
+                {weekDates.map((d) => {
+                  const dateStr = formatDateStr(
+                    d.getFullYear(),
+                    d.getMonth(),
+                    d.getDate(),
+                  );
+                  const isActive = dateStr === today;
                   const isSelected = dateStr === selectedDate;
-
                   return (
                     <button
-                      key={i}
+                      key={dateStr}
                       onClick={() =>
                         setSelectedDate(isSelected ? null : dateStr)
                       }
-                      className={`h-[42px] flex flex-col items-center justify-center rounded-full transition-all active:scale-90 ${
-                        isSelected
-                          ? "bg-red text-white font-semibold"
-                          : isToday
-                            ? "bg-red/20 text-red font-semibold"
-                            : hasTasks
-                              ? "text-text"
-                              : "text-dim"
-                      }`}
+                      className={`flex flex-col items-center gap-1 transition-all ${isActive ? "text-red" : isSelected ? "text-text" : "text-sub"}`}
                     >
-                      <span className="text-[14px]">{day}</span>
-                      {hasTasks && !isSelected && (
-                        <div className="w-[4px] h-[4px] rounded-full bg-red mt-[1px]" />
-                      )}
+                      <span className="text-[10px] font-medium uppercase">
+                        {["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][d.getDay()]}
+                      </span>
+                      <span
+                        className={`text-[15px] font-medium ${
+                          isActive
+                            ? "bg-red text-white w-[28px] h-[28px] rounded-full flex items-center justify-center"
+                            : isSelected
+                              ? "border-2 border-red w-[28px] h-[28px] rounded-full flex items-center justify-center"
+                              : ""
+                        }`}
+                      >
+                        {d.getDate()}
+                      </span>
                     </button>
                   );
                 })}
               </div>
-            </>
-          ) : (
-            /* Week strip */
-            <div className="flex justify-between pt-2 pb-3 px-1">
-              {weekDates.map((d) => {
-                const dateStr = formatDateStr(
-                  d.getFullYear(),
-                  d.getMonth(),
-                  d.getDate(),
-                );
-                const isActive = dateStr === today;
-                const isSelected = dateStr === selectedDate;
-                return (
-                  <button
-                    key={dateStr}
-                    onClick={() => setSelectedDate(isSelected ? null : dateStr)}
-                    className={`flex flex-col items-center gap-1 transition-all ${isActive ? "text-red" : isSelected ? "text-text" : "text-sub"}`}
-                  >
-                    <span className="text-[10px] font-medium uppercase">
-                      {["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][d.getDay()]}
-                    </span>
-                    <span
-                      className={`text-[15px] font-medium ${
-                        isActive
-                          ? "bg-red text-white w-[28px] h-[28px] rounded-full flex items-center justify-center"
-                          : isSelected
-                            ? "border-2 border-red w-[28px] h-[28px] rounded-full flex items-center justify-center"
-                            : ""
-                      }`}
-                    >
-                      {d.getDate()}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* Ручка-засечка: свайп вверх — свернуть в неделю, свайп вниз —

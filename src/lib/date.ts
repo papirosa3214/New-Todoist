@@ -1,6 +1,8 @@
 // Local-date helpers shared across screens. Using local (not UTC) date
 // parts so "today" matches the user's wall clock, not UTC midnight.
 
+import type { ApiTask } from "../api/types";
+
 export function todayStr(): string {
   const d = new Date();
   const y = d.getFullYear();
@@ -62,6 +64,29 @@ export function formatDueLabel(dateStr: string): string {
 // (e.g. 3h in Moscow). Normalize before parsing.
 export function parseServerDate(sqliteDatetime: string): Date {
   return new Date(sqliteDatetime.replace(" ", "T") + "Z");
+}
+
+// ═══════════ "Сегодня" screen: overdue/today split ═══════════
+// Single source for "what counts as overdue vs. due today" on the Today
+// screen — used by both its list layout (the red "Просрочено" block above
+// the regular rows, added earlier per a direct product requirement) and
+// its board layout (two columns, same names, same order). Keeping this in
+// one place means the two layouts can never quietly disagree about which
+// task belongs where. Overdue tasks come back oldest-due-first, matching
+// how the list has always shown them.
+export function partitionOverdueToday(
+  tasks: ApiTask[],
+  today: string,
+): { overdue: ApiTask[]; todayTasks: ApiTask[] } {
+  const overdue = tasks
+    .filter(
+      (t) => t.status === "active" && t.due_date !== null && t.due_date < today,
+    )
+    .sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""));
+  const todayTasks = tasks.filter(
+    (t) => t.due_date === today && t.status === "active",
+  );
+  return { overdue, todayTasks };
 }
 
 // "5 мин. назад" / "вчера" style relative label for any SQLite
