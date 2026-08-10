@@ -3,9 +3,10 @@ import { api } from "./client";
 import type { ApiSubtask } from "./types";
 
 // Plain (non-hook) request, for call sites that need to fire this inside a
-// loop/event handler rather than during render (e.g. NewTaskScreen creating
-// several subtasks right after the parent task itself is created — the
-// server's POST /api/tasks has no bulk-subtask param, see CreateTaskInput).
+// loop/event handler rather than during render (e.g. TaskFormScreen's
+// create mode, posting several subtasks right after the parent task itself
+// is created — the server's POST /api/tasks has no bulk-subtask param, see
+// CreateTaskInput).
 export function createSubtaskRequest(taskId: string, title: string) {
   return api.post<ApiSubtask>(`/api/tasks/${taskId}/subtasks`, { title });
 }

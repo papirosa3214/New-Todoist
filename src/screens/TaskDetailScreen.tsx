@@ -1,16 +1,17 @@
+// Просмотр задачи: заголовок/описание/срок/приоритет/метки/исполнитель —
+// только чтение, подзадачи — можно отмечать выполненными прямо здесь
+// (как и было). Полное редактирование полей (включая CRUD подзадач)
+// живёт в TaskFormScreen — карандаш в шапке ведёт туда (owner 2026-08-10:
+// «точно такой же интерфейс должен открываться при редактировании» —
+// переиспользуем форму создания вместо отдельного подменю).
 import { useState, type FormEvent } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTask, useUpdateTask, useDeleteTask } from "../api/tasks";
 import { useUpdateSubtask } from "../api/subtasks";
 import { useAddComment } from "../api/comments";
 import { Icon, Avatar, ScreenHeader } from "../components/UI";
-
-const PRIORITY_COLORS: Record<number, string> = {
-  1: "#E44332",
-  2: "#FF9A14",
-  3: "#4A9FD8",
-  4: "#A6A6A6",
-};
+import { PRIORITIES, PriorityPill } from "../components/TaskFields";
+import { formatDueLabel } from "../lib/date";
 
 export function TaskDetailScreen() {
   const { id } = useParams<{ id: string }>();
@@ -21,9 +22,6 @@ export function TaskDetailScreen() {
   const updateSubtask = useUpdateSubtask();
   const addComment = useAddComment(id || "");
 
-  const [editing, setEditing] = useState(false);
-  const [editTitle, setEditTitle] = useState("");
-  const [editDesc, setEditDesc] = useState("");
   const [commentText, setCommentText] = useState("");
 
   if (isLoading) {
@@ -35,22 +33,6 @@ export function TaskDetailScreen() {
       <div className="px-4 py-8 text-center text-sub">Задача не найдена</div>
     );
   }
-
-  const startEdit = () => {
-    setEditTitle(task.title);
-    setEditDesc(task.description || "");
-    setEditing(true);
-  };
-
-  const saveEdit = () => {
-    if (!editTitle.trim()) return;
-    updateTask.mutate({
-      id: task.id,
-      title: editTitle.trim(),
-      description: editDesc.trim() || undefined,
-    });
-    setEditing(false);
-  };
 
   const handleDelete = () => {
     if (!confirm("Удалить задачу без возможности отмены?")) return;
@@ -73,6 +55,9 @@ export function TaskDetailScreen() {
     });
   };
 
+  const priorityColor =
+    PRIORITIES.find((p) => p.key === task.priority)?.color ?? "#A6A6A6";
+
   return (
     <div className="px-4 pb-4">
       <ScreenHeader
@@ -89,14 +74,10 @@ export function TaskDetailScreen() {
         actions={
           <>
             <button
-              onClick={() => (editing ? saveEdit() : startEdit())}
+              onClick={() => navigate(`/task/${task.id}/edit`)}
               className="w-[44px] h-[44px] rounded-full bg-card2 flex items-center justify-center"
             >
-              <Icon
-                name={editing ? "check" : "edit"}
-                size={16}
-                className={editing ? "text-red" : "text-sub"}
-              />
+              <Icon name="edit" size={16} className="text-sub" />
             </button>
             <button
               onClick={handleDelete}
@@ -108,7 +89,7 @@ export function TaskDetailScreen() {
         }
       />
 
-      {/* Priority + Title */}
+      {/* Priority ring + Title */}
       <div className="flex items-start gap-3 mb-4">
         <button
           onClick={() => {
@@ -116,44 +97,24 @@ export function TaskDetailScreen() {
             updateTask.mutate({ id: task.id, status: newStatus });
           }}
           className="mt-1 w-[22px] h-[22px] rounded-full border-2 shrink-0 flex items-center justify-center"
-          style={{ borderColor: PRIORITY_COLORS[task.priority] }}
+          style={{ borderColor: priorityColor }}
         >
           {task.status === "completed" && (
             <Icon name="check" size={14} className="text-white" />
           )}
         </button>
-        {editing ? (
-          <textarea
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-            className="flex-1 bg-card rounded-xl px-2 py-1 text-[20px] font-semibold leading-snug outline-none resize-none"
-            rows={2}
-            autoFocus
-          />
-        ) : (
-          <h1
-            className={`text-[20px] font-semibold leading-snug ${task.status === "completed" ? "line-through text-sub" : ""}`}
-          >
-            {task.title}
-          </h1>
-        )}
+        <h1
+          className={`text-[20px] font-semibold leading-snug ${task.status === "completed" ? "line-through text-sub" : ""}`}
+        >
+          {task.title}
+        </h1>
       </div>
 
       {/* Description */}
-      {editing ? (
-        <textarea
-          value={editDesc}
-          onChange={(e) => setEditDesc(e.target.value)}
-          placeholder="Описание"
-          className="w-full bg-card rounded-xl px-2 py-1.5 text-[16px] text-sub leading-relaxed mb-4 outline-none resize-none"
-          rows={3}
-        />
-      ) : (
-        task.description && (
-          <p className="text-[14px] text-sub leading-relaxed mb-4 pl-[34px] whitespace-pre-wrap">
-            {task.description}
-          </p>
-        )
+      {task.description && (
+        <p className="text-[14px] text-sub leading-relaxed mb-4 pl-[34px] whitespace-pre-wrap">
+          {task.description}
+        </p>
       )}
 
       {/* Metadata */}
@@ -161,9 +122,16 @@ export function TaskDetailScreen() {
         {task.due_date && (
           <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
             <Icon name="calendarSmall" size={18} className="text-red" />
-            <span className="text-[14px] text-red">{task.due_date}</span>
+            <span className="text-[14px] text-red">
+              {formatDueLabel(task.due_date)}
+            </span>
           </div>
         )}
+        <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
+          <Icon name="flag" size={18} className="text-sub" />
+          <span className="text-[14px] text-sub flex-1">Приоритет</span>
+          <PriorityPill priority={task.priority} />
+        </div>
         {task.assignee_id && task.assignee_name && (
           <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
             <Avatar
@@ -191,7 +159,8 @@ export function TaskDetailScreen() {
         </div>
       )}
 
-      {/* Subtasks */}
+      {/* Subtasks — quick toggle only; add/rename/delete happens in the
+          edit form (see header pencil button). */}
       {task.subtasks.length > 0 && (
         <div className="mb-4">
           <h3 className="text-[13px] text-sub font-semibold mb-2 px-1">

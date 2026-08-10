@@ -47,7 +47,15 @@ async function parseBody(res: Response): Promise<any> {
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    // Only declare a JSON content-type when a body is actually going out.
+    // Fastify's JSON body parser 400s ("FST_ERR_CTP_EMPTY_JSON_BODY") on a
+    // request that sets this header but sends no body — which every
+    // bodyless call does: api.delete() always, and the handful of
+    // api.post()/api.patch() calls with no `data` argument (e.g.
+    // /api/notifications/read-all, /api/notifications/:id/read).
+    ...(options.body !== undefined
+      ? { "Content-Type": "application/json" }
+      : {}),
     ...(options.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;

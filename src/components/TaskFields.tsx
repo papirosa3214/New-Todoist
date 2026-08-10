@@ -1,0 +1,526 @@
+// Shared task-editing field primitives used by TaskFormScreen (create AND
+// edit — the same form component, see that file) and, for read-only
+// display, by TaskDetailScreen. Built to match the "Новая задача" screen in
+// mockup-reference/index.html (id="s-newtask", lines 1112–1201): a `.card`
+// of `.row`s for Срок/Проект/Приоритет, a horizontally-tagged `.card` for
+// Метки, and a `.card` add-row for Подзадачи. The mockup has no dedicated
+// task-detail screen and no date/priority/label picker sheet, so the
+// expand-in-place picker panels below (calendar, priority list, label
+// create-row) follow the interaction pattern already accepted for the task
+// form rather than inventing a modal.
+import { useState, Children, type ReactNode } from "react";
+import { Icon } from "./UI";
+import { formatDueLabel, todayStr, tomorrowStr } from "../lib/date";
+import type { ApiLabel } from "../api/types";
+
+// ═══════════ CARD (mockup .card — 14px radius, edge-to-edge dividers) ═══════════
+
+export function Card({ children }: { children: ReactNode }) {
+  const items = Children.toArray(children);
+  return (
+    <div className="w-full bg-card rounded-[14px] overflow-hidden">
+      {items.map((child, i) => (
+        <div key={i} className={i > 0 ? "border-t border-stroke" : ""}>
+          {child}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════ FIELD ROW (mockup .row — r-ic / r-tx / r-val / r-chev) ═══════════
+
+export function FieldRow({
+  icon,
+  iconClassName = "text-sub",
+  label,
+  value,
+  valueClassName = "text-sub",
+  trailing,
+  chevron = true,
+  chevronOpen = false,
+  onClick,
+  minHeight = 47,
+}: {
+  icon?: string;
+  iconClassName?: string;
+  label: string;
+  value?: ReactNode;
+  valueClassName?: string;
+  trailing?: ReactNode;
+  chevron?: boolean;
+  chevronOpen?: boolean;
+  onClick?: () => void;
+  minHeight?: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center gap-3 px-[14px] text-left active:bg-white/[0.04] transition-colors"
+      style={{ minHeight }}
+    >
+      {icon && (
+        <Icon name={icon} size={18} className={`shrink-0 ${iconClassName}`} />
+      )}
+      <span className="text-[15px] font-medium text-text flex-1 min-w-0 truncate">
+        {label}
+      </span>
+      {value !== undefined && (
+        <span
+          className={`text-[14px] shrink-0 ${typeof value === "string" ? valueClassName : ""}`}
+        >
+          {value}
+        </span>
+      )}
+      {trailing}
+      {chevron && (
+        <Icon
+          name={chevronOpen ? "chevronDown" : "chevron"}
+          size={14}
+          className="text-dim shrink-0"
+        />
+      )}
+    </button>
+  );
+}
+
+// ═══════════ PRIORITY ═══════════
+
+export const PRIORITIES = [
+  { key: 1, label: "P1", name: "Срочный", color: "#E44332" },
+  { key: 2, label: "P2", name: "Высокий", color: "#FF9A14" },
+  { key: 3, label: "P3", name: "Средний", color: "#4A9FD8" },
+  { key: 4, label: "P4", name: "Низкий", color: "#A6A6A6" },
+] as const;
+
+// mockup .p1-pill
+export function PriorityPill({ priority }: { priority: number }) {
+  const p = PRIORITIES.find((x) => x.key === priority) ?? PRIORITIES[3];
+  return (
+    <span
+      className="inline-flex items-center justify-center text-[11px] font-bold text-white rounded-[10px] px-[7px] h-[20px] min-w-[26px] shrink-0"
+      style={{ backgroundColor: p.color }}
+    >
+      {p.label}
+    </span>
+  );
+}
+
+export function PriorityField({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <FieldRow
+        icon="flag"
+        label="Приоритет"
+        value={<PriorityPill priority={value} />}
+        chevronOpen={open}
+        onClick={() => setOpen((o) => !o)}
+      />
+      {open && (
+        <div className="border-t border-stroke">
+          {PRIORITIES.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => {
+                onChange(p.key);
+                setOpen(false);
+              }}
+              className="w-full flex items-center gap-3 py-3 px-[14px] text-left active:bg-white/[0.04] transition-colors"
+            >
+              <span
+                className="w-[24px] h-[24px] rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
+                style={{ backgroundColor: p.color }}
+              >
+                {p.label}
+              </span>
+              <span className="text-[14px] text-text flex-1">{p.name}</span>
+              {p.key === value && (
+                <Icon name="check" size={16} className="text-red shrink-0" />
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ═══════════ DUE DATE ═══════════
+
+function miniCal(year: number, month: number) {
+  const first = new Date(year, month, 1).getDay();
+  const days = new Date(year, month + 1, 0).getDate();
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < first; i++) cells.push(null);
+  for (let d = 1; d <= days; d++) cells.push(d);
+  return cells;
+}
+
+const CAL_MONTHS = [
+  "январь",
+  "февраль",
+  "март",
+  "апрель",
+  "май",
+  "июнь",
+  "июль",
+  "август",
+  "сентябрь",
+  "октябрь",
+  "ноябрь",
+  "декабрь",
+];
+
+export function DueDateField({
+  value,
+  onChange,
+}: {
+  value: string | null | undefined;
+  onChange: (v: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const base = value
+    ? new Date(value + "T00:00:00")
+    : new Date(todayStr() + "T00:00:00");
+  const [calYear, setCalYear] = useState(base.getFullYear());
+  const [calMonth, setCalMonth] = useState(base.getMonth());
+
+  const cells = miniCal(calYear, calMonth);
+  const today = todayStr();
+  const tomorrow = tomorrowStr();
+  const hasValue = !!value;
+
+  return (
+    <>
+      <FieldRow
+        icon="calendarSmall"
+        iconClassName={hasValue ? "text-red" : "text-sub"}
+        label="Срок"
+        value={hasValue ? formatDueLabel(value!) : "Не установлен"}
+        valueClassName={hasValue ? "text-red" : "text-sub"}
+        chevronOpen={open}
+        onClick={() => setOpen((o) => !o)}
+      />
+      {open && (
+        <div className="border-t border-stroke px-3 py-3">
+          {/* Быстрые опции */}
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => {
+                onChange(today);
+                setOpen(false);
+              }}
+              className={`flex-1 h-[38px] rounded-xl text-[13px] font-medium transition-colors ${
+                value === today
+                  ? "bg-red text-white"
+                  : "bg-card2 text-text active:bg-white/10"
+              }`}
+            >
+              Сегодня
+            </button>
+            <button
+              onClick={() => {
+                onChange(tomorrow);
+                setOpen(false);
+              }}
+              className={`flex-1 h-[38px] rounded-xl text-[13px] font-medium transition-colors ${
+                value === tomorrow
+                  ? "bg-red text-white"
+                  : "bg-card2 text-text active:bg-white/10"
+              }`}
+            >
+              Завтра
+            </button>
+          </div>
+
+          {/* Календарь для произвольной даты */}
+          <div className="flex items-center justify-between mb-2">
+            <button
+              onClick={() =>
+                calMonth === 0
+                  ? (setCalMonth(11), setCalYear(calYear - 1))
+                  : setCalMonth(calMonth - 1)
+              }
+              className="p-1.5 -m-1.5"
+            >
+              <Icon name="chevronLeft" size={16} className="text-sub" />
+            </button>
+            <span className="text-[13px] font-semibold">
+              {CAL_MONTHS[calMonth]} {calYear}
+            </span>
+            <button
+              onClick={() =>
+                calMonth === 11
+                  ? (setCalMonth(0), setCalYear(calYear + 1))
+                  : setCalMonth(calMonth + 1)
+              }
+              className="p-1.5 -m-1.5"
+            >
+              <Icon name="chevron" size={16} className="text-sub" />
+            </button>
+          </div>
+          <div className="grid grid-cols-7 gap-0">
+            {["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"].map((d) => (
+              <div key={d} className="text-center text-[10px] text-dim py-1">
+                {d}
+              </div>
+            ))}
+            {cells.map((day, i) => {
+              if (day === null) return <div key={i} />;
+              const ds = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+              const selected = ds === value;
+              return (
+                <button
+                  key={i}
+                  onClick={() => {
+                    onChange(ds);
+                    setOpen(false);
+                  }}
+                  className={`h-[32px] text-[13px] rounded-full transition-all ${
+                    selected
+                      ? "bg-red text-white font-semibold"
+                      : "text-text active:bg-card2"
+                  }`}
+                >
+                  {day}
+                </button>
+              );
+            })}
+          </div>
+
+          {hasValue && (
+            <button
+              onClick={() => {
+                onChange(null);
+                setOpen(false);
+              }}
+              className="w-full text-center text-[13px] text-sub py-2 mt-1"
+            >
+              Убрать дату
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ═══════════ LABELS (mockup .tags-row / .tag-pill-2) ═══════════
+
+export function LabelsField({
+  labels,
+  selectedIds,
+  onToggle,
+  onCreate,
+}: {
+  labels: ApiLabel[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  onCreate: (name: string) => void | Promise<void>;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setCreating(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onCreate(trimmed);
+      setName("");
+      setCreating(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="w-full bg-card rounded-[14px] overflow-hidden">
+      <div className="flex flex-wrap gap-2 px-[14px] py-[13px]">
+        {labels.map((l) => {
+          const active = selectedIds.includes(l.id);
+          return (
+            <button
+              key={l.id}
+              onClick={() => onToggle(l.id)}
+              className="inline-flex items-center gap-1 text-[12.5px] font-semibold rounded-[10px] px-[13px] py-[6px] transition-colors"
+              style={{
+                backgroundColor: active
+                  ? l.color + "26"
+                  : "rgba(255,255,255,.08)",
+                color: active ? l.color : "#A6A6A6",
+              }}
+            >
+              {active && <Icon name="check" size={11} />}
+              {l.name}
+            </button>
+          );
+        })}
+        {!creating && (
+          <button
+            onClick={() => setCreating(true)}
+            className="inline-flex items-center text-[12.5px] font-semibold rounded-[10px] px-[13px] py-[6px] text-sub bg-white/[0.08]"
+          >
+            + новая
+          </button>
+        )}
+      </div>
+      {creating && (
+        <div className="border-t border-stroke flex items-center gap-2 px-[14px] py-[10px]">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+              if (e.key === "Escape") {
+                setCreating(false);
+                setName("");
+              }
+            }}
+            placeholder="Название метки"
+            className="flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none"
+          />
+          <button
+            onClick={submit}
+            disabled={!name.trim() || saving}
+            className="p-2 -m-1 shrink-0 disabled:opacity-40"
+          >
+            <Icon name="check" size={18} className="text-red" />
+          </button>
+          <button
+            onClick={() => {
+              setCreating(false);
+              setName("");
+            }}
+            className="p-2 -m-1 shrink-0"
+          >
+            <Icon name="x" size={16} className="text-dim" />
+          </button>
+        </div>
+      )}
+      {labels.length === 0 && !creating && (
+        <div className="px-[14px] pb-[13px] -mt-1 text-[12px] text-dim">
+          Меток пока нет
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════ SUBTASKS (mockup .card add-row) ═══════════
+
+// Existing (persisted) subtask row — toggle done, tap title to rename,
+// delete. Used by TaskDetailScreen where subtasks are real API records.
+export function SubtaskRow({
+  title,
+  done,
+  onToggle,
+  onRename,
+  onDelete,
+}: {
+  title: string;
+  done: boolean;
+  onToggle: () => void;
+  onRename: (title: string) => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(title);
+
+  const commit = () => {
+    const trimmed = value.trim();
+    setEditing(false);
+    if (trimmed && trimmed !== title) onRename(trimmed);
+    else setValue(title);
+  };
+
+  return (
+    <div className="flex items-center gap-3 px-[14px] py-[12px]">
+      <button
+        onClick={onToggle}
+        className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center shrink-0 ${
+          done ? "bg-red border-red" : "border-dim"
+        }`}
+      >
+        {done && <Icon name="check" size={12} className="text-white" />}
+      </button>
+      {editing ? (
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              setValue(title);
+              setEditing(false);
+            }
+          }}
+          className="flex-1 min-w-0 bg-transparent text-[16px] text-text outline-none"
+        />
+      ) : (
+        <button
+          onClick={() => {
+            setValue(title);
+            setEditing(true);
+          }}
+          className="flex-1 min-w-0 text-left"
+        >
+          <span
+            className={`text-[14px] ${done ? "line-through text-sub" : "text-text"}`}
+          >
+            {title}
+          </span>
+        </button>
+      )}
+      <button onClick={onDelete} className="p-2 -m-1 shrink-0">
+        <Icon name="x" size={14} className="text-dim" />
+      </button>
+    </div>
+  );
+}
+
+// New-subtask input row — mockup's "Добавить подзадачу..." row (48px,
+// gray-bordered circle placeholder). Used by both screens.
+export function AddSubtaskRow({ onAdd }: { onAdd: (title: string) => void }) {
+  const [value, setValue] = useState("");
+  const submit = () => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    onAdd(trimmed);
+    setValue("");
+  };
+  return (
+    <div
+      className="flex items-center gap-3 px-[14px]"
+      style={{ minHeight: 48 }}
+    >
+      <div className="w-[16px] h-[16px] rounded-full border-2 border-dim shrink-0" />
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        placeholder="Добавить подзадачу..."
+        className="flex-1 min-w-0 bg-transparent text-[16px] text-sub placeholder:text-sub outline-none"
+      />
+      {value.trim() && (
+        <button onClick={submit} className="p-2 -m-1 shrink-0">
+          <Icon name="check" size={16} className="text-red" />
+        </button>
+      )}
+    </div>
+  );
+}
