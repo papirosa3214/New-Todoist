@@ -127,6 +127,11 @@ export function SettingsScreen() {
             label="Уведомления"
             onClick={() => navigate("/notifications")}
           />
+          <Row
+            icon="activity"
+            label="Активность"
+            onClick={() => navigate("/activity")}
+          />
           <Row icon="bot" label="Агенты" onClick={() => navigate("/agents")} />
         </FieldGroup>
       </div>

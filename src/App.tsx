@@ -11,6 +11,7 @@ import { SettingsScreen } from "./screens/SettingsScreen";
 import { TaskDetailScreen } from "./screens/TaskDetailScreen";
 import { TaskFormScreen } from "./screens/TaskFormScreen";
 import { NotificationsScreen } from "./screens/NotificationsScreen";
+import { ActivityScreen } from "./screens/ActivityScreen";
 import { AgentsScreen } from "./screens/AgentsScreen";
 import { ProjectsScreen } from "./screens/ProjectsScreen";
 import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
@@ -66,6 +67,9 @@ export default function App() {
           <Route path="/task/new" element={<TaskFormScreen />} />
           <Route path="/task/:id/edit" element={<TaskFormScreen />} />
           <Route path="/notifications" element={<NotificationsScreen />} />
+          {/* Drill-down, not a tab — see Layout.tsx's TAB_ROUTES allowlist.
+              Deliberately absent from it, so no bottom nav / FAB here. */}
+          <Route path="/activity" element={<ActivityScreen />} />
           <Route path="/agents" element={<AgentsScreen />} />
           <Route path="/projects" element={<ProjectsScreen />} />
           <Route path="/projects/:id" element={<ProjectTasksScreen />} />

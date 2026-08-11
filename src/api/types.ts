@@ -54,6 +54,14 @@ export interface ApiTask {
   status: "active" | "completed";
   created_at: string;
   updated_at: string;
+  // The moment status flipped active→completed — see server/src/db.ts's
+  // additive migration for the full contract: set only on that exact
+  // transition, cleared back to NULL on completed→active, untouched by
+  // any other PATCH (so editing a finished task never re-stamps it).
+  // Tasks completed before this column existed were backfilled from
+  // updated_at, so this is effectively never null for status:"completed" —
+  // ActivityScreen still falls back to updated_at defensively.
+  completed_at: string | null;
   // Joined in on list/detail — not present on the raw row returned by
   // POST/PATCH.
   assignee_name?: string | null;

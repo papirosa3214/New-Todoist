@@ -126,6 +126,30 @@ export function migrate() {
   // Unconditional (idempotent) so u2/u3 get flagged even on a DB that
   // already had this column from an earlier partial migration.
   db.exec("UPDATE users SET is_system_bot = 1 WHERE id IN ('u2','u3')");
+
+  // Additive migration: tasks.completed_at may be missing on a DB created
+  // before this column was added. Unlike updated_at (touched on every
+  // PATCH), completed_at is set only on the active→completed transition and
+  // cleared back to NULL on completed→active — see PATCH /api/tasks/:id.
+  // It exists so a future "Activity" screen can group completed tasks by
+  // day without a later edit (e.g. changing the description) bumping a
+  // task that was actually finished yesterday into "today".
+  const taskCols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+    name: string;
+  }>;
+  if (!taskCols.some((c) => c.name === "completed_at")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN completed_at TEXT");
+  }
+  // Backfill, unconditional (idempotent) — same precedent as the
+  // is_system_bot UPDATE above. Any task that is 'completed' but still has
+  // completed_at IS NULL (a pre-existing completed task from before this
+  // column existed, on either a DB that just got the ALTER TABLE above or
+  // one that already had the column from an earlier partial migration) has
+  // no way to know its true completion time — updated_at is the closest
+  // approximation available.
+  db.exec(
+    "UPDATE tasks SET completed_at = updated_at WHERE status = 'completed' AND completed_at IS NULL",
+  );
 }
 
 export default db;

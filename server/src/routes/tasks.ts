@@ -380,6 +380,25 @@ export function registerTaskRoutes(app: FastifyInstance) {
           values.push(body[key]);
         }
       }
+
+      // completed_at tracks the moment the task became 'completed',
+      // independent of updated_at (which is bumped on every PATCH below,
+      // including unrelated edits). Set it only on the active→completed
+      // transition; clear it back to NULL on completed→active, so a task
+      // pulled back into work doesn't linger in a "completed on that day"
+      // history. A repeated status:"completed" PATCH against an
+      // already-completed task leaves it untouched — otherwise editing a
+      // finished task (e.g. its description) would re-stamp completed_at
+      // to now and slide it into "today" on an Activity screen grouped by
+      // completion day, which is exactly the bug this column exists to fix.
+      if (body.status !== undefined) {
+        if (body.status === "completed" && existing.status !== "completed") {
+          fields.push("completed_at = datetime('now')");
+        } else if (body.status === "active") {
+          fields.push("completed_at = NULL");
+        }
+      }
+
       if (fields.length) {
         fields.push("updated_at = datetime('now')");
         values.push(id);
