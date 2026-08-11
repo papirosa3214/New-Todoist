@@ -6,19 +6,26 @@ import { todayStr } from "../lib/date";
 import { getPriorityColor } from "../lib/priority";
 import type { ApiTask } from "../api/types";
 
-const MONTHS_FULL = [
-  "января",
-  "февраля",
-  "марта",
-  "апреля",
-  "мая",
-  "июня",
-  "июля",
-  "августа",
-  "сентября",
-  "октября",
-  "ноября",
-  "декабря",
+// Сокращённые названия месяцев (именительный падеж, с точкой там, где
+// усечено по стандарту рус. типографики) — используются в ДВУХ местах: в
+// заголовке ленты («Авг. 2026 г.») и внутри ячейки первого числа месяца
+// («Сент.» над «1»). Родительный падеж («11 августа») в этом файле не
+// нужен — здесь нет мест, где месяц ставится после числа; такой массив
+// (MONTHS_FULL) есть отдельно в RescheduleSheet.tsx и ActivityScreen.tsx,
+// этот файл их не использует.
+const MONTHS_ABBR_DOT = [
+  "Янв.",
+  "Февр.",
+  "Март",
+  "Апр.",
+  "Май",
+  "Июнь",
+  "Июль",
+  "Авг.",
+  "Сент.",
+  "Окт.",
+  "Нояб.",
+  "Дек.",
 ];
 const MONTHS_SHORT = [
   "янв",
@@ -34,7 +41,12 @@ const MONTHS_SHORT = [
   "ноя",
   "дек",
 ];
-const WEEKDAYS = ["ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"];
+// Порядок недели с понедельника (не индексируется через getDay() —
+// рендерится напрямую по .map(), поэтому порядок в массиве и есть порядок
+// колонок в сетке). Массивы, индексируемые через d.getDay() (0 = ВС),
+// такие как в formatFullDate и в week-strip ниже, трогать нельзя — там
+// переставлять нельзя.
+const WEEKDAYS = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"];
 
 // Переход месяц↔неделя: длительность и направленная кривая (ease-out на
 // разворот — по ощущениям владельца; ease-in на сворачивание — зеркальная
@@ -83,27 +95,47 @@ const WEEKDAYS = ["ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"];
 //      реально стартует между двумя видимыми, покрашенными кадрами.
 //    - onTransitionEnd отпускает height обратно в auto (undefined) — иначе
 //      после анимации высота осталась бы зажатой в px и не следила бы за
-//      сменой числа строк месяца (4–6 недель) при обычной навигации
-//      предыдущий/следующий месяц, которая calMode не трогает.
+//      сменой числа строк ленты недель (сейчас фиксированное число, но
+//      строка с переходом месяца выше остальных — см. WEEKS_COUNT) при
+//      обычной навигации по месяцам через попап, которая calMode не трогает.
 //    - prefers-reduced-motion: reduce — changeMode() и useEffect оба вообще
 //      не трогают явную высоту (остаётся auto), переход мгновенный — иначе
 //      он бы «залип» без transitionend, который при выключенных переходах
 //      не срабатывает.
 //    Результат — реальная intrinsic-высота контента в обе стороны, без
-//    угаданных чисел, переживает переменное число строк месяца.
+//    угаданных чисел, переживает переменную высоту строки перехода месяца.
 
 // Свайп по ручке-засечке короче этого порога (px по Y) считается тапом —
 // его обрабатывает обычный onClick, а не сам touch-хэндлер.
 const SWIPE_THRESHOLD = 24;
 
-function genCalendar(year: number, month: number) {
-  const first = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells: (number | null)[] = [];
-  for (let i = 0; i < first; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-  while (cells.length % 7 !== 0) cells.push(null);
-  return cells;
+// Сколько недель показывать в ленте. На образце — пять строк подряд.
+const WEEKS_COUNT = 5;
+
+// Понедельник недели, которой принадлежит `d` (getDay() отдаёт 0 =
+// воскресенье). Единая точка правды для «начала недели» — everywhere else
+// (weekDates ниже) считает то же самое, но inline, под свою специфику
+// (база — selectedDate/today, а не произвольная дата).
+function mondayOf(d: Date): Date {
+  const dow = d.getDay();
+  const offset = dow === 0 ? -6 : 1 - dow;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + offset);
+  monday.setHours(0, 0, 0, 0);
+  return monday;
+}
+
+// Непрерывная лента недель начиная с `startMonday` — БЕЗ пустых ячеек и
+// без разрыва на границе месяца (в отличие от прежней genCalendar, которая
+// строила сетку одного месяца с пустой добивкой по краям).
+function genWeekStrip(startMonday: Date, weeks: number): Date[] {
+  const days: Date[] = [];
+  for (let i = 0; i < weeks * 7; i++) {
+    const d = new Date(startMonday);
+    d.setDate(startMonday.getDate() + i);
+    days.push(d);
+  }
+  return days;
 }
 
 function formatDateStr(y: number, m: number, d: number): string {
@@ -115,8 +147,27 @@ export function UpcomingScreen() {
   const today = todayStr();
   const todayDate = new Date(today + "T00:00:00");
 
-  const [year, setYear] = useState(todayDate.getFullYear());
-  const [month, setMonth] = useState(todayDate.getMonth());
+  // pickerYear/pickerMonth — то, что показывает заголовок ленты («Авг.
+  // 2026 г.») и что листает попап-выбор месяца. Отдельно от того, откуда
+  // реально начинается лента (ribbonAnchor): по умолчанию (ribbonAnchor ===
+  // null) лента стартует с понедельника ТЕКУЩЕЙ недели, что при обычном
+  // ходе месяца совпадает с pickerMonth, но не обязано совпасть в
+  // граничных случаях (текущая неделя может зацепить конец предыдущего
+  // месяца) — заголовок в таких случаях всё равно должен называть именно
+  // «текущий» месяц, а не месяц первой ячейки ленты, поэтому это два
+  // независимых state, не один выведенный из другого.
+  const [pickerYear, setPickerYear] = useState(todayDate.getFullYear());
+  const [pickerMonth, setPickerMonth] = useState(todayDate.getMonth());
+  // null = лента начинается с понедельника текущей недели (обычный режим).
+  // Ставится в конкретный понедельник, когда владелец выбрал другой месяц
+  // через попап — тогда лента стартует с ПЕРВОЙ недели этого месяца (та,
+  // что содержит его 1-е число), как договорено в ТЗ.
+  const [ribbonAnchor, setRibbonAnchor] = useState<Date | null>(null);
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [popoverPos, setPopoverPos] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   const { data: allTasks = [], isLoading, error } = useTasks();
@@ -127,7 +178,14 @@ export function UpcomingScreen() {
     [allTasks],
   );
 
-  const cells = useMemo(() => genCalendar(year, month), [year, month]);
+  const ribbonStart = useMemo(
+    () => ribbonAnchor ?? mondayOf(todayDate),
+    [ribbonAnchor, todayDate],
+  );
+  const ribbonDays = useMemo(
+    () => genWeekStrip(ribbonStart, WEEKS_COUNT),
+    [ribbonStart],
+  );
 
   // Два рефа, не один — это была первая, ошибочная попытка с одним рефом:
   // измерять `scrollHeight` того же элемента, на который наложен явный
@@ -143,6 +201,16 @@ export function UpcomingScreen() {
   // всегда показывает истинный intrinsic-размер текущего контента.
   const calOuterRef = useRef<HTMLDivElement>(null);
   const calInnerRef = useRef<HTMLDivElement>(null);
+  // stickyRef — контейнер, относительно которого позиционируется попап
+  // выбора месяца (position:sticky — уже позиционирующий элемент, свой
+  // containing block для absolute-потомков, доп. class="relative" не
+  // нужен). Попап рендерится СНАРУЖИ calOuterRef (соседом, не потомком) —
+  // иначе overflow-hidden/явная height на calOuterRef обрежут его: у
+  // абсолютно спозиционированного потомка контент не участвует в auto-
+  // высоте предка, а overflow-hidden всё равно клипует по границе
+  // предка, так что попап был бы невидим.
+  const stickyRef = useRef<HTMLDivElement>(null);
+  const monthBtnRef = useRef<HTMLButtonElement>(null);
   const [calAnimHeight, setCalAnimHeight] = useState<number | undefined>(
     undefined,
   );
@@ -232,7 +300,7 @@ export function UpcomingScreen() {
   // Week view dates (Mon-based week containing the selected date, falling
   // back to `today` when nothing is selected) — so the collapsed view
   // always shows the week the user actually cares about, not always "this
-  // week" regardless of what they picked in month view.
+  // week" regardless of what they picked in the ribbon.
   const weekDates = useMemo(() => {
     const base = new Date((selectedDate || today) + "T00:00:00");
     const dow = base.getDay(); // 0 = Sunday
@@ -246,21 +314,57 @@ export function UpcomingScreen() {
     });
   }, [today, selectedDate]);
 
-  const prevMonth = () => {
-    if (month === 0) {
-      setMonth(11);
-      setYear(year - 1);
-    } else setMonth(month - 1);
-    setSelectedDate(null);
-  };
+  // Попап выбора месяца — рендерится вне calOuterRef (см. комментарий у
+  // stickyRef), поэтому позиционируется вручную по живым координатам
+  // кнопки-триггера относительно sticky-контейнера, а не CSS-якорем.
+  function openMonthPicker() {
+    const btn = monthBtnRef.current;
+    const sticky = stickyRef.current;
+    if (btn && sticky) {
+      const b = btn.getBoundingClientRect();
+      const s = sticky.getBoundingClientRect();
+      setPopoverPos({ top: b.bottom - s.top + 4, left: b.left - s.left });
+    }
+    setMonthPickerOpen(true);
+  }
 
-  const nextMonth = () => {
-    if (month === 11) {
-      setMonth(0);
-      setYear(year + 1);
-    } else setMonth(month + 1);
+  function closeMonthPicker() {
+    setMonthPickerOpen(false);
+  }
+
+  function goPrevMonth() {
+    let y = pickerYear;
+    let m = pickerMonth - 1;
+    if (m < 0) {
+      m = 11;
+      y -= 1;
+    }
+    setPickerYear(y);
+    setPickerMonth(m);
+    setRibbonAnchor(mondayOf(new Date(y, m, 1)));
     setSelectedDate(null);
-  };
+  }
+
+  function goNextMonth() {
+    let y = pickerYear;
+    let m = pickerMonth + 1;
+    if (m > 11) {
+      m = 0;
+      y += 1;
+    }
+    setPickerYear(y);
+    setPickerMonth(m);
+    setRibbonAnchor(mondayOf(new Date(y, m, 1)));
+    setSelectedDate(null);
+  }
+
+  function goToday() {
+    setPickerYear(todayDate.getFullYear());
+    setPickerMonth(todayDate.getMonth());
+    setRibbonAnchor(null);
+    setSelectedDate(null);
+    setMonthPickerOpen(false);
+  }
 
   // ── Свайп по ручке-засечке ──
   // touchstart/touchmove в React 17+ регистрируются пассивно на корне, так
@@ -308,13 +412,23 @@ export function UpcomingScreen() {
           десктопе (скроллится .flex-1.overflow-y-auto рамки телефона в
           Layout.tsx) — sticky в обоих случаях считается от ближайшего
           реального скролл-контейнера, а не от структуры вложенности. */}
-      <div className="sticky top-0 z-20 bg-bg border-b border-stroke shadow-[0_10px_16px_-12px_rgba(0,0,0,.55)]">
+      <div
+        ref={stickyRef}
+        /* -mx-4 px-4: этот блок несёт собственный фон и живёт внутри
+           родительского px-4, поэтому без компенсации его фон обрывался в
+           16px от краёв экрана и прокручивающиеся карточки проглядывали в
+           щелях (замер 11.08.2026: ширина 358 при экране 390, на остальных
+           вкладках ScreenHeader растягивается сам). Отрицательное поле
+           тянет фон до краёв, внутренний padding возвращает содержимому
+           прежние отступы — заголовок и кнопки не сдвигаются. */
+        className="sticky top-0 z-20 -mx-4 px-4 bg-bg border-b border-stroke shadow-[0_10px_16px_-12px_rgba(0,0,0,.55)]"
+      >
         <ScreenHeader
           title="Предстоящее"
           actions={
             <button
               onClick={toggleCalMode}
-              className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center active:scale-95 transition-transform"
+              className="w-[44px] h-[44px] flex items-center justify-center active:scale-95 transition-transform"
               aria-label={
                 calMode === "month"
                   ? "Свернуть календарь в неделю"
@@ -330,12 +444,13 @@ export function UpcomingScreen() {
           }
         />
 
-        {/* Единственный смонтированный вид (месяц ИЛИ неделя, по ternary —
-            как и было изначально). Высота анимируется через явный height,
-            зафиксированный в calAnimHeight (см. changeMode/useEffect выше);
-            обычные ре-рендеры (навигация по месяцам) height не трогают —
-            он остаётся undefined/auto, так что 4–6-строчные месяцы всегда
-            показывают точную высоту без анимации, как раньше. */}
+        {/* Единственный смонтированный вид (лента недель ИЛИ одна неделя,
+            по ternary — как и было изначально). Высота анимируется через
+            явный height, зафиксированный в calAnimHeight (см.
+            changeMode/useEffect выше); обычные ре-рендеры (навигация по
+            месяцам через попап) height не трогают — он остаётся
+            undefined/auto, так что строка с переходом месяца всегда
+            показывает точную высоту без анимации, как раньше. */}
         <div
           ref={calOuterRef}
           onTransitionEnd={(e) => {
@@ -363,74 +478,101 @@ export function UpcomingScreen() {
           <div ref={calInnerRef}>
             {calMode === "month" ? (
               <>
-                {/* Month nav */}
-                <div className="flex items-center justify-between mb-2 pt-1">
+                {/* Заголовок ленты — компактный, слева, без стрелок по
+                    бокам (в эталоне они исчезают целиком). Шеврон вниз —
+                    признак того, что по нажатию открывается выбор месяца
+                    (попап с «‹ Сегодня ›» ниже), а не сама навигация. */}
+                <div className="flex items-center mb-1">
                   <button
-                    onClick={prevMonth}
-                    aria-label="Предыдущий месяц"
-                    className="w-[44px] h-[44px] -ml-2 flex items-center justify-center active:scale-95"
+                    ref={monthBtnRef}
+                    onClick={() =>
+                      monthPickerOpen ? closeMonthPicker() : openMonthPicker()
+                    }
+                    aria-haspopup="true"
+                    aria-expanded={monthPickerOpen}
+                    aria-label="Выбрать месяц"
+                    className="flex items-center gap-1 h-[40px] -ml-2 px-2 active:scale-95"
                   >
-                    <Icon name="chevronLeft" size={18} className="text-sub" />
-                  </button>
-                  {/* Подпись месяца/года — в эталоне (mockup-reference) это
-                    статичная метка, не кнопка: переключение вида
-                    месяц/неделя живёт в тоггле выше (иконка grid/list) и в
-                    ручке-засечке снизу, а не здесь. */}
-                  <span className="flex items-center gap-1">
                     <span className="text-[14px] font-semibold text-red">
-                      {MONTHS_FULL[month]}. {year} г.
+                      {MONTHS_ABBR_DOT[pickerMonth]} {pickerYear} г.
                     </span>
-                    <Icon name="chevronDown" size={12} className="text-red" />
-                  </span>
-                  <button
-                    onClick={nextMonth}
-                    aria-label="Следующий месяц"
-                    className="w-[44px] h-[44px] -mr-2 flex items-center justify-center active:scale-95"
-                  >
-                    <Icon name="chevron" size={18} className="text-sub" />
+                    <Icon
+                      name="chevronDown"
+                      size={12}
+                      className={`text-red transition-transform ${monthPickerOpen ? "rotate-180" : ""}`}
+                    />
                   </button>
                 </div>
 
-                {/* Weekday headers */}
-                <div className="grid grid-cols-7 gap-0 mb-1">
+                {/* Weekday headers — py-0/mb-0 (было py-1/mb-1): уплотнение
+                    календаря, эту строку не тапают, минимальная площадь
+                    касания на неё не распространяется. */}
+                <div className="grid grid-cols-7 gap-0 mb-0">
                   {WEEKDAYS.map((d) => (
                     <div
                       key={d}
-                      className="text-center text-[11px] text-sub py-1"
+                      className="text-center text-[11px] text-sub py-0"
                     >
                       {d}
                     </div>
                   ))}
                 </div>
 
-                {/* Calendar grid */}
-                <div className="grid grid-cols-7 gap-0 pb-2">
-                  {cells.map((day, i) => {
-                    if (day === null) return <div key={i} />;
-                    const dateStr = formatDateStr(year, month, day);
+                {/* Лента недель — непрерывная, без пустых ячеек и без
+                    разрыва на границе месяца: начинается с понедельника
+                    текущей недели (или с первой недели выбранного через
+                    попап месяца) и идёт только вперёд. pb-1 (уплотнение,
+                    шкала 16/12/8/4). Числовые ячейки — не уже 40×40 (сама
+                    кнопка), внутренний кружок заливки — 26×26. */}
+                <div className="grid grid-cols-7 gap-0 pb-1">
+                  {ribbonDays.map((d) => {
+                    const dateStr = formatDateStr(
+                      d.getFullYear(),
+                      d.getMonth(),
+                      d.getDate(),
+                    );
                     const hasTasks = groupedTasks[dateStr]?.length > 0;
                     const isToday = dateStr === today;
                     const isSelected = dateStr === selectedDate;
+                    const isPast = dateStr < today;
+                    const isFirstOfMonth = d.getDate() === 1;
+                    const isFilled = isSelected || isToday;
 
                     return (
                       <button
-                        key={i}
+                        key={dateStr}
+                        data-date={dateStr}
                         onClick={() =>
                           setSelectedDate(isSelected ? null : dateStr)
                         }
-                        className={`h-[42px] flex flex-col items-center justify-center rounded-full transition-all active:scale-90 ${
-                          isSelected
-                            ? "bg-red text-white font-semibold"
-                            : isToday
-                              ? "bg-red/20 text-red font-semibold"
-                              : hasTasks
-                                ? "text-text"
-                                : "text-dim"
-                        }`}
+                        className="min-h-[40px] w-full flex flex-col items-center justify-center gap-[1px] py-1 transition-all active:scale-90"
                       >
-                        <span className="text-[14px]">{day}</span>
-                        {hasTasks && !isSelected && (
-                          <div className="w-[4px] h-[4px] rounded-full bg-red mt-[1px]" />
+                        {isFirstOfMonth && (
+                          <span
+                            data-cal-month-label
+                            className={`text-[9px] leading-none ${
+                              isFilled ? "text-red" : "text-sub"
+                            }`}
+                          >
+                            {MONTHS_ABBR_DOT[d.getMonth()]}
+                          </span>
+                        )}
+                        <span
+                          data-cal-daynum
+                          className={`text-[14px] leading-none w-[26px] h-[26px] rounded-full flex items-center justify-center ${
+                            isFilled
+                              ? "bg-red text-white font-semibold"
+                              : isPast
+                                ? "text-dim"
+                                : hasTasks
+                                  ? "text-text"
+                                  : "text-dim"
+                          }`}
+                        >
+                          {d.getDate()}
+                        </span>
+                        {hasTasks && !isFilled && (
+                          <div className="w-[4px] h-[4px] rounded-full bg-red" />
                         )}
                       </button>
                     );
@@ -477,6 +619,43 @@ export function UpcomingScreen() {
             )}
           </div>
         </div>
+
+        {/* Попап выбора месяца — соседний с calOuterRef элемент (НЕ
+            потомок), чтобы overflow-hidden/анимируемая height на
+            calOuterRef его не обрезали (см. комментарий у stickyRef).
+            Оверлей — div, не button/Link: check-dead-controls проверяет
+            только button/Link/NavLink, а этот div и не должен туда
+            попадать — это просто клик-заглушка для закрытия по тапу мимо. */}
+        {monthPickerOpen && popoverPos && (
+          <>
+            <div className="fixed inset-0 z-30" onClick={closeMonthPicker} />
+            <div
+              className="absolute z-40 flex items-center gap-1 bg-card border border-stroke rounded-lg shadow-lg p-1"
+              style={{ top: popoverPos.top, left: popoverPos.left }}
+            >
+              <button
+                onClick={goPrevMonth}
+                aria-label="Предыдущий месяц"
+                className="w-[36px] h-[36px] flex items-center justify-center active:scale-95"
+              >
+                <Icon name="chevronLeft" size={16} className="text-sub" />
+              </button>
+              <button
+                onClick={goToday}
+                className="px-2 h-[36px] text-[12px] text-sub whitespace-nowrap active:scale-95"
+              >
+                Сегодня
+              </button>
+              <button
+                onClick={goNextMonth}
+                aria-label="Следующий месяц"
+                className="w-[36px] h-[36px] flex items-center justify-center active:scale-95"
+              >
+                <Icon name="chevron" size={16} className="text-sub" />
+              </button>
+            </div>
+          </>
+        )}
 
         {/* Ручка-засечка: свайп вверх — свернуть в неделю, свайп вниз —
             развернуть в месяц; на устройствах без touch (мышь) короткий

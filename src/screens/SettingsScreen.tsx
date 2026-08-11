@@ -132,6 +132,7 @@ export function SettingsScreen() {
             label="Активность"
             onClick={() => navigate("/activity")}
           />
+          <Row icon="tag" label="Метки" onClick={() => navigate("/labels")} />
           <Row icon="bot" label="Агенты" onClick={() => navigate("/agents")} />
         </FieldGroup>
       </div>

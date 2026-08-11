@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useProjects, useCreateProject } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import { ActionsMenu } from "../components/ActionsMenu";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 
 // Same 7 swatches ProjectsScreen offers when creating/renaming a project —
@@ -35,6 +36,8 @@ export function OverviewScreen() {
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [color, setColor] = useState(PROJECT_COLORS[0]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuAnchorRef = useRef<HTMLButtonElement>(null);
 
   const handleCreate = useGuardedCallback(async (e: FormEvent) => {
     e.preventDefault();
@@ -66,17 +69,30 @@ export function OverviewScreen() {
         actions={
           <>
             <button
-              onClick={() => navigate("/notifications")}
-              className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
+              ref={menuAnchorRef}
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-label="Ещё"
+              className="w-[44px] h-[44px] flex items-center justify-center"
             >
-              <Icon name="bell" size={18} />
+              <Icon name="dots" size={18} />
             </button>
-            <button
-              onClick={() => navigate("/settings")}
-              className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
-            >
-              <Icon name="settings" size={18} />
-            </button>
+            <ActionsMenu
+              open={menuOpen}
+              onClose={() => setMenuOpen(false)}
+              anchorRef={menuAnchorRef}
+              items={[
+                {
+                  icon: "bell",
+                  label: "Уведомления",
+                  onClick: () => navigate("/notifications"),
+                },
+                {
+                  icon: "settings",
+                  label: "Настройки",
+                  onClick: () => navigate("/settings"),
+                },
+              ]}
+            />
           </>
         }
       />

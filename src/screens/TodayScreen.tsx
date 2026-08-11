@@ -1,12 +1,19 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
-import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { useCurrentUser } from "../api/auth";
+import {
+  Icon,
+  ScreenHeader,
+  ErrorBanner,
+  AgentStateTag,
+} from "../components/UI";
 import { todayStr, formatDueLabel, partitionOverdueToday } from "../lib/date";
 import { getPriorityColor } from "../lib/priority";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
 import { RescheduleSheet } from "../components/RescheduleSheet";
+import { ActionsMenu } from "../components/ActionsMenu";
 import type { ApiTask } from "../api/types";
 
 const MONTHS_SHORT = [
@@ -71,11 +78,16 @@ function TaskRow({
             {task.description.substring(0, 60)}…
           </div>
         )}
-        {overdue && task.due_date && (
-          <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
-            <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
-            {formatDueLabel(task.due_date)}
-          </span>
+        {((overdue && task.due_date) || task.agent_state) && (
+          <div className="flex items-center gap-1 flex-wrap mt-1.5">
+            {overdue && task.due_date && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
+                <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
+                {formatDueLabel(task.due_date)}
+              </span>
+            )}
+            <AgentStateTag task={task} />
+          </div>
         )}
       </div>
     </button>
@@ -84,25 +96,77 @@ function TaskRow({
 
 export function TodayScreen() {
   const { data: allTasks = [], isLoading, isError, error } = useTasks();
+  const { data: currentUser, isLoading: isLoadingUser } = useCurrentUser();
   const navigate = useNavigate();
   const today = todayStr();
   const layout = useAppStore((s) => s.taskLayout.today);
   const setTaskLayout = useAppStore((s) => s.setTaskLayout);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuAnchorRef = useRef<HTMLButtonElement>(null);
 
   // Single source for "просрочено vs. сегодня" — shared by both layouts
   // (see lib/date.ts) so the list and the board can never quietly disagree
-  // about which task belongs where.
-  const { overdue: overdueTasks, todayTasks } = useMemo(
+  // about which task belongs where. These are the *raw* sets, before the
+  // "Ждут вас" dedup below strips out whatever already surfaced there.
+  const { overdue: rawOverdueTasks, todayTasks: rawTodayTasks } = useMemo(
     () => partitionOverdueToday(allTasks, today),
     [allTasks, today],
   );
 
+  // «Ждут вас» — вычисляемая выборка, НЕ переброска assignee_id
+  // (AGENT-PROTOCOL.md, "Ответственный: assignee_id не переписываем"):
+  // исполнителя задачи никто не меняет, иначе агент теряет доступ к своей
+  // же задаче. Я — создатель (creator_id), а агент встал (blocked) или
+  // сдал на проверку (review). Заблокированные — первыми: по формулировке
+  // протокола именно они "требуют действий владельца" сильнее, чем
+  // готовая-к-приёмке работа.
+  const waitingTasks = useMemo(() => {
+    if (!currentUser) return [];
+    return allTasks
+      .filter(
+        (t) =>
+          t.status === "active" &&
+          t.creator_id === currentUser.id &&
+          (t.agent_state === "blocked" || t.agent_state === "review"),
+      )
+      .sort((a, b) => {
+        const rank = (t: ApiTask) => (t.agent_state === "blocked" ? 0 : 1);
+        return rank(a) - rank(b);
+      });
+  }, [allTasks, currentUser]);
+
+  // Дедуп по приоритету блока: «Ждут вас» → «Просрочено» → «Сегодня». Одна
+  // и та же задача рисуется РОВНО один раз, в самом верхнем блоке, которому
+  // подходит — владелец явно попросил не видеть повтор строки на экране
+  // (предыдущая версия добавляла "Ждут вас" поверх полных списков, отсюда и
+  // дубль на скриншоте). Смысл при этом не теряется: TaskRow ниже получает
+  // `overdue` по фактической дате задачи, а не по тому, в каком блоке она
+  // оказалась, так что плашка «Просрочено» остаётся на строке, ушедшей
+  // наверх. overdueTasks/todayTasks — теперь уже вычищенные множества;
+  // именно они и есть источник правды для счётчиков в заголовках (пункт
+  // "предыдущий агент откатил дедуп из-за разъехавшихся чисел" — здесь
+  // числа и списки берутся из одного и того же массива).
+  const waitingIds = useMemo(
+    () => new Set(waitingTasks.map((t) => t.id)),
+    [waitingTasks],
+  );
+  const overdueTasks = useMemo(
+    () => rawOverdueTasks.filter((t) => !waitingIds.has(t.id)),
+    [rawOverdueTasks, waitingIds],
+  );
+  const todayTasks = useMemo(
+    () => rawTodayTasks.filter((t) => !waitingIds.has(t.id)),
+    [rawTodayTasks, waitingIds],
+  );
+
   const isEmpty =
     !isLoading &&
+    !isLoadingUser &&
     !isError &&
     overdueTasks.length === 0 &&
-    todayTasks.length === 0;
+    todayTasks.length === 0 &&
+    waitingTasks.length === 0;
 
   // Доска «Сегодня» — НЕ по проектам (прямое решение владельца): ровно две
   // колонки, «Просрочено» и «Сегодня», тот же состав и порядок, что и в
@@ -114,6 +178,22 @@ export function TodayScreen() {
   // «Добавить задачу») — это тот самый экран, ради которого сюда пришли.
   const boardColumns: BoardColumn[] = useMemo(() => {
     const cols: BoardColumn[] = [];
+    // Тот же принцип, что и «Просрочено»: колонка целиком отсутствует,
+    // когда ждать нечего, а не висит пустой половиной экрана. Заметка о
+    // границе: BoardCard (TaskBoard.tsx) не рисует пометку agent_state —
+    // тот файл в этой волне не трогаем, так что здесь задачи видны по
+    // составу колонки, но без цветного тега на карточке. overdueTasks и
+    // todayTasks уже вычищены от задач, ушедших в «Ждут вас» (см. дедуп
+    // выше) — так что и здесь колонки не дублируют карточку, а счётчик в
+    // заголовке (interpolated ниже) совпадает с длиной tasks.
+    if (waitingTasks.length > 0) {
+      cols.push({
+        id: "waiting",
+        title: `Ждут вас ${waitingTasks.length}`,
+        tasks: waitingTasks,
+        showProjectBadge: true,
+      });
+    }
     if (overdueTasks.length > 0) {
       cols.push({
         id: "overdue",
@@ -138,19 +218,20 @@ export function TodayScreen() {
       tasks: todayTasks,
       showProjectBadge: true,
       footer: (
+        /* Пунктир и акцентный цвет — тот же приём, что у «Создать проект»
+           и «Создать метку» в этом же приложении: заливка bg-card совпадала
+           с фоном карточек задач, и кнопка сливалась со списком. */
         <button
           onClick={() => navigate("/task/new")}
-          className="tap-row w-full flex items-center justify-center gap-2 h-11 rounded-full bg-card text-[13px] font-semibold text-text"
+          className="tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 text-[13px] font-semibold text-red"
         >
-          <span className="w-5 h-5 rounded-full bg-card2 flex items-center justify-center">
-            <Icon name="plus" size={12} />
-          </span>
+          <Icon name="plus" size={16} />
           Добавить задачу
         </button>
       ),
     });
     return cols;
-  }, [overdueTasks, todayTasks, today, navigate]);
+  }, [waitingTasks, overdueTasks, todayTasks, today, navigate]);
 
   const header = (
     <ScreenHeader
@@ -164,31 +245,32 @@ export function TodayScreen() {
       actions={
         <>
           <button
-            onClick={() =>
-              setTaskLayout("today", layout === "list" ? "board" : "list")
-            }
-            className="tap-scale w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
-            aria-label={
-              layout === "list"
-                ? "Переключить на вид доски"
-                : "Переключить на вид списка"
-            }
+            ref={menuAnchorRef}
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-label="Ещё"
+            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
           >
-            <Icon
-              name={layout === "list" ? "list" : "grid"}
-              size={18}
-              className="text-text"
-            />
-          </button>
-          <button className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center active:scale-95 transition-transform">
             <Icon name="dots" size={18} />
           </button>
-          <button
-            onClick={() => navigate("/search")}
-            className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center active:scale-95 transition-transform"
-          >
-            <Icon name="search" size={18} />
-          </button>
+          <ActionsMenu
+            open={menuOpen}
+            onClose={() => setMenuOpen(false)}
+            anchorRef={menuAnchorRef}
+            items={[
+              {
+                icon: layout === "list" ? "grid" : "list",
+                label:
+                  layout === "list" ? "Показать доской" : "Показать списком",
+                onClick: () =>
+                  setTaskLayout("today", layout === "list" ? "board" : "list"),
+              },
+              {
+                icon: "search",
+                label: "Поиск",
+                onClick: () => navigate("/search"),
+              },
+            ]}
+          />
         </>
       }
     />
@@ -281,6 +363,25 @@ export function TodayScreen() {
         </div>
       ) : (
         <div className="space-y-[2px]">
+          {waitingTasks.length > 0 && (
+            <div className="flex items-center gap-1.5 px-1 pt-2 pb-1">
+              <Icon name="bot" size={13} className="text-text" />
+              <span className="text-[13px] font-semibold text-text">
+                Ждут вас
+              </span>
+            </div>
+          )}
+          {waitingTasks.map((t) => (
+            <TaskRow
+              key={t.id}
+              task={t}
+              // Дедуп прячет строку из «Просрочено», но не факт: если задача
+              // и правда просрочена, красная плашка «Просрочено, …» остаётся
+              // на ней и здесь, в «Ждут вас» (см. rawOverdueTasks выше).
+              overdue={t.due_date !== null && t.due_date < today}
+              onClick={() => navigate(`/task/${t.id}`)}
+            />
+          ))}
           {overdueTasks.length > 0 && (
             <div className="flex items-center gap-1.5 px-1 pt-2 pb-1">
               <span className="text-[13px] font-semibold text-red">
@@ -296,11 +397,19 @@ export function TodayScreen() {
               onClick={() => navigate(`/task/${t.id}`)}
             />
           ))}
-          {overdueTasks.length > 0 && todayTasks.length > 0 && (
-            <div className="text-[13px] font-semibold text-sub px-1 pt-3 pb-1">
-              Сегодня
-            </div>
-          )}
+          {/* Раньше проверялось только overdueTasks.length > 0 — но после
+              дедупа overdueTasks может опустеть, даже когда над «Сегодня»
+              всё равно есть блок («Ждут вас» в одиночку съел единственную
+              просроченную задачу). Без waitingTasks в условии подпись
+              «Сегодня» пропадала бы, и сегодняшние строки визуально сливались
+              бы с «Ждут вас» — та же путаница с местом задачи, которую и
+              просили убрать. */}
+          {todayTasks.length > 0 &&
+            (overdueTasks.length > 0 || waitingTasks.length > 0) && (
+              <div className="text-[13px] font-semibold text-sub px-1 pt-3 pb-1">
+                Сегодня
+              </div>
+            )}
           {todayTasks.map((t) => (
             <TaskRow
               key={t.id}

@@ -50,6 +50,15 @@
        fix for any specific overflow — the actual cause (an element wider
        than the viewport) should still be found and fixed at the source. */
     overflow-x: clip;
+    /* Дублирует фон body на сам html (документ), а не только на body —
+       html раньше не имел фона вообще, поэтому любая область за пределами
+       body (overscroll/bounce на iOS, доля секунды до отрисовки body) была
+       белой. color-scheme: dark говорит браузеру, что документ тёмный, ещё
+       до применения остальных правил — это же значение уже стоит инлайном
+       в index.html <head> (до загрузки этого файла); повторено и здесь,
+       чтобы тема не зависела от того, какой из двух источников подгрузился. */
+    background: var(--color-bg);
+    color-scheme: dark;
   }
 
   body {
@@ -64,6 +73,34 @@
 
   #root {
     min-height: 100vh;
+  }
+
+  /* Мобильная вкладка приложения (Layout.tsx, мобильная ветка) ставит этот
+     класс на <html> на время своей жизни — то есть пока владелец
+     авторизован и смотрит на узком экране, но НЕ на /login и /register
+     (те рендерятся вне Layout и по-прежнему используют обычную прокрутку
+     документа для собственного min-h-[100dvh]).
+     Без этого класса body унаследует свой baseline `min-height: 100vh`
+     выше — а 100vh на мобильных браузерах обычно равен САМОЙ БОЛЬШОЙ
+     высоте вьюпорта (с убранной адресной строкой), то есть больше текущего
+     100dvh, пока панель браузера видна. min-height больше явного height
+     побеждает по спеке CSS — поэтому здесь одного `height: 100dvh`
+     недостаточно, нужно явно перебить и min-height тем же значением.
+     overflow: hidden — собственно то, что убирает прокрутку ТЕЛА документа
+     (а с ней и появление адресной строки/панели браузера при переключении
+     вкладок — см. комментарий в Layout.tsx). overscroll-behavior: none —
+     чтобы не осталось «резинового» оттягивания всей страницы на iOS, даже
+     когда прокручивать нечего.
+     Правило и на html, и на body: document.scrollingElement в разных
+     браузерах — это то html, то body в зависимости от их overflow, надёжнее
+     закрыть прокрутку на обоих сразу, чем полагаться на то, какой из них
+     выберет конкретный браузер. */
+  html.app-shell-locked,
+  html.app-shell-locked body {
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
 
   button,
@@ -101,16 +138,30 @@
   .nav-pill-bottom {
     bottom: max(8px, env(safe-area-inset-bottom));
   }
-  /* Отступ контента = высота меню (60) + его зазор снизу (8) + запас (8). */
+  /* Отступ контента = высота бара AnimatedTabBar (.nt-tabbar-menu, задача
+     2026-08-11 — перенос горбика из CRM) + отступ <nav> снизу + запас.
+     Высота бара — 4em (padding 0.55em+0.85em + иконка 2.6em, все числа из
+     перенесённого блока в index.css) и растёт с font-size:clamp(10px,3vw,12px)
+     самого бара — на 430px это уже 12px×4=48px (измерено live: 40 / 46.8 /
+     48px на 320/390/430). Отступ <nav> снизу — max(env(...),16px) (см.
+     BottomNav в UI.tsx). 48 (макс. бар) + 16 (мин. отступ) + 8 запаса = 72. */
   .pb-content-safe {
-    padding-bottom: calc(76px + env(safe-area-inset-bottom));
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
   }
   .pb-bottom-safe {
     padding-bottom: max(16px, env(safe-area-inset-bottom));
   }
-  /* Плавающая кнопка — над меню: 60 + 8 зазора + 16 воздуха. */
+  /* Плавающая кнопка — над «горбиком» AnimatedTabBar. Раньше (плоское меню
+     60px) хватало 84px; после переноса горбика (задача 2026-08-11) на
+     вкладке «Обзор» (правый край, рядом с FAB) круг активной вкладки
+     поднимается, а «пузырь»-бугор высотой 2.4em всплывает над баром — на
+     390/430px FAB и бугор физически перекрывались (см. отчёт агента о
+     переносе, скриншот port-390-tab-overview-close.png: два красных круга
+     сливались в один). Посчитано, не на глаз: макс. высота бара 48px (font
+     12px) + высота бугра 2.4em=28.8px + мин. отступ 16px = 92.8px нужного
+     просвета от низа экрана до верха бугра; 104px даёт живой запас ~11px. */
   .fab-safe-bottom {
-    bottom: calc(84px + env(safe-area-inset-bottom));
+    bottom: calc(104px + env(safe-area-inset-bottom));
   }
 }
 
@@ -196,4 +247,200 @@
       opacity: 0.75;
     }
   }
+}
+
+/* ═══════════ AnimatedTabBar (перенос из CRM, задача 2026-08-11) ═══════════
+   Дословный порт CSS-блока ~/Проекты/CRM/CRM-Castom/frontend/src/index.css
+   (строки ≈445-589, класс-эталон «geometry», утверждён владельцем 2026-07-
+   29 в проекте CRM). Владелец: «там есть рабочая, уже прям идеально
+   выверенная вещь» — вся геометрия горба (размеры в em от font-size на
+   .menu, форма бугра через clip-path, единая drop-shadow) взята 1:1, НИ ОДНО
+   число здесь не изменено и не изобретено заново.
+   Вынесено НАРУЖУ любого @layer намеренно, как и в оригинале: правило
+   `.nt-tabbar-menu__item svg { width: 2.6em; ... }` должно перебивать
+   Tailwind-утилиты вроде h-5/w-5 на самой иконке — по спеке cascade-layers
+   безслойное правило побеждает слойное вне зависимости от специфичности, а
+   вся Tailwind-generated CSS (@tailwindcss/vite) сама обёрнута в @layer
+   utilities. Если положить этот блок внутрь @layer, он проиграет.
+   Отличия от оригинала (разрешены заданием — только цвета/контент, не
+   геометрия):
+     • --bgColorMenu (surface CRM) → var(--color-card) — наша панельная
+       поверхность.
+     • круг активной вкладки (ink-50 в CRM, там это цвет ФОНА страницы —
+       «дырка», сквозь которую видна акцентная иконка) → var(--color-red).
+       Это НЕ произвольное решение агента: задание прямо требует «Цвет круга
+       активной вкладки — наш красный акцент», отдельной строкой в списке
+       разрешённых правок. Владелец CRM просил другое (нейтральная дырка +
+       синяя иконка) в своём проекте 29.07 — здесь другой, явно
+       сформулированный запрос.
+     • раз круг стал сплошным красным (а не дыркой цвета фона), акцентная
+       иконка поверх него читается плохо — поэтому активная иконка не
+       брендового цвета (как в CRM: --brand-strong), а var(--color-text)
+       (белая). Это прямое и единственно возможное следствие предыдущего
+       пункта, не самостоятельная правка стиля.
+     • неактивная иконка (ink-400 в CRM) → var(--color-dim).
+     • тень: в оригинале --shadow-offset-y/--shadow-blur/--shadow-opacity —
+       собственные CSS-переменные CRM, которые меняются между свето/тёмной
+       темой. У нас темы нет (проект принудительно тёмный, color-scheme:
+       dark, см. GLOBAL RESET выше) — использованы буквально те же числа,
+       что и в тёмной теме CRM (6px/18px/0.35), а не придуманы заново.
+   Счётчик задач на «Сегодня» (.nt-tabbar-badge) — это ДОПОЛНЕНИЕ к
+   оригиналу, не его часть: задание отдельно разрешает «счётчик задач на
+   Сегодня — маленькая красная цифра без подложки». В самом демо-компоненте
+   CRM счётчика нет вообще. Смещение подобрано счётом, а не на глаз (радиус
+   круга 2.1em, половина иконки 1.3em — цифра у самого угла иконки попадает
+   ВНУТРЬ круга; см. отчёт агента о переносе за точными числами по ширинам
+   320/390/430). */
+.nt-tabbar-svg-container {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.nt-tabbar-menu {
+  --duration: 0.7s;
+  --bgColorMenu: var(--color-card);
+  position: relative;
+  display: flex;
+  width: 100%;
+  max-width: 28rem;
+  margin: 0 auto;
+  /* Опорный размер всей геометрии оригинала (иконка 2.6em, круг 4.2em и т.д.). */
+  font-size: clamp(10px, 3vw, 12px);
+  padding: 0 2.85em;
+  align-items: center;
+  justify-content: center;
+  list-style: none;
+  background-color: var(--bgColorMenu);
+  border-radius: 9999px;
+  overflow: visible;
+  /* ЕДИНАЯ тень на весь gooey-силуэт (панель + холмик + поднятый круг):
+     drop-shadow на .menu обводит объединённую форму всего поддерева разом.
+     Две раздельные тени (box-shadow бара + drop-shadow холмика) давали бы
+     двойное затемнение у шва. Направление вверх; радиус /2 — у drop-shadow
+     размытие визуально ~вдвое сильнее box-shadow (комментарий оригинала). */
+  filter: drop-shadow(0 -6px 9px rgb(0 0 0 / 0.35));
+}
+
+.nt-tabbar-menu__item {
+  all: unset;
+  flex-grow: 1;
+  z-index: 100;
+  display: flex;
+  cursor: pointer;
+  position: relative;
+  border-radius: 50%;
+  align-items: center;
+  will-change: transform;
+  justify-content: center;
+  padding: 0.55em 0 0.85em;
+  color: var(--color-dim);
+  transition:
+    transform var(--timeOut, var(--duration)),
+    color var(--duration);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Цветной круг под активной вкладкой. z-index:-1 кладёт его под иконку, но
+   поверх «пузыря»: кнопка (z-index:100) целиком выше .menu__border. */
+.nt-tabbar-menu__item::before {
+  content: "";
+  z-index: -1;
+  width: 4.2em;
+  height: 4.2em;
+  border-radius: 50%;
+  position: absolute;
+  transform: scale(0);
+  transition:
+    background-color var(--duration),
+    transform var(--duration);
+}
+
+.nt-tabbar-menu__item.active {
+  transform: translate3d(0, -0.8em, 0);
+  color: var(--color-text);
+}
+
+.nt-tabbar-menu__item.active::before {
+  transform: scale(1);
+  background-color: var(--color-red);
+}
+
+/* Иконки — наши Lucide (stroke=currentColor уже задан компонентом Icon);
+   размер задаём здесь: правило вне @layer перебивает tailwind h-5/w-5.
+   stroke-dasharray 400 (число оригинала, не тронуто) с offset 0 в покое
+   штрих не меняет — нужен только для reverse-анимации прорисовки при
+   активации. */
+.nt-tabbar-menu__item svg {
+  width: 2.6em;
+  height: 2.6em;
+  stroke-dasharray: 400;
+}
+
+.nt-tabbar-menu__item.active svg {
+  animation: nt-tabbar-strok 1.5s reverse;
+}
+
+@keyframes nt-tabbar-strok {
+  100% {
+    stroke-dashoffset: 400;
+  }
+}
+
+/* «Пузырь»: плоский прямоугольник 10.9×2.4em НАД баром (bottom:99% — нижним
+   краем на верхнем крае .menu), форму бугра даёт clip-path из
+   AnimatedTabBar.tsx; ширина больше одного пункта — видна только «горка» у
+   своего центра. Позиция по X — transform, его пишет JS-часть компонента
+   инлайн-стилем (см. AnimatedTabBar.tsx). */
+.nt-tabbar-menu__border {
+  position: absolute;
+  left: 0;
+  bottom: 99%;
+  width: 10.9em;
+  height: 2.4em;
+  transition: transform var(--timeOut, var(--duration));
+  will-change: transform;
+  /* Тень у холмика — НЕ здесь: единый drop-shadow висит на .nt-tabbar-menu и
+     обводит общий силуэт (см. коммент там). Форму режет ::before —
+     box-shadow/фильтры на самом клипнутом элементе срезаются clip-path'ом. */
+}
+
+.nt-tabbar-menu__border::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  clip-path: url(#nt-tabbar-menu-clip-path);
+  background-color: var(--bgColorMenu);
+}
+
+/* Счётчик задач на «Сегодня» — ДОПОЛНЕНИЕ к оригиналу (обоснование выше в
+   шапке блока), не его часть. Маленькая цифра без подложки, вынесена за
+   пределы круга (радиус 2.1em). Два момента, проверенных расчётом, а не на
+   глаз:
+   1. Позиционирование через `left` (не `right`). `right` фиксирует ВНЕШНИЙ
+      край цифры — внутренний (ближний к центру круга) тогда ползёт ВЛЕВО с
+      каждой лишней цифрой. При двузначном счётчике (10+ задач — обычный
+      случай, не край) внутренний угол заезжал под круг (проверено: 320px,
+      2 цифры — 18.3px < 21px радиуса). `left` фиксирует именно ближний
+      край — сколько бы цифр ни было, счётчик растёт вправо, наружу.
+   2. Никакого своего font-size: цифра наследует font-size от .nt-tabbar-menu
+      (тот самый clamp(10px,3vw,12px), на котором держится вся геометрия
+      бугра), поэтому top/left в em остаются в ТОЙ ЖЕ системе координат, что
+      и круг/иконка, и масштабируются с ней синхронно на любой ширине — а
+      не съезжают, как было бы при собственном font-size:0.85em. На 320px
+      это ровно 10px — то же, что и было в исходном text-[10px] (задание:
+      «как сейчас»).
+   left:3.3em/top:-1em дают ближний (нижний левый) угол цифры на расстоянии
+   ≈2.35em от центра иконки (радиус круга 2.1em) — проверено на 320/390/430
+   и с принудительным двузначным/трёхзначным текстом (см. отчёт агента). */
+.nt-tabbar-badge {
+  position: absolute;
+  top: -1em;
+  left: 3.3em;
+  z-index: 1;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-red);
+  white-space: nowrap;
 }

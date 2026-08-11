@@ -7,7 +7,13 @@ import {
   useDeleteNotification,
   formatRelativeTime,
 } from "../api/notifications";
-import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import {
+  Icon,
+  Avatar,
+  ScreenHeader,
+  ErrorBanner,
+  BackButton,
+} from "../components/UI";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 
 function NotificationRow({ n }: { n: ApiNotification }) {
@@ -110,15 +116,7 @@ export function NotificationsScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
-        leading={
-          <button
-            onClick={() => navigate(-1)}
-            className="w-11 h-11 -ml-2.5 flex items-center justify-center"
-            aria-label="Назад"
-          >
-            <Icon name="chevronLeft" size={22} />
-          </button>
-        }
+        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Уведомления"
         actions={
           <button

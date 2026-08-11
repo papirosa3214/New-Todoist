@@ -24,7 +24,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks, useUpdateTask } from "../api/tasks";
-import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import {
+  Icon,
+  Avatar,
+  ScreenHeader,
+  ErrorBanner,
+  BackButton,
+} from "../components/UI";
 import { Card, FieldRow } from "../components/TaskFields";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { parseServerDate, todayStr, addDays } from "../lib/date";
@@ -635,15 +641,7 @@ export function ActivityScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
-        leading={
-          <button
-            onClick={() => navigate(-1)}
-            className="w-11 h-11 -ml-2.5 flex items-center justify-center"
-            aria-label="Назад"
-          >
-            <Icon name="chevronLeft" size={22} />
-          </button>
-        }
+        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Активность"
         actions={
           <button

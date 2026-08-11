@@ -27,7 +27,7 @@ export { PRIORITIES };
 export function Card({ children }: { children: ReactNode }) {
   const items = Children.toArray(children);
   return (
-    <div className="w-full bg-card rounded-[14px] overflow-hidden">
+    <div className="w-full bg-card rounded-2xl overflow-hidden">
       {items.map((child, i) => (
         <div key={i} className={i > 0 ? "border-t border-stroke" : ""}>
           {child}
@@ -49,7 +49,7 @@ export function FieldRow({
   chevron = true,
   chevronOpen = false,
   onClick,
-  minHeight = 47,
+  minHeight = 48,
 }: {
   icon?: string;
   iconClassName?: string;
@@ -65,7 +65,7 @@ export function FieldRow({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-3 px-[14px] text-left active:bg-white/[0.04] transition-colors"
+      className="w-full flex items-center gap-3 px-4 text-left active:bg-white/[0.04] transition-colors"
       style={{ minHeight }}
     >
       {icon && (
@@ -101,7 +101,7 @@ export function PriorityPill({ priority }: { priority: number }) {
   const p = PRIORITIES.find((x) => x.key === priority) ?? PRIORITIES[3];
   return (
     <span
-      className="inline-flex items-center justify-center text-[11px] font-bold text-white rounded-[10px] px-[7px] h-[20px] min-w-[26px] shrink-0"
+      className="inline-flex items-center justify-center text-[11px] font-bold text-white rounded-[10px] px-2 h-[20px] min-w-[26px] shrink-0"
       style={{ backgroundColor: p.color }}
     >
       {p.label}
@@ -135,7 +135,7 @@ export function PriorityField({
                 onChange(p.key);
                 setOpen(false);
               }}
-              className="w-full flex items-center gap-3 py-3 px-[14px] text-left active:bg-white/[0.04] transition-colors"
+              className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-white/[0.04] transition-colors"
             >
               <span
                 className="w-[24px] h-[24px] rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
@@ -220,7 +220,7 @@ export function DueDateField({
                 onChange(today);
                 setOpen(false);
               }}
-              className={`flex-1 h-[38px] rounded-xl text-[13px] font-medium transition-colors ${
+              className={`flex-1 h-[40px] rounded-xl text-[13px] font-medium transition-colors ${
                 value === today
                   ? "bg-red text-white"
                   : "bg-card2 text-text active:bg-white/10"
@@ -233,7 +233,7 @@ export function DueDateField({
                 onChange(tomorrow);
                 setOpen(false);
               }}
-              className={`flex-1 h-[38px] rounded-xl text-[13px] font-medium transition-colors ${
+              className={`flex-1 h-[40px] rounded-xl text-[13px] font-medium transition-colors ${
                 value === tomorrow
                   ? "bg-red text-white"
                   : "bg-card2 text-text active:bg-white/10"
@@ -352,15 +352,15 @@ export function LabelsField({
   });
 
   return (
-    <div className="w-full bg-card rounded-[14px] overflow-hidden">
-      <div className="flex flex-wrap gap-2 px-[14px] py-[13px]">
+    <div className="w-full bg-card rounded-2xl overflow-hidden">
+      <div className="flex flex-wrap gap-2 px-4 py-3">
         {labels.map((l) => {
           const active = selectedIds.includes(l.id);
           return (
             <button
               key={l.id}
               onClick={() => onToggle(l.id)}
-              className="inline-flex items-center gap-1 text-[12.5px] font-semibold rounded-[10px] px-[13px] py-[6px] transition-colors"
+              className="inline-flex items-center gap-1 text-[12px] font-semibold rounded-[10px] px-3 py-2 transition-colors"
               style={{
                 backgroundColor: active
                   ? l.color + "26"
@@ -376,14 +376,14 @@ export function LabelsField({
         {!creating && (
           <button
             onClick={() => setCreating(true)}
-            className="inline-flex items-center text-[12.5px] font-semibold rounded-[10px] px-[13px] py-[6px] text-sub bg-white/[0.08]"
+            className="inline-flex items-center text-[12px] font-semibold rounded-[10px] px-3 py-2 text-sub bg-white/[0.08]"
           >
             + новая
           </button>
         )}
       </div>
       {creating && (
-        <div className="border-t border-stroke flex items-center gap-2 px-[14px] py-[10px]">
+        <div className="border-t border-stroke flex items-center gap-2 px-4 py-2.5">
           <input
             autoFocus
             value={name}
@@ -417,7 +417,7 @@ export function LabelsField({
         </div>
       )}
       {labels.length === 0 && !creating && (
-        <div className="px-[14px] pb-[13px] -mt-1 text-[12px] text-dim">
+        <div className="px-4 pb-3 -mt-1 text-[12px] text-dim">
           Меток пока нет
         </div>
       )}
@@ -453,7 +453,7 @@ export function SubtaskRow({
   };
 
   return (
-    <div className="flex items-center gap-3 px-[14px] py-[12px]">
+    <div className="flex items-center gap-3 px-4 py-3">
       <button
         onClick={onToggle}
         className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center shrink-0 ${
@@ -510,10 +510,7 @@ export function AddSubtaskRow({ onAdd }: { onAdd: (title: string) => void }) {
     setValue("");
   };
   return (
-    <div
-      className="flex items-center gap-3 px-[14px]"
-      style={{ minHeight: 48 }}
-    >
+    <div className="flex items-center gap-3 px-4" style={{ minHeight: 48 }}>
       <div className="w-[16px] h-[16px] rounded-full border-2 border-dim shrink-0" />
       <input
         value={value}

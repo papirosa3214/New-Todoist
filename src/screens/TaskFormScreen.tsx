@@ -7,7 +7,7 @@
 // исключение: у существующей задачи они уже персистентны, поэтому их
 // CRUD идёт через живой API сразу, а не копится в локальном стейте.
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useProjects } from "../api/projects";
 import { useLabels, useCreateLabel } from "../api/labels";
 import { useAgents } from "../api/agents";
@@ -34,6 +34,7 @@ export function TaskFormScreen() {
   const { id } = useParams<{ id: string }>();
   const isEdit = !!id;
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const { data: agents = [], isError: agentsError } = useAgents();
   const { data: projects = [], isError: projectsError } = useProjects();
@@ -65,11 +66,21 @@ export function TaskFormScreen() {
   // below, so an existing task keeps its own date.
   const [dueDate, setDueDate] = useState<string | null>(null);
   // undefined = "not touched yet" (create mode falls back to the user's
-  // first project); null = "explicitly no project" (a valid state only
-  // reachable in edit mode, for a task that lives in Inbox).
-  const [projectId, setProjectId] = useState<string | null | undefined>(
-    undefined,
-  );
+  // first project); null = "explicitly no project" — reachable in edit
+  // mode for a task that lives in Inbox, AND now in create mode too: the
+  // Inbox board's per-column "Добавить задачу" pill (InboxScreen.tsx) links
+  // here with a `project` query param so the task lands in the same column
+  // it was created from — `?project=none` for the "Без проекта" column,
+  // `?project=<id>` for a real project column. Read once via useState's
+  // lazy initializer (not an effect): this only needs to seed the very
+  // first render, same as useEffect's edit-mode hydration below but for
+  // create mode, which has no existingTask to hydrate from.
+  const [projectId, setProjectId] = useState<string | null | undefined>(() => {
+    if (isEdit) return undefined;
+    const p = searchParams.get("project");
+    if (p === null) return undefined;
+    return p === "none" ? null : p;
+  });
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [showAssigneePicker, setShowAssigneePicker] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -152,9 +163,14 @@ export function TaskFormScreen() {
   // whole form and hitting «Готово».
   const refDataError = agentsError || projectsError || labelsError;
 
-  const effectiveProjectId = isEdit
-    ? (projectId ?? null)
-    : (projectId ?? projects[0]?.id);
+  // `??` alone would be wrong here: `null` is a real, distinct value
+  // ("explicitly no project", set by the ?project=none pill or an edit-mode
+  // Inbox task) and `??` treats null exactly like undefined, silently
+  // falling back to projects[0] and putting a "no project" task into the
+  // user's first project instead. Only `undefined` ("not touched yet")
+  // should fall back; `null` must pass through untouched in both modes.
+  const effectiveProjectId =
+    projectId === undefined ? (isEdit ? null : projects[0]?.id) : projectId;
   const currentProject = projects.find((p) => p.id === effectiveProjectId);
 
   const toggleLabel = (labelId: string) => {
@@ -209,7 +225,7 @@ export function TaskFormScreen() {
         leading={
           <button
             onClick={() => navigate(-1)}
-            className="w-[44px] h-[44px] rounded-full bg-card2 flex items-center justify-center active:scale-95"
+            className="w-[44px] h-[44px] flex items-center justify-center active:scale-95"
           >
             <Icon name="x" size={18} />
           </button>
@@ -247,7 +263,7 @@ export function TaskFormScreen() {
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Название задачи"
-        className="w-full bg-transparent text-[20px] font-medium text-text placeholder:text-dim resize-none outline-none mb-2 min-h-[32px]"
+        className="block w-full bg-transparent text-[20px] font-medium text-text placeholder:text-dim resize-none outline-none mb-2 min-h-[32px]"
         rows={1}
       />
 
@@ -256,7 +272,7 @@ export function TaskFormScreen() {
         value={desc}
         onChange={(e) => setDesc(e.target.value)}
         placeholder="Описание"
-        className="w-full bg-transparent text-[16px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px]"
+        className="block w-full bg-transparent text-[16px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px]"
         rows={2}
       />
 

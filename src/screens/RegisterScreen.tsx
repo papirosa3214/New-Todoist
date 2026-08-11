@@ -4,9 +4,9 @@ import {
   Button,
   ErrorBanner,
   FieldGroup,
-  Icon,
   TextField,
   ScreenHeader,
+  BackButton,
 } from "../components/UI";
 import { useRegister } from "../api/auth";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
@@ -39,15 +39,7 @@ export function RegisterScreen() {
     <div className="pb-bottom-safe px-5 flex flex-col min-h-[100dvh]">
       <ScreenHeader
         variant="compact"
-        leading={
-          <button
-            onClick={() => navigate("/login")}
-            className="w-11 h-11 -ml-2.5 flex items-center justify-center"
-            aria-label="Назад"
-          >
-            <Icon name="chevronLeft" size={22} />
-          </button>
-        }
+        leading={<BackButton onClick={() => navigate("/login")} />}
         title="Регистрация"
       />
 

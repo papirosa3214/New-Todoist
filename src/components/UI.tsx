@@ -1,10 +1,14 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Children,
+  useLayoutEffect,
   useMemo,
+  useRef,
+  useState,
   type ComponentPropsWithoutRef,
   type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   Activity,
@@ -14,6 +18,7 @@ import {
   BellOff,
   Bot,
   Calendar,
+  CalendarCheck,
   CalendarDays,
   Check,
   ChevronDown,
@@ -54,8 +59,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useTasks } from "../api/tasks";
-import { todayStr } from "../lib/date";
+import { todayStr, formatRelativeTime } from "../lib/date";
 import { getErrorMessage } from "../lib/errors";
+import type { ApiTask } from "../api/types";
+import { AnimatedTabBar, type TabItem } from "./AnimatedTabBar";
 
 // ═══════════ ICON SET (Lucide) ═══════════
 // База набора — Lucide (lucide-react): единая сетка 24×24, единая толщина
@@ -68,7 +75,15 @@ import { getErrorMessage } from "../lib/errors";
 // нарисованным значком — из-за этого вкладки «Сегодня» и «Предстоящее»
 // в нижнем меню выглядели близнецами. Теперь это два разных компонента
 // Lucide, как и в mockup-reference (data-i="cal" vs data-i="calGrid"):
-// обычный календарь и календарь с сеткой дней.
+// обычный календарь и календарь с сеткой дней. "calendarSmall" (CalendarDays,
+// «сетка дней») остался у «Предстоящего» — это ровно calGrid из
+// mockup-reference. У «Сегодня» вместо "calendar" (простой лист календаря)
+// теперь отдельный ключ "calendarCheck" (CalendarCheck, «календарь с
+// галочкой») — владелец 2026-08-11: «у нас всё равно два календаря
+// одинаковых, подбери какую-нибудь другую». "calendar" НЕ тронут и не
+// переиспользован — на нём завязаны другие ~170 вызовов <Icon
+// name="calendar"/> по проекту (даты задач и т.п.), это отдельный новый
+// ключ только для нижнего меню.
 //
 // Кастомный (не-Lucide) рисунок остаётся только один — многоцветный логотип
 // Google чуть ниже в самом компоненте Icon: в Lucide нет цветных брендовых
@@ -76,9 +91,9 @@ import { getErrorMessage } from "../lib/errors";
 const LUCIDE_ICONS: Record<string, LucideIcon> = {
   inbox: Inbox,
   calendar: Calendar,
+  calendarCheck: CalendarCheck,
   calendarSmall: CalendarDays,
   home: Home,
-  homeFilled: Home, // тот же контур, залитый — см. fill в рендере ниже
   tag: Tag,
   hash: Hash,
   flag: Flag,
@@ -168,13 +183,18 @@ export const Icon = ({
   const Glyph = LUCIDE_ICONS[name];
   if (!Glyph) return null;
 
+  // fill:"currentColor" раньше включался для ключа "homeFilled" — тот же
+  // контур Home, залитый насквозь. Убрано целиком (2026-08-11): активная
+  // вкладка «Обзор» заливалась сплошным пятном вместо того, чтобы просто
+  // сменить цвет обводки, как остальные три вкладки. Заливки нет ни у
+  // одной Lucide-иконки в проекте — всегда обводка (fill:"none").
   return (
     <Glyph
       size={size}
       strokeWidth={1.5}
       className={className}
       style={style}
-      fill={name === "homeFilled" ? "currentColor" : "none"}
+      fill="none"
     />
   );
 };
@@ -290,42 +310,100 @@ export function Avatar({
   );
 }
 
+// ═══════════ AGENT STATE TAG (task-row pometka, AGENT-PROTOCOL.md) ═══════════
+// Compact inline pill for a task row's agent_state: "в работе · N мин
+// назад" / "агент пропал" / "на проверке" / "заблокировано" — see
+// AGENT-PROTOCOL.md, "Как это видит владелец". Same color convention as
+// TaskJournal.tsx's AgentStatusRow (teal/orange/blue, coral for the stale
+// "агент пропал" case) so the list and the task-detail screen never
+// disagree about what a color means. Height stays within the row's
+// existing `mt-1.5` badge slot (see TodayScreen.tsx's overdue pill) — no
+// new row geometry.
+const AGENT_TAG_META: Record<
+  "in_progress" | "blocked" | "review",
+  { label: string; bg: string; text: string }
+> = {
+  in_progress: { label: "в работе", bg: "bg-teal/15", text: "text-teal" },
+  blocked: { label: "заблокировано", bg: "bg-orange/15", text: "text-orange" },
+  review: { label: "на проверке", bg: "bg-blue/15", text: "text-blue" },
+};
+
+export function AgentStateTag({ task }: { task: ApiTask }) {
+  if (!task.agent_state) return null;
+
+  // "Агент пропал" — аренда истекла, задача всё ещё числится in_progress.
+  // Отдельная, тревожная подача (плотнее заливка, жирный текст) — это
+  // состояние требует решения владельца, в отличие от спокойного "в
+  // работе". agent_stale вычисляется сервером (agentState.ts isStale) —
+  // никогда не пересчитывается на клиенте.
+  if (task.agent_state === "in_progress" && task.agent_stale) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-coral/20 text-coral">
+        <Icon name="bot" size={10} />
+        Агент пропал
+        {task.agent_heartbeat_at && (
+          <span className="font-normal opacity-80">
+            · {formatRelativeTime(task.agent_heartbeat_at)}
+          </span>
+        )}
+      </span>
+    );
+  }
+
+  const meta = AGENT_TAG_META[task.agent_state];
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] ${meta.bg} ${meta.text}`}
+    >
+      <Icon name="bot" size={10} />
+      {meta.label}
+      {task.agent_state === "in_progress" && task.agent_heartbeat_at && (
+        <span className="opacity-80">
+          · {formatRelativeTime(task.agent_heartbeat_at)}
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ═══════════ BOTTOM NAV ═══════════
 
 // Активная вкладка не получает никакой плашки-подложки — просто загорается
 // красным иконка и подпись. Плашки вокруг иконок были собственной выдумкой
 // (и вдобавок разной у разных вкладок), из-за чего подсветка выглядела кривой.
+// Один icon на вкладку (без отдельного activeIcon): активное состояние —
+// это только цвет (.nt-tabbar-menu__item.active в index.css), сам силуэт
+// не меняется. Раньше у «Обзора» был отдельный activeIcon:"homeFilled" —
+// тот же контур Home, но с fill:currentColor — и заливался сплошным
+// красным пятном при активации (баг, 2026-08-11: «когда нажимаю, он весь
+// заливается, ведёт себя неправильно»). Ключ homeFilled и fill-хак в Icon
+// убраны целиком, а не просто выключены — иначе остались бы мёртвым кодом.
 const NAV_ITEMS = [
-  {
-    path: "/inbox",
-    label: "Входящие",
-    icon: "inbox",
-    activeIcon: "inbox",
-    activeIconClass: "text-red",
-  },
-  {
-    path: "/today",
-    label: "Сегодня",
-    icon: "calendar",
-    activeIcon: "calendar",
-    activeIconClass: "text-red",
-  },
-  {
-    path: "/upcoming",
-    label: "Предстоящее",
-    icon: "calendarSmall",
-    activeIcon: "calendarSmall",
-    activeIconClass: "text-red",
-  },
-  {
-    path: "/overview",
-    label: "Обзор",
-    icon: "home",
-    activeIcon: "homeFilled",
-    activeIconClass: "text-red",
-  },
+  { path: "/inbox", label: "Входящие", icon: "inbox" },
+  // "calendarCheck" — отдельная от "calendar" иконка (Lucide CalendarCheck),
+  // а не переиспользование "calendar": тот ключ завязан на ~170 других
+  // вызовов <Icon name="calendar"/> по проекту, трогать его нельзя.
+  // Раньше здесь стоял тот же "calendar", что и у «Предстоящего» —
+  // владелец (2026-08-11): «у нас всё равно два календаря одинаковых,
+  // подбери какую-нибудь другую» — теперь силуэты различаются издалека.
+  { path: "/today", label: "Сегодня", icon: "calendarCheck" },
+  { path: "/upcoming", label: "Предстоящее", icon: "calendarSmall" },
+  { path: "/overview", label: "Обзор", icon: "home" },
 ];
 
+// ── «Горбик»: дословный перенос ~/Проекты/CRM/CRM-Castom/frontend/src/
+// components/ui/AnimatedTabBar.tsx + блока .menu* из index.css того проекта
+// (задача 2026-08-11, владелец: «там есть рабочая, уже прям идеально
+// выверенная вещь»). Логика позиционирования — AnimatedTabBar.tsx
+// (getBoundingClientRect + ResizeObserver, 0 своих formul), геометрия горба
+// — CSS-блок «AnimatedTabBar (перенос из CRM...)» в index.css (размеры в
+// em, форма волны clip-path, единая тень). Полный список отличий от
+// оригинала — в отчёте агента о переносе; коротко: цвет круга активной
+// вкладки — наш красный акцент (это прямое требование задания, не выбор
+// агента), подписей под иконками нет — оригинал их не рисует вообще, а
+// дописать их означало бы поменять его числа (padding/высоту/подъём),
+// что запрещено. Счётчик задач на «Сегодня» — наше дополнение (см.
+// .nt-tabbar-badge в index.css), в оригинале его не было.
 export function BottomNav() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -337,47 +415,55 @@ export function BottomNav() {
       ),
     [allTasks],
   );
+  // Индикатора «ждут вас» в меню намеренно НЕТ. Пробовали и число, и
+  // точку — решение владельца (11.08.2026): в меню показывается только
+  // «сколько задач на сегодня», а то, что ждёт его решения, он видит
+  // блоком «Ждут вас» на самом экране «Сегодня», когда туда заходит.
+  const activeIndex = Math.max(
+    0,
+    NAV_ITEMS.findIndex((item) => item.path === location.pathname),
+  );
+
+  const tabItems: TabItem[] = NAV_ITEMS.map((item) => {
+    const isToday = item.path === "/today";
+    const showBadge = isToday && todayTasks.length > 0;
+    return {
+      // Счётчик — не только визуально (.nt-tabbar-badge), но и в
+      // aria-label: у AnimatedTabBar.tsx badge помечен aria-hidden (это
+      // просто цифра поверх иконки, дублировать её скринридеру дважды не
+      // нужно), поэтому число обязано попасть в единственное место, которое
+      // скринридер озвучивает — сам label кнопки.
+      label: showBadge
+        ? `${item.label}, задач: ${todayTasks.length}`
+        : item.label,
+      icon: (
+        <span className="relative inline-flex">
+          <Icon name={item.icon} size={22} />
+          {showBadge && (
+            <span className="nt-tabbar-badge" aria-hidden="true">
+              {todayTasks.length}
+            </span>
+          )}
+        </span>
+      ),
+    };
+  });
 
   return (
-    <nav className="nav-pill-bottom fixed inset-x-3 z-20 flex items-stretch h-[60px] rounded-[26px] border border-white/10 bg-[#1e1e1e]/88 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_8px_28px_-8px_rgba(0,0,0,.65)]">
-      {NAV_ITEMS.map((item) => {
-        const active = location.pathname === item.path;
-        const isToday = item.path === "/today";
-        const showBadge = isToday && todayTasks.length > 0;
-        return (
-          <button
-            key={item.path}
-            onClick={() => navigate(item.path)}
-            className={`flex-1 flex flex-col items-center justify-center gap-[2px] transition-colors tap-scale ${
-              active ? "text-text" : "text-dim"
-            }`}
-          >
-            {/* Обёртка иконки одинакова в обоих состояниях — ничего не
-                прыгает при переключении, меняется только цвет.
-                Раньше здесь стоял isToday-хак, который на вкладке «Сегодня»
-                всегда рисовал "calendarSmall" — тот же значок, что и у
-                «Предстоящего». Из-за этого вкладки выглядели близнецами;
-                теперь у каждого пункта свой icon/activeIcon. */}
-            <div className="relative flex h-6 items-center justify-center px-2.5">
-              <Icon
-                name={active ? item.activeIcon : item.icon}
-                size={22}
-                className={active ? item.activeIconClass : ""}
-              />
-              {showBadge && (
-                <div className="absolute -top-1.5 -right-1.5 bg-red text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">
-                  {todayTasks.length}
-                </div>
-              )}
-            </div>
-            <span
-              className={`text-[10px] font-medium ${active ? "text-red" : "text-dim"}`}
-            >
-              {item.label}
-            </span>
-          </button>
-        );
-      })}
+    <nav
+      // z-35, было z-20: FAB (z-30, ../UI.tsx FAB) стоит над панелью и тащит
+      // за собой свой красный shadow (blur 16px) — тот выступает ниже самой
+      // кнопки. Вставать выше диалогов (z-40/z-50, см. Dialog.tsx,
+      // RescheduleSheet.tsx, TaskJournal.tsx, ActivityScreen.tsx,
+      // ActionsMenu.tsx) z-35 не даёт — они по-прежнему перекрывают панель.
+      className="fixed inset-x-0 bottom-0 z-[35] px-4"
+      style={{ paddingBottom: "max(env(safe-area-inset-bottom), 16px)" }}
+    >
+      <AnimatedTabBar
+        items={tabItems}
+        defaultIndex={activeIndex}
+        onTabChange={(i) => navigate(NAV_ITEMS[i].path)}
+      />
     </nav>
   );
 }
@@ -392,6 +478,26 @@ export function FAB({ onClick }: { onClick?: () => void }) {
       className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-[0_6px_16px_rgba(228,67,50,.45)] z-30 tap-scale"
     >
       <Icon name="plus" size={26} className="text-white" />
+    </button>
+  );
+}
+
+// ═══════════ BACK BUTTON ═══════════
+
+export function BackButton({
+  onClick,
+  className = "",
+}: {
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-11 h-11 -ml-2.5 flex items-center justify-center ${className}`}
+      aria-label="Назад"
+    >
+      <Icon name="chevronLeft" size={22} />
     </button>
   );
 }
@@ -421,6 +527,107 @@ export function FAB({ onClick }: { onClick?: () => void }) {
 // existing `px-4 ...` root div — no extra wrapper/margin needed, it just
 // stays put at the top of the (document-level) scroll while the rest of
 // the screen's content scrolls underneath it.
+//
+// Screens wrap their content in a horizontally-padded root (`px-4` on most
+// screens, `px-5` on RegisterScreen, and on UpcomingScreen there's a whole
+// extra unpadded sticky wrapper between this component and the padded
+// root — see UpcomingScreen.tsx). Left to the DOM, that padding clips this
+// header's sticky background/border along with everything else, so a
+// couple of the padded pixels of whatever's scrolling underneath show
+// through on both sides once the header is stuck at the top (owner report
+// 2026-08-11, Inbox screen, 16px slivers left/right). None of that padding
+// is a fixed, known number this component could just subtract — it varies
+// per screen and this component can't reach into every screen to
+// normalize it — so `useFullBleedInset` below measures it live off the DOM
+// instead: it walks up from this header's *parent* (so nesting like
+// Upcoming's extra wrapper is transparent to it) to the nearest real
+// scroll container — Layout.tsx's `.overflow-y-auto` frame, on both mobile
+// and desktop, or `document` itself for screens like /register that render
+// outside Layout and scroll the page — and reads how far the parent's
+// content box sits from that container's edges. Negative margin cancels
+// exactly that gap so this element's background/border box spans the full
+// container width; equal-and-opposite padding re-indents the actual
+// title/actions row by the same amount, so they land back on the exact
+// pixels the screen's own padding would have put them on. Measuring the
+// *parent* (never touched by the inline style this hook produces) rather
+// than this element's own box is deliberate — re-measuring your own
+// already-bled box on a later resize would read back the compensated
+// position instead of the original gap and unravel the fix.
+function findScrollContainer(node: HTMLElement): HTMLElement {
+  let el: HTMLElement | null = node;
+  while (el && el !== document.body) {
+    const overflowY = getComputedStyle(el).overflowY;
+    if (overflowY === "auto" || overflowY === "scroll") return el;
+    el = el.parentElement;
+  }
+  return document.documentElement;
+}
+
+function useFullBleedInset(ref: RefObject<HTMLElement | null>) {
+  const [inset, setInset] = useState<{
+    left: number;
+    right: number;
+    width?: number;
+  }>({ left: 0, right: 0 });
+
+  useLayoutEffect(() => {
+    const parent = ref.current?.parentElement;
+    if (!parent) return;
+
+    const measure = () => {
+      const container = findScrollContainer(parent);
+      const parentRect = parent.getBoundingClientRect();
+      const parentStyle = getComputedStyle(parent);
+      const contentLeft =
+        parentRect.left +
+        parseFloat(parentStyle.borderLeftWidth || "0") +
+        parseFloat(parentStyle.paddingLeft || "0");
+      const contentRight =
+        parentRect.right -
+        parseFloat(parentStyle.borderRightWidth || "0") -
+        parseFloat(parentStyle.paddingRight || "0");
+      const containerRect = container.getBoundingClientRect();
+      const left = Math.max(0, Math.round(contentLeft - containerRect.left));
+      const right = Math.max(0, Math.round(containerRect.right - contentRight));
+      // Width is pinned explicitly (not left to `auto` + the negative
+      // margins to sort out on their own) because some callers render this
+      // header inside a *centering* flex parent with their own `w-full`
+      // override on top of ours (TodayScreen.tsx's empty state: `flex
+      // flex-col items-center` wrapping a `className="w-full"` header). In
+      // that shape two things independently break a margin-only bleed:
+      // `w-full` resolves to 100% of the *content* box (the padded-in
+      // width, e.g. 358), not the auto-expanded full-bleed width the plain
+      // block case gets for free, so the box is simply too narrow; and
+      // even set to the right width, `align-items: center` centers an
+      // item's margin box using its negative margins at face value, which
+      // re-shifts an already-correct 390-wide box back inward by exactly
+      // the bled amount. Pinning `width` inline (highest specificity, wins
+      // over any `w-full` class) to the container's own full span sidesteps
+      // both: the box is the right size AND its margin-box, at that size,
+      // has zero leftover free space for align-items to redistribute.
+      const width = Math.round(containerRect.right - containerRect.left);
+      setInset((prev) =>
+        prev.left === left && prev.right === right && prev.width === width
+          ? prev
+          : { left, right, width },
+      );
+    };
+
+    measure();
+    const container = findScrollContainer(parent);
+    const ro = new ResizeObserver(measure);
+    ro.observe(container);
+    ro.observe(parent);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [ref]);
+
+  return inset;
+}
+
 export function ScreenHeader({
   title,
   leading,
@@ -435,9 +642,19 @@ export function ScreenHeader({
   className?: string;
 }) {
   const isCompact = variant === "compact";
+  const rootRef = useRef<HTMLDivElement>(null);
+  const bleed = useFullBleedInset(rootRef);
   return (
     <div
+      ref={rootRef}
       className={`sticky top-0 z-20 bg-bg/90 backdrop-blur-xl border-b border-stroke ${className}`}
+      style={{
+        marginLeft: -bleed.left,
+        marginRight: -bleed.right,
+        paddingLeft: bleed.left,
+        paddingRight: bleed.right,
+        ...(bleed.width !== undefined ? { width: bleed.width } : {}),
+      }}
     >
       <div
         className={`flex items-center gap-2 relative ${

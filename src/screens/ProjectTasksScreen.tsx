@@ -6,7 +6,13 @@ import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useProjects } from "../api/projects";
-import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import {
+  Icon,
+  Avatar,
+  ScreenHeader,
+  ErrorBanner,
+  BackButton,
+} from "../components/UI";
 
 function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
@@ -72,15 +78,7 @@ export function ProjectTasksScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
-        leading={
-          <button
-            onClick={() => navigate(-1)}
-            className="w-[44px] h-[44px] -ml-2.5 flex items-center justify-center"
-            aria-label="Назад"
-          >
-            <Icon name="chevronLeft" size={22} />
-          </button>
-        }
+        leading={<BackButton onClick={() => navigate(-1)} />}
         title={
           project ? (
             <span className="inline-flex max-w-[62vw] items-center gap-2">

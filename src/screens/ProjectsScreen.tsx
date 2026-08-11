@@ -4,10 +4,24 @@ import {
   useProjects,
   useCreateProject,
   useUpdateProject,
+  useDeleteProject,
 } from "../api/projects";
-import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner, BackButton } from "../components/UI";
+import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import type { ApiProject } from "../api/types";
+
+// Plural forms for "N задач" — 1 задача / 2-4 задачи / 5+ задач, with the
+// usual 11-14 exception (11 задач, not 11 задача). Same rule as
+// LabelsScreen's taskWord.
+function taskWord(n: number): string {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 14) return "задач";
+  const mod10 = n % 10;
+  if (mod10 === 1) return "задача";
+  if (mod10 >= 2 && mod10 <= 4) return "задачи";
+  return "задач";
+}
 
 const PROJECT_COLORS = [
   "#4A9FD8",
@@ -23,7 +37,13 @@ const PROJECT_COLORS = [
 // useGuardedCallback + its own useUpdateProject mutation — tapping "Save"
 // twice fast on row A can't race with row B, and each row's pending/error
 // state is independent of every other row's.
-function ProjectRow({ project }: { project: ApiProject }) {
+function ProjectRow({
+  project,
+  onRequestDelete,
+}: {
+  project: ApiProject;
+  onRequestDelete: (project: ApiProject) => void;
+}) {
   const navigate = useNavigate();
   const updateProject = useUpdateProject();
   const [editing, setEditing] = useState(false);
@@ -121,9 +141,16 @@ function ProjectRow({ project }: { project: ApiProject }) {
       <button
         onClick={startEdit}
         aria-label="Переименовать проект"
-        className="w-[44px] h-[44px] mr-1 flex items-center justify-center shrink-0 text-dim"
+        className="w-[44px] h-[44px] flex items-center justify-center shrink-0 text-dim"
       >
         <Icon name="edit" size={16} />
+      </button>
+      <button
+        onClick={() => onRequestDelete(project)}
+        aria-label="Удалить проект"
+        className="w-[44px] h-[44px] mr-1 flex items-center justify-center shrink-0 text-dim"
+      >
+        <Icon name="trash" size={16} />
       </button>
     </div>
   );
@@ -133,10 +160,13 @@ export function ProjectsScreen() {
   const navigate = useNavigate();
   const { data: projects = [], isLoading, isError, error } = useProjects();
   const createProject = useCreateProject();
+  const deleteProject = useDeleteProject();
+  const { confirm, dialog } = useDialog();
 
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [color, setColor] = useState(PROJECT_COLORS[0]);
+  const [deleteError, setDeleteError] = useState<unknown>(null);
 
   const handleCreate = useGuardedCallback(async (e: FormEvent) => {
     e.preventDefault();
@@ -146,24 +176,44 @@ export function ProjectsScreen() {
     setShowCreate(false);
   });
 
+  // Server-verified (server/src/routes/projects.ts DELETE /api/projects/:id):
+  // it first runs `UPDATE tasks SET project_id = NULL WHERE project_id = ?`,
+  // THEN deletes the project row. So the project's tasks are NOT deleted —
+  // they survive as project-less tasks (same "detach, don't destroy" shape
+  // as label deletion). The confirm text below must say exactly that.
+  // task_count comes straight off the already-loaded project row (the
+  // GET /api/projects query computes it server-side), no extra fetch needed.
+  const handleDelete = async (project: ApiProject) => {
+    const count = project.task_count;
+    const ok = await confirm({
+      title: `Удалить проект «${project.name}»?`,
+      description:
+        count > 0
+          ? `Задачи внутри (${count} ${taskWord(count)}) не удалятся — они останутся без проекта. Сам проект и его столбец на доске исчезнут без возможности отмены.`
+          : "В нём сейчас нет задач. Действие нельзя отменить.",
+      confirmLabel: "Удалить",
+      danger: true,
+    });
+    if (!ok) return;
+    setDeleteError(null);
+    try {
+      await deleteProject.mutateAsync(project.id);
+    } catch (err) {
+      setDeleteError(err);
+    }
+  };
+
   return (
     <div className="px-4 pb-4">
+      {dialog}
       <ScreenHeader
         variant="compact"
-        leading={
-          <button
-            onClick={() => navigate(-1)}
-            className="w-[44px] h-[44px] -ml-2.5 flex items-center justify-center"
-            aria-label="Назад"
-          >
-            <Icon name="chevronLeft" size={22} />
-          </button>
-        }
+        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Проекты"
         actions={
           <button
             onClick={() => setShowCreate((v) => !v)}
-            className="w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
+            className="w-[44px] h-[44px] flex items-center justify-center"
           >
             <Icon name={showCreate ? "x" : "plus"} size={18} />
           </button>
@@ -217,10 +267,18 @@ export function ProjectsScreen() {
         variant="inline"
         className="mb-2"
       />
+      {deleteError !== null && (
+        <ErrorBanner
+          error={deleteError}
+          fallback="Не удалось удалить проект"
+          variant="block"
+          className="mb-2"
+        />
+      )}
 
       <div className="space-y-[2px]">
         {projects.map((p) => (
-          <ProjectRow key={p.id} project={p} />
+          <ProjectRow key={p.id} project={p} onRequestDelete={handleDelete} />
         ))}
         {!isLoading && !isError && projects.length === 0 && !showCreate && (
           <p className="px-1 text-[13px] text-dim">Проектов пока нет</p>

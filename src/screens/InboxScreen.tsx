@@ -61,24 +61,50 @@ export function InboxScreen() {
         noProject.push(t);
       }
     }
+    // Пилюля «Добавить задачу» — тот же приём, что у колонки «Сегодня»
+    // (TodayScreen.tsx: пунктир, акцентный красный, TaskBoard.tsx уже даёт
+    // ей отступ mt-4 от карточек). Здесь колонка = проект, поэтому у каждой
+    // своя пилюля, и она передаёт СВОЙ проект в создание задачи через
+    // ?project=<id> (TaskFormScreen.tsx читает параметр один раз при
+    // монтировании) — так задача действительно попадает в тот проект, под
+    // колонкой которого её создали, а не в первый проект пользователя
+    // (дефолт формы вне этого экрана).
+    const makeFooter = (projectQuery: string) => (
+      <button
+        onClick={() => navigate(`/task/new?project=${projectQuery}`)}
+        className="tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 text-[13px] font-semibold text-red"
+      >
+        <Icon name="plus" size={16} />
+        Добавить задачу
+      </button>
+    );
     const cols: BoardColumn[] = projects.map((p) => ({
       id: p.id,
       title: p.name,
       dotColor: p.color,
       trailingCount: (byProject.get(p.id) ?? []).length,
       tasks: byProject.get(p.id) ?? [],
+      footer: makeFooter(p.id),
     }));
-    if (noProject.length > 0) {
+    // Колонка «Без проекта» держится и без единой задачи, когда у
+    // пользователя вообще нет проектов — иначе на доске «Входящие» не
+    // остаётся ни одной колонки, а значит ни одной пилюли, и кнопка «+»
+    // при этом уже спрятана (Layout.tsx, fabReplacedByPill) — экран без
+    // единого способа создать задачу. Когда хотя бы один проект есть,
+    // колонка по-прежнему появляется только при реальных задачах без
+    // project_id — иначе это была бы вечно пустая колонка без смысла.
+    if (noProject.length > 0 || projects.length === 0) {
       cols.push({
         id: "__none",
         title: "Без проекта",
         dotColor: "var(--color-dim)",
         trailingCount: noProject.length,
         tasks: noProject,
+        footer: makeFooter("none"),
       });
     }
     return cols;
-  }, [tasks, projects]);
+  }, [tasks, projects, navigate]);
 
   return (
     <div className="px-4 pb-4">
@@ -89,7 +115,7 @@ export function InboxScreen() {
             onClick={() =>
               setTaskLayout("inbox", layout === "list" ? "board" : "list")
             }
-            className="tap-scale w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
+            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
             aria-label={
               layout === "list"
                 ? "Переключить на вид доски"

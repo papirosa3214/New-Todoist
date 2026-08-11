@@ -1,6 +1,12 @@
 import { useNavigate } from "react-router-dom";
 import { useAgents } from "../api/agents";
-import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import {
+  Icon,
+  Avatar,
+  ScreenHeader,
+  ErrorBanner,
+  BackButton,
+} from "../components/UI";
 
 export function AgentsScreen() {
   const navigate = useNavigate();
@@ -10,29 +16,8 @@ export function AgentsScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
-        leading={
-          <button
-            onClick={() => navigate(-1)}
-            className="w-11 h-11 -ml-2.5 flex items-center justify-center"
-            aria-label="Назад"
-          >
-            <Icon name="chevronLeft" size={22} />
-          </button>
-        }
+        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Агенты"
-        actions={
-          <>
-            {/* No POST /api/agents on the server — inviting/creating an agent
-                from here isn't wired to anything real. */}
-            <button
-              disabled
-              className="w-11 h-11 rounded-[10px] bg-card flex items-center justify-center opacity-40 cursor-not-allowed"
-              title="Сервер не даёт создавать агентов из этого экрана"
-            >
-              <Icon name="plus" size={18} />
-            </button>
-          </>
-        }
       />
 
       <ErrorBanner

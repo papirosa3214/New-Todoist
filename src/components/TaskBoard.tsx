@@ -6,9 +6,10 @@
 // "Просрочено" / "Сегодня", never by project — direct product decision)
 // with different header furniture (Inbox: a plain trailing count; Today's
 // "Просрочено" folds its count into the title text itself and adds a
-// "Перенести" button; "Сегодня" gets neither, plus a footer "Добавить
-// задачу" pill). A single generic component keeps that difference in the
-// screens, not duplicated here.
+// "Перенести" button). Both screens now give every column a footer
+// "Добавить задачу" pill (Today's "Сегодня" column; every Inbox project
+// column, including "Без проекта") — a single generic component keeps that
+// difference in the screens, not duplicated here.
 //
 // Columns scroll horizontally as a group (the screen itself never scrolls
 // sideways — see overflow-x-auto below, scoped to this strip only). Column
@@ -253,7 +254,10 @@ export function TaskBoard({
             </div>
           )}
 
-          {col.footer && <div className="mt-2">{col.footer}</div>}
+          {/* mt-4, а не mt-2: на mt-2 кнопка «Добавить задачу» вплотную
+              липла к последней карточке и читалась как ещё одна строка
+              списка, а не как действие (замечание владельца 11.08.2026). */}
+          {col.footer && <div className="mt-4">{col.footer}</div>}
         </div>
       ))}
     </div>
