@@ -18,7 +18,7 @@
 // (e.g. Today with no overdue tasks) instead goes full-width — a lone
 // 260px column floating in the middle of the screen would look broken.
 import type { ReactNode } from "react";
-import { Icon } from "./UI";
+import { Icon, AgentStateTag } from "./UI";
 import { getPriorityColor } from "../lib/priority";
 import type { ApiTask } from "../api/types";
 
@@ -98,7 +98,8 @@ function BoardCard({
     !!task.due_date ||
     task.subtasks.length > 0 ||
     !!label ||
-    (showProjectBadge && !!task.project_name);
+    (showProjectBadge && !!task.project_name) ||
+    !!task.agent_state;
 
   return (
     <button
@@ -123,6 +124,7 @@ function BoardCard({
       </div>
       {hasFooter && (
         <div className="flex items-center gap-1.5 flex-wrap pl-[18px]">
+          {task.agent_state && <AgentStateTag task={task} compact />}
           {task.due_date && (
             <span
               className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 ${

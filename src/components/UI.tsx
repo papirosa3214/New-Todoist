@@ -328,8 +328,22 @@ const AGENT_TAG_META: Record<
   review: { label: "на проверке", bg: "bg-blue/15", text: "text-blue" },
 };
 
-export function AgentStateTag({ task }: { task: ApiTask }) {
+// `compact` — доска (TaskBoard.tsx: BoardCard, 260px колонка) уже тесна
+// сама по себе, без этого варианта тег с "· N мин назад" вылезал бы за
+// карточку рядом с другими футер-пилюлями (дата/подзадачи/метка). Тот же
+// цвет и тот же смысл, что и в списке (TodayScreen) — меняется только
+// геометрия: чуть меньше паддинг и относительное время скрыто целиком
+// (не обрезано — обрезанное "· 5 …" читалось бы как баг, а не как дизайн).
+export function AgentStateTag({
+  task,
+  compact = false,
+}: {
+  task: ApiTask;
+  compact?: boolean;
+}) {
   if (!task.agent_state) return null;
+
+  const pad = compact ? "px-1.5 py-0.5" : "px-2 py-0.5";
 
   // "Агент пропал" — аренда истекла, задача всё ещё числится in_progress.
   // Отдельная, тревожная подача (плотнее заливка, жирный текст) — это
@@ -338,10 +352,12 @@ export function AgentStateTag({ task }: { task: ApiTask }) {
   // никогда не пересчитывается на клиенте.
   if (task.agent_state === "in_progress" && task.agent_stale) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-coral/20 text-coral">
+      <span
+        className={`inline-flex items-center gap-1 ${pad} rounded text-[11px] font-semibold bg-coral/20 text-coral`}
+      >
         <Icon name="bot" size={10} />
         Агент пропал
-        {task.agent_heartbeat_at && (
+        {!compact && task.agent_heartbeat_at && (
           <span className="font-normal opacity-80">
             · {formatRelativeTime(task.agent_heartbeat_at)}
           </span>
@@ -353,15 +369,17 @@ export function AgentStateTag({ task }: { task: ApiTask }) {
   const meta = AGENT_TAG_META[task.agent_state];
   return (
     <span
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] ${meta.bg} ${meta.text}`}
+      className={`inline-flex items-center gap-1 ${pad} rounded text-[11px] ${meta.bg} ${meta.text}`}
     >
       <Icon name="bot" size={10} />
       {meta.label}
-      {task.agent_state === "in_progress" && task.agent_heartbeat_at && (
-        <span className="opacity-80">
-          · {formatRelativeTime(task.agent_heartbeat_at)}
-        </span>
-      )}
+      {!compact &&
+        task.agent_state === "in_progress" &&
+        task.agent_heartbeat_at && (
+          <span className="opacity-80">
+            · {formatRelativeTime(task.agent_heartbeat_at)}
+          </span>
+        )}
     </span>
   );
 }
