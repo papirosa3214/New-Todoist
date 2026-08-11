@@ -564,9 +564,7 @@ export function UpcomingScreen() {
                               ? "bg-red text-white font-semibold"
                               : isPast
                                 ? "text-dim"
-                                : hasTasks
-                                  ? "text-text"
-                                  : "text-dim"
+                                : "text-text"
                           }`}
                         >
                           {d.getDate()}
