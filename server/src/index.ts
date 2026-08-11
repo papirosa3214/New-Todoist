@@ -7,6 +7,7 @@ import { resolveUserIdFromToken } from "./auth.js";
 import { addClient, removeClient } from "./ws.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
+import { registerAgentStateRoutes } from "./routes/agent-state.js";
 import { registerProjectLabelRoutes } from "./routes/projects.js";
 import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
@@ -19,7 +20,27 @@ const HOST = process.env.HOST || "0.0.0.0";
 const app = Fastify({ logger: true });
 
 // Plugins
-await app.register(cors, { origin: true, credentials: true });
+// CORS: Явный список разрешённых источников вместо origin:true.
+// origin:true разрешает ВСЕ источники (что небезопасно, особенно с credentials:true).
+// Вместо этого: vite dev-сервер (localhost:5180 и 127.0.0.1:5180),
+// capacitor://localhost для мобильной обёртки, плюс доп. источники из переменной окружения.
+// Запросы БЕЗ заголовка Origin (curl, серверные вызовы, агенты по api_token)
+// продолжают работать — CORS не применяется к ним.
+const allowedOrigins = [
+  "http://localhost:5180",
+  "http://127.0.0.1:5180",
+  "capacitor://localhost",
+];
+const extraOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
+  : [];
+const allOrigins = [...allowedOrigins, ...extraOrigins];
+
+await app.register(cors, {
+  origin: allOrigins,
+  credentials: true,
+  methods: ["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],
+});
 await app.register(fastifyJwt, {
   secret: process.env.JWT_SECRET || "taskflow-dev-secret-2026",
 });
@@ -31,6 +52,7 @@ migrate();
 // Routes
 registerAuthRoutes(app);
 registerTaskRoutes(app);
+registerAgentStateRoutes(app);
 registerProjectLabelRoutes(app);
 registerSubtaskCommentRoutes(app);
 registerNotificationRoutes(app);

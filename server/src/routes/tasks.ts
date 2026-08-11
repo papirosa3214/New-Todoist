@@ -8,6 +8,7 @@ import {
   getTaskForOwnerDelete,
   allLabelsOwnedByUser,
 } from "../access.js";
+import { isStale, logEvent } from "../agentState.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -29,7 +30,22 @@ function isValidDateStr(s: string): boolean {
   );
 }
 
-function hydrateTask(task: any) {
+// agent_stale is derived, not stored (see agentState.ts) — attach it
+// wherever a task row goes out over the API. Gated on agent_state ===
+// 'in_progress': AGENT-PROTOCOL.md defines "агент пропал" specifically as
+// "задача в in_progress, но последний сигнал был давно" — a stale
+// agent_heartbeat_at left over on a completed task, or on one sitting in
+// blocked/review waiting on the owner (exactly as designed), must NOT
+// paint as abandoned just because 15 minutes passed since the last ping.
+function withAgentStale(task: any) {
+  return {
+    ...task,
+    agent_stale:
+      task.agent_state === "in_progress" && isStale(task.agent_heartbeat_at),
+  };
+}
+
+export function hydrateTask(task: any) {
   const labels = db
     .prepare(
       `SELECT l.id, l.name, l.color FROM labels l
@@ -40,7 +56,7 @@ function hydrateTask(task: any) {
     .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
     .all(task.id)
     .map((s: any) => ({ ...s, done: !!s.done }));
-  return { ...task, labels, subtasks };
+  return { ...withAgentStale(task), labels, subtasks };
 }
 
 // ═══════ TASKS CRUD ═══════
@@ -74,7 +90,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     );
 
     return tasks.map((t: any) => ({
-      ...t,
+      ...withAgentStale(t),
       labels: stmtLabels.all(t.id),
       subtasks: stmtSub.all(t.id).map((s: any) => ({ ...s, done: !!s.done })),
     }));
@@ -111,7 +127,22 @@ export function registerTaskRoutes(app: FastifyInstance) {
         )
         .all(task.id);
 
-      return { ...full, labels, subtasks, comments };
+      // Journal — same JOIN-users pattern as comments. actor_id can be NULL
+      // (a system-authored entry), in which case the actor_* columns come
+      // back NULL too and the frontend renders it as a system row.
+      // ORDER BY created_at, rowid — created_at is second-resolution, so
+      // several events written in the same transaction (e.g. claim's
+      // 'claimed' + 'state_changed') need rowid as the tiebreaker to stay
+      // in insertion order.
+      const events = db
+        .prepare(
+          `SELECT e.*, u.name as actor_name, u.avatar_color as actor_color, u.initials as actor_initials
+           FROM task_events e LEFT JOIN users u ON e.actor_id = u.id
+           WHERE e.task_id = ? ORDER BY e.created_at, e.rowid`,
+        )
+        .all(task.id);
+
+      return { ...withAgentStale(full), labels, subtasks, comments, events };
     },
   );
 
@@ -333,6 +364,20 @@ export function registerTaskRoutes(app: FastifyInstance) {
       if (body.status !== undefined && !ALLOWED_STATUS.includes(body.status)) {
         return reply.code(400).send({ error: "invalid status" });
       }
+      // Приёмка за человеком (AGENT-PROTOCOL.md, "Что остаётся на
+      // человеке"): an AI-typed account can drive a task to `review`, but
+      // only a human may mark it `completed` — otherwise the agent could
+      // accept its own work and the whole point of the review step is gone.
+      if (body.status === "completed" && existing.status !== "completed") {
+        const caller = db
+          .prepare("SELECT type FROM users WHERE id = ?")
+          .get(req.userId) as { type: string } | undefined;
+        if (caller?.type === "ai") {
+          return reply.code(403).send({
+            error: "агент не может сам принять задачу — это делает владелец",
+          });
+        }
+      }
       if (
         body.priority !== undefined &&
         !(body.priority >= 1 && body.priority <= 4)
@@ -394,8 +439,16 @@ export function registerTaskRoutes(app: FastifyInstance) {
       if (body.status !== undefined) {
         if (body.status === "completed" && existing.status !== "completed") {
           fields.push("completed_at = datetime('now')");
+          // A completed task is done — any in-flight agent_state (usually
+          // 'review', it's the owner accepting) no longer means anything.
+          fields.push("agent_state = NULL");
         } else if (body.status === "active") {
           fields.push("completed_at = NULL");
+          // completed -> active is "вернуть в работу" (AGENT-PROTOCOL.md
+          // transition matrix) — starts clean, nobody's mid-lease on it.
+          if (existing.status === "completed") {
+            fields.push("agent_state = NULL");
+          }
         }
       }
 
@@ -405,6 +458,21 @@ export function registerTaskRoutes(app: FastifyInstance) {
         db.prepare(`UPDATE tasks SET ${fields.join(", ")} WHERE id = ?`).run(
           ...values,
         );
+      }
+
+      // Status changes go in the journal too — the "смена состояния"
+      // journal row isn't only about agent_state, `status` counts as well
+      // (this is how a human's own active<->completed toggles show up in
+      // the task's history feed alongside the agent transitions).
+      if (body.status !== undefined && body.status !== existing.status) {
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "state_changed",
+          field: "status",
+          fromValue: existing.status,
+          toValue: body.status,
+        });
       }
 
       // Update labels
@@ -467,6 +535,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
       db.prepare("DELETE FROM subtasks WHERE task_id = ?").run(req.params.id);
       db.prepare("DELETE FROM comments WHERE task_id = ?").run(req.params.id);
       db.prepare("DELETE FROM notifications WHERE task_id = ?").run(
+        req.params.id,
+      );
+      // Must run before DELETE FROM tasks — task_events.task_id references
+      // tasks(id) and foreign_keys = ON (db.ts), so deleting the parent row
+      // first would fail the FK check.
+      db.prepare("DELETE FROM task_events WHERE task_id = ?").run(
         req.params.id,
       );
       db.prepare("DELETE FROM tasks WHERE id = ?").run(req.params.id);

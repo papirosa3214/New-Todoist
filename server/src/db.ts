@@ -150,6 +150,45 @@ export function migrate() {
   db.exec(
     "UPDATE tasks SET completed_at = updated_at WHERE status = 'completed' AND completed_at IS NULL",
   );
+
+  // Additive migration: tasks.agent_state / tasks.agent_heartbeat_at may be
+  // missing on a DB created before the agent-work protocol (AGENT-PROTOCOL.md)
+  // was added. Deliberately no CHECK constraint on agent_state — valid values
+  // (NULL | 'in_progress' | 'blocked' | 'review') are enforced in
+  // agentState.ts, not in the schema, so the transition matrix can evolve
+  // without another SQLite table-rebuild migration (see AGENT-PROTOCOL.md,
+  // "Решение о хранении"). agent_state is orthogonal to `status`: a task
+  // stays status='active' the whole time an agent works on it, so it never
+  // disappears from the eight status==='active' filters across the frontend.
+  const taskCols2 = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+    name: string;
+  }>;
+  if (!taskCols2.some((c) => c.name === "agent_state")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN agent_state TEXT");
+  }
+  if (!taskCols2.some((c) => c.name === "agent_heartbeat_at")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN agent_heartbeat_at TEXT");
+  }
+
+  // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:
+  // there is no PATCH/DELETE endpoint for individual events, which is what
+  // makes the journal tamper-proof from the API side (see AGENT-PROTOCOL.md,
+  // "Журнал задачи"). actor_id NULL means the server itself made the entry
+  // (e.g. a future lease-expired marker), not a specific user.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_events (
+      id TEXT PRIMARY KEY,
+      task_id TEXT REFERENCES tasks(id),
+      actor_id TEXT REFERENCES users(id),
+      kind TEXT NOT NULL,
+      field TEXT,
+      from_value TEXT,
+      to_value TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_events_task_created
+      ON task_events(task_id, created_at);
+  `);
 }
 
 export default db;
