@@ -42,6 +42,28 @@ export interface ApiComment {
   user_initials?: string | null;
 }
 
+// tasks.agent_state / tasks.agent_heartbeat_at — see AGENT-PROTOCOL.md and
+// server/src/agentState.ts. NULL means "никто не взял"; the three named
+// states are set exclusively through POST /api/tasks/:id/{claim,state}.
+export type AgentState = "in_progress" | "blocked" | "review";
+
+// A row from task_events — the immutable, server-written journal of what
+// happened to a task (see AGENT-PROTOCOL.md, "Журнал задачи"). Only ever
+// INSERTed/SELECTed by the server; there is no API to edit or delete one.
+export interface ApiTaskEvent {
+  id: string;
+  task_id: string;
+  actor_id: string | null; // NULL = system-authored entry, no human/agent actor
+  kind: string; // e.g. "claimed" | "state_changed" | ...
+  field: string | null;
+  from_value: string | null;
+  to_value: string | null;
+  created_at: string;
+  actor_name?: string | null;
+  actor_color?: string | null;
+  actor_initials?: string | null;
+}
+
 export interface ApiTask {
   id: string;
   title: string;
@@ -62,6 +84,16 @@ export interface ApiTask {
   // updated_at, so this is effectively never null for status:"completed" —
   // ActivityScreen still falls back to updated_at defensively.
   completed_at: string | null;
+  // Agent-work protocol (AGENT-PROTOCOL.md) — orthogonal to `status`: a task
+  // stays status:"active" the entire time an agent works on it, so none of
+  // the status==="active" filters across the frontend need to change.
+  agent_state?: AgentState | null;
+  agent_heartbeat_at?: string | null;
+  // Derived, not stored — true once agent_heartbeat_at + 15min has passed
+  // while agent_state is still set ("агент пропал"). Computed server-side
+  // on every read (server/src/agentState.ts isStale), never trust a stale
+  // client-cached value.
+  agent_stale?: boolean;
   // Joined in on list/detail — not present on the raw row returned by
   // POST/PATCH.
   assignee_name?: string | null;
@@ -72,6 +104,7 @@ export interface ApiTask {
   labels: ApiLabel[];
   subtasks: ApiSubtask[];
   comments?: ApiComment[]; // only on GET /api/tasks/:id
+  events?: ApiTaskEvent[]; // only on GET /api/tasks/:id
 }
 
 export interface ApiProject {

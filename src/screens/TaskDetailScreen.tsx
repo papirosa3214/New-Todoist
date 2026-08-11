@@ -4,15 +4,29 @@
 // живёт в TaskFormScreen — карандаш в шапке ведёт туда (owner 2026-08-10:
 // «точно такой же интерфейс должен открываться при редактировании» —
 // переиспользуем форму создания вместо отдельного подменю).
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTask, useUpdateTask, useDeleteTask } from "../api/tasks";
+import { useCurrentUser } from "../api/auth";
 import { useUpdateSubtask } from "../api/subtasks";
 import { useAddComment } from "../api/comments";
 import { ApiError } from "../api/client";
-import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import {
+  Icon,
+  Avatar,
+  ScreenHeader,
+  ErrorBanner,
+  BackButton,
+} from "../components/UI";
 import { PRIORITIES, PriorityPill } from "../components/TaskFields";
-import { formatDueLabel, formatRelativeTime } from "../lib/date";
+import {
+  AgentStatusRow,
+  AgentOwnerActions,
+  TaskFeed,
+} from "../components/TaskJournal";
+import { ActionsMenu } from "../components/ActionsMenu";
+import { formatDueLabel } from "../lib/date";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 
@@ -57,13 +71,34 @@ export function TaskDetailScreen() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data: task, isLoading, isError, error } = useTask(id);
+  const { data: currentUser } = useCurrentUser();
   const updateTask = useUpdateTask();
   const deleteTask = useDeleteTask();
   const updateSubtask = useUpdateSubtask();
   const addComment = useAddComment(id || "");
   const { confirm, alert, dialog } = useDialog();
+  const queryClient = useQueryClient();
 
   const [commentText, setCommentText] = useState("");
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsAnchorRef = useRef<HTMLButtonElement>(null);
+
+  // "Аренда истекла" (agent_stale) is computed server-side on every read —
+  // nothing pushes it to an open tab (heartbeat deliberately fires no WS
+  // event, see server/src/routes/agent-state.ts). Without this, a card left
+  // open through a 15-minute silent lease would keep showing "Агент
+  // работает" forever — exactly the "молчание неотличимо от работы"
+  // failure the whole protocol exists to prevent (AGENT-PROTOCOL.md). Only
+  // polls while an agent actually holds the task, and at a cadence well
+  // under the 15-minute lease so the header can catch the in_progress →
+  // "агент пропал" flip (and keep "N мин назад" honest) without a reload.
+  useEffect(() => {
+    if (!id || !task?.agent_state) return;
+    const timer = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", id] });
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [id, task?.agent_state, queryClient]);
 
   // These guarded handlers close over `task`, which is only defined once
   // the query resolves — but the hooks themselves must run unconditionally,
@@ -149,29 +184,36 @@ export function TaskDetailScreen() {
       {dialog}
       <ScreenHeader
         variant="compact"
-        leading={
-          <button
-            onClick={() => navigate(-1)}
-            className="w-[44px] h-[44px] rounded-full bg-card2 flex items-center justify-center"
-          >
-            <Icon name="chevronLeft" size={18} />
-          </button>
-        }
+        leading={<BackButton onClick={() => navigate(-1)} />}
         title=""
         actions={
           <>
             <button
-              onClick={() => navigate(`/task/${task.id}/edit`)}
-              className="w-[44px] h-[44px] rounded-full bg-card2 flex items-center justify-center"
+              ref={actionsAnchorRef}
+              onClick={() => setActionsOpen((v) => !v)}
+              className="tap-scale w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
+              aria-label="Действия с задачей"
             >
-              <Icon name="edit" size={16} className="text-sub" />
+              <Icon name="dots" size={18} />
             </button>
-            <button
-              onClick={handleDelete}
-              className="w-[44px] h-[44px] rounded-full bg-card2 flex items-center justify-center"
-            >
-              <Icon name="trash" size={16} className="text-coral" />
-            </button>
+            <ActionsMenu
+              open={actionsOpen}
+              onClose={() => setActionsOpen(false)}
+              anchorRef={actionsAnchorRef}
+              items={[
+                {
+                  icon: "edit",
+                  label: "Изменить",
+                  onClick: () => navigate(`/task/${task.id}/edit`),
+                },
+                {
+                  icon: "trash",
+                  label: "Удалить",
+                  destructive: true,
+                  onClick: handleDelete,
+                },
+              ]}
+            />
           </>
         }
       />
@@ -233,7 +275,16 @@ export function TaskDetailScreen() {
             <span className="text-[14px] text-text">{task.assignee_name}</span>
           </div>
         )}
+        <AgentStatusRow task={task} />
       </div>
+
+      {/* Owner actions — agent-work protocol (AGENT-PROTOCOL.md): visible
+          only to the task's creator, only while an agent_state makes them
+          relevant. Renders nothing otherwise. */}
+      <AgentOwnerActions
+        task={task}
+        isOwner={!!currentUser && currentUser.id === task.creator_id}
+      />
 
       {/* Labels */}
       {task.labels.length > 0 && (
@@ -278,37 +329,14 @@ export function TaskDetailScreen() {
         </div>
       )}
 
-      {/* Comments */}
+      {/* Лента — комментарии и журнал задачи в одном хронологическом
+          потоке (AGENT-PROTOCOL.md, "Журнал задачи"): комментарии
+          полноценными карточками, системные записи — приглушённой
+          компактной строкой, чтобы живой текст не тонул среди служебных
+          отметок. См. src/components/TaskJournal.tsx. */}
       <div>
-        <h3 className="text-[13px] text-sub font-semibold mb-2 px-1">
-          Комментарии
-        </h3>
-        {!task.comments || task.comments.length === 0 ? (
-          <div className="bg-card rounded-2xl p-4 text-center text-[13px] text-dim mb-2">
-            Нет комментариев
-          </div>
-        ) : (
-          <div className="space-y-2 mb-2">
-            {task.comments.map((c) => (
-              <div key={c.id} className="bg-card rounded-2xl p-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <Avatar
-                    initials={c.user_initials || "?"}
-                    color={c.user_color || "#A6A6A6"}
-                    size={20}
-                  />
-                  <span className="text-[13px] font-medium">
-                    {c.user_name || "Неизвестный"}
-                  </span>
-                  <span className="text-[11px] text-dim ml-auto">
-                    {formatRelativeTime(c.created_at)}
-                  </span>
-                </div>
-                <p className="text-[14px] text-sub">{c.text}</p>
-              </div>
-            ))}
-          </div>
-        )}
+        <h3 className="text-[13px] text-sub font-semibold mb-2 px-1">Лента</h3>
+        <TaskFeed task={task} />
         <ErrorBanner
           error={addComment.error}
           fallback="Не удалось отправить комментарий"

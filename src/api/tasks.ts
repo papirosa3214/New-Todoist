@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { ApiTask } from "./types";
+import type { AgentState, ApiTask } from "./types";
 
 export function useTasks() {
   return useQuery({
@@ -76,6 +76,63 @@ export function useDeleteTask() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.delete<{ ok: boolean }>(`/api/tasks/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+  });
+}
+
+// ═══════════ Agent-work protocol (AGENT-PROTOCOL.md) ═══════════
+// Three thin wrappers around server/src/routes/agent-state.ts, same
+// mutation/invalidation shape as the CRUD hooks above: `useUpdateTask`
+// invalidates the whole ["tasks"] prefix (covers both the list and this
+// task's ["tasks", id] detail query) rather than seeding the cache from
+// the response, and these three follow the same convention — claim/state
+// return a full hydrated task (labels/subtasks included) but heartbeat
+// doesn't, so seeding from the response isn't an option there anyway.
+
+// POST /api/tasks/:id/claim — take the task into work. Used by an agent
+// caller (or a human testing the protocol); the owner-facing UI in
+// TaskJournal.tsx never calls this itself.
+export function useClaimTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ task: ApiTask }>(`/api/tasks/${id}/claim`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+  });
+}
+
+// POST /api/tasks/:id/heartbeat — renew the 15-minute lease. Deliberately
+// does not touch updated_at/task_events server-side (see agent-state.ts),
+// so this hook still invalidates ["tasks"] itself to pull the fresh
+// agent_heartbeat_at into the cache.
+export function useTaskHeartbeat() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ lease_expires_at: string }>(`/api/tasks/${id}/heartbeat`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+  });
+}
+
+// POST /api/tasks/:id/state — explicit transition. `comment` is mandatory
+// server-side for `state: "blocked" | "review"` (400 without it); for the
+// owner actions this app exposes ("Вернуть на доработку" → in_progress,
+// "Снять с агента" → null) it's optional/omittable, but always pass
+// whatever the caller collected so the explanation lands in the same
+// comment feed as everything else.
+export function useSetAgentState() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      state,
+      comment,
+    }: {
+      id: string;
+      state: AgentState | null;
+      comment?: string;
+    }) =>
+      api.post<{ task: ApiTask }>(`/api/tasks/${id}/state`, { state, comment }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
   });
 }
