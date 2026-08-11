@@ -82,6 +82,7 @@ export function TaskDetailScreen() {
   const [commentText, setCommentText] = useState("");
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsAnchorRef = useRef<HTMLButtonElement>(null);
+  const commentInputRef = useRef<HTMLInputElement>(null);
 
   // "Аренда истекла" (agent_stale) is computed server-side on every read —
   // nothing pushes it to an open tab (heartbeat deliberately fires no WS
@@ -180,7 +181,15 @@ export function TaskDetailScreen() {
     PRIORITIES.find((p) => p.key === task.priority)?.color ?? "#A6A6A6";
 
   return (
-    <div className="px-4 pb-4">
+    // pb-4 (16px) — исходный отступ снизу для «десктопной» рамки/Android,
+    // где 100dvh сам ужимается под клавиатуру (см. index.html:38,
+    // interactive-widget=resizes-content). На WebKit (Safari, режим «с
+    // домашнего экрана») этого не происходит — 16px тонет под клавиатурой
+    // высотой 280-340px, поэтому здесь добавлен --kb-inset
+    // (useVisualViewportInset.ts): пока клавиатура закрыта, переменная
+    // 0px и calc() равен ровно pb-4, как и было; открыта — отступ растёт
+    // на её высоту.
+    <div className="px-4 pb-[calc(1rem+var(--kb-inset,0px))]">
       {dialog}
       <ScreenHeader
         variant="compact"
@@ -348,8 +357,24 @@ export function TaskDetailScreen() {
           className="flex items-center gap-2"
         >
           <input
+            ref={commentInputRef}
             value={commentText}
             onChange={(e) => setCommentText(e.target.value)}
+            // Родное поведение WebKit «сам подскроллит фокусный инпут над
+            // клавиатурой» на iPhone ненадёжно (аудит 2026-08-11: токен
+            // interactive-widget=resizes-content, на который это
+            // поведение обычно опирается, в WebKit не реализован — см.
+            // useVisualViewportInset.ts) — не полагаемся только на него,
+            // добиваем явным скроллом. block:"end" — это поле последнее
+            // в ленте, его естественное место при открытой клавиатуре —
+            // у самого низа видимой области. На десктопе (клавиатуры нет)
+            // это не более чем обычный скролл контейнера к уже почти
+            // видимому полю — если оно и так внизу, scrollIntoView
+            // фактически не двигает содержимое (проверено скриншотами,
+            // см. отчёт).
+            onFocus={() =>
+              commentInputRef.current?.scrollIntoView({ block: "end" })
+            }
             placeholder="Написать комментарий…"
             className="flex-1 bg-card rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none"
           />

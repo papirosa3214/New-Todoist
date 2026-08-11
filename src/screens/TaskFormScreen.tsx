@@ -219,7 +219,12 @@ export function TaskFormScreen() {
   };
 
   return (
-    <div className="px-4 pb-4 min-h-full">
+    // pb-4 (16px) + --kb-inset — тот же приём, что и в TaskDetailScreen
+    // (см. комментарий там): дефолт переменной 0px в index.css держит
+    // отступ ровно 16px, пока клавиатура закрыта, а useVisualViewportInset
+    // (подключён в Layout.tsx) добавляет её высоту на WebKit, где 100dvh
+    // сам не пересчитывается.
+    <div className="px-4 pb-[calc(1rem+var(--kb-inset,0px))] min-h-full">
       <ScreenHeader
         variant="compact"
         leading={

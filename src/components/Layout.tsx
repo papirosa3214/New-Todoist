@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useState } from "react";
 import { useCurrentUser } from "../api/auth";
 import { useAppStore } from "../store";
 import { useNotificationsSocket } from "../api/ws";
+import { useVisualViewportInset } from "../lib/useVisualViewportInset";
 
 // Bottom nav + FAB belong only to the app's four top-level tab screens —
 // the ones BottomNav itself renders a tab for (see NAV_ITEMS in UI.tsx) and
@@ -49,6 +50,13 @@ function useIsMobile() {
 export function Layout() {
   const loc = useLocation();
   const isMobile = useIsMobile();
+  // Инсет экранной клавиатуры (--kb-inset на <html>) — см.
+  // src/lib/useVisualViewportInset.ts за подробным «почему». Подключён
+  // безусловно (не только для мобильной ветки ниже): на десктопной рамке
+  // клавиатуры не бывает, но и вреда от подписки на несуществующее там
+  // событие тоже нет — а один общий вызов на весь Layout проще, чем два
+  // условных в двух разных return-ветках ниже.
+  useVisualViewportInset();
   // Тело документа не должно прокручиваться на мобильном — иначе браузер
   // выкатывает свою адресную строку/панель поверх приложения (жалоба
   // владельца 2026-08-11: на «Входящих» контент помещается в экран и

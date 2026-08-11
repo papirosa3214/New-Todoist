@@ -40,11 +40,27 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  /* Дефолт инсета экранной клавиатуры — 0px, чтобы вёрстка не зависела от
+     того, выполнился ли JS. Реальное значение пишет в эту же переменную
+     src/lib/useVisualViewportInset.ts — инлайн-стилем на documentElement,
+     он побеждает это правило по специфичности каскада, так что здесь
+     можно спокойно задать статичный дефолт. Без него
+     calc(... + var(--kb-inset)) в компонентах, ждущих этой переменной,
+     считался бы invalid, пока хук не отработает — то есть на самом первом
+     кадре после навигации, или вовсе (браузер без visualViewport). */
+  :root {
+    --kb-inset: 0px;
+  }
+
   html {
     -webkit-text-size-adjust: 100%;
-    /* Kill the iOS double-tap-to-zoom gesture app-wide. Safe alongside the
-       normal (non-maximum-scale-locked) viewport meta tag: pinch-zoom still
-       works, only the accidental double-tap zoom on buttons/rows is gone. */
+    /* Убивает жест iOS double-tap-to-zoom по всему приложению. Комментарий
+       уточнён 2026-08-11: раньше здесь подразумевался «обычный» viewport-
+       тег без maximum-scale/user-scalable=no — с тех пор (см. index.html:38,
+       коммит «Приложение ставится на домашний экран») тег сам блокирует и
+       пинч-зум тоже. Это правило теперь не «работает рядом с открытым
+       зумом», а просто дублирует запрет ещё и для одного конкретного
+       жеста (двойной тап), не завязанного на viewport-тег напрямую. */
     touch-action: manipulation;
     /* Root-level horizontal-scroll safety net. This is a backstop, not the
        fix for any specific overflow — the actual cause (an element wider
@@ -112,11 +128,18 @@
     touch-action: manipulation;
   }
 
-  /* iOS Safari auto-zooms the page on focus of any form control whose
-     computed font-size is under 16px. We don't want maximum-scale/
-     user-scalable=no in the viewport meta (breaks pinch-zoom
-     accessibility), so the only correct fix is: no form control renders
-     text smaller than 16px. */
+  /* iOS Safari авто-зумит страницу при фокусе на поле ввода, у которого
+     вычисленный font-size меньше 16px. Комментарий уточнён 2026-08-11:
+     раньше здесь стояло «мы намеренно не ставим maximum-scale/
+     user-scalable=no ради accessibility пинч-зума, поэтому единственная
+     защита — 16px». С тех пор (index.html:38, коммит «Приложение ставится
+     на домашний экран») viewport-тег их всё-таки ставит — осознанный
+     компромисс ради вида PWA без браузерной обвязки, задокументированный
+     там же. Само правило (font-size:16px) от этого не стало лишним и
+     оставлено как есть: часть версий WebKit всё равно дёргает авто-зум на
+     фокусе поля с мелким текстом даже при заблокированном пользовательском
+     масштабировании, а разблокировать зум обратно ради снятия этого
+     правила никто не просил. */
   input,
   select,
   textarea {
