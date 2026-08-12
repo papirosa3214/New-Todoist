@@ -18,6 +18,7 @@ import { AgentsScreen } from "./screens/AgentsScreen";
 import { ProjectsScreen } from "./screens/ProjectsScreen";
 import { LabelsScreen } from "./screens/LabelsScreen";
 import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
+import { LabelTasksScreen } from "./screens/LabelTasksScreen";
 import { SearchScreen } from "./screens/SearchScreen";
 import { Icon } from "./components/UI";
 
@@ -90,6 +91,7 @@ export default function App() {
           <Route path="/projects" element={<ProjectsScreen />} />
           <Route path="/projects/:id" element={<ProjectTasksScreen />} />
           <Route path="/labels" element={<LabelsScreen />} />
+          <Route path="/labels/:id" element={<LabelTasksScreen />} />
           <Route path="/search" element={<SearchScreen />} />
         </Route>
       </Route>
