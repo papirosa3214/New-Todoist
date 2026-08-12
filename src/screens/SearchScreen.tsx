@@ -192,13 +192,11 @@ export function SearchScreen() {
                 Метки
               </h3>
               <div className="space-y-[2px]">
-                {/* Not a button: there's no label-detail route in the app
-                    yet (only /task/:id and /projects/:id exist), so this
-                    is a display-only row rather than a dead link. */}
                 {labels.map((l) => (
-                  <div
+                  <button
                     key={l.id}
-                    className="w-full flex items-center gap-3 py-2.5 px-3 bg-card/60 rounded-xl"
+                    onClick={() => navigate(`/labels/${l.id}`)}
+                    className="w-full flex items-center gap-3 py-2.5 px-3 bg-card/60 rounded-xl text-left"
                   >
                     <span
                       className="inline-flex items-center justify-center w-[28px] h-[28px] rounded-lg shrink-0"
@@ -207,7 +205,7 @@ export function SearchScreen() {
                       <Icon name="tag" size={14} style={{ color: l.color }} />
                     </span>
                     <span className="text-[15px] text-text">{l.name}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>

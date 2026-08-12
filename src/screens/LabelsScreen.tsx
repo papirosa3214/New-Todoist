@@ -80,6 +80,7 @@ function LabelRow({
   taskCount: number | null;
   onRequestDelete: (label: ApiLabel) => void;
 }) {
+  const navigate = useNavigate();
   const updateLabel = useUpdateLabel();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(label.name);
@@ -146,7 +147,10 @@ function LabelRow({
 
   return (
     <div className="w-full flex items-center bg-card rounded-xl mb-[2px]">
-      <div className="flex-1 min-w-0 flex items-center gap-3 py-3 pl-4 pr-1">
+      <button
+        onClick={() => navigate(`/labels/${label.id}`)}
+        className="flex-1 min-w-0 flex items-center gap-3 py-3 pl-4 pr-1 text-left"
+      >
         <div
           className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
           style={{ backgroundColor: label.color + "20" }}
@@ -163,7 +167,7 @@ function LabelRow({
             </div>
           )}
         </div>
-      </div>
+      </button>
       <button
         onClick={startEdit}
         aria-label="Изменить метку"
