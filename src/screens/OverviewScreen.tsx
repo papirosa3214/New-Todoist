@@ -1,11 +1,13 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useProjects, useCreateProject } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
+import { useTasks } from "../api/tasks";
 import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { PROJECT_COLORS } from "../lib/projectColors";
+import { partitionOverdueToday, todayStr } from "../lib/date";
 
 export function OverviewScreen() {
   const navigate = useNavigate();
@@ -18,6 +20,34 @@ export function OverviewScreen() {
     refetch,
   } = useProjects();
   const createProject = useCreateProject();
+
+  // Сводка вверху экрана — считается на клиенте из уже загруженного
+  // useTasks() (тот же кэш react-query, что и TodayScreen/TaskDetailScreen),
+  // без отдельного агрегирующего эндпоинта. "Просрочено" — через
+  // partitionOverdueToday (lib/date.ts), ТУ ЖЕ функцию, что даёт красный
+  // блок "Просрочено N" на "Сегодня", но это НЕ гарантирует одинаковое
+  // число: TodayScreen после неё ещё вычитает задачи, ушедшие в «Ждут вас»
+  // (blocked/review), а здесь считаются ВСЕ активные просроченные задачи
+  // без вычета. Так и задумано для сводки "сколько всего просрочено" — но
+  // при наличии просроченных задач в «Ждут вас» цифра тут будет БОЛЬШЕ,
+  // чем заголовок "Просрочено N" на "Сегодня", и это не баг, а разная
+  // семантика.
+  // "Протухло у агентов" — то же условие, что и бейдж "Агент пропал"
+  // (components/UI.tsx AgentStateTag): agent_stale вычисляется сервером и
+  // осмыслен только вместе с agent_state === "in_progress"
+  // (server/src/routes/tasks.ts withAgentStale).
+  const { data: allTasks = [] } = useTasks();
+  const today = todayStr();
+  const overdueCount = useMemo(
+    () => partitionOverdueToday(allTasks, today).overdue.length,
+    [allTasks, today],
+  );
+  const staleCount = useMemo(
+    () =>
+      allTasks.filter((t) => t.agent_state === "in_progress" && t.agent_stale)
+        .length,
+    [allTasks],
+  );
 
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
@@ -82,6 +112,27 @@ export function OverviewScreen() {
           </>
         }
       />
+
+      {/* Сводка: просроченные задачи + протухшие аренды агентов, одним
+          взглядом. Ноль — нейтральный цвет (bg-card2/text-sub), не тревожный. */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <div
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
+            overdueCount > 0 ? "bg-red/15 text-red" : "bg-card2 text-sub"
+          }`}
+        >
+          <Icon name="calendarSmall" size={14} />
+          Просрочено: {overdueCount}
+        </div>
+        <div
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
+            staleCount > 0 ? "bg-coral/20 text-coral" : "bg-card2 text-sub"
+          }`}
+        >
+          <Icon name="bot" size={14} />
+          Протухло у агентов: {staleCount}
+        </div>
+      </div>
 
       {/* Search Card */}
       <button
