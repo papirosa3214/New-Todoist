@@ -324,11 +324,15 @@ export function registerTaskRoutes(app: FastifyInstance) {
       title: string;
       description: string;
       due_date: string | null;
-      project_id: string;
+      project_id: string | null;
       priority: number;
       assignee_id: string;
       status: string;
       label_ids: string[];
+      // Manual sort order within a TaskBoard column (see db.ts's additive
+      // migration). Any integer, including negative — TaskBoard reindexes a
+      // whole column's cards to 0..n-1 on every drop, it never needs gaps.
+      position: number | null;
     }>;
   }>("/api/tasks/:id", {
     preHandler: authPre,
@@ -393,6 +397,15 @@ export function registerTaskRoutes(app: FastifyInstance) {
         if (!project)
           return reply.code(400).send({ error: "invalid project_id" });
       }
+      // position, when sent, must be a plain integer — null is allowed (an
+      // explicit "un-order" this task), but not e.g. a fraction or NaN.
+      if (
+        body.position !== undefined &&
+        body.position !== null &&
+        !Number.isInteger(body.position)
+      ) {
+        return reply.code(400).send({ error: "position must be an integer" });
+      }
       if (body.assignee_id) {
         const assignee = db
           .prepare("SELECT id FROM users WHERE id = ?")
@@ -416,6 +429,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         "priority",
         "assignee_id",
         "status",
+        "position",
       ] as const;
       const fields: string[] = [];
       const values: any[] = [];

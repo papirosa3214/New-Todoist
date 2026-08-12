@@ -57,6 +57,7 @@ export interface UpdateTaskInput {
   assignee_id?: string | null;
   status?: "active" | "completed";
   label_ids?: string[];
+  position?: number | null;
 }
 
 export function useUpdateTask() {

@@ -17,15 +17,103 @@
 // hinting there's more to the right; a board reduced to a single column
 // (e.g. Today with no overdue tasks) instead goes full-width — a lone
 // 260px column floating in the middle of the screen would look broken.
-import type { ReactNode } from "react";
+//
+// ─── Drag-and-drop (added — reorder + cross-column move) ───
+// One deliberate crack in "dumb/presentational" above: InboxScreen.tsx and
+// TodayScreen.tsx are off-limits to this change (parallel agents own them),
+// so there is no caller-supplied callback this component could delegate
+// persistence to — TaskBoard talks to the API directly (api.patch + a
+// single queryClient.invalidateQueries(["tasks"]) once a drop settles).
+// That is the one place this file stops being "dumb"; every other decision
+// below still only reads props/data it's already handed, nothing about
+// "Inbox" or "Today" by name.
+//
+// What a drop does, decided from data already on BoardColumn/ApiTask:
+//  - Reordering inside one column always works — it only ever touches this
+//    task's own `position` (server/src/db.ts's additive migration; NULL
+//    until the first drag, see sortByPosition below).
+//  - Moving a card to a DIFFERENT column additionally writes project_id —
+//    but only when the whole board is "project-shaped". The signal for
+//    that is `dotColor`: Inbox sets it on every column (a project's real
+//    color, or the dim placeholder for "Без проекта" — see InboxScreen.tsx);
+//    Today's status columns never set it (see the BoardColumn.dotColor
+//    doc below). So: `columns.every(c => c.dotColor !== undefined)` is the
+//    single flag that turns cross-column drops into a project_id write.
+//    Today fails that check (no column sets dotColor) — a card dragged
+//    toward another Today column just snaps back into place, same as
+//    dropping it in its own column at an unchanged index: no lie, because
+//    nothing about a status column is a stored field a drag could rewrite
+//    ("Ждут вас" is derived from agent_state + creator_id, which this app
+//    never rewrites by hand — see AGENT-PROTOCOL.md; "Просрочено"/"Сегодня"
+//    already have a dedicated control for that, the "Перенести" button).
+//  - The one Inbox-specific literal this file knows: `"__none"` is the
+//    sentinel InboxScreen.tsx uses for its "Без проекта" column id (grepped
+//    the repo — it's the only synthetic BoardColumn id there is). Dropping
+//    onto that column writes project_id: null instead of the string
+//    "__none". If a future board ever reuses dotColor for something else,
+//    this mapping would need a real per-column hook instead — flagged here
+//    on purpose so it isn't missed.
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+  type DraggableAttributes,
+  type DraggableSyntheticListeners,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useQueryClient } from "@tanstack/react-query";
 import { Icon, AgentStateTag } from "./UI";
 import { getPriorityColor } from "../lib/priority";
 import { MONTHS_SHORT } from "../lib/date";
+import { api } from "../api/client";
 import type { ApiTask } from "../api/types";
 
 function formatCompactDate(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
+}
+
+// Sentinel InboxScreen.tsx uses for its "no project" column — see the
+// file-header note above. Kept as one named constant instead of a bare
+// string sprinkled through the drag handlers below.
+const NO_PROJECT_COLUMN_ID = "__none";
+
+// A column's cards, ordered for display: manual `position` wins when set
+// (ascending — lower drags above higher), ties/NULLs fall back to
+// whatever order the column already arrived in (each screen's own default:
+// Inbox groups tasks in fetch order, Today's "Просрочено" is pre-sorted by
+// due_date, "Сегодня" and "Ждут вас" keep their own — see those screens).
+// Array.prototype.sort is a stable sort (guaranteed since ES2019), so two
+// NULL positions never swap relative to each other here.
+function sortByPosition(tasks: ApiTask[]): ApiTask[] {
+  return [...tasks].sort((a, b) => {
+    const pa = a.position ?? Number.MAX_SAFE_INTEGER;
+    const pb = b.position ?? Number.MAX_SAFE_INTEGER;
+    return pa - pb;
+  });
 }
 
 export interface BoardColumn {
@@ -41,6 +129,13 @@ export interface BoardColumn {
   // titleClassName instead, mirroring exactly how the list layout already
   // styles those two labels (TodayScreen.tsx: red for overdue, sub for
   // today's date).
+  //
+  // Drag-and-drop reads this same flag as "is this column a project" —
+  // see the file header. Set it (a real color, or a placeholder like
+  // "var(--color-dim)") on EVERY column of a board for cards to become
+  // droppable across columns there; leave it unset on every column for a
+  // reorder-only board. Don't set it on some columns of a board and not
+  // others — that's not a shape this component's drag logic handles.
   dotColor?: string;
   titleClassName?: string;
   // Separate trailing count pill, right-aligned — Inbox's project columns
@@ -72,11 +167,21 @@ function BoardCard({
   overdue,
   showProjectBadge,
   onClick,
+  dragHandleListeners,
+  dragHandleAttributes,
+  setDragHandleRef,
+  isDragging,
 }: {
   task: ApiTask;
   overdue: boolean;
   showProjectBadge: boolean;
   onClick: () => void;
+  // Undefined outside a DndContext (the DragOverlay preview renders a bare
+  // BoardCard with no handle needed — see TaskBoard below).
+  dragHandleListeners?: DraggableSyntheticListeners;
+  dragHandleAttributes?: DraggableAttributes;
+  setDragHandleRef?: (el: HTMLElement | null) => void;
+  isDragging?: boolean;
 }) {
   const doneSub = task.subtasks.filter((s) => s.done).length;
   const label = task.labels[0];
@@ -90,69 +195,169 @@ function BoardCard({
   return (
     <button
       onClick={onClick}
-      className="tap-row w-full text-left bg-card rounded-xl p-3 flex flex-col gap-1"
+      className={`tap-row w-full text-left bg-card rounded-xl p-3 flex items-stretch gap-1 ${
+        isDragging ? "opacity-40" : ""
+      }`}
     >
-      <div className="flex items-start gap-2">
+      {dragHandleListeners && (
+        // Drag starts ONLY from this handle, never from the rest of the
+        // card — the card's own onClick above (open task detail) has to
+        // keep working for a plain tap, and a mouse/touch-down anywhere
+        // else in the card must still be free to scroll the page or the
+        // column strip. touch-none stops the browser from starting its
+        // own scroll gesture the instant a finger lands here (without it,
+        // the scroll wins the race and cancels the drag before it starts).
+        // stopPropagation on click swallows the synthetic click a
+        // finished drag gesture leaves behind — otherwise every completed
+        // drag would also fire the card's onClick and navigate away.
         <div
-          className="mt-0.5 w-[12px] h-[12px] rounded-full border-2 shrink-0"
-          style={{ borderColor: getPriorityColor(task.priority) }}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] text-text leading-snug line-clamp-2">
-            {task.title}
-          </div>
-          {task.description && (
-            <div className="text-[11px] text-sub truncate mt-0.5">
-              {task.description}
-            </div>
-          )}
-        </div>
-      </div>
-      {hasFooter && (
-        <div className="flex items-center gap-1.5 flex-wrap pl-[18px]">
-          {task.agent_state && <AgentStateTag task={task} compact />}
-          {task.due_date && (
-            <span
-              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 ${
-                overdue ? "bg-red/15 text-red" : "bg-card2 text-sub"
-              }`}
-            >
-              <Icon name="calendarSmall" size={9} />
-              {formatCompactDate(task.due_date)}
-            </span>
-          )}
-          {task.subtasks.length > 0 && (
-            <span className="text-[10px] text-sub shrink-0">
-              {doneSub}/{task.subtasks.length}
-            </span>
-          )}
-          {label && (
-            <span
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0"
-              style={{
-                backgroundColor: label.color + "26",
-                color: label.color,
-              }}
-            >
-              <Icon name="tag" size={9} />
-              {label.name}
-            </span>
-          )}
-          {showProjectBadge && task.project_name && (
-            <span
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 min-w-0"
-              style={{
-                backgroundColor: (task.project_color || "#A6A6A6") + "26",
-                color: task.project_color || "#A6A6A6",
-              }}
-            >
-              <Icon name="hash" size={9} />
-              <span className="truncate max-w-[90px]">{task.project_name}</span>
-            </span>
-          )}
+          ref={setDragHandleRef}
+          {...dragHandleAttributes}
+          {...dragHandleListeners}
+          onClick={(e) => e.stopPropagation()}
+          className="touch-none shrink-0 -my-3 -ml-3 mr-1 px-2 flex items-center justify-center self-stretch text-dim active:text-sub"
+          aria-label="Перетащить задачу"
+        >
+          <Icon name="grip" size={14} />
         </div>
       )}
+      <div className="min-w-0 flex-1 flex flex-col gap-1">
+        <div className="flex items-start gap-2">
+          <div
+            className="mt-0.5 w-[12px] h-[12px] rounded-full border-2 shrink-0"
+            style={{ borderColor: getPriorityColor(task.priority) }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] text-text leading-snug line-clamp-2">
+              {task.title}
+            </div>
+            {task.description && (
+              <div className="text-[11px] text-sub truncate mt-0.5">
+                {task.description}
+              </div>
+            )}
+          </div>
+        </div>
+        {hasFooter && (
+          <div className="flex items-center gap-1.5 flex-wrap pl-[18px]">
+            {task.agent_state && <AgentStateTag task={task} compact />}
+            {task.due_date && (
+              <span
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 ${
+                  overdue ? "bg-red/15 text-red" : "bg-card2 text-sub"
+                }`}
+              >
+                <Icon name="calendarSmall" size={9} />
+                {formatCompactDate(task.due_date)}
+              </span>
+            )}
+            {task.subtasks.length > 0 && (
+              <span className="text-[10px] text-sub shrink-0">
+                {doneSub}/{task.subtasks.length}
+              </span>
+            )}
+            {label && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0"
+                style={{
+                  backgroundColor: label.color + "26",
+                  color: label.color,
+                }}
+              >
+                <Icon name="tag" size={9} />
+                {label.name}
+              </span>
+            )}
+            {showProjectBadge && task.project_name && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 min-w-0"
+                style={{
+                  backgroundColor: (task.project_color || "#A6A6A6") + "26",
+                  color: task.project_color || "#A6A6A6",
+                }}
+              >
+                <Icon name="hash" size={9} />
+                <span className="truncate max-w-[90px]">
+                  {task.project_name}
+                </span>
+              </span>
+            )}
+          </div>
+        )}
+      </div>
     </button>
+  );
+}
+
+// Wraps BoardCard with dnd-kit's per-item sortable hook. The whole card
+// still receives `transform`/`transition` (so it slides out of the way
+// during a neighbor's drag) — only `listeners` (the handlers that actually
+// START a drag on pointerdown) go to the handle sub-element via BoardCard's
+// props, per the file-header note on why the whole card can't be the
+// trigger.
+function SortableBoardCard({
+  task,
+  overdue,
+  showProjectBadge,
+  onClick,
+}: {
+  task: ApiTask;
+  overdue: boolean;
+  showProjectBadge: boolean;
+  onClick: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: task.id });
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <BoardCard
+        task={task}
+        overdue={overdue}
+        showProjectBadge={showProjectBadge}
+        onClick={onClick}
+        dragHandleListeners={listeners}
+        dragHandleAttributes={attributes}
+        setDragHandleRef={setActivatorNodeRef}
+        isDragging={isDragging}
+      />
+    </div>
+  );
+}
+
+// The column's card area (or its empty-state box) as one droppable zone —
+// needed on top of SortableContext's own item-level targets so dropping in
+// the blank space of a short/empty column still resolves to that column
+// (dnd-kit has nothing to hit-test against there otherwise: an empty
+// column has zero sortable items).
+function ColumnDropZone({
+  columnId,
+  taskIds,
+  children,
+}: {
+  columnId: string;
+  taskIds: string[];
+  children: ReactNode;
+}) {
+  const { setNodeRef } = useDroppable({ id: columnId });
+  return (
+    <div ref={setNodeRef}>
+      <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
+        {children}
+      </SortableContext>
+    </div>
   );
 }
 
@@ -167,6 +372,203 @@ export function TaskBoard({
   isLoading?: boolean;
   emptyMessage?: string;
 }) {
+  const qc = useQueryClient();
+
+  // One card-id array per column — the actual thing dnd-kit reorders live
+  // as you drag. Re-derived from props whenever the underlying data really
+  // changes; the two guards below stop that resync from clobbering a drag
+  // in progress:
+  //  - `activeId`: a drag is literally in progress right now.
+  //  - `persistingRef`: the drop just ended and PATCH requests are still
+  //    in flight. This one exists because of src/api/ws.ts — every PATCH's
+  //    server broadcast comes back over this same user's own websocket and
+  //    invalidates ["tasks"] on receipt, so a multi-card reorder (several
+  //    PATCHes in Promise.all) would otherwise see 2-3 partial-state
+  //    resyncs land mid-flight, one per PATCH that's already landed.
+  const [colItems, setColItems] = useState<Record<string, string[]>>(() =>
+    Object.fromEntries(
+      columns.map((c) => [c.id, sortByPosition(c.tasks).map((t) => t.id)]),
+    ),
+  );
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const persistingRef = useRef(false);
+  // Which column the active card started in — set on drag start, read on
+  // drag end to tell "reordered in place" apart from "moved to another
+  // column" (onDragOver below may already have relocated the id in
+  // colItems by drag-end time, so colItems alone can't answer that).
+  const dragSourceColRef = useRef<string | null>(null);
+  // colItems exactly as it was before this drag touched it. onDragOver
+  // mutates colItems live so a card visually joins whatever column it's
+  // hovering — but a drag can end without a drop to persist: cancelled
+  // (Escape, or dnd-kit aborting it) or released outside every droppable
+  // (real on a phone — a finger dragged off the strip's edge). Both paths
+  // must restore this snapshot, or the card is left sitting in the "new"
+  // column on screen while nothing was ever written to the server — the
+  // exact kind of UI lie this feature exists to avoid.
+  const dragSnapshotRef = useRef<Record<string, string[]> | null>(null);
+
+  useEffect(() => {
+    if (activeId !== null || persistingRef.current) return;
+    setColItems(
+      Object.fromEntries(
+        columns.map((c) => [c.id, sortByPosition(c.tasks).map((t) => t.id)]),
+      ),
+    );
+    // Only the actual column data should trigger a resync — activeId/
+    // persistingRef are read as guards, not as triggers (see comment above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columns]);
+
+  const taskById = useMemo(() => {
+    const map = new Map<string, ApiTask>();
+    for (const col of columns) for (const t of col.tasks) map.set(t.id, t);
+    return map;
+  }, [columns]);
+
+  const columnById = useMemo(() => {
+    const map = new Map<string, BoardColumn>();
+    for (const col of columns) map.set(col.id, col);
+    return map;
+  }, [columns]);
+
+  // See the file-header note — this is the one flag that turns a
+  // cross-column drop into a project_id write.
+  const projectBoard =
+    columns.length > 0 && columns.every((c) => c.dotColor !== undefined);
+
+  function findColumnOf(id: string): string | undefined {
+    if (colItems[id]) return id; // dropped straight on a column/container id
+    return Object.keys(colItems).find((key) => colItems[key].includes(id));
+  }
+
+  // dnd-kit recommends PointerSensor alone (not PointerSensor+TouchSensor
+  // together) for apps that need both mouse and touch — Pointer Events
+  // already unify the two, and running both sensors risks a touch starting
+  // both at once. `distance` (not a time delay) is safe here specifically
+  // because the handle is a dedicated element with nothing else to
+  // activate on it — a plain tap there was never a valid gesture to begin
+  // with, so there's no tap-vs-drag ambiguity to resolve with a delay.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  function handleDragStart(event: DragStartEvent) {
+    const id = String(event.active.id);
+    setActiveId(id);
+    dragSourceColRef.current = findColumnOf(id) ?? null;
+    dragSnapshotRef.current = colItems;
+  }
+
+  // Cross-column boards only: live-move the dragged card into whichever
+  // column it's currently hovering, so that column's own SortableContext
+  // previews it in place. Same-column reordering doesn't need this —
+  // dnd-kit's SortableContext already previews that from active/over state
+  // without any array mutation until drop.
+  function handleDragOver(event: DragOverEvent) {
+    if (!projectBoard) return;
+    const { active, over } = event;
+    if (!over) return;
+    const activeCol = findColumnOf(String(active.id));
+    const overCol = findColumnOf(String(over.id));
+    if (!activeCol || !overCol || activeCol === overCol) return;
+
+    setColItems((prev) => {
+      const activeItems = prev[activeCol];
+      const overItems = prev[overCol];
+      const activeIndex = activeItems.indexOf(String(active.id));
+      if (activeIndex === -1) return prev;
+      let overIndex = overItems.indexOf(String(over.id));
+      if (overIndex === -1) overIndex = overItems.length;
+      return {
+        ...prev,
+        [activeCol]: activeItems.filter((id) => id !== active.id),
+        [overCol]: [
+          ...overItems.slice(0, overIndex),
+          String(active.id),
+          ...overItems.slice(overIndex),
+        ],
+      };
+    });
+  }
+
+  async function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    const sourceCol = dragSourceColRef.current;
+    const snapshot = dragSnapshotRef.current;
+    setActiveId(null);
+    dragSourceColRef.current = null;
+    dragSnapshotRef.current = null;
+
+    // Released outside every droppable (real on a phone — a finger dragged
+    // off the strip's edge) or nothing found to place against (defensive):
+    // roll back whatever onDragOver already moved between columns, or the
+    // card would be left sitting in the "new" column with nothing
+    // persisted — see dragSnapshotRef's own comment.
+    if (!over) {
+      if (snapshot) setColItems(snapshot);
+      return;
+    }
+
+    const activeIdStr = String(active.id);
+    const destCol = findColumnOf(activeIdStr);
+    if (!destCol) {
+      if (snapshot) setColItems(snapshot);
+      return;
+    }
+
+    const items = colItems[destCol];
+    const oldIndex = items.indexOf(activeIdStr);
+    const overIdStr = String(over.id);
+    let newIndex = items.indexOf(overIdStr);
+    if (newIndex === -1) newIndex = items.length - 1;
+    if (newIndex < 0) {
+      if (snapshot) setColItems(snapshot);
+      return; // empty column, nothing to place against
+    }
+
+    const reordered =
+      oldIndex === -1 ? items : arrayMove(items, oldIndex, newIndex);
+    const movedAcrossColumns = sourceCol !== null && sourceCol !== destCol;
+
+    // Nothing actually changed (dropped a card back where it started, same
+    // column, same index) — skip the whole persist round-trip.
+    const unchanged =
+      !movedAcrossColumns &&
+      reordered.length === items.length &&
+      reordered.every((id, i) => id === items[i]);
+    if (unchanged) return;
+
+    setColItems((prev) => ({ ...prev, [destCol]: reordered }));
+    persistingRef.current = true;
+    try {
+      const patches: Promise<unknown>[] = [];
+      reordered.forEach((taskId, index) => {
+        const current = taskById.get(taskId);
+        const body: { position?: number; project_id?: string | null } = {};
+        if (current?.position !== index) body.position = index;
+        if (taskId === activeIdStr && movedAcrossColumns) {
+          const value = destCol === NO_PROJECT_COLUMN_ID ? null : destCol;
+          if (current?.project_id !== value) body.project_id = value;
+        }
+        if (Object.keys(body).length > 0) {
+          patches.push(api.patch(`/api/tasks/${taskId}`, body));
+        }
+      });
+      if (patches.length > 0) {
+        await Promise.all(patches);
+        await qc.invalidateQueries({ queryKey: ["tasks"] });
+      }
+    } catch (err) {
+      console.error("Не удалось сохранить порядок задач", err);
+      await qc.invalidateQueries({ queryKey: ["tasks"] });
+    } finally {
+      persistingRef.current = false;
+    }
+  }
+
   // The parent screen already renders its own "Загрузка…" line above the
   // list/board switch — nothing to add here, just don't flash an "empty"
   // message while the real data is still in flight.
@@ -181,73 +583,120 @@ export function TaskBoard({
   }
 
   const single = columns.length === 1;
+  const activeTask = activeId ? taskById.get(activeId) : undefined;
+  const activeColumn = activeId
+    ? columnById.get(findColumnOf(activeId) ?? "")
+    : undefined;
 
   return (
-    <div
-      data-board-strip
-      className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2"
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => {
+        setActiveId(null);
+        dragSourceColRef.current = null;
+        if (dragSnapshotRef.current) setColItems(dragSnapshotRef.current);
+        dragSnapshotRef.current = null;
+      }}
     >
-      {columns.map((col) => (
-        <div
-          key={col.id}
-          className={`shrink-0 snap-start ${single ? "w-full" : "w-[260px]"}`}
-        >
-          {/* min-h-11 on both column headers on purpose — the overdue
-              column's "Перенести" button is a 44px tap target, so without
-              matching that floor here the two headers would sit at
-              different heights and the first card in each column would
-              start at a different Y (exactly the misaligned-board-columns
-              failure mode). */}
-          <div className="flex items-center gap-2 px-1 mb-2 min-h-11">
-            {col.dotColor && (
-              <span
-                className="w-2.5 h-2.5 rounded-full shrink-0"
-                style={{ backgroundColor: col.dotColor }}
-              />
-            )}
-            <span
-              className={`text-[13px] font-semibold truncate ${
-                col.titleClassName ?? "text-text"
-              }`}
+      <div
+        data-board-strip
+        className={`-mx-1 flex gap-3 overflow-x-auto px-1 pb-2 ${
+          // Scroll-snap fights dnd-kit's auto-scroll-to-edge while a drag is
+          // active (each auto-scroll tick gets pulled back toward the
+          // nearest snap point) — off for the duration of a drag, back on
+          // the moment it ends.
+          activeId ? "" : "snap-x snap-mandatory"
+        }`}
+      >
+        {columns.map((col) => {
+          const taskIds = colItems[col.id] ?? [];
+          return (
+            <div
+              key={col.id}
+              className={`shrink-0 snap-start ${single ? "w-full" : "w-[260px]"}`}
             >
-              {col.title}
-            </span>
-            {(col.trailingCount !== undefined || col.headerAction) && (
-              <div className="ml-auto shrink-0 flex items-center gap-1">
-                {col.trailingCount !== undefined && (
-                  <span className="text-[11px] text-sub">
-                    {col.trailingCount}
-                  </span>
+              {/* min-h-11 on both column headers on purpose — the overdue
+                  column's "Перенести" button is a 44px tap target, so without
+                  matching that floor here the two headers would sit at
+                  different heights and the first card in each column would
+                  start at a different Y (exactly the misaligned-board-columns
+                  failure mode). */}
+              <div className="flex items-center gap-2 px-1 mb-2 min-h-11">
+                {col.dotColor && (
+                  <span
+                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: col.dotColor }}
+                  />
                 )}
-                {col.headerAction}
+                <span
+                  className={`text-[13px] font-semibold truncate ${
+                    col.titleClassName ?? "text-text"
+                  }`}
+                >
+                  {col.title}
+                </span>
+                {(col.trailingCount !== undefined || col.headerAction) && (
+                  <div className="ml-auto shrink-0 flex items-center gap-1">
+                    {col.trailingCount !== undefined && (
+                      <span className="text-[11px] text-sub">
+                        {col.trailingCount}
+                      </span>
+                    )}
+                    {col.headerAction}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {col.tasks.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-stroke py-6 text-center text-[12px] text-dim">
-              Нет задач
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {col.tasks.map((task) => (
-                <BoardCard
-                  key={task.id}
-                  task={task}
-                  overdue={col.dueBadgeVariant === "overdue"}
-                  showProjectBadge={!!col.showProjectBadge}
-                  onClick={() => onTaskClick(task.id)}
-                />
-              ))}
-            </div>
-          )}
+              <ColumnDropZone columnId={col.id} taskIds={taskIds}>
+                {taskIds.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-stroke py-6 text-center text-[12px] text-dim">
+                    Нет задач
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {taskIds.map((taskId) => {
+                      const task = taskById.get(taskId);
+                      if (!task) return null;
+                      return (
+                        <SortableBoardCard
+                          key={task.id}
+                          task={task}
+                          overdue={col.dueBadgeVariant === "overdue"}
+                          showProjectBadge={!!col.showProjectBadge}
+                          onClick={() => onTaskClick(task.id)}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </ColumnDropZone>
 
-          {/* mt-4, а не mt-2: на mt-2 кнопка «Добавить задачу» вплотную
-              липла к последней карточке и читалась как ещё одна строка
-              списка, а не как действие (замечание владельца 11.08.2026). */}
-          {col.footer && <div className="mt-4">{col.footer}</div>}
-        </div>
-      ))}
-    </div>
+              {/* mt-4, а не mt-2: на mt-2 кнопка «Добавить задачу» вплотную
+                  липла к последней карточке и читалась как ещё одна строка
+                  списка, а не как действие (замечание владельца 11.08.2026). */}
+              {col.footer && <div className="mt-4">{col.footer}</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Rendered outside any column's scroll/transform context — dnd-kit's
+          own recipe for dragging inside a scrollable container, otherwise
+          the floating card inherits the strip's scroll offset and drifts. */}
+      <DragOverlay>
+        {activeTask ? (
+          <BoardCard
+            task={activeTask}
+            overdue={activeColumn?.dueBadgeVariant === "overdue"}
+            showProjectBadge={!!activeColumn?.showProjectBadge}
+            onClick={() => {}}
+          />
+        ) : null}
+      </DragOverlay>
+    </DndContext>
   );
 }

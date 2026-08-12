@@ -94,6 +94,12 @@ export interface ApiTask {
   // on every read (server/src/agentState.ts isStale), never trust a stale
   // client-cached value.
   agent_stale?: boolean;
+  // Manual sort order within a TaskBoard column (server/src/db.ts's
+  // additive migration) — NULL until the card is dragged for the first
+  // time, in which case the view's own default order applies (see
+  // TaskBoard.tsx). Not scoped to any one column/project — see that file's
+  // comment for why cross-column value collisions are harmless.
+  position: number | null;
   // Joined in on list/detail — not present on the raw row returned by
   // POST/PATCH.
   assignee_name?: string | null;

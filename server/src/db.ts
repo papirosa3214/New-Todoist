@@ -170,6 +170,23 @@ export function migrate() {
     db.exec("ALTER TABLE tasks ADD COLUMN agent_heartbeat_at TEXT");
   }
 
+  // Additive migration: tasks.position may be missing on a DB created before
+  // drag-and-drop reordering was added (TaskBoard.tsx). NULL means "never
+  // manually reordered by dragging" — the frontend sorts a column's cards by
+  // position when set and falls back to that view's existing default order
+  // (created_at DESC / due_date ASC / etc., unchanged) for the rest, so no
+  // backfill is needed here: a fresh NULL row just renders wherever it
+  // already would have. Position is a per-task integer, not scoped to any
+  // one column/project in the schema — two different columns' cards can
+  // legitimately share the same value, which is fine (see TaskBoard.tsx
+  // comment on why cross-column ties never cause a visible ordering bug).
+  const taskCols3 = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+    name: string;
+  }>;
+  if (!taskCols3.some((c) => c.name === "position")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN position INTEGER");
+  }
+
   // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:
   // there is no PATCH/DELETE endpoint for individual events, which is what
   // makes the journal tamper-proof from the API side (see AGENT-PROTOCOL.md,

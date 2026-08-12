@@ -31,6 +31,7 @@ import {
   Eye,
   Filter,
   Flag,
+  GripVertical,
   Hash,
   Home,
   Image,
@@ -141,6 +142,8 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   arrowDown: ArrowDown,
   pin: MapPin,
   sparkles: Sparkles,
+  // Доска задач (TaskBoard.tsx) — хендл ручного перетаскивания карточки.
+  grip: GripVertical,
 };
 
 export const Icon = ({
