@@ -83,21 +83,6 @@ export function OverviewScreen() {
         }
       />
 
-      {/* Pro Banner */}
-      <div className="bg-card rounded-2xl p-4 mb-4 flex items-center gap-3">
-        <div className="w-[44px] h-[44px] bg-orange rounded-xl flex items-center justify-center shrink-0">
-          <Icon name="zap" size={22} className="text-white" />
-        </div>
-        <div className="flex-1">
-          <div className="text-[14px] font-semibold">
-            Бесплатная пробная версия
-          </div>
-          <div className="text-[12px] text-sub">
-            Попробуйте 30 дней бесплатно
-          </div>
-        </div>
-      </div>
-
       {/* Search Card */}
       <button
         onClick={() => navigate("/search")}

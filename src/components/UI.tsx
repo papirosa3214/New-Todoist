@@ -200,11 +200,18 @@ export const Icon = ({
 };
 
 // ═══════════ STATUS BAR ═══════════
-
+// Владелец 2026-08-12: фейковые часы «08:17» и батарея «49%» — убрать, даже
+// несмотря на то что это часть телефонной рамки в mockup-reference (прямое
+// решение, не рефакторинг под сомнением). Значок вызова (bellSlash),
+// сигнал и wifi остаются — про них решения не было. Оставшиеся значки
+// переведены на currentColor (раньше — литеральный "white"/rgba(255,255,
+// 255,…)): на тёмной теме визуально не отличить, но на светлой (см.
+// index.css, LIGHT THEME OVERRIDE) буквальный белый был бы невидим на
+// светлом фоне рамки — currentColor наследует var(--color-text), которая
+// меняется вместе с темой, как и всё остальное в этом компоненте.
 export function StatusBar() {
   return (
-    <div className="flex items-center justify-between px-[22px] h-[46px] shrink-0">
-      <span className="text-[14px] font-semibold tracking-[0.2px]">08:17</span>
+    <div className="flex items-center justify-end px-[22px] h-[46px] shrink-0">
       <div className="flex items-center gap-[5px]">
         <Icon name="bellSlash" size={15} className="opacity-90" />
         <svg viewBox="0 0 16 13" className="w-[16px] h-[13px]">
@@ -214,7 +221,7 @@ export function StatusBar() {
             width="2.5"
             height="5"
             rx="0.8"
-            fill="rgba(255,255,255,.9)"
+            fill="currentColor"
           />
           <rect
             x="4.5"
@@ -222,7 +229,7 @@ export function StatusBar() {
             width="2.5"
             height="7"
             rx="0.8"
-            fill="rgba(255,255,255,.9)"
+            fill="currentColor"
           />
           <rect
             x="9"
@@ -230,7 +237,7 @@ export function StatusBar() {
             width="2.5"
             height="9"
             rx="0.8"
-            fill="rgba(255,255,255,.9)"
+            fill="currentColor"
           />
           <rect
             x="13.5"
@@ -238,44 +245,23 @@ export function StatusBar() {
             width="2.5"
             height="11"
             rx="0.8"
-            fill="rgba(255,255,255,.9)"
+            fill="currentColor"
           />
         </svg>
         <svg viewBox="0 0 16 13" className="w-[16px] h-[13px]">
           <path
             d="M1 5a8 8 0 0 1 14 0"
             fill="none"
-            stroke="white"
+            stroke="currentColor"
             strokeWidth="1.5"
           />
           <path
             d="M3.5 8a5 5 0 0 1 9 0"
             fill="none"
-            stroke="white"
+            stroke="currentColor"
             strokeWidth="1.5"
           />
-          <circle cx="8" cy="11.5" r="1.6" fill="white" />
-        </svg>
-        <svg viewBox="0 0 29 13" className="w-[29px] h-[13px]">
-          <rect x="0" y="0" width="26" height="12" rx="3.5" fill="#4CD964" />
-          <text
-            x="13"
-            y="8.6"
-            textAnchor="middle"
-            fontSize="7"
-            fontWeight="700"
-            fill="#0A0A0A"
-          >
-            49%
-          </text>
-          <rect
-            x="27"
-            y="3.5"
-            width="1.8"
-            height="5"
-            rx="0.9"
-            fill="rgba(255,255,255,.5)"
-          />
+          <circle cx="8" cy="11.5" r="1.6" fill="currentColor" />
         </svg>
       </div>
     </div>
