@@ -2,6 +2,17 @@ import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 
+// SQLite's built-in LOWER() only folds ASCII — it does NOT lowercase Cyrillic
+// (verified on this machine: both the sqlite3 CLI and the better-sqlite3 build
+// used by this server return "Максим" unchanged from `SELECT LOWER('Максим')`).
+// Register a JS-backed SQL function so case-insensitive search works for
+// Cyrillic (and any other Unicode text) via JS's locale-aware toLowerCase().
+// Registered once at module load (ESM modules are evaluated once), not per
+// request, so it's cheap and safe to call from every query below.
+db.function("lower_uni", (value: unknown) =>
+  value == null ? null : String(value).toLowerCase(),
+);
+
 export function registerSearchRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
 
@@ -29,19 +40,14 @@ export function registerSearchRoutes(app: FastifyInstance) {
       const params: any[] = [userId, userId]; // Start with userId for creator_id and assignee_id
 
       for (const word of words) {
-        const upperWord = word.toUpperCase();
-        const capitalizedWord =
-          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-
-        // Each word condition: match in title or description with any of 3 case variants
+        // Case-insensitive match in title or description via lower_uni().
+        // `word` is already lowercased above, so no extra variants are needed.
         wordConditions.push(
-          `(instr(t.title, ?) > 0 OR instr(t.title, ?) > 0 OR instr(t.title, ?) > 0
-            OR instr(COALESCE(t.description, ''), ?) > 0 OR instr(COALESCE(t.description, ''), ?) > 0 OR instr(COALESCE(t.description, ''), ?) > 0)`,
+          `(instr(lower_uni(t.title), ?) > 0
+            OR instr(lower_uni(COALESCE(t.description, '')), ?) > 0)`,
         );
 
-        // Add parameters for this word (3 variants × 2 fields = 6 params per word)
-        params.push(word, upperWord, capitalizedWord); // for title
-        params.push(word, upperWord, capitalizedWord); // for description
+        params.push(word, word);
       }
 
       // Search tasks by title or description
@@ -80,15 +86,8 @@ export function registerSearchRoutes(app: FastifyInstance) {
       const projectParams: any[] = [userId];
 
       for (const word of words) {
-        const upperWord = word.toUpperCase();
-        const capitalizedWord =
-          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-
-        projectWordConditions.push(
-          `(instr(p.name, ?) > 0 OR instr(p.name, ?) > 0 OR instr(p.name, ?) > 0)`,
-        );
-
-        projectParams.push(word, upperWord, capitalizedWord);
+        projectWordConditions.push(`instr(lower_uni(p.name), ?) > 0`);
+        projectParams.push(word);
       }
 
       // Search projects by name
@@ -109,15 +108,8 @@ export function registerSearchRoutes(app: FastifyInstance) {
       const labelParams: any[] = [userId];
 
       for (const word of words) {
-        const upperWord = word.toUpperCase();
-        const capitalizedWord =
-          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-
-        labelWordConditions.push(
-          `(instr(l.name, ?) > 0 OR instr(l.name, ?) > 0 OR instr(l.name, ?) > 0)`,
-        );
-
-        labelParams.push(word, upperWord, capitalizedWord);
+        labelWordConditions.push(`instr(lower_uni(l.name), ?) > 0`);
+        labelParams.push(word);
       }
 
       // Search labels by name
