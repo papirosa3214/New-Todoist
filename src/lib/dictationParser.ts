@@ -36,6 +36,19 @@ function wordRe(pattern: string): RegExp {
   );
 }
 
+// Убирает найденное совпадение из текста по его индексу и схлопывает
+// пробелы, которые остались на его месте. Общий хвост и для дат
+// (extractDate), и для точечного удаления распознанного `!приоритет` —
+// НЕ вызывается, если маркер не распознан (см. разбор приоритета ниже):
+// нераспознанное `!слово` должно остаться в заголовке как есть, а не
+// молча съедаться вместе с текстом рядом.
+function cutMatch(text: string, m: RegExpMatchArray): string {
+  const idx = m.index ?? 0;
+  return (text.slice(0, idx) + text.slice(idx + m[0].length))
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export interface ParsedDictation {
   /** Заголовок без маркеров дат/проекта/приоритета, схлопнутые пробелы убраны. */
   title: string;
@@ -62,7 +75,6 @@ const PROJECT_MARKER_RE_G = new RegExp(`#${MARKER_WORD}`, "giu");
 // ═══════════ Приоритет: `!слово` ═══════════
 
 const PRIORITY_MARKER_RE = new RegExp(`!(${MARKER_WORD})`, "iu");
-const PRIORITY_MARKER_RE_G = new RegExp(`!${MARKER_WORD}`, "giu");
 
 // Явные русские слова приоритета + пара латинских синонимов (голосовой ввод
 // иногда транслитерирует технический жаргон) + короткие формы `!1`..`!4` и
@@ -153,15 +165,6 @@ function fmt(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-// Убирает найденное совпадение из текста и схлопывает пробелы, которые
-// остались на его месте — общий хвост для каждой ветки extractDate.
-function cutMatch(text: string, m: RegExpMatchArray): string {
-  const idx = m.index ?? 0;
-  return (text.slice(0, idx) + text.slice(idx + m[0].length))
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
-
 interface DateExtraction {
   dueDate: string | null;
   rest: string;
@@ -202,11 +205,15 @@ function extractDate(text: string, today: Date): DateExtraction {
     return { dueDate: fmt(d), rest: cutMatch(text, m) };
   }
 
-  // «в понедельник» / «во вторник» / просто «пятницу» без предлога —
-  // предлог необязателен, дикция может его проглотить.
+  // «в понедельник» / «во вторник» — предлог ОБЯЗАТЕЛЕН. Без него голое имя
+  // дня недели слишком легко оказывается частью обычного текста, не
+  // связанного с датой вообще («настроить среду разработки», «купить в
+  // пятницу» без «в» стало бы «купить», а «среда» в «настроить среду» без
+  // проверки предлога срезала бы половину заголовка) — разрушительно и
+  // незаметно, ровно то, чего требует избегать «не ломай ручной ввод».
   m = text.match(
     wordRe(
-      "(?:(?:в|во)\\s+)?(понедельник|вторник|сред[ау]|четверг|пятниц[ау]|суббот[ау]|воскресенье)",
+      "(?:в|во)\\s+(понедельник|вторник|сред[ау]|четверг|пятниц[ау]|суббот[ау]|воскресенье)",
     ),
   );
   if (m) {
@@ -293,10 +300,19 @@ export function parseDictation(
   if (projectMatch) projectName = projectMatch[1];
   text = text.replace(PROJECT_MARKER_RE_G, "");
 
+  // Маркер вырезается из заголовка ТОЛЬКО если слово после `!` реально
+  // распознано как приоритет. «Купить !молоко» — не приоритет и не мусор,
+  // это часть заголовка пользователя; молча съесть «молоко» вместе с
+  // нераспознанным маркером было бы разрушительным и незаметным для него —
+  // хуже, чем просто не сработавший парсинг. Для `#Проект` то же самое не
+  // применяется сознательно: там маркер всегда синтаксис, а не потенциально
+  // случайный текст, см. findProjectByName ниже.
   let priority: number | null = null;
   const priorityMatch = text.match(PRIORITY_MARKER_RE);
-  if (priorityMatch) priority = resolvePriorityWord(priorityMatch[1]);
-  text = text.replace(PRIORITY_MARKER_RE_G, "");
+  if (priorityMatch) {
+    priority = resolvePriorityWord(priorityMatch[1]);
+    if (priority !== null) text = cutMatch(text, priorityMatch);
+  }
 
   const { dueDate, rest } = extractDate(text, today);
   text = rest;
