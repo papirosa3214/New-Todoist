@@ -23,6 +23,35 @@
     Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
+/* ═══════════════ LIGHT THEME OVERRIDE ═══════════════
+   Владелец 2026-08-12: тема должна реально переключаться (settings.theme в
+   store/index.ts), а не быть навсегда тёмной строкой в SettingsScreen.
+   Светлая палитра — минимальная рабочая, не редизайн: переопределены
+   только поверхностные/текстовые токены (bg/card/card2/stroke/text/sub/
+   dim), акцентные цвета (red/orange/pink/blue/purple/yellow/coral/teal/
+   green) остаются теми же в обеих темах — это цвета брендов/приоритетов/
+   меток, их смена темой не касается.
+
+   ДОЛЖНО остаться СНАРУЖИ любого @layer, как и сам @theme выше — та же
+   причина, что у GLOBAL RESET ниже (cascade layers: безслойное правило
+   побеждает слойное независимо от специфичности). @theme генерирует
+   переменные на :root безслойно; положи это правило в @layer base — оно
+   проиграло бы @theme-шным значениям даже с более специфичным селектором
+   [data-theme="light"], ровно так же, как проиграл бы незаслоённый ресет
+   Tailwind-утилитам, если бы ресет был не в @layer (см. коммент ниже).
+   App.tsx ставит data-theme на <html> (document.documentElement) из
+   store.settings.theme при монтировании и на каждое изменение. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-bg: #f4f4f5;
+  --color-card: #ffffff;
+  --color-card2: #ececee;
+  --color-stroke: rgba(0, 0, 0, 0.09);
+  --color-text: #171717;
+  --color-sub: #5c5c5c;
+  --color-dim: #9a9a9a;
+}
+
 /* ═══════════════ GLOBAL RESET ═══════════════
    Must live in @layer base. Tailwind's own generated CSS wraps its utility
    classes in @layer utilities; per the CSS cascade-layers spec, an

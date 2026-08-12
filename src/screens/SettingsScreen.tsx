@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { FieldGroup, Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
+import { useAppStore } from "../store";
 
 interface RowProps {
   icon: string;
@@ -67,10 +68,80 @@ function InfoRow({ icon, iconColor = "#FF6B6B", label, value }: InfoRowProps) {
   );
 }
 
+// Геометрия скопирована буквально из mockup-reference/index.html's `.switch`
+// (43×25px pill, 20px белый кружок, тень 0 1px 3px rgba(0,0,0,.3)) — там
+// это статичный, всегда «включённый» (красный) макет одного состояния;
+// здесь добавлено настоящее выключенное состояние (серый фон, кружок
+// слева), которого в референсе просто нет ни одного примера.
+function Switch({
+  checked,
+  onChange,
+  ariaLabel,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      onClick={onChange}
+      className={`tap-scale relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors ${
+        checked ? "bg-red" : "bg-card2 border border-stroke"
+      }`}
+    >
+      <span
+        className="absolute top-[2.5px] w-[20px] h-[20px] rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,.3)] transition-[right] duration-150"
+        style={{ right: checked ? "2.5px" : "20.5px" }}
+      />
+    </button>
+  );
+}
+
+interface ToggleRowProps {
+  icon: string;
+  iconColor?: string;
+  label: string;
+  valueLabel: string;
+  checked: boolean;
+  onChange: () => void;
+}
+
+// Единственный реальный переключатель на этом экране (тема) — остальные
+// строки либо ссылки (Row), либо статичный текст (InfoRow, «Иконка»: одна
+// фиксированная иконка приложения, менять нечего).
+function ToggleRow({
+  icon,
+  iconColor = "#FF6B6B",
+  label,
+  valueLabel,
+  checked,
+  onChange,
+}: ToggleRowProps) {
+  return (
+    <div className="w-full flex items-center gap-3 py-3 px-4 bg-card text-left">
+      <div
+        className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
+        style={{ backgroundColor: iconColor + "18" }}
+      >
+        <Icon name={icon} size={16} className="text-text" />
+      </div>
+      <span className="text-[15px] flex-1 text-text">{label}</span>
+      <span className="text-[13px] text-sub">{valueLabel}</span>
+      <Switch checked={checked} onChange={onChange} ariaLabel={label} />
+    </div>
+  );
+}
+
 export function SettingsScreen() {
   const navigate = useNavigate();
   const { data: user, error } = useCurrentUser();
   const logout = useLogout();
+  const theme = useAppStore((s) => s.settings.theme);
+  const setTheme = useAppStore((s) => s.setTheme);
 
   return (
     <div className="px-4 pb-4">
@@ -113,7 +184,13 @@ export function SettingsScreen() {
       </div>
       <div className="mb-4">
         <FieldGroup>
-          <InfoRow icon="moon" label="Тема" value="Темный" />
+          <ToggleRow
+            icon="moon"
+            label="Тема"
+            valueLabel={theme === "dark" ? "Тёмная" : "Светлая"}
+            checked={theme === "dark"}
+            onChange={() => setTheme(theme === "dark" ? "light" : "dark")}
+          />
           <InfoRow icon="image" label="Иконка" value="Todoist" />
         </FieldGroup>
       </div>

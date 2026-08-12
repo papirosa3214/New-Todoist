@@ -9,29 +9,9 @@ import {
 import { Icon, ScreenHeader, ErrorBanner, BackButton } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
+import { taskWord } from "../lib/pluralize";
+import { PROJECT_COLORS } from "../lib/projectColors";
 import type { ApiProject } from "../api/types";
-
-// Plural forms for "N задач" — 1 задача / 2-4 задачи / 5+ задач, with the
-// usual 11-14 exception (11 задач, not 11 задача). Same rule as
-// LabelsScreen's taskWord.
-function taskWord(n: number): string {
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 14) return "задач";
-  const mod10 = n % 10;
-  if (mod10 === 1) return "задача";
-  if (mod10 >= 2 && mod10 <= 4) return "задачи";
-  return "задач";
-}
-
-const PROJECT_COLORS = [
-  "#4A9FD8",
-  "#A78BFA",
-  "#E44332",
-  "#FF9A14",
-  "#FF7A8A",
-  "#8FBF9F",
-  "#35B8A3",
-];
 
 // One row = one component instance, so its rename form gets its own
 // useGuardedCallback + its own useUpdateProject mutation — tapping "Save"

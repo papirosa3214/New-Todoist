@@ -88,42 +88,6 @@ export function LoginScreen() {
           </div>
         </form>
 
-        {/* Divider */}
-        <div className="flex items-center gap-3 w-full mb-4">
-          <div className="flex-1 h-px bg-stroke" />
-          <span className="text-[13px] text-dim">или</span>
-          <div className="flex-1 h-px bg-stroke" />
-        </div>
-
-        {/* Google — not backed by any server endpoint, kept as a visual reference only */}
-        <div className="w-full mb-6">
-          <Button
-            variant="secondary"
-            disabled
-            className="opacity-50 cursor-not-allowed"
-          >
-            <svg viewBox="0 0 24 24" width="20" height="20">
-              <path
-                d="M22.5 12.2c0-.8-.1-1.6-.2-2.3H12v4.4h5.9a5.1 5.1 0 0 1-2.2 3.3v2.8h3.6c2.1-1.9 3.2-4.8 3.2-8.2z"
-                fill="#4285F4"
-              />
-              <path
-                d="M12 23c3 0 5.5-1 7.3-2.7l-3.6-2.8c-1 .7-2.3 1.1-3.7 1.1-2.8 0-5.2-1.9-6.1-4.5H2.2v2.9A11 11 0 0 0 12 23z"
-                fill="#34A853"
-              />
-              <path
-                d="M5.9 14.1a6.5 6.5 0 0 1 0-4.2V7H2.2a11 11 0 0 0 0 10l3.7-2.9z"
-                fill="#FBBC05"
-              />
-              <path
-                d="M12 5.3c1.5 0 2.9.5 3.9 1.5l2.9-2.9C17.5 2.3 15 1.3 12 1.3A11 11 0 0 0 2.2 7l3.7 2.9C6.8 7.1 9.2 5.3 12 5.3z"
-                fill="#EA4335"
-              />
-            </svg>
-            <span className="text-[15px] text-text">Войти через Google</span>
-          </Button>
-        </div>
-
         {/* Register link */}
         <p className="text-[14px] text-sub">
           Нет аккаунта?{" "}

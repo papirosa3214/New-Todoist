@@ -5,21 +5,7 @@ import { useCurrentUser } from "../api/auth";
 import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
-
-// Same 7 swatches ProjectsScreen offers when creating/renaming a project —
-// duplicated here (not imported) because this screen owns only this file;
-// values are the hex equivalents of the blue/purple/red/orange/pink/green/
-// teal CSS variables in src/index.css, so the palette stays in sync with
-// the rest of the app even though it's a second literal array.
-const PROJECT_COLORS = [
-  "#4A9FD8",
-  "#A78BFA",
-  "#E44332",
-  "#FF9A14",
-  "#FF7A8A",
-  "#8FBF9F",
-  "#35B8A3",
-];
+import { PROJECT_COLORS } from "../lib/projectColors";
 
 export function OverviewScreen() {
   const navigate = useNavigate();
@@ -96,21 +82,6 @@ export function OverviewScreen() {
           </>
         }
       />
-
-      {/* Pro Banner */}
-      <div className="bg-card rounded-2xl p-4 mb-4 flex items-center gap-3">
-        <div className="w-[44px] h-[44px] bg-orange rounded-xl flex items-center justify-center shrink-0">
-          <Icon name="zap" size={22} className="text-white" />
-        </div>
-        <div className="flex-1">
-          <div className="text-[14px] font-semibold">
-            Бесплатная пробная версия
-          </div>
-          <div className="text-[12px] text-sub">
-            Попробуйте 30 дней бесплатно
-          </div>
-        </div>
-      </div>
 
       {/* Search Card */}
       <button

@@ -2,30 +2,10 @@ import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useProjects } from "../api/projects";
-import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
-import { getPriorityColor } from "../lib/priority";
+import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
-
-function formatDue(dateStr: string): string {
-  const d = new Date(dateStr + "T00:00:00");
-  const day = d.getDate();
-  const months = [
-    "янв",
-    "фев",
-    "мар",
-    "апр",
-    "мая",
-    "июн",
-    "июл",
-    "авг",
-    "сен",
-    "окт",
-    "ноя",
-    "дек",
-  ];
-  return `${day} ${months[d.getMonth()]}`;
-}
+import { TaskRow } from "../components/TaskRow";
 
 export function InboxScreen() {
   const { data: allTasks = [], isLoading, isError, error } = useTasks();
@@ -157,69 +137,13 @@ export function InboxScreen() {
         />
       ) : (
         <div className="space-y-[2px]">
-          {tasks.map((task) => {
-            const hasSubtasks = task.subtasks.length > 0;
-            const doneSub = task.subtasks.filter((s) => s.done).length;
-            return (
-              <button
-                key={task.id}
-                onClick={() => navigate(`/task/${task.id}`)}
-                className="w-full flex items-start gap-3 py-3 px-1 text-left border-b border-stroke/50"
-              >
-                <div
-                  className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
-                  style={{
-                    borderColor: getPriorityColor(task.priority),
-                  }}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[15px] text-text leading-snug mb-1 truncate">
-                    {task.title}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-sub">
-                    {task.description && (
-                      <span className="truncate max-w-[200px]">
-                        {task.description.substring(0, 50)}…
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                    {task.labels.map((l) => (
-                      <span
-                        key={l.id}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
-                        style={{
-                          backgroundColor: l.color + "26",
-                          color: l.color,
-                        }}
-                      >
-                        <Icon name="tag" size={10} /> {l.name}
-                      </span>
-                    ))}
-                    {task.due_date && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                        <Icon name="calendarSmall" size={10} />{" "}
-                        {formatDue(task.due_date)}
-                      </span>
-                    )}
-                    {hasSubtasks && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                        <Icon name="check" size={10} /> {doneSub}/
-                        {task.subtasks.length}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {task.assignee_id && task.assignee_initials && (
-                  <Avatar
-                    initials={task.assignee_initials}
-                    color={task.assignee_color || "#A6A6A6"}
-                    size={24}
-                  />
-                )}
-              </button>
-            );
-          })}
+          {tasks.map((task) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              onClick={() => navigate(`/task/${task.id}`)}
+            />
+          ))}
         </div>
       )}
     </div>

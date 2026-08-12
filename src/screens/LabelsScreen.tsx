@@ -22,6 +22,7 @@ import {
 } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
+import { taskWord } from "../lib/pluralize";
 import type { ApiLabel, ApiTask } from "../api/types";
 
 // Not inventing new colors — this is the same 7-swatch set ProjectsScreen/
@@ -180,17 +181,6 @@ function LabelRow({
       </button>
     </div>
   );
-}
-
-// Plural forms for "N задач" — 1 задача / 2-4 задачи / 5+ задач, with the
-// usual 11-14 exception (11 задач, not 11 задача).
-function taskWord(n: number): string {
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 14) return "задач";
-  const mod10 = n % 10;
-  if (mod10 === 1) return "задача";
-  if (mod10 >= 2 && mod10 <= 4) return "задачи";
-  return "задач";
 }
 
 export function LabelsScreen() {

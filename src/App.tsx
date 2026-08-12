@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { useAppStore } from "./store";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
 import { LoginScreen } from "./screens/LoginScreen";
@@ -49,6 +51,19 @@ function NotFoundScreen() {
 }
 
 export default function App() {
+  // Реально применяет settings.theme (store/index.ts) на весь документ —
+  // на <html data-theme="..."> смотрит CSS-переопределение в index.css
+  // (LIGHT THEME OVERRIDE). На уровне App, а не Layout: LoginScreen/
+  // RegisterScreen рендерятся вне Layout и всё равно должны подхватывать
+  // тему. Ограничение: на перезагрузке страницы с сохранённой светлой
+  // темой возможна короткая вспышка тёмного фона (index.html красит
+  // документ тёмным ДО того, как этот эффект успевает отработать) — не
+  // устранено намеренно, правка index.html вне рамок этой задачи.
+  const theme = useAppStore((s) => s.settings.theme);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
   return (
     <Routes>
       {/* Auth (no layout) */}

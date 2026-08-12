@@ -20,22 +20,8 @@
 import type { ReactNode } from "react";
 import { Icon, AgentStateTag } from "./UI";
 import { getPriorityColor } from "../lib/priority";
+import { MONTHS_SHORT } from "../lib/date";
 import type { ApiTask } from "../api/types";
-
-const MONTHS_SHORT = [
-  "янв",
-  "фев",
-  "мар",
-  "апр",
-  "мая",
-  "июн",
-  "июл",
-  "авг",
-  "сен",
-  "окт",
-  "ноя",
-  "дек",
-];
 
 function formatCompactDate(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
