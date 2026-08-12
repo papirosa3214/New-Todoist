@@ -32,6 +32,7 @@ import {
   AddSubtaskRow,
 } from "../components/TaskFields";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
+import { findProjectByName, parseDictation } from "../lib/dictationParser";
 import type { UpdateTaskInput } from "../api/tasks";
 
 export function TaskFormScreen() {
@@ -290,6 +291,36 @@ export function TaskFormScreen() {
     return patch;
   };
 
+  // Разбор голосовой диктовки (Superwhisper печатает готовый текст прямо в
+  // это поле на уровне ОС — сюда долетает уже обычный текст, аудио тут ни
+  // при чём) — распознаёт «завтра», «#Проект», «!приоритет» и переносит их
+  // в соответствующие поля, вырезая маркеры из заголовка. Синхронно, без
+  // сети (см. src/lib/dictationParser.ts).
+  //
+  // Только create-режим: в редактировании заголовок уже осмысленный текст
+  // существующей задачи, а не свежая диктовка — трогать его молчаливым
+  // regex-разбором при каждом blur было бы неожиданным поведением для
+  // задачи, которую открыли просто чтобы поправить описание.
+  //
+  // Срабатывает по потере фокуса поля, а не на каждое нажатие клавиши:
+  // live-разбор во время самого набора текста дёргал бы поле и переносил
+  // курсор прямо под пальцами/при живой диктовке. Кнопка «Готово» лежит
+  // вне этого поля (в шапке экрана), поэтому клик по ней стандартно снимает
+  // фокус с textarea раньше, чем срабатывает её собственный обработчик —
+  // blur успевает отработать до сохранения.
+  const applyDictationParse = () => {
+    if (isEdit) return;
+    const parsed = parseDictation(title);
+    if (parsed.title === title) return; // ни одного маркера — не трогаем
+    setTitle(parsed.title);
+    if (parsed.dueDate) setDueDate(parsed.dueDate);
+    if (parsed.priority) setPriority(parsed.priority);
+    if (parsed.projectName) {
+      const match = findProjectByName(projects, parsed.projectName);
+      if (match) setProjectId(match.id);
+    }
+  };
+
   return (
     // pb-4 (16px) + --kb-inset — тот же приём, что и в TaskDetailScreen
     // (см. комментарий там): дефолт переменной 0px в index.css держит
@@ -339,6 +370,7 @@ export function TaskFormScreen() {
       <textarea
         value={title}
         onChange={(e) => setTitle(e.target.value)}
+        onBlur={applyDictationParse}
         placeholder="Название задачи"
         className="block w-full bg-transparent text-[20px] font-medium text-text placeholder:text-dim resize-none outline-none mb-2 min-h-[32px]"
         rows={1}
