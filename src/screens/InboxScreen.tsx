@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useProjects } from "../api/projects";
@@ -6,6 +6,19 @@ import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
 import { TaskRow } from "../components/TaskRow";
+import {
+  TaskFilterButton,
+  TaskFilterSheet,
+} from "../components/TaskFilterSheet";
+import {
+  DEFAULT_TASK_FILTERS,
+  filterTasks,
+  countActiveTaskFilters,
+  buildProjectOptions,
+  buildLabelOptions,
+  buildAssigneeOptions,
+  type TaskFilters,
+} from "../lib/taskFilters";
 
 export function InboxScreen() {
   const { data: allTasks = [], isLoading, isError, error } = useTasks();
@@ -17,11 +30,41 @@ export function InboxScreen() {
   const navigate = useNavigate();
   const layout = useAppStore((s) => s.taskLayout.inbox);
   const setTaskLayout = useAppStore((s) => s.setTaskLayout);
+  const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
-  const tasks = useMemo(
+  const activeTasks = useMemo(
     () => allTasks.filter((t) => t.status === "active"),
     [allTasks],
   );
+
+  // Filter options come from the full active set (pre-filter) — every
+  // option shown matches at least one task somewhere on this screen, even
+  // when combined with another active filter it currently yields zero.
+  const projectFilterOptions = useMemo(
+    () => buildProjectOptions(activeTasks),
+    [activeTasks],
+  );
+  const labelFilterOptions = useMemo(
+    () => buildLabelOptions(activeTasks),
+    [activeTasks],
+  );
+  const assigneeFilterOptions = useMemo(
+    () => buildAssigneeOptions(activeTasks),
+    [activeTasks],
+  );
+
+  // The single filtered set feeding both layouts — list rows below and
+  // the board columns' project buckets both read from `tasks`, so list ↔
+  // board can never quietly disagree about which tasks a filter matched.
+  const tasks = useMemo(
+    () => filterTasks(activeTasks, filters),
+    [activeTasks, filters],
+  );
+  const activeFilterCount = countActiveTaskFilters(filters);
+  const showTrueEmpty = !isLoading && !isError && activeTasks.length === 0;
+  const showFilteredEmpty =
+    !isLoading && !isError && activeTasks.length > 0 && tasks.length === 0;
 
   // Доска: колонка = проект. Каждый проект — своя колонка, даже без единой
   // задачи на этом экране (пустая колонка), так порядок и состав колонок не
@@ -91,23 +134,29 @@ export function InboxScreen() {
       <ScreenHeader
         title="Входящие"
         actions={
-          <button
-            onClick={() =>
-              setTaskLayout("inbox", layout === "list" ? "board" : "list")
-            }
-            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
-            aria-label={
-              layout === "list"
-                ? "Переключить на вид доски"
-                : "Переключить на вид списка"
-            }
-          >
-            <Icon
-              name={layout === "list" ? "list" : "grid"}
-              size={18}
-              className="text-text"
+          <>
+            <TaskFilterButton
+              onClick={() => setFilterSheetOpen(true)}
+              active={activeFilterCount > 0}
             />
-          </button>
+            <button
+              onClick={() =>
+                setTaskLayout("inbox", layout === "list" ? "board" : "list")
+              }
+              className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
+              aria-label={
+                layout === "list"
+                  ? "Переключить на вид доски"
+                  : "Переключить на вид списка"
+              }
+            >
+              <Icon
+                name={layout === "list" ? "list" : "grid"}
+                size={18}
+                className="text-text"
+              />
+            </button>
+          </>
         }
       />
 
@@ -124,8 +173,19 @@ export function InboxScreen() {
           variant="inline"
         />
       )}
-      {!isLoading && !isError && tasks.length === 0 && (
+      {showTrueEmpty && (
         <p className="px-1 text-[13px] text-dim">Задач пока нет</p>
+      )}
+      {showFilteredEmpty && (
+        <div className="px-1 flex items-center gap-2 flex-wrap text-[13px] text-dim">
+          Под выбранные фильтры ничего не подошло
+          <button
+            onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
+            className="text-red font-medium"
+          >
+            Сбросить фильтры
+          </button>
+        </div>
       )}
 
       {layout === "board" ? (
@@ -146,6 +206,16 @@ export function InboxScreen() {
           ))}
         </div>
       )}
+
+      <TaskFilterSheet
+        open={filterSheetOpen}
+        onClose={() => setFilterSheetOpen(false)}
+        filters={filters}
+        setFilters={setFilters}
+        projectOptions={projectFilterOptions}
+        labelOptions={labelFilterOptions}
+        assigneeOptions={assigneeFilterOptions}
+      />
     </div>
   );
 }

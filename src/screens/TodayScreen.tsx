@@ -9,6 +9,19 @@ import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
 import { TaskRow } from "../components/TaskRow";
 import { RescheduleSheet } from "../components/RescheduleSheet";
 import { ActionsMenu } from "../components/ActionsMenu";
+import {
+  TaskFilterButton,
+  TaskFilterSheet,
+} from "../components/TaskFilterSheet";
+import {
+  DEFAULT_TASK_FILTERS,
+  filterTasks,
+  countActiveTaskFilters,
+  buildProjectOptions,
+  buildLabelOptions,
+  buildAssigneeOptions,
+  type TaskFilters,
+} from "../lib/taskFilters";
 import type { ApiTask } from "../api/types";
 
 const WEEKDAYS_FULL = [
@@ -40,12 +53,17 @@ export function TodayScreen() {
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuAnchorRef = useRef<HTMLButtonElement>(null);
+  const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   // Single source for "просрочено vs. сегодня" — shared by both layouts
   // (see lib/date.ts) so the list and the board can never quietly disagree
-  // about which task belongs where. These are the *raw* sets, before the
-  // "Ждут вас" dedup below strips out whatever already surfaced there.
-  const { overdue: rawOverdueTasks, todayTasks: rawTodayTasks } = useMemo(
+  // about which task belongs where. These are the *raw* sets, before both
+  // the "Ждут вас" dedup below AND the project/label/assignee filter — the
+  // "…All" suffix marks that: they're what "Сегодня" would show with every
+  // filter cleared, used below to tell "genuinely nothing due" (trueEmpty)
+  // apart from "filters hid everything" (filteredEmpty).
+  const { overdue: rawOverdueAll, todayTasks: rawTodayAll } = useMemo(
     () => partitionOverdueToday(allTasks, today),
     [allTasks, today],
   );
@@ -57,7 +75,7 @@ export function TodayScreen() {
   // сдал на проверку (review). Заблокированные — первыми: по формулировке
   // протокола именно они "требуют действий владельца" сильнее, чем
   // готовая-к-приёмке работа.
-  const waitingTasks = useMemo(() => {
+  const waitingTasksAll = useMemo(() => {
     if (!currentUser) return [];
     return allTasks
       .filter(
@@ -72,6 +90,29 @@ export function TodayScreen() {
       });
   }, [allTasks, currentUser]);
 
+  // Filter options built from the full pre-filter screen universe (every
+  // task that could ever appear here across all three blocks) — same rule
+  // as Inbox/ActivityScreen. The three raw arrays overlap (a waiting task
+  // can also be overdue) but build*Options dedups by id/project/label
+  // internally, so a plain concat is enough.
+  const screenTaskUniverse = useMemo(
+    () => [...waitingTasksAll, ...rawOverdueAll, ...rawTodayAll],
+    [waitingTasksAll, rawOverdueAll, rawTodayAll],
+  );
+  const projectFilterOptions = useMemo(
+    () => buildProjectOptions(screenTaskUniverse),
+    [screenTaskUniverse],
+  );
+  const labelFilterOptions = useMemo(
+    () => buildLabelOptions(screenTaskUniverse),
+    [screenTaskUniverse],
+  );
+  const assigneeFilterOptions = useMemo(
+    () => buildAssigneeOptions(screenTaskUniverse),
+    [screenTaskUniverse],
+  );
+  const activeFilterCount = countActiveTaskFilters(filters);
+
   // Дедуп по приоритету блока: «Ждут вас» → «Просрочено» → «Сегодня». Одна
   // и та же задача рисуется РОВНО один раз, в самом верхнем блоке, которому
   // подходит — владелец явно попросил не видеть повтор строки на экране
@@ -79,10 +120,27 @@ export function TodayScreen() {
   // дубль на скриншоте). Смысл при этом не теряется: TaskRow ниже получает
   // `overdue` по фактической дате задачи, а не по тому, в каком блоке она
   // оказалась, так что плашка «Просрочено» остаётся на строке, ушедшей
-  // наверх. overdueTasks/todayTasks — теперь уже вычищенные множества;
-  // именно они и есть источник правды для счётчиков в заголовках (пункт
-  // "предыдущий агент откатил дедуп из-за разъехавшихся чисел" — здесь
-  // числа и списки берутся из одного и того же массива).
+  // наверх. Дедуп бежит ПОСЛЕ фильтра (waitingTasks/rawOverdueTasks/
+  // rawTodayTasks — уже отфильтрованные по проекту/метке/исполнителю), так
+  // что задача, которую фильтр убрал из «Ждут вас», не утаскивает за собой
+  // свою же строку в «Просрочено»/«Сегодня» — там она снова проверяется на
+  // соответствие фильтру самостоятельно. overdueTasks/todayTasks — уже и
+  // отфильтрованные, и вычищенные множества; именно они и есть источник
+  // правды для счётчиков в заголовках (пункт "предыдущий агент откатил
+  // дедуп из-за разъехавшихся чисел" — здесь числа и списки берутся из
+  // одного и того же массива).
+  const waitingTasks = useMemo(
+    () => filterTasks(waitingTasksAll, filters),
+    [waitingTasksAll, filters],
+  );
+  const rawOverdueTasks = useMemo(
+    () => filterTasks(rawOverdueAll, filters),
+    [rawOverdueAll, filters],
+  );
+  const rawTodayTasks = useMemo(
+    () => filterTasks(rawTodayAll, filters),
+    [rawTodayAll, filters],
+  );
   const waitingIds = useMemo(
     () => new Set(waitingTasks.map((t) => t.id)),
     [waitingTasks],
@@ -96,7 +154,20 @@ export function TodayScreen() {
     [rawTodayTasks, waitingIds],
   );
 
-  const isEmpty =
+  // trueEmpty (unaffected by filters — from the "…All" sets) still drives
+  // the big illustration screen below: it means there's genuinely nothing
+  // due today, not that a filter is hiding everything. filteredEmpty is
+  // the new, lighter case — something's due, the current filter just
+  // doesn't match any of it.
+  const trueEmpty =
+    !isLoading &&
+    !isLoadingUser &&
+    !isError &&
+    waitingTasksAll.length === 0 &&
+    rawOverdueAll.length === 0 &&
+    rawTodayAll.length === 0;
+  const filteredEmpty =
+    !trueEmpty &&
     !isLoading &&
     !isLoadingUser &&
     !isError &&
@@ -170,7 +241,7 @@ export function TodayScreen() {
 
   const header = (
     <ScreenHeader
-      className={isEmpty ? "w-full" : ""}
+      className={trueEmpty ? "w-full" : ""}
       leading={
         <div className="bg-card/60 rounded-full p-2">
           <Icon name="calendarSmall" size={22} className="text-text" />
@@ -179,6 +250,10 @@ export function TodayScreen() {
       title="Сегодня"
       actions={
         <>
+          <TaskFilterButton
+            onClick={() => setFilterSheetOpen(true)}
+            active={activeFilterCount > 0}
+          />
           <button
             ref={menuAnchorRef}
             onClick={() => setMenuOpen((v) => !v)}
@@ -211,7 +286,7 @@ export function TodayScreen() {
     />
   );
 
-  if (isEmpty) {
+  if (trueEmpty) {
     return (
       <div className="px-4 pb-4 flex flex-col items-center">
         {header}
@@ -288,6 +363,17 @@ export function TodayScreen() {
         fallback="Не удалось загрузить задачи"
         className="mt-2"
       />
+      {filteredEmpty && (
+        <div className="px-1 pt-2 flex items-center gap-2 flex-wrap text-[13px] text-dim">
+          Под выбранные фильтры ничего не подошло
+          <button
+            onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
+            className="text-red font-medium"
+          >
+            Сбросить фильтры
+          </button>
+        </div>
+      )}
       {layout === "board" ? (
         <div className="mt-2">
           <TaskBoard
@@ -375,6 +461,16 @@ export function TodayScreen() {
         open={rescheduleOpen}
         onClose={() => setRescheduleOpen(false)}
         taskIds={overdueTasks.map((t) => t.id)}
+      />
+
+      <TaskFilterSheet
+        open={filterSheetOpen}
+        onClose={() => setFilterSheetOpen(false)}
+        filters={filters}
+        setFilters={setFilters}
+        projectOptions={projectFilterOptions}
+        labelOptions={labelFilterOptions}
+        assigneeOptions={assigneeFilterOptions}
       />
     </div>
   );

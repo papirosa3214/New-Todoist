@@ -4,6 +4,19 @@ import { useTasks } from "../api/tasks";
 import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { todayStr, MONTHS_SHORT } from "../lib/date";
 import { TaskRow } from "../components/TaskRow";
+import {
+  TaskFilterButton,
+  TaskFilterSheet,
+} from "../components/TaskFilterSheet";
+import {
+  DEFAULT_TASK_FILTERS,
+  filterTasks,
+  countActiveTaskFilters,
+  buildProjectOptions,
+  buildLabelOptions,
+  buildAssigneeOptions,
+  type TaskFilters,
+} from "../lib/taskFilters";
 import type { ApiTask } from "../api/types";
 
 // Сокращённые названия месяцев (именительный падеж, с точкой там, где
@@ -158,10 +171,45 @@ export function UpcomingScreen() {
 
   const { data: allTasks = [], isLoading, error } = useTasks();
   const navigate = useNavigate();
+  const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
-  const tasks = useMemo(
+  const activeTasks = useMemo(
     () => allTasks.filter((t) => t.status === "active"),
     [allTasks],
+  );
+
+  // This screen only ever renders tasks that have a due_date (groupedTasks
+  // below drops everything else) — so the filter's task universe has to be
+  // `datedTasks`, not every active task, or the sheet would offer a
+  // project/label/assignee that exists only on undated tasks. Picking such
+  // an option would leave `tasks` matching real (undated) tasks while the
+  // calendar/list shows nothing and no "ничего не подошло" message fires,
+  // since that check also needs to compare against the dated universe.
+  const datedTasks = useMemo(
+    () => activeTasks.filter((t) => t.due_date),
+    [activeTasks],
+  );
+
+  // Filter options from the full dated set (pre-filter), same rule as
+  // Inbox/Today/ActivityScreen.
+  const projectFilterOptions = useMemo(
+    () => buildProjectOptions(datedTasks),
+    [datedTasks],
+  );
+  const labelFilterOptions = useMemo(
+    () => buildLabelOptions(datedTasks),
+    [datedTasks],
+  );
+  const assigneeFilterOptions = useMemo(
+    () => buildAssigneeOptions(datedTasks),
+    [datedTasks],
+  );
+  const activeFilterCount = countActiveTaskFilters(filters);
+
+  const tasks = useMemo(
+    () => filterTasks(datedTasks, filters),
+    [datedTasks, filters],
   );
 
   const ribbonStart = useMemo(
@@ -412,21 +460,27 @@ export function UpcomingScreen() {
         <ScreenHeader
           title="Предстоящее"
           actions={
-            <button
-              onClick={toggleCalMode}
-              className="w-[44px] h-[44px] flex items-center justify-center active:scale-95 transition-transform"
-              aria-label={
-                calMode === "month"
-                  ? "Свернуть календарь в неделю"
-                  : "Развернуть календарь в месяц"
-              }
-            >
-              <Icon
-                name={calMode === "month" ? "grid" : "list"}
-                size={16}
-                className="text-text"
+            <>
+              <TaskFilterButton
+                onClick={() => setFilterSheetOpen(true)}
+                active={activeFilterCount > 0}
               />
-            </button>
+              <button
+                onClick={toggleCalMode}
+                className="w-[44px] h-[44px] flex items-center justify-center active:scale-95 transition-transform"
+                aria-label={
+                  calMode === "month"
+                    ? "Свернуть календарь в неделю"
+                    : "Развернуть календарь в месяц"
+                }
+              >
+                <Icon
+                  name={calMode === "month" ? "grid" : "list"}
+                  size={16}
+                  className="text-text"
+                />
+              </button>
+            </>
           }
         />
 
@@ -688,6 +742,26 @@ export function UpcomingScreen() {
         className="mt-3 mb-2"
       />
 
+      {/* selectedDate уже показывает своё «Нет задач на эту дату» ниже,
+          когда фильтр вычистил всё на выбранный день — эта строка только
+          для общего вида ленты (без выбранной даты), где раньше в этом
+          случае не было вообще никакого сообщения. */}
+      {!selectedDate &&
+        !isLoading &&
+        !error &&
+        datedTasks.length > 0 &&
+        tasks.length === 0 && (
+          <div className="px-1 pt-1 pb-2 flex items-center gap-2 flex-wrap text-[13px] text-dim">
+            Под выбранные фильтры ничего не подошло
+            <button
+              onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
+              className="text-red font-medium"
+            >
+              Сбросить фильтры
+            </button>
+          </div>
+        )}
+
       {/* Task list */}
       <div className={selectedDate || isLoading || error ? "" : "mt-3"}>
         {visibleDates.map((dateStr) => (
@@ -713,6 +787,16 @@ export function UpcomingScreen() {
           </div>
         )}
       </div>
+
+      <TaskFilterSheet
+        open={filterSheetOpen}
+        onClose={() => setFilterSheetOpen(false)}
+        filters={filters}
+        setFilters={setFilters}
+        projectOptions={projectFilterOptions}
+        labelOptions={labelFilterOptions}
+        assigneeOptions={assigneeFilterOptions}
+      />
     </div>
   );
 }
