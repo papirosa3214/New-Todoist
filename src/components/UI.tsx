@@ -50,6 +50,7 @@ import {
   Settings,
   Share2,
   Shield,
+  Sparkles,
   Star,
   Tag,
   Trash2,
@@ -137,6 +138,7 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   arrowUp: ArrowUp,
   arrowDown: ArrowDown,
   pin: MapPin,
+  sparkles: Sparkles,
 };
 
 export const Icon = ({
