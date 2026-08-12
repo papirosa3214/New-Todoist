@@ -15,6 +15,12 @@ interface AppState {
     calendarView: "month" | "week";
   };
   setCalendarView: (view: "month" | "week") => void;
+  // Реальный переключатель темы (SettingsScreen.tsx) — settings.theme уже
+  // существовал и персистился, но до 2026-08-12 ничто его не читало и не
+  // меняло: SettingsScreen показывал захардкоженную строку «Темный».
+  // App.tsx применяет текущее значение на <html data-theme> при каждом
+  // изменении (см. index.css, LIGHT THEME OVERRIDE).
+  setTheme: (theme: "dark" | "light") => void;
   // Список↔доска, per screen. Kept as one object with a key per screen
   // (not a single flat value like calendarView above) because Inbox and
   // Today are independent screens that can each sit in their own mode at
@@ -32,6 +38,7 @@ export const useAppStore = create<AppState>()(
       settings: { theme: "dark", calendarView: "month" },
       setCalendarView: (view) =>
         set((s) => ({ settings: { ...s.settings, calendarView: view } })),
+      setTheme: (theme) => set((s) => ({ settings: { ...s.settings, theme } })),
       taskLayout: { inbox: "list", today: "list" },
       setTaskLayout: (screen, layout) =>
         set((s) => ({ taskLayout: { ...s.taskLayout, [screen]: layout } })),
