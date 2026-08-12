@@ -26,7 +26,15 @@ export function tomorrowStr(): string {
   return addDays(todayStr(), 1);
 }
 
-const MONTHS_SHORT = [
+// Канонический источник сокращённых названий месяцев (родительный падеж
+// без точки: "янв", "авг" — используется в датах задач по всему
+// приложению). Раньше был продублирован буквально в InboxScreen.tsx,
+// ProjectTasksScreen.tsx, TaskBoard.tsx, TodayScreen.tsx, UpcomingScreen.tsx
+// — теперь импортируется отсюда. НЕ путать с MONTHS_ABBR_DOT в
+// UpcomingScreen.tsx (другой формат: "Янв.", "Авг." — с точкой и заглавной,
+// используется только в заголовке ленты календаря того экрана) — это
+// разные наборы для разных мест, не дубль друг друга.
+export const MONTHS_SHORT = [
   "янв",
   "фев",
   "мар",

@@ -8,7 +8,12 @@ import {
   ErrorBanner,
   AgentStateTag,
 } from "../components/UI";
-import { todayStr, formatDueLabel, partitionOverdueToday } from "../lib/date";
+import {
+  todayStr,
+  formatDueLabel,
+  partitionOverdueToday,
+  MONTHS_SHORT,
+} from "../lib/date";
 import { getPriorityColor } from "../lib/priority";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
@@ -16,20 +21,6 @@ import { RescheduleSheet } from "../components/RescheduleSheet";
 import { ActionsMenu } from "../components/ActionsMenu";
 import type { ApiTask } from "../api/types";
 
-const MONTHS_SHORT = [
-  "янв",
-  "фев",
-  "мар",
-  "апр",
-  "мая",
-  "июн",
-  "июл",
-  "авг",
-  "сен",
-  "окт",
-  "ноя",
-  "дек",
-];
 const WEEKDAYS_FULL = [
   "Воскресенье",
   "Понедельник",

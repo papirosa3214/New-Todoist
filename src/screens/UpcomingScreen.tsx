@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, type TouchEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
-import { todayStr } from "../lib/date";
+import { todayStr, MONTHS_SHORT } from "../lib/date";
 import { getPriorityColor } from "../lib/priority";
 import type { ApiTask } from "../api/types";
 
@@ -26,20 +26,6 @@ const MONTHS_ABBR_DOT = [
   "Окт.",
   "Нояб.",
   "Дек.",
-];
-const MONTHS_SHORT = [
-  "янв",
-  "фев",
-  "мар",
-  "апр",
-  "мая",
-  "июн",
-  "июл",
-  "авг",
-  "сен",
-  "окт",
-  "ноя",
-  "дек",
 ];
 // Порядок недели с понедельника (не индексируется через getDay() —
 // рендерится напрямую по .map(), поэтому порядок в массиве и есть порядок

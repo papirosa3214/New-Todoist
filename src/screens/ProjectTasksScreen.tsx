@@ -13,33 +13,14 @@ import {
   ErrorBanner,
   BackButton,
 } from "../components/UI";
+import { MONTHS_SHORT } from "../lib/date";
+import { getPriorityColor } from "../lib/priority";
 
 function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   const day = d.getDate();
-  const months = [
-    "янв",
-    "фев",
-    "мар",
-    "апр",
-    "мая",
-    "июн",
-    "июл",
-    "авг",
-    "сен",
-    "окт",
-    "ноя",
-    "дек",
-  ];
-  return `${day} ${months[d.getMonth()]}`;
+  return `${day} ${MONTHS_SHORT[d.getMonth()]}`;
 }
-
-const PRIORITY_COLORS: Record<number, string> = {
-  1: "#E44332",
-  2: "#FF9A14",
-  3: "#4A9FD8",
-  4: "#A6A6A6",
-};
 
 export function ProjectTasksScreen() {
   const { id } = useParams<{ id: string }>();
@@ -144,7 +125,7 @@ export function ProjectTasksScreen() {
               <div
                 className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
                 style={{
-                  borderColor: PRIORITY_COLORS[task.priority] || "#4A9FD8",
+                  borderColor: getPriorityColor(task.priority),
                 }}
               />
               <div className="flex-1 min-w-0">

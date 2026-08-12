@@ -4,27 +4,14 @@ import { useTasks } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
 import { getPriorityColor } from "../lib/priority";
+import { MONTHS_SHORT } from "../lib/date";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
 
 function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   const day = d.getDate();
-  const months = [
-    "янв",
-    "фев",
-    "мар",
-    "апр",
-    "мая",
-    "июн",
-    "июл",
-    "авг",
-    "сен",
-    "окт",
-    "ноя",
-    "дек",
-  ];
-  return `${day} ${months[d.getMonth()]}`;
+  return `${day} ${MONTHS_SHORT[d.getMonth()]}`;
 }
 
 export function InboxScreen() {

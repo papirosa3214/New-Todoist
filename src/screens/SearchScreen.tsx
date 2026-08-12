@@ -2,13 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSearch } from "../api/search";
 import { Icon, ErrorBanner } from "../components/UI";
-
-const PRIORITY_COLORS: Record<number, string> = {
-  1: "#E44332",
-  2: "#FF9A14",
-  3: "#4A9FD8",
-  4: "#A6A6A6",
-};
+import { getPriorityColor } from "../lib/priority";
 
 export function SearchScreen() {
   const navigate = useNavigate();
@@ -127,7 +121,7 @@ export function SearchScreen() {
                     <div
                       className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
                       style={{
-                        borderColor: PRIORITY_COLORS[t.priority] || "#4A9FD8",
+                        borderColor: getPriorityColor(t.priority),
                       }}
                     />
                     <div className="flex-1 min-w-0">
