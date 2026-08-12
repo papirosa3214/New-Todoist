@@ -1,9 +1,9 @@
 import { useState, useMemo, useRef, useEffect, type TouchEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
-import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { todayStr, MONTHS_SHORT } from "../lib/date";
-import { getPriorityColor } from "../lib/priority";
+import { TaskRow } from "../components/TaskRow";
 import type { ApiTask } from "../api/types";
 
 // Сокращённые названия месяцев (именительный падеж, с точкой там, где
@@ -696,52 +696,13 @@ export function UpcomingScreen() {
               {formatFullDate(dateStr)}
             </div>
             {groupedTasks[dateStr].map((task) => (
-              <button
+              <TaskRow
                 key={task.id}
+                task={task}
+                maxLabels={1}
+                showDueBadge={false}
                 onClick={() => navigate(`/task/${task.id}`)}
-                className="w-full flex items-start gap-3 py-3 px-1 text-left border-b border-stroke/50 active:bg-card/50 transition-colors"
-              >
-                <div
-                  className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
-                  style={{ borderColor: getPriorityColor(task.priority) }}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[15px] text-text leading-snug">
-                    {task.title}
-                  </div>
-                  {task.description && (
-                    <div className="text-[13px] text-sub mt-0.5 line-clamp-2">
-                      {task.description}
-                    </div>
-                  )}
-                  <div className="flex items-center gap-1.5 mt-1.5">
-                    {task.labels[0] && (
-                      <span
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
-                        style={{
-                          backgroundColor: task.labels[0].color + "30",
-                          color: task.labels[0].color,
-                        }}
-                      >
-                        <Icon name="shield" size={10} /> {task.labels[0].name}
-                      </span>
-                    )}
-                    {task.subtasks.length > 0 && (
-                      <span className="text-[11px] text-sub">
-                        {task.subtasks.filter((s) => s.done).length}/
-                        {task.subtasks.length}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {task.assignee_id && task.assignee_initials && (
-                  <Avatar
-                    initials={task.assignee_initials}
-                    color={task.assignee_color || "#A6A6A6"}
-                    size={24}
-                  />
-                )}
-              </button>
+              />
             ))}
           </div>
         ))}

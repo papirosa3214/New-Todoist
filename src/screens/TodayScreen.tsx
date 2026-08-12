@@ -2,21 +2,11 @@ import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useCurrentUser } from "../api/auth";
-import {
-  Icon,
-  ScreenHeader,
-  ErrorBanner,
-  AgentStateTag,
-} from "../components/UI";
-import {
-  todayStr,
-  formatDueLabel,
-  partitionOverdueToday,
-  MONTHS_SHORT,
-} from "../lib/date";
-import { getPriorityColor } from "../lib/priority";
+import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { todayStr, partitionOverdueToday, MONTHS_SHORT } from "../lib/date";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
+import { TaskRow } from "../components/TaskRow";
 import { RescheduleSheet } from "../components/RescheduleSheet";
 import { ActionsMenu } from "../components/ActionsMenu";
 import type { ApiTask } from "../api/types";
@@ -38,51 +28,6 @@ const WEEKDAYS_FULL = [
 function formatColumnDateLabel(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}. · ${WEEKDAYS_FULL[d.getDay()]}`;
-}
-
-// Одна строка задачи — используется и для просроченных, и для сегодняшних,
-// разница только в `overdue` (красная пометка «Просрочено, …» под текстом).
-function TaskRow({
-  task,
-  overdue,
-  onClick,
-}: {
-  task: ApiTask;
-  overdue: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full flex items-start gap-3 py-3 px-1 text-left border-b border-stroke/50 active:bg-card/50 transition-colors"
-    >
-      <div
-        className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
-        style={{ borderColor: getPriorityColor(task.priority) }}
-      />
-      <div className="flex-1 min-w-0">
-        <div className="text-[15px] text-text leading-snug truncate">
-          {task.title}
-        </div>
-        {task.description && (
-          <div className="text-[13px] text-sub mt-0.5 truncate">
-            {task.description.substring(0, 60)}…
-          </div>
-        )}
-        {((overdue && task.due_date) || task.agent_state) && (
-          <div className="flex items-center gap-1 flex-wrap mt-1.5">
-            {overdue && task.due_date && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
-                <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
-                {formatDueLabel(task.due_date)}
-              </span>
-            )}
-            <AgentStateTag task={task} />
-          </div>
-        )}
-      </div>
-    </button>
-  );
 }
 
 export function TodayScreen() {
@@ -369,6 +314,11 @@ export function TodayScreen() {
               // и правда просрочена, красная плашка «Просрочено, …» остаётся
               // на ней и здесь, в «Ждут вас» (см. rawOverdueTasks выше).
               overdue={t.due_date !== null && t.due_date < today}
+              showAgentState
+              maxLabels={0}
+              showDueBadge={false}
+              showSubtasksBadge={false}
+              showAvatar={false}
               onClick={() => navigate(`/task/${t.id}`)}
             />
           ))}
@@ -384,6 +334,11 @@ export function TodayScreen() {
               key={t.id}
               task={t}
               overdue
+              showAgentState
+              maxLabels={0}
+              showDueBadge={false}
+              showSubtasksBadge={false}
+              showAvatar={false}
               onClick={() => navigate(`/task/${t.id}`)}
             />
           ))}
@@ -405,6 +360,11 @@ export function TodayScreen() {
               key={t.id}
               task={t}
               overdue={false}
+              showAgentState
+              maxLabels={0}
+              showDueBadge={false}
+              showSubtasksBadge={false}
+              showAvatar={false}
               onClick={() => navigate(`/task/${t.id}`)}
             />
           ))}
