@@ -1,5 +1,5 @@
 import { Outlet, useLocation, matchPath } from "react-router-dom";
-import { StatusBar, BottomNav, FAB, Panel } from "./UI";
+import { BottomNav, SideNav, FAB, Panel } from "./UI";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { useCurrentUser } from "../api/auth";
 import { useAppStore } from "../store";
@@ -35,12 +35,23 @@ function isTabRoute(pathname: string) {
   return TAB_ROUTES.some((path) => matchPath({ path, end: true }, pathname));
 }
 
+// Брейкпоинт — Tailwind `lg` (1024px), не `md` (768px, старое значение
+// здесь). Ниже 1024 остаётся мобильная раскладка (single-column, полная
+// ширина вьюпорта) — это осознанно шире, чем «телефон», и накрывает узкие
+// ноутбучные окна/таблеты в портретной ориентации: до этой правки такое
+// окно попадало в старую desktop-ветку и получало 390px рамку с мёртвым
+// полем вокруг — то есть уже тогда фактически показывало «мобильный» вид,
+// просто через фейковую рамку вместо честной полноширинной раскладки.
+// Приложение мобильное по духу (см. задание), поэтому граница поставлена
+// консервативно: только экраны, где реально помещается боковая колонка
+// навигации + читаемая колонка контента (см. desktop-ветку ниже), получают
+// десктопный вид.
 function useIsMobile() {
   const [m, setM] = useState(
-    typeof window !== "undefined" ? window.innerWidth < 768 : false,
+    typeof window !== "undefined" ? window.innerWidth < 1024 : false,
   );
   useEffect(() => {
-    const onResize = () => setM(window.innerWidth < 768);
+    const onResize = () => setM(window.innerWidth < 1024);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -52,7 +63,7 @@ export function Layout() {
   const isMobile = useIsMobile();
   // Инсет экранной клавиатуры (--kb-inset на <html>) — см.
   // src/lib/useVisualViewportInset.ts за подробным «почему». Подключён
-  // безусловно (не только для мобильной ветки ниже): на десктопной рамке
+  // безусловно (не только для мобильной ветки ниже): на десктопе экранной
   // клавиатуры не бывает, но и вреда от подписки на несуществующее там
   // событие тоже нет — а один общий вызов на весь Layout проще, чем два
   // условных в двух разных return-ветках ниже.
@@ -67,8 +78,12 @@ export function Layout() {
   // попасть на <html> ДО того, как браузер отрисует кадр — иначе будет
   // видимый кадр со старым overflow (документ прокрутится/дёрнется на
   // первый рендер каждого захода в Layout). Только для мобильной ветки:
-  // десктопная рамка уже сама себя ограничивает высотой 844px и никогда не
-  // полагалась на прокрутку body, трогать её поведение незачем.
+  // desktop-ветка ниже сама себе ставит явную h-[100dvh] + overflow-hidden
+  // на корневой обёртке (тот же приём, что и здесь, просто без класса на
+  // <html>) и держит прокрутку внутри одного вложенного контейнера — она
+  // никогда не полагалась на прокрутку body, трогать её поведение незачем.
+  // Мобильному браузеру этот трюк ещё и нужнее: только там прокрутка body
+  // выкатывает адресную строку, у десктопных браузеров такой панели нет.
   useLayoutEffect(() => {
     if (!isMobile) return;
     document.documentElement.classList.add("app-shell-locked");
@@ -116,9 +131,9 @@ export function Layout() {
      Fix: give this wrapper a *definite* height (`h-[100dvh]`, not
      `min-h-*`) instead — that's the one change the old comment's own
      diagnosis says should have capped the child correctly — and move the
-     scroll into a single nested container, same shape as the desktop frame
-     below (`flex-1 overflow-y-auto`) which never had this bug precisely
-     because it already had a definite `h-[844px]`. `min-h-0` on the nested
+     scroll into a single nested container, same shape the desktop branch
+     below uses too (`flex-1 overflow-y-auto` off its own definite
+     `h-[100dvh]` wrapper) for the same reason. `min-h-0` on the nested
      scroller overrides the flex default `min-height: auto`, which is the
      other half of the classic "flex column child won't actually scroll"
      trap (a flex item's automatic minimum size is its content size unless
@@ -148,32 +163,38 @@ export function Layout() {
     );
   }
 
-  /* ── Desktop: phone frame + panel ──
-     This frame has an explicit h-[844px] (a definite height, unlike the
-     mobile branch's min-h-only wrapper), so its nested `overflow-y-auto`
-     genuinely contains scroll — that part was never broken. What it does
-     need is `transform` on the frame: that's what makes it the containing
-     block for `position: fixed` descendants (BottomNav, FAB). Without it,
-     "fixed" pins to the real browser viewport and the nav/FAB fly out of
-     the little phone mockup instead of staying inside it. */
+  /* ── Desktop: sidebar + content, no phone frame ──
+     Replaces the old "shrink the whole app into a 390×844 phone mockup and
+     float it in the middle of the browser window" staging. Real desktop
+     layout instead: SideNav (UI.tsx) takes BottomNav's job — same four
+     destinations, same `hideNav` condition, just a column instead of a row
+     — and the content gets a `max-w`, not an edge-to-edge stretch: every
+     screen under this Layout (list rows, form fields, compact drill-down
+     headers) was built at 390px reference width, and letting rows go
+     arbitrarily wide on a 2000px monitor would spread icon/label/chevron
+     across mostly empty space, not show "more". 640px keeps it a single
+     narrow column — wider than the phone, nowhere near a multi-pane
+     dashboard, per the brief ("не делай навороченный десктопный дашборд").
+     Same definite-height / `min-*-0` / nested-scroll shape as the mobile
+     branch above, just row-direction: the wrapper's `h-[100dvh]` is the
+     definite size flex `stretch` (the default for row-direction children)
+     hands the content column, so its own `overflow-y-auto` genuinely
+     contains scroll; `min-w-0` is this row's version of the mobile branch's
+     `min-h-0` — a flex item's automatic minimum size is its content size on
+     the *main* axis unless told otherwise, and here the main axis is width.
+     No `transform` needed for FAB's `position: fixed` (unlike the old phone
+     frame, which needed one as a containing-block trick): this shell already
+     *is* the full viewport, so plain `fixed` already lands where it should. */
   return (
-    <div className="min-h-screen bg-[#0d0d0f] flex items-center justify-center p-4 xl:p-8">
-      <div className="flex gap-8 items-start">
-        <div
-          className="relative w-[390px] h-[844px] bg-bg rounded-[44px] border border-[#2a2a2a] shadow-[0_0_80px_rgba(0,0,0,.6)] overflow-hidden flex flex-col shrink-0"
-          style={{ transform: "translateZ(0)" }}
-        >
-          <StatusBar />
-          <div className="flex-1 overflow-y-auto overflow-x-hidden">
-            <div className="pb-content-safe">
-              <Outlet />
-            </div>
-          </div>
-          {!hideNav && <BottomNav />}
-          {!hideFAB && <FAB />}
+    <div className="h-[100dvh] overflow-hidden flex bg-bg">
+      {!hideNav && <SideNav />}
+      <div className="flex-1 min-w-0 h-full overflow-y-auto overflow-x-hidden overscroll-y-contain">
+        <div className="max-w-[640px] mx-auto pb-bottom-safe">
+          <Outlet />
         </div>
-        <Panel />
       </div>
+      {!hideFAB && <FAB />}
+      <Panel />
     </div>
   );
 }

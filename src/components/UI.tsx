@@ -486,6 +486,67 @@ export function BottomNav() {
   );
 }
 
+// ═══════════ SIDE NAV (desktop) ═══════════
+// Same four destinations as BottomNav (NAV_ITEMS above) rendered as a
+// vertical list instead of a horizontal bar — Layout.tsx swaps one for the
+// other by breakpoint, never both at once. Deliberately its own small
+// component rather than a shared refactor of BottomNav/AnimatedTabBar: that
+// bar's whole geometry (gooey "horka" clip-path, em-scale tied to a
+// specific font-size, corner-overlay badge) is built for a horizontal strip
+// and doesn't have a vertical equivalent worth inventing for four rows —
+// see the "AnimatedTabBar (перенос из CRM...)" block in index.css.
+//
+// Active-state color is not invented here either: it's the exact rule
+// already decided for these four destinations a few paragraphs up
+// ("активная вкладка не получает никакой плашки-подложки — просто
+// загорается красным иконка и подпись") — same red/dim tokens, no
+// background pill, just reused for a column instead of a row. The row
+// treatment itself (`.tap-row`) is index.css's own documented case for
+// "sidebar/menu-drawer items" — see that class's comment block. The hover
+// step (dim → sub) mirrors Panel's own hover a few hundred lines down
+// (text-sub → text-text) one rung lower on the same dim/sub/text brightness
+// ladder in @theme — not a new value, only active rows skip it (they're
+// already red, hovering them shouldn't dull the color).
+export function SideNav() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { data: allTasks = [] } = useTasks();
+  const todayCount = useMemo(
+    () =>
+      allTasks.filter((t) => t.due_date === todayStr() && t.status === "active")
+        .length,
+    [allTasks],
+  );
+
+  return (
+    <nav className="w-60 h-full shrink-0 flex flex-col gap-1 p-4 border-r border-stroke">
+      {NAV_ITEMS.map((item) => {
+        const active = item.path === location.pathname;
+        const showBadge = item.path === "/today" && todayCount > 0;
+        return (
+          <button
+            key={item.path}
+            type="button"
+            onClick={() => navigate(item.path)}
+            aria-current={active ? "page" : undefined}
+            className={`tap-row w-full h-12 flex items-center gap-3 px-3 rounded-xl text-[14px] ${
+              active ? "text-red" : "text-dim hover:text-sub"
+            }`}
+          >
+            <Icon name={item.icon} size={22} />
+            <span className="flex-1 text-left truncate">{item.label}</span>
+            {showBadge && (
+              <span className="min-w-5 h-5 px-1 rounded-full bg-red text-white text-[11px] font-bold flex items-center justify-center leading-none shrink-0">
+                {todayCount}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 // ═══════════ FAB ═══════════
 
 export function FAB({ onClick }: { onClick?: () => void }) {
