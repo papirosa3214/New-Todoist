@@ -6,7 +6,7 @@
 // (POST один раз vs. PATCH одним пакетом по кнопке «Готово»). Подзадачи —
 // исключение: у существующей задачи они уже персистентны, поэтому их
 // CRUD идёт через живой API сразу, а не копится в локальном стейте.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useProjects } from "../api/projects";
 import { useLabels, useCreateLabel } from "../api/labels";
@@ -31,6 +31,8 @@ import {
   SubtaskRow,
   AddSubtaskRow,
 } from "../components/TaskFields";
+import { MicOverlay } from "../components/MicOverlay";
+import { MicKeyboardBar } from "../components/MicKeyboardBar";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import {
   combineDictatedText,
@@ -181,21 +183,71 @@ export function TaskFormScreen() {
   // Хуки объявлены здесь, ДО веток isEdit/taskLoading/hydrated ниже (те же
   // правила хуков, что и у useGuardedCallback выше) — иначе на части
   // рендеров (загрузка/edit-режим) они бы не вызывались вовсе.
+  // Одна кнопка, три цели: пишет в то поле, где владелец последний раз
+  // ставил курсор (title по умолчанию — то же поведение, что было раньше,
+  // пока полей для диктовки было только одно). onFocus на title/desc и на
+  // поле подзадачи (AddSubtaskRow) ниже держит voiceTarget в актуальном
+  // состоянии; recording уводит фокус на саму кнопку, но state, в отличие
+  // от document.activeElement, переживает это без изменений.
+  const [voiceTarget, setVoiceTarget] = useState<"title" | "desc" | "subtask">(
+    "title",
+  );
+  // Черновик текста для поля «Добавить подзадачу...» — поднят сюда из
+  // AddSubtaskRow (owner 2026-08-13), иначе кнопке диктовки некуда было бы
+  // писать: у некотролируемого input своего state снаружи не видно.
+  const [subtaskInput, setSubtaskInput] = useState("");
+  // Owner 2026-08-13 (третий заход по концепции): полноэкранная анимация
+  // сама по себе «красиво, симпатично», но как отдельная кнопка внизу
+  // формы — «не туда, ни сюда»: перекрывает всю форму, а поле для записи
+  // выбирать было уже негде. Правильное место — рядом с клавиатурой, как
+  // системная accessory-панель iOS («стрелочки, свернуть клавиатуру»), но
+  // сайты не могут добавить туда свою кнопку — это закрытый нативный UI,
+  // недоступный из веба (проверено, не наобум). Вместо этого — своя
+  // всплывающая панель, прижатая к границе клавиатуры через уже
+  // существующий --kb-inset (useVisualViewportInset, подключён в
+  // Layout.tsx). Показывается, только пока фокус реально в title/desc/поле
+  // подзадачи — setTimeout на blur даёт запасные 100мс, чтобы не мигать при
+  // переключении фокуса между этими двумя полями (blur одного срабатывает
+  // раньше focus другого).
+  const [keyboardFieldFocused, setKeyboardFieldFocused] = useState(false);
+  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleFieldFocus = (target: "title" | "desc" | "subtask") => {
+    if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+    setVoiceTarget(target);
+    setKeyboardFieldFocused(true);
+  };
+  const handleFieldBlur = () => {
+    blurTimeoutRef.current = setTimeout(
+      () => setKeyboardFieldFocused(false),
+      100,
+    );
+  };
   const transcribeAudio = useTranscribeAudio();
   const mic = useMicRecorder(async (blob) => {
     try {
       const { text } = await transcribeAudio.mutateAsync(blob);
-      const combined = combineDictatedText(title, text);
-      if (isEdit) {
-        setTitle(combined);
+      if (voiceTarget === "desc") {
+        // Описание — произвольный текст, без parseDictation: маркеры
+        // #Проект/!приоритет/дата разбираются только в заголовке.
+        setDesc(combineDictatedText(desc, text));
+      } else if (voiceTarget === "subtask") {
+        // Подзадача — тоже произвольный текст, без parseDictation: маркеры
+        // #Проект/!приоритет/дата в названии подзадачи не имеют смысла, это
+        // формат только для заголовка задачи.
+        setSubtaskInput((prev) => combineDictatedText(prev, text));
       } else {
-        const parsed = parseDictation(combined);
-        setTitle(parsed.title);
-        if (parsed.dueDate) setDueDate(parsed.dueDate);
-        if (parsed.priority) setPriority(parsed.priority);
-        if (parsed.projectName) {
-          const match = findProjectByName(projects, parsed.projectName);
-          if (match) setProjectId(match.id);
+        const combined = combineDictatedText(title, text);
+        if (isEdit) {
+          setTitle(combined);
+        } else {
+          const parsed = parseDictation(combined);
+          setTitle(parsed.title);
+          if (parsed.dueDate) setDueDate(parsed.dueDate);
+          if (parsed.priority) setPriority(parsed.priority);
+          if (parsed.projectName) {
+            const match = findProjectByName(projects, parsed.projectName);
+            if (match) setProjectId(match.id);
+          }
         }
       }
     } catch {
@@ -418,108 +470,36 @@ export function TaskFormScreen() {
         className="mb-4"
       />
 
-      {/* Title + кнопка микрофона (idle 44×44, тот же тап-таргет, что и
-          крестик в шапке; recording/processing — пилюля той же высоты 44,
-          ширина по контенту, чтобы ряд не прыгал вертикально) */}
-      <div className="flex items-center gap-2 mb-2">
-        <textarea
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={applyDictationParse}
-          placeholder="Название задачи"
-          className="block w-full flex-1 min-w-0 bg-transparent text-[20px] font-medium text-text placeholder:text-dim resize-none outline-none min-h-[32px]"
-          rows={1}
-        />
-        {mic.state === "idle" && (
-          <button
-            type="button"
-            onClick={mic.start}
-            aria-label="Надиктовать"
-            className="w-[44px] h-[44px] shrink-0 flex items-center justify-center active:scale-95"
-          >
-            <Icon name="mic" size={18} className="text-dim" />
-          </button>
-        )}
-        {mic.state === "recording" && (
-          <button
-            type="button"
-            onClick={mic.stop}
-            aria-label="Остановить запись"
-            className="h-[44px] shrink-0 flex items-center gap-2 px-3 rounded-full bg-red/10 active:opacity-70"
-          >
-            <span className="mic-rec-dot w-2 h-2 rounded-full bg-red" />
-            <span className="text-[12px] font-medium text-red tabular-nums">
-              {micElapsedLabel}
-            </span>
-          </button>
-        )}
-        {mic.state === "processing" && (
-          <div className="h-[44px] shrink-0 flex items-center px-3 rounded-full bg-card2">
-            <span className="text-[12px] text-sub">Распознаю…</span>
-          </div>
-        )}
-      </div>
-      <ErrorBanner
-        error={micError}
-        fallback="Не удалось распознать речь. Проверьте соединение."
-        variant="block"
-        className="mb-2"
-      />
-
-      {/* Description */}
+      {/* Title — кнопки микрофона тут нет (owner 2026-08-13, третий заход):
+          она живёт в плавающей панели над клавиатурой, показывается пока
+          это поле в фокусе — см. keyboardFieldFocused/handleFieldFocus
+          выше и MicKeyboardBar в самом конце разметки. */}
       <textarea
-        value={desc}
-        onChange={(e) => setDesc(e.target.value)}
-        placeholder="Описание"
-        className="block w-full bg-transparent text-[16px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px]"
-        rows={2}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onBlur={() => {
+          applyDictationParse();
+          handleFieldBlur();
+        }}
+        onFocus={() => handleFieldFocus("title")}
+        placeholder="Название задачи"
+        className="block w-full bg-transparent text-[20px] font-medium text-text placeholder:text-dim resize-none outline-none mb-4 min-h-[32px]"
+        rows={1}
       />
 
-      {/* ── Срок / Проект / Приоритет — mockup .card (screen 11) ── */}
-      <div className="mb-4">
-        <Card>
-          <DueDateField value={dueDate} onChange={setDueDate} />
-          <div>
-            <FieldRow
-              icon="hash"
-              label="Проект"
-              value={currentProject?.name || "Входящие"}
-              chevronOpen={showProjectPicker}
-              onClick={() => setShowProjectPicker((o) => !o)}
-            />
-            {showProjectPicker && (
-              <div className="border-t border-stroke">
-                {projects.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => {
-                      setProjectId(p.id);
-                      setShowProjectPicker(false);
-                    }}
-                    className="w-full flex items-center gap-3 py-3 px-[14px] text-left active:bg-white/[0.04] transition-colors"
-                  >
-                    <Icon name="hash" size={16} style={{ color: p.color }} />
-                    <span className="text-[14px] text-text flex-1">
-                      {p.name}
-                    </span>
-                    {p.id === effectiveProjectId && (
-                      <Icon name="check" size={16} className="text-red" />
-                    )}
-                  </button>
-                ))}
-                {projects.length === 0 && (
-                  <div className="px-[14px] py-3 text-[13px] text-dim">
-                    Проектов пока нет
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          <PriorityField value={priority} onChange={setPriority} />
-        </Card>
-      </div>
-
-      {/* ── Subtasks — moved up, right under the main card ── */}
+      {/* ── Subtasks — owner 2026-08-13 (пятый заход): переставлены сразу
+          под название, перед описанием (было: после карточки Срок/Проект/
+          Приоритет) — так поле «Добавить подзадачу» больше не оказывается
+          далеко внизу формы, за карточкой и AI-блоком: раньше переключение
+          фокуса между title/desc и этим полем гоняло страницу через весь
+          этот путь, и --kb-inset (useVisualViewportInset) не успевал
+          пересчитаться, пока шёл автоскролл к полю — плавающая кнопка
+          диктовки на миг проваливалась к низу экрана и «подтягивалась»
+          обратно только после того, как скролл останавливался. Соседство с
+          title сокращает этот путь до одного экрана. Список — БЕЗ Card-
+          обёртки (bg-card/рамка/разделители), в общем потоке страницы, тем
+          же приёмом, что и обычный текст: владелец явно попросил убрать
+          карточку, оставить только заголовок и кнопку «Разбить». */}
       <div className="flex items-center justify-between px-1 mb-2">
         <span className="text-[13px] text-sub font-semibold">Подзадачи</span>
         <button
@@ -590,58 +570,62 @@ export function TaskFormScreen() {
       )}
 
       <div className="mb-4">
-        <Card>
-          {/* Card only draws a divider between DIRECT children (see its
-              own Children.toArray) — a single wrapping Fragment here would
-              collapse the whole list into one child and lose every row
-              separator, so each row/array must be spread as a sibling. */}
-          {isEdit
-            ? [
-                ...(existingTask?.subtasks || []).map((st) => (
-                  <SubtaskRow
-                    key={st.id}
-                    title={st.title}
-                    done={st.done}
-                    onToggle={() =>
-                      updateSubtask.mutate({ id: st.id, done: !st.done })
+        {/* No Card wrapper here on purpose (see comment above) — each row
+            keeps its own px-4/px-[14px] horizontal padding regardless, so
+            nothing shifts, it just loses the shared bg-card/rounded frame
+            and the border-t dividers Card used to draw between rows. */}
+        {isEdit
+          ? [
+              ...(existingTask?.subtasks || []).map((st) => (
+                <SubtaskRow
+                  key={st.id}
+                  title={st.title}
+                  done={st.done}
+                  onToggle={() =>
+                    updateSubtask.mutate({ id: st.id, done: !st.done })
+                  }
+                  onRename={(t) =>
+                    updateSubtask.mutate({ id: st.id, title: t })
+                  }
+                  onDelete={() => deleteSubtask.mutate(st.id)}
+                />
+              )),
+              <AddSubtaskRow
+                key="add"
+                onAdd={(t) => createSubtask.mutate(t)}
+                value={subtaskInput}
+                onChange={setSubtaskInput}
+                onFocus={() => handleFieldFocus("subtask")}
+                onBlur={handleFieldBlur}
+              />,
+            ]
+          : [
+              ...localSubtasks.map((s, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-3 px-[14px] py-[12px]"
+                >
+                  <div className="w-[18px] h-[18px] rounded-full border-2 border-dim shrink-0" />
+                  <span className="text-[14px] text-text flex-1">{s}</span>
+                  <button
+                    onClick={() =>
+                      setLocalSubtasks(localSubtasks.filter((_, j) => j !== i))
                     }
-                    onRename={(t) =>
-                      updateSubtask.mutate({ id: st.id, title: t })
-                    }
-                    onDelete={() => deleteSubtask.mutate(st.id)}
-                  />
-                )),
-                <AddSubtaskRow
-                  key="add"
-                  onAdd={(t) => createSubtask.mutate(t)}
-                />,
-              ]
-            : [
-                ...localSubtasks.map((s, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-3 px-[14px] py-[12px]"
+                    className="p-2 -m-1 shrink-0"
                   >
-                    <div className="w-[18px] h-[18px] rounded-full border-2 border-dim shrink-0" />
-                    <span className="text-[14px] text-text flex-1">{s}</span>
-                    <button
-                      onClick={() =>
-                        setLocalSubtasks(
-                          localSubtasks.filter((_, j) => j !== i),
-                        )
-                      }
-                      className="p-2 -m-1 shrink-0"
-                    >
-                      <Icon name="x" size={14} className="text-dim" />
-                    </button>
-                  </div>
-                )),
-                <AddSubtaskRow
-                  key="add"
-                  onAdd={(t) => setLocalSubtasks((prev) => [...prev, t])}
-                />,
-              ]}
-        </Card>
+                    <Icon name="x" size={14} className="text-dim" />
+                  </button>
+                </div>
+              )),
+              <AddSubtaskRow
+                key="add"
+                onAdd={(t) => setLocalSubtasks((prev) => [...prev, t])}
+                value={subtaskInput}
+                onChange={setSubtaskInput}
+                onFocus={() => handleFieldFocus("subtask")}
+                onBlur={handleFieldBlur}
+              />,
+            ]}
         <ErrorBanner
           error={
             createSubtask.error ?? updateSubtask.error ?? deleteSubtask.error
@@ -650,6 +634,62 @@ export function TaskFormScreen() {
           variant="block"
           className="mt-2"
         />
+      </div>
+
+      {/* Description — тот же принцип: своей кнопки нет, панель над
+          клавиатурой пишет сюда, если в фокусе было это поле. */}
+      <textarea
+        value={desc}
+        onChange={(e) => setDesc(e.target.value)}
+        onFocus={() => handleFieldFocus("desc")}
+        onBlur={handleFieldBlur}
+        placeholder="Описание"
+        className="block w-full bg-transparent text-[16px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px]"
+        rows={2}
+      />
+
+      {/* ── Срок / Проект / Приоритет — mockup .card (screen 11) ── */}
+      <div className="mb-4">
+        <Card>
+          <DueDateField value={dueDate} onChange={setDueDate} />
+          <div>
+            <FieldRow
+              icon="hash"
+              label="Проект"
+              value={currentProject?.name || "Входящие"}
+              chevronOpen={showProjectPicker}
+              onClick={() => setShowProjectPicker((o) => !o)}
+            />
+            {showProjectPicker && (
+              <div className="border-t border-stroke">
+                {projects.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => {
+                      setProjectId(p.id);
+                      setShowProjectPicker(false);
+                    }}
+                    className="w-full flex items-center gap-3 py-3 px-[14px] text-left active:bg-white/[0.04] transition-colors"
+                  >
+                    <Icon name="hash" size={16} style={{ color: p.color }} />
+                    <span className="text-[14px] text-text flex-1">
+                      {p.name}
+                    </span>
+                    {p.id === effectiveProjectId && (
+                      <Icon name="check" size={16} className="text-red" />
+                    )}
+                  </button>
+                ))}
+                {projects.length === 0 && (
+                  <div className="px-[14px] py-3 text-[13px] text-dim">
+                    Проектов пока нет
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <PriorityField value={priority} onChange={setPriority} />
+        </Card>
       </div>
 
       {/* ── Assignee (tappable → picker) ── */}
@@ -750,6 +790,45 @@ export function TaskFormScreen() {
           className="mt-2"
         />
       </div>
+
+      {/* ── Диктовка — owner 2026-08-13, третий заход по концепции: не
+          отдельная кнопка в потоке формы (перекрывала форму, некуда было
+          целиться), а панель над клавиатурой (MicKeyboardBar), которая
+          появляется, только когда реально набираешь текст в title/desc/
+          поле подзадачи (четвёртый заход: то же поведение распространено
+          на AddSubtaskRow) — см. keyboardFieldFocused выше. Прижата к
+          правому краю (right-[18px] в самом MicKeyboardBar), максимально
+          вправо. Полноэкранное кольцо (MicOverlay) остаётся тем же —
+          «красиво, симпатично» уже подтверждено, менялось только МЕСТО
+          входа в запись, не сама анимация. ErrorBanner — всегда в потоке
+          формы, не только при открытой клавиатуре: ошибка распознавания
+          может прийти уже после того, как клавиатура закрылась. */}
+      <ErrorBanner
+        error={micError}
+        fallback="Не удалось распознать речь. Проверьте соединение."
+        variant="block"
+        className="mb-4"
+      />
+      {keyboardFieldFocused && mic.state === "idle" && (
+        <MicKeyboardBar
+          onStart={mic.start}
+          ariaLabel={
+            voiceTarget === "desc"
+              ? "Надиктовать описание"
+              : voiceTarget === "subtask"
+                ? "Надиктовать подзадачу"
+                : "Надиктовать название"
+          }
+        />
+      )}
+      {(mic.state === "recording" || mic.state === "processing") && (
+        <MicOverlay
+          state={mic.state}
+          elapsedLabel={micElapsedLabel}
+          getTimeDomainData={mic.getTimeDomainData}
+          onStop={mic.stop}
+        />
+      )}
     </div>
   );
 }

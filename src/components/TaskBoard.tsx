@@ -89,6 +89,7 @@ import { Icon, AgentStateTag } from "./UI";
 import { getPriorityColor } from "../lib/priority";
 import { MONTHS_SHORT } from "../lib/date";
 import { api } from "../api/client";
+import { useUpdateTask } from "../api/tasks";
 import type { ApiTask } from "../api/types";
 
 function formatCompactDate(dateStr: string): string {
@@ -183,6 +184,8 @@ function BoardCard({
   setDragHandleRef?: (el: HTMLElement | null) => void;
   isDragging?: boolean;
 }) {
+  const updateTask = useUpdateTask();
+  const isDone = task.status === "completed";
   const doneSub = task.subtasks.filter((s) => s.done).length;
   const label = task.labels[0];
   const hasFooter =
@@ -223,12 +226,32 @@ function BoardCard({
       )}
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         <div className="flex items-start gap-2">
+          {/* Owner 2026-08-13: priority dots measured 12/18/22px across the
+              three places this app shows one — unified to 18px everywhere.
+              Clickable now (toggles active↔completed, same call the list
+              row and TaskDetailScreen's ring already make) — a plain <div>
+              with stopPropagation, not a nested <button>, following the
+              same pattern this file's own drag handle above already uses
+              for "interactive sub-area inside the card's outer button". */}
           <div
-            className="mt-0.5 w-[12px] h-[12px] rounded-full border-2 shrink-0"
+            onClick={(e) => {
+              e.stopPropagation();
+              updateTask.mutate({
+                id: task.id,
+                status: isDone ? "active" : "completed",
+              });
+            }}
+            role="button"
+            aria-label={isDone ? "Вернуть в работу" : "Отметить выполненной"}
+            className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0 flex items-center justify-center"
             style={{ borderColor: getPriorityColor(task.priority) }}
-          />
+          >
+            {isDone && <Icon name="check" size={12} className="text-white" />}
+          </div>
           <div className="min-w-0 flex-1">
-            <div className="text-[13px] text-text leading-snug line-clamp-2">
+            <div
+              className={`text-[13px] leading-snug line-clamp-2 ${isDone ? "line-through text-sub" : "text-text"}`}
+            >
               {task.title}
             </div>
             {task.description && (
@@ -239,7 +262,12 @@ function BoardCard({
           </div>
         </div>
         {hasFooter && (
-          <div className="flex items-center gap-1.5 flex-wrap pl-[18px]">
+          // pl-[26px] = 18px dot + gap-2 (8px) — keeps the footer badges
+          // aligned under the title text now that the dot grew from 12px
+          // (which paired with pl-[18px], a 2px mismatch already baked into
+          // the pre-existing code — recomputed here rather than carried
+          // forward, since the dot's own width changed anyway).
+          <div className="flex items-center gap-1.5 flex-wrap pl-[26px]">
             {task.agent_state && <AgentStateTag task={task} compact />}
             {task.due_date && (
               <span

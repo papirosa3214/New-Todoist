@@ -33,6 +33,20 @@ export function useMicRecorder(onDone: (blob: Blob) => void) {
   const startedAtRef = useRef(0);
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Живой сигнал микрофона для кольца (MicRing) ──
+  // Owner 2026-08-13: перенос готового виджета «voice-ring-2.html»
+  // (прислан 1:1, не переизобретать) — параметры Web Audio узла ТОЧНО как
+  // в присланном файле (fftSize=1024, а не что-то своё), чтобы совпадала
+  // и плотность данных, на которой была откалибрована вся «органика»
+  // кольца (BAR_PHASE/SPEED/BIAS, LERP-сглаживание — см. MicRing.tsx).
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  // <ArrayBuffer>, не голый Uint8Array — в свежих lib.dom типах тот
+  // обобщён над ArrayBufferLike (включая SharedArrayBuffer), иначе
+  // getByteTimeDomainData() ниже не типизируется (тот же паттерн, что в
+  // api/audio.ts).
+  const timeArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+
   const cleanup = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (autoStopRef.current) clearTimeout(autoStopRef.current);
@@ -41,6 +55,24 @@ export function useMicRecorder(onDone: (blob: Blob) => void) {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     recorderRef.current = null;
+    audioCtxRef.current?.close().catch(() => {});
+    audioCtxRef.current = null;
+    analyserRef.current = null;
+    timeArrayRef.current = null;
+  }, []);
+
+  // Читает актуальную форму сигнала прямо сейчас — вызывается из
+  // requestAnimationFrame-цикла MicRing, не из React state (60
+  // ре-рендеров/сек были бы лишними, рисование и так гоняет свой rAF).
+  // Возвращает null, если Web Audio недоступен/ещё не готов — вызывающий
+  // код молча деградирует (кольцо остаётся в покое), запись и
+  // распознавание от Web Audio не зависят.
+  const getTimeDomainData = useCallback((): Uint8Array<ArrayBuffer> | null => {
+    const analyser = analyserRef.current;
+    const data = timeArrayRef.current;
+    if (!analyser || !data) return null;
+    analyser.getByteTimeDomainData(data);
+    return data;
   }, []);
 
   // Componente unmount (навигация с формы во время записи) — не оставлять
@@ -71,6 +103,33 @@ export function useMicRecorder(onDone: (blob: Blob) => void) {
           : "Не удалось включить микрофон.",
       );
       return;
+    }
+
+    // Web Audio — параметры и порядок действий 1:1 из voice-ring-2.html
+    // (audioCtx.resume() для suspended состояния включительно). Best-effort:
+    // если не получилось — кольцо просто остаётся в покое, запись и
+    // распознавание всё равно работают дальше как ни в чём не бывало.
+    try {
+      if (!audioCtxRef.current) {
+        const AudioCtx =
+          window.AudioContext || (window as any).webkitAudioContext;
+        const audioCtx = new AudioCtx();
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        const src = audioCtx.createMediaStreamSource(stream);
+        src.connect(analyser);
+        audioCtxRef.current = audioCtx;
+        analyserRef.current = analyser;
+        timeArrayRef.current = new Uint8Array(
+          new ArrayBuffer(analyser.fftSize),
+        );
+      }
+      if (audioCtxRef.current.state === "suspended") {
+        await audioCtxRef.current.resume();
+      }
+    } catch {
+      // getTimeDomainData() будет молча возвращать null — обработано на
+      // стороне отрисовки (MicRing).
     }
 
     // Chrome/большинство браузеров дают webm/opus; Safari — обычно mp4.
@@ -128,5 +187,6 @@ export function useMicRecorder(onDone: (blob: Blob) => void) {
     start,
     stop,
     finish,
+    getTimeDomainData,
   };
 }

@@ -513,3 +513,37 @@
 .mic-rec-dot {
   animation: mic-rec-pulse 1s ease-in-out infinite;
 }
+
+/* Кнопка микрофона (TaskFormScreen) — радиальное кольцо вокруг иконки.
+   Owner 2026-08-13: перенос присланного файла voice-ring-2.html 1:1 —
+   владелец сам довёл геометрию до готовности («я уже всё сделал так,
+   чтобы было всё красиво»), явно попросил взять как есть, не исправлять.
+   Только .ring-wrap/.ring-canvas классы из файла (сама mic-кнопка того
+   файла не переносится — владелец явно попросил «не кнопку, а нашу
+   плоскую иконку»). Размеры и media query — те же числа, что в файле, не
+   пересчитаны заново. Логика отрисовки (96 палочек, LERP-сглаживание,
+   hash-personality) — src/components/MicRing.tsx. */
+.mic-ring-wrap {
+  position: relative;
+  width: 320px;
+  height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mic-ring-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (max-width: 380px) {
+  .mic-ring-wrap {
+    width: 280px;
+    height: 280px;
+  }
+}

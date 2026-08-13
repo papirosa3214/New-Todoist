@@ -227,15 +227,18 @@ export function TaskDetailScreen() {
         }
       />
 
-      {/* Priority ring + Title */}
+      {/* Priority ring + Title — owner 2026-08-13: was 22px (odd one out
+          against the 18px this app's other two priority dots — list rows,
+          board cards — now converge on), unified down to the same 18px so
+          every priority dot in the app measures the same. */}
       <div className="flex items-start gap-3 mb-4">
         <button
           onClick={handleToggleStatus}
-          className="mt-1 w-[22px] h-[22px] rounded-full border-2 shrink-0 flex items-center justify-center"
+          className="mt-1 w-[18px] h-[18px] rounded-full border-2 shrink-0 flex items-center justify-center"
           style={{ borderColor: priorityColor }}
         >
           {task.status === "completed" && (
-            <Icon name="check" size={14} className="text-white" />
+            <Icon name="check" size={12} className="text-white" />
           )}
         </button>
         <h1
@@ -252,9 +255,12 @@ export function TaskDetailScreen() {
         className="mb-4"
       />
 
-      {/* Description */}
+      {/* Description — pl-[30px] = 18px ring + gap-3 (12px), keeps this
+          aligned under the title now that the ring shrank from 22px (was
+          pl-[34px] = 22+12 — recomputed here, same mismatch TaskBoard's
+          footer padding had after its own dot resize). */}
       {task.description && (
-        <p className="text-[14px] text-sub leading-relaxed mb-4 pl-[34px] whitespace-pre-wrap">
+        <p className="text-[14px] text-sub leading-relaxed mb-4 pl-[30px] whitespace-pre-wrap">
           {task.description}
         </p>
       )}

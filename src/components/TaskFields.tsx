@@ -501,8 +501,31 @@ export function SubtaskRow({
 
 // New-subtask input row — mockup's "Добавить подзадачу..." row (48px,
 // gray-bordered circle placeholder). Used by both screens.
-export function AddSubtaskRow({ onAdd }: { onAdd: (title: string) => void }) {
-  const [value, setValue] = useState("");
+//
+// value/onChange опциональны и подняты в TaskFormScreen (owner 2026-08-13:
+// кнопка диктовки должна писать и сюда, не только в title/desc) — когда
+// они переданы, поле становится controlled и родитель может вставлять в
+// него надиктованный текст; без них компонент ведёт себя как раньше
+// (собственный локальный state), поэтому существующие вызовы не ломаются.
+// onFocus/onBlur наружу — тем же способом, каким title/desc уже сообщают
+// MicKeyboardBar, в каком поле сейчас курсор.
+export function AddSubtaskRow({
+  onAdd,
+  value: controlledValue,
+  onChange: controlledOnChange,
+  onFocus,
+  onBlur,
+}: {
+  onAdd: (title: string) => void;
+  value?: string;
+  onChange?: (value: string) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+}) {
+  const [localValue, setLocalValue] = useState("");
+  const isControlled = controlledValue !== undefined;
+  const value = isControlled ? controlledValue : localValue;
+  const setValue = isControlled ? controlledOnChange! : setLocalValue;
   const submit = () => {
     const trimmed = value.trim();
     if (!trimmed) return;
@@ -516,6 +539,8 @@ export function AddSubtaskRow({ onAdd }: { onAdd: (title: string) => void }) {
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
+        onFocus={onFocus}
+        onBlur={onBlur}
         placeholder="Добавить подзадачу..."
         className="flex-1 min-w-0 bg-transparent text-[16px] text-sub placeholder:text-sub outline-none"
       />

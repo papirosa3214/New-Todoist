@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect, type TouchEvent } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
@@ -103,10 +103,6 @@ const WEEKDAYS = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"];
 //      не срабатывает.
 //    Результат — реальная intrinsic-высота контента в обе стороны, без
 //    угаданных чисел, переживает переменную высоту строки перехода месяца.
-
-// Свайп по ручке-засечке короче этого порога (px по Y) считается тапом —
-// его обрабатывает обычный onClick, а не сам touch-хэндлер.
-const SWIPE_THRESHOLD = 24;
 
 // Сколько недель показывать в ленте. На образце — пять строк подряд.
 const WEEKS_COUNT = 5;
@@ -258,11 +254,12 @@ export function UpcomingScreen() {
     );
   }
 
-  // Единая точка входа для месяц↔неделя — дёргают и кнопка в шапке, и
-  // ручка-засечка (клик/свайп), поэтому оба управления не могут разойтись:
-  // это один и тот же вызов над одним и тем же состоянием. Меряет ТЕКУЩУЮ
-  // (ещё старую) высоту ВНЕШНЕГО блока ДО смены calMode и фиксирует её как
-  // явный height — это стартовая точка анимации, см. useEffect ниже.
+  // Единая точка входа для месяц↔неделя — дёргает кнопка в шапке (owner
+  // 2026-08-13: ручку-засечку под календарём убрали целиком вместе со
+  // свайпом — она дублировала эту же кнопку и оставляла пустую полосу
+  // между сеткой дней и списком задач). Меряет ТЕКУЩУЮ (ещё старую) высоту
+  // ВНЕШНЕГО блока ДО смены calMode и фиксирует её как явный height — это
+  // стартовая точка анимации, см. useEffect ниже.
   function changeMode(next: "month" | "week") {
     if (next === calMode) return;
     if (!prefersReducedMotion()) {
@@ -400,43 +397,14 @@ export function UpcomingScreen() {
     setMonthPickerOpen(false);
   }
 
-  // ── Свайп по ручке-засечке ──
-  // touchstart/touchmove в React 17+ регистрируются пассивно на корне, так
-  // что preventDefault там не остановит скролл/системные жесты — поэтому
-  // жест «глушится» через CSS touch-action:none на самой ручке (класс
-  // touch-none ниже), а не через preventDefault в этих хэндлерах. Порог по
-  // Y решает, был ли это свайп (сработает тут) или короткий тап (сработает
-  // обычный onClick на этом же элементе).
-  const touchStartY = useRef<number | null>(null);
-
-  function handleTouchStart(e: TouchEvent) {
-    touchStartY.current = e.touches[0]?.clientY ?? null;
-  }
-
-  function handleTouchEnd(e: TouchEvent) {
-    const startY = touchStartY.current;
-    touchStartY.current = null;
-    if (startY === null) return;
-    const endY = e.changedTouches[0]?.clientY ?? startY;
-    const dy = endY - startY;
-    if (dy <= -SWIPE_THRESHOLD && calMode !== "week") {
-      // touchend (в отличие от touchstart/touchmove) не форсится пассивным,
-      // preventDefault здесь реально гасит «призрачный» click после свайпа
-      // — иначе он вызвал бы toggleCalMode ещё раз и откатил переключение.
-      e.preventDefault();
-      changeMode("week");
-    } else if (dy >= SWIPE_THRESHOLD && calMode !== "month") {
-      e.preventDefault();
-      changeMode("month");
-    }
-    // Иначе — сдвиг меньше порога, это тап: пусть его обработает обычный
-    // onClick на этой же ручке (единая точка входа toggleCalMode).
-  }
-
   return (
     <div className="px-4 pb-4">
-      {/* Закреплённый «хром»: шапка экрана + календарь + ручка-засечка —
-          всё в одном sticky-блоке. ScreenHeader сам уже sticky top-0
+      {/* Закреплённый «хром»: шапка экрана + календарь — всё в одном
+          sticky-блоке (owner 2026-08-13: ручку-засечку под сеткой дней
+          убрали — свайп ею дублировал кнопку toggleCalMode в шапке, а
+          пустая 36px-полоса под ней отделяла список задач от чисел
+          календаря без необходимости; граница/тень блока теперь сразу
+          под сеткой дней). ScreenHeader сам уже sticky top-0
           (см. UI.tsx), но вложенный в уже прилипший родитель, эта
           собственная стики-логика становится no-op: как только внешний
           блок прилип к верху скролл-контейнера, всё что внутри нём (шапка,
@@ -694,33 +662,6 @@ export function UpcomingScreen() {
             </div>
           </>
         )}
-
-        {/* Ручка-засечка: свайп вверх — свернуть в неделю, свайп вниз —
-            развернуть в месяц; на устройствах без touch (мышь) короткий
-            клик делает то же самое через toggleCalMode. Видимая полоска —
-            4px, но интерактивная область — полные 44px по высоте
-            (тап-таргет). */}
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label={
-            calMode === "month"
-              ? "Свернуть календарь в неделю"
-              : "Развернуть календарь в месяц"
-          }
-          onClick={toggleCalMode}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              toggleCalMode();
-            }
-          }}
-          onTouchStart={handleTouchStart}
-          onTouchEnd={handleTouchEnd}
-          className="flex items-center justify-center h-[36px] touch-none select-none cursor-pointer"
-        >
-          <span className="w-[36px] h-[4px] rounded-full bg-dim/70" />
-        </div>
       </div>
 
       {/* Selected date indicator */}

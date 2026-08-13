@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSearch } from "../api/search";
+import { useUpdateTask } from "../api/tasks";
 import { Icon, ErrorBanner } from "../components/UI";
 import { getPriorityColor } from "../lib/priority";
 
@@ -31,6 +32,7 @@ export function SearchScreen() {
   const isDebouncing = hasQuery && debouncedQuery !== query.trim();
 
   const { data, isLoading, isError, error } = useSearch(debouncedQuery);
+  const updateTask = useUpdateTask();
   const tasks = data?.tasks ?? [];
   const projects = data?.projects ?? [];
   const labels = data?.labels ?? [];
@@ -112,38 +114,64 @@ export function SearchScreen() {
                 Задачи
               </h3>
               <div className="space-y-[2px]">
-                {tasks.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => navigate(`/task/${t.id}`)}
-                    className="w-full flex items-start gap-3 py-3 px-1 text-left border-b border-stroke/50"
-                  >
+                {/* Owner 2026-08-13: same dot-toggles-status split as
+                    TaskRow.tsx (its own comment has the full rationale) —
+                    two sibling <button>s in a non-button wrapper, not one
+                    nested in the other. */}
+                {tasks.map((t) => {
+                  const isDone = t.status === "completed";
+                  return (
                     <div
-                      className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
-                      style={{
-                        borderColor: getPriorityColor(t.priority),
-                      }}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[15px] text-text truncate">
-                        {t.title}
-                      </div>
-                      {(t.project_name || t.description) && (
-                        <div className="text-[12px] text-sub mt-0.5 truncate">
-                          {t.project_name && (
-                            <span
-                              style={{ color: t.project_color || undefined }}
-                            >
-                              #{t.project_name}
-                            </span>
-                          )}
-                          {t.project_name && t.description ? " · " : ""}
-                          {t.description}
+                      key={t.id}
+                      className="tap-row w-full flex items-start gap-3 py-3 px-1 border-b border-stroke/50"
+                    >
+                      <button
+                        onClick={() =>
+                          updateTask.mutate({
+                            id: t.id,
+                            status: isDone ? "active" : "completed",
+                          })
+                        }
+                        aria-label={
+                          isDone ? "Вернуть в работу" : "Отметить выполненной"
+                        }
+                        className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0 flex items-center justify-center"
+                        style={{
+                          borderColor: getPriorityColor(t.priority),
+                        }}
+                      >
+                        {isDone && (
+                          <Icon name="check" size={12} className="text-white" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => navigate(`/task/${t.id}`)}
+                        className="flex-1 min-w-0 text-left"
+                      >
+                        <div
+                          className={`text-[15px] truncate ${isDone ? "line-through text-sub" : "text-text"}`}
+                        >
+                          {t.title}
                         </div>
-                      )}
+                        {(t.project_name || t.description) && (
+                          <div className="text-[12px] text-sub mt-0.5 truncate">
+                            {t.project_name && (
+                              <span
+                                style={{
+                                  color: t.project_color || undefined,
+                                }}
+                              >
+                                #{t.project_name}
+                              </span>
+                            )}
+                            {t.project_name && t.description ? " · " : ""}
+                            {t.description}
+                          </div>
+                        )}
+                      </button>
                     </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

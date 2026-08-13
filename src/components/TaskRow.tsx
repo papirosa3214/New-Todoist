@@ -22,16 +22,36 @@
 // mockup-fidelity fix, not just deduplication. Press feedback is `tap-row`
 // (index.css's own canonical answer for "a row inside a list" — Inbox/
 // Project's `active:bg-card/50 transition-colors` was exactly the kind of
-// ad-hoc drift that block's own comment calls out), and the label pill
-// always uses the "tag" icon (Upcoming's single label pill used "shield" —
-// the odd one out against Inbox/Project/LabelsScreen's "tag" convention).
+// ad-hoc drift that block's own comment calls out) — it lives on the outer
+// wrapping <div> now, not a <button>, see the priority-dot comment below
+// for why. Label pill always uses the "tag" icon (Upcoming's single label
+// pill used "shield" — the odd one out against Inbox/Project/LabelsScreen's
+// "tag" convention).
 //
 // Props below are only for genuine per-screen product differences (what a
 // row is allowed to show at all), never for restyling the same badge two
 // ways — see each prop's comment for which screen needs it and why.
+//
+// Priority dot — owner 2026-08-13: it used to be a plain decorative <div>
+// inside the row's single <button>, so tapping it just opened the task like
+// tapping anywhere else. Split into its OWN <button> (toggles status
+// active↔completed, same call TaskDetailScreen's ring already makes) next
+// to a second <button> carrying the rest of the row (title/description/
+// meta/avatar, still opens the task) — two buttons side by side, not one
+// nested in the other, since nested <button>s are invalid HTML and break
+// focus/click handling. stopPropagation isn't needed for this: they're
+// siblings, not ancestor/descendant, so a dot tap never reaches the row's
+// onClick at all. 18px + 12px check icon matches the size TaskDetailScreen
+// already uses for its own subtask rows (SubtaskToggleRow in that file,
+// TaskFields.tsx's AddSubtaskRow placeholder) — the one size this project's
+// checkable circles converge on; TaskDetailScreen's OWN task-status ring
+// (22px) and TaskBoard's board-card dot (12px) are unified down/up to this
+// same 18px in the same pass, so every priority dot in the app now measures
+// the same regardless of which screen it's on.
 import { Icon, Avatar, AgentStateTag } from "./UI";
 import { getPriorityColor } from "../lib/priority";
 import { formatDueLabel, MONTHS_SHORT } from "../lib/date";
+import { useUpdateTask } from "../api/tasks";
 import type { ApiTask } from "../api/types";
 
 // Plain "8 авг" — no relative "Сегодня/Завтра" prefix, no trailing dot.
@@ -87,6 +107,8 @@ export function TaskRow({
   showSubtasksBadge = true,
   showAvatar = true,
 }: TaskRowProps) {
+  const updateTask = useUpdateTask();
+  const isDone = task.status === "completed";
   const doneSub = task.subtasks.filter((s) => s.done).length;
   const visibleLabels = maxLabels > 0 ? task.labels.slice(0, maxLabels) : [];
 
@@ -103,62 +125,80 @@ export function TaskRow({
     hasLabels;
 
   return (
-    <button
-      onClick={onClick}
-      className="tap-row w-full flex items-start gap-3 py-3 px-1 text-left border-b border-stroke/50"
-    >
-      <div
-        className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
+    // tap-row sits on this outer div, not on either button — CSS :active
+    // propagates up to ancestors of whichever element is actually pressed,
+    // so tapping either the dot or the content button still washes the
+    // whole row exactly like the old single-<button> row did.
+    <div className="tap-row w-full flex items-start gap-3 py-3 px-1 border-b border-stroke/50">
+      <button
+        onClick={() =>
+          updateTask.mutate({
+            id: task.id,
+            status: isDone ? "active" : "completed",
+          })
+        }
+        aria-label={isDone ? "Вернуть в работу" : "Отметить выполненной"}
+        className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0 flex items-center justify-center"
         style={{ borderColor: getPriorityColor(task.priority) }}
-      />
-      <div className="flex-1 min-w-0">
-        <div className="text-[15px] text-text leading-snug truncate">
-          {task.title}
+      >
+        {isDone && <Icon name="check" size={12} className="text-white" />}
+      </button>
+      <button
+        onClick={onClick}
+        className="flex-1 min-w-0 flex items-start gap-3 text-left"
+      >
+        <div className="flex-1 min-w-0">
+          <div
+            className={`text-[15px] leading-snug truncate ${isDone ? "line-through text-sub" : "text-text"}`}
+          >
+            {task.title}
+          </div>
+          {task.description && (
+            <div className="text-[13px] text-sub mt-0.5 line-clamp-2">
+              {task.description}
+            </div>
+          )}
+          {hasMeta && (
+            <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+              {hasOverduePill && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
+                  <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
+                  {formatDueLabel(task.due_date!)}
+                </span>
+              )}
+              {hasAgentTag && <AgentStateTag task={task} />}
+              {visibleLabels.map((l) => (
+                <span
+                  key={l.id}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+                  style={{ backgroundColor: l.color + "26", color: l.color }}
+                >
+                  <Icon name="tag" size={10} /> {l.name}
+                </span>
+              ))}
+              {hasDueBadge && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
+                  <Icon name="calendarSmall" size={10} />{" "}
+                  {formatDue(task.due_date!)}
+                </span>
+              )}
+              {hasSubtasksBadge && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
+                  <Icon name="check" size={10} /> {doneSub}/
+                  {task.subtasks.length}
+                </span>
+              )}
+            </div>
+          )}
         </div>
-        {task.description && (
-          <div className="text-[13px] text-sub mt-0.5 line-clamp-2">
-            {task.description}
-          </div>
+        {showAvatar && task.assignee_id && task.assignee_initials && (
+          <Avatar
+            initials={task.assignee_initials}
+            color={task.assignee_color || "#A6A6A6"}
+            size={24}
+          />
         )}
-        {hasMeta && (
-          <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-            {hasOverduePill && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
-                <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
-                {formatDueLabel(task.due_date!)}
-              </span>
-            )}
-            {hasAgentTag && <AgentStateTag task={task} />}
-            {visibleLabels.map((l) => (
-              <span
-                key={l.id}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
-                style={{ backgroundColor: l.color + "26", color: l.color }}
-              >
-                <Icon name="tag" size={10} /> {l.name}
-              </span>
-            ))}
-            {hasDueBadge && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                <Icon name="calendarSmall" size={10} />{" "}
-                {formatDue(task.due_date!)}
-              </span>
-            )}
-            {hasSubtasksBadge && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                <Icon name="check" size={10} /> {doneSub}/{task.subtasks.length}
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-      {showAvatar && task.assignee_id && task.assignee_initials && (
-        <Avatar
-          initials={task.assignee_initials}
-          color={task.assignee_color || "#A6A6A6"}
-          size={24}
-        />
-      )}
-    </button>
+      </button>
+    </div>
   );
 }

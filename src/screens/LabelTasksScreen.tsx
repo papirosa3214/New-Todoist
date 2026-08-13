@@ -8,7 +8,7 @@
 // is cheaper than a new route and doesn't touch any existing contract.
 import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useTasks } from "../api/tasks";
+import { useTasks, useUpdateTask } from "../api/tasks";
 import { useLabels } from "../api/labels";
 import {
   Icon,
@@ -41,6 +41,7 @@ export function LabelTasksScreen() {
     isError: tasksError,
     error: tasksErrorObj,
   } = useTasks();
+  const updateTask = useUpdateTask();
 
   const label = useMemo(() => labels.find((l) => l.id === id), [labels, id]);
 
@@ -120,67 +121,92 @@ export function LabelTasksScreen() {
         )}
 
       <div className="space-y-[2px]">
+        {/* Owner 2026-08-13: same dot-toggles-status split as TaskRow.tsx
+            (its own comment has the full rationale). This screen already
+            filters to status:"active" tasks above, so a toggle here just
+            makes the row disappear from the list on the next refetch —
+            same as ticking off a task anywhere else in the app. */}
         {tasks.map((task) => {
           const hasSubtasks = task.subtasks.length > 0;
           const doneSub = task.subtasks.filter((s) => s.done).length;
+          const isDone = task.status === "completed";
           return (
-            <button
+            <div
               key={task.id}
-              onClick={() => navigate(`/task/${task.id}`)}
-              className="w-full flex items-start gap-3 py-3 px-1 text-left border-b border-stroke/50"
+              className="tap-row w-full flex items-start gap-3 py-3 px-1 border-b border-stroke/50"
             >
-              <div
-                className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0"
+              <button
+                onClick={() =>
+                  updateTask.mutate({
+                    id: task.id,
+                    status: isDone ? "active" : "completed",
+                  })
+                }
+                aria-label={
+                  isDone ? "Вернуть в работу" : "Отметить выполненной"
+                }
+                className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0 flex items-center justify-center"
                 style={{
                   borderColor: PRIORITY_COLORS[task.priority] || "#4A9FD8",
                 }}
-              />
-              <div className="flex-1 min-w-0">
-                <div className="text-[15px] text-text leading-snug mb-1 truncate">
-                  {task.title}
+              >
+                {isDone && (
+                  <Icon name="check" size={12} className="text-white" />
+                )}
+              </button>
+              <button
+                onClick={() => navigate(`/task/${task.id}`)}
+                className="flex-1 min-w-0 flex items-start gap-3 text-left"
+              >
+                <div className="flex-1 min-w-0">
+                  <div
+                    className={`text-[15px] leading-snug mb-1 truncate ${isDone ? "line-through text-sub" : "text-text"}`}
+                  >
+                    {task.title}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-sub">
+                    {task.description && (
+                      <span className="truncate max-w-[200px]">
+                        {task.description.substring(0, 50)}…
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                    {task.labels.map((l) => (
+                      <span
+                        key={l.id}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+                        style={{
+                          backgroundColor: l.color + "26",
+                          color: l.color,
+                        }}
+                      >
+                        <Icon name="tag" size={10} /> {l.name}
+                      </span>
+                    ))}
+                    {task.due_date && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
+                        <Icon name="calendarSmall" size={10} />{" "}
+                        {formatDue(task.due_date)}
+                      </span>
+                    )}
+                    {hasSubtasks && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
+                        <Icon name="check" size={10} /> {doneSub}/
+                        {task.subtasks.length}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-sub">
-                  {task.description && (
-                    <span className="truncate max-w-[200px]">
-                      {task.description.substring(0, 50)}…
-                    </span>
-                  )}
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                  {task.labels.map((l) => (
-                    <span
-                      key={l.id}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
-                      style={{
-                        backgroundColor: l.color + "26",
-                        color: l.color,
-                      }}
-                    >
-                      <Icon name="tag" size={10} /> {l.name}
-                    </span>
-                  ))}
-                  {task.due_date && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                      <Icon name="calendarSmall" size={10} />{" "}
-                      {formatDue(task.due_date)}
-                    </span>
-                  )}
-                  {hasSubtasks && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                      <Icon name="check" size={10} /> {doneSub}/
-                      {task.subtasks.length}
-                    </span>
-                  )}
-                </div>
-              </div>
-              {task.assignee_id && task.assignee_initials && (
-                <Avatar
-                  initials={task.assignee_initials}
-                  color={task.assignee_color || "#A6A6A6"}
-                  size={24}
-                />
-              )}
-            </button>
+                {task.assignee_id && task.assignee_initials && (
+                  <Avatar
+                    initials={task.assignee_initials}
+                    color={task.assignee_color || "#A6A6A6"}
+                    size={24}
+                  />
+                )}
+              </button>
+            </div>
           );
         })}
       </div>
