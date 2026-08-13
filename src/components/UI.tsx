@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Children,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -418,6 +419,18 @@ const NAV_ITEMS = [
 // дописать их означало бы поменять его числа (padding/высоту/подъём),
 // что запрещено. Счётчик задач на «Сегодня» — наше дополнение (см.
 // .nt-tabbar-badge в index.css), в оригинале его не было.
+//
+// Owner 2026-08-13 (десятый заход): счётчик раньше был виден постоянно,
+// пока на «Сегодня» есть активные задачи — владелец: «я же уже увидел
+// её, увидел, мне не надо, чтобы она постоянно маячила». Теперь счётчик
+// гаснет ПОСЛЕ первого захода на /today в текущий день и не появляется
+// заново до полуночи (или до перезахода следующим днём), даже если
+// список задач меняется — правило простое («увидел раз — достаточно»),
+// без отдельного отслеживания «появились ли НОВЫЕ задачи с прошлого
+// захода». Хранится в localStorage (не sessionStorage) — иначе счётчик
+// возвращался бы при каждом перезапуске вкладки/приложения в тот же день.
+const TODAY_BADGE_SEEN_KEY = "taskflow_today_badge_seen_date";
+
 export function BottomNav() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -429,6 +442,16 @@ export function BottomNav() {
       ),
     [allTasks],
   );
+  const [badgeSeenDate, setBadgeSeenDate] = useState(() =>
+    localStorage.getItem(TODAY_BADGE_SEEN_KEY),
+  );
+  useEffect(() => {
+    if (location.pathname !== "/today") return;
+    const today = todayStr();
+    if (badgeSeenDate === today) return; // уже отмечено — не дёргать localStorage/render зря
+    localStorage.setItem(TODAY_BADGE_SEEN_KEY, today);
+    setBadgeSeenDate(today);
+  }, [location.pathname, badgeSeenDate]);
   // Индикатора «ждут вас» в меню намеренно НЕТ. Пробовали и число, и
   // точку — решение владельца (11.08.2026): в меню показывается только
   // «сколько задач на сегодня», а то, что ждёт его решения, он видит
@@ -440,7 +463,8 @@ export function BottomNav() {
 
   const tabItems: TabItem[] = NAV_ITEMS.map((item) => {
     const isToday = item.path === "/today";
-    const showBadge = isToday && todayTasks.length > 0;
+    const showBadge =
+      isToday && todayTasks.length > 0 && badgeSeenDate !== todayStr();
     return {
       // Счётчик — не только визуально (.nt-tabbar-badge), но и в
       // aria-label: у AnimatedTabBar.tsx badge помечен aria-hidden (это
