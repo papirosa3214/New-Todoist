@@ -473,7 +473,17 @@ export function TaskFormScreen() {
       {/* Title — кнопки микрофона тут нет (owner 2026-08-13, третий заход):
           она живёт в плавающей панели над клавиатурой, показывается пока
           это поле в фокусе — см. keyboardFieldFocused/handleFieldFocus
-          выше и MicKeyboardBar в самом конце разметки. */}
+          выше и MicKeyboardBar в самом конце разметки.
+          Owner 2026-08-13 (шестой заход, типографика): владелец свёл всю
+          карточку к ДВУМ типоразмерам — крупный (17px, = заголовок экрана
+          «Новая задача»/«Изменить задачу», ScreenHeader compact-вариант,
+          UI.tsx) только для лейблов-заголовков секций («Подзадачи»,
+          «Заметка»), мелкий (13px, = прежний размер лейбла «Подзадачи» —
+          он же теперь общий для любого вводимого текста) для содержимого
+          полей: этого textarea, «Добавить подзадачу», textarea описания.
+          Раньше название задачи было самым крупным элементом (20px) —
+          прямая, явная просьба владельца сделать наоборот: жирности/
+          выделения у поля ввода не остаётся, весь акцент — на лейблах. */}
       <textarea
         value={title}
         onChange={(e) => setTitle(e.target.value)}
@@ -483,7 +493,7 @@ export function TaskFormScreen() {
         }}
         onFocus={() => handleFieldFocus("title")}
         placeholder="Название задачи"
-        className="block w-full bg-transparent text-[20px] font-medium text-text placeholder:text-dim resize-none outline-none mb-4 min-h-[32px]"
+        className="block w-full bg-transparent text-[13px] text-text placeholder:text-dim resize-none outline-none mb-4 min-h-[20px]"
         rows={1}
       />
 
@@ -499,9 +509,11 @@ export function TaskFormScreen() {
           title сокращает этот путь до одного экрана. Список — БЕЗ Card-
           обёртки (bg-card/рамка/разделители), в общем потоке страницы, тем
           же приёмом, что и обычный текст: владелец явно попросил убрать
-          карточку, оставить только заголовок и кнопку «Разбить». */}
+          карточку, оставить только заголовок и кнопку «Разбить».
+          Шестой заход: лейбл «Подзадачи» вырос до крупного типоразмера
+          (17px) — см. комментарий у textarea названия выше. */}
       <div className="flex items-center justify-between px-1 mb-2">
-        <span className="text-[13px] text-sub font-semibold">Подзадачи</span>
+        <span className="text-[17px] text-sub font-semibold">Подзадачи</span>
         <button
           onClick={handleSuggestSubtasks}
           disabled={!title.trim() || suggestPending}
@@ -637,14 +649,21 @@ export function TaskFormScreen() {
       </div>
 
       {/* Description — тот же принцип: своей кнопки нет, панель над
-          клавиатурой пишет сюда, если в фокусе было это поле. */}
+          клавиатурой пишет сюда, если в фокусе было это поле.
+          Owner 2026-08-13 (шестой заход): лейбл «Заметка» — новый, той же
+          разметкой (px-1 mb-2), что и лейбл «Подзадачи» выше, крупный
+          типоразмер (17px). Сам textarea — мелкий (13px), тот же приём,
+          что и у названия задачи. */}
+      <div className="px-1 mb-2">
+        <span className="text-[17px] text-sub font-semibold">Заметка</span>
+      </div>
       <textarea
         value={desc}
         onChange={(e) => setDesc(e.target.value)}
         onFocus={() => handleFieldFocus("desc")}
         onBlur={handleFieldBlur}
         placeholder="Описание"
-        className="block w-full bg-transparent text-[16px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px]"
+        className="block w-full bg-transparent text-[13px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px]"
         rows={2}
       />
 

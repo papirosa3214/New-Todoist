@@ -499,8 +499,13 @@ export function SubtaskRow({
   );
 }
 
-// New-subtask input row — mockup's "Добавить подзадачу..." row (48px,
-// gray-bordered circle placeholder). Used by both screens.
+// New-subtask input row — mockup's "Добавить подзадачу..." row (48px).
+// Owner 2026-08-13 (шестой заход, типографика): decorative gray-bordered
+// circle placeholder removed on request — this row is a plain text input,
+// not a checkable subtask (those already have their own real circle, see
+// SubtaskRow above). Text size dropped 16px to 13px, the "мелкий" (content)
+// size the whole form's typography now converges on — see the comment on
+// TaskFormScreen's title textarea for the full two-size rationale.
 //
 // value/onChange опциональны и подняты в TaskFormScreen (owner 2026-08-13:
 // кнопка диктовки должна писать и сюда, не только в title/desc) — когда
@@ -534,7 +539,6 @@ export function AddSubtaskRow({
   };
   return (
     <div className="flex items-center gap-3 px-4" style={{ minHeight: 48 }}>
-      <div className="w-[16px] h-[16px] rounded-full border-2 border-dim shrink-0" />
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -542,7 +546,7 @@ export function AddSubtaskRow({
         onFocus={onFocus}
         onBlur={onBlur}
         placeholder="Добавить подзадачу..."
-        className="flex-1 min-w-0 bg-transparent text-[16px] text-sub placeholder:text-sub outline-none"
+        className="flex-1 min-w-0 bg-transparent text-[13px] text-sub placeholder:text-sub outline-none"
       />
       {value.trim() && (
         <button onClick={submit} className="p-2 -m-1 shrink-0">
