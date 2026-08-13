@@ -32,7 +32,13 @@ import {
   AddSubtaskRow,
 } from "../components/TaskFields";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
-import { findProjectByName, parseDictation } from "../lib/dictationParser";
+import {
+  combineDictatedText,
+  findProjectByName,
+  parseDictation,
+} from "../lib/dictationParser";
+import { useMicRecorder } from "../lib/useMicRecorder";
+import { useTranscribeAudio } from "../api/audio";
 import type { UpdateTaskInput } from "../api/tasks";
 
 export function TaskFormScreen() {
@@ -161,6 +167,52 @@ export function TaskFormScreen() {
     }
   });
   const isSaving = createTask.isPending || updateTask.isPending;
+
+  // ── Кнопка микрофона — свой ASR, не сторонний инструмент ──
+  // Superwhisper (macOS/Windows/iOS) не покрывает все устройства, с
+  // которых открыт этот веб-апп (в частности Linux) — см. память
+  // maksim-uses-superwhisper-mac.md. Голос записывается прямо в браузере
+  // и уходит на локальный ASR-сервис через свой же backend
+  // (server/src/routes/transcribe.ts), затем текст проходит ЧЕРЕЗ ТОТ ЖЕ
+  // parseDictation, что и Superwhisper-диктовка ниже (applyDictationParse)
+  // — маркеры #Проект/!приоритет/дата разбираются одинаково независимо от
+  // того, откуда взялся текст.
+  //
+  // Хуки объявлены здесь, ДО веток isEdit/taskLoading/hydrated ниже (те же
+  // правила хуков, что и у useGuardedCallback выше) — иначе на части
+  // рендеров (загрузка/edit-режим) они бы не вызывались вовсе.
+  const transcribeAudio = useTranscribeAudio();
+  const mic = useMicRecorder(async (blob) => {
+    try {
+      const { text } = await transcribeAudio.mutateAsync(blob);
+      const combined = combineDictatedText(title, text);
+      if (isEdit) {
+        setTitle(combined);
+      } else {
+        const parsed = parseDictation(combined);
+        setTitle(parsed.title);
+        if (parsed.dueDate) setDueDate(parsed.dueDate);
+        if (parsed.priority) setPriority(parsed.priority);
+        if (parsed.projectName) {
+          const match = findProjectByName(projects, parsed.projectName);
+          if (match) setProjectId(match.id);
+        }
+      }
+    } catch {
+      // transcribeAudio.error уже несёт причину — ErrorBanner ниже её
+      // покажет, дублировать текст здесь не нужно.
+    } finally {
+      mic.finish();
+    }
+  });
+  const micError =
+    mic.error ?? (transcribeAudio.isError ? transcribeAudio.error : null);
+  const micElapsedLabel = (() => {
+    const totalSec = Math.floor(mic.elapsedMs / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  })();
 
   // Дёргает эндпоинт разбивки — существующая задача шлёт свой id (сервер
   // сам подтянет title/description из БД), но тело всё равно везёт текущие
@@ -366,14 +418,52 @@ export function TaskFormScreen() {
         className="mb-4"
       />
 
-      {/* Title */}
-      <textarea
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        onBlur={applyDictationParse}
-        placeholder="Название задачи"
-        className="block w-full bg-transparent text-[20px] font-medium text-text placeholder:text-dim resize-none outline-none mb-2 min-h-[32px]"
-        rows={1}
+      {/* Title + кнопка микрофона (idle 44×44, тот же тап-таргет, что и
+          крестик в шапке; recording/processing — пилюля той же высоты 44,
+          ширина по контенту, чтобы ряд не прыгал вертикально) */}
+      <div className="flex items-center gap-2 mb-2">
+        <textarea
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onBlur={applyDictationParse}
+          placeholder="Название задачи"
+          className="block w-full flex-1 min-w-0 bg-transparent text-[20px] font-medium text-text placeholder:text-dim resize-none outline-none min-h-[32px]"
+          rows={1}
+        />
+        {mic.state === "idle" && (
+          <button
+            type="button"
+            onClick={mic.start}
+            aria-label="Надиктовать"
+            className="w-[44px] h-[44px] shrink-0 flex items-center justify-center active:scale-95"
+          >
+            <Icon name="mic" size={18} className="text-dim" />
+          </button>
+        )}
+        {mic.state === "recording" && (
+          <button
+            type="button"
+            onClick={mic.stop}
+            aria-label="Остановить запись"
+            className="h-[44px] shrink-0 flex items-center gap-2 px-3 rounded-full bg-red/10 active:opacity-70"
+          >
+            <span className="mic-rec-dot w-2 h-2 rounded-full bg-red" />
+            <span className="text-[12px] font-medium text-red tabular-nums">
+              {micElapsedLabel}
+            </span>
+          </button>
+        )}
+        {mic.state === "processing" && (
+          <div className="h-[44px] shrink-0 flex items-center px-3 rounded-full bg-card2">
+            <span className="text-[12px] text-sub">Распознаю…</span>
+          </div>
+        )}
+      </div>
+      <ErrorBanner
+        error={micError}
+        fallback="Не удалось распознать речь. Проверьте соединение."
+        variant="block"
+        className="mb-2"
       />
 
       {/* Description */}

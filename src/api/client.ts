@@ -47,13 +47,18 @@ async function parseBody(res: Response): Promise<any> {
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
-    // Only declare a JSON content-type when a body is actually going out.
-    // Fastify's JSON body parser 400s ("FST_ERR_CTP_EMPTY_JSON_BODY") on a
-    // request that sets this header but sends no body — which every
-    // bodyless call does: api.delete() always, and the handful of
-    // api.post()/api.patch() calls with no `data` argument (e.g.
-    // /api/notifications/read-all, /api/notifications/:id/read).
-    ...(options.body !== undefined
+    // Only declare a JSON content-type when a body is actually going out
+    // AND is actually JSON (a string — every api.post/patch call below
+    // passes JSON.stringify(...) as the body). A Blob body (api.postBlob,
+    // used for the mic-recording upload — see api/audio.ts) must NOT get
+    // this header: it would lie about the payload's real type and, unlike
+    // a plain string body, fetch() would still send it verbatim instead of
+    // deriving the header from the Blob's own `type`. Bodyless calls
+    // (api.delete() always, api.post()/api.patch() with no `data`) must
+    // also skip it — Fastify's JSON body parser 400s
+    // ("FST_ERR_CTP_EMPTY_JSON_BODY") on a Content-Type: application/json
+    // request that carries no body at all.
+    ...(typeof options.body === "string"
       ? { "Content-Type": "application/json" }
       : {}),
     ...(options.headers as Record<string, string> | undefined),
@@ -98,4 +103,16 @@ export const api = {
     }),
   delete: <T>(path: string): Promise<T> =>
     request<T>(path, { method: "DELETE" }),
+  // Raw binary upload (mic recording → ASR, see api/audio.ts). Explicit
+  // Content-Type from the Blob's own `type` (set by MediaRecorder) rather
+  // than leaving it to fetch's Blob-body inference — the server's
+  // addContentTypeParser(/^audio\//) match needs to see it as a real
+  // header either way, explicit is one less "does the browser actually do
+  // this" assumption to trust.
+  postBlob: <T>(path: string, blob: Blob): Promise<T> =>
+    request<T>(path, {
+      method: "POST",
+      body: blob,
+      headers: { "Content-Type": blob.type || "application/octet-stream" },
+    }),
 };

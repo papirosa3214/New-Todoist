@@ -329,6 +329,22 @@ export function parseDictation(
   return { title: text, dueDate, projectName, priority };
 }
 
+// ═══════════ Кнопка микрофона: вставка распознанного текста ═══════════
+
+// Распознанный ASR текст добавляется к уже введённому, а не заменяет его —
+// та же логика, что и у обычного набора текста: несколько нажатий кнопки
+// подряд («Купить молоко» + «завтра») копятся в одну фразу, а не стирают
+// предыдущую попытку. Пустой текущий заголовок — просто подставляем текст
+// без склейки (без ведущего пробела).
+export function combineDictatedText(current: string, incoming: string): string {
+  const trimmedIncoming = incoming.trim();
+  if (!trimmedIncoming) return current;
+  const trimmedCurrent = current.trim();
+  return trimmedCurrent
+    ? `${trimmedCurrent} ${trimmedIncoming}`
+    : trimmedIncoming;
+}
+
 // Сверка сырого `#Имя` со списком реальных проектов пользователя —
 // регистронезависимо, по обрезанным пробелам. Вынесено отдельной чистой
 // функцией ради юнит-теста без React; в форме проект просто не

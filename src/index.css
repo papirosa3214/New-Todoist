@@ -496,3 +496,20 @@
   color: var(--color-red);
   white-space: nowrap;
 }
+
+/* Кнопка микрофона (TaskFormScreen) — пульсирующая точка «идёт запись».
+   Системное значение (1s ease-in-out), не подобрано на глаз — агент не
+   ощущает пружину/плавность, см. design-by-measurement. */
+@keyframes mic-rec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.mic-rec-dot {
+  animation: mic-rec-pulse 1s ease-in-out infinite;
+}

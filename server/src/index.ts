@@ -13,12 +13,27 @@ import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerAiRoutes } from "./routes/ai.js";
+import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerSeedRoutes } from "./seed.js";
 
 const PORT = Number(process.env.PORT) || 3001;
 const HOST = process.env.HOST || "0.0.0.0";
 
-const app = Fastify({ logger: true });
+// bodyLimit по умолчанию у Fastify — 1 МБ, мало для аудиозаписи диктовки
+// (кнопка микрофона, routes/transcribe.ts). Поднимаем до потолка самого
+// ASR-сервиса (25 МБ, см. local-asr-service.md) — выше смысла нет, он всё
+// равно откажет.
+const app = Fastify({ logger: true, bodyLimit: 25 * 1024 * 1024 });
+
+// Сырые байты audio/* (запись из MediaRecorder на фронтенде) — не JSON,
+// парсим как Buffer и отдаём как есть в req.body. Без этого Fastify упадёт
+// с FST_ERR_CTP_INVALID_MEDIA_TYPE на любом Content-Type, для которого нет
+// зарегистрированного парсера.
+app.addContentTypeParser(
+  /^audio\//,
+  { parseAs: "buffer" },
+  (_req, body, done) => done(null, body),
+);
 
 // Plugins
 // CORS: Явный список разрешённых источников вместо origin:true.
@@ -59,6 +74,7 @@ registerSubtaskCommentRoutes(app);
 registerNotificationRoutes(app);
 registerSearchRoutes(app);
 registerAiRoutes(app);
+registerTranscribeRoutes(app);
 registerSeedRoutes(app);
 
 // Health

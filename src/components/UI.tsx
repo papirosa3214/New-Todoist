@@ -43,6 +43,7 @@ import {
   Mail,
   MapPin,
   Menu,
+  Mic,
   Moon,
   Pencil,
   Play,
@@ -144,6 +145,8 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   sparkles: Sparkles,
   // Доска задач (TaskBoard.tsx) — хендл ручного перетаскивания карточки.
   grip: GripVertical,
+  // Кнопка микрофона (TaskFormScreen) — запись голоса → свой ASR.
+  mic: Mic,
 };
 
 export const Icon = ({

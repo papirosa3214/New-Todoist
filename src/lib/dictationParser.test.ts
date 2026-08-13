@@ -2,7 +2,11 @@
 // Фиксированное "сегодня" передаётся вторым аргументом, чтобы тесты не
 // зависели от системных часов и дня недели, в который их запускают.
 import { describe, expect, it } from "vitest";
-import { findProjectByName, parseDictation } from "./dictationParser";
+import {
+  combineDictatedText,
+  findProjectByName,
+  parseDictation,
+} from "./dictationParser";
 
 // Суббота, 15 августа 2026 — выбрана намеренно как известный день недели,
 // чтобы тесты на «в понедельник» и т.п. были детерминированы.
@@ -195,5 +199,28 @@ describe("findProjectByName", () => {
 
   it("null-имя — сразу undefined", () => {
     expect(findProjectByName(projects, null)).toBeUndefined();
+  });
+});
+
+describe("combineDictatedText — вставка из кнопки микрофона", () => {
+  it("пустой заголовок — просто подставляет распознанный текст", () => {
+    expect(combineDictatedText("", "Купить молоко")).toBe("Купить молоко");
+  });
+
+  it("непустой заголовок — дописывает через пробел", () => {
+    expect(combineDictatedText("Купить молоко", "завтра")).toBe(
+      "Купить молоко завтра",
+    );
+  });
+
+  it("лишние пробелы по краям обеих частей не остаются", () => {
+    expect(combineDictatedText("  Купить молоко  ", "  завтра  ")).toBe(
+      "Купить молоко завтра",
+    );
+  });
+
+  it("пустое распознавание (тишина/шум) — заголовок не трогает", () => {
+    expect(combineDictatedText("Купить молоко", "")).toBe("Купить молоко");
+    expect(combineDictatedText("Купить молоко", "   ")).toBe("Купить молоко");
   });
 });
