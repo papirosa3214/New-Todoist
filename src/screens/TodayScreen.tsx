@@ -242,11 +242,11 @@ export function TodayScreen() {
   const header = (
     <ScreenHeader
       className={trueEmpty ? "w-full" : ""}
-      leading={
-        <div className="bg-card/60 rounded-full p-2">
-          <Icon name="calendarSmall" size={22} className="text-text" />
-        </div>
-      }
+      // Owner 2026-08-13 (десятый заход): leading-иконка убрана — только
+      // «Сегодня» её имела, все остальные разделы (Входящие, Предстоящее,
+      // Обзор) показывают просто текстовый заголовок. Владелец: разное
+      // оформление одного и того же элемента навигации выглядело как
+      // непоследовательность, не как акцент.
       title="Сегодня"
       actions={
         <>
