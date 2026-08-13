@@ -17,33 +17,13 @@ import {
   ErrorBanner,
   BackButton,
 } from "../components/UI";
+import { MONTHS_SHORT } from "../lib/date";
+import { PRIORITY_COLORS } from "../lib/priority";
 
 function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
-  const day = d.getDate();
-  const months = [
-    "янв",
-    "фев",
-    "мар",
-    "апр",
-    "мая",
-    "июн",
-    "июл",
-    "авг",
-    "сен",
-    "окт",
-    "ноя",
-    "дек",
-  ];
-  return `${day} ${months[d.getMonth()]}`;
+  return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
 }
-
-const PRIORITY_COLORS: Record<number, string> = {
-  1: "#E44332",
-  2: "#FF9A14",
-  3: "#4A9FD8",
-  4: "#A6A6A6",
-};
 
 export function LabelTasksScreen() {
   const { id } = useParams<{ id: string }>();
