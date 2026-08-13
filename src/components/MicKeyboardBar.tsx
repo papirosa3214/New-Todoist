@@ -82,7 +82,21 @@ export function MicKeyboardBar({
         // сильнее blur (xl вместо sm): та панель на всю ширину экрана под
         // контентом, эта — маленький плавающий круг на фоне клавиатуры,
         // ему нужна не почти-непрозрачная подложка, а настоящее стекло.
-        className="tap-scale w-11 h-11 rounded-full bg-bg/70 backdrop-blur-xl border border-stroke shadow-[0_2px_10px_rgba(0,0,0,.35)] flex items-center justify-center"
+        // Owner 2026-08-13 (девятый заход): владелец попросил именно
+        // Apple-style «жидкое стекло», не плоский blur — канон проекта
+        // (backdrop-blur-xl без saturate) даёт этот плоский эффект, отсюда
+        // «видно, что инородный». Настоящий iOS material (UIBlurEffect) —
+        // это ВСЕГДА blur + saturate вместе: насыщенность того, что под
+        // стеклом, сама по себе продаёт «стеклянность», один blur без неё
+        // выглядит как обычная полупрозрачная плашка. backdrop-saturate-150
+        // добавлен ТОЛЬКО здесь (точечно, под конкретную просьбу), канон в
+        // UI.tsx не тронут — если понравится, распространить туда отдельным
+        // заходом, не молча заодно. Второй приём — тонкий inset-блик по
+        // верхнему краю (имитирует свет, ловящийся кромкой стекла) поверх
+        // уже существующей внешней тени: border-stroke сам по себе
+        // одинаковый со всех сторон, блик делает верх чуть светлее низа,
+        // как и настоящее выпуклое стекло.
+        className="tap-scale w-11 h-11 rounded-full bg-bg/70 backdrop-blur-xl backdrop-saturate-150 border border-stroke shadow-[0_2px_10px_rgba(0,0,0,.35),inset_0_1px_0_rgba(255,255,255,.14)] flex items-center justify-center"
       >
         <Icon name="mic" size={20} className="text-text" />
       </button>
