@@ -493,7 +493,13 @@ export function TaskFormScreen() {
           просто лишним сдвигом вправо. Теперь везде один общий уровень —
           левый край родительского px-4 (16px), ничего сверху не добавляет
           свой px. */}
-      <div className="text-[17px] text-sub font-semibold mb-2">
+      {/* mt-4 (16px) — девятый заход, замер: без него этот лейбл липнет
+          прямо к border-b шапки (0px зазор, живой замер
+          getBoundingClientRect подтвердил), потому что оба ErrorBanner
+          выше рендерят null и не держат места, когда ошибок нет (обычный
+          случай). 16px — тот же межблочный модуль, что mb-4 держит между
+          остальными секциями формы ниже. */}
+      <div className="text-[17px] text-sub font-semibold mb-2 mt-4">
         {isEdit ? "Изменить задачу" : "Новая задача"}
       </div>
       <textarea
@@ -593,13 +599,17 @@ export function TaskFormScreen() {
         </div>
       )}
 
-      <div className="mb-4">
+      <div>
         {/* No Card wrapper here on purpose (see comment above) — rows lost
             the shared bg-card/rounded frame and the border-t dividers Card
             used to draw between them. Their own px-4/px-[14px] (leftover
             from standing inside that Card) was removed a couple owner
             passes later — see AddSubtaskRow's own comment (TaskFields.tsx)
-            for why. */}
+            for why.
+            No own mb-4 here (девятый заход, замер) — AddSubtaskRow now
+            carries mb-4 itself (same pattern as title/desc textarea), so
+            this wrapper doesn't double it. See AddSubtaskRow's comment for
+            the measured before/after. */}
         {isEdit
           ? [
               ...(existingTask?.subtasks || []).map((st) => (
@@ -665,10 +675,17 @@ export function TaskFormScreen() {
           разметкой, что и лейбл «Подзадачи» выше, крупный типоразмер
           (17px). Сам textarea — мелкий (13px), тот же приём, что и у
           названия задачи. Седьмой заход: px-1 убран — см. комментарий у
-          textarea названия. */}
-      <div className="mb-2">
-        <span className="text-[17px] text-sub font-semibold">Заметка</span>
-      </div>
+          textarea названия.
+          Девятый заход (замер): убран лишний <span>-обёртка — в отличие
+          от «Подзадачи» (там span нужен как flex-item рядом с кнопкой
+          «Разбить»), у «Заметка» это был единственный ребёнок div'а без
+          причины. Строчный span внутри блочного div даёт свой line-box
+          строкой ниже (line-height от унаследованного 17px), из-за чего
+          div.bottom оказывался на ~4px ниже фактического текста — gap до
+          textarea измерялся 12px вместо 8px, как у «Новая задача»→
+          textarea и «Подзадачи»→«Добавить подзадачу». Текст теперь прямо
+          в div, тем же приёмом, что и заголовок экрана выше. */}
+      <div className="text-[17px] text-sub font-semibold mb-2">Заметка</div>
       <textarea
         value={desc}
         onChange={(e) => setDesc(e.target.value)}
