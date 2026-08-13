@@ -225,7 +225,15 @@ function BoardCard({
         </div>
       )}
       <div className="min-w-0 flex-1 flex flex-col gap-1">
-        <div className="flex items-start gap-2">
+        {/* gap-3 (12px), not gap-2 — owner 2026-08-13, tenth pass: dot size
+            got unified to 18px everywhere in the first pass, but this row's
+            own gap to the title text was missed, left at 8px while every
+            other place that shows this same dot (TaskRow, SearchScreen,
+            LabelTasksScreen, TaskDetailScreen — both spots) already used
+            12px. Owner noticed the text sitting at a different distance
+            from the dot depending on which screen/view showed the same
+            task — this was the one outlier. */}
+        <div className="flex items-start gap-3">
           {/* Owner 2026-08-13: priority dots measured 12/18/22px across the
               three places this app shows one — unified to 18px everywhere.
               Clickable now (toggles active↔completed, same call the list
