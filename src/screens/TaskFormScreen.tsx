@@ -442,7 +442,7 @@ export function TaskFormScreen() {
             <Icon name="x" size={18} />
           </button>
         }
-        title={isEdit ? "Изменить задачу" : "Новая задача"}
+        title=""
         actions={
           <button
             onClick={handleSave}
@@ -475,15 +475,27 @@ export function TaskFormScreen() {
           это поле в фокусе — см. keyboardFieldFocused/handleFieldFocus
           выше и MicKeyboardBar в самом конце разметки.
           Owner 2026-08-13 (шестой заход, типографика): владелец свёл всю
-          карточку к ДВУМ типоразмерам — крупный (17px, = заголовок экрана
-          «Новая задача»/«Изменить задачу», ScreenHeader compact-вариант,
-          UI.tsx) только для лейблов-заголовков секций («Подзадачи»,
-          «Заметка»), мелкий (13px, = прежний размер лейбла «Подзадачи» —
-          он же теперь общий для любого вводимого текста) для содержимого
-          полей: этого textarea, «Добавить подзадачу», textarea описания.
-          Раньше название задачи было самым крупным элементом (20px) —
-          прямая, явная просьба владельца сделать наоборот: жирности/
-          выделения у поля ввода не остаётся, весь акцент — на лейблах. */}
+          карточку к ДВУМ типоразмерам — крупный (17px, = прежний заголовок
+          экрана «Новая задача»/«Изменить задачу», ScreenHeader compact-
+          вариант) для лейблов-заголовков секций, мелкий (13px, = прежний
+          размер лейбла «Подзадачи») для содержимого полей.
+          Седьмой заход: заголовок экрана вынесен ИЗ шапки СЮДА — тем же
+          лейблом, что и остальные секции («по аналогии с другими
+          заголовками», прямая формулировка владельца) — ScreenHeader
+          выше теперь получает title="" (шапка остаётся с X/Готово, без
+          текста по центру). Заодно убран px-1, который был у всех
+          лейблов секций (Подзадачи/Заметка/Назначить/Метки) и НЕ было у
+          textarea/списка подзадач — реальная причина «подзадача начинается
+          в одном месте, описание в другом»: список подзадач (SubtaskRow/
+          AddSubtaskRow, TaskFields.tsx) донёс свой px-4 из тех времён,
+          когда стоял внутри Card-рамки (убрана пятым заходом) — там он был
+          нужен как внутренний отступ ОТ ГРАНИЦЫ рамки, а без рамки стал
+          просто лишним сдвигом вправо. Теперь везде один общий уровень —
+          левый край родительского px-4 (16px), ничего сверху не добавляет
+          свой px. */}
+      <div className="text-[17px] text-sub font-semibold mb-2">
+        {isEdit ? "Изменить задачу" : "Новая задача"}
+      </div>
       <textarea
         value={title}
         onChange={(e) => setTitle(e.target.value)}
@@ -510,9 +522,9 @@ export function TaskFormScreen() {
           обёртки (bg-card/рамка/разделители), в общем потоке страницы, тем
           же приёмом, что и обычный текст: владелец явно попросил убрать
           карточку, оставить только заголовок и кнопку «Разбить».
-          Шестой заход: лейбл «Подзадачи» вырос до крупного типоразмера
-          (17px) — см. комментарий у textarea названия выше. */}
-      <div className="flex items-center justify-between px-1 mb-2">
+          Седьмой заход: убран px-1 — см. комментарий у textarea названия
+          выше. */}
+      <div className="flex items-center justify-between mb-2">
         <span className="text-[17px] text-sub font-semibold">Подзадачи</span>
         <button
           onClick={handleSuggestSubtasks}
@@ -582,10 +594,12 @@ export function TaskFormScreen() {
       )}
 
       <div className="mb-4">
-        {/* No Card wrapper here on purpose (see comment above) — each row
-            keeps its own px-4/px-[14px] horizontal padding regardless, so
-            nothing shifts, it just loses the shared bg-card/rounded frame
-            and the border-t dividers Card used to draw between rows. */}
+        {/* No Card wrapper here on purpose (see comment above) — rows lost
+            the shared bg-card/rounded frame and the border-t dividers Card
+            used to draw between them. Their own px-4/px-[14px] (leftover
+            from standing inside that Card) was removed a couple owner
+            passes later — see AddSubtaskRow's own comment (TaskFields.tsx)
+            for why. */}
         {isEdit
           ? [
               ...(existingTask?.subtasks || []).map((st) => (
@@ -613,10 +627,7 @@ export function TaskFormScreen() {
             ]
           : [
               ...localSubtasks.map((s, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-3 px-[14px] py-[12px]"
-                >
+                <div key={i} className="flex items-center gap-3 py-[12px]">
                   <div className="w-[18px] h-[18px] rounded-full border-2 border-dim shrink-0" />
                   <span className="text-[14px] text-text flex-1">{s}</span>
                   <button
@@ -651,10 +662,11 @@ export function TaskFormScreen() {
       {/* Description — тот же принцип: своей кнопки нет, панель над
           клавиатурой пишет сюда, если в фокусе было это поле.
           Owner 2026-08-13 (шестой заход): лейбл «Заметка» — новый, той же
-          разметкой (px-1 mb-2), что и лейбл «Подзадачи» выше, крупный
-          типоразмер (17px). Сам textarea — мелкий (13px), тот же приём,
-          что и у названия задачи. */}
-      <div className="px-1 mb-2">
+          разметкой, что и лейбл «Подзадачи» выше, крупный типоразмер
+          (17px). Сам textarea — мелкий (13px), тот же приём, что и у
+          названия задачи. Седьмой заход: px-1 убран — см. комментарий у
+          textarea названия. */}
+      <div className="mb-2">
         <span className="text-[17px] text-sub font-semibold">Заметка</span>
       </div>
       <textarea
@@ -712,9 +724,7 @@ export function TaskFormScreen() {
       </div>
 
       {/* ── Assignee (tappable → picker) ── */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
-        Назначить
-      </div>
+      <div className="text-[13px] text-sub font-semibold mb-2">Назначить</div>
       <div className="bg-card rounded-[14px] overflow-hidden mb-4">
         {showAssigneePicker ? (
           <>
@@ -794,7 +804,7 @@ export function TaskFormScreen() {
       </div>
 
       {/* ── Labels — mockup .tags-row ── */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">Метки</div>
+      <div className="text-[13px] text-sub font-semibold mb-2">Метки</div>
       <div className="mb-4">
         <LabelsField
           labels={labels}

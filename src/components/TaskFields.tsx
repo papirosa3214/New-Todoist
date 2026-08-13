@@ -453,7 +453,12 @@ export function SubtaskRow({
   };
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
+    // Owner 2026-08-13 (седьмой заход): px-4 убран — тот же рассинхрон, что
+    // и у AddSubtaskRow ниже (его комментарий разбирает причину подробно):
+    // здесь этот отступ был нужен, пока строка стояла внутри Card-рамки
+    // (убрана пятым заходом), сейчас это просто лишний сдвиг вправо
+    // относительно title/desc textarea и остальных лейблов формы.
+    <div className="flex items-center gap-3 py-3">
       <button
         onClick={onToggle}
         className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center shrink-0 ${
@@ -506,6 +511,12 @@ export function SubtaskRow({
 // SubtaskRow above). Text size dropped 16px to 13px, the "мелкий" (content)
 // size the whole form's typography now converges on — see the comment on
 // TaskFormScreen's title textarea for the full two-size rationale.
+// Седьмой заход: px-4 тоже убран — этот отступ был правильным, пока строка
+// стояла ВНУТРИ Card-рамки (bg-card/rounded, убрана пятым заходом): там он
+// был внутренним отступом от края плашки. Без рамки он стал просто лишним
+// сдвигом вправо относительно title/desc textarea (владелец это и заметил
+// — «подзадача начинается в одном месте, описание в другом»). Теперь этот
+// ряд наследует общий px-4 родителя формы, как и всё остальное.
 //
 // value/onChange опциональны и подняты в TaskFormScreen (owner 2026-08-13:
 // кнопка диктовки должна писать и сюда, не только в title/desc) — когда
@@ -538,7 +549,7 @@ export function AddSubtaskRow({
     setValue("");
   };
   return (
-    <div className="flex items-center gap-3 px-4" style={{ minHeight: 48 }}>
+    <div className="flex items-center gap-3" style={{ minHeight: 48 }}>
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
