@@ -5,7 +5,12 @@
 import crypto from "crypto";
 import db from "./db.js";
 
-export const LEASE_MINUTES = 15;
+// Срок аренды: сколько задача считается «в работе» после последнего сигнала
+// агента. Было 15 минут, с 14.08.2026 — 5 (решение Максима): пропавшего
+// исполнителя надо видеть быстро, а не через четверть часа. Служба-будильник
+// шлёт сигнал каждые 90 секунд, то есть даже пара пропущенных подряд не
+// сделает работающего агента «пропавшим».
+export const LEASE_MINUTES = 5;
 
 export type AgentState = "in_progress" | "blocked" | "review";
 export const AGENT_STATES: AgentState[] = ["in_progress", "blocked", "review"];

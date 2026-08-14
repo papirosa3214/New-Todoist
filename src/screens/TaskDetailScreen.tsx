@@ -131,13 +131,24 @@ export function TaskDetailScreen() {
   // polls while an agent actually holds the task, and at a cadence well
   // under the 15-minute lease so the header can catch the in_progress →
   // "агент пропал" flip (and keep "N мин назад" honest) without a reload.
+  // Опрос идёт, только пока агент реально работает и ещё не просрочил
+  // аренду. Как только он помечен пропавшим, опрашивать нечего: сам по
+  // себе статус уже не изменится, а возвращение агента прилетит событием
+  // по сокету (api/ws.ts инвалидирует кэш задач на любое task:updated) —
+  // и опрос возобновится сам, потому что agent_stale снова станет false.
+  // Просьба Максима 14.08.2026: «показал, что не работает — больше не
+  // дёргает систему; вернулся — возобновился».
   useEffect(() => {
     if (!id || !task?.agent_state) return;
+    if (task.agent_state === "in_progress" && task.agent_stale) return;
     const timer = setInterval(() => {
       queryClient.invalidateQueries({ queryKey: ["tasks", id] });
     }, 30_000);
     return () => clearInterval(timer);
-  }, [id, task?.agent_state, queryClient]);
+    // agent_stale в зависимостях обязателен: без него эффект не
+    // пересобрался бы в момент, когда агент вернулся, и опрос не
+    // возобновился бы.
+  }, [id, task?.agent_state, task?.agent_stale, queryClient]);
 
   // These guarded handlers close over `task`, which is only defined once
   // the query resolves — but the hooks themselves must run unconditionally,
