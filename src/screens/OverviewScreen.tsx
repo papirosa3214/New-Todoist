@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useProjects, useCreateProject } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { useTasks } from "../api/tasks";
+import { useAgents } from "../api/agents";
 import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
@@ -47,6 +48,22 @@ export function OverviewScreen() {
       allTasks.filter((t) => t.agent_state === "in_progress" && t.agent_stale)
         .length,
     [allTasks],
+  );
+
+  // Присутствие агентов — тот же источник, что и на экране агентов
+  // (useAgents сам перезапрашивается раз в 15 секунд, см. api/agents.ts),
+  // поэтому плашка на главном экране не отстаёт от настроек. Считаются
+  // только ИИ-учётки: вопрос «работает кто-то или нет» — про агентов, а не
+  // про самого Максима, который и так сидит в приложении.
+  const { data: allAgents = [] } = useAgents();
+  const aiAgents = useMemo(
+    () => allAgents.filter((a) => a.type === "ai"),
+    [allAgents],
+  );
+  const agentsTotal = aiAgents.length;
+  const agentsOnline = useMemo(
+    () => aiAgents.filter((a) => a.status === "online").length,
+    [aiAgents],
   );
 
   const [showCreate, setShowCreate] = useState(false);
@@ -132,6 +149,26 @@ export function OverviewScreen() {
           <Icon name="bot" size={14} />
           Протухло у агентов: {staleCount}
         </div>
+        {/* «Кто сейчас на связи» — по просьбе Максима 14.08.2026: раньше это
+            было видно только в настройках, а вопрос «работает кто-то или
+            нет» возникает сходу, на главном экране. Плашка в том же ряду и
+            том же стиле, что «Просрочено» и «Протухло», но кликабельная:
+            ведёт на полный экран агентов, где видно и роли, и кто именно.
+            Точка вместо иконки — тот же зелёный кружок присутствия, что и
+            на экране агентов, чтобы признак читался одинаково в двух местах. */}
+        <button
+          onClick={() => navigate("/agents")}
+          className={`tap-scale flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
+            agentsOnline > 0 ? "bg-green/15 text-green" : "bg-card2 text-sub"
+          }`}
+        >
+          <span
+            className={`w-[7px] h-[7px] rounded-full ${
+              agentsOnline > 0 ? "bg-green" : "bg-dim"
+            }`}
+          />
+          Агенты на связи: {agentsOnline} из {agentsTotal}
+        </button>
       </div>
 
       {/* Search Card */}
