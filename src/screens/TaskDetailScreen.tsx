@@ -200,7 +200,7 @@ export function TaskDetailScreen() {
             <button
               ref={actionsAnchorRef}
               onClick={() => setActionsOpen((v) => !v)}
-              className="tap-scale w-[44px] h-[44px] rounded-[10px] bg-card flex items-center justify-center"
+              className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
               aria-label="Действия с задачей"
             >
               <Icon name="dots" size={18} />
