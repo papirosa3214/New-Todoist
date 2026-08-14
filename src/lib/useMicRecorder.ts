@@ -12,6 +12,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // многоминутный файл (тело ASR-сервиса ограничено 25 МБ) и держит
 // распознавание в разумных временных рамках на CPU-инференсе.
 const MAX_DURATION_MS = 60_000;
+// Сколько держать микрофон захваченным между записями, чтобы не спрашивать
+// разрешение заново. Две минуты — запас на «надиктовал, подумал, надиктовал
+// ещё»; дольше держать нельзя, иначе индикатор записи горит просто так.
+const IDLE_RELEASE_MS = 120_000;
 
 export type MicState = "idle" | "recording" | "processing";
 
@@ -47,19 +51,40 @@ export function useMicRecorder(onDone: (blob: Blob) => void) {
   // api/audio.ts).
   const timeArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
 
-  const cleanup = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    if (autoStopRef.current) clearTimeout(autoStopRef.current);
-    timerRef.current = null;
-    autoStopRef.current = null;
+  // ── Почему поток НЕ закрывается сразу после записи ──
+  // Каждый вызов getUserMedia в приложении, запущенном с домашнего экрана
+  // (standalone PWA), Safari может встречать новым запросом разрешения —
+  // владелец 2026-08-14: «устал давать разрешение перед каждой записью».
+  // Пока поток жив, нового запроса не требуется вовсе, поэтому между
+  // записями он удерживается — но не бесконечно: через IDLE_RELEASE_MS
+  // тишины отпускается совсем. Иначе индикатор захваченного микрофона
+  // (оранжевая точка в iOS) горел бы всё время, пока открыто приложение —
+  // а это ровно то, чего от трекера задач не ждут.
+  const idleReleaseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Отпустить микрофон совсем: треки, Web Audio, всё. */
+  const releaseStream = useCallback(() => {
+    if (idleReleaseRef.current) clearTimeout(idleReleaseRef.current);
+    idleReleaseRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
-    recorderRef.current = null;
     audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
     analyserRef.current = null;
     timeArrayRef.current = null;
   }, []);
+
+  const cleanup = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (autoStopRef.current) clearTimeout(autoStopRef.current);
+    timerRef.current = null;
+    autoStopRef.current = null;
+    recorderRef.current = null;
+    // Сам поток остаётся живым — его отпустит таймер простоя ниже, если
+    // следующей записи так и не случится.
+    if (idleReleaseRef.current) clearTimeout(idleReleaseRef.current);
+    idleReleaseRef.current = setTimeout(releaseStream, IDLE_RELEASE_MS);
+  }, [releaseStream]);
 
   // Читает актуальную форму сигнала прямо сейчас — вызывается из
   // requestAnimationFrame-цикла MicRing, не из React state (60
@@ -77,7 +102,17 @@ export function useMicRecorder(onDone: (blob: Blob) => void) {
 
   // Componente unmount (навигация с формы во время записи) — не оставлять
   // микрофон физически захваченным.
-  useEffect(() => cleanup, [cleanup]);
+  // Уход с экрана — отпускаем микрофон сразу, не дожидаясь таймера простоя:
+  // держать его захваченным, когда форма уже закрыта, нельзя.
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (autoStopRef.current) clearTimeout(autoStopRef.current);
+      recorderRef.current = null;
+      releaseStream();
+    },
+    [releaseStream],
+  );
 
   const start = useCallback(async () => {
     setError(null);
@@ -90,9 +125,24 @@ export function useMicRecorder(onDone: (blob: Blob) => void) {
       return;
     }
 
+    // Живой поток с прошлой записи переиспользуется — именно это и убирает
+    // повторные запросы разрешения. Треки проверяются на "live": iOS может
+    // оборвать их сам (звонок, переключение приложения), и молча писать в
+    // мёртвый поток нельзя — тогда запрашиваем заново.
+    const kept = streamRef.current;
+    const keptAlive =
+      kept && kept.getTracks().some((t) => t.readyState === "live");
+    if (idleReleaseRef.current) {
+      clearTimeout(idleReleaseRef.current);
+      idleReleaseRef.current = null;
+    }
+    if (!keptAlive && kept) releaseStream();
+
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = keptAlive
+        ? (kept as MediaStream)
+        : await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err: any) {
       // NotAllowedError (разрешение отклонено/заблокировано политикой) —
       // самый частый случай на практике; остальное (NotFoundError — нет
