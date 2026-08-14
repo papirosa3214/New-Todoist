@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { ApiUser } from "./types";
 
@@ -15,5 +15,17 @@ export function useAgents() {
     // достаточно: это индикатор присутствия, а не секундомер.
     refetchInterval: 15000,
     refetchOnWindowFocus: true,
+  });
+}
+
+// Завести агента (экран агентов, кнопка «Завести агента»). Ключ доступа
+// приходит в ответе ровно один раз — сервер его больше не показывает нигде,
+// поэтому вызывающий обязан показать его пользователю сразу.
+export function useCreateAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      api.post<{ agent: ApiUser; api_token: string }>("/api/agents", { name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
   });
 }

@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAgents } from "../api/agents";
+import { useAgents, useCreateAgent } from "../api/agents";
 import {
   Icon,
   Avatar,
@@ -11,6 +12,16 @@ import {
 export function AgentsScreen() {
   const navigate = useNavigate();
   const { data: agents = [], isLoading, error, isError } = useAgents();
+  const createAgent = useCreateAgent();
+  const [showInvite, setShowInvite] = useState(false);
+  const [name, setName] = useState("");
+  // Ключ живёт только здесь, в состоянии экрана: сервер отдаёт его ровно
+  // один раз при создании и больше ни одним маршрутом не показывает.
+  const [issuedToken, setIssuedToken] = useState<{
+    name: string;
+    token: string;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   return (
     <div className="px-4 pb-4">
@@ -69,18 +80,108 @@ export function AgentsScreen() {
         )}
       </div>
 
-      {/* Invitations — no invite endpoint exists on the server */}
+      {/* Новый агент — учётка + ключ доступа. Почты на машине нет, и
+          «пригласить» здесь значит именно завести агента: сервер создаёт
+          учётку и один раз показывает ключ (POST /api/agents). */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">
-        Приглашения
+        Новый агент
       </div>
       <div className="bg-card rounded-2xl overflow-hidden mb-4">
-        <button
-          disabled
-          className="w-full flex items-center gap-3 py-3 px-4 border border-dashed border-stroke rounded-2xl opacity-40 cursor-not-allowed"
-        >
-          <Icon name="plus" size={18} className="text-dim" />
-          <span className="text-[14px] text-sub">Пригласить агента</span>
-        </button>
+        {issuedToken ? (
+          <div className="p-4">
+            <p className="text-[13px] text-text mb-1">
+              Агент «{issuedToken.name}» заведён
+            </p>
+            <p className="text-[12px] text-sub mb-3">
+              Ключ показывается один раз — сохраните его сейчас. Потом он нигде
+              не отображается, можно только выпустить новый.
+            </p>
+            <div className="bg-card2 rounded-xl px-3 py-2.5 mb-3">
+              <code className="text-[12px] text-text break-all">
+                {issuedToken.token}
+              </code>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  navigator.clipboard?.writeText(issuedToken.token);
+                  setCopied(true);
+                }}
+                className="tap-scale h-11 px-4 rounded-xl bg-red text-white text-[14px] font-semibold"
+              >
+                {copied ? "Скопировано" : "Скопировать ключ"}
+              </button>
+              <button
+                onClick={() => {
+                  setIssuedToken(null);
+                  setCopied(false);
+                }}
+                className="tap-scale h-11 px-4 rounded-xl bg-card2 text-sub text-[14px]"
+              >
+                Готово
+              </button>
+            </div>
+          </div>
+        ) : showInvite ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!name.trim() || createAgent.isPending) return;
+              createAgent.mutate(name.trim(), {
+                onSuccess: (res) => {
+                  setIssuedToken({
+                    name: res.agent.name,
+                    token: res.api_token,
+                  });
+                  setName("");
+                  setShowInvite(false);
+                },
+              });
+            }}
+            className="p-4"
+          >
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Имя агента — например, Гермес"
+              className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none mb-3"
+            />
+            <ErrorBanner
+              error={createAgent.error}
+              fallback="Не удалось завести агента"
+              variant="block"
+              className="mb-3"
+            />
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={!name.trim() || createAgent.isPending}
+                className="tap-scale h-11 px-4 rounded-xl bg-red text-white text-[14px] font-semibold disabled:opacity-40"
+              >
+                {createAgent.isPending ? "Завожу…" : "Завести"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowInvite(false);
+                  setName("");
+                }}
+                className="tap-scale h-11 px-4 rounded-xl bg-card2 text-sub text-[14px]"
+              >
+                Отмена
+              </button>
+            </div>
+          </form>
+        ) : (
+          <button
+            onClick={() => setShowInvite(true)}
+            className="tap-row w-full flex items-center gap-3 py-3 px-4 border border-dashed border-stroke rounded-2xl"
+          >
+            <Icon name="plus" size={18} className="text-red" />
+            <span className="text-[14px] text-text">Завести агента</span>
+          </button>
+        )}
       </div>
 
       {/* Roles */}

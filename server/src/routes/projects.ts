@@ -156,12 +156,77 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
          FROM users
          WHERE is_system_bot = 1
             OR id = ?
+            OR created_by = ?
             OR id IN (
               SELECT assignee_id FROM tasks WHERE creator_id = ? AND assignee_id IS NOT NULL
               UNION
               SELECT creator_id FROM tasks WHERE assignee_id = ? AND creator_id IS NOT NULL
             )`,
       )
-      .all(req.userId, req.userId, req.userId);
+      .all(req.userId, req.userId, req.userId, req.userId);
   });
+
+  // ── Завести агента ── кнопка «Пригласить агента» на экране агентов.
+  // Приглашения по почте на этой машине быть не может (SMTP не настроен), да
+  // и агент — не человек с ящиком: «пригласить» здесь значит завести учётку
+  // и выдать ключ доступа. Ключ показывается РОВНО ОДИН раз, в ответе на это
+  // создание: в базе он лежит как есть, но наружу больше не отдаётся ни
+  // одним маршрутом (/api/agents и /api/auth/me его вырезают).
+  //
+  // Кто может: только человек. Агенту незачем плодить себе подобных, а
+  // украденный ключ агента иначе стал бы способом наделать учёток.
+  app.post<{ Body: { name?: string } }>(
+    "/api/agents",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const caller = db
+        .prepare("SELECT type FROM users WHERE id = ?")
+        .get(req.userId) as { type?: string } | undefined;
+      if (caller?.type === "ai") {
+        return reply
+          .code(403)
+          .send({ error: "агент не может заводить других агентов" });
+      }
+
+      const name = (req.body?.name ?? "").trim();
+      if (!name) return reply.code(400).send({ error: "нужно имя агента" });
+
+      // Почта у агента техническая и наружу не показывается (см. /api/agents),
+      // но колонка обязательна и уникальна — собираем из имени, а при
+      // совпадении отвечаем понятной ошибкой, а не «UNIQUE constraint failed».
+      const slug =
+        name
+          .toLowerCase()
+          .replace(/[^a-zа-я0-9]+/gi, "-")
+          .replace(/^-|-$/g, "") || "agent";
+      const email = `${slug}@taskflow.local`;
+      const exists = db
+        .prepare("SELECT id FROM users WHERE email = ?")
+        .get(email);
+      if (exists) {
+        return reply
+          .code(409)
+          .send({ error: "агент с таким именем уже заведён" });
+      }
+
+      const id = uid();
+      const apiToken = "tf_" + crypto.randomBytes(32).toString("hex");
+      // Вход по паролю агенту не нужен — он ходит по ключу. Но колонка
+      // обязательна, поэтому кладём заведомо непригодный хеш: подобрать к
+      // нему пароль нельзя, а значит учётка не имеет второго входа.
+      const unusablePassword = "!" + crypto.randomBytes(24).toString("hex");
+      const initials = name.trim().charAt(0).toUpperCase();
+      db.prepare(
+        `INSERT INTO users (id, name, email, password_hash, role, type, avatar_color, initials, status, api_token, is_system_bot, created_by)
+         VALUES (?, ?, ?, ?, 'agent', 'ai', '#A78BFA', ?, 'offline', ?, 0, ?)`,
+      ).run(id, name, email, unusablePassword, initials, apiToken, req.userId);
+
+      const agent = db
+        .prepare(
+          "SELECT id, name, role, type, avatar_color, initials, status FROM users WHERE id = ?",
+        )
+        .get(id);
+      return reply.code(201).send({ agent, api_token: apiToken });
+    },
+  );
 }

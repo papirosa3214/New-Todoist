@@ -127,6 +127,18 @@ export function migrate() {
   // already had this column from an earlier partial migration.
   db.exec("UPDATE users SET is_system_bot = 1 WHERE id IN ('u2','u3')");
 
+  // Additive migration: users.created_by — кто завёл этого агента кнопкой
+  // «Пригласить агента» (POST /api/agents). Нужен ровно для видимости:
+  // список агентов намеренно не отдаёт всю таблицу пользователей, поэтому
+  // без этой связи только что заведённый агент пропадал бы из списка у
+  // того, кто его и создал, — до первой общей задачи. Системные боты
+  // (is_system_bot = 1) видны всем и в этой колонке не нуждаются.
+  if (!userCols.some((c) => c.name === "created_by")) {
+    db.exec(
+      "ALTER TABLE users ADD COLUMN created_by TEXT REFERENCES users(id)",
+    );
+  }
+
   // Additive migration: tasks.completed_at may be missing on a DB created
   // before this column was added. Unlike updated_at (touched on every
   // PATCH), completed_at is set only on the active→completed transition and
