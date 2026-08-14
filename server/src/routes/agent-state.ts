@@ -37,6 +37,23 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       const task = getTaskForUser(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
+      // Взять задачу в работу может только учётка-агент (type = 'ai').
+      // Решение Максима 14.08.2026: сводка на «Обзоре» показывает «В
+      // работе N» как работу агентов, и это должно быть правдой по
+      // построению, а не по договорённости. Раньше проверки не было —
+      // человек мог выставить себе agent_state и попасть в тот же счётчик.
+      // Возврат задачи из review в in_progress («вернуть на доработку»)
+      // это не затрагивает: он идёт через /state и разрешён именно
+      // владельцу (agentState.ts canTransition).
+      const caller = db
+        .prepare("SELECT type FROM users WHERE id = ?")
+        .get(req.userId) as { type?: string } | undefined;
+      if (caller?.type !== "ai") {
+        return reply.code(403).send({
+          error: "взять задачу в работу может только агент",
+        });
+      }
+
       if (task.status !== "active") {
         return reply.code(400).send({
           error: "задачу можно взять в работу, только пока она активна",
