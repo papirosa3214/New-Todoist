@@ -220,6 +220,26 @@ def t_agents(_args):
     }
 
 
+def t_projects(_args):
+    """Проекты людей, на которых работает агент.
+
+    До 14.08.2026 список приходил пустым: сервер отдавал только собственные
+    проекты вызывающего, а у агента их нет. Класть задачу в проект человека
+    агент при этом был вправе — приходилось угадывать идентификатор.
+    """
+    return {
+        "проекты": [
+            {"id": p.get("id"), "название": p.get("name"),
+             "активных задач": p.get("task_count")}
+            for p in api("GET", "/api/projects")
+        ],
+        "как пользоваться": (
+            "id подставить в taskflow_create_task как project_id; "
+            "assignee_id — тот же человек, чей это проект."
+        ),
+    }
+
+
 def t_create_task(args):
     body = {"title": args["title"]}
     for key in ("description", "project_id", "assignee_id", "due_date", "priority"):
@@ -316,6 +336,12 @@ TOOLS = [
         "description": "Кто есть в команде и кто сейчас на связи.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": t_agents,
+    },
+    {
+        "name": "taskflow_projects",
+        "description": "Проекты и их идентификаторы — чтобы класть задачу в нужный, а не во «Входящие».",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": t_projects,
     },
     {
         "name": "taskflow_create_task",
