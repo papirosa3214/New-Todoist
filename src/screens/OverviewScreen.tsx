@@ -44,20 +44,27 @@ export function OverviewScreen() {
     [allTasks],
   );
 
-  // Присутствие агентов — тот же источник, что и на экране агентов
-  // (useAgents сам перезапрашивается раз в 15 секунд, см. api/agents.ts),
-  // поэтому плашка на главном экране не отстаёт от настроек. Считаются
-  // только ИИ-учётки: вопрос «работает кто-то или нет» — про агентов, а не
-  // про самого Максима, который и так сидит в приложении.
+  // Дежурство службы. Служба-будильник держит соединение под учёткой
+  // агента, поэтому «хотя бы одна ИИ-учётка онлайн» и есть признак того,
+  // что назначенная задача будет подхвачена. Двойники, которых служба
+  // запускает, своих соединений не открывают — считать их здесь нечего,
+  // занятость показывает соседняя плашка «В работе».
   const { data: allAgents = [] } = useAgents();
-  const aiAgents = useMemo(
-    () => allAgents.filter((a) => a.type === "ai"),
+  const serviceOn = useMemo(
+    () => allAgents.some((a) => a.type === "ai" && a.status === "online"),
     [allAgents],
   );
-  const agentsTotal = aiAgents.length;
-  const agentsOnline = useMemo(
-    () => aiAgents.filter((a) => a.status === "online").length,
-    [aiAgents],
+  // Занятость — по задачам, а не по учёткам: сколько карточек агенты
+  // реально делают сейчас. Протухшие сюда не входят, для них своя плашка.
+  const workingCount = useMemo(
+    () =>
+      allTasks.filter(
+        (t) =>
+          t.status === "active" &&
+          t.agent_state === "in_progress" &&
+          !t.agent_stale,
+      ).length,
+    [allTasks],
   );
 
   const [showCreate, setShowCreate] = useState(false);
@@ -124,51 +131,66 @@ export function OverviewScreen() {
         }
       />
 
-      {/* Сводка по агентам одной строкой: кто на связи и у кого протухла
-          аренда. Ноль — нейтральный цвет (bg-card2/text-sub), не тревожный.
-          Своих просроченных задач тут больше нет (см. комментарий к
+      {/* Сводка агентского слоя, три плашки в одну строку: работает ли
+          служба, сколько задач в работе, сколько брошено. Ноль —
+          нейтральный цвет (bg-card2/text-sub), тревожная из трёх только
+          «Пропали». Своих просроченных задач тут нет (см. комментарий к
           подсчётам выше) — для них есть «Сегодня».
 
-          Обе плашки — одна строка на всю ширину, по половине каждая
-          (просьба Максима 14.08.2026): flex-1 с basis-0 делит доступные
-          358px (100vw минус px-4 с двух сторон) пополам — по 175px на
-          плашку при gap-2. Подписи с иконкой и полями укладываются
-          примерно в 150px, запас есть даже на «10 из 10». flex-wrap снят
-          намеренно: с ним перенос вернулся бы молча, стоит подписи чуть
-          подрасти; min-w-0 + truncate на этот случай оставляют плашку в
-          строке, подрезая текст, а не ломая раскладку.
+          Размеры считаны, а не подобраны на глаз. Доступная ширина на
+          390px-экране: 100vw − px-4 с двух сторон = 358px; при gap-2 (8px)
+          три flex-1 basis-0 дают ровно (358 − 16) / 3 = 114px на плашку.
+          Подписи при 13px semibold (кириллица ~7.2px на символ) и px-2
+          (8px с каждой стороны): «Дежурит» ≈ 79px, «Выключен» ≈ 87px,
+          «В работе: 12» ≈ 102px, «Пропали: 12» ≈ 95px — запас есть у всех,
+          включая двузначные числа. Прежняя подпись «На дежурстве» (≈123px)
+          не помещалась и обрезалась бы — потому и укорочена.
 
-          «Протухло» ушло по прямому замечанию Максима — слово не из этой
-          области. Взято «Пропали», тем же словом, что и бейдж «Агент
-          пропал» на самой карточке (components/UI.tsx AgentStateTag), так
-          что одно и то же состояние называется одинаково везде. */}
+          Высота h-11 = 44px: все три кликабельны, это минимальная зона
+          нажатия, принятая в проекте. flex-wrap снят намеренно — с ним
+          перенос вернулся бы молча, стоит подписи подрасти; min-w-0 +
+          truncate на этот случай оставляют плашку в строке, подрезая
+          текст, а не ломая раскладку. */}
       <div className="flex items-stretch gap-2 mb-4">
-        {/* «Кто сейчас на связи» — по просьбе Максима 14.08.2026: раньше это
-            было видно только в настройках, а вопрос «работает кто-то или
-            нет» возникает сходу, на главном экране. Иконка та же, что у
-            соседней плашки (бот), и она же загорается зелёным, когда
-            кто-то на связи — цвет наследуется от текста, отдельной точки
-            присутствия здесь не нужно. Кликабельна: ведёт на полный экран
-            агентов, где видно, кто именно и в какой роли. */}
+        {/* 1. Дежурство — про СЛУЖБУ, а не про агентов (уточнение Максима
+            14.08.2026): «на связи» читалось как «агент работает», хотя
+            отвечает на другой вопрос — подхватится ли задача, если её
+            назначить. Признак: служба держит соединение под учёткой агента
+            (server/src/ws.ts), поэтому онлайн хотя бы одной ИИ-учётки и
+            означает «приём задач работает». Кто именно из агентов доступен,
+            видно там, где это и нужно — при выборе исполнителя и в
+            настройках, а не в сводке. */}
         <button
           onClick={() => navigate("/agents")}
-          className={`tap-scale flex flex-1 basis-0 min-w-0 items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
-            agentsOnline > 0 ? "bg-green/15 text-green" : "bg-card2 text-sub"
+          className={`tap-scale flex h-11 flex-1 basis-0 min-w-0 items-center justify-center gap-1.5 px-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
+            serviceOn ? "bg-green/15 text-green" : "bg-card2 text-sub"
           }`}
         >
-          <Icon name="bot" size={14} className="shrink-0" />
-          <span className="truncate">
-            На связи: {agentsOnline} из {agentsTotal}
-          </span>
+          <span
+            className={`w-[7px] h-[7px] rounded-full shrink-0 ${
+              serviceOn ? "bg-green" : "bg-dim"
+            }`}
+          />
+          <span className="truncate">{serviceOn ? "Дежурит" : "Выключен"}</span>
         </button>
-        <div
-          className={`flex flex-1 basis-0 min-w-0 items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
+        {/* 2. В работе — сколько задач агенты делают прямо сейчас. */}
+        <button
+          onClick={() => navigate("/agent-work")}
+          className={`tap-scale flex h-11 flex-1 basis-0 min-w-0 items-center justify-center px-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
+            workingCount > 0 ? "bg-blue/15 text-blue" : "bg-card2 text-sub"
+          }`}
+        >
+          <span className="truncate">В работе: {workingCount}</span>
+        </button>
+        {/* 3. Пропали — взялись и замолчали: единственная тревожная из трёх. */}
+        <button
+          onClick={() => navigate("/agent-work?focus=stale")}
+          className={`tap-scale flex h-11 flex-1 basis-0 min-w-0 items-center justify-center px-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
             staleCount > 0 ? "bg-coral/20 text-coral" : "bg-card2 text-sub"
           }`}
         >
-          <Icon name="bot" size={14} className="shrink-0" />
           <span className="truncate">Пропали: {staleCount}</span>
-        </div>
+        </button>
       </div>
 
       {/* Search Card */}

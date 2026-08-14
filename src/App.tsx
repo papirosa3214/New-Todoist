@@ -15,6 +15,7 @@ import { TaskFormScreen } from "./screens/TaskFormScreen";
 import { NotificationsScreen } from "./screens/NotificationsScreen";
 import { ActivityScreen } from "./screens/ActivityScreen";
 import { AgentsScreen } from "./screens/AgentsScreen";
+import { AgentWorkScreen } from "./screens/AgentWorkScreen";
 import { ProjectsScreen } from "./screens/ProjectsScreen";
 import { LabelsScreen } from "./screens/LabelsScreen";
 import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
@@ -88,6 +89,7 @@ export default function App() {
               Deliberately absent from it, so no bottom nav / FAB here. */}
           <Route path="/activity" element={<ActivityScreen />} />
           <Route path="/agents" element={<AgentsScreen />} />
+          <Route path="/agent-work" element={<AgentWorkScreen />} />
           <Route path="/projects" element={<ProjectsScreen />} />
           <Route path="/projects/:id" element={<ProjectTasksScreen />} />
           <Route path="/labels" element={<LabelsScreen />} />

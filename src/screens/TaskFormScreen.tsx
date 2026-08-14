@@ -759,10 +759,31 @@ export function TaskFormScreen() {
                   color={u.avatar_color}
                   size={32}
                 />
-                <div className="flex-1">
-                  <div className="text-[14px] text-text">{u.name}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[14px] text-text truncate">{u.name}</div>
+                  {/* Кто на связи — видно там, где это и решает: назначать
+                      задачу агенту, который сейчас не отвечает, смысла мало
+                      (просьба Максима 14.08.2026 — статус нужен в момент
+                      выбора исполнителя, а не только в настройках). У людей
+                      строки нет: их присутствие ни на что не влияет. */}
+                  {u.type === "ai" && (
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`w-[6px] h-[6px] rounded-full shrink-0 ${
+                          u.status === "online" ? "bg-green" : "bg-dim"
+                        }`}
+                      />
+                      <span
+                        className={`text-[12px] ${
+                          u.status === "online" ? "text-green" : "text-dim"
+                        }`}
+                      >
+                        {u.status === "online" ? "на связи" : "не в сети"}
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <span className="text-[12px] text-sub bg-card2 px-2 py-0.5 rounded">
+                <span className="text-[12px] text-sub bg-card2 px-2 py-0.5 rounded shrink-0">
                   {u.role === "owner" ? "Владелец" : "Агент"}
                 </span>
                 {assignee === u.id ? (
