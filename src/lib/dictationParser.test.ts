@@ -12,6 +12,43 @@ import {
 // чтобы тесты на «в понедельник» и т.п. были детерминированы.
 const SATURDAY = new Date(2026, 7, 15); // месяцы в Date 0-based → август = 7
 
+describe("parseDictation — маркер метки", () => {
+  it("вырезает @Метку, заголовок остаётся читаемым", () => {
+    const r = parseDictation("Купить лампочки @Дом", SATURDAY);
+    expect(r.title).toBe("Купить лампочки");
+    expect(r.labelName).toBe("Дом");
+  });
+
+  it("метка вместе с проектом, приоритетом и датой", () => {
+    const r = parseDictation(
+      "Позвонить завтра #Работа @Важно !срочно",
+      SATURDAY,
+    );
+    expect(r.title).toBe("Позвонить");
+    expect(r.projectName).toBe("Работа");
+    expect(r.labelName).toBe("Важно");
+    expect(r.priority).toBe(1);
+    expect(r.dueDate).toBe("2026-08-16");
+  });
+
+  it("хвостовая пунктуация после метки не попадает в имя", () => {
+    const r = parseDictation("Полить цветы @Дом, вечером", SATURDAY);
+    expect(r.labelName).toBe("Дом");
+    expect(r.title).toBe("Полить цветы, вечером");
+  });
+
+  it("нескольких меток берётся первая, остальные не мусорят в заголовке", () => {
+    const r = parseDictation("Разобрать почту @Работа @Срочно", SATURDAY);
+    expect(r.labelName).toBe("Работа");
+    expect(r.title).toBe("Разобрать почту");
+  });
+
+  it("без маркера метки поле пустое", () => {
+    const r = parseDictation("Обычная задача без маркеров", SATURDAY);
+    expect(r.labelName).toBeNull();
+  });
+});
+
 describe("parseDictation — маркеры проекта и приоритета", () => {
   it("вырезает #Проект и !приоритет, заголовок остаётся читаемым", () => {
     const r = parseDictation("Позвонить завтра #Работа !срочно", SATURDAY);
@@ -173,6 +210,9 @@ describe("parseDictation — не ломает обычный ручной вв�
       title: "Позвонить",
       dueDate: "2026-08-16",
       projectName: "Работа",
+      // Маркера метки в этой фразе нет — поле должно быть именно null, а не
+      // отсутствовать: разбор всегда возвращает полный набор полей.
+      labelName: null,
       priority: 1,
     });
   });

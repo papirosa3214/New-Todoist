@@ -57,6 +57,9 @@ export interface ParsedDictation {
   /** Сырое имя после `#`, как есть (без ведущего `#`) — сверка со списком
    *  проектов остаётся за вызывающим кодом (только он знает список). */
   projectName: string | null;
+  /** Сырое имя после `@`, как есть (без ведущего `@`) — сверка со списком
+   *  меток остаётся за вызывающим кодом, ровно как и у проекта. */
+  labelName: string | null;
   /** 1..4 (см. src/lib/priority.ts — 1 самый срочный) или null. */
   priority: number | null;
 }
@@ -71,6 +74,21 @@ export interface ParsedDictation {
 const MARKER_WORD = `[${WORD_CHARS}_-]+`;
 const PROJECT_MARKER_RE = new RegExp(`#(${MARKER_WORD})`, "iu");
 const PROJECT_MARKER_RE_G = new RegExp(`#${MARKER_WORD}`, "giu");
+
+// ═══════════ Метка: `@Название` ═══════════
+//
+// Тот же приём, что у проекта, и тот же класс символов: маркер сам
+// останавливается перед пунктуацией, поэтому «@Дом, срочно» не съедает
+// запятую. Символ `@` в этом приложении свободен — исполнителя выбирают
+// списком, а не упоминанием в тексте, так что путаницы «метка или человек»
+// не возникает.
+//
+// Метка одна, а не список: в форме задачи метки всё равно проставляются
+// поштучно, а «@одна @вторая @третья» в надиктованной фразе — это уже не
+// быстрый ввод, а разметка. Берётся первая распознанная, остальные маркеры
+// из заголовка так же вырезаются (иначе они остались бы мусором в тексте).
+const LABEL_MARKER_RE = new RegExp(`@(${MARKER_WORD})`, "iu");
+const LABEL_MARKER_RE_G = new RegExp(`@${MARKER_WORD}`, "giu");
 
 // ═══════════ Приоритет: `!слово` ═══════════
 
@@ -300,6 +318,11 @@ export function parseDictation(
   if (projectMatch) projectName = projectMatch[1];
   text = text.replace(PROJECT_MARKER_RE_G, "");
 
+  let labelName: string | null = null;
+  const labelMatch = text.match(LABEL_MARKER_RE);
+  if (labelMatch) labelName = labelMatch[1];
+  text = text.replace(LABEL_MARKER_RE_G, "");
+
   // Маркер вырезается из заголовка ТОЛЬКО если слово после `!` реально
   // распознано как приоритет. «Купить !молоко» — не приоритет и не мусор,
   // это часть заголовка пользователя; молча съесть «молоко» вместе с
@@ -326,7 +349,7 @@ export function parseDictation(
     .replace(/^[\s,.;:]+|[\s,.;:]+$/g, "")
     .trim();
 
-  return { title: text, dueDate, projectName, priority };
+  return { title: text, dueDate, projectName, labelName, priority };
 }
 
 // ═══════════ Кнопка микрофона: вставка распознанного текста ═══════════

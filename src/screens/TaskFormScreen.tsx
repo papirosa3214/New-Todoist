@@ -248,6 +248,7 @@ export function TaskFormScreen() {
             const match = findProjectByName(projects, parsed.projectName);
             if (match) setProjectId(match.id);
           }
+          applyParsedLabel(parsed.labelName);
         }
       }
     } catch {
@@ -412,6 +413,21 @@ export function TaskFormScreen() {
   // вне этого поля (в шапке экрана), поэтому клик по ней стандартно снимает
   // фокус с textarea раньше, чем срабатывает её собственный обработчик —
   // blur успевает отработать до сохранения.
+  // Метка из маркера `@Название`. Сопоставление по имени — той же функцией,
+  // что и для проекта (findProjectByName принимает любой {id, name}), чтобы
+  // правила совпадения не разъехались между полями. Неизвестное имя молча
+  // игнорируем: новую метку по обмолвке в диктовке заводить нельзя, а
+  // маркер из заголовка парсер уже вырезал — текст останется чистым.
+  // Уже выбранную метку повторно не добавляем.
+  const applyParsedLabel = (labelName: string | null) => {
+    if (!labelName) return;
+    const match = findProjectByName(labels, labelName);
+    if (!match) return;
+    setSelectedLabelIds((prev) =>
+      prev.includes(match.id) ? prev : [...prev, match.id],
+    );
+  };
+
   const applyDictationParse = () => {
     if (isEdit) return;
     const parsed = parseDictation(title);
@@ -423,6 +439,7 @@ export function TaskFormScreen() {
       const match = findProjectByName(projects, parsed.projectName);
       if (match) setProjectId(match.id);
     }
+    applyParsedLabel(parsed.labelName);
   };
 
   return (
