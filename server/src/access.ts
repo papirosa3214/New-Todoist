@@ -34,6 +34,40 @@ export function getProjectForUser(
     .get(projectId, userId);
 }
 
+/**
+ * Проект, в который вызывающий вправе положить задачу.
+ *
+ * Обычный случай — свой проект (та же проверка, что и getProjectForUser).
+ * Плюс один: агент (users.type = 'ai') может положить задачу в проект
+ * человека, НО только когда задача этому же человеку и адресована
+ * (assignee_id = projects.owner_id). Иначе агенту пришлось бы ходить под
+ * учёткой владельца: колонки на доске строятся из проектов текущего
+ * пользователя, поэтому задача, заведённая в собственный проект агента,
+ * у человека не показывается вообще ни в одной колонке.
+ *
+ * Это не дыра «агент пишет куда хочет»: задача обязана оказаться у
+ * владельца проекта в списке (он её исполнитель), спрятать её от него
+ * таким способом нельзя. Агенту это не даёт ни увидеть чужие проекты
+ * (GET /api/projects по-прежнему только свои), ни тронуть чужие задачи.
+ */
+export function getProjectForFiling(
+  projectId: string,
+  userId: string,
+  assigneeId: string | null | undefined,
+): any | undefined {
+  const own = getProjectForUser(projectId, userId);
+  if (own) return own;
+
+  const caller = db
+    .prepare("SELECT type FROM users WHERE id = ?")
+    .get(userId) as { type?: string } | undefined;
+  if (caller?.type !== "ai" || !assigneeId) return undefined;
+
+  return db
+    .prepare("SELECT * FROM projects WHERE id = ? AND owner_id = ?")
+    .get(projectId, assigneeId);
+}
+
 export function getLabelForUser(
   labelId: string,
   userId: string,

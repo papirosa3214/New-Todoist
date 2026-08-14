@@ -7,6 +7,7 @@ import {
   getTaskForUser,
   getTaskForOwnerDelete,
   allLabelsOwnedByUser,
+  getProjectForFiling,
 } from "../access.js";
 import { isStale, logEvent } from "../agentState.js";
 
@@ -199,11 +200,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
           .send({ error: "priority must be between 1 and 4" });
       }
 
-      // project_id must belong to the caller — no filing tasks into someone else's project.
+      // project_id — свой проект, либо (для агента) проект того человека,
+      // которому задача и адресована. См. getProjectForFiling в access.ts.
       if (project_id) {
-        const project = db
-          .prepare("SELECT id FROM projects WHERE id = ? AND owner_id = ?")
-          .get(project_id, req.userId);
+        const project = getProjectForFiling(
+          project_id,
+          req.userId,
+          assignee_id,
+        );
         if (!project)
           return reply.code(400).send({ error: "invalid project_id" });
       }
@@ -390,10 +394,18 @@ export function registerTaskRoutes(app: FastifyInstance) {
           .code(400)
           .send({ error: "priority must be between 1 and 4" });
       }
+      // Тот же допуск, что и при создании (getProjectForFiling): исполнитель
+      // берётся из тела, а если его там нет — из уже сохранённой задачи,
+      // иначе перенос задачи в проект её же владельца ломался бы только
+      // потому, что assignee_id не переслали повторно.
       if (body.project_id) {
-        const project = db
-          .prepare("SELECT id FROM projects WHERE id = ? AND owner_id = ?")
-          .get(body.project_id, req.userId);
+        const project = getProjectForFiling(
+          body.project_id,
+          req.userId,
+          body.assignee_id !== undefined
+            ? body.assignee_id
+            : existing.assignee_id,
+        );
         if (!project)
           return reply.code(400).send({ error: "invalid project_id" });
       }
