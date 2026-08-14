@@ -220,52 +220,72 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post<{ Params: { taskId: string }; Body: { text: string } }>(
-    "/api/tasks/:taskId/comments",
-    {
-      preHandler: authPre,
-      handler: async (req: any, reply) => {
-        const task = getTaskForUser(req.params.taskId, req.userId) as any;
-        if (!task) return reply.code(404).send({ error: "Not found" });
-        if (!req.body?.text)
-          return reply.code(400).send({ error: "text required" });
+  app.post<{
+    Params: { taskId: string };
+    Body: { text: string; attachment_ids?: string[] };
+  }>("/api/tasks/:taskId/comments", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const task = getTaskForUser(req.params.taskId, req.userId) as any;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      const attachmentIds: string[] = Array.isArray(req.body?.attachment_ids)
+        ? req.body.attachment_ids
+        : [];
+      // Пустой текст допустим, когда приложены файлы: «вот скриншот» без
+      // подписи — нормальный комментарий, требовать к нему слова незачем.
+      // А вот пустой комментарий совсем без ничего — по-прежнему 400.
+      if (!req.body?.text && attachmentIds.length === 0)
+        return reply.code(400).send({ error: "text required" });
 
-        const id = uid();
-        db.prepare(
-          "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
-        ).run(id, req.params.taskId, req.userId, req.body.text);
+      const id = uid();
+      db.prepare(
+        "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
+      ).run(id, req.params.taskId, req.userId, req.body.text ?? "");
 
-        // Notify the other party (creator or assignee, whichever isn't the commenter)
-        const notifyTarget =
-          task.assignee_id === req.userId ? task.creator_id : task.assignee_id;
-        if (notifyTarget && notifyTarget !== req.userId) {
-          const user = db
-            .prepare("SELECT name FROM users WHERE id = ?")
-            .get(req.userId) as any;
-          const notifId = uid();
-          db.prepare(
-            "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'commented', ?, ?, ?)",
-          ).run(
-            notifId,
-            notifyTarget,
-            req.params.taskId,
-            `${user?.name || "Кто-то"} прокомментировал: ${task.title}`,
-            req.userId,
-          );
-          broadcastToUsers([notifyTarget], {
-            type: "notification:new",
-            notificationId: notifId,
-            taskId: req.params.taskId,
-          });
+      // Файлы загружаются заранее и лежат «ничьими» (comment_id = NULL) —
+      // здесь они подбираются отправленным комментарием. Берём только свои
+      // и только по этой задаче: чужое вложение чужой карточки к своему
+      // комментарию не привяжется, даже если знать его идентификатор.
+      if (attachmentIds.length) {
+        const attach = db.prepare(
+          `UPDATE attachments SET comment_id = ?
+             WHERE id = ? AND task_id = ? AND user_id = ? AND comment_id IS NULL`,
+        );
+        for (const attId of attachmentIds) {
+          attach.run(id, attId, req.params.taskId, req.userId);
         }
+      }
 
-        return db
-          .prepare(
-            `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials
+      // Notify the other party (creator or assignee, whichever isn't the commenter)
+      const notifyTarget =
+        task.assignee_id === req.userId ? task.creator_id : task.assignee_id;
+      if (notifyTarget && notifyTarget !== req.userId) {
+        const user = db
+          .prepare("SELECT name FROM users WHERE id = ?")
+          .get(req.userId) as any;
+        const notifId = uid();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'commented', ?, ?, ?)",
+        ).run(
+          notifId,
+          notifyTarget,
+          req.params.taskId,
+          `${user?.name || "Кто-то"} прокомментировал: ${task.title}`,
+          req.userId,
+        );
+        broadcastToUsers([notifyTarget], {
+          type: "notification:new",
+          notificationId: notifId,
+          taskId: req.params.taskId,
+        });
+      }
+
+      return db
+        .prepare(
+          `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials
            FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.id = ?`,
-          )
-          .get(id);
-      },
+        )
+        .get(id);
     },
-  );
+  });
 }

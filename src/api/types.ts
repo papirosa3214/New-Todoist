@@ -31,6 +31,18 @@ export interface ApiSubtask {
   position: number;
 }
 
+// Вложение комментария. Байтов здесь нет — только описание файла; сам файл
+// забирается отдельным запросом (GET /api/attachments/:id), иначе карточка
+// тащила бы за собой все приложенные скриншоты разом.
+export interface ApiAttachment {
+  id: string;
+  comment_id: string | null;
+  file_name: string;
+  mime: string;
+  size: number;
+  created_at: string;
+}
+
 export interface ApiComment {
   id: string;
   task_id: string;
@@ -40,6 +52,8 @@ export interface ApiComment {
   user_name?: string | null;
   user_color?: string | null;
   user_initials?: string | null;
+  /** Приложенные файлы — приходят вместе с задачей (GET /api/tasks/:id). */
+  attachments?: ApiAttachment[];
 }
 
 // tasks.agent_state / tasks.agent_heartbeat_at — see AGENT-PROTOCOL.md and

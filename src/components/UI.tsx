@@ -45,6 +45,7 @@ import {
   MapPin,
   Menu,
   Mic,
+  Paperclip,
   Moon,
   Pencil,
   Play,
@@ -148,6 +149,9 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   grip: GripVertical,
   // Кнопка микрофона (TaskFormScreen) — запись голоса → свой ASR.
   mic: Mic,
+  // Вложения комментариев: кнопка «приложить файл» и строка документа в
+  // ленте (AttachmentView.tsx).
+  paperclip: Paperclip,
 };
 
 export const Icon = ({

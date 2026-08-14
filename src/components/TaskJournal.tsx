@@ -26,6 +26,7 @@ import { useSetAgentState, useUpdateTask } from "../api/tasks";
 import { useAgents } from "../api/agents";
 import { useProjects } from "../api/projects";
 import { PRIORITIES } from "../lib/priority";
+import { AttachmentView } from "./AttachmentView";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { formatDueLabel, formatRelativeTime } from "../lib/date";
 import type { ApiComment, ApiTask, ApiTaskEvent } from "../api/types";
@@ -408,7 +409,17 @@ function CommentCard({ comment }: { comment: ApiComment }) {
           {formatRelativeTime(comment.created_at)}
         </span>
       </div>
-      <p className="text-[14px] text-sub whitespace-pre-wrap">{comment.text}</p>
+      {comment.text && (
+        <p className="text-[14px] text-sub whitespace-pre-wrap">
+          {comment.text}
+        </p>
+      )}
+      {/* Приложенные файлы: картинки показываются превью, документы —
+          строкой с именем и размером (AttachmentView.tsx). Комментарий
+          может состоять из одних файлов — тогда текста выше просто нет. */}
+      {comment.attachments?.map((att) => (
+        <AttachmentView key={att.id} attachment={att} />
+      ))}
     </div>
   );
 }

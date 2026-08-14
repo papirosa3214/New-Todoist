@@ -126,7 +126,24 @@ export function registerTaskRoutes(app: FastifyInstance) {
           `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials
            FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.task_id = ? ORDER BY c.created_at`,
         )
-        .all(task.id);
+        .all(task.id) as any[];
+
+      // Вложения раскладываются по своим комментариям. Одним запросом на всю
+      // задачу, а не по запросу на комментарий: файлов мало, а лишние
+      // обращения к базе на каждое открытие карточки ни к чему. Байты сюда
+      // не попадают — только имя, тип и размер; сам файл отдаётся отдельно
+      // (GET /api/attachments/:id), иначе карточка тащила бы за собой все
+      // приложенные скриншоты разом.
+      const attachments = db
+        .prepare(
+          `SELECT id, comment_id, file_name, mime, size, created_at
+           FROM attachments WHERE task_id = ? AND comment_id IS NOT NULL
+           ORDER BY created_at`,
+        )
+        .all(task.id) as any[];
+      for (const c of comments) {
+        c.attachments = attachments.filter((a) => a.comment_id === c.id);
+      }
 
       // Journal — same JOIN-users pattern as comments. actor_id can be NULL
       // (a system-authored entry), in which case the actor_* columns come

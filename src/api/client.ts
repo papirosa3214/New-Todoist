@@ -115,4 +115,19 @@ export const api = {
       body: blob,
       headers: { "Content-Type": blob.type || "application/octet-stream" },
     }),
+  // Скачать файл (вложение комментария). Отдельно от request<T>: тот
+  // разбирает ответ как JSON, а здесь нужны сами байты. Заголовок с токеном
+  // ставится так же — без него сервер отдаёт 401, и именно поэтому картинку
+  // нельзя показать простым <img src="/api/attachments/…">, см.
+  // components/AttachmentView.tsx.
+  getBlob: async (path: string): Promise<Blob> => {
+    const token = getToken();
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      throw new ApiError(res.status, res.statusText);
+    }
+    return res.blob();
+  },
 };

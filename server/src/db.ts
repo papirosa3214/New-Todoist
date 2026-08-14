@@ -5,7 +5,11 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Allow overriding the DB file (e.g. for smoke tests / alternate envs) without
 // touching the default location the app has always used.
-const DB_PATH = process.env.DB_PATH
+// Экспортируется, чтобы всё, что должно лежать РЯДОМ с базой (папка
+// вложений — routes/attachments.ts), считало путь отсюда же, а не строило
+// свой: собственный fallback уже дал папку не в том месте, потому что
+// вычислялся от текущего каталога процесса, а не от файла базы.
+export const DB_PATH = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)
   : path.join(__dirname, "..", "taskflow.db");
 
@@ -78,6 +82,29 @@ export function migrate() {
       task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       user_id TEXT REFERENCES users(id),
       text TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Вложения комментариев. Сам файл лежит на диске (server/uploads), в
+    -- базе только запись о нём: имя, тип, размер и имя файла в хранилище.
+    -- Держать байты в самой базе сознательно не стали (решение Максима
+    -- 14.08.2026): пара десятков скриншотов раздули бы файл базы с нынешних
+    -- 176 КБ до десятков мегабайт, а это вес при каждом чтении задач и при
+    -- каждой резервной копии. Плата за это — бэкап теперь из двух частей,
+    -- база и папка; учтено в шаге «автобэкап» того же проекта.
+    --
+    -- comment_id NULL — файл уже загружен, но комментарий, к которому он
+    -- прикрепляется, ещё не отправлен (человек выбрал файл и пишет текст).
+    -- Такие записи привязываются при создании комментария.
+    CREATE TABLE IF NOT EXISTS attachments (
+      id TEXT PRIMARY KEY,
+      task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+      comment_id TEXT REFERENCES comments(id) ON DELETE CASCADE,
+      user_id TEXT REFERENCES users(id),
+      file_name TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      stored_name TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     );
 

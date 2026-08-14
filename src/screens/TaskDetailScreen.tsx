@@ -26,9 +26,16 @@ import {
   TaskFeed,
 } from "../components/TaskJournal";
 import { ActionsMenu } from "../components/ActionsMenu";
+import { MicKeyboardBar } from "../components/MicKeyboardBar";
+import { MicOverlay } from "../components/MicOverlay";
 import { formatDueLabel } from "../lib/date";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
+import { useMicRecorder } from "../lib/useMicRecorder";
+import { useTranscribeAudio } from "../api/audio";
+import { combineDictatedText } from "../lib/dictationParser";
+import { useUploadAttachment, useDeleteAttachment } from "../api/attachments";
+import type { ApiAttachment } from "../api/types";
 
 // ═══════════ SUBTASK ROW ═══════════
 // Its own component (not inlined in the .map() below) so each row gets its
@@ -83,6 +90,37 @@ export function TaskDetailScreen() {
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsAnchorRef = useRef<HTMLButtonElement>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Файлы грузятся сразу при выборе, а не в момент отправки: так человек
+  // видит, что вложение принято (и может его убрать), ещё пока пишет текст.
+  // До отправки комментария они висят «ничьими» и подбираются им же.
+  const uploadAttachment = useUploadAttachment(id || "");
+  const deleteAttachment = useDeleteAttachment();
+  const [pending, setPending] = useState<ApiAttachment[]>([]);
+
+  // Микрофон в ленте — та же плавающая кнопка над клавиатурой, что и в
+  // форме задачи (MicKeyboardBar), а не отдельный значок внутри поля:
+  // владелец 2026-08-14 прямо просил не городить микрофон в самой плашке.
+  // Показывается, пока курсор в поле комментария.
+  const [commentFocused, setCommentFocused] = useState(false);
+  const transcribeAudio = useTranscribeAudio();
+  const mic = useMicRecorder(async (blob) => {
+    try {
+      const { text } = await transcribeAudio.mutateAsync(blob);
+      // Комментарий — произвольный текст: маркеры #Проект/!приоритет тут не
+      // разбираются, они формат заголовка задачи, а не ленты.
+      setCommentText((prev) => combineDictatedText(prev, text));
+    } catch {
+      // Причина уже в transcribeAudio.error — её показывает ErrorBanner.
+    } finally {
+      mic.finish();
+    }
+  });
+  const micElapsedLabel = (() => {
+    const totalSec = Math.floor(mic.elapsedMs / 1000);
+    return `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, "0")}`;
+  })();
 
   // "Аренда истекла" (agent_stale) is computed server-side on every read —
   // nothing pushes it to an open tab (heartbeat deliberately fires no WS
@@ -140,10 +178,42 @@ export function TaskDetailScreen() {
   const handleSubmitComment = useGuardedCallback(async (e: FormEvent) => {
     e.preventDefault();
     const trimmed = commentText.trim();
-    if (!trimmed) return;
-    await addComment.mutateAsync(trimmed);
+    // Комментарий из одних файлов — нормальный случай: «вот скриншот» без
+    // подписи. Пустым считается только тот, где нет ни текста, ни вложений.
+    if (!trimmed && pending.length === 0) return;
+    await addComment.mutateAsync({
+      text: trimmed,
+      attachmentIds: pending.map((a) => a.id),
+    });
     setCommentText("");
+    setPending([]);
   });
+
+  const handlePickFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    for (const file of Array.from(files)) {
+      try {
+        const res = await uploadAttachment.mutateAsync(file);
+        setPending((prev) => [...prev, res.attachment]);
+      } catch {
+        // Причину покажет ErrorBanner ниже (uploadAttachment.error): файл
+        // мог не пройти по размеру или типу — это ответ сервера, а не сбой.
+        break;
+      }
+    }
+    // Сброс значения — иначе повторный выбор того же файла не даст события.
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleRemovePending = async (attId: string) => {
+    try {
+      await deleteAttachment.mutateAsync(attId);
+    } catch {
+      // Даже если на сервере не удалилось — из списка убираем: иначе файл
+      // прилипнет к комментарию, которого человек уже не хочет.
+    }
+    setPending((prev) => prev.filter((a) => a.id !== attId));
+  };
 
   if (isLoading) {
     return <div className="px-4 py-8 text-center text-sub">Загрузка…</div>;
@@ -358,10 +428,65 @@ export function TaskDetailScreen() {
           variant="block"
           className="mb-2"
         />
+        {/* Уже загруженные, но ещё не отправленные файлы — строкой над
+            полем: видно, что вложение принято, и можно передумать до
+            отправки. Крестик удаляет файл и с диска. */}
+        {pending.length > 0 && (
+          <div className="flex flex-col gap-1 mb-2">
+            {pending.map((att) => (
+              <div
+                key={att.id}
+                className="flex items-center gap-2 px-3 h-11 rounded-xl bg-card"
+              >
+                <Icon
+                  name="paperclip"
+                  size={14}
+                  className="text-sub shrink-0"
+                />
+                <span className="flex-1 min-w-0 truncate text-[13px] text-text">
+                  {att.file_name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleRemovePending(att.id)}
+                  aria-label="Убрать файл"
+                  className="w-9 h-9 -mr-2 flex items-center justify-center text-dim"
+                >
+                  <Icon name="x" size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <ErrorBanner
+          error={uploadAttachment.error}
+          fallback="Не удалось приложить файл"
+          variant="block"
+          className="mb-2"
+        />
         <form
           onSubmit={handleSubmitComment}
           className="flex items-center gap-2"
         >
+          {/* Скрепка слева от поля — размер тот же 40×40, что у кнопки
+              отправки справа, чтобы строка ввода не перекосилась. */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,application/pdf,text/plain,.doc,.docx,.odt,.ods,.xlsx"
+            onChange={(e) => handlePickFiles(e.target.files)}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadAttachment.isPending}
+            aria-label="Приложить файл"
+            className="w-[40px] h-[40px] rounded-xl bg-card flex items-center justify-center shrink-0 disabled:opacity-50"
+          >
+            <Icon name="paperclip" size={18} className="text-sub" />
+          </button>
           <input
             ref={commentInputRef}
             value={commentText}
@@ -378,21 +503,48 @@ export function TaskDetailScreen() {
             // видимому полю — если оно и так внизу, scrollIntoView
             // фактически не двигает содержимое (проверено скриншотами,
             // см. отчёт).
-            onFocus={() =>
-              commentInputRef.current?.scrollIntoView({ block: "end" })
-            }
+            onFocus={() => {
+              setCommentFocused(true);
+              commentInputRef.current?.scrollIntoView({ block: "end" });
+            }}
+            // Кнопка микрофона живёт в портале над клавиатурой и фокус не
+            // крадёт (MicKeyboardBar гасит mousedown), но blur всё равно
+            // приходит раньше её onClick при переходе к другим элементам —
+            // отсюда задержка: она даёт клику отработать, а не гасит панель
+            // ровно в момент нажатия.
+            onBlur={() => setTimeout(() => setCommentFocused(false), 150)}
             placeholder="Написать комментарий…"
             className="flex-1 bg-card rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none"
           />
           <button
             type="submit"
-            disabled={!commentText.trim() || addComment.isPending}
+            disabled={
+              (!commentText.trim() && pending.length === 0) ||
+              addComment.isPending
+            }
             className="w-[40px] h-[40px] rounded-xl bg-red flex items-center justify-center shrink-0 disabled:opacity-50"
           >
             <Icon name="chevron" size={16} className="text-white -rotate-90" />
           </button>
         </form>
       </div>
+      {/* Микрофон — та же плавающая кнопка над клавиатурой, что в форме
+          задачи. Появляется, пока курсор в поле комментария; надиктованный
+          текст дописывается к уже набранному, а не затирает его. */}
+      {commentFocused && mic.state === "idle" && (
+        <MicKeyboardBar
+          onStart={mic.start}
+          ariaLabel="Надиктовать комментарий"
+        />
+      )}
+      {(mic.state === "recording" || mic.state === "processing") && (
+        <MicOverlay
+          state={mic.state}
+          elapsedLabel={micElapsedLabel}
+          getTimeDomainData={mic.getTimeDomainData}
+          onStop={mic.stop}
+        />
+      )}
     </div>
   );
 }

@@ -30,3 +30,7 @@ mockup-reference/__pycache__
 
 # Claude Code worktrees
 .claude/
+
+# Вложения комментариев — файлы Максима, не код: лежат рядом с базой
+# (server/uploads), в репозиторий им нельзя.
+server/uploads/

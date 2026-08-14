@@ -12,6 +12,7 @@ import { registerProjectLabelRoutes } from "./routes/projects.js";
 import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerSearchRoutes } from "./routes/search.js";
+import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerSeedRoutes } from "./seed.js";
@@ -34,6 +35,29 @@ app.addContentTypeParser(
   { parseAs: "buffer" },
   (_req, body, done) => done(null, body),
 );
+
+// Вложения комментариев приходят тем же способом — сырыми байтами
+// (routes/attachments.ts). Типы перечислены поимённо, БЕЗ маски вида
+// `application/*`: под неё попал бы и application/json, парсер тела
+// перехватил бы его у Fastify, и весь остальной API перестал бы понимать
+// обычные запросы. Окончательное «такое не принимаем» решает сам маршрут —
+// он отвечает понятным текстом вместо сырого FST_ERR_CTP_INVALID_MEDIA_TYPE.
+const ATTACHMENT_CONTENT_TYPES = [
+  /^image\//,
+  /^text\/plain/,
+  "application/pdf",
+  "application/octet-stream",
+  "application/msword",
+  /^application\/vnd\.openxmlformats-officedocument\./,
+  /^application\/vnd\.oasis\.opendocument\./,
+];
+for (const type of ATTACHMENT_CONTENT_TYPES) {
+  app.addContentTypeParser(
+    type as any,
+    { parseAs: "buffer" },
+    (_req: any, body: any, done: any) => done(null, body),
+  );
+}
 
 // Plugins
 // CORS: Явный список разрешённых источников вместо origin:true.
@@ -73,6 +97,7 @@ registerProjectLabelRoutes(app);
 registerSubtaskCommentRoutes(app);
 registerNotificationRoutes(app);
 registerSearchRoutes(app);
+registerAttachmentRoutes(app);
 registerAiRoutes(app);
 registerTranscribeRoutes(app);
 registerSeedRoutes(app);
