@@ -13,7 +13,16 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   app.get("/api/projects", { preHandler: authPre }, async (req: any) => {
     return db
       .prepare(
-        "SELECT p.*, (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count FROM projects p WHERE p.owner_id = ?",
+        // Считаются только АКТИВНЫЕ задачи. Раньше считались все, вместе с
+        // выполненными, и число рядом с проектом расходилось с тем, что
+        // человек видит, провалившись внутрь: «Входящие — 10», а в списке
+        // три (7 из них давно закрыты). Найдено Максимом 14.08.2026.
+        // Экран проекта (ProjectTasksScreen) показывает именно активные —
+        // счётчик обязан отвечать на тот же вопрос, что и экран под ним.
+        `SELECT p.*,
+                (SELECT COUNT(*) FROM tasks
+                  WHERE project_id = p.id AND status = 'active') as task_count
+         FROM projects p WHERE p.owner_id = ?`,
       )
       .all(req.userId);
   });
