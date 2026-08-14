@@ -443,6 +443,59 @@ export function TaskBoard({
   // exact kind of UI lie this feature exists to avoid.
   const dragSnapshotRef = useRef<Record<string, string[]> | null>(null);
 
+  // ─── Полоса на всю оставшуюся высоту экрана ───
+  // Пролистывание колонок пальцем ловится только там, где есть сама полоса,
+  // а её высота — это высота самой длинной колонки. Поэтому под карточками
+  // оставалась мёртвая зона: свайп по пустому месту не переключал колонку
+  // (просьба Максима 14.08.2026 — «чтобы двигались и по пустому месту»).
+  // Лечится вёрсткой, а не своей обработкой жестов: полоса дотягивается до
+  // низа видимой области, колонки внутри неё растягиваются (flex stretch),
+  // и пустое место под карточками становится частью той же скроллируемой
+  // полосы — переключение остаётся нативным, вместе со snap.
+  //
+  // Высота считается замером, без зашитых чисел: берётся ближайший
+  // вертикальный скроллер (Layout.tsx: `flex-1 overflow-y-auto`), из его
+  // видимой высоты вычитается отступ его контентной обёртки (класс
+  // pb-content-safe — место под нижней навигацией; на десктопе он свой) и
+  // расстояние от верха скроллера до полосы. Расстояние берётся с поправкой
+  // на scrollTop, иначе прокрутка меняла бы замер и высота росла бы сама от
+  // себя.
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [stripMinH, setStripMinH] = useState<number>();
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const measure = () => {
+      let scroller: HTMLElement | null = strip.parentElement;
+      while (
+        scroller &&
+        !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)
+      ) {
+        scroller = scroller.parentElement;
+      }
+      if (!scroller) return;
+      const wrap = scroller.firstElementChild as HTMLElement | null;
+      const inset = wrap
+        ? parseFloat(getComputedStyle(wrap).paddingBottom) || 0
+        : 0;
+      const offsetFromScrollerTop =
+        strip.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top +
+        scroller.scrollTop;
+      const available = scroller.clientHeight - inset - offsetFromScrollerTop;
+      setStripMinH(available > 0 ? available : undefined);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(strip);
+    if (strip.parentElement) ro.observe(strip.parentElement);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [columns.length]);
+
   useEffect(() => {
     if (activeId !== null || persistingRef.current) return;
     setColItems(
@@ -640,6 +693,11 @@ export function TaskBoard({
     >
       <div
         data-board-strip
+        ref={stripRef}
+        // items-stretch (дефолт flex) + min-height полосы = колонка занимает
+        // всю её высоту, поэтому пустое место под карточками принадлежит
+        // полосе и пролистывается тем же жестом, что и сами карточки.
+        style={stripMinH ? { minHeight: stripMinH } : undefined}
         className={`-mx-1 flex gap-3 overflow-x-auto px-1 pb-2 ${
           // Scroll-snap fights dnd-kit's auto-scroll-to-edge while a drag is
           // active (each auto-scroll tick gets pulled back toward the
