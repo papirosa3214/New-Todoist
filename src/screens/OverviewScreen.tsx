@@ -66,6 +66,24 @@ export function OverviewScreen() {
       ).length,
     [allTasks],
   );
+  // Назначено агенту, но никто не взял. Пока служба дежурит, это нормальная
+  // очередь — подхватит. А вот при выключенной службе ровно эти задачи и
+  // зависнут молча: назначил и ждёшь, а никто не придёт. Именно этого
+  // Максим и опасался, поэтому плашка дежурства становится тревожной не
+  // «когда служба выключена» вообще (её можно и не включать, работая через
+  // MCP руками), а когда выключена И есть кому простаивать.
+  const waitingCount = useMemo(
+    () =>
+      allTasks.filter(
+        (t) =>
+          t.status === "active" &&
+          !t.agent_state &&
+          !!t.assignee_id &&
+          allAgents.some((a) => a.id === t.assignee_id && a.type === "ai"),
+      ).length,
+    [allTasks, allAgents],
+  );
+  const serviceAlarm = !serviceOn && waitingCount > 0;
 
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
@@ -163,15 +181,29 @@ export function OverviewScreen() {
         <button
           onClick={() => navigate("/agents")}
           className={`tap-scale flex h-11 flex-1 basis-0 min-w-0 items-center justify-center gap-1.5 px-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
-            serviceOn ? "bg-green/15 text-green" : "bg-card2 text-sub"
+            serviceOn
+              ? "bg-green/15 text-green"
+              : serviceAlarm
+                ? "bg-coral/20 text-coral"
+                : "bg-card2 text-sub"
           }`}
         >
           <span
             className={`w-[7px] h-[7px] rounded-full shrink-0 ${
-              serviceOn ? "bg-green" : "bg-dim"
+              serviceOn ? "bg-green" : serviceAlarm ? "bg-coral" : "bg-dim"
             }`}
           />
-          <span className="truncate">{serviceOn ? "Дежурит" : "Выключен"}</span>
+          {/* «Выключен: N» — N это задачи, назначенные агенту и никем не
+              взятые: ровно они и зависнут, пока служба не работает. Без
+              ожидающих плашка спокойно-серая: выключенная служба сама по
+              себе не беда — задачу можно вести и руками, через MCP. */}
+          <span className="truncate">
+            {serviceOn
+              ? "Дежурит"
+              : serviceAlarm
+                ? `Выключен: ${waitingCount}`
+                : "Выключен"}
+          </span>
         </button>
         {/* 2. В работе — сколько задач агенты делают прямо сейчас. */}
         <button
