@@ -8,7 +8,6 @@ import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { PROJECT_COLORS } from "../lib/projectColors";
-import { partitionOverdueToday, todayStr } from "../lib/date";
 
 export function OverviewScreen() {
   const navigate = useNavigate();
@@ -24,25 +23,20 @@ export function OverviewScreen() {
 
   // Сводка вверху экрана — считается на клиенте из уже загруженного
   // useTasks() (тот же кэш react-query, что и TodayScreen/TaskDetailScreen),
-  // без отдельного агрегирующего эндпоинта. "Просрочено" — через
-  // partitionOverdueToday (lib/date.ts), ТУ ЖЕ функцию, что даёт красный
-  // блок "Просрочено N" на "Сегодня", но это НЕ гарантирует одинаковое
-  // число: TodayScreen после неё ещё вычитает задачи, ушедшие в «Ждут вас»
-  // (blocked/review), а здесь считаются ВСЕ активные просроченные задачи
-  // без вычета. Так и задумано для сводки "сколько всего просрочено" — но
-  // при наличии просроченных задач в «Ждут вас» цифра тут будет БОЛЬШЕ,
-  // чем заголовок "Просрочено N" на "Сегодня", и это не баг, а разная
-  // семантика.
-  // "Протухло у агентов" — то же условие, что и бейдж "Агент пропал"
+  // без отдельного агрегирующего эндпоинта.
+  //
+  // Своих просроченных задач тут намеренно НЕТ (убрано по просьбе Максима
+  // 14.08.2026): для них есть «Сегодня» с красным блоком «Просрочено N», и
+  // вторая цифра рядом только сбивала — она считалась без вычета задач,
+  // ушедших в «Ждут вас», то есть законно расходилась с той, что на
+  // «Сегодня». Сводка здесь отвечает на другой вопрос — что происходит у
+  // агентов, а не что просрочено у самого Максима.
+  //
+  // "Пропали" — то же условие, что и бейдж "Агент пропал"
   // (components/UI.tsx AgentStateTag): agent_stale вычисляется сервером и
   // осмыслен только вместе с agent_state === "in_progress"
   // (server/src/routes/tasks.ts withAgentStale).
   const { data: allTasks = [] } = useTasks();
-  const today = todayStr();
-  const overdueCount = useMemo(
-    () => partitionOverdueToday(allTasks, today).overdue.length,
-    [allTasks, today],
-  );
   const staleCount = useMemo(
     () =>
       allTasks.filter((t) => t.agent_state === "in_progress" && t.agent_stale)
@@ -130,45 +124,51 @@ export function OverviewScreen() {
         }
       />
 
-      {/* Сводка: просроченные задачи + протухшие аренды агентов, одним
-          взглядом. Ноль — нейтральный цвет (bg-card2/text-sub), не тревожный. */}
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <div
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
-            overdueCount > 0 ? "bg-red/15 text-red" : "bg-card2 text-sub"
-          }`}
-        >
-          <Icon name="calendarSmall" size={14} />
-          Просрочено: {overdueCount}
-        </div>
-        <div
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
-            staleCount > 0 ? "bg-coral/20 text-coral" : "bg-card2 text-sub"
-          }`}
-        >
-          <Icon name="bot" size={14} />
-          Протухло у агентов: {staleCount}
-        </div>
+      {/* Сводка по агентам одной строкой: кто на связи и у кого протухла
+          аренда. Ноль — нейтральный цвет (bg-card2/text-sub), не тревожный.
+          Своих просроченных задач тут больше нет (см. комментарий к
+          подсчётам выше) — для них есть «Сегодня».
+
+          Обе плашки — одна строка на всю ширину, по половине каждая
+          (просьба Максима 14.08.2026): flex-1 с basis-0 делит доступные
+          358px (100vw минус px-4 с двух сторон) пополам — по 175px на
+          плашку при gap-2. Подписи с иконкой и полями укладываются
+          примерно в 150px, запас есть даже на «10 из 10». flex-wrap снят
+          намеренно: с ним перенос вернулся бы молча, стоит подписи чуть
+          подрасти; min-w-0 + truncate на этот случай оставляют плашку в
+          строке, подрезая текст, а не ломая раскладку.
+
+          «Протухло» ушло по прямому замечанию Максима — слово не из этой
+          области. Взято «Пропали», тем же словом, что и бейдж «Агент
+          пропал» на самой карточке (components/UI.tsx AgentStateTag), так
+          что одно и то же состояние называется одинаково везде. */}
+      <div className="flex items-stretch gap-2 mb-4">
         {/* «Кто сейчас на связи» — по просьбе Максима 14.08.2026: раньше это
             было видно только в настройках, а вопрос «работает кто-то или
-            нет» возникает сходу, на главном экране. Плашка в том же ряду и
-            том же стиле, что «Просрочено» и «Протухло», но кликабельная:
-            ведёт на полный экран агентов, где видно и роли, и кто именно.
-            Точка вместо иконки — тот же зелёный кружок присутствия, что и
-            на экране агентов, чтобы признак читался одинаково в двух местах. */}
+            нет» возникает сходу, на главном экране. Иконка та же, что у
+            соседней плашки (бот), и она же загорается зелёным, когда
+            кто-то на связи — цвет наследуется от текста, отдельной точки
+            присутствия здесь не нужно. Кликабельна: ведёт на полный экран
+            агентов, где видно, кто именно и в какой роли. */}
         <button
           onClick={() => navigate("/agents")}
-          className={`tap-scale flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
+          className={`tap-scale flex flex-1 basis-0 min-w-0 items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
             agentsOnline > 0 ? "bg-green/15 text-green" : "bg-card2 text-sub"
           }`}
         >
-          <span
-            className={`w-[7px] h-[7px] rounded-full ${
-              agentsOnline > 0 ? "bg-green" : "bg-dim"
-            }`}
-          />
-          Агенты на связи: {agentsOnline} из {agentsTotal}
+          <Icon name="bot" size={14} className="shrink-0" />
+          <span className="truncate">
+            На связи: {agentsOnline} из {agentsTotal}
+          </span>
         </button>
+        <div
+          className={`flex flex-1 basis-0 min-w-0 items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
+            staleCount > 0 ? "bg-coral/20 text-coral" : "bg-card2 text-sub"
+          }`}
+        >
+          <Icon name="bot" size={14} className="shrink-0" />
+          <span className="truncate">Пропали: {staleCount}</span>
+        </div>
       </div>
 
       {/* Search Card */}
