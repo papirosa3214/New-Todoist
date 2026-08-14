@@ -112,7 +112,17 @@ export function Layout() {
       !!matchPath({ path: "/today", end: true }, loc.pathname)) ||
     (inboxLayout === "board" &&
       !!matchPath({ path: "/inbox", end: true }, loc.pathname));
-  const hideFAB = hideNav || fabReplacedByPill;
+  // «Обзор» — сводный экран (поиск, свои проекты, «ждут вас»), а не список
+  // задач: задачу заводят там, где её потом видно — на «Входящих» или
+  // «Сегодня». Поэтому кнопки «+» здесь нет вообще, в отличие от случая
+  // выше — там она не исчезает, а заменяется пилюлей под колонкой.
+  // Просьба Максима 14.08.2026. Нижняя навигация при этом остаётся:
+  // «Обзор» — полноценный таб-экран.
+  const fabHiddenOnOverview = !!matchPath(
+    { path: "/overview", end: true },
+    loc.pathname,
+  );
+  const hideFAB = hideNav || fabReplacedByPill || fabHiddenOnOverview;
   const { data: currentUser } = useCurrentUser();
   useNotificationsSocket(!!currentUser);
 
