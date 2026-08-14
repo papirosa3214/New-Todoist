@@ -93,7 +93,7 @@ def as_tasks(payload):
 
 def short(task: dict) -> dict:
     """Компактная карточка для списков: без служебных полей, читаемо глазами."""
-    return {
+    card = {
         "id": task.get("id"),
         "название": task.get("title"),
         "проект": task.get("project_name"),
@@ -103,6 +103,13 @@ def short(task: dict) -> dict:
         "срок": task.get("due_date"),
         "исполнитель": task.get("assignee_name"),
     }
+    # Последний сигнал — единственный способ отличить «двойник сейчас
+    # работает» от «взял и молчит»: состояние in_progress держится и в том,
+    # и в другом случае, а brошена становится true только через 15 минут
+    # тишины. Без этого поля вопрос «он ещё жив?» по MCP не ответить.
+    if task.get("agent_heartbeat_at"):
+        card["последний сигнал"] = task["agent_heartbeat_at"]
+    return card
 
 
 # --------------------------------------------------------------------------- инструменты
@@ -177,6 +184,29 @@ def t_subtask_done(args):
 def t_subtask_add(args):
     s = api("POST", f"/api/tasks/{args['task_id']}/subtasks", {"title": args["title"]})
     return {"шаг добавлен": s.get("title"), "id": s.get("id")}
+
+
+def t_status(_args):
+    """Одним вызовом: работает ли служба и чем заняты агенты прямо сейчас.
+
+    Отвечает на вопрос «двойник вообще пашет или нет» без обхода трёх
+    инструментов — именно за этим сюда и заходят.
+    """
+    agents = api("GET", "/api/agents")
+    tasks = [t for t in as_tasks(api("GET", "/api/tasks")) if t.get("status") == "active"]
+    working = [t for t in tasks if t.get("agent_state") == "in_progress" and not t.get("agent_stale")]
+    lost = [t for t in tasks if t.get("agent_state") == "in_progress" and t.get("agent_stale")]
+    review = [t for t in tasks if t.get("agent_state") == "review"]
+    blocked = [t for t in tasks if t.get("agent_state") == "blocked"]
+    online = [a.get("name") for a in agents if a.get("type") == "ai" and a.get("status") == "online"]
+    return {
+        "служба на дежурстве": bool(online),
+        "агенты на связи": online or "никого",
+        "в работе": [short(t) for t in working],
+        "брошено (взяли и молчат)": [short(t) for t in lost],
+        "ждут проверки владельца": [short(t) for t in review],
+        "упёрлись, нужен владелец": [short(t) for t in blocked],
+    }
 
 
 def t_agents(_args):
@@ -274,6 +304,12 @@ TOOLS = [
             "required": ["task_id", "title"],
         },
         "fn": t_subtask_add,
+    },
+    {
+        "name": "taskflow_status",
+        "description": "Что сейчас происходит: работает ли служба, какие задачи агенты делают прямо сейчас (с временем последнего сигнала), что брошено, что ждёт проверки. Начинать проверку состояния — отсюда.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": t_status,
     },
     {
         "name": "taskflow_agents",
