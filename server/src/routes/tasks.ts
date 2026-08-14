@@ -501,6 +501,44 @@ export function registerTaskRoutes(app: FastifyInstance) {
         });
       }
 
+      // Остальные правки задачи — в тот же журнал. До этого писался ровно
+      // один вид записи (смена status выше) плюс переходы agent_state в
+      // agent-state.ts, поэтому назначение исполнителя не оставляло в ленте
+      // никакого следа: уведомление адресату уходило (ниже), а владелец,
+      // открыв ленту, не видел, что ответственный вообще менялся. Найдено
+      // Максимом 14.08.2026 — он назначил исполнителя, и лента промолчала.
+      //
+      // Пишем те поля, изменение которых человек воспринимает как событие:
+      // исполнитель, срок, приоритет, проект, название. description и
+      // position сознательно не журналируем — первое даёт «портянку» из
+      // текста в ленте (для этого есть комментарии), второе меняется при
+      // каждом перетаскивании карточки и забило бы ленту служебным шумом.
+      const JOURNALLED = [
+        "assignee_id",
+        "due_date",
+        "priority",
+        "project_id",
+        "title",
+      ] as const;
+      for (const key of JOURNALLED) {
+        if (body[key] === undefined) continue;
+        const before = existing[key] ?? null;
+        const after = body[key] ?? null;
+        // Числа и строки из тела запроса сравниваем по строковому виду:
+        // priority приходит числом, а в SQLite лежит числом же, но из JSON
+        // может прийти и строкой — String() снимает этот класс ложных
+        // «изменений» без изменения того, что реально пишется в базу.
+        if (String(before) === String(after)) continue;
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "field_changed",
+          field: key,
+          fromValue: before === null ? null : String(before),
+          toValue: after === null ? null : String(after),
+        });
+      }
+
       // Update labels
       if (body.label_ids) {
         db.prepare("DELETE FROM task_labels WHERE task_id = ?").run(id);

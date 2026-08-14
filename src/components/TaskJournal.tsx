@@ -20,11 +20,14 @@
 // padding scale, tap-scale/tap-fade for touch feedback, the Dialog.tsx/
 // RescheduleSheet.tsx bottom-sheet shape for the "Вернуть на доработку"
 // comment prompt).
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Avatar, Button, ErrorBanner, Icon } from "./UI";
 import { useSetAgentState, useUpdateTask } from "../api/tasks";
+import { useAgents } from "../api/agents";
+import { useProjects } from "../api/projects";
+import { PRIORITIES } from "../lib/priority";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
-import { formatRelativeTime } from "../lib/date";
+import { formatDueLabel, formatRelativeTime } from "../lib/date";
 import type { ApiComment, ApiTask, ApiTaskEvent } from "../api/types";
 
 // ═══════════ STATUS ROW ═══════════
@@ -302,7 +305,40 @@ function describeAgentStateChange(
   return `${actor}: ${fromWord} → ${toWord}`;
 }
 
-function describeEvent(e: ApiTaskEvent): string {
+// Справочники для расшифровки field_changed: id исполнителя и проекта сами
+// по себе человеку ничего не говорят, а имя лежит в других запросах.
+// Приходит из TaskFeed (useAgents/useProjects) — если справочник ещё не
+// загружен или запись старая и того пользователя/проекта уже нет, строка
+// честно скажет «снят»/«убран», а не покажет сырой идентификатор.
+type NameLookup = {
+  userName: (id: string | null) => string | null;
+  projectName: (id: string | null) => string | null;
+};
+
+function describeFieldChange(e: ApiTaskEvent, actor: string, look: NameLookup) {
+  if (e.field === "assignee_id") {
+    const to = look.userName(e.to_value);
+    if (!e.to_value) return `${actor} снял исполнителя`;
+    return `${actor} назначил исполнителем: ${to ?? "другого участника"}`;
+  }
+  if (e.field === "due_date") {
+    if (!e.to_value) return `${actor} убрал срок`;
+    return `${actor} поставил срок: ${formatDueLabel(e.to_value)}`;
+  }
+  if (e.field === "priority") {
+    const p = PRIORITIES.find((x) => String(x.key) === String(e.to_value));
+    return `${actor} сменил приоритет: ${p ? p.name.toLowerCase() : (e.to_value ?? "без приоритета")}`;
+  }
+  if (e.field === "project_id") {
+    const to = look.projectName(e.to_value);
+    if (!e.to_value) return `${actor} убрал задачу из проекта`;
+    return `${actor} перенёс задачу в проект: ${to ?? "другой"}`;
+  }
+  if (e.field === "title") return `${actor} переименовал задачу`;
+  return `${actor}: задача обновлена`;
+}
+
+function describeEvent(e: ApiTaskEvent, look: NameLookup): string {
   const actor = e.actor_name || "Система";
   if (e.kind === "claimed") return `${actor} взял задачу в работу`;
   if (e.kind === "state_changed" && e.field === "agent_state") {
@@ -312,18 +348,25 @@ function describeEvent(e: ApiTaskEvent): string {
     if (e.to_value === "completed") return `${actor} принял задачу`;
     if (e.to_value === "active") return `${actor} вернул задачу в работу`;
   }
+  if (e.kind === "field_changed") return describeFieldChange(e, actor, look);
   // Forward-compatible fallback for journal kinds this wave doesn't render
   // specially (field_changed/subtask_*/label_*/comment_added — wave C) —
   // still Russian, still no raw "kind field→value" leaking through.
   return `${actor}: задача обновлена`;
 }
 
-function JournalLine({ event }: { event: ApiTaskEvent }) {
+function JournalLine({
+  event,
+  look,
+}: {
+  event: ApiTaskEvent;
+  look: NameLookup;
+}) {
   return (
     <div className="flex items-center gap-2 px-1 py-1.5">
       <span className="w-1 h-1 rounded-full bg-dim shrink-0" />
       <span className="flex-1 min-w-0 text-[12px] text-dim">
-        {describeEvent(event)}
+        {describeEvent(event, look)}
       </span>
       <span className="text-[11px] text-dim shrink-0">
         {formatRelativeTime(event.created_at)}
@@ -355,6 +398,22 @@ function CommentCard({ comment }: { comment: ApiComment }) {
 
 export function TaskFeed({ task }: { task: ApiTask }) {
   const feed = buildFeed(task);
+  // Справочники для строк вида «назначил исполнителем: Клод» — журнал
+  // хранит идентификаторы, а имена живут в этих двух запросах (оба уже
+  // закешированы react-query: экран агентов и список проектов их и так
+  // тянут). Пока не загрузились — describeFieldChange даёт нейтральную
+  // формулировку, сырой id в ленту не попадает.
+  const { data: agents } = useAgents();
+  const { data: projects } = useProjects();
+  const look: NameLookup = useMemo(
+    () => ({
+      userName: (id) =>
+        id ? (agents?.find((a) => a.id === id)?.name ?? null) : null,
+      projectName: (id) =>
+        id ? (projects?.find((p) => p.id === id)?.name ?? null) : null,
+    }),
+    [agents, projects],
+  );
 
   if (feed.length === 0) {
     return (
@@ -370,7 +429,11 @@ export function TaskFeed({ task }: { task: ApiTask }) {
         row.kind === "comment" ? (
           <CommentCard key={`c-${row.comment.id}`} comment={row.comment} />
         ) : (
-          <JournalLine key={`e-${row.event.id}`} event={row.event} />
+          <JournalLine
+            key={`e-${row.event.id}`}
+            event={row.event}
+            look={look}
+          />
         ),
       )}
     </div>
