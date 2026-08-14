@@ -349,6 +349,23 @@ function describeEvent(e: ApiTaskEvent, look: NameLookup): string {
     if (e.to_value === "active") return `${actor} вернул задачу в работу`;
   }
   if (e.kind === "field_changed") return describeFieldChange(e, actor, look);
+  if (e.kind === "task_created") return `${actor} создал задачу`;
+  if (e.kind === "subtasks_seeded") {
+    return `${actor} добавил шаги: ${e.to_value ?? ""}`.trim();
+  }
+  if (e.kind === "subtask_added") return `${actor} добавил шаг: ${e.to_value}`;
+  if (e.kind === "subtask_done") return `${actor} выполнил шаг: ${e.to_value}`;
+  if (e.kind === "subtask_undone") {
+    return `${actor} снял отметку с шага: ${e.to_value}`;
+  }
+  if (e.kind === "subtask_renamed") {
+    return `${actor} переименовал шаг: ${e.from_value} → ${e.to_value}`;
+  }
+  if (e.kind === "subtask_removed") {
+    return `${actor} удалил шаг: ${e.from_value}`;
+  }
+  if (e.kind === "description_changed") return `${actor} изменил описание`;
+  if (e.kind === "labels_changed") return `${actor} изменил метки`;
   // Forward-compatible fallback for journal kinds this wave doesn't render
   // specially (field_changed/subtask_*/label_*/comment_added — wave C) —
   // still Russian, still no raw "kind field→value" leaking through.

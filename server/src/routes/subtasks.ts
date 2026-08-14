@@ -4,6 +4,7 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForUser } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
+import { logEvent } from "../agentState.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -103,6 +104,14 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           .prepare("SELECT * FROM subtasks WHERE id = ?")
           .get(id);
 
+        logEvent({
+          taskId: req.params.taskId,
+          actorId: req.userId,
+          kind: "subtask_added",
+          field: "subtask",
+          toValue: req.body.title,
+        });
+
         const fullTask = getFullTask(req.params.taskId);
         broadcastToUsers([task.creator_id, task.assignee_id], {
           type: "task:updated",
@@ -123,16 +132,41 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (!subtask) return reply.code(404).send({ error: "Not found" });
 
       const { done, title } = req.body || {};
-      if (done !== undefined)
+      if (done !== undefined) {
         db.prepare("UPDATE subtasks SET done = ? WHERE id = ?").run(
           done ? 1 : 0,
           req.params.id,
         );
-      if (title)
+        // Галочка на шаге — такое же событие задачи, как и всё остальное:
+        // в ленте видно, кто именно отметил шаг сделанным (или снял
+        // отметку). Пишем только при реальной смене, чтобы повторный
+        // PATCH тем же значением не плодил одинаковые строки.
+        if (!!subtask.done !== !!done) {
+          logEvent({
+            taskId: subtask.task_id,
+            actorId: req.userId,
+            kind: done ? "subtask_done" : "subtask_undone",
+            field: "subtask",
+            toValue: title ?? subtask.title,
+          });
+        }
+      }
+      if (title) {
         db.prepare("UPDATE subtasks SET title = ? WHERE id = ?").run(
           title,
           req.params.id,
         );
+        if (title !== subtask.title) {
+          logEvent({
+            taskId: subtask.task_id,
+            actorId: req.userId,
+            kind: "subtask_renamed",
+            field: "subtask",
+            fromValue: subtask.title,
+            toValue: title,
+          });
+        }
+      }
 
       const fullTask = getFullTask(subtask.task_id);
       broadcastToUsers([subtask.task_creator_id, subtask.task_assignee_id], {
@@ -153,6 +187,13 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (!subtask) return reply.code(404).send({ error: "Not found" });
 
       db.prepare("DELETE FROM subtasks WHERE id = ?").run(req.params.id);
+      logEvent({
+        taskId: subtask.task_id,
+        actorId: req.userId,
+        kind: "subtask_removed",
+        field: "subtask",
+        fromValue: subtask.title,
+      });
       const fullTask = getFullTask(subtask.task_id);
       broadcastToUsers([subtask.task_creator_id, subtask.task_assignee_id], {
         type: "task:updated",

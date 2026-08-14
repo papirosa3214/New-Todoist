@@ -292,6 +292,45 @@ export function registerTaskRoutes(app: FastifyInstance) {
       });
       createTaskTxn();
 
+      // Первая запись ленты — «создал задачу»: до этого лента начиналась с
+      // первого же изменения, и по ней нельзя было понять, кто и когда
+      // задачу вообще завёл (просьба Максима 14.08.2026 — лента должна
+      // фиксировать всё, начиная с создания). Исполнитель, назначенный
+      // сразу при создании, пишется отдельной строкой — иначе назначение
+      // «в момент заведения» осталось бы невидимым, в отличие от того же
+      // назначения через правку задачи.
+      logEvent({
+        taskId: id,
+        actorId: req.userId,
+        kind: "task_created",
+        field: "task",
+        toValue: trimmedTitle,
+      });
+      if (assignee_id) {
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "field_changed",
+          field: "assignee_id",
+          fromValue: null,
+          toValue: String(assignee_id),
+        });
+      }
+      // Шаги, заведённые вместе с задачей, — одной строкой с их числом, а
+      // не по строке на каждый: задача из десяти шагов иначе открывалась бы
+      // лентой из десяти одинаковых записей, в которой не видно ничего
+      // другого. Шаг, добавленный потом руками, по-прежнему пишется
+      // отдельной строкой со своим названием (routes/subtasks.ts).
+      if (subtaskTitles.length) {
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "subtasks_seeded",
+          field: "subtask",
+          toValue: String(subtaskTitles.length),
+        });
+      }
+
       // Create notification for assignee
       if (assignee_id && assignee_id !== req.userId) {
         const notifId = uid();
@@ -539,8 +578,42 @@ export function registerTaskRoutes(app: FastifyInstance) {
         });
       }
 
+      // Описание — фактом, без текста: «изменил описание». Сам текст в
+      // ленте был бы портянкой (и дублировал бы то, что видно выше в
+      // карточке), но и молчать нельзя — правка описания такое же
+      // телодвижение, как остальные.
+      if (
+        body.description !== undefined &&
+        (body.description ?? "") !== (existing.description ?? "")
+      ) {
+        logEvent({
+          taskId: id,
+          actorId: req.userId,
+          kind: "description_changed",
+          field: "description",
+        });
+      }
+
       // Update labels
       if (body.label_ids) {
+        const before = (
+          db
+            .prepare("SELECT label_id FROM task_labels WHERE task_id = ?")
+            .all(id) as Array<{ label_id: string }>
+        )
+          .map((r) => r.label_id)
+          .sort();
+        const after = [...body.label_ids].sort();
+        if (before.join(",") !== after.join(",")) {
+          logEvent({
+            taskId: id,
+            actorId: req.userId,
+            kind: "labels_changed",
+            field: "labels",
+            fromValue: String(before.length),
+            toValue: String(after.length),
+          });
+        }
         db.prepare("DELETE FROM task_labels WHERE task_id = ?").run(id);
         const ins = db.prepare(
           "INSERT INTO task_labels (task_id, label_id) VALUES (?, ?)",
