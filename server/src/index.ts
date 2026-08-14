@@ -4,7 +4,7 @@ import fastifyJwt from "@fastify/jwt";
 import fastifyWebsocket from "@fastify/websocket";
 import { migrate } from "./db.js";
 import { resolveUserIdFromToken } from "./auth.js";
-import { addClient, removeClient } from "./ws.js";
+import { addClient, removeClient, resetAllOffline } from "./ws.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
@@ -108,5 +108,9 @@ app.register(async function (fastify) {
 
 // Start
 app.listen({ port: PORT, host: HOST }).then((addr) => {
+  // Сокетов после рестарта нет ни у кого — значит и «online» в базе быть не
+  // может: иначе статус, оставшийся с прошлого запуска, врал бы до первого
+  // подключения того же пользователя.
+  resetAllOffline();
   console.log(`🚀 TaskFlow API running at ${addr}`);
 });
