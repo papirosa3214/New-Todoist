@@ -268,8 +268,10 @@ export function migrate() {
   // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:
   // there is no PATCH/DELETE endpoint for individual events, which is what
   // makes the journal tamper-proof from the API side (see AGENT-PROTOCOL.md,
-  // "Журнал задачи"). actor_id NULL means the server itself made the entry
-  // (e.g. a future lease-expired marker), not a specific user.
+  // "Журнал задачи"). actor_id NULL means the server itself made the entry,
+  // not a specific user — e.g. kind='lease_expired' (agent-state.ts): the
+  // caller whose request surfaced it didn't cause the silence, so it isn't
+  // credited as their action.
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_events (
       id TEXT PRIMARY KEY,

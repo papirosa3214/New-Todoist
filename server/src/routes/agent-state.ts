@@ -109,10 +109,14 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         // agent_heartbeat_at уже будет свежим (обновлён строкой ниже), и
         // isStale(task.agent_heartbeat_at) — значение ДО этого UPDATE —
         // войдёт в лог ровно один раз за цикл claim → ... → claim.
+        //
+        // actor_id = NULL — это не действие req.userId, а факт, который
+        // вскрыл его вызов: молчание случилось раньше и независимо от
+        // текущего запроса (см. комментарий у CREATE TABLE task_events).
         if (who.leaseExpired) {
           logEvent({
             taskId: task.id,
-            actorId: req.userId,
+            actorId: null,
             kind: "lease_expired",
             field: "agent_heartbeat_at",
             fromValue: task.agent_heartbeat_at ?? null,
@@ -249,10 +253,12 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         from === "in_progress" && isStale(task.agent_heartbeat_at);
 
       const stateTxn = db.transaction(() => {
+        // actor_id = NULL — тот же довод, что в claim(): это не действие
+        // req.userId, а факт, который вскрыл его вызов.
         if (leaseWasExpired) {
           logEvent({
             taskId: task.id,
-            actorId: req.userId,
+            actorId: null,
             kind: "lease_expired",
             field: "agent_heartbeat_at",
             fromValue: task.agent_heartbeat_at ?? null,
