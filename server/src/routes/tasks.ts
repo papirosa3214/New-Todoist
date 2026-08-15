@@ -37,7 +37,7 @@ function isValidDateStr(s: string): boolean {
 // "задача в in_progress, но последний сигнал был давно" — a stale
 // agent_heartbeat_at left over on a completed task, or on one sitting in
 // blocked/review waiting on the owner (exactly as designed), must NOT
-// paint as abandoned just because 15 minutes passed since the last ping.
+// paint as abandoned just because 5 minutes passed since the last ping.
 function withAgentStale(task: any) {
   return {
     ...task,
