@@ -251,7 +251,7 @@ function BoardCard({
             }}
             role="button"
             aria-label={isDone ? "Вернуть в работу" : "Отметить выполненной"}
-            className="mt-0.5 w-[18px] h-[18px] rounded-full border-2 shrink-0 flex items-center justify-center"
+            className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 shrink-0 flex items-center justify-center"
             style={{ borderColor: getPriorityColor(task.priority) }}
           >
             {isDone && <Icon name="check" size={12} className="text-white" />}
