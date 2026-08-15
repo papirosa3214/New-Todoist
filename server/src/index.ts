@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import fastifyJwt from "@fastify/jwt";
 import fastifyWebsocket from "@fastify/websocket";
 import { migrate } from "./db.js";
+import { runMigrations } from "./migrations.js";
 import { resolveUserIdFromToken } from "./auth.js";
 import { addClient, removeClient, resetAllOffline } from "./ws.js";
 import { registerAuthRoutes } from "./routes/auth.js";
@@ -89,6 +90,9 @@ await app.register(fastifyWebsocket);
 
 // DB
 migrate();
+// Версионные миграции поверх — новые изменения схемы идут сюда, не в
+// migrate() (см. migrations.ts).
+runMigrations();
 
 // Routes
 registerAuthRoutes(app);
