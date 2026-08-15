@@ -222,8 +222,16 @@ export function TaskDetailScreen() {
     );
   }
 
-  const priorityColor =
-    PRIORITIES.find((p) => p.key === task.priority)?.color ?? "#A6A6A6";
+  // Цвет приоритета теперь показывает флажок у заголовка, а не обводка
+  // отметки (решение Максима 15.08.2026).
+  const priority = PRIORITIES.find((p) => p.key === task.priority);
+  const showPriorityFlag = !!task.priority && task.priority <= 3;
+  // То же правило, что в списке и на доске: задачу с незакрытыми подзадачами
+  // нельзя закрыть случайным тычком.
+  const canCompleteTask =
+    task.status === "completed" ||
+    task.subtasks.length === 0 ||
+    task.subtasks.filter((s) => s.done).length === task.subtasks.length;
 
   return (
     // pb-4 (16px) — исходный отступ снизу для «десктопной» рамки/Android,
@@ -277,20 +285,39 @@ export function TaskDetailScreen() {
           board cards — now converge on), unified down to the same 18px so
           every priority dot in the app measures the same. */}
       <div className="flex items-start gap-3 mb-4">
-        <button
-          onClick={handleToggleStatus}
-          className="mt-1 w-[18px] h-[18px] rounded-full border-2 shrink-0 flex items-center justify-center"
-          style={{ borderColor: priorityColor }}
-        >
-          {task.status === "completed" && (
-            <Icon name="check" size={12} className="text-white" />
-          )}
-        </button>
+        {/* Квадрат и серый — как в списке и на доске (решение Максима
+            15.08.2026): круг остаётся за подзадачами, цвет приоритета ушёл
+            во флажок. И отметка появляется, только когда закрывать можно —
+            все подзадачи выполнены либо их нет. */}
+        {canCompleteTask ? (
+          <button
+            onClick={handleToggleStatus}
+            className="mt-1 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center"
+          >
+            {task.status === "completed" && (
+              <Icon name="check" size={12} className="text-white" />
+            )}
+          </button>
+        ) : (
+          <div className="mt-1 w-[18px] h-[18px] shrink-0" aria-hidden="true" />
+        )}
         <h1
-          className={`text-[20px] font-semibold leading-snug ${task.status === "completed" ? "line-through text-sub" : ""}`}
+          className={`text-[20px] font-semibold leading-snug flex-1 ${task.status === "completed" ? "line-through text-sub" : ""}`}
         >
           {task.title}
         </h1>
+        {/* Флажок приоритета — справа от заголовка, там же, где в строке
+            списка он стоит в метаданных. Низкий (P4) не показываем: это
+            значение по умолчанию. */}
+        {showPriorityFlag && (
+          <Icon
+            name="flag"
+            size={16}
+            className="mt-1 shrink-0"
+            style={{ color: priority?.color }}
+            aria-label={`Приоритет: ${priority?.name ?? ""}`}
+          />
+        )}
       </div>
 
       <ErrorBanner

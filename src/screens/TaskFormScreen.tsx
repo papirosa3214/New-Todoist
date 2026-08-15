@@ -150,7 +150,13 @@ export function TaskFormScreen() {
       if (Object.keys(patch).length > 0) {
         await updateTask.mutateAsync({ id, ...patch });
       }
-      navigate(`/task/${id}`);
+      // replace, а не push (правка Максима 15.08.2026): иначе история
+      // становится «карточка → форма → карточка», и «назад» из карточки
+      // честно возвращает в форму редактирования. Выйти получалось только
+      // крестиком из формы, а «Готово» зацикливало: сохранил → назад →
+      // снова форма → сохранил → снова форма. Замена убирает форму из
+      // истории — «назад» ведёт туда, откуда задачу открыли.
+      navigate(`/task/${id}`, { replace: true });
     } else {
       // Server creates the task and its subtasks in one transaction (see
       // AGENT-API.md §Tasks, `subtasks` param) — no follow-up requests, no
