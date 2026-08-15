@@ -304,6 +304,44 @@
       transform: none;
       opacity: 0.75;
     }
+
+    /* Tabbar icon stroke draw -> instant opacity flash (no @keyframes).
+       Active tab still reads via position shift, circle and color change. */
+    .nt-tabbar-menu__item.active svg {
+      animation: none !important;
+    }
+
+    /* Tabbar bubble/item positions -> move instantly (no vestibular translate3d). */
+    .nt-tabbar-menu__item,
+    .nt-tabbar-menu__border {
+      transition: transform 0ms ease-out;
+    }
+
+    /* Mic recording indicator: keep visible as "recording" — replace pulse
+       with a static dot at full opacity (color carries the state). */
+    .mic-rec-dot {
+      animation: none !important;
+      opacity: 1;
+    }
+  }
+
+  /* Surface translucency -> opaque: drop blur, solid background. */
+  @media (prefers-reduced-transparency: reduce) {
+    [class~="backdrop-blur-xl"],
+    [class~="backdrop-blur-md"] {
+      background-color: var(--color-card);
+      backdrop-filter: none !important;
+    }
+  }
+
+  /* More contrast: near-solid surfaces with a defined edge. */
+  @media (prefers-contrast: more) {
+    [class~="backdrop-blur-xl"],
+    [class~="backdrop-blur-md"] {
+      background-color: var(--color-card);
+      backdrop-filter: none !important;
+      border: 1px solid var(--color-stroke);
+    }
   }
 }
 
@@ -357,7 +395,7 @@
 }
 
 .nt-tabbar-menu {
-  --duration: 0.7s;
+  --duration: 0.35s;
   --bgColorMenu: var(--color-card);
   position: relative;
   display: flex;
@@ -567,4 +605,79 @@
 }
 [data-board-strip]::-webkit-scrollbar {
   display: none; /* Chrome/Safari/WebKit — основная платформа приложения */
+}
+
+/* Вертикальная полоса прокрутки страницы — тоже прячется (просьба Максима
+   15.08.2026: «полоска скролла справа отображается, когда вверх-вниз
+   скроллю»). Причина та же, что у горизонтальной выше: приложение мобильное
+   по духу, на телефоне системная полоса появляется только во время жеста и
+   сама тает, а в браузере на большом экране висит постоянной серой чертой у
+   края и спорит с раскладкой.
+   Скролл остаётся полностью рабочим — прячется ТОЛЬКО индикатор: колесо,
+   жест, клавиши и полоса-перетаскивание на трекпаде работают как прежде. */
+html,
+body {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* старый Edge/IE */
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/WebKit */
+}
+
+/* Внутренние прокручиваемые области — их в приложении 13 (шторки, колонки
+   доски, длинные списки). Прячем полосу и у них: иначе получилось бы
+   вперемешку — у страницы полосы нет, а внутри шторки есть. */
+.overflow-y-auto,
+.overflow-auto,
+.overflow-x-auto {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar {
+  display: none;
+}
+
+/* ═══════════ TRACKING BY FONT SIZE ═══════════════
+   Skill §15: letter-spacing is size-specific, never one value for all sizes.
+   Large display text wants negative tracking (letters read too far apart as
+   they grow); small text wants slightly positive tracking for legibility.
+   Apple SF Pro Text optical tracking (values are per-em, so they scale with
+   the user's font-size setting):
+     17px -> -0.012em  (large-ish: slight tightening, letters otherwise spread)
+     16px -> -0.006em  (above body: gentle negative)
+     15px -> -0.002em  (between body and heading: near zero, tiny tightening)
+     14px ->  0        (body copy reference line — optical center)
+     13px -> +0.008em  (secondary/small text: legibility bump)
+     12px -> +0.012em  (UI labels/pills: interval grows as size falls)
+     11px -> +0.018em  (mini-text: without tracking it reads as a smudge)
+     10px -> +0.025em  (badges/indicators: max opening for readability)
+   :where() keeps specificity at zero — an explicit tracking-* utility in
+   markup always overrides the automatic value.
+*/
+:where([class~="text-[17px]"]) {
+  letter-spacing: -0.012em;
+}
+:where([class~="text-[16px]"]) {
+  letter-spacing: -0.006em;
+}
+:where([class~="text-[15px]"]) {
+  letter-spacing: -0.002em;
+}
+:where([class~="text-[14px]"]) {
+  letter-spacing: 0;
+}
+:where([class~="text-[13px]"]) {
+  letter-spacing: 0.008em;
+}
+:where([class~="text-[12px]"]) {
+  letter-spacing: 0.012em;
+}
+:where([class~="text-[11px]"]) {
+  letter-spacing: 0.018em;
+}
+:where([class~="text-[10px]"]) {
+  letter-spacing: 0.025em;
 }

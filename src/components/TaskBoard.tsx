@@ -86,7 +86,6 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useQueryClient } from "@tanstack/react-query";
 import { Icon, AgentStateTag } from "./UI";
-import { getPriorityColor } from "../lib/priority";
 import { MONTHS_SHORT } from "../lib/date";
 import { api } from "../api/client";
 import { useUpdateTask } from "../api/tasks";
@@ -262,8 +261,7 @@ function BoardCard({
               }}
               role="button"
               aria-label={isDone ? "Вернуть в работу" : "Отметить выполненной"}
-              className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 shrink-0 flex items-center justify-center"
-              style={{ borderColor: getPriorityColor(task.priority) }}
+              className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center"
             >
               {isDone && <Icon name="check" size={12} className="text-white" />}
             </div>

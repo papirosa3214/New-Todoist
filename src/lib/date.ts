@@ -61,6 +61,39 @@ export function formatDueLabel(dateStr: string): string {
   return `${day} ${month}.`;
 }
 
+/** Сколько суток до срока: 0 — сегодня, 1 — завтра, отрицательное — просрочено. */
+export function daysUntil(dateStr: string): number {
+  // Считаем по календарным суткам, а не по часам: «через сутки» и «завтра» —
+  // разные вещи, а человека интересует именно день. Обе даты приводятся к
+  // полуночи, поэтому переход через ночь всегда даёт ровно ±1, без дробей и
+  // без зависимости от того, в котором часу открыли приложение.
+  const цель = new Date(dateStr + "T00:00:00");
+  const сегодня = new Date(todayStr() + "T00:00:00");
+  return Math.round((цель.getTime() - сегодня.getTime()) / 86_400_000);
+}
+
+/** «осталось 3 дня» / «сегодня» / «просрочено на 2 дня» — короткой строкой. */
+export function formatDaysLeft(dateStr: string): string {
+  const d = daysUntil(dateStr);
+  if (d === 0) return "сегодня";
+  if (d === 1) return "завтра";
+  if (d === -1) return "вчера";
+  // Русские окончания: 1 день, 2-4 дня, 5+ дней — плюс исключение для
+  // 11-14, где по правилу всегда «дней» (одиннадцать дней, а не «день»).
+  const n = Math.abs(d);
+  const сотня = n % 100;
+  const единица = n % 10;
+  const слово =
+    сотня >= 11 && сотня <= 14
+      ? "дней"
+      : единица === 1
+        ? "день"
+        : единица >= 2 && единица <= 4
+          ? "дня"
+          : "дней";
+  return d > 0 ? `осталось ${n} ${слово}` : `просрочено на ${n} ${слово}`;
+}
+
 // ═══════════ TIMESTAMPS (comments, notifications, activity, …) ═══════════
 // Canonical home for these two — they used to live only in
 // ../api/notifications.ts (re-exported from there for backward

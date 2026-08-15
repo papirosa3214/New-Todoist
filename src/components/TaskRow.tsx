@@ -59,8 +59,13 @@
 // finger's release velocity handed off — §5 velocity handoff).
 import { useRef, useCallback } from "react";
 import { Icon, Avatar, AgentStateTag } from "./UI";
-import { getPriorityColor } from "../lib/priority";
-import { formatDueLabel, MONTHS_SHORT } from "../lib/date";
+import { getPriorityColor, PRIORITIES } from "../lib/priority";
+import {
+  formatDueLabel,
+  MONTHS_SHORT,
+  daysUntil,
+  formatDaysLeft,
+} from "../lib/date";
 import { useUpdateTask } from "../api/tasks";
 import { useSpring } from "../lib/useSpring";
 import type { ApiTask } from "../api/types";
@@ -136,8 +141,11 @@ export function TaskRow({
   const hasAgentTag = showAgentState && !!task.agent_state;
   const hasDueBadge = showDueBadge && !overdue && !!task.due_date;
   const hasSubtasksBadge = showSubtasksBadge && task.subtasks.length > 0;
+  // Флажок только для 1-3: четвёртый — «низкий», значение по умолчанию.
+  const hasPriorityFlag = !!task.priority && task.priority <= 3;
   const hasLabels = visibleLabels.length > 0;
   const hasMeta =
+    hasPriorityFlag ||
     hasOverduePill ||
     hasAgentTag ||
     hasDueBadge ||
@@ -345,6 +353,21 @@ export function TaskRow({
             )}
             {hasMeta && (
               <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                {/* Приоритет флажком (решение Максима 15.08.2026). Раньше он
+                    жил цветом обводки отметки — но отметка теперь скрывается,
+                    пока есть незакрытые подзадачи, и вместе с ней пропадал
+                    единственный признак срочности. Флажок от отметки не
+                    зависит и виден всегда. Низкий приоритет не показываем:
+                    это значение по умолчанию, значок на каждой задаче
+                    превратился бы в шум. */}
+                {hasPriorityFlag && (
+                  <Icon
+                    name="flag"
+                    size={12}
+                    style={{ color: getPriorityColor(task.priority) }}
+                    aria-label={`Приоритет: ${PRIORITIES.find((p) => p.key === task.priority)?.name ?? ""}`}
+                  />
+                )}
                 {hasOverduePill && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
                     <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
@@ -361,10 +384,24 @@ export function TaskRow({
                     <Icon name="tag" size={10} /> {l.name}
                   </span>
                 ))}
+                {/* Дата + сколько дней осталось (просьба Максима
+                    15.08.2026): «8 авг · осталось 3 дня». Сама дата отвечает
+                    на «когда», отсчёт — на «скоро ли», и второе как раз то,
+                    по чему решают, за что браться. Ближе трёх суток отсчёт
+                    оранжевый: срок перестал быть абстрактным. */}
                 {hasDueBadge && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
                     <Icon name="calendarSmall" size={10} />{" "}
                     {formatDue(task.due_date!)}
+                    <span
+                      className={
+                        daysUntil(task.due_date!) <= 3
+                          ? "text-orange"
+                          : "text-dim"
+                      }
+                    >
+                      · {formatDaysLeft(task.due_date!)}
+                    </span>
                   </span>
                 )}
                 {hasSubtasksBadge && (
