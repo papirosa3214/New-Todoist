@@ -38,3 +38,9 @@ server/uploads/
 # Секрет подписи JWT — генерируется и сохраняется сюда сам при первом
 # старте (server/src/env.ts), в код зашитого запасного значения больше нет.
 server/.env
+
+# scripts/screenshot.mjs (скриншот-харнесс) — живая сессия входа (JWT в
+# storageState, фактически секрет) и сами снимки, это результат прогона,
+# не код.
+scripts/auth-state.json
+scripts/*.png
