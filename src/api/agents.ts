@@ -29,3 +29,39 @@ export function useCreateAgent() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
   });
 }
+
+/** Состояние службы-будильника: включён ли автономный режим. */
+export interface AgentServiceState {
+  /** Служба работает прямо сейчас. */
+  active: boolean;
+  /** Поднимется сама после перезагрузки машины. */
+  enabled: boolean;
+}
+
+// Автономный режим = служба-будильник. Включена — назначенную задачу
+// подхватит двойник; выключена — задачи ведёт живая сессия.
+//
+// Опрашиваем в том же ритме, что и агентов: состояние может измениться и
+// снаружи (например, из терминала), плашка обязана это показывать.
+export function useAgentService() {
+  return useQuery({
+    queryKey: ["agent-service"],
+    queryFn: () => api.get<AgentServiceState>("/api/agent-service"),
+    refetchInterval: 15000,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useToggleAgentService() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (on: boolean) =>
+      api.post<AgentServiceState>("/api/agent-service", { on }),
+    // Обновляем и агентов: включённая служба открывает соединение под
+    // учёткой агента, и «онлайн» в списке меняется следом за тумблером.
+    onSuccess: (state) => {
+      qc.setQueryData(["agent-service"], state);
+      qc.invalidateQueries({ queryKey: ["agents"] });
+    },
+  });
+}

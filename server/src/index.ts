@@ -15,6 +15,7 @@ import { registerSearchRoutes } from "./routes/search.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
+import { registerAgentServiceRoutes } from "./routes/agent-service.js";
 import { registerSeedRoutes } from "./seed.js";
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -100,6 +101,7 @@ registerSearchRoutes(app);
 registerAttachmentRoutes(app);
 registerAiRoutes(app);
 registerTranscribeRoutes(app);
+registerAgentServiceRoutes(app);
 registerSeedRoutes(app);
 
 // Health

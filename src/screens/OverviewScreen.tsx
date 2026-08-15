@@ -3,7 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { useProjects, useCreateProject } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { useTasks } from "../api/tasks";
-import { useAgents } from "../api/agents";
+import {
+  useAgents,
+  useAgentService,
+  useToggleAgentService,
+} from "../api/agents";
 import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
@@ -49,11 +53,17 @@ export function OverviewScreen() {
   // что назначенная задача будет подхвачена. Двойники, которых служба
   // запускает, своих соединений не открывают — считать их здесь нечего,
   // занятость показывает соседняя плашка «В работе».
+  // Состояние берём у самой службы, а не по косвенному признаку «онлайн ли
+  // ИИ-учётка»: плашка теперь не только показывает режим, но и переключает
+  // его, а переключатель обязан отражать то, чем управляет. Косвенный
+  // признак к тому же врал бы в первые секунды после включения — соединение
+  // открывается не мгновенно.
+  const { data: service } = useAgentService();
+  const toggleService = useToggleAgentService();
+  const serviceOn = service?.active ?? false;
+  // Список агентов нужен отдельно — по нему считаются задачи, назначенные
+  // ИИ-учёткам и никем не взятые (waitingCount ниже).
   const { data: allAgents = [] } = useAgents();
-  const serviceOn = useMemo(
-    () => allAgents.some((a) => a.type === "ai" && a.status === "online"),
-    [allAgents],
-  );
   // Занятость — по задачам, а не по учёткам: сколько карточек агенты
   // реально делают сейчас. Протухшие сюда не входят, для них своя плашка.
   const workingCount = useMemo(
@@ -173,14 +183,29 @@ export function OverviewScreen() {
         {/* 1. Дежурство — про СЛУЖБУ, а не про агентов (уточнение Максима
             14.08.2026): «на связи» читалось как «агент работает», хотя
             отвечает на другой вопрос — подхватится ли задача, если её
-            назначить. Признак: служба держит соединение под учёткой агента
-            (server/src/ws.ts), поэтому онлайн хотя бы одной ИИ-учётки и
-            означает «приём задач работает». Кто именно из агентов доступен,
-            видно там, где это и нужно — при выборе исполнителя и в
-            настройках, а не в сводке. */}
+            назначить. Кто именно из агентов доступен, видно там, где это и
+            нужно — при выборе исполнителя и в настройках, а не в сводке.
+
+            С 15.08.2026 плашка ещё и ПЕРЕКЛЮЧАТЕЛЬ (решение Максима: «она
+            показывает состояние — пусть им и управляет, это лучше, чем
+            перебрасывать на экран агентов»). Нажатие включает и выключает
+            автономный режим: включён — назначенную задачу подхватит двойник,
+            выключен — задачи ведёт живая сессия, а аренда продлевается
+            вручную (см. AGENT-PROTOCOL.md и заметку про ручную аренду).
+
+            Состояние спрашиваем у самой службы (/api/agent-service), а не по
+            косвенному «онлайн ли ИИ-учётка»: переключатель обязан показывать
+            то, чем управляет, а соединение открывается не мгновенно — иначе
+            первые секунды после включения плашка врала бы.
+
+            Экран агентов никуда не делся — он открывается из настроек. */}
         <button
-          onClick={() => navigate("/agents")}
-          className={`tap-scale flex h-11 flex-1 basis-0 min-w-0 items-center justify-center gap-1.5 px-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
+          role="switch"
+          aria-checked={serviceOn}
+          aria-label="Автономный режим: служба сама поднимает агента по назначенной задаче"
+          disabled={toggleService.isPending}
+          onClick={() => toggleService.mutate(!serviceOn)}
+          className={`tap-scale flex h-11 flex-1 basis-0 min-w-0 items-center justify-center gap-1.5 px-2 rounded-xl text-[13px] font-semibold whitespace-nowrap disabled:opacity-60 ${
             serviceOn
               ? "bg-green/15 text-green"
               : serviceAlarm
