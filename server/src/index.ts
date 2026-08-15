@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import fastifyJwt from "@fastify/jwt";
 import fastifyWebsocket from "@fastify/websocket";
+import fastifyRateLimit from "@fastify/rate-limit";
 import { migrate } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserIdFromToken } from "./auth.js";
@@ -87,6 +88,14 @@ await app.register(fastifyJwt, {
   secret: process.env.JWT_SECRET || "taskflow-dev-secret-2026",
 });
 await app.register(fastifyWebsocket);
+// global: false — лимит НЕ применяется автоматически ко всем маршрутам.
+// Агенты и служба-будильник (taskflow-trigger) бьют по /api/tasks и
+// heartbeat раз в 90 секунд под одним и тем же LAN/localhost IP — общий
+// лимит по IP превратился бы в самопроизвольную блокировку рабочего
+// трафика. Ограничение включается точечно, через config.rateLimit на
+// конкретном маршруте (пока — только /api/auth/login и /register,
+// routes/auth.ts), где оно и нужно: подбор пароля идёт только туда.
+await app.register(fastifyRateLimit, { global: false });
 
 // DB
 migrate();
