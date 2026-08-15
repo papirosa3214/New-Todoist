@@ -16,12 +16,18 @@ export interface TaskFilters {
   projectId: string | null; // null = все проекты
   labelId: string | null; // null = все метки
   assigneeKey: string | null; // null = все, "__none" = без исполнителя, иначе user id
+  // Показывать ли выполненные (просьба Максима 15.08.2026). По умолчанию
+  // выключено: списки — про то, что делать, а не про то, что сделано.
+  // Считается ВКЛЮЧЁННЫМ фильтром, когда true, — иначе счётчик на кнопке
+  // не объяснял бы, почему в списке вдруг появились закрытые задачи.
+  showCompleted: boolean;
 }
 
 export const DEFAULT_TASK_FILTERS: TaskFilters = {
   projectId: null,
   labelId: null,
   assigneeKey: null,
+  showCompleted: false,
 };
 
 export function taskMatchesFilters(
@@ -39,6 +45,12 @@ export function taskMatchesFilters(
   } else if (filters.assigneeKey && task.assignee_id !== filters.assigneeKey) {
     return false;
   }
+  // Выполненные скрыты, пока их не попросили показать. Экраны, которые
+  // выполненные и так не запрашивают, от этого не меняются — там таких
+  // задач в наборе просто нет.
+  if (!filters.showCompleted && task.status === "completed") {
+    return false;
+  }
   return true;
 }
 
@@ -50,7 +62,8 @@ export function countActiveTaskFilters(filters: TaskFilters): number {
   return (
     (filters.projectId ? 1 : 0) +
     (filters.labelId ? 1 : 0) +
-    (filters.assigneeKey ? 1 : 0)
+    (filters.assigneeKey ? 1 : 0) +
+    (filters.showCompleted ? 1 : 0)
   );
 }
 

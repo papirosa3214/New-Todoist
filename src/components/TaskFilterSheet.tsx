@@ -11,8 +11,9 @@
 // sheet's own markup doesn't vary between them at all, only the task list
 // each screen feeds it does.
 import { useEffect, useState } from "react";
-import { Icon, Avatar } from "./UI";
+import { Icon, Avatar, SheetHandle } from "./UI";
 import { Card, FieldRow } from "./TaskFields";
+import { useBottomSheet } from "../lib/useBottomSheet";
 import {
   DEFAULT_TASK_FILTERS,
   type TaskFilters,
@@ -146,10 +147,16 @@ export function TaskFilterSheet({
     if (open) setOpenSection(null);
   }, [open]);
 
-  if (!open) return null;
+  // §3 Interruptibility, §5 Velocity handoff, §7 Spatial consistency
+  const sheet = useBottomSheet({ open, onClose });
+
+  if (!sheet.mounted) return null;
 
   const hasActive =
-    !!filters.projectId || !!filters.labelId || !!filters.assigneeKey;
+    !!filters.projectId ||
+    !!filters.labelId ||
+    !!filters.assigneeKey ||
+    filters.showCompleted;
 
   const projectLabel =
     (filters.projectId &&
@@ -172,11 +179,19 @@ export function TaskFilterSheet({
       className="fixed inset-0 z-50 flex flex-col justify-end"
       onClick={onClose}
     >
-      <div className="absolute inset-0 bg-black/65" />
+      {/* Scrim: opacity animated by useBottomSheet spring */}
       <div
-        className="relative bg-card rounded-t-[20px] px-4 pt-3 pb-bottom-safe max-h-[85vh] overflow-y-auto"
+        ref={sheet.scrimRef}
+        className="absolute inset-0 bg-black"
+        style={{ opacity: 0 }}
+      />
+      <div
+        ref={sheet.sheetRef}
+        className="relative bg-card rounded-t-[20px] px-4 pb-bottom-safe max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Handle: drag target for dismiss gesture */}
+        <SheetHandle dragProps={sheet.dragProps} />
         <div className="flex items-center justify-between pb-3">
           <button
             onClick={onClose}
@@ -303,6 +318,44 @@ export function TaskFilterSheet({
                   )}
               </div>
             )}
+          </Card>
+
+          {/* Выполненные (просьба Максима 15.08.2026). Отдельной карточкой,
+              а не пунктом в списке полей: это не «чем сузить выборку», а
+              «что вообще показывать» — другой по смыслу переключатель.
+              По умолчанию выключен: список задач отвечает на вопрос «что
+              делать», а не «что сделано». */}
+          <Card>
+            <button
+              onClick={() =>
+                setFilters({
+                  ...filters,
+                  showCompleted: !filters.showCompleted,
+                })
+              }
+              role="switch"
+              aria-checked={filters.showCompleted}
+              className="tap-row w-full flex items-center gap-3 py-3 px-[14px] text-left"
+            >
+              <Icon name="check" size={18} className="text-sub shrink-0" />
+              <span className="text-[14px] text-text flex-1">
+                Показывать выполненные
+              </span>
+              {/* Тот же переключатель, что в настройках: 43×25 с белым
+                  кружком — свой второй вид тут заводить незачем. */}
+              <span
+                className={`relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors ${
+                  filters.showCompleted
+                    ? "bg-red"
+                    : "bg-card2 border border-stroke"
+                }`}
+              >
+                <span
+                  className="absolute top-[2.5px] w-[20px] h-[20px] rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,.3)] transition-[right] duration-150"
+                  style={{ right: filters.showCompleted ? "2.5px" : "20.5px" }}
+                />
+              </span>
+            </button>
           </Card>
         </div>
       </div>
