@@ -36,43 +36,7 @@ import { useTranscribeAudio } from "../api/audio";
 import { combineDictatedText } from "../lib/dictationParser";
 import { useUploadAttachment, useDeleteAttachment } from "../api/attachments";
 import type { ApiAttachment } from "../api/types";
-
-// ═══════════ SUBTASK ROW ═══════════
-// Its own component (not inlined in the .map() below) so each row gets its
-// own useGuardedCallback instance — one hook call per row instance, per
-// useGuardedCallback's own rule. A single guard hoisted out of the loop and
-// shared across rows would make tapping row 2 a silent no-op while row 1's
-// toggle is still in flight.
-function SubtaskToggleRow({
-  title,
-  done,
-  onToggle,
-}: {
-  title: string;
-  done: boolean;
-  onToggle: () => Promise<unknown>;
-}) {
-  const guardedToggle = useGuardedCallback(onToggle);
-  return (
-    <button
-      onClick={guardedToggle}
-      className="w-full flex items-center gap-3 py-3 px-4 text-left"
-    >
-      <div
-        className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center shrink-0 ${
-          done ? "bg-red border-red" : "border-dim"
-        }`}
-      >
-        {done && <Icon name="check" size={12} className="text-white" />}
-      </div>
-      <span
-        className={`text-[14px] ${done ? "line-through text-sub" : "text-text"}`}
-      >
-        {title}
-      </span>
-    </button>
-  );
-}
+import { SubtaskFeed } from "../components/SubtaskFeed";
 
 export function TaskDetailScreen() {
   const { id } = useParams<{ id: string }>();
@@ -400,29 +364,20 @@ export function TaskDetailScreen() {
       {/* Subtasks — quick toggle only; add/rename/delete happens in the
           edit form (see header pencil button). */}
       {task.subtasks.length > 0 && (
-        <div className="mb-4">
-          <h3 className="text-[13px] text-sub font-semibold mb-2 px-1">
-            Подзадачи
-          </h3>
-          <div className="bg-card rounded-2xl overflow-hidden">
-            {task.subtasks.map((st) => (
-              <SubtaskToggleRow
-                key={st.id}
-                title={st.title}
-                done={st.done}
-                onToggle={() =>
-                  updateSubtask.mutateAsync({ id: st.id, done: !st.done })
-                }
-              />
-            ))}
-          </div>
+        <>
+          <SubtaskFeed
+            subtasks={task.subtasks}
+            onToggle={(st) =>
+              updateSubtask.mutateAsync({ id: st.id, done: !st.done })
+            }
+          />
           <ErrorBanner
             error={updateSubtask.error}
             fallback="Не удалось обновить подзадачу"
             variant="block"
-            className="mt-2"
+            className="-mt-2 mb-4"
           />
-        </div>
+        </>
       )}
 
       {/* Лента — комментарии и журнал задачи в одном хронологическом
