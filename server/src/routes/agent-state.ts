@@ -99,6 +99,26 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       }
 
       const claimTxn = db.transaction(() => {
+        // Перезахват после истёкшей аренды (from === 'in_progress', to ===
+        // 'in_progress') — тот самый момент, когда система «замечает»
+        // молчание агента: до сих пор это было только вычисляемым полем
+        // agent_stale, нигде не оставлявшим следа. Пишем один раз именно
+        // здесь — не по крону (AGENT-PROTOCOL.md: «никакого фонового
+        // процесса»), а на первом же действии, которое трогает эту аренду.
+        // Дважды на один и тот же период не запишется: следующий раз
+        // agent_heartbeat_at уже будет свежим (обновлён строкой ниже), и
+        // isStale(task.agent_heartbeat_at) — значение ДО этого UPDATE —
+        // войдёт в лог ровно один раз за цикл claim → ... → claim.
+        if (who.leaseExpired) {
+          logEvent({
+            taskId: task.id,
+            actorId: req.userId,
+            kind: "lease_expired",
+            field: "agent_heartbeat_at",
+            fromValue: task.agent_heartbeat_at ?? null,
+          });
+        }
+
         db.prepare(
           `UPDATE tasks SET agent_state = 'in_progress', agent_heartbeat_at = datetime('now'),
              assignee_id = COALESCE(assignee_id, ?) WHERE id = ?`,
@@ -217,7 +237,28 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "invalid transition" });
       }
 
+      // Тот же случай, что self-reclaim в claim() — система замечает
+      // истёкшую аренду в момент, когда что-то СДЕЛАНО с задачей, а не по
+      // таймеру. Здесь это происходит не только при перезахвате (тот идёт
+      // через claim, не сюда), а при любом уходе ИЗ in_progress с
+      // просроченным сигналом: агент вернулся и сразу сдал на review/ушёл
+      // в blocked, или владелец снял его явным state:null. isStale
+      // считается ДО обновления heartbeat ниже, поэтому один и тот же
+      // просроченный период не залогируется дважды.
+      const leaseWasExpired =
+        from === "in_progress" && isStale(task.agent_heartbeat_at);
+
       const stateTxn = db.transaction(() => {
+        if (leaseWasExpired) {
+          logEvent({
+            taskId: task.id,
+            actorId: req.userId,
+            kind: "lease_expired",
+            field: "agent_heartbeat_at",
+            fromValue: task.agent_heartbeat_at ?? null,
+          });
+        }
+
         if (comment) {
           db.prepare(
             "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
