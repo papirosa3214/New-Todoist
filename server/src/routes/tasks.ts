@@ -46,6 +46,32 @@ function withAgentStale(task: any) {
   };
 }
 
+// То же самое для подзадачи (15.08.2026). Подзадача теперь единица работы:
+// у неё своё состояние и своя аренда, поэтому «в работе» здесь тоже
+// ВЫЧИСЛЯЕТСЯ, а не хранится. Замолчал дольше срока — крутилка в ленте
+// гаснет сама, без чьего-либо участия. Индикатор, горящий без работы, хуже
+// отсутствующего.
+function withSubtaskState(s: any) {
+  const stale =
+    s.agent_state === "in_progress" && isStale(s.agent_heartbeat_at);
+  return {
+    ...s,
+    done: !!s.done,
+    agent_stale: stale,
+    // Готово важнее: подзадачу могли отметить сделанной, не сняв состояние.
+    // Протухшая аренда возвращает её в «ждёт» — работы-то нет.
+    state: s.done
+      ? "done"
+      : stale
+        ? "pending"
+        : s.agent_state === "in_progress"
+          ? "running"
+          : s.agent_state === "blocked"
+            ? "blocked"
+            : "pending",
+  };
+}
+
 export function hydrateTask(task: any) {
   const labels = db
     .prepare(
@@ -56,7 +82,7 @@ export function hydrateTask(task: any) {
   const subtasks = db
     .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
     .all(task.id)
-    .map((s: any) => ({ ...s, done: !!s.done }));
+    .map(withSubtaskState);
   return { ...withAgentStale(task), labels, subtasks };
 }
 
@@ -93,7 +119,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     return tasks.map((t: any) => ({
       ...withAgentStale(t),
       labels: stmtLabels.all(t.id),
-      subtasks: stmtSub.all(t.id).map((s: any) => ({ ...s, done: !!s.done })),
+      subtasks: stmtSub.all(t.id).map(withSubtaskState),
     }));
   });
 
@@ -120,7 +146,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const subtasks = db
         .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
         .all(task.id)
-        .map((s: any) => ({ ...s, done: !!s.done }));
+        .map(withSubtaskState);
       const comments = db
         .prepare(
           `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials

@@ -4,7 +4,7 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForUser } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
-import { logEvent } from "../agentState.js";
+import { logEvent, isStale } from "../agentState.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -166,6 +166,109 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             toValue: title,
           });
         }
+      }
+
+      const fullTask = getFullTask(subtask.task_id);
+      broadcastToUsers([subtask.task_creator_id, subtask.task_assignee_id], {
+        type: "task:updated",
+        task: fullTask,
+      });
+      return db
+        .prepare("SELECT * FROM subtasks WHERE id = ?")
+        .get(req.params.id);
+    },
+  });
+
+  // ═══════ РАБОТА АГЕНТА НАД ПОДЗАДАЧЕЙ ═══════
+  //
+  // Зачем: до 15.08.2026 по карточке было видно только «агент взял задачу» и
+  // «сдал», а где он внутри — нет. Подзадача умела ровно одно: галочку по
+  // факту. Теперь агент отмечает НАЧАЛО работы над конкретной подзадачей, и
+  // в ленте видно, где он сейчас.
+  //
+  // Аренда та же, что у задачи, и по той же причине (см. AGENT-PROTOCOL.md
+  // и заметку про ручное продление): «в работе» держится СИГНАЛАМИ, а не
+  // выставляется раз и навсегда. Замолчал дольше срока — подзадача больше не
+  // показывается работающей. Индикатор, который горит без работы, хуже
+  // отсутствующего: ровно от этого весь протокол и защищает.
+  app.post<{
+    Params: { id: string };
+    Body: { state?: "in_progress" | "blocked" | null; result?: string };
+  }>("/api/subtasks/:id/work", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
+      if (!subtask) return reply.code(404).send({ error: "Not found" });
+
+      const { state, result } = req.body || {};
+      const known =
+        state === undefined ||
+        state === null ||
+        state === "in_progress" ||
+        state === "blocked";
+      if (!known) {
+        return reply
+          .code(400)
+          .send({ error: "state: in_progress | blocked | null" });
+      }
+
+      // Чужую подзадачу не перехватываем: пока живой держит аренду, второй
+      // исполнитель получает отказ — та же защита, что у задачи, иначе два
+      // агента напишут разный итог в одну строку.
+      const занята =
+        subtask.agent_state === "in_progress" &&
+        subtask.agent_id &&
+        subtask.agent_id !== req.userId &&
+        !isStale(subtask.agent_heartbeat_at);
+      if (занята && state === "in_progress") {
+        return reply
+          .code(409)
+          .send({ error: "Над подзадачей уже работает другой исполнитель" });
+      }
+
+      if (state !== undefined) {
+        if (state === null) {
+          db.prepare(
+            "UPDATE subtasks SET agent_state = NULL, agent_id = NULL, agent_heartbeat_at = NULL WHERE id = ?",
+          ).run(req.params.id);
+        } else {
+          db.prepare(
+            `UPDATE subtasks
+                SET agent_state = ?, agent_id = ?, agent_heartbeat_at = datetime('now')
+              WHERE id = ?`,
+          ).run(state, req.userId, req.params.id);
+        }
+      } else {
+        // Тело без state — это продление аренды. Трогаем ТОЛЬКО отметку
+        // времени, как и heartbeat у задачи: сигнал не меняет ничего, кроме
+        // «я ещё здесь».
+        db.prepare(
+          "UPDATE subtasks SET agent_heartbeat_at = datetime('now') WHERE id = ?",
+        ).run(req.params.id);
+      }
+
+      if (result !== undefined) {
+        db.prepare("UPDATE subtasks SET result = ? WHERE id = ?").run(
+          result || null,
+          req.params.id,
+        );
+      }
+
+      // В журнал — только смена состояния, не каждый сигнал: иначе лента
+      // задачи утонет в служебных отметках раз в полторы минуты.
+      if (state !== undefined && state !== subtask.agent_state) {
+        logEvent({
+          taskId: subtask.task_id,
+          actorId: req.userId,
+          kind:
+            state === "in_progress"
+              ? "subtask_started"
+              : state === "blocked"
+                ? "subtask_blocked"
+                : "subtask_released",
+          field: "subtask",
+          toValue: subtask.title,
+        });
       }
 
       const fullTask = getFullTask(subtask.task_id);

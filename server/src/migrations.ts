@@ -53,6 +53,28 @@ const migrations: Migration[] = [
       // строит по нему неявный индекс сам.
     },
   },
+  {
+    id: "003_subtask_work",
+    description:
+      "подзадача как единица работы: кто её ведёт, когда подал сигнал, и краткий итог — чтобы в ленте было видно, ГДЕ агент внутри задачи, а не только «взял» и «сдал»",
+    up: () => {
+      // Состояния намеренно те же, что у задачи (agentState.ts): NULL —
+      // никто не ведёт, in_progress — ведут сейчас, blocked — упёрлись.
+      // Отдельного «done» здесь нет: готовность подзадачи как была, так и
+      // осталась в поле done — не заводим второй источник правды о том же.
+      db.exec(`
+        ALTER TABLE subtasks ADD COLUMN agent_state TEXT;
+        ALTER TABLE subtasks ADD COLUMN agent_id TEXT REFERENCES users(id);
+        ALTER TABLE subtasks ADD COLUMN agent_heartbeat_at TEXT;
+        ALTER TABLE subtasks ADD COLUMN result TEXT;
+      `);
+      // Индекс под «покажи, что сейчас в работе» — выборка идёт по
+      // состоянию, а не по задаче.
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_subtasks_agent_state ON subtasks(agent_state)",
+      );
+    },
+  },
 ];
 
 /** Применить все ещё не применённые миграции, по одной транзакции на каждую. */

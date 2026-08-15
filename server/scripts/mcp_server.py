@@ -220,6 +220,31 @@ def t_agents(_args):
     }
 
 
+def t_subtask_work(args):
+    """Взяться за подзадачу, продлить работу, упереться или отпустить.
+
+    Зачем: до 15.08.2026 агент умел только отметить подзадачу сделанной —
+    по карточке было видно «взял задачу» и «сдал», а где он внутри, нет.
+    Теперь он отмечает НАЧАЛО, и в ленте крутится значок ровно у той
+    подзадачи, над которой идёт работа.
+
+    Аренда та же, что у задачи: «в работе» держится сигналами. Замолчал
+    дольше срока — значок гаснет сам. Поэтому по ходу длинной подзадачи
+    вызывать этот же метод без state (продление), как heartbeat у задачи.
+    """
+    body = {}
+    if "state" in args:
+        body["state"] = args["state"]
+    if args.get("result") is not None:
+        body["result"] = args["result"]
+    row = api("POST", f"/api/subtasks/{args['id']}/work", body)
+    return {
+        "подзадача": row.get("title"),
+        "состояние": row.get("agent_state") or "не в работе",
+        "итог": row.get("result") or "—",
+    }
+
+
 def t_projects(_args):
     """Проекты людей, на которых работает агент.
 
@@ -336,6 +361,28 @@ TOOLS = [
         "description": "Кто есть в команде и кто сейчас на связи.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": t_agents,
+    },
+    {
+        "name": "taskflow_subtask_work",
+        "description": (
+            "Отметить, что работаешь над подзадачей. state='in_progress' — берусь "
+            "(в ленте закрутится значок), 'blocked' — упёрся, null — отпустить. "
+            "Без state — продлить работу (как heartbeat: молчание дольше 5 минут "
+            "гасит значок). result — короткий итог, он виден при раскрытии."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "state": {
+                    "type": ["string", "null"],
+                    "description": "in_progress | blocked | null",
+                },
+                "result": {"type": "string", "description": "короткий «что вышло»"},
+            },
+            "required": ["id"],
+        },
+        "fn": t_subtask_work,
     },
     {
         "name": "taskflow_projects",
