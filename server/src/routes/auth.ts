@@ -4,8 +4,6 @@ import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
 import { authMiddleware, authOrApiToken } from "../auth.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "taskflow-dev-secret-2026";
-
 function generateApiToken(): string {
   return "tf_" + crypto.randomBytes(32).toString("hex");
 }
@@ -184,5 +182,3 @@ export function registerAuthRoutes(app: FastifyInstance) {
     },
   });
 }
-
-export { JWT_SECRET };

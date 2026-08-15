@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import fastifyJwt from "@fastify/jwt";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
+import { ensureJwtSecret } from "./env.js";
 import { migrate } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserIdFromToken } from "./auth.js";
@@ -19,6 +20,10 @@ import { registerAiRoutes } from "./routes/ai.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerAgentServiceRoutes } from "./routes/agent-service.js";
 import { registerSeedRoutes } from "./seed.js";
+
+// До всего остального — секрет подписи JWT должен быть в process.env
+// раньше, чем fastifyJwt.register() ниже его прочитает (см. env.ts).
+ensureJwtSecret();
 
 const PORT = Number(process.env.PORT) || 3001;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -84,8 +89,11 @@ await app.register(cors, {
   credentials: true,
   methods: ["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],
 });
+// ensureJwtSecret() выше гарантирует, что JWT_SECRET уже в process.env —
+// без литерала-запасного варианта: он либо пришёл снаружи, либо сгенерирован
+// и сохранён в server/.env при первом старте.
 await app.register(fastifyJwt, {
-  secret: process.env.JWT_SECRET || "taskflow-dev-secret-2026",
+  secret: process.env.JWT_SECRET as string,
 });
 await app.register(fastifyWebsocket);
 // global: false — лимит НЕ применяется автоматически ко всем маршрутам.
