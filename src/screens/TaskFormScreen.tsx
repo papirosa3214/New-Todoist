@@ -640,9 +640,6 @@ export function TaskFormScreen() {
                   key={st.id}
                   title={st.title}
                   done={st.done}
-                  onToggle={() =>
-                    updateSubtask.mutate({ id: st.id, done: !st.done })
-                  }
                   onRename={(t) =>
                     updateSubtask.mutate({ id: st.id, title: t })
                   }
@@ -661,7 +658,6 @@ export function TaskFormScreen() {
           : [
               ...localSubtasks.map((s, i) => (
                 <div key={i} className="flex items-center gap-3 py-[12px]">
-                  <div className="w-[18px] h-[18px] rounded-full border-2 border-dim shrink-0" />
                   <span className="text-[14px] text-text flex-1">{s}</span>
                   <button
                     onClick={() =>

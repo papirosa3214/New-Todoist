@@ -427,18 +427,18 @@ export function LabelsField({
 
 // ═══════════ SUBTASKS (mockup .card add-row) ═══════════
 
-// Existing (persisted) subtask row — toggle done, tap title to rename,
-// delete. Used by TaskDetailScreen where subtasks are real API records.
+// Строка подзадачи в форме «Изменить»: переименовать и удалить.
+// Отмечать выполненной здесь НЕЛЬЗЯ (решение Максима 15.08.2026) — для
+// этого есть лента подзадач в самой карточке; в форме переключатель только
+// загромождал строку. Признак готовности остаётся видимым: галочка слева.
 export function SubtaskRow({
   title,
   done,
-  onToggle,
   onRename,
   onDelete,
 }: {
   title: string;
   done: boolean;
-  onToggle: () => void;
   onRename: (title: string) => void;
   onDelete: () => void;
 }) {
@@ -459,14 +459,14 @@ export function SubtaskRow({
     // (убрана пятым заходом), сейчас это просто лишний сдвиг вправо
     // относительно title/desc textarea и остальных лейблов формы.
     <div className="flex items-center gap-3 py-3">
-      <button
-        onClick={onToggle}
-        className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center shrink-0 ${
-          done ? "bg-red border-red" : "border-dim"
-        }`}
-      >
-        {done && <Icon name="check" size={12} className="text-white" />}
-      </button>
+      {/* Кружка-переключателя здесь нет (решение Максима 15.08.2026): это
+          раздел «Изменить», в нём подзадачи правят и удаляют, а отмечают
+          выполненными в самой карточке. Лишний элемент только загружал
+          строку. Галочка у уже выполненной остаётся — она несёт смысл,
+          показывая, что шаг закрыт. */}
+      {done && (
+        <Icon name="check" size={14} className="text-green shrink-0" />
+      )}
       {editing ? (
         <input
           autoFocus
