@@ -186,6 +186,12 @@ function BoardCard({
 }) {
   const updateTask = useUpdateTask();
   const isDone = task.status === "completed";
+  // То же правило, что в строке списка (TaskRow): задачу с незакрытыми
+  // подзадачами нельзя закрыть случайным тычком.
+  const canComplete =
+    isDone ||
+    task.subtasks.length === 0 ||
+    task.subtasks.filter((s) => s.done).length === task.subtasks.length;
   const doneSub = task.subtasks.filter((s) => s.done).length;
   const label = task.labels[0];
   const hasFooter =
@@ -241,21 +247,29 @@ function BoardCard({
               with stopPropagation, not a nested <button>, following the
               same pattern this file's own drag handle above already uses
               for "interactive sub-area inside the card's outer button". */}
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              updateTask.mutate({
-                id: task.id,
-                status: isDone ? "active" : "completed",
-              });
-            }}
-            role="button"
-            aria-label={isDone ? "Вернуть в работу" : "Отметить выполненной"}
-            className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 shrink-0 flex items-center justify-center"
-            style={{ borderColor: getPriorityColor(task.priority) }}
-          >
-            {isDone && <Icon name="check" size={12} className="text-white" />}
-          </div>
+          {/* Как и в строке списка: отметка появляется, только когда
+              закрывать действительно можно — все подзадачи выполнены либо
+              их нет. Иначе на её месте пустота того же размера, чтобы
+              карточка не меняла раскладку при закрытии последнего шага. */}
+          {canComplete ? (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                updateTask.mutate({
+                  id: task.id,
+                  status: isDone ? "active" : "completed",
+                });
+              }}
+              role="button"
+              aria-label={isDone ? "Вернуть в работу" : "Отметить выполненной"}
+              className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 shrink-0 flex items-center justify-center"
+              style={{ borderColor: getPriorityColor(task.priority) }}
+            >
+              {isDone && <Icon name="check" size={12} className="text-white" />}
+            </div>
+          ) : (
+            <div className="mt-0.5 w-[18px] h-[18px] shrink-0" aria-hidden="true" />
+          )}
           <div className="min-w-0 flex-1">
             <div
               className={`text-[13px] leading-snug line-clamp-2 ${isDone ? "line-through text-sub" : "text-text"}`}

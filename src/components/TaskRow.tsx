@@ -317,10 +317,15 @@ export function TaskRow({
             {isDone && <Icon name="check" size={12} className="text-white" />}
           </button>
         ) : (
+          /* Отметки нет вовсе, пока есть незакрытые подзадачи — просьба
+             Максима 15.08.2026 буквальная: «должны появляться, только когда
+             все подзадачи выполнены либо их нет». Пустое место того же
+             размера остаётся, чтобы текст не сдвигался при закрытии
+             последнего шага; пунктирный контур на этом месте оказался
+             отсебятиной и был убран. */
           <div
-            className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 border-dashed border-dim shrink-0 flex items-center justify-center"
-            aria-label={`Сначала закройте подзадачи: осталось ${task.subtasks.length - doneSub}`}
-            title={`Осталось подзадач: ${task.subtasks.length - doneSub}`}
+            className="mt-0.5 w-[18px] h-[18px] shrink-0"
+            aria-hidden="true"
           />
         )}
         <button
