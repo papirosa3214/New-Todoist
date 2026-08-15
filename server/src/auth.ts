@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
-import db from "./db.js";
+import db, { hashApiToken } from "./db.js";
 
 /**
  * Resolves a bearer token to a userId. Accepts either:
@@ -20,11 +20,14 @@ export function resolveUserIdFromToken(
     // Not a valid/current JWT — fall through and try it as an api_token.
   }
 
+  // В базе лежит ОТПЕЧАТОК ключа, не сам ключ (см. hashApiToken в db.ts):
+  // хэшируем предъявленный и ищем совпадение. Прямое сравнение оставлять
+  // нельзя — тогда утёкший файл базы сразу давал бы доступ агента.
   const row = db
     .prepare(
       "SELECT id FROM users WHERE api_token = ? AND api_token IS NOT NULL AND api_token != ''",
     )
-    .get(token) as { id: string } | undefined;
+    .get(hashApiToken(token)) as { id: string } | undefined;
   return row?.id ?? null;
 }
 

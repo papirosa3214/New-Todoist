@@ -1,6 +1,20 @@
 import Database from "better-sqlite3";
+import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
+
+/**
+ * Отпечаток ключа агента. В базе хранится только он — сам ключ существует
+ * ровно один раз, в момент выдачи, и дальше живёт у владельца в хранилище.
+ *
+ * SHA-256 без соли здесь намеренно: ключ — 256 случайных бит, его нельзя ни
+ * подобрать, ни встретить в радужной таблице, а детерминированный отпечаток
+ * позволяет найти пользователя одним запросом (с солёным bcrypt пришлось бы
+ * перебирать всю таблицу на каждом обращении).
+ */
+export function hashApiToken(token: string): string {
+  return crypto.createHash("sha256").update(token, "utf8").digest("hex");
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Allow overriding the DB file (e.g. for smoke tests / alternate envs) without
@@ -153,6 +167,31 @@ export function migrate() {
   // Unconditional (idempotent) so u2/u3 get flagged even on a DB that
   // already had this column from an earlier partial migration.
   db.exec("UPDATE users SET is_system_bot = 1 WHERE id IN ('u2','u3')");
+
+  // Ключи агентов хранятся ОТПЕЧАТКОМ, а не открытым текстом (15.08.2026).
+  //
+  // Было: в users.api_token лежал сам ключ вида «tf_<64 hex>», и сверка шла
+  // прямым сравнением. Пароль человека рядом хранился хэшем, а ключ агента —
+  // как есть: кто получил файл базы, тот получил и доступ агента.
+  //
+  // Почему SHA-256, а не bcrypt (которым хэшируются пароли): ключ — случайные
+  // 256 бит, перебрать его нельзя, а замедление хэша тут только мешает. Плюс
+  // bcrypt солёный, по нему не найти строку одним запросом; отпечаток же
+  // детерминирован — WHERE api_token = sha256(предъявленный).
+  //
+  // Переход без простоя: existing открытый ключ заменяется своим отпечатком,
+  // поэтому УЖЕ ВЫДАННЫЕ ключи продолжают работать — перевыпускать и
+  // разносить их по конфигам не нужно. Признак «ещё не переведён» — префикс
+  // «tf_», у отпечатка его нет.
+  const plainTokens = db
+    .prepare("SELECT id, api_token FROM users WHERE api_token LIKE 'tf_%'")
+    .all() as Array<{ id: string; api_token: string }>;
+  if (plainTokens.length) {
+    const upd = db.prepare("UPDATE users SET api_token = ? WHERE id = ?");
+    for (const row of plainTokens) {
+      upd.run(hashApiToken(row.api_token), row.id);
+    }
+  }
 
   // Additive migration: users.created_by — кто завёл этого агента кнопкой
   // «Пригласить агента» (POST /api/agents). Нужен ровно для видимости:

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
-import db from "../db.js";
+import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getProjectForUser, getLabelForUser } from "../access.js";
 
@@ -252,7 +252,18 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       db.prepare(
         `INSERT INTO users (id, name, email, password_hash, role, type, avatar_color, initials, status, api_token, is_system_bot, created_by)
          VALUES (?, ?, ?, ?, 'agent', 'ai', '#A78BFA', ?, 'offline', ?, 0, ?)`,
-      ).run(id, name, email, unusablePassword, initials, apiToken, req.userId);
+        // В базу кладём ОТПЕЧАТОК ключа. Сам ключ уходит в ответе ниже и
+        // больше нигде не хранится: показать его повторно невозможно, только
+        // выпустить новый. Так утечка файла базы не даёт доступа агента.
+      ).run(
+        id,
+        name,
+        email,
+        unusablePassword,
+        initials,
+        hashApiToken(apiToken),
+        req.userId,
+      );
 
       const agent = db
         .prepare(

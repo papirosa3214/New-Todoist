@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import db from "../db.js";
+import db, { hashApiToken } from "../db.js";
 import { authMiddleware, authOrApiToken } from "../auth.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "taskflow-dev-secret-2026";
@@ -119,8 +119,10 @@ export function registerAuthRoutes(app: FastifyInstance) {
     preHandler: authMiddleware,
     handler: async (req: any) => {
       const token = generateApiToken();
+      // В базу — только отпечаток; сам ключ возвращается вызывающему один
+      // раз и больше нигде не хранится (см. hashApiToken в db.ts).
       db.prepare("UPDATE users SET api_token = ? WHERE id = ?").run(
-        token,
+        hashApiToken(token),
         req.userId,
       );
       return { api_token: token };
