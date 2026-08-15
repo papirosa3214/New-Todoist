@@ -47,14 +47,25 @@ function stateOf(st: FeedSubtask): SubtaskState {
 // Цвета — только токены проекта. Синего среди них нет, «в работе» берёт
 // teal: он читается как активность и не спорит с red (приоритет) и
 // coral (тревога).
+//
+// Кольцо рисуется ТОЛЬКО у «готово» — залитый кружок с галочкой, как было в
+// чек-листе. У остальных состояний кольца нет намеренно (правка Максима
+// 15.08.2026): раньше сплошная обводка сочеталась со значком внутри, и
+// получалось два кольца одно в другом — пунктирный значок вставал в
+// сплошной кружок криво. Теперь у не-готовых состояний виден только сам
+// значок, он же и несёт форму.
 const VIEW: Record<
   SubtaskState,
   { ring: string; text: string; label: string }
 > = {
-  done: { ring: "bg-green border-green", text: "text-sub", label: "готово" },
-  running: { ring: "border-teal", text: "text-text", label: "в работе" },
-  pending: { ring: "border-dim", text: "text-text", label: "ждёт" },
-  blocked: { ring: "border-coral", text: "text-text", label: "упёрлась" },
+  done: {
+    ring: "bg-green border-2 border-green",
+    text: "text-sub",
+    label: "готово",
+  },
+  running: { ring: "", text: "text-text", label: "в работе" },
+  pending: { ring: "", text: "text-text", label: "ждёт" },
+  blocked: { ring: "", text: "text-text", label: "упёрлась" },
 };
 
 function StateMark({ state }: { state: SubtaskState }) {
@@ -63,19 +74,23 @@ function StateMark({ state }: { state: SubtaskState }) {
   // при переходе на ленту, и высота ряда остаётся прежней.
   return (
     <div
-      className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center shrink-0 ${v.ring}`}
+      className={`w-[18px] h-[18px] rounded-full flex items-center justify-center shrink-0 ${v.ring}`}
       aria-label={v.label}
     >
+      {/* Галочка — внутри залитого кружка, поэтому мельче поля: 12 из 18.
+          У остальных кольца нет, и значок сам занимает всё место — 17px,
+          чтобы кружки визуально совпадали по размеру с готовым, а не
+          выглядели мелкими точками в пустоте. */}
       {state === "done" && <Check size={12} className="text-white" />}
       {/* Движение — только у текущей. Под prefers-reduced-motion вращение
           гасится глобальным правилом в index.css, значок остаётся. */}
       {state === "running" && (
-        <Loader2 size={12} className="text-teal animate-spin" />
+        <Loader2 size={17} className="text-teal animate-spin" />
       )}
       {state === "blocked" && (
-        <TriangleAlert size={11} className="text-coral" />
+        <TriangleAlert size={16} className="text-coral" />
       )}
-      {state === "pending" && <CircleDashed size={11} className="text-dim" />}
+      {state === "pending" && <CircleDashed size={17} className="text-dim" />}
     </div>
   );
 }
