@@ -21,7 +21,7 @@
 // RescheduleSheet.tsx bottom-sheet shape for the "Вернуть на доработку"
 // comment prompt).
 import { useMemo, useState } from "react";
-import { Avatar, Button, ErrorBanner, Icon } from "./UI";
+import { Avatar, Button, ErrorBanner, Icon, SheetHandle } from "./UI";
 import { useSetAgentState, useUpdateTask } from "../api/tasks";
 import { useAgents } from "../api/agents";
 import { useProjects } from "../api/projects";
@@ -29,6 +29,7 @@ import { PRIORITIES } from "../lib/priority";
 import { AttachmentView } from "./AttachmentView";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { formatDueLabel, formatRelativeTime } from "../lib/date";
+import { useBottomSheet } from "../lib/useBottomSheet";
 import type { ApiComment, ApiTask, ApiTaskEvent } from "../api/types";
 
 // ═══════════ STATUS ROW ═══════════
@@ -154,6 +155,7 @@ export function AgentOwnerActions({
 
       {returning && (
         <ReturnToWorkSheet
+          open={returning}
           value={comment}
           onChange={setComment}
           busy={setAgentState.isPending}
@@ -173,28 +175,43 @@ export function AgentOwnerActions({
 // Same visual language as Dialog.tsx / RescheduleSheet.tsx: black scrim,
 // bg-card rounded-t-[20px] panel sliding up, X-closes / ✓-confirms header.
 function ReturnToWorkSheet({
+  open,
   value,
   onChange,
   onCancel,
   onSubmit,
   busy,
 }: {
+  open: boolean;
   value: string;
   onChange: (v: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
   busy: boolean;
 }) {
+  // §3 Interruptibility, §5 Velocity handoff, §7 Spatial consistency
+  const sheet = useBottomSheet({ open, onClose: onCancel });
+
+  if (!sheet.mounted) return null;
+
   return (
     <div
       className="fixed inset-0 z-50 flex flex-col justify-end"
       onClick={onCancel}
     >
-      <div className="absolute inset-0 bg-black/65" />
+      {/* Scrim: opacity animated by useBottomSheet spring */}
       <div
-        className="relative bg-card rounded-t-[20px] px-4 pt-3 pb-bottom-safe"
+        ref={sheet.scrimRef}
+        className="absolute inset-0 bg-black"
+        style={{ opacity: 0 }}
+      />
+      <div
+        ref={sheet.sheetRef}
+        className="relative bg-card rounded-t-[20px] px-4 pb-bottom-safe"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Handle: drag target for dismiss gesture */}
+        <SheetHandle dragProps={sheet.dragProps} />
         <div className="flex items-center justify-between pb-2">
           <button
             onClick={onCancel}

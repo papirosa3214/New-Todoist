@@ -69,6 +69,8 @@ import { todayStr, formatRelativeTime } from "../lib/date";
 import { getErrorMessage } from "../lib/errors";
 import type { ApiTask } from "../api/types";
 import { AnimatedTabBar, type TabItem } from "./AnimatedTabBar";
+import type { BottomSheetDragProps } from "../lib/useBottomSheet";
+import { NAV_ITEMS } from "../lib/navItems";
 
 // ═══════════ ICON SET (Lucide) ═══════════
 // База набора — Lucide (lucide-react): единая сетка 24×24, единая толщина
@@ -288,25 +290,56 @@ export function StatusBar() {
 export function Avatar({
   initials,
   color,
+  avatar_url,
   size = 32,
 }: {
-  initials: string;
-  color: string;
+  initials?: string;
+  color?: string;
+  avatar_url?: string | null;
   size?: number;
 }) {
+  if (avatar_url) {
+    return (
+      <img
+        src={avatar_url}
+        alt=""
+        className="rounded-full shrink-0"
+        style={{ width: size, height: size, objectFit: "cover" }}
+      />
+    );
+  }
+  const fallback = initials ?? "";
+  const bg = color ?? "#A6A6A6";
   return (
     <div
       className="rounded-full flex items-center justify-center shrink-0"
       style={{
         width: size,
         height: size,
-        backgroundColor: color,
+        backgroundColor: bg,
         fontSize: size * 0.43,
         fontWeight: 600,
         color: "white",
       }}
     >
-      {initials}
+      {fallback}
+    </div>
+  );
+}
+
+// ═══════════ SHEET HANDLE ═══════════
+// Полоска-индикатор в верхней части bottom sheet: намекает «можно потянуть
+// вниз» (§8 Apple Design — hint in direction) и является точкой захвата для
+// drag-to-dismiss. Принимает dragProps из useBottomSheet.
+
+export function SheetHandle({
+  dragProps,
+}: {
+  dragProps?: BottomSheetDragProps;
+}) {
+  return (
+    <div className="flex justify-center pt-2 pb-1 -mx-4 px-4" {...dragProps}>
+      <div className="w-9 h-1 rounded-full bg-stroke" />
     </div>
   );
 }
@@ -397,18 +430,8 @@ export function AgentStateTag({
 // красным пятном при активации (баг, 2026-08-11: «когда нажимаю, он весь
 // заливается, ведёт себя неправильно»). Ключ homeFilled и fill-хак в Icon
 // убраны целиком, а не просто выключены — иначе остались бы мёртвым кодом.
-const NAV_ITEMS = [
-  { path: "/inbox", label: "Входящие", icon: "inbox" },
-  // "calendarCheck" — отдельная от "calendar" иконка (Lucide CalendarCheck),
-  // а не переиспользование "calendar": тот ключ завязан на ~170 других
-  // вызовов <Icon name="calendar"/> по проекту, трогать его нельзя.
-  // Раньше здесь стоял тот же "calendar", что и у «Предстоящего» —
-  // владелец (2026-08-11): «у нас всё равно два календаря одинаковых,
-  // подбери какую-нибудь другую» — теперь силуэты различаются издалека.
-  { path: "/today", label: "Сегодня", icon: "calendarCheck" },
-  { path: "/upcoming", label: "Предстоящее", icon: "calendarSmall" },
-  { path: "/overview", label: "Обзор", icon: "home" },
-];
+// Список вынесен в lib/navItems.ts — 2026-08-17, чтобы FanMenu.tsx мог
+// переиспользовать его без oxlint(only-export-components) на этом файле.
 
 // ── «Горбик»: дословный перенос ~/Проекты/CRM/CRM-Castom/frontend/src/
 // components/ui/AnimatedTabBar.tsx + блока .menu* из index.css того проекта

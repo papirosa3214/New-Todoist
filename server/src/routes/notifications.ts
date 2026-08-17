@@ -11,7 +11,7 @@ export function registerNotificationRoutes(app: FastifyInstance) {
         `
       SELECT n.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials,
              t.title as task_title,
-             a.id as actor_id, a.name as actor_name, a.initials as actor_initials, a.avatar_color as actor_color
+             a.id as actor_id, a.name as actor_name, a.initials as actor_initials, a.avatar_color as actor_color, a.avatar_url as actor_avatar_url
       FROM notifications n
       LEFT JOIN users u ON n.user_id = u.id
       LEFT JOIN tasks t ON n.task_id = t.id

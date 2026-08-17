@@ -27,6 +27,10 @@
 // Portaling both to <body> puts them in the same stacking context, so
 // z-40/z-50 between them means what it says. Needs `anchorRef` — a ref on
 // the trigger button — to know where to sit.
+//
+// §3 Apple Design (Interruptibility): open/close animation driven by
+// useSpring instead of CSS transition. Re-opening while closing picks up
+// from the current opacity/scale without jumps.
 import {
   useLayoutEffect,
   useEffect,
@@ -37,6 +41,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./UI";
+import { useSpring } from "../lib/useSpring";
 
 export type ActionsMenuItem = {
   icon: string;
@@ -57,28 +62,51 @@ export function ActionsMenu({
   /** Ref on the trigger button — the menu anchors to its bottom-right. */
   anchorRef: RefObject<HTMLElement | null>;
 }) {
-  // Mounted a beat longer than `open` so the closing transition can play
-  // instead of the panel just vanishing — owner asked for smooth, quick
-  // appearance (120-150ms) with no jumps; the same courtesy applies on
-  // the way out.
   const [mounted, setMounted] = useState(open);
-  const [entered, setEntered] = useState(false);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
+  // Spring drives opacity + scale directly on the panel DOM node.
+  // Fully interruptible: if the user closes and immediately reopens,
+  // the spring redirects from the current value without snapping.
+  // response:0.2 → quick, snappy appearance matching the small size of the menu.
+  const spring = useSpring(
+    (value, done) => {
+      const el = panelRef.current;
+      if (el) {
+        el.style.opacity = String(value);
+        el.style.transform = `scale(${0.95 + 0.05 * value}) translateZ(0)`;
+      }
+      // Unmount after the close animation finishes
+      if (!open && done && value < 0.02) {
+        setMounted(false);
+      }
+    },
+    { response: 0.2, damping: 1 },
+  );
+
+  const prevOpenRef = useRef(open);
   useEffect(() => {
-    if (open) {
-      if (closeTimer.current) clearTimeout(closeTimer.current);
+    if (open && !prevOpenRef.current) {
+      // Opened
       setMounted(true);
-      const raf = requestAnimationFrame(() => setEntered(true));
-      return () => cancelAnimationFrame(raf);
     }
-    setEntered(false);
-    closeTimer.current = setTimeout(() => setMounted(false), 140);
-    return () => {
-      if (closeTimer.current) clearTimeout(closeTimer.current);
-    };
-  }, [open]);
+    if (!open && prevOpenRef.current) {
+      // Closed — animate out
+      spring.animateTo(0);
+    }
+    prevOpenRef.current = open;
+  }, [open, spring]);
+
+  // When the panel first mounts (or re-mounts), animate in from 0 → 1
+  const prevMountedRef = useRef(mounted);
+  useEffect(() => {
+    if (mounted && !prevMountedRef.current) {
+      spring.set(0);
+      requestAnimationFrame(() => spring.animateTo(1));
+    }
+    prevMountedRef.current = mounted;
+  }, [mounted, spring]);
 
   // Runs before paint, synchronously — so the panel appears already
   // anchored in the right place on the very first frame instead of
@@ -109,11 +137,15 @@ export function ActionsMenu({
           undimmed. */}
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div
+        ref={panelRef}
         role="menu"
-        style={{ top: pos.top, right: pos.right }}
-        className={`fixed z-50 min-w-[192px] max-w-[calc(100vw-32px)] origin-top-right overflow-hidden rounded-[14px] border border-stroke bg-card2 shadow-xl transition-[opacity,transform] duration-150 ease-out ${
-          entered ? "scale-100 opacity-100" : "scale-95 opacity-0"
-        }`}
+        style={{
+          top: pos.top,
+          right: pos.right,
+          opacity: 0,
+          transform: "scale(0.95) translateZ(0)",
+        }}
+        className="fixed z-50 min-w-[192px] max-w-[calc(100vw-32px)] origin-top-right overflow-hidden rounded-[14px] border border-stroke bg-card2 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="divide-y divide-stroke">

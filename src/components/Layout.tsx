@@ -1,5 +1,6 @@
 import { Outlet, useLocation, matchPath } from "react-router-dom";
 import { BottomNav, SideNav, FAB, Panel } from "./UI";
+import { FanMenu, FAN_MENU_CONTENT_PADDING } from "./FanMenu";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { useCurrentUser } from "../api/auth";
 import { useAppStore } from "../store";
@@ -30,6 +31,13 @@ import { useVisualViewportInset } from "../lib/useVisualViewportInset";
 // four entries below are exhaustive by construction — every other screen in
 // App.tsx is deliberately absent.
 const TAB_ROUTES = ["/inbox", "/today", "/upcoming", "/overview"];
+
+// Переключатель нижней панели на мобильном — задача Максима 17.08.2026,
+// «попробовать веер вместо горбика+FAB». "fan" — новый FanMenu.tsx
+// (BottomNav и FAB не удалены, просто не рендерятся на мобильном, пока
+// стоит "fan" — один флаг возвращает прежнее поведение). Десктоп
+// (SideNav+FAB) эта задача не касалась, там всё как было.
+const MOBILE_NAV_STYLE: "fan" | "tabbar" = "fan";
 
 function isTabRoute(pathname: string) {
   return TAB_ROUTES.some((path) => matchPath({ path, end: true }, pathname));
@@ -160,15 +168,22 @@ export function Layout() {
      `transform`, so they still pin to the real viewport, not to this div —
      unaffected by any of the above. */
   if (isMobile) {
+    const isFan = MOBILE_NAV_STYLE === "fan";
     return (
       <div className="h-[100dvh] overflow-hidden flex flex-col bg-bg">
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain">
-          <div className="pb-content-safe">
+          <div
+            className={isFan ? undefined : "pb-content-safe"}
+            style={
+              isFan ? { paddingBottom: FAN_MENU_CONTENT_PADDING } : undefined
+            }
+          >
             <Outlet />
           </div>
         </div>
-        {!hideNav && <BottomNav />}
-        {!hideFAB && <FAB />}
+        {!hideNav && isFan && <FanMenu showAdd={!hideFAB} />}
+        {!hideNav && !isFan && <BottomNav />}
+        {!hideFAB && !isFan && <FAB />}
       </div>
     );
   }

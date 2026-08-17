@@ -185,7 +185,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   app.get("/api/agents", { preHandler: authPre }, async (req: any) => {
     return db
       .prepare(
-        `SELECT id, name, role, type, avatar_color, initials, status
+        `SELECT id, name, role, type, avatar_color, avatar_url, initials, status
          FROM users
          WHERE is_system_bot = 1
             OR id = ?
@@ -250,7 +250,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       const unusablePassword = "!" + crypto.randomBytes(24).toString("hex");
       const initials = name.trim().charAt(0).toUpperCase();
       db.prepare(
-        `INSERT INTO users (id, name, email, password_hash, role, type, avatar_color, initials, status, api_token, is_system_bot, created_by)
+        `INSERT INTO users (id, name, email, password_hash, role, type, avatar_color, avatar_url, initials, status, api_token, is_system_bot, created_by)
          VALUES (?, ?, ?, ?, 'agent', 'ai', '#A78BFA', ?, 'offline', ?, 0, ?)`,
         // В базу кладём ОТПЕЧАТОК ключа. Сам ключ уходит в ответе ниже и
         // больше нигде не хранится: показать его повторно невозможно, только
@@ -267,7 +267,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
 
       const agent = db
         .prepare(
-          "SELECT id, name, role, type, avatar_color, initials, status FROM users WHERE id = ?",
+          "SELECT id, name, role, type, avatar_color, avatar_url, initials, status FROM users WHERE id = ?",
         )
         .get(id);
       return reply.code(201).send({ agent, api_token: apiToken });

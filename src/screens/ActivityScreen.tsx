@@ -30,10 +30,12 @@ import {
   ScreenHeader,
   ErrorBanner,
   BackButton,
+  SheetHandle,
 } from "../components/UI";
 import { Card, FieldRow } from "../components/TaskFields";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { parseServerDate, todayStr, addDays } from "../lib/date";
+import { useBottomSheet } from "../lib/useBottomSheet";
 import type { ApiTask } from "../api/types";
 
 const MONTHS_FULL = [
@@ -287,7 +289,10 @@ function ActivityFilterSheet({
     if (open) setOpenSection(null);
   }, [open]);
 
-  if (!open) return null;
+  // §3 Interruptibility, §5 Velocity handoff, §7 Spatial consistency
+  const sheet = useBottomSheet({ open, onClose });
+
+  if (!sheet.mounted) return null;
 
   const hasActive =
     !!filters.projectId ||
@@ -318,11 +323,19 @@ function ActivityFilterSheet({
       className="fixed inset-0 z-50 flex flex-col justify-end"
       onClick={onClose}
     >
-      <div className="absolute inset-0 bg-black/65" />
+      {/* Scrim: opacity animated by useBottomSheet spring */}
       <div
-        className="relative bg-card rounded-t-[20px] px-4 pt-3 pb-bottom-safe max-h-[85vh] overflow-y-auto"
+        ref={sheet.scrimRef}
+        className="absolute inset-0 bg-black"
+        style={{ opacity: 0 }}
+      />
+      <div
+        ref={sheet.sheetRef}
+        className="relative bg-card rounded-t-[20px] px-4 pb-bottom-safe max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Handle: drag target for dismiss gesture */}
+        <SheetHandle dragProps={sheet.dragProps} />
         <div className="flex items-center justify-between pb-3">
           <button
             onClick={onClose}

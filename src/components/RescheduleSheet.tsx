@@ -1,29 +1,30 @@
 // ═══════════ RESCHEDULE SHEET ═══════════
-// Bulk "перенести все просроченные" sheet, opened from the overdue
+// Bulk «перенести все просроченные» sheet, opened from the overdue
 // column's header button on Today's board. Same bottom-sheet visual
 // language as Dialog.tsx's confirm/alert (scrim + bg-card rounded-t-[20px]
 // panel sliding up from the bottom).
 //
 // Scope, per direct product decision: quick-pick rows (Сегодня/Завтра/На
 // выходных/Следующая неделя/Без срока) + a month calendar for picking any
-// other day. NOT implemented on purpose: the free-text "Введите срок"
-// input, "Время", "Повтор" — there is no time-of-day or recurrence concept
+// other day. NOT implemented on purpose: the free-text «Введите срок»
+// input, «Время», «Повтор» — there is no time-of-day or recurrence concept
 // anywhere in this app's data model or server, so a row for either would
 // be a dead control with nothing behind it. Owner's own rule: either build
 // it for real or don't show it — this doesn't show it, rather than fake it
 // with a disabled row.
 //
 // There is no bulk-PATCH endpoint on the server (confirmed — tasks.ts only
-// has PATCH /api/tasks/:id, one row at a time), so "reschedule everything"
+// has PATCH /api/tasks/:id, one row at a time), so «reschedule everything»
 // here really is N sequential network calls fired in parallel via
 // Promise.all. That's inherent to the current API, not a shortcut taken
 // here — see the report for why a real bulk endpoint would be worth adding
 // server-side.
 import { useEffect, useState } from "react";
-import { Icon, ErrorBanner } from "./UI";
+import { Icon, ErrorBanner, SheetHandle } from "./UI";
 import { useUpdateTask } from "../api/tasks";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { addDays, todayStr } from "../lib/date";
+import { useBottomSheet } from "../lib/useBottomSheet";
 
 const MONTHS_FULL = [
   "января",
@@ -127,7 +128,10 @@ export function RescheduleSheet({
     if (fails === 0) onClose();
   });
 
-  if (!open) return null;
+  // §3 Interruptibility, §5 Velocity handoff, §7 Spatial consistency
+  const sheet = useBottomSheet({ open, onClose });
+
+  if (!sheet.mounted) return null;
 
   const tomorrow = addDays(today, 1);
   const dow = new Date(today + "T00:00:00").getDay();
@@ -186,11 +190,20 @@ export function RescheduleSheet({
       className="fixed inset-0 z-50 flex flex-col justify-end"
       onClick={onClose}
     >
-      <div className="absolute inset-0 bg-black/65" />
+      {/* Scrim: opacity animated by useBottomSheet spring */}
       <div
-        className="relative bg-card rounded-t-[20px] px-4 pt-3 pb-bottom-safe max-h-[85vh] overflow-y-auto"
+        ref={sheet.scrimRef}
+        className="absolute inset-0 bg-black"
+        style={{ opacity: 0 }}
+      />
+      <div
+        ref={sheet.sheetRef}
+        className="relative bg-card rounded-t-[20px] px-4 pb-bottom-safe max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Handle: drag target for dismiss gesture */}
+        <SheetHandle dragProps={sheet.dragProps} />
+
         {/* Header: X закрывает без изменений слева, круглая галочка справа
             подтверждает выбранный в календаре день (быстрые варианты ниже
             применяются сразу по тапу, без промежуточного подтверждения —

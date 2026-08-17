@@ -98,13 +98,13 @@ export function registerAuthRoutes(app: FastifyInstance) {
       const color = colors[Math.floor(Math.random() * colors.length)];
 
       db.prepare(
-        "INSERT INTO users (id, name, email, password_hash, role, type, avatar_color, initials) VALUES (?,?,?,?,?,?,?,?)",
-      ).run(id, name, email, hash, role, type, color, initials);
+        "INSERT INTO users (id, name, email, password_hash, role, type, avatar_color, avatar_url, initials) VALUES (?,?,?,?,?,?,?,?,?)",
+      ).run(id, name, email, hash, role, type, color, null, initials);
 
       const token = app.jwt.sign({ id }, { expiresIn: "30d" });
       const user = db
         .prepare(
-          "SELECT id, name, email, role, type, avatar_color, initials, status FROM users WHERE id = ?",
+          "SELECT id, name, email, role, type, avatar_color, avatar_url, initials, status FROM users WHERE id = ?",
         )
         .get(id);
       return { token, user };
@@ -158,7 +158,7 @@ export function registerAuthRoutes(app: FastifyInstance) {
     handler: async (req: any) => {
       const user = db
         .prepare(
-          "SELECT id, name, email, role, type, avatar_color, initials, status FROM users WHERE id = ?",
+          "SELECT id, name, email, role, type, avatar_color, avatar_url, initials, status FROM users WHERE id = ?",
         )
         .get(req.userId);
       return { user };

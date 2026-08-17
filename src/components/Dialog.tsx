@@ -45,6 +45,7 @@ import {
   type ReactNode,
 } from "react";
 import { Button, Icon } from "./UI";
+import { useBottomSheet } from "../lib/useBottomSheet";
 
 export interface ConfirmOptions {
   title: string;
@@ -71,6 +72,8 @@ export function useDialog(): {
   dialog: ReactNode;
 } {
   const [state, setState] = useState<DialogState | null>(null);
+  // open=true when state is non-null — drives useBottomSheet
+  const [open, setOpen] = useState(false);
   // The pending resolver lives in a ref, not in `state` — it must survive
   // untouched across the re-render `setState` triggers, and never itself
   // becomes a reason to re-render.
@@ -80,6 +83,7 @@ export function useDialog(): {
     resolveRef.current?.(confirmed);
     resolveRef.current = null;
     setState(null);
+    setOpen(false);
   }, []);
 
   // A screen can unmount (navigate away) while its dialog is still open —
@@ -98,6 +102,7 @@ export function useDialog(): {
     return new Promise<boolean>((resolve) => {
       resolveRef.current = resolve;
       setState({ mode: "confirm", ...normalized });
+      setOpen(true);
     });
   }, []);
 
@@ -107,16 +112,27 @@ export function useDialog(): {
     return new Promise<void>((resolve) => {
       resolveRef.current = () => resolve();
       setState({ mode: "alert", ...normalized });
+      setOpen(true);
     });
   }, []);
 
-  const dialog: ReactNode = state && (
+  // useBottomSheet drives slide-up / slide-down animation.
+  // No drag-to-dismiss: confirm dialogs must not be accidentally dismissed.
+  const sheet = useBottomSheet({ open, onClose: () => settle(false) });
+
+  const dialog: ReactNode = sheet.mounted && state && (
     <div
       className="fixed inset-0 z-50 flex flex-col justify-end"
       onClick={() => settle(false)}
     >
-      <div className="absolute inset-0 bg-black/65" />
+      {/* Scrim: opacity animated by useBottomSheet spring */}
       <div
+        ref={sheet.scrimRef}
+        className="absolute inset-0 bg-black"
+        style={{ opacity: 0 }}
+      />
+      <div
+        ref={sheet.sheetRef}
         className="relative bg-card rounded-t-[20px] px-5 pt-6 pb-bottom-safe"
         onClick={(e) => e.stopPropagation()}
       >

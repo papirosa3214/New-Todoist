@@ -12,7 +12,7 @@ const uid = () => crypto.randomUUID();
 function getFullTask(taskId: string) {
   const full = db
     .prepare(
-      `SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.initials as assignee_initials
+      `SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials
        FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.id = ?`,
     )
     .get(taskId) as any;
@@ -29,7 +29,7 @@ function getFullTask(taskId: string) {
     .map((s: any) => ({ ...s, done: !!s.done }));
   const comments = db
     .prepare(
-      `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials
+      `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.avatar_url as user_avatar_url, u.initials as user_initials
        FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.task_id = ? ORDER BY c.created_at`,
     )
     .all(taskId);
@@ -315,7 +315,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (!task) return reply.code(404).send({ error: "Not found" });
       return db
         .prepare(
-          `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials
+          `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.avatar_url as user_avatar_url, u.initials as user_initials
          FROM comments c LEFT JOIN users u ON c.user_id = u.id
          WHERE c.task_id = ? ORDER BY c.created_at`,
         )
@@ -385,7 +385,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
 
       return db
         .prepare(
-          `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials
+          `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.avatar_url as user_avatar_url, u.initials as user_initials
            FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.id = ?`,
         )
         .get(id);

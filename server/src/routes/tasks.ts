@@ -97,7 +97,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const tasks = db
       .prepare(
         `
-      SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.initials as assignee_initials,
+      SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
              p.name as project_name, p.color as project_color
       FROM tasks t
       LEFT JOIN users u ON t.assignee_id = u.id
@@ -133,7 +133,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
 
       const full = db
         .prepare(
-          `SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.initials as assignee_initials
+          `SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials
            FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.id = ?`,
         )
         .get(task.id) as any;

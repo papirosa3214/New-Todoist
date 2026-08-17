@@ -12,6 +12,7 @@ export interface ApiUser {
   role: Role;
   type: UserType;
   avatar_color: string;
+  avatar_url?: string | null;
   initials: string;
   status: string;
 }
@@ -51,6 +52,7 @@ export interface ApiComment {
   created_at: string;
   user_name?: string | null;
   user_color?: string | null;
+  user_avatar_url?: string | null;
   user_initials?: string | null;
   /** Приложенные файлы — приходят вместе с задачей (GET /api/tasks/:id). */
   attachments?: ApiAttachment[];
@@ -75,6 +77,7 @@ export interface ApiTaskEvent {
   created_at: string;
   actor_name?: string | null;
   actor_color?: string | null;
+  actor_avatar_url?: string | null;
   actor_initials?: string | null;
 }
 
@@ -118,6 +121,7 @@ export interface ApiTask {
   // POST/PATCH.
   assignee_name?: string | null;
   assignee_color?: string | null;
+  assignee_avatar_url?: string | null;
   assignee_initials?: string | null;
   project_name?: string | null;
   project_color?: string | null;
@@ -154,6 +158,7 @@ export interface ApiNotification {
   actor_id?: string | null;
   actor_name?: string | null;
   actor_color?: string | null;
+  actor_avatar_url?: string | null;
   actor_initials?: string | null;
   // LEFT JOIN users ON n.user_id — this is the *recipient*.
   user_name?: string | null;
