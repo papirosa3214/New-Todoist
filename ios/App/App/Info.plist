@@ -68,6 +68,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Нужен для голосового ввода задач</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Приложение обращается к серверу задач в домашней сети</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>
