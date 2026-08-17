@@ -78,6 +78,21 @@ export function useBottomSheet({
   // чтобы не запустить вторую анимацию закрытия из useEffect ниже.
   const isDismissingRef = useRef(false);
 
+  // Флаг: спринг сейчас реально едет К ЗАКРЫТИЮ (props-close ИЛИ
+  // drag-dismiss) — единственный случай, когда done-коллбэк ниже должен
+  // унмаунтить шит. Без этого флага баг 17.08.2026 («нажимаешь «Перенести»,
+  // шит вообще не открывается»): spring.set(h) в открывающем useEffect ниже
+  // — это МГНОВЕННАЯ установка стартовой позиции («съехать вниз перед
+  // стартом анимации вверх»), не связанная с закрытием, но useSpring.set()
+  // по контракту сама зовёт onUpdate(value, done:true) синхронно — тот же
+  // коллбэк, что и у настоящего конца closing-анимации. При value===h
+  // (а это всегда так сразу после spring.set(h)) условие "докатились до
+  // низа" было неотличимо от "закрытие завершилось" → setMounted(false)
+  // срабатывал в тот же тик, что и открытие, отменяя requestAnimationFrame
+  // ниже (cleanup эффекта при [mounted] true→false его отменяет) — шит
+  // монтировался и тут же размонтировался в одном цикле рендера.
+  const isClosingRef = useRef(false);
+
   // Кэшированная высота шита — измеряется один раз при монтировании
   // и переизмеряется при ресайзе (ResizeObserver ниже).
   const heightRef = useRef(0);
@@ -97,10 +112,13 @@ export function useBottomSheet({
   const spring = useSpring(
     (value, done) => {
       applyY(value);
-      if (done) {
+      // isClosingRef.current — см. комментарий у объявления: без него сюда
+      // попадает и мгновенная стартовая установка позиции при открытии.
+      if (done && isClosingRef.current) {
         const h = heightRef.current;
         if (value >= h - 1) {
-          // Анимация закрытия завершена
+          // Анимация закрытия действительно завершена
+          isClosingRef.current = false;
           if (isDismissingRef.current) {
             isDismissingRef.current = false;
             onCloseRef.current();
@@ -117,12 +135,14 @@ export function useBottomSheet({
   useEffect(() => {
     if (open) {
       isDismissingRef.current = false;
+      isClosingRef.current = false;
       justMountedRef.current = true;
       setMounted(true);
     } else {
       // Закрытие через props (кнопка «×», клик по скриму и т.д.)
       if (!mounted) return;
       if (isDismissingRef.current) return; // уже анимируется drag-dismiss
+      isClosingRef.current = true;
       const h = heightRef.current || (sheetRef.current?.offsetHeight ?? 600);
       spring.animateTo(h, 0);
     }
@@ -216,8 +236,11 @@ export function useBottomSheet({
         if (shouldDismiss) {
           // Velocity handoff: spring стартует с реальной скоростью пальца
           isDismissingRef.current = true;
+          isClosingRef.current = true;
           spring.animateTo(h, vel);
         } else {
+          // Отпустили, не дотянув до порога — едем обратно вверх, это НЕ
+          // закрытие: isClosingRef здесь специально не трогаем.
           spring.animateTo(0, vel);
         }
       };
