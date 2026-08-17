@@ -15,6 +15,7 @@ import { ApiError } from "../api/client";
 import {
   Icon,
   Avatar,
+  Button,
   ScreenHeader,
   ErrorBanner,
   BackButton,
@@ -226,12 +227,19 @@ export function TaskDetailScreen() {
   // отметки (решение Максима 15.08.2026).
   const priority = PRIORITIES.find((p) => p.key === task.priority);
   const showPriorityFlag = !!task.priority && task.priority <= 3;
-  // То же правило, что в списке и на доске: задачу с незакрытыми подзадачами
-  // нельзя закрыть случайным тычком.
-  const canCompleteTask =
-    task.status === "completed" ||
-    task.subtasks.length === 0 ||
-    task.subtasks.filter((s) => s.done).length === task.subtasks.length;
+  const doneSubtasks = task.subtasks.filter((s) => s.done).length;
+  const allSubtasksDone =
+    task.subtasks.length > 0 && doneSubtasks === task.subtasks.length;
+  // Максим 17.08.2026: «когда есть подзадачи, убирать квадратик из главной
+  // задачи» — не только пока подзадачи не все закрыты (это уже было), а
+  // ВООБЩЕ, пока задача активна. Отметить готовой одним тычком по квадрату
+  // здесь больше нельзя, если есть хоть одна подзадача — вместо этого, когда
+  // все подзадачи выполнены, ниже под списком появляется явный выбор из двух
+  // кнопок (закрыть / доработать, см. ниже). Уже выполненную задачу тычком
+  // возвращают в работу как и раньше — это не «закрытие», квадрат тут просто
+  // индикатор состояния.
+  const showHeaderCheckbox =
+    task.status === "completed" || task.subtasks.length === 0;
 
   return (
     // pb-4 (16px) — исходный отступ снизу для «десктопной» рамки/Android,
@@ -287,9 +295,10 @@ export function TaskDetailScreen() {
       <div className="flex items-start gap-3 mb-4">
         {/* Квадрат и серый — как в списке и на доске (решение Максима
             15.08.2026): круг остаётся за подзадачами, цвет приоритета ушёл
-            во флажок. И отметка появляется, только когда закрывать можно —
-            все подзадачи выполнены либо их нет. */}
-        {canCompleteTask ? (
+            во флажок. Отметка в шапке — только для задач без подзадач
+            (или уже выполненных, для возврата в работу) — см.
+            showHeaderCheckbox выше. */}
+        {showHeaderCheckbox ? (
           <button
             onClick={handleToggleStatus}
             className="mt-1 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center"
@@ -404,6 +413,28 @@ export function TaskDetailScreen() {
             variant="block"
             className="-mt-2 mb-4"
           />
+          {/* Все подзадачи выполнены, задача ещё активна — явный выбор
+              вместо квадратика в шапке (см. showHeaderCheckbox выше,
+              Максим 17.08.2026): либо назначенных шагов хватило и задачу
+              закрывают сразу, либо нет — и тогда доходят до формы добавить
+              ещё один. CRUD подзадач живёт только в форме редактирования
+              (см. комментарий в шапке файла), поэтому «Добавить подзадачу»
+              ведёт туда же, куда и карандаш в ActionsMenu. */}
+          {allSubtasksDone && task.status === "active" && (
+            <div className="space-y-2 mb-4">
+              <Button variant="primary" onClick={handleToggleStatus}>
+                <Icon name="check" size={16} />
+                Закрыть задачу
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => navigate(`/task/${task.id}/edit`)}
+              >
+                <Icon name="plus" size={16} />
+                Добавить подзадачу
+              </Button>
+            </div>
+          )}
         </>
       )}
 
