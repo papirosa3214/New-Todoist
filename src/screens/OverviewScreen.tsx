@@ -1,21 +1,19 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useProjects, useCreateProject } from "../api/projects";
-import { useCurrentUser } from "../api/auth";
 import { useTasks } from "../api/tasks";
 import {
   useAgents,
   useAgentService,
   useToggleAgentService,
 } from "../api/agents";
-import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { PROJECT_COLORS } from "../lib/projectColors";
 
 export function OverviewScreen() {
   const navigate = useNavigate();
-  const { data: user } = useCurrentUser();
   const {
     data: projects = [],
     isLoading,
@@ -114,20 +112,15 @@ export function OverviewScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         className="mb-5"
-        title={
-          <span className="flex w-fit max-w-full items-center gap-2 bg-card px-3 py-1.5 rounded-full">
-            {user && (
-              <Avatar
-                initials={user.initials}
-                color={user.avatar_color}
-                size={28}
-              />
-            )}
-            <span className="min-w-0 truncate text-[16px] font-semibold">
-              {user?.name}
-            </span>
-          </span>
-        }
+        // Простой текстовый заголовок — как у всех остальных разделов
+        // (Входящие/Сегодня/Предстоящее, см. комментарий в TodayScreen.tsx
+        // «все остальные разделы показывают просто текстовый заголовок»).
+        // Раньше здесь была пилюля с аватаркой и именем пользователя —
+        // Максим (17.08.2026): «у меня вверху Максим написано, зачем это,
+        // надо тоже написать, что это Обзор». Пилюля была декоративной, не
+        // кликабельной — профиль/аватар нигде больше не были нужны в этом
+        // файле.
+        title="Обзор"
         actions={
           <>
             <button
