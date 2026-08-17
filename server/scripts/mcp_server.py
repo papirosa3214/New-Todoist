@@ -182,7 +182,10 @@ def t_subtask_done(args):
 
 
 def t_subtask_add(args):
-    s = api("POST", f"/api/tasks/{args['task_id']}/subtasks", {"title": args["title"]})
+    body = {"title": args["title"]}
+    if args.get("after_id"):
+        body["after_id"] = args["after_id"]
+    s = api("POST", f"/api/tasks/{args['task_id']}/subtasks", body)
     return {"шаг добавлен": s.get("title"), "id": s.get("id")}
 
 
@@ -342,10 +345,21 @@ TOOLS = [
     },
     {
         "name": "taskflow_subtask_add",
-        "description": "Добавить шаг в задачу.",
+        "description": (
+            "Добавить шаг в задачу. Без after_id — в конец списка. С after_id — "
+            "сразу после указанного шага (например, поняли по ходу работы, что "
+            "между вторым и третьим шагом нужен ещё один — after_id = id второго)."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"task_id": {"type": "string"}, "title": {"type": "string"}},
+            "properties": {
+                "task_id": {"type": "string"},
+                "title": {"type": "string"},
+                "after_id": {
+                    "type": "string",
+                    "description": "id уже существующего шага этой же задачи — новый встанет сразу за ним.",
+                },
+            },
             "required": ["task_id", "title"],
         },
         "fn": t_subtask_add,

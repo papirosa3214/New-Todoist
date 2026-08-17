@@ -81,17 +81,44 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post<{ Params: { taskId: string }; Body: { title: string } }>(
-    "/api/tasks/:taskId/subtasks",
-    {
-      preHandler: authPre,
-      handler: async (req: any, reply) => {
-        const task = getTaskForUser(req.params.taskId, req.userId);
-        if (!task) return reply.code(404).send({ error: "Not found" });
-        if (!req.body?.title)
-          return reply.code(400).send({ error: "title required" });
+  app.post<{
+    Params: { taskId: string };
+    Body: { title: string; after_id?: string };
+  }>("/api/tasks/:taskId/subtasks", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const task = getTaskForUser(req.params.taskId, req.userId);
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      if (!req.body?.title)
+        return reply.code(400).send({ error: "title required" });
 
-        const id = uid();
+      const id = uid();
+
+      // after_id: агент вставляет шаг НЕ в конец, а сразу после конкретного
+      // уже существующего — например, между шагом 2 и 3, поняв по ходу
+      // работы, что нужен ещё один. Без него — прежнее поведение (в конец).
+      // Позиция сдвигается транзакцией: и освобождение места, и сама
+      // вставка коммитятся вместе, иначе конкурентный запрос может
+      // воткнуться между ними и увидеть дыру или дубль.
+      const afterId = req.body.after_id;
+      if (afterId) {
+        const after = db
+          .prepare("SELECT * FROM subtasks WHERE id = ? AND task_id = ?")
+          .get(afterId, req.params.taskId) as any;
+        if (!after) {
+          return reply
+            .code(400)
+            .send({ error: "after_id: подзадача не найдена в этой задаче" });
+        }
+        db.transaction(() => {
+          db.prepare(
+            "UPDATE subtasks SET position = position + 1 WHERE task_id = ? AND position > ?",
+          ).run(req.params.taskId, after.position);
+          db.prepare(
+            "INSERT INTO subtasks (id, task_id, title, position) VALUES (?,?,?,?)",
+          ).run(id, req.params.taskId, req.body.title, after.position + 1);
+        })();
+      } else {
         const maxPos = db
           .prepare(
             "SELECT COALESCE(MAX(position),0) as m FROM subtasks WHERE task_id = ?",
@@ -100,38 +127,39 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         db.prepare(
           "INSERT INTO subtasks (id, task_id, title, position) VALUES (?,?,?,?)",
         ).run(id, req.params.taskId, req.body.title, maxPos.m + 1);
-        const subtask = db
-          .prepare("SELECT * FROM subtasks WHERE id = ?")
-          .get(id);
+      }
+      const subtask = db.prepare("SELECT * FROM subtasks WHERE id = ?").get(id);
 
-        logEvent({
-          taskId: req.params.taskId,
-          actorId: req.userId,
-          kind: "subtask_added",
-          field: "subtask",
-          toValue: req.body.title,
-        });
+      logEvent({
+        taskId: req.params.taskId,
+        actorId: req.userId,
+        kind: "subtask_added",
+        field: "subtask",
+        toValue: req.body.title,
+      });
 
-        const fullTask = getFullTask(req.params.taskId);
-        broadcastToUsers([task.creator_id, task.assignee_id], {
-          type: "task:updated",
-          task: fullTask,
-        });
-        return subtask;
-      },
+      const fullTask = getFullTask(req.params.taskId);
+      broadcastToUsers([task.creator_id, task.assignee_id], {
+        type: "task:updated",
+        task: fullTask,
+      });
+      return subtask;
     },
-  );
+  });
 
   app.patch<{
     Params: { id: string };
-    Body: { done?: boolean; title?: string };
+    Body: { done?: boolean; title?: string; position?: number };
   }>("/api/subtasks/:id", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
       if (!subtask) return reply.code(404).send({ error: "Not found" });
 
-      const { done, title } = req.body || {};
+      const { done, title, position } = req.body || {};
+      if (position !== undefined && !Number.isInteger(position)) {
+        return reply.code(400).send({ error: "position must be an integer" });
+      }
       if (done !== undefined) {
         db.prepare("UPDATE subtasks SET done = ? WHERE id = ?").run(
           done ? 1 : 0,
@@ -166,6 +194,16 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             toValue: title,
           });
         }
+      }
+      // position — то же самое ручное перетаскивание, что уже есть у задач
+      // на доске (tasks.ts): сознательно НЕ журналируем — то же обоснование,
+      // портянка из «шаг переставлен» на каждый пиксель драга никому не
+      // нужна. Broadcast всё равно уходит — по нему обновится список.
+      if (position !== undefined) {
+        db.prepare("UPDATE subtasks SET position = ? WHERE id = ?").run(
+          position,
+          req.params.id,
+        );
       }
 
       const fullTask = getFullTask(subtask.task_id);
