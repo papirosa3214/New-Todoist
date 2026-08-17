@@ -55,12 +55,14 @@
 //    on purpose so it isn't missed.
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { useLocation } from "react-router-dom";
 import {
   DndContext,
   DragOverlay,
@@ -494,6 +496,76 @@ export function TaskBoard({
     };
   }, [columns.length]);
 
+  // ─── Помнить, на какой колонке (проекте) стоял пользователь ───
+  // Максим 18.08.2026: заходит в задачу с колонки «Домашний сервер»
+  // (не первой), выходит назад — доска встречает его на самой левой
+  // колонке. React Router размонтирует TaskBoard при переходе на
+  // /task/:id и монтирует заново при возврате — scrollLeft полосы
+  // никто не помнит между этими двумя жизнями компонента.
+  // sessionStorage, не сам React state — переживает именно размонтирование,
+  // но не обязан жить дольше вкладки. Ключ — location.pathname, не общий:
+  // Today (single-колонка) и Inbox не должны делить одну и ту же память.
+  const location = useLocation();
+  const scrollMemoryKey = `taskboard-scroll:${location.pathname}`;
+
+  // Восстановление — один раз, как только колонки реально появились
+  // (до этого strip пуст, восстанавливать нечего). restoredRef не даёт
+  // сработать повторно при каждом обновлении columns (reorder, WS-
+  // invalidate и т.п.) — иначе живой скролл пользователя откатывало бы
+  // назад на сохранённое значение при каждом чужом чихе.
+  const restoredScrollRef = useRef(false);
+  useLayoutEffect(() => {
+    if (restoredScrollRef.current || columns.length === 0) return;
+    restoredScrollRef.current = true;
+    const strip = stripRef.current;
+    const savedId = sessionStorage.getItem(scrollMemoryKey);
+    if (!strip || !savedId) return;
+    // window.CSS, не CSS — этот файл импортирует CSS из @dnd-kit/utilities
+    // (transform-строки для drag), тот объект затеняет глобальный и не
+    // имеет .escape(). Ловилось не сразу: TaskBoard падал целиком без
+    // error boundary — ошибка утекала прямо в консоль, экран просто гас.
+    const el = strip.querySelector<HTMLElement>(
+      `[data-column-id="${window.CSS.escape(savedId)}"]`,
+    );
+    // "instant", не smooth: это восстановление состояния, не жест
+    // пользователя — анимированный проезд через все колонки между
+    // приходом на экран и прыжком на нужную выглядел бы как глюк.
+    el?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [columns, scrollMemoryKey]);
+
+  // Сохранение — какая колонка сейчас ближе всего к центру полосы,
+  // debounced на прекращение скролла (150мс), не на каждый кадр.
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip || columns.length <= 1) return; // одна колонка (Today) не скроллится
+    let timer: ReturnType<typeof setTimeout>;
+    const onScroll = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const stripRect = strip.getBoundingClientRect();
+        const centerX = stripRect.left + stripRect.width / 2;
+        let closestId: string | null = null;
+        let closestDist = Infinity;
+        strip
+          .querySelectorAll<HTMLElement>("[data-column-id]")
+          .forEach((el) => {
+            const r = el.getBoundingClientRect();
+            const dist = Math.abs(r.left + r.width / 2 - centerX);
+            if (dist < closestDist) {
+              closestDist = dist;
+              closestId = el.dataset.columnId ?? null;
+            }
+          });
+        if (closestId) sessionStorage.setItem(scrollMemoryKey, closestId);
+      }, 150);
+    };
+    strip.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      strip.removeEventListener("scroll", onScroll);
+      clearTimeout(timer);
+    };
+  }, [scrollMemoryKey, columns.length]);
+
   useEffect(() => {
     if (activeId !== null || persistingRef.current) return;
     setColItems(
@@ -735,6 +807,7 @@ export function TaskBoard({
           return (
             <div
               key={col.id}
+              data-column-id={col.id}
               // Максим 17.08.2026: снап к левому краю (snap-start) давал
               // подглядывание только справа — «слева нету ничего, справа
               // вылазит чуть больше», непонятно, где по счёту колонка и
