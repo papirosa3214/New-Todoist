@@ -772,9 +772,14 @@ export function TaskBoard({
               // попросил peek «на миллиметрик больше» текущего, не
               // колоссально. Пересчитано под полосу, которая теперь
               // честно full-bleed (-mx-4 без компенсирующего padding, см.
-              // выше), с чуть большим запасом: 32px peek + gap-3 (12px) =
-              // 44px с КАЖДОЙ стороны, ×2 = 88. min(...,584px) — тот же
-              // кап под десктопный max-w-[640px]+bleed (640+32−88=584).
+              // выше).
+              //
+              // Третий заход (17.08.2026): 32px оказался обратной
+              // крайностью — «хвостики соседних плиток вылазят прям
+              // капитально», нужно «чисто символически». 8px peek +
+              // gap-3 (12px) = 20px с КАЖДОЙ стороны, ×2 = 40. min(...,632px)
+              // — тот же кап под десктопный max-w-[640px]+bleed
+              // (640+32−40=632).
               //
               // single (Today часто одна колонка) — w-full здесь раньше
               // означало «во всю ширину РОДИТЕЛЯ» (полоса ещё не была
@@ -785,7 +790,7 @@ export function TaskBoard({
               // w-[min(calc(100vw-32px),608px)] — та же ширина, что раньше
               // w-full фактически давал (100vw бленда минус 16px с каждой
               // стороны; 608=640−32 — тот же принцип десктопного капа).
-              className={`shrink-0 snap-center ${single ? "mx-auto w-[min(calc(100vw-32px),608px)]" : "w-[min(calc(100vw-88px),584px)]"}`}
+              className={`shrink-0 snap-center ${single ? "mx-auto w-[min(calc(100vw-32px),608px)]" : "w-[min(calc(100vw-40px),632px)]"}`}
             >
               {/* min-h-11 on both column headers on purpose — the overdue
                   column's "Перенести" button is a 44px tap target, so without
