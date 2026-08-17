@@ -1,5 +1,11 @@
 import { useNavigate } from "react-router-dom";
-import { FieldGroup, Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import {
+  FieldGroup,
+  Icon,
+  ScreenHeader,
+  ErrorBanner,
+  BackButton,
+} from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
 import { useAppStore } from "../store";
 
@@ -147,18 +153,21 @@ export function SettingsScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
+        // Была своя красная кнопка-галочка справа («Готово») — Максим
+        // (17.08.2026): «тут не галочка нужна, тут справа обычная кнопка
+        // назад, как она везде у нас есть, стрелочка». Обычный BackButton
+        // слева — тот же паттерн, что у Agents/TaskDetail/LabelTasks и
+        // остальных compact-экранов (см. пример в комментарии самого
+        // ScreenHeader в UI.tsx).
+        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Настройки"
-        actions={
-          <button
-            onClick={() => navigate("/overview")}
-            className="w-[44px] h-[44px] flex items-center justify-center"
-            aria-label="Готово"
-          >
-            <span className="w-[36px] h-[36px] rounded-full bg-red flex items-center justify-center">
-              <Icon name="check" size={18} className="text-white" />
-            </span>
-          </button>
-        }
+        // mb-3 (12px) — та же величина, что AgentsScreen ставит между
+        // compact-заголовком и первым содержательным блоком (там —
+        // className="mt-3" на ErrorBanner). Раньше здесь отступа не было
+        // вовсе — профиль («Максим», e-mail) шёл вплотную под заголовком,
+        // Максим: «прям прилипла очень сильно, не так, как во всех
+        // приложениях».
+        className="mb-3"
       />
 
       <ErrorBanner
