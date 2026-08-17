@@ -85,7 +85,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useQueryClient } from "@tanstack/react-query";
-import { Icon, AgentStateTag } from "./UI";
+import { Icon, Avatar, AgentStateTag } from "./UI";
 import { MONTHS_SHORT } from "../lib/date";
 import { api } from "../api/client";
 import { useUpdateTask } from "../api/tasks";
@@ -250,27 +250,45 @@ function BoardCard({
               закрывать действительно можно — все подзадачи выполнены либо
               их нет. Иначе на её месте пустота того же размера, чтобы
               карточка не меняла раскладку при закрытии последнего шага. */}
-          {canComplete ? (
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-                updateTask.mutate({
-                  id: task.id,
-                  status: isDone ? "active" : "completed",
-                });
-              }}
-              role="button"
-              aria-label={isDone ? "Вернуть в работу" : "Отметить выполненной"}
-              className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center"
-            >
-              {isDone && <Icon name="check" size={12} className="text-white" />}
-            </div>
-          ) : (
-            <div
-              className="mt-0.5 w-[18px] h-[18px] shrink-0"
-              aria-hidden="true"
-            />
-          )}
+          {/* Отметка + аватарка исполнителя — тот же левый столбец, что и в
+              строке списка (TaskRow.tsx, просьба Максима 17.08.2026): здесь
+              аватарки не было вообще, хотя список её уже показывал — того
+              же паттерна тут просто не было применено. */}
+          <div className="flex flex-col items-center gap-1.5 shrink-0">
+            {canComplete ? (
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  updateTask.mutate({
+                    id: task.id,
+                    status: isDone ? "active" : "completed",
+                  });
+                }}
+                role="button"
+                aria-label={
+                  isDone ? "Вернуть в работу" : "Отметить выполненной"
+                }
+                className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center"
+              >
+                {isDone && (
+                  <Icon name="check" size={12} className="text-white" />
+                )}
+              </div>
+            ) : (
+              <div
+                className="mt-0.5 w-[18px] h-[18px] shrink-0"
+                aria-hidden="true"
+              />
+            )}
+            {task.assignee_id && task.assignee_initials && (
+              <Avatar
+                initials={task.assignee_initials}
+                color={task.assignee_color || "#A6A6A6"}
+                avatar_url={task.assignee_avatar_url}
+                size={24}
+              />
+            )}
+          </div>
           <div className="min-w-0 flex-1">
             <div
               className={`text-[13px] leading-snug line-clamp-2 ${isDone ? "line-through text-sub" : "text-text"}`}
