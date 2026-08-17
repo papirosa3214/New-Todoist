@@ -323,6 +323,13 @@
       animation: none !important;
       opacity: 1;
     }
+
+    /* CometSpinner (SubtaskFeed «в работе»): вращение выключено, капли
+       остаются видимыми в неподвижном виде — «в работе» всё ещё читается
+       по хвосту-комете, просто без движения. */
+    .comet-spin {
+      animation: none;
+    }
   }
 
   /* Surface translucency -> opaque: drop blur, solid background. */
@@ -556,6 +563,24 @@
 
 .mic-rec-dot {
   animation: mic-rec-pulse 1s ease-in-out infinite;
+}
+
+/* CometSpinner (SubtaskFeed.tsx, состояние «в работе») — референс Максима
+   18.08.2026 (гифка+картинка, Dropbox AI): 12 капель по кругу, «хвост
+   кометы» вращается. Скорость НЕ на глаз: в референсе 171 кадр × 20мс =
+   3.42с на кадр = один полный оборот 12 капель — то же число, округлено.
+   transform-origin: center — SVG rotate иначе крутится вокруг (0,0), не
+   вокруг центра viewBox. Готовый Tailwind animate-spin (1s) сюда не
+   годится — другая скорость, свой @keyframes. */
+@keyframes comet-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.comet-spin {
+  animation: comet-spin 3.4s linear infinite;
+  transform-origin: center;
 }
 
 /* Кнопка микрофона (TaskFormScreen) — радиальное кольцо вокруг иконки.

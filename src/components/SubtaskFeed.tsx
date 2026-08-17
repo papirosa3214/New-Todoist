@@ -17,13 +17,7 @@
 // их присылать, компонент менять не придётся. Пока их нет, состояние
 // выводится из `done`, а раскрывать нечего — стрелка не показывается.
 import { useState } from "react";
-import {
-  Check,
-  ChevronRight,
-  CircleDashed,
-  Loader2,
-  TriangleAlert,
-} from "lucide-react";
+import { Check, ChevronRight, CircleDashed, TriangleAlert } from "lucide-react";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 
 /** Состояние подзадачи. Приходит с сервера, пока может отсутствовать. */
@@ -44,9 +38,14 @@ function stateOf(st: FeedSubtask): SubtaskState {
   return st.state ?? (st.done ? "done" : "pending");
 }
 
-// Цвета — только токены проекта. Синего среди них нет, «в работе» берёт
-// teal: он читается как активность и не спорит с red (приоритет) и
-// coral (тревога).
+// Цвета — только токены проекта. «В работе» раньше нарочно брала teal, а не
+// зелёный (см. историю ниже) — Максим 18.08.2026 явно попросил обратное:
+// прислал референс (гифка+картинка, Dropbox AI) и велел «закрась зелёненьким,
+// таким же цветом как готово». Значит done и running теперь ОДНОГО цвета —
+// различаются формой (сплошное кольцо с галочкой vs вращающаяся комета из
+// капель, см. CometSpinner ниже), не цветом. Прежнее обоснование («teal
+// читается как активность и не спорит с red/coral») тем самым отменено этим
+// прямым указанием, не забыто — оставлено в git-истории, не здесь.
 //
 // Кольцо рисуется ТОЛЬКО у «готово» — залитый кружок с галочкой, как было в
 // чек-листе. У остальных состояний кольца нет намеренно (правка Максима
@@ -68,6 +67,53 @@ const VIEW: Record<
   blocked: { ring: "", text: "text-text", label: "упёрлась" },
 };
 
+// ═══ CometSpinner — «в работе» ═══
+// Форма и анимация — референс Максима 18.08.2026: 12 капель по кругу, 4 из
+// них горят разом — «хвост кометы» с затухающей яркостью от головы к
+// хвосту, — и вращаются. Активные капли: заливка, зелёный (var(--color-
+// green) через text-green), градиент прозрачности взят на глаз с самого
+// референса. Неактивные — контур (не заливка, в референсе это тоже контур,
+// не сплошной цвет), text-dim — та же приглушённая палитра, что у pending
+// ниже. Скорость — .comet-spin в index.css, не Tailwind animate-spin
+// (другая, посчитанная по кадрам референса, а не системная 1s).
+const COMET_DOTS = 12;
+const COMET_TAIL = 4; // сколько капель горят одновременно, включая голову
+const COMET_TAIL_OPACITY = [1, 0.62, 0.34, 0.16]; // голова → хвост
+// Подобрано визуально (4 варианта формы сравнены рядом при 17px и 90px,
+// см. урок 2026-08-18): более широкая капля и strokeWidth 1.3 у неактивных
+// давали «бублик» — контур сливался в сплошное кольцо на таком масштабе.
+// Эта уже, а strokeWidth 0.6.
+const COMET_DROP_PATH =
+  "M12 8.8C10.8 8.8 9.9 7.6 9.9 6.2C9.9 4.5 10.8 2.6 12 2.6C13.2 2.6 14.1 4.5 14.1 6.2C14.1 7.6 13.2 8.8 12 8.8Z";
+
+function CometSpinner() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={17}
+      height={17}
+      className="comet-spin"
+      aria-hidden="true"
+    >
+      {Array.from({ length: COMET_DOTS }, (_, i) => {
+        const inTail = i < COMET_TAIL;
+        return (
+          <path
+            key={i}
+            d={COMET_DROP_PATH}
+            transform={`rotate(${i * (360 / COMET_DOTS)} 12 12)`}
+            className={inTail ? "text-green" : "text-dim"}
+            fill={inTail ? "currentColor" : "none"}
+            stroke={inTail ? "none" : "currentColor"}
+            strokeWidth={inTail ? undefined : 0.6}
+            opacity={inTail ? COMET_TAIL_OPACITY[i] : 1}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
 function StateMark({ state }: { state: SubtaskState }) {
   const v = VIEW[state];
   // Размер кружка тот же 18px, что был у чек-листа — строка не «прыгает»
@@ -83,10 +129,8 @@ function StateMark({ state }: { state: SubtaskState }) {
           выглядели мелкими точками в пустоте. */}
       {state === "done" && <Check size={12} className="text-white" />}
       {/* Движение — только у текущей. Под prefers-reduced-motion вращение
-          гасится глобальным правилом в index.css, значок остаётся. */}
-      {state === "running" && (
-        <Loader2 size={17} className="text-teal animate-spin" />
-      )}
+          гасится правилом .comet-spin в index.css, капли остаются на месте. */}
+      {state === "running" && <CometSpinner />}
       {state === "blocked" && (
         <TriangleAlert size={16} className="text-coral" />
       )}
@@ -135,7 +179,9 @@ function SubtaskRow({
             {st.title}
           </span>
           {state === "running" && (
-            <span className="text-[11px] text-teal font-semibold shrink-0">
+            // text-green, не text-teal — та же смена, что у CometSpinner
+            // выше: подпись и значок одного состояния одним цветом.
+            <span className="text-[11px] text-green font-semibold shrink-0">
               {v.label}
             </span>
           )}
