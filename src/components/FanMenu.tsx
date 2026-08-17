@@ -52,30 +52,45 @@ const ADD_ITEM: FanItem = {
   icon: "plus",
 };
 
+function buildItems(showAdd: boolean): FanItem[] {
+  return showAdd ? [...NAV_ITEMS, ADD_ITEM] : NAV_ITEMS;
+}
+
 export function FanMenu({ showAdd = true }: { showAdd?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
-  const items = useMemo<FanItem[]>(
-    () => (showAdd ? [...NAV_ITEMS, ADD_ITEM] : NAV_ITEMS),
-    [showAdd],
+  // Список пунктов «замораживается» на момент ОТКРЫТИЯ и не пересчитывается,
+  // пока меню открыто или закрывается — даже если showAdd успеет поменяться
+  // (маршрут сменился, hideFAB пересчитался). Баг 17.08.2026: раньше список
+  // (и его длина n) шёл прямо от showAdd-пропа, поэтому смена count ПОСРЕДИ
+  // closing-анимации — клик по пункту одновременно закрывает веер И
+  // навигирует, а новый route может поменять showAdd — обнуляла состояние
+  // пружин в useMultiSpring (пересоздание Float64Array при смене count) без
+  // финального обновления DOM: кружок замирал на полпути закрытия — сам
+  // rAF-цикл после сброса решает, что двигать нечего, и останавливается, а
+  // opacity/transform в DOM остаются от последнего кадра — тап срабатывал
+  // только со второго раза (новый цикл toggle).
+  // Следующее открытие всегда берёт актуальный showAdd — устаревать нечему.
+  const [menuItems, setMenuItems] = useState<FanItem[]>(() =>
+    buildItems(showAdd),
   );
-  const n = items.length;
+  const n = menuItems.length;
 
   // Угол пункта i: дуга центрирована строго вверх (-90°), симметрично по
   // STEP_DEG вокруг середины списка — формула одна для чётного и нечётного
   // n (совпадает с «центральным индексом» при нечётном n).
   const offsets = useMemo(() => {
     const mid = (n - 1) / 2;
-    return items.map((_, i) => {
+    return menuItems.map((_, i) => {
       const angleRad = ((-90 + (i - mid) * STEP_DEG) * Math.PI) / 180;
       return {
         tx: Math.cos(angleRad) * RADIUS,
         ty: Math.sin(angleRad) * RADIUS,
       };
     });
-  }, [items, n]);
+  }, [menuItems, n]);
 
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const scrimRef = useRef<HTMLDivElement | null>(null);
@@ -116,13 +131,38 @@ export function FanMenu({ showAdd = true }: { showAdd?: boolean }) {
     { response: 0.2, damping: 1 },
   );
 
+  // Отложенные setTimeout-запуски стаггера — id храним, чтобы быстрый
+  // повторный toggle() (открыл → тут же передумал/выбрал пункт) отменял
+  // ещё не сработавшие таймауты прошлого вызова, а не давал им позже
+  // дёрнуть пружину в обратную сторону поверх уже идущей новой анимации
+  // (короткий, но заметный флик на пунктах 2–5 при быстром тапе).
+  const pendingTimeouts = useRef<ReturnType<typeof setTimeout>[]>([]);
+
   function toggle(next: boolean) {
+    pendingTimeouts.current.forEach(clearTimeout);
+    pendingTimeouts.current = [];
+
+    // Список фиксируется заново только при открытии — см. комментарий у
+    // menuItems выше. При закрытии домённый снимок остаётся как был.
+    const activeItems = next ? buildItems(showAdd) : menuItems;
+    if (next) setMenuItems(activeItems);
+
     setOpen(next);
     openSpring.animateTo(next ? 1 : 0);
-    items.forEach((_, i) => {
-      setTimeout(() => itemSprings.animateTo(i, next ? 1 : 0), i * STAGGER_MS);
+    activeItems.forEach((_, i) => {
+      const id = setTimeout(
+        () => itemSprings.animateTo(i, next ? 1 : 0),
+        i * STAGGER_MS,
+      );
+      pendingTimeouts.current.push(id);
     });
   }
+
+  useLayoutEffect(() => {
+    return () => {
+      pendingTimeouts.current.forEach(clearTimeout);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -144,7 +184,7 @@ export function FanMenu({ showAdd = true }: { showAdd?: boolean }) {
         aria-hidden="true"
       />
 
-      {items.map((item, i) => {
+      {menuItems.map((item, i) => {
         const active = item.path === location.pathname;
         return (
           <button

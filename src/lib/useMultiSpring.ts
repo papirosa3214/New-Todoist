@@ -44,6 +44,14 @@ export function useMultiSpring(
   } | null>(null);
 
   if (!state.current || state.current.values.length !== count) {
+    // Пересоздание массивов на смену count обрывает любой идущий rAF-цикл
+    // старого state — не отменить его rafId здесь значило бы потерять
+    // ссылку на активный requestAnimationFrame навсегда (он всё равно
+    // сработает ещё раз на старом объекте и тихо остановится сам — не
+    // крэш, но лишний кадр и незакрытый id, пока жив компонент).
+    if (state.current?.rafId !== null && state.current?.rafId !== undefined) {
+      cancelAnimationFrame(state.current.rafId);
+    }
     state.current = {
       values: new Float64Array(count),
       vels: new Float64Array(count),
@@ -132,9 +140,14 @@ export function useMultiSpring(
   }
 
   useEffect(() => {
-    const s = state.current!;
+    // state.current читаем ВНУТРИ cleanup, не захватываем при монтировании:
+    // при смене count (см. resize-ветка выше) объект целиком заменяется, а
+    // этот эффект с пустыми deps выполняется один раз — захват на монтаже
+    // отменил бы rafId уже покинутого объекта, а актуальный цикл остался бы
+    // висеть после размонтирования компонента.
     return () => {
-      if (s.rafId !== null) cancelAnimationFrame(s.rafId);
+      const s = state.current;
+      if (s && s.rafId !== null) cancelAnimationFrame(s.rafId);
     };
   }, []);
 
