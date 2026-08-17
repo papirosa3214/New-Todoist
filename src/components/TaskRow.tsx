@@ -251,7 +251,14 @@ export function TaskRow({
 
         const shouldComplete = absDx > SWIPE_THRESHOLD || absVel > SWIPE_VEL;
 
-        if (shouldComplete && !isDone) {
+        // canComplete — то же правило, что у квадратика ниже: задачу с
+        // незакрытыми подзадачами нельзя закрыть случайным тычком. Раньше
+        // свайп его не проверял вовсе — можно было обойти запрет жестом,
+        // которого квадратик не разрешает (найдено 17.08.2026, Максим:
+        // «так оно не должно работать»). Строка просто едет обратно, без
+        // действия и без объяснения — так же молча, как сейчас ведёт себя
+        // скрытый квадратик у задачи с незакрытыми подзадачами.
+        if (shouldComplete && !isDone && canComplete) {
           updateTask.mutate({ id: task.id, status: "completed" });
         }
 
@@ -264,7 +271,7 @@ export function TaskRow({
       el.addEventListener("pointerup", onUp);
       el.addEventListener("pointercancel", onUp);
     },
-    [isDone, task.id, updateTask, spring],
+    [isDone, canComplete, task.id, updateTask, spring],
   );
 
   return (
