@@ -196,14 +196,51 @@ export function InboxScreen() {
           emptyMessage="Задач пока нет"
         />
       ) : (
-        <div className="space-y-[2px]">
-          {tasks.map((task) => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              onClick={() => navigate(`/task/${task.id}`)}
-            />
-          ))}
+        // Список сгруппирован по проектам — Максим 17.08.2026: «не просто
+        // один голый список, а были разделы — проект написан, потом идут
+        // задачи». Группы и порядок берутся из boardColumns (тот же расчёт,
+        // что для вида доски — один источник, list и board не могут
+        // разойтись в том, что относится к какому проекту), только пустые
+        // колонки тут не показываются: на доске пустая колонка держит место
+        // и пилюлю «Добавить», в простом списке пустой заголовок без единой
+        // задачи под ним смысла не несёт. Заголовок секции — 1:1 разметка
+        // заголовка колонки из TaskBoard.tsx (точка цвета проекта + название
+        // + счётчик), чтобы один и тот же проект выглядел одинаково что на
+        // доске, что в списке.
+        <div className="space-y-4">
+          {boardColumns
+            .filter((col) => col.tasks.length > 0)
+            .map((col) => (
+              <div key={col.id}>
+                <div className="flex items-center gap-2 px-1 mb-2 min-h-11">
+                  {col.dotColor && (
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: col.dotColor }}
+                    />
+                  )}
+                  <span
+                    className={`text-[13px] font-semibold truncate ${
+                      col.titleClassName ?? "text-text"
+                    }`}
+                  >
+                    {col.title}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[11px] text-sub">
+                    {col.trailingCount}
+                  </span>
+                </div>
+                <div className="space-y-[2px]">
+                  {col.tasks.map((task) => (
+                    <TaskRow
+                      key={task.id}
+                      task={task}
+                      onClick={() => navigate(`/task/${task.id}`)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
         </div>
       )}
 
