@@ -9,6 +9,10 @@
 // create-row) follow the interaction pattern already accepted for the task
 // form rather than inventing a modal.
 import { useState, Children, type ReactNode } from "react";
+import type {
+  DraggableAttributes,
+  DraggableSyntheticListeners,
+} from "@dnd-kit/core";
 import { Icon } from "./UI";
 import { formatDueLabel, todayStr, tomorrowStr } from "../lib/date";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
@@ -436,11 +440,23 @@ export function SubtaskRow({
   done,
   onRename,
   onDelete,
+  dragHandleListeners,
+  dragHandleAttributes,
+  setDragHandleRef,
+  isDragging,
 }: {
   title: string;
   done: boolean;
   onRename: (title: string) => void;
   onDelete: () => void;
+  // Перетаскивание — см. SortableSubtaskRow в TaskFormScreen.tsx. Опционально:
+  // без dnd-kit-обёртки (create-mode ещё без id, или будущий вызов без
+  // переупорядочивания) строка просто не получает ручку и ведёт себя как
+  // раньше.
+  dragHandleListeners?: DraggableSyntheticListeners;
+  dragHandleAttributes?: DraggableAttributes;
+  setDragHandleRef?: (el: HTMLElement | null) => void;
+  isDragging?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(title);
@@ -458,15 +474,30 @@ export function SubtaskRow({
     // здесь этот отступ был нужен, пока строка стояла внутри Card-рамки
     // (убрана пятым заходом), сейчас это просто лишний сдвиг вправо
     // относительно title/desc textarea и остальных лейблов формы.
-    <div className="flex items-center gap-3 py-3">
+    <div
+      className={`flex items-center gap-2 py-3 ${isDragging ? "opacity-40" : ""}`}
+    >
+      {dragHandleListeners && (
+        // Тот же приём, что у BoardCard на доске (TaskBoard.tsx): ручка —
+        // отдельный элемент, перетаскивание стартует только с неё, тап по
+        // остальной строке (переименование, `input`) не задет. touch-none —
+        // чтобы палец не начинал скролл раньше, чем dnd-kit распознает драг.
+        <div
+          ref={setDragHandleRef}
+          {...dragHandleAttributes}
+          {...dragHandleListeners}
+          className="touch-none shrink-0 -my-3 -ml-1 py-3 pr-1 text-dim active:text-sub"
+          aria-label="Перетащить подзадачу"
+        >
+          <Icon name="grip" size={14} />
+        </div>
+      )}
       {/* Кружка-переключателя здесь нет (решение Максима 15.08.2026): это
           раздел «Изменить», в нём подзадачи правят и удаляют, а отмечают
           выполненными в самой карточке. Лишний элемент только загружал
           строку. Галочка у уже выполненной остаётся — она несёт смысл,
           показывая, что шаг закрыт. */}
-      {done && (
-        <Icon name="check" size={14} className="text-green shrink-0" />
-      )}
+      {done && <Icon name="check" size={14} className="text-green shrink-0" />}
       {editing ? (
         <input
           autoFocus

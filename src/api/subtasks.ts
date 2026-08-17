@@ -29,6 +29,7 @@ export function useUpdateSubtask() {
       id: string;
       done?: boolean;
       title?: string;
+      position?: number;
     }) => api.patch<ApiSubtask>(`/api/subtasks/${id}`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
   });

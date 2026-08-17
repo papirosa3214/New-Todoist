@@ -6,8 +6,31 @@
 // (POST один раз vs. PATCH одним пакетом по кнопке «Готово»). Подзадачи —
 // исключение: у существующей задачи они уже персистентны, поэтому их
 // CRUD идёт через живой API сразу, а не копится в локальном стейте.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useProjects } from "../api/projects";
 import { useLabels, useCreateLabel } from "../api/labels";
 import { useAgents } from "../api/agents";
@@ -42,6 +65,54 @@ import {
 import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import type { UpdateTaskInput } from "../api/tasks";
+
+// Тот же приём, что SortableBoardCard у TaskBoard.tsx: dnd-kit даёт
+// transform/transition/listeners, но реальная ручка — отдельный
+// sub-элемент внутри SubtaskRow (см. её комментарий), не вся строка,
+// иначе тап по названию (переименование) и драг спорили бы за один жест.
+function SortableSubtaskRow({
+  id,
+  title,
+  done,
+  onRename,
+  onDelete,
+}: {
+  id: string;
+  title: string;
+  done: boolean;
+  onRename: (title: string) => void;
+  onDelete: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <SubtaskRow
+        title={title}
+        done={done}
+        onRename={onRename}
+        onDelete={onDelete}
+        dragHandleListeners={listeners}
+        dragHandleAttributes={attributes}
+        setDragHandleRef={setActivatorNodeRef}
+        isDragging={isDragging}
+      />
+    </div>
+  );
+}
 
 export function TaskFormScreen() {
   const { id } = useParams<{ id: string }>();
@@ -92,6 +163,58 @@ export function TaskFormScreen() {
   // CRUD against, so they're held locally and sent as part of the atomic
   // POST /api/tasks `subtasks` param (see handleSave).
   const [localSubtasks, setLocalSubtasks] = useState<string[]>([]);
+
+  // Порядок подзадач (edit-mode) — тот же приём, что colItems у TaskBoard.
+  // Держим локально id-список, а не читаем existingTask.subtasks напрямую в
+  // рендере: во время самого драга и пока PATCH'и ещё в полёте, сервер
+  // (через WS-broadcast) может прислать старый порядок и на миг откатить
+  // визуально то, что человек только что расставил.
+  const [subtaskOrder, setSubtaskOrder] = useState<string[]>([]);
+  const [draggingSubtask, setDraggingSubtask] = useState(false);
+  const persistingSubtaskOrder = useRef(false);
+  useEffect(() => {
+    if (draggingSubtask || persistingSubtaskOrder.current) return;
+    setSubtaskOrder((existingTask?.subtasks || []).map((s) => s.id));
+  }, [existingTask?.subtasks, draggingSubtask]);
+
+  const subtaskSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  async function handleSubtaskDragEnd(event: DragEndEvent) {
+    setDraggingSubtask(false);
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = subtaskOrder.indexOf(String(active.id));
+    const newIndex = subtaskOrder.indexOf(String(over.id));
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const reordered = arrayMove(subtaskOrder, oldIndex, newIndex);
+    setSubtaskOrder(reordered);
+    persistingSubtaskOrder.current = true;
+    try {
+      const byId = new Map(
+        (existingTask?.subtasks || []).map((s) => [s.id, s]),
+      );
+      const patches = reordered
+        .map((subtaskId, index) => ({ subtaskId, index }))
+        .filter(
+          ({ subtaskId, index }) => byId.get(subtaskId)?.position !== index,
+        )
+        .map(({ subtaskId, index }) =>
+          updateSubtask.mutateAsync({ id: subtaskId, position: index }),
+        );
+      if (patches.length > 0) await Promise.all(patches);
+    } catch (err) {
+      console.error("Не удалось сохранить порядок подзадач", err);
+    } finally {
+      persistingSubtaskOrder.current = false;
+    }
+  }
   // Предложение локальной модели, ждущее подтверждения владельцем —
   // ничего в нём не сохранено, пока он не нажал «Добавить выбранные».
   // Второй клик по «Разбить» полностью заменяет этот список, а не
@@ -649,27 +772,56 @@ export function TaskFormScreen() {
             this wrapper doesn't double it. See AddSubtaskRow's comment for
             the measured before/after. */}
         {isEdit
-          ? [
-              ...(existingTask?.subtasks || []).map((st) => (
-                <SubtaskRow
-                  key={st.id}
-                  title={st.title}
-                  done={st.done}
-                  onRename={(t) =>
-                    updateSubtask.mutate({ id: st.id, title: t })
-                  }
-                  onDelete={() => deleteSubtask.mutate(st.id)}
-                />
-              )),
-              <AddSubtaskRow
-                key="add"
-                onAdd={(t) => createSubtask.mutate(t)}
-                value={subtaskInput}
-                onChange={setSubtaskInput}
-                onFocus={() => handleFieldFocus("subtask")}
-                onBlur={handleFieldBlur}
-              />,
-            ]
+          ? (() => {
+              const byId = new Map(
+                (existingTask?.subtasks || []).map((s) => [s.id, s]),
+              );
+              // subtaskOrder — источник порядка при рендере (не сырой
+              // existingTask.subtasks): во время resync-паузы (см. эффект
+              // выше) это единственное, что не прыгает при живом drag.
+              // Подзадача, которую сервер ещё не прислал (только что
+              // созданная — invalidate ещё в полёте), молча пропускается,
+              // отфильтровывается ниже вместе с любым битым id.
+              const ordered = subtaskOrder
+                .map((sid) => byId.get(sid))
+                .filter((s): s is NonNullable<typeof s> => !!s);
+              return (
+                <>
+                  <DndContext
+                    sensors={subtaskSensors}
+                    collisionDetection={closestCenter}
+                    onDragStart={() => setDraggingSubtask(true)}
+                    onDragEnd={handleSubtaskDragEnd}
+                    onDragCancel={() => setDraggingSubtask(false)}
+                  >
+                    <SortableContext
+                      items={ordered.map((s) => s.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {ordered.map((st) => (
+                        <SortableSubtaskRow
+                          key={st.id}
+                          id={st.id}
+                          title={st.title}
+                          done={st.done}
+                          onRename={(t) =>
+                            updateSubtask.mutate({ id: st.id, title: t })
+                          }
+                          onDelete={() => deleteSubtask.mutate(st.id)}
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
+                  <AddSubtaskRow
+                    onAdd={(t) => createSubtask.mutate(t)}
+                    value={subtaskInput}
+                    onChange={setSubtaskInput}
+                    onFocus={() => handleFieldFocus("subtask")}
+                    onBlur={handleFieldBlur}
+                  />
+                </>
+              );
+            })()
           : [
               ...localSubtasks.map((s, i) => (
                 <div key={i} className="flex items-center gap-3 py-[12px]">
