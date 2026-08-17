@@ -381,7 +381,6 @@ export function TaskRow({
                     {formatDueLabel(task.due_date!)}
                   </span>
                 )}
-                {hasAgentTag && <AgentStateTag task={task} />}
                 {visibleLabels.map((l) => (
                   <span
                     key={l.id}
@@ -417,6 +416,10 @@ export function TaskRow({
                     {task.subtasks.length}
                   </span>
                 )}
+                {/* После счётчика подзадач, не перед ним (просьба Максима
+                    17.08.2026) — статичные счётчики сначала, живой статус
+                    агента следом. Тот же порядок в TaskBoard.tsx. */}
+                {hasAgentTag && <AgentStateTag task={task} />}
               </div>
             )}
           </div>
