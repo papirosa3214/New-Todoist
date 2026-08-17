@@ -46,25 +46,33 @@ function isValidDateStr(s: string): boolean {
 // плитке доски (TaskRow.tsx: hasAgentTag = !!task.agent_state) гас, хотя
 // агент реально работал. Раз состояние подзадачи и так вычисляется на
 // каждое чтение, а не хранится — то же самое для роллапа наверх: если у
-// задачи нет своего agent_state, но среди подзадач кто-то running/blocked,
-// задача показывает это состояние, унаследовав heartbeat самой свежей
-// активной подзадачи. Свой agent_state (claim на задаче без подзадач,
-// blocked/review от владельца) остаётся приоритетнее — роллап только
-// подставляет то, чего нет.
+// задачи нет своего agent_state, но среди подзадач кто-то running/stale/
+// blocked, задача показывает это состояние, унаследовав heartbeat самой
+// свежей активной подзадачи. Свой agent_state (claim на задаче без
+// подзадач, blocked/review от владельца) остаётся приоритетнее — роллап
+// только подставляет то, чего нет.
+//
+// Первая версия (эта же дата) фильтровала подзадачи по !isStale() ДО
+// роллапа — протухшая подзадача просто выпадала из выборки, и бейдж молча
+// гас вместо того, чтобы показать «агент пропал». Это ровно та ложь,
+// от которой весь этот механизм и задуман избавлять (см. AGENT-PROTOCOL.md
+// и лист 2026-08-15 про подзадачи: «индикатор, который горит без работы —
+// вранью равносилен» — тут была обратная сторона той же монеты, индикатор
+// молчал при работе, которая просто давно не подавала признаков жизни).
+// Теперь берём среди in_progress-подзадач самую свежую по heartbeat,
+// протухшая она или нет, — agent_stale ниже сам решит, каким показывать
+// бейдж: живым или «пропал».
 function withAgentStale(task: any, subtasks?: any[]) {
   let agent_state = task.agent_state;
   let agent_heartbeat_at = task.agent_heartbeat_at;
 
   if (!agent_state && subtasks?.length) {
-    const running = subtasks
-      .filter(
-        (s) =>
-          s.agent_state === "in_progress" && !isStale(s.agent_heartbeat_at),
-      )
+    const inProgress = subtasks
+      .filter((s) => s.agent_state === "in_progress")
       .sort((a, b) => (a.agent_heartbeat_at < b.agent_heartbeat_at ? 1 : -1));
-    if (running.length) {
+    if (inProgress.length) {
       agent_state = "in_progress";
-      agent_heartbeat_at = running[0].agent_heartbeat_at;
+      agent_heartbeat_at = inProgress[0].agent_heartbeat_at;
     } else if (subtasks.some((s) => s.agent_state === "blocked")) {
       agent_state = "blocked";
     }
