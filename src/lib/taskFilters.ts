@@ -74,7 +74,13 @@ export interface TaskFilterOption {
 }
 
 export interface TaskAssigneeOptions {
-  list: { id: string; name: string; color: string; initials: string }[];
+  list: {
+    id: string;
+    name: string;
+    color: string;
+    initials: string;
+    avatar_url?: string | null;
+  }[];
   hasUnassigned: boolean;
 }
 
@@ -112,7 +118,13 @@ export function buildLabelOptions(tasks: ApiTask[]): TaskFilterOption[] {
 export function buildAssigneeOptions(tasks: ApiTask[]): TaskAssigneeOptions {
   const map = new Map<
     string,
-    { id: string; name: string; color: string; initials: string }
+    {
+      id: string;
+      name: string;
+      color: string;
+      initials: string;
+      avatar_url?: string | null;
+    }
   >();
   let hasUnassigned = false;
   for (const t of tasks) {
@@ -123,6 +135,7 @@ export function buildAssigneeOptions(tasks: ApiTask[]): TaskAssigneeOptions {
           name: t.assignee_name || "Без имени",
           color: t.assignee_color || "#A6A6A6",
           initials: t.assignee_initials || "?",
+          avatar_url: t.assignee_avatar_url,
         });
       }
     } else {

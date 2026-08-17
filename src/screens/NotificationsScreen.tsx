@@ -48,6 +48,7 @@ function NotificationRow({ n }: { n: ApiNotification }) {
         <Avatar
           initials={n.actor_initials || "?"}
           color={n.actor_color || "#A6A6A6"}
+          avatar_url={n.actor_avatar_url}
           size={36}
         />
       ) : (

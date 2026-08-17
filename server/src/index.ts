@@ -17,6 +17,7 @@ import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
+import { registerAvatarRoutes } from "./routes/avatars.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerAgentServiceRoutes } from "./routes/agent-service.js";
@@ -129,6 +130,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerNotificationRoutes(app);
   registerSearchRoutes(app);
   registerAttachmentRoutes(app);
+  registerAvatarRoutes(app);
   registerAiRoutes(app);
   registerTranscribeRoutes(app);
   registerAgentServiceRoutes(app);

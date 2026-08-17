@@ -791,6 +791,7 @@ export function TaskFormScreen() {
                 <Avatar
                   initials={u.initials}
                   color={u.avatar_color}
+                  avatar_url={u.avatar_url}
                   size={32}
                 />
                 <div className="flex-1 min-w-0">

@@ -366,6 +366,7 @@ export function TaskDetailScreen() {
             <Avatar
               initials={task.assignee_initials || "?"}
               color={task.assignee_color || "#A6A6A6"}
+              avatar_url={task.assignee_avatar_url}
               size={24}
             />
             <span className="text-[14px] text-text">{task.assignee_name}</span>

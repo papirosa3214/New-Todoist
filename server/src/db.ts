@@ -205,6 +205,16 @@ export function migrate() {
     );
   }
 
+  // Additive migration: users.avatar_url — картинка вместо инициалов+цвета
+  // (routes/avatars.ts). Колонка уже была на живой базе (кто-то добавил
+  // руками, мимо migrate()) — весь код, что её читает/пишет (auth.ts,
+  // projects.ts и т.д.), фактически на неё опирался ещё до этой миграции,
+  // но на чистой БД с нуля упал бы на "no such column". Добавлено
+  // 17.08.2026 при реализации загрузки аватарок, задним числом.
+  if (!userCols.some((c) => c.name === "avatar_url")) {
+    db.exec("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT NULL");
+  }
+
   // Additive migration: tasks.completed_at may be missing on a DB created
   // before this column was added. Unlike updated_at (touched on every
   // PATCH), completed_at is set only on the active→completed transition and

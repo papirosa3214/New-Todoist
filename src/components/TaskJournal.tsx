@@ -417,6 +417,7 @@ function CommentCard({ comment }: { comment: ApiComment }) {
         <Avatar
           initials={comment.user_initials || "?"}
           color={comment.user_color || "#A6A6A6"}
+          avatar_url={comment.user_avatar_url}
           size={20}
         />
         <span className="text-[13px] font-medium">

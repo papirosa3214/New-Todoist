@@ -279,7 +279,13 @@ function ActivityFilterSheet({
   projectOptions: { id: string; label: string; color: string }[];
   labelOptions: { id: string; label: string; color: string }[];
   assigneeOptions: {
-    list: { id: string; name: string; color: string; initials: string }[];
+    list: {
+      id: string;
+      name: string;
+      color: string;
+      initials: string;
+      avatar_url?: string | null;
+    }[];
     hasUnassigned: boolean;
   };
 }) {
@@ -426,7 +432,12 @@ function ActivityFilterSheet({
                     }}
                     className="tap-row w-full flex items-center gap-3 py-2.5 px-[14px] text-left"
                   >
-                    <Avatar initials={a.initials} color={a.color} size={24} />
+                    <Avatar
+                      initials={a.initials}
+                      color={a.color}
+                      avatar_url={a.avatar_url}
+                      size={24}
+                    />
                     <span className="text-[14px] text-text flex-1 truncate">
                       {a.name}
                     </span>
@@ -553,7 +564,13 @@ export function ActivityScreen() {
   const assigneeOptions = useMemo(() => {
     const map = new Map<
       string,
-      { id: string; name: string; color: string; initials: string }
+      {
+        id: string;
+        name: string;
+        color: string;
+        initials: string;
+        avatar_url?: string | null;
+      }
     >();
     let hasUnassigned = false;
     for (const t of completed) {
@@ -564,6 +581,7 @@ export function ActivityScreen() {
             name: t.assignee_name || "Без имени",
             color: t.assignee_color || "#A6A6A6",
             initials: t.assignee_initials || "?",
+            avatar_url: t.assignee_avatar_url,
           });
         }
       } else {

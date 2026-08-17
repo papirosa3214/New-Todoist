@@ -65,6 +65,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useTasks } from "../api/tasks";
+import { API_BASE_URL } from "../api/client";
 import { todayStr, formatRelativeTime } from "../lib/date";
 import { getErrorMessage } from "../lib/errors";
 import type { ApiTask } from "../api/types";
@@ -299,9 +300,19 @@ export function Avatar({
   size?: number;
 }) {
   if (avatar_url) {
+    // avatar_url из API — относительный путь (/api/avatars/...). В браузере
+    // это резолвится к тому же origin, что и сам API (same-origin или через
+    // vite-прокси) — работало бы как есть. Но в native-обёртке (Capacitor)
+    // origin страницы — capacitor://localhost, а API живёт на отдельном
+    // хосте (см. api/client.ts, API_BASE_URL) — относительный <img src>
+    // ушёл бы туда же, в capacitor://localhost, и не загрузился бы. Тот же
+    // урок, что уже был с самими API-запросами.
+    const resolvedUrl = /^https?:\/\//.test(avatar_url)
+      ? avatar_url
+      : `${API_BASE_URL}${avatar_url}`;
     return (
       <img
-        src={avatar_url}
+        src={resolvedUrl}
         alt=""
         className="rounded-full shrink-0"
         style={{ width: size, height: size, objectFit: "cover" }}

@@ -1,12 +1,16 @@
 import { useNavigate } from "react-router-dom";
+import { useRef, useState } from "react";
 import {
   FieldGroup,
   Icon,
   ScreenHeader,
   ErrorBanner,
   BackButton,
+  Avatar,
 } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
+import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
+import { getErrorMessage } from "../lib/errors";
 import { useAppStore } from "../store";
 
 interface RowProps {
@@ -142,6 +146,94 @@ function ToggleRow({
   );
 }
 
+// Аватарка своего аккаунта — картинка вместо инициалов+цвета (просьба
+// Максима 17.08.2026: «через настройки, где я указан, нативно выбирать
+// аватарку»). Тап по кружку открывает системный выбор файла; крестик
+// поверх — только когда картинка уже стоит, убирает её обратно на
+// инициалы+цвет. PNG/JPEG/WebP/GIF/SVG — то же ограничение, что и на
+// сервере (routes/avatars.ts), тут только чтобы браузер не открыл
+// диалог выбора вообще всего подряд.
+function AccountAvatarRow({
+  userId,
+  name,
+  email,
+  initials,
+  color,
+  avatarUrl,
+}: {
+  userId: string;
+  name: string;
+  email?: string;
+  initials?: string;
+  color?: string;
+  avatarUrl?: string | null;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const upload = useUploadAvatar(userId);
+  const del = useDeleteAvatar(userId);
+  const [error, setError] = useState<string | null>(null);
+  const busy = upload.isPending || del.isPending;
+
+  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // тот же файл повторно тоже должен триггерить change
+    if (!file) return;
+    setError(null);
+    upload.mutate(file, {
+      onError: (err) => setError(getErrorMessage(err)),
+    });
+  }
+
+  return (
+    <div className="w-full flex items-center gap-3 py-3 px-4 bg-card">
+      <button
+        type="button"
+        onClick={() => fileRef.current?.click()}
+        disabled={busy}
+        aria-label="Сменить аватарку"
+        className="relative shrink-0 tap-scale"
+      >
+        <Avatar
+          initials={initials}
+          color={color}
+          avatar_url={avatarUrl}
+          size={40}
+        />
+        <span className="absolute inset-0 rounded-full bg-black/0 hover:bg-black/30 transition-colors flex items-center justify-center">
+          <Icon
+            name="image"
+            size={14}
+            className="text-white opacity-0 hover:opacity-100"
+          />
+        </span>
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+        className="hidden"
+        onChange={onPick}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-[15px] text-text truncate">{name}</div>
+        {email && <div className="text-[13px] text-sub truncate">{email}</div>}
+        {error && <div className="text-[12px] text-coral mt-0.5">{error}</div>}
+      </div>
+      {avatarUrl && (
+        <button
+          type="button"
+          onClick={() => del.mutate()}
+          disabled={busy}
+          aria-label="Убрать аватарку"
+          className="text-[13px] text-sub shrink-0"
+        >
+          Убрать
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function SettingsScreen() {
   const navigate = useNavigate();
   const { data: user, error } = useCurrentUser();
@@ -174,11 +266,18 @@ export function SettingsScreen() {
       {/* Account section */}
       <div className="mb-4">
         <FieldGroup>
-          <Row
-            icon="person"
-            label={user ? user.name : "Аккаунт"}
-            value={user?.email}
-          />
+          {user ? (
+            <AccountAvatarRow
+              userId={user.id}
+              name={user.name}
+              email={user.email}
+              initials={user.initials}
+              color={user.avatar_color}
+              avatarUrl={user.avatar_url}
+            />
+          ) : (
+            <Row icon="person" label="Аккаунт" />
+          )}
         </FieldGroup>
       </div>
 

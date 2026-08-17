@@ -202,6 +202,7 @@ export function LabelTasksScreen() {
                   <Avatar
                     initials={task.assignee_initials}
                     color={task.assignee_color || "#A6A6A6"}
+                    avatar_url={task.assignee_avatar_url}
                     size={24}
                   />
                 )}

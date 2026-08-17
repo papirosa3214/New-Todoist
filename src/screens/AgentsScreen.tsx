@@ -46,7 +46,12 @@ export function AgentsScreen() {
       <div className="bg-card rounded-2xl overflow-hidden mb-4">
         {agents.map((u) => (
           <div key={u.id} className="flex items-center gap-3 py-3 px-4">
-            <Avatar initials={u.initials} color={u.avatar_color} size={36} />
+            <Avatar
+              initials={u.initials}
+              color={u.avatar_color}
+              avatar_url={u.avatar_url}
+              size={36}
+            />
             <div className="flex-1 min-w-0">
               <div className="text-[15px] text-text">{u.name}</div>
             </div>
