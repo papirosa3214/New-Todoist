@@ -93,9 +93,14 @@ export interface TaskRowProps {
   // TodayScreen only: this row is overdue — swaps the ordinary due badge
   // for a red "Просрочено, …" pill (relative label from formatDueLabel).
   overdue?: boolean;
-  // TodayScreen only: show the agent-state pill (AGENT-PROTOCOL.md — "в
-  // работе"/"на проверке"/"заблокировано"/"агент пропал"). Inbox/Project/
-  // Upcoming's plain list rows never showed this.
+  // Показывать пилюлю статуса агента (AGENT-PROTOCOL.md — "в работе"/"на
+  // проверке"/"заблокировано"/"агент пропал"). БЫЛО: только на Today,
+  // Inbox/Project/Upcoming намеренно оставляли строку «плоской». СТАЛО
+  // (просьба Максима 17.08.2026): статус агента должен быть виден в любом
+  // списке, не только на доске и не только на Today — переключился
+  // молча на плитке канбана, а в обычном списке пропадал. Default true,
+  // а не добавление в каждый экран по одному — чтобы новый список,
+  // использующий TaskRow, получал бейдж не по забывчивости, а по умолчанию.
   showAgentState?: boolean;
   // How many label pills to render. Inbox/Project show every label
   // (Infinity, the default); Upcoming only ever showed the first one
@@ -121,7 +126,7 @@ export function TaskRow({
   task,
   onClick,
   overdue = false,
-  showAgentState = false,
+  showAgentState = true,
   maxLabels = Infinity,
   showDueBadge = true,
   showSubtasksBadge = true,
