@@ -44,3 +44,13 @@ server/.env
 # не код.
 scripts/auth-state.json
 scripts/*.png
+
+# Capacitor iOS — сам ios/ коммитим (нативный проект — часть исходников,
+# стандартная практика Capacitor), но не сгенерированные CocoaPods/Xcode
+# артефакты (ставятся заново командой pod install на Маке).
+ios/App/Pods/
+ios/App/build/
+ios/App/output/
+ios/DerivedData/
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
