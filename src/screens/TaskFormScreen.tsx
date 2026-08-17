@@ -6,7 +6,7 @@
 // (POST один раз vs. PATCH одним пакетом по кнопке «Готово»). Подзадачи —
 // исключение: у существующей задачи они уже персистентны, поэтому их
 // CRUD идёт через живой API сразу, а не копится в локальном стейте.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useProjects } from "../api/projects";
 import { useLabels, useCreateLabel } from "../api/labels";
@@ -71,6 +71,20 @@ export function TaskFormScreen() {
 
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
+  // Авто-рост поля названия по содержимому — Максим 17.08.2026: после
+  // диктовки в фиксированной 1 строке не видно, весь ли текст попал и нет
+  // ли ошибок («просто так я даже не понимаю, дописалось оно или нет»).
+  // rows={1} остаётся как высота ДО первого эффекта (пустое поле при
+  // монтировании) — сам рост считается здесь, не CSS: у textarea нет
+  // чистого CSS-способа расти по контенту без второго, зеркального
+  // элемента, а он для одного поля избыточен.
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = titleRef.current;
+    if (!el) return;
+    el.style.height = "auto"; // сброс перед пересчётом — иначе scrollHeight никогда не уменьшится обратно при удалении текста
+    el.style.height = `${el.scrollHeight}px`;
+  }, [title]);
   const [assignee, setAssignee] = useState<string | undefined>();
   const [priority, setPriority] = useState(1);
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
@@ -526,6 +540,7 @@ export function TaskFormScreen() {
         {isEdit ? "Изменить задачу" : "Новая задача"}
       </div>
       <textarea
+        ref={titleRef}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         onBlur={() => {
@@ -534,7 +549,7 @@ export function TaskFormScreen() {
         }}
         onFocus={() => handleFieldFocus("title")}
         placeholder="Название задачи"
-        className="block w-full bg-transparent text-[13px] text-text placeholder:text-dim resize-none outline-none mb-4 min-h-[20px]"
+        className="block w-full bg-transparent text-[13px] text-text placeholder:text-dim resize-none outline-none mb-4 min-h-[20px] overflow-hidden"
         rows={1}
       />
 
