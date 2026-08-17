@@ -227,21 +227,25 @@ export function FanMenu({ showAdd = true }: { showAdd?: boolean }) {
         aria-label={open ? "Закрыть меню разделов" : "Открыть меню разделов"}
         // Матовое тёмное стекло вместо плоской красной заливки — Максим
         // 17.08.2026: «оно выбивается из общего стиля», хотел тёмное и
-        // прозрачное, а из-под стекла — аккуратное свечение. backdrop-blur
-        // — тот же приём, что уже даёт матовость ScreenHeader
-        // (bg-bg/90 backdrop-blur-xl, UI.tsx) — не изобретён заново, взят
-        // тем же классом. Внутренний radial-градиент (style ниже) даёт
-        // ощущение источника света ИЗНУТРИ, не просто внешнюю тень; тонкая
-        // светлая обводка (border-white/10) отделяет край стекла от фона
-        // за ним, как и положено стеклу.
-        className="tap-scale fixed left-1/2 z-[36] flex items-center justify-center rounded-full border border-white/10 text-white shadow-[0_8px_32px_rgba(228,67,50,.4)] backdrop-blur-xl"
+        // прозрачное, а из-под стекла — аккуратное свечение. Свечение
+        // (внешний shadow) Максим прямо попросил не трогать («забей на
+        // подсветку, всё нормально») — второй заход тем же днём был
+        // только про саму заливку: «более прозрачную кнопку, чтобы видно
+        // было, как текст мимо неё проходит, когда скроллю». backdrop-blur
+        // снижен дважды: -xl → -md было мало, текст под кнопкой
+        // всё ещё было не разобрать — до -sm (совсем без blur контент
+        // мелькал бы нечитаемым шумом при скролле, тут ищем баланс, не
+        // убираем матовость целиком). alpha обеих стоп градиента снижена
+        // вслед (.5→.32→.28, .55→.4→.3) — тонкая светлая обводка (border-white/10) отделяет край
+        // стекла от фона за ним, как и положено стеклу.
+        className="tap-scale fixed left-1/2 z-[36] flex items-center justify-center rounded-full border border-white/10 text-white shadow-[0_8px_32px_rgba(228,67,50,.4)] backdrop-blur-sm"
         style={{
           width: TRIGGER_SIZE,
           height: TRIGGER_SIZE,
           marginLeft: -TRIGGER_SIZE / 2,
           bottom: SAFE_BOTTOM,
           background:
-            "radial-gradient(circle at 50% 35%, rgba(228,67,50,.5), rgba(23,23,23,.55) 72%)",
+            "radial-gradient(circle at 50% 35%, rgba(228,67,50,.28), rgba(23,23,23,.3) 72%)",
         }}
       >
         <span ref={iconWrapRef} className="inline-flex">
