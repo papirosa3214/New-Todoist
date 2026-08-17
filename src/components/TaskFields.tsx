@@ -475,21 +475,31 @@ export function SubtaskRow({
     // (убрана пятым заходом), сейчас это просто лишний сдвиг вправо
     // относительно title/desc textarea и остальных лейблов формы.
     <div
-      className={`flex items-center gap-2 py-3 ${isDragging ? "opacity-40" : ""}`}
+      className={`relative flex items-center gap-3 py-3 ${isDragging ? "opacity-40" : ""}`}
     >
       {dragHandleListeners && (
         // Тот же приём, что у BoardCard на доске (TaskBoard.tsx): ручка —
         // отдельный элемент, перетаскивание стартует только с неё, тап по
         // остальной строке (переименование, `input`) не задет. touch-none —
         // чтобы палец не начинал скролл раньше, чем dnd-kit распознает драг.
+        //
+        // absolute, НЕ в потоке: строка (её родитель наследует px-4 формы,
+        // своего отступа не имеет — см. комментарий выше) не может отдать
+        // ручке место в потоке, не сдвинув текст вправо относительно
+        // AddSubtaskRow и textarea названия — ровно та рассинхронизация,
+        // которую семь заходов правок этого файла как раз убирали. Ручка
+        // вместо этого встаёт в сам px-4 gutter слева от строки: left:-16px
+        // (=-px-4) до 0 — ровно ширина этого отступа, ни пикселем в текст.
+        // Хуже 44×44 канона (TaskFilterButton и т.п.), но шире отступа
+        // взять некуда, не сдвинув текст всей формы — цена этого выбора.
         <div
           ref={setDragHandleRef}
           {...dragHandleAttributes}
           {...dragHandleListeners}
-          className="touch-none shrink-0 -my-3 -ml-1 py-3 pr-1 text-dim active:text-sub"
+          className="absolute left-[-16px] top-0 bottom-0 w-4 flex items-center justify-center touch-none text-dim active:text-sub"
           aria-label="Перетащить подзадачу"
         >
-          <Icon name="grip" size={14} />
+          <Icon name="grip" size={12} />
         </div>
       )}
       {/* Кружка-переключателя здесь нет (решение Максима 15.08.2026): это

@@ -14,6 +14,7 @@ import {
   type CSSProperties,
 } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   DndContext,
   KeyboardSensor,
@@ -119,6 +120,7 @@ export function TaskFormScreen() {
   const isEdit = !!id;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const qc = useQueryClient();
 
   const { data: agents = [], isError: agentsError } = useAgents();
   const { data: projects = [], isError: projectsError } = useProjects();
@@ -210,7 +212,12 @@ export function TaskFormScreen() {
         );
       if (patches.length > 0) await Promise.all(patches);
     } catch (err) {
+      // Тот же приём, что у TaskBoard.handleDragEnd: если часть PATCH-ей не
+      // прошла, локальный subtaskOrder уже показывает порядок, которого на
+      // сервере нет — без invalidate это расхождение так и останется на
+      // экране до следующего чужого изменения.
       console.error("Не удалось сохранить порядок подзадач", err);
+      await qc.invalidateQueries({ queryKey: ["tasks"] });
     } finally {
       persistingSubtaskOrder.current = false;
     }
