@@ -322,32 +322,46 @@ export function TaskRow({
             шагами не закрывается случайным тычком — раньше это был один
             промах пальцем. Место при этом сохраняется, иначе строка
             дёргалась бы при закрытии последнего шага. */}
-        {canComplete ? (
-          <button
-            onClick={() =>
-              updateTask.mutate({
-                id: task.id,
-                status: isDone ? "active" : "completed",
-              })
-            }
-            aria-label={isDone ? "Вернуть в работу" : "Отметить выполненной"}
-            className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 shrink-0 flex items-center justify-center"
-            style={{ borderColor: getPriorityColor(task.priority) }}
-          >
-            {isDone && <Icon name="check" size={12} className="text-white" />}
-          </button>
-        ) : (
-          /* Отметки нет вовсе, пока есть незакрытые подзадачи — просьба
-             Максима 15.08.2026 буквальная: «должны появляться, только когда
-             все подзадачи выполнены либо их нет». Пустое место того же
-             размера остаётся, чтобы текст не сдвигался при закрытии
-             последнего шага; пунктирный контур на этом месте оказался
-             отсебятиной и был убран. */
-          <div
-            className="mt-0.5 w-[18px] h-[18px] shrink-0"
-            aria-hidden="true"
-          />
-        )}
+        {/* Отметка + аватарка исполнителя — один левый столбец (просьба
+            Максима 17.08.2026: аватарка «переезжает влево под квадратик»,
+            была в конце строки справа). Оба центрированы по ширине — Avatar
+            (24px) шире квадратика (18px). */}
+        <div className="flex flex-col items-center gap-1.5 shrink-0">
+          {canComplete ? (
+            <button
+              onClick={() =>
+                updateTask.mutate({
+                  id: task.id,
+                  status: isDone ? "active" : "completed",
+                })
+              }
+              aria-label={isDone ? "Вернуть в работу" : "Отметить выполненной"}
+              className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 shrink-0 flex items-center justify-center"
+              style={{ borderColor: getPriorityColor(task.priority) }}
+            >
+              {isDone && <Icon name="check" size={12} className="text-white" />}
+            </button>
+          ) : (
+            /* Отметки нет вовсе, пока есть незакрытые подзадачи — просьба
+               Максима 15.08.2026 буквальная: «должны появляться, только
+               когда все подзадачи выполнены либо их нет». Пустое место того
+               же размера остаётся, чтобы текст не сдвигался при закрытии
+               последнего шага; пунктирный контур на этом месте оказался
+               отсебятиной и был убран. */
+            <div
+              className="mt-0.5 w-[18px] h-[18px] shrink-0"
+              aria-hidden="true"
+            />
+          )}
+          {showAvatar && task.assignee_id && task.assignee_initials && (
+            <Avatar
+              initials={task.assignee_initials}
+              color={task.assignee_color || "#A6A6A6"}
+              avatar_url={task.assignee_avatar_url}
+              size={24}
+            />
+          )}
+        </div>
         <button
           onClick={onClick}
           className="flex-1 min-w-0 flex items-start gap-3 text-left"
@@ -428,13 +442,6 @@ export function TaskRow({
               </div>
             )}
           </div>
-          {showAvatar && task.assignee_id && task.assignee_initials && (
-            <Avatar
-              initials={task.assignee_initials}
-              color={task.assignee_color || "#A6A6A6"}
-              size={24}
-            />
-          )}
         </button>
       </div>
     </div>
