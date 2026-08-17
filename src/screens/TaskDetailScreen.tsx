@@ -26,7 +26,6 @@ import {
   AgentOwnerActions,
   TaskFeed,
 } from "../components/TaskJournal";
-import { ActionsMenu } from "../components/ActionsMenu";
 import { MicKeyboardBar } from "../components/MicKeyboardBar";
 import { MicOverlay } from "../components/MicOverlay";
 import { formatDueLabel } from "../lib/date";
@@ -52,8 +51,6 @@ export function TaskDetailScreen() {
   const queryClient = useQueryClient();
 
   const [commentText, setCommentText] = useState("");
-  const [actionsOpen, setActionsOpen] = useState(false);
-  const actionsAnchorRef = useRef<HTMLButtonElement>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -256,35 +253,21 @@ export function TaskDetailScreen() {
         variant="compact"
         leading={<BackButton onClick={() => navigate(-1)} />}
         title=""
+        // Три точки → меню из двух пунктов убраны (Максим 18.08.2026):
+        // «Изменить» и так означает то же, что «Добавить подзадачу» внизу
+        // (обе ведут в форму редактирования — переименована и вынесена из-
+        // под условия ниже, теперь видна всегда, не только когда все
+        // подзадачи выполнены). «Удалить» — единственное действие, у
+        // которого не было своего места, и оно получает прямую кнопку:
+        // назад слева, корзина справа, без промежуточного меню.
         actions={
-          <>
-            <button
-              ref={actionsAnchorRef}
-              onClick={() => setActionsOpen((v) => !v)}
-              className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
-              aria-label="Действия с задачей"
-            >
-              <Icon name="dots" size={18} />
-            </button>
-            <ActionsMenu
-              open={actionsOpen}
-              onClose={() => setActionsOpen(false)}
-              anchorRef={actionsAnchorRef}
-              items={[
-                {
-                  icon: "edit",
-                  label: "Изменить",
-                  onClick: () => navigate(`/task/${task.id}/edit`),
-                },
-                {
-                  icon: "trash",
-                  label: "Удалить",
-                  destructive: true,
-                  onClick: handleDelete,
-                },
-              ]}
-            />
-          </>
+          <button
+            onClick={handleDelete}
+            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
+            aria-label="Удалить задачу"
+          >
+            <Icon name="trash" size={18} className="text-coral" />
+          </button>
         }
       />
 
@@ -399,7 +382,7 @@ export function TaskDetailScreen() {
       )}
 
       {/* Subtasks — quick toggle only; add/rename/delete happens in the
-          edit form (see header pencil button). */}
+          edit form (see the "Изменить" button below). */}
       {task.subtasks.length > 0 && (
         <>
           <SubtaskFeed
@@ -414,30 +397,34 @@ export function TaskDetailScreen() {
             variant="block"
             className="-mt-2 mb-4"
           />
-          {/* Все подзадачи выполнены, задача ещё активна — явный выбор
-              вместо квадратика в шапке (см. showHeaderCheckbox выше,
-              Максим 17.08.2026): либо назначенных шагов хватило и задачу
-              закрывают сразу, либо нет — и тогда доходят до формы добавить
-              ещё один. CRUD подзадач живёт только в форме редактирования
-              (см. комментарий в шапке файла), поэтому «Добавить подзадачу»
-              ведёт туда же, куда и карандаш в ActionsMenu. */}
-          {allSubtasksDone && task.status === "active" && (
-            <div className="space-y-2 mb-4">
-              <Button variant="primary" onClick={handleToggleStatus}>
-                <Icon name="check" size={16} />
-                Закрыть задачу
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => navigate(`/task/${task.id}/edit`)}
-              >
-                <Icon name="plus" size={16} />
-                Добавить подзадачу
-              </Button>
-            </div>
-          )}
         </>
       )}
+
+      {/* «Закрыть задачу» + «Изменить» — Максим 18.08.2026: три точки в
+          шапке убраны (см. ScreenHeader выше), «Изменить» — единственный
+          путь в форму редактирования, и она обязана быть видна ВСЕГДА,
+          не только когда все подзадачи выполнены — раньше это была кнопка
+          «Добавить подзадачу», условная на allSubtasksDone, и у активной
+          задачи с недоделанными шагами (или вовсе без них) редактировать
+          было бы нечем. «Закрыть задачу» остаётся условной как была:
+          явный выбор вместо квадратика в шапке (showHeaderCheckbox выше,
+          Максим 17.08.2026) — либо шагов хватило и задачу закрывают сразу,
+          либо нет, и тогда просто идут менять. */}
+      <div className="space-y-2 mb-4">
+        {allSubtasksDone && task.status === "active" && (
+          <Button variant="primary" onClick={handleToggleStatus}>
+            <Icon name="check" size={16} />
+            Закрыть задачу
+          </Button>
+        )}
+        <Button
+          variant="outline"
+          onClick={() => navigate(`/task/${task.id}/edit`)}
+        >
+          <Icon name="edit" size={16} />
+          Изменить
+        </Button>
+      </div>
 
       {/* Лента — комментарии и журнал задачи в одном хронологическом
           потоке (AGENT-PROTOCOL.md, "Журнал задачи"): комментарии
