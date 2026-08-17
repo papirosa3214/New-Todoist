@@ -88,7 +88,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Icon, Avatar, AgentStateTag } from "./UI";
 import { MONTHS_SHORT } from "../lib/date";
 import { api } from "../api/client";
-import { useUpdateTask } from "../api/tasks";
 import type { ApiTask } from "../api/types";
 
 function formatCompactDate(dateStr: string): string {
@@ -183,14 +182,7 @@ function BoardCard({
   setDragHandleRef?: (el: HTMLElement | null) => void;
   isDragging?: boolean;
 }) {
-  const updateTask = useUpdateTask();
   const isDone = task.status === "completed";
-  // То же правило, что в строке списка (TaskRow): задачу с незакрытыми
-  // подзадачами нельзя закрыть случайным тычком.
-  const canComplete =
-    isDone ||
-    task.subtasks.length === 0 ||
-    task.subtasks.filter((s) => s.done).length === task.subtasks.length;
   const doneSub = task.subtasks.filter((s) => s.done).length;
   const label = task.labels[0];
   const hasFooter =
@@ -239,58 +231,16 @@ function BoardCard({
             from the dot depending on which screen/view showed the same
             task — this was the one outlier. */}
         <div className="flex items-start gap-3">
-          {/* Owner 2026-08-13: priority dots measured 12/18/22px across the
-              three places this app shows one — unified to 18px everywhere.
-              Clickable now (toggles active↔completed, same call the list
-              row and TaskDetailScreen's ring already make) — a plain <div>
-              with stopPropagation, not a nested <button>, following the
-              same pattern this file's own drag handle above already uses
-              for "interactive sub-area inside the card's outer button". */}
-          {/* Как и в строке списка: отметка появляется, только когда
-              закрывать действительно можно — все подзадачи выполнены либо
-              их нет. Иначе на её месте пустота того же размера, чтобы
-              карточка не меняла раскладку при закрытии последнего шага. */}
-          {/* Отметка + аватарка исполнителя — тот же левый столбец, что и в
-              строке списка (TaskRow.tsx, просьба Максима 17.08.2026): здесь
-              аватарки не было вообще, хотя список её уже показывал — того
-              же паттерна тут просто не было применено. */}
-          {/* w-[24px] явно, не просто shrink-0: без фиксированной ширины
-              колонка была ровно по самому широкому ребёнку — 24px, когда
-              есть Avatar, 18px, когда его нет — и текст задачи сдвигался
-              вправо/влево в зависимости от того, назначен ли исполнитель
-              (Максим 18.08.2026, живьём заметил на доске). 24px — под
-              Avatar, самый широкий из двух.
-              -ml-[6px]: те лишние 24-18=6px забираются у ручки-хвата слева
-              (там есть место — px-2/mr-1), а не у текста задачи справа —
-              Максим 18.08.2026: «а почему не сдвинуть влево, к точечкам».
-              Итог — чекбокс сидит там же, где сидел до появления Avatar на
-              доске вообще, при любом исполнителе или без него. */}
-          <div className="flex flex-col items-center gap-1.5 shrink-0 w-[24px] -ml-[6px]">
-            {canComplete ? (
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  updateTask.mutate({
-                    id: task.id,
-                    status: isDone ? "active" : "completed",
-                  });
-                }}
-                role="button"
-                aria-label={
-                  isDone ? "Вернуть в работу" : "Отметить выполненной"
-                }
-                className="mt-0.5 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center"
-              >
-                {isDone && (
-                  <Icon name="check" size={12} className="text-white" />
-                )}
-              </div>
-            ) : (
-              <div
-                className="mt-0.5 w-[18px] h-[18px] shrink-0"
-                aria-hidden="true"
-              />
-            )}
+          {/* Квадратик-отметка убран (Максим 18.08.2026: «не надо мне эти
+              квадратики, они только всё портят») — закрыть задачу теперь
+              можно только изнутри неё (TaskDetailScreen.tsx), тап по
+              карточке целиком открывает её. Аватарка исполнителя осталась.
+              w-[24px] фиксирована и -ml-[6px] (забирает место у ручки-хвата
+              слева, есть запас — px-2/mr-1) — без этого колонка была бы по
+              ширине Avatar только когда исполнитель есть, и текст задачи
+              гулял бы вправо/влево (тот же баг всплыл 18.08.2026 из-за
+              квадратика, тут причина та же). */}
+          <div className="flex flex-col items-center shrink-0 w-[24px] -ml-[6px]">
             {task.assignee_id && task.assignee_initials && (
               <Avatar
                 initials={task.assignee_initials}
