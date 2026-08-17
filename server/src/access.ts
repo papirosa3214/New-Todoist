@@ -3,16 +3,34 @@
 // the ownership predicate everywhere.
 import db from "./db.js";
 
-/** Task is "owned" by its creator or its assignee (matches the /api/tasks list rule). */
+/**
+ * Task is "owned" by its creator, its assignee, or the owner of the project
+ * it's filed in (matches the /api/tasks list rule).
+ *
+ * The third clause is what keeps `getProjectForFiling`'s guarantee ("задача
+ * обязана оказаться у владельца проекта в списке") true after the fact, not
+ * just at creation. An agent can create a task (creator_id = agent) filed
+ * into the owner's project only while assignee_id = owner_id — but the owner
+ * can later reassign it to a different agent via the app's own assignee
+ * picker (intended, PATCH allows it). Without this clause that reassignment
+ * would leave creator_id = agent and assignee_id = another agent, and the
+ * owner — neither creator nor assignee — would lose the task entirely: it'd
+ * vanish from their board, they couldn't open it, comment on it, or complete
+ * it. Found live 17.08.2026: Maksim reassigned a Claude_Bot-created task to
+ * Claude_Bot itself and it disappeared from his view.
+ */
 export function getTaskForUser(
   taskId: string,
   userId: string,
 ): any | undefined {
   return db
     .prepare(
-      "SELECT * FROM tasks WHERE id = ? AND (creator_id = ? OR assignee_id = ?)",
+      `SELECT * FROM tasks WHERE id = ? AND (
+         creator_id = ? OR assignee_id = ? OR
+         project_id IN (SELECT id FROM projects WHERE owner_id = ?)
+       )`,
     )
-    .get(taskId, userId, userId);
+    .get(taskId, userId, userId, userId);
 }
 
 /** Only the creator may delete a task (assignees complete/update, they don't delete). */

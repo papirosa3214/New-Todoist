@@ -38,11 +38,43 @@ function isValidDateStr(s: string): boolean {
 // agent_heartbeat_at left over on a completed task, or on one sitting in
 // blocked/review waiting on the owner (exactly as designed), must NOT
 // paint as abandoned just because 5 minutes passed since the last ping.
-function withAgentStale(task: any) {
+//
+// `subtasks` (optional) — 17.08.2026: с тех пор, как подзадача обзавелась
+// собственной арендой (см. withSubtaskState), у задачи с шагами
+// task.agent_state годами остаётся NULL: работа идёт через
+// /api/subtasks/:id/work, а не через /api/tasks/:id/claim — и бейдж на
+// плитке доски (TaskRow.tsx: hasAgentTag = !!task.agent_state) гас, хотя
+// агент реально работал. Раз состояние подзадачи и так вычисляется на
+// каждое чтение, а не хранится — то же самое для роллапа наверх: если у
+// задачи нет своего agent_state, но среди подзадач кто-то running/blocked,
+// задача показывает это состояние, унаследовав heartbeat самой свежей
+// активной подзадачи. Свой agent_state (claim на задаче без подзадач,
+// blocked/review от владельца) остаётся приоритетнее — роллап только
+// подставляет то, чего нет.
+function withAgentStale(task: any, subtasks?: any[]) {
+  let agent_state = task.agent_state;
+  let agent_heartbeat_at = task.agent_heartbeat_at;
+
+  if (!agent_state && subtasks?.length) {
+    const running = subtasks
+      .filter(
+        (s) =>
+          s.agent_state === "in_progress" && !isStale(s.agent_heartbeat_at),
+      )
+      .sort((a, b) => (a.agent_heartbeat_at < b.agent_heartbeat_at ? 1 : -1));
+    if (running.length) {
+      agent_state = "in_progress";
+      agent_heartbeat_at = running[0].agent_heartbeat_at;
+    } else if (subtasks.some((s) => s.agent_state === "blocked")) {
+      agent_state = "blocked";
+    }
+  }
+
   return {
     ...task,
-    agent_stale:
-      task.agent_state === "in_progress" && isStale(task.agent_heartbeat_at),
+    agent_state,
+    agent_heartbeat_at,
+    agent_stale: agent_state === "in_progress" && isStale(agent_heartbeat_at),
   };
 }
 
@@ -83,7 +115,7 @@ export function hydrateTask(task: any) {
     .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
     .all(task.id)
     .map(withSubtaskState);
-  return { ...withAgentStale(task), labels, subtasks };
+  return { ...withAgentStale(task, subtasks), labels, subtasks };
 }
 
 // ═══════ TASKS CRUD ═══════
@@ -91,7 +123,8 @@ export function hydrateTask(task: any) {
 export function registerTaskRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
 
-  // List tasks — only ones the caller created or is assigned to.
+  // List tasks — the caller created or is assigned to, plus (see
+  // getTaskForUser in access.ts) anything filed into a project they own.
   app.get("/api/tasks", { preHandler: authPre }, async (req: any) => {
     const userId = req.userId;
     const tasks = db
@@ -103,10 +136,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
       LEFT JOIN users u ON t.assignee_id = u.id
       LEFT JOIN projects p ON t.project_id = p.id
       WHERE t.creator_id = ? OR t.assignee_id = ?
+         OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?)
       ORDER BY t.created_at DESC
     `,
       )
-      .all(userId, userId) as any[];
+      .all(userId, userId, userId) as any[];
 
     const stmtLabels = db.prepare(`
       SELECT l.id, l.name, l.color FROM labels l
@@ -116,11 +150,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
       "SELECT * FROM subtasks WHERE task_id = ? ORDER BY position",
     );
 
-    return tasks.map((t: any) => ({
-      ...withAgentStale(t),
-      labels: stmtLabels.all(t.id),
-      subtasks: stmtSub.all(t.id).map(withSubtaskState),
-    }));
+    return tasks.map((t: any) => {
+      const subtasks = stmtSub.all(t.id).map(withSubtaskState);
+      return {
+        ...withAgentStale(t, subtasks),
+        labels: stmtLabels.all(t.id),
+        subtasks,
+      };
+    });
   });
 
   // Get single task — must be creator or assignee.
@@ -186,7 +223,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
         )
         .all(task.id);
 
-      return { ...withAgentStale(full), labels, subtasks, comments, events };
+      return {
+        ...withAgentStale(full, subtasks),
+        labels,
+        subtasks,
+        comments,
+        events,
+      };
     },
   );
 
