@@ -5,6 +5,11 @@ import { authOrApiToken } from "../auth.js";
 import { getTaskForUser } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { logEvent, isStale } from "../agentState.js";
+// Тот же расчёт state/agent_stale, что у GET /api/tasks/:id (tasks.ts) —
+// иначе ответы этого файла (add/patch/delete подзадачи, WS-рассылка)
+// отдают сырой agent_state вместо вычисленного state, и два места отдачи
+// задачи расходятся в контракте. Максим 18.08.2026: «почини».
+import { withSubtaskState } from "./tasks.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -26,7 +31,7 @@ function getFullTask(taskId: string) {
   const subtasks = db
     .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
     .all(taskId)
-    .map((s: any) => ({ ...s, done: !!s.done }));
+    .map(withSubtaskState);
   const comments = db
     .prepare(
       `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.avatar_url as user_avatar_url, u.initials as user_initials
@@ -128,7 +133,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           "INSERT INTO subtasks (id, task_id, title, position) VALUES (?,?,?,?)",
         ).run(id, req.params.taskId, req.body.title, maxPos.m + 1);
       }
-      const subtask = db.prepare("SELECT * FROM subtasks WHERE id = ?").get(id);
+      const subtask = withSubtaskState(
+        db.prepare("SELECT * FROM subtasks WHERE id = ?").get(id),
+      );
 
       logEvent({
         taskId: req.params.taskId,
@@ -211,9 +218,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         type: "task:updated",
         task: fullTask,
       });
-      return db
-        .prepare("SELECT * FROM subtasks WHERE id = ?")
-        .get(req.params.id);
+      return withSubtaskState(
+        db.prepare("SELECT * FROM subtasks WHERE id = ?").get(req.params.id),
+      );
     },
   });
 
@@ -314,9 +321,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         type: "task:updated",
         task: fullTask,
       });
-      return db
-        .prepare("SELECT * FROM subtasks WHERE id = ?")
-        .get(req.params.id);
+      return withSubtaskState(
+        db.prepare("SELECT * FROM subtasks WHERE id = ?").get(req.params.id),
+      );
     },
   });
 

@@ -30,6 +30,18 @@ export interface ApiSubtask {
   title: string;
   done: boolean;
   position: number;
+  // Аренда агента над этой конкретной подзадачей (withSubtaskState,
+  // server/src/routes/tasks.ts) — вычисляются при КАЖДОЙ отдаче, не
+  // хранятся как есть. Опциональны не потому, что сервер может их не
+  // прислать (шлёт всегда), а чтобы TS не ломался там, где подзадача
+  // собирается вручную (TaskFormScreen.tsx create-mode, localSubtasks) без
+  // этих полей вовсе. См. SubtaskFeed.tsx — тот же набор состояний, что
+  // здесь, называется SubtaskState.
+  state?: "done" | "running" | "pending" | "blocked";
+  result?: string | null;
+  agent_id?: string | null;
+  agent_heartbeat_at?: string | null;
+  agent_stale?: boolean;
 }
 
 // Вложение комментария. Байтов здесь нет — только описание файла; сам файл
