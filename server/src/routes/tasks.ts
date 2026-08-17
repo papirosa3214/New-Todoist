@@ -91,7 +91,7 @@ function withAgentStale(task: any, subtasks?: any[]) {
 // ВЫЧИСЛЯЕТСЯ, а не хранится. Замолчал дольше срока — крутилка в ленте
 // гаснет сама, без чьего-либо участия. Индикатор, горящий без работы, хуже
 // отсутствующего.
-function withSubtaskState(s: any) {
+export function withSubtaskState(s: any) {
   const stale =
     s.agent_state === "in_progress" && isStale(s.agent_heartbeat_at);
   return {
