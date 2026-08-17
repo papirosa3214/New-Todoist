@@ -773,7 +773,18 @@ export function ScreenHeader({
   return (
     <div
       ref={rootRef}
-      className={`sticky top-0 z-20 bg-bg/90 backdrop-blur-xl border-b border-stroke ${className}`}
+      // mb-4 (16px) — Максим 17.08.2026: «пройтись по всем окнам и
+      // подбить, чтобы все начиналось ровно с одинаковыми отступами».
+      // Раньше каждый экран решал сам (или не решал вовсе): у Overview
+      // было mb-5, у Settings — не было совсем (профиль лип к заголовку),
+      // у TaskDetail — тоже 0 (название задачи лезло вплотную под шапку),
+      // у Today/Upcoming — тоже не было. Отступ теперь часть самой шапки,
+      // не копия одного числа в 15 экранах — обновить его снова значит
+      // поменять одну строку здесь, а не искать все места. Ставится
+      // ПОСЛЕДНИМ классом в строке, до внешнего className — единственный
+      // экран, где className что-то своё несёт (TodayScreen, w-full для
+      // пустого состояния), к margin отношения не имеет и не конфликтует.
+      className={`sticky top-0 z-20 bg-bg/90 backdrop-blur-xl border-b border-stroke mb-4 ${className}`}
       style={{
         marginLeft: -bleed.left,
         marginRight: -bleed.right,
