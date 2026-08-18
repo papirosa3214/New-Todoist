@@ -517,6 +517,32 @@ export function TaskFormScreen() {
     }
   });
 
+  // ⚠️ Разбор маркеров диктовки — ДО ранних return ниже, а не рядом со
+  // своей функцией. Хук после условного выхода вызывается не на каждом
+  // рендере: пока задача грузится, компонент выходит раньше и хуков
+  // меньше, после загрузки — больше, и React падает с «Rendered more
+  // hooks than during the previous render». Именно этот краш ловил
+  // владелец при нажатии «Изменить» (19.08.2026): экран пустел целиком.
+  //
+  // Ref пустой заглушкой, а не самой функцией: applyDictationParse
+  // объявлена ниже через const, подъёма у неё нет — обращение отсюда
+  // упало бы с «Cannot access before initialization». Реальная ссылка
+  // проставляется в .current сразу после объявления функции (это уже не
+  // хук, порядок вызовов не нарушает).
+  const applyParseRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    // setTimeout(0), а не прямой вызов: событие летит синхронно сразу за
+    // вставкой текста, когда React ещё не применил новое значение заголовка —
+    // разбор прочитал бы предыдущее. Отложенный вызов приходит после коммита,
+    // и ref уже указывает на замыкание со свежим title.
+    const onDictation = () => {
+      window.setTimeout(() => applyParseRef.current(), 0);
+    };
+    window.addEventListener("app-dictation-inserted", onDictation);
+    return () =>
+      window.removeEventListener("app-dictation-inserted", onDictation);
+  }, []);
+
   if (isEdit && taskLoading) {
     return <div className="px-4 py-8 text-center text-sub">Загрузка…</div>;
   }
@@ -647,24 +673,9 @@ export function TaskFormScreen() {
     }
     applyParsedLabel(parsed.labelName);
   };
-
-  // Разбор маркеров сразу после диктовки, не дожидаясь потери фокуса. Ссылка
-  // на свежую функцию в ref: сама функция пересоздаётся каждый рендер, а
-  // слушатель вешаем один раз.
-  const applyParseRef = useRef(applyDictationParse);
+  // Свежая ссылка для слушателя, объявленного выше (см. applyParseRef):
+  // функция пересоздаётся каждый рендер, слушатель вешается один раз.
   applyParseRef.current = applyDictationParse;
-  useEffect(() => {
-    // setTimeout(0), а не прямой вызов: событие летит синхронно сразу за
-    // вставкой текста, когда React ещё не применил новое значение заголовка —
-    // разбор прочитал бы предыдущее. Отложенный вызов приходит после коммита,
-    // и ref уже указывает на замыкание со свежим title.
-    const onDictation = () => {
-      window.setTimeout(() => applyParseRef.current(), 0);
-    };
-    window.addEventListener("app-dictation-inserted", onDictation);
-    return () =>
-      window.removeEventListener("app-dictation-inserted", onDictation);
-  }, []);
 
   return (
     // pb-4 (16px) + --kb-inset — тот же приём, что и в TaskDetailScreen
