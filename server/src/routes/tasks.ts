@@ -62,18 +62,26 @@ function isValidDateStr(s: string): boolean {
 // Теперь берём среди in_progress-подзадач самую свежую по heartbeat,
 // протухшая она или нет, — agent_stale ниже сам решит, каким показывать
 // бейдж: живым или «пропал».
+//
+// Второй заход (та же дата, чуть позже): PATCH /api/subtasks/:id (done)
+// трогает только колонку done, agent_state НЕ сбрасывает — см.
+// routes/subtasks.ts. Значит у любой когда-либо взятой в работу подзадачи
+// agent_state так и остаётся "in_progress"/"blocked" навсегда, даже после
+// done. Без фильтра !s.done роллап считал давно закрытые шаги живой
+// работой — задача с одним взятым и закрытым шагом из девяти показывала
+// бы «агент пропал» бесконечно, хотя там объективно нечему быть пропавшим.
 function withAgentStale(task: any, subtasks?: any[]) {
   let agent_state = task.agent_state;
   let agent_heartbeat_at = task.agent_heartbeat_at;
 
   if (!agent_state && subtasks?.length) {
     const inProgress = subtasks
-      .filter((s) => s.agent_state === "in_progress")
+      .filter((s) => !s.done && s.agent_state === "in_progress")
       .sort((a, b) => (a.agent_heartbeat_at < b.agent_heartbeat_at ? 1 : -1));
     if (inProgress.length) {
       agent_state = "in_progress";
       agent_heartbeat_at = inProgress[0].agent_heartbeat_at;
-    } else if (subtasks.some((s) => s.agent_state === "blocked")) {
+    } else if (subtasks.some((s) => !s.done && s.agent_state === "blocked")) {
       agent_state = "blocked";
     }
   }
