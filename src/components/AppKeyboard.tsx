@@ -5,6 +5,9 @@ import "react-simple-keyboard/build/css/index.css";
 import { MicOverlay } from "./MicOverlay";
 import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
+import { normalizeDictatedText } from "../lib/dictationParser";
+import { addDictationLogEntry } from "../lib/dictationLog";
+import { queueRecording } from "../lib/dictationArchive";
 
 // ═══════════ СВОЯ ЭКРАННАЯ КЛАВИАТУРА (общая для всего приложения) ═══════════
 //
@@ -90,6 +93,11 @@ export interface AppKeyboardProps {
   /** Для однострочных: что делать по {enter}. Если не задан — onClose. */
   onEnter?: () => void;
   onClose?: () => void;
+  /** Сообщить наружу, каким движком распознали. Показывает это НЕ панель:
+      она закрывается вместе с окончанием диктовки, и подпись пропадала
+      вместе с ней (владелец 18.08.2026: «клавиатура уже скрытая, никакой
+      плашки нет»). Рисует KeyboardProvider — он живёт всё время. */
+  onEngineNote?: (note: string | null) => void;
 }
 
 export function AppKeyboard({
@@ -98,9 +106,9 @@ export function AppKeyboard({
   multiline = false,
   onEnter,
   onClose,
+  onEngineNote,
 }: AppKeyboardProps) {
   const [layoutName, setLayoutName] = useState<keyof typeof LAYOUTS>("default");
-  const [micNote, setMicNote] = useState<string | null>(null);
   const keyboardRef = useRef<unknown>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
 
@@ -114,33 +122,56 @@ export function AppKeyboard({
   const mic = useMicRecorder(async (blob) => {
     try {
       const res = await transcribeAudio.mutateAsync(blob);
-      const clean = res.text.trim();
+      // Аббревиатуры в верхний регистр и заглавная первая буква: small пишет
+      // «продлить осаго», «позвонить в втб». Тут, а не в парсере: нормализация
+      // нужна ЛЮБОМУ полю, а разбор маркеров — только заголовку задачи.
+      const rawText = res.text.trim();
+      const clean = normalizeDictatedText(rawText);
+      // Журнал (выключен по умолчанию, включается в настройках моделей): пишем
+      // текст ОТ МОДЕЛИ и текст после наших правок, чтобы было видно, кто
+      // исправил регистр — словарь или сама модель.
+      addDictationLogEntry({ engine: res.source, raw: rawText, normalized: clean });
+      // Аудио — в очередь на выгрузку в архив на .110. Копия на телефоне
+      // держится до подтверждения сервером, поэтому запись не потеряется, даже
+      // если сети нет или серверный маршрут ещё не развёрнут.
+      void queueRecording({
+        blob,
+        mime: blob.type || "audio/mp4",
+        text: rawText,
+        engine: res.source,
+      });
       if (clean) {
         // Дописываем в конец, а не в позицию каретки: перемещение каретки
         // внутри строки владельцу не нужно (сказал прямо), а поведение
         // simple-keyboard с вставкой в середину не подтверждено.
         const prev = valueRef.current;
         onChange(prev ? `${prev} ${clean}` : clean);
+        // Сообщаем, что в поле легла ДИКТОВКА, а не обычный набор. Нужно для
+        // разбора маркеров (дата/проект/приоритет): раньше микрофон был
+        // отдельной кнопкой, и TaskFormScreen разбирал текст сразу в своём
+        // обработчике записи. С переносом микрофона внутрь клавиатуры тот путь
+        // перестал вызываться, и разбор остался только на onBlur — а если сразу
+        // нажать «Сохранить», обработчик читает ещё неразобранный заголовок
+        // (18.08.2026: «сказал завтра позвонить в банк ВТБ, и срок не
+        // выставился»). Событием, а не пропсом: клавиатура не должна знать ни
+        // про формы, ни про парсер.
+        window.dispatchEvent(new CustomEvent("app-dictation-inserted"));
       }
-      setMicNote(
-        res.source === "device"
-          ? "распознано на устройстве"
-          : "распознано на сервере",
+      onEngineNote?.(
+        res.source === "whisper"
+          ? "Whisper на устройстве"
+          : res.source === "apple"
+            ? // Причину даёт плагин: «не скачана» / «ещё грузится» /
+              // «не загрузилась» — это разные вещи, и путать их нельзя.
+              `диктовка Apple (${res.whisperReason ?? "Whisper недоступен"})`
+            : "сервер .110",
       );
     } catch {
-      setMicNote("не удалось распознать");
+      onEngineNote?.("не удалось распознать");
     } finally {
       mic.finish();
     }
   });
-
-  // Заметка о движке распознавания живёт недолго — она информационная, и
-  // висеть над клавиатурой постоянно ей незачем.
-  useEffect(() => {
-    if (!micNote) return;
-    const t = window.setTimeout(() => setMicNote(null), 2500);
-    return () => window.clearTimeout(t);
-  }, [micNote]);
 
   // Высота панели → --app-kb-height, чтобы формы поднялись над ней.
   // Замеряем фактическую, а не считаем из CSS: высота зависит от
@@ -192,7 +223,14 @@ export function AppKeyboard({
       return;
     }
     if (button === "{mic}") {
-      if (mic.state === "idle") mic.start();
+      if (mic.state === "idle") {
+        // Подпись о движке гасим здесь, а не по таймеру: авто-скрытие через
+        // 2.5 с владелец просто не успевал заметить («никакой подписи вообще
+        // не видел»). Теперь она висит до следующей диктовки — факт, который
+        // можно прочитать спокойно.
+        onEngineNote?.(null);
+        mic.start();
+      }
       return;
     }
 
@@ -249,9 +287,6 @@ export function AppKeyboard({
         }}
         className="fixed inset-x-0 bottom-0 z-[45]"
       >
-        {micNote && (
-          <div className="px-4 pb-1 text-[12px] text-dim bg-[#171717]">{micNote}</div>
-        )}
         {micError != null && (
           <div className="px-4 pb-1 text-[12px] text-coral bg-[#171717]">
             {typeof micError === "string" ? micError : "Ошибка микрофона"}

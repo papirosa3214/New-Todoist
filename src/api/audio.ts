@@ -25,9 +25,22 @@ export function useTranscribeAudio() {
   return useMutation({
     mutationFn: async (
       blob: Blob,
-    ): Promise<TranscribeResponse & { source: "device" | "server" }> => {
+    ): Promise<
+      TranscribeResponse & {
+        source: "whisper" | "apple" | "server";
+        whisperReason?: string;
+      }
+    > => {
       const onDevice = await transcribeOnDevice(blob);
-      if (onDevice !== null) return { text: onDevice, source: "device" };
+      // Три значения, а не два: на устройстве работают ДВА разных движка, и
+      // «на устройстве» их не различало — см. комментарий у OnDeviceEngine.
+      if (onDevice !== null) {
+        return {
+          text: onDevice.text,
+          source: onDevice.engine,
+          whisperReason: onDevice.whisperReason,
+        };
+      }
       const server = await api.postBlob<TranscribeResponse>(
         "/api/audio/transcribe",
         blob,

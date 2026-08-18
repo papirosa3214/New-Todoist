@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AppKeyboard } from "../components/AppKeyboard";
+import { warmUpWhisper } from "./localAI";
+import { flushArchiveQueue } from "./dictationArchive";
 
 // ═══════════ ОДНА КЛАВИАТУРА НА ВСЁ ПРИЛОЖЕНИЕ ═══════════
 //
@@ -107,13 +109,31 @@ export function KeyboardProvider({ children }: { children: ReactNode }) {
   // заставляет её перерисоваться при наборе. Читать el.value прямо в рендере
   // нельзя — мутация DOM не вызывает ре-рендер React.
   const [value, setValue] = useState("");
+  // Подпись о движке распознавания живёт ЗДЕСЬ, а не в панели: панель
+  // закрывается по окончании диктовки, и подпись пропадала вместе с ней.
+  // Ставится ПОСЛЕ расшифровки, по фактическому результату — не предсказание:
+  // какой движок сработал, до получения текста неизвестно, и откат на сервер
+  // тоже виден именно так.
+  const [engineNote, setEngineNote] = useState<string | null>(null);
   const closeTimer = useRef<number | null>(null);
+  const noteTimer = useRef<number | null>(null);
   // Идёт ли прямо сейчас касание по самой клавиатуре. Нужен именно флаг, а не
   // проверка e.relatedTarget в focusout: на iOS relatedTarget при тапе по
   // кнопке приходит null, и отличить «ушёл на клавишу» от «ушёл вообще» по
   // событию нельзя.
   const touchingKeyboard = useRef(false);
   const clearTouchTimer = useRef<number | null>(null);
+  // Прогрев модели распознавания при входе в приложение. Здесь, а не в момент
+  // диктовки: загрузка CoreML-модели занимает куда больше трёх секунд, которые
+  // отведены на ожидание в плагине, поэтому «ленивая» загрузка означала, что
+  // Whisper не успевал никогда.
+  useEffect(() => {
+    warmUpWhisper();
+    // Догоняем то, что не ушло раньше: .110 мог быть недоступен, или серверный
+    // маршрут ещё не был развёрнут.
+    void flushArchiveQueue();
+  }, []);
+
   useEffect(() => {
     const cancelClose = () => {
       if (closeTimer.current !== null) {
@@ -266,6 +286,30 @@ export function KeyboardProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Подпись гаснет сама. Таймер отменяемый: новая диктовка обнуляет подпись и
+  // не должна получить гашение от предыдущей — та же ошибка, что уже была с
+  // флагом удержания фокуса.
+  const showEngineNote = useCallback((note: string | null) => {
+    if (noteTimer.current !== null) {
+      window.clearTimeout(noteTimer.current);
+      noteTimer.current = null;
+    }
+    setEngineNote(note);
+    if (note !== null) {
+      noteTimer.current = window.setTimeout(() => {
+        noteTimer.current = null;
+        setEngineNote(null);
+      }, 10000);
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (noteTimer.current !== null) window.clearTimeout(noteTimer.current);
+    },
+    [],
+  );
+
   const handleChange = useCallback(
     (next: string) => {
       setValue(next);
@@ -301,7 +345,32 @@ export function KeyboardProvider({ children }: { children: ReactNode }) {
           multiline={activeEl instanceof HTMLTextAreaElement}
           onEnter={handleEnter}
           onClose={close}
+          onEngineNote={showEngineNote}
         />
+      )}
+      {engineNote && (
+        // Снизу и само гаснет через 5 с (владелец 18.08.2026: «плавающее
+        // окошечко, хер с ним снизу появилось, и потом через секунды пять
+        // исчезло»).
+        //
+        // bottom считается от --kb-inset, а не прибит к нулю: когда панель
+        // открыта, инсет равен её высоте, и окошко всплывает НАД клавишами;
+        // когда закрыта — инсет 0, и оно садится к низу экрана. Одна формула
+        // на оба случая, без отслеживания состояния панели.
+        //
+        // pointer-events: none — окошко не должно перехватывать касания по
+        // тому, что под ним.
+        <div
+          className="fixed inset-x-0 z-[60] flex justify-center pointer-events-none"
+          style={{
+            bottom:
+              "calc(var(--kb-inset, 0px) + env(safe-area-inset-bottom, 0px) + 12px)",
+          }}
+        >
+          <div className="px-3 py-1 rounded-full bg-card2/95 text-[11px] text-sub">
+            Распознано: {engineNote}
+          </div>
+        </div>
       )}
     </>
   );

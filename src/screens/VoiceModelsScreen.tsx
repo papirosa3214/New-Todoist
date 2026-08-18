@@ -9,8 +9,22 @@ import {
   deleteWhisperModel,
   onWhisperProgress,
   localAIModelsSupported,
+  prepareWhisperModel,
 } from "../lib/localAI";
 import { getErrorMessage } from "../lib/errors";
+import {
+  type DictationLogEntry,
+  clearDictationLog,
+  isDictationLogEnabled,
+  readDictationLog,
+  setDictationLogEnabled,
+  subscribeDictationLog,
+} from "../lib/dictationLog";
+import {
+  flushArchiveQueue,
+  pendingCount,
+  subscribeArchiveQueue,
+} from "../lib/dictationArchive";
 
 // Экран управления локальными моделями распознавания речи (Максим,
 // 18.08.2026: «я должен всё в настройках контролировать» — менять модель
@@ -92,6 +106,14 @@ export function VoiceModelsScreen() {
     }
   }, []);
 
+  // Пока модель прогревается, статус надо перечитывать: иначе индикатор
+  // застынет на жёлтом и секунды не будут расти.
+  useEffect(() => {
+    if (!status?.loading) return;
+    const t = window.setInterval(() => void refresh(), 1500);
+    return () => window.clearInterval(t);
+  }, [status?.loading, refresh]);
+
   useEffect(() => {
     mounted.current = true;
     void refresh();
@@ -114,6 +136,10 @@ export function VoiceModelsScreen() {
     setBusy(model);
     try {
       await action();
+      // Прогрев сразу после скачивания или выбора: раньше он начинался только
+      // при следующем входе в приложение, и статус всё это время висел
+      // «скачана, прогреется при входе» — бесполезное состояние.
+      void prepareWhisperModel();
       await refresh();
     } catch (e) {
       setError(e);
@@ -160,16 +186,35 @@ export function VoiceModelsScreen() {
       </div>
 
       {status && (
-        <div className="text-[13px] text-sub px-1 mb-3">
-          Выбрана: <span className="text-text">{prettyName(status.selected)}</span>
-          {status.ready
-            ? " · загружена в память"
-            : status.loading
-              ? " · загружается…"
-              : installed.has(status.selected)
-                ? " · установлена"
-                : " · не установлена"}
-          {status.error ? ` · ошибка: ${status.error}` : ""}
+        <div className="flex items-center gap-2 px-1 mb-3">
+          {/* Цветом, а не только словами: владелец просил «зелёненьким —
+              рабочее, жёлтеньким — прогревается, красненьким — вообще не
+              фурычит» (18.08.2026). Порядок проверок: «не скачана» ВПЕРЕДИ
+              «прогревается» — иначе после удаления модели статус продолжал
+              показывать прогрев от прерванной загрузки, то есть врал про
+              модель, которой уже нет на диске. */}
+          <span
+            className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+              status.error || !installed.has(status.selected)
+                ? "bg-red"
+                : status.ready
+                  ? "bg-green"
+                  : "bg-yellow"
+            }`}
+          />
+          <div className="text-[13px] text-sub min-w-0">
+            <span className="text-text">{prettyName(status.selected)}</span>
+            {" — "}
+            {status.error
+              ? `не работает: ${status.error}`
+              : !installed.has(status.selected)
+                ? "не скачана"
+                : status.ready
+                  ? "работает"
+                  : status.loadingSeconds > 0
+                    ? `прогревается, ${status.loadingSeconds} с`
+                    : "прогревается"}
+          </div>
         </div>
       )}
 
@@ -200,7 +245,7 @@ export function VoiceModelsScreen() {
                       onClick={() => void run(model, () => downloadWhisperModel(model))}
                       className="text-[14px] px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50"
                     >
-                      {isBusy ? "Скачиваю…" : "Скачать"}
+                      {isBusy ? "Скачиваю из сети…" : "Скачать"}
                     </button>
                   ) : (
                     <div className="flex items-center gap-2">
@@ -243,12 +288,138 @@ export function VoiceModelsScreen() {
         </FieldGroup>
       </div>
 
+      <DictationLogSection />
+
       {available.length === 0 && (
         <div className="text-[13px] text-sub px-1">
           Список моделей не загрузился — нужен интернет, чтобы его получить.
           Уже скачанные модели продолжают работать офлайн.
           {error ? ` (${getErrorMessage(error, "")})` : ""}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ═══ Журнал диктовок ═══
+// Отдельным компонентом: у него своя подписка и своё состояние, и экрану
+// моделей незачем перерисовываться на каждую запись в журнале.
+function DictationLogSection() {
+  const [enabled, setEnabled] = useState(isDictationLogEnabled());
+  const [entries, setEntries] = useState<DictationLogEntry[]>(readDictationLog());
+  const [queued, setQueued] = useState(0);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    const sync = () => {
+      setEnabled(isDictationLogEnabled());
+      setEntries(readDictationLog());
+    };
+    return subscribeDictationLog(sync);
+  }, []);
+
+  // Очередь аудио — своя подписка: она меняется и без записей в журнал (журнал
+  // можно выключить, а архив продолжает работать).
+  useEffect(() => {
+    const sync = () => void pendingCount().then(setQueued);
+    sync();
+    return subscribeArchiveQueue(sync);
+  }, []);
+
+  return (
+    <div className="mb-6">
+      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
+        Диагностика диктовки
+      </div>
+      {/* Архив аудио. Показываем всегда, а не только при включённом журнале:
+          выгрузка идёт независимо от журнала, и владельцу нужно видеть, что
+          записи не потерялись, пока сервер не обновлён. */}
+      <div className="mb-2">
+        <FieldGroup>
+          <div className="flex items-center justify-between px-4 py-3 bg-card">
+            <div className="text-[15px] text-text pr-3">
+              Архив аудио на сервере
+              <div className="text-[13px] text-sub">
+                {queued === 0
+                  ? "Всё выгружено"
+                  : `Ждут отправки: ${queued}. Уйдут, когда .110 будет доступен`}
+              </div>
+            </div>
+            {queued > 0 && (
+              <button
+                type="button"
+                disabled={sending}
+                onClick={() => {
+                  setSending(true);
+                  void flushArchiveQueue().finally(() => setSending(false));
+                }}
+                className="text-[14px] px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50 shrink-0"
+              >
+                {sending ? "Отправляю…" : "Отправить"}
+              </button>
+            )}
+          </div>
+        </FieldGroup>
+      </div>
+
+      <div className="mb-2">
+        <FieldGroup>
+          <div className="flex items-center justify-between px-4 py-3 bg-card">
+            <div className="text-[15px] text-text pr-3">
+              Записывать, что распознала модель
+              <div className="text-[13px] text-sub">
+                Видно текст от модели и текст после исправлений
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDictationLogEnabled(!enabled)}
+              className={`text-[14px] px-3 py-1 rounded-lg shrink-0 ${
+                enabled ? "bg-green/20 text-green" : "bg-blue/15 text-blue"
+              }`}
+            >
+              {enabled ? "Включено" : "Выключено"}
+            </button>
+          </div>
+        </FieldGroup>
+      </div>
+
+      {enabled && entries.length === 0 && (
+        <div className="text-[13px] text-sub px-1">
+          Пока пусто — продиктуй что-нибудь, и запись появится здесь.
+        </div>
+      )}
+
+      {entries.length > 0 && (
+        <>
+          <FieldGroup>
+            {entries.map((entry) => (
+              <div key={entry.at} className="px-4 py-3 bg-card">
+                <div className="text-[12px] text-dim mb-1">
+                  {new Date(entry.at).toLocaleTimeString("ru-RU")} · {entry.engine}
+                  {entry.raw === entry.normalized
+                    ? " · исправлений не потребовалось"
+                    : " · исправлено нами"}
+                </div>
+                <div className="text-[13px] text-sub break-words">
+                  от модели: {entry.raw || "—"}
+                </div>
+                {entry.raw !== entry.normalized && (
+                  <div className="text-[13px] text-text break-words">
+                    после правок: {entry.normalized}
+                  </div>
+                )}
+              </div>
+            ))}
+          </FieldGroup>
+          <button
+            type="button"
+            onClick={clearDictationLog}
+            className="text-[14px] text-coral px-1 mt-2"
+          >
+            Очистить журнал
+          </button>
+        </>
       )}
     </div>
   );

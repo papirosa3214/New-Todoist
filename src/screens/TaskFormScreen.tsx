@@ -61,6 +61,7 @@ import { useGuardedCallback } from "../lib/useGuardedCallback";
 import {
   combineDictatedText,
   findProjectByName,
+  capitalizeFirst,
   parseDictation,
 } from "../lib/dictationParser";
 import { useMicRecorder } from "../lib/useMicRecorder";
@@ -365,7 +366,11 @@ export function TaskFormScreen() {
   // локально» — выключать Wi-Fi ради проверки ломает всё приложение
   // целиком, не только эту фичу). null — ещё ни разу не диктовали в этой
   // сессии формы, подпись не показываем.
-  const [voiceSource, setVoiceSource] = useState<"device" | "server" | null>(
+  // Три значения вместо двух: "device" не различало Whisper и системную
+  // диктовку Apple, а это разные механизмы с разным качеством.
+  const [voiceSource, setVoiceSource] = useState<
+    "whisper" | "apple" | "server" | null
+  >(
     null,
   );
   // Черновик текста для поля «Добавить подзадачу...» — поднят сюда из
@@ -610,7 +615,10 @@ export function TaskFormScreen() {
     if (isEdit) return;
     const parsed = parseDictation(title);
     if (parsed.title === title) return; // ни одного маркера — не трогаем
-    setTitle(parsed.title);
+    // Заглавная после вырезания маркера: если дата стояла в начале фразы
+    // («4 сентября 2027 года надо продлить ОСАГО»), заголовок оставался со
+    // строчной буквы.
+    setTitle(capitalizeFirst(parsed.title));
     if (parsed.dueDate) setDueDate(parsed.dueDate);
     if (parsed.priority) setPriority(parsed.priority);
     if (parsed.projectName) {
@@ -619,6 +627,24 @@ export function TaskFormScreen() {
     }
     applyParsedLabel(parsed.labelName);
   };
+
+  // Разбор маркеров сразу после диктовки, не дожидаясь потери фокуса. Ссылка
+  // на свежую функцию в ref: сама функция пересоздаётся каждый рендер, а
+  // слушатель вешаем один раз.
+  const applyParseRef = useRef(applyDictationParse);
+  applyParseRef.current = applyDictationParse;
+  useEffect(() => {
+    // setTimeout(0), а не прямой вызов: событие летит синхронно сразу за
+    // вставкой текста, когда React ещё не применил новое значение заголовка —
+    // разбор прочитал бы предыдущее. Отложенный вызов приходит после коммита,
+    // и ref уже указывает на замыкание со свежим title.
+    const onDictation = () => {
+      window.setTimeout(() => applyParseRef.current(), 0);
+    };
+    window.addEventListener("app-dictation-inserted", onDictation);
+    return () =>
+      window.removeEventListener("app-dictation-inserted", onDictation);
+  }, []);
 
   return (
     // pb-4 (16px) + --kb-inset — тот же приём, что и в TaskDetailScreen
@@ -1124,7 +1150,11 @@ export function TaskFormScreen() {
       {voiceSource && mic.state === "idle" && (
         <p className="text-[12px] text-dim mb-4 -mt-2">
           Распознано{" "}
-          {voiceSource === "device" ? "на устройстве" : "через сервер"}
+          {voiceSource === "whisper"
+            ? "Whisper на устройстве"
+            : voiceSource === "apple"
+              ? "диктовка Apple"
+              : "через сервер"}
         </p>
       )}
       {keyboardFieldFocused && mic.state === "idle" && (

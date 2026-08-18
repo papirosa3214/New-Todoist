@@ -61,7 +61,12 @@ private struct LocalAIError: LocalizedError {
 actor WhisperEngine {
   static let shared = WhisperEngine()
 
-  static let defaultModel = "openai_whisper-large-v3-v20240930_turbo_632MB"
+  // По умолчанию small, а не large-v3-turbo: у turbo (632 МБ) прогрев в память
+  // и компиляция CoreML занимают минуты и заметно греют телефон, из-за чего
+  // диктовка всё равно уходила на Apple (18.08.2026). small (216 МБ)
+  // поднимается в разы быстрее и по-русски всё равно лучше системной диктовки.
+  // turbo остаётся в списке — выбирается вручную, если нужен максимум качества.
+  static let defaultModel = "openai_whisper-small_216MB"
   private static let selectedKey = "whisper.selectedModel"
 
   // Список на случай, когда сети нет и fetchAvailableModels не отвечает —
@@ -80,6 +85,14 @@ actor WhisperEngine {
   private var downloadingModel: String?
   private var downloadProgress: Double = 0
   private var lastError: String?
+  // Когда начался прогрев — чтобы наружу уходило «грузится N с», а не
+  // безразмерное «грузится».
+  private var loadStartedAt: Date?
+  // Ссылка на идущую загрузку — чтобы её можно было ОТМЕНИТЬ при удалении или
+  // смене модели. Без неё удаление модели оставляло loading=true навсегда, и
+  // настройки писали «прогревается в память» для уже удалённой модели
+  // (18.08.2026).
+  private var loadTask: Task<Void, Never>?
 
   private let base: URL = {
     let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -94,7 +107,9 @@ actor WhisperEngine {
 
   func select(_ model: String) {
     UserDefaults.standard.set(model, forKey: Self.selectedKey)
-    // Сбрасываем загруженную — следующая диктовка поднимет выбранную.
+    // Сбрасываем загруженную и снимаем прогрев прежней: иначе он допишет
+    // loadedModel уже не той модели, которую выбрали.
+    cancelLoading()
     kit = nil
     loadedModel = nil
   }
@@ -136,6 +151,7 @@ actor WhisperEngine {
       "downloading": downloadingModel ?? "",
       "progress": downloadProgress,
       "error": lastError ?? "",
+      "loadingSeconds": loadStartedAt.map { Int(Date().timeIntervalSince($0)) } ?? 0,
     ]
   }
 
@@ -169,12 +185,26 @@ actor WhisperEngine {
   }
 
   func delete(_ model: String) throws {
-    guard let url = folder(for: model) else { return }
-    try FileManager.default.removeItem(at: url)
+    // Сначала прекращаем работу с моделью, потом удаляем файлы: иначе прогрев
+    // продолжает читать то, чего уже нет.
+    if loadedModel == model || selectedModel == model || loading {
+      cancelLoading()
+    }
     if loadedModel == model {
       kit = nil
       loadedModel = nil
     }
+    guard let url = folder(for: model) else { return }
+    try FileManager.default.removeItem(at: url)
+  }
+
+  /// Снимает идущий прогрев и опускает флаги. Отдельным методом, потому что
+  /// нужен из трёх мест: удаление модели, смена выбранной, ошибка.
+  private func cancelLoading() {
+    loadTask?.cancel()
+    loadTask = nil
+    loading = false
+    loadStartedAt = nil
   }
 
   /// Грузит выбранную модель в память, если она установлена. НЕ качает.
@@ -182,21 +212,82 @@ actor WhisperEngine {
     let model = selectedModel
     guard kit == nil, !loading, folder(for: model) != nil else { return }
     loading = true
-    Task { await self.load(model) }
+    loadTask = Task { await self.load(model) }
   }
 
   private func load(_ model: String) async {
+    loadStartedAt = Date()
     do {
       let config = WhisperKitConfig(
-        model: model, modelFolder: folder(for: model)?.path,
+        model: model,
+        // downloadBase и tokenizerFolder — тот же каталог, куда качали модель.
+        // Без tokenizerFolder WhisperKit, не найдя токенизатор рядом с
+        // моделью, уходит за ним в СЕТЬ на HuggingFace (loadTokenizerIfNeeded).
+        // Файлы модели при этом локальные, поэтому со стороны это выглядит как
+        // «модель грузится» — и висит бесконечно, если сети до HF нет. Ровно
+        // это владелец и наблюдал 18.08.2026: десять минут «ещё грузится».
+        downloadBase: base,
+        modelFolder: folder(for: model)?.path,
+        tokenizerFolder: base,
         verbose: false, logLevel: .error, prewarm: true, load: true, download: false)
-      kit = try await WhisperKit(config)
+
+      // Таймаут обязателен: без него зависший сетевой шаг превращается в
+      // бесконечное loading=true, и наружу уходит «ещё грузится» вместо ошибки.
+      kit = try await Self.withTimeout(seconds: 180) {
+        try await WhisperKit(config)
+      }
       loadedModel = model
       lastError = nil
     } catch {
       lastError = error.localizedDescription
+      kit = nil
     }
     loading = false
+    loadStartedAt = nil
+    loadTask = nil
+  }
+
+  /// Гонка «операция против будильника» — копия приёма из плагина, но внутри
+  /// актора: тащить туда метод класса нельзя.
+  private static func withTimeout<T: Sendable>(
+    seconds: Double, _ operation: @escaping @Sendable () async throws -> T
+  ) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+      group.addTask { try await operation() }
+      group.addTask {
+        try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        throw LocalAIError(
+          "Прогрев модели не завершился за \(Int(seconds)) с. Обычная причина — "
+            + "WhisperKit ушёл за токенизатором в сеть и не дождался ответа.")
+      }
+      guard let result = try await group.next() else {
+        throw LocalAIError("Прогрев модели не дал результата")
+      }
+      group.cancelAll()
+      return result
+    }
+  }
+
+  /// Почему Whisper не сработал — тремя разными случаями, а не одним «нет».
+  /// Подпись в интерфейсе обязана их различать: «не скачана» при скачанной, но
+  /// ещё не прогретой модели — прямая дезинформация (18.08.2026, владелец
+  /// увидел в настройках «скачано и выбрано» при подписи «модель не скачана»).
+  enum Unavailable: String {
+    case notInstalled = "модель не скачана"
+    case loading = "модель ещё грузится"
+    case failed = "модель не загрузилась"
+  }
+
+  func unavailableReason() -> String {
+    if folder(for: selectedModel) == nil { return Unavailable.notInstalled.rawValue }
+    if let lastError { return "ошибка: \(lastError)" }
+    if loading {
+      let sec = loadStartedAt.map { Int(Date().timeIntervalSince($0)) } ?? 0
+      return "модель грузится уже \(sec) с"
+    }
+    // Ни загрузки, ни ошибки, ни готовой модели — прогрев не начинался.
+    // Отдельный случай: раньше он маскировался под «грузится».
+    return "прогрев не запущен"
   }
 
   /// nil — Whisper не готов (не установлен / грузится / упал), вызывающий
@@ -371,7 +462,12 @@ public class LocalAIPlugin: CAPPlugin, CAPBridgedPlugin {
       }
       do {
         let text = try await self.runTranscription(fileURL: url, locale: locale)
-        call.resolve(["text": text, "engine": "apple"])
+        call.resolve([
+          "text": text,
+          "engine": "apple",
+          // Почему не Whisper — чтобы подпись в интерфейсе говорила правду.
+          "whisperReason": await WhisperEngine.shared.unavailableReason(),
+        ])
       } catch {
         call.reject("Распознавание не удалось: \(error.localizedDescription)")
       }

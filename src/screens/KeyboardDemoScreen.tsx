@@ -110,9 +110,11 @@ export function KeyboardDemoScreen() {
         });
       }
       setMicNote(
-        res.source === "device"
-          ? "распознано на устройстве"
-          : "распознано на сервере",
+        res.source === "whisper"
+          ? "Whisper на устройстве"
+          : res.source === "apple"
+            ? "диктовка Apple (модель не скачана)"
+            : "распознано на сервере",
       );
     } catch {
       setMicNote("не удалось распознать");

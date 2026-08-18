@@ -20,6 +20,8 @@ export interface ModelStatus {
   downloading: string;
   progress: number;
   error: string;
+  /** Сколько секунд идёт прогрев. 0 — не идёт. */
+  loadingSeconds: number;
 }
 
 interface LocalAIPlugin {
@@ -27,7 +29,7 @@ interface LocalAIPlugin {
   transcribe(opts: {
     audioBase64: string;
     mimeType?: string;
-  }): Promise<{ text: string; engine?: string }>;
+  }): Promise<{ text: string; engine?: string; whisperReason?: string }>;
   suggestSubtasks(opts: { text: string }): Promise<{ subtasks: string[] }>;
   listModels(): Promise<ModelStatus & { available: string[] }>;
   modelStatus(): Promise<ModelStatus>;
@@ -93,7 +95,21 @@ function blobToBase64(blob: Blob): Promise<string> {
 // хуке — единообразный контракт на один call-site, а не размноженный по
 // всем местам использования.
 
-export async function transcribeOnDevice(blob: Blob): Promise<string | null> {
+/** Движок, которым реально распознали. Нужен, чтобы «на устройстве» не
+    сваливало в одну подпись два разных механизма: Whisper (скачанная модель,
+    качество выше) и системную диктовку Apple (та же, что под микрофоном
+    клавиатуры). Владелец 18.08.2026: «действует по модели это или же опять
+    обычная диктовка» — по прежней подписи различить было нельзя. */
+export type OnDeviceEngine = "whisper" | "apple";
+
+export async function transcribeOnDevice(
+  blob: Blob,
+): Promise<{
+  text: string;
+  engine: OnDeviceEngine;
+  /** Почему не Whisper — только когда engine === "apple". */
+  whisperReason?: string;
+} | null> {
   try {
     const { asr } = await checkLocalAIAvailability();
     if (!asr) return null;
@@ -101,11 +117,17 @@ export async function transcribeOnDevice(blob: Blob): Promise<string | null> {
     // MIME передаём явно: AVFoundation определяет контейнер по расширению
     // временного файла, а угаданное расширение давало
     // kAudioFileUnsupportedFileTypeError.
-    const { text } = await LocalAI.transcribe({
+    const { text, engine, whisperReason } = await LocalAI.transcribe({
       audioBase64,
       mimeType: blob.type,
     });
-    return text;
+    // Плагин отдаёт "whisper" или "apple". Незнакомое значение трактуем как
+    // apple: молча соврать «работает модель» хуже, чем недооценить.
+    return {
+      text,
+      engine: engine === "whisper" ? "whisper" : "apple",
+      whisperReason,
+    };
   } catch {
     return null;
   }
@@ -160,4 +182,25 @@ export async function onWhisperProgress(
   return () => {
     void handle.remove();
   };
+}
+
+/** Прогрев модели заранее. Без этого она начинала грузиться только в момент
+    диктовки, а ждём мы её 3 секунды — CoreML-модель за это время не
+    поднимается, и каждый раз уходило на диктовку Apple (18.08.2026: «почему
+    отражается, что скачано и выбрано», а работал не Whisper). Fire-and-forget:
+    ответ не нужен, важно лишь начать. */
+/** То же, но с ответом: нужно, чтобы после скачивания и после выбора модели
+    прогрев запускался СРАЗУ, а не «при следующем входе в приложение» — именно
+    это состояние раздражало владельца в настройках (18.08.2026). */
+export async function prepareWhisperModel(): Promise<ModelStatus | null> {
+  if (!isNativeIOS()) return null;
+  return LocalAI.prepareModel();
+}
+
+export function warmUpWhisper(): void {
+  if (!isNativeIOS()) return;
+  void LocalAI.prepareModel().catch(() => {
+    // Молча: прогрев — оптимизация, его провал не должен ничего ломать, а
+    // реальную причину покажет подпись после диктовки.
+  });
 }

@@ -58,6 +58,13 @@ export function formatDueLabel(dateStr: string): string {
   const month = MONTHS_SHORT[d.getMonth()];
   if (dateStr === todayStr()) return `Сегодня, ${day} ${month}.`;
   if (dateStr === tomorrowStr()) return `Завтра, ${day} ${month}.`;
+  // Год показываем ТОЛЬКО когда он не текущий (18.08.2026, владелец
+  // запланировал задачу на 2027 и увидел «4 сент.» — по такой подписи год не
+  // отличить, и срок читается как «через две недели» вместо «через год»).
+  // В текущем году год не пишем: он избыточен и удлиняет бейджи в списках.
+  const currentYear = new Date().getFullYear();
+  const year = d.getFullYear();
+  if (year !== currentYear) return `${day} ${month} ${year}`;
   return `${day} ${month}.`;
 }
 

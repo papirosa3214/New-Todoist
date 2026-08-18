@@ -4,6 +4,14 @@ const config: CapacitorConfig = {
   appId: "com.maksim.taskflow",
   appName: "Задачи",
   webDir: "dist",
+  // Логи JS-консоли в системный лог устройства. Capacitor по умолчанию ставит
+  // "debug", то есть проксирует их ТОЛЬКО в отладочной сборке (см.
+  // CAPInstanceDescriptor.h: none/debug/production). После перехода на Release
+  // (18.08.2026, ради нагрева и расхода батареи) канал
+  // `xcrun devicectl device process launch --console` замолчал — а именно им
+  // диагностировались все причины на живом устройстве. "production" оставляет
+  // его рабочим и в Release; на поведение приложения это не влияет.
+  loggingBehavior: "production",
   // Без этого WKWebView рисует контент от самого верха экрана — уезжает
   // под статус-бар/Dynamic Island. В браузере/PWA это скрывал
   // apple-mobile-web-app-status-bar-style=black (Safari сам резервирует
