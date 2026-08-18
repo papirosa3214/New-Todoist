@@ -7,7 +7,11 @@ import { persist } from "zustand/middleware";
 // This store only keeps client-side UI preferences that don't belong on
 // the server.
 
-export type TaskLayout = "list" | "board";
+// "hours" — календарная развёртка по часам (18.08.2026), доступна только
+// на экране «Сегодня»: у неё есть смысл ровно для одного дня, на
+// «Входящих» раскладывать по часам нечего. Хранится тем же полем, что
+// список и доска, — выбор вида запоминается между заходами.
+export type TaskLayout = "list" | "board" | "hours";
 
 interface AppState {
   settings: {

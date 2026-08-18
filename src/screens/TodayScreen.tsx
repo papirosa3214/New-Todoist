@@ -1,12 +1,14 @@
 import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
+import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { todayStr, partitionOverdueToday, MONTHS_SHORT } from "../lib/date";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
 import { TaskRow } from "../components/TaskRow";
+import { DayHours } from "../components/DayHours";
 import { RescheduleSheet } from "../components/RescheduleSheet";
 import { ActionsMenu } from "../components/ActionsMenu";
 import {
@@ -49,6 +51,8 @@ export function TodayScreen() {
   const navigate = useNavigate();
   const today = todayStr();
   const layout = useAppStore((s) => s.taskLayout.today);
+  // Цвет блока в сетке часов берётся от проекта задачи (см. DayHours).
+  const { data: projects = [] } = useProjects();
   const setTaskLayout = useAppStore((s) => s.setTaskLayout);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -270,12 +274,32 @@ export function TodayScreen() {
             onClose={() => setMenuOpen(false)}
             anchorRef={menuAnchorRef}
             items={[
+              // Три вида по кругу: список → доска → часы → список.
+              // Отдельным пунктом на каждый вид меню разрослось бы втрое;
+              // круговое переключение уже было здесь для двух видов, часы
+              // просто встают третьим — выбор запоминается в store.
               {
-                icon: layout === "list" ? "grid" : "list",
+                icon:
+                  layout === "list"
+                    ? "grid"
+                    : layout === "board"
+                      ? "clock"
+                      : "list",
                 label:
-                  layout === "list" ? "Показать доской" : "Показать списком",
+                  layout === "list"
+                    ? "Показать доской"
+                    : layout === "board"
+                      ? "Показать по часам"
+                      : "Показать списком",
                 onClick: () =>
-                  setTaskLayout("today", layout === "list" ? "board" : "list"),
+                  setTaskLayout(
+                    "today",
+                    layout === "list"
+                      ? "board"
+                      : layout === "board"
+                        ? "hours"
+                        : "list",
+                  ),
               },
               {
                 icon: "search",
@@ -384,7 +408,19 @@ export function TodayScreen() {
           </button>
         </div>
       )}
-      {layout === "board" ? (
+      {layout === "hours" ? (
+        // Просроченные в сетку дня НЕ идут: вчерашняя задача на 9:00 не
+        // должна рисоваться в сегодняшних девяти утра. Они остаются в
+        // нижнем списке вместе с задачами без времени.
+        <DayHours
+          tasks={[...todayTasks, ...overdueTasks]}
+          projectColor={(t) =>
+            projects.find((p) => p.id === t.project_id)?.color || "#717171"
+          }
+          onTaskClick={(id) => navigate(`/task/${id}`)}
+          isToday
+        />
+      ) : layout === "board" ? (
         <div className="mt-2">
           <TaskBoard
             columns={boardColumns}
