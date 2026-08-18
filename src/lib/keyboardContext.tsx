@@ -113,7 +113,7 @@ export function KeyboardProvider({ children }: { children: ReactNode }) {
   // кнопке приходит null, и отличить «ушёл на клавишу» от «ушёл вообще» по
   // событию нельзя.
   const touchingKeyboard = useRef(false);
-
+  const clearTouchTimer = useRef<number | null>(null);
   useEffect(() => {
     const cancelClose = () => {
       if (closeTimer.current !== null) {
@@ -183,22 +183,27 @@ export function KeyboardProvider({ children }: { children: ReactNode }) {
     // возвращаем фокус в поле.
     const onPointerDown = (e: Event) => {
       const target = e.target;
+      // Новое касание отменяет отложенный сброс от предыдущего.
+      if (clearTouchTimer.current !== null) {
+        window.clearTimeout(clearTouchTimer.current);
+        clearTouchTimer.current = null;
+      }
       touchingKeyboard.current =
         target instanceof HTMLElement &&
         target.closest("[data-app-keyboard]") !== null;
-
-      // Повторный тап по УЖЕ сфокусированному полю нового focusin не даёт —
-      // браузер не перефокусирует то, что и так в фокусе. Без этой ветки
-      // закрытую панель нельзя было вернуть, не уходя фокусом в другое поле.
-      if (isOurField(target) && document.activeElement === target) {
-        cancelClose();
-        setActiveEl(target);
-        setValue(target.value);
-      }
     };
+    // Сброс флага — отложенный, потому что focusout от этого же тапа приходит
+    // позже. Таймер ОБЯЗАН быть отменяемым: при быстром наборе таймер от
+    // предыдущей клавиши срабатывал посреди следующего нажатия, флаг падал в
+    // false, фокус не возвращался и панель закрывалась. Ровно это и было
+    // «печатаю — прячется»: в логе касание по клавише с вПанели=true, а через
+    // 65 мс потеря фокуса с вернём=false.
     const onPointerUp = () => {
-      // Сбрасываем не сразу: focusout от этого же тапа приходит позже.
-      window.setTimeout(() => {
+      if (clearTouchTimer.current !== null) {
+        window.clearTimeout(clearTouchTimer.current);
+      }
+      clearTouchTimer.current = window.setTimeout(() => {
+        clearTouchTimer.current = null;
         touchingKeyboard.current = false;
       }, 300);
     };
@@ -254,6 +259,9 @@ export function KeyboardProvider({ children }: { children: ReactNode }) {
       document.removeEventListener("touchstart", onPointerDown, true);
       document.removeEventListener("pointerup", onPointerUp, true);
       document.removeEventListener("touchend", onPointerUp, true);
+      if (clearTouchTimer.current !== null) {
+        window.clearTimeout(clearTouchTimer.current);
+      }
       cancelClose();
     };
   }, []);

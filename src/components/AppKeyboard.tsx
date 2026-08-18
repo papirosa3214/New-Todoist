@@ -240,6 +240,13 @@ export function AppKeyboard({
         // Метка для KeyboardProvider: по ней он опознаёт, что фокус ушёл на
         // клавишу, а не в другое поле, и возвращает его обратно.
         data-app-keyboard=""
+        // touch-action: панель не должна давать двойным тапом зум, а выделение
+        // текста на клавишах бессмысленно и мешает удержанию.
+        style={{
+          touchAction: "manipulation",
+          WebkitUserSelect: "none",
+          userSelect: "none",
+        }}
         className="fixed inset-x-0 bottom-0 z-[45]"
       >
         {micNote && (
@@ -261,8 +268,8 @@ export function AppKeyboard({
             display={DISPLAY}
             onKeyPress={onKeyPress}
             // Держит фокус (и каретку) в поле при тапе по клавише: клавиши —
-            // настоящие <button>, без этого каждый тап уводил бы фокус и
-            // каретка гасла бы на первом же символе.
+            // настоящие кнопки, без этого каждый тап уводил бы фокус и каретка
+            // гасла бы на первом же символе. Одного этого мало — см.
             preventMouseDownDefault
             // Кнопки настоящими button-элементами, а не div — первый совет
             // мейнтейнера по iOS-issue #2739 (тап иногда попадал в соседнюю
