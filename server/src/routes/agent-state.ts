@@ -31,7 +31,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   // rows, not a bypass of it. In particular it must NOT be able to reach
   // in_progress from `review`: that would let an agent silently take back
   // work it already submitted for the owner's review.
-  app.post<{ Params: { id: string } }>("/api/tasks/:id/claim", {
+  app.post<{
+    Params: { id: string };
+    Body: { session_id?: string };
+  }>("/api/tasks/:id/claim", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const task = getTaskForUser(req.params.id, req.userId);
@@ -123,10 +126,18 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           });
         }
 
+        // session_id — необязательный: приходит от MCP-клиента как
+        // CLAUDE_CODE_SESSION_ID процесса, который реально claim'ит. Пишем
+        // его молча (не в лог) — это техническая метка «чей физически этот
+        // claim», не событие, которое имеет смысл владельцу. Несколько
+        // параллельных сессий делят один и тот же учётный аккаунт-агента
+        // (assignee_id/Claude_Bot), поэтому это единственное поле, по
+        // которому свой Stop-хук отличает «мою» незавершённую работу от
+        // чужой под тем же ботом (миграция 004_agent_session_id).
         db.prepare(
           `UPDATE tasks SET agent_state = 'in_progress', agent_heartbeat_at = datetime('now'),
-             assignee_id = COALESCE(assignee_id, ?) WHERE id = ?`,
-        ).run(req.userId, task.id);
+             assignee_id = COALESCE(assignee_id, ?), agent_session_id = ? WHERE id = ?`,
+        ).run(req.userId, req.body?.session_id || null, task.id);
 
         logEvent({
           taskId: task.id,
@@ -197,7 +208,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   // can never end up in blocked/review without its explanation attached.
   app.post<{
     Params: { id: string };
-    Body: { state: AgentState | null; comment?: string };
+    Body: { state: AgentState | null; comment?: string; session_id?: string };
   }>("/api/tasks/:id/state", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
@@ -273,10 +284,12 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
         // Re-entering in_progress (from blocked, or owner sending it back
         // from review) takes out a fresh lease — "берётся новая аренда".
+        // session_id обновляется тут же — тот же смысл, что в claim() выше:
+        // чей физически процесс возобновляет работу.
         if (state === "in_progress") {
           db.prepare(
-            "UPDATE tasks SET agent_state = ?, agent_heartbeat_at = datetime('now') WHERE id = ?",
-          ).run(state, task.id);
+            "UPDATE tasks SET agent_state = ?, agent_heartbeat_at = datetime('now'), agent_session_id = ? WHERE id = ?",
+          ).run(state, req.body?.session_id || null, task.id);
         } else {
           db.prepare("UPDATE tasks SET agent_state = ? WHERE id = ?").run(
             state,

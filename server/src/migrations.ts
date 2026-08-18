@@ -75,6 +75,14 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: "004_agent_session_id",
+    description:
+      "чей это claim физически: несколько параллельных сессий Claude Code делят один и тот же учётный аккаунт-агента (Claude_Bot) в TaskFlow, поэтому agent_state/assignee_id одни не отличают «эту сессию ведёт мой процесс» от «ведёт кто-то ещё под тем же ботом» — понадобилось после того, как taskflow-progress-gate.py (Stop-хук) начал блокировать сессии чужой незавершённой работой того же бота (18.08.2026)",
+    up: () => {
+      db.exec("ALTER TABLE tasks ADD COLUMN agent_session_id TEXT;");
+    },
+  },
 ];
 
 /** Применить все ещё не применённые миграции, по одной транзакции на каждую. */

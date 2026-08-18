@@ -31,6 +31,15 @@ BASE = os.environ.get("TASKFLOW_API", "http://localhost:3001")
 VAULT_GET = os.path.expanduser("~/.claude/vault-get.py")
 VAULT_KEY = os.environ.get("TASKFLOW_VAULT_KEY", "TASKFLOW_AGENT_TOKEN")
 
+# Несколько параллельных сессий Claude Code делят один и тот же учётный
+# аккаунт-агента (Claude_Bot) в TaskFlow — assignee_id один на всех, поэтому
+# claim/state сами по себе не говорят, ЧЕЙ физически это процесс. Пишем
+# session_id при каждом входе в in_progress (18.08.2026, после того как
+# taskflow-progress-gate.py начал блокировать сессии чужой незавершённой
+# работой того же бота) — единственное поле, по которому Stop-хук отличает
+# «моя» работа от «чужая под тем же ботом».
+CLAUDE_SESSION_ID = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+
 
 def log(msg: str) -> None:
     # Только stderr: stdout занят протоколом, любая посторонняя строка там
@@ -146,6 +155,11 @@ def t_task(args):
     return {
         **short(task),
         "описание": task.get("description"),
+        # Техническое поле для Stop-хука (taskflow-progress-gate.py), не для
+        # чтения человеком — сессия, которая физически держит claim. Пусто у
+        # задач, взятых до 004_agent_session_id, или если MCP-клиент не
+        # передал CLAUDE_CODE_SESSION_ID.
+        "session_id": task.get("agent_session_id"),
         "шаги": [
             {"id": s.get("id"), "сделан": bool(s.get("done")), "название": s.get("title")}
             for s in d.get("subtasks", []) or []
@@ -155,7 +169,8 @@ def t_task(args):
 
 
 def t_claim(args):
-    return {"взято в работу": short(unwrap(api("POST", f"/api/tasks/{args['id']}/claim", {})))}
+    body = {"session_id": CLAUDE_SESSION_ID} if CLAUDE_SESSION_ID else {}
+    return {"взято в работу": short(unwrap(api("POST", f"/api/tasks/{args['id']}/claim", body)))}
 
 
 def t_heartbeat(args):
@@ -167,6 +182,8 @@ def t_state(args):
     body = {"state": args["state"]}
     if args.get("comment"):
         body["comment"] = args["comment"]
+    if args["state"] == "in_progress" and CLAUDE_SESSION_ID:
+        body["session_id"] = CLAUDE_SESSION_ID
     return {"состояние изменено": short(unwrap(api("POST", f"/api/tasks/{args['id']}/state", body)))}
 
 
