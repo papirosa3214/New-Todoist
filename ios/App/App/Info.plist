@@ -68,6 +68,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Нужен для голосового ввода задач</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Нужен, чтобы распознавать надиктованный текст задач прямо на телефоне, без отправки на сервер</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Приложение обращается к серверу задач в домашней сети</string>
 	<key>NSAppTransportSecurity</key>
