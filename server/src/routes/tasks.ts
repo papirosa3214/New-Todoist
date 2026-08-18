@@ -31,6 +31,27 @@ function isValidDateStr(s: string): boolean {
   );
 }
 
+// start_time хранится тем же приёмом, что и due_date выше — голым текстом
+// «ЧЧ:ММ» местного времени, без даты и без пояса (миграция
+// 005_task_time_of_day). Проверяем не только форму, но и осмысленность:
+// «25:00» и «10:75» регулярка одну бы пропустила.
+const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+function isValidTimeStr(s: string): boolean {
+  return TIME_RE.test(s);
+}
+
+// Длительность — целые минуты. Верхняя граница 24 часа: задача, которая
+// длится дольше суток, в дневную сетку не укладывается по определению, и
+// молча принять её значило бы нарисовать блок, уезжающий за край экрана.
+const MAX_DURATION_MIN = 24 * 60;
+function isValidDuration(n: unknown): boolean {
+  return (
+    Number.isInteger(n) &&
+    (n as number) > 0 &&
+    (n as number) <= MAX_DURATION_MIN
+  );
+}
+
 // agent_stale is derived, not stored (see agentState.ts) — attach it
 // wherever a task row goes out over the API. Gated on agent_state ===
 // 'in_progress': AGENT-PROTOCOL.md defines "агент пропал" specifically as
@@ -259,6 +280,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
       title: string;
       description?: string;
       due_date?: string;
+      // «ЧЧ:ММ» местного времени и целые минуты — оба необязательные и
+      // осмысленны только вместе со сроком: время без даты некуда поставить
+      // в календаре (проверка ниже).
+      start_time?: string | null;
+      duration_min?: number | null;
       project_id?: string;
       priority?: number;
       assignee_id?: string;
@@ -277,6 +303,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
         title,
         description,
         due_date,
+        start_time,
+        duration_min,
         project_id,
         priority,
         assignee_id,
@@ -304,6 +332,36 @@ export function registerTaskRoutes(app: FastifyInstance) {
         return reply
           .code(400)
           .send({ error: "priority must be between 1 and 4" });
+      }
+
+      if (
+        start_time !== undefined &&
+        start_time !== null &&
+        (typeof start_time !== "string" || !isValidTimeStr(start_time))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "некорректное время (ожидается формат ЧЧ:ММ)" });
+      }
+
+      if (
+        duration_min !== undefined &&
+        duration_min !== null &&
+        !isValidDuration(duration_min)
+      ) {
+        return reply.code(400).send({
+          error: "длительность — целые минуты от 1 до 1440",
+        });
+      }
+
+      // Время без даты в календарь не поставить: сетка строится по дню.
+      // Отсекаем здесь, а не молча сохраняем — иначе поле лежало бы в базе
+      // и нигде не показывалось, и разбираться пришлось бы уже по факту
+      // «я поставил время, а его нет на экране».
+      if (start_time && !due_date) {
+        return reply
+          .code(400)
+          .send({ error: "время начала имеет смысл только вместе со сроком" });
       }
 
       // project_id — свой проект, либо (для агента) проект того человека,
@@ -368,14 +426,19 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const createTaskTxn = db.transaction(() => {
         db.prepare(
           `
-          INSERT INTO tasks (id, title, description, due_date, project_id, priority, assignee_id, creator_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         ).run(
           id,
           trimmedTitle,
           description || null,
           due_date || null,
+          start_time || null,
+          // ?? , а не || — длительность приходит числом, и 0 через || стал бы
+          // null молча. Ноль сюда всё равно не дойдёт (isValidDuration его
+          // отсекает), но приём «числовое поле через ||» ошибочен сам по себе.
+          duration_min ?? null,
           project_id || null,
           priority || 1,
           assignee_id || null,
@@ -473,6 +536,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       title: string;
       description: string;
       due_date: string | null;
+      start_time: string | null;
+      duration_min: number | null;
       project_id: string | null;
       priority: number;
       assignee_id: string;
@@ -512,6 +577,44 @@ export function registerTaskRoutes(app: FastifyInstance) {
         return reply
           .code(400)
           .send({ error: "некорректная дата (ожидается формат ГГГГ-ММ-ДД)" });
+      }
+
+      // Те же правила, что при создании (см. POST выше): форма «ЧЧ:ММ»,
+      // целые минуты, и время только вместе со сроком. Последнее здесь
+      // сверяется с УЖЕ СОХРАНЁННЫМ сроком, если в этом же запросе его не
+      // меняют — иначе «поставить время задаче, у которой срок уже есть»
+      // отвергалось бы на ровном месте.
+      if (
+        body.start_time !== undefined &&
+        body.start_time !== null &&
+        (typeof body.start_time !== "string" ||
+          !isValidTimeStr(body.start_time))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "некорректное время (ожидается формат ЧЧ:ММ)" });
+      }
+      if (
+        body.duration_min !== undefined &&
+        body.duration_min !== null &&
+        !isValidDuration(body.duration_min)
+      ) {
+        return reply.code(400).send({
+          error: "длительность — целые минуты от 1 до 1440",
+        });
+      }
+      {
+        const nextDue =
+          body.due_date !== undefined ? body.due_date : existing.due_date;
+        const nextStart =
+          body.start_time !== undefined
+            ? body.start_time
+            : (existing as any).start_time;
+        if (nextStart && !nextDue) {
+          return reply.code(400).send({
+            error: "время начала имеет смысл только вместе со сроком",
+          });
+        }
       }
 
       if (body.status !== undefined && !ALLOWED_STATUS.includes(body.status)) {
@@ -582,6 +685,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
         "title",
         "description",
         "due_date",
+        "start_time",
+        "duration_min",
         "project_id",
         "priority",
         "assignee_id",
