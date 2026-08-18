@@ -257,6 +257,28 @@ export function TodayScreen() {
       title="Сегодня"
       actions={
         <>
+          {/* Часы — отдельной кнопкой в шапке, а не только пунктом меню
+              (18.08.2026). Через меню до них два касания и перебор видов по
+              кругу; развёртка дня — то, ради чего на этот экран заходят
+              днём, столько шагов до неё держать нельзя. Кнопка
+              переключает «часы ⇄ прежний вид», а не гоняет по кругу:
+              повторный тап возвращает туда, откуда пришли. */}
+          <button
+            onClick={() =>
+              setTaskLayout("today", layout === "hours" ? "list" : "hours")
+            }
+            aria-label={
+              layout === "hours" ? "Показать списком" : "Показать по часам"
+            }
+            aria-pressed={layout === "hours"}
+            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
+          >
+            <Icon
+              name={layout === "hours" ? "list" : "clock"}
+              size={18}
+              className={layout === "hours" ? "text-red" : ""}
+            />
+          </button>
           <TaskFilterButton
             onClick={() => setFilterSheetOpen(true)}
             active={activeFilterCount > 0}
@@ -274,32 +296,17 @@ export function TodayScreen() {
             onClose={() => setMenuOpen(false)}
             anchorRef={menuAnchorRef}
             items={[
-              // Три вида по кругу: список → доска → часы → список.
-              // Отдельным пунктом на каждый вид меню разрослось бы втрое;
-              // круговое переключение уже было здесь для двух видов, часы
-              // просто встают третьим — выбор запоминается в store.
+              // В меню осталось переключение список ⇄ доска, как было.
+              // Часы сюда не заводим третьим кругом: у них своя кнопка в
+              // шапке, а пункт меню, дублирующий соседнюю кнопку, только
+              // сбивает — из «часов» этот пункт вернёт в список или доску,
+              // что и требуется.
               {
-                icon:
-                  layout === "list"
-                    ? "grid"
-                    : layout === "board"
-                      ? "clock"
-                      : "list",
+                icon: layout === "board" ? "list" : "grid",
                 label:
-                  layout === "list"
-                    ? "Показать доской"
-                    : layout === "board"
-                      ? "Показать по часам"
-                      : "Показать списком",
+                  layout === "board" ? "Показать списком" : "Показать доской",
                 onClick: () =>
-                  setTaskLayout(
-                    "today",
-                    layout === "list"
-                      ? "board"
-                      : layout === "board"
-                        ? "hours"
-                        : "list",
-                  ),
+                  setTaskLayout("today", layout === "board" ? "list" : "board"),
               },
               {
                 icon: "search",
