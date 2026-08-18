@@ -28,6 +28,7 @@ import {
 } from "../components/TaskJournal";
 import { MicKeyboardBar } from "../components/MicKeyboardBar";
 import { MicOverlay } from "../components/MicOverlay";
+import { isTaskOwner } from "../lib/taskOwner";
 import { formatDueLabel } from "../lib/date";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
@@ -374,7 +375,7 @@ export function TaskDetailScreen() {
           relevant. Renders nothing otherwise. */}
       <AgentOwnerActions
         task={task}
-        isOwner={!!currentUser && currentUser.id === task.creator_id}
+        isOwner={isTaskOwner(currentUser, task)}
       />
 
       {/* Labels */}
@@ -398,7 +399,7 @@ export function TaskDetailScreen() {
         <>
           <SubtaskFeed
             subtasks={task.subtasks}
-            isOwner={!!currentUser && currentUser.id === task.creator_id}
+            isOwner={isTaskOwner(currentUser, task)}
             onToggle={(st) =>
               updateSubtask.mutateAsync({ id: st.id, done: !st.done })
             }

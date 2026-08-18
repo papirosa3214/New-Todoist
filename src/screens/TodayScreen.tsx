@@ -4,6 +4,7 @@ import { useTasks } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { isTaskOwner } from "../lib/taskOwner";
 import { todayStr, partitionOverdueToday, MONTHS_SHORT } from "../lib/date";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
@@ -85,7 +86,9 @@ export function TodayScreen() {
       .filter(
         (t) =>
           t.status === "active" &&
-          t.creator_id === currentUser.id &&
+          // Владелец трекера принимает и то, что агент завёл сам, —
+          // см. lib/taskOwner.ts (правило по роли, 18.08.2026).
+          isTaskOwner(currentUser, t) &&
           (t.agent_state === "blocked" || t.agent_state === "review"),
       )
       .sort((a, b) => {

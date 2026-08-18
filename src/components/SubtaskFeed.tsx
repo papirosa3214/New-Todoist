@@ -518,9 +518,12 @@ export function SubtaskFeed({
   onUploadFile,
 }: {
   subtasks: FeedSubtask[];
-  /** Кнопки «Принять»/«Вернуть»/«Ответить» видны только владельцу задачи —
-      TaskDetailScreen передаёт currentUser.id === task.creator_id. Без
-      этого пропа (форма редактирования и т.п.) кнопки просто не рисуются. */
+  /** Кнопки «Принять»/«Вернуть»/«Ответить» видны владельцу задачи —
+      TaskDetailScreen передаёт isTaskOwner(currentUser, task): создатель
+      ИЛИ владелец трекера (lib/taskOwner.ts). До 18.08.2026 сравнивался
+      только creator_id, и у задачи, заведённой агентом, принимать работу
+      было некому. Без этого пропа (форма редактирования и т.п.) кнопки
+      просто не рисуются. */
   isOwner?: boolean;
   onToggle: (st: FeedSubtask) => Promise<unknown>;
   /** review → pending, с комментарием и вложениями (18.08.2026). */
