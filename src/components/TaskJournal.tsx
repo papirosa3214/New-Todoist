@@ -6,9 +6,11 @@
 //
 //   - AgentStatusRow   — header pill: работает / на проверке / заблокировано
 //                        / пропал, with "N мин назад" or the stale warning.
-//   - AgentOwnerActions — «Принять» / «Вернуть на доработку» / «Снять с
-//                        агента», visible only to the task's creator, only
-//                        when the current agent_state makes them relevant.
+//   - AgentOwnerActions — «Принять» / «Вернуть на доработку» / «Ответить и
+//                        вернуть в работу» (для заблокированной) / «Вернуть
+//                        в ожидание», visible only to the task's creator,
+//                        only when the current agent_state makes them
+//                        relevant.
 //   - TaskFeed         — the единая лента: task.comments and task.events
 //                        merged into one chronological list. Comments render
 //                        as the existing full cards; journal rows render as
@@ -23,6 +25,7 @@
 import { useMemo, useState } from "react";
 import { Avatar, Button, ErrorBanner, Icon, SheetHandle } from "./UI";
 import { useSetAgentState, useUpdateTask } from "../api/tasks";
+import { useAddComment } from "../api/comments";
 import { useAgents } from "../api/agents";
 import { useProjects } from "../api/projects";
 import { PRIORITIES } from "../lib/priority";
@@ -106,15 +109,38 @@ export function AgentOwnerActions({
 }) {
   const updateTask = useUpdateTask();
   const setAgentState = useSetAgentState();
+  const addComment = useAddComment(task.id);
   const [returning, setReturning] = useState(false);
+  // Для заблокированной задачи тот же лист собирает не «что доработать», а
+  // ответ на вопрос агента — отсюда разный заголовок и разный обработчик.
+  const [answering, setAnswering] = useState(false);
   const [comment, setComment] = useState("");
 
   const handleAccept = useGuardedCallback(async () => {
     await updateTask.mutateAsync({ id: task.id, status: "completed" });
   });
 
-  const handleUnassign = useGuardedCallback(async () => {
+  // state:null — это НЕ «снять исполнителя» (assignee_id не трогается,
+  // задача остаётся на агенте), а сброс рабочего состояния: карточка снова
+  // ждёт, и агент может взяться за неё заново. Кнопка называлась «Снять с
+  // агента» и этим сбивала с толку — из заблокированной задачи было
+  // непонятно, чем вообще её вернуть (Максим, 18.08.2026).
+  const handleRelease = useGuardedCallback(async () => {
     await setAgentState.mutateAsync({ id: task.id, state: null });
+  });
+
+  // Ответ на блокировку. Порядок важен: СНАЧАЛА снять blocked, ПОТОМ
+  // комментарий. Будильник (taskflow-trigger) просыпается по уведомлению о
+  // комментарии и тут же перечитывает задачу — если она в этот момент ещё
+  // blocked, он пройдёт мимо («заблокирована, ждёт владельца») и ответ
+  // повиснет без движения.
+  const handleAnswer = useGuardedCallback(async () => {
+    const trimmed = comment.trim();
+    if (!trimmed) return;
+    await setAgentState.mutateAsync({ id: task.id, state: null });
+    await addComment.mutateAsync({ text: trimmed });
+    setAnswering(false);
+    setComment("");
   });
 
   const handleReturn = useGuardedCallback(async () => {
@@ -146,17 +172,40 @@ export function AgentOwnerActions({
             Вернуть на доработку
           </Button>
         )}
-        <Button variant="outline" onClick={handleUnassign}>
+        {task.agent_state === "blocked" && (
+          <Button variant="primary" onClick={() => setAnswering(true)}>
+            <Icon name="sync" size={16} />
+            Ответить и вернуть в работу
+          </Button>
+        )}
+        <Button variant="outline" onClick={handleRelease}>
           <Icon name="x" size={16} />
-          Снять с агента
+          Вернуть в ожидание
         </Button>
       </div>
       <ErrorBanner
-        error={updateTask.error || setAgentState.error}
+        error={updateTask.error || setAgentState.error || addComment.error}
         fallback="Не удалось изменить состояние задачи"
         variant="block"
         className="mt-2"
       />
+
+      {answering && (
+        <ReturnToWorkSheet
+          open={answering}
+          title="Ответить агенту"
+          hint="Задача выйдет из блокировки, а ответ уйдёт агенту — он продолжит с этого места."
+          placeholder="Например: 42 записи слей в основную базу, старую не трогай…"
+          value={comment}
+          onChange={setComment}
+          busy={setAgentState.isPending || addComment.isPending}
+          onCancel={() => {
+            setAnswering(false);
+            setComment("");
+          }}
+          onSubmit={handleAnswer}
+        />
+      )}
 
       {returning && (
         <ReturnToWorkSheet
@@ -186,6 +235,12 @@ function ReturnToWorkSheet({
   onCancel,
   onSubmit,
   busy,
+  // Тот же лист обслуживает два сценария владельца — «вернуть на доработку»
+  // (из review) и «ответить агенту» (из blocked). Разница только в словах,
+  // поэтому не плодим второй компонент.
+  title = "Вернуть на доработку",
+  hint = "Без комментария сервер не примет возврат — опишите, что нужно поправить.",
+  placeholder = "Например: не хватает шагов для сценария «просрочено»…",
 }: {
   open: boolean;
   value: string;
@@ -193,6 +248,9 @@ function ReturnToWorkSheet({
   onCancel: () => void;
   onSubmit: () => void;
   busy: boolean;
+  title?: string;
+  hint?: string;
+  placeholder?: string;
 }) {
   // §3 Interruptibility, §5 Velocity handoff, §7 Spatial consistency
   const sheet = useBottomSheet({ open, onClose: onCancel });
@@ -225,9 +283,7 @@ function ReturnToWorkSheet({
           >
             <Icon name="x" size={20} className="text-sub" />
           </button>
-          <h3 className="text-[16px] font-semibold text-text">
-            Вернуть на доработку
-          </h3>
+          <h3 className="text-[16px] font-semibold text-text">{title}</h3>
           <button
             onClick={onSubmit}
             disabled={!value.trim() || busy}
@@ -237,16 +293,13 @@ function ReturnToWorkSheet({
             <Icon name="check" size={18} className="text-white" />
           </button>
         </div>
-        <p className="text-[13px] text-sub mb-2 px-1">
-          Без комментария сервер не примет возврат — опишите, что нужно
-          поправить.
-        </p>
+        <p className="text-[13px] text-sub mb-2 px-1">{hint}</p>
         <textarea
           autoFocus
           rows={4}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="Например: не хватает шагов для сценария «просрочено»…"
+          placeholder={placeholder}
           className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none resize-none mb-3"
         />
       </div>
