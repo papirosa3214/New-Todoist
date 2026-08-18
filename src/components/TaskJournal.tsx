@@ -24,6 +24,7 @@
 // comment prompt).
 import { useMemo, useState } from "react";
 import { Avatar, Button, ErrorBanner, Icon, SheetHandle } from "./UI";
+import { useDialog } from "./Dialog";
 import { useSetAgentState, useUpdateTask } from "../api/tasks";
 import { useAddComment } from "../api/comments";
 import { useAgents } from "../api/agents";
@@ -115,8 +116,30 @@ export function AgentOwnerActions({
   // ответ на вопрос агента — отсюда разный заголовок и разный обработчик.
   const [answering, setAnswering] = useState(false);
   const [comment, setComment] = useState("");
+  // Подтверждение приёмки, когда шаги не закрыты (см. handleAccept) —
+  // тем же диалогом, что и остальные подтверждения в приложении.
+  const { confirm, dialog } = useDialog();
+
+  // Незакрытые шаги на момент приёмки. Владелец 19.08.2026: нажал
+  // «Принять» — задача закрылась, «при том что у меня одна подзадача в
+  // итоге болтается». Молча закрывать задачу с незавершёнными шагами
+  // нельзя: на доске и в отчётах она станет выполненной, а работа по ней
+  // — нет.
+  const openSubtasks = (task.subtasks || []).filter((st) => !st.done);
 
   const handleAccept = useGuardedCallback(async () => {
+    if (openSubtasks.length > 0) {
+      const ok = await confirm({
+        title: `Закрыть задачу? Не выполнено шагов: ${openSubtasks.length}`,
+        description:
+          openSubtasks.length === 1
+            ? `Шаг «${openSubtasks[0].title}» останется невыполненным, а задача уйдёт в готовые.`
+            : "Эти шаги останутся невыполненными, а задача уйдёт в готовые.",
+        confirmLabel: "Всё равно закрыть",
+        cancelLabel: "Не закрывать",
+      });
+      if (!ok) return;
+    }
     await updateTask.mutateAsync({ id: task.id, status: "completed" });
   });
 
@@ -207,6 +230,8 @@ export function AgentOwnerActions({
         />
       )}
 
+      {dialog}
+
       {returning && (
         <ReturnToWorkSheet
           open={returning}
@@ -270,8 +295,17 @@ function ReturnToWorkSheet({
       />
       <div
         ref={sheet.sheetRef}
-        className="relative bg-card rounded-t-[20px] px-4 pb-bottom-safe"
+        className="relative bg-card rounded-t-[20px] px-4"
         onClick={(e) => e.stopPropagation()}
+        // Лист поднимается НАД экранной клавиатурой. Без этого он вставал
+        // ровно на её место и полностью её перекрывал: поле для
+        // комментария видно, а печатать нечем (владелец 19.08.2026: «она
+        // чётко ровно в размер клавиатуры вылезла»). --kb-inset пишет
+        // lib/useVisualViewportInset.ts, дефолт 0px задан в index.css, так
+        // что на десктопе поведение прежнее.
+        style={{
+          paddingBottom: "calc(var(--kb-inset, 0px) + env(safe-area-inset-bottom, 0px) + 8px)",
+        }}
       >
         {/* Handle: drag target for dismiss gesture */}
         <SheetHandle dragProps={sheet.dragProps} />

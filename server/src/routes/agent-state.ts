@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
-import { getTaskForWrite } from "../access.js";
+import { getTaskForWrite, isOwner as isTrackerOwner } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { hydrateTask } from "./tasks.js";
 import {
@@ -84,7 +84,14 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // creator — AGENT-PROTOCOL.md is explicit that only the owner
       // *explicitly releasing it via /state* reopens it to a new claimant).
       const who = {
-        isOwner: task.creator_id === req.userId,
+        // Владелец трекера (role='owner') — владелец ЛЮБОЙ задачи, даже
+        // заведённой агентом. Раньше здесь стояло только сравнение с
+        // creator_id, и владелец не мог ни принять, ни вернуть задачу,
+        // которую агент создал сам: сервер отвечал отказом, а интерфейс
+        // показывал «Не удалось изменить состояние задачи» (поймано
+        // владельцем 19.08.2026 на кнопке «Вернуть в ожидание»). То же
+        // правило по роли уже жило в access.ts — сюда его не донесли.
+        isOwner: isTrackerOwner(req.userId) || task.creator_id === req.userId,
         isExecutor:
           task.assignee_id === req.userId || task.assignee_id === null,
         leaseExpired:
@@ -245,7 +252,14 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       }
 
       const who = {
-        isOwner: task.creator_id === req.userId,
+        // Владелец трекера (role='owner') — владелец ЛЮБОЙ задачи, даже
+        // заведённой агентом. Раньше здесь стояло только сравнение с
+        // creator_id, и владелец не мог ни принять, ни вернуть задачу,
+        // которую агент создал сам: сервер отвечал отказом, а интерфейс
+        // показывал «Не удалось изменить состояние задачи» (поймано
+        // владельцем 19.08.2026 на кнопке «Вернуть в ожидание»). То же
+        // правило по роли уже жило в access.ts — сюда его не донесли.
+        isOwner: isTrackerOwner(req.userId) || task.creator_id === req.userId,
         isExecutor: task.assignee_id === req.userId,
       };
       if (!canTransition(from, state, who, "state")) {
