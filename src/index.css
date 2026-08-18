@@ -1,0 +1,1006 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #171717;
+  --color-card: #242424;
+  --color-card2: #2b2b2b;
+  --color-stroke: rgba(255, 255, 255, 0.09);
+  --color-text: #ffffff;
+  --color-sub: #a6a6a6;
+  --color-dim: #717171;
+  --color-red: #e44332;
+  --color-orange: #ff9a14;
+  --color-pink: #ff7a8a;
+  --color-blue: #4a9fd8;
+  --color-purple: #a78bfa;
+  --color-yellow: #f7d038;
+  --color-coral: #ff6b6b;
+  --color-teal: #35b8a3;
+  /* Один зелёный на всё приложение (Максим 18.08.2026). Три захода:
+     бледно-пастельный #8fbf9f (той же светлоты, что --color-dim — волна
+     DashedRing не видна) → взят hue/saturation --color-teal буквально
+     (#35b8a3, L 46%) → «недостаточно тёмный», светлота сбита до 38%
+     (#2c9684) — тот заход красил только SubtaskFeed/TaskFields, но не
+     AgentStatusRow (TaskJournal.tsx) внутри самой карточки задачи, где
+     «Агент работает» на самом деле висел на отдельном text-teal — правка
+     токена туда не долетала, поэтому «темнее» не было заметно вообще, а
+     не только «недостаточно». Финал: то же hue 170°, светлота ещё ниже
+     (38%→33%) и насыщенность заметно выше (55%→75%) — не только темнее,
+     но и сочнее/ярче в значении «насыщеннее», не «светлее». */
+  --color-green: #15937e;
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Avenir Next", "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* ═══════════════ LIGHT THEME OVERRIDE ═══════════════
+   Владелец 2026-08-12: тема должна реально переключаться (settings.theme в
+   store/index.ts), а не быть навсегда тёмной строкой в SettingsScreen.
+   Светлая палитра — минимальная рабочая, не редизайн: переопределены
+   только поверхностные/текстовые токены (bg/card/card2/stroke/text/sub/
+   dim), акцентные цвета (red/orange/pink/blue/purple/yellow/coral/teal/
+   green) остаются теми же в обеих темах — это цвета брендов/приоритетов/
+   меток, их смена темой не касается.
+
+   ДОЛЖНО остаться СНАРУЖИ любого @layer, как и сам @theme выше — та же
+   причина, что у GLOBAL RESET ниже (cascade layers: безслойное правило
+   побеждает слойное независимо от специфичности). @theme генерирует
+   переменные на :root безслойно; положи это правило в @layer base — оно
+   проиграло бы @theme-шным значениям даже с более специфичным селектором
+   [data-theme="light"], ровно так же, как проиграл бы незаслоённый ресет
+   Tailwind-утилитам, если бы ресет был не в @layer (см. коммент ниже).
+   App.tsx ставит data-theme на <html> (document.documentElement) из
+   store.settings.theme при монтировании и на каждое изменение. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-bg: #f4f4f5;
+  --color-card: #ffffff;
+  --color-card2: #ececee;
+  --color-stroke: rgba(0, 0, 0, 0.09);
+  --color-text: #171717;
+  --color-sub: #5c5c5c;
+  --color-dim: #9a9a9a;
+}
+
+/* ═══════════════ GLOBAL RESET ═══════════════
+   Must live in @layer base. Tailwind's own generated CSS wraps its utility
+   classes in @layer utilities; per the CSS cascade-layers spec, an
+   unlayered rule beats a layered rule regardless of specificity. A plain
+   top-level star-selector margin and padding reset here, outside a layer,
+   would silently win over every spacing utility class in the whole app
+   (that is exactly what was happening before this got layered). */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Дефолт инсета экранной клавиатуры — 0px, чтобы вёрстка не зависела от
+     того, выполнился ли JS. Реальное значение пишет в эту же переменную
+     src/lib/useVisualViewportInset.ts — инлайн-стилем на documentElement,
+     он побеждает это правило по специфичности каскада, так что здесь
+     можно спокойно задать статичный дефолт. Без него
+     calc(... + var(--kb-inset)) в компонентах, ждущих этой переменной,
+     считался бы invalid, пока хук не отработает — то есть на самом первом
+     кадре после навигации, или вовсе (браузер без visualViewport). */
+  :root {
+    --kb-inset: 0px;
+    /* Девятый заход (owner 2026-08-13): чистая высота клавиатуры, без
+       поправки на панорамирование видимой области (vv.offsetTop) — верна
+       для position:fixed потребителей (MicKeyboardBar), в отличие от
+       --kb-inset выше, который для них двойной учёт того же смещения.
+       Разбор — в useVisualViewportInset.ts. */
+    --kb-height: 0px;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    /* Убивает жест iOS double-tap-to-zoom по всему приложению. Комментарий
+       уточнён 2026-08-11: раньше здесь подразумевался «обычный» viewport-
+       тег без maximum-scale/user-scalable=no — с тех пор (см. index.html:38,
+       коммит «Приложение ставится на домашний экран») тег сам блокирует и
+       пинч-зум тоже. Это правило теперь не «работает рядом с открытым
+       зумом», а просто дублирует запрет ещё и для одного конкретного
+       жеста (двойной тап), не завязанного на viewport-тег напрямую. */
+    touch-action: manipulation;
+    /* Root-level horizontal-scroll safety net. This is a backstop, not the
+       fix for any specific overflow — the actual cause (an element wider
+       than the viewport) should still be found and fixed at the source. */
+    overflow-x: clip;
+    /* Дублирует фон body на сам html (документ), а не только на body —
+       html раньше не имел фона вообще, поэтому любая область за пределами
+       body (overscroll/bounce на iOS, доля секунды до отрисовки body) была
+       белой. color-scheme: dark говорит браузеру, что документ тёмный, ещё
+       до применения остальных правил — это же значение уже стоит инлайном
+       в index.html <head> (до загрузки этого файла); повторено и здесь,
+       чтобы тема не зависела от того, какой из двух источников подгрузился. */
+    background: var(--color-bg);
+    color-scheme: dark;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--color-bg);
+    color: var(--color-text);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    touch-action: manipulation;
+    overflow-x: clip;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  /* Мобильная вкладка приложения (Layout.tsx, мобильная ветка) ставит этот
+     класс на <html> на время своей жизни — то есть пока владелец
+     авторизован и смотрит на узком экране, но НЕ на /login и /register
+     (те рендерятся вне Layout и по-прежнему используют обычную прокрутку
+     документа для собственного min-h-[100dvh]).
+     Без этого класса body унаследует свой baseline `min-height: 100vh`
+     выше — а 100vh на мобильных браузерах обычно равен САМОЙ БОЛЬШОЙ
+     высоте вьюпорта (с убранной адресной строкой), то есть больше текущего
+     100dvh, пока панель браузера видна. min-height больше явного height
+     побеждает по спеке CSS — поэтому здесь одного `height: 100dvh`
+     недостаточно, нужно явно перебить и min-height тем же значением.
+     overflow: hidden — собственно то, что убирает прокрутку ТЕЛА документа
+     (а с ней и появление адресной строки/панели браузера при переключении
+     вкладок — см. комментарий в Layout.tsx). overscroll-behavior: none —
+     чтобы не осталось «резинового» оттягивания всей страницы на iOS, даже
+     когда прокручивать нечего.
+     Правило и на html, и на body: document.scrollingElement в разных
+     браузерах — это то html, то body в зависимости от их overflow, надёжнее
+     закрыть прокрутку на обоих сразу, чем полагаться на то, какой из них
+     выберет конкретный браузер. */
+  html.app-shell-locked,
+  html.app-shell-locked body {
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+
+  /* iOS Safari авто-зумит страницу при фокусе на поле ввода, у которого
+     вычисленный font-size меньше 16px. Комментарий уточнён 2026-08-11:
+     раньше здесь стояло «мы намеренно не ставим maximum-scale/
+     user-scalable=no ради accessibility пинч-зума, поэтому единственная
+     защита — 16px». С тех пор (index.html:38, коммит «Приложение ставится
+     на домашний экран») viewport-тег их всё-таки ставит — осознанный
+     компромисс ради вида PWA без браузерной обвязки, задокументированный
+     там же. Само правило (font-size:16px) от этого не стало лишним и
+     оставлено как есть: часть версий WebKit всё равно дёргает авто-зум на
+     фокусе поля с мелким текстом даже при заблокированном пользовательском
+     масштабировании, а разблокировать зум обратно ради снятия этого
+     правила никто не просил. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* ═══════════════ SAFE AREA (notch / home-indicator) ═══════════════
+   Requires viewport-fit=cover in index.html, otherwise env() is 0 and
+   these are harmless no-ops on non-notch devices/desktop.
+   BottomNav's own height is 60px icon row + 18px base bottom pad = 78px
+   (see components/UI.tsx). If that 78px changes, update .pb-nav-safe too.
+   Layered as utilities (like the classes above) so normal Tailwind utility
+   classes on the same element compose/override predictably. */
+@layer utilities {
+  /* Нижнее меню — «таблетка», висящая с зазором от края экрана, а не полоса
+     во всю ширину: высота 60 + зазор снизу. Зазор не меньше 8px, а на
+     устройствах с домашней полоской — по её высоте, чтобы меню не наезжало. */
+  .nav-pill-bottom {
+    bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  /* Отступ контента = высота бара AnimatedTabBar (.nt-tabbar-menu, задача
+     2026-08-11 — перенос горбика из CRM) + отступ <nav> снизу + запас.
+     Высота бара — 4em (padding 0.55em+0.85em + иконка 2.6em, все числа из
+     перенесённого блока в index.css) и растёт с font-size:clamp(10px,3vw,12px)
+     самого бара — на 430px это уже 12px×4=48px (измерено live: 40 / 46.8 /
+     48px на 320/390/430). Отступ <nav> снизу — max(env(...),16px) (см.
+     BottomNav в UI.tsx). 48 (макс. бар) + 16 (мин. отступ) + 8 запаса = 72. */
+  .pb-content-safe {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+  .pb-bottom-safe {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  /* Плавающая кнопка — над «горбиком» AnimatedTabBar. Раньше (плоское меню
+     60px) хватало 84px; после переноса горбика (задача 2026-08-11) на
+     вкладке «Обзор» (правый край, рядом с FAB) круг активной вкладки
+     поднимается, а «пузырь»-бугор высотой 2.4em всплывает над баром — на
+     390/430px FAB и бугор физически перекрывались (см. отчёт агента о
+     переносе, скриншот port-390-tab-overview-close.png: два красных круга
+     сливались в один). Посчитано, не на глаз: макс. высота бара 48px (font
+     12px) + высота бугра 2.4em=28.8px + мин. отступ 16px = 92.8px нужного
+     просвета от низа экрана до верха бугра; 104px даёт живой запас ~11px. */
+  .fab-safe-bottom {
+    bottom: calc(104px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ═══════════════ TAP FEEDBACK ═══════════════
+   One named set of press-feedback classes, replacing the ad-hoc mix that
+   had accumulated across the app (active:scale-95/90, active:opacity-80/70,
+   active:bg-white/10, active:bg-card2, active:bg-card/50 — seven different
+   values, none matching mockup-reference/index.html). Values below are
+   copied from that file's own :active rules, so a press reads exactly like
+   the reference wherever these are used. -webkit-tap-highlight-color is
+   suppressed globally (see GLOBAL RESET above); these four classes are the
+   deliberate replacement for it, same as the reference's own reset does
+   (mockup-reference/index.html line 26 also sets tap-highlight-color:
+   transparent and relies on per-component :active rules, not the system
+   highlight).
+
+   Pick by element shape, not by screen:
+     .tap-scale — icon/round/square buttons (pill-btn/round-btn/fab shape:
+       a button that is its own tappable card, not a full-bleed CTA or a
+       row in a list). Physical press via a scale dip.
+       Value: transform:scale(.94), from .fab:active (mockup line ~262).
+       <button className="tap-scale h-11 w-11 rounded-full ...">
+
+     .tap-row — one row inside a list/card (FieldGroup rows, settings
+       rows, task rows, sidebar/menu-drawer items). The row doesn't move,
+       its background washes very slightly.
+       Value: background:rgba(255,255,255,.04), from .row:active
+       (mockup line ~143).
+       <button className="tap-row w-full flex items-center gap-3 ...">
+
+     .tap-fade — full-width/solid CTA buttons and plain text links: the
+       shape must not change (it's often the width of the screen), so
+       opacity carries the feedback instead.
+       Value: opacity:.85, from .auth-btn:active / .check-btn:active
+       (mockup lines ~410 / ~125).
+       <button className="tap-fade w-full h-12 rounded-xl bg-red ...">
+
+     .tap-menu — a row inside a floating menu/sheet that already sits on
+       an elevated surface (mockup's #242424 .menu panel over the #171717
+       page background), so the wash needs to be one notch brighter than
+       .tap-row to still read.
+       Value: background:rgba(255,255,255,.06), from .menu button:active
+       (mockup line ~279).
+       <button className="tap-menu w-full flex items-center gap-3 ...">
+
+   No transition-property is declared on purpose: none of the reference's
+   :active rules animate (they snap instantly), and declaring one here
+   would fight any transition-* utility Tailwind emits for the same
+   element at equal specificity, in the same layer, with the winner
+   decided only by generation order. Elements that want an eased pressed
+   state should own that separately from whichever Tailwind transition-*
+   utility they already carry.
+
+   prefers-reduced-motion: only .tap-scale moves anything (a transform).
+   Under reduced motion its scale is disabled and it falls back to the
+   same opacity dip the reference's own pill-btn/round-btn use — opacity:
+   .75 (mockup lines ~89/~117) — so a press still visibly reads as a
+   press, just without motion.
+
+   :not(:disabled) guard: Chromium still matches :active on a disabled
+   <button> when the pointer is pressed directly over it (confirmed live —
+   an unguarded rule made a disabled Button get *brighter* under press,
+   0.5 -> 0.85, reading as "accepted"). The guard also keeps these classes
+   safely reusable on disabled-able rows the 13-screen rollout adds later;
+   it's a no-op on non-form elements like a `div role="button"` row. */
+@layer utilities {
+  .tap-scale:active:not(:disabled) {
+    transform: scale(0.94);
+  }
+  .tap-row:active:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.04);
+  }
+  .tap-fade:active:not(:disabled) {
+    opacity: 0.85;
+  }
+  .tap-menu:active:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tap-scale:active:not(:disabled) {
+      transform: none;
+      opacity: 0.75;
+    }
+
+    /* Tabbar icon stroke draw -> instant opacity flash (no @keyframes).
+       Active tab still reads via position shift, circle and color change. */
+    .nt-tabbar-menu__item.active svg {
+      animation: none !important;
+    }
+
+    /* Tabbar bubble/item positions -> move instantly (no vestibular translate3d). */
+    .nt-tabbar-menu__item,
+    .nt-tabbar-menu__border {
+      transition: transform 0ms ease-out;
+    }
+
+    /* Mic recording indicator: keep visible as "recording" — replace pulse
+       with a static dot at full opacity (color carries the state). */
+    .mic-rec-dot {
+      animation: none !important;
+      opacity: 1;
+    }
+
+    /* DashedRing (SubtaskFeed «в работе»): волна выключена, все 8
+       сегментов остаются видимыми неподвижным пунктирным кругом — то же
+       самое, что pending, «в работе» тогда читается только по подписи
+       рядом, не по анимации (сама волна и есть единственное движение
+       здесь — ничего физически не крутится, гасить нечего кроме неё). */
+    .dash-glow {
+      animation: none;
+    }
+
+    /* Пульсация размера (dash-pulse) — тот же довод, что у dash-glow
+       выше: под reduced-motion гасим, кружок остаётся на среднем
+       размере (transform: none = масштаб 1, база рендера 21px). */
+    .dash-pulse {
+      animation: none;
+    }
+  }
+
+  /* Surface translucency -> opaque: drop blur, solid background. */
+  @media (prefers-reduced-transparency: reduce) {
+    [class~="backdrop-blur-xl"],
+    [class~="backdrop-blur-md"] {
+      background-color: var(--color-card);
+      backdrop-filter: none !important;
+    }
+  }
+
+  /* More contrast: near-solid surfaces with a defined edge. */
+  @media (prefers-contrast: more) {
+    [class~="backdrop-blur-xl"],
+    [class~="backdrop-blur-md"] {
+      background-color: var(--color-card);
+      backdrop-filter: none !important;
+      border: 1px solid var(--color-stroke);
+    }
+  }
+}
+
+/* ═══════════ AnimatedTabBar (перенос из CRM, задача 2026-08-11) ═══════════
+   Дословный порт CSS-блока ~/Проекты/CRM/CRM-Castom/frontend/src/index.css
+   (строки ≈445-589, класс-эталон «geometry», утверждён владельцем 2026-07-
+   29 в проекте CRM). Владелец: «там есть рабочая, уже прям идеально
+   выверенная вещь» — вся геометрия горба (размеры в em от font-size на
+   .menu, форма бугра через clip-path, единая drop-shadow) взята 1:1, НИ ОДНО
+   число здесь не изменено и не изобретено заново.
+   Вынесено НАРУЖУ любого @layer намеренно, как и в оригинале: правило
+   `.nt-tabbar-menu__item svg { width: 2.6em; ... }` должно перебивать
+   Tailwind-утилиты вроде h-5/w-5 на самой иконке — по спеке cascade-layers
+   безслойное правило побеждает слойное вне зависимости от специфичности, а
+   вся Tailwind-generated CSS (@tailwindcss/vite) сама обёрнута в @layer
+   utilities. Если положить этот блок внутрь @layer, он проиграет.
+   Отличия от оригинала (разрешены заданием — только цвета/контент, не
+   геометрия):
+     • --bgColorMenu (surface CRM) → var(--color-card) — наша панельная
+       поверхность.
+     • круг активной вкладки (ink-50 в CRM, там это цвет ФОНА страницы —
+       «дырка», сквозь которую видна акцентная иконка) → var(--color-red).
+       Это НЕ произвольное решение агента: задание прямо требует «Цвет круга
+       активной вкладки — наш красный акцент», отдельной строкой в списке
+       разрешённых правок. Владелец CRM просил другое (нейтральная дырка +
+       синяя иконка) в своём проекте 29.07 — здесь другой, явно
+       сформулированный запрос.
+     • раз круг стал сплошным красным (а не дыркой цвета фона), акцентная
+       иконка поверх него читается плохо — поэтому активная иконка не
+       брендового цвета (как в CRM: --brand-strong), а var(--color-text)
+       (белая). Это прямое и единственно возможное следствие предыдущего
+       пункта, не самостоятельная правка стиля.
+     • неактивная иконка (ink-400 в CRM) → var(--color-dim).
+     • тень: в оригинале --shadow-offset-y/--shadow-blur/--shadow-opacity —
+       собственные CSS-переменные CRM, которые меняются между свето/тёмной
+       темой. У нас темы нет (проект принудительно тёмный, color-scheme:
+       dark, см. GLOBAL RESET выше) — использованы буквально те же числа,
+       что и в тёмной теме CRM (6px/18px/0.35), а не придуманы заново.
+   Счётчик задач на «Сегодня» (.nt-tabbar-badge) — это ДОПОЛНЕНИЕ к
+   оригиналу, не его часть: задание отдельно разрешает «счётчик задач на
+   Сегодня — маленькая красная цифра без подложки». В самом демо-компоненте
+   CRM счётчика нет вообще. Смещение подобрано счётом, а не на глаз (радиус
+   круга 2.1em, половина иконки 1.3em — цифра у самого угла иконки попадает
+   ВНУТРЬ круга; см. отчёт агента о переносе за точными числами по ширинам
+   320/390/430). */
+.nt-tabbar-svg-container {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.nt-tabbar-menu {
+  --duration: 0.35s;
+  --bgColorMenu: var(--color-card);
+  position: relative;
+  display: flex;
+  width: 100%;
+  max-width: 28rem;
+  margin: 0 auto;
+  /* Опорный размер всей геометрии оригинала (иконка 2.6em, круг 4.2em и т.д.). */
+  font-size: clamp(10px, 3vw, 12px);
+  padding: 0 2.85em;
+  align-items: center;
+  justify-content: center;
+  list-style: none;
+  background-color: var(--bgColorMenu);
+  border-radius: 9999px;
+  overflow: visible;
+  /* ЕДИНАЯ тень на весь gooey-силуэт (панель + холмик + поднятый круг):
+     drop-shadow на .menu обводит объединённую форму всего поддерева разом.
+     Две раздельные тени (box-shadow бара + drop-shadow холмика) давали бы
+     двойное затемнение у шва. Направление вверх; радиус /2 — у drop-shadow
+     размытие визуально ~вдвое сильнее box-shadow (комментарий оригинала). */
+  filter: drop-shadow(0 -6px 9px rgb(0 0 0 / 0.35));
+}
+
+.nt-tabbar-menu__item {
+  all: unset;
+  flex-grow: 1;
+  z-index: 100;
+  display: flex;
+  cursor: pointer;
+  position: relative;
+  border-radius: 50%;
+  align-items: center;
+  will-change: transform;
+  justify-content: center;
+  padding: 0.55em 0 0.85em;
+  color: var(--color-dim);
+  transition:
+    transform var(--timeOut, var(--duration)),
+    color var(--duration);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Цветной круг под активной вкладкой. z-index:-1 кладёт его под иконку, но
+   поверх «пузыря»: кнопка (z-index:100) целиком выше .menu__border. */
+.nt-tabbar-menu__item::before {
+  content: "";
+  z-index: -1;
+  width: 4.2em;
+  height: 4.2em;
+  border-radius: 50%;
+  position: absolute;
+  transform: scale(0);
+  transition:
+    background-color var(--duration),
+    transform var(--duration);
+}
+
+.nt-tabbar-menu__item.active {
+  transform: translate3d(0, -0.8em, 0);
+  color: var(--color-text);
+}
+
+.nt-tabbar-menu__item.active::before {
+  transform: scale(1);
+  background-color: var(--color-red);
+}
+
+/* Иконки — наши Lucide (stroke=currentColor уже задан компонентом Icon);
+   размер задаём здесь: правило вне @layer перебивает tailwind h-5/w-5.
+   stroke-dasharray 400 (число оригинала, не тронуто) с offset 0 в покое
+   штрих не меняет — нужен только для reverse-анимации прорисовки при
+   активации. */
+.nt-tabbar-menu__item svg {
+  width: 2.6em;
+  height: 2.6em;
+  stroke-dasharray: 400;
+}
+
+.nt-tabbar-menu__item.active svg {
+  animation: nt-tabbar-strok 1.5s reverse;
+}
+
+@keyframes nt-tabbar-strok {
+  100% {
+    stroke-dashoffset: 400;
+  }
+}
+
+/* «Пузырь»: плоский прямоугольник 10.9×2.4em НАД баром (bottom:99% — нижним
+   краем на верхнем крае .menu), форму бугра даёт clip-path из
+   AnimatedTabBar.tsx; ширина больше одного пункта — видна только «горка» у
+   своего центра. Позиция по X — transform, его пишет JS-часть компонента
+   инлайн-стилем (см. AnimatedTabBar.tsx). */
+.nt-tabbar-menu__border {
+  position: absolute;
+  left: 0;
+  bottom: 99%;
+  width: 10.9em;
+  height: 2.4em;
+  transition: transform var(--timeOut, var(--duration));
+  will-change: transform;
+  /* Тень у холмика — НЕ здесь: единый drop-shadow висит на .nt-tabbar-menu и
+     обводит общий силуэт (см. коммент там). Форму режет ::before —
+     box-shadow/фильтры на самом клипнутом элементе срезаются clip-path'ом. */
+}
+
+.nt-tabbar-menu__border::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  clip-path: url(#nt-tabbar-menu-clip-path);
+  background-color: var(--bgColorMenu);
+}
+
+/* Счётчик задач на «Сегодня» — ДОПОЛНЕНИЕ к оригиналу (обоснование выше в
+   шапке блока), не его часть. Маленькая цифра без подложки, вынесена за
+   пределы круга (радиус 2.1em). Два момента, проверенных расчётом, а не на
+   глаз:
+   1. Позиционирование через `left` (не `right`). `right` фиксирует ВНЕШНИЙ
+      край цифры — внутренний (ближний к центру круга) тогда ползёт ВЛЕВО с
+      каждой лишней цифрой. При двузначном счётчике (10+ задач — обычный
+      случай, не край) внутренний угол заезжал под круг (проверено: 320px,
+      2 цифры — 18.3px < 21px радиуса). `left` фиксирует именно ближний
+      край — сколько бы цифр ни было, счётчик растёт вправо, наружу.
+   2. Никакого своего font-size: цифра наследует font-size от .nt-tabbar-menu
+      (тот самый clamp(10px,3vw,12px), на котором держится вся геометрия
+      бугра), поэтому top/left в em остаются в ТОЙ ЖЕ системе координат, что
+      и круг/иконка, и масштабируются с ней синхронно на любой ширине — а
+      не съезжают, как было бы при собственном font-size:0.85em. На 320px
+      это ровно 10px — то же, что и было в исходном text-[10px] (задание:
+      «как сейчас»).
+   left:3.3em/top:-1em дают ближний (нижний левый) угол цифры на расстоянии
+   ≈2.35em от центра иконки (радиус круга 2.1em) — проверено на 320/390/430
+   и с принудительным двузначным/трёхзначным текстом (см. отчёт агента). */
+.nt-tabbar-badge {
+  position: absolute;
+  top: -1em;
+  left: 3.3em;
+  z-index: 1;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-red);
+  white-space: nowrap;
+}
+
+/* Кнопка микрофона (TaskFormScreen) — пульсирующая точка «идёт запись».
+   Системное значение (1s ease-in-out), не подобрано на глаз — агент не
+   ощущает пружину/плавность, см. design-by-measurement. */
+@keyframes mic-rec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.mic-rec-dot {
+  animation: mic-rec-pulse 1s ease-in-out infinite;
+}
+
+/* DashedRing (SubtaskFeed.tsx, состояние «в работе») — четвёртый заход
+   18.08.2026. Первая версия (Loader2, системная стрелка) и вторая (капли-
+   комета, вращалась целиком) не подошли — комета «крутилась не как
+   стрелочка на своей оси, а ещё и вокруг оси — как ураган неровный, пьяная
+   стрелка». Третья (один сегмент на пике 12.5%, спад к 25%) технически
+   волна, но при 8 сегментах в моменте виден только один яркий — «не вижу,
+   что там что-то происходит». Эта версия ничего не вращает физически (тот
+   же приём, что раньше): 8 сегментов lucide-значка CircleDashed стоят на
+   месте, только по очереди меняют цвет через animation-delay (см.
+   DashedRing) — но зелёными держатся не 1/8, а 5/8 разом (62.5% цикла),
+   дугой в половину кольца с хвостиком, а не одиночной искрой. Числа 62.5%
+   здесь и DASH_GLOW_DURATION/8 в SubtaskFeed.tsx держать согласованными
+   при правке любого из двух мест. */
+@keyframes dash-glow {
+  0% {
+    color: var(--color-green);
+  }
+  62.5% {
+    color: var(--color-green);
+  }
+  62.5% {
+    color: var(--color-dim);
+  }
+  100% {
+    color: var(--color-dim);
+  }
+}
+
+.dash-glow {
+  animation: dash-glow 0.8s ease-in-out infinite;
+}
+
+/* dash-pulse — размер «дышит» вместе с бегущей дугой, на svg целиком (не
+   на path — transform на path внутри viewBox исказил бы саму дугу).
+   0.8571/1.0952 — не подобраны на глаз: рендер-база 21px (см. DashedRing),
+   просьба «от 18 до 23 пикселей» → 18/21 и 23/21 точно. Период 1.6s — тот
+   же, что у dash-spin (вращение обёртки) ниже, НЕ у dash-glow: цвет идёт
+   вдвое быстрее вращения по прямой просьбе (0.8s), три слоя намеренно на
+   разных ритмах, не рассинхрон. */
+@keyframes dash-pulse {
+  0%,
+  100% {
+    transform: scale(0.8571);
+  }
+  50% {
+    transform: scale(1.0952);
+  }
+}
+
+.dash-pulse {
+  animation: dash-pulse 1.6s ease-in-out infinite;
+  /* border-box, не спековый дефолт view-box для SVG — иначе center может
+     резолвиться не от границ самого значка, а поехать в сторону. */
+  transform-box: border-box;
+  transform-origin: center;
+}
+
+/* dash-spin — весь кружок физически вращается, против часовой (прямая
+   просьба Максима 18.08.2026). На отдельной обёртке вокруг svg, не на нём
+   самом — dash-pulse там уже занял transform, вторая CSS-анимация transform
+   на том же узле просто заменила бы первую, не сложилась бы с ней. linear,
+   не ease — рывки от ease на равномерно симметричной фигуре читались бы
+   как неровность; сама фигура симметрична (8 сегментов через равные 45°
+   вокруг истинного центра обёртки), поэтому вращение с постоянной
+   скоростью не может «уйти со своей оси», в отличие от бракованной кометы
+   (разномастная группа капель, там ось действительно гуляла). */
+@keyframes dash-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+.dash-spin {
+  animation: dash-spin 1.6s linear infinite;
+}
+
+/* Кнопка микрофона (TaskFormScreen) — радиальное кольцо вокруг иконки.
+   Owner 2026-08-13: перенос присланного файла voice-ring-2.html 1:1 —
+   владелец сам довёл геометрию до готовности («я уже всё сделал так,
+   чтобы было всё красиво»), явно попросил взять как есть, не исправлять.
+   Только .ring-wrap/.ring-canvas классы из файла (сама mic-кнопка того
+   файла не переносится — владелец явно попросил «не кнопку, а нашу
+   плоскую иконку»). Размеры и media query — те же числа, что в файле, не
+   пересчитаны заново. Логика отрисовки (96 палочек, LERP-сглаживание,
+   hash-personality) — src/components/MicRing.tsx. */
+.mic-ring-wrap {
+  position: relative;
+  width: 320px;
+  height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mic-ring-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (max-width: 380px) {
+  .mic-ring-wrap {
+    width: 280px;
+    height: 280px;
+  }
+}
+
+/* Owner 2026-08-13 (десятый заход): нативная горизонтальная полоса скролла
+   на доске (TaskBoard.tsx, [data-board-strip], overflow-x-auto) — заметно
+   и «некрасиво», по словам владельца, особенно на «Входящих», где колонок
+   обычно несколько и полоса рисуется под самым коротким столбцом контента,
+   а не у низа экрана. Скролл сам остаётся рабочим (это чисто визуальный
+   индикатор, не функциональность) — стандартный кросс-браузерный приём
+   скрытия. */
+[data-board-strip] {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* старый Edge/IE — на всякий случай, целевая платформа iOS Safari его не видит */
+}
+[data-board-strip]::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/WebKit — основная платформа приложения */
+}
+
+/* Вертикальная полоса прокрутки страницы — тоже прячется (просьба Максима
+   15.08.2026: «полоска скролла справа отображается, когда вверх-вниз
+   скроллю»). Причина та же, что у горизонтальной выше: приложение мобильное
+   по духу, на телефоне системная полоса появляется только во время жеста и
+   сама тает, а в браузере на большом экране висит постоянной серой чертой у
+   края и спорит с раскладкой.
+   Скролл остаётся полностью рабочим — прячется ТОЛЬКО индикатор: колесо,
+   жест, клавиши и полоса-перетаскивание на трекпаде работают как прежде. */
+html,
+body {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* старый Edge/IE */
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/WebKit */
+}
+
+/* Внутренние прокручиваемые области — их в приложении 13 (шторки, колонки
+   доски, длинные списки). Прячем полосу и у них: иначе получилось бы
+   вперемешку — у страницы полосы нет, а внутри шторки есть. */
+.overflow-y-auto,
+.overflow-auto,
+.overflow-x-auto {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar {
+  display: none;
+}
+
+/* ═══════════ TRACKING BY FONT SIZE ═══════════════
+   Skill §15: letter-spacing is size-specific, never one value for all sizes.
+   Large display text wants negative tracking (letters read too far apart as
+   they grow); small text wants slightly positive tracking for legibility.
+   Apple SF Pro Text optical tracking (values are per-em, so they scale with
+   the user's font-size setting):
+     17px -> -0.012em  (large-ish: slight tightening, letters otherwise spread)
+     16px -> -0.006em  (above body: gentle negative)
+     15px -> -0.002em  (between body and heading: near zero, tiny tightening)
+     14px ->  0        (body copy reference line — optical center)
+     13px -> +0.008em  (secondary/small text: legibility bump)
+     12px -> +0.012em  (UI labels/pills: interval grows as size falls)
+     11px -> +0.018em  (mini-text: without tracking it reads as a smudge)
+     10px -> +0.025em  (badges/indicators: max opening for readability)
+   :where() keeps specificity at zero — an explicit tracking-* utility in
+   markup always overrides the automatic value.
+*/
+:where([class~="text-[17px]"]) {
+  letter-spacing: -0.012em;
+}
+:where([class~="text-[16px]"]) {
+  letter-spacing: -0.006em;
+}
+:where([class~="text-[15px]"]) {
+  letter-spacing: -0.002em;
+}
+:where([class~="text-[14px]"]) {
+  letter-spacing: 0;
+}
+:where([class~="text-[13px]"]) {
+  letter-spacing: 0.008em;
+}
+:where([class~="text-[12px]"]) {
+  letter-spacing: 0.012em;
+}
+:where([class~="text-[11px]"]) {
+  letter-spacing: 0.018em;
+}
+:where([class~="text-[10px]"]) {
+  letter-spacing: 0.025em;
+}
+
+/* ═══════════ ДЕМО: своя экранная клавиатура (/kb-demo) ═══════════
+   Пробный экран 18.08.2026. Дефолтная тема react-simple-keyboard
+   (hg-theme-default) светлая — перекрашивается целиком.
+
+   ВСЕ ЧИСЛА НИЖЕ СНЯТЫ ЗАМЕРОМ С РЕАЛЬНОГО СКРИНШОТА системной клавиатуры
+   iPhone (тёмная тема, русская раскладка), присланного владельцем
+   18.08.2026 через обменную папку. Скриншот @3x (1260px = 420pt), поэтому
+   каждое измеренное значение делено на 3. Сканирование строк/колонок
+   пикселей, не оценка на глаз:
+
+     фон панели        #171717   (замер; совпал с --color-bg проекта)
+     ЛЮБАЯ клавиша     #3C3C3C   (замер по 11 клавишам ряда 3 и всем 4
+                                  клавишам ряда 4 — служебные тем же
+                                  цветом, что буквенные!)
+     высота клавиши    135/3 = 45
+     зазор горизонт.    18/3 = 6
+     зазор вертик.      33/3 = 11
+     боковые поля       20/3 ≈ 6
+     радиус             19/3 ≈ 6
+     ряд 4, ширины(pt)  123=45.3 · 🎤=45.7 · пробел=200.7 · return=97.3
+
+   Две ошибки прошлого захода, которые замер и вскрыл:
+   1) служебные клавиши были покрашены темнее буквенных — это верно для
+      СВЕТЛОЙ темы iOS, а в тёмной все клавиши одного цвета;
+   2) клавиши стояли на #4a4a4c (светлее замеренного) поверх панели
+      #101012 (темнее замеренной) — контраст был завышен вдвое.
+*/
+.kb-demo {
+  background: #171717;
+  /* Боковое поле — ровно 20 физических пикселей при @3x, как на замере
+     системной клавиатуры (20 слева / 19 справа). Записано делением, а не
+     округлённым 6.67, чтобы связь с замером была видна и не потерялась.
+     Проверка арифметикой на его экране (420pt, 11 клавиш, 10 зазоров по 6):
+       (420 − 2×20/3 − 10×6) / 11 = 31.52pt = 94.5px@3x — эталон 94.6.
+     С прежними целыми 6px выходило 31.64pt (94.9px) — те самые 0.3px
+     расхождения, которые владелец заметил на сравнении. */
+  padding: 8px calc(19px / 3) calc(8px + env(safe-area-inset-bottom, 0px))
+    calc(20px / 3);
+}
+
+.kb-demo .hg-theme-default {
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+}
+
+.kb-demo .hg-row {
+  display: flex;
+  gap: 6px;
+}
+.kb-demo .hg-row + .hg-row {
+  /* Ровно замеренные 11: тень убрана, лишний пиксель больше не съедается. */
+  margin-top: 11px;
+}
+
+/* ⚠️ Обязательно обнулить СВОИ отступы темы библиотеки.
+   hg-theme-default держит `.hg-row .hg-button:not(:last-child){margin-right:5px}`
+   и `.hg-row:not(:last-child){margin-bottom:5px}`. Они не заменяются нашим
+   gap/margin-top, а СКЛАДЫВАЮТСЯ с ним: 6+5 = 11px по горизонтали вместо 6.
+   Замер это и показал — клавиши выходили 27pt вместо системных 31.5pt, и
+   владелец увидел разницу глазами раньше, чем я её померил. */
+.kb-demo .hg-row .hg-button:not(:last-child),
+.kb-demo .hg-row .hg-button-container:not(:last-child) {
+  margin-right: 0;
+}
+.kb-demo .hg-row:not(:last-child) {
+  margin-bottom: 0;
+}
+
+/* Единый вид всех клавиш — в тёмной теме iOS служебные не выделяются
+   цветом (проверено замером, см. шапку). Тень снизу тонкая: на замере
+   кромка клавиши темнее её тела на ~1px. */
+.kb-demo .hg-button {
+  /* flex-basis: 0 — обязательно. У библиотеки кнопки идут `flex-grow: 1`
+     при базисе auto, то есть ширина зависит от СОДЕРЖИМОГО: в рядах из
+     одних букв клавиши выходят равными, а в третьем ряду shift и
+     backspace шире буквы и растаскивают колонки. На замере это дало
+     «лесенку»: ряды 1-2 начинали вторую клавишу с 132px, а ряд 3 — со
+     108px. С нулевым базисом ширина считается только от свободного
+     места, и все ряды встают в одну сетку. */
+  flex: 1 1 0;
+  min-width: 0;
+  height: 45px;
+  background: #3c3c3c;
+  color: #fff;
+  border: none;
+  /* 19 физических пикселей при @3x — столько «съедает» скругление у
+     системной клавиши на замере. */
+  border-radius: calc(19px / 3);
+  font-weight: 400;
+  line-height: 1;
+  /* Тени нет намеренно: `box-shadow: 0 1px 0` выходил за габарит клавиши
+     и давал на замере высоту 138px вместо системных 135. */
+  transition: background 80ms ease;
+}
+
+/* ⚠️ Кегль — отдельным правилом с ПОВЫШЕННОЙ специфичностью.
+   hg-theme-default держит `.hg-theme-default button.hg-button{font-size:inherit}`
+   (0,2,1) — оно перебивало наш `.kb-demo .hg-button` (0,2,0), и клавиши
+   молча наследовали 16px от страницы: в CSS стояло одно число, а на
+   экране было другое. Проверять такое надо не по исходнику, а
+   getComputedStyle на живой странице.
+   Значение: у системной «Ф» габарит 46×46 физических пикселей (@3x);
+   при 16px наша давала 33 → 46×16/33 ≈ 22px.
+   ВАЖНО: на .110 нет SF Pro, подгонка сделана под шрифт Linux-рендера —
+   на реальном iPhone кегль пересчитать замером заново. */
+.kb-demo .hg-theme-default button.hg-button {
+  font-size: 22px;
+}
+.kb-demo .hg-theme-default button.kb-key-util {
+  font-size: 17px;
+}
+
+/* Нажатие — светлее, клавиша «подсвечивается», а не проваливается. */
+.kb-demo .hg-button:active,
+.kb-demo .hg-button.hg-activeButton {
+  background: #5a5a5a;
+}
+
+/* Служебные отличаются только КЕГЛЕМ подписи, не цветом. */
+.kb-demo .kb-key-util {
+  font-size: 17px;
+}
+
+/* Пропорции нижнего ряда — замер: 45.3 / 45.7 / 200.7 / 97.3 pt.
+   Заданы через flex-basis в тех же долях, чтобы тянулись по ширине. */
+.kb-demo .hg-button[data-skbtn="{numbers}"],
+.kb-demo .hg-button[data-skbtn="{abc}"],
+.kb-demo .hg-button[data-skbtn="{mic}"] {
+  flex: 0 0 45px;
+  max-width: 45px;
+}
+.kb-demo .hg-button[data-skbtn="{enter}"] {
+  flex: 0 0 97px;
+  max-width: 97px;
+}
+/* Пробел на системной клавиатуре пустой, с мелкой пометкой языка у
+   правого края — воспроизводится псевдоэлементом, чтобы не заводить
+   ради подписи отдельную клавишу. */
+.kb-demo .hg-button[data-skbtn="{space}"] {
+  position: relative;
+}
+.kb-demo .hg-button[data-skbtn="{space}"]::after {
+  content: "ру";
+  position: absolute;
+  right: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* ── Иконки служебных клавиш ──
+   Системная клавиатура рисует их символами SF Symbols (shift, delete.left,
+   return), а не типографскими «⇧ ⌫ ⏎» — те заметно тоньше и другой формы.
+   simple-keyboard подпись отдаёт строкой и HTML внутрь кнопки не пускает
+   (getButtonDisplayName возвращает string), поэтому иконка идёт фоном:
+   `mask-image` со встроенным SVG, цвет берётся от currentColor — так
+   клавиша остаётся одной кнопкой, без наложенных сверху элементов.
+   Подпись при этом делается прозрачной, а не пустой: на пустую строку
+   библиотека подставляет обратно сырое имя кнопки. */
+.kb-demo .kb-icon {
+  color: transparent;
+  position: relative;
+}
+.kb-demo .kb-icon::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* shift — контурная стрелка вверх с основанием */
+.kb-demo .hg-button[data-skbtn="{shift}"]::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linejoin='round'%3E%3Cpath d='M12 3.6 3.4 12.2h4.5v6.4h8.2v-6.4h4.5z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linejoin='round'%3E%3Cpath d='M12 3.6 3.4 12.2h4.5v6.4h8.2v-6.4h4.5z'/%3E%3C/svg%3E");
+  -webkit-mask-size: 19px 19px;
+  mask-size: 19px 19px;
+}
+
+/* backspace — пятиугольник с остриём влево и крестиком.
+   viewBox плотно облегает рисунок (22×18), поэтому mask-size задаёт его
+   габарит напрямую: 46×38 физических пикселей замера / 3. Прошлый SVG имел
+   поля внутри viewBox и пропорции 28:24 — из-за preserveAspectRatio высота
+   упиралась в ширину и рисунок выходил площе эталона (47×30 вместо 46×38). */
+.kb-demo .hg-button[data-skbtn="{bksp}"]::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 18' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 0.9h11.6a1.6 1.6 0 0 1 1.6 1.6v13a1.6 1.6 0 0 1-1.6 1.6H8L0.9 9z'/%3E%3Cpath d='M11.3 5.6l5.2 6.8M16.5 5.6l-5.2 6.8'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 18' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 0.9h11.6a1.6 1.6 0 0 1 1.6 1.6v13a1.6 1.6 0 0 1-1.6 1.6H8L0.9 9z'/%3E%3Cpath d='M11.3 5.6l5.2 6.8M16.5 5.6l-5.2 6.8'/%3E%3C/svg%3E");
+  -webkit-mask-size: calc(46px / 3) calc(38px / 3);
+  mask-size: calc(46px / 3) calc(38px / 3);
+}
+
+/* return — стрелка с загибом вниз-влево */
+.kb-demo .hg-button[data-skbtn="{enter}"]::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 5v6.5a2.5 2.5 0 0 1-2.5 2.5H4.6'/%3E%3Cpath d='M9.2 9.4 4.4 14l4.8 4.6'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 5v6.5a2.5 2.5 0 0 1-2.5 2.5H4.6'/%3E%3Cpath d='M9.2 9.4 4.4 14l4.8 4.6'/%3E%3C/svg%3E");
+  -webkit-mask-size: 20px 20px;
+  mask-size: 20px 20px;
+}
+
+/* микрофон — вместо эмодзи-клавиши системной раскладки */
+.kb-demo .hg-button[data-skbtn="{mic}"]::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='2.5' width='6' height='11' rx='3'/%3E%3Cpath d='M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='2.5' width='6' height='11' rx='3'/%3E%3Cpath d='M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21'/%3E%3C/svg%3E");
+  -webkit-mask-size: 23px 23px;
+  mask-size: 23px 23px;
+}
+
+/* Микрофон — единственное отступление от оригинала: в системной
+   клавиатуре на этом месте стоит эмодзи-клавиша. Цвет тот же, чтобы не
+   ломать строй; иконка отличает её от остальных. */
+.kb-demo .kb-key-mic {
+  font-size: 20px;
+}

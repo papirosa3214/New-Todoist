@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <!-- Установка на домашний экран (PWA). display: standalone в манифесте
+         убирает браузерную обвязку на Android. На iPhone манифест сам по
+         себе не работает — Safari слушает только apple-mobile-web-app-*
+         мета-теги ниже: apple-mobile-web-app-capable запускает приложение
+         без адресной строки, status-bar-style задаёт вид системной строки
+         состояния под «чёлкой». Расширенный viewport (maximum-scale=1,
+         user-scalable=no, interactive-widget=resizes-content) — по образцу
+         из ~/Проекты/infra-panel/frontend/index.html, уже проверен в бою
+         на этом же телефоне владельца. Осознанный компромисс: масштабирование
+         жестом (пинч-зум) отключается вместе с обвязкой — если это станет
+         мешать, можно вернуть user-scalable=yes отдельно от display-mode. -->
+    <meta name="apple-mobile-web-app-title" content="Задачи" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- НЕ black-translucent, как в образце infra-panel. Там этот режим
+         (контент рисуется ПОД статус-баром) явно скомпенсирован в
+         App.tsx — pt-[max(10px,env(safe-area-inset-top))] и
+         pt-[calc(64px+env(safe-area-inset-top))] (см. ~/Проекты/infra-panel/
+         frontend/src/App.tsx). В ЭТОМ проекте такой компенсации нигде нет —
+         grep по src/ на safe-area-inset-top ничего не находит, а
+         Layout.tsx (в него мне нельзя) не резервирует место сверху. При
+         black-translucent верхний sticky-заголовок ушёл бы под чёлку/статус-
+         бар iPhone — ровно то, что пункт 4 задания запрещает. "black" отдаёт
+         статус-бару собственную непрозрачную полосу и не рисует контент под
+         ней — тот же эффект (без адресной строки), но без риска наезда, и
+         без правок в src/**. Если позже кто-то добавит свой отступ по
+         env(safe-area-inset-top) в Layout.tsx, тут можно вернуть
+         black-translucent для полного визуального слияния со статус-баром. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <!-- Тёмная тема — единственная тема приложения. color-scheme здесь (а не
+         только в src/index.css) нужен потому, что этот <head> разбирается и
+         применяется браузером ДО того, как приедет CSS-бандл (он грузится
+         вместе с JS через <script type="module">), а до этого браузер по
+         умолчанию считает документ светлым и красит полотно белым — это и
+         есть вспышка при F5. theme-color — тот же цвет для системного UI
+         (адресная строка/статус-бар) на мобильных. Значение #171717 — это
+         --color-bg из src/index.css (@theme), продублировано буквально,
+         потому что переменная CSS ещё не существует на этом этапе загрузки;
+         если --color-bg поменяется, поменять и здесь. -->
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#171717" />
+    <style>
+      /* Критический инлайн-стиль: красит html (весь документ, а не только
+         body) тёмным до применения src/index.css. Без этого между разбором
+         <head> и загрузкой стилей браузер рисует белое полотно — ровно та
+         вспышка, на которую жалуется владелец. */
+      html {
+        background: #171717;
+        color-scheme: dark;
+      }
+    </style>
+    <title>taskflow</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

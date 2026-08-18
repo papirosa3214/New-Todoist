@@ -1,0 +1,45 @@
+# Зависимости
+node_modules/
+
+# Сборка веба
+dist/
+
+# Веб-бандл внутри iOS-проекта — генерируется `vite build` + `cap sync ios`,
+# в репозитории не нужен. ВАЖНО при сборке из чистого клона: собирать с
+# явным адресом API, иначе приложение откроется, но не загрузит данные
+# (same-origin fallback молча ломается в native-режиме):
+#   VITE_API_URL=http://192.168.1.110:3001 npx vite build && npx cap sync ios
+ios/App/App/public/
+
+# Xcode
+ios/App/build/
+ios/App/DerivedData/
+*.xcuserstate
+xcuserdata/
+ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration/
+
+# Локальная БД разработки
+db.sqlite
+*.sqlite-journal
+
+# macOS
+.DS_Store
+
+# Логи и окружение
+*.log
+.env
+.env.local
+
+# Служебные каталоги Claude Code. В worktrees/ оседают брошенные рабочие
+# копии — внутри полный дубль самого проекта, к TaskFlow отношения не имеет.
+.claude/
+
+# Мусор macOS от SMB/Dropbox (AppleDouble-спутники файлов)
+._*
+.AppleDouble
+
+# Сохранённая сессия браузерного харнесса — внутри живой JWT. Учётные данные
+# в репозиторий не кладём: то же правило, по которому пароль в
+# scripts/screenshot.mjs берётся только из окружения, а зашитый JWT_SECRET
+# убран из server/src/env.ts.
+scripts/auth-state.json
