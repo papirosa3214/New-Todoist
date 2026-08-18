@@ -314,7 +314,7 @@ export function SettingsScreen() {
           />
           <Row icon="tag" label="Метки" onClick={() => navigate("/labels")} />
           <Row icon="bot" label="Агенты" onClick={() => navigate("/agents")} />
-          {/* Вход на пробный экран своей клавиатуры (18.08.2026). Временный
+{/* Вход на пробный экран своей клавиатуры (18.08.2026). Временный
               пункт: без него до /kb-demo в собранном приложении не добраться —
               роут есть, а ссылки в интерфейсе нет. Убрать, когда проба
               закончится решением делать или не делать. */}
@@ -322,6 +322,12 @@ export function SettingsScreen() {
             icon="edit"
             label="Своя клавиатура (проба)"
             onClick={() => navigate("/kb-demo")}
+          />
+          <Row
+            icon="mic"
+            iconColor="#4a9fd8"
+            label="Модели распознавания"
+            onClick={() => navigate("/settings/voice-models")}
           />
         </FieldGroup>
       </div>

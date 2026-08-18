@@ -11,7 +11,8 @@
     "check:dead-controls": "node scripts/check-dead-controls.mjs",
     "check": "npm run check:dead-controls",
     "test": "vitest run",
-    "screenshot": "node scripts/screenshot.mjs"
+    "screenshot": "node scripts/screenshot.mjs",
+    "check:keyboard": "node scripts/kb-check.mjs"
   },
   "dependencies": {
     "@capacitor/cli": "^8.5.0",

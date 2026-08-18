@@ -913,17 +913,25 @@ export function TextField({
   icon,
   trailing,
   className = "",
+  systemKeyboard,
   ...inputProps
 }: {
   icon?: string;
   trailing?: ReactNode;
   className?: string;
+  /** true — обычная системная клавиатура, как было до своей (ТЗ §3 шаг 3). */
+  systemKeyboard?: boolean;
 } & ComponentPropsWithoutRef<"input">) {
   return (
     <div className="flex items-center gap-3 px-4 h-[52px]">
       {icon && <Icon name={icon} size={18} className="text-dim shrink-0" />}
       <input
         {...inputProps}
+        // Своя клавиатура подключается делегированием на уровне
+        // KeyboardProvider (lib/keyboardContext.tsx) — по DOM, не по пропсам,
+        // потому что 14 полей в проекте написаны мимо этого компонента.
+        // Здесь остаётся только опт-аут: атрибут, который перехват уважает.
+        data-system-keyboard={systemKeyboard ? "" : undefined}
         className={`flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none ${className}`}
       />
       {trailing}

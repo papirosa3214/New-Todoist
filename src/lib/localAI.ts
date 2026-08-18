@@ -11,10 +11,34 @@
 // никогда не считается доступным.
 import { registerPlugin, Capacitor } from "@capacitor/core";
 
+export interface ModelStatus {
+  selected: string;
+  installed: string[];
+  ready: boolean;
+  loadedModel: string;
+  loading: boolean;
+  downloading: string;
+  progress: number;
+  error: string;
+}
+
 interface LocalAIPlugin {
   isAvailable(): Promise<{ llm: boolean; llmReason: string; asr: boolean }>;
-  transcribe(opts: { audioBase64: string }): Promise<{ text: string }>;
+  transcribe(opts: {
+    audioBase64: string;
+    mimeType?: string;
+  }): Promise<{ text: string; engine?: string }>;
   suggestSubtasks(opts: { text: string }): Promise<{ subtasks: string[] }>;
+  listModels(): Promise<ModelStatus & { available: string[] }>;
+  modelStatus(): Promise<ModelStatus>;
+  downloadModel(opts: { model: string }): Promise<ModelStatus>;
+  selectModel(opts: { model: string }): Promise<ModelStatus>;
+  deleteModel(opts: { model: string }): Promise<ModelStatus>;
+  prepareModel(): Promise<ModelStatus>;
+  addListener(
+    event: "whisperProgress",
+    cb: (data: { model: string; progress: number }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
 }
 
 const LocalAI = registerPlugin<LocalAIPlugin>("LocalAI");
@@ -74,7 +98,13 @@ export async function transcribeOnDevice(blob: Blob): Promise<string | null> {
     const { asr } = await checkLocalAIAvailability();
     if (!asr) return null;
     const audioBase64 = await blobToBase64(blob);
-    const { text } = await LocalAI.transcribe({ audioBase64 });
+    // MIME передаём явно: AVFoundation определяет контейнер по расширению
+    // временного файла, а угаданное расширение давало
+    // kAudioFileUnsupportedFileTypeError.
+    const { text } = await LocalAI.transcribe({
+      audioBase64,
+      mimeType: blob.type,
+    });
     return text;
   } catch {
     return null;
@@ -92,4 +122,42 @@ export async function suggestSubtasksOnDevice(
   } catch {
     return null;
   }
+}
+
+// ═══════════ Управление моделями распознавания из настроек ═══════════
+//
+// Всё это доступно только на нативном iOS. На вебе экран моделей просто
+// показывает, что управлять нечем — бросать исключение в UI незачем.
+
+export function localAIModelsSupported(): boolean {
+  return isNativeIOS();
+}
+
+export async function listWhisperModels(): Promise<
+  (ModelStatus & { available: string[] }) | null
+> {
+  if (!isNativeIOS()) return null;
+  return LocalAI.listModels();
+}
+
+export async function downloadWhisperModel(model: string): Promise<ModelStatus> {
+  return LocalAI.downloadModel({ model });
+}
+
+export async function selectWhisperModel(model: string): Promise<ModelStatus> {
+  return LocalAI.selectModel({ model });
+}
+
+export async function deleteWhisperModel(model: string): Promise<ModelStatus> {
+  return LocalAI.deleteModel({ model });
+}
+
+export async function onWhisperProgress(
+  cb: (data: { model: string; progress: number }) => void,
+): Promise<() => void> {
+  if (!isNativeIOS()) return () => {};
+  const handle = await LocalAI.addListener("whisperProgress", cb);
+  return () => {
+    void handle.remove();
+  };
 }

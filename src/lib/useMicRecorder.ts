@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Capacitor } from "@capacitor/core";
+
+function isNativeIOS(): boolean {
+  return Capacitor.isNativePlatform() && Capacitor.getPlatform() === "ios";
+}
 
 // ═══════════ Запись голоса в браузере — кнопка микрофона ═══════════
 //
@@ -185,9 +190,16 @@ export function useMicRecorder(onDone: (blob: Blob) => void) {
     // Chrome/большинство браузеров дают webm/opus; Safari — обычно mp4.
     // ASR-сервис определяет формат сам через ffmpeg, не по расширению —
     // достаточно взять первый реально поддерживаемый вариант.
-    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(
-      (t) => MediaRecorder.isTypeSupported(t),
-    );
+    // Порядок зависит от платформы. На вебе webm/opus компактнее. На
+    // нативном iOS он неприемлем: AVFoundation (и WhisperKit, и
+    // DictationTranscriber) WebM не читает вообще, отдаёт
+    // kAudioFileUnsupportedFileTypeError, и весь локальный путь молча
+    // уходит на сервер. mp4/AAC читается. Серверному ASR формат безразличен
+    // (ffmpeg определяет сам), так что приоритет mp4 на iOS ничего не ломает.
+    const candidates = isNativeIOS()
+      ? ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
+      : ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+    const mimeType = candidates.find((t) => MediaRecorder.isTypeSupported(t));
 
     const recorder = new MediaRecorder(
       stream,

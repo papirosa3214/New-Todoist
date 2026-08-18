@@ -78,7 +78,22 @@ export function useVisualViewportInset() {
       // защита от отрицательных значений на переходных кадрах анимации
       // открытия/закрытия клавиатуры и от округления; минусовый отступ
       // был бы хуже нулевого.
-      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      const vvInset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      // Своя экранная клавиатура (components/AppKeyboard.tsx) системную НЕ
+      // вызывает — она гасится inputMode="none", и visualViewport при её
+      // открытии не сжимается ВООБЩЕ (замер на iPhone Air, iOS 26.6,
+      // 18.08.2026: инсет 0px). Значит vvInset про неё ничего не знает, и
+      // формы уехали бы под панель. Её высоту она сама пишет в
+      // --app-kb-height, а здесь берётся максимум: писатель --kb-inset
+      // остаётся ОДИН, иначе два источника перебивали бы друг друга на
+      // каждом событии scroll.
+      const ownKeyboard =
+        parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue(
+            "--app-kb-height",
+          ),
+        ) || 0;
+      const inset = Math.max(vvInset, ownKeyboard);
       document.documentElement.style.setProperty("--kb-inset", `${inset}px`);
       // Чистая высота клавиатуры, без поправки на панорамирование — см.
       // комментарий выше. Единственный текущий потребитель — MicKeyboardBar
@@ -102,10 +117,14 @@ export function useVisualViewportInset() {
     // бы от реальной картинки при панорамировании над клавиатурой.
     vv.addEventListener("resize", update);
     vv.addEventListener("scroll", update);
+    // Своя клавиатура появляется и исчезает без участия visualViewport —
+    // ни resize, ни scroll при этом не стреляют. Она сообщает о себе сама.
+    window.addEventListener("app-keyboard-resize", update);
 
     return () => {
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
+      window.removeEventListener("app-keyboard-resize", update);
       // Сброс на дефолт при размонтировании — тот же дефолт, что и в
       // index.css, чтобы не оставить «залипший» ненулевой инсет для
       // экранов, которые этот конкретный монтированный хук больше не

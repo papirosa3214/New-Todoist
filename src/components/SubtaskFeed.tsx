@@ -234,6 +234,7 @@ function ReplyForm({
   onCancel: () => void;
   onSubmit: (comment: string, attachmentIds: string[]) => Promise<unknown>;
 }) {
+
   const [comment, setComment] = useState("");
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);

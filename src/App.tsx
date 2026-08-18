@@ -21,6 +21,8 @@ import { LabelsScreen } from "./screens/LabelsScreen";
 import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
 import { LabelTasksScreen } from "./screens/LabelTasksScreen";
 import { SearchScreen } from "./screens/SearchScreen";
+import { VoiceModelsScreen } from "./screens/VoiceModelsScreen";
+import { KeyboardProvider } from "./lib/keyboardContext";
 import { KeyboardDemoScreen } from "./screens/KeyboardDemoScreen";
 import { Icon } from "./components/UI";
 
@@ -83,7 +85,11 @@ export default function App() {
 
       {/* App shell (requires auth) */}
       <Route element={<RequireAuth />}>
-        <Route element={<Layout />}>
+        {/* KeyboardProvider — здесь, ВНУТРИ RequireAuth и вокруг Layout (ТЗ
+            KEYBOARD-INTEGRATION.md §3 шаг 2): своя клавиатура рендерится один
+            раз на всё приложение. На /login и /register она сознательно НЕ
+            подключена — там нужна обычная системная, иначе пароль не ввести. */}
+        <Route element={<KeyboardProvider><Layout /></KeyboardProvider>}>
           <Route path="/" element={<Navigate to="/inbox" replace />} />
           <Route path="/inbox" element={<InboxScreen />} />
           <Route path="/today" element={<TodayScreen />} />
@@ -104,6 +110,7 @@ export default function App() {
           <Route path="/labels" element={<LabelsScreen />} />
           <Route path="/labels/:id" element={<LabelTasksScreen />} />
           <Route path="/search" element={<SearchScreen />} />
+          <Route path="/settings/voice-models" element={<VoiceModelsScreen />} />
         </Route>
       </Route>
 

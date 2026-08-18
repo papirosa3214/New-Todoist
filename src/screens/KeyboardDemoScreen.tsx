@@ -85,6 +85,7 @@ const DISPLAY = {
   "{mic}": " ",
 };
 
+
 export function KeyboardDemoScreen() {
   const [text, setText] = useState("");
   const [layoutName, setLayoutName] = useState<keyof typeof LAYOUTS>("default");
@@ -164,6 +165,11 @@ export function KeyboardDemoScreen() {
 
         <div className="bg-card rounded-2xl px-4 py-3 mb-3">
           <input
+            // Системная клавиатура гасится этим атрибутом. Замер на iPhone Air
+            // (iOS 26.6) 18.08.2026: инсет visualViewport 0px против 413px у
+            // поля без атрибута. Каретка при этом остаётся — поэтому НЕ
+            // readonly, с ним WebKit каретку не рисует.
+            inputMode="none"
             value={text}
             onChange={(e) => {
               setText(e.target.value);
