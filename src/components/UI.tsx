@@ -624,11 +624,25 @@ export function SideNav() {
 
 // ═══════════ FAB ═══════════
 
-export function FAB({ onClick }: { onClick?: () => void }) {
+export function FAB({
+  onClick,
+  // Создание из раздела «Сегодня» сразу проставляет сегодняшний срок
+  // (владелец 19.08.2026: «логично, если я и сегодня создаю»). В
+  // остальных разделах задача по-прежнему заводится БЕЗ срока — это
+  // отдельное решение владельца от 10.08.2026 (как в Todoist: задача без
+  // даты падает во «Входящие»), и трогать его здесь нельзя.
+  dueToday,
+}: {
+  onClick?: () => void;
+  dueToday?: boolean;
+}) {
   const navigate = useNavigate();
   return (
     <button
-      onClick={onClick ?? (() => navigate("/task/new"))}
+      onClick={
+        onClick ??
+        (() => navigate(`/task/new${dueToday ? "?due=today" : ""}`))
+      }
       className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-[0_6px_16px_rgba(228,67,50,.45)] z-30 tap-scale"
     >
       <Icon name="plus" size={26} className="text-white" />

@@ -64,6 +64,7 @@ import {
   capitalizeFirst,
   parseDictation,
 } from "../lib/dictationParser";
+import { todayStr } from "../lib/date";
 import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import type { UpdateTaskInput } from "../api/tasks";
@@ -253,7 +254,14 @@ export function TaskFormScreen() {
   // — undated tasks land in Inbox, "Сегодня" only shows what was actually
   // put there). Edit mode overwrites this from existingTask.due_date right
   // below, so an existing task keeps its own date.
-  const [dueDate, setDueDate] = useState<string | null>(null);
+  //
+  // Исключение (19.08.2026): создание ИЗ раздела «Сегодня» — там кнопка
+  // передаёт ?due=today, и срок проставляется сразу («логично, если я и
+  // сегодня создаю»). Правило выше при этом в силе: из любого другого
+  // раздела задача заводится без срока.
+  const [dueDate, setDueDate] = useState<string | null>(
+    searchParams.get("due") === "today" ? todayStr() : null,
+  );
   // Час начала и длительность — под календарную развёртку раздела «День»
   // (18.08.2026). Живут отдельными полями, а не внутри dueDate: срок в
   // проекте всюду сравнивается как голая дата «ГГГГ-ММ-ДД», и подмешивание

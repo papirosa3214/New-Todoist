@@ -183,7 +183,7 @@ export function Layout() {
         </div>
         {!hideNav && isFan && <FanMenu showAdd={!hideFAB} />}
         {!hideNav && !isFan && <BottomNav />}
-        {!hideFAB && !isFan && <FAB />}
+        {!hideFAB && !isFan && <FAB dueToday={loc.pathname === "/today"} />}
       </div>
     );
   }
@@ -218,7 +218,7 @@ export function Layout() {
           <Outlet />
         </div>
       </div>
-      {!hideFAB && <FAB />}
+      {!hideFAB && <FAB dueToday={loc.pathname === "/today"} />}
       <Panel />
     </div>
   );

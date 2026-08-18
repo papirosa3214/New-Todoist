@@ -136,7 +136,14 @@ export function DayHours({
             <div className="absolute bottom-0 left-[46px] right-2 top-0">
               {timed.map((t) => {
                 const start = hoursFromTime(t.start_time)!;
-                const dur = t.duration_min ?? 60;
+                // Длительность необязательная (владелец 19.08.2026: «если
+                // я не знаю, сколько займёт, просто указал время»). Без неё
+                // блок рисуется коротким — получасовой меткой начала, а не
+                // часовым прямоугольником: занимать час экрана под задачу,
+                // про которую известно только «в 14:30», значит показывать
+                // то, чего никто не утверждал.
+                const dur = t.duration_min ?? 30;
+                const durKnown = t.duration_min != null;
                 const color = projectColor(t);
                 const done = t.status === "completed";
                 const height = Math.max(34, (dur / 60) * HOUR_H - 3);
@@ -152,6 +159,16 @@ export function DayHours({
                       // плотный цвет на такой площади перетягивает экран.
                       // Цвет несёт полоска слева.
                       boxShadow: `inset 3px 0 0 0 ${color}`,
+                      // Конец не задан — низ блока размыт, чтобы он не
+                      // читался как «задача точно кончится здесь».
+                      ...(durKnown
+                        ? null
+                        : {
+                            maskImage:
+                              "linear-gradient(to bottom, #000 60%, transparent)",
+                            WebkitMaskImage:
+                              "linear-gradient(to bottom, #000 60%, transparent)",
+                          }),
                       opacity: done ? 0.55 : 1,
                     }}
                   >
@@ -165,7 +182,8 @@ export function DayHours({
                       </span>
                       {height > 44 && (
                         <span className="mt-0.5 block text-[11px] text-dim tabular-nums">
-                          {t.start_time} · {minutesLabel(dur)}
+                          {t.start_time}
+                          {durKnown ? ` · ${minutesLabel(dur)}` : ""}
                         </span>
                       )}
                     </span>

@@ -507,7 +507,11 @@ export function DueDateField({
                   onChange={(h) =>
                     onTimeChange!(
                       `${String(h).padStart(2, "0")}:${time ? time.split(":")[1] : "00"}`,
-                      duration ?? 60,
+                      // Длительность НЕ подставляем: «сколько займёт»
+                      // владелец может не знать (19.08.2026 — «если я не
+                      // знаю, сколько займёт, просто указал время»). Поле
+                      // необязательное и в базе, и в API.
+                      duration ?? null,
                     )
                   }
                   format={(h) => String(h).padStart(2, "0")}
@@ -523,7 +527,7 @@ export function DueDateField({
                   onChange={(m) =>
                     onTimeChange!(
                       `${time ? time.split(":")[0] : "09"}:${String(m).padStart(2, "0")}`,
-                      duration ?? 60,
+                      duration ?? null,
                     )
                   }
                   format={(m) => String(m).padStart(2, "0")}
@@ -547,7 +551,12 @@ export function DueDateField({
                     {DURATIONS.map((d) => (
                       <button
                         key={d}
-                        onClick={() => onTimeChange!(time ?? "09:00", d)}
+                        onClick={() =>
+                          // Повторный тап снимает длительность — так её
+                          // можно не только поставить, но и передумать,
+                          // не убирая время целиком.
+                          onTimeChange!(time ?? "09:00", duration === d ? null : d)
+                        }
                         className={`h-[34px] flex-1 rounded-lg text-[13px] font-medium tabular-nums transition-colors ${
                           duration === d
                             ? "bg-red text-white"
@@ -641,14 +650,13 @@ export function LabelsField({
             </button>
           );
         })}
-        {!creating && (
-          <button
-            onClick={() => setCreating(true)}
-            className="inline-flex items-center text-[12px] font-semibold rounded-[10px] px-3 py-2 text-sub bg-white/[0.08]"
-          >
-            + новая
-          </button>
-        )}
+        {/* Кнопка «+ новая» убрана 19.08.2026 по решению владельца: метки
+            заводятся в настройках («Метки»), и второй вход сюда же плодил
+            дубли — «я в настройках себе выставляю, а оно двоится». Здесь
+            остаётся только ВЫБОР из уже заведённых. Механизм создания
+            (creating/onCreate ниже) не удалён: им пользуется экран меток,
+            а удалять рабочий код ради одной скрытой кнопки — лишний риск,
+            уже наступали (см. историю PriorityPill выше в этом файле). */}
       </div>
       {creating && (
         <div className="border-t border-stroke flex items-center gap-2 px-4 py-2.5">

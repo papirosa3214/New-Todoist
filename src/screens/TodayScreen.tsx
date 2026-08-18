@@ -423,7 +423,20 @@ export function TodayScreen() {
         // должна рисоваться в сегодняшних девяти утра. Они остаются в
         // нижнем списке вместе с задачами без времени.
         <DayHours
-          tasks={[...todayTasks, ...overdueTasks]}
+          // Сюда идут ВСЕ три блока экрана, включая «Ждут вас». Списочный
+          // вид разносит задачу ровно по одному блоку (дедуп по waitingIds
+          // выше), и если брать только todayTasks+overdueTasks, то задача,
+          // ждущая приёмки, из сетки просто исчезает — а у неё как раз
+          // чаще всего и проставлено время. Дедуп по id здесь свой:
+          // waiting и overdue пересекаются.
+          tasks={Array.from(
+            new Map(
+              [...waitingTasks, ...todayTasks, ...overdueTasks].map((t) => [
+                t.id,
+                t,
+              ]),
+            ).values(),
+          )}
           projectColor={(t) =>
             projects.find((p) => p.id === t.project_id)?.color || "#717171"
           }

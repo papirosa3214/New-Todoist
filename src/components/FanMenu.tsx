@@ -52,14 +52,32 @@ const ADD_ITEM: FanItem = {
   icon: "plus",
 };
 
+// Настройки — крайним пунктом веера (владелец 19.08.2026: «добавить
+// задачу всегда по центру, а все остальные настройки в самом крайнее
+// правое»). Раньше до них приходилось идти через «Обзор», что владелец
+// назвал неудобным.
+const SETTINGS_ITEM: FanItem = {
+  path: "/settings",
+  label: "Настройки",
+  icon: "gear",
+};
+
 function buildItems(showAdd: boolean): FanItem[] {
-  return showAdd ? [...NAV_ITEMS, ADD_ITEM] : NAV_ITEMS;
+  return showAdd
+    ? [...NAV_ITEMS, ADD_ITEM, SETTINGS_ITEM]
+    : [...NAV_ITEMS, SETTINGS_ITEM];
 }
+
+// Порог удержания. 400 мс — обычный системный «long press»: короче
+// начинает срабатывать на обычных тапах, длиннее ощущается как зависание.
+const HOLD_MS = 400;
 
 export function FanMenu({ showAdd = true }: { showAdd?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heldRef = useRef(false);
 
   // Список пунктов «замораживается» на момент ОТКРЫТИЯ и не пересчитывается,
   // пока меню открыто или закрывается — даже если showAdd успеет поменяться
@@ -222,9 +240,36 @@ export function FanMenu({ showAdd = true }: { showAdd?: boolean }) {
 
       <button
         type="button"
-        onClick={() => toggle(!open)}
+        // Короткий тап — веер, удержание — сразу новая задача (владелец
+        // 19.08.2026). Обработка на pointer-событиях, а не onClick:
+        // click приходит уже после отпускания, и отличить «подержал» от
+        // «нажал» в нём нечем. onPointerLeave/Cancel обязательны — палец
+        // может уехать с кнопки, и тогда не должно случиться ни того, ни
+        // другого.
+        onPointerDown={() => {
+          heldRef.current = false;
+          holdTimer.current = setTimeout(() => {
+            heldRef.current = true;
+            if (open) toggle(false);
+            navigate("/task/new");
+          }, HOLD_MS);
+        }}
+        onPointerUp={() => {
+          if (holdTimer.current) clearTimeout(holdTimer.current);
+          if (!heldRef.current) toggle(!open);
+        }}
+        onPointerLeave={() => {
+          if (holdTimer.current) clearTimeout(holdTimer.current);
+        }}
+        onPointerCancel={() => {
+          if (holdTimer.current) clearTimeout(holdTimer.current);
+        }}
         aria-expanded={open}
-        aria-label={open ? "Закрыть меню разделов" : "Открыть меню разделов"}
+        aria-label={
+          open
+            ? "Закрыть меню разделов"
+            : "Открыть меню разделов, удержание — новая задача"
+        }
         // Матовое тёмное стекло вместо плоской красной заливки — Максим
         // 17.08.2026: «оно выбивается из общего стиля», хотел тёмное и
         // прозрачное, а из-под стекла — аккуратное свечение. Свечение
