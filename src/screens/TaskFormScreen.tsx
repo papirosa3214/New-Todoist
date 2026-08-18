@@ -241,6 +241,12 @@ export function TaskFormScreen() {
   const [suggestions, setSuggestions] = useState<
     { text: string; checked: boolean }[] | null
   >(null);
+  // Источник последнего разбора подзадач — тот же смысл, что voiceSource
+  // выше (18.08.2026, «как понять, что реально работает через Apple
+  // Intelligence»).
+  const [suggestSource, setSuggestSource] = useState<
+    "device" | "server" | null
+  >(null);
   const [confirmingSuggestions, setConfirmingSuggestions] = useState(false);
   // Owner 2026-08-10: a new task must start with NO due date (Todoist-style
   // — undated tasks land in Inbox, "Сегодня" only shows what was actually
@@ -354,6 +360,14 @@ export function TaskFormScreen() {
   const [voiceTarget, setVoiceTarget] = useState<"title" | "desc" | "subtask">(
     "title",
   );
+  // Источник последней диктовки — «на устройстве» (Apple Intelligence) или
+  // «через сервер» (18.08.2026, просьба «как понять, что реально работает
+  // локально» — выключать Wi-Fi ради проверки ломает всё приложение
+  // целиком, не только эту фичу). null — ещё ни разу не диктовали в этой
+  // сессии формы, подпись не показываем.
+  const [voiceSource, setVoiceSource] = useState<"device" | "server" | null>(
+    null,
+  );
   // Черновик текста для поля «Добавить подзадачу...» — поднят сюда из
   // AddSubtaskRow (owner 2026-08-13), иначе кнопке диктовки некуда было бы
   // писать: у некотролируемого input своего state снаружи не видно.
@@ -387,7 +401,8 @@ export function TaskFormScreen() {
   const transcribeAudio = useTranscribeAudio();
   const mic = useMicRecorder(async (blob) => {
     try {
-      const { text } = await transcribeAudio.mutateAsync(blob);
+      const { text, source } = await transcribeAudio.mutateAsync(blob);
+      setVoiceSource(source);
       if (voiceTarget === "desc") {
         // Описание — произвольный текст, без parseDictation: маркеры
         // #Проект/!приоритет/дата разбираются только в заголовке.
@@ -449,6 +464,7 @@ export function TaskFormScreen() {
         ? await suggestForTask.mutateAsync(body)
         : await suggestForDraft.mutateAsync(body);
     setSuggestions(res.subtasks.map((text) => ({ text, checked: true })));
+    setSuggestSource(res.source);
   });
 
   const toggleSuggestion = (index: number) => {
@@ -772,6 +788,13 @@ export function TaskFormScreen() {
         <div className="mb-3 bg-card rounded-2xl overflow-hidden">
           <div className="px-4 pt-3 pb-1 text-[12px] text-dim">
             Предложение модели — уберите лишнее и подтвердите
+            {suggestSource && (
+              <>
+                {" "}
+                ·{" "}
+                {suggestSource === "device" ? "на устройстве" : "через сервер"}
+              </>
+            )}
           </div>
           {suggestions.map((s, i) => (
             <button
@@ -1094,6 +1117,16 @@ export function TaskFormScreen() {
         variant="block"
         className="mb-4"
       />
+      {/* Источник последней диктовки (18.08.2026) — «на устройстве» (Apple
+          Intelligence, без сети) или «через сервер» (.110). Держится до
+          следующей диктовки в этой же форме, не auto-hide — не мигающий
+          toast, а факт, который можно спокойно прочитать в своём темпе. */}
+      {voiceSource && mic.state === "idle" && (
+        <p className="text-[12px] text-dim mb-4 -mt-2">
+          Распознано{" "}
+          {voiceSource === "device" ? "на устройстве" : "через сервер"}
+        </p>
+      )}
       {keyboardFieldFocused && mic.state === "idle" && (
         <MicKeyboardBar
           onStart={mic.start}

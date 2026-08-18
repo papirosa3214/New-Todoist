@@ -22,19 +22,30 @@ function draftText(title?: string, description?: string): string {
 // комментарий в lib/localAI.ts) — в обоих случаях просто падаем на сервер
 // как раньше, здесь этот выбор не различать. Без title не разобрать
 // текст вовсе — на on-device пути он обязателен явно.
+//
+// source — 18.08.2026, следующая просьба: «а как понять, что реально
+// работает через Apple Intelligence» — возвращаем источник явно,
+// TaskFormScreen показывает его короткой подписью (см. audio.ts —
+// тот же паттерн, та же причина).
+type SuggestResult = SuggestSubtasksResponse & { source: "device" | "server" };
+
 export function useSuggestSubtasksForTask(taskId: string) {
   return useMutation({
-    mutationFn: async (body: { title?: string; description?: string }) => {
+    mutationFn: async (body: {
+      title?: string;
+      description?: string;
+    }): Promise<SuggestResult> => {
       if (body.title) {
         const onDevice = await suggestSubtasksOnDevice(
           draftText(body.title, body.description),
         );
-        if (onDevice) return { subtasks: onDevice };
+        if (onDevice) return { subtasks: onDevice, source: "device" };
       }
-      return api.post<SuggestSubtasksResponse>(
+      const server = await api.post<SuggestSubtasksResponse>(
         `/api/tasks/${taskId}/suggest-subtasks`,
         body,
       );
+      return { ...server, source: "server" };
     },
   });
 }
@@ -42,15 +53,19 @@ export function useSuggestSubtasksForTask(taskId: string) {
 // Черновик — задача ещё не создана, id нет.
 export function useSuggestSubtasksForDraft() {
   return useMutation({
-    mutationFn: async (body: { title: string; description?: string }) => {
+    mutationFn: async (body: {
+      title: string;
+      description?: string;
+    }): Promise<SuggestResult> => {
       const onDevice = await suggestSubtasksOnDevice(
         draftText(body.title, body.description),
       );
-      if (onDevice) return { subtasks: onDevice };
-      return api.post<SuggestSubtasksResponse>(
+      if (onDevice) return { subtasks: onDevice, source: "device" };
+      const server = await api.post<SuggestSubtasksResponse>(
         "/api/ai/suggest-subtasks",
         body,
       );
+      return { ...server, source: "server" };
     },
   });
 }
