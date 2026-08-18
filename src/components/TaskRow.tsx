@@ -49,14 +49,22 @@
 // same 18px in the same pass, so every priority dot in the app now measures
 // the same regardless of which screen it's on.
 //
-// §2 §5 §8 Apple Design — swipe-left-to-complete (2026-08-15):
-// Dragging the row left reveals a teal "complete" action behind it.
+// §2 §5 §8 Apple Design — swipe-left-to-edit (было swipe-to-complete до
+// 2026-08-15, чекбоксы и жест убраны в тот же день целиком; жест
+// восстановлен 18.08.2026 прямой просьбой — то же ощущение, другое
+// действие). Dragging the row left reveals a blue "edit" action behind it.
 // setPointerCapture ensures 1:1 tracking even if the pointer leaves the
 // element. Direction lock: first pointermove determines if the gesture is
-// horizontal (|dx|>|dy|) — if not, scroll is allowed through normally.
-// On release: if displacement > SWIPE_THRESHOLD or velocity > SWIPE_VEL,
-// the task is completed. Spring snaps the row back in both cases (with the
-// finger's release velocity handed off — §5 velocity handoff).
+// horizontal (|dx|>|dy|) — if not, scroll is allowed through normally. On
+// release: if displacement > SWIPE_THRESHOLD or velocity > SWIPE_VEL,
+// navigate straight to the edit form (`/task/:id/edit`) — skipping the
+// detail screen and its «Изменить» button entirely, the whole point of the
+// gesture. Spring snaps the row back in both cases (with the finger's
+// release velocity handed off — §5 velocity handoff). Physics unchanged
+// from the original (`response: 0.3, damping: 1`) — already tuned/approved,
+// only the released action changed, not the feel.
+import { useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { Icon, Avatar, AgentStateTag } from "./UI";
 import { getPriorityColor, PRIORITIES } from "../lib/priority";
 import {
@@ -65,6 +73,7 @@ import {
   daysUntil,
   formatDaysLeft,
 } from "../lib/date";
+import { useSpring } from "../lib/useSpring";
 import type { ApiTask } from "../api/types";
 
 // Plain "8 авг" — no relative "Сегодня/Завтра" prefix, no trailing dot.
@@ -79,6 +88,11 @@ function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
 }
+
+// Swipe-to-edit thresholds — те же числа, что были у swipe-to-complete
+// (не подбирались заново, физика уже одобрена).
+const SWIPE_THRESHOLD = 72; // px displacement to trigger edit
+const SWIPE_VEL = 400; // px/s release velocity to trigger edit
 
 export interface TaskRowProps {
   task: ApiTask;
@@ -129,6 +143,7 @@ export function TaskRow({
   showSubtasksBadge = true,
   showAvatar = true,
 }: TaskRowProps) {
+  const navigate = useNavigate();
   const isDone = task.status === "completed";
   const doneSub = task.subtasks.filter((s) => s.done).length;
   const visibleLabels = maxLabels > 0 ? task.labels.slice(0, maxLabels) : [];
@@ -148,105 +163,244 @@ export function TaskRow({
     hasSubtasksBadge ||
     hasLabels;
 
-  // Квадратик-отметка и свайп-влево для быстрого завершения — оба убраны
-  // (Максим 18.08.2026: «не надо мне эти квадратики, они только всё
-  // портят»). Единственный способ закрыть задачу теперь — открыть её
-  // (эта строка ведёт туда целиком, весь тап) и нажать кнопку внутри
-  // (TaskDetailScreen.tsx). Аватарка исполнителя осталась — она не
-  // квадратик и не жест, чисто информация «кто ведёт».
+  // ── Swipe-to-edit (18.08.2026, восстановлено) ──────────────────────────
+  // Квадратик-отметка завершения остаётся убранным (Максим 18.08.2026:
+  // «не надо мне эти квадратики, они только всё портят») — это только
+  // жест, не чекбокс. Сам механизм 1:1 со старым swipe-to-complete
+  // (см. историю файла, коммит 8cd89bc~1), только released-действие другое.
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const actionRef = useRef<HTMLDivElement | null>(null);
+
+  const spring = useSpring(
+    (value) => {
+      if (rowRef.current)
+        rowRef.current.style.transform = `translateX(${value}px)`;
+      if (actionRef.current) {
+        const frac = Math.min(Math.abs(value) / SWIPE_THRESHOLD, 1);
+        actionRef.current.style.opacity = String(frac);
+      }
+    },
+    { response: 0.3, damping: 1 },
+  );
+
+  const swipeDrag = useRef({
+    active: false,
+    locked: false,
+    isHorizontal: false,
+    startX: 0,
+    startY: 0,
+    samples: [] as { x: number; t: number }[],
+  });
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      const el = e.currentTarget;
+
+      swipeDrag.current = {
+        active: true,
+        locked: false,
+        isHorizontal: false,
+        startX: e.clientX,
+        startY: e.clientY,
+        samples: [{ x: e.clientX, t: performance.now() }],
+      };
+
+      const onMove = (ev: PointerEvent) => {
+        const d = swipeDrag.current;
+        if (!d.active) return;
+
+        const dx = ev.clientX - d.startX;
+        const dy = ev.clientY - d.startY;
+
+        if (!d.locked && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
+          d.isHorizontal = Math.abs(dx) > Math.abs(dy);
+          d.locked = true;
+          if (d.isHorizontal) el.setPointerCapture(ev.pointerId);
+        }
+
+        if (!d.locked || !d.isHorizontal) return;
+
+        // Только влево (отрицательный dx → положительный «показ» действия)
+        const clampedDx = Math.min(0, dx);
+        spring.stop();
+        if (rowRef.current)
+          rowRef.current.style.transform = `translateX(${clampedDx}px)`;
+        if (actionRef.current) {
+          const frac = Math.min(Math.abs(clampedDx) / SWIPE_THRESHOLD, 1);
+          actionRef.current.style.opacity = String(frac);
+        }
+
+        d.samples.push({ x: ev.clientX, t: performance.now() });
+        if (d.samples.length > 6) d.samples.shift();
+      };
+
+      const onUp = (ev: PointerEvent) => {
+        const d = swipeDrag.current;
+        d.active = false;
+        el.removeEventListener("pointermove", onMove);
+        el.removeEventListener("pointerup", onUp);
+        el.removeEventListener("pointercancel", onUp);
+
+        if (!d.isHorizontal) return;
+
+        const samples = d.samples;
+        let vel = 0;
+        if (samples.length >= 2) {
+          const last = samples[samples.length - 1];
+          const prev = samples[samples.length - 2];
+          const dt = (last.t - prev.t) / 1000;
+          if (dt > 0) vel = (last.x - prev.x) / dt;
+        }
+
+        const currentDx = ev.clientX - d.startX;
+        const absDx = Math.abs(Math.min(0, currentDx));
+        const absVel = Math.abs(Math.min(0, vel));
+
+        const shouldEdit = absDx > SWIPE_THRESHOLD || absVel > SWIPE_VEL;
+        if (shouldEdit) navigate(`/task/${task.id}/edit`);
+
+        // Строка всегда едет обратно — уходить со свайпом (как раньше
+        // уходила закрытая задача из списка) тут нечему: редактирование
+        // не убирает задачу из списка.
+        spring.animateTo(0, -vel);
+      };
+
+      el.addEventListener("pointermove", onMove);
+      el.addEventListener("pointerup", onUp);
+      el.addEventListener("pointercancel", onUp);
+    },
+    [navigate, task.id, spring],
+  );
+
   return (
-    <button
-      onClick={onClick}
-      className="tap-row w-full flex items-start gap-3 py-3 px-1 border-b border-stroke/50 bg-bg text-left"
-    >
-      {/* w-[24px] фиксирована: без неё колонка была бы по ширине Avatar
-          (24px) только когда исполнитель есть, иначе не занимала бы места
-          вовсе — заголовок задачи гулял бы вправо/влево в зависимости от
-          того, назначен ли исполнитель (тот же баг всплыл на доске
-          18.08.2026, здесь тот же паттерн: место держится всегда). */}
-      <div className="flex flex-col items-center shrink-0 w-[24px]">
-        {showAvatar && task.assignee_id && task.assignee_initials && (
-          <Avatar
-            initials={task.assignee_initials}
-            color={task.assignee_color || "#A6A6A6"}
-            avatar_url={task.assignee_avatar_url}
-            size={24}
-          />
-        )}
+    // Swipe container: overflow hidden clips the action bg
+    <div style={{ position: "relative", overflow: "hidden" }}>
+      {/* Действие под свайпом — синий «редактировать» (был teal-check у
+          завершения; teal и вообще «готово»-семантика тут неуместны, это
+          другое действие). */}
+      <div
+        ref={actionRef}
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: "100%",
+          display: "flex",
+          justifyContent: "flex-end",
+          alignItems: "center",
+          paddingRight: "20px",
+          backgroundColor: "var(--color-blue)",
+          opacity: 0,
+          pointerEvents: "none",
+        }}
+      >
+        <Icon name="edit" size={22} className="text-white" />
       </div>
-      <div className="flex-1 min-w-0">
-        <div
-          className={`text-[15px] leading-snug truncate ${isDone ? "line-through text-sub" : "text-text"}`}
+
+      <div
+        ref={rowRef}
+        onPointerDown={onPointerDown}
+        style={{ willChange: "transform" }}
+      >
+        <button
+          onClick={onClick}
+          className="tap-row w-full flex items-start gap-3 py-3 px-1 border-b border-stroke/50 bg-bg text-left"
         >
-          {task.title}
-        </div>
-        {task.description && (
-          <div className="text-[13px] text-sub mt-0.5 line-clamp-2">
-            {task.description}
+          {/* w-[24px] фиксирована: без неё колонка была бы по ширине Avatar
+              (24px) только когда исполнитель есть, иначе не занимала бы места
+              вовсе — заголовок задачи гулял бы вправо/влево в зависимости от
+              того, назначен ли исполнитель (тот же баг всплыл на доске
+              18.08.2026, здесь тот же паттерн: место держится всегда). */}
+          <div className="flex flex-col items-center shrink-0 w-[24px]">
+            {showAvatar && task.assignee_id && task.assignee_initials && (
+              <Avatar
+                initials={task.assignee_initials}
+                color={task.assignee_color || "#A6A6A6"}
+                avatar_url={task.assignee_avatar_url}
+                size={24}
+              />
+            )}
           </div>
-        )}
-        {hasMeta && (
-          <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-            {/* Приоритет флажком (решение Максима 15.08.2026). Раньше он
+          <div className="flex-1 min-w-0">
+            <div
+              className={`text-[15px] leading-snug truncate ${isDone ? "line-through text-sub" : "text-text"}`}
+            >
+              {task.title}
+            </div>
+            {task.description && (
+              <div className="text-[13px] text-sub mt-0.5 line-clamp-2">
+                {task.description}
+              </div>
+            )}
+            {hasMeta && (
+              <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+                {/* Приоритет флажком (решение Максима 15.08.2026). Раньше он
                 жил цветом обводки отметки — но отметка теперь скрывается,
                 пока есть незакрытые подзадачи, и вместе с ней пропадал
                 единственный признак срочности. Флажок от отметки не
                 зависит и виден всегда. Низкий приоритет не показываем:
                 это значение по умолчанию, значок на каждой задаче
                 превратился бы в шум. */}
-            {hasPriorityFlag && (
-              <Icon
-                name="flag"
-                size={12}
-                style={{ color: getPriorityColor(task.priority) }}
-                aria-label={`Приоритет: ${PRIORITIES.find((p) => p.key === task.priority)?.name ?? ""}`}
-              />
-            )}
-            {hasOverduePill && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
-                <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
-                {formatDueLabel(task.due_date!)}
-              </span>
-            )}
-            {visibleLabels.map((l) => (
-              <span
-                key={l.id}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
-                style={{ backgroundColor: l.color + "26", color: l.color }}
-              >
-                <Icon name="tag" size={10} /> {l.name}
-              </span>
-            ))}
-            {/* Дата + сколько дней осталось (просьба Максима
+                {hasPriorityFlag && (
+                  <Icon
+                    name="flag"
+                    size={12}
+                    style={{ color: getPriorityColor(task.priority) }}
+                    aria-label={`Приоритет: ${PRIORITIES.find((p) => p.key === task.priority)?.name ?? ""}`}
+                  />
+                )}
+                {hasOverduePill && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
+                    <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
+                    {formatDueLabel(task.due_date!)}
+                  </span>
+                )}
+                {visibleLabels.map((l) => (
+                  <span
+                    key={l.id}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+                    style={{ backgroundColor: l.color + "26", color: l.color }}
+                  >
+                    <Icon name="tag" size={10} /> {l.name}
+                  </span>
+                ))}
+                {/* Дата + сколько дней осталось (просьба Максима
                 15.08.2026): «8 авг · осталось 3 дня». Сама дата отвечает
                 на «когда», отсчёт — на «скоро ли», и второе как раз то,
                 по чему решают, за что браться. Ближе трёх суток отсчёт
                 оранжевый: срок перестал быть абстрактным. */}
-            {hasDueBadge && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                <Icon name="calendarSmall" size={10} />{" "}
-                {formatDue(task.due_date!)}
-                <span
-                  className={
-                    daysUntil(task.due_date!) <= 3 ? "text-orange" : "text-dim"
-                  }
-                >
-                  · {formatDaysLeft(task.due_date!)}
-                </span>
-              </span>
-            )}
-            {hasSubtasksBadge && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                <Icon name="check" size={10} /> {doneSub}/{task.subtasks.length}
-              </span>
-            )}
-            {/* После счётчика подзадач, не перед ним (просьба Максима
+                {hasDueBadge && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
+                    <Icon name="calendarSmall" size={10} />{" "}
+                    {formatDue(task.due_date!)}
+                    <span
+                      className={
+                        daysUntil(task.due_date!) <= 3
+                          ? "text-orange"
+                          : "text-dim"
+                      }
+                    >
+                      · {formatDaysLeft(task.due_date!)}
+                    </span>
+                  </span>
+                )}
+                {hasSubtasksBadge && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
+                    <Icon name="check" size={10} /> {doneSub}/
+                    {task.subtasks.length}
+                  </span>
+                )}
+                {/* После счётчика подзадач, не перед ним (просьба Максима
                 17.08.2026) — статичные счётчики сначала, живой статус
                 агента следом. Тот же порядок в TaskBoard.tsx. */}
-            {hasAgentTag && <AgentStateTag task={task} />}
+                {hasAgentTag && <AgentStateTag task={task} />}
+              </div>
+            )}
           </div>
-        )}
+        </button>
       </div>
-    </button>
+    </div>
   );
 }
