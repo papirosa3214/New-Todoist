@@ -1,4 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  PointerSensor,
+  useDraggable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
 import type { ApiTask } from "../api/types";
 import { Icon } from "./UI";
 
@@ -16,9 +25,20 @@ import { Icon } from "./UI";
 // цвет уже есть у проекта (lib/projectColors.ts) — заводить вторую
 // палитру значило бы, что одна и та же задача в списке и в сетке разного
 // цвета.
+//
+// 19.08.2026 — перетаскивание. Владелец: «вижу, что у меня куча задач без
+// времени, и я могу эту задачу перетащить на временную шкалу и там себе
+// определить, куда я её хочу вставить, тем самым назначить время».
+// Поэтому список задач без времени переехал НАВЕРХ (раньше был под
+// сеткой): тащить снизу вверх через весь экран неудобно, а сверху он ещё
+// и виден сразу, не прокручивая сетку до конца.
 const HOUR_H = 64;
 const HOURS = Array.from({ length: 18 }, (_, i) => i + 6); // 06:00–23:00
 const FIRST_HOUR = HOURS[0];
+// Шаг привязки при перетаскивании. 15 минут — как в форме: попадать
+// пальцем в минуту на шкале высотой 64px/час невозможно, а «ровные»
+// четверти часа и так покрывают почти все реальные планы.
+const SNAP_MIN = 15;
 
 /** «14:30» → 14.5; неразобранное время → null, блок просто не рисуется. */
 function hoursFromTime(t: string | null | undefined): number | null {
@@ -26,6 +46,19 @@ function hoursFromTime(t: string | null | undefined): number | null {
   const [h, m] = t.split(":").map(Number);
   if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
   return h + m / 60;
+}
+
+/** Смещение в пикселях от верха сетки → «ЧЧ:ММ», округлённое до SNAP_MIN. */
+function timeFromOffset(px: number): string {
+  const raw = FIRST_HOUR * 60 + (px / HOUR_H) * 60;
+  const snapped = Math.round(raw / SNAP_MIN) * SNAP_MIN;
+  const clamped = Math.min(
+    Math.max(snapped, FIRST_HOUR * 60),
+    (FIRST_HOUR + HOURS.length) * 60 - SNAP_MIN,
+  );
+  const h = Math.floor(clamped / 60);
+  const m = clamped % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 function minutesLabel(min: number): string {
@@ -54,7 +87,7 @@ function NowLine() {
       className="pointer-events-none absolute left-0 right-0 z-20 flex items-center"
       style={{ top: (pos - FIRST_HOUR) * HOUR_H }}
     >
-      <span className="w-[46px] shrink-0 text-right pr-1.5 text-[10px] font-medium text-red">
+      <span className="w-[46px] shrink-0 pr-1.5 text-right text-[10px] font-medium text-red">
         {String(now.getHours()).padStart(2, "0")}:
         {String(now.getMinutes()).padStart(2, "0")}
       </span>
@@ -64,19 +97,140 @@ function NowLine() {
   );
 }
 
+/** Строка задачи без времени — её и тащат на шкалу. */
+function UntimedRow({
+  task,
+  color,
+  onClick,
+  first,
+}: {
+  task: ApiTask;
+  color: string;
+  onClick: () => void;
+  first: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: task.id,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onClick={onClick}
+      className={`flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/[0.04] ${
+        first ? "" : "border-t border-stroke"
+      } ${isDragging ? "opacity-40" : ""}`}
+      // touch-action: none обязателен для перетаскивания пальцем — без
+      // него браузер считает жест прокруткой и до dnd-kit он не доходит.
+      style={{ touchAction: "none" }}
+    >
+      <span
+        className="h-2 w-2 shrink-0 rounded-full"
+        style={{ backgroundColor: color }}
+      />
+      <span
+        className={`min-w-0 flex-1 truncate text-[14px] ${
+          task.status === "completed" ? "text-sub line-through" : "text-text"
+        }`}
+      >
+        {task.title}
+      </span>
+      <Icon name="grip" size={14} className="shrink-0 text-dim" />
+    </div>
+  );
+}
+
+/** Блок задачи внутри сетки — тоже перетаскивается, меняя время. */
+function TimedBlock({
+  task,
+  color,
+  top,
+  height,
+  durKnown,
+  dur,
+  onClick,
+}: {
+  task: ApiTask;
+  color: string;
+  top: number;
+  height: number;
+  durKnown: boolean;
+  dur: number;
+  onClick: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: task.id,
+  });
+  const done = task.status === "completed";
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onClick={onClick}
+      className="absolute left-0 right-0 flex gap-2 overflow-hidden rounded-lg bg-card2 px-2 py-1.5 text-left active:opacity-80"
+      style={{
+        top,
+        height,
+        touchAction: "none",
+        boxShadow: `inset 3px 0 0 0 ${color}`,
+        opacity: isDragging ? 0.4 : done ? 0.55 : 1,
+        // Конец не задан — низ блока размыт, чтобы он не читался как
+        // «задача точно кончится здесь».
+        ...(durKnown
+          ? null
+          : {
+              maskImage: "linear-gradient(to bottom, #000 60%, transparent)",
+              WebkitMaskImage:
+                "linear-gradient(to bottom, #000 60%, transparent)",
+            }),
+      }}
+    >
+      <span className="min-w-0 flex-1">
+        <span
+          className={`block truncate text-[13px] font-medium ${
+            done ? "text-sub line-through" : "text-text"
+          }`}
+        >
+          {task.title}
+        </span>
+        {height > 44 && (
+          <span className="mt-0.5 block text-[11px] text-dim tabular-nums">
+            {task.start_time}
+            {durKnown ? ` · ${minutesLabel(dur)}` : ""}
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
 export function DayHours({
   tasks,
   projectColor,
   onTaskClick,
+  onSchedule,
   isToday,
 }: {
   tasks: ApiTask[];
   /** Цвет проекта задачи; без проекта — приглушённый серый. */
   projectColor: (task: ApiTask) => string;
   onTaskClick: (id: string) => void;
+  /** Задачу перетащили на шкалу — назначить ей это время. */
+  onSchedule: (id: string, time: string) => void;
   isToday: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+
+  // Мышь/палец начинают тащить только после 6px — иначе обычный тап по
+  // строке превращался бы в микро-перетаскивание и не открывал задачу.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
 
   const timed = useMemo(
     () =>
@@ -103,21 +257,79 @@ export function DayHours({
     );
   }, [isToday, timed.length]);
 
+  function handleDragStart(e: DragStartEvent) {
+    setDragging(String(e.active.id));
+  }
+
+  function handleDragEnd(e: DragEndEvent) {
+    setDragging(null);
+    setPreview(null);
+    const grid = gridRef.current;
+    if (!grid) return;
+    // Координата отпускания в системе координат сетки: dnd-kit даёт
+    // прямоугольник перетаскиваемого элемента, берём его верх.
+    const rect = e.active.rect.current.translated;
+    if (!rect) return;
+    const gridBox = grid.getBoundingClientRect();
+    const offset = rect.top - gridBox.top;
+    // Отпустили выше сетки (например, обратно в список) — не трогаем.
+    if (offset < -HOUR_H) return;
+    onSchedule(String(e.active.id), timeFromOffset(offset));
+  }
+
+  function handleDragMove(e: { active: DragEndEvent["active"] }) {
+    const grid = gridRef.current;
+    const rect = e.active.rect.current.translated;
+    if (!grid || !rect) return;
+    const offset = rect.top - grid.getBoundingClientRect().top;
+    setPreview(offset < -HOUR_H ? null : timeFromOffset(offset));
+  }
+
   return (
-    <div className="mt-2">
-      {timed.length === 0 ? (
-        <div className="rounded-2xl bg-card px-4 py-6 text-center">
-          <p className="text-[14px] text-sub">Ничего не назначено на время</p>
-          <p className="mt-1 text-[12px] text-dim">
-            Час начала задаётся в задаче, рядом со сроком
-          </p>
-        </div>
-      ) : (
+    <DndContext
+      sensors={sensors}
+      onDragStart={handleDragStart}
+      onDragMove={handleDragMove}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => {
+        setDragging(null);
+        setPreview(null);
+      }}
+    >
+      <div className="mt-2 flex flex-col gap-3">
+        {/* Задачи без времени — НАД сеткой: их перетаскивают вниз на шкалу,
+            и держать их под ней значило бы тащить через весь экран. */}
+        {untimed.length > 0 && (
+          <div>
+            <div className="mb-1.5 flex items-center gap-1.5 px-1">
+              <Icon name="list" size={13} className="text-dim" />
+              <span className="text-[13px] font-semibold text-sub">
+                Без времени — {untimed.length}
+              </span>
+              <span className="ml-auto text-[11px] text-dim">
+                перетащите на шкалу
+              </span>
+            </div>
+            <div className="overflow-hidden rounded-2xl bg-card">
+              {untimed.map((t, i) => (
+                <UntimedRow
+                  key={t.id}
+                  task={t}
+                  color={projectColor(t)}
+                  first={i === 0}
+                  onClick={() => !dragging && onTaskClick(t.id)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
         <div
           ref={scrollRef}
-          className="relative max-h-[62vh] overflow-y-auto rounded-2xl bg-card"
+          className="relative max-h-[58vh] overflow-y-auto rounded-2xl bg-card"
         >
           <div
+            ref={gridRef}
             className="relative"
             style={{ height: HOURS.length * HOUR_H + 8 }}
           >
@@ -133,6 +345,26 @@ export function DayHours({
               </div>
             ))}
 
+            {/* Подсказка времени под пальцем — иначе непонятно, куда
+                именно встанет задача при отпускании. */}
+            {preview && (
+              <div
+                className="pointer-events-none absolute left-0 right-0 z-30 flex items-center gap-2"
+                style={{
+                  top:
+                    (Number(preview.split(":")[0]) +
+                      Number(preview.split(":")[1]) / 60 -
+                      FIRST_HOUR) *
+                    HOUR_H,
+                }}
+              >
+                <span className="w-[46px] shrink-0 pr-1.5 text-right text-[10px] font-semibold text-red tabular-nums">
+                  {preview}
+                </span>
+                <span className="h-[2px] flex-1 rounded bg-red/70" />
+              </div>
+            )}
+
             <div className="absolute bottom-0 left-[46px] right-2 top-0">
               {timed.map((t) => {
                 const start = hoursFromTime(t.start_time)!;
@@ -144,50 +376,17 @@ export function DayHours({
                 // то, чего никто не утверждал.
                 const dur = t.duration_min ?? 30;
                 const durKnown = t.duration_min != null;
-                const color = projectColor(t);
-                const done = t.status === "completed";
-                const height = Math.max(34, (dur / 60) * HOUR_H - 3);
                 return (
-                  <button
+                  <TimedBlock
                     key={t.id}
-                    onClick={() => onTaskClick(t.id)}
-                    className="absolute left-0 right-0 flex gap-2 overflow-hidden rounded-lg bg-card2 px-2 py-1.5 text-left active:opacity-80"
-                    style={{
-                      top: Math.max(0, (start - FIRST_HOUR) * HOUR_H + 1),
-                      height,
-                      // Заливка от цвета проекта, но слабая: блок крупный,
-                      // плотный цвет на такой площади перетягивает экран.
-                      // Цвет несёт полоска слева.
-                      boxShadow: `inset 3px 0 0 0 ${color}`,
-                      // Конец не задан — низ блока размыт, чтобы он не
-                      // читался как «задача точно кончится здесь».
-                      ...(durKnown
-                        ? null
-                        : {
-                            maskImage:
-                              "linear-gradient(to bottom, #000 60%, transparent)",
-                            WebkitMaskImage:
-                              "linear-gradient(to bottom, #000 60%, transparent)",
-                          }),
-                      opacity: done ? 0.55 : 1,
-                    }}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span
-                        className={`block truncate text-[13px] font-medium ${
-                          done ? "text-sub line-through" : "text-text"
-                        }`}
-                      >
-                        {t.title}
-                      </span>
-                      {height > 44 && (
-                        <span className="mt-0.5 block text-[11px] text-dim tabular-nums">
-                          {t.start_time}
-                          {durKnown ? ` · ${minutesLabel(dur)}` : ""}
-                        </span>
-                      )}
-                    </span>
-                  </button>
+                    task={t}
+                    color={projectColor(t)}
+                    top={Math.max(0, (start - FIRST_HOUR) * HOUR_H + 1)}
+                    height={Math.max(34, (dur / 60) * HOUR_H - 3)}
+                    durKnown={durKnown}
+                    dur={dur}
+                    onClick={() => !dragging && onTaskClick(t.id)}
+                  />
                 );
               })}
             </div>
@@ -195,43 +394,13 @@ export function DayHours({
             {isToday && <NowLine />}
           </div>
         </div>
-      )}
 
-      {untimed.length > 0 && (
-        <div className="mt-3">
-          <div className="mb-1.5 flex items-center gap-1.5 px-1">
-            <Icon name="list" size={13} className="text-dim" />
-            <span className="text-[13px] font-semibold text-sub">
-              Без времени — {untimed.length}
-            </span>
-          </div>
-          <div className="overflow-hidden rounded-2xl bg-card">
-            {untimed.map((t, i) => (
-              <button
-                key={t.id}
-                onClick={() => onTaskClick(t.id)}
-                className={`flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/[0.04] ${
-                  i > 0 ? "border-t border-stroke" : ""
-                }`}
-              >
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: projectColor(t) }}
-                />
-                <span
-                  className={`min-w-0 flex-1 truncate text-[14px] ${
-                    t.status === "completed"
-                      ? "text-sub line-through"
-                      : "text-text"
-                  }`}
-                >
-                  {t.title}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
+        {timed.length === 0 && (
+          <p className="px-1 text-center text-[12px] text-dim">
+            На время пока ничего не назначено
+          </p>
+        )}
+      </div>
+    </DndContext>
   );
 }

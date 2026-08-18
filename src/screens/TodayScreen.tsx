@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useTasks } from "../api/tasks";
+import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
@@ -54,6 +54,8 @@ export function TodayScreen() {
   const layout = useAppStore((s) => s.taskLayout.today);
   // Цвет блока в сетке часов берётся от проекта задачи (см. DayHours).
   const { data: projects = [] } = useProjects();
+  // Назначение времени перетаскиванием в сетке часов (19.08.2026).
+  const updateTask = useUpdateTask();
   const setTaskLayout = useAppStore((s) => s.setTaskLayout);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -441,6 +443,18 @@ export function TodayScreen() {
             projects.find((p) => p.id === t.project_id)?.color || "#717171"
           }
           onTaskClick={(id) => navigate(`/task/${id}`)}
+          // Перетащили задачу на шкалу — сразу назначаем время. Срок при
+          // этом проставляем сегодняшним, если его не было: сервер не
+          // примет время без даты, а задача, которую человек кладёт в
+          // сетку СЕГОДНЯШНЕГО дня, на сегодня и планируется.
+          onSchedule={(id, time) => {
+            const task = allTasks.find((t) => t.id === id);
+            updateTask.mutate({
+              id,
+              start_time: time,
+              ...(task?.due_date ? null : { due_date: today }),
+            });
+          }}
           isToday
         />
       ) : layout === "board" ? (
