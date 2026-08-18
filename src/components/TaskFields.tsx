@@ -8,7 +8,7 @@
 // expand-in-place picker panels below (calendar, priority list, label
 // create-row) follow the interaction pattern already accepted for the task
 // form rather than inventing a modal.
-import { useState, Children, type ReactNode } from "react";
+import { useState, useRef, useEffect, Children, type ReactNode } from "react";
 import type {
   DraggableAttributes,
   DraggableSyntheticListeners,
@@ -193,12 +193,142 @@ const CAL_MONTHS = [
   "декабрь",
 ];
 
+// ═══════════ ВРЕМЯ НАЧАЛА И ДЛИТЕЛЬНОСТЬ ═══════════
+//
+// 18.08.2026, под календарную развёртку раздела «День». Живёт ВНУТРИ
+// «Срока» (см. DueDateField): владелец 19.08.2026 — «логично как-то это
+// совместить, а то мне надо сначала выбрать срок, потом только
+// открывается время». Время без даты сервер не примет, поэтому барабаны
+// заблокированы, пока день не выбран.
+//
+// Ввод — БАРАБАНАМИ, как в будильнике iPhone (просьба владельца
+// 19.08.2026), а не рядами кнопок: первый заход кнопками занимал три
+// ряда на экране и всё равно давал только шаг в 15 минут.
+const HOURS = Array.from({ length: 24 }, (_, i) => i); // весь день: будильник не ограничивает
+const MINUTES = Array.from({ length: 12 }, (_, i) => i * 5); // шаг 5 минут
+const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240];
+
+/** «90» → «1 ч 30 мин»; часы без остатка — просто «2 ч». */
+export function formatDuration(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (!h) return `${m} мин`;
+  return m ? `${h} ч ${m} мин` : `${h} ч`;
+}
+
+// Барабан: вертикальный скролл с залипанием на строке. Выбранное значение
+// определяется положением прокрутки, а не кликом — так же, как в
+// системном пикере. Клик по строке тоже работает: на десктопе и для
+// доступности крутить колесом мыши до нужного значения неудобно.
+const ROW_H = 36; // высота строки барабана
+const VISIBLE = 5; // сколько строк видно разом (центральная — выбранная)
+
+function Wheel({
+  items,
+  value,
+  onChange,
+  format,
+  disabled,
+  ariaLabel,
+}: {
+  items: number[];
+  value: number;
+  onChange: (v: number) => void;
+  format: (v: number) => string;
+  disabled?: boolean;
+  ariaLabel: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const idx = Math.max(0, items.indexOf(value));
+
+  // Прокрутить к выбранному при открытии и при внешней смене значения.
+  // Без behavior: барабан должен ОКАЗАТЬСЯ на месте, а не ехать туда на
+  // глазах при каждом открытии поля.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const target = idx * ROW_H;
+    if (Math.abs(el.scrollTop - target) > 2) el.scrollTop = target;
+  }, [idx]);
+
+  // Значение читается по прокрутке, с задержкой: событие scroll летит
+  // десятками в секунду, а менять состояние формы на каждый кадр — значит
+  // дёргать перерисовку всей карточки.
+  const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function onScroll() {
+    if (disabled) return;
+    if (settle.current) clearTimeout(settle.current);
+    settle.current = setTimeout(() => {
+      const el = ref.current;
+      if (!el) return;
+      const next = items[Math.round(el.scrollTop / ROW_H)];
+      if (next !== undefined && next !== value) onChange(next);
+    }, 90);
+  }
+
+  const pad = ((VISIBLE - 1) / 2) * ROW_H;
+
+  return (
+    <div
+      className="relative flex-1"
+      style={{ height: VISIBLE * ROW_H }}
+      aria-label={ariaLabel}
+    >
+      {/* Подсветка центральной строки — «окошко» барабана */}
+      <div
+        className="pointer-events-none absolute inset-x-0 z-0 rounded-lg bg-card2"
+        style={{ top: pad, height: ROW_H }}
+      />
+      <div
+        ref={ref}
+        onScroll={onScroll}
+        className={`relative z-10 h-full overflow-y-auto ${
+          disabled ? "pointer-events-none opacity-40" : ""
+        }`}
+        style={{
+          scrollSnapType: "y mandatory",
+          scrollbarWidth: "none",
+          paddingTop: pad,
+          paddingBottom: pad,
+        }}
+      >
+        {items.map((it) => (
+          <button
+            key={it}
+            type="button"
+            onClick={() => onChange(it)}
+            className={`flex w-full items-center justify-center text-[17px] tabular-nums transition-colors ${
+              it === value ? "font-semibold text-text" : "text-dim"
+            }`}
+            style={{ height: ROW_H, scrollSnapAlign: "center" }}
+          >
+            {format(it)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function DueDateField({
   value,
   onChange,
+  // Время живёт ЗДЕСЬ же, внутри «Срока», а не отдельной строкой ниже
+  // (владелец 19.08.2026: «логично как-то это совместить, а то мне надо
+  // сначала выбрать срок, потом только открывается время»). Первый заход
+  // был отдельной строкой «Время», которая появлялась лишь после того,
+  // как задан срок, — владелец её просто не нашёл при создании задачи.
+  // Пропсы необязательные: без них поле ведёт себя как раньше, только с
+  // датой (так его зовут экраны, где время ни к чему).
+  time,
+  duration,
+  onTimeChange,
 }: {
   value: string | null | undefined;
   onChange: (v: string | null) => void;
+  time?: string | null;
+  duration?: number | null;
+  onTimeChange?: (time: string | null, duration: number | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const base = value
@@ -211,14 +341,23 @@ export function DueDateField({
   const today = todayStr();
   const tomorrow = tomorrowStr();
   const hasValue = !!value;
+  const withTime = !!onTimeChange;
+
+  // «Сегодня, 18 авг. · 14:30 · 1 ч 30 мин» — дата и время одной строкой,
+  // чтобы состояние читалось не открывая поле.
+  const rowValue = !hasValue
+    ? "Не установлен"
+    : time
+      ? `${formatDueLabel(value!)} · ${time}${duration ? ` · ${formatDuration(duration)}` : ""}`
+      : formatDueLabel(value!);
 
   return (
     <>
       <FieldRow
         icon="calendarSmall"
         iconClassName={hasValue ? "text-red" : "text-sub"}
-        label="Срок"
-        value={hasValue ? formatDueLabel(value!) : "Не установлен"}
+        label={withTime ? "Срок и время" : "Срок"}
+        value={rowValue}
         valueClassName={hasValue ? "text-red" : "text-sub"}
         chevronOpen={open}
         onClick={() => setOpen((o) => !o)}
@@ -230,7 +369,10 @@ export function DueDateField({
             <button
               onClick={() => {
                 onChange(today);
-                setOpen(false);
+                // Панель остаётся открытой, когда в ней есть барабаны
+                // времени: закрыть её сразу после выбора дня — значит
+                // спрятать время, ради которого поле и объединили.
+                if (!withTime) setOpen(false);
               }}
               className={`flex-1 h-[40px] rounded-xl text-[13px] font-medium transition-colors ${
                 value === today
@@ -243,7 +385,7 @@ export function DueDateField({
             <button
               onClick={() => {
                 onChange(tomorrow);
-                setOpen(false);
+                if (!withTime) setOpen(false);
               }}
               className={`flex-1 h-[40px] rounded-xl text-[13px] font-medium transition-colors ${
                 value === tomorrow
@@ -296,7 +438,7 @@ export function DueDateField({
                   key={i}
                   onClick={() => {
                     onChange(ds);
-                    setOpen(false);
+                    if (!withTime) setOpen(false);
                   }}
                   className={`h-[32px] text-[13px] rounded-full transition-all ${
                     selected
@@ -310,148 +452,85 @@ export function DueDateField({
             })}
           </div>
 
+          {withTime && (
+            <div className="mt-3 border-t border-stroke pt-3">
+              <div className="mb-1 flex items-baseline justify-between">
+                <span className="text-[12px] text-sub">Во сколько</span>
+                {!hasValue && (
+                  <span className="text-[11px] text-dim">
+                    сначала выберите день
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                <Wheel
+                  items={HOURS}
+                  value={time ? Number(time.split(":")[0]) : 9}
+                  onChange={(h) =>
+                    onTimeChange!(
+                      `${String(h).padStart(2, "0")}:${time ? time.split(":")[1] : "00"}`,
+                      duration ?? 60,
+                    )
+                  }
+                  format={(h) => String(h).padStart(2, "0")}
+                  disabled={!hasValue}
+                  ariaLabel="Часы"
+                />
+                <span className="pb-[2px] text-[17px] font-semibold text-dim">
+                  :
+                </span>
+                <Wheel
+                  items={MINUTES}
+                  value={time ? Number(time.split(":")[1]) : 0}
+                  onChange={(m) =>
+                    onTimeChange!(
+                      `${time ? time.split(":")[0] : "09"}:${String(m).padStart(2, "0")}`,
+                      duration ?? 60,
+                    )
+                  }
+                  format={(m) => String(m).padStart(2, "0")}
+                  disabled={!hasValue}
+                  ariaLabel="Минуты"
+                />
+              </div>
+
+              {time && (
+                <>
+                  <div className="mt-2 mb-2 text-[12px] text-sub">
+                    Сколько займёт
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {DURATIONS.map((d) => (
+                      <button
+                        key={d}
+                        onClick={() => onTimeChange!(time, d)}
+                        className={`h-[34px] rounded-lg px-3 text-[13px] font-medium transition-colors ${
+                          duration === d
+                            ? "bg-red text-white"
+                            : "bg-card2 text-text active:bg-white/10"
+                        }`}
+                      >
+                        {formatDuration(d)}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {hasValue && (
             <button
               onClick={() => {
                 onChange(null);
+                // Дата ушла — время осиротело: сервер не примет время без
+                // срока, поэтому снимаем оба разом.
+                onTimeChange?.(null, null);
                 setOpen(false);
               }}
-              className="w-full text-center text-[13px] text-sub py-2 mt-1"
+              className="mt-1 w-full py-2 text-center text-[13px] text-sub"
             >
-              Убрать дату
-            </button>
-          )}
-        </div>
-      )}
-    </>
-  );
-}
-
-// ═══════════ ВРЕМЯ НАЧАЛА И ДЛИТЕЛЬНОСТЬ ═══════════
-//
-// 18.08.2026, под календарную развёртку раздела «День». Поле показывается
-// ТОЛЬКО когда у задачи есть срок: сервер отвергает время без даты
-// («время начала имеет смысл только вместе со сроком»), и предлагать
-// заведомо отклоняемый ввод нельзя. Строка исчезает вместе со сроком —
-// вместе с ней сервер обнуляет и время, см. TaskFormScreen.
-//
-// Шаг 15 минут и набор длительностей — те же, что в присланном прототипе
-// (task-manager-mobile): 15/30/45 минут и часы до четырёх. Произвольную
-// длительность вводить нечем и незачем — на телефоне это лишний ввод ради
-// значения, которое почти всегда одно из этих.
-const HOURS = Array.from({ length: 18 }, (_, i) => i + 6); // 06:00–23:00, как сетка дня
-const MINUTES = [0, 15, 30, 45];
-const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240];
-
-/** «90» → «1 ч 30 мин»; часы без остатка — просто «2 ч». */
-export function formatDuration(min: number): string {
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  if (!h) return `${m} мин`;
-  return m ? `${h} ч ${m} мин` : `${h} ч`;
-}
-
-export function TimeField({
-  time,
-  duration,
-  onChange,
-}: {
-  time: string | null | undefined;
-  duration: number | null | undefined;
-  onChange: (time: string | null, duration: number | null) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const has = !!time;
-  const [h, m] = has ? time!.split(":").map(Number) : [9, 0];
-
-  const label = has
-    ? `${time}${duration ? ` · ${formatDuration(duration)}` : ""}`
-    : "Не задано";
-
-  function pick(nextH: number, nextM: number) {
-    const hh = String(nextH).padStart(2, "0");
-    const mm = String(nextM).padStart(2, "0");
-    // Длительность по умолчанию — час: задача, которой задали время, почти
-    // всегда чем-то занимает день, а блок нулевой высоты в сетке не виден.
-    onChange(`${hh}:${mm}`, duration ?? 60);
-  }
-
-  return (
-    <>
-      <FieldRow
-        icon="clock"
-        iconClassName={has ? "text-red" : "text-sub"}
-        label="Время"
-        value={label}
-        valueClassName={has ? "text-red" : "text-sub"}
-        chevronOpen={open}
-        onClick={() => setOpen((o) => !o)}
-      />
-      {open && (
-        <div className="border-t border-stroke px-3 py-3">
-          <div className="text-[12px] text-sub mb-2">Начало</div>
-          <div className="flex gap-2 mb-3">
-            <div className="flex-1 overflow-x-auto">
-              <div className="flex gap-1.5">
-                {HOURS.map((hour) => (
-                  <button
-                    key={hour}
-                    onClick={() => pick(hour, has ? m : 0)}
-                    className={`h-[36px] min-w-[44px] shrink-0 rounded-lg text-[13px] font-medium transition-colors ${
-                      has && hour === h
-                        ? "bg-red text-white"
-                        : "bg-card2 text-text active:bg-white/10"
-                    }`}
-                  >
-                    {String(hour).padStart(2, "0")}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex gap-1.5 mb-3">
-            {MINUTES.map((min) => (
-              <button
-                key={min}
-                onClick={() => pick(has ? h : 9, min)}
-                className={`flex-1 h-[36px] rounded-lg text-[13px] font-medium transition-colors ${
-                  has && min === m
-                    ? "bg-red text-white"
-                    : "bg-card2 text-text active:bg-white/10"
-                }`}
-              >
-                :{String(min).padStart(2, "0")}
-              </button>
-            ))}
-          </div>
-
-          <div className="text-[12px] text-sub mb-2">Сколько займёт</div>
-          <div className="flex flex-wrap gap-1.5">
-            {DURATIONS.map((d) => (
-              <button
-                key={d}
-                onClick={() => onChange(time ?? "09:00", d)}
-                className={`h-[36px] px-3 rounded-lg text-[13px] font-medium transition-colors ${
-                  duration === d
-                    ? "bg-red text-white"
-                    : "bg-card2 text-text active:bg-white/10"
-                }`}
-              >
-                {formatDuration(d)}
-              </button>
-            ))}
-          </div>
-
-          {has && (
-            <button
-              onClick={() => {
-                onChange(null, null);
-                setOpen(false);
-              }}
-              className="w-full text-center text-[13px] text-sub py-2 mt-2"
-            >
-              Убрать время
+              {time ? "Убрать дату и время" : "Убрать дату"}
             </button>
           )}
         </div>

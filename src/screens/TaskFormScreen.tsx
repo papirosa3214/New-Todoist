@@ -50,7 +50,6 @@ import {
   Card,
   FieldRow,
   DueDateField,
-  TimeField,
   PriorityField,
   LabelsField,
   SubtaskRow,
@@ -996,6 +995,12 @@ export function TaskFormScreen() {
       <div className="mb-4">
         <Card>
           <DueDateField
+            time={startTime}
+            duration={durationMin}
+            onTimeChange={(t, d) => {
+              setStartTime(t);
+              setDurationMin(d);
+            }}
             value={dueDate}
             onChange={(v) => {
               setDueDate(v);
@@ -1008,16 +1013,6 @@ export function TaskFormScreen() {
               }
             }}
           />
-          {dueDate && (
-            <TimeField
-              time={startTime}
-              duration={durationMin}
-              onChange={(t, d) => {
-                setStartTime(t);
-                setDurationMin(d);
-              }}
-            />
-          )}
           <div>
             <FieldRow
               icon="hash"
