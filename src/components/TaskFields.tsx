@@ -100,6 +100,26 @@ export function FieldRow({
 // ═══════════ PRIORITY ═══════════
 // (PRIORITIES itself now lives in ../lib/priority.ts — imported + re-exported above.)
 
+// Восстановлена 18.08.2026 — была удалена как «мёртвый код» после того, как
+// TaskDetailScreen.tsx перестал её использовать в своей read-only карточке
+// (Максим попросил там флажок+слово цветом вместо пилюли), но PriorityField
+// ниже её всё ещё использует — свёрнутое состояние пикера в форме
+// редактирования. grep по проекту тогда проверил только импорты СНАРУЖИ
+// файла, не вызовы внутри него самого — вызвало ReferenceError и белый
+// экран при открытии формы («Изменить», тухнет, серый фон»). Живой урок:
+// «нигде не импортируется» и «нигде не используется» — разные проверки.
+export function PriorityPill({ priority }: { priority: number }) {
+  const p = PRIORITIES.find((x) => x.key === priority) ?? PRIORITIES[3];
+  return (
+    <span
+      className="inline-flex items-center justify-center text-[11px] font-bold text-white rounded-[10px] px-2 h-[20px] min-w-[26px] shrink-0"
+      style={{ backgroundColor: p.color }}
+    >
+      {p.label}
+    </span>
+  );
+}
+
 // mockup .p1-pill
 export function PriorityField({
   value,
