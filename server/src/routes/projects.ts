@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
-import { getProjectForUser, getLabelForUser } from "../access.js";
+import { getProjectForUser, getLabelForUser, visibleScope } from "../access.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -20,35 +20,17 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     const countSql = `(SELECT COUNT(*) FROM tasks
                         WHERE project_id = p.id AND status = 'active') as task_count`;
 
-    const caller = db
-      .prepare("SELECT type FROM users WHERE id = ?")
-      .get(req.userId) as { type?: string } | undefined;
-
-    // Агент (type='ai') видит проекты ЛЮДЕЙ, на которых работает.
+    // Кому какие проекты видны — общее правило из access.ts (visibleScope):
+    // владельцу все, агенту свои и людские, прочему человеку только свои.
     //
     // Решение Максима 14.08.2026: «это его личный трекер, один человек и его
     // же агенты — стена между ними смысла не имеет». Раньше агенту отдавался
     // пустой список, хотя положить задачу в проект человека он был вправе, —
     // приходилось угадывать идентификатор проекта.
-    //
-    // Что при этом НЕ открывается: чужие задачи. Задача с чужим исполнителем
-    // агенту по-прежнему недоступна — это отдельная проверка, её не трогаем.
-    // Формулировка Максима: «если ответственный назначен и назначен не ты —
-    // туда не лезть, вот это правильная вещь».
-    if (caller?.type === "ai") {
-      return db
-        .prepare(
-          `SELECT p.*, ${countSql}
-             FROM projects p
-             JOIN users u ON u.id = p.owner_id
-            WHERE u.type != 'ai'`,
-        )
-        .all();
-    }
-
+    const scope = visibleScope(req.userId, "p.owner_id");
     return db
-      .prepare(`SELECT p.*, ${countSql} FROM projects p WHERE p.owner_id = ?`)
-      .all(req.userId);
+      .prepare(`SELECT p.*, ${countSql} FROM projects p WHERE ${scope.sql}`)
+      .all(...scope.params);
   });
 
   app.post<{ Body: { name: string; color?: string } }>("/api/projects", {
@@ -111,9 +93,12 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
 
   // ── Labels ──
   app.get("/api/labels", { preHandler: authPre }, async (req: any) => {
+    // Та же видимость, что и у проектов (visibleScope в access.ts): метки
+    // ставит владелец, а агент лишь пользуется его метками.
+    const scope = visibleScope(req.userId, "owner_id");
     return db
-      .prepare("SELECT * FROM labels WHERE owner_id = ?")
-      .all(req.userId);
+      .prepare(`SELECT * FROM labels WHERE ${scope.sql}`)
+      .all(...scope.params);
   });
 
   app.post<{ Body: { name: string; color?: string } }>("/api/labels", {

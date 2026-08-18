@@ -4,10 +4,12 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { broadcastToUsers } from "../ws.js";
 import {
-  getTaskForUser,
+  getTaskForRead,
+  getTaskForWrite,
   getTaskForOwnerDelete,
   allLabelsOwnedByUser,
   getProjectForFiling,
+  seesEveryTask,
 } from "../access.js";
 import { isStale, logEvent } from "../agentState.js";
 
@@ -164,24 +166,35 @@ export function hydrateTask(task: any) {
 export function registerTaskRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
 
-  // List tasks — the caller created or is assigned to, plus (see
-  // getTaskForUser in access.ts) anything filed into a project they own.
+  // Список задач. Кому что видно — правило в access.ts (шапка файла):
+  // владельцу и его агентам видны ВСЕ задачи, самостоятельно
+  // зарегистрированному человеку — только свои. Раньше правило было одно
+  // для всех, и задача, заведённая агентом без проекта и без исполнителя,
+  // не показывалась владельцу вообще.
   app.get("/api/tasks", { preHandler: authPre }, async (req: any) => {
     const userId = req.userId;
-    const tasks = db
-      .prepare(
-        `
-      SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
-             p.name as project_name, p.color as project_color
-      FROM tasks t
+    const columns = `t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
+             p.name as project_name, p.color as project_color`;
+    const joins = `FROM tasks t
       LEFT JOIN users u ON t.assignee_id = u.id
-      LEFT JOIN projects p ON t.project_id = p.id
+      LEFT JOIN projects p ON t.project_id = p.id`;
+
+    const tasks = (
+      seesEveryTask(userId)
+        ? db
+            .prepare(
+              `SELECT ${columns} ${joins} ORDER BY t.created_at DESC`,
+            )
+            .all()
+        : db
+            .prepare(
+              `SELECT ${columns} ${joins}
       WHERE t.creator_id = ? OR t.assignee_id = ?
          OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?)
-      ORDER BY t.created_at DESC
-    `,
-      )
-      .all(userId, userId, userId) as any[];
+      ORDER BY t.created_at DESC`,
+            )
+            .all(userId, userId, userId)
+    ) as any[];
 
     const stmtLabels = db.prepare(`
       SELECT l.id, l.name, l.color FROM labels l
@@ -206,7 +219,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     "/api/tasks/:id",
     { preHandler: authPre },
     async (req: any, reply) => {
-      const task = getTaskForUser(req.params.id, req.userId);
+      const task = getTaskForRead(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       const full = db
@@ -554,7 +567,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const { id } = req.params;
       const body = req.body || {};
 
-      const existing = getTaskForUser(id, req.userId);
+      const existing = getTaskForWrite(id, req.userId);
       if (!existing) return reply.code(404).send({ error: "Not found" });
 
       // title, when sent, must not be blank — trim now so the ALLOWED_FIELDS

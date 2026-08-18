@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { seesEveryTask, visibleScope } from "../access.js";
 
 // SQLite's built-in LOWER() only folds ASCII — it does NOT lowercase Cyrillic
 // (verified on this machine: both the sqlite3 CLI and the better-sqlite3 build
@@ -36,8 +37,13 @@ export function registerSearchRoutes(app: FastifyInstance) {
 
       // Build SQL WHERE clause with AND-ed word conditions
       // Each word must appear in title or description, but not necessarily in same field
+      // Кому какие задачи видны — то же правило, что и у /api/tasks
+      // (access.ts): владельцу и его агентам все, прочему человеку свои.
+      // Раньше поиск жил по собственному, ещё более узкому предикату
+      // (только creator/assignee) — и находил не то, что показывает доска.
+      const seesAll = seesEveryTask(userId);
       const wordConditions: string[] = [];
-      const params: any[] = [userId, userId]; // Start with userId for creator_id and assignee_id
+      const params: any[] = seesAll ? [] : [userId, userId];
 
       for (const word of words) {
         // Case-insensitive match in title or description via lower_uni().
@@ -59,7 +65,7 @@ export function registerSearchRoutes(app: FastifyInstance) {
         FROM tasks t
         LEFT JOIN users u ON t.assignee_id = u.id
         LEFT JOIN projects p ON t.project_id = p.id
-        WHERE (t.creator_id = ? OR t.assignee_id = ?)
+        WHERE ${seesAll ? "1 = 1" : "(t.creator_id = ? OR t.assignee_id = ?)"}
           AND ${wordConditions.join(" AND ")}
         ORDER BY t.created_at DESC
       `,
@@ -82,8 +88,9 @@ export function registerSearchRoutes(app: FastifyInstance) {
       }));
 
       // Build project search conditions
+      const projectScope = visibleScope(userId, "p.owner_id");
       const projectWordConditions: string[] = [];
-      const projectParams: any[] = [userId];
+      const projectParams: any[] = [...projectScope.params];
 
       for (const word of words) {
         projectWordConditions.push(`instr(lower_uni(p.name), ?) > 0`);
@@ -96,7 +103,7 @@ export function registerSearchRoutes(app: FastifyInstance) {
           `
         SELECT p.*, (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count
         FROM projects p
-        WHERE p.owner_id = ?
+        WHERE ${projectScope.sql}
           AND ${projectWordConditions.join(" AND ")}
         ORDER BY p.created_at DESC
       `,
@@ -104,8 +111,9 @@ export function registerSearchRoutes(app: FastifyInstance) {
         .all(...projectParams) as any[];
 
       // Build labels search conditions
+      const labelScope = visibleScope(userId, "l.owner_id");
       const labelWordConditions: string[] = [];
-      const labelParams: any[] = [userId];
+      const labelParams: any[] = [...labelScope.params];
 
       for (const word of words) {
         labelWordConditions.push(`instr(lower_uni(l.name), ?) > 0`);
@@ -118,7 +126,7 @@ export function registerSearchRoutes(app: FastifyInstance) {
           `
         SELECT l.*
         FROM labels l
-        WHERE l.owner_id = ?
+        WHERE ${labelScope.sql}
           AND ${labelWordConditions.join(" AND ")}
         ORDER BY l.id
       `,

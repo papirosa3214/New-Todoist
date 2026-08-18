@@ -24,7 +24,7 @@ import fs from "fs";
 import path from "path";
 import db, { DB_PATH } from "../db.js";
 import { authOrApiToken } from "../auth.js";
-import { getTaskForUser } from "../access.js";
+import { getTaskForRead, getTaskForWrite } from "../access.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -79,7 +79,7 @@ export function registerAttachmentRoutes(app: FastifyInstance) {
     "/api/tasks/:taskId/attachments",
     { preHandler: authPre },
     async (req: any, reply) => {
-      const task = getTaskForUser(req.params.taskId, req.userId);
+      const task = getTaskForWrite(req.params.taskId, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       const body: Buffer = req.body;
@@ -147,7 +147,7 @@ export function registerAttachmentRoutes(app: FastifyInstance) {
         .prepare("SELECT * FROM attachments WHERE id = ?")
         .get(req.params.id) as any;
       if (!att) return reply.code(404).send({ error: "Not found" });
-      if (!getTaskForUser(att.task_id, req.userId)) {
+      if (!getTaskForRead(att.task_id, req.userId)) {
         return reply.code(404).send({ error: "Not found" });
       }
 

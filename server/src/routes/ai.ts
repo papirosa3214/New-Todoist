@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
-import { getTaskForUser } from "../access.js";
+import { getTaskForRead } from "../access.js";
 
 // ═══════════ AI-разбивка задачи на подзадачи (локальная модель) ═══════════
 // Дёргает Ollama (OpenAI-совместимый /v1/chat/completions) на домашнем
@@ -148,7 +148,7 @@ export function registerAiRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/suggest-subtasks", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForUser(req.params.id, req.userId);
+      const task = getTaskForRead(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       const bodyTitle = req.body?.title;

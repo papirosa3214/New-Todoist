@@ -1,28 +1,100 @@
-// Shared object-ownership lookups. A row is returned only if it belongs to
-// the given user, so callers can do `if (!row) return 404` without repeating
-// the ownership predicate everywhere.
+// Shared object-ownership lookups. A row is returned only if the caller may
+// touch it, so callers can do `if (!row) return 404` without repeating the
+// predicate everywhere.
+//
+// ─────────────────────────────────────────────────────────────────────────
+// Правило доступа (формулировка владельца, 18.08.2026)
+//
+//   «Человек-владелец видит всё и вся и может залезать куда угодно — полный
+//    карт-бланш. Агенты тоже видят всё, но не лезут в те задачи, которые им
+//    не назначили».
+//
+// Отсюда три круга, а не один:
+//
+//   role='owner'  — владелец трекера. Читает и меняет что угодно.
+//   type='ai'     — агент. Заводится ТОЛЬКО владельцем (POST /api/agents),
+//                   регистрация такую учётку выдать не может (auth.ts).
+//                   Читает всё, меняет лишь то, что создал сам или что ему
+//                   назначили.
+//   остальные     — человек, зарегистрировавшийся сам. Для него всё как
+//                   раньше: своё создал / своё назначено / свой проект.
+//                   Регистрация на :5180 открыта, поэтому «видно всё» на
+//                   этот круг не распространяется.
+//
+// До 18.08.2026 роль не проверялась НИГДЕ, доступ считался только по
+// владению объектом — и задача, которую агент завёл сам, у владельца не
+// показывалась вообще: ни creator, ни assignee, ни проект на него не
+// указывали. Три такие задачи нашлись в живой базе.
+// ─────────────────────────────────────────────────────────────────────────
 import db from "./db.js";
 
+type Caller = { role?: string; type?: string };
+
+function callerOf(userId: string): Caller | undefined {
+  return db.prepare("SELECT role, type FROM users WHERE id = ?").get(userId) as
+    | Caller
+    | undefined;
+}
+
+/** Владелец трекера — карт-бланш на чтение и на правку. */
+export function isOwner(userId: string): boolean {
+  return callerOf(userId)?.role === "owner";
+}
+
 /**
- * Task is "owned" by its creator, its assignee, or the owner of the project
- * it's filed in (matches the /api/tasks list rule).
- *
- * The third clause is what keeps `getProjectForFiling`'s guarantee ("задача
- * обязана оказаться у владельца проекта в списке") true after the fact, not
- * just at creation. An agent can create a task (creator_id = agent) filed
- * into the owner's project only while assignee_id = owner_id — but the owner
- * can later reassign it to a different agent via the app's own assignee
- * picker (intended, PATCH allows it). Without this clause that reassignment
- * would leave creator_id = agent and assignee_id = another agent, and the
- * owner — neither creator nor assignee — would lose the task entirely: it'd
- * vanish from their board, they couldn't open it, comment on it, or complete
- * it. Found live 17.08.2026: Maksim reassigned a Claude_Bot-created task to
- * Claude_Bot itself and it disappeared from his view.
+ * Контур владельца: он сам и заведённые им агенты. Только внутри этого
+ * круга действует «видно всё» — самостоятельно зарегистрированный человек
+ * (role='agent', type='human') в него не входит и видит по-прежнему своё.
  */
-export function getTaskForUser(
+export function seesEveryTask(userId: string): boolean {
+  const c = callerOf(userId);
+  return c?.role === "owner" || c?.type === "ai";
+}
+
+/**
+ * Что видно вызывающему в списках справочников — проектов и меток.
+ * Возвращает готовый кусок WHERE и параметры к нему, чтобы одно правило не
+ * пришлось повторять в /api/projects, /api/labels и в поиске:
+ *
+ *   владелец      — всё;
+ *   агент         — своё и принадлежащее людям, на которых он работает
+ *                   (решение Максима 14.08.2026: «один человек и его же
+ *                   агенты, стена между ними смысла не имеет»);
+ *   прочий человек — только своё.
+ *
+ * `ownerColumn` подставляется в SQL как есть, поэтому вызывать её можно
+ * только с литералом из кода («p.owner_id»), а не с чем-то из запроса.
+ */
+export function visibleScope(
+  userId: string,
+  ownerColumn: string,
+): { sql: string; params: any[] } {
+  const caller = callerOf(userId);
+  if (caller?.role === "owner") return { sql: "1 = 1", params: [] };
+  if (caller?.type === "ai") {
+    return {
+      sql: `(${ownerColumn} = ? OR ${ownerColumn} IN (SELECT id FROM users WHERE type != 'ai'))`,
+      params: [userId],
+    };
+  }
+  return { sql: `${ownerColumn} = ?`, params: [userId] };
+}
+
+const taskById = () => db.prepare("SELECT * FROM tasks WHERE id = ?");
+
+/**
+ * Задача для ЧТЕНИЯ (карточка, подзадачи, лента, скачивание вложения).
+ *
+ * Владельцу и агентам — любая. Прочему человеку — прежнее правило владения,
+ * включая «лежит в моём проекте»: без третьего условия владелец проекта
+ * терял бы задачу, которую сам переназначил другому исполнителю (найдено
+ * живьём 17.08.2026).
+ */
+export function getTaskForRead(
   taskId: string,
   userId: string,
 ): any | undefined {
+  if (seesEveryTask(userId)) return taskById().get(taskId);
   return db
     .prepare(
       `SELECT * FROM tasks WHERE id = ? AND (
@@ -33,20 +105,61 @@ export function getTaskForUser(
     .get(taskId, userId, userId, userId);
 }
 
-/** Only the creator may delete a task (assignees complete/update, they don't delete). */
+/**
+ * Задача для ПРАВКИ (поля, состояние работы, подзадачи, комментарии,
+ * вложения).
+ *
+ * Владелец — любая. Агент — только своя: создал сам или назначена ему.
+ * Это и есть «назначен не ты — туда не лезть»: чужая задача агенту видна,
+ * но неизменяема.
+ */
+export function getTaskForWrite(
+  taskId: string,
+  userId: string,
+): any | undefined {
+  if (isOwner(userId)) return taskById().get(taskId);
+
+  const caller = callerOf(userId);
+  if (caller?.type === "ai") {
+    return db
+      .prepare(
+        "SELECT * FROM tasks WHERE id = ? AND (creator_id = ? OR assignee_id = ?)",
+      )
+      .get(taskId, userId, userId);
+  }
+
+  return db
+    .prepare(
+      `SELECT * FROM tasks WHERE id = ? AND (
+         creator_id = ? OR assignee_id = ? OR
+         project_id IN (SELECT id FROM projects WHERE owner_id = ?)
+       )`,
+    )
+    .get(taskId, userId, userId, userId);
+}
+
+/**
+ * Удаление задачи: владельцу — любая, остальным — только своя созданная
+ * (исполнители сдают и закрывают, но не удаляют).
+ */
 export function getTaskForOwnerDelete(
   taskId: string,
   userId: string,
 ): any | undefined {
+  if (isOwner(userId)) return taskById().get(taskId);
   return db
     .prepare("SELECT * FROM tasks WHERE id = ? AND creator_id = ?")
     .get(taskId, userId);
 }
 
+/** Проект для правки/удаления: владельцу — любой, остальным — свой. */
 export function getProjectForUser(
   projectId: string,
   userId: string,
 ): any | undefined {
+  if (isOwner(userId)) {
+    return db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId);
+  }
   return db
     .prepare("SELECT * FROM projects WHERE id = ? AND owner_id = ?")
     .get(projectId, userId);
@@ -58,15 +171,12 @@ export function getProjectForUser(
  * Обычный случай — свой проект (та же проверка, что и getProjectForUser).
  * Плюс один: агент (users.type = 'ai') может положить задачу в проект
  * человека, НО только когда задача этому же человеку и адресована
- * (assignee_id = projects.owner_id). Иначе агенту пришлось бы ходить под
- * учёткой владельца: колонки на доске строятся из проектов текущего
- * пользователя, поэтому задача, заведённая в собственный проект агента,
- * у человека не показывается вообще ни в одной колонке.
+ * (assignee_id = projects.owner_id).
  *
- * Это не дыра «агент пишет куда хочет»: задача обязана оказаться у
- * владельца проекта в списке (он её исполнитель), спрятать её от него
- * таким способом нельзя. Агенту это не даёт ни увидеть чужие проекты
- * (GET /api/projects по-прежнему только свои), ни тронуть чужие задачи.
+ * С правилом по ролям (см. шапку файла) этот допуск перестал быть
+ * единственным способом показать владельцу задачу агента — тот теперь видит
+ * её в любом случае. Оставлен как есть: он работает, ничего не открывает
+ * сверх прежнего и убирать его — отдельная работа.
  */
 export function getProjectForFiling(
   projectId: string,
@@ -76,9 +186,7 @@ export function getProjectForFiling(
   const own = getProjectForUser(projectId, userId);
   if (own) return own;
 
-  const caller = db
-    .prepare("SELECT type FROM users WHERE id = ?")
-    .get(userId) as { type?: string } | undefined;
+  const caller = callerOf(userId);
   if (caller?.type !== "ai" || !assigneeId) return undefined;
 
   return db
@@ -86,16 +194,28 @@ export function getProjectForFiling(
     .get(projectId, assigneeId);
 }
 
+/** Метка для правки/удаления: владельцу — любая, остальным — своя. */
 export function getLabelForUser(
   labelId: string,
   userId: string,
 ): any | undefined {
+  if (isOwner(userId)) {
+    return db.prepare("SELECT * FROM labels WHERE id = ?").get(labelId);
+  }
   return db
     .prepare("SELECT * FROM labels WHERE id = ? AND owner_id = ?")
     .get(labelId, userId);
 }
 
-/** True if every id in `labelIds` is owned by `userId` (no missing/foreign ids). */
+/**
+ * True, если каждой меткой из `labelIds` вызывающий вправе пометить задачу.
+ *
+ * Владельцу доступны любые. Агенту — свои и метки людей, на которых он
+ * работает: он ставит задаче метку владельца, а не заводит собственную
+ * (симметрично проектам, решение Максима 14.08.2026 — «один человек и его
+ * же агенты, стена между ними смысла не имеет»). Прочему человеку — только
+ * свои.
+ */
 export function allLabelsOwnedByUser(
   labelIds: string[],
   userId: string,
@@ -103,6 +223,25 @@ export function allLabelsOwnedByUser(
   const unique = [...new Set(labelIds)];
   if (unique.length === 0) return true;
   const placeholders = unique.map(() => "?").join(",");
+
+  if (isOwner(userId)) {
+    const known = db
+      .prepare(`SELECT id FROM labels WHERE id IN (${placeholders})`)
+      .all(...unique) as Array<{ id: string }>;
+    return known.length === unique.length;
+  }
+
+  if (callerOf(userId)?.type === "ai") {
+    const usable = db
+      .prepare(
+        `SELECT l.id FROM labels l
+           JOIN users u ON u.id = l.owner_id
+          WHERE l.id IN (${placeholders}) AND (l.owner_id = ? OR u.type != 'ai')`,
+      )
+      .all(...unique, userId) as Array<{ id: string }>;
+    return usable.length === unique.length;
+  }
+
   const owned = db
     .prepare(
       `SELECT id FROM labels WHERE owner_id = ? AND id IN (${placeholders})`,

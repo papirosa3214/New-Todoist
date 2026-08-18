@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
-import { getTaskForUser } from "../access.js";
+import { getTaskForRead, getTaskForWrite } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { logEvent, isStale } from "../agentState.js";
 // Тот же расчёт state/agent_stale, что у GET /api/tasks/:id (tasks.ts) —
@@ -42,32 +42,27 @@ function getFullTask(taskId: string) {
   return { ...full, labels, subtasks, comments };
 }
 
-/** The task a subtask belongs to, joined and ownership-checked in one query. */
+/**
+ * Подзадача вместе с её задачей — и только если вызывающий вправе эту задачу
+ * ПРАВИТЬ. Предикат владения больше не зашит в запрос: правило зависит от
+ * роли (владельцу — любая задача, агенту — своя), и живёт оно в одном месте,
+ * в access.ts. Раньше здесь стояло собственное `creator_id = ? OR
+ * assignee_id = ?`, из-за чего владелец не мог тронуть шаг в задаче,
+ * которую агент завёл сам.
+ */
 function getSubtaskWithTaskForUser(
   subtaskId: string,
   userId: string,
 ): any | undefined {
-  return db
+  const subtask = db
     .prepare(
       `SELECT s.*, t.creator_id as task_creator_id, t.assignee_id as task_assignee_id
        FROM subtasks s JOIN tasks t ON t.id = s.task_id
-       WHERE s.id = ? AND (t.creator_id = ? OR t.assignee_id = ?)`,
+       WHERE s.id = ?`,
     )
-    .get(subtaskId, userId, userId);
-}
-
-/** The comment's parent task, joined and ownership-checked in one query. */
-function getCommentWithTaskForUser(
-  commentId: string,
-  userId: string,
-): any | undefined {
-  return db
-    .prepare(
-      `SELECT c.*, t.creator_id as task_creator_id, t.assignee_id as task_assignee_id
-       FROM comments c JOIN tasks t ON t.id = c.task_id
-       WHERE c.id = ? AND (t.creator_id = ? OR t.assignee_id = ?)`,
-    )
-    .get(commentId, userId, userId);
+    .get(subtaskId) as any;
+  if (!subtask) return undefined;
+  return getTaskForWrite(subtask.task_id, userId) ? subtask : undefined;
 }
 
 export function registerSubtaskCommentRoutes(app: FastifyInstance) {
@@ -78,7 +73,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     "/api/tasks/:taskId/subtasks",
     { preHandler: authPre },
     async (req: any, reply) => {
-      const task = getTaskForUser(req.params.taskId, req.userId);
+      const task = getTaskForRead(req.params.taskId, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
       return db
         .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
@@ -92,7 +87,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
   }>("/api/tasks/:taskId/subtasks", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForUser(req.params.taskId, req.userId);
+      const task = getTaskForWrite(req.params.taskId, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
       if (!req.body?.title)
         return reply.code(400).send({ error: "title required" });
@@ -411,7 +406,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     "/api/tasks/:taskId/comments",
     { preHandler: authPre },
     async (req: any, reply) => {
-      const task = getTaskForUser(req.params.taskId, req.userId);
+      const task = getTaskForRead(req.params.taskId, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
       return db
         .prepare(
@@ -429,7 +424,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
   }>("/api/tasks/:taskId/comments", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForUser(req.params.taskId, req.userId) as any;
+      const task = getTaskForWrite(req.params.taskId, req.userId) as any;
       if (!task) return reply.code(404).send({ error: "Not found" });
       const attachmentIds: string[] = Array.isArray(req.body?.attachment_ids)
         ? req.body.attachment_ids

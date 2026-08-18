@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
-import { getTaskForUser } from "../access.js";
+import { getTaskForWrite } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { hydrateTask } from "./tasks.js";
 import {
@@ -37,7 +37,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/claim", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForUser(req.params.id, req.userId);
+      const task = getTaskForWrite(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       // Взять задачу в работу может только учётка-агент (type = 'ai').
@@ -178,7 +178,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/api/tasks/:id/heartbeat", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForUser(req.params.id, req.userId);
+      const task = getTaskForWrite(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       if (
@@ -212,7 +212,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/state", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForUser(req.params.id, req.userId);
+      const task = getTaskForWrite(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       const { state } = req.body || {};

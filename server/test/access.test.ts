@@ -1,0 +1,288 @@
+// Права доступа по роли — задача babbfc82, формулировка владельца:
+// «человек-владелец видит всё и вся и может залезать куда угодно; агенты
+// тоже видят всё, но не лезут в задачи, которые им не назначили».
+//
+// Правило живёт в src/access.ts; здесь проверяется его наблюдаемое
+// поведение через HTTP (app.inject, одноразовая база — test/setup.ts).
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { buildApp } from "../src/index.js";
+import db from "../src/db.js";
+
+describe("Доступ по роли: владелец, агенты, посторонний", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+  let ownerId: string;
+  let agentAToken: string;
+  let agentAId: string;
+  let agentBToken: string;
+  let strangerToken: string;
+
+  /** Учётка через регистрацию + при необходимости роль/тип прямым UPDATE. */
+  async function makeUser(
+    name: string,
+    email: string,
+    patch?: { role?: string; type?: string },
+  ) {
+    const reg = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name, email, password: "password123" },
+    });
+    expect(reg.statusCode).toBe(200);
+    const body = reg.json();
+    // Регистрация намеренно не умеет выдавать role='owner'/type='ai'
+    // (auth.ts) — как и у системных ботов, это ставится только в базе.
+    if (patch?.role)
+      db.prepare("UPDATE users SET role = ? WHERE id = ?").run(
+        patch.role,
+        body.user.id,
+      );
+    if (patch?.type)
+      db.prepare("UPDATE users SET type = ? WHERE id = ?").run(
+        patch.type,
+        body.user.id,
+      );
+    return { id: body.user.id as string, jwt: body.token as string };
+  }
+
+  async function apiToken(jwt: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/api-token",
+      headers: { authorization: `Bearer ${jwt}` },
+    });
+    return res.json().api_token as string;
+  }
+
+  beforeAll(async () => {
+    app = await buildApp();
+
+    const owner = await makeUser("Владелец", "owner@access.test", {
+      role: "owner",
+    });
+    ownerId = owner.id;
+    ownerToken = owner.jwt;
+
+    const agentA = await makeUser("Агент А", "agent-a@access.test", {
+      type: "ai",
+    });
+    agentAId = agentA.id;
+    agentAToken = await apiToken(agentA.jwt);
+
+    const agentB = await makeUser("Агент Б", "agent-b@access.test", {
+      type: "ai",
+    });
+    agentBToken = await apiToken(agentB.jwt);
+
+    const stranger = await makeUser("Посторонний", "stranger@access.test");
+    strangerToken = stranger.jwt;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  /** Ровно тот случай, который сломался живьём: у задачи нет ни проекта,
+   * ни исполнителя — только создатель-агент. */
+  async function agentCreatesLooseTask(title: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${agentAToken}` },
+      payload: { title },
+    });
+    expect(res.statusCode).toBe(200);
+    const task = res.json().task;
+    expect(task.project_id).toBeFalsy();
+    expect(task.assignee_id).toBeFalsy();
+    return task.id as string;
+  }
+
+  it("владелец видит задачу агента без проекта и без исполнителя", async () => {
+    const id = await agentCreatesLooseTask("Задача агента без проекта");
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().map((t: any) => t.id)).toContain(id);
+
+    const card = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(card.statusCode).toBe(200);
+  });
+
+  it("владелец правит и удаляет чужую задачу", async () => {
+    const id = await agentCreatesLooseTask("Задача агента на правку");
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title: "Переименовал владелец" },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().task.title).toBe("Переименовал владелец");
+
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(del.statusCode).toBe(200);
+  });
+
+  it("владелец находит задачу агента поиском", async () => {
+    await agentCreatesLooseTask("Ключевоеслово агента");
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/search?q=Ключевоеслово",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().tasks.length).toBeGreaterThan(0);
+  });
+
+  it("агент видит чужую задачу, но править её не может", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title: "Задача для агента А", assignee_id: agentAId },
+    });
+    const id = created.json().task.id;
+
+    const seen = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${agentBToken}` },
+    });
+    expect(seen.statusCode).toBe(200);
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${agentBToken}` },
+      payload: { title: "Влез в чужую" },
+    });
+    expect(patch.statusCode).toBe(404);
+
+    const claim = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${id}/claim`,
+      headers: { authorization: `Bearer ${agentBToken}` },
+    });
+    expect(claim.statusCode).toBe(404);
+  });
+
+  it("агент работает со своей задачей как раньше", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title: "Своя задача агента А", assignee_id: agentAId },
+    });
+    const id = created.json().task.id;
+
+    const claim = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${id}/claim`,
+      headers: { authorization: `Bearer ${agentAToken}` },
+    });
+    expect(claim.statusCode).toBe(200);
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${agentAToken}` },
+      payload: { description: "ход работы" },
+    });
+    expect(patch.statusCode).toBe(200);
+  });
+
+  it("приёмка остаётся за человеком: агент не закрывает задачу сам", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title: "Приёмка за владельцем", assignee_id: agentAId },
+    });
+    const id = created.json().task.id;
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${agentAToken}` },
+      payload: { status: "completed" },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  /** Регистрация на :5180 открыта, поэтому «видно всё» не должно
+   * распространяться на человека, который завёл себе учётку сам. */
+  it("посторонний человек чужих задач не видит", async () => {
+    const id = await agentCreatesLooseTask("Не для постороннего");
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${strangerToken}` },
+    });
+    expect(list.json().map((t: any) => t.id)).not.toContain(id);
+
+    const card = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${strangerToken}` },
+    });
+    expect(card.statusCode).toBe(404);
+
+    const search = await app.inject({
+      method: "GET",
+      url: "/api/search?q=Не для постороннего",
+      headers: { authorization: `Bearer ${strangerToken}` },
+    });
+    expect(search.json().tasks.length).toBe(0);
+  });
+
+  it("владельцу видны проекты и метки, посторонний своих не теряет", async () => {
+    const ownerProject = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Проект владельца" },
+    });
+    expect(ownerProject.statusCode).toBe(200);
+
+    const strangerProject = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${strangerToken}` },
+      payload: { name: "Проект постороннего" },
+    });
+    const strangerProjectId = strangerProject.json().id;
+
+    const ownerList = await app.inject({
+      method: "GET",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(ownerList.json().map((p: any) => p.id)).toContain(strangerProjectId);
+
+    const strangerList = await app.inject({
+      method: "GET",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${strangerToken}` },
+    });
+    const strangerIds = strangerList.json().map((p: any) => p.id);
+    expect(strangerIds).toContain(strangerProjectId);
+    expect(strangerIds).not.toContain(ownerProject.json().id);
+    expect(ownerId).toBeTruthy();
+  });
+});
