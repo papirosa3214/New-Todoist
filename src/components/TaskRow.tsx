@@ -155,7 +155,15 @@ export function TaskRow({
   // Флажок только для 1-3: четвёртый — «низкий», значение по умолчанию.
   const hasPriorityFlag = !!task.priority && task.priority <= 3;
   const hasLabels = visibleLabels.length > 0;
+  // Проект — бейджем с названием, ровно как на доске (владелец
+  // 19.08.2026: «нужно бы прописывать, к какому проекту относится
+  // задача… ну уж тогда какой-нибудь бейдж сделай»). Оформление один в
+  // один с TaskBoard: фон — цвет проекта с прозрачностью, текст — сам
+  // цвет. Так один проект выглядит одинаково в списке, на доске и
+  // полоской в сетке часов.
+  const hasProjectBadge = !!task.project_name;
   const hasMeta =
+    hasProjectBadge ||
     hasPriorityFlag ||
     hasOverduePill ||
     hasAgentTag ||
@@ -357,6 +365,17 @@ export function TaskRow({
                     style={{ color: getPriorityColor(task.priority) }}
                     aria-label={`Приоритет: ${PRIORITIES.find((p) => p.key === task.priority)?.name ?? ""}`}
                   />
+                )}
+                {hasProjectBadge && (
+                  <span
+                    className="inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium"
+                    style={{
+                      backgroundColor: (task.project_color || "#A6A6A6") + "26",
+                      color: task.project_color || "#A6A6A6",
+                    }}
+                  >
+                    {task.project_name}
+                  </span>
                 )}
                 {hasOverduePill && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
