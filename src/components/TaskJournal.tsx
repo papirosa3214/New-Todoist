@@ -283,10 +283,18 @@ function buildFeed(task: ApiTask): FeedRow[] {
     .filter((e, i) => !isClaimTwin(e, rawEvents[i - 1]))
     .map((e) => ({ kind: "event", ts: e.created_at, event: e }));
   // Array#sort is stable — on a tie (same second) this keeps comments
-  // ahead of events, since `comments` was concatenated first. That reads
-  // naturally: the agent's explanation appears just before the compact
-  // "сдано на проверку" line it was attached to.
-  return [...comments, ...events].sort((a, b) => a.ts.localeCompare(b.ts));
+  // ahead of events, since `comments` was concatenated first.
+  // .reverse() at the end (Максим 18.08.2026: «самые актуальные вверху,
+  // самые неактуальные внизу» — не листать до конца, чтобы увидеть
+  // последнее), not a flipped comparator: reversing the whole
+  // already-sorted (oldest-first, comment-before-event-on-a-tie) array
+  // keeps that same tie order flipped consistently too — the event now
+  // sits above the comment that explains it, which still reads naturally
+  // top-to-bottom-is-newest-to-oldest ("сдано на проверку" first, its own
+  // explanation right under it).
+  return [...comments, ...events]
+    .sort((a, b) => a.ts.localeCompare(b.ts))
+    .reverse();
 }
 
 const AGENT_STATE_WORD: Record<string, string> = {

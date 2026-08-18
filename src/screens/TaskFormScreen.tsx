@@ -158,6 +158,18 @@ export function TaskFormScreen() {
     el.style.height = "auto"; // сброс перед пересчётом — иначе scrollHeight никогда не уменьшится обратно при удалении текста
     el.style.height = `${el.scrollHeight}px`;
   }, [title]);
+  // То же самое для описания (Максим 18.08.2026 — тот же симптом, что у
+  // названия 17.08.2026, просто в другом поле: фиксированные rows={2} без
+  // роста — длинный надиктованный текст прячется под внутренним скроллом
+  // textarea, выглядит как «часть текста пропала», хотя она просто не
+  // видна без прокрутки внутри мелкого окошка.
+  const descRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = descRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [desc]);
   const [assignee, setAssignee] = useState<string | undefined>();
   const [priority, setPriority] = useState(1);
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
@@ -683,6 +695,39 @@ export function TaskFormScreen() {
         rows={1}
       />
 
+      {/* Description — Максим 18.08.2026: порядок полей должен быть
+          «название → заметка → подзадачи», не наоборот — заметка это
+          описание самой задачи, ей место сразу под названием, а не в
+          подвале после списка шагов. Переставлена перед блоком «Подзадачи»
+          ниже (был порядок «Подзадачи» → «Заметка», пятый заход 2026-08-13
+          — то прежнее решение отменено этим прямым указанием, история
+          осталась в git, не переписана здесь).
+          Owner 2026-08-13 (шестой заход): лейбл «Заметка» — той же
+          разметкой, что и лейбл «Подзадачи» ниже, крупный типоразмер
+          (17px). Сам textarea — мелкий (13px), тот же приём, что и у
+          названия задачи. Седьмой заход: px-1 убран — см. комментарий у
+          textarea названия.
+          Девятый заход (замер): убран лишний <span>-обёртка — в отличие
+          от «Подзадачи» (там span нужен как flex-item рядом с кнопкой
+          «Разбить»), у «Заметка» это был единственный ребёнок div'а без
+          причины. Строчный span внутри блочного div даёт свой line-box
+          строкой ниже (line-height от унаследованного 17px), из-за чего
+          div.bottom оказывался на ~4px ниже фактического текста — gap до
+          textarea измерялся 12px вместо 8px, как у «Новая задача»→
+          textarea и «Подзадачи»→«Добавить подзадачу». Текст теперь прямо
+          в div, тем же приёмом, что и заголовок экрана выше. */}
+      <div className="text-[17px] text-sub font-semibold mb-2">Заметка</div>
+      <textarea
+        ref={descRef}
+        value={desc}
+        onChange={(e) => setDesc(e.target.value)}
+        onFocus={() => handleFieldFocus("desc")}
+        onBlur={handleFieldBlur}
+        placeholder="Описание"
+        className="block w-full bg-transparent text-[13px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px] overflow-hidden"
+        rows={1}
+      />
+
       {/* ── Subtasks — owner 2026-08-13 (пятый заход): переставлены сразу
           под название, перед описанием (было: после карточки Срок/Проект/
           Приоритет) — так поле «Добавить подзадачу» больше не оказывается
@@ -697,7 +742,12 @@ export function TaskFormScreen() {
           же приёмом, что и обычный текст: владелец явно попросил убрать
           карточку, оставить только заголовок и кнопку «Разбить».
           Седьмой заход: убран px-1 — см. комментарий у textarea названия
-          выше. */}
+          выше.
+          Десятый заход (18.08.2026): «Заметка» переставлена ВЫШЕ этого
+          блока (см. её комментарий) — соседство с title, ради которого
+          подзадачи сюда и подняли пятым заходом, этим не портится: оба
+          поля всё ещё в одном экране без скролла, просто заметка теперь
+          между ними. */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-[17px] text-sub font-semibold">Подзадачи</span>
         <button
@@ -861,33 +911,6 @@ export function TaskFormScreen() {
           className="mt-2"
         />
       </div>
-
-      {/* Description — тот же принцип: своей кнопки нет, панель над
-          клавиатурой пишет сюда, если в фокусе было это поле.
-          Owner 2026-08-13 (шестой заход): лейбл «Заметка» — новый, той же
-          разметкой, что и лейбл «Подзадачи» выше, крупный типоразмер
-          (17px). Сам textarea — мелкий (13px), тот же приём, что и у
-          названия задачи. Седьмой заход: px-1 убран — см. комментарий у
-          textarea названия.
-          Девятый заход (замер): убран лишний <span>-обёртка — в отличие
-          от «Подзадачи» (там span нужен как flex-item рядом с кнопкой
-          «Разбить»), у «Заметка» это был единственный ребёнок div'а без
-          причины. Строчный span внутри блочного div даёт свой line-box
-          строкой ниже (line-height от унаследованного 17px), из-за чего
-          div.bottom оказывался на ~4px ниже фактического текста — gap до
-          textarea измерялся 12px вместо 8px, как у «Новая задача»→
-          textarea и «Подзадачи»→«Добавить подзадачу». Текст теперь прямо
-          в div, тем же приёмом, что и заголовок экрана выше. */}
-      <div className="text-[17px] text-sub font-semibold mb-2">Заметка</div>
-      <textarea
-        value={desc}
-        onChange={(e) => setDesc(e.target.value)}
-        onFocus={() => handleFieldFocus("desc")}
-        onBlur={handleFieldBlur}
-        placeholder="Описание"
-        className="block w-full bg-transparent text-[13px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px]"
-        rows={2}
-      />
 
       {/* ── Срок / Проект / Приоритет — mockup .card (screen 11) ── */}
       <div className="mb-4">
