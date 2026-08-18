@@ -293,21 +293,8 @@ export function TaskDetailScreen() {
         ) : (
           <div className="mt-1 w-[18px] h-[18px] shrink-0" aria-hidden="true" />
         )}
-        {/* Цвет заголовка = цвет приоритета (Максим 18.08.2026: «не ставить
-            P1 в пилюльке, а красить само название и флаг — каким он выбран,
-            таким и ставится»). Убрана PriorityPill (см. карточку
-            метаданных ниже), это теперь единственный, но заметный носитель
-            цвета приоритета вместе с флажком рядом. Низкий (P4)/без
-            приоритета — тот же showPriorityFlag, что уже гейтит флажок:
-            значение по умолчанию не красим, иначе каждый заголовок был бы
-            цветным без исключения. */}
         <h1
           className={`text-[20px] font-semibold leading-snug flex-1 ${task.status === "completed" ? "line-through text-sub" : ""}`}
-          style={
-            showPriorityFlag && task.status !== "completed"
-              ? { color: priority?.color }
-              : undefined
-          }
         >
           {task.title}
         </h1>
@@ -352,16 +339,19 @@ export function TaskDetailScreen() {
             </span>
           </div>
         )}
+        {/* Приоритет — не пилюля справа, а сам флажок и слово «Приоритет»
+            цветом приоритета (Максим 18.08.2026, уточнение: «не заголовок —
+            заголовок не трогай, здесь только флажок и слово красишь»).
+            Только в этой карточке (щёлкнул на задачу) — строка списка/
+            плитка доски используют свой собственный флажок-точку рядом с
+            заголовком, его не трогаю, он и так уже цветной. */}
         <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
-          <Icon name="flag" size={18} className="text-sub" />
-          <span className="text-[14px] text-sub flex-1">Приоритет</span>
-          {/* Имя цветом приоритета, не пилюля (см. заголовок выше — тот же
-              повод: «зачем эта пилюлька, она лишняя»). */}
+          <Icon name="flag" size={18} style={{ color: priority?.color }} />
           <span
-            className="text-[14px] font-medium"
+            className="text-[14px] flex-1"
             style={{ color: priority?.color }}
           >
-            {priority?.name}
+            Приоритет
           </span>
         </div>
         {task.assignee_id && task.assignee_name && (
