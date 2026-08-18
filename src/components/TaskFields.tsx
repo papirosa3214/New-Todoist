@@ -101,18 +101,6 @@ export function FieldRow({
 // (PRIORITIES itself now lives in ../lib/priority.ts — imported + re-exported above.)
 
 // mockup .p1-pill
-export function PriorityPill({ priority }: { priority: number }) {
-  const p = PRIORITIES.find((x) => x.key === priority) ?? PRIORITIES[3];
-  return (
-    <span
-      className="inline-flex items-center justify-center text-[11px] font-bold text-white rounded-[10px] px-2 h-[20px] min-w-[26px] shrink-0"
-      style={{ backgroundColor: p.color }}
-    >
-      {p.label}
-    </span>
-  );
-}
-
 export function PriorityField({
   value,
   onChange,
