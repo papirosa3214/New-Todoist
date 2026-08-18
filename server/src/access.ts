@@ -57,9 +57,9 @@ export function seesEveryTask(userId: string): boolean {
  * пришлось повторять в /api/projects, /api/labels и в поиске:
  *
  *   владелец      — всё;
- *   агент         — своё и принадлежащее людям, на которых он работает
- *                   (решение Максима 14.08.2026: «один человек и его же
- *                   агенты, стена между ними смысла не имеет»);
+ *   агент         — своё и принадлежащее владельцам трекера (решение
+ *                   Максима 14.08.2026: «один человек и его же агенты,
+ *                   стена между ними смысла не имеет»);
  *   прочий человек — только своё.
  *
  * `ownerColumn` подставляется в SQL как есть, поэтому вызывать её можно
@@ -72,8 +72,11 @@ export function visibleScope(
   const caller = callerOf(userId);
   if (caller?.role === "owner") return { sql: "1 = 1", params: [] };
   if (caller?.type === "ai") {
+    // Именно владельцы (role='owner'), а не «любой человек»: регистрация
+    // открыта, и по «type != 'ai'» агент видел бы справочники случайного
+    // зарегистрировавшегося человека — к работе это отношения не имеет.
     return {
-      sql: `(${ownerColumn} = ? OR ${ownerColumn} IN (SELECT id FROM users WHERE type != 'ai'))`,
+      sql: `(${ownerColumn} = ? OR ${ownerColumn} IN (SELECT id FROM users WHERE role = 'owner'))`,
       params: [userId],
     };
   }
@@ -210,8 +213,8 @@ export function getLabelForUser(
 /**
  * True, если каждой меткой из `labelIds` вызывающий вправе пометить задачу.
  *
- * Владельцу доступны любые. Агенту — свои и метки людей, на которых он
- * работает: он ставит задаче метку владельца, а не заводит собственную
+ * Владельцу доступны любые. Агенту — свои и метки владельца трекера: он
+ * ставит задаче метку владельца, а не заводит собственную
  * (симметрично проектам, решение Максима 14.08.2026 — «один человек и его
  * же агенты, стена между ними смысла не имеет»). Прочему человеку — только
  * свои.
@@ -236,7 +239,7 @@ export function allLabelsOwnedByUser(
       .prepare(
         `SELECT l.id FROM labels l
            JOIN users u ON u.id = l.owner_id
-          WHERE l.id IN (${placeholders}) AND (l.owner_id = ? OR u.type != 'ai')`,
+          WHERE l.id IN (${placeholders}) AND (l.owner_id = ? OR u.role = 'owner')`,
       )
       .all(...unique, userId) as Array<{ id: string }>;
     return usable.length === unique.length;

@@ -251,6 +251,49 @@ describe("Доступ по роли: владелец, агенты, посто
     expect(search.json().tasks.length).toBe(0);
   });
 
+  it("агенту не видны справочники постороннего человека", async () => {
+    const label = await app.inject({
+      method: "POST",
+      url: "/api/labels",
+      headers: { authorization: `Bearer ${strangerToken}` },
+      payload: { name: "Метка постороннего" },
+    });
+    const strangerLabelId = label.json().id;
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${strangerToken}` },
+      payload: { name: "Проект постороннего для агента" },
+    });
+    const strangerProjectId = project.json().id;
+
+    const labels = await app.inject({
+      method: "GET",
+      url: "/api/labels",
+      headers: { authorization: `Bearer ${agentAToken}` },
+    });
+    expect(labels.json().map((l: any) => l.id)).not.toContain(strangerLabelId);
+
+    const projects = await app.inject({
+      method: "GET",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${agentAToken}` },
+    });
+    expect(projects.json().map((p: any) => p.id)).not.toContain(
+      strangerProjectId,
+    );
+
+    // И пометить свою задачу чужой меткой агент тоже не может.
+    const task = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${agentAToken}` },
+      payload: { title: "С чужой меткой", label_ids: [strangerLabelId] },
+    });
+    expect(task.statusCode).toBe(400);
+  });
+
   it("владельцу видны проекты и метки, посторонний своих не теряет", async () => {
     const ownerProject = await app.inject({
       method: "POST",
