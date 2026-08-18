@@ -18,6 +18,7 @@ import {
   Bell,
   BellOff,
   Bot,
+  Clock,
   Calendar,
   CalendarCheck,
   CalendarDays,
@@ -102,6 +103,9 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   calendar: Calendar,
   calendarCheck: CalendarCheck,
   calendarSmall: CalendarDays,
+  // Час начала и длительность задачи (TimeField, 18.08.2026) — под
+  // календарную развёртку раздела «День».
+  clock: Clock,
   home: Home,
   tag: Tag,
   hash: Hash,

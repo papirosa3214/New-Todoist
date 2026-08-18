@@ -50,6 +50,7 @@ import {
   Card,
   FieldRow,
   DueDateField,
+  TimeField,
   PriorityField,
   LabelsField,
   SubtaskRow,
@@ -254,6 +255,12 @@ export function TaskFormScreen() {
   // put there). Edit mode overwrites this from existingTask.due_date right
   // below, so an existing task keeps its own date.
   const [dueDate, setDueDate] = useState<string | null>(null);
+  // Час начала и длительность — под календарную развёртку раздела «День»
+  // (18.08.2026). Живут отдельными полями, а не внутри dueDate: срок в
+  // проекте всюду сравнивается как голая дата «ГГГГ-ММ-ДД», и подмешивание
+  // времени сломало бы эти сравнения (см. lib/date.ts).
+  const [startTime, setStartTime] = useState<string | null>(null);
+  const [durationMin, setDurationMin] = useState<number | null>(null);
   // undefined = "not touched yet" (create mode falls back to the user's
   // first project); null = "explicitly no project" — reachable in edit
   // mode for a task that lives in Inbox, AND now in create mode too: the
@@ -285,6 +292,8 @@ export function TaskFormScreen() {
       setPriority(existingTask.priority);
       setSelectedLabelIds(existingTask.labels.map((l) => l.id));
       setDueDate(existingTask.due_date);
+      setStartTime(existingTask.start_time ?? null);
+      setDurationMin(existingTask.duration_min ?? null);
       setProjectId(existingTask.project_id);
       setHydrated(true);
     }
@@ -328,6 +337,11 @@ export function TaskFormScreen() {
         title: title.trim(),
         description: desc.trim() || undefined,
         due_date: dueDate || undefined,
+        // Только вместе со сроком — сервер отвергает время без даты, а
+        // поле в интерфейсе без срока и не показывается.
+        start_time: dueDate ? (startTime ?? undefined) : undefined,
+        duration_min:
+          dueDate && startTime ? (durationMin ?? undefined) : undefined,
         project_id: effectiveProjectId ?? undefined,
         priority,
         assignee_id: assignee,
@@ -370,9 +384,7 @@ export function TaskFormScreen() {
   // диктовку Apple, а это разные механизмы с разным качеством.
   const [voiceSource, setVoiceSource] = useState<
     "whisper" | "apple" | "server" | null
-  >(
-    null,
-  );
+  >(null);
   // Черновик текста для поля «Добавить подзадачу...» — поднят сюда из
   // AddSubtaskRow (owner 2026-08-13), иначе кнопке диктовки некуда было бы
   // писать: у некотролируемого input своего state снаружи не видно.
@@ -568,6 +580,14 @@ export function TaskFormScreen() {
     if (nextDesc !== (existingTask.description || ""))
       patch.description = nextDesc;
     if (dueDate !== existingTask.due_date) patch.due_date = dueDate;
+    // Снятый срок уносит с собой время: иначе на сервере осталось бы
+    // время без даты — состояние, которое он же сам и запрещает.
+    const nextStart = dueDate ? startTime : null;
+    const nextDuration = dueDate && startTime ? durationMin : null;
+    if (nextStart !== (existingTask.start_time ?? null))
+      patch.start_time = nextStart;
+    if (nextDuration !== (existingTask.duration_min ?? null))
+      patch.duration_min = nextDuration;
     if (effectiveProjectId !== (existingTask.project_id ?? null))
       patch.project_id = effectiveProjectId;
     if (priority !== existingTask.priority) patch.priority = priority;
@@ -964,7 +984,29 @@ export function TaskFormScreen() {
       {/* ── Срок / Проект / Приоритет — mockup .card (screen 11) ── */}
       <div className="mb-4">
         <Card>
-          <DueDateField value={dueDate} onChange={setDueDate} />
+          <DueDateField
+            value={dueDate}
+            onChange={(v) => {
+              setDueDate(v);
+              // Дату сняли — время осиротело, убираем сразу, а не при
+              // сохранении: иначе строка «Время» исчезнет, а значение
+              // останется висеть в состоянии формы.
+              if (!v) {
+                setStartTime(null);
+                setDurationMin(null);
+              }
+            }}
+          />
+          {dueDate && (
+            <TimeField
+              time={startTime}
+              duration={durationMin}
+              onChange={(t, d) => {
+                setStartTime(t);
+                setDurationMin(d);
+              }}
+            />
+          )}
           <div>
             <FieldRow
               icon="hash"

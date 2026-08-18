@@ -98,6 +98,11 @@ export interface ApiTask {
   title: string;
   description: string | null;
   due_date: string | null;
+  // Час начала «ЧЧ:ММ» местного времени и длительность в минутах — под
+  // календарную развёртку раздела «День» (миграция 005_task_time_of_day).
+  // Оба необязательные: задача без них — обычная задача списка.
+  start_time?: string | null;
+  duration_min?: number | null;
   project_id: string | null;
   priority: 1 | 2 | 3 | 4;
   assignee_id: string | null;

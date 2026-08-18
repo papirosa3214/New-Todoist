@@ -26,6 +26,10 @@ export interface CreateTaskInput {
   title: string;
   description?: string;
   due_date?: string;
+  // Час начала «ЧЧ:ММ» и длительность в минутах — только вместе со сроком,
+  // сервер отвергает время без даты (миграция 005_task_time_of_day).
+  start_time?: string | null;
+  duration_min?: number | null;
   project_id?: string;
   priority?: number;
   assignee_id?: string;
@@ -52,6 +56,8 @@ export interface UpdateTaskInput {
   title?: string;
   description?: string;
   due_date?: string | null;
+  start_time?: string | null;
+  duration_min?: number | null;
   project_id?: string | null;
   priority?: number;
   assignee_id?: string | null;

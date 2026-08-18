@@ -327,6 +327,139 @@ export function DueDateField({
   );
 }
 
+// ═══════════ ВРЕМЯ НАЧАЛА И ДЛИТЕЛЬНОСТЬ ═══════════
+//
+// 18.08.2026, под календарную развёртку раздела «День». Поле показывается
+// ТОЛЬКО когда у задачи есть срок: сервер отвергает время без даты
+// («время начала имеет смысл только вместе со сроком»), и предлагать
+// заведомо отклоняемый ввод нельзя. Строка исчезает вместе со сроком —
+// вместе с ней сервер обнуляет и время, см. TaskFormScreen.
+//
+// Шаг 15 минут и набор длительностей — те же, что в присланном прототипе
+// (task-manager-mobile): 15/30/45 минут и часы до четырёх. Произвольную
+// длительность вводить нечем и незачем — на телефоне это лишний ввод ради
+// значения, которое почти всегда одно из этих.
+const HOURS = Array.from({ length: 18 }, (_, i) => i + 6); // 06:00–23:00, как сетка дня
+const MINUTES = [0, 15, 30, 45];
+const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240];
+
+/** «90» → «1 ч 30 мин»; часы без остатка — просто «2 ч». */
+export function formatDuration(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (!h) return `${m} мин`;
+  return m ? `${h} ч ${m} мин` : `${h} ч`;
+}
+
+export function TimeField({
+  time,
+  duration,
+  onChange,
+}: {
+  time: string | null | undefined;
+  duration: number | null | undefined;
+  onChange: (time: string | null, duration: number | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const has = !!time;
+  const [h, m] = has ? time!.split(":").map(Number) : [9, 0];
+
+  const label = has
+    ? `${time}${duration ? ` · ${formatDuration(duration)}` : ""}`
+    : "Не задано";
+
+  function pick(nextH: number, nextM: number) {
+    const hh = String(nextH).padStart(2, "0");
+    const mm = String(nextM).padStart(2, "0");
+    // Длительность по умолчанию — час: задача, которой задали время, почти
+    // всегда чем-то занимает день, а блок нулевой высоты в сетке не виден.
+    onChange(`${hh}:${mm}`, duration ?? 60);
+  }
+
+  return (
+    <>
+      <FieldRow
+        icon="clock"
+        iconClassName={has ? "text-red" : "text-sub"}
+        label="Время"
+        value={label}
+        valueClassName={has ? "text-red" : "text-sub"}
+        chevronOpen={open}
+        onClick={() => setOpen((o) => !o)}
+      />
+      {open && (
+        <div className="border-t border-stroke px-3 py-3">
+          <div className="text-[12px] text-sub mb-2">Начало</div>
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1 overflow-x-auto">
+              <div className="flex gap-1.5">
+                {HOURS.map((hour) => (
+                  <button
+                    key={hour}
+                    onClick={() => pick(hour, has ? m : 0)}
+                    className={`h-[36px] min-w-[44px] shrink-0 rounded-lg text-[13px] font-medium transition-colors ${
+                      has && hour === h
+                        ? "bg-red text-white"
+                        : "bg-card2 text-text active:bg-white/10"
+                    }`}
+                  >
+                    {String(hour).padStart(2, "0")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-1.5 mb-3">
+            {MINUTES.map((min) => (
+              <button
+                key={min}
+                onClick={() => pick(has ? h : 9, min)}
+                className={`flex-1 h-[36px] rounded-lg text-[13px] font-medium transition-colors ${
+                  has && min === m
+                    ? "bg-red text-white"
+                    : "bg-card2 text-text active:bg-white/10"
+                }`}
+              >
+                :{String(min).padStart(2, "0")}
+              </button>
+            ))}
+          </div>
+
+          <div className="text-[12px] text-sub mb-2">Сколько займёт</div>
+          <div className="flex flex-wrap gap-1.5">
+            {DURATIONS.map((d) => (
+              <button
+                key={d}
+                onClick={() => onChange(time ?? "09:00", d)}
+                className={`h-[36px] px-3 rounded-lg text-[13px] font-medium transition-colors ${
+                  duration === d
+                    ? "bg-red text-white"
+                    : "bg-card2 text-text active:bg-white/10"
+                }`}
+              >
+                {formatDuration(d)}
+              </button>
+            ))}
+          </div>
+
+          {has && (
+            <button
+              onClick={() => {
+                onChange(null, null);
+                setOpen(false);
+              }}
+              className="w-full text-center text-[13px] text-sub py-2 mt-2"
+            >
+              Убрать время
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 // ═══════════ LABELS (mockup .tags-row / .tag-pill-2) ═══════════
 
 export function LabelsField({
