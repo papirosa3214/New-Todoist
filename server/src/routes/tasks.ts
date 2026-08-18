@@ -107,7 +107,9 @@ export function withSubtaskState(s: any) {
     done: !!s.done,
     agent_stale: stale,
     // Готово важнее: подзадачу могли отметить сделанной, не сняв состояние.
-    // Протухшая аренда возвращает её в «ждёт» — работы-то нет.
+    // Протухшая аренда возвращает её в «ждёт» — работы-то нет. review не
+    // протухает как in_progress (агент сдал и ждёт решения владельца —
+    // молчание тут не признак брошенной работы, а нормальное ожидание).
     state: s.done
       ? "done"
       : stale
@@ -116,7 +118,9 @@ export function withSubtaskState(s: any) {
           ? "running"
           : s.agent_state === "blocked"
             ? "blocked"
-            : "pending",
+            : s.agent_state === "review"
+              ? "review"
+              : "pending",
   };
 }
 

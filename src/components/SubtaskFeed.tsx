@@ -17,11 +17,12 @@
 // их присылать, компонент менять не придётся. Пока их нет, состояние
 // выводится из `done`, а раскрывать нечего — стрелка не показывается.
 import { useState } from "react";
-import { Check, ChevronRight, TriangleAlert } from "lucide-react";
+import { Check, ChevronRight, Eye, TriangleAlert } from "lucide-react";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 
 /** Состояние подзадачи. Приходит с сервера, пока может отсутствовать. */
-export type SubtaskState = "done" | "running" | "pending" | "blocked";
+export type SubtaskState =
+  "done" | "running" | "pending" | "blocked" | "review";
 
 export interface FeedSubtask {
   id: string;
@@ -65,6 +66,7 @@ const VIEW: Record<
   running: { ring: "", text: "text-text", label: "в работе" },
   pending: { ring: "", text: "text-text", label: "ждёт" },
   blocked: { ring: "", text: "text-text", label: "упёрлась" },
+  review: { ring: "", text: "text-text", label: "на проверке" },
 };
 
 // ═══ DashedRing — «ждёт»/«в работе» ═══
@@ -179,9 +181,19 @@ function StateMark({ state }: { state: SubtaskState }) {
           DashedRing выше). Под prefers-reduced-motion гасится правилом
           .dash-glow в index.css, сегменты остаются на месте, без цвета. */}
       {state === "running" && <DashedRing active />}
+      {/* text-orange, не text-coral (18.08.2026, найден рассинхрон) —
+          «заблокировано» и в AgentStatusRow (статус самой задачи наверху),
+          и здесь должно быть ОДНИМ цветом. Coral — это «Агент пропал»
+          (агент молчит дольше 15 минут, требует внимания острее, чем
+          обычная блокировка), не «упёрлась»; их нельзя красить одинаково. */}
       {state === "blocked" && (
-        <TriangleAlert size={16} className="text-coral" />
+        <TriangleAlert size={21} className="text-orange" />
       )}
+      {/* review — text-blue, тот же цвет, что «На проверке — ждёт вашей
+          приёмки» в AgentStatusRow наверху (18.08.2026, новое состояние):
+          агент сдал шаг, ждёт вашего решения — принять (галочка) или
+          вернуть на доработку (см. владельческие действия ниже). */}
+      {state === "review" && <Eye size={21} className="text-blue" />}
       {/* pending — тот же пунктирный кружок, неподвижный (см. DashedRing) —
           не отдельная иконка. */}
       {state === "pending" && <DashedRing active={false} />}
@@ -191,29 +203,58 @@ function StateMark({ state }: { state: SubtaskState }) {
 
 function SubtaskRow({
   st,
+  isOwner,
   onToggle,
+  onReturn,
 }: {
   st: FeedSubtask;
+  isOwner: boolean;
   onToggle: () => Promise<unknown>;
+  onReturn?: (comment: string) => Promise<unknown>;
 }) {
   const [open, setOpen] = useState(false);
+  const [returning, setReturning] = useState(false);
+  const [comment, setComment] = useState("");
   const guardedToggle = useGuardedCallback(onToggle);
+  const guardedReturn = useGuardedCallback(async () => {
+    const trimmed = comment.trim();
+    if (!trimmed || !onReturn) return;
+    await onReturn(trimmed);
+    setReturning(false);
+    setComment("");
+  });
   const state = stateOf(st);
   const v = VIEW[state];
   const canOpen = !!st.result;
+  // Вернуть на доработку — только владелец, только пока шаг реально на
+  // проверке (18.08.2026, симметрично AgentOwnerActions на уровне задачи).
+  // result у review обязателен на сервере, поэтому canOpen тут всегда true —
+  // раскрывать и правда есть что.
+  const canReturn = isOwner && state === "review" && !!onReturn;
 
   return (
     <div>
       <div className="flex items-center gap-3 py-3 px-4">
         {/* Отметка о готовности — отдельная зона нажатия, как было раньше:
-            щелчок по кружку переключает, а не раскрывает. */}
-        <button
-          onClick={guardedToggle}
-          className="tap-scale shrink-0"
-          aria-label={st.done ? "Снять отметку" : "Отметить сделанной"}
-        >
-          <StateMark state={state} />
-        </button>
+            щелчок по кружку переключает, а не раскрывает. Кроме review
+            (18.08.2026, прямое указание): «на проверке» — решение
+            («Принять»/«Вернуть на доработку»), не тап-переключатель — та же
+            зона нажатия, что и раньше, случайным щелчком легко принять
+            шаг, который на самом деле хотели отклонить. Приёмка теперь
+            только явной кнопкой в раскрытом виде ниже. */}
+        {state === "review" ? (
+          <div className="shrink-0" aria-label={v.label}>
+            <StateMark state={state} />
+          </div>
+        ) : (
+          <button
+            onClick={guardedToggle}
+            className="tap-scale shrink-0"
+            aria-label={st.done ? "Снять отметку" : "Отметить сделанной"}
+          >
+            <StateMark state={state} />
+          </button>
+        )}
 
         {/* Заголовок раскрывает подзадачу — но только если внутри есть итог.
             Кнопка без содержимого хуже отсутствующей: нажимаешь, ничего не
@@ -228,13 +269,12 @@ function SubtaskRow({
           >
             {st.title}
           </span>
-          {state === "running" && (
-            // text-green, не text-teal — та же смена, что у DashedRing
-            // выше: подпись и значок одного состояния одним цветом.
-            <span className="text-[11px] text-green font-semibold shrink-0">
-              {v.label}
-            </span>
-          )}
+          {/* Текстовая подпись «в работе» рядом с заголовком убрана
+              (18.08.2026, прямое указание) — избыточна: статус самой
+              задачи уже написан выше (AgentStatusRow, «Агент работает»),
+              а DashedRing здесь же сигнализирует состояние формой и
+              движением. v.label остаётся только в aria-label кружка
+              (доступность), не в видимом тексте. */}
           {canOpen && (
             <ChevronRight
               size={16}
@@ -248,8 +288,62 @@ function SubtaskRow({
           кружку (18px) плюс зазору (12px), чтобы текст шёл по одной
           вертикали с заголовком, а не висел под кружком. */}
       {open && st.result && (
-        <div className="pb-3 pr-4 pl-[46px] text-[13px] text-sub whitespace-pre-wrap">
-          {st.result}
+        <div className="pb-3 pr-4 pl-[46px]">
+          <p className="text-[13px] text-sub whitespace-pre-wrap">
+            {st.result}
+          </p>
+          {/* Приёмка шага владельцем — обе кнопки рядом, в одной строке
+              (18.08.2026, прямое указание): кружок выше больше не кликается
+              у review (см. правку там же) — случайный тап по нему раньше
+              мог принять шаг, который хотели отклонить. Явное решение,
+              не тап-переключатель. Инлайн, не bottom-sheet как у задачи
+              целиком: подзадача уже раскрыта на этом же месте. */}
+          {canReturn && !returning && (
+            <div className="mt-2 flex justify-between">
+              <button
+                onClick={guardedToggle}
+                className="text-[13px] font-semibold uppercase tracking-wider text-green tap-fade"
+              >
+                Принять
+              </button>
+              <button
+                onClick={() => setReturning(true)}
+                className="text-[13px] font-semibold uppercase tracking-wider text-blue tap-fade"
+              >
+                Вернуть
+              </button>
+            </div>
+          )}
+          {canReturn && returning && (
+            <div className="mt-2 space-y-2">
+              <textarea
+                autoFocus
+                rows={2}
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                placeholder="Что нужно поправить…"
+                className="w-full bg-card2 rounded-xl px-3 py-2 text-[14px] text-text placeholder:text-dim outline-none resize-none"
+              />
+              <div className="flex gap-3">
+                <button
+                  onClick={guardedReturn}
+                  disabled={!comment.trim()}
+                  className="text-[13px] font-semibold text-blue disabled:opacity-40 tap-fade"
+                >
+                  Отправить
+                </button>
+                <button
+                  onClick={() => {
+                    setReturning(false);
+                    setComment("");
+                  }}
+                  className="text-[13px] text-dim tap-fade"
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -258,10 +352,17 @@ function SubtaskRow({
 
 export function SubtaskFeed({
   subtasks,
+  isOwner = false,
   onToggle,
+  onReturn,
 }: {
   subtasks: FeedSubtask[];
+  /** Кнопка «Вернуть на доработку» видна только владельцу задачи —
+      TaskDetailScreen передаёт currentUser.id === task.creator_id. Без
+      этого пропа (форма редактирования и т.п.) кнопка просто не рисуется. */
+  isOwner?: boolean;
   onToggle: (st: FeedSubtask) => Promise<unknown>;
+  onReturn?: (st: FeedSubtask, comment: string) => Promise<unknown>;
 }) {
   if (subtasks.length === 0) return null;
 
@@ -279,7 +380,13 @@ export function SubtaskFeed({
       </div>
       <div className="bg-card rounded-2xl overflow-hidden divide-y divide-stroke">
         {subtasks.map((st) => (
-          <SubtaskRow key={st.id} st={st} onToggle={() => onToggle(st)} />
+          <SubtaskRow
+            key={st.id}
+            st={st}
+            isOwner={isOwner}
+            onToggle={() => onToggle(st)}
+            onReturn={onReturn ? (comment) => onReturn(st, comment) : undefined}
+          />
         ))}
       </div>
     </div>

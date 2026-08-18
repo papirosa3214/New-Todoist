@@ -38,7 +38,12 @@ const AGENT_STATE_META: Record<
   "in_progress" | "blocked" | "review",
   { label: string; color: string }
 > = {
-  in_progress: { label: "Агент работает", color: "text-teal" },
+  // text-green, не text-teal (правка 18.08.2026) — «Агент работает» здесь
+  // должен быть тем же единым зелёным, что done/running в SubtaskFeed, а
+  // не отдельным оттенком: Максим явно указал красить состояние именно
+  // тут, в карточке задачи, не бейдж AGENT_TAG_META в списке/канбане
+  // (UI.tsx) — его отдельный text-teal сознательно не тронут.
+  in_progress: { label: "Агент работает", color: "text-green" },
   blocked: {
     label: "Заблокировано — нужны ваши действия",
     color: "text-orange",
@@ -389,6 +394,12 @@ function describeEvent(e: ApiTaskEvent, look: NameLookup): string {
   }
   if (e.kind === "subtask_removed") {
     return `${actor} удалил шаг: ${e.from_value}`;
+  }
+  if (e.kind === "subtask_review") {
+    return `${actor} сдал шаг на проверку: ${e.to_value}`;
+  }
+  if (e.kind === "subtask_returned") {
+    return `${actor} вернул шаг на доработку: ${e.to_value}`;
   }
   if (e.kind === "description_changed") return `${actor} изменил описание`;
   if (e.kind === "labels_changed") return `${actor} изменил метки`;

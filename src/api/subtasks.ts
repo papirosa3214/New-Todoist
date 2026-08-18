@@ -35,6 +35,29 @@ export function useUpdateSubtask() {
   });
 }
 
+// POST /api/subtasks/:id/work — то же самое, чем агент отмечает своё
+// продвижение по шагу (server/src/routes/subtasks.ts), но здесь только
+// владельческая половина: «Вернуть на доработку» (state: null + result —
+// сервер требует комментарий у входа в review, но возврат наоборот пишет
+// свой текст в result, перезаписывая итог агента объяснением, что не так).
+// Агент делает то же самое действие через MCP (taskflow_subtask_work), не
+// через этот хук — фронт подзадач открывает только владелец.
+export function useSubtaskWork() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      state,
+      result,
+    }: {
+      id: string;
+      state: "in_progress" | "blocked" | "review" | null;
+      result?: string;
+    }) => api.post<ApiSubtask>(`/api/subtasks/${id}/work`, { state, result }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+  });
+}
+
 export function useDeleteSubtask() {
   const qc = useQueryClient();
   return useMutation({

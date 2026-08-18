@@ -167,6 +167,20 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (position !== undefined && !Number.isInteger(position)) {
         return reply.code(400).send({ error: "position must be an integer" });
       }
+      // Приёмка за человеком (симметрично «completed для type='ai' —
+      // 403» у самой задачи, agent-state.ts): агент не может сам поставить
+      // готово шагу, который сам же сдал на проверку — иначе review ничего
+      // не защищает, просто лишняя кнопка перед тем же самообслуживанием.
+      if (done === true && subtask.agent_state === "review") {
+        const caller = db
+          .prepare("SELECT type FROM users WHERE id = ?")
+          .get(req.userId) as { type?: string } | undefined;
+        if (caller?.type === "ai") {
+          return reply.code(403).send({
+            error: "принять шаг с проверки может только владелец задачи",
+          });
+        }
+      }
       if (done !== undefined) {
         db.prepare("UPDATE subtasks SET done = ? WHERE id = ?").run(
           done ? 1 : 0,
@@ -238,7 +252,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
   // отсутствующего: ровно от этого весь протокол и защищает.
   app.post<{
     Params: { id: string };
-    Body: { state?: "in_progress" | "blocked" | null; result?: string };
+    Body: {
+      state?: "in_progress" | "blocked" | "review" | null;
+      result?: string;
+    };
   }>("/api/subtasks/:id/work", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
@@ -250,11 +267,41 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         state === undefined ||
         state === null ||
         state === "in_progress" ||
-        state === "blocked";
+        state === "blocked" ||
+        state === "review";
       if (!known) {
         return reply
           .code(400)
-          .send({ error: "state: in_progress | blocked | null" });
+          .send({ error: "state: in_progress | blocked | review | null" });
+      }
+
+      // review — то же самое, что review у задачи (AGENT-PROTOCOL.md):
+      // агент сдаёт шаг, объяснив, что сделал. Пустой result здесь так же
+      // недопустим, как пустой комментарий у задачи в review/blocked —
+      // владелец «прощёлкивает» шаги пачкой позже (не сразу), без текста
+      // ему нечего оценивать.
+      if (state === "review" && !result && !subtask.result) {
+        return reply
+          .code(400)
+          .send({ error: "result обязателен: что сделано в этом шаге" });
+      }
+
+      // Выход ИЗ review — человек, не агент. НЕ по creator_id (18.08.2026,
+      // поправка после демо: «в большинстве случаев создавать задачи будешь
+      // ты» — агент часто и есть создатель, привязка к creator_id заперла
+      // бы решение по review именно на него, а не на живого владельца).
+      // Симметрично task-level защите «completed отклоняется для
+      // type='ai'» (agent-state.ts) — тот же принцип, та же причина: агент,
+      // сдавший шаг на проверку, не должен сам же его и забрать обратно.
+      if (subtask.agent_state === "review" && state !== "review") {
+        const caller = db
+          .prepare("SELECT type FROM users WHERE id = ?")
+          .get(req.userId) as { type?: string } | undefined;
+        if (caller?.type === "ai") {
+          return reply.code(403).send({
+            error: "вернуть шаг из проверки может только человек-владелец",
+          });
+        }
       }
 
       // Чужую подзадачу не перехватываем: пока живой держит аренду, второй
@@ -301,6 +348,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
 
       // В журнал — только смена состояния, не каждый сигнал: иначе лента
       // задачи утонет в служебных отметках раз в полторы минуты.
+      // subtask_returned (не subtask_released) — когда null приходит ИЗ
+      // review: это не агент сам отпустил шаг, это владелец вернул его на
+      // доработку, и в ленте это должно читаться иначе (см. проверку прав
+      // выше — сюда доходит только владелец).
       if (state !== undefined && state !== subtask.agent_state) {
         logEvent({
           taskId: subtask.task_id,
@@ -310,7 +361,11 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
               ? "subtask_started"
               : state === "blocked"
                 ? "subtask_blocked"
-                : "subtask_released",
+                : state === "review"
+                  ? "subtask_review"
+                  : subtask.agent_state === "review"
+                    ? "subtask_returned"
+                    : "subtask_released",
           field: "subtask",
           toValue: subtask.title,
         });

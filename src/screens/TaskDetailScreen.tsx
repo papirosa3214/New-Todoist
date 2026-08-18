@@ -9,7 +9,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTask, useUpdateTask, useDeleteTask } from "../api/tasks";
 import { useCurrentUser } from "../api/auth";
-import { useUpdateSubtask } from "../api/subtasks";
+import { useUpdateSubtask, useSubtaskWork } from "../api/subtasks";
 import { useAddComment } from "../api/comments";
 import { ApiError } from "../api/client";
 import {
@@ -46,6 +46,7 @@ export function TaskDetailScreen() {
   const updateTask = useUpdateTask();
   const deleteTask = useDeleteTask();
   const updateSubtask = useUpdateSubtask();
+  const subtaskWork = useSubtaskWork();
   const addComment = useAddComment(id || "");
   const { confirm, alert, dialog } = useDialog();
   const queryClient = useQueryClient();
@@ -397,8 +398,16 @@ export function TaskDetailScreen() {
         <>
           <SubtaskFeed
             subtasks={task.subtasks}
+            isOwner={!!currentUser && currentUser.id === task.creator_id}
             onToggle={(st) =>
               updateSubtask.mutateAsync({ id: st.id, done: !st.done })
+            }
+            onReturn={(st, comment) =>
+              subtaskWork.mutateAsync({
+                id: st.id,
+                state: null,
+                result: comment,
+              })
             }
           />
           <ErrorBanner
