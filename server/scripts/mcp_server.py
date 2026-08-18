@@ -38,7 +38,42 @@ VAULT_KEY = os.environ.get("TASKFLOW_VAULT_KEY", "TASKFLOW_AGENT_TOKEN")
 # taskflow-progress-gate.py начал блокировать сессии чужой незавершённой
 # работой того же бота) — единственное поле, по которому Stop-хук отличает
 # «моя» работа от «чужая под тем же ботом».
-CLAUDE_SESSION_ID = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+ENV_SESSION_ID = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+TRANSCRIPTS_DIR = os.path.expanduser("~/.claude/projects/-home-maksim")
+
+
+def current_session_id() -> str:
+    """Сессия, от имени которой идёт вызов, — на момент ВЫЗОВА, не запуска.
+
+    Переменная окружения выставляется один раз, когда Claude Code поднимает
+    этот процесс, и живёт до его смерти. После /clear сессия сменяется, а
+    процесс остаётся — и в agent_session_id попадал ИД уже завершённой
+    сессии: Stop-хук (taskflow-progress-gate.py) не находил совпадения
+    никогда и пропускал любую незакрытую работу (найдено 18.08.2026).
+
+    Поэтому: если транскрипт «своей» сессии больше не пополняется, а рядом
+    есть более свежий — значит сессию сменили, и текущая та, что пишется
+    сейчас. Файл транскрипта Claude Code обновляет на каждом ходе, так что
+    свежесть здесь надёжнее переменной. Не нашли ничего — возвращаем
+    переменную, поведение как раньше.
+    """
+    try:
+        newest, newest_mtime = "", 0.0
+        for name in os.listdir(TRANSCRIPTS_DIR):
+            if not name.endswith(".jsonl"):
+                continue
+            mtime = os.path.getmtime(os.path.join(TRANSCRIPTS_DIR, name))
+            if mtime > newest_mtime:
+                newest, newest_mtime = name[: -len(".jsonl")], mtime
+        if not newest or newest == ENV_SESSION_ID:
+            return ENV_SESSION_ID
+        own = os.path.join(TRANSCRIPTS_DIR, f"{ENV_SESSION_ID}.jsonl")
+        own_mtime = os.path.getmtime(own) if os.path.exists(own) else 0.0
+        # Минута форы своей сессии: при двух параллельных сессиях чужой ход
+        # не должен перебивать наш только потому, что случился секундой позже.
+        return newest if newest_mtime - own_mtime > 60 else ENV_SESSION_ID
+    except Exception:
+        return ENV_SESSION_ID
 
 
 def log(msg: str) -> None:
@@ -161,7 +196,17 @@ def t_task(args):
         # передал CLAUDE_CODE_SESSION_ID.
         "session_id": task.get("agent_session_id"),
         "шаги": [
-            {"id": s.get("id"), "сделан": bool(s.get("done")), "название": s.get("title")}
+            {
+                "id": s.get("id"),
+                "сделан": bool(s.get("done")),
+                # Состояние шага нужно и в карточке: «сдан на проверку» —
+                # это закрытый агентом шаг, но «сделан» его ставит владелец,
+                # прощёлкивая review. Без этого поля Stop-хук
+                # (taskflow-progress-gate.py) не отличал сданный шаг от
+                # нетронутого и считал сданную работу недоделанной.
+                "состояние": s.get("agent_state") or "не в работе",
+                "название": s.get("title"),
+            }
             for s in d.get("subtasks", []) or []
         ],
         "лента": feed,
@@ -169,7 +214,8 @@ def t_task(args):
 
 
 def t_claim(args):
-    body = {"session_id": CLAUDE_SESSION_ID} if CLAUDE_SESSION_ID else {}
+    session = current_session_id()
+    body = {"session_id": session} if session else {}
     return {"взято в работу": short(unwrap(api("POST", f"/api/tasks/{args['id']}/claim", body)))}
 
 
@@ -182,8 +228,9 @@ def t_state(args):
     body = {"state": args["state"]}
     if args.get("comment"):
         body["comment"] = args["comment"]
-    if args["state"] == "in_progress" and CLAUDE_SESSION_ID:
-        body["session_id"] = CLAUDE_SESSION_ID
+    session = current_session_id()
+    if args["state"] == "in_progress" and session:
+        body["session_id"] = session
     return {"состояние изменено": short(unwrap(api("POST", f"/api/tasks/{args['id']}/state", body)))}
 
 
