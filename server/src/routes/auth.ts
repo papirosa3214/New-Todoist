@@ -65,6 +65,22 @@ export function registerAuthRoutes(app: FastifyInstance) {
       },
     },
     async (req, reply) => {
+      // Регистрация закрыта (18.08.2026, решение Максима). Трекер личный:
+      // владелец один, агентов заводит он сам через POST /api/agents. Порт
+      // при этом слушается на 0.0.0.0, то есть открытая форма позволяла
+      // любому в локальной сети завести себе учётку — а с правилом доступа
+      // по роли это ещё и лишний круг проверок в access.ts.
+      //
+      // Два исключения, оба узкие:
+      //   • база без единого пользователя — первичная настройка, иначе в
+      //     свежей установке некому было бы войти;
+      //   • TASKFLOW_ALLOW_REGISTRATION=1 — осознанное временное открытие
+      //     (им же пользуются тесты, см. server/test/setup.ts).
+      const usersExist = db.prepare("SELECT id FROM users LIMIT 1").get();
+      if (usersExist && process.env.TASKFLOW_ALLOW_REGISTRATION !== "1") {
+        return reply.code(403).send({ error: "Регистрация закрыта" });
+      }
+
       const { name, email, password } = req.body;
       const role = "agent";
       const type = "human";

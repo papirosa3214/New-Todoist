@@ -17,6 +17,10 @@ process.env.DB_PATH = dbPath;
 
 // Свой секрет на прогон — без этого ensureJwtSecret() (env.ts) читал бы
 // или писал server/.env настоящего сервера.
+// Тесты заводят учётки через /api/auth/register — в проде она закрыта
+// (routes/auth.ts, 18.08.2026), здесь открываем явным флагом.
+process.env.TASKFLOW_ALLOW_REGISTRATION = "1";
+
 process.env.JWT_SECRET =
   "test-secret-" + crypto.randomBytes(16).toString("hex");
 
