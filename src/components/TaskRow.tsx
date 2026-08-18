@@ -274,8 +274,15 @@ export function TaskRow({
   );
 
   return (
-    // Swipe container: overflow hidden clips the action bg
-    <div style={{ position: "relative", overflow: "hidden" }}>
+    // -mx-4 full-bleed (найдено 18.08.2026 по скриншоту свайпа: без неё
+    // synий action-фон обрывался на границе родительского px-4, до края
+    // экрана оставалась голая полоса тёмного фона — тот же класс бага,
+    // что чинили на доске, коммит 3e05468 «полоса честно full-bleed»,
+    // тот же приём переиспользован). Экран/список даёт px-4 (16px) с
+    // каждой стороны (см. InboxScreen.tsx и др.) — растягиваем ровно на
+    // него и возвращаем тот же отступ содержимому изнутри (px-4 на
+    // button ниже), а не полосе.
+    <div style={{ position: "relative", overflow: "hidden" }} className="-mx-4">
       {/* Действие под свайпом — синий «редактировать» (был teal-check у
           завершения; teal и вообще «готово»-семантика тут неуместны, это
           другое действие). */}
@@ -306,7 +313,7 @@ export function TaskRow({
       >
         <button
           onClick={onClick}
-          className="tap-row w-full flex items-start gap-3 py-3 px-1 border-b border-stroke/50 bg-bg text-left"
+          className="tap-row w-full flex items-start gap-3 py-3 px-4 border-b border-stroke/50 bg-bg text-left"
         >
           {/* w-[24px] фиксирована: без неё колонка была бы по ширине Avatar
               (24px) только когда исполнитель есть, иначе не занимала бы места
