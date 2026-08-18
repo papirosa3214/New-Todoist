@@ -402,13 +402,37 @@ export function TaskDetailScreen() {
             onToggle={(st) =>
               updateSubtask.mutateAsync({ id: st.id, done: !st.done })
             }
-            onReturn={(st, comment) =>
-              subtaskWork.mutateAsync({
+            // Возврат — комментарий с вложениями идёт в общую ленту задачи
+            // (18.08.2026, прямая просьба: «фото, что не нравится»), не
+            // только в result подзадачи — только у comments/attachments
+            // есть файлы, у result всегда был просто текст. result всё
+            // равно пишется тем же текстом (без файла) — то, что видно при
+            // раскрытии шага без похода в общую ленту.
+            onReturn={async (st, comment, attachmentIds) => {
+              await addComment.mutateAsync({
+                text: `По шагу «${st.title}»: ${comment}`,
+                attachmentIds,
+              });
+              await subtaskWork.mutateAsync({
                 id: st.id,
                 state: null,
                 result: comment,
-              })
-            }
+              });
+            }}
+            // Ответ на блокировку — только комментарий в общую ленту, state
+            // подзадачи не трогаем (агент сам её разблокирует, когда
+            // сможет продолжить) — не путать с onReturn выше, у того
+            // смысл другой (возврат в pending).
+            onComment={async (st, comment, attachmentIds) => {
+              await addComment.mutateAsync({
+                text: `По шагу «${st.title}»: ${comment}`,
+                attachmentIds,
+              });
+            }}
+            onUploadFile={async (file) => {
+              const res = await uploadAttachment.mutateAsync(file);
+              return res.attachment;
+            }}
           />
           <ErrorBanner
             error={updateSubtask.error}

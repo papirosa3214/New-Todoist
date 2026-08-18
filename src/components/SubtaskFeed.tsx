@@ -16,9 +16,23 @@
 // `result` объявлены необязательными и уже поддержаны — когда сервер начнёт
 // их присылать, компонент менять не придётся. Пока их нет, состояние
 // выводится из `done`, а раскрывать нечего — стрелка не показывается.
-import { useState } from "react";
-import { Check, ChevronRight, Eye, TriangleAlert } from "lucide-react";
+import { useRef, useState } from "react";
+import {
+  Check,
+  ChevronRight,
+  Eye,
+  Paperclip,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
+
+/** Вложение, уже загруженное на сервер — минимум полей, нужных здесь для
+    превью-чипа (не тащим сюда весь ApiAttachment ради имени файла). */
+export interface PendingAttachment {
+  id: string;
+  file_name: string;
+}
 
 /** Состояние подзадачи. Приходит с сервера, пока может отсутствовать. */
 export type SubtaskState =
@@ -201,36 +215,179 @@ function StateMark({ state }: { state: SubtaskState }) {
   );
 }
 
+// Форма ответа — общая для двух сценариев (18.08.2026): «Вернуть» у review
+// (комментарий + возврат в pending) и «Ответить» у blocked (просто
+// комментарий, без смены state — агент сам снимает блокировку, когда
+// сможет). Файл — та же инфраструктура вложений, что у обычного
+// комментария задачи (TaskDetailScreen): грузится сразу при выборе, чипом
+// висит над полем, можно убрать до отправки.
+function ReplyForm({
+  placeholder,
+  busy,
+  onUploadFile,
+  onCancel,
+  onSubmit,
+}: {
+  placeholder: string;
+  busy: boolean;
+  onUploadFile?: (file: File) => Promise<PendingAttachment>;
+  onCancel: () => void;
+  onSubmit: (comment: string, attachmentIds: string[]) => Promise<unknown>;
+}) {
+  const [comment, setComment] = useState("");
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const guardedSubmit = useGuardedCallback(async () => {
+    const trimmed = comment.trim();
+    if (!trimmed) return;
+    await onSubmit(
+      trimmed,
+      pending.map((a) => a.id),
+    );
+  });
+
+  const handlePickFiles = async (files: FileList | null) => {
+    if (!files?.length || !onUploadFile) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const att = await onUploadFile(file);
+        setPending((prev) => [...prev, att]);
+      }
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  return (
+    <div className="mt-2 space-y-2">
+      {pending.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {pending.map((att) => (
+            <div
+              key={att.id}
+              className="flex items-center gap-2 px-3 h-9 rounded-lg bg-card2"
+            >
+              <Paperclip size={13} className="text-sub shrink-0" />
+              <span className="flex-1 min-w-0 truncate text-[12px] text-text">
+                {att.file_name}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setPending((prev) => prev.filter((a) => a.id !== att.id))
+                }
+                aria-label="Убрать файл"
+                className="w-7 h-7 -mr-1 flex items-center justify-center text-dim"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <textarea
+        autoFocus
+        rows={2}
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        placeholder={placeholder}
+        className="w-full bg-card2 rounded-xl px-3 py-2 text-[14px] text-text placeholder:text-dim outline-none resize-none"
+      />
+      <div className="flex items-center gap-3">
+        {onUploadFile && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,application/pdf,text/plain,.doc,.docx,.odt,.ods,.xlsx"
+              onChange={(e) => handlePickFiles(e.target.files)}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              aria-label="Приложить файл"
+              className="w-9 h-9 -ml-1.5 rounded-lg flex items-center justify-center shrink-0 disabled:opacity-50"
+            >
+              <Paperclip size={16} className="text-sub" />
+            </button>
+          </>
+        )}
+        <button
+          onClick={guardedSubmit}
+          disabled={!comment.trim() || busy || uploading}
+          className="text-[13px] font-semibold text-blue disabled:opacity-40 tap-fade"
+        >
+          Отправить
+        </button>
+        <button onClick={onCancel} className="text-[13px] text-dim tap-fade">
+          Отмена
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SubtaskRow({
   st,
   isOwner,
   onToggle,
   onReturn,
+  onComment,
+  onUploadFile,
 }: {
   st: FeedSubtask;
   isOwner: boolean;
   onToggle: () => Promise<unknown>;
-  onReturn?: (comment: string) => Promise<unknown>;
+  onReturn?: (comment: string, attachmentIds: string[]) => Promise<unknown>;
+  onComment?: (comment: string, attachmentIds: string[]) => Promise<unknown>;
+  onUploadFile?: (file: File) => Promise<PendingAttachment>;
 }) {
   const [open, setOpen] = useState(false);
-  const [returning, setReturning] = useState(false);
-  const [comment, setComment] = useState("");
+  const [replying, setReplying] = useState(false);
+  const [busy, setBusy] = useState(false);
   const guardedToggle = useGuardedCallback(onToggle);
-  const guardedReturn = useGuardedCallback(async () => {
-    const trimmed = comment.trim();
-    if (!trimmed || !onReturn) return;
-    await onReturn(trimmed);
-    setReturning(false);
-    setComment("");
-  });
   const state = stateOf(st);
   const v = VIEW[state];
-  const canOpen = !!st.result;
-  // Вернуть на доработку — только владелец, только пока шаг реально на
-  // проверке (18.08.2026, симметрично AgentOwnerActions на уровне задачи).
-  // result у review обязателен на сервере, поэтому canOpen тут всегда true —
-  // раскрывать и правда есть что.
+  // blocked без result всё равно должен раскрываться — там форма ответа,
+  // а не итог: агент не обязан передавать result вместе с blocked (только
+  // review требует его на сервере).
+  const canOpen = !!st.result || state === "blocked";
+  // Вернуть — только владелец, только пока шаг реально на проверке
+  // (18.08.2026, симметрично AgentOwnerActions на уровне задачи).
   const canReturn = isOwner && state === "review" && !!onReturn;
+  // Ответить на блокировку — тот же принцип, другое действие: не меняет
+  // state (агент сам решает, когда разблокировался), просто комментарий
+  // в общую ленту задачи, чтобы не листать вниз в поисках поля ввода
+  // (18.08.2026, прямая просьба).
+  const canComment = isOwner && state === "blocked" && !!onComment;
+
+  const submitReturn = async (comment: string, attachmentIds: string[]) => {
+    if (!onReturn) return;
+    setBusy(true);
+    try {
+      await onReturn(comment, attachmentIds);
+      setReplying(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const submitComment = async (comment: string, attachmentIds: string[]) => {
+    if (!onComment) return;
+    setBusy(true);
+    try {
+      await onComment(comment, attachmentIds);
+      setReplying(false);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div>
@@ -238,10 +395,10 @@ function SubtaskRow({
         {/* Отметка о готовности — отдельная зона нажатия, как было раньше:
             щелчок по кружку переключает, а не раскрывает. Кроме review
             (18.08.2026, прямое указание): «на проверке» — решение
-            («Принять»/«Вернуть на доработку»), не тап-переключатель — та же
-            зона нажатия, что и раньше, случайным щелчком легко принять
-            шаг, который на самом деле хотели отклонить. Приёмка теперь
-            только явной кнопкой в раскрытом виде ниже. */}
+            («Принять»/«Вернуть»), не тап-переключатель — та же зона
+            нажатия, что и раньше, случайным щелчком легко принять шаг,
+            который на самом деле хотели отклонить. Приёмка теперь только
+            явной кнопкой в раскрытом виде ниже. */}
         {state === "review" ? (
           <div className="shrink-0" aria-label={v.label}>
             <StateMark state={state} />
@@ -287,18 +444,20 @@ function SubtaskRow({
       {/* Итог — то, ради чего подзадачу открывают. Отступ слева равен
           кружку (18px) плюс зазору (12px), чтобы текст шёл по одной
           вертикали с заголовком, а не висел под кружком. */}
-      {open && st.result && (
+      {open && (
         <div className="pb-3 pr-4 pl-[46px]">
-          <p className="text-[13px] text-sub whitespace-pre-wrap">
-            {st.result}
-          </p>
+          {st.result && (
+            <p className="text-[13px] text-sub whitespace-pre-wrap">
+              {st.result}
+            </p>
+          )}
           {/* Приёмка шага владельцем — обе кнопки рядом, в одной строке
               (18.08.2026, прямое указание): кружок выше больше не кликается
               у review (см. правку там же) — случайный тап по нему раньше
               мог принять шаг, который хотели отклонить. Явное решение,
               не тап-переключатель. Инлайн, не bottom-sheet как у задачи
               целиком: подзадача уже раскрыта на этом же месте. */}
-          {canReturn && !returning && (
+          {canReturn && !replying && (
             <div className="mt-2 flex justify-between">
               <button
                 onClick={guardedToggle}
@@ -307,42 +466,41 @@ function SubtaskRow({
                 Принять
               </button>
               <button
-                onClick={() => setReturning(true)}
+                onClick={() => setReplying(true)}
                 className="text-[13px] font-semibold uppercase tracking-wider text-blue tap-fade"
               >
                 Вернуть
               </button>
             </div>
           )}
-          {canReturn && returning && (
-            <div className="mt-2 space-y-2">
-              <textarea
-                autoFocus
-                rows={2}
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                placeholder="Что нужно поправить…"
-                className="w-full bg-card2 rounded-xl px-3 py-2 text-[14px] text-text placeholder:text-dim outline-none resize-none"
-              />
-              <div className="flex gap-3">
-                <button
-                  onClick={guardedReturn}
-                  disabled={!comment.trim()}
-                  className="text-[13px] font-semibold text-blue disabled:opacity-40 tap-fade"
-                >
-                  Отправить
-                </button>
-                <button
-                  onClick={() => {
-                    setReturning(false);
-                    setComment("");
-                  }}
-                  className="text-[13px] text-dim tap-fade"
-                >
-                  Отмена
-                </button>
-              </div>
-            </div>
+          {canReturn && replying && (
+            <ReplyForm
+              placeholder="Что нужно поправить…"
+              busy={busy}
+              onUploadFile={onUploadFile}
+              onCancel={() => setReplying(false)}
+              onSubmit={submitReturn}
+            />
+          )}
+          {/* Ответ на блокировку — сразу форма, без промежуточной кнопки
+              (в отличие от review, тут нет второго действия вроде
+              «Принять», выбирать не из чего). */}
+          {canComment && !replying && (
+            <button
+              onClick={() => setReplying(true)}
+              className="mt-2 text-[13px] font-semibold uppercase tracking-wider text-orange tap-fade"
+            >
+              Ответить
+            </button>
+          )}
+          {canComment && replying && (
+            <ReplyForm
+              placeholder="Например: доступ уже дал, попробуй ещё раз…"
+              busy={busy}
+              onUploadFile={onUploadFile}
+              onCancel={() => setReplying(false)}
+              onSubmit={submitComment}
+            />
           )}
         </div>
       )}
@@ -355,14 +513,28 @@ export function SubtaskFeed({
   isOwner = false,
   onToggle,
   onReturn,
+  onComment,
+  onUploadFile,
 }: {
   subtasks: FeedSubtask[];
-  /** Кнопка «Вернуть на доработку» видна только владельцу задачи —
+  /** Кнопки «Принять»/«Вернуть»/«Ответить» видны только владельцу задачи —
       TaskDetailScreen передаёт currentUser.id === task.creator_id. Без
-      этого пропа (форма редактирования и т.п.) кнопка просто не рисуется. */
+      этого пропа (форма редактирования и т.п.) кнопки просто не рисуются. */
   isOwner?: boolean;
   onToggle: (st: FeedSubtask) => Promise<unknown>;
-  onReturn?: (st: FeedSubtask, comment: string) => Promise<unknown>;
+  /** review → pending, с комментарием и вложениями (18.08.2026). */
+  onReturn?: (
+    st: FeedSubtask,
+    comment: string,
+    attachmentIds: string[],
+  ) => Promise<unknown>;
+  /** blocked — просто ответ в общую ленту, state не меняется. */
+  onComment?: (
+    st: FeedSubtask,
+    comment: string,
+    attachmentIds: string[],
+  ) => Promise<unknown>;
+  onUploadFile?: (file: File) => Promise<PendingAttachment>;
 }) {
   if (subtasks.length === 0) return null;
 
@@ -385,7 +557,17 @@ export function SubtaskFeed({
             st={st}
             isOwner={isOwner}
             onToggle={() => onToggle(st)}
-            onReturn={onReturn ? (comment) => onReturn(st, comment) : undefined}
+            onReturn={
+              onReturn
+                ? (comment, ids) => onReturn(st, comment, ids)
+                : undefined
+            }
+            onComment={
+              onComment
+                ? (comment, ids) => onComment(st, comment, ids)
+                : undefined
+            }
+            onUploadFile={onUploadFile}
           />
         ))}
       </div>
