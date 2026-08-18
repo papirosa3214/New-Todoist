@@ -194,7 +194,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         .map(withSubtaskState);
       const comments = db
         .prepare(
-          `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.initials as user_initials
+          `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.avatar_url as user_avatar_url, u.initials as user_initials
            FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.task_id = ? ORDER BY c.created_at`,
         )
         .all(task.id) as any[];
