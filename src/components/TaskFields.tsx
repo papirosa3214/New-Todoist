@@ -206,7 +206,16 @@ const CAL_MONTHS = [
 // ряда на экране и всё равно давал только шаг в 15 минут.
 const HOURS = Array.from({ length: 24 }, (_, i) => i); // весь день: будильник не ограничивает
 const MINUTES = Array.from({ length: 12 }, (_, i) => i * 5); // шаг 5 минут
-const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240];
+// Ровно шесть значений и одной строкой (владелец 19.08.2026): 90 минут и
+// 4 часа убраны — с ними ряд переносился на вторую строку, а «полтора
+// часа» на телефоне выбирают заметно реже остальных.
+const DURATIONS = [15, 30, 45, 60, 120, 180];
+
+/** Компактная подпись для кнопки в один ряд: «45м», «2ч». Полная форма
+ *  («1 ч 30 мин») остаётся в строке поля, где места хватает. */
+function shortDuration(min: number): string {
+  return min < 60 ? `${min}м` : `${min / 60}ч`;
+}
 
 /** «90» → «1 ч 30 мин»; часы без остатка — просто «2 ч». */
 export function formatDuration(min: number): string {
@@ -494,23 +503,29 @@ export function DueDateField({
                 />
               </div>
 
-              {time && (
+              {/* Ряд длительностей показывается сразу, как выбран день, а
+                  не только после касания барабана: барабаны и так стоят на
+                  09:00, и пустое место под ними читалось как «время уже
+                  задано, а длительности почему-то нет». Тап по любой
+                  длительности заодно фиксирует время, которое барабаны
+                  показывают. */}
+              {hasValue && (
                 <>
                   <div className="mt-2 mb-2 text-[12px] text-sub">
                     Сколько займёт
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex gap-1.5">
                     {DURATIONS.map((d) => (
                       <button
                         key={d}
-                        onClick={() => onTimeChange!(time, d)}
-                        className={`h-[34px] rounded-lg px-3 text-[13px] font-medium transition-colors ${
+                        onClick={() => onTimeChange!(time ?? "09:00", d)}
+                        className={`h-[34px] flex-1 rounded-lg text-[13px] font-medium tabular-nums transition-colors ${
                           duration === d
                             ? "bg-red text-white"
                             : "bg-card2 text-text active:bg-white/10"
                         }`}
                       >
-                        {formatDuration(d)}
+                        {shortDuration(d)}
                       </button>
                     ))}
                   </div>
