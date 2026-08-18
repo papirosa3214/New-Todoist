@@ -181,7 +181,7 @@ export function Layout() {
             <Outlet />
           </div>
         </div>
-        {!hideNav && isFan && <FanMenu showAdd={!hideFAB} />}
+        {!hideNav && isFan && <FanMenu />}
         {!hideNav && !isFan && <BottomNav />}
         {!hideFAB && !isFan && <FAB dueToday={loc.pathname === "/today"} />}
       </div>

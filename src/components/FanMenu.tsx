@@ -46,11 +46,10 @@ export const FAN_MENU_CONTENT_PADDING = `calc(${SAFE_BOTTOM} + ${TRIGGER_SIZE + 
 
 type FanItem = { path: string; label: string; icon: string };
 
-const ADD_ITEM: FanItem = {
-  path: "/task/new",
-  label: "Добавить",
-  icon: "plus",
-};
+// Пункта «Добавить» в веере НЕТ (владелец 19.08.2026, отдельно повторено:
+// «в веер это вообще не нужна, эта кнопка»). Задача заводится удержанием
+// центральной кнопки — она на экране всегда, поэтому дублировать её
+// пунктом внутри того же меню незачем.
 
 // Настройки — крайним пунктом веера (владелец 19.08.2026: «добавить
 // задачу всегда по центру, а все остальные настройки в самом крайнее
@@ -62,17 +61,19 @@ const SETTINGS_ITEM: FanItem = {
   icon: "gear",
 };
 
-function buildItems(showAdd: boolean): FanItem[] {
-  return showAdd
-    ? [...NAV_ITEMS, ADD_ITEM, SETTINGS_ITEM]
-    : [...NAV_ITEMS, SETTINGS_ITEM];
+function buildItems(): FanItem[] {
+  return [...NAV_ITEMS, SETTINGS_ITEM];
 }
 
 // Порог удержания. 400 мс — обычный системный «long press»: короче
 // начинает срабатывать на обычных тапах, длиннее ощущается как зависание.
 const HOLD_MS = 400;
 
-export function FanMenu({ showAdd = true }: { showAdd?: boolean }) {
+// Проп showAdd больше не принимается: состав веера от него не зависит
+// (пункта «Добавить» там нет), а удержание центральной кнопки заводит
+// задачу ВЕЗДЕ, включая доску — владелец 19.08.2026: «чтобы в канбане на
+// удержание она всё равно создавала задачу».
+export function FanMenu() {
   const location = useLocation();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -92,7 +93,7 @@ export function FanMenu({ showAdd = true }: { showAdd?: boolean }) {
   // только со второго раза (новый цикл toggle).
   // Следующее открытие всегда берёт актуальный showAdd — устаревать нечему.
   const [menuItems, setMenuItems] = useState<FanItem[]>(() =>
-    buildItems(showAdd),
+    buildItems(),
   );
   const n = menuItems.length;
 
@@ -162,7 +163,7 @@ export function FanMenu({ showAdd = true }: { showAdd?: boolean }) {
 
     // Список фиксируется заново только при открытии — см. комментарий у
     // menuItems выше. При закрытии домённый снимок остаётся как был.
-    const activeItems = next ? buildItems(showAdd) : menuItems;
+    const activeItems = next ? buildItems() : menuItems;
     if (next) setMenuItems(activeItems);
 
     setOpen(next);
