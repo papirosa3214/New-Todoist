@@ -95,23 +95,27 @@ export interface TaskRowProps {
   // а не добавление в каждый экран по одному — чтобы новый список,
   // использующий TaskRow, получал бейдж не по забывчивости, а по умолчанию.
   showAgentState?: boolean;
-  // How many label pills to render. Inbox/Project show every label
+  // How many label pills to render. Inbox/Project/Today show every label
   // (Infinity, the default); Upcoming only ever showed the first one
-  // (pass 1); Today shows none at all (pass 0) — its row stays a focused
-  // "what and why" line without the extra badges the other three carry.
+  // (pass 1) — Максим 18.08.2026: Today's own metки/счётчик подзадач were
+  // OFF (pass 0) same as this file's date badge, on the "keep the row
+  // focused" reasoning below — turned out that reasoning only actually
+  // held for the date (redundant with "сегодня" itself), not for
+  // labels/subtasks, which he wants visible same as everywhere else.
   maxLabels?: number;
   // Ordinary (non-overdue) due-date badge. Default on for Inbox/Project.
   // Off for Upcoming (the date is already that row's group header, a
-  // second copy on the row itself would be redundant) and for Today
-  // (which only ever shows the overdue-specific red pill, never a plain
-  // one for a same-day date).
+  // second copy on the row itself would be redundant) and for Today (the
+  // one still-valid case of the same reasoning: a task sitting in "Today"
+  // is by definition due today, a plain date badge would say nothing a
+  // same-day date doesn't already say by being on this screen at all).
   showDueBadge?: boolean;
-  // Subtasks-done badge ("2/5"). Default on for Inbox/Project/Upcoming,
-  // off for Today (same "keep the row focused" reasoning as maxLabels).
+  // Subtasks-done badge ("2/5"). Default on everywhere, Today included
+  // (see maxLabels above — was off, Максим 18.08.2026 wants it back).
   showSubtasksBadge?: boolean;
-  // Assignee avatar. Default on for Inbox/Project/Upcoming, off for
-  // Today — its row never carried one and nothing in this task asks to
-  // add it there.
+  // Assignee avatar. Default on everywhere, Today included (was off, same
+  // "keep the row focused" reasoning as maxLabels/showSubtasksBadge above
+  // — Максим 18.08.2026 wants it back too).
   showAvatar?: boolean;
 }
 

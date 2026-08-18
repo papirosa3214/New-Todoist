@@ -411,10 +411,7 @@ export function TodayScreen() {
               // на ней и здесь, в «Ждут вас» (см. rawOverdueTasks выше).
               overdue={t.due_date !== null && t.due_date < today}
               showAgentState
-              maxLabels={0}
               showDueBadge={false}
-              showSubtasksBadge={false}
-              showAvatar={false}
               onClick={() => navigate(`/task/${t.id}`)}
             />
           ))}
@@ -431,10 +428,7 @@ export function TodayScreen() {
               task={t}
               overdue
               showAgentState
-              maxLabels={0}
               showDueBadge={false}
-              showSubtasksBadge={false}
-              showAvatar={false}
               onClick={() => navigate(`/task/${t.id}`)}
             />
           ))}
@@ -457,10 +451,7 @@ export function TodayScreen() {
               task={t}
               overdue={false}
               showAgentState
-              maxLabels={0}
               showDueBadge={false}
-              showSubtasksBadge={false}
-              showAvatar={false}
               onClick={() => navigate(`/task/${t.id}`)}
             />
           ))}
