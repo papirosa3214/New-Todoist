@@ -17,7 +17,7 @@
 // их присылать, компонент менять не придётся. Пока их нет, состояние
 // выводится из `done`, а раскрывать нечего — стрелка не показывается.
 import { useState } from "react";
-import { Check, ChevronRight, CircleDashed, TriangleAlert } from "lucide-react";
+import { Check, ChevronRight, TriangleAlert } from "lucide-react";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 
 /** Состояние подзадачи. Приходит с сервера, пока может отсутствовать. */
@@ -83,20 +83,31 @@ const COMET_TAIL_OPACITY = [1, 0.62, 0.34, 0.16]; // голова → хвост
 // см. урок 2026-08-18): более широкая капля и strokeWidth 1.3 у неактивных
 // давали «бублик» — контур сливался в сплошное кольцо на таком масштабе.
 // Эта уже, а strokeWidth 0.6.
+// Второй заход (18.08.2026): даже эта ширина (offset ±2.1 от центра) была
+// шире дугового расстояния между соседними каплями (~3.9 units на радиусе
+// капли) — 12 капель слипались в сплошной «цветочек» без просветов между
+// лепестками. Сужена до offset ±1.3 (масштаб 0.62 по X, Y не тронут) —
+// теперь между каплями есть воздух, как в референсе.
 const COMET_DROP_PATH =
-  "M12 8.8C10.8 8.8 9.9 7.6 9.9 6.2C9.9 4.5 10.8 2.6 12 2.6C13.2 2.6 14.1 4.5 14.1 6.2C14.1 7.6 13.2 8.8 12 8.8Z";
+  "M12 8.8C11.26 8.8 10.7 7.6 10.7 6.2C10.7 4.5 11.26 2.6 12 2.6C12.74 2.6 13.3 4.5 13.3 6.2C13.3 7.6 12.74 8.8 12 8.8Z";
 
-function CometSpinner() {
+// active=false — «ждёт» (Максим 18.08.2026): та же капельная форма, что
+// running, но неподвижная и без цветного хвоста — «цвет убери, сделай
+// палочки все одним цветом, это будет стартовая позиция». Одна и та же
+// иконка для обоих состояний, не два разных значка — pending читается как
+// «running, только ещё не поехало», а не как что-то целиком другое (как
+// было с CircleDashed раньше).
+function CometSpinner({ active }: { active: boolean }) {
   return (
     <svg
       viewBox="0 0 24 24"
       width={17}
       height={17}
-      className="comet-spin"
+      className={active ? "comet-spin" : undefined}
       aria-hidden="true"
     >
       {Array.from({ length: COMET_DOTS }, (_, i) => {
-        const inTail = i < COMET_TAIL;
+        const inTail = active && i < COMET_TAIL;
         return (
           <path
             key={i}
@@ -130,11 +141,13 @@ function StateMark({ state }: { state: SubtaskState }) {
       {state === "done" && <Check size={12} className="text-white" />}
       {/* Движение — только у текущей. Под prefers-reduced-motion вращение
           гасится правилом .comet-spin в index.css, капли остаются на месте. */}
-      {state === "running" && <CometSpinner />}
+      {state === "running" && <CometSpinner active />}
       {state === "blocked" && (
         <TriangleAlert size={16} className="text-coral" />
       )}
-      {state === "pending" && <CircleDashed size={17} className="text-dim" />}
+      {/* pending — та же капельная форма, неподвижная, один цвет (см.
+          CometSpinner) — не отдельная иконка. */}
+      {state === "pending" && <CometSpinner active={false} />}
     </div>
   );
 }
