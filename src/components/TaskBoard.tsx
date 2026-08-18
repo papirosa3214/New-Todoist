@@ -785,7 +785,20 @@ export function TaskBoard({
         // максимуме), а пара spacer-элементов по краям списка колонок
         // ниже — они физически сдвигают координаты первой/последней
         // колонки, так что даже нулевой scrollLeft уже даёт нужный отступ.
-        style={stripMinH ? { minHeight: stripMinH } : undefined}
+        // WebkitOverflowScrolling: 18.08.2026, найдено на реальном iPhone
+        // через WKWebView (Capacitor) — «ватная» доска, скролл двигается,
+        // но не докручивается/не защёлкивается на snap-точку, можно
+        // остановиться где угодно между колонками. В обычном мобильном
+        // Safari инерционный скролл с iOS 13+ включён по умолчанию для
+        // overflow:auto, но нативный WKWebView внутри Capacitor-приложения
+        // (не полноценный Safari) этого не наследует сам по себе — без
+        // явного свойства momentum-scrolling слабый, snap-mandatory не
+        // успевает довести докрутку. На вебе/десктопе свойство — no-op,
+        // сломать нечего.
+        style={{
+          ...(stripMinH ? { minHeight: stripMinH } : undefined),
+          WebkitOverflowScrolling: "touch",
+        }}
         className={`-mx-4 flex gap-3 overflow-x-auto pb-2 ${
           // Scroll-snap fights dnd-kit's auto-scroll-to-edge while a drag is
           // active (each auto-scroll tick gets pulled back toward the
