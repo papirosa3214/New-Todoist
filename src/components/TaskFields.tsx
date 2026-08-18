@@ -8,7 +8,14 @@
 // expand-in-place picker panels below (calendar, priority list, label
 // create-row) follow the interaction pattern already accepted for the task
 // form rather than inventing a modal.
-import { useState, useRef, useEffect, Children, type ReactNode } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  Children,
+  type ReactNode,
+  type CSSProperties,
+} from "react";
 import type {
   DraggableAttributes,
   DraggableSyntheticListeners,
@@ -46,6 +53,9 @@ export function Card({ children }: { children: ReactNode }) {
 export function FieldRow({
   icon,
   iconClassName = "text-sub",
+  // Цвет иконки значением, а не классом — нужен там, где он берётся из
+  // данных (цвет приоритета), а не из палитры Tailwind.
+  iconStyle,
   label,
   value,
   valueClassName = "text-sub",
@@ -57,6 +67,7 @@ export function FieldRow({
 }: {
   icon?: string;
   iconClassName?: string;
+  iconStyle?: CSSProperties;
   label: string;
   value?: ReactNode;
   valueClassName?: string;
@@ -73,7 +84,12 @@ export function FieldRow({
       style={{ minHeight }}
     >
       {icon && (
-        <Icon name={icon} size={18} className={`shrink-0 ${iconClassName}`} />
+        <Icon
+          name={icon}
+          size={18}
+          className={`shrink-0 ${iconClassName}`}
+          style={iconStyle}
+        />
       )}
       <span className="text-[15px] font-medium text-text flex-1 min-w-0 truncate">
         {label}
@@ -129,12 +145,25 @@ export function PriorityField({
   onChange: (v: number) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const current = PRIORITIES.find((x) => x.key === value) ?? PRIORITIES[3];
   return (
     <>
+      {/* Свёрнутый вид — как в детальной карточке: флажок и название
+          приоритета его цветом, без пилюли (владелец 19.08.2026: «у нас
+          же уже была правка, что пилюлю убираем, красится флаг и слово»).
+          Раньше пилюля жила только здесь, и одно и то же значение
+          выглядело в форме и в карточке по-разному. Сама PriorityPill
+          осталась для развёрнутого списка ниже — там кружок с «P1»
+          работает как маркер варианта, а не как способ показать текущее. */}
       <FieldRow
         icon="flag"
+        iconStyle={{ color: current.color }}
         label="Приоритет"
-        value={<PriorityPill priority={value} />}
+        value={
+          <span style={{ color: current.color }} className="font-medium">
+            {current.name}
+          </span>
+        }
         chevronOpen={open}
         onClick={() => setOpen((o) => !o)}
       />
