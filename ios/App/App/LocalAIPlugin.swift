@@ -229,18 +229,36 @@ actor WhisperEngine {
         downloadBase: base,
         modelFolder: folder(for: model)?.path,
         tokenizerFolder: base,
-        verbose: false, logLevel: .error, prewarm: true, load: true, download: false)
+        // prewarm: false — намеренно. Прогрев с prewarm делает ЛИШНИЙ проход
+        // компиляции и прогона, удваивая ожидание перед тем, как модель станет
+        // готовой. Первая расшифровка после этого чуть медленнее, зато модель
+        // доступна в разы раньше — для нашего случая (пользователь ждёт
+        // зелёного статуса) это верный обмен.
+        verbose: false, logLevel: .error, prewarm: false, load: true, download: false)
 
-      // Таймаут обязателен: без него зависший сетевой шаг превращается в
-      // бесконечное loading=true, и наружу уходит «ещё грузится» вместо ошибки.
-      kit = try await Self.withTimeout(seconds: 180) {
+      // 600 с, а не 180. Замеры на iPhone Air (iOS 26.6, Release), модель
+      // large-v3-turbo 632 МБ:
+      //   первый прогрев после скачивания — 203 с;
+      //   каждый следующий — 7 с.
+      // Долгая только первая загрузка: iOS специализирует .mlmodelc под Neural
+      // Engine и кладёт результат в системный кэш (сама модель приходит уже
+      // скомпилированной, компилировать нечего). Прежний лимит 180 с обрывал эту
+      // работу за 23 с до финиша, поэтому она начиналась заново при каждой
+      // попытке и НИКОГДА не заканчивалась — замкнутый круг создавал таймаут, а
+      // не железо. Лимит всё равно нужен: без него зависший шаг даёт бесконечное
+      // loading=true. Но отсекать он должен аварию, а не законную работу.
+      print("[WhisperEngine] прогрев начат: \(model)")
+      kit = try await Self.withTimeout(seconds: 600) {
         try await WhisperKit(config)
       }
+      let elapsed = Int(Date().timeIntervalSince(loadStartedAt ?? Date()))
+      print("[WhisperEngine] прогрев завершён за \(elapsed) с: \(model)")
       loadedModel = model
       lastError = nil
     } catch {
       lastError = error.localizedDescription
       kit = nil
+      print("[WhisperEngine] прогрев не удался: \(error.localizedDescription)")
     }
     loading = false
     loadStartedAt = nil
@@ -256,9 +274,13 @@ actor WhisperEngine {
       group.addTask { try await operation() }
       group.addTask {
         try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        // Только факт, без версий о причине. Прежний текст утверждал, что
+        // виноват сетевой поход за токенизатором — это была ДОГАДКА, зашитая в
+        // сообщение, и владелец прочитал её как установленную причину. Таймаут
+        // причину не знает и утверждать её не должен.
         throw LocalAIError(
-          "Прогрев модели не завершился за \(Int(seconds)) с. Обычная причина — "
-            + "WhisperKit ушёл за токенизатором в сеть и не дождался ответа.")
+          "Прогрев модели не завершился за \(Int(seconds)) с и был прерван. "
+            + "Причина неизвестна: смотри лог приложения или выбери модель меньше.")
       }
       guard let result = try await group.next() else {
         throw LocalAIError("Прогрев модели не дал результата")
