@@ -787,3 +787,220 @@ body::-webkit-scrollbar {
 :where([class~="text-[10px]"]) {
   letter-spacing: 0.025em;
 }
+
+/* ═══════════ ДЕМО: своя экранная клавиатура (/kb-demo) ═══════════
+   Пробный экран 18.08.2026. Дефолтная тема react-simple-keyboard
+   (hg-theme-default) светлая — перекрашивается целиком.
+
+   ВСЕ ЧИСЛА НИЖЕ СНЯТЫ ЗАМЕРОМ С РЕАЛЬНОГО СКРИНШОТА системной клавиатуры
+   iPhone (тёмная тема, русская раскладка), присланного владельцем
+   18.08.2026 через обменную папку. Скриншот @3x (1260px = 420pt), поэтому
+   каждое измеренное значение делено на 3. Сканирование строк/колонок
+   пикселей, не оценка на глаз:
+
+     фон панели        #171717   (замер; совпал с --color-bg проекта)
+     ЛЮБАЯ клавиша     #3C3C3C   (замер по 11 клавишам ряда 3 и всем 4
+                                  клавишам ряда 4 — служебные тем же
+                                  цветом, что буквенные!)
+     высота клавиши    135/3 = 45
+     зазор горизонт.    18/3 = 6
+     зазор вертик.      33/3 = 11
+     боковые поля       20/3 ≈ 6
+     радиус             19/3 ≈ 6
+     ряд 4, ширины(pt)  123=45.3 · 🎤=45.7 · пробел=200.7 · return=97.3
+
+   Две ошибки прошлого захода, которые замер и вскрыл:
+   1) служебные клавиши были покрашены темнее буквенных — это верно для
+      СВЕТЛОЙ темы iOS, а в тёмной все клавиши одного цвета;
+   2) клавиши стояли на #4a4a4c (светлее замеренного) поверх панели
+      #101012 (темнее замеренной) — контраст был завышен вдвое.
+*/
+.kb-demo {
+  background: #171717;
+  /* Боковое поле — ровно 20 физических пикселей при @3x, как на замере
+     системной клавиатуры (20 слева / 19 справа). Записано делением, а не
+     округлённым 6.67, чтобы связь с замером была видна и не потерялась.
+     Проверка арифметикой на его экране (420pt, 11 клавиш, 10 зазоров по 6):
+       (420 − 2×20/3 − 10×6) / 11 = 31.52pt = 94.5px@3x — эталон 94.6.
+     С прежними целыми 6px выходило 31.64pt (94.9px) — те самые 0.3px
+     расхождения, которые владелец заметил на сравнении. */
+  padding: 8px calc(19px / 3) calc(8px + env(safe-area-inset-bottom, 0px))
+    calc(20px / 3);
+}
+
+.kb-demo .hg-theme-default {
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+}
+
+.kb-demo .hg-row {
+  display: flex;
+  gap: 6px;
+}
+.kb-demo .hg-row + .hg-row {
+  /* Ровно замеренные 11: тень убрана, лишний пиксель больше не съедается. */
+  margin-top: 11px;
+}
+
+/* ⚠️ Обязательно обнулить СВОИ отступы темы библиотеки.
+   hg-theme-default держит `.hg-row .hg-button:not(:last-child){margin-right:5px}`
+   и `.hg-row:not(:last-child){margin-bottom:5px}`. Они не заменяются нашим
+   gap/margin-top, а СКЛАДЫВАЮТСЯ с ним: 6+5 = 11px по горизонтали вместо 6.
+   Замер это и показал — клавиши выходили 27pt вместо системных 31.5pt, и
+   владелец увидел разницу глазами раньше, чем я её померил. */
+.kb-demo .hg-row .hg-button:not(:last-child),
+.kb-demo .hg-row .hg-button-container:not(:last-child) {
+  margin-right: 0;
+}
+.kb-demo .hg-row:not(:last-child) {
+  margin-bottom: 0;
+}
+
+/* Единый вид всех клавиш — в тёмной теме iOS служебные не выделяются
+   цветом (проверено замером, см. шапку). Тень снизу тонкая: на замере
+   кромка клавиши темнее её тела на ~1px. */
+.kb-demo .hg-button {
+  /* flex-basis: 0 — обязательно. У библиотеки кнопки идут `flex-grow: 1`
+     при базисе auto, то есть ширина зависит от СОДЕРЖИМОГО: в рядах из
+     одних букв клавиши выходят равными, а в третьем ряду shift и
+     backspace шире буквы и растаскивают колонки. На замере это дало
+     «лесенку»: ряды 1-2 начинали вторую клавишу с 132px, а ряд 3 — со
+     108px. С нулевым базисом ширина считается только от свободного
+     места, и все ряды встают в одну сетку. */
+  flex: 1 1 0;
+  min-width: 0;
+  height: 45px;
+  background: #3c3c3c;
+  color: #fff;
+  border: none;
+  /* 19 физических пикселей при @3x — столько «съедает» скругление у
+     системной клавиши на замере. */
+  border-radius: calc(19px / 3);
+  font-weight: 400;
+  line-height: 1;
+  /* Тени нет намеренно: `box-shadow: 0 1px 0` выходил за габарит клавиши
+     и давал на замере высоту 138px вместо системных 135. */
+  transition: background 80ms ease;
+}
+
+/* ⚠️ Кегль — отдельным правилом с ПОВЫШЕННОЙ специфичностью.
+   hg-theme-default держит `.hg-theme-default button.hg-button{font-size:inherit}`
+   (0,2,1) — оно перебивало наш `.kb-demo .hg-button` (0,2,0), и клавиши
+   молча наследовали 16px от страницы: в CSS стояло одно число, а на
+   экране было другое. Проверять такое надо не по исходнику, а
+   getComputedStyle на живой странице.
+   Значение: у системной «Ф» габарит 46×46 физических пикселей (@3x);
+   при 16px наша давала 33 → 46×16/33 ≈ 22px.
+   ВАЖНО: на .110 нет SF Pro, подгонка сделана под шрифт Linux-рендера —
+   на реальном iPhone кегль пересчитать замером заново. */
+.kb-demo .hg-theme-default button.hg-button {
+  font-size: 22px;
+}
+.kb-demo .hg-theme-default button.kb-key-util {
+  font-size: 17px;
+}
+
+/* Нажатие — светлее, клавиша «подсвечивается», а не проваливается. */
+.kb-demo .hg-button:active,
+.kb-demo .hg-button.hg-activeButton {
+  background: #5a5a5a;
+}
+
+/* Служебные отличаются только КЕГЛЕМ подписи, не цветом. */
+.kb-demo .kb-key-util {
+  font-size: 17px;
+}
+
+/* Пропорции нижнего ряда — замер: 45.3 / 45.7 / 200.7 / 97.3 pt.
+   Заданы через flex-basis в тех же долях, чтобы тянулись по ширине. */
+.kb-demo .hg-button[data-skbtn="{numbers}"],
+.kb-demo .hg-button[data-skbtn="{abc}"],
+.kb-demo .hg-button[data-skbtn="{mic}"] {
+  flex: 0 0 45px;
+  max-width: 45px;
+}
+.kb-demo .hg-button[data-skbtn="{enter}"] {
+  flex: 0 0 97px;
+  max-width: 97px;
+}
+/* Пробел на системной клавиатуре пустой, с мелкой пометкой языка у
+   правого края — воспроизводится псевдоэлементом, чтобы не заводить
+   ради подписи отдельную клавишу. */
+.kb-demo .hg-button[data-skbtn="{space}"] {
+  position: relative;
+}
+.kb-demo .hg-button[data-skbtn="{space}"]::after {
+  content: "ру";
+  position: absolute;
+  right: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* ── Иконки служебных клавиш ──
+   Системная клавиатура рисует их символами SF Symbols (shift, delete.left,
+   return), а не типографскими «⇧ ⌫ ⏎» — те заметно тоньше и другой формы.
+   simple-keyboard подпись отдаёт строкой и HTML внутрь кнопки не пускает
+   (getButtonDisplayName возвращает string), поэтому иконка идёт фоном:
+   `mask-image` со встроенным SVG, цвет берётся от currentColor — так
+   клавиша остаётся одной кнопкой, без наложенных сверху элементов.
+   Подпись при этом делается прозрачной, а не пустой: на пустую строку
+   библиотека подставляет обратно сырое имя кнопки. */
+.kb-demo .kb-icon {
+  color: transparent;
+  position: relative;
+}
+.kb-demo .kb-icon::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* shift — контурная стрелка вверх с основанием */
+.kb-demo .hg-button[data-skbtn="{shift}"]::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linejoin='round'%3E%3Cpath d='M12 3.6 3.4 12.2h4.5v6.4h8.2v-6.4h4.5z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linejoin='round'%3E%3Cpath d='M12 3.6 3.4 12.2h4.5v6.4h8.2v-6.4h4.5z'/%3E%3C/svg%3E");
+  -webkit-mask-size: 19px 19px;
+  mask-size: 19px 19px;
+}
+
+/* backspace — пятиугольник с остриём влево и крестиком.
+   viewBox плотно облегает рисунок (22×18), поэтому mask-size задаёт его
+   габарит напрямую: 46×38 физических пикселей замера / 3. Прошлый SVG имел
+   поля внутри viewBox и пропорции 28:24 — из-за preserveAspectRatio высота
+   упиралась в ширину и рисунок выходил площе эталона (47×30 вместо 46×38). */
+.kb-demo .hg-button[data-skbtn="{bksp}"]::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 18' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 0.9h11.6a1.6 1.6 0 0 1 1.6 1.6v13a1.6 1.6 0 0 1-1.6 1.6H8L0.9 9z'/%3E%3Cpath d='M11.3 5.6l5.2 6.8M16.5 5.6l-5.2 6.8'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 18' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 0.9h11.6a1.6 1.6 0 0 1 1.6 1.6v13a1.6 1.6 0 0 1-1.6 1.6H8L0.9 9z'/%3E%3Cpath d='M11.3 5.6l5.2 6.8M16.5 5.6l-5.2 6.8'/%3E%3C/svg%3E");
+  -webkit-mask-size: calc(46px / 3) calc(38px / 3);
+  mask-size: calc(46px / 3) calc(38px / 3);
+}
+
+/* return — стрелка с загибом вниз-влево */
+.kb-demo .hg-button[data-skbtn="{enter}"]::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 5v6.5a2.5 2.5 0 0 1-2.5 2.5H4.6'/%3E%3Cpath d='M9.2 9.4 4.4 14l4.8 4.6'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 5v6.5a2.5 2.5 0 0 1-2.5 2.5H4.6'/%3E%3Cpath d='M9.2 9.4 4.4 14l4.8 4.6'/%3E%3C/svg%3E");
+  -webkit-mask-size: 20px 20px;
+  mask-size: 20px 20px;
+}
+
+/* микрофон — вместо эмодзи-клавиши системной раскладки */
+.kb-demo .hg-button[data-skbtn="{mic}"]::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='2.5' width='6' height='11' rx='3'/%3E%3Cpath d='M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='2.5' width='6' height='11' rx='3'/%3E%3Cpath d='M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21'/%3E%3C/svg%3E");
+  -webkit-mask-size: 23px 23px;
+  mask-size: 23px 23px;
+}
+
+/* Микрофон — единственное отступление от оригинала: в системной
+   клавиатуре на этом месте стоит эмодзи-клавиша. Цвет тот же, чтобы не
+   ломать строй; иконка отличает её от остальных. */
+.kb-demo .kb-key-mic {
+  font-size: 20px;
+}

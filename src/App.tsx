@@ -21,6 +21,7 @@ import { LabelsScreen } from "./screens/LabelsScreen";
 import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
 import { LabelTasksScreen } from "./screens/LabelTasksScreen";
 import { SearchScreen } from "./screens/SearchScreen";
+import { KeyboardDemoScreen } from "./screens/KeyboardDemoScreen";
 import { Icon } from "./components/UI";
 
 // Catch-all for unknown routes: without this a bad/typo'd URL renders the
@@ -71,6 +72,14 @@ export default function App() {
       {/* Auth (no layout) */}
       <Route path="/login" element={<LoginScreen />} />
       <Route path="/register" element={<RegisterScreen />} />
+
+      {/* Пробный экран своей клавиатуры (18.08.2026). Под авторизацией —
+          распознавание речи ходит в /api/audio/transcribe, — но ВНЕ Layout:
+          нижняя навигация перекрыла бы клавиатуру. Экран одноразовый, ни
+          на что в приложении не влияет. */}
+      <Route element={<RequireAuth />}>
+        <Route path="/kb-demo" element={<KeyboardDemoScreen />} />
+      </Route>
 
       {/* App shell (requires auth) */}
       <Route element={<RequireAuth />}>

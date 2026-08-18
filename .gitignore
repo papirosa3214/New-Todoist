@@ -1,55 +1,77 @@
-# Logs
-logs
+# Зависимости
+node_modules/
+
+# Сборка веба
+dist/
+
+# Веб-бандл внутри iOS-проекта — генерируется `vite build` + `cap sync ios`,
+# в репозитории не нужен. ВАЖНО при сборке из чистого клона: собирать с
+# явным адресом API, иначе приложение откроется, но не загрузит данные
+# (same-origin fallback молча ломается в native-режиме):
+#   VITE_API_URL=http://192.168.1.110:3001 npx vite build && npx cap sync ios
+ios/App/App/public/
+
+# Xcode
+ios/App/build/
+ios/App/DerivedData/
+*.xcuserstate
+xcuserdata/
+ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration/
+
+# Локальная БД разработки
+db.sqlite
+*.sqlite-journal
+
+# macOS
+.DS_Store
+
+# Логи и окружение
 *.log
+.env
+.env.local
+
+# Служебные каталоги Claude Code. В worktrees/ оседают брошенные рабочие
+# копии — внутри полный дубль самого проекта, к TaskFlow отношения не имеет.
+.claude/
+
+# Мусор macOS от SMB/Dropbox (AppleDouble-спутники файлов)
+._*
+.AppleDouble
+
+# Сохранённая сессия браузерного харнесса — внутри живой JWT. Учётные данные
+# в репозиторий не кладём: то же правило, по которому пароль в
+# scripts/screenshot.mjs берётся только из окружения, а зашитый JWT_SECRET
+# убран из server/src/env.ts.
+scripts/auth-state.json
+
+# ═══════ Сохранено из копии на .110 при слиянии 18.08.2026 ═══════
+# Живые данные сервера: база и загруженные файлы лежат рядом с кодом, но
+# принадлежат работающему приложению, а не репозиторию.
+logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
 node_modules
 dist
 dist-ssr
 *.local
-
-# Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
-.DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-
-# sqlite
 server/taskflow.db*
 server/node_modules
 mockup-reference/__pycache__
-
-# Claude Code worktrees
-.claude/
-
-# Вложения комментариев — файлы Максима, не код: лежат рядом с базой
-# (server/uploads), в репозиторий им нельзя.
 server/uploads/
-
-# Секрет подписи JWT — генерируется и сохраняется сюда сам при первом
-# старте (server/src/env.ts), в код зашитого запасного значения больше нет.
 server/.env
-
-# scripts/screenshot.mjs (скриншот-харнесс) — живая сессия входа (JWT в
-# storageState, фактически секрет) и сами снимки, это результат прогона,
-# не код.
-scripts/auth-state.json
 scripts/*.png
-
-# Capacitor iOS — сам ios/ коммитим (нативный проект — часть исходников,
-# стандартная практика Capacitor), но не сгенерированные CocoaPods/Xcode
-# артефакты (ставятся заново командой pod install на Маке).
 ios/App/Pods/
-ios/App/build/
 ios/App/output/
 ios/DerivedData/
 ios/**/xcuserdata/

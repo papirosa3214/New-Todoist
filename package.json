@@ -27,6 +27,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
+    "react-simple-keyboard": "^3.8.257",
     "tailwindcss": "^4.3.3",
     "zustand": "^5.0.14"
   },
