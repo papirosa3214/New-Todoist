@@ -10,6 +10,7 @@ import {
   MonthGrid,
   DaySheet,
   groupByDate,
+  WeekMonthLabel,
   // В этом файле уже есть своя mondayOf — она работает с Date и обслуживает
   // ленту-выборщик; эта работает со строками «ГГГГ-ММ-ДД» и обслуживает
   // календарные виды. Разные типы, разные потребители, поэтому алиас, а не
@@ -468,6 +469,12 @@ export function UpcomingScreen() {
       >
         <ScreenHeader
           title="Предстоящее"
+          // Какой месяц смотрим — строкой под заголовком, внутри шапки:
+          // так её накрывает общее затухание, и высота шапки, от которой
+          // считается высота сетки, пересчитывается автоматически.
+          below={
+            view === "week" ? <WeekMonthLabel monday={gridMonday} /> : undefined
+          }
           actions={
             <>
               <TaskFilterButton

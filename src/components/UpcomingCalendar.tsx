@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ApiTask } from "../api/types";
-import { Icon } from "./UI";
+import { Icon, findScrollContainer } from "./UI";
 import { formatTimeRange, todayStr } from "../lib/date";
 
 // ═══════════ Календарные виды раздела «Предстоящее» ═══════════
@@ -162,10 +162,15 @@ function MiniMonth({
   const weekEnd = addDays(monday, 6);
 
   return (
-    <div className="flex flex-col gap-[3px] p-1.5">
-      <div className="grid grid-cols-7">
+    // Календарь занимает ячейку ЦЕЛИКОМ, а не сидит сплющенным сверху
+    // (владелец 19.08.2026: «зачем ты его сплющил и оставил половину
+    // квадратика пустым — надо на весь квадратик»). Ряды делят высоту
+    // поровну через flex-1, поэтому числа расходятся по всей ячейке, как
+    // и в соседних ячейках дней.
+    <div className="flex h-full flex-col p-1.5">
+      <div className="grid grid-cols-7 pb-0.5">
         {WEEKDAY_LETTERS.map((l, i) => (
-          <span key={i} className="text-center text-[8px] text-dim">
+          <span key={i} className="text-center text-[9px] text-dim">
             {l}
           </span>
         ))}
@@ -179,7 +184,9 @@ function MiniMonth({
         return (
           <div
             key={row}
-            className={`grid grid-cols-7 rounded ${inWeek ? "bg-white/[0.07]" : ""}`}
+            className={`grid flex-1 grid-cols-7 items-center rounded ${
+              inWeek ? "bg-white/[0.07]" : ""
+            }`}
           >
             {rowCells.map((d) => {
               const ds = toDateStr(d);
@@ -187,8 +194,11 @@ function MiniMonth({
               return (
                 <button
                   key={ds}
-                  onClick={() => onPickDate(ds)}
-                  className={`text-center text-[9px] leading-[13px] tabular-nums ${
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPickDate(ds);
+                  }}
+                  className={`text-center text-[10px] tabular-nums ${
                     ds === today
                       ? "font-semibold text-red"
                       : dim
@@ -207,6 +217,38 @@ function MiniMonth({
   );
 }
 
+/** Подпись месяца под заголовком экрана — какой месяц мы вообще смотрим
+ *  (владелец 19.08.2026: «нужно месяц вверху указывать, там где
+ *  Предстоящее, чуть ниже»). Отдаётся в ScreenHeader через проп `below`:
+ *  тогда её накрывает то же затухание, что и заголовок, а высота шапки
+ *  (--screen-header-h, по ней считается высота сетки) пересчитывается
+ *  сама. Месяц берётся по четвергу недели — по той же причине, что и в
+ *  мини-календаре. */
+export function WeekMonthLabel({ monday }: { monday: string }) {
+  const thursday = new Date(monday + "T00:00:00");
+  thursday.setDate(thursday.getDate() + 3);
+  return (
+    <div className="pb-1.5 pt-0.5 text-[15px] font-semibold text-text">
+      {MONTHS_NOM[thursday.getMonth()]} {thursday.getFullYear()}
+    </div>
+  );
+}
+
+const MONTHS_NOM = [
+  "Январь",
+  "Февраль",
+  "Март",
+  "Апрель",
+  "Май",
+  "Июнь",
+  "Июль",
+  "Август",
+  "Сентябрь",
+  "Октябрь",
+  "Ноябрь",
+  "Декабрь",
+];
+
 /** Неделя: мини-календарь и семь дней в сетке 2×4. */
 export function WeekGrid({
   monday,
@@ -223,6 +265,43 @@ export function WeekGrid({
 }) {
   const today = todayStr();
   const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+  // Высота сетки ЗАМЕРЯЕТСЯ, а не считается формулой из 100dvh: расчёт
+  // «экран минус шапка минус запас» промахнулся на 25px — в него не
+  // входят отступы страницы и нижний padding контейнера прокрутки, и
+  // страница всё равно чуть болталась вверх-вниз, чего владелец как раз и
+  // просил не допускать («статика, абсолютная статика»). Здесь берётся
+  // фактическое расстояние от верха сетки до низа видимой области того же
+  // контейнера, что и прокручивает страницу.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const sc = findScrollContainer(grid);
+    const measure = () => {
+      const top =
+        grid.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+      // Нижние отступы ВСЕЙ цепочки до контейнера прокрутки, а не только
+      // его собственный: место под кнопку-веер создаёт страница, и без
+      // этого слагаемого сетка ровно на столько и вылезала за экран
+      // (замер: 104px прокрутки). Тот же обход предков, что в сетке дня.
+      let padBelow = parseFloat(getComputedStyle(sc).paddingBottom) || 0;
+      for (
+        let el: HTMLElement | null = grid.parentElement;
+        el && el !== sc;
+        el = el.parentElement
+      ) {
+        padBelow += parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      }
+      const next = Math.max(240, sc.clientHeight - top - padBelow);
+      setHeight((prev) => (prev && Math.abs(prev - next) < 1 ? prev : next));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(sc);
+    return () => ro.disconnect();
+  }, [monday]);
+
   return (
     // Сетка идёт от края до края экрана (-mx-4 компенсирует поля страницы)
     // и делится линиями, а не отступами — как на скриншоте: ячейки там
@@ -233,14 +312,21 @@ export function WeekGrid({
     // пустотой внизу. Отсчёт от --screen-header-h (реальная высота шапки,
     // публикуется ScreenHeader) плюс запас под кнопку-веер, чтобы нижний
     // ряд не уезжал под неё.
+    // БЕЗ прокрутки: вся неделя видна разом, крутить нечего (владелец
+    // 19.08.2026: «зачем здесь скроллить, вся неделя на экране — статика,
+    // абсолютная статика»). Поэтому height, а не minHeight: сетка ровно в
+    // оставшийся экран, страница не удлиняется ни на пиксель.
+    //
+    // Замыкающих линий сверху и снизу нет намеренно — только внутренние
+    // разделители. С рамкой по периметру сетка читалась «квадратиком»;
+    // без неё края открыты и раскладка выглядит продолжающейся, как и
+    // просил владелец («чтобы был такой воздушный, с продолжением»).
     <div
-      className="-mx-4 grid grid-cols-2 border-t border-stroke"
-      style={{
-        minHeight: `calc(100dvh - var(--screen-header-h, 60px) - ${GRID_BOTTOM_RESERVE}px)`,
-        gridTemplateRows: "repeat(4, minmax(0, 1fr))",
-      }}
+      ref={gridRef}
+      className="-mx-4 grid grid-cols-2"
+      style={{ height, gridTemplateRows: "repeat(4, minmax(0, 1fr))" }}
     >
-      <div className="border-b border-r border-stroke">
+      <div className="min-h-0 border-b border-r border-stroke">
         <MiniMonth monday={monday} onPickDate={onPickDate} />
       </div>
       {days.map((ds, i) => {
@@ -256,11 +342,15 @@ export function WeekGrid({
           <div
             key={ds}
             onClick={() => onDayClick(ds)}
-            className={`flex min-h-0 flex-col items-stretch overflow-hidden gap-[3px] border-b border-stroke p-1.5 text-left ${
+            className={`flex min-h-0 flex-col items-stretch gap-[3px] overflow-hidden p-1.5 text-left ${
               // Правая граница — только у левой колонки сетки. Первая
               // ячейка (мини-календарь) уже занята, поэтому чётность
               // считается со сдвигом на единицу.
-              i % 2 === 0 ? "" : "border-r"
+              i % 2 === 0 ? "" : "border-r border-stroke"
+            } ${
+              // Нижняя черта — у всех, кроме двух последних ячеек: сетка
+              // не должна замыкаться линией по низу, см. комментарий выше.
+              i < days.length - 2 ? "border-b border-stroke" : ""
             }`}
           >
             <div className="mb-0.5 flex items-baseline gap-1 px-0.5">
