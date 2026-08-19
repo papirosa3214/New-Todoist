@@ -411,6 +411,8 @@ export function DayHours({
   // упирается в HOUR_H_MIN и сетка снова становится длиннее экрана — это
   // хуже, но читаемо; лучше прокрутка, чем строки в десять пикселей.
   const [hourH, setHourH] = useState(HOUR_H_BASE);
+  // Нижний отступ страницы, который сетка перекрывает собой.
+  const [padBelow, setPadBelow] = useState(0);
   // Текущее значение для замера — читать state внутри эффекта нельзя, он
   // подписан один раз и видел бы старое.
   const hourHRef = useRef(hourH);
@@ -424,6 +426,12 @@ export function DayHours({
         grid.getBoundingClientRect().top -
         sc.getBoundingClientRect().top +
         sc.scrollTop;
+      // Нижние отступы страницы (место под кнопку-веер) сетке НЕ мешают:
+      // она заходит под кнопку — «крайний час 24:00, это прям край-край
+      // кнопки». Поэтому их не вычитаем из доступной высоты, а гасим
+      // отрицательным margin у самой сетки, иначе под ней оставалась
+      // пустая полоса в полтораста пикселей (скриншот с телефона
+      // 19.08.2026 — стало хуже, чем было).
       let pad = parseFloat(getComputedStyle(sc).paddingBottom) || 0;
       for (
         let el: HTMLElement | null = grid.parentElement;
@@ -432,15 +440,25 @@ export function DayHours({
       ) {
         pad += parseFloat(getComputedStyle(el).paddingBottom) || 0;
       }
+      setPadBelow(Math.round(pad));
       // Если прокрутка всё-таки осталась — вычитаем ровно её: подсчёт по
       // «свободному месту» промахивается на отступы, о которых снаружи не
       // знаешь (mb соседних блоков, safe-area), а этот способ сходится за
       // один-два прохода к состоянию «прокручивать нечего».
       const overflow = sc.scrollHeight - sc.clientHeight;
+      // Зазор между низом сетки и низом видимой области — если он есть,
+      // сетка не дотянулась до края, и час надо подрастить ровно на его
+      // долю. Симметрично overflow выше; вместе они за пару кадров
+      // сводят сетку точно в экран, без пустой полосы снизу и без
+      // прокрутки.
+      const gap =
+        sc.getBoundingClientRect().bottom - grid.getBoundingClientRect().bottom;
       const next =
         overflow > 0.5
           ? hourHRef.current - overflow / HOURS.length
-          : (sc.clientHeight - top - pad) / HOURS.length;
+          : gap > 0.5
+            ? hourHRef.current + gap / HOURS.length
+            : (sc.clientHeight - top) / HOURS.length;
       const clamped = Math.max(HOUR_H_MIN, next);
       setHourH((prev) => (Math.abs(prev - clamped) < 0.5 ? prev : clamped));
     };
@@ -450,19 +468,41 @@ export function DayHours({
     // следующем. Пять шагов с запасом хватает, дальше выходим, чтобы не
     // крутиться бесконечно на экране, куда сутки просто не влезают
     // (там работает нижняя граница HOUR_H_MIN, и прокрутка остаётся).
-    let left = 5;
+    // 20 кадров (~300 мс): первые замеры попадают на неустоявшуюся
+    // раскладку (шрифты, шапка, sticky-строка дней) и дают заниженную
+    // высоту; на пяти кадрах цикл успевал закончиться раньше, чем
+    // раскладка устаканится, и сетка застревала на нижней границе.
+    let left = 20;
     let frame = 0;
     const tick = () => {
+      // Обнуляем СРАЗУ: иначе после последнего шага в frame остаётся
+      // отработавший id, и restart ниже считает, что цикл ещё идёт, —
+      // замер больше никогда не перезапускался, а зазор снизу так и
+      // оставался.
+      frame = 0;
       measure();
       if (--left > 0) frame = requestAnimationFrame(tick);
     };
     tick();
     const restart = () => {
-      left = 5;
+      left = 20;
       if (!frame) frame = requestAnimationFrame(tick);
     };
     const ro = new ResizeObserver(restart);
     ro.observe(sc);
+    // И за самой сеткой: её высота меняется от нашего же замера, и именно
+    // это изменение открывает следующий зазор/переполнение — без этой
+    // подписки цикл заканчивался раньше, чем раскладка устаканится, и
+    // снизу оставалась пустая полоса.
+    ro.observe(grid);
+    // И за всем содержимым прокрутки: положение сетки зависит от того,
+    // что стоит НАД ней (распорка шапки получает высоту не сразу, блок
+    // задач без времени появляется после загрузки). Именно из-за этого
+    // первые замеры видели сетку ниже, чем она встанет в итоге, и час
+    // застревал на нижней границе — а второго шанса не было: собственная
+    // высота сетки при этом не менялась, и ResizeObserver молчал.
+    const content = sc.firstElementChild;
+    if (content) ro.observe(content);
     return () => {
       if (frame) cancelAnimationFrame(frame);
       ro.disconnect();
@@ -634,7 +674,10 @@ export function DayHours({
             скроллится целиком (Layout.tsx, flex-1 overflow-y-auto) — тут
             нужен был не второй вложенный скролл-регион, а обычный поток
             страницы, как у списка/доски. */}
-        <div className="-mx-4">
+        {/* pt-2 — чтобы подпись «00:00» не пряталась под шапкой: сетка
+            начинается вплотную под ней, и первая цифра оказывалась
+            наполовину перекрытой (скриншот с телефона 19.08.2026). */}
+        <div className="-mx-4 pt-2">
           <div ref={scrollRef} className="relative">
             {/* Подписи дней — только в 3-дневном виде, и «прилипают»
                 к верху при прокрутке: у Apple на «Предстоящем» они видны
@@ -676,7 +719,7 @@ export function DayHours({
             <div
               ref={gridRef}
               className="relative flex"
-              style={{ height: totalH }}
+              style={{ height: totalH, marginBottom: -padBelow }}
             >
               {/* Левая колонка — только подписи часов, без линии под
                   ними: у Apple часовая линия начинается ровно на границе
