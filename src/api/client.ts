@@ -36,7 +36,7 @@ export function clearToken(): void {
 // кэша каждый завёл бы свою попытку входа.
 let lanLoginAttempt: Promise<string | null> | null = null;
 
-async function tryLanLogin(): Promise<string | null> {
+export async function tryLanLogin(): Promise<string | null> {
   if (!lanLoginAttempt) {
     lanLoginAttempt = (async () => {
       try {
