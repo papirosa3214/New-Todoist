@@ -725,7 +725,10 @@ export function BackButton({
 // than this element's own box is deliberate — re-measuring your own
 // already-bled box on a later resize would read back the compensated
 // position instead of the original gap and unravel the fix.
-function findScrollContainer(node: HTMLElement): HTMLElement {
+// Экспортируется: DayHours меряет через неё, сколько «пустого» контента
+// идёт после сетки часов (нижний отступ страницы под кнопку-веер), чтобы
+// продлить туда полосы — см. tailBelow там.
+export function findScrollContainer(node: HTMLElement): HTMLElement {
   let el: HTMLElement | null = node;
   while (el && el !== document.body) {
     const overflowY = getComputedStyle(el).overflowY;
@@ -828,20 +831,33 @@ function usePublishHeaderHeight(ref: RefObject<HTMLElement | null>) {
   }, [ref]);
 }
 
+// Слои затухания держатся В ПРЕДЕЛАХ шапки. Заход был третий, и оба
+// промаха стоит помнить (Максим 19.08.2026):
+//   • первый профиль — переход слишком короткий, «чересчур быстро это
+//     исчезновение»;
+//   • попытка лечить это хвостом ниже кромки (h-[190%]) сделала хуже
+//     ровно в другую сторону: муть поехала вниз по странице и стала
+//     НАЧИНАТЬСЯ раньше — «я тебя прошу наоборот, чтобы оно позже
+//     начиналось».
+// Правильное сочетание: слой не вылезает за шапку (значит внизу контент
+// чистый), а сам градиент внутри плавный и растянут почти на всю её
+// высоту — так переход и начинается поздно, и не выглядит рывком.
+const FADE_LAYER = "pointer-events-none absolute inset-x-0 top-0 bottom-0";
+
 // Маски и подложка «стеклянной» шапки. Считаются снизу вверх: у нижнего
 // края шапки контент виден как есть, к верхней кромке экрана полностью
 // уходит в муть. Числа подобраны на глаз по живому экрану — точка, где
 // начинается размытие (55% высоты у сильного слоя), и есть та самая
 // «середина под шапкой», о которой просил владелец.
 const HEADER_FADE_STRONG =
-  "linear-gradient(to bottom, #000 0%, #000 50%, rgba(0,0,0,0.4) 72%, transparent 88%)";
+  "linear-gradient(to bottom, #000 0%, #000 40%, rgba(0,0,0,0.55) 62%, rgba(0,0,0,0.2) 80%, transparent 94%)";
 const HEADER_FADE_SOFT =
-  "linear-gradient(to bottom, #000 0%, #000 62%, rgba(0,0,0,0.55) 84%, transparent 100%)";
+  "linear-gradient(to bottom, #000 0%, #000 52%, rgba(0,0,0,0.5) 74%, rgba(0,0,0,0.18) 88%, transparent 100%)";
 // Цвет фона: плотный у верхней кромки (под ним не должно просвечивать
 // вообще ничего), к низу сходит на нет. color-mix — чтобы работало в обеих
 // темах от одного токена, а не двумя захардкоженными цветами.
 const HEADER_TINT =
-  "linear-gradient(to bottom, var(--color-bg) 0%, var(--color-bg) 42%, color-mix(in srgb, var(--color-bg) 80%, transparent) 62%, color-mix(in srgb, var(--color-bg) 35%, transparent) 82%, transparent 100%)";
+  "linear-gradient(to bottom, var(--color-bg) 0%, var(--color-bg) 46%, color-mix(in srgb, var(--color-bg) 74%, transparent) 66%, color-mix(in srgb, var(--color-bg) 34%, transparent) 84%, transparent 100%)";
 
 export function ScreenHeader({
   title,
@@ -904,7 +920,7 @@ export function ScreenHeader({
           другое (рецепт из памяти, frosted-glass-sticky-header). */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 bottom-0"
+        className={FADE_LAYER}
         style={{
           backdropFilter: "blur(20px)",
           WebkitBackdropFilter: "blur(20px)",
@@ -914,7 +930,7 @@ export function ScreenHeader({
       />
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 bottom-0"
+        className={FADE_LAYER}
         style={{
           backdropFilter: "blur(6px)",
           WebkitBackdropFilter: "blur(6px)",
@@ -922,14 +938,14 @@ export function ScreenHeader({
           WebkitMaskImage: HEADER_FADE_SOFT,
         }}
       />
+      <div aria-hidden className={FADE_LAYER} style={{ background: HEADER_TINT }} />
       <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 bottom-0"
-        style={{ background: HEADER_TINT }}
-      />
-      <div
+        // Заголовок и кнопки прижаты выше в пределах той же высоты шапки
+        // (Максим 19.08.2026: «входящие, фильтр и вот эту шапку чуть-чуть
+        // подтянуть наверх») — было py-2 поровну, стало 2px сверху и 14px
+        // снизу. Высота полосы та же, съезжает только содержимое.
         className={`flex items-center gap-2 relative z-10 ${
-          isCompact ? "h-[48px]" : "min-h-[56px] py-2"
+          isCompact ? "h-[48px]" : "min-h-[56px] pt-0.5 pb-3.5"
         }`}
       >
         {leading}

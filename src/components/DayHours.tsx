@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -9,7 +9,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import type { ApiTask } from "../api/types";
-import { Icon } from "./UI";
+import { Icon, findScrollContainer } from "./UI";
 
 // ═══════════ Календарная развёртка по часам — 1 или 3 дня ═══════════
 //
@@ -60,8 +60,12 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i);
 // — timeFromOffset зажимает время сутками, перетаскивание за 23:45 не
 // уедет.
 //
-// Подпись строки: после суток счёт идёт по кругу — 24 → «00:00».
-const hourLabel = (h: number) => `${String(h % 24).padStart(2, "0")}:00`;
+// Подписи есть только у суток, и последняя из них — «24:00»: это потолок
+// шкалы, дальше поставить уже нечего (Максим 19.08.2026: «крайний час
+// должен быть 24:00, это прям потолок, туда я уже ничего поставить не
+// могу, а остальное просто фон идёт»). Добавочные секции ниже подписей не
+// получают вовсе.
+const hourLabel = (h: number) => `${String(h).padStart(2, "0")}:00`;
 const GUTTER_W = 161 / 3; // левая колонка с подписями часов
 // Шаг привязки при перетаскивании. 15 минут — как в форме: попадать
 // пальцем в минуту на шкале высотой ~41px/час невозможно, а «ровные»
@@ -74,6 +78,10 @@ const MIN_H = 24;
 // Правый отступ плашки от границы колонки и зазор между плашками одного
 // часа — оба сняты тем же замером (одиночная плашка 162→521 при колонке
 // 161→527, то есть 6px свободных справа).
+// Сколько часовых секций дорисовано ПОСЛЕ суток — просто картинка,
+// продолжение сетки часами следующего дня (00:00, 01:00 …). Владелец
+// 19.08.2026: «просто пять секций добавить». Задачу туда не поставить —
+// timeFromOffset по-прежнему зажимает время сутками.
 const RIGHT_INSET = 6;
 const COL_GAP = 3;
 
@@ -119,7 +127,12 @@ function NowLine() {
 
   return (
     <div
-      className="pointer-events-none absolute left-0 right-0 z-20 flex items-center"
+      // z-10, НЕ z-20: у ScreenHeader (UI.tsx) ровно z-20, и при равном
+      // числе выигрывает тот, кто позже в DOM — то есть эта линия
+      // рисовалась поверх шапки. Пока шапка была непрозрачной плашкой,
+      // это выглядело просто странно; со стеклянной (19.08.2026) красная
+      // черта с подписью откровенно поехала поверх заголовка экрана.
+      className="pointer-events-none absolute left-0 right-0 z-10 flex items-center"
       style={{ top: pos * HOUR_H }}
     >
       <span
@@ -365,29 +378,101 @@ export function DayHours({
   const interactive = days.length === 1 && !!onSchedule;
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
-  // Высота окна — от неё зависит, сколько часовых строк дорисовать после
-  // суток, чтобы низ экрана не оставался пустым (см. gridHours ниже).
-  const [viewH, setViewH] = useState(() =>
-    typeof window === "undefined" ? 0 : window.innerHeight,
-  );
-  useEffect(() => {
-    const onResize = () => setViewH(window.innerHeight);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+  // Сколько пустого места идёт ПОСЛЕ сетки до самого низа прокрутки —
+  // нижний отступ страницы, оставленный под кнопку-веер (Layout.tsx,
+  // FAN_MENU_CONTENT_PADDING / pb-content-safe) плюс safe-area телефона.
+  // Владелец 19.08.2026: «где кнопка находится — там пустота, а я хочу,
+  // чтобы была таблица; она будет неактивна, просто фон, как будто бы
+  // визуально продолжение». Полосы протягиваются в эту зону отрицательным
+  // margin — место под кнопку остаётся ровно тем же, просто под ней теперь
+  // видна сетка, а не голый фон.
+  // ═══ Часовые полосы как ФОН прокрутки ═══
+  //
+  // Владелец 19.08.2026, после нескольких моих попыток дотянуть таблицу
+  // элементами: «почему ты не можешь сделать полоски слоем вот этого фона?
+  // не таблицу, а фон — визуально будет казаться, что это продолжение
+  // таблицы». Это и есть единственный способ, который не двигает
+  // прокрутку: обычный элемент — хоть в потоке, хоть absolute с
+  // отрицательным bottom — расширяет прокручиваемую область контейнера, и
+  // экран «Сегодня» проматывался лишнее (поймано вживую трижды).
+  //
+  // Фон рисуется на самом скролл-контейнере с `background-attachment:
+  // local` — тогда он едет вместе с содержимым (линии совпадают с сеткой
+  // на всей длине) и продолжается в зоне под кнопкой И в оттяжке-пружине,
+  // где элементов уже нет вовсе.
+  //
+  // Позиция считается от верха СОДЕРЖИМОГО до строки 00:00, снимается
+  // после раскладки и обновляется на любое изменение размеров. Контейнер
+  // общий для всех экранов, поэтому при уходе с развёртки фон снимается.
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const sc = findScrollContainer(grid);
+    // Красим ОДИН элемент — сам скролл-контейнер. Его фон покрывает весь
+    // бокс, а не только высоту содержимого, поэтому полосы есть и под
+    // кнопкой, и в оттяжке-пружине, где элементов уже нет. Позиция
+    // подстраивается под текущую прокрутку, чтобы линии всегда совпадали
+    // с сеткой.
+    const paint = () => {
+      const g = grid.getBoundingClientRect();
+      const h = sc.getBoundingClientRect();
+      // Слева — ровно там, где начинается первая колонка дня: под цифрами
+      // часов линий нет ни в сетке, ни в её продолжении.
+      const x = g.left - h.left + GUTTER_W;
+      const width = g.width - GUTTER_W;
+      const y = g.top - h.top;
+      sc.style.backgroundImage =
+        "linear-gradient(to bottom, var(--color-stroke) 0, var(--color-stroke) 1px, transparent 1px)";
+      sc.style.backgroundSize = `${width.toFixed(2)}px ${HOUR_H.toFixed(2)}px`;
+      sc.style.backgroundRepeat = "repeat-y";
+      sc.style.backgroundPosition = `${x.toFixed(2)}px ${(((y % HOUR_H) + HOUR_H) % HOUR_H).toFixed(2)}px`;
+    };
 
-  // Сутки + замыкающая полночь + столько часов следующего дня, сколько
-  // нужно, чтобы сетка была не короче экрана. Высота контейнера ниже
-  // равна позиции ПОСЛЕДНЕЙ строки — тогда она приходится ровно на нижний
-  // край, и пустого фона под таблицей не остаётся вовсе.
-  const gridHours = useMemo(() => {
-    const extra = Math.max(
-      0,
-      Math.ceil((viewH - HOURS.length * HOUR_H) / HOUR_H),
-    );
-    return Array.from({ length: HOURS.length + extra + 1 }, (_, i) => i);
-  }, [viewH]);
-  const gridSpan = gridHours[gridHours.length - 1];
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        paint();
+      });
+    };
+
+    paint();
+    const ro = new ResizeObserver(schedule);
+    ro.observe(sc);
+    ro.observe(grid);
+    sc.addEventListener("scroll", schedule, { passive: true });
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      ro.disconnect();
+      sc.removeEventListener("scroll", schedule);
+      sc.style.backgroundImage = "";
+      sc.style.backgroundSize = "";
+      sc.style.backgroundRepeat = "";
+      sc.style.backgroundPosition = "";
+    };
+  }, [days.length]);
+
+
+  // Полная высота сетки вместе с хвостом под кнопкой — и подписи часов по
+  // ней же, а не по одним суткам (Максим 19.08.2026: «время тоже до конца
+  // проставь, там буквально два числа внизу, чтобы всё было технично»).
+  // Последняя подпись рисуется, только если помещается целиком: центр
+  // строки не ближе 6px к краю, иначе цифра оказалась бы располовиненной.
+  // Ровно сутки: последняя строка «24:00» приходится на нижнюю кромку —
+  // это потолок шкалы и конец прокрутки. Продолжение сетки ниже — ФОН, оно
+  // живёт отдельным слоем и в раскладке не участвует, поэтому прокрутку не
+  // удлиняет (владелец 19.08.2026, после трёх моих неудачных попыток
+  // лечить это отрицательными отступами: «почему ты не можешь сделать
+  // полоски слоем вот этого фона? не таблицу, а фон — визуально будет
+  // казаться, что это продолжение таблицы»).
+  const totalH = HOURS.length * HOUR_H;
+  // 0…24 включительно: сутки и замыкающая строка «24:00». Ниже неё идут
+  // только полосы — фон, продолжающий сетку под кнопку и в оттяжку.
+  const labelHours = useMemo(
+    () => Array.from({ length: HOURS.length + 1 }, (_, i) => i),
+    [],
+  );
   const [dragging, setDragging] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -568,22 +653,32 @@ export function DayHours({
               </div>
             )}
 
-            {/* Высота — ровно до последней часовой строки (gridSpan), а не
-                «сутки + 8px», как было: тот хвост и был тем пустым местом
-                под 23:00, из-за которого таблица выглядела оборванной. */}
+            {/* Высота — ровно сутки, до строки «24:00» включительно: она
+                приходится на нижнюю кромку, и пустого места под таблицей
+                не остаётся. Всё, что рисуется ниже, — фоновый слой внутри
+                колонок, он высоту не занимает. */}
             <div
               ref={gridRef}
               className="relative flex"
-              style={{ height: gridSpan * HOUR_H }}
+              style={{ height: totalH }}
             >
               {/* Левая колонка — только подписи часов, без линии под
                   ними: у Apple часовая линия начинается ровно на границе
                   первой колонки дня, а не под цифрами. */}
               <div className="relative shrink-0" style={{ width: GUTTER_W }}>
-                {gridHours.map((h) => (
+                {labelHours.map((h) => (
                   <span
                     key={h}
-                    className="absolute right-1.5 -translate-y-1/2 text-[10px] font-medium text-dim tabular-nums"
+                    // Все подписи центрируются по своей часовой линии,
+                    // кроме самой первой: у неё линия проходит по верхней
+                    // кромке сетки, и центрированная цифра теряла верхнюю
+                    // половину за краем (Максим 19.08.2026: «на самом
+                    // верху у тебя не 00:00, а обрезано»). Раньше это
+                    // прятала непрозрачная шапка, со стеклянной стало
+                    // видно. Первая подпись просто ложится ПОД линию.
+                    className={`absolute right-1.5 text-[10px] font-medium text-dim tabular-nums ${
+                      h === 0 ? "" : "-translate-y-1/2"
+                    }`}
                     style={{ top: h * HOUR_H }}
                   >
                     {hourLabel(h)}
@@ -596,14 +691,6 @@ export function DayHours({
                   key={day.date}
                   className="relative min-w-0 flex-1 border-l border-stroke"
                 >
-                  {gridHours.map((h) => (
-                    <div
-                      key={h}
-                      className="absolute left-0 right-0 border-t border-stroke"
-                      style={{ top: h * HOUR_H }}
-                    />
-                  ))}
-
                   {/* Подсказка времени под пальцем — только в
                       1-дневном виде, единственной колонке. */}
                   {interactive && preview && day.isToday && (
