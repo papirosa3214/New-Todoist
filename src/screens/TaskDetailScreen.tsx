@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTask, useUpdateTask, useDeleteTask } from "../api/tasks";
+import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { useUpdateSubtask, useSubtaskWork } from "../api/subtasks";
 import { useAddComment } from "../api/comments";
@@ -20,7 +21,7 @@ import {
   ErrorBanner,
   BackButton,
 } from "../components/UI";
-import { PRIORITIES } from "../components/TaskFields";
+import { PRIORITIES, formatDuration } from "../components/TaskFields";
 import {
   AgentStatusRow,
   AgentOwnerActions,
@@ -44,6 +45,12 @@ export function TaskDetailScreen() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data: task, isLoading, isError, error } = useTask(id);
+  // Название и цвет проекта берём из справочника по project_id: детальный
+  // ответ сервера (GET /api/tasks/:id) их не отдаёт вовсе, там только сам
+  // project_id — в отличие от списка задач, где project_name/_color есть и
+  // ими пользуется бейдж на доске. Тот же приём, что в TodayScreen для
+  // цвета плашек в сетке часов.
+  const { data: projects = [] } = useProjects();
   const { data: currentUser } = useCurrentUser();
   const updateTask = useUpdateTask();
   const deleteTask = useDeleteTask();
@@ -226,6 +233,7 @@ export function TaskDetailScreen() {
   // Цвет приоритета теперь показывает флажок у заголовка, а не обводка
   // отметки (решение Максима 15.08.2026).
   const priority = PRIORITIES.find((p) => p.key === task.priority);
+  const taskProject = projects.find((p) => p.id === task.project_id);
   const showPriorityFlag = !!task.priority && task.priority <= 3;
   const doneSubtasks = task.subtasks.filter((s) => s.done).length;
   const allSubtasksDone =
@@ -273,6 +281,30 @@ export function TaskDetailScreen() {
           </button>
         }
       />
+
+      {/* Проект — бейджем над заголовком (Максим 19.08.2026: «вверху
+          небольшой бейджик ставь, в рамках какого проекта — а то цвет-то
+          есть, но я его наизусть не знаю»). До этого принадлежность к
+          проекту в карточке выражал только цвет, который надо помнить.
+          Вид — ровно тот же бейдж, что на карточках доски (TaskBoard):
+          решётка, название, заливка цветом проекта в 15%. Отступ слева
+          pl-[30px] — как у описания ниже: 18px кружка приоритета плюс
+          gap-3, чтобы бейдж встал по одной вертикали с текстом задачи, а
+          не с отметкой. */}
+      {taskProject && (
+        <div className="mb-2 pl-[30px]">
+          <span
+            className="inline-flex min-w-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px]"
+            style={{
+              backgroundColor: (taskProject.color || "#A6A6A6") + "26",
+              color: taskProject.color || "#A6A6A6",
+            }}
+          >
+            <Icon name="hash" size={9} />
+            <span className="truncate max-w-[200px]">{taskProject.name}</span>
+          </span>
+        </div>
+      )}
 
       {/* Priority ring + Title — owner 2026-08-13: was 22px (odd one out
           against the 18px this app's other two priority dots — list rows,
@@ -351,8 +383,21 @@ export function TaskDetailScreen() {
         {task.due_date && (
           <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
             <Icon name="calendarSmall" size={18} className="text-red" />
+            {/* Время и длительность — здесь же, одной строкой с датой
+                (Максим 19.08.2026: «пишется только „сегодня, 19 августа“, а
+                время видно, только если нажать „Изменить“ — хотелось бы
+                сразу видеть и время, и продолжительность»).
+                Формулировка ровно та же, что в поле «Срок и время» самой
+                формы (DueDateField, TaskFields.tsx): «Сегодня, 19 авг. ·
+                11:00 · 15 мин». Одна задача не должна читаться по-разному
+                в карточке и в форме, поэтому и разделители, и formatDuration
+                взяты оттуда, а не собраны заново. */}
             <span className="text-[14px] text-red">
               {formatDueLabel(task.due_date)}
+              {task.start_time ? ` · ${task.start_time}` : ""}
+              {task.start_time && task.duration_min
+                ? ` · ${formatDuration(task.duration_min)}`
+                : ""}
             </span>
           </div>
         )}
@@ -388,10 +433,7 @@ export function TaskDetailScreen() {
       {/* Owner actions — agent-work protocol (AGENT-PROTOCOL.md): visible
           only to the task's creator, only while an agent_state makes them
           relevant. Renders nothing otherwise. */}
-      <AgentOwnerActions
-        task={task}
-        isOwner={isTaskOwner(currentUser, task)}
-      />
+      <AgentOwnerActions task={task} isOwner={isTaskOwner(currentUser, task)} />
 
       {/* Labels */}
       {task.labels.length > 0 && (
