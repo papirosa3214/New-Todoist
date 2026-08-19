@@ -419,20 +419,6 @@ export function DayHours({
     // содержимому и прокручивается вместе с ним силами браузера, без
     // единой строчки JS в цикле прокрутки. Позиция считается от начала
     // содержимого, поэтому к разнице координат прибавляется scrollTop.
-    // Красим не только сам контейнер, но и обёртки страницы с нижним
-    // отступом (место под кнопку-веер). Фон, привязанный к содержимому
-    // (local), кончается там же, где содержимое, — и под кнопкой снова
-    // появлялся необведённый прямоугольник. Владелец: «почему ты не
-    // делаешь продолжение — я же намекаю, чтобы было единое окно».
-    const padHosts: HTMLElement[] = [];
-    for (
-      let el: HTMLElement | null = grid.parentElement;
-      el && el !== sc;
-      el = el.parentElement
-    ) {
-      if (parseFloat(getComputedStyle(el).paddingBottom) > 0) padHosts.push(el);
-    }
-
     const paintOn = (host: HTMLElement, local: boolean) => {
       const g = grid.getBoundingClientRect();
       const h = host.getBoundingClientRect();
@@ -444,12 +430,29 @@ export function DayHours({
       // отсюда scrollTop; у обычного фона обёртки — от её собственного
       // верха.
       const y = g.top - h.top + (local ? sc.scrollTop : 0);
-      host.style.backgroundImage =
-        "linear-gradient(to bottom, var(--color-stroke) 0, var(--color-stroke) 1px, transparent 1px)";
-      host.style.backgroundSize = `${width.toFixed(2)}px ${HOUR_H.toFixed(2)}px`;
-      host.style.backgroundRepeat = "repeat-y";
-      host.style.backgroundAttachment = local ? "local" : "scroll";
-      host.style.backgroundPosition = `${x.toFixed(2)}px ${(((y % HOUR_H) + HOUR_H) % HOUR_H).toFixed(2)}px`;
+      // Два слоя: часовые линии (повторяются по вертикали) и границы
+      // колонок дня (повторяются по горизонтали). Вертикали здесь — не
+      // прихоть: у самой сетки они живут как border-l колонки и потому
+      // обрываются ровно на 24:00, а продолжение полос под кнопкой
+      // оставалось висеть без левой границы — тот самый «квадратик»,
+      // из-за которого сетка не читалась единым окном (скриншот с
+      // телефона 19.08.2026).
+      const colW = width / Math.max(1, days.length);
+      host.style.backgroundImage = [
+        "linear-gradient(to bottom, var(--color-stroke) 0, var(--color-stroke) 1px, transparent 1px)",
+        "linear-gradient(to right, var(--color-stroke) 0, var(--color-stroke) 1px, transparent 1px)",
+      ].join(", ");
+      host.style.backgroundSize = [
+        `${width.toFixed(2)}px ${HOUR_H.toFixed(2)}px`,
+        `${colW.toFixed(2)}px 100%`,
+      ].join(", ");
+      host.style.backgroundRepeat = ["repeat-y", "repeat-x"].join(", ");
+      host.style.backgroundAttachment = local ? "local, local" : "scroll, scroll";
+      const yOff = (((y % HOUR_H) + HOUR_H) % HOUR_H).toFixed(2);
+      host.style.backgroundPosition = [
+        `${x.toFixed(2)}px ${yOff}px`,
+        `${x.toFixed(2)}px 0`,
+      ].join(", ");
     };
 
     const clearOn = (host: HTMLElement) => {
@@ -460,10 +463,20 @@ export function DayHours({
       host.style.backgroundAttachment = "";
     };
 
-    const paint = () => {
-      paintOn(sc, true);
-      for (const host of padHosts) paintOn(host, false);
-    };
+    // Красим ОДИН элемент. Два слоя (контейнер прокрутки + обёртка с
+    // отступом) считались от разных начал координат, и на стыке — ровно
+    // под 24:00 — часовой шаг ломался. Берём самую внешнюю обёртку с
+    // нижним отступом: она покрывает и сетку, и место под кнопкой, то
+    // есть рисунок один и непрерывный. Если такой обёртки нет — красим
+    // сам контейнер прокрутки, как раньше.
+    // Красим сам контейнер прокрутки: он один простирается до самого низа
+    // экрана, включая зону скругления/safe-area внизу телефона. Владелец
+    // 19.08.2026: «в самом низу есть чёрная плашка, которая всё обрезает,
+    // ничего не доходит до края — начинается ровно там, где экран
+    // скругляется». Внутренние обёртки туда не достают: у них там
+    // кончается бокс, и дальше виден фон страницы.
+    const host = sc;
+    const paint = () => paintOn(host, true);
 
     paint();
     const ro = new ResizeObserver(paint);
@@ -471,8 +484,7 @@ export function DayHours({
     ro.observe(grid);
     return () => {
       ro.disconnect();
-      clearOn(sc);
-      for (const host of padHosts) clearOn(host);
+      clearOn(host);
     };
   }, [days.length]);
 
