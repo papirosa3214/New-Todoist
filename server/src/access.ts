@@ -32,8 +32,7 @@ type Caller = { role?: string; type?: string };
 
 function callerOf(userId: string): Caller | undefined {
   return db.prepare("SELECT role, type FROM users WHERE id = ?").get(userId) as
-    | Caller
-    | undefined;
+    Caller | undefined;
 }
 
 /** Владелец трекера — карт-бланш на чтение и на правку. */
@@ -190,11 +189,32 @@ export function getProjectForFiling(
   if (own) return own;
 
   const caller = callerOf(userId);
-  if (caller?.type !== "ai" || !assigneeId) return undefined;
+  if (caller?.type !== "ai") return undefined;
 
+  if (assigneeId) {
+    const forAssignee = db
+      .prepare("SELECT * FROM projects WHERE id = ? AND owner_id = ?")
+      .get(projectId, assigneeId);
+    if (forAssignee) return forAssignee;
+  }
+
+  // И проект ВЛАДЕЛЬЦА системы — даже когда задача назначена на самого
+  // агента. Иначе правило «задача агента обязана лежать в проекте, а не
+  // висеть ничьей» невыполнимо: проекты заводит Максим, а задачи агент
+  // берёт на себя. До 20.08.2026 это работало «само» — агент ходил в
+  // трекер учёткой Максима через вход без пароля, то есть был им; когда
+  // ту дверь закрыли (auth.ts, lanOwnerId), вскрылось, что своей учёткой
+  // агент подшить задачу в проект не может вовсе.
+  //
+  // Шире это ничего не открывает: владелец в системе один, чужих людей
+  // с проектами тут нет, а видеть все задачи агент и так вправе.
   return db
-    .prepare("SELECT * FROM projects WHERE id = ? AND owner_id = ?")
-    .get(projectId, assigneeId);
+    .prepare(
+      `SELECT p.* FROM projects p
+         JOIN users u ON u.id = p.owner_id
+        WHERE p.id = ? AND u.role = 'owner'`,
+    )
+    .get(projectId);
 }
 
 /** Метка для правки/удаления: владельцу — любая, остальным — своя. */
