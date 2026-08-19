@@ -424,7 +424,6 @@ export function DayHours({
     return () => ro.disconnect();
   }, [days.length]);
 
-
   // Полная высота сетки вместе с хвостом под кнопкой — и подписи часов по
   // ней же, а не по одним суткам (Максим 19.08.2026: «время тоже до конца
   // проставь, там буквально два числа внизу, чтобы всё было технично»).
@@ -472,20 +471,39 @@ export function DayHours({
   // полночь, а человек смотрит день в середине дня. 120px запаса сверху,
   // чтобы было видно, что было прямо перед «сейчас».
   //
-  // scrollIntoView на невидимом якоре, а не свой scrollTop: своего
-  // скролл-контейнера у сетки больше нет (см. комментарий у -mx-4 ниже —
-  // «обрывается, не доходит до низа» лечилось именно снятием вложенного
-  // overflow-y-auto), сетка теперь часть обычного потока страницы.
-  // scrollIntoView сам находит ближайшего скроллящегося предка — не нужно
-  // знать заранее, какой именно div сейчас крутится (мобильная и
-  // десктопная ветки Layout.tsx устроены по-разному).
-  const nowAnchorRef = useRef<HTMLDivElement>(null);
+  // Крутим ИМЕННО найденный контейнер (findScrollContainer), а не
+  // scrollIntoView на якоре, как было до 19.08.2026. Причина — живой баг,
+  // который поймал Максим: scrollIntoView прокручивает ВСЮ цепочку
+  // предков, а прокручивается здесь общий контейнер контента из
+  // Layout.tsx — он один на всё приложение и при смене маршрута НЕ
+  // размонтируется. Поэтому оставленная сеткой прокрутка переезжала на
+  // соседние экраны: замер до фикса — «Входящие» 0 → «Сегодня» 258 →
+  // назад «Входящие» 258 → «Предстоящие» 258 из 242 возможных (у него
+  // это выглядело как «экран подъехал вверх, верхушка обрезана, внизу
+  // борода»). Прежний комментарий объяснял выбор scrollIntoView тем, что
+  // «не нужно знать заранее, какой именно div крутится» — findScrollContainer
+  // в этом файле и так уже используется (замер хвоста ниже), так что
+  // причины держать побочный эффект на всё приложение не было.
+  //
+  // Возврат в 0 при уходе — по той же причине: сетка чинит за собой
+  // прокрутку, которую сама сдвинула, и следующий экран открывается
+  // сверху. Не «вернуть как было»: до захода в «Сегодня» там лежит
+  // прокрутка ПРЕДЫДУЩЕГО экрана, и восстановление утащило бы её уже на
+  // третий экран — тот же баг с другого конца.
   useEffect(() => {
-    if (!showNowLine || !nowAnchorRef.current) return;
+    const grid = gridRef.current;
+    if (!showNowLine || !grid) return;
+    const sc = findScrollContainer(grid);
     const now = new Date();
     const pos = now.getHours() + now.getMinutes() / 60;
-    nowAnchorRef.current.style.top = `${Math.max(0, pos * HOUR_H - 120)}px`;
-    nowAnchorRef.current.scrollIntoView({ block: "start" });
+    const gridTop =
+      grid.getBoundingClientRect().top -
+      sc.getBoundingClientRect().top +
+      sc.scrollTop;
+    sc.scrollTop = Math.max(0, gridTop + pos * HOUR_H - 120);
+    return () => {
+      sc.scrollTop = 0;
+    };
   }, [showNowLine]);
 
   function handleDragStart(e: DragStartEvent) {
@@ -713,20 +731,7 @@ export function DayHours({
                 </div>
               ))}
 
-              {showNowLine && (
-                <>
-                  {/* Невидимый якорь для автопрокрутки — своей top ставит
-                      эффект выше (imperatively, до scrollIntoView), а не
-                      через рендер: позиция нужна только В МОМЕНТ монтажа,
-                      заводить под неё state ради одного эффекта незачем. */}
-                  <div
-                    ref={nowAnchorRef}
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-0 right-0 h-px"
-                  />
-                  <NowLine />
-                </>
-              )}
+              {showNowLine && <NowLine />}
             </div>
           </div>
         </div>
