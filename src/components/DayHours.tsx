@@ -298,6 +298,15 @@ function UntimedRow({
   );
 }
 
+// Текст на цветной плашке — ТЁМНЫЙ, не белый (19.08.2026, аудит WCAG).
+// Замер контраста белого на палитре проектов: sage 2.07, teal 2.06, pink
+// 2.10, orange 2.12, purple 2.86, blue 2.90 — норма 4.5 не бралась нигде,
+// проходил только красный (4.08, и то впритык). Тот же текст тёмным даёт
+// 6.35–8.93. Прежнее обоснование в DESIGN.md §9 («перцептивная яркость
+// заливки 113–173 из 255») считало не ту величину: WCAG смотрит на
+// относительную яркость и отношение, а не на абсолютную светлоту.
+const CHIP_INK = "#141414";
+
 /** Плашка задачи внутри сетки — сплошная заливка цветом проекта, полый
  *  кружок-маркер и белый текст, как на присланном скрине Apple Reminders.
  *  Белый текст читается на всех 7 цветах палитры проектов (замер
@@ -367,9 +376,15 @@ function TimedBlock({
             }),
       }}
     >
-      <Icon name="circle" size={9} className="shrink-0 text-white/85" />
+      <Icon
+        name="circle"
+        size={9}
+        className="shrink-0 opacity-70"
+        style={{ color: CHIP_INK }}
+      />
       <span
-        className={`min-w-0 flex-1 truncate text-[12px] font-medium text-white ${
+        style={{ color: CHIP_INK }}
+        className={`min-w-0 flex-1 truncate text-[12px] font-medium ${
           done ? "line-through opacity-70" : ""
         }`}
       >
@@ -420,8 +435,16 @@ function DragGhost({
         transformOrigin: "left center",
       }}
     >
-      <Icon name="circle" size={9} className="shrink-0 text-white/85" />
-      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-white">
+      <Icon
+        name="circle"
+        size={9}
+        className="shrink-0 opacity-70"
+        style={{ color: CHIP_INK }}
+      />
+      <span
+        style={{ color: CHIP_INK }}
+        className="min-w-0 flex-1 truncate text-[12px] font-medium"
+      >
         {task.title}
       </span>
     </div>

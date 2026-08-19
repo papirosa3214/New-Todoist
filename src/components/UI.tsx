@@ -1188,7 +1188,9 @@ export function TextField({
 type ButtonVariant = "primary" | "secondary" | "outline";
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
-  primary: "bg-red text-white",
+  // bg-[--color-red-solid], а не bg-red: белый текст 15px/600 требует
+  // 4.5:1, обычный акцент даёт 4.08 (аудит 19.08.2026).
+  primary: "bg-[var(--color-red-solid)] text-white",
   secondary: "bg-card2 border border-stroke text-text",
   outline: "border border-stroke text-sub bg-transparent",
 };

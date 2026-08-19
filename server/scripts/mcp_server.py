@@ -149,7 +149,7 @@ def short(task: dict) -> dict:
     }
     # Последний сигнал — единственный способ отличить «двойник сейчас
     # работает» от «взял и молчит»: состояние in_progress держится и в том,
-    # и в другом случае, а brошена становится true только через 15 минут
+    # и в другом случае, а brошена становится true только через 5 минут
     # тишины. Без этого поля вопрос «он ещё жив?» по MCP не ответить.
     if task.get("agent_heartbeat_at"):
         card["последний сигнал"] = task["agent_heartbeat_at"]
@@ -363,13 +363,13 @@ TOOLS = [
     },
     {
         "name": "taskflow_claim",
-        "description": "Взять задачу в работу (agent_state → in_progress). Дальше нужно продлевать аренду: срок 15 минут.",
+        "description": "Взять задачу в работу (agent_state → in_progress). Дальше нужно продлевать аренду: срок 5 минут.",
         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
         "fn": t_claim,
     },
     {
         "name": "taskflow_heartbeat",
-        "description": "Продлить аренду задачи, пока работа идёт. Без этого через 15 минут задача покажется брошенной.",
+        "description": "Продлить аренду задачи, пока работа идёт. Без этого через 5 минут задача покажется брошенной.",
         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
         "fn": t_heartbeat,
     },
@@ -528,7 +528,7 @@ def handle(msg):
             "instructions": (
                 "Задачи TaskFlow под учёткой агента. Порядок работы по "
                 "AGENT-PROTOCOL.md: взять задачу (taskflow_claim), продлевать "
-                "аренду по ходу (taskflow_heartbeat, срок 15 минут), отмечать "
+                "аренду по ходу (taskflow_heartbeat, срок 5 минут), отмечать "
                 "шаги, закончил — taskflow_state со state=review и "
                 "комментарием, что сделано. Упёрся — state=blocked с "
                 "объяснением, что нужно от владельца. Задачу выполненной "
