@@ -758,7 +758,22 @@ body::-webkit-scrollbar {
   display: none;
 }
 
-/* ═══════════ TRACKING BY FONT SIZE ═══════════════
+@layer base {
+  /* ═══════════ TRACKING BY FONT SIZE ═══════════════
+   ВНИМАНИЕ, БЛОК ОБЯЗАН ЛЕЖАТЬ В @layer base (20.08.2026). Раньше он был
+   бесслойным — и обещание строкой ниже («явная утилита tracking-*
+   перебивает автоматическое значение») не выполнялось: по спеке cascade
+   layers бесслойное правило побеждает ЛЮБОЕ слойное независимо от
+   специфичности, а все утилиты Tailwind живут в @layer utilities. Замер
+   до переноса (Chrome, живое приложение): на элементе
+   `text-[13px] tracking-wider` вычислялся letter-spacing 0.104px, то есть
+   +0.008em из таблицы вместо собственных 0.05em утилиты (0.65px); на
+   `text-[11px] tracking-wider` — 0.198px вместо 0.55px. Страдали четыре
+   места с прописными подписями (SubtaskFeed ×3, ярлык секции в UI.tsx),
+   где широкий трекинг как раз обязателен: прописные без разрядки читаются
+   сплошняком. В @layer base таблица становится тем, чем задумана —
+   значением ПО УМОЛЧАНИЮ, которое любая утилита в разметке перебивает.
+
    Skill §15: letter-spacing is size-specific, never one value for all sizes.
    Large display text wants negative tracking (letters read too far apart as
    they grow); small text wants slightly positive tracking for legibility.
@@ -796,35 +811,36 @@ body::-webkit-scrollbar {
    кривая плавно выполаживается, излома нет (для сравнения: −0.015em дало
    бы −0.001em/px, то есть шестикратный перелом ровно на стыке).
 */
-:where([class~="text-[28px]"]) {
-  letter-spacing: -0.03em;
-}
-:where([class~="text-[20px]"]) {
-  letter-spacing: -0.02em;
-}
-:where([class~="text-[17px]"]) {
-  letter-spacing: -0.012em;
-}
-:where([class~="text-[16px]"]) {
-  letter-spacing: -0.006em;
-}
-:where([class~="text-[15px]"]) {
-  letter-spacing: -0.002em;
-}
-:where([class~="text-[14px]"]) {
-  letter-spacing: 0;
-}
-:where([class~="text-[13px]"]) {
-  letter-spacing: 0.008em;
-}
-:where([class~="text-[12px]"]) {
-  letter-spacing: 0.012em;
-}
-:where([class~="text-[11px]"]) {
-  letter-spacing: 0.018em;
-}
-:where([class~="text-[10px]"]) {
-  letter-spacing: 0.025em;
+  :where([class~="text-[28px]"]) {
+    letter-spacing: -0.03em;
+  }
+  :where([class~="text-[20px]"]) {
+    letter-spacing: -0.02em;
+  }
+  :where([class~="text-[17px]"]) {
+    letter-spacing: -0.012em;
+  }
+  :where([class~="text-[16px]"]) {
+    letter-spacing: -0.006em;
+  }
+  :where([class~="text-[15px]"]) {
+    letter-spacing: -0.002em;
+  }
+  :where([class~="text-[14px]"]) {
+    letter-spacing: 0;
+  }
+  :where([class~="text-[13px]"]) {
+    letter-spacing: 0.008em;
+  }
+  :where([class~="text-[12px]"]) {
+    letter-spacing: 0.012em;
+  }
+  :where([class~="text-[11px]"]) {
+    letter-spacing: 0.018em;
+  }
+  :where([class~="text-[10px]"]) {
+    letter-spacing: 0.025em;
+  }
 }
 
 /* ═══════════ ДЕМО: своя экранная клавиатура (/kb-demo) ═══════════
