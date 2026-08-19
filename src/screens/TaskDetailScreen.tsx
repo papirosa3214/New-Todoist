@@ -317,9 +317,21 @@ export function TaskDetailScreen() {
             (или уже выполненных, для возврата в работу) — см.
             showHeaderCheckbox выше. */}
         {showHeaderCheckbox ? (
+          // Зона нажатия — 44×44 (норма HIG), а сам квадрат остаётся 18×18:
+          // это ГЛАВНЫЙ контрол завершения задачи, и мазать по нему пальцем
+          // было нечем (замер 19.08.2026: проба elementFromPoint ±22pt не
+          // попадала ни по одной оси). Расширяем прозрачным ::before ровно
+          // 44×44 (h-11 w-11) по центру кнопки, а НЕ паддингом с
+          // отрицательным margin: паддинг раздул бы саму коробку кнопки, и
+          // gap-3 отодвинул бы заголовок вправо. Размер задан явно, а не
+          // через -inset: у кнопки рамка 2px, отсчёт inset идёт от
+          // padding-box (14×14), и «-inset-[13px]» дало бы 40×40 — замер это
+          // и показал. z-10 — потому что заголовок идёт в разметке ПОСЛЕ
+          // кнопки и без него перехватывал бы правую половину зоны (проба
+          // ±21.5pt вправо падала именно на h1).
           <button
             onClick={handleToggleStatus}
-            className="mt-1 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center"
+            className="relative z-10 mt-1 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center tap-scale before:absolute before:left-1/2 before:top-1/2 before:h-11 before:w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-['']"
           >
             {task.status === "completed" && (
               <Icon name="check" size={12} className="text-white" />
@@ -328,8 +340,15 @@ export function TaskDetailScreen() {
         ) : (
           <div className="mt-1 w-[18px] h-[18px] shrink-0" aria-hidden="true" />
         )}
+        {/* leading-snug (1.375× = 27.5px) убран 20.08.2026: интерлиньяж
+            крупных кеглей задаёт таблица в index.css (@layer base), у 20px
+            там 23px — собственный бокс шрифта. Со snug заголовок карточки
+            шёл с тем же воздухом, что основной текст 15px, хотя по §15
+            крупному набору положено теснее; заодно уходила дробная высота
+            строки 27.5px. Утилита в разметке перебила бы таблицу (утилиты
+            лежат слоем выше), поэтому её именно снимаем, а не меняем. */}
         <h1
-          className={`text-[20px] font-semibold leading-snug flex-1 ${task.status === "completed" ? "line-through text-sub" : ""}`}
+          className={`text-[20px] font-semibold flex-1 ${task.status === "completed" ? "line-through text-sub" : ""}`}
         >
           {task.title}
         </h1>
@@ -597,7 +616,11 @@ export function TaskDetailScreen() {
             onClick={() => fileInputRef.current?.click()}
             disabled={uploadAttachment.isPending}
             aria-label="Приложить файл"
-            className="w-[40px] h-[40px] rounded-xl bg-card flex items-center justify-center shrink-0 disabled:opacity-50"
+            // Видимый квадрат остаётся 40×40 (иначе перекосится строка
+            // ввода), а зона нажатия добирается до 44×44 нормы HIG
+            // прозрачным ::before на 2pt в каждую сторону: соседнее поле
+            // отстоит на gap-2 = 8pt, так что зоны не пересекаются.
+            className="relative w-[40px] h-[40px] rounded-xl bg-card flex items-center justify-center shrink-0 disabled:opacity-50 tap-scale before:absolute before:-inset-[2px] before:content-['']"
           >
             <Icon name="paperclip" size={18} className="text-sub" />
           </button>
@@ -636,7 +659,8 @@ export function TaskDetailScreen() {
               (!commentText.trim() && pending.length === 0) ||
               addComment.isPending
             }
-            className="w-[40px] h-[40px] rounded-xl bg-red flex items-center justify-center shrink-0 disabled:opacity-50"
+            // Та же добивка зоны до 44×44, что у скрепки слева.
+            className="relative w-[40px] h-[40px] rounded-xl bg-red flex items-center justify-center shrink-0 disabled:opacity-50 tap-scale before:absolute before:-inset-[2px] before:content-['']"
           >
             <Icon name="chevron" size={16} className="text-white -rotate-90" />
           </button>
