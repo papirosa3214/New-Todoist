@@ -764,6 +764,8 @@ body::-webkit-scrollbar {
    they grow); small text wants slightly positive tracking for legibility.
    Apple SF Pro Text optical tracking (values are per-em, so they scale with
    the user's font-size setting):
+     28px -> -0.030em  (заголовок экрана — см. вывод значения ниже)
+     20px -> -0.020em  (заголовок карточки задачи — там же)
      17px -> -0.012em  (large-ish: slight tightening, letters otherwise spread)
      16px -> -0.006em  (above body: gentle negative)
      15px -> -0.002em  (between body and heading: near zero, tiny tightening)
@@ -774,7 +776,32 @@ body::-webkit-scrollbar {
      10px -> +0.025em  (badges/indicators: max opening for readability)
    :where() keeps specificity at zero — an explicit tracking-* utility in
    markup always overrides the automatic value.
+
+   ─── ОТКУДА ВЗЯЛИСЬ 28px и 20px (20.08.2026) ───────────────────────────
+   Таблица обрывалась на 17px, а самые крупные кегли — 28px (заголовок
+   экрана, 4 экрана верхнего уровня) и 20px (заголовок карточки задачи) —
+   оставались с letter-spacing:normal, то есть ровно там, где оптический
+   разбег букв заметнее всего, поправки не было вовсе.
+   Новые значения НЕ подобраны на глаз, а продолжают ту же кривую. Восемь
+   существующих строк переведены в АБСОЛЮТНЫЙ трекинг (em × кегль):
+   10px→+0.250px … 14px→0 … 17px→−0.204px — по кеглю это почти прямая
+   (МНК: t_px = 0.8934 − 0.06279·кегль, R² = 0.984, невязка ≤0.002em на
+   всех восьми строках). Её продолжение даёт 20px → −0.018em и
+   28px → −0.031em. Контрольная модель (t в em линейна по ln кегля,
+   R² = 0.993) даёт −0.022em и −0.045em. На 20px модели сходятся — берём
+   середину −0.020em. На 28px это экстраполяция на 11px за последнюю
+   точку, модели расходятся вдвое, поэтому взят консервативный край
+   −0.030em. Проверка стыка: собственный наклон таблицы на 16→17 равен
+   −0.006em/px, при −0.020em на 20px переход 17→20 идёт −0.0027em/px —
+   кривая плавно выполаживается, излома нет (для сравнения: −0.015em дало
+   бы −0.001em/px, то есть шестикратный перелом ровно на стыке).
 */
+:where([class~="text-[28px]"]) {
+  letter-spacing: -0.03em;
+}
+:where([class~="text-[20px]"]) {
+  letter-spacing: -0.02em;
+}
 :where([class~="text-[17px]"]) {
   letter-spacing: -0.012em;
 }
