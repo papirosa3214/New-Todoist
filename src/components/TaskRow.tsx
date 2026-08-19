@@ -229,10 +229,10 @@ export function TaskRow({
       if (rowRef.current)
         rowRef.current.style.transform = `translateX(${value}px)`;
       if (actionRef.current) {
+        // Прозрачностью больше не играем: кнопка просто лежит под строкой
+        // и открывается по мере её сдвига — «как ящичек». Раньше слой
+        // проявлялся во всю ширину, и полотно синело целиком.
         const frac = Math.min(Math.abs(value) / ACTION_W, 1);
-        actionRef.current.style.opacity = String(frac);
-        // Ловить нажатия кнопка должна только когда действительно
-        // открыта: иначе прозрачный слой поверх строки съедал бы тапы.
         actionRef.current.style.pointerEvents = frac > 0.9 ? "auto" : "none";
       }
     },
@@ -346,7 +346,15 @@ export function TaskRow({
     // каждой стороны (см. InboxScreen.tsx и др.) — растягиваем ровно на
     // него и возвращаем тот же отступ содержимому изнутри (px-4 на
     // button ниже), а не полосе.
-    <div style={{ position: "relative", overflow: "hidden" }} className="-mx-4">
+    <div
+      style={{ position: "relative", overflow: "hidden" }}
+      // Разделительная линия переехала СЮДА со строки: строка уезжает при
+      // свайпе и уносила линию с собой, поэтому под открывшейся кнопкой
+      // линия обрывалась (владелец 19.08.2026: «скольжение идёт не по
+      // разделительной линии»). На обёртке она неподвижна и идёт через всю
+      // ширину, а кнопка заканчивается на 1px выше неё.
+      className="-mx-4 border-b border-stroke/50"
+    >
       {/* Действие под свайпом — синий «редактировать» (был teal-check у
           завершения; teal и вообще «готово»-семантика тут неуместны, это
           другое действие). */}
@@ -367,14 +375,25 @@ export function TaskRow({
           position: "absolute",
           right: 0,
           top: 0,
+          // bottom: 0 — кнопка упирается ПРЯМО в разделительную линию,
+          // без зазора (владелец 19.08.2026: «на синем видно линию и потом
+          // ещё пару пикселей черноты — скольжение идёт не по ней»). Сама
+          // линия живёт на обёртке и проходит под кнопкой непрерывно,
+          // поэтому перекрыть её кнопка не может. Замер до: 3 физических
+          // пикселя фона между кромкой кнопки и линией.
           bottom: 0,
-          width: "100%",
+          // Ширина — ровно кнопка, а не вся строка: при движении синим
+          // заливало всё полотно, а должно «открываться» только окошко
+          // кнопки, как выдвижной ящик под строкой.
+          width: ACTION_W,
           display: "flex",
-          justifyContent: "flex-end",
+          justifyContent: "center",
           alignItems: "center",
-          paddingRight: "20px",
           backgroundColor: "var(--color-blue)",
-          opacity: 0,
+          // Тень внутрь от левого края — кнопка читается лежащей НИЖЕ
+          // строки, а строка — крышкой, которая её открывает.
+          boxShadow:
+            "inset 10px 0 14px -8px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.08)",
           pointerEvents: "none",
         }}
       >
@@ -384,7 +403,9 @@ export function TaskRow({
       <div
         ref={rowRef}
         onPointerDown={onPointerDown}
-        style={{ willChange: "transform" }}
+        // Тень от правого края строки — вторая половина того же эффекта:
+        // строка «нависает» над открывшейся кнопкой.
+        style={{ willChange: "transform", boxShadow: "6px 0 12px rgba(0,0,0,0.55)" }}
       >
         <button
           onClick={() => {
@@ -405,7 +426,7 @@ export function TaskRow({
           // сверху добавляются поле внутри PNG аватарки и полулидинг
           // первой строки, а нижние пилюли прижаты к своей кромке.
           // Выравнивание по нижней части, как он и просил.
-          className="tap-row w-full flex items-start gap-3 pt-[9px] pb-3 px-4 border-b border-stroke/50 bg-bg text-left"
+          className="tap-row w-full flex items-start gap-3 pt-[9px] pb-3 px-4 bg-bg text-left"
         >
           {/* w-[24px] фиксирована: без неё колонка была бы по ширине Avatar
               (24px) только когда исполнитель есть, иначе не занимала бы места
