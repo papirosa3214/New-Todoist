@@ -197,7 +197,16 @@ function BoardCard({
   return (
     <button
       onClick={onClick}
-      className={`tap-row w-full text-left bg-card rounded-xl p-3 flex items-stretch gap-1 ${
+      // pt-2 против pb-3 — намеренная асимметрия ОТСТУПОВ ради симметрии
+      // ВОЗДУХА (владелец 19.08.2026: «посчитай расстояние от верха плашки
+      // до первого слова и от последней метки до низа — они должны быть
+      // одинаковыми, выровняй по нижней части»).
+      // Замер до: сверху до рисунка аватарки 16pt и до текста 19pt, снизу
+      // до кромки пилюль 12pt. Причина перекоса не в padding — он был
+      // ровно 12/12, — а в том, что у аватарки внутри PNG своё поле ~4pt,
+      // а нижние пилюли прижаты к своей кромке вплотную. Padding снизу
+      // трогать нельзя (там всё уже ровно), поэтому убавлен верхний.
+      className={`tap-row w-full text-left bg-card rounded-xl px-3 pb-3 pt-2 flex items-stretch gap-1 ${
         isDragging ? "opacity-40" : ""
       }`}
     >
@@ -260,7 +269,14 @@ function BoardCard({
                 Из футера ниже он убран — там он был пилюлей с подложкой. */}
             {showProjectBadge && task.project_name && (
               <div
-                className="mb-0.5 inline-flex min-w-0 max-w-full items-center gap-1 text-[10px] font-medium"
+                // leading-none — не косметика: у строки 10px с обычным
+                // межстрочным интервалом сверху остаётся ~4pt полулидинга,
+                // и замер карточки давал 16pt воздуха сверху против 12pt
+                // снизу (владелец 19.08.2026: «посчитай расстояние от верха
+                // плашки до первого слова и от последней метки до низа —
+                // они должны быть одинаковыми, выровняй по нижней части»).
+                // С leading-none кромка текста садится на padding карточки.
+                className="mb-1 inline-flex min-w-0 max-w-full items-center gap-1 text-[10px] font-medium leading-none"
                 style={{ color: task.project_color || "#A6A6A6" }}
               >
                 <Icon name="hash" size={9} className="shrink-0" />
