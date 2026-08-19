@@ -16,8 +16,9 @@ import { api } from "../api/client";
 import { Icon } from "./UI";
 import type { ApiAttachment } from "../api/types";
 
-// Килобайты/мегабайты — человеку, а не 1048576.
-function formatSize(bytes: number): string {
+// Килобайты/мегабайты — человеку, а не 1048576. Экспортируется: тем же
+// видом размер показывается в поле «Файлы» формы (AttachmentsField.tsx).
+export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} Б`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} КБ`;
   return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;

@@ -55,6 +55,9 @@ import {
   SubtaskRow,
   AddSubtaskRow,
 } from "../components/TaskFields";
+import { AttachmentsField } from "../components/AttachmentsField";
+import { uploadAttachment } from "../api/attachments";
+import { useDialog } from "../components/Dialog";
 import { MicOverlay } from "../components/MicOverlay";
 import { MicKeyboardBar } from "../components/MicKeyboardBar";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
@@ -144,8 +147,16 @@ export function TaskFormScreen() {
   const suggestForTask = useSuggestSubtasksForTask(id || "");
   const suggestForDraft = useSuggestSubtasksForDraft();
 
+  const { alert, dialog } = useDialog();
+
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
+  // Файлы, выбранные ДО того, как задача создана (19.08.2026): грузить их
+  // некуда — идентификатора ещё нет, — поэтому они ждут здесь и уходят на
+  // сервер сразу после создания, в handleSave. В режиме правки список не
+  // используется вовсе: там taskId есть, и AttachmentsField грузит файл
+  // сразу при выборе.
+  const [newFiles, setNewFiles] = useState<File[]>([]);
   // Авто-рост поля названия по содержимому — Максим 17.08.2026: после
   // диктовки в фиксированной 1 строке не видно, весь ли текст попал и нет
   // ли ошибок («просто так я даже не понимаю, дописалось оно или нет»).
@@ -340,7 +351,7 @@ export function TaskFormScreen() {
       // Server creates the task and its subtasks in one transaction (see
       // AGENT-API.md §Tasks, `subtasks` param) — no follow-up requests, no
       // half-created task if the connection drops mid-way.
-      await createTask.mutateAsync({
+      const created = await createTask.mutateAsync({
         title: title.trim(),
         description: desc.trim() || undefined,
         due_date: dueDate || undefined,
@@ -355,6 +366,34 @@ export function TaskFormScreen() {
         label_ids: selectedLabelIds,
         subtasks: localSubtasks.length > 0 ? localSubtasks : undefined,
       });
+
+      // Файлы — единственное, что нельзя было отправить вместе с задачей:
+      // вложение принадлежит задаче, а её идентификатор появился только
+      // сейчас. Отсюда и порядок: сначала задача, потом её файлы.
+      //
+      // Ошибка на этом шаге НЕ возвращает в форму: задача уже создана, и
+      // повторное «Готово» завело бы вторую такую же. Поэтому сообщаем,
+      // что именно не легло, и уходим в карточку — оттуда файл можно
+      // дослать через «Изменить», не плодя дублей.
+      if (newFiles.length > 0) {
+        const failed: string[] = [];
+        for (const file of newFiles) {
+          try {
+            await uploadAttachment(created.task.id, file, "task");
+          } catch {
+            failed.push(file.name);
+          }
+        }
+        if (failed.length > 0) {
+          await alert(
+            `Задача создана, но файлы не приложились: ${failed.join(", ")}. Откройте задачу и попробуйте ещё раз.`,
+          );
+        }
+        // В карточку, а не в «Входящие»: приложенное видно сразу, и в
+        // случае осечки понятно, чего не хватает.
+        navigate(`/task/${created.task.id}`);
+        return;
+      }
       navigate("/inbox");
     }
   });
@@ -691,6 +730,9 @@ export function TaskFormScreen() {
     // (подключён в Layout.tsx) добавляет её высоту на WebKit, где 100dvh
     // сам не пересчитывается.
     <div className="px-4 pb-[calc(1rem+var(--kb-inset,0px))] min-h-full">
+      {/* Сообщение о файлах, не легших к уже созданной задаче (handleSave)
+          — тем же диалогом, что и остальные предупреждения приложения. */}
+      {dialog}
       <ScreenHeader
         variant="compact"
         leading={
@@ -806,6 +848,19 @@ export function TaskFormScreen() {
         placeholder="Описание"
         className="block w-full bg-transparent text-[13px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px] overflow-hidden"
         rows={1}
+      />
+
+      {/* ── Файлы — Максим 19.08.2026: «чтобы в заметках я уже изначально
+          мог прикреплять скриншоты и документы». Место выбрано по смыслу
+          просьбы: файл — часть заметки, поэтому сразу под ней и до
+          «Подзадач», тем же порядком «описание задачи целиком, потом
+          разбивка на шаги». Само поле и разница между созданием и правкой
+          — в components/AttachmentsField.tsx. */}
+      <AttachmentsField
+        taskId={isEdit ? id : undefined}
+        saved={existingTask?.attachments}
+        files={newFiles}
+        onFilesChange={setNewFiles}
       />
 
       {/* ── Subtasks — owner 2026-08-13 (пятый заход): переставлены сразу

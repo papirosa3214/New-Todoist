@@ -1,4 +1,4 @@
-// Вложения комментариев: загрузка файла, отдача и удаление.
+// Вложения задач и комментариев: загрузка файла, отдача и удаление.
 //
 // Файл приходит СЫРЫМИ БАЙТАМИ, без multipart-обёртки — тем же приёмом,
 // что и запись микрофона (routes/transcribe.ts + addContentTypeParser в
@@ -60,7 +60,7 @@ function mimeAllowed(mime: string): boolean {
 export function attachmentRow(id: string) {
   return db
     .prepare(
-      `SELECT a.id, a.task_id, a.comment_id, a.file_name, a.mime, a.size, a.created_at,
+      `SELECT a.id, a.task_id, a.comment_id, a.kind, a.file_name, a.mime, a.size, a.created_at,
               u.name as user_name
        FROM attachments a LEFT JOIN users u ON u.id = a.user_id
        WHERE a.id = ?`,
@@ -72,10 +72,21 @@ export function registerAttachmentRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-  // Загрузить файл к задаче. Комментарий может ещё не существовать —
-  // тогда вложение висит «ничьим» до отправки комментария, который его и
-  // подберёт (POST /api/tasks/:taskId/comments с attachment_ids).
-  app.post<{ Params: { taskId: string }; Querystring: { name?: string } }>(
+  // Загрузить файл к задаче.
+  //
+  // `?kind=comment` (по умолчанию) — файл для ленты: комментарий может ещё
+  // не существовать, тогда вложение висит «ничьим» до отправки комментария,
+  // который его и подберёт (POST /api/tasks/:taskId/comments с
+  // attachment_ids).
+  //
+  // `?kind=task` — файл самой задачи: то, что приложено к её заметке
+  // (19.08.2026). Такой в ленту не попадает и никаким комментарием подобран
+  // быть не может — выборка при отправке комментария сужена до
+  // kind = 'comment' (routes/subtasks.ts).
+  app.post<{
+    Params: { taskId: string };
+    Querystring: { name?: string; kind?: string };
+  }>(
     "/api/tasks/:taskId/attachments",
     { preHandler: authPre },
     async (req: any, reply) => {
@@ -115,17 +126,22 @@ export function registerAttachmentRoutes(app: FastifyInstance) {
       // Из имени берём только его само: ни путей, ни разделителей.
       fileName = path.basename(fileName).slice(0, 200);
 
+      // Вид — только из двух известных: неизвестное слово в query не должно
+      // заводить в базе третий, никем не читаемый вид вложений.
+      const kind = req.query?.kind === "task" ? "task" : "comment";
+
       const id = uid();
       const ext = path.extname(fileName).slice(0, 12);
       const storedName = `${id}${ext}`;
       fs.writeFileSync(path.join(UPLOAD_DIR, storedName), body);
 
       db.prepare(
-        `INSERT INTO attachments (id, task_id, comment_id, user_id, file_name, mime, size, stored_name)
-         VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`,
+        `INSERT INTO attachments (id, task_id, comment_id, kind, user_id, file_name, mime, size, stored_name)
+         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         req.params.taskId,
+        kind,
         req.userId,
         fileName,
         mime,

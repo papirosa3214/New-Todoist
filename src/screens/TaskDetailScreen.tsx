@@ -36,6 +36,7 @@ import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import { combineDictatedText } from "../lib/dictationParser";
 import { useUploadAttachment, useDeleteAttachment } from "../api/attachments";
+import { AttachmentView } from "../components/AttachmentView";
 import type { ApiAttachment } from "../api/types";
 import { SubtaskFeed } from "../components/SubtaskFeed";
 
@@ -329,6 +330,20 @@ export function TaskDetailScreen() {
         <p className="text-[14px] text-sub leading-relaxed mb-4 pl-[30px] whitespace-pre-wrap">
           {task.description}
         </p>
+      )}
+
+      {/* Файлы самой задачи — приложенные в форме, под «Заметкой»
+          (19.08.2026). Показываются здесь, а не в ленте: это часть
+          описания задачи, а не сообщение в переписке. Тем же компонентом,
+          что и вложения ленты — картинка превью, документ строкой. Отступ
+          слева тот же pl-[30px], что у описания выше: файл продолжает
+          заметку, а не начинает новый уровень. */}
+      {task.attachments && task.attachments.length > 0 && (
+        <div className="mb-4 pl-[30px]">
+          {task.attachments.map((att) => (
+            <AttachmentView key={att.id} attachment={att} />
+          ))}
+        </div>
       )}
 
       {/* Metadata */}

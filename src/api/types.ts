@@ -146,6 +146,10 @@ export interface ApiTask {
   subtasks: ApiSubtask[];
   comments?: ApiComment[]; // only on GET /api/tasks/:id
   events?: ApiTaskEvent[]; // only on GET /api/tasks/:id
+  // Файлы, приложенные к самой задаче (kind='task' на сервере), а не к
+  // комментарию в ленте — то, что прикладывается в форме под «Заметкой».
+  // Тоже только на GET /api/tasks/:id.
+  attachments?: ApiAttachment[];
 }
 
 export interface ApiProject {

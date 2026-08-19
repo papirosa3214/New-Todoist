@@ -114,6 +114,11 @@ export function migrate() {
       id TEXT PRIMARY KEY,
       task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       comment_id TEXT REFERENCES comments(id) ON DELETE CASCADE,
+      -- kind ('task' — файл самой задачи, 'comment' — файл ленты) добавлен
+      -- миграцией 006_attachment_kind и живёт ТОЛЬКО там: колонки
+      -- версионных миграций здесь не дублируются, иначе на свежей базе
+      -- ALTER TABLE упадёт на «duplicate column» (так же устроены
+      -- tasks.start_time и tasks.agent_session_id).
       user_id TEXT REFERENCES users(id),
       file_name TEXT NOT NULL,
       mime TEXT NOT NULL,

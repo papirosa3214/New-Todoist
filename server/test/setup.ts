@@ -24,6 +24,13 @@ process.env.TASKFLOW_ALLOW_REGISTRATION = "1";
 process.env.JWT_SECRET =
   "test-secret-" + crypto.randomBytes(16).toString("hex");
 
+// Вложения кладутся на диск рядом с базой (UPLOAD_DIR в
+// routes/attachments.ts, вычисляется при импорте модуля) — на прогон свой
+// временный каталог, чтобы тестовые файлы не оседали в server/uploads
+// живого сервера.
+const uploadDir = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-uploads");
+process.env.UPLOAD_DIR = uploadDir;
+
 afterAll(() => {
   for (const suffix of ["", "-wal", "-shm"]) {
     try {
@@ -31,5 +38,10 @@ afterAll(() => {
     } catch {
       // файла нет — и не должно быть, если тест ничего не открывал
     }
+  }
+  try {
+    fs.rmSync(uploadDir, { recursive: true, force: true });
+  } catch {
+    // каталога нет — тест вложений в этом прогоне не участвовал
   }
 });

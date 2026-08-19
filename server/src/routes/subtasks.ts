@@ -447,7 +447,8 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (attachmentIds.length) {
         const attach = db.prepare(
           `UPDATE attachments SET comment_id = ?
-             WHERE id = ? AND task_id = ? AND user_id = ? AND comment_id IS NULL`,
+             WHERE id = ? AND task_id = ? AND user_id = ?
+               AND comment_id IS NULL AND kind = 'comment'`,
         );
         for (const attId of attachmentIds) {
           attach.run(id, attId, req.params.taskId, req.userId);

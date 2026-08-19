@@ -253,14 +253,18 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // приложенные скриншоты разом.
       const attachments = db
         .prepare(
-          `SELECT id, comment_id, file_name, mime, size, created_at
-           FROM attachments WHERE task_id = ? AND comment_id IS NOT NULL
-           ORDER BY created_at`,
+          `SELECT id, comment_id, kind, file_name, mime, size, created_at
+           FROM attachments WHERE task_id = ? ORDER BY created_at`,
         )
         .all(task.id) as any[];
       for (const c of comments) {
         c.attachments = attachments.filter((a) => a.comment_id === c.id);
       }
+      // Файлы самой задачи — то, что приложено к её заметке (19.08.2026).
+      // Разделение идёт по kind, а НЕ по «comment_id пустой»: пустой он и у
+      // комментарийного файла, пока комментарий не отправлен, и брошенный
+      // черновик иначе всплыл бы в карточке как вложение задачи.
+      const taskAttachments = attachments.filter((a) => a.kind === "task");
 
       // Journal — same JOIN-users pattern as comments. actor_id can be NULL
       // (a system-authored entry), in which case the actor_* columns come
@@ -282,6 +286,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         labels,
         subtasks,
         comments,
+        attachments: taskAttachments,
         events,
       };
     },
