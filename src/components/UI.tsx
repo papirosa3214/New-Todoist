@@ -863,12 +863,22 @@ export function ScreenHeader({
   title,
   leading,
   actions,
+  below,
   variant = "large",
   className = "",
 }: {
   title: ReactNode;
   leading?: ReactNode;
   actions?: ReactNode;
+  /** Своя строка ВНУТРИ шапки, под заголовком: она попадает под общие слои
+   *  затухания и уезжает вместе с шапкой. Заведено 19.08.2026 под подписи
+   *  дней в 3-дневной сетке «Сегодня»: своим sticky-слоем ниже шапки они
+   *  читались как деталь чужого экрана — между шапкой и ними оставался
+   *  зазор, сквозь который просвечивала сетка часов (Максим: «выглядит как
+   *  отдельная плашка от шапки, и через промежуток видно эту таблицу»).
+   *  Содержимое рисуется во всю ширину шапки, поля компенсирует сам
+   *  вызывающий (сетка full-bleed — значит и подписи тоже). */
+  below?: ReactNode;
   variant?: "large" | "compact";
   className?: string;
 }) {
@@ -956,7 +966,7 @@ export function ScreenHeader({
           visibility: fixedBox ? undefined : "hidden",
         }}
       >
-      {/* ═══ Затухание вместо сплошной плашки (Максим 19.08.2026) ═══
+        {/* ═══ Затухание вместо сплошной плашки (Максим 19.08.2026) ═══
           «Верхушку сделать прозрачную, с последующим затуханием: вначале
           нормальная видимость, под шапкой посередине уже мутно, а ближе к
           верху экрана прям исчезает».
@@ -975,52 +985,61 @@ export function ScreenHeader({
           -webkit-backdrop-filter и -webkit-mask-image обязательны: Максим
           смотрит с айфона, в WebKit без префикса не работает ни то, ни
           другое (рецепт из памяти, frosted-glass-sticky-header). */}
-      <div
-        aria-hidden
-        className={FADE_LAYER}
-        style={{
-          backdropFilter: "blur(20px)",
-          WebkitBackdropFilter: "blur(20px)",
-          maskImage: HEADER_FADE_STRONG,
-          WebkitMaskImage: HEADER_FADE_STRONG,
-        }}
-      />
-      <div
-        aria-hidden
-        className={FADE_LAYER}
-        style={{
-          backdropFilter: "blur(6px)",
-          WebkitBackdropFilter: "blur(6px)",
-          maskImage: HEADER_FADE_SOFT,
-          WebkitMaskImage: HEADER_FADE_SOFT,
-        }}
-      />
-      <div aria-hidden className={FADE_LAYER} style={{ background: HEADER_TINT }} />
-      <div
-        // Заголовок и кнопки прижаты выше в пределах той же высоты шапки
-        // (Максим 19.08.2026: «входящие, фильтр и вот эту шапку чуть-чуть
-        // подтянуть наверх») — было py-2 поровну, стало 2px сверху и 14px
-        // снизу. Высота полосы та же, съезжает только содержимое.
-        className={`flex items-center gap-2 relative z-10 ${
-          isCompact ? "h-[48px]" : "min-h-[56px] pt-0.5 pb-3.5"
-        }`}
-      >
-        {leading}
-        {isCompact ? (
-          <h2 className="absolute left-1/2 -translate-x-1/2 text-[17px] font-semibold whitespace-nowrap">
-            {title}
-          </h2>
-        ) : (
-          <h1 className="flex-1 min-w-0 truncate text-[28px] font-bold">
-            {title}
-          </h1>
-        )}
-        {actions && (
-          <div className="flex items-center gap-2 shrink-0 ml-auto">
-            {actions}
-          </div>
-        )}
+        <div
+          aria-hidden
+          className={FADE_LAYER}
+          style={{
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+            maskImage: HEADER_FADE_STRONG,
+            WebkitMaskImage: HEADER_FADE_STRONG,
+          }}
+        />
+        <div
+          aria-hidden
+          className={FADE_LAYER}
+          style={{
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+            maskImage: HEADER_FADE_SOFT,
+            WebkitMaskImage: HEADER_FADE_SOFT,
+          }}
+        />
+        <div
+          aria-hidden
+          className={FADE_LAYER}
+          style={{ background: HEADER_TINT }}
+        />
+        <div
+          // Заголовок и кнопки прижаты выше в пределах той же высоты шапки
+          // (Максим 19.08.2026: «входящие, фильтр и вот эту шапку чуть-чуть
+          // подтянуть наверх») — было py-2 поровну, стало 2px сверху и 14px
+          // снизу. Высота полосы та же, съезжает только содержимое.
+          className={`flex items-center gap-2 relative z-10 ${
+            isCompact ? "h-[48px]" : "min-h-[56px] pt-0.5 pb-3.5"
+          }`}
+        >
+          {leading}
+          {isCompact ? (
+            <h2 className="absolute left-1/2 -translate-x-1/2 text-[17px] font-semibold whitespace-nowrap">
+              {title}
+            </h2>
+          ) : (
+            <h1 className="flex-1 min-w-0 truncate text-[28px] font-bold">
+              {title}
+            </h1>
+          )}
+          {actions && (
+            <div className="flex items-center gap-2 shrink-0 ml-auto">
+              {actions}
+            </div>
+          )}
         </div>
+        {/* Строка под заголовком — в том же слое над затуханием, поэтому
+            размытие накрывает её вместе с заголовком, а высота шапки
+            (--screen-header-h, usePublishHeaderHeight) пересчитывается с
+            ней автоматически: она измеряется по реальному боксу. */}
+        {below && <div className="relative z-10">{below}</div>}
       </div>
     </div>
   );

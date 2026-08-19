@@ -16,7 +16,11 @@ import {
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
 import { TaskRow } from "../components/TaskRow";
-import { DayHours, type DayColumnData } from "../components/DayHours";
+import {
+  DayHours,
+  DayColumnsHeader,
+  type DayColumnData,
+} from "../components/DayHours";
 import { RescheduleSheet } from "../components/RescheduleSheet";
 import { ActionsMenu } from "../components/ActionsMenu";
 import {
@@ -322,6 +326,15 @@ export function TodayScreen() {
       // оформление одного и того же элемента навигации выглядело как
       // непоследовательность, не как акцент.
       title="Сегодня"
+      // Подписи дней 3-дневной сетки живут ВНУТРИ шапки, а не отдельной
+      // строкой под ней (Максим 19.08.2026: «чтобы даты были приклеены к
+      // верхней шапке, и уже с них работало затухание, а то сейчас это
+      // отдельная плашка, и через промежуток видно таблицу»).
+      below={
+        layout === "hours" && hourDays.length > 1 ? (
+          <DayColumnsHeader days={hourDays} />
+        ) : undefined
+      }
       actions={
         <>
           <TaskFilterButton
@@ -353,7 +366,9 @@ export function TodayScreen() {
                 icon: "list",
                 label: (
                   <span
-                    className={layout === "list" ? "font-semibold text-red" : ""}
+                    className={
+                      layout === "list" ? "font-semibold text-red" : ""
+                    }
                   >
                     Список
                   </span>
