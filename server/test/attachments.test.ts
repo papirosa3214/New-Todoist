@@ -18,6 +18,9 @@ describe("Файлы задачи: прикладываются к заметк�
   let app: FastifyInstance;
   let token: string;
   let taskId: string;
+  // Файл для ленты, загруженный в третьем тесте — нужен четвёртому, где
+  // проверяется, что комментарий забирает СВОЁ и только своё.
+  let commentAttId: string;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -97,6 +100,7 @@ describe("Файлы задачи: прикладываются к заметк�
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().attachment.kind).toBe("comment");
+    commentAttId = res.json().attachment.id;
 
     const task = await app.inject({
       method: "GET",
@@ -109,7 +113,7 @@ describe("Файлы задачи: прикладываются к заметк�
     expect(task.json().attachments[0].file_name).toBe("скриншот.png");
   });
 
-  it("комментарий не может забрать себе файл задачи", async () => {
+  it("комментарий забирает свой файл и не трогает файл задачи", async () => {
     const before = await app.inject({
       method: "GET",
       url: `/api/tasks/${taskId}`,
@@ -117,11 +121,18 @@ describe("Файлы задачи: прикладываются к заметк�
     });
     const taskAttId = before.json().attachments[0].id;
 
+    // В одном запросе оба вида сразу: так проверяются обе стороны сужения
+    // выборки до kind='comment' — что своё по-прежнему подбирается (это
+    // работало до сегодняшней правки и ломаться не должно) и что чужое
+    // не уводится.
     const comment = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/comments`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { text: "попытка увести файл", attachment_ids: [taskAttId] },
+      payload: {
+        text: "свой файл и попытка увести чужой",
+        attachment_ids: [commentAttId, taskAttId],
+      },
     });
     expect(comment.statusCode).toBe(200);
 
@@ -130,11 +141,13 @@ describe("Файлы задачи: прикладываются к заметк�
       url: `/api/tasks/${taskId}`,
       headers: { authorization: `Bearer ${token}` },
     });
-    // Файл остался у задачи, а в ленте комментарий вышел без вложений.
+    // У задачи остался её файл, у комментария — ровно один, свой.
     expect(after.json().attachments).toHaveLength(1);
     expect(after.json().attachments[0].id).toBe(taskAttId);
     const comments = after.json().comments;
-    expect(comments[comments.length - 1].attachments).toHaveLength(0);
+    const last = comments[comments.length - 1];
+    expect(last.attachments).toHaveLength(1);
+    expect(last.attachments[0].id).toBe(commentAttId);
   });
 
   it("удаление файла убирает его из задачи", async () => {
