@@ -28,9 +28,9 @@ import { formatTimeRange, todayStr } from "../lib/date";
 
 const WEEKDAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 const WEEKDAY_LETTERS = ["П", "В", "С", "Ч", "П", "С", "В"];
-// Сколько высоты оставить под кнопку-веер внизу экрана, чтобы последний
-// ряд сетки не уходил под неё.
-const GRID_BOTTOM_RESERVE = 96;
+// Запас под кнопку-веер больше не константа: обе сетки замеряют реальную
+// доступную высоту (см. useLayoutEffect в WeekGrid/MonthGrid) — угаданное
+// число промахивалось на десятки пикселей.
 
 /** Понедельник недели, в которую попадает дата. */
 export function mondayOf(dateStr: string): string {
@@ -249,6 +249,44 @@ const MONTHS_NOM = [
   "Декабрь",
 ];
 
+/** Заголовок месяца со стрелками — уезжает в шапку экрана
+ *  (ScreenHeader.below), как и подпись недели: владелец 19.08.2026 —
+ *  «этот „авг 2026“ можешь в шапку добавить, календарик чуть приподнимется».
+ *  Там же он получает общее с заголовком затухание. */
+export function MonthHeaderLabel({
+  year,
+  month,
+  onPrev,
+  onNext,
+}: {
+  year: number;
+  month: number;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-center gap-4 pb-1.5 pt-0.5">
+      <button
+        onClick={onPrev}
+        className="tap-scale flex h-[28px] w-[28px] items-center justify-center"
+        aria-label="Предыдущий месяц"
+      >
+        <Icon name="chevronLeft" size={15} className="text-sub" />
+      </button>
+      <span className="min-w-[128px] text-center text-[15px] font-semibold text-text">
+        {MONTHS_NOM[month]} {year}
+      </span>
+      <button
+        onClick={onNext}
+        className="tap-scale flex h-[28px] w-[28px] items-center justify-center"
+        aria-label="Следующий месяц"
+      >
+        <Icon name="chevron" size={15} className="text-sub" />
+      </button>
+    </div>
+  );
+}
+
 /** Неделя: мини-календарь и семь дней в сетке 2×4. */
 export function WeekGrid({
   monday,
@@ -414,9 +452,38 @@ export function MonthGrid({
       return d;
     });
   }, [year, month]);
+  // Высота — замером, как в WeekGrid: календарь месяца тоже фиксирован,
+  // страница не прокручивается (владелец 19.08.2026: «тут скроллить
+  // нечего, сам календарик пусть будет фикс, а скроллить буду задачи
+  // внутри открывшегося окна»).
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const sc = findScrollContainer(grid);
+    const measure = () => {
+      const top =
+        grid.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+      let padBelow = parseFloat(getComputedStyle(sc).paddingBottom) || 0;
+      for (
+        let el: HTMLElement | null = grid.parentElement;
+        el && el !== sc;
+        el = el.parentElement
+      ) {
+        padBelow += parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      }
+      const next = Math.max(320, sc.clientHeight - top - padBelow);
+      setHeight((prev) => (prev && Math.abs(prev - next) < 1 ? prev : next));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(sc);
+    return () => ro.disconnect();
+  }, [year, month]);
 
   return (
-    <div className="-mx-4">
+    <div className="-mx-4" ref={gridRef}>
       <div className="grid grid-cols-7 border-b border-stroke pb-1">
         {WEEKDAYS_SHORT.map((w) => (
           <span key={w} className="text-center text-[10px] text-dim">
@@ -431,10 +498,12 @@ export function MonthGrid({
           неделей и следующей раскрывается окно, внутри которого задачи»).
           Внутри одного грида такую вставку не сделать, не ломая ряды. */}
       <div
-        className="flex flex-col"
-        style={{
-          minHeight: `calc(100dvh - var(--screen-header-h, 60px) - ${GRID_BOTTOM_RESERVE + 44}px)`,
-        }}
+        className="flex flex-col overflow-hidden"
+        // Высота замерена (см. выше). Ряды делят её поровну через
+        // `flex-1 basis-0`, поэтому все ячейки ОДНОГО размера независимо
+        // от того, сколько в них плашек — раньше ряд с четырьмя задачами
+        // распирало, и сетка шла лесенкой.
+        style={{ height: height ? height - 26 : undefined }}
       >
         {Array.from({ length: 6 }, (_, w) => {
           const week = cells.slice(w * 7, w * 7 + 7);
@@ -442,7 +511,7 @@ export function MonthGrid({
             openDay != null && week.some((d) => toDateStr(d) === openDay);
           return (
             <Fragment key={w}>
-              <div className="grid flex-1 grid-cols-7">
+              <div className="grid min-h-0 flex-1 basis-0 grid-cols-7">
                 {week.map((d) => {
                   const ds = toDateStr(d);
                   const tasks = byDate.get(ds) ?? [];
@@ -456,9 +525,19 @@ export function MonthGrid({
                     <div
                       key={ds}
                       onClick={() => onDayClick(ds)}
-                      className={`flex min-h-0 flex-col gap-[2px] overflow-hidden border-b border-r border-stroke p-1 text-left ${
+                      className={`flex min-h-0 flex-col gap-[2px] overflow-hidden border-r border-stroke p-1 text-left ${
                         otherMonth ? "opacity-45" : ""
-                      } ${isOpen ? "bg-white/[0.05]" : ""}`}
+                      } ${
+                        // Выбранный день СЛИВАЕТСЯ с раскрытой полосой:
+                        // тот же фон, скругление только сверху и никакой
+                        // нижней черты — владелец 19.08.2026: «убери
+                        // снизу полосочку, чтобы фон сливался, как будто
+                        // оно вливается». Остальные ячейки черту снизу
+                        // сохраняют.
+                        isOpen
+                          ? "rounded-t-lg bg-card"
+                          : "border-b border-stroke"
+                      }`}
                     >
                       <span
                         className={`mb-0.5 self-start text-[11px] tabular-nums ${
@@ -518,7 +597,10 @@ function DayStrip({
 }) {
   const d = new Date(date + "T00:00:00");
   return (
-    <div className="border-b border-stroke bg-card px-3 py-2">
+    // shrink-0 обязателен: контейнер месяца теперь фиксированной высоты с
+    // overflow-hidden, и без запрета сжатия полосу схлопывало в ноль —
+    // недели с flex-1 забирали всю высоту себе.
+    <div className="shrink-0 border-b border-stroke bg-card px-3 py-2">
       <div className="mb-1.5 flex items-center gap-2">
         <span className="text-[13px] font-semibold text-text">
           {d.getDate()} {MONTHS_GEN[d.getMonth()]}

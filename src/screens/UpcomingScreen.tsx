@@ -11,6 +11,7 @@ import {
   DaySheet,
   groupByDate,
   WeekMonthLabel,
+  MonthHeaderLabel,
   // В этом файле уже есть своя mondayOf — она работает с Date и обслуживает
   // ленту-выборщик; эта работает со строками «ГГГГ-ММ-ДД» и обслуживает
   // календарные виды. Разные типы, разные потребители, поэтому алиас, а не
@@ -473,7 +474,28 @@ export function UpcomingScreen() {
           // так её накрывает общее затухание, и высота шапки, от которой
           // считается высота сетки, пересчитывается автоматически.
           below={
-            view === "week" ? <WeekMonthLabel monday={gridMonday} /> : undefined
+            view === "week" ? (
+              <WeekMonthLabel monday={gridMonday} />
+            ) : view === "month" ? (
+              <MonthHeaderLabel
+                year={gridMonth.year}
+                month={gridMonth.month}
+                onPrev={() =>
+                  setGridMonth(({ year, month }) =>
+                    month === 0
+                      ? { year: year - 1, month: 11 }
+                      : { year, month: month - 1 },
+                  )
+                }
+                onNext={() =>
+                  setGridMonth(({ year, month }) =>
+                    month === 11
+                      ? { year: year + 1, month: 0 }
+                      : { year, month: month + 1 },
+                  )
+                }
+              />
+            ) : undefined
           }
           actions={
             <>
@@ -806,53 +828,19 @@ export function UpcomingScreen() {
           onPickDate={(d) => setGridMonday(weekStartOf(d))}
         />
       )}
+      {/* Заголовок месяца со стрелками живёт в ШАПКЕ (below выше), а не
+          здесь: владелец 19.08.2026 — «этот „авг 2026“ можешь в шапку
+          добавить, календарик чуть приподнимется». */}
       {view === "month" && (
-        <>
-          {/* Заголовок месяца со стрелками. На скриншоте месяц листается
-              прокруткой всей сетки, но там она занимает весь экран; у нас
-              над сеткой есть шапка раздела, и явные стрелки честнее, чем
-              жест, о котором нельзя догадаться. */}
-          <div className="mb-1 flex items-center justify-center gap-4 pt-1">
-            <button
-              onClick={() =>
-                setGridMonth(({ year, month }) =>
-                  month === 0
-                    ? { year: year - 1, month: 11 }
-                    : { year, month: month - 1 },
-                )
-              }
-              className="tap-scale flex h-[32px] w-[32px] items-center justify-center"
-              aria-label="Предыдущий месяц"
-            >
-              <Icon name="chevronLeft" size={16} className="text-sub" />
-            </button>
-            <span className="min-w-[128px] text-center text-[15px] font-semibold text-text">
-              {MONTHS_SHORT[gridMonth.month]} {gridMonth.year}
-            </span>
-            <button
-              onClick={() =>
-                setGridMonth(({ year, month }) =>
-                  month === 11
-                    ? { year: year + 1, month: 0 }
-                    : { year, month: month + 1 },
-                )
-              }
-              className="tap-scale flex h-[32px] w-[32px] items-center justify-center"
-              aria-label="Следующий месяц"
-            >
-              <Icon name="chevron" size={16} className="text-sub" />
-            </button>
-          </div>
-          <MonthGrid
-            year={gridMonth.year}
-            month={gridMonth.month}
-            byDate={byDate}
-            openDay={openDay}
-            // Повторный тап по тому же дню сворачивает полосу.
-            onDayClick={(d) => setOpenDay((prev) => (prev === d ? null : d))}
-            onTaskClick={(id) => navigate(`/task/${id}`)}
-          />
-        </>
+        <MonthGrid
+          year={gridMonth.year}
+          month={gridMonth.month}
+          byDate={byDate}
+          openDay={openDay}
+          // Повторный тап по тому же дню сворачивает полосу.
+          onDayClick={(d) => setOpenDay((prev) => (prev === d ? null : d))}
+          onTaskClick={(id) => navigate(`/task/${id}`)}
+        />
       )}
       {openDay && view === "week" && (
         <DaySheet
