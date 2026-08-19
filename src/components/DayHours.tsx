@@ -207,11 +207,14 @@ function UntimedRow({
   task,
   color,
   projectName,
+  first,
   onClick,
 }: {
   task: ApiTask;
   color: string;
   projectName?: string;
+  /** Первой строке разделитель сверху не нужен. */
+  first: boolean;
   onClick: () => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -228,9 +231,9 @@ function UntimedRow({
     <div
       ref={setNodeRef}
       onClick={onClick}
-      className={`flex w-full select-none items-center gap-2 rounded-xl bg-card pl-3 text-left shadow-[0_6px_16px_rgba(0,0,0,0.45)] active:bg-white/[0.04] ${
-        isDragging ? "opacity-30" : ""
-      }`}
+      className={`flex w-full select-none items-center gap-2 pl-3 text-left active:bg-white/[0.04] ${
+        first ? "" : "border-t border-stroke"
+      } ${isDragging ? "opacity-30" : ""}`}
       style={{
         // Выделение текста при удержании — прямая жалоба владельца
         // 19.08.2026 («если я зажимаю это событие, чтобы у меня не
@@ -962,13 +965,20 @@ export function DayHours({
             className="sticky z-10 -mx-4 px-4 pb-2"
             style={{ top: "var(--screen-header-h, 0px)" }}
           >
-            <div className="flex max-h-[132px] flex-col gap-1 overflow-y-auto overscroll-contain">
-              {untimed.map((t) => (
+            {/* ОДНА общая плашка со строками, а не отдельная пилюля на
+                каждую задачу (владелец 19.08.2026, после первого захода:
+                «очистил правильно, но не нужно было их разделять каждую в
+                свою пилюлину — мне нравилось, что они соединялись в одну
+                общую табличку»). Скругление и тень — у контейнера, строки
+                внутри разделены чертой. */}
+            <div className="max-h-[132px] overflow-y-auto overscroll-contain rounded-2xl bg-card shadow-[0_6px_16px_rgba(0,0,0,0.45)]">
+              {untimed.map((t, i) => (
                 <UntimedRow
                   key={t.id}
                   task={t}
                   color={projectColor(t)}
                   projectName={projectName?.(t)}
+                  first={i === 0}
                   onClick={() => !clickAfterDrag() && onTaskClick(t.id)}
                 />
               ))}
