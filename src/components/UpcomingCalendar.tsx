@@ -616,14 +616,19 @@ function DayStrip({
     <div className="shrink-0 bg-card px-3 py-2">
       <div className="mb-1.5 flex items-center gap-2">
         <span className="text-[13px] font-semibold text-text">
-          {d.getDate()} {MONTHS_GEN[d.getMonth()]}
+          {d.getDate()} {MONTHS_GEN[d.getMonth()]},
         </span>
         {/* Кнопки «Свернуть» здесь нет намеренно (владелец 19.08.2026:
             «убери это слово, оно абсолютно не нужно, я и так знаю, как
             сворачивать») — полоса закрывается повторным тапом по тому же
-            дню, см. onDayClick в UpcomingScreen. */}
-        <span className="text-[12px] text-sub">
-          {WEEKDAYS_SHORT[(d.getDay() + 6) % 7]}
+            дню, см. onDayClick в UpcomingScreen.
+            День недели — ПОЛНЫМ словом с большой буквы и тем же
+            начертанием, что дата: «20 августа, Четверг» (владелец там же:
+            «можешь всё-таки писать обычным шрифтом, как 20 августа,
+            Четверг — там всё с большой буквы идёт»). Сокращённое «Чт»
+            тонким серым читалось как служебная подпись. */}
+        <span className="text-[13px] font-semibold text-text">
+          {WEEKDAYS_FULL[(d.getDay() + 6) % 7]}
         </span>
       </div>
       {tasks.length === 0 ? (
@@ -758,6 +763,16 @@ export function DaySheet({
     </div>
   );
 }
+
+const WEEKDAYS_FULL = [
+  "Понедельник",
+  "Вторник",
+  "Среда",
+  "Четверг",
+  "Пятница",
+  "Суббота",
+  "Воскресенье",
+];
 
 const MONTHS_GEN = [
   "января",
