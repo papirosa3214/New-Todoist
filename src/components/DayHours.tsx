@@ -42,7 +42,22 @@ import { Icon, findScrollContainer } from "./UI";
 // просто решила, что раньше 6 утра дел не бывает) и прятал баг — задача
 // в 3 часа ночи получала top=0 и наезжала на 6-часовую строку. Полный
 // диапазон устраняет это заодно.
-const HOUR_H = 124 / 3; // дробное значение снято замером — законно, см. выше
+// Высота часа больше НЕ константа. Владелец 19.08.2026: «сделать не чёрный
+// фон, а вот эту сетку с цифрами — чтобы её даже дорисовывать не надо
+// было, потому что она статичная; как картинка в инфрапанели: хоть вверх
+// скролль, хоть вниз — картинка ровно такая, какая есть, и не меняется».
+//
+// Поэтому сутки ВПИСЫВАЮТСЯ в доступную высоту: 24 строки ровно на экран.
+// Прокручивать сетку становится нечем — а значит нечему и разъезжаться
+// («желе» между линиями и цифрами), нечего дорисовывать под кнопкой и в
+// оттяжке, и никакой возни с фоном.
+//
+// Число ниже — прежний замер с присланного скрина (124/3 ≈ 41.33): оно
+// остаётся стартовым значением до первого измерения и нижней границей,
+// если экран совсем маленький — тогда сетка снова длиннее экрана и
+// прокручивается, как раньше.
+const HOUR_H_BASE = 124 / 3;
+const HOUR_H_MIN = 22;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 // Строки сетки идут ДАЛЬШЕ 23:00 — часами следующих суток (00:00, 01:00,
 // …). Владелец 19.08.2026: «таблица заканчивается на 23:00, а ниже пустое
@@ -94,8 +109,8 @@ function hoursFromTime(t: string | null | undefined): number | null {
 }
 
 /** Смещение в пикселях от верха сетки → «ЧЧ:ММ», округлённое до SNAP_MIN. */
-function timeFromOffset(px: number): string {
-  const raw = (px / HOUR_H) * 60;
+function timeFromOffset(px: number, hourH: number): string {
+  const raw = (px / hourH) * 60;
   const snapped = Math.round(raw / SNAP_MIN) * SNAP_MIN;
   const clamped = Math.min(Math.max(snapped, 0), HOURS.length * 60 - SNAP_MIN);
   const h = Math.floor(clamped / 60);
@@ -114,7 +129,7 @@ function formatDayColumnLabel(dateStr: string): string {
 /** Линия текущего времени — через ВСЕ колонки разом, не по одной на день.
  *  Отдельным компонентом со своим таймером — иначе она замерла бы на
  *  времени последнего рендера всего экрана. */
-function NowLine() {
+function NowLine({ hourH }: { hourH: number }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     // Минуты достаточно: линия двигается на пиксель с небольшим —
@@ -133,7 +148,7 @@ function NowLine() {
       // это выглядело просто странно; со стеклянной (19.08.2026) красная
       // черта с подписью откровенно поехала поверх заголовка экрана.
       className="pointer-events-none absolute left-0 right-0 z-10 flex items-center"
-      style={{ top: pos * HOUR_H }}
+      style={{ top: pos * hourH }}
     >
       <span
         // bg-bg — не декоративный: когда «сейчас» проходит рядом с
@@ -292,7 +307,7 @@ interface PlacedBlock {
  *  если A и C не пересекаются напрямую), внутри кластера — жадная
  *  раскладка: очередная задача идёт в первую колонку, где предыдущая уже
  *  закончилась к её началу. */
-function layoutDay(tasks: ApiTask[]): PlacedBlock[] {
+function layoutDay(tasks: ApiTask[], hourH: number): PlacedBlock[] {
   const items: TimedItem[] = tasks
     .filter((t) => hoursFromTime(t.start_time) !== null)
     .map((t) => {
@@ -328,8 +343,8 @@ function layoutDay(tasks: ApiTask[]): PlacedBlock[] {
       const col = colOf[i];
       placed.push({
         task: item.task,
-        top: Math.max(0, item.start * HOUR_H + 1),
-        height: Math.max(MIN_H, (item.end - item.start) * HOUR_H - 3),
+        top: Math.max(0, item.start * hourH + 1),
+        height: Math.max(MIN_H, (item.end - item.start) * hourH - 3),
         left:
           col === 0
             ? "0px"
@@ -386,66 +401,71 @@ export function DayHours({
   // визуально продолжение». Полосы протягиваются в эту зону отрицательным
   // margin — место под кнопку остаётся ровно тем же, просто под ней теперь
   // видна сетка, а не голый фон.
-  // ═══ Часовые полосы как ФОН прокрутки ═══
+  // ═══ Сутки вписываются в экран ═══
   //
-  // Владелец 19.08.2026, после нескольких моих попыток дотянуть таблицу
-  // элементами: «почему ты не можешь сделать полоски слоем вот этого фона?
-  // не таблицу, а фон — визуально будет казаться, что это продолжение
-  // таблицы». Это и есть единственный способ, который не двигает
-  // прокрутку: обычный элемент — хоть в потоке, хоть absolute с
-  // отрицательным bottom — расширяет прокручиваемую область контейнера, и
-  // экран «Сегодня» проматывался лишнее (поймано вживую трижды).
+  // Высота часа считается из свободной высоты под шапкой: 24 строки ровно
+  // на видимую область. Тогда сетка статична — прокручивать нечего, а
+  // значит нечему разъезжаться и нечего дорисовывать снизу.
   //
-  // Фон рисуется на самом скролл-контейнере с `background-attachment:
-  // local` — тогда он едет вместе с содержимым (линии совпадают с сеткой
-  // на всей длине) и продолжается в зоне под кнопкой И в оттяжке-пружине,
-  // где элементов уже нет вовсе.
-  //
-  // Позиция считается от верха СОДЕРЖИМОГО до строки 00:00, снимается
-  // после раскладки и обновляется на любое изменение размеров. Контейнер
-  // общий для всех экранов, поэтому при уходе с развёртки фон снимается.
+  // Если места совсем мало (низкий экран, открытая клавиатура), час
+  // упирается в HOUR_H_MIN и сетка снова становится длиннее экрана — это
+  // хуже, но читаемо; лучше прокрутка, чем строки в десять пикселей.
+  const [hourH, setHourH] = useState(HOUR_H_BASE);
+  // Текущее значение для замера — читать state внутри эффекта нельзя, он
+  // подписан один раз и видел бы старое.
+  const hourHRef = useRef(hourH);
+  hourHRef.current = hourH;
   useLayoutEffect(() => {
     const grid = gridRef.current;
     if (!grid) return;
     const sc = findScrollContainer(grid);
-    // Красим ОДИН элемент — сам скролл-контейнер, и пересчитываем позицию
-    // ТОЛЬКО при изменении размеров, никогда на прокрутку. Двигать фон из
-    // обработчика scroll (первая версия) нельзя: JS отстаёт от нативной
-    // прокрутки на кадр-другой, и сетка едет «желе» относительно цифр —
-    // владелец увидел это сразу: «у меня вперёд двигается сетка, пока
-    // цифры поспевают».
-    //
-    // Синхронность даёт `background-attachment: local`: фон привязан к
-    // содержимому и прокручивается вместе с ним силами браузера, без
-    // единой строчки JS в цикле прокрутки. Позиция считается от начала
-    // содержимого, поэтому к разнице координат прибавляется scrollTop.
-    const paint = () => {
-      const g = grid.getBoundingClientRect();
-      const h = sc.getBoundingClientRect();
-      // Слева — ровно там, где начинается первая колонка дня: под цифрами
-      // часов линий нет ни в сетке, ни в её продолжении.
-      const x = g.left - h.left + GUTTER_W;
-      const width = g.width - GUTTER_W;
-      const y = g.top - h.top + sc.scrollTop;
-      sc.style.backgroundImage =
-        "linear-gradient(to bottom, var(--color-stroke) 0, var(--color-stroke) 1px, transparent 1px)";
-      sc.style.backgroundSize = `${width.toFixed(2)}px ${HOUR_H.toFixed(2)}px`;
-      sc.style.backgroundRepeat = "repeat-y";
-      sc.style.backgroundAttachment = "local";
-      sc.style.backgroundPosition = `${x.toFixed(2)}px ${(((y % HOUR_H) + HOUR_H) % HOUR_H).toFixed(2)}px`;
+    const measure = () => {
+      const top =
+        grid.getBoundingClientRect().top -
+        sc.getBoundingClientRect().top +
+        sc.scrollTop;
+      let pad = parseFloat(getComputedStyle(sc).paddingBottom) || 0;
+      for (
+        let el: HTMLElement | null = grid.parentElement;
+        el && el !== sc;
+        el = el.parentElement
+      ) {
+        pad += parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      }
+      // Если прокрутка всё-таки осталась — вычитаем ровно её: подсчёт по
+      // «свободному месту» промахивается на отступы, о которых снаружи не
+      // знаешь (mb соседних блоков, safe-area), а этот способ сходится за
+      // один-два прохода к состоянию «прокручивать нечего».
+      const overflow = sc.scrollHeight - sc.clientHeight;
+      const next =
+        overflow > 0.5
+          ? hourHRef.current - overflow / HOURS.length
+          : (sc.clientHeight - top - pad) / HOURS.length;
+      const clamped = Math.max(HOUR_H_MIN, next);
+      setHourH((prev) => (Math.abs(prev - clamped) < 0.5 ? prev : clamped));
     };
-
-    paint();
-    const ro = new ResizeObserver(paint);
+    // Замер повторяется по кадрам, пока остаётся переполнение: один
+    // проход не попадает точно — высота применяется уже после него, и
+    // отступы, о которых снаружи не знаешь, всплывают только на
+    // следующем. Пять шагов с запасом хватает, дальше выходим, чтобы не
+    // крутиться бесконечно на экране, куда сутки просто не влезают
+    // (там работает нижняя граница HOUR_H_MIN, и прокрутка остаётся).
+    let left = 5;
+    let frame = 0;
+    const tick = () => {
+      measure();
+      if (--left > 0) frame = requestAnimationFrame(tick);
+    };
+    tick();
+    const restart = () => {
+      left = 5;
+      if (!frame) frame = requestAnimationFrame(tick);
+    };
+    const ro = new ResizeObserver(restart);
     ro.observe(sc);
-    ro.observe(grid);
     return () => {
+      if (frame) cancelAnimationFrame(frame);
       ro.disconnect();
-      sc.style.backgroundImage = "";
-      sc.style.backgroundSize = "";
-      sc.style.backgroundRepeat = "";
-      sc.style.backgroundPosition = "";
-      sc.style.backgroundAttachment = "";
     };
   }, [days.length]);
 
@@ -462,7 +482,7 @@ export function DayHours({
   // лечить это отрицательными отступами: «почему ты не можешь сделать
   // полоски слоем вот этого фона? не таблицу, а фон — визуально будет
   // казаться, что это продолжение таблицы»).
-  const totalH = HOURS.length * HOUR_H;
+  const totalH = HOURS.length * hourH;
   // 0…24 включительно: сутки и замыкающая строка «24:00». Ниже неё идут
   // только полосы — фон, продолжающий сетку под кнопку и в оттяжку.
   const labelHours = useMemo(
@@ -487,7 +507,7 @@ export function DayHours({
   );
 
   const columns = useMemo(
-    () => days.map((d) => ({ day: d, blocks: layoutDay(d.tasks) })),
+    () => days.map((d) => ({ day: d, blocks: layoutDay(d.tasks, hourH) })),
     [days],
   );
   const anyTimed = columns.some((c) => c.blocks.length > 0);
@@ -509,7 +529,7 @@ export function DayHours({
     if (!showNowLine || !nowAnchorRef.current) return;
     const now = new Date();
     const pos = now.getHours() + now.getMinutes() / 60;
-    nowAnchorRef.current.style.top = `${Math.max(0, pos * HOUR_H - 120)}px`;
+    nowAnchorRef.current.style.top = `${Math.max(0, pos * hourH - 120)}px`;
     nowAnchorRef.current.scrollIntoView({ block: "start" });
   }, [showNowLine]);
 
@@ -552,8 +572,8 @@ export function DayHours({
     if (y == null) return;
     const offset = y - grid.getBoundingClientRect().top;
     // Отпустили выше сетки (например, обратно в список) — не трогаем.
-    if (offset < -HOUR_H) return;
-    onSchedule(String(e.active.id), timeFromOffset(offset));
+    if (offset < -hourH) return;
+    onSchedule(String(e.active.id), timeFromOffset(offset, hourH));
   }
 
   function handleDragMove(e: { activatorEvent: Event; delta: { y: number } }) {
@@ -561,7 +581,7 @@ export function DayHours({
     const y = pointerY(e);
     if (!grid || y == null) return;
     const offset = y - grid.getBoundingClientRect().top;
-    setPreview(offset < -HOUR_H ? null : timeFromOffset(offset));
+    setPreview(offset < -hourH ? null : timeFromOffset(offset, hourH));
   }
 
   return (
@@ -675,7 +695,7 @@ export function DayHours({
                     className={`absolute right-1.5 text-[10px] font-medium text-dim tabular-nums ${
                       h === 0 ? "" : "-translate-y-1/2"
                     }`}
-                    style={{ top: h * HOUR_H }}
+                    style={{ top: h * hourH }}
                   >
                     {hourLabel(h)}
                   </span>
@@ -687,6 +707,17 @@ export function DayHours({
                   key={day.date}
                   className="relative min-w-0 flex-1 border-l border-stroke"
                 >
+                  {/* Линии — обычными элементами, рядом с подписями:
+                      сетка статична, разъезжаться между фоном и текстом
+                      больше нечему (фоновый вариант был попыткой дотянуть
+                      разлиновку под кнопку, теперь тянуть некуда). */}
+                  {labelHours.map((h) => (
+                    <div
+                      key={h}
+                      className="absolute left-0 right-0 border-t border-stroke"
+                      style={{ top: h * hourH }}
+                    />
+                  ))}
                   {/* Подсказка времени под пальцем — только в
                       1-дневном виде, единственной колонке. */}
                   {interactive && preview && day.isToday && (
@@ -696,7 +727,7 @@ export function DayHours({
                         top:
                           (Number(preview.split(":")[0]) +
                             Number(preview.split(":")[1]) / 60) *
-                          HOUR_H,
+                          hourH,
                       }}
                     >
                       <span className="w-[46px] shrink-0 pr-1.5 text-right text-[10px] font-semibold text-red tabular-nums">
@@ -734,7 +765,7 @@ export function DayHours({
                     aria-hidden="true"
                     className="pointer-events-none absolute left-0 right-0 h-px"
                   />
-                  <NowLine />
+                  <NowLine hourH={hourH} />
                 </>
               )}
             </div>
