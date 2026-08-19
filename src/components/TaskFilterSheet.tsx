@@ -90,7 +90,7 @@ function FilterPicker({
         <div className="border-t border-stroke">
           <button
             onClick={() => onSelect(null)}
-            className="tap-row w-full flex items-center gap-3 py-3 px-[14px] text-left"
+            className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
           >
             <span className="text-[14px] text-text flex-1">{allLabel}</span>
             {selectedId === null && (
@@ -101,7 +101,7 @@ function FilterPicker({
             <button
               key={opt.id}
               onClick={() => onSelect(opt.id)}
-              className="tap-row w-full flex items-center gap-3 py-3 px-[14px] text-left"
+              className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
             >
               <Icon name={optionIcon} size={16} style={{ color: opt.color }} />
               <span className="text-[14px] text-text flex-1 truncate">
@@ -113,9 +113,7 @@ function FilterPicker({
             </button>
           ))}
           {options.length === 0 && (
-            <div className="px-[14px] py-3 text-[13px] text-dim">
-              {emptyText}
-            </div>
+            <div className="px-4 py-3 text-[13px] text-dim">{emptyText}</div>
           )}
         </div>
       )}
@@ -268,7 +266,7 @@ export function TaskFilterSheet({
                     setFilters({ ...filters, assigneeKey: null });
                     setOpenSection(null);
                   }}
-                  className="tap-row w-full flex items-center gap-3 py-3 px-[14px] text-left"
+                  className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
                 >
                   <span className="text-[14px] text-text flex-1">
                     Все исполнители
@@ -284,7 +282,7 @@ export function TaskFilterSheet({
                       setFilters({ ...filters, assigneeKey: a.id });
                       setOpenSection(null);
                     }}
-                    className="tap-row w-full flex items-center gap-3 py-2.5 px-[14px] text-left"
+                    className="tap-row w-full flex items-center gap-3 py-2.5 px-4 text-left"
                   >
                     <Avatar
                       initials={a.initials}
@@ -306,7 +304,7 @@ export function TaskFilterSheet({
                       setFilters({ ...filters, assigneeKey: "__none" });
                       setOpenSection(null);
                     }}
-                    className="tap-row w-full flex items-center gap-3 py-2.5 px-[14px] text-left"
+                    className="tap-row w-full flex items-center gap-3 py-2.5 px-4 text-left"
                   >
                     <div className="w-[24px] h-[24px] rounded-full bg-card2 flex items-center justify-center shrink-0">
                       <Icon name="person" size={12} className="text-dim" />
@@ -321,7 +319,7 @@ export function TaskFilterSheet({
                 )}
                 {assigneeOptions.list.length === 0 &&
                   !assigneeOptions.hasUnassigned && (
-                    <div className="px-[14px] py-3 text-[13px] text-dim">
+                    <div className="px-4 py-3 text-[13px] text-dim">
                       Нет данных об исполнителях
                     </div>
                   )}
@@ -344,7 +342,7 @@ export function TaskFilterSheet({
               }
               role="switch"
               aria-checked={filters.showCompleted}
-              className="tap-row w-full flex items-center gap-3 py-3 px-[14px] text-left"
+              className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
             >
               <Icon name="check" size={18} className="text-sub shrink-0" />
               <span className="text-[14px] text-text flex-1">

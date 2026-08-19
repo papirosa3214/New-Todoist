@@ -1100,7 +1100,7 @@ export function TaskFormScreen() {
                       setProjectId(p.id);
                       setShowProjectPicker(false);
                     }}
-                    className="w-full flex items-center gap-3 py-3 px-[14px] text-left active:bg-white/[0.04] transition-colors"
+                    className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-white/[0.04] transition-colors"
                   >
                     <Icon name="hash" size={16} style={{ color: p.color }} />
                     <span className="text-[14px] text-text flex-1">
@@ -1112,7 +1112,7 @@ export function TaskFormScreen() {
                   </button>
                 ))}
                 {projects.length === 0 && (
-                  <div className="px-[14px] py-3 text-[13px] text-dim">
+                  <div className="px-4 py-3 text-[13px] text-dim">
                     Проектов пока нет
                   </div>
                 )}
