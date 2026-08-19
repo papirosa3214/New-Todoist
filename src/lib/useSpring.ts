@@ -23,8 +23,15 @@ export interface SpringOptions {
 }
 
 export interface SpringHandle {
-  /** Анимировать из текущей позиции к target с опциональным initialVelocity (px/s) */
-  animateTo(target: number, initialVelocity?: number): void;
+  /** Анимировать из текущей позиции к target с опциональным initialVelocity
+   *  (px/s). Третьим аргументом можно задать упругость ИМЕННО этого броска:
+   *  Apple Design §4 — оверхут уместен только когда жест сам нёс инерцию
+   *  (флик), и неуместен, когда элемент просто возвращается на место. */
+  animateTo(
+    target: number,
+    initialVelocity?: number,
+    opts?: SpringOptions,
+  ): void;
   /** Мгновенно выставить значение без анимации */
   set(value: number): void;
   /** Остановить rAF-цикл */
@@ -87,11 +94,13 @@ export function useSpring(
     };
 
     handle.current = {
-      animateTo(target, initialVelocity) {
+      animateTo(target, initialVelocity, o) {
         const s = state.current;
         if (s.rafId !== null) cancelAnimationFrame(s.rafId);
         s.target = target;
         s.lastTime = null;
+        if (o?.response !== undefined) s.response = o.response;
+        if (o?.damping !== undefined) s.damping = o.damping;
         if (initialVelocity !== undefined) s.vel = initialVelocity;
         s.rafId = requestAnimationFrame(tick);
       },

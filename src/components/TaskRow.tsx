@@ -280,15 +280,19 @@ export function TaskRow({
 
         if (!d.locked || !d.isHorizontal) return;
 
-        // Только влево (отрицательный dx → положительный «показ» действия)
-        const clampedDx = Math.min(0, dx);
+        // Только влево. За пределом открытой позиции — РЕЗИНКА, а не жёсткий
+        // упор (Apple Design §9: у границы сопротивление нарастает, «стоп»
+        // читается как зависание). Формула оттуда же.
+        const raw = Math.min(0, dx);
+        const over = Math.max(0, -raw - ACTION_W);
+        const eased =
+          over > 0
+            ? -(ACTION_W + (over * ACTION_W * 0.55) / (ACTION_W + 0.55 * over))
+            : raw;
         spring.stop();
         if (rowRef.current)
-          rowRef.current.style.transform = `translateX(${clampedDx}px)`;
-        if (actionRef.current) {
-          const frac = Math.min(Math.abs(clampedDx) / SWIPE_THRESHOLD, 1);
-          actionRef.current.style.opacity = String(frac);
-        }
+          rowRef.current.style.transform = `translateX(${eased}px)`;
+        // Прозрачность кнопки не трогаем: она открывается сдвигом строки.
 
         d.samples.push({ x: ev.clientX, t: performance.now() });
         if (d.samples.length > 6) d.samples.shift();
@@ -323,11 +327,32 @@ export function TaskRow({
         // появляется кнопка с карандашом, на которую я потом нажимаю»).
         // Отсюда и снятая острота порогов: ошибиться теперь не страшно —
         // цена промаха не «улетел в чужой экран», а «строка приоткрылась».
+        // Куда жест ЛЕТИТ, а не где отпустили: проекция точки остановки по
+        // затуханию инерции (Apple Design §6, их же формула с
+        // decelerationRate 0.998), и уже к ней подбирается ближайшая точка
+        // привязки — закрыто или открыто. Порог по расстоянию остаётся
+        // страховкой для медленного перетаскивания без скорости.
+        const projected =
+          -absDx + (Math.min(0, vel) / 1000) * (0.998 / (1 - 0.998));
+        // Проекция считается только после ощутимого хода: без этого порога
+        // короткий резкий рывок на 20px «долетал» до открытой позиции и
+        // открывал строку — ровно то «в пол пинка», от которого владелец и
+        // просил уйти (поймано своим же тестом 19.08.2026).
+        const projectionCounts = absDx > SWIPE_VEL_MIN_DX;
         const shouldReveal =
-          absDx > SWIPE_THRESHOLD ||
-          (absVel > SWIPE_VEL && absDx > SWIPE_VEL_MIN_DX);
+          (projectionCounts &&
+            Math.abs(projected - -ACTION_W) < Math.abs(projected - 0)) ||
+          absDx > SWIPE_THRESHOLD;
         setRevealed(shouldReveal);
-        spring.animateTo(shouldReveal ? -ACTION_W : 0, -vel);
+        // Отскок — только если жест сам нёс инерцию (§4): брошенная строка
+        // имеет право чуть перелететь и вернуться, аккуратно доведённая —
+        // нет. Скорость пальца передаётся пружине как начальная (§5), шва
+        // между жестом и анимацией не остаётся.
+        const flick = absVel > SWIPE_VEL;
+        spring.animateTo(shouldReveal ? -ACTION_W : 0, -vel, {
+          response: flick ? 0.35 : 0.3,
+          damping: flick ? 0.78 : 1,
+        });
       };
 
       el.addEventListener("pointermove", onMove);
