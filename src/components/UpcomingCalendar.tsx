@@ -376,6 +376,7 @@ export function WeekGrid({
     // просил владелец («чтобы был такой воздушный, с продолжением»).
     <div
       ref={gridRef}
+      data-week-grid
       className="-mx-4 grid grid-cols-2"
       style={{ height, gridTemplateRows: "repeat(4, minmax(0, 1fr))" }}
     >
@@ -527,6 +528,7 @@ export function MonthGrid({
 
   return (
     <div
+      data-month-grid
       className="-mx-4 select-none"
       ref={gridRef}
       onPointerDown={onPointerDown}
