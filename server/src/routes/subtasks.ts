@@ -4,7 +4,7 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
-import { logEvent, isStale } from "../agentState.js";
+import { logEvent, isStale, subtaskWorkRefusal } from "../agentState.js";
 // Тот же расчёт state/agent_stale, что у GET /api/tasks/:id (tasks.ts) —
 // иначе ответы этого файла (add/patch/delete подзадачи, WS-рассылка)
 // отдают сырой agent_state вместо вычисленного state, и два места отдачи
@@ -56,7 +56,8 @@ function getSubtaskWithTaskForUser(
 ): any | undefined {
   const subtask = db
     .prepare(
-      `SELECT s.*, t.creator_id as task_creator_id, t.assignee_id as task_assignee_id
+      `SELECT s.*, t.creator_id as task_creator_id, t.assignee_id as task_assignee_id,
+              t.agent_state as task_agent_state
        FROM subtasks s JOIN tasks t ON t.id = s.task_id
        WHERE s.id = ?`,
     )
@@ -285,15 +286,24 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           .send({ error: "state: in_progress | blocked | review | null" });
       }
 
-      // review — то же самое, что review у задачи (AGENT-PROTOCOL.md):
-      // агент сдаёт шаг, объяснив, что сделал. Пустой result здесь так же
-      // недопустим, как пустой комментарий у задачи в review/blocked —
-      // владелец «прощёлкивает» шаги пачкой позже (не сразу), без текста
-      // ему нечего оценивать.
-      if (state === "review" && !result && !subtask.result) {
-        return reply
-          .code(400)
-          .send({ error: "result обязателен: что сделано в этом шаге" });
+      // Правила самого конвейера — одной функцией в agentState.ts рядом с
+      // матрицей переходов задачи: взять шаг можно только под взятой
+      // задачей, сдать — только побывав в работе, заблокировать и сдать —
+      // только с текстом. Раньше здесь лежала одна из этих проверок
+      // россыпью; правила конвейера должны жить в одном месте, иначе
+      // разъедутся, как разъезжались копии матрицы переходов.
+      const caller = db
+        .prepare("SELECT type FROM users WHERE id = ?")
+        .get(req.userId) as { type?: string } | undefined;
+      const refusal = subtaskWorkRefusal({
+        from: subtask.agent_state ?? null,
+        to: state,
+        isAi: caller?.type === "ai",
+        taskAgentState: subtask.task_agent_state ?? null,
+        hasResult: Boolean(result || subtask.result),
+      });
+      if (refusal) {
+        return reply.code(refusal.code).send({ error: refusal.error });
       }
 
       // Выход ИЗ review — человек, не агент. НЕ по creator_id (18.08.2026,
@@ -304,9 +314,6 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       // type='ai'» (agent-state.ts) — тот же принцип, та же причина: агент,
       // сдавший шаг на проверку, не должен сам же его и забрать обратно.
       if (subtask.agent_state === "review" && state !== "review") {
-        const caller = db
-          .prepare("SELECT type FROM users WHERE id = ?")
-          .get(req.userId) as { type?: string } | undefined;
         if (caller?.type === "ai") {
           return reply.code(403).send({
             error: "вернуть шаг из проверки может только человек-владелец",

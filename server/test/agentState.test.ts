@@ -11,6 +11,7 @@ import {
   commentRequiredFor,
   isStale,
   leaseExpiresAt,
+  subtaskWorkRefusal,
   LEASE_MINUTES,
 } from "../src/agentState.js";
 
@@ -103,6 +104,95 @@ describe("commentRequiredFor", () => {
     expect(commentRequiredFor(null, "in_progress")).toBe(false);
     expect(commentRequiredFor("blocked", "in_progress")).toBe(false);
     expect(commentRequiredFor("in_progress", null)).toBe(false);
+  });
+});
+
+describe("subtaskWorkRefusal — правила работы над шагом", () => {
+  const ai = {
+    isAi: true,
+    taskAgentState: "in_progress" as const,
+    hasResult: true,
+  };
+
+  it("агент не берёт шаг под задачей, которую никто не взял", () => {
+    const r = subtaskWorkRefusal({
+      ...ai,
+      taskAgentState: null,
+      from: null,
+      to: "in_progress",
+    });
+    expect(r?.code).toBe(400);
+    expect(r?.error).toContain("claim");
+  });
+
+  it("под взятой задачей шаг в работу проходит", () => {
+    expect(
+      subtaskWorkRefusal({ ...ai, from: null, to: "in_progress" }),
+    ).toBeNull();
+  });
+
+  it("владельца это правило не касается — он правит шаги руками", () => {
+    expect(
+      subtaskWorkRefusal({
+        ...ai,
+        isAi: false,
+        taskAgentState: null,
+        from: null,
+        to: "in_progress",
+      }),
+    ).toBeNull();
+  });
+
+  it("агент не сдаёт шаг, который не был в работе", () => {
+    const r = subtaskWorkRefusal({ ...ai, from: null, to: "review" });
+    expect(r?.code).toBe(400);
+    expect(r?.error).toContain("in_progress");
+  });
+
+  it("из работы и из блокировки сдать можно", () => {
+    expect(
+      subtaskWorkRefusal({ ...ai, from: "in_progress", to: "review" }),
+    ).toBeNull();
+    expect(
+      subtaskWorkRefusal({ ...ai, from: "blocked", to: "review" }),
+    ).toBeNull();
+  });
+
+  it("сдача без результата отклоняется", () => {
+    const r = subtaskWorkRefusal({
+      ...ai,
+      hasResult: false,
+      from: "in_progress",
+      to: "review",
+    });
+    expect(r?.code).toBe(400);
+    expect(r?.error).toContain("result");
+  });
+
+  it("блокировка шага требует причины — молча упереться нельзя", () => {
+    expect(
+      subtaskWorkRefusal({
+        ...ai,
+        hasResult: false,
+        from: "in_progress",
+        to: "blocked",
+      })?.code,
+    ).toBe(400);
+    expect(
+      subtaskWorkRefusal({ ...ai, from: "in_progress", to: "blocked" }),
+    ).toBeNull();
+  });
+
+  it("продление аренды (тело без state) не проверяется", () => {
+    expect(
+      subtaskWorkRefusal({
+        ...ai,
+        taskAgentState: null,
+        hasResult: false,
+        from: "in_progress",
+        to: undefined,
+      }),
+    ).toBeNull();
   });
 });
 
