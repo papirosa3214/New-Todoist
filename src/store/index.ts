@@ -12,6 +12,12 @@ import { persist } from "zustand/middleware";
 // «Входящих» раскладывать по часам нечего. Хранится тем же полем, что
 // список и доска, — выбор вида запоминается между заходами.
 export type TaskLayout = "list" | "board" | "hours";
+// Вид раздела «Предстоящее»: привычный список с календарём-лентой или
+// календарные раскладки — неделя и месяц (19.08.2026, по присланным
+// скриншотам). Отдельный тип, а не значения TaskLayout: «доски» и «часов»
+// в предстоящем нет, а недели и месяца нет во «Входящих» и «Сегодня» —
+// общий союз только позволил бы выставить несуществующее сочетание.
+export type UpcomingLayout = "list" | "week" | "month";
 
 interface AppState {
   settings: {
@@ -34,6 +40,8 @@ interface AppState {
     today: TaskLayout;
   };
   setTaskLayout: (screen: "inbox" | "today", layout: TaskLayout) => void;
+  upcomingLayout: UpcomingLayout;
+  setUpcomingLayout: (layout: UpcomingLayout) => void;
   // 1 день / 3 дня внутри вида «по часам» (19.08.2026, по присланным
   // скриншотам Apple Reminders — «Сегодня» и «Предстоящее» там та же
   // сетка, только на 3 колонки). Отдельное поле, а не третье значение
@@ -53,6 +61,8 @@ export const useAppStore = create<AppState>()(
       taskLayout: { inbox: "list", today: "list" },
       setTaskLayout: (screen, layout) =>
         set((s) => ({ taskLayout: { ...s.taskLayout, [screen]: layout } })),
+      upcomingLayout: "list",
+      setUpcomingLayout: (layout) => set({ upcomingLayout: layout }),
       hoursSpan: 1,
       setHoursSpan: (span) => set({ hoursSpan: span }),
     }),

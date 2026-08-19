@@ -3,6 +3,19 @@ import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useAgents } from "../api/agents";
 import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { ActionsMenu } from "../components/ActionsMenu";
+import { useAppStore } from "../store";
+import {
+  WeekGrid,
+  MonthGrid,
+  DaySheet,
+  groupByDate,
+  // В этом файле уже есть своя mondayOf — она работает с Date и обслуживает
+  // ленту-выборщик; эта работает со строками «ГГГГ-ММ-ДД» и обслуживает
+  // календарные виды. Разные типы, разные потребители, поэтому алиас, а не
+  // попытка свести их в одну.
+  mondayOf as weekStartOf,
+} from "../components/UpcomingCalendar";
 import { todayStr, MONTHS_SHORT } from "../lib/date";
 import { isAgentAssignedTask } from "../lib/taskOwner";
 import { TaskRow } from "../components/TaskRow";
@@ -141,6 +154,22 @@ function formatDateStr(y: number, m: number, d: number): string {
 
 export function UpcomingScreen() {
   const [calMode, setCalMode] = useState<"month" | "week">("month");
+  // Вид экрана: привычный список с календарём-лентой или календарные
+  // раскладки. Живёт в сторе (persist), как и вид «Сегодня»: выбранная
+  // раскладка должна переживать перезапуск приложения.
+  const view = useAppStore((s) => s.upcomingLayout);
+  const setView = useAppStore((s) => s.setUpcomingLayout);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuAnchorRef = useRef<HTMLButtonElement>(null);
+  // Какая неделя и какой месяц показаны в календарных видах, и какой день
+  // раскрыт панелью. Своё состояние, не связанное с лентой-выборщиком
+  // списка: она листается своей логикой (ribbonAnchor ниже).
+  const [gridMonday, setGridMonday] = useState(() => weekStartOf(todayStr()));
+  const [gridMonth, setGridMonth] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+  const [openDay, setOpenDay] = useState<string | null>(null);
   const today = todayStr();
   const todayDate = new Date(today + "T00:00:00");
 
@@ -216,6 +245,9 @@ export function UpcomingScreen() {
     () => filterTasks(datedTasks, filters),
     [datedTasks, filters],
   );
+  // Раскладка по дням для календарных видов — один проход по списку
+  // вместо фильтра на каждую из 42 ячеек месяца.
+  const byDate = useMemo(() => groupByDate(tasks), [tasks]);
 
   const ribbonStart = useMemo(
     () => ribbonAnchor ?? mondayOf(todayDate),
@@ -442,21 +474,60 @@ export function UpcomingScreen() {
                 onClick={() => setFilterSheetOpen(true)}
                 active={activeFilterCount > 0}
               />
+              {/* Свернуть/развернуть календарь-ленту — только в виде
+                  «список»: в календарных видах ленты нет вовсе, и кнопка
+                  управляла бы тем, чего на экране не видно. */}
+              {view === "list" && (
+                <button
+                  onClick={toggleCalMode}
+                  className="w-[44px] h-[44px] flex items-center justify-center active:scale-95 transition-transform"
+                  aria-label={
+                    calMode === "month"
+                      ? "Свернуть календарь в неделю"
+                      : "Развернуть календарь в месяц"
+                  }
+                >
+                  <Icon
+                    name={calMode === "month" ? "grid" : "list"}
+                    size={16}
+                    className="text-text"
+                  />
+                </button>
+              )}
+              {/* Виды экрана — под тремя точками, ровно как в «Сегодня»
+                  (19.08.2026: «под троеточие спрячь список, доска, один
+                  день, три дня»). Здесь набор свой: список, неделя,
+                  месяц. */}
               <button
-                onClick={toggleCalMode}
-                className="w-[44px] h-[44px] flex items-center justify-center active:scale-95 transition-transform"
-                aria-label={
-                  calMode === "month"
-                    ? "Свернуть календарь в неделю"
-                    : "Развернуть календарь в месяц"
-                }
+                ref={menuAnchorRef}
+                onClick={() => setMenuOpen((v) => !v)}
+                aria-label="Ещё"
+                className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
               >
-                <Icon
-                  name={calMode === "month" ? "grid" : "list"}
-                  size={16}
-                  className="text-text"
-                />
+                <Icon name="dots" size={18} />
               </button>
+              <ActionsMenu
+                open={menuOpen}
+                onClose={() => setMenuOpen(false)}
+                anchorRef={menuAnchorRef}
+                items={(
+                  [
+                    ["list", "Список", "list"],
+                    ["week", "Неделя", "calendarSmall"],
+                    ["month", "Месяц", "grid"],
+                  ] as const
+                ).map(([key, label, icon]) => ({
+                  icon,
+                  label: (
+                    <span
+                      className={view === key ? "font-semibold text-red" : ""}
+                    >
+                      {label}
+                    </span>
+                  ),
+                  onClick: () => setView(key),
+                }))}
+              />
             </>
           }
         />
@@ -468,8 +539,12 @@ export function UpcomingScreen() {
             месяцам через попап) height не трогают — он остаётся
             undefined/auto, так что строка с переходом месяца всегда
             показывает точную высоту без анимации, как раньше. */}
+        {/* Лента-выборщик даты — принадлежность вида «список»: в неделе и
+            месяце календарь и есть сам экран, вторая его копия сверху
+            только отняла бы высоту у сетки. */}
         <div
           ref={calOuterRef}
+          hidden={view !== "list"}
           onTransitionEnd={(e) => {
             // Только СВОЙ переход по height — иначе всплывший transitionend
             // от дочерних transition-all (дни календаря, .active:scale-90)
@@ -712,8 +787,80 @@ export function UpcomingScreen() {
           </div>
         )}
 
+      {/* Календарные виды — вместо списка. Данные те же, что у списка
+          (tasks — уже с применёнными фильтрами), просто разложены по
+          дням. */}
+      {view === "week" && (
+        <WeekGrid
+          monday={gridMonday}
+          byDate={byDate}
+          onTaskClick={(id) => navigate(`/task/${id}`)}
+          onDayClick={(d) => setOpenDay(d)}
+          onPickDate={(d) => setGridMonday(weekStartOf(d))}
+        />
+      )}
+      {view === "month" && (
+        <>
+          {/* Заголовок месяца со стрелками. На скриншоте месяц листается
+              прокруткой всей сетки, но там она занимает весь экран; у нас
+              над сеткой есть шапка раздела, и явные стрелки честнее, чем
+              жест, о котором нельзя догадаться. */}
+          <div className="mb-1 flex items-center justify-center gap-4 pt-1">
+            <button
+              onClick={() =>
+                setGridMonth(({ year, month }) =>
+                  month === 0
+                    ? { year: year - 1, month: 11 }
+                    : { year, month: month - 1 },
+                )
+              }
+              className="tap-scale flex h-[32px] w-[32px] items-center justify-center"
+              aria-label="Предыдущий месяц"
+            >
+              <Icon name="chevronLeft" size={16} className="text-sub" />
+            </button>
+            <span className="min-w-[128px] text-center text-[15px] font-semibold text-text">
+              {MONTHS_SHORT[gridMonth.month]} {gridMonth.year}
+            </span>
+            <button
+              onClick={() =>
+                setGridMonth(({ year, month }) =>
+                  month === 11
+                    ? { year: year + 1, month: 0 }
+                    : { year, month: month + 1 },
+                )
+              }
+              className="tap-scale flex h-[32px] w-[32px] items-center justify-center"
+              aria-label="Следующий месяц"
+            >
+              <Icon name="chevron" size={16} className="text-sub" />
+            </button>
+          </div>
+          <MonthGrid
+            year={gridMonth.year}
+            month={gridMonth.month}
+            byDate={byDate}
+            onDayClick={(d) => setOpenDay(d)}
+          />
+        </>
+      )}
+      {openDay && (
+        <DaySheet
+          date={openDay}
+          tasks={byDate.get(openDay) ?? []}
+          onTaskClick={(id) => {
+            setOpenDay(null);
+            navigate(`/task/${id}`);
+          }}
+          onClose={() => setOpenDay(null)}
+        />
+      )}
+
       {/* Task list */}
-      <div className={selectedDate || isLoading || error ? "" : "mt-3"}>
+      <div
+        hidden={view !== "list"}
+        className={selectedDate || isLoading || error ? "" : "mt-3"}
+      >
         {visibleDates.map((dateStr) => (
           <div key={dateStr} className="mb-3">
             <div className="text-[13px] text-sub mb-2 px-1">
