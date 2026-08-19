@@ -31,9 +31,14 @@ function Row({
   danger,
 }: RowProps) {
   return (
+    // tap-row — строка внутри карточки, ровно тот случай, под который класс
+    // и заведён (см. описание системы откликов в index.css). Без него все
+    // семь строк этого экрана нажимались вообще без видимой реакции:
+    // глобальный -webkit-tap-highlight-color: transparent снял системную
+    // подсветку, а замены строкам не дали.
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-3 py-3 px-4 bg-card text-left"
+      className="tap-row w-full flex items-center gap-3 py-3 px-4 bg-card text-left"
     >
       <div
         className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
@@ -99,7 +104,10 @@ function Switch({
       aria-checked={checked}
       aria-label={ariaLabel}
       onClick={onChange}
-      className={`tap-scale relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors ${
+      // Сам переключатель остаётся 43×25 (геометрия снята с макета), а зона
+      // нажатия доведена до 44×44 прозрачным ::before по центру — замер
+      // показал 43×25, то есть по высоте почти вдвое меньше нормы HIG.
+      className={`tap-scale relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors before:absolute before:left-1/2 before:top-1/2 before:h-11 before:w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] ${
         checked ? "bg-red" : "bg-card2 border border-stroke"
       }`}
     >
@@ -191,7 +199,9 @@ function AccountAvatarRow({
         onClick={() => fileRef.current?.click()}
         disabled={busy}
         aria-label="Сменить аватарку"
-        className="relative shrink-0 tap-scale"
+        // Кружок 40×40, зона — 44×44 (те же 2pt по кругу, что у кнопок
+        // скрепки и отправки в карточке задачи).
+        className="relative shrink-0 tap-scale before:absolute before:-inset-[2px] before:content-['']"
       >
         <Avatar
           initials={initials}
@@ -225,7 +235,9 @@ function AccountAvatarRow({
           onClick={() => del.mutate()}
           disabled={busy}
           aria-label="Убрать аватарку"
-          className="text-[13px] text-sub shrink-0"
+          // tap-fade — текстовая ссылка: менять форму нечему, отклик несёт
+          // прозрачность.
+          className="tap-fade text-[13px] text-sub shrink-0"
         >
           Убрать
         </button>
@@ -314,7 +326,7 @@ export function SettingsScreen() {
           />
           <Row icon="tag" label="Метки" onClick={() => navigate("/labels")} />
           <Row icon="bot" label="Агенты" onClick={() => navigate("/agents")} />
-{/* Вход на пробный экран своей клавиатуры (18.08.2026). Временный
+          {/* Вход на пробный экран своей клавиатуры (18.08.2026). Временный
               пункт: без него до /kb-demo в собранном приложении не добраться —
               роут есть, а ссылки в интерфейсе нет. Убрать, когда проба
               закончится решением делать или не делать. */}

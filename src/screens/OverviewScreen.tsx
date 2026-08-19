@@ -129,7 +129,7 @@ export function OverviewScreen() {
               ref={menuAnchorRef}
               onClick={() => setMenuOpen((v) => !v)}
               aria-label="Ещё"
-              className="w-[44px] h-[44px] flex items-center justify-center"
+              className="w-[44px] h-[44px] flex items-center justify-center tap-row"
             >
               <Icon name="dots" size={18} />
             </button>
@@ -247,7 +247,7 @@ export function OverviewScreen() {
       {/* Search Card */}
       <button
         onClick={() => navigate("/search")}
-        className="w-full flex items-center gap-3 bg-card rounded-2xl p-4 mb-4"
+        className="tap-row w-full flex items-center gap-3 bg-card rounded-2xl p-4 mb-4"
       >
         <Icon name="search" size={20} className="text-orange" />
         <span className="text-[15px] text-sub">Найти задачу или проект</span>
@@ -261,7 +261,7 @@ export function OverviewScreen() {
             <button
               onClick={() => navigate("/projects")}
               aria-label="Все проекты"
-              className="w-[44px] h-[44px] flex items-center justify-center text-dim"
+              className="w-[44px] h-[44px] flex items-center justify-center text-dim tap-row"
             >
               <Icon name="chevron" size={14} />
             </button>
@@ -270,7 +270,7 @@ export function OverviewScreen() {
               aria-label={
                 showCreate ? "Отменить создание проекта" : "Создать проект"
               }
-              className="w-[44px] h-[44px] flex items-center justify-center text-dim"
+              className="w-[44px] h-[44px] flex items-center justify-center text-dim tap-row"
             >
               <Icon name={showCreate ? "x" : "plus"} size={16} />
             </button>
@@ -346,7 +346,7 @@ export function OverviewScreen() {
               <button
                 key={p.id}
                 onClick={() => navigate(`/projects/${p.id}`)}
-                className="w-full flex items-center gap-3 py-2.5 px-3 bg-card rounded-xl text-left min-h-[44px]"
+                className="tap-row w-full flex items-center gap-3 py-2.5 px-3 bg-card rounded-xl text-left min-h-[44px]"
               >
                 <Icon name="hash" size={18} style={{ color: p.color }} />
                 <span className="text-[14px] text-text flex-1">{p.name}</span>

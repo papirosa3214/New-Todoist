@@ -150,7 +150,7 @@ function LabelRow({
     <div className="w-full flex items-center bg-card rounded-xl mb-[2px]">
       <button
         onClick={() => navigate(`/labels/${label.id}`)}
-        className="flex-1 min-w-0 flex items-center gap-3 py-3 pl-4 pr-1 text-left"
+        className="tap-row rounded-l-xl flex-1 min-w-0 flex items-center gap-3 py-3 pl-4 pr-1 text-left"
       >
         <div
           className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"

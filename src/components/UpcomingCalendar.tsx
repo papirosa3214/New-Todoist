@@ -97,8 +97,32 @@ function TaskChip({
         e.stopPropagation();
         onClick();
       }}
-      className={`flex w-full items-center gap-1 overflow-hidden rounded bg-card2 px-1 text-left ${
-        compact ? "h-[15px]" : "h-[19px] gap-1.5 px-1.5"
+      // tap-menu, а не tap-row: плашка сама лежит на приподнятой
+      // поверхности (bg-card2 = #2b2b2b), а значения откликов сняты с
+      // макета, где более светлая заливка .06 как раз и предназначена для
+      // строк на приподнятой панели — на #2b2b2b заливка .04 не читается
+      // (см. описание системы в index.css).
+      //
+      // ::before добирает зону нажатия на просвет между плашками (week:
+      // gap-[3px], month: gap-[2px]) — по половине зазора в каждую сторону,
+      // так что зоны соседних плашек НЕ накладываются. Смысл не в трёх
+      // пикселях высоты, а в том, что промах в зазор раньше доставался
+      // ячейке дня и открывал ДРУГОЙ экран (лист дня) вместо задачи.
+      // inset-x-0 обязателен: у абсолютного псевдоэлемента с пустым
+      // content ширина иначе схлопывается в ноль, и зона не растёт (первый
+      // заход именно так и промолчал — замер показал прежние 19pt).
+      // overflow-hidden с кнопки снят: он обрезал бы псевдоэлемент. Текст
+      // клипается сам (`truncate` на своём span), сверка скриншотов
+      // до/после: 52 субпикселя разницы с максимумом 4/255 — сглаживание
+      // скруглений у квадратика отметки, глазом не видно.
+      //
+      // Норма HIG 44pt по высоте здесь недостижима в принципе: в ячейку дня
+      // недельной сетки (замер — 155pt чистой высоты) при 44pt влезло бы
+      // три задачи вместо семи. Это перекройка вида, а не расширение зоны.
+      className={`relative flex w-full items-center gap-1 rounded bg-card2 px-1 text-left tap-menu before:absolute before:inset-x-0 before:content-[''] ${
+        compact
+          ? "h-[15px] before:-inset-y-[1px]"
+          : "h-[19px] gap-1.5 px-1.5 before:-inset-y-[1.5px]"
       } ${done ? "opacity-45" : ""}`}
     >
       {/* Отметка — квадрат рамкой, как в строке списка и в шапке карточки
@@ -186,7 +210,13 @@ function MiniMonth({
         return (
           <div
             key={row}
-            className={`grid flex-1 grid-cols-7 items-center rounded ${
+            // items-center убран намеренно: при нём кнопка числа сжималась
+            // до высоты текста (замер: 28.1×15pt при собственной высоте
+            // строки 23.1pt), и 8pt строки оставались мёртвой зоной между
+            // числами. Теперь кнопка растягивается на всю строку и центрует
+            // цифру уже внутри себя — вид тот же, зона нажатия больше в
+            // полтора раза.
+            className={`grid flex-1 grid-cols-7 rounded ${
               inWeek ? "bg-white/[0.07]" : ""
             }`}
           >
@@ -200,7 +230,14 @@ function MiniMonth({
                     e.stopPropagation();
                     onPickDate(ds);
                   }}
-                  className={`text-center text-[10px] tabular-nums ${
+                  // 44×44 в мини-календаре недостижимо арифметически: 42
+                  // ячейки живут в плитке 210×167pt, на ячейку приходится
+                  // 28.1×23.1 — больше можно взять только внахлёст с
+                  // соседним числом, что хуже промаха. Берём максимум без
+                  // наложения (h-full w-full) и добавляем отклик: tap-row,
+                  // потому что ячейка лежит на тёмном фоне плитки, где
+                  // заливки .04 достаточно (см. index.css).
+                  className={`flex h-full w-full items-center justify-center rounded text-center text-[10px] tabular-nums tap-row ${
                     ds === today
                       ? "font-semibold text-red"
                       : dim
@@ -644,7 +681,7 @@ function DayStrip({
                 e.stopPropagation();
                 onTaskClick(t.id);
               }}
-              className="flex items-center gap-2 rounded-lg bg-card2 px-2 py-1.5 text-left"
+              className="tap-menu flex items-center gap-2 rounded-lg bg-card2 px-2 py-1.5 text-left"
             >
               <span
                 className={`flex h-[13px] w-[13px] shrink-0 items-center justify-center rounded-[4px] border ${

@@ -67,7 +67,7 @@ export function SearchScreen() {
           </div>
           <button
             onClick={() => navigate(-1)}
-            className="h-[44px] px-2 text-[15px] text-sub shrink-0"
+            className="tap-fade h-[44px] px-2 text-[15px] text-sub shrink-0"
           >
             Отмена
           </button>

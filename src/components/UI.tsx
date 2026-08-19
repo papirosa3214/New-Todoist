@@ -664,9 +664,16 @@ export function BackButton({
   className?: string;
 }) {
   return (
+    // tap-scale — кнопка-иконка, ей по системе откликов (index.css)
+    // положена просадка масштабом. Своя реакция обязательна: глобальный
+    // -webkit-tap-highlight-color: transparent снял системную подсветку, и
+    // до 20.08.2026 «Назад» нажималась вообще без видимого ответа на всех
+    // двенадцати экранах, где она стоит (Настройки, Проекты, Метки,
+    // Уведомления, Активность, Агенты, карточка задачи и далее) —
+    // компонент один, правка одна.
     <button
       onClick={onClick}
-      className={`w-11 h-11 -ml-2.5 flex items-center justify-center ${className}`}
+      className={`tap-scale w-11 h-11 -ml-2.5 flex items-center justify-center ${className}`}
       aria-label="Назад"
     >
       <Icon name="chevronLeft" size={22} />

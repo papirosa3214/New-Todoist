@@ -65,7 +65,7 @@ function ProjectRow({
               key={c}
               type="button"
               onClick={() => setColor(c)}
-              className="w-[24px] h-[24px] rounded-full shrink-0"
+              className="w-[24px] h-[24px] rounded-full shrink-0 tap-scale"
               style={{
                 backgroundColor: c,
                 outline: color === c ? "2px solid white" : "none",
@@ -84,7 +84,7 @@ function ProjectRow({
           <button
             type="button"
             onClick={cancelEdit}
-            className="flex-1 h-11 rounded-xl bg-card2 text-[14px] text-sub font-semibold"
+            className="flex-1 h-11 rounded-xl bg-card2 text-[14px] text-sub font-semibold tap-row"
           >
             Отмена
           </button>
@@ -92,7 +92,7 @@ function ProjectRow({
             type="button"
             onClick={handleSave}
             disabled={!name.trim() || updateProject.isPending}
-            className="flex-1 h-11 rounded-xl bg-red text-[14px] text-white font-semibold disabled:opacity-50"
+            className="flex-1 h-11 rounded-xl bg-red text-[14px] text-white font-semibold disabled:opacity-50 tap-fade"
           >
             {updateProject.isPending ? "Сохраняем…" : "Сохранить"}
           </button>
@@ -103,9 +103,16 @@ function ProjectRow({
 
   return (
     <div className="w-full flex items-center bg-card rounded-xl mb-[2px]">
+      {/* Отклики по той же системе, что на экране-близнеце «Метки»
+          (LabelsScreen): tap-row строкам и иконкам, tap-fade — красной
+          кнопке подтверждения. Без них ни один контрол этого экрана
+          нажимался без видимой реакции: глобальный
+          -webkit-tap-highlight-color: transparent снял системную подсветку,
+          а замены не дали. rounded-l-xl — чтобы заливка отклика не
+          квадратила левый скруглённый угол карточки строки. */}
       <button
         onClick={() => navigate(`/projects/${project.id}`)}
-        className="flex-1 min-w-0 flex items-center gap-3 py-3 pl-4 pr-1 text-left"
+        className="tap-row rounded-l-xl flex-1 min-w-0 flex items-center gap-3 py-3 pl-4 pr-1 text-left"
       >
         <div
           className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
@@ -121,14 +128,14 @@ function ProjectRow({
       <button
         onClick={startEdit}
         aria-label="Переименовать проект"
-        className="w-[44px] h-[44px] flex items-center justify-center shrink-0 text-dim"
+        className="w-[44px] h-[44px] flex items-center justify-center shrink-0 text-dim tap-row"
       >
         <Icon name="edit" size={16} />
       </button>
       <button
         onClick={() => onRequestDelete(project)}
         aria-label="Удалить проект"
-        className="w-[44px] h-[44px] mr-1 flex items-center justify-center shrink-0 text-dim"
+        className="w-[44px] h-[44px] mr-1 flex items-center justify-center shrink-0 text-dim tap-row"
       >
         <Icon name="trash" size={16} />
       </button>
@@ -193,7 +200,10 @@ export function ProjectsScreen() {
         actions={
           <button
             onClick={() => setShowCreate((v) => !v)}
-            className="w-[44px] h-[44px] flex items-center justify-center"
+            aria-label={
+              showCreate ? "Отменить создание проекта" : "Новый проект"
+            }
+            className="w-[44px] h-[44px] flex items-center justify-center tap-row"
           >
             <Icon name={showCreate ? "x" : "plus"} size={18} />
           </button>
@@ -215,7 +225,7 @@ export function ProjectsScreen() {
                 key={c}
                 type="button"
                 onClick={() => setColor(c)}
-                className="w-[24px] h-[24px] rounded-full shrink-0"
+                className="w-[24px] h-[24px] rounded-full shrink-0 tap-scale"
                 style={{
                   backgroundColor: c,
                   outline: color === c ? "2px solid white" : "none",
@@ -233,7 +243,7 @@ export function ProjectsScreen() {
           <button
             type="submit"
             disabled={!name.trim() || createProject.isPending}
-            className="w-full h-12 bg-red rounded-xl text-[14px] font-semibold text-white disabled:opacity-50"
+            className="w-full h-12 bg-red rounded-xl text-[14px] font-semibold text-white disabled:opacity-50 tap-fade"
           >
             {createProject.isPending ? "Создаём…" : "Создать"}
           </button>
@@ -268,7 +278,7 @@ export function ProjectsScreen() {
       {!showCreate && (
         <button
           onClick={() => setShowCreate(true)}
-          className="w-full flex items-center gap-3 py-3 px-4 mt-4 border border-dashed border-stroke rounded-xl"
+          className="w-full flex items-center gap-3 py-3 px-4 mt-4 border border-dashed border-stroke rounded-xl tap-row"
         >
           <Icon name="plus" size={18} className="text-dim" />
           <span className="text-[14px] text-sub">Создать проект</span>

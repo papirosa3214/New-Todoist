@@ -59,7 +59,7 @@ function NotificationRow({ n }: { n: ApiNotification }) {
       <div className="flex-1 min-w-0">
         <button
           onClick={handleOpen}
-          className="w-full text-left"
+          className="tap-row w-full text-left"
           title={n.task_title || undefined}
         >
           <div className="text-[14px] text-text leading-snug">{n.text}</div>
@@ -88,7 +88,7 @@ function NotificationRow({ n }: { n: ApiNotification }) {
         <button
           onClick={handleDelete}
           disabled={deleteNotif.isPending}
-          className="w-11 h-11 flex items-center justify-center rounded-lg text-dim hover:bg-card2 hover:text-text disabled:opacity-40 -mr-2"
+          className="tap-row w-11 h-11 flex items-center justify-center rounded-lg text-dim hover:bg-card2 hover:text-text disabled:opacity-40 -mr-2"
           aria-label="Удалить уведомление"
           title="Удалить"
         >
@@ -125,7 +125,10 @@ export function NotificationsScreen() {
             disabled={
               markAllRead.isPending || notifications.every((n) => n.read)
             }
-            className="text-[13px] text-sub disabled:opacity-40"
+            // Надпись 87×19.5 — по высоте вдвое меньше нормы HIG в 44pt.
+            // Кегль и место в шапке не трогаем, зону добираем прозрачным
+            // ::before на всю ширину надписи и 44pt по высоте.
+            className="tap-fade relative text-[13px] text-sub disabled:opacity-40 before:absolute before:inset-x-0 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-['']"
           >
             Прочитать все
           </button>
