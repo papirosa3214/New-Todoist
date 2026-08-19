@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
-import { authOrApiToken } from "../auth.js";
+import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import {
@@ -347,11 +347,22 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             "UPDATE subtasks SET agent_state = NULL, agent_id = NULL, agent_heartbeat_at = NULL WHERE id = ?",
           ).run(req.params.id);
         } else {
+          // Вместе с состоянием запоминаем СЕССИЮ, которая физически ведёт
+          // этот шаг. Учётка агента одна на все сессии и на всех агентов,
+          // поэтому без этой метки чужая работа выглядит своей — Максим
+          // 20.08.2026: «другие сессии к этой задаче отношения не имеют,
+          // не должно тебя дёргать».
           db.prepare(
             `UPDATE subtasks
-                SET agent_state = ?, agent_id = ?, agent_heartbeat_at = datetime('now')
+                SET agent_state = ?, agent_id = ?, agent_session_id = ?,
+                    agent_heartbeat_at = datetime('now')
               WHERE id = ?`,
-          ).run(state, req.userId, req.params.id);
+          ).run(state, req.userId, sessionOf(req), req.params.id);
+          // Сессию поднимаем и на саму задачу, если та её ещё не знает:
+          // работа по шагам идёт без claim, и иначе задача остаётся ничьей.
+          db.prepare(
+            "UPDATE tasks SET agent_session_id = COALESCE(agent_session_id, ?) WHERE id = ?",
+          ).run(sessionOf(req), subtask.task_id);
         }
       } else {
         // Тело без state — это продление аренды. Трогаем ТОЛЬКО отметку

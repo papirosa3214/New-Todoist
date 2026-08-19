@@ -4,7 +4,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
-import { authOrApiToken } from "../auth.js";
+import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForWrite, isOwner as isTrackerOwner } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { hydrateTask } from "./tasks.js";
@@ -145,7 +145,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         db.prepare(
           `UPDATE tasks SET agent_state = 'in_progress', agent_heartbeat_at = datetime('now'),
              assignee_id = COALESCE(assignee_id, ?), agent_session_id = ? WHERE id = ?`,
-        ).run(req.userId, req.body?.session_id || null, task.id);
+        ).run(req.userId, sessionOf(req), task.id);
 
         logEvent({
           taskId: task.id,
@@ -344,7 +344,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         if (state === "in_progress") {
           db.prepare(
             "UPDATE tasks SET agent_state = ?, agent_heartbeat_at = datetime('now'), agent_session_id = ? WHERE id = ?",
-          ).run(state, req.body?.session_id || null, task.id);
+          ).run(state, sessionOf(req), task.id);
         } else {
           db.prepare("UPDATE tasks SET agent_state = ? WHERE id = ?").run(
             state,

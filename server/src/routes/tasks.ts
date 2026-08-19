@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
-import { authOrApiToken } from "../auth.js";
+import { authOrApiToken, sessionOf } from "../auth.js";
 import { broadcastToUsers } from "../ws.js";
 import {
   getTaskForRead,
@@ -204,10 +204,24 @@ export function registerTaskRoutes(app: FastifyInstance) {
       "SELECT * FROM subtasks WHERE task_id = ? ORDER BY position",
     );
 
+    // Метка сессии вызывающего: кто именно спрашивает. По ней каждая
+    // задача помечается `mine` — ведёт ли её ЭТА сессия. Учётка агента
+    // одна на все сессии и на всех агентов, поэтому без такой пометки
+    // чужая незавершённая работа неотличима от своей, и любой скрипт
+    // реагирует на неё как на собственную (Максим 20.08.2026: «другие
+    // сессии к этой задаче отношения не имеют»). Пометка справочная:
+    // ничего не фильтрует и не прячет — владелец по-прежнему видит всё.
+    const session = sessionOf(req);
     return tasks.map((t: any) => {
       const subtasks = stmtSub.all(t.id).map(withSubtaskState);
+      const bySubtask = subtasks.some(
+        (s: any) => s.agent_session_id && s.agent_session_id === session,
+      );
       return {
         ...withAgentStale(t, subtasks),
+        mine: session
+          ? t.agent_session_id === session || bySubtask
+          : null,
         labels: stmtLabels.all(t.id),
         subtasks,
       };

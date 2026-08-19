@@ -60,7 +60,7 @@ def collect(db):
 
     tasks = db.execute(
         """SELECT t.id, t.title, t.agent_state, t.agent_heartbeat_at, t.project_id,
-                  t.assignee_id, u.type AS assignee_type
+                  t.assignee_id, t.agent_session_id, u.type AS assignee_type
              FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
             WHERE t.status = 'active'"""
     ).fetchall()
@@ -74,6 +74,11 @@ def collect(db):
         open_steps = [s for s in steps if not s["done"]]
         name = (t["title"] or "")[:40]
 
+        # Кто именно ведёт задачу: учётка агента одна на все сессии, поэтому
+        # без метки сессии непонятно, чья работа встала (Максим 20.08.2026).
+        sess = (t["agent_session_id"] or "")[:8]
+        whose = f" [сессия {sess}]" if sess else ""
+
         if t["agent_state"] == "in_progress":
             beat = utc(t["agent_heartbeat_at"])
             if beat and now - beat > lease:
@@ -82,7 +87,7 @@ def collect(db):
                     (
                         f"stale:{t['id']}:{t['agent_heartbeat_at']}",
                         t["id"],
-                        f"Агент пропал: «{name}» в работе, а сигнала нет {mins} мин.",
+                        f"Агент пропал: «{name}» в работе, а сигнала нет {mins} мин.{whose}",
                     )
                 )
             # «Ни один шаг не помечен» — только когда есть чему идти. Если
@@ -99,7 +104,7 @@ def collect(db):
                         f"nostep:{t['id']}",
                         t["id"],
                         f"«{name}»: задача в работе, но ни один шаг не помечен — "
-                        "не видно, что именно делается.",
+                        f"не видно, что именно делается.{whose}",
                     )
                 )
 
