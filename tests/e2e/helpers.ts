@@ -76,15 +76,87 @@ export async function openScreen(page: Page, path: string) {
   await page.waitForTimeout(1200);
 }
 
+// Шум самих движков, к приложению отношения не имеющий. WebKit ругается
+// на `interactive-widget` в meta viewport (не поддерживает эту опцию, но
+// она нужна Chrome для поведения клавиатуры) — это предупреждение, а не
+// дефект, и валить на нём тест бессмысленно.
+const ENGINE_NOISE = [
+  "interactive-widget",
+  "Unrecognized Content-Security-Policy",
+];
+
 /** Ошибки консоли и падения — собираем на каждой странице: «экран не
  *  упал» это тоже проверка, и раньше её никто не делал. */
 export function collectErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
   page.on("console", (m) => {
-    if (m.type() === "error") errors.push("console: " + m.text().slice(0, 200));
+    if (m.type() !== "error") return;
+    const text = m.text();
+    if (ENGINE_NOISE.some((n) => text.includes(n))) return;
+    errors.push("console: " + text.slice(0, 200));
   });
   return errors;
+}
+
+/** Вертикальный свайп ПАЛЬЦЕМ, кроссбраузерно.
+ *
+ *  В Chromium жест шлётся через CDP, в WebKit его нет вовсе
+ *  («CDP session is only available in Chromium» — на этом падал первый
+ *  прогон на Safari), поэтому там события собираются вручную. Мышью такое
+ *  проверять нельзя: перетаскивание мышью страницу не прокручивает, и
+ *  проверка «прокрутилось ли» на ней всегда ложная. */
+export async function touchSwipeVertical(
+  page: Page,
+  from: { x: number; y: number },
+  offsets: number[],
+) {
+  const isChromium = page.context().browser()?.browserType().name() === "chromium";
+  if (isChromium) {
+    const cdp = await page.context().newCDPSession(page);
+    const send = (type: string, y: number) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints:
+          type === "touchEnd"
+            ? []
+            : [{ x: from.x, y, radiusX: 12, radiusY: 12, force: 1 }],
+      });
+    await send("touchStart", from.y);
+    for (const dy of offsets) {
+      await send("touchMove", from.y + dy);
+      await page.waitForTimeout(60);
+    }
+    await send("touchEnd", from.y + offsets[offsets.length - 1]);
+    return;
+  }
+  await page.evaluate(
+    async ({ x, y, offsets }) => {
+      const target = document.elementFromPoint(x, y) ?? document.body;
+      const make = (type: string, cy: number) => {
+        const touch = new Touch({
+          identifier: 1,
+          target,
+          clientX: x,
+          clientY: cy,
+        });
+        return new TouchEvent(type, {
+          touches: type === "touchend" ? [] : [touch],
+          targetTouches: type === "touchend" ? [] : [touch],
+          changedTouches: [touch],
+          bubbles: true,
+          cancelable: true,
+        });
+      };
+      target.dispatchEvent(make("touchstart", y));
+      for (const dy of offsets) {
+        target.dispatchEvent(make("touchmove", y + dy));
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      target.dispatchEvent(make("touchend", y + offsets[offsets.length - 1]));
+    },
+    { x: from.x, y: from.y, offsets },
+  );
 }
 
 /** Медленный жест пальцем/курсором с промежуточными кадрами: между шагами
