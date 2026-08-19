@@ -206,19 +206,11 @@ function UntimedRow({
   return (
     <div
       ref={setNodeRef}
-      {...attributes}
-      {...listeners}
       onClick={onClick}
-      className={`flex w-full select-none items-center gap-3 px-4 py-3 text-left active:bg-white/[0.04] ${
+      className={`flex w-full select-none items-center gap-3 pl-4 text-left active:bg-white/[0.04] ${
         first ? "" : "border-t border-stroke"
       } ${isDragging ? "opacity-30" : ""}`}
       style={{
-        // manipulation, а НЕ none: перетаскивание пальцем здесь начинается
-        // по удержанию (TouchSensor с delay, см. sensors), и до этого
-        // момента жест обязан оставаться прокруткой — иначе пул из
-        // нескольких задач нельзя пролистать, палец на строке просто
-        // «залипает». `none` был нужен старому сенсору по расстоянию.
-        touchAction: "manipulation",
         // Выделение текста при удержании — прямая жалоба владельца
         // 19.08.2026 («если я зажимаю это событие, чтобы у меня не
         // выделялся текст»): длинное нажатие на телефоне выделяет слово и
@@ -234,13 +226,38 @@ function UntimedRow({
         style={{ backgroundColor: color }}
       />
       <span
-        className={`min-w-0 flex-1 truncate text-[14px] ${
+        className={`min-w-0 flex-1 truncate py-3 text-[14px] ${
           task.status === "completed" ? "text-sub line-through" : "text-text"
         }`}
       >
         {task.title}
       </span>
-      <Icon name="grip" size={14} className="shrink-0 text-dim" />
+      {/* Тащат ТОЛЬКО за эту ручку, а не за всю строку — иначе пул нельзя
+          пролистать. Проверено 19.08.2026: медленный жест по строке (а
+          именно так тянутся к нижним пунктам короткого списка) не успевает
+          выйти за допуск 8px и через 200мс превращается в перетаскивание —
+          список стоит на месте, а задача улетает на шкалу. Ручка
+          конфликта не создаёт: тап по ней ничего другого не значит, и
+          именно это она всё время и обещала видом (иконка была здесь и
+          раньше, но ничего не делала).
+          Рецепт тот же, что у карточек доски (TaskBoard): выделенная
+          ручка — единственное место, где жест однозначен.
+          py-3 и увеличенная ширина — палец должен попадать по ней
+          уверенно, иконка 14px сама по себе слишком мелкая цель. */}
+      <span
+        {...attributes}
+        {...listeners}
+        // Клик по ручке не должен открывать задачу: она не для этого.
+        onClick={(e) => e.stopPropagation()}
+        aria-label="Перетащить на шкалу"
+        className="flex shrink-0 cursor-grab items-center justify-center self-stretch px-4 text-dim active:text-sub"
+        // manipulation, а не none: даже начатый с ручки быстрый свайп
+        // должен листать пул, а не пропадать впустую. Тащит по-прежнему
+        // удержание — сенсор один на весь экран (см. sensors).
+        style={{ touchAction: "manipulation", WebkitTouchCallout: "none" }}
+      >
+        <Icon name="grip" size={14} />
+      </span>
     </div>
   );
 }
