@@ -250,4 +250,38 @@ test.describe("Доска задач", () => {
     // полоса — единственный скроллер, который здесь двигается.
     expect(after.pageScrollTop).toBe(before.pageScrollTop);
   });
+
+  // Жалоба владельца 20.08.2026: «хочу свайпнуть, палец, разумеется,
+  // попадает на карточку, и как только отжимаю — меня тут же перекидывает в
+  // эту карточку». Карточка — обычная кнопка, а браузер шлёт click по
+  // отпусканию независимо от того, ехал палец или нет.
+  test("палец проехал по карточке — задача не открывается, а тап на месте открывает", async ({
+    page,
+    context,
+  }) => {
+    await setupApp(context, { inbox: "board" });
+    await openScreen(page, "/inbox");
+
+    const card = page.locator(CARD).first();
+    const box = (await card.boundingBox())!;
+    const start = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const urlBefore = page.url();
+
+    // Свайп: нажали на карточке и увели палец вбок далеко за порог тапа.
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    for (const dx of [-15, -40, -80, -120]) {
+      await page.mouse.move(start.x + dx, start.y, { steps: 3 });
+      await page.waitForTimeout(50);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    expect(page.url()).toBe(urlBefore);
+
+    // А обычный тап по той же карточке по-прежнему открывает задачу —
+    // иначе «починка» сводилась бы к тому, что доска перестала работать.
+    await page.locator(CARD).first().click();
+    await page.waitForTimeout(800);
+    expect(page.url()).toContain("/task/");
+  });
 });

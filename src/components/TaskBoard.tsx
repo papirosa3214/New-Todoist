@@ -89,6 +89,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useQueryClient } from "@tanstack/react-query";
 import { Icon, Avatar, AgentStateTag } from "./UI";
 import { MONTHS_SHORT } from "../lib/date";
+import { useTapGuard } from "../lib/useTapGuard";
 import { api } from "../api/client";
 import type { ApiTask } from "../api/types";
 
@@ -194,9 +195,14 @@ function BoardCard({
     (showProjectBadge && !!task.project_name) ||
     !!task.agent_state;
 
+  // Открываем задачу только на настоящем тапе: если палец ехал (прокрутка
+  // колонок вбок или страницы вниз почти всегда начинается пальцем на
+  // карточке), клик гасится. См. useTapGuard.
+  const tap = useTapGuard(onClick);
+
   return (
     <button
-      onClick={onClick}
+      {...tap}
       // pt-2 против pb-3 — намеренная асимметрия ОТСТУПОВ ради симметрии
       // ВОЗДУХА (владелец 19.08.2026: «посчитай расстояние от верха плашки
       // до первого слова и от последней метки до низа — они должны быть
