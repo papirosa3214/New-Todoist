@@ -12,6 +12,7 @@ import {
   useState,
   useRef,
   useEffect,
+  useMemo,
   Children,
   type ReactNode,
   type CSSProperties,
@@ -230,11 +231,11 @@ const CAL_MONTHS = [
 // открывается время». Время без даты сервер не примет, поэтому барабаны
 // заблокированы, пока день не выбран.
 //
-// Ввод — БАРАБАНАМИ, как в будильнике iPhone (просьба владельца
+// Ввод — БАРАБАНОМ, как в будильнике iPhone (просьба владельца
 // 19.08.2026), а не рядами кнопок: первый заход кнопками занимал три
-// ряда на экране и всё равно давал только шаг в 15 минут.
-const HOURS = Array.from({ length: 24 }, (_, i) => i); // весь день: будильник не ограничивает
-const MINUTES = Array.from({ length: 12 }, (_, i) => i * 5); // шаг 5 минут
+// ряда на экране и всё равно давал только шаг в 15 минут. Барабанов
+// было два (часы и минуты) — с 19.08.2026 остался один, крутящий сразу
+// время начала с шагом 15 минут, см. TimeWheel.
 // Ровно шесть значений и одной строкой (владелец 19.08.2026): 90 минут и
 // 4 часа убраны — с ними ряд переносился на вторую строку, а «полтора
 // часа» на телефоне выбирают заметно реже остальных.
@@ -254,96 +255,328 @@ export function formatDuration(min: number): string {
   return m ? `${h} ч ${m} мин` : `${h} ч`;
 }
 
-// Барабан: вертикальный скролл с залипанием на строке. Выбранное значение
-// определяется положением прокрутки, а не кликом — так же, как в
-// системном пикере. Клик по строке тоже работает: на десктопе и для
-// доступности крутить колесом мыши до нужного значения неудобно.
-const ROW_H = 36; // высота строки барабана
-const VISIBLE = 5; // сколько строк видно разом (центральная — выбранная)
+// ═══════════ Барабан времени: замеры с присланного скриншота ═══════════
+//
+// Владелец 19.08.2026 прислал IMG_8362.jpg («воспроизведи точно такую же
+// вещь, прям анимации постараться»): барабан там НЕ плоский — строки
+// лежат на цилиндре, к краям сжимаются и гаснут, а в центре стоит пилюля
+// с ИНТЕРВАЛОМ «12:15—12:45», а не с одним временем.
+//
+// Все числа сняты с файла пипеткой и сканированием (скилл
+// pixel-copy-from-screenshot), экран 1260×2736 @3x = 420×912pt, значит
+// физические пиксели делятся на 3:
+//
+//   карточка барабана    1140×550px → 380×183.33pt, радиус 72px → 24pt
+//   шаг центров строк      95px → 31.67pt в середине
+//   шаг ЧЕРЕЗ ОДНУ         76px → 25.33pt  ← сжатие к краям, вот и «сфера»
+//   пилюля               518×122px → 172.67×40.67pt, капсула
+//   высота цифр            30px → 10pt (кегль ≈14pt)
+//
+// Сжатие шага 95→76 и есть доказательство цилиндра: у плоского списка шаг
+// постоянный. Из двух шагов однозначно считается геометрия колеса —
+// sin(2Δ)/sin(Δ) = 2cos(Δ) = 171/94.75 даёт Δ = 25.5°, а радиус
+// R = 94.75/sin(25.5°) = 220px = 73.33pt. По этой же модели сходится и
+// высота цифр в соседних строках: 28px против 30px в центре — это
+// cos(25.5°) = 0.90, а через одну 18/30 = 0.6 против cos(51°) = 0.63.
+const WHEEL_ANGLE = 25.5; // градусов между соседними строками
+const WHEEL_R = 220 / 3; // радиус цилиндра, pt
+const WHEEL_STEP = 95 / 3; // шаг центров в середине = R·sin(WHEEL_ANGLE)
+const WHEEL_CARD_H = 550 / 3;
+const WHEEL_PILL_W = 518 / 3;
+const WHEEL_PILL_H = 122 / 3;
+const WHEEL_CARD_R = 24;
+// Прозрачность строк по удалению от центра — тоже замер, а не на глаз:
+// самый светлый пиксель строки давал #A0A0A2 / #646466 / #3F3F41 на фоне
+// карточки #2C2C2E. Обратный пересчёт через фон даёт ровно 1 / 0.48 /
+// 0.16 (проверка: 44 + 0.48×(160−44) = 99.7 при замеренных 100).
+const WHEEL_FADE = [1, 1, 0.48, 0.16, 0];
+// Шаг барабана. 15 минут — как на скриншоте (11:45, 12:00, 12:15) и как
+// у привязки при перетаскивании в сетке дня (DayHours, SNAP_MIN): одно и
+// то же время не должно ходить разным шагом в двух местах приложения.
+const TIME_STEP_MIN = 15;
+// Лента продолжительности, замеры оттуда же: 1140×147px и капсула
+// 164×115px при том же делении на 3.
+const STRIP_H = 147 / 3;
+const STRIP_CAP_W = 164 / 3;
+const STRIP_CAP_H = 115 / 3;
+// «Пройденная» заливка слева: тот же рост, что у капсулы (113px → 37.67pt),
+// отступ от левого края ленты 24px → 8pt, и обрывается она за 10px → 3.33pt
+// до капсулы, а не под ней — иначе вокруг капсулы читается ореол.
+const STRIP_FILL_H = 113 / 3;
+const STRIP_FILL_INSET = 8;
+const STRIP_FILL_GAP = 10 / 3;
 
-function Wheel({
-  items,
-  value,
+/** Прозрачность строки на расстоянии k шагов от центра (k дробное, пока
+ *  барабан крутится) — линейная интерполяция замеренных узлов. */
+function wheelOpacity(k: number): number {
+  const a = Math.abs(k);
+  const i = Math.floor(a);
+  if (i >= WHEEL_FADE.length - 1) return 0;
+  return WHEEL_FADE[i] + (WHEEL_FADE[i + 1] - WHEEL_FADE[i]) * (a - i);
+}
+
+/** Барабан времени начала с шагом 15 минут. В центральной пилюле стоит
+ *  ИНТЕРВАЛ — «12:15—12:45», конец считается из выбранной длительности,
+ *  поэтому крутить нужно один барабан, а не два (владелец 19.08.2026:
+ *  «изначально выбираешь интервал, а потом мотаешь один барабан, он уже
+ *  сразу с учётом этого»).
+ *
+ *  Прокрутка и отрисовка РАЗДЕЛЕНЫ: невидимый слой сверху даёт нативную
+ *  инерцию и залипание (scroll-snap), а видимые строки рисует абсолютный
+ *  слой по формуле цилиндра. Так сделано намеренно — если вместо этого
+ *  крутить сами строки в потоке и накладывать на них rotateX, поток и
+ *  трансформация складываются, и шаг перестаёт совпадать с замеренным.
+ *  Здесь же положение каждой строки считается ровно как y = R·sin(kΔ), а
+ *  сжатие по высоте — cos(kΔ), то есть числа со скриншота воспроизводятся
+ *  буквально. */
+function TimeWheel({
+  minutes,
+  duration,
   onChange,
-  format,
   disabled,
-  ariaLabel,
 }: {
-  items: number[];
-  value: number;
-  onChange: (v: number) => void;
-  format: (v: number) => string;
+  /** Время начала в минутах от полуночи, кратное шагу барабана. */
+  minutes: number;
+  /** Длительность для подписи интервала; null — показываем одно время. */
+  duration: number | null;
+  onChange: (minutes: number) => void;
   disabled?: boolean;
-  ariaLabel: string;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const idx = Math.max(0, items.indexOf(value));
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [offset, setOffset] = useState(0); // дробный индекс под центром
+  const items = useMemo(
+    () =>
+      Array.from(
+        { length: (24 * 60) / TIME_STEP_MIN },
+        (_, i) => i * TIME_STEP_MIN,
+      ),
+    [],
+  );
+  const idx = Math.max(0, Math.round(minutes / TIME_STEP_MIN));
 
-  // Прокрутить к выбранному при открытии и при внешней смене значения.
-  // Без behavior: барабан должен ОКАЗАТЬСЯ на месте, а не ехать туда на
-  // глазах при каждом открытии поля.
+  // Встать на выбранное значение без анимации: барабан должен ОКАЗАТЬСЯ на
+  // месте при открытии поля, а не ехать туда на глазах.
   useEffect(() => {
-    const el = ref.current;
+    const el = scrollRef.current;
     if (!el) return;
-    const target = idx * ROW_H;
-    if (Math.abs(el.scrollTop - target) > 2) el.scrollTop = target;
+    const target = idx * WHEEL_STEP;
+    if (Math.abs(el.scrollTop - target) > 1) {
+      el.scrollTop = target;
+      setOffset(idx);
+    }
   }, [idx]);
 
-  // Значение читается по прокрутке, с задержкой: событие scroll летит
-  // десятками в секунду, а менять состояние формы на каждый кадр — значит
-  // дёргать перерисовку всей карточки.
+  // Кадр прокрутки: положение читаем через rAF, иначе на каждый пиксель
+  // прокрутки шла бы перерисовка состояния формы.
+  const frame = useRef(0);
   const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function onScroll() {
+  function handleScroll() {
     if (disabled) return;
+    if (!frame.current) {
+      frame.current = requestAnimationFrame(() => {
+        frame.current = 0;
+        const el = scrollRef.current;
+        if (el) setOffset(el.scrollTop / WHEEL_STEP);
+      });
+    }
     if (settle.current) clearTimeout(settle.current);
     settle.current = setTimeout(() => {
-      const el = ref.current;
+      const el = scrollRef.current;
       if (!el) return;
-      const next = items[Math.round(el.scrollTop / ROW_H)];
-      if (next !== undefined && next !== value) onChange(next);
+      const next = items[Math.round(el.scrollTop / WHEEL_STEP)];
+      if (next !== undefined && next !== minutes) onChange(next);
     }, 90);
   }
+  useEffect(
+    () => () => {
+      if (frame.current) cancelAnimationFrame(frame.current);
+      if (settle.current) clearTimeout(settle.current);
+    },
+    [],
+  );
 
-  const pad = ((VISIBLE - 1) / 2) * ROW_H;
+  const pad = (WHEEL_CARD_H - WHEEL_STEP) / 2;
+  const center = Math.round(offset);
+  // Рисуем только то, что попадает на видимую часть цилиндра: дальше
+  // строки всё равно погашены до нуля (WHEEL_FADE).
+  const span = WHEEL_FADE.length - 1;
 
   return (
     <div
-      className="relative flex-1"
-      style={{ height: VISIBLE * ROW_H }}
-      aria-label={ariaLabel}
+      className="relative overflow-hidden"
+      style={{
+        height: WHEEL_CARD_H,
+        borderRadius: WHEEL_CARD_R,
+        background: "var(--color-card2)",
+        // Перспектива не декоративная: без неё дальние строки сжимались бы
+        // ровно по cos, но не «уходили» вглубь, и колесо читалось бы как
+        // гармошка. Значение — из радиуса цилиндра, чтобы искажение
+        // соответствовало его размеру.
+        perspective: `${WHEEL_R * 8}px`,
+      }}
     >
-      {/* Подсветка центральной строки — «окошко» барабана */}
+      {/* Пилюля выбранного интервала — под строками, они пишутся поверх. */}
       <div
-        className="pointer-events-none absolute inset-x-0 z-0 rounded-lg bg-card2"
-        style={{ top: pad, height: ROW_H }}
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-1/2 bg-red"
+        style={{
+          width: WHEEL_PILL_W,
+          height: WHEEL_PILL_H,
+          borderRadius: WHEEL_PILL_H / 2,
+          transform: "translate(-50%, -50%)",
+        }}
       />
+
+      <div className="pointer-events-none absolute inset-0">
+        {Array.from({ length: span * 2 + 1 }, (_, n) => center - span + n)
+          .filter((i) => i >= 0 && i < items.length)
+          .map((i) => {
+            const k = i - offset;
+            const rad = (k * WHEEL_ANGLE * Math.PI) / 180;
+            const op = wheelOpacity(k);
+            if (op <= 0.01) return null;
+            const near = Math.abs(k) < 0.5; // строка в пилюле
+            const end = items[i] + (duration ?? 0);
+            return (
+              <div
+                key={i}
+                className={`absolute inset-x-0 flex items-center justify-center text-[14px] tabular-nums ${
+                  near ? "font-semibold text-white" : "text-sub"
+                }`}
+                style={{
+                  top: WHEEL_CARD_H / 2 + WHEEL_R * Math.sin(rad),
+                  // translateY(-50%) центрирует строку на своей отметке, а
+                  // scaleY(cos) даёт то самое сжатие к краям: замеренные
+                  // 28px и 18px высоты цифр против 30px в центре.
+                  transform: `translateY(-50%) scaleY(${Math.cos(rad).toFixed(4)})`,
+                  opacity: op,
+                }}
+              >
+                {near && duration
+                  ? `${formatMinutes(items[i])}—${formatMinutes(end % (24 * 60))}`
+                  : formatMinutes(items[i])}
+              </div>
+            );
+          })}
+      </div>
+
+      {/* Невидимый слой прокрутки поверх всего: он и ловит палец. */}
       <div
-        ref={ref}
-        onScroll={onScroll}
-        className={`relative z-10 h-full overflow-y-auto ${
+        ref={scrollRef}
+        onScroll={handleScroll}
+        aria-label="Время начала"
+        className={`absolute inset-0 overflow-y-auto ${
           disabled ? "pointer-events-none opacity-40" : ""
         }`}
         style={{
           scrollSnapType: "y mandatory",
           scrollbarWidth: "none",
-          paddingTop: pad,
-          paddingBottom: pad,
+          WebkitOverflowScrolling: "touch",
         }}
       >
-        {items.map((it) => (
-          <button
-            key={it}
-            type="button"
-            onClick={() => onChange(it)}
-            className={`flex w-full items-center justify-center text-[17px] tabular-nums transition-colors ${
-              it === value ? "font-semibold text-text" : "text-dim"
-            }`}
-            style={{ height: ROW_H, scrollSnapAlign: "center" }}
-          >
-            {format(it)}
-          </button>
+        <div style={{ height: pad }} />
+        {items.map((m) => (
+          <div
+            key={m}
+            onClick={() => onChange(m)}
+            style={{ height: WHEEL_STEP, scrollSnapAlign: "center" }}
+          />
         ))}
+        <div style={{ height: pad }} />
       </div>
+    </div>
+  );
+}
+
+/** «735» → «12:15». Барабан и пилюля печатают время только так. */
+function formatMinutes(total: number): string {
+  const h = Math.floor(total / 60) % 24;
+  const m = total % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** Продолжительность — одной лентой-капсулой, как на присланном скрине:
+ *  все значения видны разом, активное сидит в капсуле, а всё, что левее
+ *  него, залито «пройденным» фоном. Замеры: лента 1140×147px →
+ *  380×49pt, капсула 164×115px → 54.67×38.33pt, заливка слева #524040 при
+ *  фоне ленты #2C2C2E. */
+function DurationStrip({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  disabled?: boolean;
+}) {
+  const activeIdx = value == null ? -1 : DURATIONS.indexOf(value);
+  return (
+    <div
+      className={`relative flex overflow-hidden ${
+        disabled ? "pointer-events-none opacity-40" : ""
+      }`}
+      style={{
+        height: STRIP_H,
+        borderRadius: STRIP_H / 2,
+        background: "var(--color-card2)",
+      }}
+    >
+      {/* «Пройденная» часть — от левого края до капсулы. Правый край
+          считается от ЦЕНТРА активной зоны (там стоит капсула) минус её
+          половина и зазор: доли для позиции, пиксели для отступов — иначе
+          заливка либо не достаёт, либо подлезает под капсулу. */}
+      {activeIdx >= 0 && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute left-0"
+          style={{
+            top: (STRIP_H - STRIP_FILL_H) / 2,
+            height: STRIP_FILL_H,
+            marginLeft: STRIP_FILL_INSET,
+            width: `calc(${((activeIdx + 0.5) / DURATIONS.length) * 100}% - ${
+              STRIP_FILL_INSET + STRIP_CAP_W / 2 + STRIP_FILL_GAP
+            }px)`,
+            background:
+              "color-mix(in srgb, var(--color-red) 22%, var(--color-card2))",
+            borderRadius: STRIP_FILL_H / 2,
+          }}
+        />
+      )}
+      {DURATIONS.map((d, i) => (
+        <button
+          key={d}
+          type="button"
+          // Повторный тап снимает длительность — так её можно не только
+          // поставить, но и передумать, не убирая время целиком.
+          onClick={() => onChange(value === d ? null : d)}
+          className="relative flex-1 text-[13px] font-medium tabular-nums"
+          style={{
+            // Крайние значения бледнее — на скриншоте лента гаснет к
+            // краям, а не обрывается ровным срезом.
+            opacity: i === 0 || i === DURATIONS.length - 1 ? 0.55 : 1,
+          }}
+        >
+          {i === activeIdx && (
+            <span
+              aria-hidden
+              className="absolute left-1/2 top-1/2 bg-red"
+              style={{
+                width: STRIP_CAP_W,
+                height: STRIP_CAP_H,
+                borderRadius: STRIP_CAP_H / 2,
+                transform: "translate(-50%, -50%)",
+              }}
+            />
+          )}
+          <span
+            className={`relative ${
+              i === activeIdx ? "text-white" : "text-sub"
+            }`}
+          >
+            {shortDuration(d)}
+          </span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -500,73 +733,46 @@ export function DueDateField({
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-1">
-                <Wheel
-                  items={HOURS}
-                  value={time ? Number(time.split(":")[0]) : 9}
-                  onChange={(h) =>
-                    onTimeChange!(
-                      `${String(h).padStart(2, "0")}:${time ? time.split(":")[1] : "00"}`,
-                      // Длительность НЕ подставляем: «сколько займёт»
-                      // владелец может не знать (19.08.2026 — «если я не
-                      // знаю, сколько займёт, просто указал время»). Поле
-                      // необязательное и в базе, и в API.
-                      duration ?? null,
-                    )
-                  }
-                  format={(h) => String(h).padStart(2, "0")}
-                  disabled={!hasValue}
-                  ariaLabel="Часы"
-                />
-                <span className="pb-[2px] text-[17px] font-semibold text-dim">
-                  :
-                </span>
-                <Wheel
-                  items={MINUTES}
-                  value={time ? Number(time.split(":")[1]) : 0}
-                  onChange={(m) =>
-                    onTimeChange!(
-                      `${time ? time.split(":")[0] : "09"}:${String(m).padStart(2, "0")}`,
-                      duration ?? null,
-                    )
-                  }
-                  format={(m) => String(m).padStart(2, "0")}
-                  disabled={!hasValue}
-                  ariaLabel="Минуты"
-                />
-              </div>
+              {/* Один барабан вместо двух: время начала крутится с шагом
+                  15 минут, а конец берётся из длительности и пишется тут
+                  же, в пилюле («12:15—12:45»). Отдельного барабана минут
+                  больше нет — он и был причиной того, что на выбор
+                  получаса уходили два жеста. */}
+              <TimeWheel
+                minutes={
+                  time
+                    ? Number(time.split(":")[0]) * 60 +
+                      Number(time.split(":")[1])
+                    : 9 * 60
+                }
+                duration={duration ?? null}
+                disabled={!hasValue}
+                onChange={(m) =>
+                  onTimeChange!(
+                    formatMinutes(m),
+                    // Длительность НЕ подставляем: «сколько займёт»
+                    // владелец может не знать (19.08.2026 — «если я не
+                    // знаю, сколько займёт, просто указал время»). Поле
+                    // необязательное и в базе, и в API.
+                    duration ?? null,
+                  )
+                }
+              />
 
-              {/* Ряд длительностей показывается сразу, как выбран день, а
-                  не только после касания барабана: барабаны и так стоят на
-                  09:00, и пустое место под ними читалось как «время уже
-                  задано, а длительности почему-то нет». Тап по любой
-                  длительности заодно фиксирует время, которое барабаны
-                  показывают. */}
+              {/* Продолжительность показывается сразу, как выбран день, а
+                  не только после касания барабана: барабан и так стоит на
+                  09:00, и пустое место под ним читалось как «время уже
+                  задано, а длительности почему-то нет». Тап по значению
+                  заодно фиксирует время, которое барабан показывает. */}
               {hasValue && (
                 <>
-                  <div className="mt-2 mb-2 text-[12px] text-sub">
-                    Сколько займёт
+                  <div className="mt-3 mb-2 text-[12px] text-sub">
+                    Продолжительность
                   </div>
-                  <div className="flex gap-1.5">
-                    {DURATIONS.map((d) => (
-                      <button
-                        key={d}
-                        onClick={() =>
-                          // Повторный тап снимает длительность — так её
-                          // можно не только поставить, но и передумать,
-                          // не убирая время целиком.
-                          onTimeChange!(time ?? "09:00", duration === d ? null : d)
-                        }
-                        className={`h-[34px] flex-1 rounded-lg text-[13px] font-medium tabular-nums transition-colors ${
-                          duration === d
-                            ? "bg-red text-white"
-                            : "bg-card2 text-text active:bg-white/10"
-                        }`}
-                      >
-                        {shortDuration(d)}
-                      </button>
-                    ))}
-                  </div>
+                  <DurationStrip
+                    value={duration ?? null}
+                    onChange={(d) => onTimeChange!(time ?? "09:00", d)}
+                  />
                 </>
               )}
             </div>
