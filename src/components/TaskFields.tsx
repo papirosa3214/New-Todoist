@@ -304,7 +304,10 @@ const STRIP_CAP_H = 115 / 3;
 // до капсулы, а не под ней — иначе вокруг капсулы читается ореол.
 const STRIP_FILL_H = 113 / 3;
 const STRIP_FILL_INSET = 8;
-const STRIP_FILL_GAP = 10 / 3;
+// Шлейф тает к началу ленты: у капсулы плотный, к левому краю сходит в
+// ноль. Хвост, а не вторая пилюля — см. комментарий в разметке.
+const STRIP_FILL_FADE =
+  "linear-gradient(to right, transparent 0%, rgba(0,0,0,0.35) 18%, #000 55%, #000 100%)";
 
 /** Прозрачность строки на расстоянии k шагов от центра (k дробное, пока
  *  барабан крутится) — линейная интерполяция замеренных узлов. */
@@ -521,10 +524,14 @@ function DurationStrip({
         background: "var(--color-card2)",
       }}
     >
-      {/* «Пройденная» часть — от левого края до капсулы. Правый край
-          считается от ЦЕНТРА активной зоны (там стоит капсула) минус её
-          половина и зазор: доли для позиции, пиксели для отступов — иначе
-          заливка либо не достаёт, либо подлезает под капсулу. */}
+      {/* Шлейф «пройденного» — ХВОСТ, выходящий из капсулы, а не второй
+          самостоятельный элемент. Владелец 19.08.2026 по первому заходу:
+          «не две пилюли разные, а как-то как шлейф идти должен» — там
+          заливка обрывалась перед капсулой скруглённым правым краем и
+          читалась как отдельная пилюля.
+          Поэтому: правый край ПРЯМОЙ и уходит под капсулу (до центра
+          активной зоны), скругление только слева, а к началу ленты шлейф
+          сходит на нет маской — как и положено хвосту. */}
       {activeIdx >= 0 && (
         <div
           aria-hidden
@@ -534,11 +541,13 @@ function DurationStrip({
             height: STRIP_FILL_H,
             marginLeft: STRIP_FILL_INSET,
             width: `calc(${((activeIdx + 0.5) / DURATIONS.length) * 100}% - ${
-              STRIP_FILL_INSET + STRIP_CAP_W / 2 + STRIP_FILL_GAP
+              STRIP_FILL_INSET
             }px)`,
             background:
               "color-mix(in srgb, var(--color-red) 22%, var(--color-card2))",
-            borderRadius: STRIP_FILL_H / 2,
+            borderRadius: `${STRIP_FILL_H / 2}px 0 0 ${STRIP_FILL_H / 2}px`,
+            maskImage: STRIP_FILL_FADE,
+            WebkitMaskImage: STRIP_FILL_FADE,
           }}
         />
       )}
@@ -550,11 +559,6 @@ function DurationStrip({
           // поставить, но и передумать, не убирая время целиком.
           onClick={() => onChange(value === d ? null : d)}
           className="relative flex-1 text-[13px] font-medium tabular-nums"
-          style={{
-            // Крайние значения бледнее — на скриншоте лента гаснет к
-            // краям, а не обрывается ровным срезом.
-            opacity: i === 0 || i === DURATIONS.length - 1 ? 0.55 : 1,
-          }}
         >
           {i === activeIdx && (
             <span
@@ -568,10 +572,21 @@ function DurationStrip({
               }}
             />
           )}
+          {/* Три состояния подписи, и все три — замер эталона, а не вкус:
+              активная белая; попавшая НА заливку светлее обычной
+              (#8B7B7C на #524040 = белый с прозрачностью 0.32); все
+              остальные — ровный #6E6E70, то есть наш --color-dim.
+              Затухания крайних значений в эталоне НЕТ — я его сначала
+              добавил «для мягкости», и на первом же скриншоте владельца
+              «15м» оказалось нечитаемым: к нему сложились и затемнение
+              крайнего, и тёмный фон заливки. */}
           <span
             className={`relative ${
-              i === activeIdx ? "text-white" : "text-sub"
+              i === activeIdx ? "text-white" : i < activeIdx ? "" : "text-dim"
             }`}
+            style={
+              i < activeIdx ? { color: "rgba(255,255,255,0.32)" } : undefined
+            }
           >
             {shortDuration(d)}
           </span>
