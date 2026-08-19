@@ -85,7 +85,15 @@ def collect(db):
                         f"Агент пропал: «{name}» в работе, а сигнала нет {mins} мин.",
                     )
                 )
-            if steps and not any(s["agent_state"] == "in_progress" for s in open_steps):
+            # «Ни один шаг не помечен» — только когда есть чему идти. Если
+            # все открытые шаги уже сданы или заблокированы, работа не идёт
+            # молча: она ждёт владельца, и ворчать тут не на что.
+            waiting = open_steps and all(
+                s["agent_state"] in ("review", "blocked") for s in open_steps
+            )
+            if steps and not waiting and not any(
+                s["agent_state"] == "in_progress" for s in open_steps
+            ):
                 out.append(
                     (
                         f"nostep:{t['id']}",
