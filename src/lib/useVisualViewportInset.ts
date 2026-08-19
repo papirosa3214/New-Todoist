@@ -111,6 +111,32 @@ export function useVisualViewportInset() {
         `${kbHeight}px`,
       );
 
+      // ВИДИМАЯ ОБЛАСТЬ КАК ЕСТЬ — без вычитаний и без опоры на
+      // window.innerHeight.
+      //
+      // 20.08.2026, владелец после проверки на телефоне: «выехала
+      // клавиатура, а потом ровно в том же месте выехало окно „Вернуть на
+      // доработку“ — не решено вообще». Обе переменные выше считаются как
+      // РАЗНОСТЬ innerHeight и vv.height, то есть верны, только если
+      // innerHeight при открытии клавиатуры не меняется. Стоит WebKit в
+      // каком-то режиме (например, «с домашнего экрана») ужать заодно и
+      // layout-вьюпорт — разность схлопывается в ноль, и всё, что на неё
+      // опирается, не поднимается ВООБЩЕ. Снаружи это выглядит ровно так,
+      // как он описал.
+      //
+      // vv.height и vv.offsetTop — то, что WebKit обновляет в любом
+      // случае: это и есть видимая часть страницы. Плавающему элементу
+      // (position: fixed) их достаточно, чтобы встать точно в неё, и
+      // никакая разность ему не нужна.
+      document.documentElement.style.setProperty(
+        "--vv-height",
+        `${vv.height}px`,
+      );
+      document.documentElement.style.setProperty(
+        "--vv-top",
+        `${vv.offsetTop}px`,
+      );
+
       // Клавиатура ТОЛЬКО ЧТО появилась (или выросла) — доводим активное
       // поле до видимой области ещё раз.
       //
@@ -165,4 +191,43 @@ export function useVisualViewportInset() {
       document.documentElement.style.setProperty("--kb-height", "0px");
     };
   }, []);
+}
+
+/**
+ * Поднять элемент над клавиатурой, если он под неё попал.
+ *
+ * Зачем отдельно от хука выше: хук реагирует на ПОЯВЛЕНИЕ клавиатуры, а
+ * бывает наоборот — клавиатура уже открыта, и в этот момент на экране
+ * появляется новое поле (форма ответа под шагом задачи разворачивается по
+ * нажатию «Вернуть»). Никакого события viewport при этом нет, autoFocus же
+ * доводит поле до видимой области ЛЕЙАУТА, то есть до низа экрана — а низ
+ * закрыт клавиатурой. Поймано автотестом 20.08.2026: форма шага вставала
+ * на 786 при видимой границе 576.
+ *
+ * Считает по --kb-inset (элемент в потоке документа) и прокручивает
+ * ближайший прокручиваемый контейнер ровно настолько, чтобы поле влезло с
+ * небольшим запасом.
+ */
+export function keepAboveKeyboard(el: HTMLElement | null, gap = 12) {
+  if (!el) return;
+  const inset =
+    parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue("--kb-inset"),
+    ) || 0;
+  if (inset <= 0) {
+    // Клавиатуры нет — обычного доведения до видимой области достаточно.
+    el.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  const line = window.innerHeight - inset - gap;
+  const rect = el.getBoundingClientRect();
+  if (rect.bottom <= line) return;
+
+  let sc: HTMLElement | null = el.parentElement;
+  while (sc && sc !== document.body) {
+    if (/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) break;
+    sc = sc.parentElement;
+  }
+  if (!sc || sc === document.body) return;
+  sc.scrollTop += rect.bottom - line;
 }

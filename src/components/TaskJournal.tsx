@@ -284,8 +284,22 @@ function ReturnToWorkSheet({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col justify-end"
+      className="fixed left-0 right-0 z-50 flex flex-col justify-end"
       onClick={onCancel}
+      // Не inset-0, а РОВНО ВИДИМАЯ ОБЛАСТЬ (--vv-top/--vv-height пишет
+      // useVisualViewportInset из window.visualViewport). `inset-0`
+      // растягивает шторку по layout-вьюпорту, а он на iOS при открытии
+      // клавиатуры не меняется — низ шторки оказывается под клавиатурой, и
+      // её приходилось поднимать вычисленной высотой. Владелец 20.08.2026
+      // после проверки на телефоне: «клавиатура выехала, и ровно в том же
+      // месте выехало окно — не решено». Так и есть: вычисление опирается
+      // на разность с innerHeight, а она в его режиме схлопывается в ноль.
+      // Видимая область такой зависимости не имеет: шторка живёт внутри
+      // неё, и места «под клавиатурой» у неё физически нет.
+      style={{
+        top: "var(--vv-top, 0px)",
+        height: "var(--vv-height, 100dvh)",
+      }}
     >
       {/* Scrim: opacity animated by useBottomSheet spring */}
       <div
@@ -314,8 +328,7 @@ function ReturnToWorkSheet({
         // глубже в зону клавиатуры. --kb-height = innerHeight − vv.height,
         // чистая высота клавиатуры, без поправки на пан.
         style={{
-          paddingBottom:
-            "calc(var(--kb-height, 0px) + env(safe-area-inset-bottom, 0px) + 8px)",
+          paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 8px)",
         }}
       >
         {/* Handle: drag target for dismiss gesture */}

@@ -16,7 +16,7 @@
 // `result` объявлены необязательными и уже поддержаны — когда сервер начнёт
 // их присылать, компонент менять не придётся. Пока их нет, состояние
 // выводится из `done`, а раскрывать нечего — стрелка не показывается.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronRight,
@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
+import { keepAboveKeyboard } from "../lib/useVisualViewportInset";
 
 /** Вложение, уже загруженное на сервер — минимум полей, нужных здесь для
     превью-чипа (не тащим сюда весь ApiAttachment ради имени файла). */
@@ -239,6 +240,18 @@ function ReplyForm({
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+
+  // Форма разворачивается ВНУТРИ уже прокрученной ленты, часто при уже
+  // открытой клавиатуре — тогда autoFocus доводит поле до низа экрана, то
+  // есть ровно под клавиатуру. Поднимаем сами. Второй заход с задержкой —
+  // на случай, когда клавиатура только выезжает: к этому моменту --kb-inset
+  // уже настоящий.
+  useEffect(() => {
+    keepAboveKeyboard(fieldRef.current);
+    const t = setTimeout(() => keepAboveKeyboard(fieldRef.current), 350);
+    return () => clearTimeout(t);
+  }, []);
 
   const guardedSubmit = useGuardedCallback(async () => {
     const trimmed = comment.trim();
@@ -291,6 +304,7 @@ function ReplyForm({
         </div>
       )}
       <textarea
+        ref={fieldRef}
         autoFocus
         rows={2}
         value={comment}

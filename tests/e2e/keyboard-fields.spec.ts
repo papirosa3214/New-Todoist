@@ -41,10 +41,55 @@ async function pressKeyboard(
       const root = document.documentElement;
       root.style.setProperty("--kb-inset", `${kb - pan}px`);
       root.style.setProperty("--kb-height", `${kb}px`);
+      root.style.setProperty("--vv-height", `${window.innerHeight - kb}px`);
+      root.style.setProperty("--vv-top", `${pan}px`);
     },
     { kb: KB, pan: opts.pan ? PAN : 0 },
   );
   await page.waitForTimeout(250);
+}
+
+/**
+ * НАСТОЯЩАЯ эмуляция клавиатуры: подменяется window.visualViewport, и
+ * приложение само пересчитывает все свои переменные — так же, как на
+ * телефоне.
+ *
+ * Зачем, если есть pressKeyboard. Тот выставляет переменные, которые
+ * приложение ВЫЧИСЛЯЕТ, — то есть проверяет вёрстку при заведомо верных
+ * числах. Ровно поэтому он и пропустил живую поломку: на телефоне
+ * владельца числа выходили другими, и шторка вылезала под клавиатуру,
+ * пока тест был зелёным (20.08.2026, его слова: «клавиатура выехала, и
+ * ровно в том же месте выехало окно — не решено вообще»).
+ *
+ * `shrinkLayout` — второй режим WebKit, при котором вместе с видимой
+ * областью ужимается и layout-вьюпорт. Тогда разность innerHeight −
+ * vv.height равна нулю, и любая вёрстка, опирающаяся на эту разность, не
+ * поднимается вообще. Это и есть случай владельца.
+ */
+async function emulateKeyboard(
+  page: import("@playwright/test").Page,
+  opts: { shrinkLayout?: boolean } = {},
+) {
+  await page.evaluate(
+    ({ kb, shrink }) => {
+      const vv = window.visualViewport!;
+      const visible = window.innerHeight - kb;
+      Object.defineProperty(vv, "height", {
+        value: visible,
+        configurable: true,
+      });
+      Object.defineProperty(vv, "offsetTop", { value: 0, configurable: true });
+      if (shrink) {
+        Object.defineProperty(window, "innerHeight", {
+          value: visible,
+          configurable: true,
+        });
+      }
+      vv.dispatchEvent(new Event("resize"));
+    },
+    { kb: KB, shrink: !!opts.shrinkLayout },
+  );
+  await page.waitForTimeout(300);
 }
 
 /** Нижняя кромка элемента относительно верха экрана. */
@@ -56,50 +101,161 @@ async function bottomOf(page: import("@playwright/test").Page, sel: string) {
   }, sel);
 }
 
+// Текст в ТРИ ПРЕДЛОЖЕНИЯ — прямое требование владельца 20.08.2026: «надо
+// написать текст, скажу в три предложения, потому что длина очень сильно
+// тоже может ломать схему». И правда может: поле с несколькими строками
+// растёт вверх, вместе с ним растёт шторка, и кнопка отправки может уехать
+// туда, откуда её не нажать. Короткий текст этого не показывает.
+const LONG =
+  "Проверяю, как ведёт себя поле, когда текста много, а не одно слово. " +
+  "Пишу три предложения подряд, чтобы поле выросло и подвинуло всё, что " +
+  "стоит рядом с ним. Если что-то уедет под клавиатуру или обрежется, " +
+  "проверка это увидит.";
+
+/**
+ * Набрать текст в поле и убедиться, что он записался ЦЕЛИКОМ, а от его
+ * длины ничего не уехало под клавиатуру.
+ *
+ * Печатается посимвольно (pressSequentially), а не подставляется значением:
+ * подстановка проверяет только вёрстку, а владелец жаловался именно на
+ * «написание» — на то, как поле ведёт себя, пока в него пишут.
+ */
+async function typeAndCheck(
+  page: import("@playwright/test").Page,
+  field: import("@playwright/test").Locator,
+  opts: { send?: string } = {},
+) {
+  const line = page.viewportSize()!.height - KB;
+
+  await field.focus();
+  await field.pressSequentially(LONG, { delay: 1 });
+  await page.waitForTimeout(200);
+
+  // 1. Текст дошёл полностью — ни обрезки, ни потерянных символов.
+  expect(await field.inputValue()).toBe(LONG);
+
+  // 2. Само поле осталось в видимой части экрана.
+  const rect = await field.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom };
+  });
+  expect(rect.top).toBeGreaterThanOrEqual(0);
+  expect(rect.bottom).toBeLessThanOrEqual(line);
+
+  // 3. И кнопка отправки — иначе текст написан, а отправить его нечем.
+  if (opts.send) {
+    const btn = page.locator(opts.send).first();
+    const btnRect = await btn.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom };
+    });
+    expect(btnRect.top).toBeGreaterThanOrEqual(0);
+    expect(btnRect.bottom).toBeLessThanOrEqual(line);
+    await expect(btn).toBeEnabled();
+  }
+}
+
 test.describe("Поля ввода не уезжают под клавиатуру", () => {
-  // Это ровно тот случай, с которого пришла жалоба.
-  test("возврат задачи на доработку: поле комментария остаётся видимым", async ({
+  // ДВА РЕЖИМА НАСТОЯЩЕЙ КЛАВИАТУРЫ. Проверка идёт не по переменным, а по
+  // подменённому visualViewport: приложение считает всё само, как на
+  // телефоне. Второй режим (ужимается и layout-вьюпорт) — тот самый, на
+  // котором прежняя вёрстка не поднималась вообще, а тест был зелёным.
+  for (const shrinkLayout of [false, true]) {
+    test(`окно возврата встаёт над клавиатурой${
+      shrinkLayout ? " (layout тоже ужат)" : ""
+    }`, async ({ page, context }) => {
+      await setupApp(context);
+      await openScreen(page, "/inbox");
+
+      const opened = await page.evaluate(async () => {
+        const tasks = await (await fetch("/api/tasks")).json();
+        const t = tasks.find((x: any) => x.agent_state === "review");
+        return t ? t.id : null;
+      });
+      test.skip(!opened, "нет задачи на проверке");
+
+      await openScreen(page, `/task/${opened}`);
+      await page.getByRole("button", { name: "Вернуть на доработку" }).click();
+      await page.waitForTimeout(400);
+
+      await emulateKeyboard(page, { shrinkLayout });
+      // Шторка выезжает пружиной — даём ей осесть, иначе замер поймает
+      // кадр анимации, а не итоговое положение.
+      await page.waitForTimeout(700);
+
+      const line = 912 - KB;
+      const sheet = await page.evaluate(() => {
+        const ta = document.querySelector("textarea");
+        const panel = ta?.closest("div.bg-card") as HTMLElement | null;
+        const btn = document.querySelector('[aria-label="Отправить"]');
+        return {
+          panelBottom: panel?.getBoundingClientRect().bottom ?? null,
+          fieldBottom: ta?.getBoundingClientRect().bottom ?? null,
+          btnBottom: btn?.getBoundingClientRect().bottom ?? null,
+        };
+      });
+
+      // Вся шторка целиком — над клавиатурой: и панель, и поле, и кнопка.
+      expect(sheet.panelBottom).not.toBeNull();
+      expect(sheet.panelBottom!).toBeLessThanOrEqual(line + 1);
+      expect(sheet.fieldBottom!).toBeLessThanOrEqual(line);
+      expect(sheet.btnBottom!).toBeLessThanOrEqual(line);
+
+      // И с настоящим текстом в три предложения: поле растёт, шторка
+      // вместе с ним — кнопка отправки обязана остаться нажимаемой.
+      await typeAndCheck(page, page.locator("textarea"), {
+        send: '[aria-label="Отправить"]',
+      });
+    });
+  }
+
+  // ШАГИ ЗАДАЧИ. У каждого шага своя форма: «Вернуть» у сданного на
+  // проверку и «Ответить» у заблокированного. В прежнем тесте их не было
+  // вовсе — а владелец пишет комментарии к шагам чаще, чем к задачам.
+  test("шаг задачи: комментарий при возврате пишется и не уезжает", async ({
     page,
     context,
   }) => {
     await setupApp(context);
     await openScreen(page, "/inbox");
 
-    // Нужна задача, сданная агентом на проверку: кнопка «Вернуть на
-    // доработку» есть только у неё.
-    const opened = await page.evaluate(async () => {
-      const res = await fetch("/api/tasks");
-      const tasks = await res.json();
-      const t = tasks.find((x: any) => x.agent_state === "review");
-      return t ? t.id : null;
+    // Нужна задача, у которой есть шаг на проверке.
+    const target = await page.evaluate(async () => {
+      const tasks = await (await fetch("/api/tasks")).json();
+      for (const t of tasks) {
+        const full = await (await fetch(`/api/tasks/${t.id}`)).json();
+        const step = (full.subtasks || []).find(
+          (s: any) => s.agent_state === "review" && !s.done,
+        );
+        if (step) return { taskId: t.id, stepTitle: step.title };
+      }
+      return null;
     });
-    test.skip(!opened, "нет задачи на проверке — нечего возвращать");
+    test.skip(!target, "нет ни одного шага на проверке");
 
-    await openScreen(page, `/task/${opened}`);
-    await page.getByRole("button", { name: "Вернуть на доработку" }).click();
-    await page.waitForTimeout(500);
+    await openScreen(page, `/task/${target!.taskId}`);
+    await page.waitForTimeout(600);
 
-    const field = page.locator("textarea");
+    // Клавиатура поднимается ДО открытия формы — так и бывает на телефоне:
+    // человек читает шаги, уже написав что-то в комментарий, и жмёт
+    // «Вернуть» с открытой клавиатурой. Форма разворачивается внутри
+    // прокрученной ленты, и подтянуть её обязана она сама (keepAboveKeyboard).
+    await pressKeyboard(page);
+
+    // Шаг раскрывается тапом, под ним появляются «Принять» и «Вернуть».
+    await page.getByText(target!.stepTitle, { exact: false }).first().click();
+    await page.waitForTimeout(400);
+    const back = page.getByRole("button", { name: "Вернуть", exact: true });
+    test.skip(
+      (await back.count()) === 0,
+      "у этого шага нет кнопки возврата (не владелец?)",
+    );
+    await back.first().click();
+    await page.waitForTimeout(600);
+
+    const field = page.getByPlaceholder("Что нужно поправить…");
     await expect(field).toBeVisible();
-    // Шторка `fixed` + autoFocus на поле — тот самый случай, где WebKit
-    // панорамирует страницу, а сама шторка в этом не участвует.
-    await pressKeyboard(page, { pan: true });
-
-    const viewportH = page.viewportSize()!.height;
-    const line = viewportH - KB;
-
-    const fieldBottom = await bottomOf(page, "textarea");
-    expect(fieldBottom).not.toBeNull();
-    expect(fieldBottom!).toBeLessThanOrEqual(line);
-
-    // И кнопка отправки — писать в поле, которое видно, но нечем
-    // отправить, так же бессмысленно.
-    const sendBottom = await page.evaluate(() => {
-      const b = document.querySelector('[aria-label="Отправить"]');
-      return b ? b.getBoundingClientRect().bottom : null;
-    });
-    expect(sendBottom).not.toBeNull();
-    expect(sendBottom!).toBeLessThanOrEqual(line);
+    await typeAndCheck(page, field);
   });
 
   // Лента задачи: поле комментария живёт внизу экрана и подпирается
@@ -144,6 +300,39 @@ test.describe("Поля ввода не уезжают под клавиатур
     const line = page.viewportSize()!.height - KB;
     expect(bottom).not.toBeNull();
     expect(bottom!).toBeLessThanOrEqual(line);
+
+    // И длинный текст сюда же — но с НАСТОЯЩЕЙ эмуляцией клавиатуры:
+    // приложение само пересчитывает отступы, лента прокручивается до
+    // конца, и поле обязано остаться над клавиатурой вместе с кнопкой
+    // отправки.
+    await emulateKeyboard(page);
+    const commentField = page.getByPlaceholder("Написать комментарий…");
+    await commentField.focus();
+    await commentField.pressSequentially(LONG, { delay: 1 });
+    await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>(
+        'input[placeholder="Написать комментарий…"]',
+      );
+      let sc: HTMLElement | null = el?.parentElement ?? null;
+      while (sc && sc !== document.body) {
+        if (/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) break;
+        sc = sc.parentElement;
+      }
+      if (sc) sc.scrollTop = sc.scrollHeight;
+    });
+    await page.waitForTimeout(300);
+
+    expect(await commentField.inputValue()).toBe(LONG);
+    const after = await page.evaluate(() => {
+      const el = document.querySelector('input[placeholder="Написать комментарий…"]');
+      const btn = document.querySelector('button[type="submit"]');
+      return {
+        field: el ? el.getBoundingClientRect().bottom : null,
+        send: btn ? btn.getBoundingClientRect().bottom : null,
+      };
+    });
+    expect(after.field!).toBeLessThanOrEqual(line);
+    expect(after.send!).toBeLessThanOrEqual(line);
   });
 
   // Обход всех остальных мест, где что-то вписывают. Каждое поле
