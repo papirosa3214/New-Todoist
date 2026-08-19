@@ -253,6 +253,20 @@ function BoardCard({
             )}
           </div>
           <div className="min-w-0 flex-1">
+            {/* Проект — верхней строкой над названием, решётка плюс
+                цветной текст без заливки. Тот же вид, что в строке списка
+                и в карточке задачи (владелец 19.08.2026: «пусть везде
+                будет решётка и название, в самом верху, без заливки»).
+                Из футера ниже он убран — там он был пилюлей с подложкой. */}
+            {showProjectBadge && task.project_name && (
+              <div
+                className="mb-0.5 inline-flex min-w-0 max-w-full items-center gap-1 text-[10px] font-medium"
+                style={{ color: task.project_color || "#A6A6A6" }}
+              >
+                <Icon name="hash" size={9} className="shrink-0" />
+                <span className="truncate">{task.project_name}</span>
+              </div>
+            )}
             <div
               className={`text-[13px] leading-snug line-clamp-2 ${isDone ? "line-through text-sub" : "text-text"}`}
             >
@@ -303,20 +317,7 @@ function BoardCard({
                 {label.name}
               </span>
             )}
-            {showProjectBadge && task.project_name && (
-              <span
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 min-w-0"
-                style={{
-                  backgroundColor: (task.project_color || "#A6A6A6") + "26",
-                  color: task.project_color || "#A6A6A6",
-                }}
-              >
-                <Icon name="hash" size={9} />
-                <span className="truncate max-w-[90px]">
-                  {task.project_name}
-                </span>
-              </span>
-            )}
+            {/* Проект отсюда убран — он теперь над названием, см. выше. */}
           </div>
         )}
       </div>

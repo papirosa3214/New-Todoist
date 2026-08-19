@@ -383,6 +383,23 @@ export function TaskRow({
             )}
           </div>
           <div className="flex-1 min-w-0">
+            {/* Проект — САМОЙ ВЕРХНЕЙ строкой, над названием задачи, и
+                одинаково во всех представлениях: решётка плюс цветной
+                текст, без заливки (владелец 19.08.2026: «почему в списке
+                одна метка, а на доске другая? пусть везде будет решётка и
+                название, в самом верху, без заливки — просто цветной
+                текст»). Раньше здесь была пилюля с подложкой и без
+                решётки, а на доске — с решёткой, и одна задача выглядела
+                в двух местах по-разному. */}
+            {hasProjectBadge && (
+              <div
+                className="mb-0.5 inline-flex min-w-0 max-w-full items-center gap-1 text-[11px] font-medium"
+                style={{ color: task.project_color || "#A6A6A6" }}
+              >
+                <Icon name="hash" size={10} className="shrink-0" />
+                <span className="truncate">{task.project_name}</span>
+              </div>
+            )}
             <div
               className={`text-[15px] leading-snug truncate ${isDone ? "line-through text-sub" : "text-text"}`}
             >
@@ -410,17 +427,8 @@ export function TaskRow({
                     aria-label={`Приоритет: ${PRIORITIES.find((p) => p.key === task.priority)?.name ?? ""}`}
                   />
                 )}
-                {hasProjectBadge && (
-                  <span
-                    className="inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium"
-                    style={{
-                      backgroundColor: (task.project_color || "#A6A6A6") + "26",
-                      color: task.project_color || "#A6A6A6",
-                    }}
-                  >
-                    {task.project_name}
-                  </span>
-                )}
+                {/* Проект отсюда убран — он теперь строкой над названием,
+                    см. выше. */}
                 {hasOverduePill && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
                     <Icon name="calendarSmall" size={10} /> Просрочено,{" "}

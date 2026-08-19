@@ -293,15 +293,15 @@ export function TaskDetailScreen() {
           не с отметкой. */}
       {taskProject && (
         <div className="mb-2 pl-[30px]">
+          {/* Без заливки — просто решётка и цветной текст, как в строке
+              списка и на карточке доски (владелец 19.08.2026: «она не
+              должна иметь заливку, просто цветной текст с решёткой»). */}
           <span
-            className="inline-flex min-w-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px]"
-            style={{
-              backgroundColor: (taskProject.color || "#A6A6A6") + "26",
-              color: taskProject.color || "#A6A6A6",
-            }}
+            className="inline-flex min-w-0 items-center gap-1 text-[11px] font-medium"
+            style={{ color: taskProject.color || "#A6A6A6" }}
           >
-            <Icon name="hash" size={9} />
-            <span className="truncate max-w-[200px]">{taskProject.name}</span>
+            <Icon name="hash" size={10} className="shrink-0" />
+            <span className="truncate max-w-[220px]">{taskProject.name}</span>
           </span>
         </div>
       )}
