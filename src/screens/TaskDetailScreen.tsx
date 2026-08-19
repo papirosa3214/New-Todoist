@@ -21,7 +21,7 @@ import {
   ErrorBanner,
   BackButton,
 } from "../components/UI";
-import { PRIORITIES, formatDuration } from "../components/TaskFields";
+import { PRIORITIES } from "../components/TaskFields";
 import {
   AgentStatusRow,
   AgentOwnerActions,
@@ -30,7 +30,7 @@ import {
 import { MicKeyboardBar } from "../components/MicKeyboardBar";
 import { MicOverlay } from "../components/MicOverlay";
 import { isTaskOwner } from "../lib/taskOwner";
-import { formatDueLabel } from "../lib/date";
+import { formatDueLabel, formatTimeRange } from "../lib/date";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { useMicRecorder } from "../lib/useMicRecorder";
@@ -383,20 +383,21 @@ export function TaskDetailScreen() {
         {task.due_date && (
           <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
             <Icon name="calendarSmall" size={18} className="text-red" />
-            {/* Время и длительность — здесь же, одной строкой с датой
-                (Максим 19.08.2026: «пишется только „сегодня, 19 августа“, а
-                время видно, только если нажать „Изменить“ — хотелось бы
-                сразу видеть и время, и продолжительность»).
-                Формулировка ровно та же, что в поле «Срок и время» самой
-                формы (DueDateField, TaskFields.tsx): «Сегодня, 19 авг. ·
-                11:00 · 15 мин». Одна задача не должна читаться по-разному
-                в карточке и в форме, поэтому и разделители, и formatDuration
-                взяты оттуда, а не собраны заново. */}
+            {/* Время — здесь же, одной строкой с датой (Максим 19.08.2026:
+                «пишется только „сегодня, 19 августа“, а время видно, только
+                если нажать „Изменить“»), и сразу ИНТЕРВАЛОМ: «Сегодня, 19
+                авг. · 13:45—14:30». Он же, следом: «пиши прям тот период,
+                который выбран, чтобы мне не нужно было высчитывать, во
+                сколько я освобожусь». Отдельной длительности («· 45 мин»)
+                в строке больше нет — интервал её уже задаёт, а два способа
+                сказать одно и то же только удлиняют строку.
+                Формулировка общая с полем «Срок и время» самой формы
+                (DueDateField): одна задача не должна читаться по-разному в
+                карточке и в форме. */}
             <span className="text-[14px] text-red">
               {formatDueLabel(task.due_date)}
-              {task.start_time ? ` · ${task.start_time}` : ""}
-              {task.start_time && task.duration_min
-                ? ` · ${formatDuration(task.duration_min)}`
+              {task.start_time
+                ? ` · ${formatTimeRange(task.start_time, task.duration_min)}`
                 : ""}
             </span>
           </div>

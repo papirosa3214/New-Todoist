@@ -153,3 +153,27 @@ export function formatRelativeTime(sqliteDatetime: string): string {
   if (diffD === 1) return "вчера";
   return `${diffD} дн. назад`;
 }
+
+/** «13:45» + 45 минут → «13:45—14:30». Без длительности — просто «13:45».
+ *
+ *  Владелец 19.08.2026: «пиши прям тот период, который выбран, чтобы мне
+ *  не нужно было потом высчитывать, во сколько я освобожусь». Поэтому
+ *  время задачи ВЕЗДЕ печатается интервалом, а не началом плюс отдельной
+ *  длительностью: «13:45 · 45 мин» требует сложения в уме, «13:45—14:30»
+ *  не требует.
+ *
+ *  Через полночь конец заворачивается по суткам (23:45 + 30 мин → 00:15):
+ *  задача с временем принадлежит одному дню, второй даты в подписи нет и
+ *  быть не должно. */
+export function formatTimeRange(
+  start: string,
+  durationMin?: number | null,
+): string {
+  if (!durationMin) return start;
+  const [h, m] = start.split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return start;
+  const end = (h * 60 + m + durationMin) % (24 * 60);
+  const eh = Math.floor(end / 60);
+  const em = end % 60;
+  return `${start}—${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
+}

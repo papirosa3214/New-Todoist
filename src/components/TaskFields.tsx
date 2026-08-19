@@ -22,7 +22,12 @@ import type {
   DraggableSyntheticListeners,
 } from "@dnd-kit/core";
 import { Icon } from "./UI";
-import { formatDueLabel, todayStr, tomorrowStr } from "../lib/date";
+import {
+  formatDueLabel,
+  formatTimeRange,
+  todayStr,
+  tomorrowStr,
+} from "../lib/date";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { PRIORITIES } from "../lib/priority";
 import type { ApiLabel } from "../api/types";
@@ -631,10 +636,14 @@ export function DueDateField({
 
   // «Сегодня, 18 авг. · 14:30 · 1 ч 30 мин» — дата и время одной строкой,
   // чтобы состояние читалось не открывая поле.
+  // Интервалом, а не «начало + длительность» отдельно: см. formatTimeRange
+  // — владельцу нужно видеть, во сколько он освободится, без сложения в
+  // уме. Длительность в строке больше не дублируется: «13:45—14:30» её и
+  // так задаёт.
   const rowValue = !hasValue
     ? "Не установлен"
     : time
-      ? `${formatDueLabel(value!)} · ${time}${duration ? ` · ${formatDuration(duration)}` : ""}`
+      ? `${formatDueLabel(value!)} · ${formatTimeRange(time, duration)}`
       : formatDueLabel(value!);
 
   return (
