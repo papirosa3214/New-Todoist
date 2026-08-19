@@ -25,6 +25,39 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+// ═══════ Вход без пароля из домашней сети ═══════
+//
+// Требование Максима 19.08.2026: дома экран входа показываться не должен.
+// Сервер отдаёт сессию владельца на POST /api/auth/lan, но только с приватного
+// адреса и только при TASKFLOW_LAN_NO_AUTH=1 (см. server/src/auth.ts). Снаружи
+// маршрут отвечает 404 — тогда всё работает по-старому, через /login.
+//
+// Промис кэшируется: при первой загрузке экрана запросы летят пачкой, и без
+// кэша каждый завёл бы свою попытку входа.
+let lanLoginAttempt: Promise<string | null> | null = null;
+
+async function tryLanLogin(): Promise<string | null> {
+  if (!lanLoginAttempt) {
+    lanLoginAttempt = (async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/auth/lan`, {
+          method: "POST",
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (data?.token) {
+          setToken(data.token);
+          return data.token as string;
+        }
+      } catch {
+        // сеть недоступна — обычный путь через /login
+      }
+      return null;
+    })();
+  }
+  return lanLoginAttempt;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -45,7 +78,12 @@ async function parseBody(res: Response): Promise<any> {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getToken();
+  // Токена нет — сначала пробуем домашний вход, и только если сервер его не
+  // даёт (мы снаружи или режим выключен), идём дальше как раньше.
+  let token = getToken();
+  if (!token && !path.startsWith("/api/auth/")) {
+    token = await tryLanLogin();
+  }
   const headers: Record<string, string> = {
     // Only declare a JSON content-type when a body is actually going out
     // AND is actually JSON (a string — every api.post/patch call below
@@ -75,6 +113,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // away a (nonexistent) session and bounce to /login.
     if (token) {
       clearToken();
+      // Сессия протухла. Дома молча берём новую и повторяем запрос — экран
+      // входа не показываем. Снаружи /api/auth/lan вернёт 404, и тогда как
+      // раньше: на /login.
+      lanLoginAttempt = null;
+      const fresh = !path.startsWith("/api/auth/") ? await tryLanLogin() : null;
+      if (fresh) {
+        return request<T>(path, options);
+      }
       if (!window.location.pathname.startsWith("/login")) {
         window.location.assign("/login");
       }

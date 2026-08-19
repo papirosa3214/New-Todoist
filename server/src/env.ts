@@ -33,13 +33,21 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = path.join(__dirname, "..", ".env");
 
-export function ensureJwtSecret(): void {
-  if (process.env.JWT_SECRET) return;
+/**
+ * Подтянуть server/.env в окружение процесса целиком.
+ *
+ * Раньше файл читался только по дороге за JWT_SECRET и только когда того нет
+ * в окружении — из-за чего любая ДРУГАЯ настройка в .env (например,
+ * TASKFLOW_LAN_NO_AUTH — вход без пароля из домашней сети) могла остаться
+ * непрочитанной. Значения, уже заданные снаружи, loadEnvFile не перетирает.
+ */
+export function loadEnvFile(): void {
+  if (fs.existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
+}
 
-  if (fs.existsSync(ENV_PATH)) {
-    process.loadEnvFile(ENV_PATH);
-    if (process.env.JWT_SECRET) return;
-  }
+export function ensureJwtSecret(): void {
+  loadEnvFile();
+  if (process.env.JWT_SECRET) return;
 
   const secret = crypto.randomBytes(32).toString("hex");
   // 0o600 — читает и пишет только владелец файла, тот же уровень доступа,

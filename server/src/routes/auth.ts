@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
-import { authMiddleware, authOrApiToken } from "../auth.js";
+import { authMiddleware, authOrApiToken, lanOwnerId } from "../auth.js";
 
 function generateApiToken(): string {
   return "tf_" + crypto.randomBytes(32).toString("hex");
@@ -24,6 +24,24 @@ function loginRateLimitKey(req: any): string {
 }
 
 export function registerAuthRoutes(app: FastifyInstance) {
+  // ═══════ ВХОД БЕЗ ПАРОЛЯ ИЗ ДОМАШНЕЙ СЕТИ ═══════
+  // Требование Максима 19.08.2026: «в своей домашней сети не хочу постоянно
+  // вбивать пароли». Фронтенд дёргает этот маршрут, когда токена нет, и молча
+  // получает сессию владельца — экран входа не показывается вовсе.
+  //
+  // Работает только при TASKFLOW_LAN_NO_AUTH=1 и только для приватных адресов
+  // (проверка в lanOwnerId, заголовкам X-Forwarded-For не верим). Снаружи
+  // маршрут отвечает 404, как будто его нет.
+  app.post("/api/auth/lan", async (req, reply) => {
+    const ownerId = lanOwnerId(req);
+    if (!ownerId) return reply.code(404).send({ error: "Not found" });
+    const user = db
+      .prepare("SELECT id, name, email, role, type FROM users WHERE id = ?")
+      .get(ownerId);
+    const token = app.jwt.sign({ id: ownerId }, { expiresIn: "30d" });
+    return { token, user };
+  });
+
   // ═══════ REGISTER ═══════
   app.post<{
     Body: {

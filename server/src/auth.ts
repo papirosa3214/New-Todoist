@@ -36,6 +36,45 @@ function extractBearer(req: FastifyRequest): string | undefined {
 }
 
 /**
+ * Запрос пришёл из домашней сети?
+ *
+ * Считаем домашними обычные приватные диапазоны и петлю. Заголовкам
+ * X-Forwarded-For намеренно НЕ верим: их подделывает кто угодно, а здесь от
+ * этой проверки зависит вход без пароля.
+ */
+function isLanRequest(req: FastifyRequest): boolean {
+  const ip = (req.ip || "").replace(/^::ffff:/, "");
+  return (
+    ip === "127.0.0.1" ||
+    ip === "::1" ||
+    ip.startsWith("192.168.") ||
+    ip.startsWith("10.") ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip)
+  );
+}
+
+/**
+ * Владелец трекера для входа без пароля из домашней сети.
+ *
+ * Требование Максима 19.08.2026: «в своей домашней сети не хочу постоянно
+ * вбивать эти пароли». Включено флагом `TASKFLOW_LAN_NO_AUTH` — выключить
+ * можно, не трогая код: убрать переменную и перезапустить сервер.
+ *
+ * Снаружи домашней сети (VPN-адрес, чужая подсеть) правило не действует, там
+ * по-прежнему нужен токен.
+ */
+export function lanOwnerId(req: FastifyRequest): string | null {
+  if (process.env.TASKFLOW_LAN_NO_AUTH !== "1") return null;
+  if (!isLanRequest(req)) return null;
+  const row = db
+    .prepare(
+      "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+    )
+    .get() as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+/**
  * Strict JWT-only auth. Used where an api_token must NOT be sufficient —
  * currently only the endpoint that issues/rotates the api_token itself, so a
  * leaked api_token can never be used to mint another one.
@@ -57,14 +96,28 @@ export async function authMiddleware(req: FastifyRequest, reply: FastifyReply) {
  */
 export async function authOrApiToken(req: FastifyRequest, reply: FastifyReply) {
   const token = extractBearer(req);
-  if (!token) return reply.code(401).send({ error: "No token" });
-  const userId = resolveUserIdFromToken(req.server as FastifyInstance, token);
-  if (!userId) return reply.code(401).send({ error: "Invalid token" });
-  (req as any).userId = userId;
+  const userId = token
+    ? resolveUserIdFromToken(req.server as FastifyInstance, token)
+    : null;
+  if (userId) {
+    (req as any).userId = userId;
+    return;
+  }
+  // Токена нет или он протух — из домашней сети пускаем владельцем.
+  const owner = lanOwnerId(req);
+  if (owner) {
+    (req as any).userId = owner;
+    return;
+  }
+  return reply.code(401).send({ error: token ? "Invalid token" : "No token" });
 }
 
 export async function optionalAuth(req: FastifyRequest, _reply: FastifyReply) {
   const token = extractBearer(req);
   const userId = resolveUserIdFromToken(req.server as FastifyInstance, token);
   if (userId) (req as any).userId = userId;
+  else {
+    const owner = lanOwnerId(req);
+    if (owner) (req as any).userId = owner;
+  }
 }
