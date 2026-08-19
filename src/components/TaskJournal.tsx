@@ -304,7 +304,8 @@ function ReturnToWorkSheet({
         // lib/useVisualViewportInset.ts, дефолт 0px задан в index.css, так
         // что на десктопе поведение прежнее.
         style={{
-          paddingBottom: "calc(var(--kb-inset, 0px) + env(safe-area-inset-bottom, 0px) + 8px)",
+          paddingBottom:
+            "calc(var(--kb-inset, 0px) + env(safe-area-inset-bottom, 0px) + 8px)",
         }}
       >
         {/* Handle: drag target for dismiss gesture */}
@@ -317,7 +318,11 @@ function ReturnToWorkSheet({
           >
             <Icon name="x" size={20} className="text-sub" />
           </button>
-          <h3 className="text-[16px] font-semibold text-text">{title}</h3>
+          {/* Заголовок шторки — 17px, как заголовок вторичного экрана
+              (ScreenHeader variant="compact"): шторка это тот же уровень
+              навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
+              значит «поле ввода, защита от автозума iOS», см. index.css. */}
+          <h3 className="text-[17px] font-semibold text-text">{title}</h3>
           <button
             onClick={onSubmit}
             disabled={!value.trim() || busy}

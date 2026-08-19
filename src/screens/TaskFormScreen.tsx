@@ -748,7 +748,14 @@ export function TaskFormScreen() {
           <button
             onClick={handleSave}
             disabled={!title.trim() || isSaving}
-            className="text-[16px] font-semibold text-red active:opacity-70 disabled:opacity-50"
+            /* 16px → 17px (20.08.2026). 16px в проекте — не кегль из
+               шкалы, а защита полей ввода от автозума iOS (правило
+               input/select/textarea в index.css), и вне полей ему делать
+               нечего. Здесь это обычная кнопка навбара, а рядом в той же
+               шапке заголовок набран 17px. Тем же заходом на 17px
+               переведены заголовки четырёх шторок — теперь весь неполевой
+               17px значит одно: «крупный, но не заголовок экрана». */
+            className="text-[17px] font-semibold text-red active:opacity-70 disabled:opacity-50"
           >
             {isSaving ? "Сохранение…" : "Готово"}
           </button>

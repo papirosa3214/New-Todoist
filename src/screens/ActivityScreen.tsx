@@ -350,7 +350,11 @@ function ActivityFilterSheet({
           >
             <Icon name="x" size={20} className="text-sub" />
           </button>
-          <h3 className="text-[16px] font-semibold text-text">Фильтры</h3>
+          {/* Заголовок шторки — 17px, как заголовок вторичного экрана
+              (ScreenHeader variant="compact"): шторка это тот же уровень
+              навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
+              значит «поле ввода, защита от автозума iOS», см. index.css. */}
+          <h3 className="text-[17px] font-semibold text-text">Фильтры</h3>
           <button
             onClick={() => setFilters(DEFAULT_FILTERS)}
             disabled={!hasActive}

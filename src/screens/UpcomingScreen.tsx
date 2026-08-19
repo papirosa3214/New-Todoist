@@ -654,7 +654,15 @@ export function UpcomingScreen() {
                         {isFirstOfMonth && (
                           <span
                             data-cal-month-label
-                            className={`text-[9px] leading-none ${
+                            /* 9px → 10px (20.08.2026): 9px не входил в
+                               шкалу проекта и, главное, выпадал из таблицы
+                               оптического трекинга в index.css — она
+                               начинается с 10px. То есть самая мелкая
+                               подпись в приложении оставалась БЕЗ разрядки
+                               именно там, где она нужнее всего: на 10px
+                               таблица открывает буквы на +0.025em, иначе
+                               «Сент.» читается пятном. */
+                            className={`text-[10px] leading-none ${
                               isFilled ? "text-red" : "text-sub"
                             }`}
                           >
