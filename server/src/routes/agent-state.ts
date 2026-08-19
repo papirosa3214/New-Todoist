@@ -232,6 +232,41 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
       const from = (task.agent_state ?? null) as AgentState | null;
 
+      // Задачу нельзя сдать на приёмку, пока её шаги висят несделанными.
+      // Правило владельца (20.08.2026): работа идёт СНИЗУ ВВЕРХ — каждый
+      // шаг сдаётся отдельно (work: review + result), и только когда все
+      // они закрыты им самим или ждут его приёмки, задача целиком уходит
+      // в review. Иначе «сдал задачу» ничего не значит: шаги остаются
+      // пустыми, и владелец не понимает, что именно сделано.
+      //
+      // Проверка живёт на СЕРВЕРЕ, а не в хуках клиента, потому что
+      // агентов несколько (Claude, Hermes, DeepSeek, любые субагенты) и
+      // чужие хуки нам не подчиняются.
+      if (state === "review") {
+        const caller = db
+          .prepare("SELECT type FROM users WHERE id = ?")
+          .get(req.userId) as { type?: string } | undefined;
+        if (caller?.type === "ai") {
+          const pending = db
+            .prepare(
+              `SELECT title FROM subtasks
+                WHERE task_id = ?
+                  AND done = 0
+                  AND (agent_state IS NULL OR agent_state != 'review')
+                ORDER BY position`,
+            )
+            .all(req.params.id) as { title: string }[];
+          if (pending.length > 0) {
+            return reply.code(400).send({
+              error:
+                "сначала сдай шаги: " +
+                pending.map((x) => `«${x.title}»`).join(", ") +
+                ". Каждый — POST /api/subtasks/:id/work {state:'review', result:'что вышло'}",
+            });
+          }
+        }
+      }
+
       const comment =
         typeof req.body?.comment === "string" ? req.body.comment.trim() : "";
       // Whether a comment is mandatory depends on the (from, to) pair, not

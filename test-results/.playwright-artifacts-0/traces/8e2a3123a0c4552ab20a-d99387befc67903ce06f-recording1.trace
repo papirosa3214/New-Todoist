@@ -1,0 +1,59 @@
+{"version":8,"type":"context-options","origin":"library","browserName":"chromium","playwrightVersion":"1.62.1","options":{"noDefaultViewport":false,"viewport":{"width":420,"height":912},"ignoreHTTPSErrors":true,"javaScriptEnabled":true,"bypassCSP":false,"locale":"en-US","offline":false,"deviceScaleFactor":3,"isMobile":true,"hasTouch":true,"colorScheme":"light","acceptDownloads":"accept","baseURL":"https://localhost:5180","serviceWorkers":"allow","selectorEngines":[],"testIdAttributeName":"data-testid"},"platform":"linux","wallTime":1787174168335,"monotonicTime":5117.345,"sdkLanguage":"javascript","testIdAttributeName":"data-testid","contextId":"browser-context@fbac6377aeec1705099819798f67ab69","title":"board.spec.ts:42 › Доска задач › метка проекта — строкой над названием, решётка и цветной текст без заливки"}
+{"type":"before","callId":"call@78","startTime":5118.098,"class":"BrowserContext","method":"newPage","params":{},"stepId":"pw:api@25"}
+{"type":"event","time":5144.679,"class":"BrowserContext","method":"page","params":{"pageId":"page@080bea840f64126077a030835ea9690a"}}
+{"type":"after","callId":"call@78","endTime":5144.726,"result":{"page":"<Page>"}}
+{"type":"before","callId":"call@80","startTime":5146.411,"class":"BrowserContext","method":"addInitScript","params":{"source":"(s => {\n    localStorage.setItem(\"taskflow-ui\", JSON.stringify({\n      state: s,\n      version: 0\n    }));\n  })({\"taskLayout\":{\"inbox\":\"list\",\"today\":\"board\"},\"hoursSpan\":1,\"upcomingLayout\":\"list\"})"},"stepId":"pw:api@26"}
+{"type":"after","callId":"call@80","endTime":5146.852,"result":{"disposable":"<Disposable>"}}
+{"type":"before","callId":"call@82","startTime":5147.71,"title":"Route requests","class":"BrowserContext","method":"setNetworkInterceptionPatterns","params":{"patterns":[{"glob":"**/api/**"}]},"stepId":"pw:api@27"}
+{"type":"after","callId":"call@82","endTime":5148.556}
+{"type":"before","callId":"call@85","startTime":5149.865,"class":"Frame","method":"goto","params":{"url":"/today","waitUntil":"networkidle"},"stepId":"pw:api@28","pageId":"page@080bea840f64126077a030835ea9690a","beforeSnapshot":"before@call@85"}
+{"type":"frame-snapshot","snapshot":{"callId":"call@85","snapshotName":"before@call@85","pageId":"page@080bea840f64126077a030835ea9690a","frameId":"frame@6bab6a4928357247a84f17cbb1a811dd","frameUrl":"about:blank","html":["HTML",{},["HEAD",{},["BASE",{"href":"about:blank"}]],["BODY"]],"viewport":{"width":980,"height":2128},"timestamp":5152.315,"wallTime":1787174168369,"collectionTime":1.2000000476837158,"resourceOverrides":[],"isMainFrame":true}}
+{"type":"log","callId":"call@85","time":5153.173,"message":"navigating to \"https://localhost:5180/today\", waiting until \"networkidle\""}
+{"type":"screencast-frame","pageId":"page@080bea840f64126077a030835ea9690a","sha1":"page@080bea840f64126077a030835ea9690a-1787174168372.jpeg","width":420,"height":912,"timestamp":5155.2,"frameSwapWallTime":1787174168368.713}
+{"type":"screencast-frame","pageId":"page@080bea840f64126077a030835ea9690a","sha1":"page@080bea840f64126077a030835ea9690a-1787174168434.jpeg","width":420,"height":912,"timestamp":5217.186,"frameSwapWallTime":1787174168428.2588}
+{"type":"console","messageType":"debug","text":"[vite] connecting...","args":[{"preview":"[vite] connecting...","value":"[vite] connecting..."}],"location":{"url":"https://localhost:5180/@vite/client","lineNumber":854,"columnNumber":8},"time":5295.939,"pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"console","messageType":"debug","text":"[vite] connected.","args":[{"preview":"[vite] connected.","value":"[vite] connected."}],"location":{"url":"https://localhost:5180/@vite/client","lineNumber":963,"columnNumber":11},"time":5801.916,"pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@87","startTime":5821.008,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@29","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@89","startTime":5821.301,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@30","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@91","startTime":5821.435,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@31","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@93","startTime":5821.557,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@32","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@95","startTime":5821.658,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@33","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@97","startTime":5821.755,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@34","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@99","startTime":5821.852,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@35","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@101","startTime":5821.948,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@36","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@103","startTime":5822.044,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@37","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@105","startTime":5822.141,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@38","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@107","startTime":5830.033,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@39","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@109","startTime":5830.221,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@40","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@111","startTime":5830.325,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@41","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@113","startTime":5830.414,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@42","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@115","startTime":5830.498,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@43","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"after","callId":"call@87","endTime":5832.668}
+{"type":"after","callId":"call@89","endTime":5832.734}
+{"type":"after","callId":"call@91","endTime":5832.762}
+{"type":"after","callId":"call@93","endTime":5832.784}
+{"type":"after","callId":"call@95","endTime":5832.806}
+{"type":"after","callId":"call@97","endTime":5832.828}
+{"type":"after","callId":"call@99","endTime":5832.85}
+{"type":"after","callId":"call@101","endTime":5832.872}
+{"type":"after","callId":"call@103","endTime":5832.893}
+{"type":"after","callId":"call@105","endTime":5832.915}
+{"type":"after","callId":"call@107","endTime":5838.321}
+{"type":"after","callId":"call@109","endTime":5838.376}
+{"type":"after","callId":"call@111","endTime":5838.401}
+{"type":"after","callId":"call@113","endTime":5838.568}
+{"type":"after","callId":"call@115","endTime":5838.594}
+{"type":"console","messageType":"info","text":"%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold","args":[{"preview":"%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools","value":"%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools"},{"preview":"font-weight:bold","value":"font-weight:bold"}],"location":{"url":"https://localhost:5180/node_modules/.vite/deps/react-dom_client.js?v=4ee837e3","lineNumber":14333,"columnNumber":48},"time":6141.687,"pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"screencast-frame","pageId":"page@080bea840f64126077a030835ea9690a","sha1":"page@080bea840f64126077a030835ea9690a-1787174169384.jpeg","width":420,"height":912,"timestamp":6167.243,"frameSwapWallTime":1787174169383.475}
+{"type":"before","callId":"call@117","startTime":6228.681,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@44","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"after","callId":"call@117","endTime":6229.037}
+{"type":"before","callId":"call@119","startTime":6309.087,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@45","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@121","startTime":6313.589,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@46","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"before","callId":"call@123","startTime":6313.829,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@47","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"after","callId":"call@119","endTime":6315.701}
+{"type":"before","callId":"call@125","startTime":6316.094,"class":"Route","method":"continue","params":{"isFallback":false},"stepId":"pw:api@48","pageId":"page@080bea840f64126077a030835ea9690a"}
+{"type":"after","callId":"call@121","endTime":6316.31}
+{"type":"after","callId":"call@123","endTime":6316.351}
+{"type":"after","callId":"call@125","endTime":6316.674}
+{"type":"screencast-frame","pageId":"page@080bea840f64126077a030835ea9690a","sha1":"page@080bea840f64126077a030835ea9690a-1787174169559.jpeg","width":420,"height":912,"timestamp":6342.302,"frameSwapWallTime":1787174169552.803}
+{"type":"screencast-frame","pageId":"page@080bea840f64126077a030835ea9690a","sha1":"page@080bea840f64126077a030835ea9690a-1787174169599.jpeg","width":420,"height":912,"timestamp":6381.337,"frameSwapWallTime":1787174169570.759}
