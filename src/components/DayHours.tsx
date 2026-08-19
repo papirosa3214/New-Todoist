@@ -10,7 +10,8 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import type { ApiTask } from "../api/types";
-import { FadeTrail, Icon, findScrollContainer } from "./UI";
+import { PRIORITIES } from "../lib/priority";
+import { Icon, findScrollContainer } from "./UI";
 
 // ═══════════ Календарная развёртка по часам — 1 или 3 дня ═══════════
 //
@@ -193,29 +194,43 @@ function NowLine() {
   );
 }
 
-/** Строка задачи без времени — её и тащат на шкалу. Только у 1-дневного
- *  вида: в 3-дневном непонятно, в какой из трёх колонок её кидать. */
+/** Плашка задачи без времени — её и тащат на шкалу. Только у 1-дневного
+ *  вида: в 3-дневном непонятно, в какой из трёх колонок её кидать.
+ *
+ *  Отдельная карточка, а не строка общего списка: заголовок пула и его
+ *  подложка убраны (19.08.2026), и плашки теперь просто плавают над
+ *  сеткой. Раз подписи «Без времени» больше нет, вся ориентировка — на
+ *  самой плашке, поэтому здесь появились проект и приоритет: владелец в
+ *  той же реплике — «совсем грустно, когда нет никакой информации, я не
+ *  понимаю, к чему она вообще относится; хотя бы символы добавь». */
 function UntimedRow({
   task,
   color,
+  projectName,
   onClick,
-  first,
 }: {
   task: ApiTask;
   color: string;
+  projectName?: string;
   onClick: () => void;
-  first: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: task.id,
   });
+  const priority = PRIORITIES.find((p) => p.key === task.priority);
+  // Низкий приоритет (P4) — значение по умолчанию, флажок для него не
+  // рисуем: он был бы у большинства задач и перестал бы что-либо значить.
+  // Тот же порядок, что в карточке задачи.
+  const showFlag = !!task.priority && task.priority <= 3;
+  const subtasks = task.subtasks ?? [];
+  const doneSubtasks = subtasks.filter((s) => s.done).length;
   return (
     <div
       ref={setNodeRef}
       onClick={onClick}
-      className={`flex w-full select-none items-center gap-3 pl-4 text-left active:bg-white/[0.04] ${
-        first ? "" : "border-t border-stroke"
-      } ${isDragging ? "opacity-30" : ""}`}
+      className={`flex w-full select-none items-center gap-2 rounded-xl bg-card pl-3 text-left shadow-[0_6px_16px_rgba(0,0,0,0.45)] active:bg-white/[0.04] ${
+        isDragging ? "opacity-30" : ""
+      }`}
       style={{
         // Выделение текста при удержании — прямая жалоба владельца
         // 19.08.2026 («если я зажимаю это событие, чтобы у меня не
@@ -231,12 +246,44 @@ function UntimedRow({
         className="h-2 w-2 shrink-0 rounded-full"
         style={{ backgroundColor: color }}
       />
-      <span
-        className={`min-w-0 flex-1 truncate py-3 text-[14px] ${
-          task.status === "completed" ? "text-sub line-through" : "text-text"
-        }`}
-      >
-        {task.title}
+      <span className="flex min-w-0 flex-1 flex-col py-2">
+        <span
+          className={`min-w-0 truncate text-[14px] ${
+            task.status === "completed" ? "text-sub line-through" : "text-text"
+          }`}
+        >
+          {task.title}
+        </span>
+        {/* Вторая строка — та самая «хотя бы пара символов»: чей проект,
+            какой приоритет, сколько шагов сделано. Всё коротко и только
+            если есть: у задачи без подзадач и без приоритета строка не
+            появляется вовсе, и плашка остаётся однострочной. */}
+        {(projectName || showFlag || subtasks.length > 0) && (
+          <span className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-dim">
+            {projectName && (
+              <span
+                className="min-w-0 max-w-[120px] truncate"
+                style={{ color }}
+              >
+                {projectName}
+              </span>
+            )}
+            {showFlag && (
+              <span
+                className="flex shrink-0 items-center gap-0.5"
+                style={{ color: priority?.color }}
+              >
+                <Icon name="flag" size={9} />
+                {priority?.label}
+              </span>
+            )}
+            {subtasks.length > 0 && (
+              <span className="shrink-0 tabular-nums">
+                {doneSubtasks}/{subtasks.length}
+              </span>
+            )}
+          </span>
+        )}
       </span>
       {/* Тащат ТОЛЬКО за эту ручку, а не за всю строку — иначе пул нельзя
           пролистать. Проверено 19.08.2026: медленный жест по строке (а
@@ -492,6 +539,7 @@ export interface DayColumnData {
 export function DayHours({
   days,
   projectColor,
+  projectName,
   onTaskClick,
   onSchedule,
 }: {
@@ -500,6 +548,10 @@ export function DayHours({
    *  палитры: одна и та же задача в списке и в сетке не должна быть
    *  разного цвета. */
   projectColor: (task: ApiTask) => string;
+  /** Название проекта — только для плашек пула задач без времени: у них
+   *  нет ни часа, ни заголовка секции, и без имени проекта непонятно, к
+   *  чему задача относится. */
+  projectName?: (task: ApiTask) => string | undefined;
   onTaskClick: (id: string) => void;
   /** Задачу перетащили на шкалу — назначить ей это время. Только у
    *  1-дневного вида, см. комментарий у UntimedRow. */
@@ -898,34 +950,29 @@ export function DayHours({
             DayHours.interactive). */}
         {untimed.length > 0 && (
           <div
-            // relative — под шлейф (FadeTrail лежит по top:100% этого
-            // бокса): без плавной кромки подпись часа, попавшая под низ
-            // пула, резалась пополам ровно так же, как раньше резался
-            // контент под строкой дат в шапке.
-            className="sticky relative z-10 -mx-4 bg-bg px-4 pb-2"
+            // Ни заголовка «Без времени — N», ни иконки, ни подсказки
+            // «перетащите на шкалу» здесь больше нет (владелец 19.08.2026:
+            // «убери название, эти три полосочки и „перетащите на шкалу“ —
+            // просто чтобы задачи вот так вот поверх плавали, вся их
+            // конструкция без лишнего, а остальное прозрачное»).
+            // Поэтому и подложки bg-bg нет: пул именно ПЛАВАЕТ над сеткой,
+            // сквозь промежутки видно часы. Шлейф затухания вместе с
+            // подложкой тоже ушёл — гасить нечего, плашки и так лежат
+            // отдельными карточками, а не сплошным полотном.
+            className="sticky z-10 -mx-4 px-4 pb-2"
             style={{ top: "var(--screen-header-h, 0px)" }}
           >
-            <div className="mb-1.5 flex items-center gap-1.5 px-1">
-              <Icon name="list" size={13} className="text-dim" />
-              <span className="text-[13px] font-semibold text-sub">
-                Без времени — {untimed.length}
-              </span>
-              <span className="ml-auto text-[11px] text-dim">
-                перетащите на шкалу
-              </span>
-            </div>
-            <div className="max-h-[132px] overflow-y-auto overscroll-contain rounded-2xl bg-card">
-              {untimed.map((t, i) => (
+            <div className="flex max-h-[132px] flex-col gap-1 overflow-y-auto overscroll-contain">
+              {untimed.map((t) => (
                 <UntimedRow
                   key={t.id}
                   task={t}
                   color={projectColor(t)}
-                  first={i === 0}
+                  projectName={projectName?.(t)}
                   onClick={() => !clickAfterDrag() && onTaskClick(t.id)}
                 />
               ))}
             </div>
-            <FadeTrail />
           </div>
         )}
 
