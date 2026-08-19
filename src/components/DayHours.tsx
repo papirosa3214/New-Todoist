@@ -205,14 +205,10 @@ function NowLine() {
  *  понимаю, к чему она вообще относится; хотя бы символы добавь». */
 function UntimedRow({
   task,
-  color,
-  projectName,
   first,
   onClick,
 }: {
   task: ApiTask;
-  color: string;
-  projectName?: string;
   /** Первой строке разделитель сверху не нужен. */
   first: boolean;
   onClick: () => void;
@@ -245,48 +241,32 @@ function UntimedRow({
         WebkitTouchCallout: "none",
       }}
     >
-      <span
-        className="h-2 w-2 shrink-0 rounded-full"
-        style={{ backgroundColor: color }}
-      />
-      <span className="flex min-w-0 flex-1 flex-col py-2">
-        <span
-          className={`min-w-0 truncate text-[14px] ${
-            task.status === "completed" ? "text-sub line-through" : "text-text"
-          }`}
-        >
-          {task.title}
+      {/* Порядок задан владельцем 19.08.2026: сначала флажок, потом
+          счётчик шагов, потом название — и всё в ОДНУ узкую строку. Ни
+          подписи приоритета рядом с флажком («флажок, а потом ещё и P1 —
+          зачем дублировать»), ни имени проекта: «не надо всю информацию
+          запихивать во все представления, здесь коротенькая заметочка —
+          глянул, понял; надо подробнее — провалился в задачу». */}
+      {showFlag && (
+        <Icon
+          name="flag"
+          size={12}
+          className="shrink-0"
+          style={{ color: priority?.color }}
+          aria-label={`Приоритет: ${priority?.name ?? ""}`}
+        />
+      )}
+      {subtasks.length > 0 && (
+        <span className="shrink-0 text-[11px] tabular-nums text-dim">
+          {doneSubtasks}/{subtasks.length}
         </span>
-        {/* Вторая строка — та самая «хотя бы пара символов»: чей проект,
-            какой приоритет, сколько шагов сделано. Всё коротко и только
-            если есть: у задачи без подзадач и без приоритета строка не
-            появляется вовсе, и плашка остаётся однострочной. */}
-        {(projectName || showFlag || subtasks.length > 0) && (
-          <span className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-dim">
-            {projectName && (
-              <span
-                className="min-w-0 max-w-[120px] truncate"
-                style={{ color }}
-              >
-                {projectName}
-              </span>
-            )}
-            {showFlag && (
-              <span
-                className="flex shrink-0 items-center gap-0.5"
-                style={{ color: priority?.color }}
-              >
-                <Icon name="flag" size={9} />
-                {priority?.label}
-              </span>
-            )}
-            {subtasks.length > 0 && (
-              <span className="shrink-0 tabular-nums">
-                {doneSubtasks}/{subtasks.length}
-              </span>
-            )}
-          </span>
-        )}
+      )}
+      <span
+        className={`min-w-0 flex-1 truncate py-1.5 text-[13px] ${
+          task.status === "completed" ? "text-sub line-through" : "text-text"
+        }`}
+      >
+        {task.title}
       </span>
       {/* Тащат ТОЛЬКО за эту ручку, а не за всю строку — иначе пул нельзя
           пролистать. Проверено 19.08.2026: медленный жест по строке (а
@@ -542,7 +522,6 @@ export interface DayColumnData {
 export function DayHours({
   days,
   projectColor,
-  projectName,
   onTaskClick,
   onSchedule,
 }: {
@@ -551,10 +530,6 @@ export function DayHours({
    *  палитры: одна и та же задача в списке и в сетке не должна быть
    *  разного цвета. */
   projectColor: (task: ApiTask) => string;
-  /** Название проекта — только для плашек пула задач без времени: у них
-   *  нет ни часа, ни заголовка секции, и без имени проекта непонятно, к
-   *  чему задача относится. */
-  projectName?: (task: ApiTask) => string | undefined;
   onTaskClick: (id: string) => void;
   /** Задачу перетащили на шкалу — назначить ей это время. Только у
    *  1-дневного вида, см. комментарий у UntimedRow. */
@@ -976,8 +951,6 @@ export function DayHours({
                 <UntimedRow
                   key={t.id}
                   task={t}
-                  color={projectColor(t)}
-                  projectName={projectName?.(t)}
                   first={i === 0}
                   onClick={() => !clickAfterDrag() && onTaskClick(t.id)}
                 />

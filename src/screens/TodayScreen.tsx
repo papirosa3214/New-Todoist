@@ -548,9 +548,6 @@ export function TodayScreen() {
             projectColor={(t) =>
               projects.find((p) => p.id === t.project_id)?.color || "#717171"
             }
-            projectName={(t) =>
-              projects.find((p) => p.id === t.project_id)?.name
-            }
             onTaskClick={(id) => navigate(`/task/${id}`)}
             // Перетащили задачу на шкалу — сразу назначаем время. Срок при
             // этом проставляем сегодняшним, если его не было: сервер не
