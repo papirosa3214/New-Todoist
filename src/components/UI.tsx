@@ -859,6 +859,20 @@ const HEADER_FADE_SOFT =
 const HEADER_TINT =
   "linear-gradient(to bottom, var(--color-bg) 0%, var(--color-bg) 46%, color-mix(in srgb, var(--color-bg) 74%, transparent) 66%, color-mix(in srgb, var(--color-bg) 34%, transparent) 84%, transparent 100%)";
 
+// Шлейф ПОД шапкой — только когда у неё есть своя нижняя строка (below).
+// Такая строка стоит на плотной подложке, и без шлейфа её нижняя кромка
+// давала ровный срез: контент под ней обрывался резко (Максим 19.08.2026:
+// «там, где начинаются даты, прям ровненький срез — можно вот с этого
+// момента начинать затухание»). Здесь всё зеркально верхним слоям: у
+// кромки плотно, ниже сходит на нет, поэтому контент уезжает в муть, а не
+// подрезается линией. Слой лежит ВНЕ бокса шапки (top: 100%), так что её
+// измеряемую высоту (--screen-header-h) он не меняет.
+const HEADER_TRAIL_H = 18;
+const HEADER_TRAIL_FADE =
+  "linear-gradient(to bottom, #000 0%, rgba(0,0,0,0.55) 45%, rgba(0,0,0,0.2) 72%, transparent 100%)";
+const HEADER_TRAIL_TINT =
+  "linear-gradient(to bottom, var(--color-bg) 0%, color-mix(in srgb, var(--color-bg) 55%, transparent) 45%, color-mix(in srgb, var(--color-bg) 20%, transparent) 72%, transparent 100%)";
+
 export function ScreenHeader({
   title,
   leading,
@@ -1039,7 +1053,24 @@ export function ScreenHeader({
             размытие накрывает её вместе с заголовком, а высота шапки
             (--screen-header-h, usePublishHeaderHeight) пересчитывается с
             ней автоматически: она измеряется по реальному боксу. */}
-        {below && <div className="relative z-10">{below}</div>}
+        {below && (
+          <>
+            <div className="relative z-10">{below}</div>
+            <div
+              aria-hidden
+              className="pointer-events-none absolute left-0 right-0"
+              style={{
+                top: "100%",
+                height: HEADER_TRAIL_H,
+                backdropFilter: "blur(6px)",
+                WebkitBackdropFilter: "blur(6px)",
+                maskImage: HEADER_TRAIL_FADE,
+                WebkitMaskImage: HEADER_TRAIL_FADE,
+                background: HEADER_TRAIL_TINT,
+              }}
+            />
+          </>
+        )}
       </div>
     </div>
   );
