@@ -873,6 +873,30 @@ const HEADER_TRAIL_FADE =
 const HEADER_TRAIL_TINT =
   "linear-gradient(to bottom, var(--color-bg) 0%, color-mix(in srgb, var(--color-bg) 55%, transparent) 45%, color-mix(in srgb, var(--color-bg) 20%, transparent) 72%, transparent 100%)";
 
+/** Тот же шлейф отдельным компонентом — нужен не только шапке: у пула
+ *  задач без времени («Сегодня», вид часов) плотная подложка кончается
+ *  такой же прямой кромкой, и подпись часа под ней резалась ровно
+ *  пополам. Один профиль затухания на оба места, чтобы они не разъезжались
+ *  при правках. Ставится в позиционированный родитель, лежит НИЖЕ его
+ *  бокса (top: 100%) и потому не меняет его измеряемую высоту. */
+export function FadeTrail() {
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute left-0 right-0"
+      style={{
+        top: "100%",
+        height: HEADER_TRAIL_H,
+        backdropFilter: "blur(6px)",
+        WebkitBackdropFilter: "blur(6px)",
+        maskImage: HEADER_TRAIL_FADE,
+        WebkitMaskImage: HEADER_TRAIL_FADE,
+        background: HEADER_TRAIL_TINT,
+      }}
+    />
+  );
+}
+
 export function ScreenHeader({
   title,
   leading,
@@ -1056,19 +1080,7 @@ export function ScreenHeader({
         {below && (
           <>
             <div className="relative z-10">{below}</div>
-            <div
-              aria-hidden
-              className="pointer-events-none absolute left-0 right-0"
-              style={{
-                top: "100%",
-                height: HEADER_TRAIL_H,
-                backdropFilter: "blur(6px)",
-                WebkitBackdropFilter: "blur(6px)",
-                maskImage: HEADER_TRAIL_FADE,
-                WebkitMaskImage: HEADER_TRAIL_FADE,
-                background: HEADER_TRAIL_TINT,
-              }}
-            />
+            <FadeTrail />
           </>
         )}
       </div>

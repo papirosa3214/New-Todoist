@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   useDraggable,
   useSensor,
   useSensors,
@@ -9,7 +10,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import type { ApiTask } from "../api/types";
-import { Icon, findScrollContainer } from "./UI";
+import { FadeTrail, Icon, findScrollContainer } from "./UI";
 
 // ═══════════ Календарная развёртка по часам — 1 или 3 дня ═══════════
 //
@@ -208,12 +209,25 @@ function UntimedRow({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/[0.04] ${
+      className={`flex w-full select-none items-center gap-3 px-4 py-3 text-left active:bg-white/[0.04] ${
         first ? "" : "border-t border-stroke"
-      } ${isDragging ? "opacity-40" : ""}`}
-      // touch-action: none обязателен для перетаскивания пальцем — без
-      // него браузер считает жест прокруткой и до dnd-kit он не доходит.
-      style={{ touchAction: "none" }}
+      } ${isDragging ? "opacity-30" : ""}`}
+      style={{
+        // manipulation, а НЕ none: перетаскивание пальцем здесь начинается
+        // по удержанию (TouchSensor с delay, см. sensors), и до этого
+        // момента жест обязан оставаться прокруткой — иначе пул из
+        // нескольких задач нельзя пролистать, палец на строке просто
+        // «залипает». `none` был нужен старому сенсору по расстоянию.
+        touchAction: "manipulation",
+        // Выделение текста при удержании — прямая жалоба владельца
+        // 19.08.2026 («если я зажимаю это событие, чтобы у меня не
+        // выделялся текст»): длинное нажатие на телефоне выделяет слово и
+        // поднимает лупу с меню «Копировать», и перетаскивание начинается
+        // уже поверх этого. select-none в классе гасит выделение,
+        // WebkitTouchCallout — само меню (у Tailwind свойства для него
+        // нет).
+        WebkitTouchCallout: "none",
+      }}
     >
       <span
         className="h-2 w-2 shrink-0 rounded-full"
@@ -247,6 +261,7 @@ function TimedBlock({
   width,
   durKnown,
   draggable,
+  hidden,
   onClick,
 }: {
   task: ApiTask;
@@ -257,6 +272,12 @@ function TimedBlock({
   width: string;
   durKnown: boolean;
   draggable: boolean;
+  /** Задачу тащат прямо сейчас, и вместо неё по сетке едет DragGhost —
+   *  саму плашку на её старом месте не рисуем совсем. Флаг приходит
+   *  снаружи, а не берётся из isDragging: пока палец занесён выше сетки
+   *  (задачу возвращают в пул) призрака нет, и в этот момент плашка обязана
+   *  остаться видимой, иначе она просто пропадает без следа. */
+  hidden: boolean;
   onClick: () => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -270,15 +291,18 @@ function TimedBlock({
       {...(draggable ? attributes : null)}
       {...(draggable ? listeners : null)}
       onClick={onClick}
-      className="absolute flex items-center gap-1.5 overflow-hidden rounded-[6px] px-2 text-left"
+      className="absolute flex select-none items-center gap-1.5 overflow-hidden rounded-[6px] px-2 text-left"
       style={{
         top,
         height,
         left,
         width,
         backgroundColor: color,
-        touchAction: draggable ? "none" : undefined,
-        opacity: isDragging ? 0.4 : done ? 0.5 : 1,
+        // manipulation, а не none — см. комментарий у sensors: палец
+        // прокручивает день прямо с плашки, а тащит её по удержанию.
+        touchAction: draggable ? "manipulation" : undefined,
+        WebkitTouchCallout: draggable ? "none" : undefined,
+        opacity: hidden ? 0 : isDragging ? 0.35 : done ? 0.5 : 1,
         // Конец не задан — низ плашки размыт, чтобы он не читался как
         // «задача точно кончится здесь».
         ...(durKnown
@@ -296,6 +320,55 @@ function TimedBlock({
           done ? "line-through opacity-70" : ""
         }`}
       >
+        {task.title}
+      </span>
+    </div>
+  );
+}
+
+/** Плашка, которая едет по сетке, пока задачу тащат, — и есть весь отклик
+ *  на перетаскивание. До 19.08.2026 его не было вовсе: источник бледнел на
+ *  своём месте, а под пальцем двигалась одна красная черта (владелец: «как
+ *  это кустарно смотрится»). Замер того захода: ни одного элемента с
+ *  transform во время перетаскивания.
+ *
+ *  Едет она НЕ за сырой позицией пальца, а по уже привязанному к четверти
+ *  часа времени (preview) — то есть ступеньками, ровно туда, где задача и
+ *  окажется после отпускания. Обещание совпадает с результатом, отдельная
+ *  «линия намерения» и «блок» не разъезжаются на пол-шага.
+ *
+ *  Отдельным слоем поверх сетки (pointer-events: none), а не подменой
+ *  самой плашки: задачу тащат и из пула, где плашки в сетке ещё нет вовсе,
+ *  и обе дороги должны выглядеть одинаково. */
+function DragGhost({
+  task,
+  color,
+  top,
+  height,
+}: {
+  task: ApiTask;
+  color: string;
+  top: number;
+  height: number;
+}) {
+  return (
+    <div
+      className="pointer-events-none absolute left-0 z-20 flex select-none items-center gap-1.5 overflow-hidden rounded-[6px] px-2"
+      style={{
+        top,
+        height,
+        width: `calc(100% - ${RIGHT_INSET}px)`,
+        backgroundColor: color,
+        // Приподнятость: тень и чуть увеличенный масштаб — плашка «взята в
+        // руку» и идёт над сеткой, а не лежит в ней. Origin слева, чтобы
+        // рост не выехал за границу колонки.
+        boxShadow: "0 10px 24px rgba(0,0,0,0.5)",
+        transform: "scale(1.015)",
+        transformOrigin: "left center",
+      }}
+    >
+      <Icon name="circle" size={9} className="shrink-0 text-white/85" />
+      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-white">
         {task.title}
       </span>
     </div>
@@ -447,10 +520,28 @@ export function DayHours({
   const [dragging, setDragging] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
-  // Мышь/палец начинают тащить только после 6px — иначе обычный тап по
-  // строке превращался бы в микро-перетаскивание и не открывал задачу.
+  // Мышь и палец — РАЗНЫМИ сенсорами, и это осознанное отступление от
+  // рецепта соседнего файла (TaskBoard: «PointerSensor одного хватает»).
+  // Там у карточки есть выделенная ручка перетаскивания, на которой тап и
+  // так ничего не значил, — поэтому порога в 4px достаточно. Здесь ручки
+  // нет: тащат саму плашку задачи, и она же открывается тапом, и она же
+  // лежит на поверхности, которую нужно уметь прокручивать пальцем. Один
+  // PointerSensor с порогом по расстоянию заставил бы выбрать одно из двух
+  // — либо `touch-action: none` (и тогда палец, начавший движение с
+  // плашки, не прокручивает день вообще), либо потерю перетаскивания.
+  //
+  //   мышь  — порог 4px, как на доске: курсор точный, задержка была бы
+  //           только раздражением;
+  //   палец — задержка 200мс с допуском 8px: короткий тап открывает
+  //           задачу, движение сразу — прокручивает сетку, а удержание
+  //           берёт плашку. Ровно тот жест, который владелец и описал
+  //           («если я зажимаю это событие… потом мог перетаскивать») и
+  //           который стоит в календаре самого телефона.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 8 },
+    }),
   );
 
   const untimed = useMemo(
@@ -467,6 +558,23 @@ export function DayHours({
   );
   const anyTimed = columns.some((c) => c.blocks.length > 0);
   const showNowLine = days.some((d) => d.isToday);
+
+  // Что именно едет по сетке прямо сейчас. Высота призрака — по
+  // длительности задачи, а у той, что ещё лежит в пуле, длительности нет:
+  // берём те же 15 минут, которые проставит onSchedule при отпускании
+  // (TodayScreen), чтобы призрак был ровно размером с будущую плашку.
+  const ghost = useMemo(() => {
+    if (!dragging || !preview) return null;
+    const task = days[0]?.tasks.find((t) => t.id === dragging);
+    if (!task) return null;
+    const [h, m] = preview.split(":").map(Number);
+    const dur = task.duration_min ?? SNAP_MIN;
+    return {
+      task,
+      top: (h + m / 60) * HOUR_H + 1,
+      height: Math.max(MIN_H, (dur / 60) * HOUR_H - 3),
+    };
+  }, [dragging, preview, days]);
 
   // Прокрутка к текущему часу при открытии — иначе экран открывается на
   // полночь, а человек смотрит день в середине дня. 120px запаса сверху,
@@ -621,8 +729,62 @@ export function DayHours({
     };
   }, [days.length]);
 
+  // Где именно палец взял плашку — расстояние от её верхнего края до точки
+  // захвата. Без него плашка, взятая за середину, прыгала бы верхом под
+  // палец в первый же момент перетаскивания (у задачи на 2 часа это
+  // подскок на целый час). Из пула так не сделать: там источник — строка
+  // списка совсем другой высоты, и переносить с неё захват некуда, поэтому
+  // у неё смещение остаётся нулевым и верх плашки встаёт под палец.
+  const grabOffsetRef = useRef(0);
+  // Момент окончания перетаскивания. Нужен, чтобы отпускание не досылало
+  // click и не открывало карточку задачи вдогонку: проверки `!dragging`
+  // для этого мало — состояние сбрасывается в handleDragEnd, а click от
+  // браузера приходит уже после него.
+  const dragEndedAtRef = useRef(0);
+
   function handleDragStart(e: DragStartEvent) {
-    setDragging(String(e.active.id));
+    const id = String(e.active.id);
+    setDragging(id);
+    const startY = pointerY({
+      activatorEvent: e.activatorEvent,
+      delta: { y: 0 },
+    });
+    const grid = gridRef.current;
+    // Точку захвата считаем от ВРЕМЕНИ задачи, а не от прямоугольника
+    // dnd-kit (`active.rect.current.initial`): на onDragStart тот ещё не
+    // измерен и приходит пустым, из-за чего смещение молча становилось
+    // нулевым — блок прыгал верхом под палец, как и раньше. Замер
+    // 19.08.2026 на двухчасовой задаче: взяли за нижний край, сдвинули на
+    // 2 часа, получили 14:45 вместо 13:00 — ровно высота блока промаха.
+    // Верх плашки и так однозначно считается из start_time, зависеть тут
+    // от внутренностей библиотеки незачем.
+    const startH = hoursFromTime(
+      days[0]?.tasks.find((t) => t.id === id)?.start_time,
+    );
+    const offsetInBlock =
+      startH !== null && grid && startY != null
+        ? startY - (grid.getBoundingClientRect().top + startH * HOUR_H + 1)
+        : 0;
+    // Отрицательное или заведомо большое значение — только если геометрия
+    // разъехалась (например, задача попала в кластер и сдвинута вбок);
+    // тогда безопаснее вести плашку верхом под пальцем, чем прыгнуть.
+    grabOffsetRef.current =
+      offsetInBlock > 0 && offsetInBlock < HOURS.length * HOUR_H
+        ? offsetInBlock
+        : 0;
+    // Призрак должен появиться сразу, а не после первого движения пальца:
+    // иначе плашку прячут (hidden), а рисовать вместо неё ещё нечего, и
+    // задача на мгновение исчезает с экрана.
+    if (grid && startY != null) {
+      const offset =
+        startY - grabOffsetRef.current - grid.getBoundingClientRect().top;
+      setPreview(offset < -HOUR_H ? null : timeFromOffset(offset));
+    }
+  }
+
+  /** Не пропустить click, если он прилетел сразу после перетаскивания. */
+  function clickAfterDrag(): boolean {
+    return !!dragging || Date.now() - dragEndedAtRef.current < 300;
   }
 
   // Y-координата пальца/курсора ПРЯМО СЕЙЧАС: activatorEvent — где он был
@@ -648,27 +810,37 @@ export function DayHours({
     return typeof clientY === "number" ? clientY + e.delta.y : null;
   }
 
+  /** Смещение верха плашки от верха сетки по текущему положению пальца, с
+   *  поправкой на точку захвата. Один расчёт на предпросмотр и на запись —
+   *  чтобы задача вставала ровно туда, где её показывал призрак. */
+  function offsetOf(e: {
+    activatorEvent: Event;
+    delta: { y: number };
+  }): number | null {
+    const grid = gridRef.current;
+    const y = pointerY(e);
+    if (!grid || y == null) return null;
+    return y - grabOffsetRef.current - grid.getBoundingClientRect().top;
+  }
+
   function handleDragEnd(e: DragEndEvent) {
     setDragging(null);
     setPreview(null);
-    const grid = gridRef.current;
-    if (!grid || !onSchedule) return;
+    dragEndedAtRef.current = Date.now();
+    if (!onSchedule) return;
     // Колонка здесь всегда одна (interactive===true только при
     // days.length===1), поэтому горизонталь роли не играет — важна
     // только высота.
-    const y = pointerY(e);
-    if (y == null) return;
-    const offset = y - grid.getBoundingClientRect().top;
+    const offset = offsetOf(e);
+    if (offset == null) return;
     // Отпустили выше сетки (например, обратно в список) — не трогаем.
     if (offset < -HOUR_H) return;
     onSchedule(String(e.active.id), timeFromOffset(offset));
   }
 
   function handleDragMove(e: { activatorEvent: Event; delta: { y: number } }) {
-    const grid = gridRef.current;
-    const y = pointerY(e);
-    if (!grid || y == null) return;
-    const offset = y - grid.getBoundingClientRect().top;
+    const offset = offsetOf(e);
+    if (offset == null) return;
     setPreview(offset < -HOUR_H ? null : timeFromOffset(offset));
   }
 
@@ -684,11 +856,32 @@ export function DayHours({
       }}
     >
       <div className="mt-2 flex flex-col gap-3">
-        {/* Задачи без времени — НАД сеткой: их перетаскивают вниз на
-            шкалу, и держать их под ней значило бы тащить через весь
-            экран. Только у 1-дневного вида (см. DayHours.interactive). */}
+        {/* Задачи со сроком на сегодня, но без времени — ПРИКЛЕЕННЫМ пулом
+            наверху, под шапкой (владелец 19.08.2026: «они просто должны
+            быть наверху зафиксированы где-то, чтобы я мог их спускать по
+            временным значениям»).
+            Именно приклеенным, а не просто первым блоком страницы, как
+            было: экран открывается прокрученным к текущему часу, и пул в
+            обычном потоке остаётся выше края экрана — чтобы положить дело
+            на 15:00, пришлось бы сперва крутить вверх за задачей, а потом
+            тащить её вслепую через весь день. Приклеенный пул виден
+            всегда: сетку крутят до нужного часа, и только потом берут
+            задачу.
+            top — реальная высота шапки (--screen-header-h, публикуется
+            usePublishHeaderHeight на контейнере прокрутки); z-10, чтобы
+            уходить ПОД шапку (у неё z-20), но идти над сеткой.
+            Своя прокрутка при длинном списке — иначе десяток дел без
+            времени закрыл бы собой полдня. Только у 1-дневного вида (см.
+            DayHours.interactive). */}
         {untimed.length > 0 && (
-          <div>
+          <div
+            // relative — под шлейф (FadeTrail лежит по top:100% этого
+            // бокса): без плавной кромки подпись часа, попавшая под низ
+            // пула, резалась пополам ровно так же, как раньше резался
+            // контент под строкой дат в шапке.
+            className="sticky relative z-10 -mx-4 bg-bg px-4 pb-2"
+            style={{ top: "var(--screen-header-h, 0px)" }}
+          >
             <div className="mb-1.5 flex items-center gap-1.5 px-1">
               <Icon name="list" size={13} className="text-dim" />
               <span className="text-[13px] font-semibold text-sub">
@@ -698,17 +891,18 @@ export function DayHours({
                 перетащите на шкалу
               </span>
             </div>
-            <div className="overflow-hidden rounded-2xl bg-card">
+            <div className="max-h-[132px] overflow-y-auto overscroll-contain rounded-2xl bg-card">
               {untimed.map((t, i) => (
                 <UntimedRow
                   key={t.id}
                   task={t}
                   color={projectColor(t)}
                   first={i === 0}
-                  onClick={() => !dragging && onTaskClick(t.id)}
+                  onClick={() => !clickAfterDrag() && onTaskClick(t.id)}
                 />
               ))}
             </div>
+            <FadeTrail />
           </div>
         )}
 
@@ -722,7 +916,12 @@ export function DayHours({
             скроллится целиком (Layout.tsx, flex-1 overflow-y-auto) — тут
             нужен был не второй вложенный скролл-регион, а обычный поток
             страницы, как у списка/доски. */}
-        <div className="-mx-4">
+        {/* z-0 не декоративный: он делает сетку отдельным слоем, и её
+            внутренние z-индексы (линия «сейчас», призрак перетаскивания)
+            больше не спорят с приклеенным пулом выше — иначе они
+            выигрывали бы у него как более поздние в DOM при равном
+            z-index и рисовались бы поверх пула. */}
+        <div className="relative z-0 -mx-4">
           <div ref={scrollRef} className="relative">
             {/* Подписи дней раньше стояли здесь своим sticky-слоем под
                 шапкой. С 19.08.2026 они рендерятся ВНУТРИ ScreenHeader
@@ -776,24 +975,6 @@ export function DayHours({
                       контейнера прокрутки (эффект выше). Элементами их
                       нельзя было продолжить за сутки, не удлинив прокрутку,
                       — а именно обрыв полос владельцу и мешал. */}
-                  {/* Подсказка времени под пальцем — только в
-                      1-дневном виде, единственной колонке. */}
-                  {interactive && preview && day.isToday && (
-                    <div
-                      className="pointer-events-none absolute left-0 right-0 z-30 flex items-center gap-2"
-                      style={{
-                        top:
-                          (Number(preview.split(":")[0]) +
-                            Number(preview.split(":")[1]) / 60) *
-                          HOUR_H,
-                      }}
-                    >
-                      <span className="w-[46px] shrink-0 pr-1.5 text-right text-[10px] font-semibold text-red tabular-nums">
-                        {preview}
-                      </span>
-                      <span className="h-[2px] flex-1 rounded bg-red/70" />
-                    </div>
-                  )}
 
                   {blocks.map((b) => (
                     <TimedBlock
@@ -806,11 +987,50 @@ export function DayHours({
                       width={b.width}
                       durKnown={b.durKnown}
                       draggable={interactive}
-                      onClick={() => !dragging && onTaskClick(b.task.id)}
+                      hidden={!!ghost && ghost.task.id === b.task.id}
+                      onClick={() =>
+                        !clickAfterDrag() && onTaskClick(b.task.id)
+                      }
                     />
                   ))}
+
+                  {/* Призрак — в колонке дня, чтобы взять её ширину. При
+                      interactive колонка ровно одна, промахнуться некуда. */}
+                  {interactive && ghost && day.isToday && (
+                    <DragGhost
+                      task={ghost.task}
+                      color={projectColor(ghost.task)}
+                      top={ghost.top}
+                      height={ghost.height}
+                    />
+                  )}
                 </div>
               ))}
+
+              {/* Время, на которое встанет задача, — в жёлобе часов, слева
+                  от призрака, а не поверх него. Раньше подпись рисовалась
+                  внутри колонки дня, где теперь едет сама плашка: цифры
+                  легли бы прямо на её текст. Тонкая черта отбивает верхнюю
+                  кромку будущей плашки и заодно связывает её с подписью. */}
+              {interactive && preview && (
+                <div
+                  className="pointer-events-none absolute left-0 right-0 z-30 flex items-center"
+                  style={{
+                    top:
+                      (Number(preview.split(":")[0]) +
+                        Number(preview.split(":")[1]) / 60) *
+                      HOUR_H,
+                  }}
+                >
+                  <span
+                    className="shrink-0 bg-bg py-px pr-1.5 text-right text-[10px] font-semibold text-red tabular-nums"
+                    style={{ width: GUTTER_W }}
+                  >
+                    {preview}
+                  </span>
+                  <span className="h-[1.5px] flex-1 rounded bg-red/70" />
+                </div>
+              )}
 
               {showNowLine && <NowLine />}
             </div>
