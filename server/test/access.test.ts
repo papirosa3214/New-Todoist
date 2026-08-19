@@ -294,6 +294,51 @@ describe("Доступ по роли: владелец, агенты, посто
     expect(task.statusCode).toBe(400);
   });
 
+  // 20.08.2026: до этого агент мог подшить задачу только в проект того, кому
+  // она адресована, — а свои задачи он назначает на себя. Работало это лишь
+  // потому, что агент ходил в трекер учёткой владельца через вход без пароля;
+  // дверь закрыли — и «задача агента обязана лежать в проекте» стало
+  // невыполнимо. Проект чужого человека при этом по-прежнему недоступен.
+  it("агент кладёт свою задачу в проект владельца, но не в проект постороннего", async () => {
+    const ownerProject = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Домашний сервер" },
+    });
+    const strangerProject = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${strangerToken}` },
+      payload: { name: "Проект постороннего для подшивки" },
+    });
+
+    const mine = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${agentAToken}` },
+      payload: {
+        title: "Задача агента в проекте владельца",
+        project_id: ownerProject.json().id,
+        assignee_id: agentAId,
+      },
+    });
+    expect(mine.statusCode).toBe(200);
+    expect(mine.json().task.project_id).toBe(ownerProject.json().id);
+
+    const alien = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${agentAToken}` },
+      payload: {
+        title: "Задача агента в чужом проекте",
+        project_id: strangerProject.json().id,
+        assignee_id: agentAId,
+      },
+    });
+    expect(alien.statusCode).toBe(400);
+  });
+
   it("владельцу видны проекты и метки, посторонний своих не теряет", async () => {
     const ownerProject = await app.inject({
       method: "POST",

@@ -284,4 +284,42 @@ test.describe("Доска задач", () => {
     await page.waitForTimeout(800);
     expect(page.url()).toContain("/task/");
   });
+
+  // То же самое ПАЛЬЦЕМ, а не мышью: жалоба про телефон, а мышь ведёт себя
+  // иначе (она не прокручивает страницу и не отдаёт жест браузеру). Только
+  // Chromium — синтетический тач идёт через CDP, которого в WebKit нет
+  // (helpers.ts, touchSwipeVertical: та же причина).
+  test("палец: свайп по карточке не открывает задачу", async ({
+    page,
+    context,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "синтетический тач — только CDP");
+    await setupApp(context, { inbox: "board" });
+    await openScreen(page, "/inbox");
+
+    const box = (await page.locator(CARD).first().boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const urlBefore = page.url();
+
+    const cdp = await context.newCDPSession(page);
+    const send = (type: string, cx: number) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints:
+          type === "touchEnd"
+            ? []
+            : [{ x: cx, y, radiusX: 12, radiusY: 12, force: 1 }],
+      });
+    await send("touchStart", x);
+    for (const dx of [-20, -60, -110]) {
+      await send("touchMove", x + dx);
+      await page.waitForTimeout(60);
+    }
+    await send("touchEnd", x - 110);
+    await page.waitForTimeout(700);
+
+    expect(page.url()).toBe(urlBefore);
+  });
 });
