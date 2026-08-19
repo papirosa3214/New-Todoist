@@ -78,7 +78,7 @@
 // raises the movement floor before ANY axis decision is made (6 → 10);
 // DIRECTION_BIAS then requires dx to clearly dominate dy, not just edge it
 // out, before calling the gesture horizontal.
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon, Avatar, AgentStateTag } from "./UI";
 import { getPriorityColor, PRIORITIES } from "../lib/priority";
@@ -122,6 +122,9 @@ const SWIPE_VEL_MIN_DX = SWIPE_THRESHOLD / 2; // px — ниже этого velo
 // с SWIPE_THRESHOLD/SWIPE_VEL: те решают «отпустили — открывать
 // редактирование или нет», а эти два — «это вообще горизонтальный жест
 // или человек просто скроллит».
+// На сколько строка приоткрывается и остаётся стоять — ровно под кнопку с
+// карандашом: 72px под палец плюс её правый отступ 20px.
+const ACTION_W = 92;
 const DIRECTION_LOCK_PX = 10; // px до первого решения об оси (было 6)
 const DIRECTION_BIAS = 1.4; // dx должен явно преобладать над dy, не только edge out
 
@@ -216,15 +219,21 @@ export function TaskRow({
   // жест, не чекбокс. Сам механизм 1:1 со старым swipe-to-complete
   // (см. историю файла, коммит 8cd89bc~1), только released-действие другое.
   const rowRef = useRef<HTMLDivElement | null>(null);
-  const actionRef = useRef<HTMLDivElement | null>(null);
+  const actionRef = useRef<HTMLButtonElement | null>(null);
+  // Строка приоткрыта и держит кнопку — тап по самой строке в этом
+  // состоянии закрывает её, а не открывает задачу.
+  const [revealed, setRevealed] = useState(false);
 
   const spring = useSpring(
     (value) => {
       if (rowRef.current)
         rowRef.current.style.transform = `translateX(${value}px)`;
       if (actionRef.current) {
-        const frac = Math.min(Math.abs(value) / SWIPE_THRESHOLD, 1);
+        const frac = Math.min(Math.abs(value) / ACTION_W, 1);
         actionRef.current.style.opacity = String(frac);
+        // Ловить нажатия кнопка должна только когда действительно
+        // открыта: иначе прозрачный слой поверх строки съедал бы тапы.
+        actionRef.current.style.pointerEvents = frac > 0.9 ? "auto" : "none";
       }
     },
     { response: 0.3, damping: 1 },
@@ -307,15 +316,18 @@ export function TaskRow({
         const absDx = Math.abs(Math.min(0, currentDx));
         const absVel = Math.abs(Math.min(0, vel));
 
-        const shouldEdit =
+        // Свайп больше НЕ выполняет действие сам — он только приоткрывает
+        // строку и показывает кнопку с карандашом (владелец 19.08.2026:
+        // «чувствительность безумная, это меня уже раздражает; должно не
+        // сразу измениться, а просто чуть-чуть карточка сдвигается и
+        // появляется кнопка с карандашом, на которую я потом нажимаю»).
+        // Отсюда и снятая острота порогов: ошибиться теперь не страшно —
+        // цена промаха не «улетел в чужой экран», а «строка приоткрылась».
+        const shouldReveal =
           absDx > SWIPE_THRESHOLD ||
           (absVel > SWIPE_VEL && absDx > SWIPE_VEL_MIN_DX);
-        if (shouldEdit) navigate(`/task/${task.id}/edit`);
-
-        // Строка всегда едет обратно — уходить со свайпом (как раньше
-        // уходила закрытая задача из списка) тут нечему: редактирование
-        // не убирает задачу из списка.
-        spring.animateTo(0, -vel);
+        setRevealed(shouldReveal);
+        spring.animateTo(shouldReveal ? -ACTION_W : 0, -vel);
       };
 
       el.addEventListener("pointermove", onMove);
@@ -338,8 +350,19 @@ export function TaskRow({
       {/* Действие под свайпом — синий «редактировать» (был teal-check у
           завершения; teal и вообще «готово»-семантика тут неуместны, это
           другое действие). */}
-      <div
+      {/* Кнопка «изменить» под строкой. Именно КНОПКА, а не декоративная
+          подложка: теперь действие выполняет нажатие на неё, а свайп лишь
+          открывает её. pointerEvents включается только когда строка
+          приоткрыта, иначе невидимый слой перехватывал бы тапы по строке. */}
+      <button
         ref={actionRef}
+        onClick={(e) => {
+          e.stopPropagation();
+          setRevealed(false);
+          spring.animateTo(0, 0);
+          navigate(`/task/${task.id}/edit`);
+        }}
+        aria-label="Изменить задачу"
         style={{
           position: "absolute",
           right: 0,
@@ -356,7 +379,7 @@ export function TaskRow({
         }}
       >
         <Icon name="edit" size={22} className="text-white" />
-      </div>
+      </button>
 
       <div
         ref={rowRef}
@@ -364,7 +387,17 @@ export function TaskRow({
         style={{ willChange: "transform" }}
       >
         <button
-          onClick={onClick}
+          onClick={() => {
+            // Строка приоткрыта — первый тап её закрывает, а не открывает
+            // задачу: иначе промахнуться мимо кнопки значило бы всё равно
+            // куда-то провалиться.
+            if (revealed) {
+              setRevealed(false);
+              spring.animateTo(0, 0);
+              return;
+            }
+            onClick();
+          }}
           // pt меньше pb — та же правка, что на карточках доски
           // (владелец 19.08.2026: «это и списков касается»). Симметричные
           // py-3 давали НЕсимметричный воздух: замер по чернильным
