@@ -25,4 +25,22 @@ export default defineConfig({
       "/ws": { target: "ws://localhost:3001", ws: true },
     },
   },
+  // Vitest и Playwright — разные раннеры с одинаковым расширением файлов.
+  // Без этого исключения `npm test` подхватывал tests/e2e/*.spec.ts и падал
+  // на каждом с «Playwright Test did not expect test.describe() to be called
+  // here» (19.08.2026, сразу после появления e2e-набора). Юнит-тесты живут
+  // в src/ и server/test, e2e гоняется своей командой playwright test.
+  test: {
+    // server/** — у сервера СВОЙ vitest.config.ts с setupFiles, который
+    // выставляет TASKFLOW_ALLOW_REGISTRATION и подменяет путь к базе.
+    // Из корня его тесты запускались без этой настройки и падали с 403 на
+    // регистрации — то есть «красные» серверные тесты означали неверный
+    // запуск, а не дефект. Их команда: cd server && npm test.
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "tests/e2e/**",
+      "server/**",
+    ],
+  },
 });

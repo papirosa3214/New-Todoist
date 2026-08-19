@@ -59,6 +59,30 @@ function pageOverflow(page: import("@playwright/test").Page) {
   );
 }
 
+/** То же, но ровно у контейнера прокрутки СТРАНИЦЫ (тот же обход вверх,
+ *  что делает findScrollContainer в UI.tsx). Нужен там, где на экране уже
+ *  есть свой законный внутренний скроллер — у раскрытой полосы дня список
+ *  задач намеренно прокручивается (max-h-[180px]), и общий замер по всем
+ *  .overflow-y-auto считал бы это поломкой страницы. */
+function pageScrollerOverflow(
+  page: import("@playwright/test").Page,
+  anchorSel: string,
+) {
+  return page.evaluate((sel) => {
+    let el: HTMLElement | null =
+      document.querySelector<HTMLElement>(sel)!.parentElement;
+    while (el && el !== document.body) {
+      if (/(auto|scroll)/.test(getComputedStyle(el).overflowY))
+        return el.scrollHeight - el.clientHeight;
+      el = el.parentElement;
+    }
+    return (
+      document.documentElement.scrollHeight -
+      document.documentElement.clientHeight
+    );
+  }, anchorSel);
+}
+
 /** Тексты рядов месяца: геометрия каждого ряда сетки. */
 function monthRows(page: import("@playwright/test").Page) {
   return page.evaluate(
@@ -201,6 +225,14 @@ test.describe("«Предстоящее»: месяц", () => {
     expect(stripText).toContain(String(dayNum));
     const monthsInStrip = MONTHS_GEN.filter((m) => stripText.includes(m));
     expect(monthsInStrip.length).toBe(1);
+
+    // Полоса ВСТРАИВАЕТСЯ в календарь, а не удлиняет страницу: нижние
+    // недели обрезаются краем, а прокручиваться должен только список задач
+    // внутри самой полосы (владелец 19.08.2026: «сам календарик пусть будет
+    // фикс, а скроллить буду задачи внутри открывшегося окна»). Именно
+    // раскрытое состояние и способно сломать этот договор — свёрнутое
+    // проверяется отдельным тестом выше.
+    expect(await pageScrollerOverflow(page, MONTH_ROW)).toBe(0);
 
     const after = await monthRows(page);
     expect(after.length).toBe(6);

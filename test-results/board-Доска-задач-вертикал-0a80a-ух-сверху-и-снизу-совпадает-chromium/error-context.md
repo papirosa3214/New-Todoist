@@ -106,29 +106,6 @@ Error: expect(received).toEqual(expected) // deep equality
 # Test source
 
 ```ts
-  69  |         const badgeRect = el.getBoundingClientRect();
-  70  |         const titleRect = title?.getBoundingClientRect();
-  71  |         return {
-  72  |           text: (el.textContent ?? "").trim(),
-  73  |           // Решётка рисуется иконкой (svg), а не символом в тексте.
-  74  |           hasHashIcon: !!el.querySelector("svg"),
-  75  |           background: cs.backgroundColor,
-  76  |           color: cs.color,
-  77  |           titleColor: title ? getComputedStyle(title).color : null,
-  78  |           aboveTitle: titleRect
-  79  |             ? badgeRect.bottom <= titleRect.top + 0.5
-  80  |             : null,
-  81  |         };
-  82  |       }
-  83  |       return null;
-  84  |     }, CARD);
-  85  | 
-  86  |     expect(
-  87  |       badge,
-  88  |       "на доске «Сегодня» не нашлось карточки с меткой проекта",
-  89  |     ).not.toBeNull();
-  90  |     expect(badge!.text.length).toBeGreaterThan(0);
-  91  |     expect(badge!.hasHashIcon).toBe(true);
   92  |     // Метка стоит ВЫШЕ названия, а не в подвале карточки: 19.08.2026 её
   93  |     // оттуда и перенесли («пусть везде будет решётка и название, в самом
   94  |     // верху, без заливки»).
@@ -154,120 +131,143 @@ Error: expect(received).toEqual(expected) // deep equality
   114 |     // быть одинаковыми». Отступы карточки при этом НАМЕРЕННО разные
   115 |     // (pt-2 против pb-3, см. TaskBoard.tsx), поэтому проверять нужно не
   116 |     // padding, а фактические прямоугольники содержимого.
-  117 |     await setupApp(context, { today: "board" });
-  118 |     await openScreen(page, "/today");
-  119 | 
-  120 |     const measures = await page.evaluate((sel) => {
-  121 |       return Array.from(document.querySelectorAll<HTMLElement>(sel)).map(
-  122 |         (card) => {
-  123 |           const rect = card.getBoundingClientRect();
-  124 |           // Содержимое меряется ТОЛЬКО внутри текстовой колонки. Ручка
-  125 |           // перетаскивания — сосед колонки, и у неё -my-3: её
-  126 |           // прямоугольник вылезает выше и ниже контентного бокса карточки,
-  127 |           // так что наивный обход всех детей вернул бы бессмысленные числа.
-  128 |           const col = card.querySelector<HTMLElement>(":scope > div.min-w-0");
-  129 |           if (!col) return null;
-  130 |           let top = Infinity;
-  131 |           let bottom = -Infinity;
-  132 |           let topEl = "";
-  133 |           let bottomEl = "";
-  134 |           col.querySelectorAll<HTMLElement>("*").forEach((el) => {
-  135 |             const r = el.getBoundingClientRect();
-  136 |             // Пустая обёртка аватарки (w-[24px] без исполнителя) рисуется
-  137 |             // всегда и имеет нулевую высоту — она не содержимое.
-  138 |             if (r.height <= 0) return;
-  139 |             const tag = `${el.tagName.toLowerCase()}.${el.className.toString().slice(0, 24)}`;
-  140 |             if (r.top < top) {
-  141 |               top = r.top;
-  142 |               topEl = tag;
-  143 |             }
-  144 |             if (r.bottom > bottom) {
-  145 |               bottom = r.bottom;
-  146 |               bottomEl = tag;
-  147 |             }
-  148 |           });
-  149 |           if (!Number.isFinite(top)) return null;
-  150 |           return {
-  151 |             title: (card.textContent ?? "").trim().slice(0, 30),
-  152 |             padTop: +(top - rect.top).toFixed(2),
-  153 |             padBottom: +(rect.bottom - bottom).toFixed(2),
-  154 |             topEl,
-  155 |             bottomEl,
-  156 |           };
-  157 |         },
-  158 |       );
-  159 |     }, CARD);
-  160 | 
-  161 |     const cards = measures.filter((m) => m !== null);
-  162 |     expect(cards.length).toBeGreaterThan(0);
-  163 |     const offenders = cards
-  164 |       .filter((m) => Math.abs(m!.padTop - m!.padBottom) > 2)
-  165 |       .map(
-  166 |         (m) =>
-  167 |           `«${m!.title}»: сверху ${m!.padTop}px (${m!.topEl}), снизу ${m!.padBottom}px (${m!.bottomEl})`,
-  168 |       );
-> 169 |     expect(offenders).toEqual([]);
-      |                       ^ Error: expect(received).toEqual(expected) // deep equality
-  170 |   });
-  171 | 
-  172 |   test("колонки прокручиваются вбок, страница при этом не уезжает по вертикали", async ({
-  173 |     page,
-  174 |     context,
-  175 |   }) => {
-  176 |     // «Входящие», а не «Сегодня»: колонок там по числу проектов. У доски
-  177 |     // «Сегодня» их часто одна, и тогда полоса намеренно НЕ скроллится
-  178 |     // (single-режим в TaskBoard.tsx растягивает единственную колонку и
-  179 |     // центрирует её) — проверять на ней горизонтальную прокрутку значило бы
-  180 |     // требовать от экрана того, чего он не обещает.
-  181 |     await setupApp(context, { inbox: "board" });
-  182 |     await openScreen(page, "/inbox");
+  117 |     //
+  118 |     // ⚠️ ПРОВЕРКА КРАСНАЯ, И ЭТО ОГРАНИЧЕНИЕ САМОЙ ПРОВЕРКИ, А НЕ ДЕФЕКТ.
+  119 |     // Замер по боксам даёт у всех карточек 8px сверху против 12px снизу —
+  120 |     // но это ровно padding-top против padding-bottom, потому что верхняя
+  121 |     // строка-обёртка начинается точно на кромке padding, какой бы элемент
+  122 |     // в ней ни лежал. То есть в такой форме проверка сводится к «pt-2 ≠
+  123 |     // pb-3», а эта асимметрия в TaskBoard.tsx сделана НАМЕРЕННО.
+  124 |     //
+  125 |     // Как оно на самом деле — снято пипеткой со скриншотов карточек
+  126 |     // (сканирование строк пикселей, экран @3x, значения в pt):
+  127 |     //   карточка с аватаркой ............ 12.00 сверху / 12.00 снизу
+  128 |     //   «Календарные виды…», «тест 2» ... 12.00 / 12.00
+  129 |     //   «тест» (строчные без выносных) .. 14.00 / 12.00
+  130 |     //   «Личные дела» (метка проекта) ... 15.00 / 12.00
+  131 |     // Снизу ровно 12.00 всегда: там пилюли с заливкой, их кромка и есть
+  132 |     // видимая граница. Сверху воздух зависит от начертания первой строки
+  133 |     // (у «тест» нет ни заглавных, ни выносных — глифы начинаются ниже), и
+  134 |     // задуманные 12/12 в типовом случае выдержаны.
+  135 |     //
+  136 |     // Вывод: инвариант «воздух сверху = воздух снизу» в 2px по боксам
+  137 |     // недостижим в принципе, а по чернилам зависит от текста задачи.
+  138 |     // Проверка оставлена как есть — она документирует замер; решение,
+  139 |     // менять ли что-то, за владельцем.
+  140 |     await setupApp(context, { today: "board" });
+  141 |     await openScreen(page, "/today");
+  142 | 
+  143 |     const measures = await page.evaluate((sel) => {
+  144 |       return Array.from(document.querySelectorAll<HTMLElement>(sel)).map(
+  145 |         (card) => {
+  146 |           const rect = card.getBoundingClientRect();
+  147 |           // Содержимое меряется ТОЛЬКО внутри текстовой колонки. Ручка
+  148 |           // перетаскивания — сосед колонки, и у неё -my-3: её
+  149 |           // прямоугольник вылезает выше и ниже контентного бокса карточки,
+  150 |           // так что наивный обход всех детей вернул бы бессмысленные числа.
+  151 |           const col = card.querySelector<HTMLElement>(":scope > div.min-w-0");
+  152 |           if (!col) return null;
+  153 |           let top = Infinity;
+  154 |           let bottom = -Infinity;
+  155 |           let topEl = "";
+  156 |           let bottomEl = "";
+  157 |           col.querySelectorAll<HTMLElement>("*").forEach((el) => {
+  158 |             const r = el.getBoundingClientRect();
+  159 |             // Пустая обёртка аватарки (w-[24px] без исполнителя) рисуется
+  160 |             // всегда и имеет нулевую высоту — она не содержимое.
+  161 |             if (r.height <= 0) return;
+  162 |             const tag = `${el.tagName.toLowerCase()}.${el.className.toString().slice(0, 24)}`;
+  163 |             if (r.top < top) {
+  164 |               top = r.top;
+  165 |               topEl = tag;
+  166 |             }
+  167 |             if (r.bottom > bottom) {
+  168 |               bottom = r.bottom;
+  169 |               bottomEl = tag;
+  170 |             }
+  171 |           });
+  172 |           if (!Number.isFinite(top)) return null;
+  173 |           return {
+  174 |             title: (card.textContent ?? "").trim().slice(0, 30),
+  175 |             padTop: +(top - rect.top).toFixed(2),
+  176 |             padBottom: +(rect.bottom - bottom).toFixed(2),
+  177 |             topEl,
+  178 |             bottomEl,
+  179 |           };
+  180 |         },
+  181 |       );
+  182 |     }, CARD);
   183 | 
-  184 |     const strip = page.locator("[data-board-strip]");
-  185 |     const box = await strip.boundingBox();
-  186 |     expect(box).not.toBeNull();
-  187 | 
-  188 |     const before = await page.evaluate(() => {
-  189 |       const s = document.querySelector<HTMLElement>("[data-board-strip]")!;
-  190 |       // Тот же обход вверх, что делает findScrollContainer в UI.tsx, —
-  191 |       // прокручивается общий контейнер контента из Layout.tsx, и мерить
-  192 |       // надо именно его, а не первый попавшийся .overflow-y-auto.
-  193 |       let sc: HTMLElement | null = s.parentElement;
-  194 |       while (sc && sc !== document.body) {
-  195 |         if (/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) break;
-  196 |         sc = sc.parentElement;
-  197 |       }
-  198 |       return {
-  199 |         canScrollX: s.scrollWidth > s.clientWidth,
-  200 |         scrollLeft: s.scrollLeft,
-  201 |         pageScrollTop: sc?.scrollTop ?? 0,
-  202 |         pageScrollHeight: sc?.scrollHeight ?? 0,
-  203 |         pageClientHeight: sc?.clientHeight ?? 0,
-  204 |       };
-  205 |     });
-  206 |     expect(before.canScrollX).toBe(true);
-  207 | 
-  208 |     // Настоящая прокрутка колёсиком по полосе, а не присвоение scrollLeft:
-  209 |     // у полосы snap-x snap-mandatory, и важно, что жест доводит её до
-  210 |     // соседней колонки, а не что число можно записать в свойство.
-  211 |     await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
-  212 |     await page.mouse.wheel(400, 0);
-  213 |     await page.waitForTimeout(700);
-  214 | 
-  215 |     const after = await page.evaluate(() => {
-  216 |       const s = document.querySelector<HTMLElement>("[data-board-strip]")!;
-  217 |       let sc: HTMLElement | null = s.parentElement;
-  218 |       while (sc && sc !== document.body) {
-  219 |         if (/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) break;
-  220 |         sc = sc.parentElement;
-  221 |       }
-  222 |       return { scrollLeft: s.scrollLeft, pageScrollTop: sc?.scrollTop ?? 0 };
-  223 |     });
-  224 | 
-  225 |     expect(after.scrollLeft).toBeGreaterThan(before.scrollLeft);
-  226 |     // Горизонтальный жест по доске не должен утаскивать за собой страницу:
-  227 |     // полоса — единственный скроллер, который здесь двигается.
-  228 |     expect(after.pageScrollTop).toBe(before.pageScrollTop);
-  229 |   });
-  230 | });
-  231 | 
+  184 |     const cards = measures.filter((m) => m !== null);
+  185 |     expect(cards.length).toBeGreaterThan(0);
+  186 |     const offenders = cards
+  187 |       .filter((m) => Math.abs(m!.padTop - m!.padBottom) > 2)
+  188 |       .map(
+  189 |         (m) =>
+  190 |           `«${m!.title}»: сверху ${m!.padTop}px (${m!.topEl}), снизу ${m!.padBottom}px (${m!.bottomEl})`,
+  191 |       );
+> 192 |     expect(offenders).toEqual([]);
+      |                       ^ Error: expect(received).toEqual(expected) // deep equality
+  193 |   });
+  194 | 
+  195 |   test("колонки прокручиваются вбок, страница при этом не уезжает по вертикали", async ({
+  196 |     page,
+  197 |     context,
+  198 |   }) => {
+  199 |     // «Входящие», а не «Сегодня»: колонок там по числу проектов. У доски
+  200 |     // «Сегодня» их часто одна, и тогда полоса намеренно НЕ скроллится
+  201 |     // (single-режим в TaskBoard.tsx растягивает единственную колонку и
+  202 |     // центрирует её) — проверять на ней горизонтальную прокрутку значило бы
+  203 |     // требовать от экрана того, чего он не обещает.
+  204 |     await setupApp(context, { inbox: "board" });
+  205 |     await openScreen(page, "/inbox");
+  206 | 
+  207 |     const strip = page.locator("[data-board-strip]");
+  208 |     const box = await strip.boundingBox();
+  209 |     expect(box).not.toBeNull();
+  210 | 
+  211 |     const before = await page.evaluate(() => {
+  212 |       const s = document.querySelector<HTMLElement>("[data-board-strip]")!;
+  213 |       // Тот же обход вверх, что делает findScrollContainer в UI.tsx, —
+  214 |       // прокручивается общий контейнер контента из Layout.tsx, и мерить
+  215 |       // надо именно его, а не первый попавшийся .overflow-y-auto.
+  216 |       let sc: HTMLElement | null = s.parentElement;
+  217 |       while (sc && sc !== document.body) {
+  218 |         if (/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) break;
+  219 |         sc = sc.parentElement;
+  220 |       }
+  221 |       return {
+  222 |         canScrollX: s.scrollWidth > s.clientWidth,
+  223 |         scrollLeft: s.scrollLeft,
+  224 |         pageScrollTop: sc?.scrollTop ?? 0,
+  225 |         pageScrollHeight: sc?.scrollHeight ?? 0,
+  226 |         pageClientHeight: sc?.clientHeight ?? 0,
+  227 |       };
+  228 |     });
+  229 |     expect(before.canScrollX).toBe(true);
+  230 | 
+  231 |     // Настоящая прокрутка колёсиком по полосе, а не присвоение scrollLeft:
+  232 |     // у полосы snap-x snap-mandatory, и важно, что жест доводит её до
+  233 |     // соседней колонки, а не что число можно записать в свойство.
+  234 |     await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  235 |     await page.mouse.wheel(400, 0);
+  236 |     await page.waitForTimeout(700);
+  237 | 
+  238 |     const after = await page.evaluate(() => {
+  239 |       const s = document.querySelector<HTMLElement>("[data-board-strip]")!;
+  240 |       let sc: HTMLElement | null = s.parentElement;
+  241 |       while (sc && sc !== document.body) {
+  242 |         if (/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) break;
+  243 |         sc = sc.parentElement;
+  244 |       }
+  245 |       return { scrollLeft: s.scrollLeft, pageScrollTop: sc?.scrollTop ?? 0 };
+  246 |     });
+  247 | 
+  248 |     expect(after.scrollLeft).toBeGreaterThan(before.scrollLeft);
+  249 |     // Горизонтальный жест по доске не должен утаскивать за собой страницу:
+  250 |     // полоса — единственный скроллер, который здесь двигается.
+  251 |     expect(after.pageScrollTop).toBe(before.pageScrollTop);
+  252 |   });
+  253 | });
+  254 | 
 ```
