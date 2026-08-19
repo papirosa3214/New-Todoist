@@ -210,16 +210,22 @@ export function useVisualViewportInset() {
  */
 export function keepAboveKeyboard(el: HTMLElement | null, gap = 12) {
   if (!el) return;
-  const inset =
-    parseFloat(
-      getComputedStyle(document.documentElement).getPropertyValue("--kb-inset"),
-    ) || 0;
-  if (inset <= 0) {
-    // Клавиатуры нет — обычного доведения до видимой области достаточно.
+  // Границу видимой области берём из --vv-*, а не из разности с
+  // innerHeight: разность обнуляется, если layout-вьюпорт ужимается вместе
+  // с видимой областью, и тогда «поднять над клавиатурой» превращается в
+  // «ничего не делать». Координаты getBoundingClientRect отсчитываются от
+  // layout-вьюпорта, значит нижняя кромка видимой полосы — это ровно
+  // vv-top + vv-height.
+  const cs = getComputedStyle(document.documentElement);
+  const vvTop = parseFloat(cs.getPropertyValue("--vv-top")) || 0;
+  const vvHeight = parseFloat(cs.getPropertyValue("--vv-height")) || 0;
+  if (vvHeight <= 0) {
+    // Нет данных о видимой области (браузер без visualViewport) — обычного
+    // доведения достаточно.
     el.scrollIntoView({ block: "nearest" });
     return;
   }
-  const line = window.innerHeight - inset - gap;
+  const line = vvTop + vvHeight - gap;
   const rect = el.getBoundingClientRect();
   if (rect.bottom <= line) return;
 
