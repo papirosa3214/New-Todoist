@@ -183,6 +183,29 @@ describe("subtaskWorkRefusal — правила работы над шагом",
     ).toBeNull();
   });
 
+  it("длинный result отклоняется: владельцу нужны одно-два предложения", () => {
+    const r = subtaskWorkRefusal({
+      ...ai,
+      from: "in_progress",
+      to: "review",
+      resultLength: 900,
+    });
+    expect(r?.code).toBe(400);
+    expect(r?.error).toContain("одно-два предложения");
+  });
+
+  it("человека предел длины не касается", () => {
+    expect(
+      subtaskWorkRefusal({
+        ...ai,
+        isAi: false,
+        from: "in_progress",
+        to: "review",
+        resultLength: 900,
+      }),
+    ).toBeNull();
+  });
+
   it("продление аренды (тело без state) не проверяется", () => {
     expect(
       subtaskWorkRefusal({

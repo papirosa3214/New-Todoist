@@ -4,7 +4,12 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
-import { logEvent, isStale, subtaskWorkRefusal } from "../agentState.js";
+import {
+  AGENT_RULES,
+  logEvent,
+  isStale,
+  subtaskWorkRefusal,
+} from "../agentState.js";
 // Тот же расчёт state/agent_stale, что у GET /api/tasks/:id (tasks.ts) —
 // иначе ответы этого файла (add/patch/delete подзадачи, WS-рассылка)
 // отдают сырой agent_state вместо вычисленного state, и два места отдачи
@@ -301,6 +306,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         isAi: caller?.type === "ai",
         taskAgentState: subtask.task_agent_state ?? null,
         hasResult: Boolean(result || subtask.result),
+        resultLength: (result ?? "").length,
       });
       if (refusal) {
         return reply.code(refusal.code).send({ error: refusal.error });
@@ -393,9 +399,12 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         type: "task:updated",
         task: fullTask,
       });
-      return withSubtaskState(
+      const updated: any = withSubtaskState(
         db.prepare("SELECT * FROM subtasks WHERE id = ?").get(req.params.id),
       );
+      // Взял шаг в работу — получи правила, как их писать. Тем же ответом,
+      // без отдельного запроса и без надежды, что агент их где-то читал.
+      return state === "in_progress" ? { ...updated, rules: AGENT_RULES } : updated;
     },
   });
 

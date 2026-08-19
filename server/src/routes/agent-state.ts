@@ -9,6 +9,7 @@ import { getTaskForWrite, isOwner as isTrackerOwner } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { hydrateTask } from "./tasks.js";
 import {
+  AGENT_RULES,
   AGENT_STATES,
   AgentState,
   canTransition,
@@ -173,7 +174,12 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         type: "task:state",
         task: hydrated,
       });
-      return { task: hydrated };
+      // Вместе с задачей агент получает ПРАВИЛА — сразу, в момент взятия.
+      // Максим 20.08.2026: «чтобы любой агент, ты или не ты, когда
+      // приступает к работе, на него сразу же всё это навешивалось, и он
+      // строго соблюдал». Памятка в чьём-то CLAUDE.md чужому агенту не
+      // указ, а этот ответ получают все одинаково.
+      return { task: hydrated, rules: AGENT_RULES };
     },
   });
 
