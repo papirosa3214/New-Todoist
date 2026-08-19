@@ -44,6 +44,24 @@ import { Icon } from "./UI";
 // диапазон устраняет это заодно.
 const HOUR_H = 124 / 3; // дробное значение снято замером — законно, см. выше
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
+// Строки сетки идут ДАЛЬШЕ 23:00 — часами следующих суток (00:00, 01:00,
+// …). Владелец 19.08.2026: «таблица заканчивается на 23:00, а ниже пустое
+// место и кнопка — напиши 00:00 и чёрточку, потом час ночи, насколько
+// хватает; ну или хотя бы просто таблицу дорисуй, чтобы не было пустого
+// места».
+//
+// Сколько именно — считает gridHours ниже, по высоте окна: на телефоне
+// сутки и так выше экрана, там хватает одной замыкающей строки «00:00»
+// (без неё у часа 23 не было нижней границы, и последняя строка висела
+// открытой над пустотой); на высоком экране добавляется столько, чтобы
+// расчерченным был весь низ.
+//
+// Строки за пределами суток чисто декоративные: задачу туда не поставить
+// — timeFromOffset зажимает время сутками, перетаскивание за 23:45 не
+// уедет.
+//
+// Подпись строки: после суток счёт идёт по кругу — 24 → «00:00».
+const hourLabel = (h: number) => `${String(h % 24).padStart(2, "0")}:00`;
 const GUTTER_W = 161 / 3; // левая колонка с подписями часов
 // Шаг привязки при перетаскивании. 15 минут — как в форме: попадать
 // пальцем в минуту на шкале высотой ~41px/час невозможно, а «ровные»
@@ -347,6 +365,29 @@ export function DayHours({
   const interactive = days.length === 1 && !!onSchedule;
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  // Высота окна — от неё зависит, сколько часовых строк дорисовать после
+  // суток, чтобы низ экрана не оставался пустым (см. gridHours ниже).
+  const [viewH, setViewH] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerHeight,
+  );
+  useEffect(() => {
+    const onResize = () => setViewH(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Сутки + замыкающая полночь + столько часов следующего дня, сколько
+  // нужно, чтобы сетка была не короче экрана. Высота контейнера ниже
+  // равна позиции ПОСЛЕДНЕЙ строки — тогда она приходится ровно на нижний
+  // край, и пустого фона под таблицей не остаётся вовсе.
+  const gridHours = useMemo(() => {
+    const extra = Math.max(
+      0,
+      Math.ceil((viewH - HOURS.length * HOUR_H) / HOUR_H),
+    );
+    return Array.from({ length: HOURS.length + extra + 1 }, (_, i) => i);
+  }, [viewH]);
+  const gridSpan = gridHours[gridHours.length - 1];
   const [dragging, setDragging] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -374,15 +415,48 @@ export function DayHours({
   // Прокрутка к текущему часу при открытии — иначе экран открывается на
   // полночь, а человек смотрит день в середине дня. 120px запаса сверху,
   // чтобы было видно, что было прямо перед «сейчас».
+  //
+  // scrollIntoView на невидимом якоре, а не свой scrollTop: своего
+  // скролл-контейнера у сетки больше нет (см. комментарий у -mx-4 ниже —
+  // «обрывается, не доходит до низа» лечилось именно снятием вложенного
+  // overflow-y-auto), сетка теперь часть обычного потока страницы.
+  // scrollIntoView сам находит ближайшего скроллящегося предка — не нужно
+  // знать заранее, какой именно div сейчас крутится (мобильная и
+  // десктопная ветки Layout.tsx устроены по-разному).
+  const nowAnchorRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!showNowLine || !scrollRef.current) return;
+    if (!showNowLine || !nowAnchorRef.current) return;
     const now = new Date();
     const pos = now.getHours() + now.getMinutes() / 60;
-    scrollRef.current.scrollTop = Math.max(0, pos * HOUR_H - 120);
+    nowAnchorRef.current.style.top = `${Math.max(0, pos * HOUR_H - 120)}px`;
+    nowAnchorRef.current.scrollIntoView({ block: "start" });
   }, [showNowLine]);
 
   function handleDragStart(e: DragStartEvent) {
     setDragging(String(e.active.id));
+  }
+
+  // Y-координата пальца/курсора ПРЯМО СЕЙЧАС: activatorEvent — где он был
+  // в момент, когда взяли строку, delta.y — на сколько сдвинулся с тех
+  // пор (dnd-kit копит эту дельту сам). Считать нужно именно так, а НЕ по
+  // верхнему краю перетаскиваемого блока (rect.current.translated.top,
+  // как было раньше) — тот сдвигается на ту же дельту от СВОЕГО исходного
+  // верха, и если строку взяли не за самый её верх (а палец обычно
+  // попадает в середину), результат промахивается ровно на эту разницу:
+  // палец наведён на 10:00, а получившийся верх блока — на 09:30. Найдено
+  // 19.08.2026 живым тестом (Playwright: цель 10:00 → сохранилось 09:30,
+  // разница ровно в половину высоты строки-источника).
+  function pointerY(e: {
+    activatorEvent: Event;
+    delta: { y: number };
+  }): number | null {
+    const ev = e.activatorEvent as
+      PointerEvent | MouseEvent | (Event & { touches?: TouchList });
+    const clientY =
+      "clientY" in ev
+        ? (ev as PointerEvent | MouseEvent).clientY
+        : ev.touches?.[0]?.clientY;
+    return typeof clientY === "number" ? clientY + e.delta.y : null;
   }
 
   function handleDragEnd(e: DragEndEvent) {
@@ -390,24 +464,22 @@ export function DayHours({
     setPreview(null);
     const grid = gridRef.current;
     if (!grid || !onSchedule) return;
-    // Координата отпускания в системе координат сетки: dnd-kit даёт
-    // прямоугольник перетаскиваемого элемента, берём его верх. Колонка
-    // здесь всегда одна (interactive===true только при days.length===1),
-    // поэтому горизонталь роли не играет — важна только высота.
-    const rect = e.active.rect.current.translated;
-    if (!rect) return;
-    const gridBox = grid.getBoundingClientRect();
-    const offset = rect.top - gridBox.top;
+    // Колонка здесь всегда одна (interactive===true только при
+    // days.length===1), поэтому горизонталь роли не играет — важна
+    // только высота.
+    const y = pointerY(e);
+    if (y == null) return;
+    const offset = y - grid.getBoundingClientRect().top;
     // Отпустили выше сетки (например, обратно в список) — не трогаем.
     if (offset < -HOUR_H) return;
     onSchedule(String(e.active.id), timeFromOffset(offset));
   }
 
-  function handleDragMove(e: { active: DragEndEvent["active"] }) {
+  function handleDragMove(e: { activatorEvent: Event; delta: { y: number } }) {
     const grid = gridRef.current;
-    const rect = e.active.rect.current.translated;
-    if (!grid || !rect) return;
-    const offset = rect.top - grid.getBoundingClientRect().top;
+    const y = pointerY(e);
+    if (!grid || y == null) return;
+    const offset = y - grid.getBoundingClientRect().top;
     setPreview(offset < -HOUR_H ? null : timeFromOffset(offset));
   }
 
@@ -454,17 +526,34 @@ export function DayHours({
         {/* -mx-4 full-bleed: сетка идёт от края до края экрана, как на
             присланном скрине, а не карточкой внутри страничных полей
             (родитель — TodayScreen, px-4). Тот же приём, что у полосы
-            свайпа TaskRow и у доски TaskBoard. */}
+            свайпа TaskRow и у доски TaskBoard.
+            БЕЗ своего max-h/overflow-y-auto (было max-h-[68vh] — владелец
+            19.08.2026: «таблица обрывается, не доходит до низа экрана»,
+            дальше пустой фон до кнопки-веера). Страница уже сама
+            скроллится целиком (Layout.tsx, flex-1 overflow-y-auto) — тут
+            нужен был не второй вложенный скролл-регион, а обычный поток
+            страницы, как у списка/доски. */}
         <div className="-mx-4">
-          <div
-            ref={scrollRef}
-            className="relative max-h-[68vh] overflow-y-auto"
-          >
+          <div ref={scrollRef} className="relative">
             {/* Подписи дней — только в 3-дневном виде, и «прилипают»
-                к верху при прокрутке: у Apple на «Предстоящем» они
-                видны всегда, крутится только сама сетка часов. */}
+                к верху при прокрутке: у Apple на «Предстоящем» они видны
+                всегда, крутится только сама сетка часов. top:0 здесь БЫЛ
+                БАГОМ (живой тест 19.08.2026): свой скролл-контейнер убран
+                (см. -mx-4 выше), эта строка стала sticky относительно
+                ВСЕЙ страницы — той же containing block, что и ScreenHeader
+                (тоже sticky top:0, z-20 выше). Два top:0 подряд НЕ
+                складывают отступы сами — при прокрутке эта строка
+                садилась ровно НА ScreenHeader и пряталась под ним целиком
+                (getBoundingClientRect подтвердил: top=0 у обеих, ниже
+                z-index проигрывает). top берётся из --screen-header-h
+                (UI.tsx, usePublishHeaderHeight — измеряет реальную
+                высоту шапки, а не константа: large/compact разной
+                высоты). */}
             {days.length > 1 && (
-              <div className="sticky top-0 z-10 flex items-center bg-bg pb-2">
+              <div
+                className="sticky z-10 flex items-center bg-bg pb-2"
+                style={{ top: "var(--screen-header-h, 0px)" }}
+              >
                 <span className="shrink-0" style={{ width: GUTTER_W }} />
                 {days.map((d) => (
                   <span
@@ -479,22 +568,25 @@ export function DayHours({
               </div>
             )}
 
+            {/* Высота — ровно до последней часовой строки (gridSpan), а не
+                «сутки + 8px», как было: тот хвост и был тем пустым местом
+                под 23:00, из-за которого таблица выглядела оборванной. */}
             <div
               ref={gridRef}
               className="relative flex"
-              style={{ height: HOURS.length * HOUR_H + 8 }}
+              style={{ height: gridSpan * HOUR_H }}
             >
               {/* Левая колонка — только подписи часов, без линии под
                   ними: у Apple часовая линия начинается ровно на границе
                   первой колонки дня, а не под цифрами. */}
               <div className="relative shrink-0" style={{ width: GUTTER_W }}>
-                {HOURS.map((h) => (
+                {gridHours.map((h) => (
                   <span
                     key={h}
                     className="absolute right-1.5 -translate-y-1/2 text-[10px] font-medium text-dim tabular-nums"
                     style={{ top: h * HOUR_H }}
                   >
-                    {String(h).padStart(2, "0")}:00
+                    {hourLabel(h)}
                   </span>
                 ))}
               </div>
@@ -504,7 +596,7 @@ export function DayHours({
                   key={day.date}
                   className="relative min-w-0 flex-1 border-l border-stroke"
                 >
-                  {HOURS.map((h) => (
+                  {gridHours.map((h) => (
                     <div
                       key={h}
                       className="absolute left-0 right-0 border-t border-stroke"
@@ -548,7 +640,20 @@ export function DayHours({
                 </div>
               ))}
 
-              {showNowLine && <NowLine />}
+              {showNowLine && (
+                <>
+                  {/* Невидимый якорь для автопрокрутки — своей top ставит
+                      эффект выше (imperatively, до scrollIntoView), а не
+                      через рендер: позиция нужна только В МОМЕНТ монтажа,
+                      заводить под неё state ради одного эффекта незачем. */}
+                  <div
+                    ref={nowAnchorRef}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-0 right-0 h-px"
+                  />
+                  <NowLine />
+                </>
+              )}
             </div>
           </div>
         </div>

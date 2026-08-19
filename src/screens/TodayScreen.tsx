@@ -4,11 +4,13 @@ import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
-import { isTaskOwner } from "../lib/taskOwner";
+import { isTaskOwner, isAgentAssignedTask } from "../lib/taskOwner";
+import { useAgents } from "../api/agents";
 import {
   todayStr,
   addDays,
   partitionOverdueToday,
+  formatDueLabel,
   MONTHS_SHORT,
 } from "../lib/date";
 import { useAppStore } from "../store";
@@ -54,6 +56,9 @@ function formatColumnDateLabel(dateStr: string): string {
 export function TodayScreen() {
   const { data: allTasks = [], isLoading, isError, error } = useTasks();
   const { data: currentUser, isLoading: isLoadingUser } = useCurrentUser();
+  // Для исключения агентских задач из календарной развёртки часов —
+  // см. hourDays ниже и isAgentAssignedTask.
+  const { data: agents = [] } = useAgents();
   const navigate = useNavigate();
   const today = todayStr();
   const layout = useAppStore((s) => s.taskLayout.today);
@@ -178,7 +183,13 @@ export function TodayScreen() {
   // — а время у неё чаще всего как раз проставлено. Следующие два дня (в
   // 3-дневном виде) — просто задачи с этой датой, без «просрочено/ждут»:
   // эти статусы имеют смысл только у сегодняшнего дня.
+  //
+  // Агентские задачи в сетку НЕ идут вовсе (19.08.2026, владелец: «нахуя
+  // агентские задачи в календаре, они точно уж там не должны находиться»)
+  // — в отличие от списочного вида ниже, где они остаются как обычное
+  // текстовое напоминание, как было раньше.
   const hourDays: DayColumnData[] = useMemo(() => {
+    const withoutAgent = (t: ApiTask) => !isAgentAssignedTask(t, agents);
     const days: DayColumnData[] = [
       {
         date: today,
@@ -189,7 +200,7 @@ export function TodayScreen() {
               t,
             ]),
           ).values(),
-        ),
+        ).filter(withoutAgent),
         isToday: true,
       },
     ];
@@ -198,13 +209,21 @@ export function TodayScreen() {
         const date = addDays(today, i);
         days.push({
           date,
-          tasks: allTasks.filter((t) => t.due_date === date),
+          tasks: allTasks.filter((t) => t.due_date === date && withoutAgent(t)),
           isToday: false,
         });
       }
     }
     return days;
-  }, [today, hoursSpan, waitingTasks, todayTasks, overdueTasks, allTasks]);
+  }, [
+    today,
+    hoursSpan,
+    waitingTasks,
+    todayTasks,
+    overdueTasks,
+    allTasks,
+    agents,
+  ]);
 
   // trueEmpty (unaffected by filters — from the "…All" sets) still drives
   // the big illustration screen below: it means there's genuinely nothing
@@ -305,28 +324,6 @@ export function TodayScreen() {
       title="Сегодня"
       actions={
         <>
-          {/* Часы — отдельной кнопкой в шапке, а не только пунктом меню
-              (18.08.2026). Через меню до них два касания и перебор видов по
-              кругу; развёртка дня — то, ради чего на этот экран заходят
-              днём, столько шагов до неё держать нельзя. Кнопка
-              переключает «часы ⇄ прежний вид», а не гоняет по кругу:
-              повторный тап возвращает туда, откуда пришли. */}
-          <button
-            onClick={() =>
-              setTaskLayout("today", layout === "hours" ? "list" : "hours")
-            }
-            aria-label={
-              layout === "hours" ? "Показать списком" : "Показать по часам"
-            }
-            aria-pressed={layout === "hours"}
-            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
-          >
-            <Icon
-              name={layout === "hours" ? "list" : "clock"}
-              size={18}
-              className={layout === "hours" ? "text-red" : ""}
-            />
-          </button>
           <TaskFilterButton
             onClick={() => setFilterSheetOpen(true)}
             active={activeFilterCount > 0}
@@ -344,17 +341,73 @@ export function TodayScreen() {
             onClose={() => setMenuOpen(false)}
             anchorRef={menuAnchorRef}
             items={[
-              // В меню осталось переключение список ⇄ доска, как было.
-              // Часы сюда не заводим третьим кругом: у них своя кнопка в
-              // шапке, а пункт меню, дублирующий соседнюю кнопку, только
-              // сбивает — из «часов» этот пункт вернёт в список или доску,
-              // что и требуется.
+              // Все четыре вида экрана — здесь, под тремя точками
+              // (19.08.2026, прямое указание владельца: «под троеточие
+              // спрячь вот эти вот список, доска, один день, три дня, а
+              // не отдельной иконкой»). Отдельная кнопка-часы в шапке,
+              // жившая тут с 18.08, этой же правкой убрана: два разных
+              // входа в один и тот же выбор — лишний шум в шапке.
+              // Текущий вид отмечен цветом и полужирным, как было в её
+              // меню.
               {
-                icon: layout === "board" ? "list" : "grid",
-                label:
-                  layout === "board" ? "Показать списком" : "Показать доской",
-                onClick: () =>
-                  setTaskLayout("today", layout === "board" ? "list" : "board"),
+                icon: "list",
+                label: (
+                  <span
+                    className={layout === "list" ? "font-semibold text-red" : ""}
+                  >
+                    Список
+                  </span>
+                ),
+                onClick: () => setTaskLayout("today", "list"),
+              },
+              {
+                icon: "grid",
+                label: (
+                  <span
+                    className={
+                      layout === "board" ? "font-semibold text-red" : ""
+                    }
+                  >
+                    Доска
+                  </span>
+                ),
+                onClick: () => setTaskLayout("today", "board"),
+              },
+              {
+                icon: "calendar",
+                label: (
+                  <span
+                    className={
+                      layout === "hours" && hoursSpan === 1
+                        ? "font-semibold text-red"
+                        : ""
+                    }
+                  >
+                    Один день
+                  </span>
+                ),
+                onClick: () => {
+                  setHoursSpan(1);
+                  setTaskLayout("today", "hours");
+                },
+              },
+              {
+                icon: "calendarSmall",
+                label: (
+                  <span
+                    className={
+                      layout === "hours" && hoursSpan === 3
+                        ? "font-semibold text-red"
+                        : ""
+                    }
+                  >
+                    Три дня
+                  </span>
+                ),
+                onClick: () => {
+                  setHoursSpan(3);
+                  setTaskLayout("today", "hours");
+                },
               },
               {
                 icon: "search",
@@ -465,34 +518,13 @@ export function TodayScreen() {
       )}
       {layout === "hours" ? (
         <>
-          {/* 1 день / 3 дня — мини-тумблер внутри вида, не третье
-              значение TaskLayout: это настройка формы самой сетки, а не
-              отдельный вид рядом со списком/доской (владелец прислал
-              скриншоты Apple Reminders «Сегодня» и «Предстоящее» — та же
-              сетка, просто на 3 колонки). */}
-          <div className="mt-2 mb-1 flex justify-center">
-            <div className="inline-flex gap-0.5 rounded-full bg-card2 p-0.5">
-              {(
-                [
-                  [1, "1 день"],
-                  [3, "3 дня"],
-                ] as const
-              ).map(([span, label]) => (
-                <button
-                  key={span}
-                  onClick={() => setHoursSpan(span)}
-                  aria-pressed={hoursSpan === span}
-                  className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition-colors ${
-                    hoursSpan === span
-                      ? "bg-red text-white"
-                      : "text-sub active:bg-white/[0.04]"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
+          {/* 1 день / 3 дня — больше НЕ пилюля-переключатель в теле
+              экрана (19.08.2026, третий заход: «вместо бегунка сделай
+              просто там, где изначально выбирается... нажимаю туда, и
+              там написано один день, три дня и всё»). Выбор переехал в
+              меню кнопки-часов в шапке, см. её комментарий выше —
+              hoursSpan (стор) от этого не изменился, поменялся только
+              способ его поменять. */}
           {/* Просроченные в сетку дня НЕ идут: вчерашняя задача на 9:00 не
               должна рисоваться в сегодняшних девяти утра. Они остаются в
               нижнем списке вместе с задачами без времени. */}
@@ -507,12 +539,22 @@ export function TodayScreen() {
             // примет время без даты, а задача, которую человек кладёт в
             // сетку СЕГОДНЯШНЕГО дня, на сегодня и планируется. Работает
             // только в 1-дневном виде — см. комментарий у DayHours.interactive.
+            //
+            // Длительность — 15 минут (SNAP_MIN, минимальный шаг сетки),
+            // если её раньше не было (19.08.2026, владелец: «должно
+            // вставать минимальное количество времени — 15 минут
+            // длительность»). Только когда её НЕ БЫЛО — иначе повторное
+            // перетаскивание уже расписанной 2-часовой задачи молча
+            // срезало бы её до 15 минут. Без этого duration_min оставался
+            // null, и DayHours рисовал размытый низ («конец не задан») —
+            // визуально «замылено» там, где владелец ждал ровную плашку.
             onSchedule={(id, time) => {
               const task = allTasks.find((t) => t.id === id);
               updateTask.mutate({
                 id,
                 start_time: time,
                 ...(task?.due_date ? null : { due_date: today }),
+                ...(task?.duration_min == null ? { duration_min: 15 } : null),
               });
             }}
           />
@@ -572,10 +614,13 @@ export function TodayScreen() {
               «Сегодня» пропадала бы, и сегодняшние строки визуально сливались
               бы с «Ждут вас» — та же путаница с местом задачи, которую и
               просили убрать. */}
+          {/* С числом, как заголовок колонки на доске (formatColumnDateLabel
+              там же ниже) — владелец 19.08.2026: голое «Сегодня» без даты
+              не читалось на фоне «Ждут вас» так же ясно, как дата в доске. */}
           {todayTasks.length > 0 &&
             (overdueTasks.length > 0 || waitingTasks.length > 0) && (
               <div className="text-[13px] font-semibold text-sub px-1 pt-3 pb-1">
-                Сегодня
+                {formatDueLabel(today)}
               </div>
             )}
           {todayTasks.map((t) => (
