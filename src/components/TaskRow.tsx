@@ -54,15 +54,30 @@
 // восстановлен 18.08.2026 прямой просьбой — то же ощущение, другое
 // действие). Dragging the row left reveals a blue "edit" action behind it.
 // setPointerCapture ensures 1:1 tracking even if the pointer leaves the
-// element. Direction lock: first pointermove determines if the gesture is
-// horizontal (|dx|>|dy|) — if not, scroll is allowed through normally. On
-// release: if displacement > SWIPE_THRESHOLD or velocity > SWIPE_VEL,
-// navigate straight to the edit form (`/task/:id/edit`) — skipping the
-// detail screen and its «Изменить» button entirely, the whole point of the
-// gesture. Spring snaps the row back in both cases (with the finger's
-// release velocity handed off — §5 velocity handoff). Physics unchanged
-// from the original (`response: 0.3, damping: 1`) — already tuned/approved,
-// only the released action changed, not the feel.
+// element. On release: if displacement > SWIPE_THRESHOLD or velocity >
+// SWIPE_VEL, navigate straight to the edit form (`/task/:id/edit`) —
+// skipping the detail screen and its «Изменить» button entirely, the whole
+// point of the gesture. Spring snaps the row back in both cases (with the
+// finger's release velocity handed off — §5 velocity handoff). Release
+// physics unchanged from the original (`response: 0.3, damping: 1`,
+// SWIPE_THRESHOLD/SWIPE_VEL below) — already tuned/approved, only the
+// released action changed, not the feel.
+//
+// Direction lock (19.08.2026, retuned — владелец: «чуть-чуть хочу вниз-
+// вверх, а там залипла и тут же в изменить»). Было: locked at just 6px of
+// movement in EITHER axis, direction decided by a bare `|dx| > |dy|` — a
+// hand that trembles 1px more sideways than vertically while starting an
+// ordinary scroll got permanently classified horizontal, captured the
+// pointer, and a fast scroll flick alone could clear SWIPE_VEL from there.
+// Two independent fixes, both from this skill's own §10 guidance
+// ("hysteresis, ~10px" before committing to a direction) plus the
+// asymmetric cost of guessing wrong: misreading a scroll as a swipe throws
+// the person into an unrelated screen, misreading a swipe as a scroll just
+// means try again — so ties should resolve toward scroll, not swipe.
+// DIRECTION_LOCK_PX (constants below, next to SWIPE_THRESHOLD/SWIPE_VEL)
+// raises the movement floor before ANY axis decision is made (6 → 10);
+// DIRECTION_BIAS then requires dx to clearly dominate dy, not just edge it
+// out, before calling the gesture horizontal.
 import { useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon, Avatar, AgentStateTag } from "./UI";
@@ -93,6 +108,22 @@ function formatDue(dateStr: string): string {
 // (не подбирались заново, физика уже одобрена).
 const SWIPE_THRESHOLD = 72; // px displacement to trigger edit
 const SWIPE_VEL = 400; // px/s release velocity to trigger edit
+// Velocity сама по себе — мгновенная скорость по ПОСЛЕДНИМ ДВУМ сэмплам
+// (см. onUp), не средняя за весь жест. Короткое резкое касание в
+// несколько px за пару миллисекунд легко даёт >400px/s при почти нулевом
+// реальном смещении — «buквально миллиметрик — и сразу в изменении»,
+// живая жалоба владельца 19.08.2026 ПОСЛЕ первого захода тюнинга
+// (direction-lock ниже), то есть это отдельная, вторая дыра: velocity-
+// путь не требовал вообще никакого минимального смещения. Теперь требует
+// — половина SWIPE_THRESHOLD: скорость решает, дошёл ли до готового
+// действия РЕЗКИЙ свайп, а не заменяет собой факт движения.
+const SWIPE_VEL_MIN_DX = SWIPE_THRESHOLD / 2; // px — ниже этого velocity не считается
+// Direction-lock tuning — see the comment block above for why. Не путать
+// с SWIPE_THRESHOLD/SWIPE_VEL: те решают «отпустили — открывать
+// редактирование или нет», а эти два — «это вообще горизонтальный жест
+// или человек просто скроллит».
+const DIRECTION_LOCK_PX = 10; // px до первого решения об оси (было 6)
+const DIRECTION_BIAS = 1.4; // dx должен явно преобладать над dy, не только edge out
 
 export interface TaskRowProps {
   task: ApiTask;
@@ -131,6 +162,13 @@ export interface TaskRowProps {
   // "keep the row focused" reasoning as maxLabels/showSubtasksBadge above
   // — Максим 18.08.2026 wants it back too).
   showAvatar?: boolean;
+  // Бейдж с названием проекта. Default on (владелец 19.08.2026 попросил
+  // его завести — см. hasProjectBadge ниже). Off для Inbox (тот же день,
+  // сразу следом): «Входящие» уже группируют задачи заголовками-секциями
+  // по проекту, бейдж на каждой строке повторяет то же самое второй раз —
+  // ровно та же причина, что у showDueBadge выше (Upcoming/Today — дата
+  // уже сказана группировкой экрана).
+  showProjectBadge?: boolean;
 }
 
 export function TaskRow({
@@ -142,6 +180,7 @@ export function TaskRow({
   showDueBadge = true,
   showSubtasksBadge = true,
   showAvatar = true,
+  showProjectBadge = true,
 }: TaskRowProps) {
   const navigate = useNavigate();
   const isDone = task.status === "completed";
@@ -161,7 +200,7 @@ export function TaskRow({
   // один с TaskBoard: фон — цвет проекта с прозрачностью, текст — сам
   // цвет. Так один проект выглядит одинаково в списке, на доске и
   // полоской в сетке часов.
-  const hasProjectBadge = !!task.project_name;
+  const hasProjectBadge = showProjectBadge && !!task.project_name;
   const hasMeta =
     hasProjectBadge ||
     hasPriorityFlag ||
@@ -221,8 +260,11 @@ export function TaskRow({
         const dx = ev.clientX - d.startX;
         const dy = ev.clientY - d.startY;
 
-        if (!d.locked && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
-          d.isHorizontal = Math.abs(dx) > Math.abs(dy);
+        if (
+          !d.locked &&
+          (Math.abs(dx) > DIRECTION_LOCK_PX || Math.abs(dy) > DIRECTION_LOCK_PX)
+        ) {
+          d.isHorizontal = Math.abs(dx) > Math.abs(dy) * DIRECTION_BIAS;
           d.locked = true;
           if (d.isHorizontal) el.setPointerCapture(ev.pointerId);
         }
@@ -265,7 +307,9 @@ export function TaskRow({
         const absDx = Math.abs(Math.min(0, currentDx));
         const absVel = Math.abs(Math.min(0, vel));
 
-        const shouldEdit = absDx > SWIPE_THRESHOLD || absVel > SWIPE_VEL;
+        const shouldEdit =
+          absDx > SWIPE_THRESHOLD ||
+          (absVel > SWIPE_VEL && absDx > SWIPE_VEL_MIN_DX);
         if (shouldEdit) navigate(`/task/${task.id}/edit`);
 
         // Строка всегда едет обратно — уходить со свайпом (как раньше

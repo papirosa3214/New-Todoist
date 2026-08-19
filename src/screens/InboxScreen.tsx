@@ -236,6 +236,10 @@ export function InboxScreen() {
                       key={task.id}
                       task={task}
                       onClick={() => navigate(`/task/${task.id}`)}
+                      // Секция уже озаглавлена именем проекта (col.title
+                      // чуть выше) — бейдж на каждой строке повторял бы
+                      // его второй раз. Владелец 19.08.2026.
+                      showProjectBadge={false}
                     />
                   ))}
                 </div>

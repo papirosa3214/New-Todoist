@@ -800,6 +800,34 @@ function useFullBleedInset(ref: RefObject<HTMLElement | null>) {
   return inset;
 }
 
+// Публикует реальную высоту шапки в CSS-переменную --screen-header-h на
+// ближайшем скроллящемся предке (19.08.2026, для DayHours: строка с
+// подписями дней в 3-дневном виде тоже sticky top:0, и без этого числа
+// садилась НА ТО ЖЕ место, что и эта шапка (z-20), пряталась под ней
+// целиком — два sticky top:0 подряд не складывают отступы сами по себе,
+// второй должен явно знать высоту первого). Та же техника измерения, что
+// у useFullBleedInset выше (ResizeObserver + findScrollContainer) — не
+// хардкодить число, шапка бывает large/compact разной высоты.
+function usePublishHeaderHeight(ref: RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const container = findScrollContainer(el);
+    const measure = () => {
+      container.style.setProperty("--screen-header-h", `${el.offsetHeight}px`);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      // Экран без шапки (ScreenHeader размонтирован) не должен оставлять
+      // чужой sticky-элемент приклеенным к высоте, которой больше нет.
+      container.style.removeProperty("--screen-header-h");
+    };
+  }, [ref]);
+}
+
 export function ScreenHeader({
   title,
   leading,
@@ -816,6 +844,7 @@ export function ScreenHeader({
   const isCompact = variant === "compact";
   const rootRef = useRef<HTMLDivElement>(null);
   const bleed = useFullBleedInset(rootRef);
+  usePublishHeaderHeight(rootRef);
   return (
     <div
       ref={rootRef}

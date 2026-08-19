@@ -92,9 +92,7 @@ export function FanMenu() {
   // opacity/transform в DOM остаются от последнего кадра — тап срабатывал
   // только со второго раза (новый цикл toggle).
   // Следующее открытие всегда берёт актуальный showAdd — устаревать нечему.
-  const [menuItems, setMenuItems] = useState<FanItem[]>(() =>
-    buildItems(),
-  );
+  const [menuItems, setMenuItems] = useState<FanItem[]>(() => buildItems());
   const n = menuItems.length;
 
   // Угол пункта i: дуга центрирована строго вверх (-90°), симметрично по
@@ -195,9 +193,13 @@ export function FanMenu() {
 
   return (
     <>
+      {/* Без затемнения (19.08.2026, владелец: «не надо, чтобы он
+          темнел») — верхушка экрана (статус-бар/шапка) в затемнение не
+          попадает и создаёт видимый шов с потемневшим низом. Div остаётся
+          только как кликабельная подложка — тап вне веера закрывает его. */}
       <div
         ref={scrimRef}
-        className="fixed inset-0 z-[34] bg-black/35"
+        className="fixed inset-0 z-[34]"
         style={{ opacity: 0, pointerEvents: "none" }}
         onClick={() => toggle(false)}
         aria-hidden="true"

@@ -1,8 +1,10 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
+import { useAgents } from "../api/agents";
 import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { todayStr, MONTHS_SHORT } from "../lib/date";
+import { isAgentAssignedTask } from "../lib/taskOwner";
 import { TaskRow } from "../components/TaskRow";
 import {
   TaskFilterButton,
@@ -166,13 +168,20 @@ export function UpcomingScreen() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   const { data: allTasks = [], isLoading, error } = useTasks();
+  const { data: agents = [] } = useAgents();
   const navigate = useNavigate();
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
+  // Агентские задачи сюда не попадают вовсе (19.08.2026, владелец: «кроме
+  // как во входящих в конкретном проекте, нигде маячить не должна» —
+  // Предстоящее не исключение). См. isAgentAssignedTask.
   const activeTasks = useMemo(
-    () => allTasks.filter((t) => t.status === "active"),
-    [allTasks],
+    () =>
+      allTasks.filter(
+        (t) => t.status === "active" && !isAgentAssignedTask(t, agents),
+      ),
+    [allTasks, agents],
   );
 
   // This screen only ever renders tasks that have a due_date (groupedTasks
