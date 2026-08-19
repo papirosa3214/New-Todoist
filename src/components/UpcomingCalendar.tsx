@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ApiTask } from "../api/types";
 import { Icon, findScrollContainer } from "./UI";
 import { formatTimeRange, todayStr } from "../lib/date";
@@ -391,12 +391,17 @@ export function MonthGrid({
   year,
   month,
   byDate,
+  openDay,
   onDayClick,
+  onTaskClick,
 }: {
   year: number;
   month: number;
   byDate: Map<string, ApiTask[]>;
+  /** Раскрытый день — его список вставляется ПОД строкой его недели. */
+  openDay: string | null;
   onDayClick: (date: string) => void;
+  onTaskClick: (id: string) => void;
 }) {
   const today = todayStr();
   const cells = useMemo(() => {
@@ -419,52 +424,77 @@ export function MonthGrid({
           </span>
         ))}
       </div>
-      {/* Шесть рядов на весь оставшийся экран — см. тот же приём в
-          WeekGrid: сетка месяца не должна обрываться на середине. */}
+      {/* Сетка собирается ПОНЕДЕЛЬНО, а не одним гридом на 42 ячейки:
+          раскрытый день показывает свои задачи полосой, вставленной между
+          его неделей и следующей (владелец 19.08.2026: «не надо, чтобы в
+          месяце снизу выезжала формочка — нажимаешь на день, и между этой
+          неделей и следующей раскрывается окно, внутри которого задачи»).
+          Внутри одного грида такую вставку не сделать, не ломая ряды. */}
       <div
-        className="grid grid-cols-7"
+        className="flex flex-col"
         style={{
           minHeight: `calc(100dvh - var(--screen-header-h, 60px) - ${GRID_BOTTOM_RESERVE + 44}px)`,
-          gridTemplateRows: "repeat(6, minmax(0, 1fr))",
         }}
       >
-        {cells.map((d) => {
-          const ds = toDateStr(d);
-          const tasks = byDate.get(ds) ?? [];
-          const shown = tasks.slice(0, MONTH_CHIP_LIMIT);
-          const rest = tasks.length - shown.length;
-          const otherMonth = d.getMonth() !== month;
+        {Array.from({ length: 6 }, (_, w) => {
+          const week = cells.slice(w * 7, w * 7 + 7);
+          const openHere =
+            openDay != null && week.some((d) => toDateStr(d) === openDay);
           return (
-            // div, не button — по той же причине, что и в неделе: внутри
-            // лежат кнопки-плашки.
-            <div
-              key={ds}
-              onClick={() => onDayClick(ds)}
-              className={`flex min-h-0 flex-col gap-[2px] overflow-hidden border-b border-r border-stroke p-1 text-left ${
-                otherMonth ? "opacity-45" : ""
-              }`}
-            >
-              <span
-                className={`mb-0.5 self-start text-[11px] tabular-nums ${
-                  ds === today
-                    ? "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red px-1 font-semibold text-white"
-                    : "px-1 text-text"
-                }`}
-              >
-                {d.getDate()}
-              </span>
-              {shown.map((t) => (
-                <TaskChip
-                  key={t.id}
-                  task={t}
-                  compact
-                  onClick={() => onDayClick(ds)}
+            <Fragment key={w}>
+              <div className="grid flex-1 grid-cols-7">
+                {week.map((d) => {
+                  const ds = toDateStr(d);
+                  const tasks = byDate.get(ds) ?? [];
+                  const shown = tasks.slice(0, MONTH_CHIP_LIMIT);
+                  const rest = tasks.length - shown.length;
+                  const otherMonth = d.getMonth() !== month;
+                  const isOpen = ds === openDay;
+                  return (
+                    // div, не button — по той же причине, что и в неделе:
+                    // внутри лежат кнопки-плашки.
+                    <div
+                      key={ds}
+                      onClick={() => onDayClick(ds)}
+                      className={`flex min-h-0 flex-col gap-[2px] overflow-hidden border-b border-r border-stroke p-1 text-left ${
+                        otherMonth ? "opacity-45" : ""
+                      } ${isOpen ? "bg-white/[0.05]" : ""}`}
+                    >
+                      <span
+                        className={`mb-0.5 self-start text-[11px] tabular-nums ${
+                          ds === today
+                            ? "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red px-1 font-semibold text-white"
+                            : "px-1 text-text"
+                        }`}
+                      >
+                        {d.getDate()}
+                      </span>
+                      {shown.map((t) => (
+                        <TaskChip
+                          key={t.id}
+                          task={t}
+                          compact
+                          onClick={() => onDayClick(ds)}
+                        />
+                      ))}
+                      {rest > 0 && (
+                        <span className="px-1 text-[9px] text-dim">
+                          +{rest}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {openHere && openDay && (
+                <DayStrip
+                  date={openDay}
+                  tasks={byDate.get(openDay) ?? []}
+                  onTaskClick={onTaskClick}
+                  onClose={() => onDayClick(openDay)}
                 />
-              ))}
-              {rest > 0 && (
-                <span className="px-1 text-[9px] text-dim">+{rest}</span>
               )}
-            </div>
+            </Fragment>
           );
         })}
       </div>
@@ -472,9 +502,92 @@ export function MonthGrid({
   );
 }
 
+/** Раскрытый день ВНУТРИ месячной сетки — полоса между его неделей и
+ *  следующей. Не панель снизу: владелец 19.08.2026 попросил именно так,
+ *  чтобы день раскрывался на месте, не закрывая собой календарь. */
+function DayStrip({
+  date,
+  tasks,
+  onTaskClick,
+  onClose,
+}: {
+  date: string;
+  tasks: ApiTask[];
+  onTaskClick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const d = new Date(date + "T00:00:00");
+  return (
+    <div className="border-b border-stroke bg-card px-3 py-2">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="text-[13px] font-semibold text-text">
+          {d.getDate()} {MONTHS_GEN[d.getMonth()]}
+        </span>
+        <span className="text-[12px] text-sub">
+          {WEEKDAYS_SHORT[(d.getDay() + 6) % 7]}
+        </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          className="ml-auto text-[12px] text-sub"
+          aria-label="Свернуть день"
+        >
+          Свернуть
+        </button>
+      </div>
+      {tasks.length === 0 ? (
+        <p className="py-2 text-[12px] text-dim">Ничего не запланировано</p>
+      ) : (
+        // Своя прокрутка при длинном дне: полоса не должна выталкивать
+        // календарь с экрана — она встроена в него, а не лежит поверх.
+        <div className="flex max-h-[180px] flex-col gap-1 overflow-y-auto overscroll-contain">
+          {tasks.map((t) => (
+            <button
+              key={t.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                onTaskClick(t.id);
+              }}
+              className="flex items-center gap-2 rounded-lg bg-card2 px-2 py-1.5 text-left"
+            >
+              <span
+                className={`flex h-[13px] w-[13px] shrink-0 items-center justify-center rounded-[4px] border ${
+                  t.status === "completed"
+                    ? "border-dim bg-dim/30"
+                    : "border-dim"
+                }`}
+              >
+                {t.status === "completed" && (
+                  <Icon name="check" size={8} className="text-sub" />
+                )}
+              </span>
+              <span
+                className={`min-w-0 flex-1 truncate text-[13px] ${
+                  t.status === "completed"
+                    ? "text-sub line-through"
+                    : "text-text"
+                }`}
+              >
+                {t.title}
+              </span>
+              {t.start_time && (
+                <span className="shrink-0 text-[11px] tabular-nums text-dim">
+                  {formatTimeRange(t.start_time, t.duration_min)}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Раскрытый день — панель со списком задач этого дня (скриншот IMG_8356:
- *  там она выезжает поверх сетки). Здесь она открывается снизу, как и
- *  прочие панели приложения. */
+ *  там она выезжает поверх сетки). Осталась для НЕДЕЛЬНОГО вида; в
+ *  месячном день раскрывается полосой внутри сетки, см. DayStrip. */
 export function DaySheet({
   date,
   tasks,

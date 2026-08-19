@@ -847,11 +847,14 @@ export function UpcomingScreen() {
             year={gridMonth.year}
             month={gridMonth.month}
             byDate={byDate}
-            onDayClick={(d) => setOpenDay(d)}
+            openDay={openDay}
+            // Повторный тап по тому же дню сворачивает полосу.
+            onDayClick={(d) => setOpenDay((prev) => (prev === d ? null : d))}
+            onTaskClick={(id) => navigate(`/task/${id}`)}
           />
         </>
       )}
-      {openDay && (
+      {openDay && view === "week" && (
         <DaySheet
           date={openDay}
           tasks={byDate.get(openDay) ?? []}
