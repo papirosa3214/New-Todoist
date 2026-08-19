@@ -477,24 +477,7 @@ export function UpcomingScreen() {
             view === "week" ? (
               <WeekMonthLabel monday={gridMonday} />
             ) : view === "month" ? (
-              <MonthHeaderLabel
-                year={gridMonth.year}
-                month={gridMonth.month}
-                onPrev={() =>
-                  setGridMonth(({ year, month }) =>
-                    month === 0
-                      ? { year: year - 1, month: 11 }
-                      : { year, month: month - 1 },
-                  )
-                }
-                onNext={() =>
-                  setGridMonth(({ year, month }) =>
-                    month === 11
-                      ? { year: year + 1, month: 0 }
-                      : { year, month: month + 1 },
-                  )
-                }
-              />
+              <MonthHeaderLabel year={gridMonth.year} month={gridMonth.month} />
             ) : undefined
           }
           actions={
@@ -840,6 +823,20 @@ export function UpcomingScreen() {
           // Повторный тап по тому же дню сворачивает полосу.
           onDayClick={(d) => setOpenDay((prev) => (prev === d ? null : d))}
           onTaskClick={(id) => navigate(`/task/${id}`)}
+          onPrevMonth={() =>
+            setGridMonth(({ year, month }) =>
+              month === 0
+                ? { year: year - 1, month: 11 }
+                : { year, month: month - 1 },
+            )
+          }
+          onNextMonth={() =>
+            setGridMonth(({ year, month }) =>
+              month === 11
+                ? { year: year + 1, month: 0 }
+                : { year, month: month + 1 },
+            )
+          }
         />
       )}
       {openDay && view === "week" && (

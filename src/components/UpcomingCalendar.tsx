@@ -27,6 +27,8 @@ import { formatTimeRange, todayStr } from "../lib/date";
 // раскладка, живущая по другому правилу, читалась бы как ошибка.
 
 const WEEKDAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+// Насколько далеко надо увести палец, чтобы месяц перелистнулся.
+const SWIPE_MIN_PX = 70;
 const WEEKDAY_LETTERS = ["П", "В", "С", "Ч", "П", "С", "В"];
 // Запас под кнопку-веер больше не константа: обе сетки замеряют реальную
 // доступную высоту (см. useLayoutEffect в WeekGrid/MonthGrid) — угаданное
@@ -253,36 +255,12 @@ const MONTHS_NOM = [
  *  (ScreenHeader.below), как и подпись недели: владелец 19.08.2026 —
  *  «этот „авг 2026“ можешь в шапку добавить, календарик чуть приподнимется».
  *  Там же он получает общее с заголовком затухание. */
-export function MonthHeaderLabel({
-  year,
-  month,
-  onPrev,
-  onNext,
-}: {
-  year: number;
-  month: number;
-  onPrev: () => void;
-  onNext: () => void;
-}) {
+export function MonthHeaderLabel({ month }: { year: number; month: number }) {
+  // Ни года, ни стрелок (владелец 19.08.2026: «2026 не надо, убери год;
+  // стрелки тоже убери» — месяц листается свайпом, см. MonthGrid).
   return (
-    <div className="flex items-center justify-center gap-4 pb-1.5 pt-0.5">
-      <button
-        onClick={onPrev}
-        className="tap-scale flex h-[28px] w-[28px] items-center justify-center"
-        aria-label="Предыдущий месяц"
-      >
-        <Icon name="chevronLeft" size={15} className="text-sub" />
-      </button>
-      <span className="min-w-[128px] text-center text-[15px] font-semibold text-text">
-        {MONTHS_NOM[month]} {year}
-      </span>
-      <button
-        onClick={onNext}
-        className="tap-scale flex h-[28px] w-[28px] items-center justify-center"
-        aria-label="Следующий месяц"
-      >
-        <Icon name="chevron" size={15} className="text-sub" />
-      </button>
+    <div className="pb-1.5 pt-0.5 text-[15px] font-semibold text-text">
+      {MONTHS_NOM[month]}
     </div>
   );
 }
@@ -432,6 +410,8 @@ export function MonthGrid({
   openDay,
   onDayClick,
   onTaskClick,
+  onPrevMonth,
+  onNextMonth,
 }: {
   year: number;
   month: number;
@@ -440,7 +420,30 @@ export function MonthGrid({
   openDay: string | null;
   onDayClick: (date: string) => void;
   onTaskClick: (id: string) => void;
+  onPrevMonth: () => void;
+  onNextMonth: () => void;
 }) {
+  // Свайп влево-вправо листает месяцы — стрелки владелец убрал именно под
+  // него (19.08.2026: «добавь возможность свайпами менять месяца, вот как
+  // надо, поэтому стрелочки и не нужны; свайп прям нормальный, чтобы не в
+  // пол пинка он улетал»). Отсюда пороги: жест засчитывается от 70px по
+  // горизонтали И только если он заметно горизонтальнее вертикального —
+  // случайное движение пальцем месяц не перелистнёт.
+  const swipeRef = useRef<{ x: number; y: number } | null>(null);
+  function onPointerDown(e: React.PointerEvent) {
+    swipeRef.current = { x: e.clientX, y: e.clientY };
+  }
+  function onPointerUp(e: React.PointerEvent) {
+    const start = swipeRef.current;
+    swipeRef.current = null;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.6)
+      return;
+    if (dx < 0) onNextMonth();
+    else onPrevMonth();
+  }
   const today = todayStr();
   const cells = useMemo(() => {
     const first = new Date(year, month, 1);
@@ -482,9 +485,22 @@ export function MonthGrid({
     return () => ro.disconnect();
   }, [year, month]);
 
+  const gridH = height ? height - 26 : undefined;
+  const rowH = gridH ? gridH / 6 : undefined;
+
   return (
-    <div className="-mx-4" ref={gridRef}>
-      <div className="grid grid-cols-7 border-b border-stroke pb-1">
+    <div
+      className="-mx-4 select-none"
+      ref={gridRef}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerCancel={() => (swipeRef.current = null)}
+      style={{ touchAction: "pan-y" }}
+    >
+      {/* Разделительной черты под днями недели больше нет — вся сетка
+          месяца идёт без линий (владелец 19.08.2026: «убери всю сетку
+          месяца, чтобы не было вообще этих полосок»). */}
+      <div className="grid grid-cols-7 pb-1">
         {WEEKDAYS_SHORT.map((w) => (
           <span key={w} className="text-center text-[10px] text-dim">
             {w}
@@ -497,21 +513,23 @@ export function MonthGrid({
           месяце снизу выезжала формочка — нажимаешь на день, и между этой
           неделей и следующей раскрывается окно, внутри которого задачи»).
           Внутри одного грида такую вставку не сделать, не ломая ряды. */}
-      <div
-        className="flex flex-col overflow-hidden"
-        // Высота замерена (см. выше). Ряды делят её поровну через
-        // `flex-1 basis-0`, поэтому все ячейки ОДНОГО размера независимо
-        // от того, сколько в них плашек — раньше ряд с четырьмя задачами
-        // распирало, и сетка шла лесенкой.
-        style={{ height: height ? height - 26 : undefined }}
-      >
+      {/* Высота замерена (см. выше), ряды — ФИКСИРОВАННОЙ высоты, не
+          доли: при раскрытии дня календарь не должен меняться (владелец
+          19.08.2026: «не нужно сжимать все остальные, календарь не должен
+          меняться — просто вниз уезжают те недели, что ниже»). Полоса
+          вставляется в поток, нижние недели съезжают вниз и обрезаются
+          краем, а размер ячеек остаётся прежним. */}
+      <div className="flex flex-col overflow-hidden" style={{ height: gridH }}>
         {Array.from({ length: 6 }, (_, w) => {
           const week = cells.slice(w * 7, w * 7 + 7);
           const openHere =
             openDay != null && week.some((d) => toDateStr(d) === openDay);
           return (
             <Fragment key={w}>
-              <div className="grid min-h-0 flex-1 basis-0 grid-cols-7">
+              <div
+                className="grid min-h-0 shrink-0 grid-cols-7"
+                style={{ height: rowH }}
+              >
                 {week.map((d) => {
                   const ds = toDateStr(d);
                   const tasks = byDate.get(ds) ?? [];
@@ -525,25 +543,23 @@ export function MonthGrid({
                     <div
                       key={ds}
                       onClick={() => onDayClick(ds)}
-                      className={`flex min-h-0 flex-col gap-[2px] overflow-hidden border-r border-stroke p-1 text-left ${
+                      // Никаких границ: сетка без линий вовсе. Осталась
+                      // только подсветка выбранного дня — она и связывает
+                      // его с раскрытой полосой.
+                      className={`flex min-h-0 flex-col items-center gap-[2px] overflow-hidden px-0.5 py-1 text-left ${
                         otherMonth ? "opacity-45" : ""
-                      } ${
-                        // Выбранный день СЛИВАЕТСЯ с раскрытой полосой:
-                        // тот же фон, скругление только сверху и никакой
-                        // нижней черты — владелец 19.08.2026: «убери
-                        // снизу полосочку, чтобы фон сливался, как будто
-                        // оно вливается». Остальные ячейки черту снизу
-                        // сохраняют.
-                        isOpen
-                          ? "rounded-t-lg bg-card"
-                          : "border-b border-stroke"
-                      }`}
+                      } ${isOpen ? "rounded-t-lg bg-card" : ""}`}
                     >
+                      {/* Число по ЦЕНТРУ ячейки, а не у левого края:
+                          владелец 19.08.2026 — «числа отцентруй по
+                          ячейкам, чтобы они шли в рядок с днями недели».
+                          Теперь «Пн» в шапке и все его числа стоят на
+                          одной вертикали. */}
                       <span
-                        className={`mb-0.5 self-start text-[11px] tabular-nums ${
+                        className={`mb-0.5 text-[11px] tabular-nums ${
                           ds === today
-                            ? "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red px-1 font-semibold text-white"
-                            : "px-1 text-text"
+                            ? "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red font-semibold text-white"
+                            : "text-text"
                         }`}
                       >
                         {d.getDate()}
@@ -570,7 +586,6 @@ export function MonthGrid({
                   date={openDay}
                   tasks={byDate.get(openDay) ?? []}
                   onTaskClick={onTaskClick}
-                  onClose={() => onDayClick(openDay)}
                 />
               )}
             </Fragment>
@@ -588,36 +603,28 @@ function DayStrip({
   date,
   tasks,
   onTaskClick,
-  onClose,
 }: {
   date: string;
   tasks: ApiTask[];
   onTaskClick: (id: string) => void;
-  onClose: () => void;
 }) {
   const d = new Date(date + "T00:00:00");
   return (
     // shrink-0 обязателен: контейнер месяца теперь фиксированной высоты с
     // overflow-hidden, и без запрета сжатия полосу схлопывало в ноль —
     // недели с flex-1 забирали всю высоту себе.
-    <div className="shrink-0 border-b border-stroke bg-card px-3 py-2">
+    <div className="shrink-0 bg-card px-3 py-2">
       <div className="mb-1.5 flex items-center gap-2">
         <span className="text-[13px] font-semibold text-text">
           {d.getDate()} {MONTHS_GEN[d.getMonth()]}
         </span>
+        {/* Кнопки «Свернуть» здесь нет намеренно (владелец 19.08.2026:
+            «убери это слово, оно абсолютно не нужно, я и так знаю, как
+            сворачивать») — полоса закрывается повторным тапом по тому же
+            дню, см. onDayClick в UpcomingScreen. */}
         <span className="text-[12px] text-sub">
           {WEEKDAYS_SHORT[(d.getDay() + 6) % 7]}
         </span>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onClose();
-          }}
-          className="ml-auto text-[12px] text-sub"
-          aria-label="Свернуть день"
-        >
-          Свернуть
-        </button>
       </div>
       {tasks.length === 0 ? (
         <p className="py-2 text-[12px] text-dim">Ничего не запланировано</p>
