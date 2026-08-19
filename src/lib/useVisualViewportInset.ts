@@ -61,6 +61,10 @@ export function useVisualViewportInset() {
     // хука нет.
     if (!vv) return;
 
+    // Прошлый инсет — чтобы отличить «клавиатура открылась» от обычного
+    // панорамирования над уже открытой клавиатурой (см. ниже).
+    let prevInset = 0;
+
     const update = () => {
       // window.innerHeight — высота layout-вьюпорта, той самой, от
       // которой считается 100dvh; на WebKit она НЕ меняется при
@@ -78,7 +82,10 @@ export function useVisualViewportInset() {
       // защита от отрицательных значений на переходных кадрах анимации
       // открытия/закрытия клавиатуры и от округления; минусовый отступ
       // был бы хуже нулевого.
-      const vvInset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      const vvInset = Math.max(
+        0,
+        window.innerHeight - vv.height - vv.offsetTop,
+      );
       // Своя экранная клавиатура (components/AppKeyboard.tsx) системную НЕ
       // вызывает — она гасится inputMode="none", и visualViewport при её
       // открытии не сжимается ВООБЩЕ (замер на iPhone Air, iOS 26.6,
@@ -103,6 +110,30 @@ export function useVisualViewportInset() {
         "--kb-height",
         `${kbHeight}px`,
       );
+
+      // Клавиатура ТОЛЬКО ЧТО появилась (или выросла) — доводим активное
+      // поле до видимой области ещё раз.
+      //
+      // Почему одного скролла на onFocus мало: он случается ДО того, как
+      // клавиатура выехала, то есть до того, как отступы снизу выросли на
+      // её высоту. Поле в этот момент уже «внизу видимой области», а через
+      // мгновение видимая область ужимается — и поле оказывается под
+      // клавиатурой. Ровно это поймал тест keyboard-fields.spec.ts на поле
+      // комментария в карточке задачи (20.08.2026): 911.75 при границе 576.
+      //
+      // Делается здесь, а не в каждом поле: место одно — то, которое
+      // ПЕРВЫМ узнаёт, что клавиатура открылась. block:"nearest" —
+      // минимальное движение, поле не прыгает в центр, если и так видно.
+      if (inset > prevInset + 1) {
+        const active = document.activeElement as HTMLElement | null;
+        if (
+          active &&
+          (active.tagName === "INPUT" || active.tagName === "TEXTAREA")
+        ) {
+          active.scrollIntoView({ block: "nearest" });
+        }
+      }
+      prevInset = inset;
     };
 
     // Считаем сразу при монтировании — а не только по первому событию —
