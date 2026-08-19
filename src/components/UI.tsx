@@ -876,6 +876,50 @@ export function ScreenHeader({
   const rootRef = useRef<HTMLDivElement>(null);
   const bleed = useFullBleedInset(rootRef);
   usePublishHeaderHeight(rootRef);
+
+  // ═══ Шапка ПРИБИТА к экрану, а не приклеена к прокрутке ═══
+  //
+  // Было `position: sticky` внутри скроллящегося контейнера. Sticky держит
+  // элемент у верха, пока идёт обычная прокрутка, но при оттяжке
+  // (rubber-band) содержимое уезжает вниз ЦЕЛИКОМ, вместе со sticky-шапкой
+  // — и из-под неё выглядывает то, что было выше. Пока шапка была
+  // непрозрачной плашкой, это не замечалось; со стеклянной стало видно
+  // сетку часов. Владелец 19.08.2026: «оттяжка есть, но шапка прибитая».
+  //
+  // Отключать саму оттяжку (overscroll-behavior: none) он отверг сразу —
+  // «так никто не делает». Поэтому шапка переведена на `position: fixed`:
+  // она привязана к окну, оттяжка её не касается. Место в потоке держит
+  // распорка той же высоты — иначе контент подскочил бы под шапку.
+  const [fixedBox, setFixedBox] = useState<{
+    left: number;
+    width: number;
+  } | null>(null);
+  const [barH, setBarH] = useState(0);
+  const barRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const spacer = rootRef.current;
+    const bar = barRef.current;
+    if (!spacer || !bar) return;
+    const measure = () => {
+      const r = spacer.getBoundingClientRect();
+      setFixedBox((prev) =>
+        prev && prev.left === r.left && prev.width === r.width
+          ? prev
+          : { left: r.left, width: r.width },
+      );
+      setBarH(bar.offsetHeight);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(spacer);
+    ro.observe(bar);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+
   return (
     <div
       ref={rootRef}
@@ -890,15 +934,28 @@ export function ScreenHeader({
       // ПОСЛЕДНИМ классом в строке, до внешнего className — единственный
       // экран, где className что-то своё несёт (TodayScreen, w-full для
       // пустого состояния), к margin отношения не имеет и не конфликтует.
-      className={`sticky top-0 z-20 mb-4 ${className}`}
+      className={`mb-4 ${className}`}
       style={{
         marginLeft: -bleed.left,
         marginRight: -bleed.right,
-        paddingLeft: bleed.left,
-        paddingRight: bleed.right,
         ...(bleed.width !== undefined ? { width: bleed.width } : {}),
+        // Распорка: высота настоящей полосы, которая теперь вне потока.
+        height: barH || undefined,
       }}
     >
+      <div
+        ref={barRef}
+        className="fixed top-0 z-20"
+        style={{
+          left: fixedBox ? fixedBox.left : undefined,
+          width: fixedBox ? fixedBox.width : undefined,
+          paddingLeft: bleed.left,
+          paddingRight: bleed.right,
+          // До первого замера шапку не показываем — иначе на первом кадре
+          // она мелькнёт на всю ширину окна, поверх бокового меню.
+          visibility: fixedBox ? undefined : "hidden",
+        }}
+      >
       {/* ═══ Затухание вместо сплошной плашки (Максим 19.08.2026) ═══
           «Верхушку сделать прозрачную, с последующим затуханием: вначале
           нормальная видимость, под шапкой посередине уже мутно, а ближе к
@@ -963,6 +1020,7 @@ export function ScreenHeader({
             {actions}
           </div>
         )}
+        </div>
       </div>
     </div>
   );

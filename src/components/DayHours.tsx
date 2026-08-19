@@ -408,11 +408,17 @@ export function DayHours({
     const grid = gridRef.current;
     if (!grid) return;
     const sc = findScrollContainer(grid);
-    // Красим ОДИН элемент — сам скролл-контейнер. Его фон покрывает весь
-    // бокс, а не только высоту содержимого, поэтому полосы есть и под
-    // кнопкой, и в оттяжке-пружине, где элементов уже нет. Позиция
-    // подстраивается под текущую прокрутку, чтобы линии всегда совпадали
-    // с сеткой.
+    // Красим ОДИН элемент — сам скролл-контейнер, и пересчитываем позицию
+    // ТОЛЬКО при изменении размеров, никогда на прокрутку. Двигать фон из
+    // обработчика scroll (первая версия) нельзя: JS отстаёт от нативной
+    // прокрутки на кадр-другой, и сетка едет «желе» относительно цифр —
+    // владелец увидел это сразу: «у меня вперёд двигается сетка, пока
+    // цифры поспевают».
+    //
+    // Синхронность даёт `background-attachment: local`: фон привязан к
+    // содержимому и прокручивается вместе с ним силами браузера, без
+    // единой строчки JS в цикле прокрутки. Позиция считается от начала
+    // содержимого, поэтому к разнице координат прибавляется scrollTop.
     const paint = () => {
       const g = grid.getBoundingClientRect();
       const h = sc.getBoundingClientRect();
@@ -420,36 +426,26 @@ export function DayHours({
       // часов линий нет ни в сетке, ни в её продолжении.
       const x = g.left - h.left + GUTTER_W;
       const width = g.width - GUTTER_W;
-      const y = g.top - h.top;
+      const y = g.top - h.top + sc.scrollTop;
       sc.style.backgroundImage =
         "linear-gradient(to bottom, var(--color-stroke) 0, var(--color-stroke) 1px, transparent 1px)";
       sc.style.backgroundSize = `${width.toFixed(2)}px ${HOUR_H.toFixed(2)}px`;
       sc.style.backgroundRepeat = "repeat-y";
+      sc.style.backgroundAttachment = "local";
       sc.style.backgroundPosition = `${x.toFixed(2)}px ${(((y % HOUR_H) + HOUR_H) % HOUR_H).toFixed(2)}px`;
     };
 
-    let frame = 0;
-    const schedule = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        paint();
-      });
-    };
-
     paint();
-    const ro = new ResizeObserver(schedule);
+    const ro = new ResizeObserver(paint);
     ro.observe(sc);
     ro.observe(grid);
-    sc.addEventListener("scroll", schedule, { passive: true });
     return () => {
-      if (frame) cancelAnimationFrame(frame);
       ro.disconnect();
-      sc.removeEventListener("scroll", schedule);
       sc.style.backgroundImage = "";
       sc.style.backgroundSize = "";
       sc.style.backgroundRepeat = "";
       sc.style.backgroundPosition = "";
+      sc.style.backgroundAttachment = "";
     };
   }, [days.length]);
 
