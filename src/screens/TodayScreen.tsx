@@ -5,11 +5,16 @@ import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { isTaskOwner } from "../lib/taskOwner";
-import { todayStr, partitionOverdueToday, MONTHS_SHORT } from "../lib/date";
+import {
+  todayStr,
+  addDays,
+  partitionOverdueToday,
+  MONTHS_SHORT,
+} from "../lib/date";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
 import { TaskRow } from "../components/TaskRow";
-import { DayHours } from "../components/DayHours";
+import { DayHours, type DayColumnData } from "../components/DayHours";
 import { RescheduleSheet } from "../components/RescheduleSheet";
 import { ActionsMenu } from "../components/ActionsMenu";
 import {
@@ -57,6 +62,9 @@ export function TodayScreen() {
   // Назначение времени перетаскиванием в сетке часов (19.08.2026).
   const updateTask = useUpdateTask();
   const setTaskLayout = useAppStore((s) => s.setTaskLayout);
+  // 1 день / 3 дня — тумблер внутри самого вида «по часам», см. store/index.ts.
+  const hoursSpan = useAppStore((s) => s.hoursSpan);
+  const setHoursSpan = useAppStore((s) => s.setHoursSpan);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuAnchorRef = useRef<HTMLButtonElement>(null);
@@ -162,6 +170,41 @@ export function TodayScreen() {
     () => rawTodayTasks.filter((t) => !waitingIds.has(t.id)),
     [rawTodayTasks, waitingIds],
   );
+
+  // Данные для DayHours — по дням. Первый день («сегодня») собирает те же
+  // три блока экрана, что и списочный вид, включая «Ждут вас»: списочный
+  // вид разносит задачу ровно по одному блоку (дедуп по waitingIds выше),
+  // и без этого дедупа здесь задача, ждущая приёмки, из сетки исчезала бы
+  // — а время у неё чаще всего как раз проставлено. Следующие два дня (в
+  // 3-дневном виде) — просто задачи с этой датой, без «просрочено/ждут»:
+  // эти статусы имеют смысл только у сегодняшнего дня.
+  const hourDays: DayColumnData[] = useMemo(() => {
+    const days: DayColumnData[] = [
+      {
+        date: today,
+        tasks: Array.from(
+          new Map(
+            [...waitingTasks, ...todayTasks, ...overdueTasks].map((t) => [
+              t.id,
+              t,
+            ]),
+          ).values(),
+        ),
+        isToday: true,
+      },
+    ];
+    if (hoursSpan === 3) {
+      for (let i = 1; i <= 2; i++) {
+        const date = addDays(today, i);
+        days.push({
+          date,
+          tasks: allTasks.filter((t) => t.due_date === date),
+          isToday: false,
+        });
+      }
+    }
+    return days;
+  }, [today, hoursSpan, waitingTasks, todayTasks, overdueTasks, allTasks]);
 
   // trueEmpty (unaffected by filters — from the "…All" sets) still drives
   // the big illustration screen below: it means there's genuinely nothing
@@ -421,42 +464,59 @@ export function TodayScreen() {
         </div>
       )}
       {layout === "hours" ? (
-        // Просроченные в сетку дня НЕ идут: вчерашняя задача на 9:00 не
-        // должна рисоваться в сегодняшних девяти утра. Они остаются в
-        // нижнем списке вместе с задачами без времени.
-        <DayHours
-          // Сюда идут ВСЕ три блока экрана, включая «Ждут вас». Списочный
-          // вид разносит задачу ровно по одному блоку (дедуп по waitingIds
-          // выше), и если брать только todayTasks+overdueTasks, то задача,
-          // ждущая приёмки, из сетки просто исчезает — а у неё как раз
-          // чаще всего и проставлено время. Дедуп по id здесь свой:
-          // waiting и overdue пересекаются.
-          tasks={Array.from(
-            new Map(
-              [...waitingTasks, ...todayTasks, ...overdueTasks].map((t) => [
-                t.id,
-                t,
-              ]),
-            ).values(),
-          )}
-          projectColor={(t) =>
-            projects.find((p) => p.id === t.project_id)?.color || "#717171"
-          }
-          onTaskClick={(id) => navigate(`/task/${id}`)}
-          // Перетащили задачу на шкалу — сразу назначаем время. Срок при
-          // этом проставляем сегодняшним, если его не было: сервер не
-          // примет время без даты, а задача, которую человек кладёт в
-          // сетку СЕГОДНЯШНЕГО дня, на сегодня и планируется.
-          onSchedule={(id, time) => {
-            const task = allTasks.find((t) => t.id === id);
-            updateTask.mutate({
-              id,
-              start_time: time,
-              ...(task?.due_date ? null : { due_date: today }),
-            });
-          }}
-          isToday
-        />
+        <>
+          {/* 1 день / 3 дня — мини-тумблер внутри вида, не третье
+              значение TaskLayout: это настройка формы самой сетки, а не
+              отдельный вид рядом со списком/доской (владелец прислал
+              скриншоты Apple Reminders «Сегодня» и «Предстоящее» — та же
+              сетка, просто на 3 колонки). */}
+          <div className="mt-2 mb-1 flex justify-center">
+            <div className="inline-flex gap-0.5 rounded-full bg-card2 p-0.5">
+              {(
+                [
+                  [1, "1 день"],
+                  [3, "3 дня"],
+                ] as const
+              ).map(([span, label]) => (
+                <button
+                  key={span}
+                  onClick={() => setHoursSpan(span)}
+                  aria-pressed={hoursSpan === span}
+                  className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition-colors ${
+                    hoursSpan === span
+                      ? "bg-red text-white"
+                      : "text-sub active:bg-white/[0.04]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Просроченные в сетку дня НЕ идут: вчерашняя задача на 9:00 не
+              должна рисоваться в сегодняшних девяти утра. Они остаются в
+              нижнем списке вместе с задачами без времени. */}
+          <DayHours
+            days={hourDays}
+            projectColor={(t) =>
+              projects.find((p) => p.id === t.project_id)?.color || "#717171"
+            }
+            onTaskClick={(id) => navigate(`/task/${id}`)}
+            // Перетащили задачу на шкалу — сразу назначаем время. Срок при
+            // этом проставляем сегодняшним, если его не было: сервер не
+            // примет время без даты, а задача, которую человек кладёт в
+            // сетку СЕГОДНЯШНЕГО дня, на сегодня и планируется. Работает
+            // только в 1-дневном виде — см. комментарий у DayHours.interactive.
+            onSchedule={(id, time) => {
+              const task = allTasks.find((t) => t.id === id);
+              updateTask.mutate({
+                id,
+                start_time: time,
+                ...(task?.due_date ? null : { due_date: today }),
+              });
+            }}
+          />
+        </>
       ) : layout === "board" ? (
         <div className="mt-2">
           <TaskBoard

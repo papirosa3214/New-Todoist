@@ -26,6 +26,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Circle,
   Cloud,
   Crown,
   Ellipsis,
@@ -159,6 +160,10 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   // Вложения комментариев: кнопка «приложить файл» и строка документа в
   // ленте (AttachmentView.tsx).
   paperclip: Paperclip,
+  // Полый кружок-маркер задачи в плашке DayHours (19.08.2026) — снят
+  // замером с присланного скриншота Apple Reminders, там у каждой плашки
+  // такой же полый кружок слева от текста.
+  circle: Circle,
 };
 
 export const Icon = ({
@@ -640,8 +645,7 @@ export function FAB({
   return (
     <button
       onClick={
-        onClick ??
-        (() => navigate(`/task/new${dueToday ? "?due=today" : ""}`))
+        onClick ?? (() => navigate(`/task/new${dueToday ? "?due=today" : ""}`))
       }
       className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-[0_6px_16px_rgba(228,67,50,.45)] z-30 tap-scale"
     >

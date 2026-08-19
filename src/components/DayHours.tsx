@@ -11,34 +11,53 @@ import {
 import type { ApiTask } from "../api/types";
 import { Icon } from "./UI";
 
-// ═══════════ Календарная развёртка дня по часам ═══════════
+// ═══════════ Календарная развёртка по часам — 1 или 3 дня ═══════════
 //
-// 18.08.2026. Геометрия перенесена из присланного владельцем прототипа
-// (task-manager-mobile, DayView.tsx): часовая шкала абсолютным
-// позиционированием, задача — блок высотой пропорционально длительности.
-// Числа прототипа взяты как есть (сетка 6:00–23:00, час = 64px), сам код
-// переписан под наш стек: там Tailwind 3 с собственным конфигом цветов и
-// framer-motion, у нас Tailwind 4 с токенами в CSS и свои пружины.
+// 19.08.2026, второй заход. Первая версия (18.08.2026) была виджетом
+// внутри страницы (rounded-2xl bg-card, потолок высоты 58vh) — владелец
+// прислал скриншоты Apple Reminders («Сегодня» и «Предстоящее», у второго
+// та же сетка на 3 колонки дня) и попросил именно так: полноэкранная
+// сетка без рамки-карточки, задача — сплошная цветная плашка, а не серый
+// блок с полоской. Числа сняты замером присланных PNG (пипетка +
+// сканирование границ, скилл pixel-copy-from-screenshot), экран владельца
+// 1260×2736 @3x = 420×912pt:
 //
-// Цвет блока берётся от ПРОЕКТА задачи, а не из отдельной палитры: в
-// прототипе у задачи было своё поле color с 14 цветами Todoist, у нас
-// цвет уже есть у проекта (lib/projectColors.ts) — заводить вторую
-// палитру значило бы, что одна и та же задача в списке и в сетке разного
-// цвета.
+//   левая колонка часов        161px → 53.67pt
+//   ширина колонки дня         366px → 122pt   (161+3×366=1259 ≈ ширина экрана)
+//   высота часа                 124px → 41.33pt (12 интервалов сверены, ровно)
+//   плашка: почти вся колонка (0px слева, ~6px справа до разделителя),
+//     скругление ~17px→5.7pt, сплошная заливка цветом проекта, полый
+//     кружок-маркер слева (~23px→7.7pt), текст белый в одну строку
+//   линия «сейчас»: точка ~27px→9pt, сама линия — через ВСЕ колонки разом
+//   часовая линия начинается ровно на границе первой колонки (x=161) —
+//     под подписями часов линии нет вообще, поэтому не нужен трюк с
+//     bg-card «заплаткой» под текстом, который был в первой версии
 //
-// 19.08.2026 — перетаскивание. Владелец: «вижу, что у меня куча задач без
-// времени, и я могу эту задачу перетащить на временную шкалу и там себе
-// определить, куда я её хочу вставить, тем самым назначить время».
-// Поэтому список задач без времени переехал НАВЕРХ (раньше был под
-// сеткой): тащить снизу вверх через весь экран неудобно, а сверху он ещё
-// и виден сразу, не прокручивая сетку до конца.
-const HOUR_H = 64;
-const HOURS = Array.from({ length: 18 }, (_, i) => i + 6); // 06:00–23:00
-const FIRST_HOUR = HOURS[0];
+// Час стал заметно компактнее (было 64px произвольных, стало 41.33px по
+// замеру) — но с полным диапазоном 0–23 (не 6–23, ниже) общая высота
+// сетки почти не меняется, а 30-минутная задача высотой ~19pt у Apple на
+// скриншоте читается нормально.
+//
+// 24 часа, не 6–23: старый диапазон был произвольным (первая версия
+// просто решила, что раньше 6 утра дел не бывает) и прятал баг — задача
+// в 3 часа ночи получала top=0 и наезжала на 6-часовую строку. Полный
+// диапазон устраняет это заодно.
+const HOUR_H = 124 / 3; // дробное значение снято замером — законно, см. выше
+const HOURS = Array.from({ length: 24 }, (_, i) => i);
+const GUTTER_W = 161 / 3; // левая колонка с подписями часов
 // Шаг привязки при перетаскивании. 15 минут — как в форме: попадать
-// пальцем в минуту на шкале высотой 64px/час невозможно, а «ровные»
+// пальцем в минуту на шкале высотой ~41px/час невозможно, а «ровные»
 // четверти часа и так покрывают почти все реальные планы.
 const SNAP_MIN = 15;
+// Высота, в которую гарантированно влезает одна строка 12px-текста с
+// отступами — не хвост от старой шкалы 64px, а низ, ниже которого плашку
+// просто нечем будет читать.
+const MIN_H = 24;
+// Правый отступ плашки от границы колонки и зазор между плашками одного
+// часа — оба сняты тем же замером (одиночная плашка 162→521 при колонке
+// 161→527, то есть 6px свободных справа).
+const RIGHT_INSET = 6;
+const COL_GAP = 3;
 
 /** «14:30» → 14.5; неразобранное время → null, блок просто не рисуется. */
 function hoursFromTime(t: string | null | undefined): number | null {
@@ -50,26 +69,25 @@ function hoursFromTime(t: string | null | undefined): number | null {
 
 /** Смещение в пикселях от верха сетки → «ЧЧ:ММ», округлённое до SNAP_MIN. */
 function timeFromOffset(px: number): string {
-  const raw = FIRST_HOUR * 60 + (px / HOUR_H) * 60;
+  const raw = (px / HOUR_H) * 60;
   const snapped = Math.round(raw / SNAP_MIN) * SNAP_MIN;
-  const clamped = Math.min(
-    Math.max(snapped, FIRST_HOUR * 60),
-    (FIRST_HOUR + HOURS.length) * 60 - SNAP_MIN,
-  );
+  const clamped = Math.min(Math.max(snapped, 0), HOURS.length * 60 - SNAP_MIN);
   const h = Math.floor(clamped / 60);
   const m = clamped % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function minutesLabel(min: number): string {
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  if (!h) return `${m} мин`;
-  return m ? `${h} ч ${m} мин` : `${h} ч`;
+const WEEKDAYS_SHORT = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+
+/** «Чт 20» — подпись колонки дня в 3-дневном виде, как в присланном скрине. */
+function formatDayColumnLabel(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00");
+  return `${WEEKDAYS_SHORT[d.getDay()]} ${d.getDate()}`;
 }
 
-/** Линия текущего времени. Отдельным компонентом со своим таймером —
- *  иначе она замерла бы на времени последнего рендера всего экрана. */
+/** Линия текущего времени — через ВСЕ колонки разом, не по одной на день.
+ *  Отдельным компонентом со своим таймером — иначе она замерла бы на
+ *  времени последнего рендера всего экрана. */
 function NowLine() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -80,14 +98,20 @@ function NowLine() {
   }, []);
 
   const pos = now.getHours() + now.getMinutes() / 60;
-  if (pos < FIRST_HOUR || pos > FIRST_HOUR + HOURS.length) return null;
 
   return (
     <div
       className="pointer-events-none absolute left-0 right-0 z-20 flex items-center"
-      style={{ top: (pos - FIRST_HOUR) * HOUR_H }}
+      style={{ top: pos * HOUR_H }}
     >
-      <span className="w-[46px] shrink-0 pr-1.5 text-right text-[10px] font-medium text-red">
+      <span
+        // bg-bg — не декоративный: когда «сейчас» проходит рядом с
+        // часовой отметкой (найдено на первом же тестовом скриншоте,
+        // 19.08.2026), обе подписи оказываются почти в одной точке и без
+        // непрозрачного фона превращаются в нечитаемую кашу из букв.
+        className="shrink-0 bg-bg py-px pr-1.5 text-right text-[10px] font-medium text-red tabular-nums"
+        style={{ width: GUTTER_W }}
+      >
         {String(now.getHours()).padStart(2, "0")}:
         {String(now.getMinutes()).padStart(2, "0")}
       </span>
@@ -97,7 +121,8 @@ function NowLine() {
   );
 }
 
-/** Строка задачи без времени — её и тащат на шкалу. */
+/** Строка задачи без времени — её и тащат на шкалу. Только у 1-дневного
+ *  вида: в 3-дневном непонятно, в какой из трёх колонок её кидать. */
 function UntimedRow({
   task,
   color,
@@ -141,42 +166,55 @@ function UntimedRow({
   );
 }
 
-/** Блок задачи внутри сетки — тоже перетаскивается, меняя время. */
+/** Плашка задачи внутри сетки — сплошная заливка цветом проекта, полый
+ *  кружок-маркер и белый текст, как на присланном скрине Apple Reminders.
+ *  Белый текст читается на всех 7 цветах палитры проектов (замер
+ *  перцептивной яркости заливки — от 113 до 173 из 255, весь диапазон
+ *  темнее белого текста с запасом) — отдельная логика «светлый/тёмный
+ *  текст по цвету» не понадобилась. В 1-дневном виде ещё и перетаскивается
+ *  (draggable=true), в 3-дневном — только открывается тапом. */
 function TimedBlock({
   task,
   color,
   top,
   height,
+  left,
+  width,
   durKnown,
-  dur,
+  draggable,
   onClick,
 }: {
   task: ApiTask;
   color: string;
   top: number;
   height: number;
+  left: string;
+  width: string;
   durKnown: boolean;
-  dur: number;
+  draggable: boolean;
   onClick: () => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: task.id,
+    disabled: !draggable,
   });
   const done = task.status === "completed";
   return (
     <div
       ref={setNodeRef}
-      {...attributes}
-      {...listeners}
+      {...(draggable ? attributes : null)}
+      {...(draggable ? listeners : null)}
       onClick={onClick}
-      className="absolute left-0 right-0 flex gap-2 overflow-hidden rounded-lg bg-card2 px-2 py-1.5 text-left active:opacity-80"
+      className="absolute flex items-center gap-1.5 overflow-hidden rounded-[6px] px-2 text-left"
       style={{
         top,
         height,
-        touchAction: "none",
-        boxShadow: `inset 3px 0 0 0 ${color}`,
-        opacity: isDragging ? 0.4 : done ? 0.55 : 1,
-        // Конец не задан — низ блока размыт, чтобы он не читался как
+        left,
+        width,
+        backgroundColor: color,
+        touchAction: draggable ? "none" : undefined,
+        opacity: isDragging ? 0.4 : done ? 0.5 : 1,
+        // Конец не задан — низ плашки размыт, чтобы он не читался как
         // «задача точно кончится здесь».
         ...(durKnown
           ? null
@@ -187,40 +225,126 @@ function TimedBlock({
             }),
       }}
     >
-      <span className="min-w-0 flex-1">
-        <span
-          className={`block truncate text-[13px] font-medium ${
-            done ? "text-sub line-through" : "text-text"
-          }`}
-        >
-          {task.title}
-        </span>
-        {height > 44 && (
-          <span className="mt-0.5 block text-[11px] text-dim tabular-nums">
-            {task.start_time}
-            {durKnown ? ` · ${minutesLabel(dur)}` : ""}
-          </span>
-        )}
+      <Icon name="circle" size={9} className="shrink-0 text-white/85" />
+      <span
+        className={`min-w-0 flex-1 truncate text-[12px] font-medium text-white ${
+          done ? "line-through opacity-70" : ""
+        }`}
+      >
+        {task.title}
       </span>
     </div>
   );
 }
 
+/** Один интервал времени задачи — вход для раскладки по колонкам. */
+interface TimedItem {
+  task: ApiTask;
+  start: number;
+  end: number;
+  durKnown: boolean;
+}
+
+interface PlacedBlock {
+  task: ApiTask;
+  top: number;
+  height: number;
+  left: string;
+  width: string;
+  durKnown: boolean;
+}
+
+/** Раскладывает задачи одного дня по вертикали и, при коллизиях по
+ *  времени, по колонкам side-by-side — как три плашки «З… 1… С…» в
+ *  присланном скрине на 06:00–07:00. Пересекающиеся задачи транзитивно
+ *  собираются в кластер (A∩B и B∩C делают A,B,C одним кластером, даже
+ *  если A и C не пересекаются напрямую), внутри кластера — жадная
+ *  раскладка: очередная задача идёт в первую колонку, где предыдущая уже
+ *  закончилась к её началу. */
+function layoutDay(tasks: ApiTask[]): PlacedBlock[] {
+  const items: TimedItem[] = tasks
+    .filter((t) => hoursFromTime(t.start_time) !== null)
+    .map((t) => {
+      const start = hoursFromTime(t.start_time)!;
+      const durKnown = t.duration_min != null;
+      const dur = t.duration_min ?? 30;
+      return { task: t, start, end: start + dur / 60, durKnown };
+    })
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const placed: PlacedBlock[] = [];
+  let cluster: TimedItem[] = [];
+  let clusterEnd = -Infinity;
+
+  function flush() {
+    if (cluster.length === 0) return;
+    const colEnds: number[] = [];
+    const colOf: number[] = [];
+    cluster.forEach((item) => {
+      let col = colEnds.findIndex((end) => end <= item.start);
+      if (col === -1) {
+        col = colEnds.length;
+        colEnds.push(item.end);
+      } else {
+        colEnds[col] = item.end;
+      }
+      colOf.push(col);
+    });
+    const cols = colEnds.length;
+    const totalGap = (cols - 1) * COL_GAP;
+    const widthExpr = `calc((100% - ${RIGHT_INSET}px - ${totalGap}px) / ${cols})`;
+    cluster.forEach((item, i) => {
+      const col = colOf[i];
+      placed.push({
+        task: item.task,
+        top: Math.max(0, item.start * HOUR_H + 1),
+        height: Math.max(MIN_H, (item.end - item.start) * HOUR_H - 3),
+        left:
+          col === 0
+            ? "0px"
+            : `calc(${widthExpr} * ${col} + ${col * COL_GAP}px)`,
+        width: widthExpr,
+        durKnown: item.durKnown,
+      });
+    });
+    cluster = [];
+  }
+
+  for (const item of items) {
+    if (cluster.length > 0 && item.start >= clusterEnd) {
+      flush();
+      clusterEnd = -Infinity;
+    }
+    cluster.push(item);
+    clusterEnd = Math.max(clusterEnd, item.end);
+  }
+  flush();
+  return placed;
+}
+
+export interface DayColumnData {
+  date: string;
+  tasks: ApiTask[];
+  isToday: boolean;
+}
+
 export function DayHours({
-  tasks,
+  days,
   projectColor,
   onTaskClick,
   onSchedule,
-  isToday,
 }: {
-  tasks: ApiTask[];
-  /** Цвет проекта задачи; без проекта — приглушённый серый. */
+  days: DayColumnData[];
+  /** Цвет блока в сетке берётся от ПРОЕКТА задачи, не из отдельной
+   *  палитры: одна и та же задача в списке и в сетке не должна быть
+   *  разного цвета. */
   projectColor: (task: ApiTask) => string;
   onTaskClick: (id: string) => void;
-  /** Задачу перетащили на шкалу — назначить ей это время. */
-  onSchedule: (id: string, time: string) => void;
-  isToday: boolean;
+  /** Задачу перетащили на шкалу — назначить ей это время. Только у
+   *  1-дневного вида, см. комментарий у UntimedRow. */
+  onSchedule?: (id: string, time: string) => void;
 }) {
+  const interactive = days.length === 1 && !!onSchedule;
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -232,30 +356,30 @@ export function DayHours({
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
 
-  const timed = useMemo(
-    () =>
-      tasks
-        .filter((t) => hoursFromTime(t.start_time) !== null)
-        .sort((a, b) => (a.start_time || "").localeCompare(b.start_time || "")),
-    [tasks],
-  );
   const untimed = useMemo(
-    () => tasks.filter((t) => hoursFromTime(t.start_time) === null),
-    [tasks],
+    () =>
+      interactive
+        ? days[0].tasks.filter((t) => hoursFromTime(t.start_time) === null)
+        : [],
+    [interactive, days],
   );
 
+  const columns = useMemo(
+    () => days.map((d) => ({ day: d, blocks: layoutDay(d.tasks) })),
+    [days],
+  );
+  const anyTimed = columns.some((c) => c.blocks.length > 0);
+  const showNowLine = days.some((d) => d.isToday);
+
   // Прокрутка к текущему часу при открытии — иначе экран открывается на
-  // 6 утра, а человек смотрит день в середине дня. 120px запаса сверху,
+  // полночь, а человек смотрит день в середине дня. 120px запаса сверху,
   // чтобы было видно, что было прямо перед «сейчас».
   useEffect(() => {
-    if (!isToday || !scrollRef.current || timed.length === 0) return;
+    if (!showNowLine || !scrollRef.current) return;
     const now = new Date();
     const pos = now.getHours() + now.getMinutes() / 60;
-    scrollRef.current.scrollTop = Math.max(
-      0,
-      (pos - FIRST_HOUR) * HOUR_H - 120,
-    );
-  }, [isToday, timed.length]);
+    scrollRef.current.scrollTop = Math.max(0, pos * HOUR_H - 120);
+  }, [showNowLine]);
 
   function handleDragStart(e: DragStartEvent) {
     setDragging(String(e.active.id));
@@ -265,9 +389,11 @@ export function DayHours({
     setDragging(null);
     setPreview(null);
     const grid = gridRef.current;
-    if (!grid) return;
+    if (!grid || !onSchedule) return;
     // Координата отпускания в системе координат сетки: dnd-kit даёт
-    // прямоугольник перетаскиваемого элемента, берём его верх.
+    // прямоугольник перетаскиваемого элемента, берём его верх. Колонка
+    // здесь всегда одна (interactive===true только при days.length===1),
+    // поэтому горизонталь роли не играет — важна только высота.
     const rect = e.active.rect.current.translated;
     if (!rect) return;
     const gridBox = grid.getBoundingClientRect();
@@ -297,8 +423,9 @@ export function DayHours({
       }}
     >
       <div className="mt-2 flex flex-col gap-3">
-        {/* Задачи без времени — НАД сеткой: их перетаскивают вниз на шкалу,
-            и держать их под ней значило бы тащить через весь экран. */}
+        {/* Задачи без времени — НАД сеткой: их перетаскивают вниз на
+            шкалу, и держать их под ней значило бы тащить через весь
+            экран. Только у 1-дневного вида (см. DayHours.interactive). */}
         {untimed.length > 0 && (
           <div>
             <div className="mb-1.5 flex items-center gap-1.5 px-1">
@@ -324,78 +451,109 @@ export function DayHours({
           </div>
         )}
 
-        <div
-          ref={scrollRef}
-          className="relative max-h-[58vh] overflow-y-auto rounded-2xl bg-card"
-        >
+        {/* -mx-4 full-bleed: сетка идёт от края до края экрана, как на
+            присланном скрине, а не карточкой внутри страничных полей
+            (родитель — TodayScreen, px-4). Тот же приём, что у полосы
+            свайпа TaskRow и у доски TaskBoard. */}
+        <div className="-mx-4">
           <div
-            ref={gridRef}
-            className="relative"
-            style={{ height: HOURS.length * HOUR_H + 8 }}
+            ref={scrollRef}
+            className="relative max-h-[68vh] overflow-y-auto"
           >
-            {HOURS.map((h, i) => (
-              <div
-                key={h}
-                className="absolute left-0 right-0 border-t border-stroke"
-                style={{ top: i * HOUR_H }}
-              >
-                <span className="absolute -top-[7px] left-2 bg-card px-1 text-[10px] font-medium text-dim tabular-nums">
-                  {String(h).padStart(2, "0")}:00
-                </span>
-              </div>
-            ))}
-
-            {/* Подсказка времени под пальцем — иначе непонятно, куда
-                именно встанет задача при отпускании. */}
-            {preview && (
-              <div
-                className="pointer-events-none absolute left-0 right-0 z-30 flex items-center gap-2"
-                style={{
-                  top:
-                    (Number(preview.split(":")[0]) +
-                      Number(preview.split(":")[1]) / 60 -
-                      FIRST_HOUR) *
-                    HOUR_H,
-                }}
-              >
-                <span className="w-[46px] shrink-0 pr-1.5 text-right text-[10px] font-semibold text-red tabular-nums">
-                  {preview}
-                </span>
-                <span className="h-[2px] flex-1 rounded bg-red/70" />
+            {/* Подписи дней — только в 3-дневном виде, и «прилипают»
+                к верху при прокрутке: у Apple на «Предстоящем» они
+                видны всегда, крутится только сама сетка часов. */}
+            {days.length > 1 && (
+              <div className="sticky top-0 z-10 flex items-center bg-bg pb-2">
+                <span className="shrink-0" style={{ width: GUTTER_W }} />
+                {days.map((d) => (
+                  <span
+                    key={d.date}
+                    className={`flex-1 text-center text-[12px] font-semibold ${
+                      d.isToday ? "text-red" : "text-sub"
+                    }`}
+                  >
+                    {formatDayColumnLabel(d.date)}
+                  </span>
+                ))}
               </div>
             )}
 
-            <div className="absolute bottom-0 left-[46px] right-2 top-0">
-              {timed.map((t) => {
-                const start = hoursFromTime(t.start_time)!;
-                // Длительность необязательная (владелец 19.08.2026: «если
-                // я не знаю, сколько займёт, просто указал время»). Без неё
-                // блок рисуется коротким — получасовой меткой начала, а не
-                // часовым прямоугольником: занимать час экрана под задачу,
-                // про которую известно только «в 14:30», значит показывать
-                // то, чего никто не утверждал.
-                const dur = t.duration_min ?? 30;
-                const durKnown = t.duration_min != null;
-                return (
-                  <TimedBlock
-                    key={t.id}
-                    task={t}
-                    color={projectColor(t)}
-                    top={Math.max(0, (start - FIRST_HOUR) * HOUR_H + 1)}
-                    height={Math.max(34, (dur / 60) * HOUR_H - 3)}
-                    durKnown={durKnown}
-                    dur={dur}
-                    onClick={() => !dragging && onTaskClick(t.id)}
-                  />
-                );
-              })}
-            </div>
+            <div
+              ref={gridRef}
+              className="relative flex"
+              style={{ height: HOURS.length * HOUR_H + 8 }}
+            >
+              {/* Левая колонка — только подписи часов, без линии под
+                  ними: у Apple часовая линия начинается ровно на границе
+                  первой колонки дня, а не под цифрами. */}
+              <div className="relative shrink-0" style={{ width: GUTTER_W }}>
+                {HOURS.map((h) => (
+                  <span
+                    key={h}
+                    className="absolute right-1.5 -translate-y-1/2 text-[10px] font-medium text-dim tabular-nums"
+                    style={{ top: h * HOUR_H }}
+                  >
+                    {String(h).padStart(2, "0")}:00
+                  </span>
+                ))}
+              </div>
 
-            {isToday && <NowLine />}
+              {columns.map(({ day, blocks }) => (
+                <div
+                  key={day.date}
+                  className="relative min-w-0 flex-1 border-l border-stroke"
+                >
+                  {HOURS.map((h) => (
+                    <div
+                      key={h}
+                      className="absolute left-0 right-0 border-t border-stroke"
+                      style={{ top: h * HOUR_H }}
+                    />
+                  ))}
+
+                  {/* Подсказка времени под пальцем — только в
+                      1-дневном виде, единственной колонке. */}
+                  {interactive && preview && day.isToday && (
+                    <div
+                      className="pointer-events-none absolute left-0 right-0 z-30 flex items-center gap-2"
+                      style={{
+                        top:
+                          (Number(preview.split(":")[0]) +
+                            Number(preview.split(":")[1]) / 60) *
+                          HOUR_H,
+                      }}
+                    >
+                      <span className="w-[46px] shrink-0 pr-1.5 text-right text-[10px] font-semibold text-red tabular-nums">
+                        {preview}
+                      </span>
+                      <span className="h-[2px] flex-1 rounded bg-red/70" />
+                    </div>
+                  )}
+
+                  {blocks.map((b) => (
+                    <TimedBlock
+                      key={b.task.id}
+                      task={b.task}
+                      color={projectColor(b.task)}
+                      top={b.top}
+                      height={b.height}
+                      left={b.left}
+                      width={b.width}
+                      durKnown={b.durKnown}
+                      draggable={interactive}
+                      onClick={() => !dragging && onTaskClick(b.task.id)}
+                    />
+                  ))}
+                </div>
+              ))}
+
+              {showNowLine && <NowLine />}
+            </div>
           </div>
         </div>
 
-        {timed.length === 0 && (
+        {interactive && !anyTimed && (
           <p className="px-1 text-center text-[12px] text-dim">
             На время пока ничего не назначено
           </p>
