@@ -828,6 +828,21 @@ function usePublishHeaderHeight(ref: RefObject<HTMLElement | null>) {
   }, [ref]);
 }
 
+// Маски и подложка «стеклянной» шапки. Считаются снизу вверх: у нижнего
+// края шапки контент виден как есть, к верхней кромке экрана полностью
+// уходит в муть. Числа подобраны на глаз по живому экрану — точка, где
+// начинается размытие (55% высоты у сильного слоя), и есть та самая
+// «середина под шапкой», о которой просил владелец.
+const HEADER_FADE_STRONG =
+  "linear-gradient(to bottom, #000 0%, #000 50%, rgba(0,0,0,0.4) 72%, transparent 88%)";
+const HEADER_FADE_SOFT =
+  "linear-gradient(to bottom, #000 0%, #000 62%, rgba(0,0,0,0.55) 84%, transparent 100%)";
+// Цвет фона: плотный у верхней кромки (под ним не должно просвечивать
+// вообще ничего), к низу сходит на нет. color-mix — чтобы работало в обеих
+// темах от одного токена, а не двумя захардкоженными цветами.
+const HEADER_TINT =
+  "linear-gradient(to bottom, var(--color-bg) 0%, var(--color-bg) 42%, color-mix(in srgb, var(--color-bg) 80%, transparent) 62%, color-mix(in srgb, var(--color-bg) 35%, transparent) 82%, transparent 100%)";
+
 export function ScreenHeader({
   title,
   leading,
@@ -859,7 +874,7 @@ export function ScreenHeader({
       // ПОСЛЕДНИМ классом в строке, до внешнего className — единственный
       // экран, где className что-то своё несёт (TodayScreen, w-full для
       // пустого состояния), к margin отношения не имеет и не конфликтует.
-      className={`sticky top-0 z-20 bg-bg/90 backdrop-blur-xl border-b border-stroke mb-4 ${className}`}
+      className={`sticky top-0 z-20 mb-4 ${className}`}
       style={{
         marginLeft: -bleed.left,
         marginRight: -bleed.right,
@@ -868,8 +883,52 @@ export function ScreenHeader({
         ...(bleed.width !== undefined ? { width: bleed.width } : {}),
       }}
     >
+      {/* ═══ Затухание вместо сплошной плашки (Максим 19.08.2026) ═══
+          «Верхушку сделать прозрачную, с последующим затуханием: вначале
+          нормальная видимость, под шапкой посередине уже мутно, а ближе к
+          верху экрана прям исчезает».
+
+          Было `bg-bg/90 backdrop-blur-xl border-b` — то есть почти
+          непрозрачная плашка с резкой границей: контент под ней просто
+          пропадал, а линия внизу подчёркивала обрыв.
+
+          Стало два слоя размытия со сдвинутыми масками (у одного
+          backdrop-filter силы не хватает: он даёт ОДНУ степень размытия на
+          всю высоту, а маска только гасит её целиком — плавного перехода
+          «чётко → мутно → ничего» из него не выжать) плюс градиент цвета
+          фона поверх, чтобы заголовок и кнопки читались над любым
+          контентом. Границы больше нет — она спорила бы с плавностью.
+
+          -webkit-backdrop-filter и -webkit-mask-image обязательны: Максим
+          смотрит с айфона, в WebKit без префикса не работает ни то, ни
+          другое (рецепт из памяти, frosted-glass-sticky-header). */}
       <div
-        className={`flex items-center gap-2 relative ${
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 bottom-0"
+        style={{
+          backdropFilter: "blur(20px)",
+          WebkitBackdropFilter: "blur(20px)",
+          maskImage: HEADER_FADE_STRONG,
+          WebkitMaskImage: HEADER_FADE_STRONG,
+        }}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 bottom-0"
+        style={{
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+          maskImage: HEADER_FADE_SOFT,
+          WebkitMaskImage: HEADER_FADE_SOFT,
+        }}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 bottom-0"
+        style={{ background: HEADER_TINT }}
+      />
+      <div
+        className={`flex items-center gap-2 relative z-10 ${
           isCompact ? "h-[48px]" : "min-h-[56px] py-2"
         }`}
       >
