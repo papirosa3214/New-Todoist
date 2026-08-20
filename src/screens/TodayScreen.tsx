@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
-import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { isTaskOwner, isAgentAssignedTask } from "../lib/taskOwner";
 import { useAgents } from "../api/agents";
 import {
@@ -516,7 +516,7 @@ export function TodayScreen() {
   return (
     <div className="px-4 pb-4">
       {header}
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isLoading && <Loading />}
       <ErrorBanner
         error={error}
         fallback="Не удалось загрузить задачи"

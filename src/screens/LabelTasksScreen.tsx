@@ -15,6 +15,7 @@ import {
   Avatar,
   ScreenHeader,
   ErrorBanner,
+  Loading,
   BackButton,
 } from "../components/UI";
 import { MONTHS_SHORT } from "../lib/date";
@@ -94,7 +95,7 @@ export function LabelTasksScreen() {
         className="mb-2"
       />
 
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isLoading && <Loading />}
 
       {notFound && (
         <div className="px-1 py-8 text-center">

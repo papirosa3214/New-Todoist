@@ -45,7 +45,13 @@ import {
   useSuggestSubtasksForDraft,
   useSuggestSubtasksForTask,
 } from "../api/ai";
-import { Icon, Avatar, ScreenHeader, ErrorBanner } from "../components/UI";
+import {
+  Icon,
+  Avatar,
+  ScreenHeader,
+  ErrorBanner,
+  Loading,
+} from "../components/UI";
 import {
   Card,
   FieldRow,
@@ -590,7 +596,7 @@ export function TaskFormScreen() {
   }, []);
 
   if (isEdit && taskLoading) {
-    return <div className="px-4 py-8 text-center text-sub">Загрузка…</div>;
+    return <Loading variant="block" />;
   }
   if (isEdit && (!existingTask || taskError)) {
     return (
@@ -598,7 +604,7 @@ export function TaskFormScreen() {
     );
   }
   if (isEdit && !hydrated) {
-    return <div className="px-4 py-8 text-center text-sub">Загрузка…</div>;
+    return <Loading variant="block" />;
   }
 
   // Projects/labels/agents failing to load (server down, offline) must not

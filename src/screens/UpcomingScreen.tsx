@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useAgents } from "../api/agents";
-import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
 import { useAppStore } from "../store";
 import {
@@ -780,7 +780,7 @@ export function UpcomingScreen() {
         </button>
       )}
 
-      {isLoading && <p className="mt-3 px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isLoading && <Loading className="mt-3" />}
       <ErrorBanner
         error={error}
         fallback="Не удалось загрузить задачи"

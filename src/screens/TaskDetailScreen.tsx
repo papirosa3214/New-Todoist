@@ -19,6 +19,7 @@ import {
   Button,
   ScreenHeader,
   ErrorBanner,
+  Loading,
   BackButton,
 } from "../components/UI";
 import { PRIORITIES } from "../components/TaskFields";
@@ -199,7 +200,7 @@ export function TaskDetailScreen() {
   };
 
   if (isLoading) {
-    return <div className="px-4 py-8 text-center text-sub">Загрузка…</div>;
+    return <Loading variant="block" />;
   }
 
   if (isError) {

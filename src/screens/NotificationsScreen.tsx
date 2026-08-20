@@ -12,6 +12,7 @@ import {
   Avatar,
   ScreenHeader,
   ErrorBanner,
+  Loading,
   BackButton,
 } from "../components/UI";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
@@ -148,7 +149,7 @@ export function NotificationsScreen() {
         className="mt-2"
       />
 
-      {isLoading && <p className="px-1 text-[13px] text-dim mt-3">Загрузка…</p>}
+      {isLoading && <Loading className="mt-3" />}
       {!isLoading && notifications.length === 0 && (
         <p className="px-1 text-[13px] text-dim mt-3">Уведомлений пока нет</p>
       )}

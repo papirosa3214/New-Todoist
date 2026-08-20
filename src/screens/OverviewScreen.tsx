@@ -7,7 +7,7 @@ import {
   useAgentService,
   useToggleAgentService,
 } from "../api/agents";
-import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { PROJECT_COLORS } from "../lib/projectColors";
@@ -321,7 +321,7 @@ export function OverviewScreen() {
           </form>
         )}
 
-        {isLoading && <p className="px-3 text-[13px] text-dim">Загрузка…</p>}
+        {isLoading && <Loading px={3} />}
 
         {isError && (
           <div className="px-3 space-y-2">

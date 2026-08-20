@@ -1221,6 +1221,49 @@ export function Button({
   );
 }
 
+// ═══════════ LOADING ═══════════
+// Аудит дизайн-системы 20.08.2026, пункт 3: «Загрузка…» дословно
+// копипастилась в 13 экранах — inline-строка `<p className="px-1
+// text-[13px] text-dim">Загрузка…</p>` (иногда с mt-3/mb-4/px-3), плюс
+// отдельный полноэкранный вариант `<div className="px-4 py-8 text-center
+// text-sub">Загрузка…</div>` для экранов, которые без данных вообще не
+// могут отрисоваться (TaskDetailScreen/TaskFormScreen). Тот же приём, что
+// у ErrorBanner чуть ниже — variant вместо двух раздельных компонентов.
+//
+//   - variant="inline" (default): тонкая строка под заголовком/списком,
+//     тот же вид, что был во всех местах кроме двух полноэкранных.
+//   - variant="block": центрированный блок на всю доступную ширину —
+//     когда экрану больше нечего показать, пока данные не пришли.
+//
+// px — единственное, что реально отличалось между копипастами
+// (px-1 почти везде, px-3 в OverviewScreen); значение — явный проп, а не
+// собранная на лету строка `px-${n}`, чтобы Tailwind видел класс
+// буквально в этом файле и не срезал его при сборке.
+const LOADING_PX = { 1: "px-1", 3: "px-3", 4: "px-4" } as const;
+
+export function Loading({
+  variant = "inline",
+  px = 1,
+  className = "",
+}: {
+  variant?: "inline" | "block";
+  px?: keyof typeof LOADING_PX;
+  className?: string;
+}) {
+  if (variant === "block") {
+    return (
+      <div className={`px-4 py-8 text-center text-sub ${className}`}>
+        Загрузка…
+      </div>
+    );
+  }
+  return (
+    <p className={`${LOADING_PX[px]} text-[13px] text-dim ${className}`}>
+      Загрузка…
+    </p>
+  );
+}
+
 // ═══════════ ERROR BANNER ═══════════
 // Generalizes InboxScreen's inline query-error line (`<p className="px-1
 // text-[13px] text-coral">…</p>`) into a reusable primitive that also

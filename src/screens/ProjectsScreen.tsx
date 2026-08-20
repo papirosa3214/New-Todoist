@@ -6,7 +6,7 @@ import {
   useUpdateProject,
   useDeleteProject,
 } from "../api/projects";
-import { Icon, ScreenHeader, ErrorBanner, BackButton } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner, Loading, BackButton } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { taskWord } from "../lib/pluralize";
@@ -250,7 +250,7 @@ export function ProjectsScreen() {
         </form>
       )}
 
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isLoading && <Loading />}
       <ErrorBanner
         error={error}
         fallback="Не удалось загрузить проекты"

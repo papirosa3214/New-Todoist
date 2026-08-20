@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useProjects } from "../api/projects";
-import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
 import { TaskRow } from "../components/TaskRow";
@@ -160,7 +160,7 @@ export function InboxScreen() {
         }
       />
 
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isLoading && <Loading />}
       <ErrorBanner
         error={error}
         fallback="Не удалось загрузить задачи"

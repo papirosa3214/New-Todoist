@@ -6,6 +6,7 @@ import {
   Avatar,
   ScreenHeader,
   ErrorBanner,
+  Loading,
   BackButton,
 } from "../components/UI";
 
@@ -42,7 +43,7 @@ export function AgentsScreen() {
       <div className="text-[13px] text-sub font-semibold px-1 mb-2 mt-2">
         Команда
       </div>
-      {isLoading && <p className="px-1 text-[13px] text-dim mb-4">Загрузка…</p>}
+      {isLoading && <Loading className="mb-4" />}
       <div className="bg-card rounded-2xl overflow-hidden mb-4">
         {agents.map((u) => (
           <div key={u.id} className="flex items-center gap-3 py-3 px-4">

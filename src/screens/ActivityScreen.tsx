@@ -29,6 +29,7 @@ import {
   Avatar,
   ScreenHeader,
   ErrorBanner,
+  Loading,
   BackButton,
   SheetHandle,
 } from "../components/UI";
@@ -691,7 +692,7 @@ export function ActivityScreen() {
         }
       />
 
-      {isLoading && <p className="px-1 text-[13px] text-dim mt-3">Загрузка…</p>}
+      {isLoading && <Loading className="mt-3" />}
       <ErrorBanner
         error={error}
         fallback="Не удалось загрузить выполненные задачи"

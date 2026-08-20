@@ -11,7 +11,7 @@
 import { useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTasks } from "../api/tasks";
-import { ScreenHeader, ErrorBanner, BackButton } from "../components/UI";
+import { ScreenHeader, ErrorBanner, Loading, BackButton } from "../components/UI";
 import { TaskRow } from "../components/TaskRow";
 
 export function AgentWorkScreen() {
@@ -92,7 +92,7 @@ export function AgentWorkScreen() {
         className="mb-2"
       />
 
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isLoading && <Loading />}
 
       {nothing && (
         <p className="px-1 text-[13px] text-dim">
