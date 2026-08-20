@@ -34,6 +34,11 @@ import { AttachmentView } from "./AttachmentView";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { formatDueLabel, formatRelativeTime } from "../lib/date";
 import { useBottomSheet } from "../lib/useBottomSheet";
+import { MicKeyboardBar } from "./MicKeyboardBar";
+import { MicOverlay } from "./MicOverlay";
+import { useMicRecorder } from "../lib/useMicRecorder";
+import { useTranscribeAudio } from "../api/audio";
+import { combineDictatedText } from "../lib/dictationParser";
 import type { ApiComment, ApiTask, ApiTaskEvent } from "../api/types";
 
 // ═══════════ STATUS ROW ═══════════
@@ -253,6 +258,7 @@ export function AgentOwnerActions({
           value={comment}
           onChange={setComment}
           busy={setAgentState.isPending || addComment.isPending}
+          error={setAgentState.error || addComment.error}
           onCancel={() => {
             setAnswering(false);
             setComment("");
@@ -269,6 +275,7 @@ export function AgentOwnerActions({
           value={comment}
           onChange={setComment}
           busy={setAgentState.isPending}
+          error={setAgentState.error}
           onCancel={() => {
             setReturning(false);
             setComment("");
@@ -291,6 +298,7 @@ function ReturnToWorkSheet({
   onCancel,
   onSubmit,
   busy,
+  error,
   // Тот же лист обслуживает два сценария владельца — «вернуть на доработку»
   // (из review) и «ответить агенту» (из blocked). Разница только в словах,
   // поэтому не плодим второй компонент.
@@ -304,12 +312,43 @@ function ReturnToWorkSheet({
   onCancel: () => void;
   onSubmit: () => void;
   busy: boolean;
+  /** Ошибка последней попытки отправки (setAgentState/addComment) — баннер
+   *  выше в AgentOwnerActions рисуется СНАРУЖИ этой шторки, а она —
+   *  fixed z-50 с полноэкранным scrim: тот баннер физически скрыт, пока
+   *  шторка открыта, и провал запроса выглядел бы как «нажал — ничего не
+   *  произошло» (owner 2026-08-20, тот же симптом что и потерянный клик —
+   *  разные причины, одно и то же впечатление). Дублируем ошибку сюда. */
+  error?: unknown;
   title?: string;
   hint?: string;
   placeholder?: string;
 }) {
   // §3 Interruptibility, §5 Velocity handoff, §7 Spatial consistency
   const sheet = useBottomSheet({ open, onClose: onCancel });
+
+  // Микрофон — та же плавающая кнопка над клавиатурой, что у поля
+  // комментария в ленте (TaskDetailScreen) и у формы задачи: единообразие
+  // подсказки «есть текстовое поле — рядом есть микрофон» (owner
+  // 2026-08-20: «нативная клавиатура — пропадает мой микрофончик, который
+  // должен всегда быть у клавиатуры»). textarea открывается с autoFocus,
+  // так что панель должна быть на экране с первого кадра, а не только
+  // после явного onFocus — отсюда initial state true, а не false.
+  const [focused, setFocused] = useState(true);
+  const transcribeAudio = useTranscribeAudio();
+  const mic = useMicRecorder(async (blob) => {
+    try {
+      const { text } = await transcribeAudio.mutateAsync(blob);
+      onChange(combineDictatedText(value, text));
+    } catch {
+      // Причина уже в transcribeAudio.error — её показывает ErrorBanner.
+    } finally {
+      mic.finish();
+    }
+  });
+  const micElapsedLabel = (() => {
+    const totalSec = Math.floor(mic.elapsedMs / 1000);
+    return `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, "0")}`;
+  })();
 
   if (!sheet.mounted) return null;
 
@@ -396,15 +435,44 @@ function ReturnToWorkSheet({
           </button>
         </div>
         <p className="text-[13px] text-sub mb-2 px-1">{hint}</p>
+        <ErrorBanner
+          error={error}
+          fallback="Не удалось отправить — попробуйте ещё раз"
+          variant="block"
+          className="mb-2"
+        />
+        <ErrorBanner
+          error={transcribeAudio.error}
+          fallback="Не удалось распознать речь. Проверьте соединение."
+          variant="block"
+          className="mb-2"
+        />
         <textarea
           autoFocus
           rows={4}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onFocus={() => setFocused(true)}
+          // Та же задержка, что у поля комментария в ленте: клик по
+          // микрофону не крадёт фокус (MicKeyboardBar гасит mousedown), но
+          // blur всё равно приходит раньше её onClick — задержка даёт
+          // клику отработать, а не гасит панель раньше времени.
+          onBlur={() => setTimeout(() => setFocused(false), 150)}
           placeholder={placeholder}
           className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none resize-none mb-3"
         />
       </div>
+      {focused && mic.state === "idle" && (
+        <MicKeyboardBar onStart={mic.start} ariaLabel="Надиктовать ответ" />
+      )}
+      {(mic.state === "recording" || mic.state === "processing") && (
+        <MicOverlay
+          state={mic.state}
+          elapsedLabel={micElapsedLabel}
+          getTimeDomainData={mic.getTimeDomainData}
+          onStop={mic.stop}
+        />
+      )}
     </div>
   );
 }
