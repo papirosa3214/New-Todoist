@@ -31,6 +31,18 @@ BASE = os.environ.get("TASKFLOW_API", "http://localhost:3001")
 VAULT_GET = os.path.expanduser("~/.claude/vault-get.py")
 VAULT_KEY = os.environ.get("TASKFLOW_VAULT_KEY", "TASKFLOW_AGENT_TOKEN")
 
+# Состояние шага сервер отдаёт вычисленным (поле `state`, см.
+# withSubtaskState в server/src/routes/tasks.ts) — здесь только перевод для
+# чтения. Неизвестное значение показываем как есть, чтобы новое состояние на
+# сервере не превращалось молча в «не в работе».
+SUBTASK_STATE_RU = {
+    "done": "сделан",
+    "running": "в работе",
+    "pending": "не в работе",
+    "blocked": "упёрся",
+    "review": "сдан",
+}
+
 # Несколько параллельных сессий Claude Code делят один и тот же учётный
 # аккаунт-агента (Claude_Bot) в TaskFlow — assignee_id один на всех, поэтому
 # claim/state сами по себе не говорят, ЧЕЙ физически это процесс. Пишем
@@ -213,12 +225,18 @@ def t_task(args):
             {
                 "id": s.get("id"),
                 "сделан": bool(s.get("done")),
-                # Состояние шага нужно и в карточке: «сдан на проверку» —
-                # это закрытый агентом шаг, но «сделан» его ставит владелец,
-                # прощёлкивая review. Без этого поля Stop-хук
-                # (taskflow-progress-gate.py) не отличал сданный шаг от
-                # нетронутого и считал сданную работу недоделанной.
-                "состояние": s.get("agent_state") or "не в работе",
+                # Состояние берём ВЫЧИСЛЕННОЕ сервером (withSubtaskState в
+                # routes/tasks.ts), а не сырое agent_state. Разница видна
+                # ровно там, где важна: у закрытого шага сырое поле могло
+                # остаться «in_progress», и карточка показывала шаг разом
+                # сделанным и идущим — так Максим и заметил рассинхрон
+                # 20.08.2026. Сервер же считает готовность старше работы, а
+                # протухшую аренду возвращает в «не в работе». Источник
+                # остатка закрыт в routes/subtasks.ts, но читать всё равно
+                # правильнее вычисленное: одно поле — одна правда.
+                "состояние": SUBTASK_STATE_RU.get(
+                    s.get("state"), s.get("state") or "не в работе"
+                ),
                 "название": s.get("title"),
             }
             for s in d.get("subtasks", []) or []
@@ -265,7 +283,15 @@ def t_comment(args):
 
 def t_subtask_done(args):
     done = args.get("done", True)
-    api("PATCH", f"/api/subtasks/{args['id']}", {"done": bool(done)})
+    body = {"done": bool(done)}
+    # Сервер требует result от агента при done=true (server/src/routes/
+    # subtasks.ts, 20.08.2026) — без него 400 "result обязателен". Раньше
+    # схема этого инструмента параметр не принимала вообще: любой агент,
+    # закрывающий шаг честно через MCP (как ему и велит промпт), упирался
+    # в 400 и либо не закрывал шаг, либо шёл в обход сырым curl.
+    if args.get("result"):
+        body["result"] = args["result"]
+    api("PATCH", f"/api/subtasks/{args['id']}", body)
     return {"шаг отмечен" if done else "отметка снята": args["id"]}
 
 
@@ -331,7 +357,10 @@ def t_subtask_work(args):
     row = api("POST", f"/api/subtasks/{args['id']}/work", body)
     return {
         "подзадача": row.get("title"),
-        "состояние": row.get("agent_state") or "не в работе",
+        # То же вычисленное поле, что и в карточке задачи (см. t_task).
+        "состояние": SUBTASK_STATE_RU.get(
+            row.get("state"), row.get("state") or "не в работе"
+        ),
         "итог": row.get("result") or "—",
     }
 
@@ -423,10 +452,17 @@ TOOLS = [
     },
     {
         "name": "taskflow_subtask_done",
-        "description": "Отметить шаг задачи сделанным (или снять отметку, done=false).",
+        "description": "Отметить шаг задачи сделанным (или снять отметку, done=false). При done=true передай result — что сделано (сервер требует его от агента).",
         "inputSchema": {
             "type": "object",
-            "properties": {"id": {"type": "string"}, "done": {"type": "boolean"}},
+            "properties": {
+                "id": {"type": "string"},
+                "done": {"type": "boolean"},
+                "result": {
+                    "type": "string",
+                    "description": "Что сделано, одно-два предложения. Обязателен при done=true, если у шага ещё нет result.",
+                },
+            },
             "required": ["id"],
         },
         "fn": t_subtask_done,
