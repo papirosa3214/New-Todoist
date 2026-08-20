@@ -358,3 +358,41 @@ test.describe("Форма задачи: срок и время", () => {
     expect(written).toEqual([]);
   });
 });
+
+test.describe("Форма задачи: набор названия", () => {
+  // ХВОСТОВОЙ ПРОБЕЛ ПЕРЕЖИВАЕТ ПОТЕРЮ ФОКУСА.
+  //
+  // Жалоба владельца 20.08.2026: «нажимаю пробел — каретка тут же
+  // возвращается назад». Причина была в applyDictationParse: он висит на
+  // onBlur названия и сравнивал разобранный заголовок с СЫРЫМ, а
+  // parseDictation обрезает пробелы сам — значит любой хвостовой пробел
+  // выглядел как «разбор что-то изменил», заголовок переписывался
+  // обрезанным и заодно получал заглавную от capitalizeFirst.
+  //
+  // Проверка жила в scripts/kb-check.mjs — харнессе своей экранной
+  // клавиатуры, который умел слать blur на каждое нажатие. Клавиатуру
+  // отключили 20.08.2026, харнесс удалён вместе с ней, и весь класс
+  // «что-то на blur переписывает поле» остался бы без автопроверки —
+  // поэтому она перенесена сюда. Blur здесь ручной: с нативной
+  // клавиатурой он приходит не на каждое нажатие, а при уходе с поля, но
+  // ломается от него ровно то же самое.
+  test("пробел в конце названия не съедается на blur", async ({
+    page,
+    context,
+  }) => {
+    const written = await setupApp(context);
+    const errors = collectErrors(page);
+    await openScreen(page, "/task/new");
+
+    const title = page.locator('textarea[placeholder="Название задачи"]');
+    await title.click();
+    await title.pressSequentially("кот ", { delay: 30 });
+    await title.evaluate((el) => el.blur());
+    await page.waitForTimeout(300);
+
+    // Именно «кот » — не «кот» (обрезан) и не «Кот» (плюс capitalizeFirst).
+    await expect(title).toHaveValue("кот ");
+    expect(errors).toEqual([]);
+    expect(written).toEqual([]);
+  });
+});
