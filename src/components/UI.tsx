@@ -647,7 +647,7 @@ export function FAB({
       onClick={
         onClick ?? (() => navigate(`/task/new${dueToday ? "?due=today" : ""}`))
       }
-      className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-[0_6px_16px_rgba(228,67,50,.45)] z-30 tap-scale"
+      className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-fab z-30 tap-scale"
     >
       <Icon name="plus" size={26} className="text-white" />
     </button>

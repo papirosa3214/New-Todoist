@@ -969,7 +969,7 @@ export function DayHours({
                 свою пилюлину — мне нравилось, что они соединялись в одну
                 общую табличку»). Скругление и тень — у контейнера, строки
                 внутри разделены чертой. */}
-            <div className="max-h-[132px] overflow-y-auto overscroll-contain rounded-2xl bg-card shadow-[0_6px_16px_rgba(0,0,0,0.45)]">
+            <div className="max-h-[132px] overflow-y-auto overscroll-contain rounded-2xl bg-card shadow-dropdown">
               {untimed.map((t, i) => (
                 <UntimedRow
                   key={t.id}

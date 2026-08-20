@@ -466,7 +466,7 @@ export function UpcomingScreen() {
            вкладках ScreenHeader растягивается сам). Отрицательное поле
            тянет фон до краёв, внутренний padding возвращает содержимому
            прежние отступы — заголовок и кнопки не сдвигаются. */
-        className="sticky top-0 z-20 -mx-4 px-4 bg-bg border-b border-stroke shadow-[0_10px_16px_-12px_rgba(0,0,0,.55)]"
+        className="sticky top-0 z-20 -mx-4 px-4 bg-bg border-b border-stroke shadow-sticky"
       >
         <ScreenHeader
           title="Предстоящее"
@@ -740,7 +740,7 @@ export function UpcomingScreen() {
           <>
             <div className="fixed inset-0 z-30" onClick={closeMonthPicker} />
             <div
-              className="absolute z-40 flex items-center gap-1 bg-card border border-stroke rounded-lg shadow-lg p-1"
+              className="absolute z-40 flex items-center gap-1 bg-card border border-stroke rounded-lg shadow-pop p-1"
               style={{ top: popoverPos.top, left: popoverPos.left }}
             >
               <button

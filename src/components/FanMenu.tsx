@@ -221,7 +221,7 @@ export function FanMenu() {
               toggle(false);
               navigate(item.path);
             }}
-            className="tap-scale fixed left-1/2 z-[35] flex items-center justify-center rounded-full border border-stroke bg-card2 shadow-[0_6px_16px_rgba(0,0,0,.22)]"
+            className="tap-scale fixed left-1/2 z-[35] flex items-center justify-center rounded-full border border-stroke bg-card2 shadow-fan-item"
             style={{
               width: ITEM_SIZE,
               height: ITEM_SIZE,
@@ -286,7 +286,7 @@ export function FanMenu() {
         // убираем матовость целиком). alpha обеих стоп градиента снижена
         // вслед (.5→.32→.28, .55→.4→.3) — тонкая светлая обводка (border-white/10) отделяет край
         // стекла от фона за ним, как и положено стеклу.
-        className="tap-scale fixed left-1/2 z-[36] flex items-center justify-center rounded-full border border-white/10 text-white shadow-[0_8px_32px_rgba(228,67,50,.4)] backdrop-blur-sm"
+        className="tap-scale fixed left-1/2 z-[36] flex items-center justify-center rounded-full border border-white/10 text-white shadow-fan-fab backdrop-blur-sm"
         style={{
           width: TRIGGER_SIZE,
           height: TRIGGER_SIZE,

@@ -44,6 +44,57 @@
   --font-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Avenir Next", "Segoe UI",
     Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* ═══ ТЕНИ (аудит дизайн-системы 20.08.2026, пункт 1) ═══
+     До этой правки 8+ уникальных box-shadow жили inline-строками
+     (`shadow-[0_6px_16px_rgba(...)]`), одна и та же геометрия
+     записывалась в разных местах чуть по-разному. Значения ниже — 1:1
+     то, что уже было в коде (кроме --shadow-pop, см. её отдельный
+     комментарий), просто вынесены в токены — внешний вид не менялся. */
+  --shadow-fab: 0 6px 16px rgba(228, 67, 50, 0.45); /* FAB (UI.tsx) */
+  --shadow-fan-fab: 0 8px 32px rgba(228, 67, 50, 0.4); /* центр веера (FanMenu) */
+  --shadow-fan-item: 0 6px 16px rgba(0, 0, 0, 0.22); /* пункт веера (FanMenu) */
+  --shadow-dropdown: 0 6px 16px rgba(0, 0, 0, 0.45); /* всплывающий список (DayHours) */
+  --shadow-toggle: 0 1px 3px rgba(0, 0, 0, 0.3); /* бегунок тумблера (Settings/TaskFilterSheet) */
+  --shadow-sticky: 0 10px 16px -12px rgba(0, 0, 0, 0.55); /* липкая шапка (UpcomingScreen) */
+  --shadow-tabbar: 0 -6px 9px rgb(0 0 0 / 0.35); /* таббар, значение из CRM-переноса, см. блок ниже */
+  /* Единственная тень группы, которую аудит попросил не просто вынести,
+     а УНИФИЦИРОВАТЬ: ActionsMenu был на встроенном shadow-xl (Tailwind,
+     0 20px 25px -5px rgb(0 0 0 / .1)), UpcomingScreen-поповер — на
+     shadow-lg (0 10px 15px -3px rgb(0 0 0 / .1)) — оба заметно светлее и
+     мельче остальных поповеров приложения. Одно значение на оба —
+     видимая правка, не чистый рефакторинг; показать и свериться с
+     владельцем при следующей визуальной проверке. */
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+@utility shadow-fab {
+  box-shadow: var(--shadow-fab);
+}
+@utility shadow-fan-fab {
+  box-shadow: var(--shadow-fan-fab);
+}
+@utility shadow-fan-item {
+  box-shadow: var(--shadow-fan-item);
+}
+@utility shadow-dropdown {
+  box-shadow: var(--shadow-dropdown);
+}
+@utility shadow-toggle {
+  box-shadow: var(--shadow-toggle);
+}
+@utility shadow-sticky {
+  box-shadow: var(--shadow-sticky);
+}
+@utility shadow-pop {
+  box-shadow: var(--shadow-pop);
+}
+/* MicKeyboardBar — двухслойная тень (внешняя + внутренний блик стекла),
+   токен несёт оба слоя сразу, чтобы вызывающий код не собирал их сам. */
+@utility shadow-mic-glass {
+  box-shadow:
+    0 2px 10px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
 /* ═══════════════ LIGHT THEME OVERRIDE ═══════════════
@@ -455,7 +506,7 @@
      Две раздельные тени (box-shadow бара + drop-shadow холмика) давали бы
      двойное затемнение у шва. Направление вверх; радиус /2 — у drop-shadow
      размытие визуально ~вдвое сильнее box-shadow (комментарий оригинала). */
-  filter: drop-shadow(0 -6px 9px rgb(0 0 0 / 0.35));
+  filter: drop-shadow(var(--shadow-tabbar));
 }
 
 .nt-tabbar-menu__item {
