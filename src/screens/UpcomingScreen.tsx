@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useTasks } from "../api/tasks";
+import { useTasks, useUpdateTask } from "../api/tasks";
+import { useProjects } from "../api/projects";
 import { useAgents } from "../api/agents";
 import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
@@ -18,6 +19,11 @@ import {
   // попытка свести их в одну.
   mondayOf as weekStartOf,
 } from "../components/UpcomingCalendar";
+import {
+  DayHours,
+  DayColumnsHeader,
+  type DayColumnData,
+} from "../components/DayHours";
 import { todayStr, MONTHS_SHORT, addDays } from "../lib/date";
 import { isAgentAssignedTask } from "../lib/taskOwner";
 import { TaskRow } from "../components/TaskRow";
@@ -207,6 +213,10 @@ export function UpcomingScreen() {
 
   const { data: allTasks = [], isLoading, error } = useTasks();
   const { data: agents = [] } = useAgents();
+  // Цвет блока в сетке часов и назначение времени перетаскиванием — вид
+  // «Три дня» ниже, перенесённый со «Сегодня» (20.08.2026).
+  const { data: projects = [] } = useProjects();
+  const updateTask = useUpdateTask();
   const navigate = useNavigate();
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
@@ -257,6 +267,22 @@ export function UpcomingScreen() {
   // Раскладка по дням для календарных видов — один проход по списку
   // вместо фильтра на каждую из 42 ячеек месяца.
   const byDate = useMemo(() => groupByDate(tasks), [tasks]);
+
+  // Данные для DayHours (вид «Три дня») — три колонки от сегодня, без
+  // своей навигации, ровно как было на «Сегодня» до переезда 20.08.2026
+  // (владелец: «перенос кода без каких-либо изменений»). В отличие от
+  // «Сегодня» здесь НЕТ понятий «просрочено»/«ждут вас» — это семантика
+  // того экрана, сюда её тащить не нужно: все три дня, включая
+  // сегодняшний, берут задачи одинаково, просто по due_date (byDate уже
+  // отфильтрован и уже без агентских задач — см. activeTasks выше).
+  const hourDays: DayColumnData[] = useMemo(
+    () =>
+      [0, 1, 2].map((i) => {
+        const date = addDays(today, i);
+        return { date, tasks: byDate.get(date) ?? [], isToday: date === today };
+      }),
+    [today, byDate],
+  );
 
   const ribbonStart = useMemo(
     () => ribbonAnchor ?? mondayOf(todayDate),
@@ -485,6 +511,12 @@ export function UpcomingScreen() {
               <WeekMonthLabel monday={gridMonday} />
             ) : view === "month" ? (
               <MonthHeaderLabel year={gridMonth.year} month={gridMonth.month} />
+            ) : view === "hours" ? (
+              // Подписи трёх дней — тот же приём, что был у «Сегодня» до
+              // 20.08.2026: строка живёт ВНУТРИ шапки, не отдельной плашкой
+              // под ней (владелец 19.08.2026, см. историю решения в
+              // TodayScreen.tsx).
+              <DayColumnsHeader days={hourDays} />
             ) : undefined
           }
           actions={
@@ -515,8 +547,9 @@ export function UpcomingScreen() {
               )}
               {/* Виды экрана — под тремя точками, ровно как в «Сегодня»
                   (19.08.2026: «под троеточие спрячь список, доска, один
-                  день, три дня»). Здесь набор свой: список, неделя,
-                  месяц. */}
+                  день, три дня»). Список, неделя, месяц — плюс «Три дня»
+                  (calendarSmall уже занята «Неделей», поэтому clock —
+                  сетка часов), переехавшая сюда со «Сегодня» 20.08.2026. */}
               <button
                 ref={menuAnchorRef}
                 onClick={() => setMenuOpen((v) => !v)}
@@ -534,6 +567,7 @@ export function UpcomingScreen() {
                     ["list", "Список", "list"],
                     ["week", "Неделя", "calendarSmall"],
                     ["month", "Месяц", "grid"],
+                    ["hours", "Три дня", "clock"],
                   ] as const
                 ).map(([key, label, icon]) => ({
                   icon,
@@ -843,6 +877,33 @@ export function UpcomingScreen() {
           // 20.08.2026); он лишь сообщает, что сейчас основное на экране,
           // для заголовка «Август» в шапке ниже.
           onVisibleMonthChange={(year, month) => setGridMonth({ year, month })}
+        />
+      )}
+      {/* «Три дня» — почасовая сетка, перенесённая со «Сегодня» 20.08.2026
+          (владелец: «перенос кода без каких-либо изменений... всё
+          абсолютно там настроено, просто нужно сменить локацию»).
+          DayHours — тот же компонент, что рисовал 1-дневную сетку на
+          «Сегодня», просто теперь получает три колонки вместо одной. */}
+      {view === "hours" && (
+        <DayHours
+          days={hourDays}
+          projectColor={(t) =>
+            projects.find((p) => p.id === t.project_id)?.color || "#717171"
+          }
+          onTaskClick={(id) => navigate(`/task/${id}`)}
+          // Перетащили задачу на шкалу — назначаем и время, и дату колонки,
+          // куда отпустили; длительность 15 минут (SNAP_MIN), если её
+          // раньше не было — та же логика, что была на «Сегодня», см.
+          // комментарий у одноимённого onSchedule в TodayScreen.tsx.
+          onSchedule={(id, date, time) => {
+            const task = allTasks.find((t) => t.id === id);
+            updateTask.mutate({
+              id,
+              start_time: time,
+              due_date: date,
+              ...(task?.duration_min == null ? { duration_min: 15 } : null),
+            });
+          }}
         />
       )}
       {openDay && view === "week" && (

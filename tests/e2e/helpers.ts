@@ -22,13 +22,11 @@ export async function setupApp(
   ui: {
     inbox?: "list" | "board";
     today?: "list" | "board" | "hours";
-    hoursSpan?: 1 | 3;
-    upcoming?: "list" | "week" | "month";
+    upcoming?: "list" | "week" | "month" | "hours";
   } = {},
 ): Promise<Written[]> {
   const state = {
     taskLayout: { inbox: ui.inbox ?? "list", today: ui.today ?? "list" },
-    hoursSpan: ui.hoursSpan ?? 1,
     upcomingLayout: ui.upcoming ?? "list",
   };
   await context.addInitScript((s) => {
@@ -111,7 +109,8 @@ export async function touchSwipeVertical(
   from: { x: number; y: number },
   offsets: number[],
 ) {
-  const isChromium = page.context().browser()?.browserType().name() === "chromium";
+  const isChromium =
+    page.context().browser()?.browserType().name() === "chromium";
   if (isChromium) {
     const cdp = await page.context().newCDPSession(page);
     const send = (type: string, y: number) =>

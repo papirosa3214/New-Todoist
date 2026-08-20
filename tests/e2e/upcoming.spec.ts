@@ -1,6 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { setupApp, openScreen, collectErrors, dragBy } from "./helpers";
 
+/** Плашка задачи внутри сетки часов (DayHours → TimedBlock). Тот же
+ *  селектор, что в today-hours.spec.ts — компонент один и тот же, только
+ *  теперь может рисоваться и здесь. */
+const TIMED_BLOCK = "div.absolute.select-none.overflow-hidden";
+
 // «Предстоящее» — календарные виды «неделя» и «месяц» (UpcomingCalendar.tsx).
 //
 // Неделя владелец 19.08.2026 просил сделать СТАТИЧНОЙ: «зачем здесь
@@ -498,5 +503,133 @@ test.describe("«Предстоящее»: месяц", () => {
     await dragBy(page, start.fromLeft, [40, 90, 140]);
     await page.waitForTimeout(400);
     expect(await monthLabel()).toBe(initial);
+  });
+});
+
+// «Три дня» — почасовая сетка (DayHours.tsx), перенесённая со «Сегодня»
+// 20.08.2026 (владелец: «перенос кода без каких-либо изменений... просто
+// нужно сменить локацию»). Сами тесты — тоже перенос: раньше жили в
+// today-hours.spec.ts под hoursSpan:3, теперь здесь под upcoming:"hours".
+test.describe("«Предстоящее»: три дня", () => {
+  test("переключение на 3 дня даёт три колонки с датами", async ({
+    page,
+    context,
+  }) => {
+    await setupApp(context, { upcoming: "hours" });
+    const errors = collectErrors(page);
+    await openScreen(page, "/upcoming");
+
+    const captions = await page
+      .locator("span.flex-1.text-center.font-semibold")
+      .allTextContents();
+    expect(captions.length).toBe(3);
+    for (const c of captions) {
+      expect(c).toMatch(/^(Пн|Вт|Ср|Чт|Пт|Сб|Вс) \d{1,2}$/);
+    }
+
+    // Геометрия подписей обязана совпадать с геометрией самих колонок —
+    // это единственное, что удерживает их над своими днями (подписи
+    // рендерятся в шапке, а колонки в сетке, общего родителя у них нет).
+    const aligned = await page.evaluate(() => {
+      const caps = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          "span.flex-1.text-center.font-semibold",
+        ),
+      ).map((e) => e.getBoundingClientRect());
+      const cols = Array.from(
+        document.querySelectorAll<HTMLElement>("div.relative.min-w-0.flex-1"),
+      ).map((e) => e.getBoundingClientRect());
+      return {
+        caps: caps.length,
+        cols: cols.length,
+        diffs: caps.map((c, i) =>
+          cols[i]
+            ? +(
+                c.left +
+                c.width / 2 -
+                (cols[i].left + cols[i].width / 2)
+              ).toFixed(1)
+            : null,
+        ),
+      };
+    });
+    expect(aligned.cols).toBe(3);
+    for (const d of aligned.diffs) expect(Math.abs(d!)).toBeLessThanOrEqual(1);
+
+    expect(errors).toEqual([]);
+  });
+
+  test("задачу можно перетащить в соседнюю колонку дня", async ({
+    page,
+    context,
+  }) => {
+    // 20.08.2026: раньше draggable в DayHours был только у 1-дневного вида
+    // (interactive = days.length===1) — владелец попросил снять это
+    // ограничение, «между днями тоже должны ездить». Перехват PATCH —
+    // проверяем ИМЕННО тело запроса (due_date сменился на колонку, куда
+    // отпустили), в живую базу ничего не пишем (см. helpers.ts).
+    const written = await setupApp(context, { upcoming: "hours" });
+    await openScreen(page, "/upcoming");
+
+    const blocks = page.locator(TIMED_BLOCK);
+    const count = await blocks.count();
+    test.skip(count === 0, "в базе сейчас нет ни одной задачи со временем");
+
+    const source = blocks.first();
+    const box = await source.boundingBox();
+    if (!box) throw new Error("у плашки задачи нет геометрии");
+
+    // Колонки дня равной ширины, GUTTER_W (161/3) слева под подписи часов
+    // — под неё драг не заводим, есть свои проверки на выход за сетку.
+    // Столбец назначения — следующий по кругу от исходного (в какой
+    // колонке ни оказался бы source, «+1 колонка вправо/влево по модулю
+    // 3» гарантированно другая дата). data-day-col — атрибут, заведённый
+    // в DayHours.tsx специально под этот тест, несёт саму дату колонки.
+    const gridBox = await page.evaluate(() =>
+      Array.from(document.querySelectorAll<HTMLElement>("[data-day-col]")).map(
+        (e) => {
+          const r = e.getBoundingClientRect();
+          return { date: e.dataset.dayCol!, left: r.left, width: r.width };
+        },
+      ),
+    );
+    expect(gridBox.length).toBe(3);
+    const startColIndex = gridBox.findIndex(
+      (c) => box.x >= c.left - 2 && box.x < c.left + c.width + 2,
+    );
+    expect(startColIndex).toBeGreaterThanOrEqual(0);
+    const targetColIndex = (startColIndex + 1) % gridBox.length;
+    const targetDate = gridBox[targetColIndex].date;
+    const targetX =
+      gridBox[targetColIndex].left + gridBox[targetColIndex].width / 2;
+
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+
+    // Долгий жест с промежуточными шагами — тот же приём, что у dragBy в
+    // helpers.ts: MouseSensor(distance:4) требует реального движения, не
+    // телепорта, иначе перетаскивание не активируется вовсе.
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    const steps = 8;
+    for (let i = 1; i <= steps; i++) {
+      const x = startX + ((targetX - startX) * i) / steps;
+      await page.mouse.move(x, startY, { steps: 2 });
+      await page.waitForTimeout(40);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+
+    const patch = written.find(
+      (w) => w.method === "PATCH" && w.url.includes("/api/tasks/"),
+    );
+    expect(patch, "перетаскивание не отправило PATCH").toBeTruthy();
+    const body = patch!.body as { due_date?: string; start_time?: string };
+    // Дата назначения — ровно колонка targetColIndex, не исходная и не
+    // случайная: единственная проверка, которая реально ловит регресс
+    // «X не учитывается» (старая реализация писала бы либо ничего, либо
+    // всегда исходную дату — X полностью игнорировался).
+    expect(body.due_date).toBe(targetDate);
+    expect(body.start_time).toBeTruthy();
   });
 });
