@@ -86,22 +86,14 @@ export function useVisualViewportInset() {
         0,
         window.innerHeight - vv.height - vv.offsetTop,
       );
-      // Своя экранная клавиатура (components/AppKeyboard.tsx) системную НЕ
-      // вызывает — она гасится inputMode="none", и visualViewport при её
-      // открытии не сжимается ВООБЩЕ (замер на iPhone Air, iOS 26.6,
-      // 18.08.2026: инсет 0px). Значит vvInset про неё ничего не знает, и
-      // формы уехали бы под панель. Её высоту она сама пишет в
-      // --app-kb-height, а здесь берётся максимум: писатель --kb-inset
-      // остаётся ОДИН, иначе два источника перебивали бы друг друга на
-      // каждом событии scroll.
-      const ownKeyboard =
-        parseFloat(
-          getComputedStyle(document.documentElement).getPropertyValue(
-            "--app-kb-height",
-          ),
-        ) || 0;
-      const inset = Math.max(vvInset, ownKeyboard);
-      document.documentElement.style.setProperty("--kb-inset", `${inset}px`);
+      // Своя экранная клавиатура (components/AppKeyboard.tsx) отключена
+      // 20.08.2026, и здесь снова ровно один источник высоты — сам
+      // visualViewport. Пока она была включена, её высота приходила из
+      // --app-kb-height и бралась максимумом: системная клавиатура при
+      // inputMode="none" не выезжала, вьюпорт не сжимался вовсе (замер на
+      // iPhone Air, iOS 26.6: инсет 0px), и без этой добавки формы уехали бы
+      // под панель. Вернётся тот путь — вернётся и максимум.
+      document.documentElement.style.setProperty("--kb-inset", `${vvInset}px`);
       // Чистая высота клавиатуры, без поправки на панорамирование — см.
       // комментарий выше. Единственный текущий потребитель — MicKeyboardBar
       // (position:fixed).
@@ -150,7 +142,7 @@ export function useVisualViewportInset() {
       // Делается здесь, а не в каждом поле: место одно — то, которое
       // ПЕРВЫМ узнаёт, что клавиатура открылась. block:"nearest" —
       // минимальное движение, поле не прыгает в центр, если и так видно.
-      if (inset > prevInset + 1) {
+      if (vvInset > prevInset + 1) {
         const active = document.activeElement as HTMLElement | null;
         if (
           active &&
@@ -159,7 +151,7 @@ export function useVisualViewportInset() {
           active.scrollIntoView({ block: "nearest" });
         }
       }
-      prevInset = inset;
+      prevInset = vvInset;
     };
 
     // Считаем сразу при монтировании — а не только по первому событию —

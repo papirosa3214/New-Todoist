@@ -6,6 +6,8 @@ import { useCurrentUser } from "../api/auth";
 import { useAppStore } from "../store";
 import { useNotificationsSocket } from "../api/ws";
 import { useVisualViewportInset } from "../lib/useVisualViewportInset";
+import { warmUpWhisper } from "../lib/localAI";
+import { flushArchiveQueue } from "../lib/dictationArchive";
 
 // Bottom nav + FAB belong only to the app's four top-level tab screens —
 // the ones BottomNav itself renders a tab for (see NAV_ITEMS in UI.tsx) and
@@ -76,6 +78,18 @@ export function Layout() {
   // событие тоже нет — а один общий вызов на весь Layout проще, чем два
   // условных в двух разных return-ветках ниже.
   useVisualViewportInset();
+  // Прогрев модели распознавания и досылка архива диктовок — при первом входе
+  // в приложение под авторизацией. Жили в KeyboardProvider, пока тот
+  // существовал (он оборачивал ровно этот Layout); с отключением своей
+  // клавиатуры 20.08.2026 переехали сюда, чтобы не пропасть вместе с ней.
+  // Прогрев обязан быть заранее: загрузка CoreML-модели занимает куда больше
+  // тех трёх секунд, что плагин отводит на ожидание, и «ленивый» прогрев в
+  // момент диктовки означал бы, что Whisper не успевает никогда. Досылка —
+  // потому что .110 мог быть недоступен, когда запись делалась.
+  useEffect(() => {
+    warmUpWhisper();
+    void flushArchiveQueue();
+  }, []);
   // Тело документа не должно прокручиваться на мобильном — иначе браузер
   // выкатывает свою адресную строку/панель поверх приложения (жалоба
   // владельца 2026-08-11: на «Входящих» контент помещается в экран и

@@ -656,6 +656,12 @@ export function TaskDetailScreen() {
           />
           <button
             type="submit"
+            // Тап при открытой клавиатуре сначала уводит фокус с поля,
+            // клавиатура съезжает, строка ввода переезжает вниз — и кнопка
+            // уходит из-под пальца между touchstart и touchend, click не
+            // приходит вовсе. Гасим mousedown, фокус остаётся в поле. Тот же
+            // приём, что в MicKeyboardBar и ReplyForm (SubtaskFeed.tsx).
+            onMouseDown={(e) => e.preventDefault()}
             disabled={
               (!commentText.trim() && pending.length === 0) ||
               addComment.isPending

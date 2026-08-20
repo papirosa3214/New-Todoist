@@ -366,6 +366,13 @@ function ReturnToWorkSheet({
         <SheetHandle dragProps={sheet.dragProps} />
         <div className="flex items-center justify-between pb-2">
           <button
+            type="button"
+            // preventDefault на mousedown: тап при открытой клавиатуре иначе
+            // сперва уводит фокус с textarea, клавиатура съезжает, шторка
+            // переезжает — и кнопка уходит из-под пальца между touchstart и
+            // touchend, click не приходит. Тот же приём, что в MicKeyboardBar
+            // и в ReplyForm (SubtaskFeed.tsx).
+            onMouseDown={(e) => e.preventDefault()}
             onClick={onCancel}
             aria-label="Отмена"
             className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center"
@@ -378,6 +385,8 @@ function ReturnToWorkSheet({
               значит «поле ввода, защита от автозума iOS», см. index.css. */}
           <h3 className="text-[17px] font-semibold text-text">{title}</h3>
           <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={onSubmit}
             disabled={!value.trim() || busy}
             aria-label="Отправить"

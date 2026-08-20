@@ -9,10 +9,10 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "check:dead-controls": "node scripts/check-dead-controls.mjs",
-    "check": "npm run check:dead-controls",
+    "check": "npm run check:ui && npm run check:dead-controls",
     "test": "vitest run",
     "screenshot": "node scripts/screenshot.mjs",
-    "check:keyboard": "node scripts/kb-check.mjs"
+    "check:ui": "node scripts/ui-check.mjs"
   },
   "dependencies": {
     "@capacitor/cli": "^8.5.0",

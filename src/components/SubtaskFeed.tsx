@@ -312,6 +312,22 @@ function ReplyForm({
         placeholder={placeholder}
         className="w-full bg-card2 rounded-xl px-3 py-2 text-[14px] text-text placeholder:text-dim outline-none resize-none"
       />
+      {/* preventDefault на mousedown — тот же приём, что в MicKeyboardBar, и
+          по той же причине, только здесь он был пропущен. Тап по кнопке при
+          открытой клавиатуре сперва уводит фокус с textarea: клавиатура
+          съезжает, страница вырастает обратно, и кнопка УЕЗЖАЕТ из-под пальца
+          между touchstart и touchend. click в этом случае не приходит вовсе —
+          нажатие просто теряется. Владелец 20.08.2026: «нажимаю ответить,
+          ввожу комментарий, и он не отправляется».
+          Сюда же вторая половина жалобы, «сообщение просто исчезает»: после
+          первого потерянного нажатия макет уже сдвинут, и повторный тап по
+          тому же месту приходится на соседнюю «Отмену» — форма закрывается
+          вместе с набранным текстом. Поэтому гасится mousedown у ВСЕХ трёх
+          кнопок строки, а не только у «Отправить»: фокус не уходит — макет не
+          прыгает — промахнуться некуда.
+          type="button" обязателен: по умолчанию у button тип submit, и стоит
+          этой форме однажды оказаться внутри <form>, как нажатие начнёт
+          перезагружать страницу. */}
       <div className="flex items-center gap-3">
         {onUploadFile && (
           <>
@@ -325,6 +341,7 @@ function ReplyForm({
             />
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
               aria-label="Приложить файл"
@@ -335,13 +352,20 @@ function ReplyForm({
           </>
         )}
         <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={guardedSubmit}
           disabled={!comment.trim() || busy || uploading}
           className="text-[13px] font-semibold text-blue disabled:opacity-40 tap-fade"
         >
           Отправить
         </button>
-        <button onClick={onCancel} className="text-[13px] text-dim tap-fade">
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onCancel}
+          className="text-[13px] text-dim tap-fade"
+        >
           Отмена
         </button>
       </div>

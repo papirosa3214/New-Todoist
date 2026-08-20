@@ -22,8 +22,6 @@ import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
 import { LabelTasksScreen } from "./screens/LabelTasksScreen";
 import { SearchScreen } from "./screens/SearchScreen";
 import { VoiceModelsScreen } from "./screens/VoiceModelsScreen";
-import { KeyboardProvider } from "./lib/keyboardContext";
-import { KeyboardDemoScreen } from "./screens/KeyboardDemoScreen";
 import { Icon } from "./components/UI";
 
 // Catch-all for unknown routes: without this a bad/typo'd URL renders the
@@ -75,21 +73,14 @@ export default function App() {
       <Route path="/login" element={<LoginScreen />} />
       <Route path="/register" element={<RegisterScreen />} />
 
-      {/* Пробный экран своей клавиатуры (18.08.2026). Под авторизацией —
-          распознавание речи ходит в /api/audio/transcribe, — но ВНЕ Layout:
-          нижняя навигация перекрыла бы клавиатуру. Экран одноразовый, ни
-          на что в приложении не влияет. */}
-      <Route element={<RequireAuth />}>
-        <Route path="/kb-demo" element={<KeyboardDemoScreen />} />
-      </Route>
-
       {/* App shell (requires auth) */}
       <Route element={<RequireAuth />}>
-        {/* KeyboardProvider — здесь, ВНУТРИ RequireAuth и вокруг Layout (ТЗ
-            KEYBOARD-INTEGRATION.md §3 шаг 2): своя клавиатура рендерится один
-            раз на всё приложение. На /login и /register она сознательно НЕ
-            подключена — там нужна обычная системная, иначе пароль не ввести. */}
-        <Route element={<KeyboardProvider><Layout /></KeyboardProvider>}>
+        {/* Клавиатура — СИСТЕМНАЯ, как было до 18.08.2026. Своя экранная
+            (components/AppKeyboard.tsx + lib/keyboardContext.tsx) отключена
+            20.08.2026 по решению владельца: «головника больше, чем
+            преимуществ — то печатает, то криво смотрится». Файлы оставлены
+            нетронутыми, но нигде не подключены — см. шапку AppKeyboard.tsx. */}
+        <Route element={<Layout />}>
           <Route path="/" element={<Navigate to="/inbox" replace />} />
           <Route path="/inbox" element={<InboxScreen />} />
           <Route path="/today" element={<TodayScreen />} />
