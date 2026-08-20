@@ -513,8 +513,15 @@ export function TaskDetailScreen() {
               return res.attachment;
             }}
           />
+          {/* Ответ на заблокированный/возвращаемый шаг (onComment/onReturn
+              выше) шлёт addComment/subtaskWork, а не updateSubtask — без
+              них баннер молчал именно там, где отправка реально падает.
+              Единственный другой ErrorBanner на addComment.error стоит НИЖЕ
+              всей ленты комментариев, за пределами экрана в момент, когда
+              форма подзадачи только что закрылась (владелец 20.08.2026,
+              подзадача под «упёрлась»: «не могу там ответить»). */}
           <ErrorBanner
-            error={updateSubtask.error}
+            error={updateSubtask.error || addComment.error || subtaskWork.error}
             fallback="Не удалось обновить подзадачу"
             variant="block"
             className="-mt-2 mb-4"
