@@ -383,31 +383,65 @@ function TimeWheel({
     }
   }, [idx]);
 
-  // Кадр прокрутки: положение читаем через rAF, иначе на каждый пиксель
-  // прокрутки шла бы перерисовка состояния формы.
+  // Положение барабана читается ПОКАДРОВО, пока он едет, а не по событию
+  // scroll. Причина не в перерисовке (хотя и в ней тоже: без rAF состояние
+  // формы обновлялось бы на каждый пиксель), а в том, что событий scroll
+  // приходит МЕНЬШЕ, чем реальных переходов через деления: инерционную
+  // прокрутку WebKit ведёт вне основного потока и события по ней склеивает.
+  // На виброотклике это слышно прямо руками — владелец 20.08.2026: «по
+  // сетке гораздо чаще идёт виброотклик, нежели по барабану». В сетке часов
+  // источник событий свой (dnd-kit шлёт onDragMove на каждый кадр), и там
+  // такой дыры нет. Здесь опрос идёт своим циклом rAF: событие scroll лишь
+  // ЗАПУСКАЕТ его, а дальше барабан опрашивается каждый кадр, пока
+  // scrollTop не перестанет меняться.
   const frame = useRef(0);
   const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTopRef = useRef(0);
+  const idleFramesRef = useRef(0);
+
+  // Сколько неподвижных кадров считать остановкой. Меньше — цикл срывался
+  // бы в паузах между жестом и инерцией (палец на экране, барабан стоит),
+  // и следующий рывок опять пришлось бы ловить событием.
+  const IDLE_FRAMES_TO_STOP = 8;
+
+  function sampleWheel() {
+    const el = scrollRef.current;
+    if (!el) {
+      frame.current = 0;
+      return;
+    }
+    const raw = el.scrollTop / WHEEL_STEP;
+    setOffset(raw);
+    // Барабан прошёл деление — щёлкаем ровно как системный пикер iOS.
+    // Каждый ЧАС (четыре деления по TIME_STEP_MIN) — засечка крупнее,
+    // иначе на быстрой прокрутке шкала превращается в ровный треск, по
+    // которому не понять, докуда домотал.
+    const notch = Math.round(raw);
+    if (notch !== lastNotchRef.current) {
+      lastNotchRef.current = notch;
+      const atHour = (notch * TIME_STEP_MIN) % 60 === 0;
+      if (atHour) hapticNotch();
+      else hapticCross();
+    }
+    if (el.scrollTop === lastTopRef.current) {
+      idleFramesRef.current += 1;
+    } else {
+      idleFramesRef.current = 0;
+      lastTopRef.current = el.scrollTop;
+    }
+    if (idleFramesRef.current >= IDLE_FRAMES_TO_STOP) {
+      frame.current = 0;
+      return;
+    }
+    frame.current = requestAnimationFrame(sampleWheel);
+  }
+
   function handleScroll() {
     if (disabled) return;
     if (!frame.current) {
-      frame.current = requestAnimationFrame(() => {
-        frame.current = 0;
-        const el = scrollRef.current;
-        if (!el) return;
-        const raw = el.scrollTop / WHEEL_STEP;
-        setOffset(raw);
-        // Барабан прошёл деление — щёлкаем ровно как системный пикер iOS.
-        // Каждый ЧАС (четыре деления по TIME_STEP_MIN) — засечка крупнее,
-        // иначе на быстрой прокрутке шкала превращается в ровный треск, по
-        // которому не понять, докуда домотал.
-        const notch = Math.round(raw);
-        if (notch !== lastNotchRef.current) {
-          lastNotchRef.current = notch;
-          const atHour = (notch * TIME_STEP_MIN) % 60 === 0;
-          if (atHour) hapticNotch();
-          else hapticCross();
-        }
-      });
+      idleFramesRef.current = 0;
+      lastTopRef.current = scrollRef.current?.scrollTop ?? 0;
+      frame.current = requestAnimationFrame(sampleWheel);
     }
     if (settle.current) clearTimeout(settle.current);
     settle.current = setTimeout(() => {
