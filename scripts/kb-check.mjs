@@ -207,6 +207,49 @@ await typeInto('input[placeholder*="Задачи"]', "Поиск");
 await open("/task/new");
 const titleSel = 'textarea[placeholder="Название задачи"]';
 await typeInto(titleSel, "Название задачи (textarea)");
+// ── Пробел переживает blur ──
+//
+// Почему проверка выглядит странно (ручной blur посреди набора): на
+// устройстве blur приходит на КАЖДОЕ нажатие — клавиши настоящие кнопки,
+// и фокус уходит на них. В обычном Chrome preventMouseDownDefault у
+// simple-keyboard фокус в поле удерживает, blur не приходит вовсе, и
+// целый класс поломок «что-то на blur переписывает поле» здесь физически
+// не воспроизводился. Ровно так 20.08.2026 и ушёл в сборку баг: разбор
+// диктовки на onBlur сравнивал разобранный заголовок с сырым, а
+// parseDictation обрезает пробелы сам — каждый хвостовой пробел выглядел
+// как «разбор что-то изменил», и текст переписывался обрезанным. Владелец
+// поймал это пальцем, харнесс — нет. Blur здесь ручной именно поэтому.
+{
+  const field = page.locator(titleSel).first();
+  await field.click();
+  await page.locator(`${KB} [data-skbtn="к"]`).first().click();
+  await page.waitForTimeout(150);
+  await page.locator(`${KB} [data-skbtn="{space}"]`).first().click();
+  await page.waitForTimeout(150);
+  await field.evaluate((el) => el.blur());
+  await page.waitForTimeout(250);
+  const afterBlur = await field.inputValue();
+  check(
+    "хвостовой пробел переживает blur поля",
+    afterBlur === "к ",
+    `ожидалось "к ", получено ${JSON.stringify(afterBlur)}`,
+  );
+
+  // Та же ловушка с другой стороны: разбор не должен и заглавную наводить
+  // на ровном месте — capitalizeFirst стоял за тем же сравнением.
+  check(
+    "разбор не трогает регистр без маркеров",
+    afterBlur.startsWith("к"),
+    `получено ${JSON.stringify(afterBlur)}`,
+  );
+
+  await field.click();
+  for (let i = 0; i < 2; i++) {
+    await page.locator(`${KB} [data-skbtn="{bksp}"]`).first().click();
+    await page.waitForTimeout(120);
+  }
+}
+
 // {enter} в многострочном обязан вставлять перевод строки, а не закрывать.
 {
   const field = page.locator(titleSel).first();
