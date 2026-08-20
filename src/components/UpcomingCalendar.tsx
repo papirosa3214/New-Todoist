@@ -309,15 +309,37 @@ export function WeekGrid({
   onTaskClick,
   onDayClick,
   onPickDate,
+  onPrevWeek,
+  onNextWeek,
 }: {
   monday: string;
   byDate: Map<string, ApiTask[]>;
   onTaskClick: (id: string) => void;
   onDayClick: (date: string) => void;
   onPickDate: (date: string) => void;
+  /** Свайп влево-вправо переключает неделю — Максим 20.08.2026: «нужно
+   *  реализовать это влево-вправо, чтобы недели перескакивали», тот же
+   *  жест и те же пороги, что уже листают месяц (см. MonthGrid ниже). */
+  onPrevWeek: () => void;
+  onNextWeek: () => void;
 }) {
   const today = todayStr();
   const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+  const swipeRef = useRef<{ x: number; y: number } | null>(null);
+  function onPointerDown(e: React.PointerEvent) {
+    swipeRef.current = { x: e.clientX, y: e.clientY };
+  }
+  function onPointerUp(e: React.PointerEvent) {
+    const start = swipeRef.current;
+    swipeRef.current = null;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.6)
+      return;
+    if (dx < 0) onNextWeek();
+    else onPrevWeek();
+  }
   // Высота сетки ЗАМЕРЯЕТСЯ, а не считается формулой из 100dvh: расчёт
   // «экран минус шапка минус запас» промахнулся на 25px — в него не
   // входят отступы страницы и нижний padding контейнера прокрутки, и
@@ -332,12 +354,15 @@ export function WeekGrid({
     if (!grid) return;
     const sc = findScrollContainer(grid);
     const measure = () => {
+      // Нижняя граница — обход padding-bottom всей цепочки предков до sc,
+      // ТОТ ЖЕ метод, что и раньше (пробовали заменить его прямым замером
+      // плавающей кнопки-веера — оказалось неверно: у кнопки нет
+      // отношения к padding-bottom, который реально стоит в потоке ПОСЛЕ
+      // содержимого страницы (FAN_MENU_CONTENT_PADDING на обёртке вокруг
+      // Outlet, Layout.tsx) — без его учёта e2e-тест поймал живой скролл
+      // 16px, хотя нижний край сетки формально не заходил под кнопку).
       const top =
         grid.getBoundingClientRect().top - sc.getBoundingClientRect().top;
-      // Нижние отступы ВСЕЙ цепочки до контейнера прокрутки, а не только
-      // его собственный: место под кнопку-веер создаёт страница, и без
-      // этого слагаемого сетка ровно на столько и вылезала за экран
-      // (замер: 104px прокрутки). Тот же обход предков, что в сетке дня.
       let padBelow = parseFloat(getComputedStyle(sc).paddingBottom) || 0;
       for (
         let el: HTMLElement | null = grid.parentElement;
@@ -352,85 +377,132 @@ export function WeekGrid({
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(sc);
-    return () => ro.disconnect();
+    // Раскладка стабилизируется НЕ за один проход. 20.08.2026, живой замер
+    // вместе с владельцем: gridTop гулял 48.5 → 139.5 → 108px за один и
+    // тот же цикл загрузки — сначала «доедала» себя шапка (меняет
+    // --screen-header-h, style-атрибут на sc — это ResizeObserver(sc) не
+    // видит, значение публикуется вручную через setProperty, не через
+    // изменение размера sc), потом что-то ещё в поддереве над сеткой
+    // (подпись месяца, судя по моменту) сдвигало саму сетку ещё на
+    // 31.5px — тоже не изменение размера/style самого sc. Widen —
+    // единственный надёжный вариант без гадания точным источником:
+    // MutationObserver на всё поддерево sc (там же живёт и подпись
+    // месяца, и сама сетка) ловит правки класса/текста/детей, а не
+    // только style — проверено живым замером до точного совпадения с
+    // независимым измерением после полного оседания страницы.
+    const mo = new MutationObserver(measure);
+    mo.observe(sc, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    return () => {
+      mo.disconnect();
+      ro.disconnect();
+    };
   }, [monday]);
 
+  // Высота ряда УЖЕ на максимуме без скролла — сетка и так занимает весь
+  // оставшийся экран целиком (height ниже — фактическая доступная высота,
+  // 4 равные доли). Растянуть выше физически некуда, не заведя прокрутку;
+  // Максим 20.08.2026 явно отказался и от сужения ширины («мне не нужны
+  // квадратики... ширину-то не надо было сужать»), и раньше — от скролла
+  // («статика, абсолютная статика»). Значит ячейка остаётся тем
+  // прямоугольником, что и была: ширина колонки на всю ширину экрана,
+  // высота — вся доступная без остатка. Свайп ниже — отдельная, принятая
+  // часть просьбы, ширины эта правка не касается.
   return (
-    // Сетка идёт от края до края экрана (-mx-4 компенсирует поля страницы)
-    // и делится линиями, а не отступами — как на скриншоте: ячейки там
-    // смыкаются, разделённые одной чертой.
-    //
-    // Высота — ровно оставшийся экран, поделённый на четыре ряда: на
-    // скриншоте сетка занимает его целиком, а не кончается на середине с
-    // пустотой внизу. Отсчёт от --screen-header-h (реальная высота шапки,
-    // публикуется ScreenHeader) плюс запас под кнопку-веер, чтобы нижний
-    // ряд не уезжал под неё.
-    // БЕЗ прокрутки: вся неделя видна разом, крутить нечего (владелец
-    // 19.08.2026: «зачем здесь скроллить, вся неделя на экране — статика,
-    // абсолютная статика»). Поэтому height, а не minHeight: сетка ровно в
-    // оставшийся экран, страница не удлиняется ни на пиксель.
-    //
-    // Замыкающих линий сверху и снизу нет намеренно — только внутренние
-    // разделители. С рамкой по периметру сетка читалась «квадратиком»;
-    // без неё края открыты и раскладка выглядит продолжающейся, как и
-    // просил владелец («чтобы был такой воздушный, с продолжением»).
+    // Внешняя full-bleed обёртка — только под свайп-жест (палец должен
+    // ловиться по всей ширине экрана). touchAction: pan-y — тот же приём,
+    // что у MonthGrid: горизонтальный жест не даёт странице увести
+    // вертикальный скролл вместе с ним.
     <div
-      ref={gridRef}
-      data-week-grid
-      className="-mx-4 grid grid-cols-2"
-      style={{ height, gridTemplateRows: "repeat(4, minmax(0, 1fr))" }}
+      className="-mx-4 select-none"
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerCancel={() => (swipeRef.current = null)}
+      style={{ touchAction: "pan-y" }}
     >
-      <div className="min-h-0 border-b border-r border-stroke">
-        <MiniMonth monday={monday} onPickDate={onPickDate} />
-      </div>
-      {days.map((ds, i) => {
-        const tasks = byDate.get(ds) ?? [];
-        const d = new Date(ds + "T00:00:00");
-        const isToday = ds === today;
-        return (
-          // Ячейка — div, а НЕ button: внутри лежат кнопки-плашки задач, а
-          // кнопка внутри кнопки — невалидная разметка, React ругается
-          // прямо в консоль («cannot be a descendant of button»). Тап по
-          // свободному месту ячейки раскрывает день, тап по плашке
-          // открывает задачу и всплытие останавливает.
-          <div
-            key={ds}
-            onClick={() => onDayClick(ds)}
-            className={`flex min-h-0 flex-col items-stretch gap-[3px] overflow-hidden p-1.5 text-left ${
-              // Правая граница — только у левой колонки сетки. Первая
-              // ячейка (мини-календарь) уже занята, поэтому чётность
-              // считается со сдвигом на единицу.
-              i % 2 === 0 ? "" : "border-r border-stroke"
-            } ${
-              // Нижняя черта — у всех, кроме двух последних ячеек: сетка
-              // не должна замыкаться линией по низу, см. комментарий выше.
-              i < days.length - 2 ? "border-b border-stroke" : ""
-            }`}
-          >
-            <div className="mb-0.5 flex items-baseline gap-1 px-0.5">
-              <span
-                className={`text-[11px] font-semibold ${
-                  isToday ? "text-red" : "text-sub"
-                }`}
-              >
-                {WEEKDAYS_SHORT[i]}
-              </span>
-              <span
-                className={`text-[12px] tabular-nums ${
-                  isToday
-                    ? "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red px-1 text-[11px] font-semibold text-white"
-                    : "text-text"
-                }`}
-              >
-                {d.getDate()}
-              </span>
+      {/* Высота — ровно оставшийся экран, поделённый на четыре ряда: на
+          скриншоте сетка занимает его целиком, а не кончается на середине с
+          пустотой внизу. Отсчёт от --screen-header-h (реальная высота шапки,
+          публикуется ScreenHeader) плюс запас под кнопку-веер, чтобы нижний
+          ряд не уезжал под неё.
+          БЕЗ прокрутки: вся неделя видна разом, крутить нечего (владелец
+          19.08.2026: «зачем здесь скроллить, вся неделя на экране — статика,
+          абсолютная статика»). Поэтому height, а не minHeight: сетка ровно в
+          оставшийся экран, страница не удлиняется ни на пиксель.
+          Замыкающих линий сверху и снизу нет намеренно — только внутренние
+          разделители. С рамкой по периметру сетка читалась «квадратиком»;
+          без неё края открыты и раскладка выглядит продолжающейся, как и
+          просил владелец («чтобы был такой воздушный, с продолжением»). */}
+      <div
+        ref={gridRef}
+        data-week-grid
+        className="grid grid-cols-2"
+        style={{
+          height,
+          gridTemplateRows: "repeat(4, minmax(0, 1fr))",
+        }}
+      >
+        <div className="min-h-0 border-b border-r border-stroke">
+          <MiniMonth monday={monday} onPickDate={onPickDate} />
+        </div>
+        {days.map((ds, i) => {
+          const tasks = byDate.get(ds) ?? [];
+          const d = new Date(ds + "T00:00:00");
+          const isToday = ds === today;
+          return (
+            // Ячейка — div, а НЕ button: внутри лежат кнопки-плашки задач, а
+            // кнопка внутри кнопки — невалидная разметка, React ругается
+            // прямо в консоль («cannot be a descendant of button»). Тап по
+            // свободному месту ячейки раскрывает день, тап по плашке
+            // открывает задачу и всплытие останавливает.
+            <div
+              key={ds}
+              data-week-day={ds}
+              onClick={() => onDayClick(ds)}
+              className={`flex min-h-0 flex-col items-stretch gap-[3px] overflow-hidden p-1.5 text-left ${
+                // Правая граница — только у левой колонки сетки. Первая
+                // ячейка (мини-календарь) уже занята, поэтому чётность
+                // считается со сдвигом на единицу.
+                i % 2 === 0 ? "" : "border-r border-stroke"
+              } ${
+                // Нижняя черта — у всех, кроме двух последних ячеек: сетка
+                // не должна замыкаться линией по низу, см. комментарий выше.
+                i < days.length - 2 ? "border-b border-stroke" : ""
+              }`}
+            >
+              <div className="mb-0.5 flex items-baseline gap-1 px-0.5">
+                <span
+                  className={`text-[11px] font-semibold ${
+                    isToday ? "text-red" : "text-sub"
+                  }`}
+                >
+                  {WEEKDAYS_SHORT[i]}
+                </span>
+                <span
+                  className={`text-[12px] tabular-nums ${
+                    isToday
+                      ? "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red px-1 text-[11px] font-semibold text-white"
+                      : "text-text"
+                  }`}
+                >
+                  {d.getDate()}
+                </span>
+              </div>
+              {tasks.map((t) => (
+                <TaskChip
+                  key={t.id}
+                  task={t}
+                  onClick={() => onTaskClick(t.id)}
+                />
+              ))}
             </div>
-            {tasks.map((t) => (
-              <TaskChip key={t.id} task={t} onClick={() => onTaskClick(t.id)} />
-            ))}
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -18,7 +18,7 @@ import {
   // попытка свести их в одну.
   mondayOf as weekStartOf,
 } from "../components/UpcomingCalendar";
-import { todayStr, MONTHS_SHORT } from "../lib/date";
+import { todayStr, MONTHS_SHORT, addDays } from "../lib/date";
 import { isAgentAssignedTask } from "../lib/taskOwner";
 import { TaskRow } from "../components/TaskRow";
 import {
@@ -817,6 +817,8 @@ export function UpcomingScreen() {
           onTaskClick={(id) => navigate(`/task/${id}`)}
           onDayClick={(d) => setOpenDay(d)}
           onPickDate={(d) => setGridMonday(weekStartOf(d))}
+          onPrevWeek={() => setGridMonday((m) => addDays(m, -7))}
+          onNextWeek={() => setGridMonday((m) => addDays(m, 7))}
         />
       )}
       {/* Заголовок месяца со стрелками живёт в ШАПКЕ (below выше), а не

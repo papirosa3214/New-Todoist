@@ -129,6 +129,23 @@ test.describe("«Предстоящее»: неделя", () => {
     expect(shape.cols).toBe(2);
     expect(shape.rows).toBe(4);
     expect(shape.firstHasMiniMonth).toBe(true);
+
+    // Высота ряда — МАКСИМАЛЬНО возможная без скролла (Максим 20.08.2026:
+    // «неужели нет свободного места опустить ещё чуть-чуть, на
+    // максимально возможный низ» — старый замер промахивался мимо гонки
+    // раскладки при первом проходе и терял ~31.5px). Регрессионная
+    // проверка: высота ряда заметно выше дозамерного значения 167.1px —
+    // если кто-то случайно вернёт однократный синхронный measure() без
+    // MutationObserver, тест поймает откат к заниженному числу раньше,
+    // чем это заметят глазами.
+    const rowHeight = await page.evaluate(
+      (sel) =>
+        document.querySelector<HTMLElement>(sel)!.getBoundingClientRect()
+          .height / 4,
+      WEEK_GRID,
+    );
+    expect(rowHeight).toBeGreaterThan(172);
+
     // Буквы дней недели мини-календаря начинаются с понедельника — весь
     // календарь этого приложения так построен (см. шапку UpcomingCalendar).
     expect(
@@ -148,6 +165,49 @@ test.describe("«Предстоящее»: неделя", () => {
     );
 
     expect(errors).toEqual([]);
+  });
+
+  test("свайп влево-вправо переключает неделю", async ({ page, context }) => {
+    // Максим 20.08.2026: «нужно реализовать это влево-вправо, чтобы недели
+    // перескакивали» — раньше неделя листалась только тапом по числу в
+    // мини-календаре. data-week-day — атрибут, заведённый в WeekGrid
+    // специально под этот тест, несёт точную дату дня.
+    await setupApp(context, { upcoming: "week" });
+    await openScreen(page, "/upcoming");
+
+    const firstDay = () =>
+      page.evaluate(() => {
+        const cells = document.querySelectorAll("[data-week-day]");
+        return cells[0]?.getAttribute("data-week-day") ?? null;
+      });
+
+    const grid = page.locator(WEEK_GRID);
+    const box = await grid.boundingBox();
+    if (!box) throw new Error("сетка недели не найдена");
+    const startX = box.x + box.width / 2;
+    const startY = box.y + 40;
+
+    const initial = await firstDay();
+    expect(initial).not.toBeNull();
+
+    // Свайп влево — следующая неделя (+7 дней).
+    await dragBy(page, { x: startX, y: startY }, [-40, -90, -140]);
+    await page.waitForTimeout(400);
+    const next = await firstDay();
+    // Локальными методами Date, как в lib/date.ts addDays() — toISOString()
+    // тут даёт другую дату при часовом поясе восточнее UTC (первая попытка
+    // теста ошибочно сравнивала UTC-дату с локальной).
+    const expectedNext = new Date(initial! + "T00:00:00");
+    expectedNext.setDate(expectedNext.getDate() + 7);
+    const y = expectedNext.getFullYear();
+    const m = String(expectedNext.getMonth() + 1).padStart(2, "0");
+    const day = String(expectedNext.getDate()).padStart(2, "0");
+    expect(next).toBe(`${y}-${m}-${day}`);
+
+    // И назад — тем же жестом, зеркально.
+    await dragBy(page, { x: startX, y: startY }, [40, 90, 140]);
+    await page.waitForTimeout(400);
+    expect(await firstDay()).toBe(initial);
   });
 });
 
