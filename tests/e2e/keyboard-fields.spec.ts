@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { setupApp, openScreen } from "./helpers";
+import { setupApp, openScreen, mockTaskDetail } from "./helpers";
 
 // ПОЛЯ ВВОДА ПРИ ОТКРЫТОЙ КЛАВИАТУРЕ.
 //
@@ -209,6 +209,106 @@ test.describe("Поля ввода не уезжают под клавиатур
     });
   }
 
+  // ЗАБЛОКИРОВАННАЯ ЗАДАЧА — жалоба владельца 20.08.2026 (карточка
+  // 27ee45ba): «отвечая на заблокированную задачу, всплывает окошко для
+  // комментариев... клавиатура закрыта за этим окошком, не могу напечатать
+  // ни ничего сделать». Тот же ReturnToWorkSheet, что и «Вернуть на
+  // доработку» выше, но по кнопке «Ответить и вернуть в работу» — цикл над
+  // ней (agent_state:"review") этот путь НЕ проверяет вообще: разные
+  // кнопки, разное состояние задачи, разный тайминг монтирования формы.
+  // Фикстура через mockTaskDetail — не ищем задачу в живой базе (в
+  // blocked-состоянии её может не быть), не создаём и не трогаем ничего
+  // на доске владельца.
+  for (const shrinkLayout of [false, true]) {
+    test(`окно ответа на блокировку встаёт над клавиатурой${
+      shrinkLayout ? " (layout тоже ужат)" : ""
+    }`, async ({ page, context }) => {
+      await setupApp(context);
+      await mockTaskDetail(context, {
+        id: "e2e-fixture-blocked-task",
+        title: "E2E: заблокированная задача",
+        agent_state: "blocked",
+        agent_session_id: null,
+      });
+
+      await openScreen(page, "/task/e2e-fixture-blocked-task");
+      await page
+        .getByRole("button", { name: "Ответить и вернуть в работу" })
+        .click();
+      await page.waitForTimeout(400);
+
+      await emulateKeyboard(page, { shrinkLayout });
+      await page.waitForTimeout(700);
+
+      const line = 912 - KB;
+      const sheet = await page.evaluate(() => {
+        const ta = document.querySelector("textarea");
+        const panel = ta?.closest("div.bg-card") as HTMLElement | null;
+        const btn = document.querySelector('[aria-label="Отправить"]');
+        return {
+          panelBottom: panel?.getBoundingClientRect().bottom ?? null,
+          fieldBottom: ta?.getBoundingClientRect().bottom ?? null,
+          btnBottom: btn?.getBoundingClientRect().bottom ?? null,
+        };
+      });
+
+      expect(sheet.panelBottom).not.toBeNull();
+      expect(sheet.panelBottom!).toBeLessThanOrEqual(line + 1);
+      expect(sheet.fieldBottom!).toBeLessThanOrEqual(line);
+      expect(sheet.btnBottom!).toBeLessThanOrEqual(line);
+
+      await typeAndCheck(page, page.locator("textarea"), {
+        send: '[aria-label="Отправить"]',
+      });
+    });
+  }
+
+  // Тот же самый разбор, но для ШАГА задачи — «Ответить» у заблокированного
+  // шага (SubtaskFeed.tsx ReplyForm), а не у задачи целиком: другой
+  // компонент, другой механизм подъёма (keepAboveKeyboard/--kb-inset, не
+  // --vv-top/--vv-height), другой owner-путь. Существующий тест ниже
+  // покрывает только review-«Вернуть», не blocked-«Ответить».
+  test("шаг задачи: ответ на блокировку пишется и не уезжает", async ({
+    page,
+    context,
+  }) => {
+    await setupApp(context);
+    await mockTaskDetail(context, {
+      id: "e2e-fixture-blocked-step-task",
+      title: "E2E: задача с заблокированным шагом",
+      subtasks: [
+        {
+          id: "e2e-fixture-blocked-step",
+          task_id: "e2e-fixture-blocked-step-task",
+          title: "Заблокированный шаг",
+          done: false,
+          position: 0,
+          state: "blocked",
+          result: null,
+          agent_id: null,
+        },
+      ],
+    });
+
+    await openScreen(page, "/task/e2e-fixture-blocked-step-task");
+    await page.waitForTimeout(400);
+
+    // Клавиатура поднимается ДО открытия формы — как в живом сценарии,
+    // владелец жмёт «Ответить», уже что-то напечатав в другом месте.
+    await pressKeyboard(page);
+
+    await page.getByText("Заблокированный шаг", { exact: false }).click();
+    await page.waitForTimeout(400);
+    await page.getByRole("button", { name: "Ответить", exact: true }).click();
+    await page.waitForTimeout(600);
+
+    const field = page.getByPlaceholder(
+      "Например: доступ уже дал, попробуй ещё раз…",
+    );
+    await expect(field).toBeVisible();
+    await typeAndCheck(page, field);
+  });
+
   // ШАГИ ЗАДАЧИ. У каждого шага своя форма: «Вернуть» у сданного на
   // проверку и «Ответить» у заблокированного. В прежнем тесте их не было
   // вовсе — а владелец пишет комментарии к шагам чаще, чем к задачам.
@@ -324,7 +424,9 @@ test.describe("Поля ввода не уезжают под клавиатур
 
     expect(await commentField.inputValue()).toBe(LONG);
     const after = await page.evaluate(() => {
-      const el = document.querySelector('input[placeholder="Написать комментарий…"]');
+      const el = document.querySelector(
+        'input[placeholder="Написать комментарий…"]',
+      );
       const btn = document.querySelector('button[type="submit"]');
       return {
         field: el ? el.getBoundingClientRect().bottom : null,

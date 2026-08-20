@@ -68,6 +68,60 @@ export async function setupApp(
   return written;
 }
 
+// Обязательные поля ApiTask, которые фикстуре ниже незачем перечислять
+// каждый раз — значения-заглушки, ничего не значащие для проверок клавиатуры.
+const TASK_DEFAULTS = {
+  description: null,
+  due_date: null,
+  project_id: null,
+  priority: 4,
+  assignee_id: null,
+  creator_id: "e2e-fixture-owner",
+  status: "active",
+  created_at: "2026-08-20T00:00:00.000Z",
+  updated_at: "2026-08-20T00:00:00.000Z",
+  completed_at: null,
+  position: null,
+  labels: [],
+  subtasks: [],
+  comments: [],
+  events: [],
+  attachments: [],
+};
+
+/**
+ * Подменяет ТОЛЬКО GET /api/tasks/:id синтетической карточкой — не читает
+ * и не пишет в живую базу владельца. Нужна для сценариев (agent_state
+ * "blocked", подзадача "blocked"), которых в реальных данных может не
+ * оказаться в момент прогона: прежний подход «найти подходящую задачу в
+ * живой базе, иначе test.skip» молча превращает проверку в no-op, стоит
+ * только такой задаче исчезнуть с доски (ровно это случилось с проверкой
+ * agent_state:"review" 20.08.2026 — она стала попросту не запускаться).
+ *
+ * creator_id можно не подгонять под реального владельца: isTaskOwner()
+ * пропускает и role==="owner", а под живым логином (POST /api/auth/lan,
+ * который эта заглушка НЕ трогает) у Максима всегда эта роль — владельческие
+ * кнопки появятся независимо от того, кто здесь стоит в creator_id.
+ *
+ * Регистрируется ПОСЛЕ setupApp(context) в каждом тесте: Playwright
+ * запускает более поздний обработчик первым, а он для не-GET сам вызывает
+ * route.fallback() и уступает место общей заглушке записи из setupApp.
+ */
+export async function mockTaskDetail(
+  context: BrowserContext,
+  task: { id: string; title: string } & Record<string, unknown>,
+) {
+  const full = { ...TASK_DEFAULTS, ...task };
+  await context.route(`**/api/tasks/${task.id}`, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(full),
+    });
+  });
+}
+
 /** Открыть экран и дождаться, пока список задач отрисуется. */
 export async function openScreen(page: Page, path: string) {
   await page.goto(path, { waitUntil: "networkidle" });
