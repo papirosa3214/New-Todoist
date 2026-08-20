@@ -27,6 +27,12 @@ import {
 } from "lucide-react";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { keepAboveKeyboard } from "../lib/useVisualViewportInset";
+import { MicKeyboardBar } from "./MicKeyboardBar";
+import { MicOverlay } from "./MicOverlay";
+import { useMicRecorder } from "../lib/useMicRecorder";
+import { useTranscribeAudio } from "../api/audio";
+import { combineDictatedText } from "../lib/dictationParser";
+import { ErrorBanner } from "./UI";
 
 /** Вложение, уже загруженное на сервер — минимум полей, нужных здесь для
     превью-чипа (не тащим сюда весь ApiAttachment ради имени файла). */
@@ -235,7 +241,6 @@ function ReplyForm({
   onCancel: () => void;
   onSubmit: (comment: string, attachmentIds: string[]) => Promise<unknown>;
 }) {
-
   const [comment, setComment] = useState("");
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -252,6 +257,33 @@ function ReplyForm({
     const t = setTimeout(() => keepAboveKeyboard(fieldRef.current), 350);
     return () => clearTimeout(t);
   }, []);
+
+  // Микрофон — тот же приём, что у поля комментария в ленте и у шторки
+  // «Ответить агенту»/«Вернуть на доработку» (TaskJournal.tsx): владелец
+  // 20.08.2026 про эту самую форму, ответ на заблокированный шаг —
+  // «нативная клавиатура — пропадает мой микрофончик». Свой независимый
+  // recorder-инстанс, не общий с TaskDetailScreen/TaskJournal: каждый
+  // держит свой getUserMedia-поток только пока реально пишет, и работать
+  // одновременно в двух местах пользователь физически не может — заметный
+  // конфликт был бы только если один поток ещё не отпущен (IDLE_RELEASE_MS
+  // = 2 мин), а запись начата в другом месте; отдельный вопрос, если
+  // всплывёт на практике.
+  const [focused, setFocused] = useState(true);
+  const transcribeAudio = useTranscribeAudio();
+  const mic = useMicRecorder(async (blob) => {
+    try {
+      const { text } = await transcribeAudio.mutateAsync(blob);
+      setComment((prev) => combineDictatedText(prev, text));
+    } catch {
+      // Причина уже в transcribeAudio.error — её показывает ErrorBanner.
+    } finally {
+      mic.finish();
+    }
+  });
+  const micElapsedLabel = (() => {
+    const totalSec = Math.floor(mic.elapsedMs / 1000);
+    return `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, "0")}`;
+  })();
 
   const guardedSubmit = useGuardedCallback(async () => {
     const trimmed = comment.trim();
@@ -303,12 +335,23 @@ function ReplyForm({
           ))}
         </div>
       )}
+      <ErrorBanner
+        error={transcribeAudio.error}
+        fallback="Не удалось распознать речь. Проверьте соединение."
+        variant="block"
+        className="mb-1"
+      />
       <textarea
         ref={fieldRef}
         autoFocus
         rows={2}
         value={comment}
         onChange={(e) => setComment(e.target.value)}
+        onFocus={() => setFocused(true)}
+        // Та же задержка, что у поля комментария в ленте и у шторки
+        // задачи: клик по микрофону не крадёт фокус (MicKeyboardBar гасит
+        // mousedown), но blur всё равно приходит раньше её onClick.
+        onBlur={() => setTimeout(() => setFocused(false), 150)}
         placeholder={placeholder}
         className="w-full bg-card2 rounded-xl px-3 py-2 text-[14px] text-text placeholder:text-dim outline-none resize-none"
       />
@@ -369,6 +412,20 @@ function ReplyForm({
           Отмена
         </button>
       </div>
+      {focused && mic.state === "idle" && (
+        <MicKeyboardBar
+          onStart={mic.start}
+          ariaLabel="Надиктовать ответ на шаг"
+        />
+      )}
+      {(mic.state === "recording" || mic.state === "processing") && (
+        <MicOverlay
+          state={mic.state}
+          elapsedLabel={micElapsedLabel}
+          getTimeDomainData={mic.getTimeDomainData}
+          onStop={mic.stop}
+        />
+      )}
     </div>
   );
 }
