@@ -20,6 +20,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Icon } from "./UI";
 import { NAV_ITEMS } from "../lib/navItems";
+import { hapticGrab } from "../lib/haptics";
 import { useSpring } from "../lib/useSpring";
 import { useMultiSpring } from "../lib/useMultiSpring";
 
@@ -253,6 +254,14 @@ export function FanMenu() {
           heldRef.current = false;
           holdTimer.current = setTimeout(() => {
             heldRef.current = true;
+            // Порог удержания взят — и это надо СКАЗАТЬ пальцем, а не
+            // экраном (владелец 20.08.2026: «чтобы сигнализировал, что я
+            // перехожу в создание задачи, а не просто нажал»). До этого
+            // момента у короткого тапа и у удержания не было никакой
+            // разницы в ощущении, а расходятся они полностью: тап открывает
+            // веер, удержание уводит на новую задачу. Тот же вес, что у
+            // захвата карточки: это ровно оно и есть — жест «взял».
+            hapticGrab();
             if (open) toggle(false);
             navigate("/task/new");
           }, HOLD_MS);
