@@ -125,10 +125,24 @@ def api(method: str, path: str, body=None):
 
 
 def unwrap(payload):
-    """Часть маршрутов отдаёт задачу как {"task": {...}} — разворачиваем."""
-    if isinstance(payload, dict) and "task" in payload and len(payload) == 1:
+    """Часть маршрутов отдаёт задачу как {"task": {...}} — разворачиваем.
+
+    Условия «ключ ровно один» здесь быть не должно: claim и state отвечают
+    {"task": …, "rules": …}, и с ним разворот молча не срабатывал — короткая
+    карточка строилась из внешнего словаря, где полей задачи нет, и печатала
+    «не взята» со сплошными null на успешно взятой задаче (20.08.2026).
+    Правила достаются отдельно, через rules_of().
+    """
+    if isinstance(payload, dict) and isinstance(payload.get("task"), dict):
         return payload["task"]
     return payload
+
+
+def rules_of(payload):
+    """Правила работы, которые сервер навешивает на ответ claim/state."""
+    if isinstance(payload, dict):
+        return payload.get("rules")
+    return None
 
 
 def as_tasks(payload):
@@ -216,7 +230,12 @@ def t_task(args):
 def t_claim(args):
     session = current_session_id()
     body = {"session_id": session} if session else {}
-    return {"взято в работу": short(unwrap(api("POST", f"/api/tasks/{args['id']}/claim", body)))}
+    resp = api("POST", f"/api/tasks/{args['id']}/claim", body)
+    out = {"взято в работу": short(unwrap(resp))}
+    rules = rules_of(resp)
+    if rules:
+        out["правила"] = rules
+    return out
 
 
 def t_heartbeat(args):
@@ -231,7 +250,12 @@ def t_state(args):
     session = current_session_id()
     if args["state"] == "in_progress" and session:
         body["session_id"] = session
-    return {"состояние изменено": short(unwrap(api("POST", f"/api/tasks/{args['id']}/state", body)))}
+    resp = api("POST", f"/api/tasks/{args['id']}/state", body)
+    out = {"состояние изменено": short(unwrap(resp))}
+    rules = rules_of(resp)
+    if rules:
+        out["правила"] = rules
+    return out
 
 
 def t_comment(args):
