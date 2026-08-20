@@ -90,6 +90,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Icon, Avatar, AgentStateTag } from "./UI";
 import { MONTHS_SHORT } from "../lib/date";
 import { useTapGuard } from "../lib/useTapGuard";
+import { hapticCross, hapticDrop, hapticGrab } from "../lib/haptics";
 import { api } from "../api/client";
 import type { ApiTask } from "../api/types";
 
@@ -464,6 +465,10 @@ export function TaskBoard({
   // column on screen while nothing was ever written to the server — the
   // exact kind of UI lie this feature exists to avoid.
   const dragSnapshotRef = useRef<Record<string, string[]> | null>(null);
+  // Над какой карточкой (или колонкой) палец висел на прошлом событии —
+  // чтобы виброотклик приходился на пересечение границы, а не на каждое
+  // событие перетаскивания.
+  const lastOverRef = useRef<string | null>(null);
 
   // ─── Полоса на всю оставшуюся высоту экрана ───
   // Пролистывание колонок пальцем ловится только там, где есть сама полоса,
@@ -642,6 +647,8 @@ export function TaskBoard({
     setActiveId(id);
     dragSourceColRef.current = findColumnOf(id) ?? null;
     dragSnapshotRef.current = colItems;
+    hapticGrab();
+    lastOverRef.current = id;
   }
 
   // Cross-column boards only: live-move the dragged card into whichever
@@ -650,8 +657,17 @@ export function TaskBoard({
   // dnd-kit's SortableContext already previews that from active/over state
   // without any array mutation until drop.
   function handleDragOver(event: DragOverEvent) {
-    if (!projectBoard) return;
     const { active, over } = event;
+    // Виброотклик — ДО выхода по projectBoard: перестановка внутри одной
+    // колонки ниже не обрабатывается вовсе (её превью dnd-kit рисует сам),
+    // но пальцу-то карточка меняет соседа и там. Щёлкаем по смене того, НАД
+    // ЧЕМ висим, — это и есть «пересёк границу карточки».
+    const overId = over ? String(over.id) : null;
+    if (overId !== lastOverRef.current) {
+      lastOverRef.current = overId;
+      if (overId) hapticCross();
+    }
+    if (!projectBoard) return;
     if (!over) return;
     const activeCol = findColumnOf(String(active.id));
     const overCol = findColumnOf(String(over.id));
@@ -683,6 +699,7 @@ export function TaskBoard({
     setActiveId(null);
     dragSourceColRef.current = null;
     dragSnapshotRef.current = null;
+    lastOverRef.current = null;
 
     // Released outside every droppable (real on a phone — a finger dragged
     // off the strip's edge) or nothing found to place against (defensive):
@@ -723,6 +740,9 @@ export function TaskBoard({
       reordered.every((id, i) => id === items[i]);
     if (unchanged) return;
 
+    // Карточка легла на новое место — то же правило, что в DayHours:
+    // «щёлкает» только реальная перестановка, все возвраты выше молчат.
+    hapticDrop();
     setColItems((prev) => ({ ...prev, [destCol]: reordered }));
     persistingRef.current = true;
     try {
@@ -780,6 +800,7 @@ export function TaskBoard({
       onDragCancel={() => {
         setActiveId(null);
         dragSourceColRef.current = null;
+        lastOverRef.current = null;
         if (dragSnapshotRef.current) setColItems(dragSnapshotRef.current);
         dragSnapshotRef.current = null;
       }}

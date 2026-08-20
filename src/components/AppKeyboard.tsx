@@ -8,6 +8,7 @@ import { useTranscribeAudio } from "../api/audio";
 import { normalizeDictatedText } from "../lib/dictationParser";
 import { addDictationLogEntry } from "../lib/dictationLog";
 import { queueRecording } from "../lib/dictationArchive";
+import { hapticKey } from "../lib/haptics";
 
 // ═══════════ СВОЯ ЭКРАННАЯ КЛАВИАТУРА (общая для всего приложения) ═══════════
 //
@@ -210,6 +211,12 @@ export function AppKeyboard({
   // два источника правды синхронно через setInput — именно там и возникает
   // рассинхрон, когда значение поля меняется извне (диктовка, очистка формы).
   function onKeyPress(button: string) {
+    // Каждая клавиша — лёгкий отклик, как у системной клавиатуры iOS
+    // (там он включается в «Звук и тактильные сигналы»; своей клавиатуре
+    // в WKWebView система его не даёт, делаем сами). Ставится до всех
+    // ветвлений: служебные клавиши — {shift}, {bksp}, {mic} — такие же
+    // нажатия, и молчать на них было бы заметнее, чем щёлкать.
+    hapticKey();
     if (button === "{shift}") {
       setLayoutName((n) => (n === "shift" ? "default" : "shift"));
       return;

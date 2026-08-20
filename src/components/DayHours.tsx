@@ -11,6 +11,7 @@ import {
 } from "@dnd-kit/core";
 import type { ApiTask } from "../api/types";
 import { PRIORITIES } from "../lib/priority";
+import { hapticCross, hapticDrop, hapticGrab } from "../lib/haptics";
 import { Icon, findScrollContainer } from "./UI";
 
 // ═══════════ Календарная развёртка по часам — 1 или 3 дня ═══════════
@@ -846,10 +847,22 @@ export function DayHours({
   // для этого мало — состояние сбрасывается в handleDragEnd, а click от
   // браузера приходит уже после него.
   const dragEndedAtRef = useRef(0);
+  // Ячейка под пальцем на прошлом кадре — «колонка:время». Виброотклик
+  // положен на ПЕРЕСЕЧЕНИЕ границы, а не на движение: onDragMove приходит
+  // каждый кадр, а шаг сетки — SNAP_MIN, и между двумя соседними кадрами
+  // время чаще всего то же самое.
+  const lastCellRef = useRef<string | null>(null);
+
+  function cellKeyOf(pos: { top: number; colIndex: number } | null): string | null {
+    if (!pos || pos.top < -HOUR_H) return null;
+    return `${pos.colIndex}:${timeFromOffset(pos.top)}`;
+  }
 
   function handleDragStart(e: DragStartEvent) {
     const id = String(e.active.id);
     setDragging(id);
+    // Плашка оторвалась от сетки — это и есть момент «взял».
+    hapticGrab();
     const zeroDelta = {
       activatorEvent: e.activatorEvent,
       delta: { x: 0, y: 0 },
@@ -887,6 +900,7 @@ export function DayHours({
       setPreview(pos.top < -HOUR_H ? null : timeFromOffset(pos.top));
       setDragCol(pos.top < -HOUR_H ? null : pos.colIndex);
     }
+    lastCellRef.current = cellKeyOf(pos);
   }
 
   /** Не пропустить click, если он прилетел сразу после перетаскивания. */
@@ -948,6 +962,7 @@ export function DayHours({
     setDragging(null);
     setPreview(null);
     setDragCol(null);
+    lastCellRef.current = null;
     dragEndedAtRef.current = Date.now();
     if (!onSchedule) return;
     const pos = positionOf(e);
@@ -956,6 +971,9 @@ export function DayHours({
     if (pos.top < -HOUR_H) return;
     const date = days[pos.colIndex]?.date;
     if (!date) return;
+    // Отклик только когда задача ДЕЙСТВИТЕЛЬНО переставлена: все выходы
+    // выше молча ничего не меняют, и «щелчок» там соврал бы про результат.
+    hapticDrop();
     onSchedule(String(e.active.id), date, timeFromOffset(pos.top));
   }
 
@@ -967,6 +985,13 @@ export function DayHours({
     if (!pos) return;
     setPreview(pos.top < -HOUR_H ? null : timeFromOffset(pos.top));
     setDragCol(pos.top < -HOUR_H ? null : pos.colIndex);
+    const cell = cellKeyOf(pos);
+    if (cell !== lastCellRef.current) {
+      lastCellRef.current = cell;
+      // Уход ВЫШЕ сетки (cell === null) — не пересечение ячеек, а выход из
+      // поля целиком; щёлкать там нечему.
+      if (cell) hapticCross();
+    }
   }
 
   return (
@@ -979,6 +1004,7 @@ export function DayHours({
         setDragging(null);
         setPreview(null);
         setDragCol(null);
+        lastCellRef.current = null;
       }}
     >
       <div className="mt-2 flex flex-col gap-3">

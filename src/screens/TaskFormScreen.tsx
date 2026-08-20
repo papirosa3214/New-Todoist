@@ -67,6 +67,7 @@ import { useDialog } from "../components/Dialog";
 import { MicOverlay } from "../components/MicOverlay";
 import { MicKeyboardBar } from "../components/MicKeyboardBar";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
+import { hapticCross, hapticDrop, hapticGrab } from "../lib/haptics";
 import {
   combineDictatedText,
   findProjectByName,
@@ -210,6 +211,9 @@ export function TaskFormScreen() {
     setSubtaskOrder((existingTask?.subtasks || []).map((s) => s.id));
   }, [existingTask?.subtasks, draggingSubtask]);
 
+  // Над какой подзадачей палец висел на прошлом событии — виброотклик
+  // должен приходиться на пересечение границы строки, не на каждый кадр.
+  const lastSubtaskOverRef = useRef<string | null>(null);
   const subtaskSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, {
@@ -219,6 +223,7 @@ export function TaskFormScreen() {
 
   async function handleSubtaskDragEnd(event: DragEndEvent) {
     setDraggingSubtask(false);
+    lastSubtaskOverRef.current = null;
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
@@ -227,6 +232,7 @@ export function TaskFormScreen() {
     if (oldIndex === -1 || newIndex === -1) return;
 
     const reordered = arrayMove(subtaskOrder, oldIndex, newIndex);
+    hapticDrop();
     setSubtaskOrder(reordered);
     persistingSubtaskOrder.current = true;
     try {
@@ -1002,9 +1008,25 @@ export function TaskFormScreen() {
                   <DndContext
                     sensors={subtaskSensors}
                     collisionDetection={closestCenter}
-                    onDragStart={() => setDraggingSubtask(true)}
+                    onDragStart={(e) => {
+                      setDraggingSubtask(true);
+                      hapticGrab();
+                      lastSubtaskOverRef.current = String(e.active.id);
+                    }}
+                    // Строка перепрыгнула соседа — тот же «щелчок», что на
+                    // доске и в сетке часов.
+                    onDragOver={(e) => {
+                      const overId = e.over ? String(e.over.id) : null;
+                      if (overId !== lastSubtaskOverRef.current) {
+                        lastSubtaskOverRef.current = overId;
+                        if (overId) hapticCross();
+                      }
+                    }}
                     onDragEnd={handleSubtaskDragEnd}
-                    onDragCancel={() => setDraggingSubtask(false)}
+                    onDragCancel={() => {
+                      setDraggingSubtask(false);
+                      lastSubtaskOverRef.current = null;
+                    }}
                   >
                     <SortableContext
                       items={ordered.map((s) => s.id)}

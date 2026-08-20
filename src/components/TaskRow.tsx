@@ -82,6 +82,7 @@ import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon, Avatar, AgentStateTag } from "./UI";
 import { getPriorityColor, PRIORITIES } from "../lib/priority";
+import { hapticCross, hapticDrop } from "../lib/haptics";
 import {
   formatDueLabel,
   MONTHS_SHORT,
@@ -243,6 +244,8 @@ export function TaskRow({
     active: false,
     locked: false,
     isHorizontal: false,
+    // Прошли ли уже ширину кнопки — см. onMove, отклик на пересечении.
+    pastAction: false,
     startX: 0,
     startY: 0,
     samples: [] as { x: number; t: number }[],
@@ -257,6 +260,7 @@ export function TaskRow({
         active: true,
         locked: false,
         isHorizontal: false,
+        pastAction: false,
         startX: e.clientX,
         startY: e.clientY,
         samples: [{ x: e.clientX, t: performance.now() }],
@@ -275,7 +279,14 @@ export function TaskRow({
         ) {
           d.isHorizontal = Math.abs(dx) > Math.abs(dy) * DIRECTION_BIAS;
           d.locked = true;
-          if (d.isHorizontal) el.setPointerCapture(ev.pointerId);
+          if (d.isHorizontal) {
+            el.setPointerCapture(ev.pointerId);
+            // Строка «взялась» за палец. Отклик именно здесь, на решении об
+            // оси, а не на pointerdown: до этого места ещё не известно,
+            // свайп это или прокрутка списка, и щёлкать на каждом касании
+            // экрана значило бы щёлкать на прокрутке.
+            hapticCross();
+          }
         }
 
         if (!d.locked || !d.isHorizontal) return;
@@ -293,6 +304,15 @@ export function TaskRow({
         if (rowRef.current)
           rowRef.current.style.transform = `translateX(${eased}px)`;
         // Прозрачность кнопки не трогаем: она открывается сдвигом строки.
+
+        // Кнопка вышла из-под строки целиком — с этого места отпускание
+        // оставит строку открытой. Порог перешли — щёлкнули, ровно один
+        // раз на пересечение (в обе стороны).
+        const past = -eased >= ACTION_W;
+        if (past !== d.pastAction) {
+          d.pastAction = past;
+          hapticCross();
+        }
 
         d.samples.push({ x: ev.clientX, t: performance.now() });
         if (d.samples.length > 6) d.samples.shift();
@@ -344,6 +364,9 @@ export function TaskRow({
             Math.abs(projected - -ACTION_W) < Math.abs(projected - 0)) ||
           absDx > SWIPE_THRESHOLD;
         setRevealed(shouldReveal);
+        // Отклик только на открытии: закрытие — возврат в исходное, там
+        // «щёлкать» нечему.
+        if (shouldReveal) hapticDrop();
         // Отскок — только если жест сам нёс инерцию (§4): брошенная строка
         // имеет право чуть перелететь и вернуться, аккуратно доведённая —
         // нет. Скорость пальца передаётся пружине как начальная (§5), шва
