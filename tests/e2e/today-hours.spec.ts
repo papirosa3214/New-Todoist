@@ -53,14 +53,14 @@ test.describe("«Сегодня»: вид часов", () => {
     expect(hourLabels).toContain("24:00");
     expect(hourLabels.every((t) => /^\d{2}:00$/.test(t))).toBe(true);
 
-    // Подпись даты — «Ср 19» — живёт ВНУТРИ шапки (ScreenHeader.below), и
-    // она обязана быть даже в 1-дневном виде: без неё сетка не говорит,
-    // какое сегодня число (владелец 19.08.2026).
-    const dayCaptions = await page
-      .locator("span.flex-1.text-center.font-semibold")
-      .allTextContents();
-    expect(dayCaptions.length).toBe(1);
-    expect(dayCaptions[0]).toMatch(/^(Пн|Вт|Ср|Чт|Пт|Сб|Вс) \d{1,2}$/);
+    // Подпись даты — «Четверг, 20 авг.» — сам заголовок шапки, не отдельная
+    // плашка под ней (владелец 20.08.2026: «четверг, двадцатая — там же,
+    // где написано „Сегодня“, прямо в шапке»; было — 19.08.2026, отдельная
+    // строка ScreenHeader.below).
+    const title = await page.locator("h1").textContent();
+    expect(title).toMatch(
+      /^(Понедельник|Вторник|Среда|Четверг|Пятница|Суббота|Воскресенье), \d{1,2} [а-я]{3}\.$/,
+    );
 
     expect(errors).toEqual([]);
   });
