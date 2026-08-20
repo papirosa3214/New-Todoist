@@ -157,16 +157,54 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
 
   app.patch<{
     Params: { id: string };
-    Body: { done?: boolean; title?: string; position?: number };
+    Body: {
+      done?: boolean;
+      title?: string;
+      position?: number;
+      result?: string;
+    };
   }>("/api/subtasks/:id", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
       if (!subtask) return reply.code(404).send({ error: "Not found" });
 
-      const { done, title, position } = req.body || {};
+      const { done, title, position, result } = req.body || {};
       if (position !== undefined && !Number.isInteger(position)) {
         return reply.code(400).send({ error: "position must be an integer" });
+      }
+
+      // ЗАКРЫТИЕ ШАГА АГЕНТОМ ОБЯЗАНО НЕСТИ ИТОГ.
+      //
+      // Отменяя приёмку (20.08.2026), мы вместе с ней потеряли `result`:
+      // раньше «что вышло» требовалось при сдаче в review, а закрытие
+      // галочкой такого поля вообще не принимало. Максим в тот же вечер:
+      // «ты комментарий перестал писать при закрытии этих подзадач».
+      //
+      // Владельцу отметка нужна не сама по себе, а как ответ на «что
+      // сделано»: без него в ленте остаётся ряд галочек, по которому нельзя
+      // ни оценить работу, ни вернуться к ней через месяц. Так что приёмку
+      // мы сняли, а отчётность — нет.
+      //
+      // Человека это не касается: он закрывает шаги руками в своём
+      // интерфейсе, и требовать от него текст в каждой галочке — та самая
+      // лишняя работа, от которой уходили.
+      if (done === true && !result && !subtask.result) {
+        const caller = db
+          .prepare("SELECT type FROM users WHERE id = ?")
+          .get(req.userId) as { type?: string } | undefined;
+        if (caller?.type === "ai") {
+          return reply.code(400).send({
+            error:
+              "result обязателен при закрытии шага: одно-два предложения, что сделано",
+          });
+        }
+      }
+      if (result !== undefined) {
+        db.prepare("UPDATE subtasks SET result = ? WHERE id = ?").run(
+          result || null,
+          subtask.id,
+        );
       }
       // Шаг закрывает тот, кто его сделал, — включая агента.
       //
