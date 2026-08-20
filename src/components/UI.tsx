@@ -166,6 +166,22 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   circle: Circle,
 };
 
+// Аудит 20.08.2026, п.8: 7 разных числовых размеров без названия
+// (10/12/15/16/18/22/26) — четыре из них соответствуют семантическим
+// шагам (icon-xs/sm/md/lg), остальные — точные замеренные значения
+// конкретных компонентов (StateMark 18/21px, DashedRing и т.п.), которые
+// подгонялись под пиксельный эталон и не обязаны лежать на этой шкале.
+// Поэтому size принимает ОБА варианта: строковый алиас для нового кода
+// без своего особого случая, число — когда нужно то самое замеренное
+// значение. Строка не заменяет число, а сокращает координатную сетку
+// там, где точность до пикселя не имеет отдельного обоснования.
+const ICON_SIZE: Record<"xs" | "sm" | "md" | "lg", number> = {
+  xs: 14,
+  sm: 18,
+  md: 22,
+  lg: 26,
+};
+
 export const Icon = ({
   name,
   size = 22,
@@ -173,17 +189,18 @@ export const Icon = ({
   style,
 }: {
   name: string;
-  size?: number;
+  size?: number | "xs" | "sm" | "md" | "lg";
   className?: string;
   style?: CSSProperties;
 }) => {
+  const resolvedSize = typeof size === "string" ? ICON_SIZE[size] : size;
   // Единственное исключение из Lucide: многоцветный логотип Google.
   if (name === "google") {
     return (
       <svg
         viewBox="0 0 24 24"
-        width={size}
-        height={size}
+        width={resolvedSize}
+        height={resolvedSize}
         className={className}
         style={style}
       >
@@ -217,7 +234,7 @@ export const Icon = ({
   // одной Lucide-иконки в проекте — всегда обводка (fill:"none").
   return (
     <Glyph
-      size={size}
+      size={resolvedSize}
       strokeWidth={1.5}
       className={className}
       style={style}
