@@ -1223,12 +1223,11 @@ export function TextField({
       {icon && <Icon name={icon} size={18} className="text-dim shrink-0" />}
       <input
         {...inputProps}
-        // Аудит 20.08.2026, п.13: outline-none без замены — на десктопе и
-        // при Tab-навигации (accessibility) фокус был не виден вовсе.
-        // ring-inset, не обычный ring: поле часто живёт внутри Card
-        // (rounded-2xl overflow-hidden, см. DESIGN.md), внешняя тень
-        // обрезалась бы её краем — внутренняя всегда видна целиком.
-        className={`flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-red/40 ${className}`}
+        // Видимый фокус (аудит 20.08.2026, п.13) теперь даёт index.css —
+        // одним правилом на все поля и только при pointer: fine. Утилитами
+        // на классе он был и на телефоне: :focus-visible браузеры применяют
+        // к текстовым полям на ЛЮБОЙ фокус, включая обычный тап.
+        className={`flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none ${className}`}
       />
       {trailing}
     </div>

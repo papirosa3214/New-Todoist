@@ -963,7 +963,7 @@ export function LabelsField({
               }
             }}
             placeholder="Название метки"
-            className="flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-red/40"
+            className="flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none"
           />
           <button
             onClick={submit}
@@ -1084,7 +1084,7 @@ export function SubtaskRow({
               setEditing(false);
             }
           }}
-          className="flex-1 min-w-0 bg-transparent text-[16px] text-text outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-red/40"
+          className="flex-1 min-w-0 bg-transparent text-[16px] text-text outline-none"
         />
       ) : (
         <button
@@ -1185,7 +1185,7 @@ export function AddSubtaskRow({
         onFocus={onFocus}
         onBlur={onBlur}
         placeholder="Добавить подзадачу..."
-        className="flex-1 min-w-0 bg-transparent text-[13px] text-sub placeholder:text-sub outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-red/40"
+        className="flex-1 min-w-0 bg-transparent text-[13px] text-sub placeholder:text-sub outline-none"
       />
       {value.trim() && (
         <button onClick={submit} className="p-2 -m-1 shrink-0">

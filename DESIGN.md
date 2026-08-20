@@ -666,10 +666,15 @@ transparency`/`prefers-contrast` в `index.css` матчат именно по �
 card2/teal/green)`: на светлой теме тёмный фон смайлика торчал бы, `--color-green` заодно
 подтянут к текущей палитре (был заморожен на значении до правки 18.08.2026).
 
-**Focus-ring** — все 4 текстовых поля (`TextField` в `UI.tsx` + 3 в `TaskFields.tsx`) получили
-`focus-visible:ring-2 ring-inset ring-red/40` — были на голом `outline-none`. `ring-inset`, не
-обычный `ring`: поля часто внутри `Card` (`rounded-2xl overflow-hidden`), внешняя тень
-обрезалась бы её краем.
+**Focus-ring** — поля были на голом `outline-none`, Tab-навигация шла вслепую. Сперва рамку
+поставили утилитами `focus-visible:ring-2 ring-inset ring-red/40` на 4 текстовых поля
+(`TextField` в `UI.tsx` + 3 в `TaskFields.tsx`) — и в тот же день владелец увидел её **на
+телефоне**: «какая-то невменяемая рамка вокруг поля, никогда не было». Дело не в утилитах:
+к текстовым полям браузеры применяют `:focus-visible` при ЛЮБОМ фокусе, включая тап пальцем
+(замер: `el.matches(":focus-visible") === true` сразу после `click` в мобильном контексте).
+Итог — рамка живёт одним правилом в `index.css` под `@media (pointer: fine)`: мышь и трекпад
+её получают, палец нет. `inset`, не внешняя тень: поля часто внутри `Card`
+(`rounded-2xl overflow-hidden`), внешнюю обрезало бы краем.
 
 **Disabled вне `Button`** — одно правило на всю tap-сетку
 (`.tap-scale/-row/-fade/-menu:disabled { opacity:.5; cursor:not-allowed }`) вместо точечных
