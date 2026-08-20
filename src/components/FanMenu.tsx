@@ -293,8 +293,9 @@ export function FanMenu() {
         // всё ещё было не разобрать — до -sm (совсем без blur контент
         // мелькал бы нечитаемым шумом при скролле, тут ищем баланс, не
         // убираем матовость целиком). alpha обеих стоп градиента снижена
-        // вслед (.5→.32→.28, .55→.4→.3) — тонкая светлая обводка (border-white/10) отделяет край
-        // стекла от фона за ним, как и положено стеклу.
+        // трижды (.5→.32→.28→.20, .55→.4→.3→.22, владелец 20.08.2026: «ещё
+        // прозрачнее») — тонкая светлая обводка (border-white/10) отделяет
+        // край стекла от фона за ним, как и положено стеклу.
         className="tap-scale fixed left-1/2 z-[36] flex items-center justify-center rounded-full border border-white/10 text-white shadow-fan-fab backdrop-blur-sm"
         style={{
           width: TRIGGER_SIZE,
@@ -302,7 +303,7 @@ export function FanMenu() {
           marginLeft: -TRIGGER_SIZE / 2,
           bottom: SAFE_BOTTOM,
           background:
-            "radial-gradient(circle at 50% 35%, rgba(228,67,50,.28), rgba(23,23,23,.3) 72%)",
+            "radial-gradient(circle at 50% 35%, rgba(228,67,50,.20), rgba(23,23,23,.22) 72%)",
         }}
       >
         <span ref={iconWrapRef} className="inline-flex">
