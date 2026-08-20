@@ -28,6 +28,7 @@ import {
   ChevronRight,
   Circle,
   Cloud,
+  Copy,
   Crown,
   Ellipsis,
   EllipsisVertical,
@@ -164,6 +165,9 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   // замером с присланного скриншота Apple Reminders, там у каждой плашки
   // такой же полый кружок слева от текста.
   circle: Circle,
+  // Кнопка «скопировать команду» — AgentStatusRow (TaskJournal.tsx), зайти
+  // в терминал двойника.
+  copy: Copy,
 };
 
 // Аудит 20.08.2026, п.8: 7 разных числовых размеров без названия

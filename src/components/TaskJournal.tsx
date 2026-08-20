@@ -55,6 +55,31 @@ const AGENT_STATE_META: Record<
   review: { label: "На проверке — ждёт вашей приёмки", color: "text-blue" },
 };
 
+// Команда для терминала — зайти в того же двойника, который ведёт задачу
+// (`claude --resume <session-id>`, тот же флаг, каким сам будильник
+// TaskFlow продолжает свою сессию — server/scripts/trigger.py). Копируется
+// одной кнопкой прямо из карточки, руками ID не набирать. Показывается,
+// только пока сессия известна (agent_session_id) — у задач, взятых до
+// привязки к сессии, поле пустое, кнопки нет.
+function ResumeSessionButton({ sessionId }: { sessionId: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard?.writeText(`claude --resume ${sessionId}`);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="tap-scale shrink-0 flex items-center justify-center h-7 w-7 rounded-lg bg-card2 text-dim"
+      title={
+        copied ? "Скопировано" : `Скопировать: claude --resume ${sessionId}`
+      }
+    >
+      <Icon name={copied ? "check" : "copy"} size={13} />
+    </button>
+  );
+}
+
 export function AgentStatusRow({ task }: { task: ApiTask }) {
   if (!task.agent_state) return null;
 
@@ -75,6 +100,9 @@ export function AgentStatusRow({ task }: { task: ApiTask }) {
               : "неизвестно"}
           </p>
         </div>
+        {task.agent_session_id && (
+          <ResumeSessionButton sessionId={task.agent_session_id} />
+        )}
       </div>
     );
   }
@@ -88,6 +116,9 @@ export function AgentStatusRow({ task }: { task: ApiTask }) {
         <span className="text-[12px] text-dim shrink-0">
           {formatRelativeTime(task.agent_heartbeat_at)}
         </span>
+      )}
+      {task.agent_session_id && (
+        <ResumeSessionButton sessionId={task.agent_session_id} />
       )}
     </div>
   );

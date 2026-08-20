@@ -123,6 +123,10 @@ export interface ApiTask {
   // the status==="active" filters across the frontend need to change.
   agent_state?: AgentState | null;
   agent_heartbeat_at?: string | null;
+  // Чья сессия ведёт задачу (X-Agent-Session, agent-state.ts claim/state) —
+  // нужен только для одного: показать владельцу команду `claude --resume`,
+  // чтобы зайти в терминал того же двойника (TaskJournal.tsx AgentStatusRow).
+  agent_session_id?: string | null;
   // Derived, not stored — true once agent_heartbeat_at + 15min has passed
   // while agent_state is still set ("агент пропал"). Computed server-side
   // on every read (server/src/agentState.ts isStale), never trust a stale
