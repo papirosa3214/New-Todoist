@@ -29,7 +29,7 @@ import {
   tomorrowStr,
 } from "../lib/date";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
-import { hapticCross, hapticNotch } from "../lib/haptics";
+import { hapticCross, hapticNotch, hapticWarmup } from "../lib/haptics";
 import { PRIORITIES } from "../lib/priority";
 import type { ApiLabel } from "../api/types";
 
@@ -528,6 +528,11 @@ function TimeWheel({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        // Движок вибрации просыпается на первом же событии, и без этого
+        // первая засечка барабана приходит позже и слабее остальных.
+        // Касание — самый ранний момент, когда известно, что барабан
+        // сейчас поедет.
+        onPointerDown={hapticWarmup}
         aria-label="Время начала"
         className={`absolute inset-0 overflow-y-auto ${
           disabled ? "pointer-events-none opacity-40" : ""

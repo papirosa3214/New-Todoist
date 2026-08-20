@@ -813,5 +813,13 @@ public class LocalAIPlugin: CAPPlugin, CAPBridgedPlugin {
 public class LocalAIBridgeViewController: CAPBridgeViewController {
   public override func capacitorDidLoad() {
     bridge?.registerPluginInstance(LocalAIPlugin())
+    // Виброотклик (TFHapticsPlugin.swift) — по той же причине руками.
+    // 20.08.2026 он был добавлен без этой строки, и промах вышел ровно
+    // такой, как описано выше: имя TFHaptics в списке Capacitor.Plugins
+    // появлялось (его туда кладёт registerPlugin на стороне JS), а первый
+    // же вызов отвечал «"TFHaptics" plugin is not implemented on ios», и
+    // весь отклик молча шёл слабым запасным путём. Поймано логом
+    // устройства, а не на глаз.
+    bridge?.registerPluginInstance(TFHapticsPlugin())
   }
 }
