@@ -182,9 +182,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const tasks = (
       seesEveryTask(userId)
         ? db
-            .prepare(
-              `SELECT ${columns} ${joins} ORDER BY t.created_at DESC`,
-            )
+            .prepare(`SELECT ${columns} ${joins} ORDER BY t.created_at DESC`)
             .all()
         : db
             .prepare(
@@ -219,9 +217,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       );
       return {
         ...withAgentStale(t, subtasks),
-        mine: session
-          ? t.agent_session_id === session || bySubtask
-          : null,
+        mine: session ? t.agent_session_id === session || bySubtask : null,
         labels: stmtLabels.all(t.id),
         subtasks,
       };
@@ -652,20 +648,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
       if (body.status !== undefined && !ALLOWED_STATUS.includes(body.status)) {
         return reply.code(400).send({ error: "invalid status" });
       }
-      // Приёмка за человеком (AGENT-PROTOCOL.md, "Что остаётся на
-      // человеке"): an AI-typed account can drive a task to `review`, but
-      // only a human may mark it `completed` — otherwise the agent could
-      // accept its own work and the whole point of the review step is gone.
-      if (body.status === "completed" && existing.status !== "completed") {
-        const caller = db
-          .prepare("SELECT type FROM users WHERE id = ?")
-          .get(req.userId) as { type: string } | undefined;
-        if (caller?.type === "ai") {
-          return reply.code(403).send({
-            error: "агент не может сам принять задачу — это делает владелец",
-          });
-        }
-      }
+      // Задачу закрывает тот, кто её сделал, — включая агента. Решение
+      // Максима 20.08.2026 по итогам живой работы с конвейером: приёмка
+      // отдельным шагом оказалась лишним телодвижением, недовольство
+      // результатом он выражает комментарием или новой задачей, а не
+      // отказом закрыть старую. Прежний запрет (403 для type='ai') снят
+      // здесь же — см. симметричную правку в routes/subtasks.ts.
       if (
         body.priority !== undefined &&
         !(body.priority >= 1 && body.priority <= 4)

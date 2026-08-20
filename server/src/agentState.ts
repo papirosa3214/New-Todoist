@@ -79,11 +79,13 @@ export type TransitionVia = "claim" | "state";
  * Two rows are endpoint-specific:
  *  - `in_progress -> in_progress` (self-reclaim of an expired lease) only
  *    claim() can take — state() has no reason to request a no-op transition.
- *  - `review -> in_progress` only state() can take, and only the owner,
- *    with a mandatory comment (see commentRequiredFor). claim() reaching
- *    into `review` is exactly the hole this endpoint-gating closes: an
- *    agent that submitted its own work for review must not be able to
- *    silently take it back and skip the owner's acceptance.
+ *  - `review -> in_progress` only state() can take, with a mandatory comment
+ *    (see commentRequiredFor). Since 20.08.2026 the executor may take it too:
+ *    mandatory owner acceptance was dropped, so there is no acceptance left to
+ *    skip — `review` became a voluntary way to show work, not a one-way door.
+ *    claim() still cannot reach into `review`: silently resuming a task the
+ *    owner is looking at would hide the transition from the feed, and the
+ *    mandatory comment is the point.
  */
 export function canTransition(
   from: AgentState | null,
@@ -99,7 +101,7 @@ export function canTransition(
     return via === "claim" && who.isExecutor && !!who.leaseExpired;
   }
   if (from === "review" && to === "in_progress") {
-    return via === "state" && who.isOwner;
+    return via === "state" && (who.isOwner || who.isExecutor);
   }
   // "любое → NULL, владелец, снять с агента"
   if (to === null) return who.isOwner;

@@ -63,10 +63,17 @@ describe("canTransition — матрица переходов (AGENT-PROTOCOL.md
     );
   });
 
-  it("review -> in_progress: только владелец, только через state", () => {
+  // 20.08.2026: обязательная приёмка отменена, поэтому вернуть задачу из
+  // review может и исполнитель — но по-прежнему только через state, где
+  // обязателен комментарий. claim в review не лезет: молчаливое
+  // возобновление работы не должно проходить мимо ленты.
+  it("review -> in_progress: владелец и исполнитель, только через state", () => {
     expect(canTransition("review", "in_progress", owner, "state")).toBe(true);
-    expect(canTransition("review", "in_progress", owner, "claim")).toBe(false);
     expect(canTransition("review", "in_progress", executor, "state")).toBe(
+      true,
+    );
+    expect(canTransition("review", "in_progress", owner, "claim")).toBe(false);
+    expect(canTransition("review", "in_progress", executor, "claim")).toBe(
       false,
     );
   });

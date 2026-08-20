@@ -136,14 +136,18 @@ describe("Сквозной сценарий: claim → heartbeat → blocked →
     expect(res.json().task.agent_state).toBe("review");
   });
 
-  it("агент не может сам принять свою задачу — 403", async () => {
+  // 20.08.2026: обязательная приёмка владельцем отменена — агент закрывает
+  // свою задачу сам, недовольство результатом владелец выражает
+  // комментарием или новой задачей.
+  it("агент закрывает свою задачу сам", async () => {
     const res = await app.inject({
       method: "PATCH",
       url: `/api/tasks/${taskId}`,
       headers: { authorization: `Bearer ${agentToken}` },
       payload: { status: "completed" },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().task.status).toBe("completed");
   });
 
   it("владелец принимает", async () => {
