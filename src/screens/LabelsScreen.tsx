@@ -17,6 +17,7 @@ import {
   Icon,
   ScreenHeader,
   ErrorBanner,
+  Loading,
   BackButton,
   Button,
 } from "../components/UI";
@@ -301,7 +302,7 @@ export function LabelsScreen() {
         </form>
       )}
 
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isLoading && <Loading />}
       <ErrorBanner
         error={error}
         fallback="Не удалось загрузить метки"

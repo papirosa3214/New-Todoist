@@ -133,7 +133,7 @@ export function useDialog(): {
       />
       <div
         ref={sheet.sheetRef}
-        className="relative bg-card rounded-t-[20px] px-5 pt-6 pb-bottom-safe"
+        className="relative bg-card rounded-sheet-top px-5 pt-6 pb-bottom-safe"
         onClick={(e) => e.stopPropagation()}
       >
         {state.mode === "confirm" && state.danger && (

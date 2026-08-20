@@ -29,6 +29,7 @@ import {
   Avatar,
   ScreenHeader,
   ErrorBanner,
+  Loading,
   BackButton,
   SheetHandle,
 } from "../components/UI";
@@ -182,7 +183,7 @@ function CompletedTaskCard({ task }: { task: ApiTask }) {
 
 // ═══════════ FILTER SHEET ═══════════
 // Same bottom-sheet chrome as RescheduleSheet.tsx (scrim + bg-card
-// rounded-t-[20px] panel, pb-bottom-safe, max-h-[85vh] overflow-y-auto) —
+// rounded-sheet-top panel, pb-bottom-safe, max-h-[85vh] overflow-y-auto) —
 // used here as the style reference per direct instruction. Unlike
 // RescheduleSheet's quick-pick rows (which apply immediately and close the
 // whole sheet), each facet here expands in place and applies immediately
@@ -335,7 +336,7 @@ function ActivityFilterSheet({
       />
       <div
         ref={sheet.sheetRef}
-        className="relative bg-card rounded-t-[20px] px-4 pb-bottom-safe max-h-[85vh] overflow-y-auto"
+        className="relative bg-card rounded-sheet-top px-4 pb-bottom-safe max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Handle: drag target for dismiss gesture */}
@@ -691,7 +692,7 @@ export function ActivityScreen() {
         }
       />
 
-      {isLoading && <p className="px-1 text-[13px] text-dim mt-3">Загрузка…</p>}
+      {isLoading && <Loading className="mt-3" />}
       <ErrorBanner
         error={error}
         fallback="Не удалось загрузить выполненные задачи"

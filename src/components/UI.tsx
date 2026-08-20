@@ -166,6 +166,22 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   circle: Circle,
 };
 
+// Аудит 20.08.2026, п.8: 7 разных числовых размеров без названия
+// (10/12/15/16/18/22/26) — четыре из них соответствуют семантическим
+// шагам (icon-xs/sm/md/lg), остальные — точные замеренные значения
+// конкретных компонентов (StateMark 18/21px, DashedRing и т.п.), которые
+// подгонялись под пиксельный эталон и не обязаны лежать на этой шкале.
+// Поэтому size принимает ОБА варианта: строковый алиас для нового кода
+// без своего особого случая, число — когда нужно то самое замеренное
+// значение. Строка не заменяет число, а сокращает координатную сетку
+// там, где точность до пикселя не имеет отдельного обоснования.
+const ICON_SIZE: Record<"xs" | "sm" | "md" | "lg", number> = {
+  xs: 14,
+  sm: 18,
+  md: 22,
+  lg: 26,
+};
+
 export const Icon = ({
   name,
   size = 22,
@@ -173,17 +189,18 @@ export const Icon = ({
   style,
 }: {
   name: string;
-  size?: number;
+  size?: number | "xs" | "sm" | "md" | "lg";
   className?: string;
   style?: CSSProperties;
 }) => {
+  const resolvedSize = typeof size === "string" ? ICON_SIZE[size] : size;
   // Единственное исключение из Lucide: многоцветный логотип Google.
   if (name === "google") {
     return (
       <svg
         viewBox="0 0 24 24"
-        width={size}
-        height={size}
+        width={resolvedSize}
+        height={resolvedSize}
         className={className}
         style={style}
       >
@@ -217,7 +234,7 @@ export const Icon = ({
   // одной Lucide-иконки в проекте — всегда обводка (fill:"none").
   return (
     <Glyph
-      size={size}
+      size={resolvedSize}
       strokeWidth={1.5}
       className={className}
       style={style}
@@ -386,6 +403,19 @@ export function SheetHandle({
 // disagree about what a color means. Height stays within the row's
 // existing `mt-1.5` badge slot (see TodayScreen.tsx's overdue pill) — no
 // new row geometry.
+// Аудит дизайн-системы 20.08.2026, пункт 4 — «bg-X/12, bg-X/15, bg-X/20:
+// почему разные?». Проверка по всем местам применения (здесь, OverviewScreen,
+// ErrorBanner, TaskJournal) показала, что это НЕ случайность, а не названная
+// прежде явно шкала по тревожности/площади заливки — фиксируем словами,
+// чтобы новый код брал число осознанно, а не «на глаз»:
+//   12% — alert-панель на крупной площади (ErrorBanner variant="block",
+//         TaskJournal blocked-notice) — на большой площади та же плотность
+//         читалась бы слишком тяжело.
+//   15% — обычная статус-пилюля/бейдж (эта таблица, TaskRow/TaskBoard
+//         overdue-бейдж, UpcomingScreen).
+//   20% — тот же элемент, но состояние ТРЕВОЖНОЕ (agent_stale ниже,
+//         OverviewScreen «Пропали») — плотнее заливка, тот же приём, что и
+//         жирный текст рядом, специально просит больше внимания.
 const AGENT_TAG_META: Record<
   "in_progress" | "blocked" | "review",
   { label: string; bg: string; text: string }
@@ -647,7 +677,7 @@ export function FAB({
       onClick={
         onClick ?? (() => navigate(`/task/new${dueToday ? "?due=today" : ""}`))
       }
-      className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-[0_6px_16px_rgba(228,67,50,.45)] z-30 tap-scale"
+      className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-fab z-30 tap-scale"
     >
       <Icon name="plus" size={26} className="text-white" />
     </button>
@@ -1185,7 +1215,12 @@ export function TextField({
         // потому что 14 полей в проекте написаны мимо этого компонента.
         // Здесь остаётся только опт-аут: атрибут, который перехват уважает.
         data-system-keyboard={systemKeyboard ? "" : undefined}
-        className={`flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none ${className}`}
+        // Аудит 20.08.2026, п.13: outline-none без замены — на десктопе и
+        // при Tab-навигации (accessibility) фокус был не виден вовсе.
+        // ring-inset, не обычный ring: поле часто живёт внутри Card
+        // (rounded-2xl overflow-hidden, см. DESIGN.md), внешняя тень
+        // обрезалась бы её краем — внутренняя всегда видна целиком.
+        className={`flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-red/40 ${className}`}
       />
       {trailing}
     </div>
@@ -1218,6 +1253,49 @@ export function Button({
     >
       {children}
     </button>
+  );
+}
+
+// ═══════════ LOADING ═══════════
+// Аудит дизайн-системы 20.08.2026, пункт 3: «Загрузка…» дословно
+// копипастилась в 13 экранах — inline-строка `<p className="px-1
+// text-[13px] text-dim">Загрузка…</p>` (иногда с mt-3/mb-4/px-3), плюс
+// отдельный полноэкранный вариант `<div className="px-4 py-8 text-center
+// text-sub">Загрузка…</div>` для экранов, которые без данных вообще не
+// могут отрисоваться (TaskDetailScreen/TaskFormScreen). Тот же приём, что
+// у ErrorBanner чуть ниже — variant вместо двух раздельных компонентов.
+//
+//   - variant="inline" (default): тонкая строка под заголовком/списком,
+//     тот же вид, что был во всех местах кроме двух полноэкранных.
+//   - variant="block": центрированный блок на всю доступную ширину —
+//     когда экрану больше нечего показать, пока данные не пришли.
+//
+// px — единственное, что реально отличалось между копипастами
+// (px-1 почти везде, px-3 в OverviewScreen); значение — явный проп, а не
+// собранная на лету строка `px-${n}`, чтобы Tailwind видел класс
+// буквально в этом файле и не срезал его при сборке.
+const LOADING_PX = { 1: "px-1", 3: "px-3", 4: "px-4" } as const;
+
+export function Loading({
+  variant = "inline",
+  px = 1,
+  className = "",
+}: {
+  variant?: "inline" | "block";
+  px?: keyof typeof LOADING_PX;
+  className?: string;
+}) {
+  if (variant === "block") {
+    return (
+      <div className={`px-4 py-8 text-center text-sub ${className}`}>
+        Загрузка…
+      </div>
+    );
+  }
+  return (
+    <p className={`${LOADING_PX[px]} text-[13px] text-dim ${className}`}>
+      Загрузка…
+    </p>
   );
 }
 

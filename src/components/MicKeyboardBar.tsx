@@ -141,7 +141,7 @@ export function MicKeyboardBar({
         // CSS/SVG) тот же: «тёмная/однородная подложка чаще улучшает
         // читаемость сильнее, чем рост blur» — то есть радиус, не
         // прозрачность, был неверной ручкой всё это время.
-        className="tap-scale w-11 h-11 rounded-full bg-bg/15 backdrop-blur-[2px] backdrop-saturate-[1.8] border border-stroke shadow-[0_2px_10px_rgba(0,0,0,.35),inset_0_1px_0_rgba(255,255,255,.14)] flex items-center justify-center"
+        className="tap-scale w-11 h-11 rounded-full bg-bg/15 backdrop-blur-[2px] backdrop-saturate-[1.8] border border-stroke shadow-mic-glass flex items-center justify-center"
       >
         <Icon name="mic" size={20} className="text-text" />
       </button>

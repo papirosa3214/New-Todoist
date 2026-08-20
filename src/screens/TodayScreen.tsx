@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
-import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { isTaskOwner, isAgentAssignedTask } from "../lib/taskOwner";
 import { useAgents } from "../api/agents";
 import {
@@ -450,8 +450,15 @@ export function TodayScreen() {
       <div className="px-4 pb-4 flex flex-col items-center">
         {header}
         <div className="flex-1 flex flex-col items-center justify-center mt-8">
+          {/* Аудит 20.08.2026, п.10: три литерала были захардкожены — на
+              светлой теме тёмный фон смайлика (#2B2B2B) торчал бы на светлом
+              фоне экрана вместо card2 (#ececee). --color-green заодно
+              подтягивается к актуальному значению (#15937e) — было заморожено
+              на устаревшем #8FBF9F, с 18.08.2026 палитра сменилась везде,
+              кроме этой иллюстрации. Белые «глаза»/«рот» — не токен цвета
+              темы, оставлены буквальным white осознанно. */}
           <svg width="200" height="180" viewBox="0 0 200 180" className="mb-6">
-            <circle cx="100" cy="80" r="48" fill="#2B2B2B" />
+            <circle cx="100" cy="80" r="48" fill="var(--color-card2)" />
             <circle cx="85" cy="72" r="4" fill="white" />
             <circle cx="115" cy="72" r="4" fill="white" />
             <path
@@ -466,7 +473,7 @@ export function TodayScreen() {
               cy="55"
               rx="6"
               ry="3"
-              fill="#35B8A3"
+              fill="var(--color-teal)"
               transform="rotate(-20 68 55)"
             />
             <ellipse
@@ -474,7 +481,7 @@ export function TodayScreen() {
               cy="55"
               rx="6"
               ry="3"
-              fill="#35B8A3"
+              fill="var(--color-teal)"
               transform="rotate(20 132 55)"
             />
             <circle
@@ -482,7 +489,7 @@ export function TodayScreen() {
               cy="130"
               r="18"
               fill="none"
-              stroke="#8FBF9F"
+              stroke="var(--color-green)"
               strokeWidth="2"
             />
             <circle
@@ -490,7 +497,7 @@ export function TodayScreen() {
               cy="120"
               r="14"
               fill="none"
-              stroke="#8FBF9F"
+              stroke="var(--color-green)"
               strokeWidth="2"
             />
             <circle
@@ -498,7 +505,7 @@ export function TodayScreen() {
               cy="150"
               r="10"
               fill="none"
-              stroke="#8FBF9F"
+              stroke="var(--color-green)"
               strokeWidth="1.5"
             />
           </svg>
@@ -516,7 +523,7 @@ export function TodayScreen() {
   return (
     <div className="px-4 pb-4">
       {header}
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isLoading && <Loading />}
       <ErrorBanner
         error={error}
         fallback="Не удалось загрузить задачи"
@@ -551,11 +558,14 @@ export function TodayScreen() {
               projects.find((p) => p.id === t.project_id)?.color || "#717171"
             }
             onTaskClick={(id) => navigate(`/task/${id}`)}
-            // Перетащили задачу на шкалу — сразу назначаем время. Срок при
-            // этом проставляем сегодняшним, если его не было: сервер не
-            // примет время без даты, а задача, которую человек кладёт в
-            // сетку СЕГОДНЯШНЕГО дня, на сегодня и планируется. Работает
-            // только в 1-дневном виде — см. комментарий у DayHours.interactive.
+            // Перетащили задачу на шкалу — назначаем и время, и дату
+            // колонки, куда отпустили (20.08.2026: раньше только время, а
+            // дата ставилась сегодняшней и только если её раньше не было —
+            // работало исключительно в 1-дневном виде, где колонка одна и
+            // всегда «сегодня». Теперь колонок может быть три, и владелец
+            // явно переносит задачу между днями — дата всегда берётся с
+            // той колонки, куда отпустили, даже если у задачи уже была
+            // другая: жест переноса сам по себе и есть решение сменить день.
             //
             // Длительность — 15 минут (SNAP_MIN, минимальный шаг сетки),
             // если её раньше не было (19.08.2026, владелец: «должно
@@ -565,12 +575,12 @@ export function TodayScreen() {
             // срезало бы её до 15 минут. Без этого duration_min оставался
             // null, и DayHours рисовал размытый низ («конец не задан») —
             // визуально «замылено» там, где владелец ждал ровную плашку.
-            onSchedule={(id, time) => {
+            onSchedule={(id, date, time) => {
               const task = allTasks.find((t) => t.id === id);
               updateTask.mutate({
                 id,
                 start_time: time,
-                ...(task?.due_date ? null : { due_date: today }),
+                due_date: date,
                 ...(task?.duration_min == null ? { duration_min: 15 } : null),
               });
             }}

@@ -145,7 +145,7 @@ export function ActionsMenu({
           opacity: 0,
           transform: "scale(0.95) translateZ(0)",
         }}
-        className="fixed z-50 min-w-[192px] max-w-[calc(100vw-32px)] origin-top-right overflow-hidden rounded-[14px] border border-stroke bg-card2 shadow-xl"
+        className="fixed z-50 min-w-[192px] max-w-[calc(100vw-32px)] origin-top-right overflow-hidden rounded-2xl border border-stroke bg-card2 shadow-pop"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="divide-y divide-stroke">

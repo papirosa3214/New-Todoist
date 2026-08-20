@@ -6,7 +6,7 @@ import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useProjects } from "../api/projects";
-import { ScreenHeader, ErrorBanner, BackButton } from "../components/UI";
+import { ScreenHeader, ErrorBanner, Loading, BackButton } from "../components/UI";
 import { TaskRow } from "../components/TaskRow";
 
 export function ProjectTasksScreen() {
@@ -75,7 +75,7 @@ export function ProjectTasksScreen() {
         className="mb-2"
       />
 
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+      {isLoading && <Loading />}
 
       {notFound && (
         <div className="px-1 py-8 text-center">
