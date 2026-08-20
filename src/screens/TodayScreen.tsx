@@ -450,8 +450,15 @@ export function TodayScreen() {
       <div className="px-4 pb-4 flex flex-col items-center">
         {header}
         <div className="flex-1 flex flex-col items-center justify-center mt-8">
+          {/* Аудит 20.08.2026, п.10: три литерала были захардкожены — на
+              светлой теме тёмный фон смайлика (#2B2B2B) торчал бы на светлом
+              фоне экрана вместо card2 (#ececee). --color-green заодно
+              подтягивается к актуальному значению (#15937e) — было заморожено
+              на устаревшем #8FBF9F, с 18.08.2026 палитра сменилась везде,
+              кроме этой иллюстрации. Белые «глаза»/«рот» — не токен цвета
+              темы, оставлены буквальным white осознанно. */}
           <svg width="200" height="180" viewBox="0 0 200 180" className="mb-6">
-            <circle cx="100" cy="80" r="48" fill="#2B2B2B" />
+            <circle cx="100" cy="80" r="48" fill="var(--color-card2)" />
             <circle cx="85" cy="72" r="4" fill="white" />
             <circle cx="115" cy="72" r="4" fill="white" />
             <path
@@ -466,7 +473,7 @@ export function TodayScreen() {
               cy="55"
               rx="6"
               ry="3"
-              fill="#35B8A3"
+              fill="var(--color-teal)"
               transform="rotate(-20 68 55)"
             />
             <ellipse
@@ -474,7 +481,7 @@ export function TodayScreen() {
               cy="55"
               rx="6"
               ry="3"
-              fill="#35B8A3"
+              fill="var(--color-teal)"
               transform="rotate(20 132 55)"
             />
             <circle
@@ -482,7 +489,7 @@ export function TodayScreen() {
               cy="130"
               r="18"
               fill="none"
-              stroke="#8FBF9F"
+              stroke="var(--color-green)"
               strokeWidth="2"
             />
             <circle
@@ -490,7 +497,7 @@ export function TodayScreen() {
               cy="120"
               r="14"
               fill="none"
-              stroke="#8FBF9F"
+              stroke="var(--color-green)"
               strokeWidth="2"
             />
             <circle
@@ -498,7 +505,7 @@ export function TodayScreen() {
               cy="150"
               r="10"
               fill="none"
-              stroke="#8FBF9F"
+              stroke="var(--color-green)"
               strokeWidth="1.5"
             />
           </svg>

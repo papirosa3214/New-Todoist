@@ -386,6 +386,19 @@ export function SheetHandle({
 // disagree about what a color means. Height stays within the row's
 // existing `mt-1.5` badge slot (see TodayScreen.tsx's overdue pill) — no
 // new row geometry.
+// Аудит дизайн-системы 20.08.2026, пункт 4 — «bg-X/12, bg-X/15, bg-X/20:
+// почему разные?». Проверка по всем местам применения (здесь, OverviewScreen,
+// ErrorBanner, TaskJournal) показала, что это НЕ случайность, а не названная
+// прежде явно шкала по тревожности/площади заливки — фиксируем словами,
+// чтобы новый код брал число осознанно, а не «на глаз»:
+//   12% — alert-панель на крупной площади (ErrorBanner variant="block",
+//         TaskJournal blocked-notice) — на большой площади та же плотность
+//         читалась бы слишком тяжело.
+//   15% — обычная статус-пилюля/бейдж (эта таблица, TaskRow/TaskBoard
+//         overdue-бейдж, UpcomingScreen).
+//   20% — тот же элемент, но состояние ТРЕВОЖНОЕ (agent_stale ниже,
+//         OverviewScreen «Пропали») — плотнее заливка, тот же приём, что и
+//         жирный текст рядом, специально просит больше внимания.
 const AGENT_TAG_META: Record<
   "in_progress" | "blocked" | "review",
   { label: string; bg: string; text: string }
@@ -1185,7 +1198,12 @@ export function TextField({
         // потому что 14 полей в проекте написаны мимо этого компонента.
         // Здесь остаётся только опт-аут: атрибут, который перехват уважает.
         data-system-keyboard={systemKeyboard ? "" : undefined}
-        className={`flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none ${className}`}
+        // Аудит 20.08.2026, п.13: outline-none без замены — на десктопе и
+        // при Tab-навигации (accessibility) фокус был не виден вовсе.
+        // ring-inset, не обычный ring: поле часто живёт внутри Card
+        // (rounded-2xl overflow-hidden, см. DESIGN.md), внешняя тень
+        // обрезалась бы её краем — внутренняя всегда видна целиком.
+        className={`flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-red/40 ${className}`}
       />
       {trailing}
     </div>
