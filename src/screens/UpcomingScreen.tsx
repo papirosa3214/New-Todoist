@@ -473,229 +473,231 @@ export function UpcomingScreen() {
     setMonthPickerOpen(false);
   }
 
+  // Общие кнопки шапки — используются и лёгкой шапкой «три дня», и полным
+  // календарным хромом ниже, чтобы не держать одну и ту же разметку в двух
+  // местах (см. оба места использования).
+  const headerActions = (
+    <>
+      <TaskFilterButton
+        onClick={() => setFilterSheetOpen(true)}
+        active={activeFilterCount > 0}
+      />
+      {/* Свернуть/развернуть календарь-ленту — только в виде
+          «список»: в календарных видах ленты нет вовсе, и кнопка
+          управляла бы тем, чего на экране не видно. */}
+      {view === "list" && (
+        <button
+          onClick={toggleCalMode}
+          className="w-[44px] h-[44px] flex items-center justify-center active:scale-95 transition-transform"
+          aria-label={
+            calMode === "month"
+              ? "Свернуть календарь в неделю"
+              : "Развернуть календарь в месяц"
+          }
+        >
+          <Icon
+            name={calMode === "month" ? "grid" : "list"}
+            size={16}
+            className="text-text"
+          />
+        </button>
+      )}
+      {/* Виды экрана — под тремя точками, ровно как в «Сегодня»
+          (19.08.2026: «под троеточие спрячь список, доска, один
+          день, три дня»). Список, неделя, месяц — плюс «Три дня»
+          (calendarSmall уже занята «Неделей», поэтому clock —
+          сетка часов), переехавшая сюда со «Сегодня» 20.08.2026. */}
+      <button
+        ref={menuAnchorRef}
+        onClick={() => setMenuOpen((v) => !v)}
+        aria-label="Ещё"
+        className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
+      >
+        <Icon name="dots" size={18} />
+      </button>
+      <ActionsMenu
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        anchorRef={menuAnchorRef}
+        items={(
+          [
+            ["list", "Список", "list"],
+            ["week", "Неделя", "calendarSmall"],
+            ["month", "Месяц", "grid"],
+            ["hours", "Три дня", "clock"],
+          ] as const
+        ).map(([key, label, icon]) => ({
+          icon,
+          label: (
+            <span className={view === key ? "font-semibold text-red" : ""}>
+              {label}
+            </span>
+          ),
+          onClick: () => setView(key),
+        }))}
+      />
+    </>
+  );
+
   return (
     <div className="px-4 pb-4">
-      {/* Закреплённый «хром»: шапка экрана + календарь — всё в одном
-          sticky-блоке (owner 2026-08-13: ручку-засечку под сеткой дней
-          убрали — свайп ею дублировал кнопку toggleCalMode в шапке, а
-          пустая 36px-полоса под ней отделяла список задач от чисел
-          календаря без необходимости; граница/тень блока теперь сразу
-          под сеткой дней). ScreenHeader сам уже sticky top-0
-          (см. UI.tsx), но вложенный в уже прилипший родитель, эта
-          собственная стики-логика становится no-op: как только внешний
-          блок прилип к верху скролл-контейнера, всё что внутри нём (шапка,
-          календарь) больше никогда не проезжает мимо top:0, так что
-          дублирование не конфликтует — оно просто не участвует. Работает
-          одинаково что на мобильном (скроллится document), что на
-          десктопе (скроллится .flex-1.overflow-y-auto рамки телефона в
-          Layout.tsx) — sticky в обоих случаях считается от ближайшего
-          реального скролл-контейнера, а не от структуры вложенности. */}
-      <div
-        ref={stickyRef}
-        /* -mx-4 px-4: этот блок несёт собственный фон и живёт внутри
-           родительского px-4, поэтому без компенсации его фон обрывался в
-           16px от краёв экрана и прокручивающиеся карточки проглядывали в
-           щелях (замер 11.08.2026: ширина 358 при экране 390, на остальных
-           вкладках ScreenHeader растягивается сам). Отрицательное поле
-           тянет фон до краёв, внутренний padding возвращает содержимому
-           прежние отступы — заголовок и кнопки не сдвигаются. */
-        className="sticky top-0 z-20 -mx-4 px-4 bg-bg border-b border-stroke shadow-sticky"
-      >
+      {/* «Три дня» — своя, не обёрнутая в sticky-хром шапка, ТОЧНО как у
+          «Сегодня» (владелец 20.08.2026: «шапка должна быть статичной, а
+          не растягиваться вместе с таблицей, и затухание — на краю
+          шапки»). Раньше этот вид шёл через тот же sticky-блок, что
+          список/неделя/месяц, ниже — а ScreenHeader сам по себе `position:
+          fixed`, не sticky (см. UI.tsx): вложенный в sticky-родителя, он
+          измерял свои left/width от родителя, который ещё «не прилип» на
+          старте скролла — отсюда и «растягивание». У списка/недели/месяца
+          так и оставлено: там в этом же блоке ещё лента календаря
+          (calOuterRef) и попап месяца, обёртка им нужна взаправду. */}
+      {view === "hours" ? (
         <ScreenHeader
           title="Предстоящее"
-          // Какой месяц смотрим — строкой под заголовком, внутри шапки:
-          // так её накрывает общее затухание, и высота шапки, от которой
-          // считается высота сетки, пересчитывается автоматически.
-          below={
-            view === "week" ? (
-              <WeekMonthLabel monday={gridMonday} />
-            ) : view === "month" ? (
-              <MonthHeaderLabel year={gridMonth.year} month={gridMonth.month} />
-            ) : view === "hours" ? (
-              // Подписи трёх дней — тот же приём, что был у «Сегодня» до
-              // 20.08.2026: строка живёт ВНУТРИ шапки, не отдельной плашкой
-              // под ней (владелец 19.08.2026, см. историю решения в
-              // TodayScreen.tsx).
-              <DayColumnsHeader days={hourDays} />
-            ) : undefined
-          }
-          actions={
-            <>
-              <TaskFilterButton
-                onClick={() => setFilterSheetOpen(true)}
-                active={activeFilterCount > 0}
-              />
-              {/* Свернуть/развернуть календарь-ленту — только в виде
-                  «список»: в календарных видах ленты нет вовсе, и кнопка
-                  управляла бы тем, чего на экране не видно. */}
-              {view === "list" && (
-                <button
-                  onClick={toggleCalMode}
-                  className="w-[44px] h-[44px] flex items-center justify-center active:scale-95 transition-transform"
-                  aria-label={
-                    calMode === "month"
-                      ? "Свернуть календарь в неделю"
-                      : "Развернуть календарь в месяц"
-                  }
-                >
-                  <Icon
-                    name={calMode === "month" ? "grid" : "list"}
-                    size={16}
-                    className="text-text"
-                  />
-                </button>
-              )}
-              {/* Виды экрана — под тремя точками, ровно как в «Сегодня»
-                  (19.08.2026: «под троеточие спрячь список, доска, один
-                  день, три дня»). Список, неделя, месяц — плюс «Три дня»
-                  (calendarSmall уже занята «Неделей», поэтому clock —
-                  сетка часов), переехавшая сюда со «Сегодня» 20.08.2026. */}
-              <button
-                ref={menuAnchorRef}
-                onClick={() => setMenuOpen((v) => !v)}
-                aria-label="Ещё"
-                className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
-              >
-                <Icon name="dots" size={18} />
-              </button>
-              <ActionsMenu
-                open={menuOpen}
-                onClose={() => setMenuOpen(false)}
-                anchorRef={menuAnchorRef}
-                items={(
-                  [
-                    ["list", "Список", "list"],
-                    ["week", "Неделя", "calendarSmall"],
-                    ["month", "Месяц", "grid"],
-                    ["hours", "Три дня", "clock"],
-                  ] as const
-                ).map(([key, label, icon]) => ({
-                  icon,
-                  label: (
-                    <span
-                      className={view === key ? "font-semibold text-red" : ""}
-                    >
-                      {label}
-                    </span>
-                  ),
-                  onClick: () => setView(key),
-                }))}
-              />
-            </>
-          }
+          below={<DayColumnsHeader days={hourDays} />}
+          actions={headerActions}
         />
+      ) : (
+        <div
+          ref={stickyRef}
+          /* -mx-4 px-4: этот блок несёт собственный фон и живёт внутри
+             родительского px-4, поэтому без компенсации его фон обрывался в
+             16px от краёв экрана и прокручивающиеся карточки проглядывали в
+             щелях (замер 11.08.2026: ширина 358 при экране 390, на остальных
+             вкладках ScreenHeader растягивается сам). Отрицательное поле
+             тянет фон до краёв, внутренний padding возвращает содержимому
+             прежние отступы — заголовок и кнопки не сдвигаются. */
+          className="sticky top-0 z-20 -mx-4 px-4 bg-bg border-b border-stroke shadow-sticky"
+        >
+          <ScreenHeader
+            title="Предстоящее"
+            // Какой месяц смотрим — строкой под заголовком, внутри шапки:
+            // так её накрывает общее затухание, и высота шапки, от которой
+            // считается высота сетки, пересчитывается автоматически.
+            below={
+              view === "week" ? (
+                <WeekMonthLabel monday={gridMonday} />
+              ) : view === "month" ? (
+                <MonthHeaderLabel
+                  year={gridMonth.year}
+                  month={gridMonth.month}
+                />
+              ) : undefined
+            }
+            actions={headerActions}
+          />
 
-        {/* Единственный смонтированный вид (лента недель ИЛИ одна неделя,
+          {/* Единственный смонтированный вид (лента недель ИЛИ одна неделя,
             по ternary — как и было изначально). Высота анимируется через
             явный height, зафиксированный в calAnimHeight (см.
             changeMode/useEffect выше); обычные ре-рендеры (навигация по
             месяцам через попап) height не трогают — он остаётся
             undefined/auto, так что строка с переходом месяца всегда
             показывает точную высоту без анимации, как раньше. */}
-        {/* Лента-выборщик даты — принадлежность вида «список»: в неделе и
+          {/* Лента-выборщик даты — принадлежность вида «список»: в неделе и
             месяце календарь и есть сам экран, вторая его копия сверху
             только отняла бы высоту у сетки. */}
-        <div
-          ref={calOuterRef}
-          hidden={view !== "list"}
-          onTransitionEnd={(e) => {
-            // Только СВОЙ переход по height — иначе всплывший transitionend
-            // от дочерних transition-all (дни календаря, .active:scale-90)
-            // сбросил бы height обратно в auto посреди анимации.
-            if (e.target === e.currentTarget && e.propertyName === "height") {
-              setCalAnimHeight(undefined);
-            }
-          }}
-          style={{ height: calAnimHeight }}
-          // Tailwind's scanner needs a complete, literal class token in the
-          // source text — an interpolated `duration-[${N}ms]` would never
-          // match and the utility would silently not be generated
-          // (transition falling back to 0s, instant). duration-[280ms] is
-          // written out literally here — the single source of truth for
-          // that number, see the "ВЫБРАНО" note above.
-          className={`overflow-hidden transition-[height] duration-[280ms] motion-reduce:transition-none ${
-            calMode === "month" ? "ease-out" : "ease-in"
-          }`}
-        >
-          {/* calInnerRef — БЕЗ каких-либо height-ограничений, всегда
+          <div
+            ref={calOuterRef}
+            hidden={view !== "list"}
+            onTransitionEnd={(e) => {
+              // Только СВОЙ переход по height — иначе всплывший transitionend
+              // от дочерних transition-all (дни календаря, .active:scale-90)
+              // сбросил бы height обратно в auto посреди анимации.
+              if (e.target === e.currentTarget && e.propertyName === "height") {
+                setCalAnimHeight(undefined);
+              }
+            }}
+            style={{ height: calAnimHeight }}
+            // Tailwind's scanner needs a complete, literal class token in the
+            // source text — an interpolated `duration-[${N}ms]` would never
+            // match and the utility would silently not be generated
+            // (transition falling back to 0s, instant). duration-[280ms] is
+            // written out literally here — the single source of truth for
+            // that number, see the "ВЫБРАНО" note above.
+            className={`overflow-hidden transition-[height] duration-[280ms] motion-reduce:transition-none ${
+              calMode === "month" ? "ease-out" : "ease-in"
+            }`}
+          >
+            {/* calInnerRef — БЕЗ каких-либо height-ограничений, всегда
               измеримо в свой истинный intrinsic-размер (см. useEffect
               выше и комментарий про два рефа). */}
-          <div ref={calInnerRef}>
-            {calMode === "month" ? (
-              <>
-                {/* Заголовок ленты — компактный, слева, без стрелок по
+            <div ref={calInnerRef}>
+              {calMode === "month" ? (
+                <>
+                  {/* Заголовок ленты — компактный, слева, без стрелок по
                     бокам (в эталоне они исчезают целиком). Шеврон вниз —
                     признак того, что по нажатию открывается выбор месяца
                     (попап с «‹ Сегодня ›» ниже), а не сама навигация. */}
-                <div className="flex items-center mb-1">
-                  <button
-                    ref={monthBtnRef}
-                    onClick={() =>
-                      monthPickerOpen ? closeMonthPicker() : openMonthPicker()
-                    }
-                    aria-haspopup="true"
-                    aria-expanded={monthPickerOpen}
-                    aria-label="Выбрать месяц"
-                    className="flex items-center gap-1 h-[40px] -ml-2 px-2 active:scale-95"
-                  >
-                    <span className="text-[14px] font-semibold text-red">
-                      {MONTHS_ABBR_DOT[pickerMonth]} {pickerYear} г.
-                    </span>
-                    <Icon
-                      name="chevronDown"
-                      size={12}
-                      className={`text-red transition-transform ${monthPickerOpen ? "rotate-180" : ""}`}
-                    />
-                  </button>
-                </div>
+                  <div className="flex items-center mb-1">
+                    <button
+                      ref={monthBtnRef}
+                      onClick={() =>
+                        monthPickerOpen ? closeMonthPicker() : openMonthPicker()
+                      }
+                      aria-haspopup="true"
+                      aria-expanded={monthPickerOpen}
+                      aria-label="Выбрать месяц"
+                      className="flex items-center gap-1 h-[40px] -ml-2 px-2 active:scale-95"
+                    >
+                      <span className="text-[14px] font-semibold text-red">
+                        {MONTHS_ABBR_DOT[pickerMonth]} {pickerYear} г.
+                      </span>
+                      <Icon
+                        name="chevronDown"
+                        size={12}
+                        className={`text-red transition-transform ${monthPickerOpen ? "rotate-180" : ""}`}
+                      />
+                    </button>
+                  </div>
 
-                {/* Weekday headers — py-0/mb-0 (было py-1/mb-1): уплотнение
+                  {/* Weekday headers — py-0/mb-0 (было py-1/mb-1): уплотнение
                     календаря, эту строку не тапают, минимальная площадь
                     касания на неё не распространяется. */}
-                <div className="grid grid-cols-7 gap-0 mb-0">
-                  {WEEKDAYS.map((d) => (
-                    <div
-                      key={d}
-                      className="text-center text-[11px] text-sub py-0"
-                    >
-                      {d}
-                    </div>
-                  ))}
-                </div>
+                  <div className="grid grid-cols-7 gap-0 mb-0">
+                    {WEEKDAYS.map((d) => (
+                      <div
+                        key={d}
+                        className="text-center text-[11px] text-sub py-0"
+                      >
+                        {d}
+                      </div>
+                    ))}
+                  </div>
 
-                {/* Лента недель — непрерывная, без пустых ячеек и без
+                  {/* Лента недель — непрерывная, без пустых ячеек и без
                     разрыва на границе месяца: начинается с понедельника
                     текущей недели (или с первой недели выбранного через
                     попап месяца) и идёт только вперёд. pb-1 (уплотнение,
                     шкала 16/12/8/4). Числовые ячейки — не уже 40×40 (сама
                     кнопка), внутренний кружок заливки — 26×26. */}
-                <div className="grid grid-cols-7 gap-0 pb-1">
-                  {ribbonDays.map((d) => {
-                    const dateStr = formatDateStr(
-                      d.getFullYear(),
-                      d.getMonth(),
-                      d.getDate(),
-                    );
-                    const hasTasks = groupedTasks[dateStr]?.length > 0;
-                    const isToday = dateStr === today;
-                    const isSelected = dateStr === selectedDate;
-                    const isPast = dateStr < today;
-                    const isFirstOfMonth = d.getDate() === 1;
-                    const isFilled = isSelected || isToday;
+                  <div className="grid grid-cols-7 gap-0 pb-1">
+                    {ribbonDays.map((d) => {
+                      const dateStr = formatDateStr(
+                        d.getFullYear(),
+                        d.getMonth(),
+                        d.getDate(),
+                      );
+                      const hasTasks = groupedTasks[dateStr]?.length > 0;
+                      const isToday = dateStr === today;
+                      const isSelected = dateStr === selectedDate;
+                      const isPast = dateStr < today;
+                      const isFirstOfMonth = d.getDate() === 1;
+                      const isFilled = isSelected || isToday;
 
-                    return (
-                      <button
-                        key={dateStr}
-                        data-date={dateStr}
-                        onClick={() =>
-                          setSelectedDate(isSelected ? null : dateStr)
-                        }
-                        className="min-h-[40px] w-full flex flex-col items-center justify-center gap-[1px] py-1 transition-all active:scale-90"
-                      >
-                        {isFirstOfMonth && (
-                          <span
-                            data-cal-month-label
-                            /* 9px → 10px (20.08.2026): 9px не входил в
+                      return (
+                        <button
+                          key={dateStr}
+                          data-date={dateStr}
+                          onClick={() =>
+                            setSelectedDate(isSelected ? null : dateStr)
+                          }
+                          className="min-h-[40px] w-full flex flex-col items-center justify-center gap-[1px] py-1 transition-all active:scale-90"
+                        >
+                          {isFirstOfMonth && (
+                            <span
+                              data-cal-month-label
+                              /* 9px → 10px (20.08.2026): 9px не входил в
                                шкалу проекта и, главное, выпадал из таблицы
                                оптического трекинга в index.css — она
                                начинается с 10px. То есть самая мелкая
@@ -703,111 +705,116 @@ export function UpcomingScreen() {
                                именно там, где она нужнее всего: на 10px
                                таблица открывает буквы на +0.025em, иначе
                                «Сент.» читается пятном. */
-                            className={`text-[10px] leading-none ${
-                              isFilled ? "text-red" : "text-sub"
+                              className={`text-[10px] leading-none ${
+                                isFilled ? "text-red" : "text-sub"
+                              }`}
+                            >
+                              {MONTHS_ABBR_DOT[d.getMonth()]}
+                            </span>
+                          )}
+                          <span
+                            data-cal-daynum
+                            className={`text-[14px] leading-none w-[26px] h-[26px] rounded-full flex items-center justify-center ${
+                              isFilled
+                                ? "bg-red text-white font-semibold"
+                                : isPast
+                                  ? "text-dim"
+                                  : "text-text"
                             }`}
                           >
-                            {MONTHS_ABBR_DOT[d.getMonth()]}
+                            {d.getDate()}
                           </span>
-                        )}
+                          {hasTasks && !isFilled && (
+                            <div className="w-[4px] h-[4px] rounded-full bg-red" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                /* Week strip */
+                <div className="flex justify-between pt-2 pb-3 px-1">
+                  {weekDates.map((d) => {
+                    const dateStr = formatDateStr(
+                      d.getFullYear(),
+                      d.getMonth(),
+                      d.getDate(),
+                    );
+                    const isActive = dateStr === today;
+                    const isSelected = dateStr === selectedDate;
+                    return (
+                      <button
+                        key={dateStr}
+                        onClick={() =>
+                          setSelectedDate(isSelected ? null : dateStr)
+                        }
+                        className={`flex flex-col items-center gap-1 transition-all ${isActive ? "text-red" : isSelected ? "text-text" : "text-sub"}`}
+                      >
+                        <span className="text-[10px] font-medium uppercase">
+                          {
+                            ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][
+                              d.getDay()
+                            ]
+                          }
+                        </span>
                         <span
-                          data-cal-daynum
-                          className={`text-[14px] leading-none w-[26px] h-[26px] rounded-full flex items-center justify-center ${
-                            isFilled
-                              ? "bg-red text-white font-semibold"
-                              : isPast
-                                ? "text-dim"
-                                : "text-text"
+                          className={`text-[15px] font-medium ${
+                            isActive
+                              ? "bg-red text-white w-[28px] h-[28px] rounded-full flex items-center justify-center"
+                              : isSelected
+                                ? "border-2 border-red w-[28px] h-[28px] rounded-full flex items-center justify-center"
+                                : ""
                           }`}
                         >
                           {d.getDate()}
                         </span>
-                        {hasTasks && !isFilled && (
-                          <div className="w-[4px] h-[4px] rounded-full bg-red" />
-                        )}
                       </button>
                     );
                   })}
                 </div>
-              </>
-            ) : (
-              /* Week strip */
-              <div className="flex justify-between pt-2 pb-3 px-1">
-                {weekDates.map((d) => {
-                  const dateStr = formatDateStr(
-                    d.getFullYear(),
-                    d.getMonth(),
-                    d.getDate(),
-                  );
-                  const isActive = dateStr === today;
-                  const isSelected = dateStr === selectedDate;
-                  return (
-                    <button
-                      key={dateStr}
-                      onClick={() =>
-                        setSelectedDate(isSelected ? null : dateStr)
-                      }
-                      className={`flex flex-col items-center gap-1 transition-all ${isActive ? "text-red" : isSelected ? "text-text" : "text-sub"}`}
-                    >
-                      <span className="text-[10px] font-medium uppercase">
-                        {["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][d.getDay()]}
-                      </span>
-                      <span
-                        className={`text-[15px] font-medium ${
-                          isActive
-                            ? "bg-red text-white w-[28px] h-[28px] rounded-full flex items-center justify-center"
-                            : isSelected
-                              ? "border-2 border-red w-[28px] h-[28px] rounded-full flex items-center justify-center"
-                              : ""
-                        }`}
-                      >
-                        {d.getDate()}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
 
-        {/* Попап выбора месяца — соседний с calOuterRef элемент (НЕ
+          {/* Попап выбора месяца — соседний с calOuterRef элемент (НЕ
             потомок), чтобы overflow-hidden/анимируемая height на
             calOuterRef его не обрезали (см. комментарий у stickyRef).
             Оверлей — div, не button/Link: check-dead-controls проверяет
             только button/Link/NavLink, а этот div и не должен туда
             попадать — это просто клик-заглушка для закрытия по тапу мимо. */}
-        {monthPickerOpen && popoverPos && (
-          <>
-            <div className="fixed inset-0 z-30" onClick={closeMonthPicker} />
-            <div
-              className="absolute z-40 flex items-center gap-1 bg-card border border-stroke rounded-lg shadow-pop p-1"
-              style={{ top: popoverPos.top, left: popoverPos.left }}
-            >
-              <button
-                onClick={goPrevMonth}
-                aria-label="Предыдущий месяц"
-                className="w-[36px] h-[36px] flex items-center justify-center active:scale-95"
+          {monthPickerOpen && popoverPos && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={closeMonthPicker} />
+              <div
+                className="absolute z-40 flex items-center gap-1 bg-card border border-stroke rounded-lg shadow-pop p-1"
+                style={{ top: popoverPos.top, left: popoverPos.left }}
               >
-                <Icon name="chevronLeft" size={16} className="text-sub" />
-              </button>
-              <button
-                onClick={goToday}
-                className="px-2 h-[36px] text-[12px] text-sub whitespace-nowrap active:scale-95"
-              >
-                Сегодня
-              </button>
-              <button
-                onClick={goNextMonth}
-                aria-label="Следующий месяц"
-                className="w-[36px] h-[36px] flex items-center justify-center active:scale-95"
-              >
-                <Icon name="chevron" size={16} className="text-sub" />
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+                <button
+                  onClick={goPrevMonth}
+                  aria-label="Предыдущий месяц"
+                  className="w-[36px] h-[36px] flex items-center justify-center active:scale-95"
+                >
+                  <Icon name="chevronLeft" size={16} className="text-sub" />
+                </button>
+                <button
+                  onClick={goToday}
+                  className="px-2 h-[36px] text-[12px] text-sub whitespace-nowrap active:scale-95"
+                >
+                  Сегодня
+                </button>
+                <button
+                  onClick={goNextMonth}
+                  aria-label="Следующий месяц"
+                  className="w-[36px] h-[36px] flex items-center justify-center active:scale-95"
+                >
+                  <Icon name="chevron" size={16} className="text-sub" />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Selected date indicator */}
       {selectedDate && (
