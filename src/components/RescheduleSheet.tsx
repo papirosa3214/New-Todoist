@@ -1,7 +1,7 @@
 // ═══════════ RESCHEDULE SHEET ═══════════
 // Bulk «перенести все просроченные» sheet, opened from the overdue
 // column's header button on Today's board. Same bottom-sheet visual
-// language as Dialog.tsx's confirm/alert (scrim + bg-card rounded-t-[20px]
+// language as Dialog.tsx's confirm/alert (scrim + bg-card rounded-sheet-top
 // panel sliding up from the bottom).
 //
 // Scope, per direct product decision: quick-pick rows (Сегодня/Завтра/На
@@ -198,7 +198,7 @@ export function RescheduleSheet({
       />
       <div
         ref={sheet.sheetRef}
-        className="relative bg-card rounded-t-[20px] px-4 pb-bottom-safe max-h-[85vh] overflow-y-auto"
+        className="relative bg-card rounded-sheet-top px-4 pb-bottom-safe max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Handle: drag target for dismiss gesture */}

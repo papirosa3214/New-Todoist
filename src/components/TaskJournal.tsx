@@ -252,7 +252,7 @@ export function AgentOwnerActions({
 // Bottom sheet collecting the mandatory comment for "Вернуть на доработку"
 // (POST /state {state:'in_progress', comment} — server 400s without one).
 // Same visual language as Dialog.tsx / RescheduleSheet.tsx: black scrim,
-// bg-card rounded-t-[20px] panel sliding up, X-closes / ✓-confirms header.
+// bg-card rounded-sheet-top panel sliding up, X-closes / ✓-confirms header.
 function ReturnToWorkSheet({
   open,
   value,
@@ -309,7 +309,7 @@ function ReturnToWorkSheet({
       />
       <div
         ref={sheet.sheetRef}
-        className="relative bg-card rounded-t-[20px] px-4"
+        className="relative bg-card rounded-sheet-top px-4"
         onClick={(e) => e.stopPropagation()}
         // Лист поднимается НАД экранной клавиатурой. Без этого он вставал
         // ровно на её место и полностью её перекрывал: поле для

@@ -1,6 +1,6 @@
 // ═══════════ TASK FILTER SHEET (Inbox / Today / Upcoming) ═══════════
 // Same bottom-sheet chrome as ActivityScreen.tsx's own filter sheet (scrim
-// + bg-card rounded-t-[20px] panel, Card/FieldRow facets that expand in
+// + bg-card rounded-sheet-top panel, Card/FieldRow facets that expand in
 // place) — taken as the style reference per direct instruction. Trimmed
 // down from it, though: no "Период" facet (these screens have their own
 // date dimension already — Today's overdue/today split, Upcoming's
@@ -185,7 +185,7 @@ export function TaskFilterSheet({
       />
       <div
         ref={sheet.sheetRef}
-        className="relative bg-card rounded-t-[20px] px-4 pb-bottom-safe max-h-[85vh] overflow-y-auto"
+        className="relative bg-card rounded-sheet-top px-4 pb-bottom-safe max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Handle: drag target for dismiss gesture */}
