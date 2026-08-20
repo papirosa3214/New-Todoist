@@ -194,8 +194,8 @@ function NowLine() {
   );
 }
 
-/** Плашка задачи без времени — её и тащат на шкалу. Только у 1-дневного
- *  вида: в 3-дневном непонятно, в какой из трёх колонок её кидать.
+/** Плашка задачи без времени — её и тащат на шкалу, на любую из отображённых
+ *  колонок дня (1 или 3 — см. комментарий у DayHours.onSchedule, 20.08.2026).
  *
  *  Отдельная карточка, а не строка общего списка: заголовок пула и его
  *  подложка убраны (19.08.2026), и плашки теперь просто плавают над
@@ -312,8 +312,8 @@ const CHIP_INK = "#141414";
  *  Белый текст читается на всех 7 цветах палитры проектов (замер
  *  перцептивной яркости заливки — от 113 до 173 из 255, весь диапазон
  *  темнее белого текста с запасом) — отдельная логика «светлый/тёмный
- *  текст по цвету» не понадобилась. В 1-дневном виде ещё и перетаскивается
- *  (draggable=true), в 3-дневном — только открывается тапом. */
+ *  текст по цвету» не понадобилась. Перетаскивается (draggable=true) в
+ *  обоих видах — 1-дневном и 3-дневном (20.08.2026, было только в первом). */
 function TimedBlock({
   task,
   color,
@@ -554,11 +554,16 @@ export function DayHours({
    *  разного цвета. */
   projectColor: (task: ApiTask) => string;
   onTaskClick: (id: string) => void;
-  /** Задачу перетащили на шкалу — назначить ей это время. Только у
-   *  1-дневного вида, см. комментарий у UntimedRow. */
-  onSchedule?: (id: string, time: string) => void;
+  /** Задачу перетащили на шкалу (или на другую колонку дня в 3-дневном
+   *  виде) — назначить ей эту дату и время. 20.08.2026: раньше работало
+   *  только в 1-дневном виде («в 3-дневном непонятно, в какую из трёх
+   *  колонок кидать») — Максим прямо попросил снять это ограничение:
+   *  «точно так же, как в одном дне, только между днями тоже должны
+   *  ездить». Дата всегда та колонка, куда отпустили, даже если у задачи
+   *  уже была другая (человек явно переносит её на другой день). */
+  onSchedule?: (id: string, date: string, time: string) => void;
 }) {
-  const interactive = days.length === 1 && !!onSchedule;
+  const interactive = !!onSchedule;
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   // Хвоста сетки под кнопку здесь больше нет (был до 19.08.2026: сетке
@@ -595,6 +600,12 @@ export function DayHours({
   }, [overscan]);
   const [dragging, setDragging] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  // Какая из колонок дня сейчас под пальцем — только у 3-дневного вида
+  // это не всегда 0. Отдельный стейт, а не часть preview: preview — это
+  // только время (Y), колонка — это X, они меняются по разным осям и
+  // разной частоте (короткий вертикальный доводок внутри своего дня не
+  // должен пересчитывать горизонталь).
+  const [dragCol, setDragCol] = useState<number | null>(null);
 
   // Мышь и палец — РАЗНЫМИ сенсорами, и это осознанное отступление от
   // рецепта соседнего файла (TaskBoard: «PointerSensor одного хватает»).
@@ -620,10 +631,24 @@ export function DayHours({
     }),
   );
 
+  // 20.08.2026: раньше только days[0] (единственная колонка 1-дневного
+  // вида) — теперь объединение untimed-задач ВСЕХ отображаемых дней сразу
+  // (Map по id гасит теоретическое пересечение, каждая задача — свой
+  // due_date, дублей быть не должно, но дедуп на всякий случай дёшев).
+  // Один общий приклеенный пул, из которого можно кинуть на любую из
+  // колонок — та же плитка, что в 1-дневном виде, просто целей для
+  // перетаскивания теперь несколько.
   const untimed = useMemo(
     () =>
       interactive
-        ? days[0].tasks.filter((t) => hoursFromTime(t.start_time) === null)
+        ? Array.from(
+            new Map(
+              days
+                .flatMap((d) => d.tasks)
+                .filter((t) => hoursFromTime(t.start_time) === null)
+                .map((t) => [t.id, t] as const),
+            ).values(),
+          )
         : [],
     [interactive, days],
   );
@@ -640,17 +665,21 @@ export function DayHours({
   // берём те же 15 минут, которые проставит onSchedule при отпускании
   // (TodayScreen), чтобы призрак был ровно размером с будущую плашку.
   const ghost = useMemo(() => {
-    if (!dragging || !preview) return null;
-    const task = days[0]?.tasks.find((t) => t.id === dragging);
+    if (!dragging || !preview || dragCol == null) return null;
+    // Задача-источник может лежать в ЛЮБОЙ из колонок (уже размещённая на
+    // своём дне) или в общем пуле без времени — id уникален по всем days,
+    // flatMap ищет её независимо от того, где она была до перетаскивания.
+    const task = days.flatMap((d) => d.tasks).find((t) => t.id === dragging);
     if (!task) return null;
     const [h, m] = preview.split(":").map(Number);
     const dur = task.duration_min ?? SNAP_MIN;
     return {
       task,
+      colIndex: dragCol,
       top: (h + m / 60) * HOUR_H + 1,
       height: Math.max(MIN_H, (dur / 60) * HOUR_H - 3),
     };
-  }, [dragging, preview, days]);
+  }, [dragging, preview, dragCol, days]);
 
   // Прокрутка к текущему часу при открытии — иначе экран открывается на
   // полночь, а человек смотрит день в середине дня. 120px запаса сверху,
@@ -821,10 +850,11 @@ export function DayHours({
   function handleDragStart(e: DragStartEvent) {
     const id = String(e.active.id);
     setDragging(id);
-    const startY = pointerY({
+    const zeroDelta = {
       activatorEvent: e.activatorEvent,
-      delta: { y: 0 },
-    });
+      delta: { x: 0, y: 0 },
+    };
+    const pt = pointerXY(zeroDelta);
     const grid = gridRef.current;
     // Точку захвата считаем от ВРЕМЕНИ задачи, а не от прямоугольника
     // dnd-kit (`active.rect.current.initial`): на onDragStart тот ещё не
@@ -833,13 +863,14 @@ export function DayHours({
     // 19.08.2026 на двухчасовой задаче: взяли за нижний край, сдвинули на
     // 2 часа, получили 14:45 вместо 13:00 — ровно высота блока промаха.
     // Верх плашки и так однозначно считается из start_time, зависеть тут
-    // от внутренностей библиотеки незачем.
+    // от внутренностей библиотеки незачем. Ищем по ВСЕМ дням (20.08.2026)
+    // — задача-источник может лежать в любой из трёх колонок, id уникален.
     const startH = hoursFromTime(
-      days[0]?.tasks.find((t) => t.id === id)?.start_time,
+      days.flatMap((d) => d.tasks).find((t) => t.id === id)?.start_time,
     );
     const offsetInBlock =
-      startH !== null && grid && startY != null
-        ? startY - (grid.getBoundingClientRect().top + startH * HOUR_H + 1)
+      startH !== null && grid && pt
+        ? pt.y - (grid.getBoundingClientRect().top + startH * HOUR_H + 1)
         : 0;
     // Отрицательное или заведомо большое значение — только если геометрия
     // разъехалась (например, задача попала в кластер и сдвинута вбок);
@@ -851,10 +882,10 @@ export function DayHours({
     // Призрак должен появиться сразу, а не после первого движения пальца:
     // иначе плашку прячут (hidden), а рисовать вместо неё ещё нечего, и
     // задача на мгновение исчезает с экрана.
-    if (grid && startY != null) {
-      const offset =
-        startY - grabOffsetRef.current - grid.getBoundingClientRect().top;
-      setPreview(offset < -HOUR_H ? null : timeFromOffset(offset));
+    const pos = positionOf(zeroDelta);
+    if (pos) {
+      setPreview(pos.top < -HOUR_H ? null : timeFromOffset(pos.top));
+      setDragCol(pos.top < -HOUR_H ? null : pos.colIndex);
     }
   }
 
@@ -863,61 +894,79 @@ export function DayHours({
     return !!dragging || Date.now() - dragEndedAtRef.current < 300;
   }
 
-  // Y-координата пальца/курсора ПРЯМО СЕЙЧАС: activatorEvent — где он был
-  // в момент, когда взяли строку, delta.y — на сколько сдвинулся с тех
-  // пор (dnd-kit копит эту дельту сам). Считать нужно именно так, а НЕ по
-  // верхнему краю перетаскиваемого блока (rect.current.translated.top,
-  // как было раньше) — тот сдвигается на ту же дельту от СВОЕГО исходного
-  // верха, и если строку взяли не за самый её верх (а палец обычно
-  // попадает в середину), результат промахивается ровно на эту разницу:
-  // палец наведён на 10:00, а получившийся верх блока — на 09:30. Найдено
+  // Координаты пальца/курсора ПРЯМО СЕЙЧАС: activatorEvent — где он был в
+  // момент, когда взяли строку, delta — на сколько сдвинулся с тех пор
+  // (dnd-kit копит её сам). Считать нужно именно так, а НЕ по верхнему
+  // краю перетаскиваемого блока (rect.current.translated, как было
+  // раньше) — тот сдвигается на ту же дельту от СВОЕГО исходного угла, и
+  // если строку взяли не за самый её край (а палец обычно попадает в
+  // середину), результат промахивается ровно на эту разницу: палец
+  // наведён на 10:00, а получившийся верх блока — на 09:30. Найдено
   // 19.08.2026 живым тестом (Playwright: цель 10:00 → сохранилось 09:30,
-  // разница ровно в половину высоты строки-источника).
-  function pointerY(e: {
+  // разница ровно в половину высоты строки-источника). X добавлен
+  // 20.08.2026 тем же приёмом — определяет колонку дня под пальцем.
+  function pointerXY(e: {
     activatorEvent: Event;
-    delta: { y: number };
-  }): number | null {
+    delta: { x: number; y: number };
+  }): { x: number; y: number } | null {
     const ev = e.activatorEvent as
       PointerEvent | MouseEvent | (Event & { touches?: TouchList });
+    const clientX =
+      "clientX" in ev
+        ? (ev as PointerEvent | MouseEvent).clientX
+        : ev.touches?.[0]?.clientX;
     const clientY =
       "clientY" in ev
         ? (ev as PointerEvent | MouseEvent).clientY
         : ev.touches?.[0]?.clientY;
-    return typeof clientY === "number" ? clientY + e.delta.y : null;
+    if (typeof clientX !== "number" || typeof clientY !== "number") return null;
+    return { x: clientX + e.delta.x, y: clientY + e.delta.y };
   }
 
-  /** Смещение верха плашки от верха сетки по текущему положению пальца, с
-   *  поправкой на точку захвата. Один расчёт на предпросмотр и на запись —
-   *  чтобы задача вставала ровно туда, где её показывал призрак. */
-  function offsetOf(e: {
+  /** Смещение верха плашки от верха сетки (для времени) + индекс колонки
+   *  дня (для даты) по текущему положению пальца, с поправкой на точку
+   *  захвата по вертикали. Один расчёт на предпросмотр и на запись — чтобы
+   *  задача вставала ровно туда, где её показывал призрак. Колонка не
+   *  получает поправку на точку захвата — задача не может «наполовину
+   *  висеть» между двумя днями, целится в тот день, где сейчас сам палец. */
+  function positionOf(e: {
     activatorEvent: Event;
-    delta: { y: number };
-  }): number | null {
+    delta: { x: number; y: number };
+  }): { top: number; colIndex: number } | null {
     const grid = gridRef.current;
-    const y = pointerY(e);
-    if (!grid || y == null) return null;
-    return y - grabOffsetRef.current - grid.getBoundingClientRect().top;
+    const pt = pointerXY(e);
+    if (!grid || !pt) return null;
+    const rect = grid.getBoundingClientRect();
+    const top = pt.y - grabOffsetRef.current - rect.top;
+    const colW = (rect.width - GUTTER_W) / days.length;
+    const rawCol = (pt.x - rect.left - GUTTER_W) / colW;
+    const colIndex = Math.min(days.length - 1, Math.max(0, Math.floor(rawCol)));
+    return { top, colIndex };
   }
 
   function handleDragEnd(e: DragEndEvent) {
     setDragging(null);
     setPreview(null);
+    setDragCol(null);
     dragEndedAtRef.current = Date.now();
     if (!onSchedule) return;
-    // Колонка здесь всегда одна (interactive===true только при
-    // days.length===1), поэтому горизонталь роли не играет — важна
-    // только высота.
-    const offset = offsetOf(e);
-    if (offset == null) return;
+    const pos = positionOf(e);
+    if (!pos) return;
     // Отпустили выше сетки (например, обратно в список) — не трогаем.
-    if (offset < -HOUR_H) return;
-    onSchedule(String(e.active.id), timeFromOffset(offset));
+    if (pos.top < -HOUR_H) return;
+    const date = days[pos.colIndex]?.date;
+    if (!date) return;
+    onSchedule(String(e.active.id), date, timeFromOffset(pos.top));
   }
 
-  function handleDragMove(e: { activatorEvent: Event; delta: { y: number } }) {
-    const offset = offsetOf(e);
-    if (offset == null) return;
-    setPreview(offset < -HOUR_H ? null : timeFromOffset(offset));
+  function handleDragMove(e: {
+    activatorEvent: Event;
+    delta: { x: number; y: number };
+  }) {
+    const pos = positionOf(e);
+    if (!pos) return;
+    setPreview(pos.top < -HOUR_H ? null : timeFromOffset(pos.top));
+    setDragCol(pos.top < -HOUR_H ? null : pos.colIndex);
   }
 
   return (
@@ -929,6 +978,7 @@ export function DayHours({
       onDragCancel={() => {
         setDragging(null);
         setPreview(null);
+        setDragCol(null);
       }}
     >
       <div className="mt-2 flex flex-col gap-3">
@@ -947,8 +997,9 @@ export function DayHours({
             usePublishHeaderHeight на контейнере прокрутки); z-10, чтобы
             уходить ПОД шапку (у неё z-20), но идти над сеткой.
             Своя прокрутка при длинном списке — иначе десяток дел без
-            времени закрыл бы собой полдня. Только у 1-дневного вида (см.
-            DayHours.interactive). */}
+            времени закрыл бы собой полдня. Общий пул для всех
+            отображённых дней разом (20.08.2026, было только у 1-дневного
+            вида) — каждую задачу можно кинуть на любую из колонок. */}
         {untimed.length > 0 && (
           <div
             // Ни заголовка «Без времени — N», ни иконки, ни подсказки
@@ -1037,9 +1088,14 @@ export function DayHours({
                 ))}
               </div>
 
-              {columns.map(({ day, blocks }) => (
+              {columns.map(({ day, blocks }, colIndex) => (
                 <div
                   key={day.date}
+                  // data-day-col — не для стилей, только для e2e (today-
+                  // hours.spec.ts): без него тест перетаскивания между
+                  // колонками не мог бы проверить, что задача улетела
+                  // именно в ПРАВИЛЬНУЮ дату, только «в какую-то».
+                  data-day-col={day.date}
                   // Границы колонок — тоже фон контейнера прокрутки (второй
                   // слой градиента), а не border: иначе вертикали
                   // обрывались бы на 24:00, пока горизонтальные полосы идут
@@ -1070,9 +1126,12 @@ export function DayHours({
                     />
                   ))}
 
-                  {/* Призрак — в колонке дня, чтобы взять её ширину. При
-                      interactive колонка ровно одна, промахнуться некуда. */}
-                  {interactive && ghost && day.isToday && (
+                  {/* Призрак — в той колонке дня, что сейчас под пальцем
+                      (ghost.colIndex, см. positionOf) — не обязательно
+                      «сегодня»: 20.08.2026, перетаскивание работает между
+                      всеми колонками 3-дневного вида, не только внутри
+                      одной. Взята ширина ИМЕННО этой колонки. */}
+                  {interactive && ghost && ghost.colIndex === colIndex && (
                     <DragGhost
                       task={ghost.task}
                       color={projectColor(ghost.task)}
