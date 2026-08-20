@@ -854,7 +854,19 @@ function usePublishHeaderHeight(ref: RefObject<HTMLElement | null>) {
     if (!el) return;
     const container = findScrollContainer(el);
     const measure = () => {
-      container.style.setProperty("--screen-header-h", `${el.offsetHeight}px`);
+      // offsetHeight не считает margin-bottom (ScreenHeader несёt mb-4),
+      // а место в потоке шапка занимает ВМЕСТЕ с ним — следующий элемент
+      // начинается за краем margin, не за краем border-box. Без него любой
+      // sticky-слой, вычисляющий свой top от этой переменной, садится на
+      // 16px выше реального низа шапки и на этом отрезке проигрывает её
+      // по z-index (найдено 20.08.2026: подпись дней недели в месячной
+      // сетке «Предстоящего» не ловила свайп — жест перехватывала сама
+      // sticky-обёртка шапки).
+      const marginBottom = parseFloat(getComputedStyle(el).marginBottom) || 0;
+      container.style.setProperty(
+        "--screen-header-h",
+        `${el.offsetHeight + marginBottom}px`,
+      );
     };
     measure();
     const ro = new ResizeObserver(measure);
