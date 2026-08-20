@@ -56,6 +56,17 @@ export function hapticCross(): void {
   fire(() => Haptics.selectionChanged());
 }
 
+/**
+ * Крупная засечка — целый час на сетке дня. Отличается от hapticCross
+ * НАМЕРЕННО: если щёлкать все деления одинаково, палец чувствует ровный
+ * треск и не может сказать, где он находится. Разный вес каждой четвёртой
+ * засечки даёт шкале «рельеф» — час читается на ощупь, как щелчок оборота
+ * у механического регулятора.
+ */
+export function hapticNotch(): void {
+  fire(() => Haptics.impact({ style: ImpactStyle.Light }));
+}
+
 /** Отпустили: объект лёг на место. Лёгкий — это касание, не удар. */
 export function hapticDrop(): void {
   fire(() => Haptics.impact({ style: ImpactStyle.Light }));

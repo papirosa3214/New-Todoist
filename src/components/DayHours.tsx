@@ -11,7 +11,7 @@ import {
 } from "@dnd-kit/core";
 import type { ApiTask } from "../api/types";
 import { PRIORITIES } from "../lib/priority";
-import { hapticCross, hapticDrop, hapticGrab } from "../lib/haptics";
+import { hapticCross, hapticDrop, hapticGrab, hapticNotch } from "../lib/haptics";
 import { Icon, findScrollContainer } from "./UI";
 
 // ═══════════ Календарная развёртка по часам — 1 или 3 дня ═══════════
@@ -858,6 +858,11 @@ export function DayHours({
     return `${pos.colIndex}:${timeFromOffset(pos.top)}`;
   }
 
+  /** Ключ ячейки указывает на ровный час — «2:14:00» → да, «2:14:15» → нет. */
+  function hourNotch(cell: string): boolean {
+    return cell.endsWith(":00");
+  }
+
   function handleDragStart(e: DragStartEvent) {
     const id = String(e.active.id);
     setDragging(id);
@@ -987,10 +992,21 @@ export function DayHours({
     setDragCol(pos.top < -HOUR_H ? null : pos.colIndex);
     const cell = cellKeyOf(pos);
     if (cell !== lastCellRef.current) {
+      const prev = lastCellRef.current;
       lastCellRef.current = cell;
       // Уход ВЫШЕ сетки (cell === null) — не пересечение ячеек, а выход из
       // поля целиком; щёлкать там нечему.
-      if (cell) hapticCross();
+      if (cell) {
+        // Шкала времени прощупывается: каждые SNAP_MIN — мелкая засечка,
+        // ровный час — крупная (владелец 20.08.2026: «как будто бы засечки
+        // временные прощупывались»). Смена КОЛОНКИ дня тоже считается
+        // крупной: это переход на другой день, событие того же веса, что
+        // час, а не четверть часа.
+        const colChanged =
+          prev !== null && prev.split(":")[0] !== cell.split(":")[0];
+        if (hourNotch(cell) || colChanged) hapticNotch();
+        else hapticCross();
+      }
     }
   }
 

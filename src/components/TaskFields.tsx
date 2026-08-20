@@ -29,6 +29,7 @@ import {
   tomorrowStr,
 } from "../lib/date";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
+import { hapticCross, hapticNotch } from "../lib/haptics";
 import { PRIORITIES } from "../lib/priority";
 import type { ApiLabel } from "../api/types";
 
@@ -362,6 +363,10 @@ function TimeWheel({
   );
   const idx = Math.max(0, Math.round(minutes / TIME_STEP_MIN));
 
+  // Деление, стоявшее в пилюле на прошлом кадре прокрутки — чтобы
+  // виброотклик приходился на ПЕРЕХОД через засечку, а не на каждый кадр.
+  const lastNotchRef = useRef(idx);
+
   // Встать на выбранное значение без анимации: барабан должен ОКАЗАТЬСЯ на
   // месте при открытии поля, а не ехать туда на глазах.
   useEffect(() => {
@@ -371,6 +376,10 @@ function TimeWheel({
     if (Math.abs(el.scrollTop - target) > 1) {
       el.scrollTop = target;
       setOffset(idx);
+      // Прыжок сделан кодом, а не пальцем: барабан открылся на нужном часе
+      // или время пришло извне (диктовка). Отклика тут быть не должно —
+      // отмечаем деление заранее, и onScroll ниже не увидит перехода.
+      lastNotchRef.current = idx;
     }
   }, [idx]);
 
@@ -384,7 +393,20 @@ function TimeWheel({
       frame.current = requestAnimationFrame(() => {
         frame.current = 0;
         const el = scrollRef.current;
-        if (el) setOffset(el.scrollTop / WHEEL_STEP);
+        if (!el) return;
+        const raw = el.scrollTop / WHEEL_STEP;
+        setOffset(raw);
+        // Барабан прошёл деление — щёлкаем ровно как системный пикер iOS.
+        // Каждый ЧАС (четыре деления по TIME_STEP_MIN) — засечка крупнее,
+        // иначе на быстрой прокрутке шкала превращается в ровный треск, по
+        // которому не понять, докуда домотал.
+        const notch = Math.round(raw);
+        if (notch !== lastNotchRef.current) {
+          lastNotchRef.current = notch;
+          const atHour = (notch * TIME_STEP_MIN) % 60 === 0;
+          if (atHour) hapticNotch();
+          else hapticCross();
+        }
       });
     }
     if (settle.current) clearTimeout(settle.current);
