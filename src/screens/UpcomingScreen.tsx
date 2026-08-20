@@ -167,6 +167,13 @@ export function UpcomingScreen() {
   // раскрыт панелью. Своё состояние, не связанное с лентой-выборщиком
   // списка: она листается своей логикой (ribbonAnchor ниже).
   const [gridMonday, setGridMonday] = useState(() => weekStartOf(todayStr()));
+  // Стартовая точка для месяца — читается ОДИН раз (initial state), сам
+  // список недель дальше живёт своей жизнью внутри MonthGrid (континуальный
+  // скролл, 20.08.2026: «нужно, чтобы бесконечный скролл был вниз-вверх,
+  // тоже месяца менялись»). gridMonth ниже теперь не источник данных для
+  // сетки, а только зеркало «что сейчас видно» — MonthGrid сообщает об
+  // этом сам через onVisibleMonthChange, для заголовка в шапке.
+  const [monthGridInitialMonday] = useState(() => weekStartOf(todayStr()));
   const [gridMonth, setGridMonth] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() };
@@ -826,27 +833,16 @@ export function UpcomingScreen() {
           добавить, календарик чуть приподнимется». */}
       {view === "month" && (
         <MonthGrid
-          year={gridMonth.year}
-          month={gridMonth.month}
+          initialMonday={monthGridInitialMonday}
           byDate={byDate}
           openDay={openDay}
           // Повторный тап по тому же дню сворачивает полосу.
           onDayClick={(d) => setOpenDay((prev) => (prev === d ? null : d))}
           onTaskClick={(id) => navigate(`/task/${id}`)}
-          onPrevMonth={() =>
-            setGridMonth(({ year, month }) =>
-              month === 0
-                ? { year: year - 1, month: 11 }
-                : { year, month: month - 1 },
-            )
-          }
-          onNextMonth={() =>
-            setGridMonth(({ year, month }) =>
-              month === 11
-                ? { year: year + 1, month: 0 }
-                : { year, month: month + 1 },
-            )
-          }
+          // Список недель — внутреннее дело MonthGrid (continuous-scroll,
+          // 20.08.2026); он лишь сообщает, что сейчас основное на экране,
+          // для заголовка «Август» в шапке ниже.
+          onVisibleMonthChange={(year, month) => setGridMonth({ year, month })}
         />
       )}
       {openDay && view === "week" && (

@@ -30,9 +30,32 @@ const WEEKDAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 // Насколько далеко надо увести палец, чтобы месяц перелистнулся.
 const SWIPE_MIN_PX = 70;
 const WEEKDAY_LETTERS = ["П", "В", "С", "Ч", "П", "С", "В"];
-// Запас под кнопку-веер больше не константа: обе сетки замеряют реальную
-// доступную высоту (см. useLayoutEffect в WeekGrid/MonthGrid) — угаданное
-// число промахивалось на десятки пикселей.
+// Запас под кнопку-веер больше не константа для WeekGrid: она замеряет
+// реальную доступную высоту (см. useLayoutEffect в WeekGrid). MonthGrid
+// после 20.08.2026 меряет по-другому — см. её собственный блок ниже.
+
+// ═══ Месяц — континуальный скролл (20.08.2026) ═══
+// Максим, увидев дискретное «страница-месяц целиком» с горизонтальным
+// свайпом: «нужно, чтобы бесконечный скролл был вниз-вверх, тоже месяца
+// менялись... прям непрерывно и полотном... с числом числом, ну одни
+// цифры... без каких-либо заминок». Настоящий infinite-scroll (Google
+// Calendar-стиль), не страницы — уточнено явно через превью вариантов.
+//
+// MONTH_ROW_H — ФИКСИРОВАННАЯ высота строки-недели, а не замер «весь
+// экран / 6 рядов» (тот способ был для другой задачи — «месяц занимает
+// ровно экран, без остатка»; теперь общий смысл обратный, сама фича —
+// это то, что список скроллится). 128px — то самое число, что уже было
+// подтверждено в проекте комментарием у MONTH_CHIP_LIMIT ниже («на 128px
+// ячейки помещается ровно четыре плашки по 15px с отступами») — не
+// придумано заново, взято уже проверенное.
+const MONTH_ROW_H = 128;
+// Сколько недель заранее подгружено при первом открытии — до и после
+// начальной точки. Не «настоящая бесконечность с рождения Христова»: чем
+// дальше владелец проскроллит, тем больше довешивается чанками
+// (WEEKS_CHUNK) через IntersectionObserver на верхнем/нижнем сентинеле.
+const WEEKS_INITIAL_PAST = 8;
+const WEEKS_INITIAL_FUTURE = 16;
+const WEEKS_CHUNK = 12;
 
 /** Понедельник недели, в которую попадает дата. */
 export function mondayOf(dateStr: string): string {
@@ -513,33 +536,231 @@ export function WeekGrid({
  *  четыре плашки по 15px с отступами. */
 const MONTH_CHIP_LIMIT = 4;
 
+/** «Доминирующий» месяц недели — по четвергу, тем же правилом, что уже
+ *  использует WeekMonthLabel/MiniMonth в этом файле: на стыке двух
+ *  месяцев неделя «принадлежит» тому, где лежит её большая часть. */
+function weekMonth(monday: string): { year: number; month: number } {
+  const thu = new Date(monday + "T00:00:00");
+  thu.setDate(thu.getDate() + 3);
+  return { year: thu.getFullYear(), month: thu.getMonth() };
+}
+
 export function MonthGrid({
-  year,
-  month,
+  initialMonday,
   byDate,
   openDay,
   onDayClick,
   onTaskClick,
-  onPrevMonth,
-  onNextMonth,
+  onVisibleMonthChange,
 }: {
-  year: number;
-  month: number;
+  /** Понедельник недели, вокруг которой строится начальный диапазон —
+   *  обычно неделя сегодняшнего дня. Дальше список живёт сам, родитель им
+   *  не управляет (см. «Почему» ниже). */
+  initialMonday: string;
   byDate: Map<string, ApiTask[]>;
   /** Раскрытый день — его список вставляется ПОД строкой его недели. */
   openDay: string | null;
   onDayClick: (date: string) => void;
   onTaskClick: (id: string) => void;
-  onPrevMonth: () => void;
-  onNextMonth: () => void;
+  /** Какой месяц сейчас основной на экране — только для заголовка в
+   *  шапке (MonthHeaderLabel в UpcomingScreen). Не управляет сеткой:
+   *  список недель — внутреннее состояние этого компонента. */
+  onVisibleMonthChange: (year: number, month: number) => void;
 }) {
-  // Свайп влево-вправо листает месяцы — стрелки владелец убрал именно под
-  // него (19.08.2026: «добавь возможность свайпами менять месяца, вот как
-  // надо, поэтому стрелочки и не нужны; свайп прям нормальный, чтобы не в
-  // пол пинка он улетал»). Отсюда пороги: жест засчитывается от 70px по
-  // горизонтали И только если он заметно горизонтальнее вертикального —
-  // случайное движение пальцем месяц не перелистнёт.
+  const today = todayStr();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  const bottomSentinelRef = useRef<HTMLDivElement>(null);
+
+  const [weeks, setWeeks] = useState<string[]>(() =>
+    Array.from(
+      { length: WEEKS_INITIAL_PAST + WEEKS_INITIAL_FUTURE + 1 },
+      (_, i) => addDays(initialMonday, (i - WEEKS_INITIAL_PAST) * 7),
+    ),
+  );
+  // Список НАЧИНАЕТСЯ на WEEKS_INITIAL_PAST недель раньше сегодняшней —
+  // без явной прокрутки первым кадром был бы виден самый край списка
+  // (прошлый месяц), а не «сейчас», как ждёт владелец при открытии
+  // «Предстоящего». useLayoutEffect — до первой отрисовки на экране,
+  // никакого мелькания прошлого месяца не будет. Единожды, при монтировании
+  // (initialMonday в остальной жизни компонента не меняется).
+  useLayoutEffect(() => {
+    const grid = containerRef.current;
+    if (!grid) return;
+    const sc = findScrollContainer(grid);
+    const gridTop =
+      grid.getBoundingClientRect().top -
+      sc.getBoundingClientRect().top +
+      sc.scrollTop;
+    sc.scrollTop = gridTop + WEEKS_INITIAL_PAST * MONTH_ROW_H;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Сколько недель добавили СВЕРХУ последним разом — растущий список внизу
+  // не двигает уже видимый контент (браузер сам сохраняет scrollTop), а
+  // добавление сверху отодвигает всё, что уже на экране, ровно на
+  // добавленную высоту. Без коррекции ниже видимая часть «прыгает» вниз в
+  // момент подгрузки — ровно то дёрганье, которого continuous-scroll не
+  // должен показывать («без каких-либо заминок»).
+  const prependedRef = useRef(0);
+  useLayoutEffect(() => {
+    if (prependedRef.current === 0) return;
+    const sc = findScrollContainer(containerRef.current!);
+    sc.scrollTop += prependedRef.current * MONTH_ROW_H;
+    prependedRef.current = 0;
+  }, [weeks]);
+
+  // Подгрузка чанками через сентинелы сверху/снизу списка — не настоящая
+  // виртуализация (дальние недели из DOM не убираются): для домашнего
+  // трекера, где никто не станет листать тысячи недель за раз, это
+  // достаточно и на порядок проще/безопаснее самодельной виртуализации.
+  // rootMargin даёт запас — чанк подгружается ДО того, как сентинел
+  // реально войдёт в кадр, иначе на быстром скролле мелькнёт пустота.
+  useLayoutEffect(() => {
+    const top = topSentinelRef.current;
+    const bottom = bottomSentinelRef.current;
+    const grid = containerRef.current;
+    if (!top || !bottom || !grid) return;
+    const sc = findScrollContainer(grid);
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          if (entry.target === top) {
+            setWeeks((prev) => {
+              const added = Array.from({ length: WEEKS_CHUNK }, (_, i) =>
+                addDays(prev[0], (i - WEEKS_CHUNK) * 7),
+              );
+              prependedRef.current = WEEKS_CHUNK;
+              return [...added, ...prev];
+            });
+          } else if (entry.target === bottom) {
+            setWeeks((prev) => [
+              ...prev,
+              ...Array.from({ length: WEEKS_CHUNK }, (_, i) =>
+                addDays(prev[prev.length - 1], (i + 1) * 7),
+              ),
+            ]);
+          }
+        }
+      },
+      { root: sc, rootMargin: "800px 0px 800px 0px" },
+    );
+    io.observe(top);
+    io.observe(bottom);
+    return () => io.disconnect();
+  }, []);
+
+  // Какой месяц сейчас основной на экране — по неделе, чья позиция
+  // приходится на точку чуть НИЖЕ верхней кромки видимой области (не
+  // ровно на кромке: там как раз чаще всего стоит переходная неделя, и
+  // заголовок дёргался бы туда-обратно на каждый мелкий скролл). Индекс
+  // считается арифметикой по MONTH_ROW_H, не перебором всех строк через
+  // getBoundingClientRect — тот перебор дорог при не-виртуализированном
+  // списке в сотни недель, а тут одно вычитание координат.
+  useLayoutEffect(() => {
+    const grid = containerRef.current;
+    if (!grid) return;
+    const sc = findScrollContainer(grid);
+    let raf = 0;
+    let lastKey = "";
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const scRect = sc.getBoundingClientRect();
+        const gridTop = grid.getBoundingClientRect().top;
+        const anchorY = scRect.top + 120;
+        const idx = Math.max(
+          0,
+          Math.min(
+            weeks.length - 1,
+            Math.floor((anchorY - gridTop) / MONTH_ROW_H),
+          ),
+        );
+        const { year, month } = weekMonth(weeks[idx]);
+        const key = `${year}-${month}`;
+        if (key !== lastKey) {
+          lastKey = key;
+          onVisibleMonthChange(year, month);
+        }
+      });
+    };
+    sc.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => {
+      sc.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(raf);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weeks.length]);
+
+  // Свайп влево-вправо — теперь не смена state, а программный прыжок:
+  // найти первую неделю, чей четверг попадает в следующий/предыдущий
+  // месяц относительно того, что сейчас видно, и подскроллить к ней.
+  // Если нужной недели ещё нет в уже построенном диапазоне (редко —
+  // только у самых краёв), диапазон сперва достраивается синхронно,
+  // чтобы прыжок не промахнулся в пустоту.
   const swipeRef = useRef<{ x: number; y: number } | null>(null);
+  function jumpMonths(delta: 1 | -1) {
+    const grid = containerRef.current;
+    if (!grid) return;
+    const sc = findScrollContainer(grid);
+    const scRect = sc.getBoundingClientRect();
+    const gridTop = grid.getBoundingClientRect().top;
+    const curIdx = Math.max(
+      0,
+      Math.min(
+        weeks.length - 1,
+        Math.floor((scRect.top + 120 - gridTop) / MONTH_ROW_H),
+      ),
+    );
+    const curMonth = weekMonth(weeks[curIdx]).month;
+    // Поиск и, если нужно, достройка диапазона считаются здесь, ОДИН раз
+    // на closure-снимке weeks — не внутри updater-функции setWeeds. React
+    // StrictMode в dev нарочно вызывает такие updater'ы дважды, ловя
+    // нечистые побочные эффекты: scrollTo внутри неё срабатывал оба раза,
+    // причём второй раз поверх уже сдвинутого scrollTop — свайп улетал на
+    // двойное расстояние (поймано 20.08.2026 на тесте свайпа назад).
+    let list = weeks;
+    let idx = curIdx;
+    while (
+      (delta === 1 ? idx < list.length - 1 : idx > 0) &&
+      weekMonth(list[idx]).month === curMonth
+    ) {
+      idx += delta;
+    }
+    if (weekMonth(list[idx]).month === curMonth) {
+      // Край уже построенного диапазона, месяц так и не сменился —
+      // достроить чанк и повторить поиск один раз.
+      const extra = Array.from({ length: WEEKS_CHUNK }, (_, i) =>
+        delta === 1
+          ? addDays(list[list.length - 1], (i + 1) * 7)
+          : addDays(list[0], (i - WEEKS_CHUNK) * 7),
+      );
+      if (delta === 1) {
+        list = [...list, ...extra];
+      } else {
+        prependedRef.current += WEEKS_CHUNK;
+        list = [...extra, ...list];
+        idx += WEEKS_CHUNK;
+      }
+      while (
+        (delta === 1 ? idx < list.length - 1 : idx > 0) &&
+        weekMonth(list[idx]).month === curMonth
+      ) {
+        idx += delta;
+      }
+      // Функциональная форма, не setWeeks(list) напрямую: list построен на
+      // closure-снимке weeks, и если между рендером и этим вызовом
+      // сентинел уже успел что-то дописать (узкое окно, но не нулевое),
+      // плоская запись стёрла бы его — здесь достаточно применить свежий
+      // prev, если он успел уйти вперёд снимка.
+      setWeeks((prev) => (prev === weeks ? list : prev));
+    }
+    requestAnimationFrame(() => {
+      sc.scrollTo({ top: sc.scrollTop + (idx - curIdx) * MONTH_ROW_H });
+    });
+  }
   function onPointerDown(e: React.PointerEvent) {
     swipeRef.current = { x: e.clientX, y: e.clientY };
   }
@@ -551,102 +772,85 @@ export function MonthGrid({
     const dy = e.clientY - start.y;
     if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.6)
       return;
-    if (dx < 0) onNextMonth();
-    else onPrevMonth();
+    jumpMonths(dx < 0 ? 1 : -1);
   }
-  const today = todayStr();
-  const cells = useMemo(() => {
-    const first = new Date(year, month, 1);
-    const lead = first.getDay() === 0 ? 6 : first.getDay() - 1;
-    const start = new Date(year, month, 1 - lead);
-    return Array.from({ length: 42 }, (_, i) => {
-      const d = new Date(start);
-      d.setDate(d.getDate() + i);
-      return d;
-    });
-  }, [year, month]);
-  // Высота — замером, как в WeekGrid: календарь месяца тоже фиксирован,
-  // страница не прокручивается (владелец 19.08.2026: «тут скроллить
-  // нечего, сам календарик пусть будет фикс, а скроллить буду задачи
-  // внутри открывшегося окна»).
-  const gridRef = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState<number | undefined>(undefined);
-  useLayoutEffect(() => {
-    const grid = gridRef.current;
-    if (!grid) return;
-    const sc = findScrollContainer(grid);
-    const measure = () => {
-      const top =
-        grid.getBoundingClientRect().top - sc.getBoundingClientRect().top;
-      let padBelow = parseFloat(getComputedStyle(sc).paddingBottom) || 0;
-      for (
-        let el: HTMLElement | null = grid.parentElement;
-        el && el !== sc;
-        el = el.parentElement
-      ) {
-        padBelow += parseFloat(getComputedStyle(el).paddingBottom) || 0;
-      }
-      const next = Math.max(320, sc.clientHeight - top - padBelow);
-      setHeight((prev) => (prev && Math.abs(prev - next) < 1 ? prev : next));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(sc);
-    return () => ro.disconnect();
-  }, [year, month]);
-
-  const gridH = height ? height - 26 : undefined;
-  const rowH = gridH ? gridH / 6 : undefined;
 
   return (
     <div
       data-month-grid
       className="-mx-4 select-none"
-      ref={gridRef}
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
       onPointerCancel={() => (swipeRef.current = null)}
+      // pan-y: жест остаётся настоящим вертикальным скроллом системы (это
+      // и есть вся фича), горизонтальная составляющая перехватывается
+      // логикой выше только чтобы отличить «смахнул вбок» от «повёл
+      // пальцем чуть криво во время скролла» — сам скролл она не блокирует.
       style={{ touchAction: "pan-y" }}
     >
       {/* Разделительной черты под днями недели больше нет — вся сетка
           месяца идёт без линий (владелец 19.08.2026: «убери всю сетку
-          месяца, чтобы не было вообще этих полосок»). */}
-      <div className="grid grid-cols-7 pb-1">
+          месяца, чтобы не было вообще этих полосок»).
+          sticky, а не обычный поток (20.08.2026, найдено при переходе на
+          continuous-scroll): страница теперь реально скроллится, и без
+          этого подпись «Пн Вт Ср…» уезжала вверх вместе с уже пройденными
+          неделями — после автоскролла к сегодня её не было видно вовсе.
+          top: var(--screen-header-h), НЕ top-0 — тот же приём, что у
+          подписей дней в 3-дневном виде DayHours.tsx: второй sticky-элемент
+          с тем же top:0, что и ScreenHeader, просто прячется под ней. */}
+      <div
+        // Без своего -mx-4/px-4: родитель [data-month-grid] уже full-bleed
+        // (-mx-4), эта строка просто наследует его ширину как обычный
+        // block-потомок — свой -mx-4 здесь удвоил бы отступ.
+        className="sticky z-10 grid grid-cols-7 bg-bg pb-1 pt-1"
+        style={{ top: "var(--screen-header-h, 0px)" }}
+      >
         {WEEKDAYS_SHORT.map((w) => (
           <span key={w} className="text-center text-[10px] text-dim">
             {w}
           </span>
         ))}
       </div>
-      {/* Сетка собирается ПОНЕДЕЛЬНО, а не одним гридом на 42 ячейки:
-          раскрытый день показывает свои задачи полосой, вставленной между
-          его неделей и следующей (владелец 19.08.2026: «не надо, чтобы в
-          месяце снизу выезжала формочка — нажимаешь на день, и между этой
-          неделей и следующей раскрывается окно, внутри которого задачи»).
-          Внутри одного грида такую вставку не сделать, не ломая ряды. */}
-      {/* Высота замерена (см. выше), ряды — ФИКСИРОВАННОЙ высоты, не
-          доли: при раскрытии дня календарь не должен меняться (владелец
-          19.08.2026: «не нужно сжимать все остальные, календарь не должен
-          меняться — просто вниз уезжают те недели, что ниже»). Полоса
-          вставляется в поток, нижние недели съезжают вниз и обрезаются
-          краем, а размер ячеек остаётся прежним. */}
-      <div className="flex flex-col overflow-hidden" style={{ height: gridH }}>
-        {Array.from({ length: 6 }, (_, w) => {
-          const week = cells.slice(w * 7, w * 7 + 7);
+      {/* Сентинел сверху — рождает подгрузку недель НАЗАД, когда владелец
+          скроллит вверх и приближается к текущему началу списка. */}
+      <div ref={topSentinelRef} aria-hidden className="h-px" />
+      {/* Сетка собирается ПОНЕДЕЛЬНО, а не одним гридом: раскрытый день
+          показывает свои задачи полосой, вставленной между его неделей и
+          следующей (владелец 19.08.2026: «не надо, чтобы в месяце снизу
+          выезжала формочка — между этой неделей и следующей раскрывается
+          окно»). Список ПРОСТО скроллится вместе со страницей — общий
+          scroll-контейнер, свой вложенный скролл не заводим (страница
+          длинная, это и есть вся суть continuous-scroll, 20.08.2026). */}
+      <div ref={containerRef} className="flex flex-col">
+        {weeks.map((monday, i) => {
+          const week = Array.from(
+            { length: 7 },
+            (_, d) => new Date(addDays(monday, d) + "T00:00:00"),
+          );
           const openHere =
             openDay != null && week.some((d) => toDateStr(d) === openDay);
+          // Переходная неделя — дни принадлежат двум разным месяцам.
+          // Тонкая линия только здесь: Максим 20.08.2026, глядя на
+          // Google Calendar-стиль — «небольшая полосочка только
+          // появляется, когда месяцы смежные... переходный... чтобы не
+          // путаться, тут так она потом исчезает». otherMonth-приглушение
+          // (было раньше) больше не имеет смысла: при continuous-scroll
+          // нет «одного текущего месяца», к которому дни принадлежат.
+          const isTransitionWeek =
+            new Set(week.map((d) => d.getMonth())).size > 1;
           return (
-            <Fragment key={w}>
+            <Fragment key={monday}>
               <div
-                className="grid min-h-0 shrink-0 grid-cols-7"
-                style={{ height: rowH }}
+                className={`grid shrink-0 grid-cols-7 ${
+                  isTransitionWeek && i > 0 ? "border-t border-stroke" : ""
+                }`}
+                style={{ height: MONTH_ROW_H }}
               >
                 {week.map((d) => {
                   const ds = toDateStr(d);
                   const tasks = byDate.get(ds) ?? [];
                   const shown = tasks.slice(0, MONTH_CHIP_LIMIT);
                   const rest = tasks.length - shown.length;
-                  const otherMonth = d.getMonth() !== month;
                   const isOpen = ds === openDay;
                   return (
                     // div, не button — по той же причине, что и в неделе:
@@ -654,18 +858,15 @@ export function MonthGrid({
                     <div
                       key={ds}
                       onClick={() => onDayClick(ds)}
-                      // Никаких границ: сетка без линий вовсе. Осталась
-                      // только подсветка выбранного дня — она и связывает
-                      // его с раскрытой полосой.
                       className={`flex min-h-0 flex-col items-center gap-[2px] overflow-hidden px-0.5 py-1 text-left ${
-                        otherMonth ? "opacity-45" : ""
-                      } ${isOpen ? "rounded-t-lg bg-card" : ""}`}
+                        isOpen ? "rounded-t-lg bg-card" : ""
+                      }`}
                     >
                       {/* Число по ЦЕНТРУ ячейки, а не у левого края:
                           владелец 19.08.2026 — «числа отцентруй по
                           ячейкам, чтобы они шли в рядок с днями недели».
-                          Теперь «Пн» в шапке и все его числа стоят на
-                          одной вертикали. */}
+                          «Пн» в шапке и все его числа стоят на одной
+                          вертикали. */}
                       <span
                         className={`mb-0.5 text-[11px] tabular-nums ${
                           ds === today
@@ -703,6 +904,7 @@ export function MonthGrid({
           );
         })}
       </div>
+      <div ref={bottomSentinelRef} aria-hidden className="h-px" />
     </div>
   );
 }

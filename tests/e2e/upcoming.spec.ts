@@ -3,23 +3,32 @@ import { setupApp, openScreen, collectErrors, dragBy } from "./helpers";
 
 // «Предстоящее» — календарные виды «неделя» и «месяц» (UpcomingCalendar.tsx).
 //
-// Оба вида владелец 19.08.2026 просил сделать СТАТИЧНЫМИ: «зачем здесь
-// скроллить, вся неделя на экране — статика, абсолютная статика» и «тут
-// скроллить нечего, сам календарик пусть будет фикс, а скроллить буду
-// задачи внутри открывшегося окна». Поэтому главная проверка обоих видов —
-// что страница не прокручивается вовсе: высота сеток замеряется в
-// useLayoutEffect, и промах замера возвращает именно прокрутку (прошлый
-// расчёт формулой из 100dvh промахивался на 25px, а до него — на 104px).
+// Неделя владелец 19.08.2026 просил сделать СТАТИЧНОЙ: «зачем здесь
+// скроллить, вся неделя на экране — статика, абсолютная статика». Главная
+// проверка этого вида — что страница не прокручивается вовсе: высота
+// сетки замеряется в useLayoutEffect, и промах замера возвращает именно
+// прокрутку (прошлый расчёт формулой из 100dvh промахивался на 25px, а до
+// него — на 104px).
 //
-// Вторая тема — раскрытие дня в месяце. Требование дословно: «не нужно
-// сжимать все остальные, календарь не должен меняться — просто вниз уезжают
-// те недели, что ниже». То есть проверять надо ДВЕ вещи разом: полоса
-// появилась И высоты рядов не поехали.
+// Месяц 20.08.2026 стал ПРОТИВОПОЛОЖНЫМ — континуальный вертикальный
+// скролл недель («нужно, чтобы бесконечный скролл был вниз-вверх, тоже
+// месяца менялись... прям непрерывно и полотном»), заменил прежнее
+// «месяц — фикс, свайп меняет страницу целиком» (19.08.2026: «тут
+// скроллить нечего»). Здесь проверки другие: список РЕАЛЬНО скроллится,
+// подгружает недели без визуального прыжка, автоскроллится к сегодняшнему
+// месяцу при открытии, и тонкая линия-разделитель — только на неделе, где
+// встречаются два месяца.
+//
+// Раскрытие дня в месяце — требование не изменилось: «не нужно сжимать
+// все остальные, календарь не должен меняться — просто вниз уезжают те
+// недели, что ниже». Проверяем ДВЕ вещи разом: полоса появилась И высоты
+// рядов не поехали.
 
 const WEEK_GRID = "div.grid.grid-cols-2";
-const MONTH_ROW = "div.grid.min-h-0.shrink-0.grid-cols-7";
+const MONTH_ROW = "div.grid.shrink-0.grid-cols-7";
 const MONTH_WEEKDAYS = "div.grid.grid-cols-7.pb-1";
 const DAY_STRIP = "div.shrink-0.bg-card.px-3.py-2";
+const MONTH_ROW_H = 128;
 const MONTHS_NOM = [
   "Январь",
   "Февраль",
@@ -57,30 +66,6 @@ function pageOverflow(page: import("@playwright/test").Page) {
       (el) => el.scrollHeight - el.clientHeight,
     ),
   );
-}
-
-/** То же, но ровно у контейнера прокрутки СТРАНИЦЫ (тот же обход вверх,
- *  что делает findScrollContainer в UI.tsx). Нужен там, где на экране уже
- *  есть свой законный внутренний скроллер — у раскрытой полосы дня список
- *  задач намеренно прокручивается (max-h-[180px]), и общий замер по всем
- *  .overflow-y-auto считал бы это поломкой страницы. */
-function pageScrollerOverflow(
-  page: import("@playwright/test").Page,
-  anchorSel: string,
-) {
-  return page.evaluate((sel) => {
-    let el: HTMLElement | null =
-      document.querySelector<HTMLElement>(sel)!.parentElement;
-    while (el && el !== document.body) {
-      if (/(auto|scroll)/.test(getComputedStyle(el).overflowY))
-        return el.scrollHeight - el.clientHeight;
-      el = el.parentElement;
-    }
-    return (
-      document.documentElement.scrollHeight -
-      document.documentElement.clientHeight
-    );
-  }, anchorSel);
 }
 
 /** Тексты рядов месяца: геометрия каждого ряда сетки. */
@@ -212,7 +197,7 @@ test.describe("«Предстоящее»: неделя", () => {
 });
 
 test.describe("«Предстоящее»: месяц", () => {
-  test("шесть рядов равной высоты, без границ, страница не прокручивается", async ({
+  test("строки фиксированной высоты, сегодня видно сразу, страница реально скроллится", async ({
     page,
     context,
   }) => {
@@ -221,17 +206,37 @@ test.describe("«Предстоящее»: месяц", () => {
     await openScreen(page, "/upcoming");
 
     const rows = await monthRows(page);
-    expect(rows.length).toBe(6);
+    // Много недель заранее (WEEKS_INITIAL_PAST+FUTURE+1), не шесть — это и
+    // есть суть continuous-scroll, 20.08.2026.
+    expect(rows.length).toBeGreaterThan(20);
     const heights = rows.map((r) => r.height);
     const spread = Math.max(...heights) - Math.min(...heights);
     expect(
       spread,
       `высоты рядов разошлись: ${heights.join(", ")}`,
     ).toBeLessThanOrEqual(1);
+    expect(Math.abs(heights[0] - MONTH_ROW_H)).toBeLessThanOrEqual(1);
 
-    // Сетка без единой линии (владелец 19.08.2026: «убери всю сетку
-    // месяца, чтобы не было вообще этих полосок»).
-    const borders = await page.evaluate((sel) => {
+    // Автоскролл к сегодняшней неделе при открытии — иначе первым кадром
+    // виден прошлый месяц (WEEKS_INITIAL_PAST недель назад), а не «сейчас»,
+    // которое владелец ждёт увидеть сразу.
+    const todayVisible = await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>(
+        "[data-month-grid] .bg-red.font-semibold",
+      );
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return r.top >= 0 && r.top <= window.innerHeight;
+    });
+    expect(todayVisible, "кружок «сегодня» не виден на первом экране").toBe(
+      true,
+    );
+
+    // Сетка без границ у ОБЫЧНЫХ ячеек-дней (владелец 19.08.2026: «убери
+    // всю сетку месяца, чтобы не было вообще этих полосок») — граница
+    // теперь бывает только у САМОЙ СТРОКИ переходной недели (см. отдельный
+    // тест ниже), не у ячеек внутри.
+    const cellBorders = await page.evaluate((sel) => {
       const bad: string[] = [];
       document.querySelectorAll<HTMLElement>(sel).forEach((row, ri) => {
         Array.from(row.children).forEach((cell, ci) => {
@@ -248,10 +253,118 @@ test.describe("«Предстоящее»: месяц", () => {
       });
       return bad;
     }, MONTH_ROW);
-    expect(borders).toEqual([]);
+    expect(cellBorders).toEqual([]);
 
-    for (const over of await pageOverflow(page)) expect(over).toBe(0);
+    // Обратная проверка к прежней: раньше страница НЕ должна была
+    // прокручиваться («тут скроллить нечего»), теперь реальный скролл —
+    // это и есть вся суть фичи.
+    const overflows = await pageOverflow(page);
+    expect(
+      Math.max(...overflows),
+      "список недель не скроллится",
+    ).toBeGreaterThan(0);
     expect(errors).toEqual([]);
+  });
+
+  test("переходная неделя двух месяцев отмечена тонкой линией, обычные — нет", async ({
+    page,
+    context,
+  }) => {
+    await setupApp(context, { upcoming: "month" });
+    await openScreen(page, "/upcoming");
+
+    const rows = await page.evaluate((sel) => {
+      const els = Array.from(document.querySelectorAll<HTMLElement>(sel));
+      return els.map((row) => {
+        const days = Array.from(row.children).map((c) =>
+          (c.textContent ?? "").trim().slice(0, 2).replace(/\D/g, ""),
+        );
+        return {
+          firstDay: days[0],
+          lastDay: days[6],
+          borderTop: parseFloat(getComputedStyle(row).borderTopWidth) > 0,
+        };
+      });
+    }, MONTH_ROW);
+
+    // Переходная неделя — там, где число в конце строки МЕНЬШЕ числа в
+    // начале (месяц перевалил: «29» → «5» вместо «29» → «35»).
+    const expectedTransitions = rows
+      .map((r, i) => ({
+        i,
+        isTransition: Number(r.lastDay) < Number(r.firstDay),
+      }))
+      .filter((r) => r.isTransition)
+      .map((r) => r.i);
+    expect(expectedTransitions.length).toBeGreaterThan(0);
+
+    for (let i = 0; i < rows.length; i++) {
+      // Самая первая строка списка — граница ей не положена, даже если
+      // формально переходная: сверху её ничто не отделяет.
+      const expected = i > 0 && expectedTransitions.includes(i);
+      expect(
+        rows[i].borderTop,
+        `строка ${i} (${rows[i].firstDay}→${rows[i].lastDay}): граница ${rows[i].borderTop}, ожидалось ${expected}`,
+      ).toBe(expected);
+    }
+  });
+
+  test("подгрузка недель при скролле вверх не сдвигает видимую часть", async ({
+    page,
+    context,
+  }) => {
+    // 20.08.2026: добавление недель СВЕРХУ списка отодвигает уже видимый
+    // контент вниз, если не скорректировать scrollTop — «без каких-либо
+    // заминок» было прямым требованием стиля Google Calendar.
+    await setupApp(context, { upcoming: "month" });
+    await openScreen(page, "/upcoming");
+
+    const readAnchor = () =>
+      page.evaluate(() => {
+        const rows = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            "[data-month-grid] div.grid.shrink-0.grid-cols-7",
+          ),
+        );
+        // Строка, чей верх ближе всего к верху видимой области — тот же
+        // «якорь», что использует человек глазами при скролле.
+        let best: { text: string; top: number } | null = null;
+        for (const r of rows) {
+          const top = r.getBoundingClientRect().top;
+          if (top >= -10 && (!best || top < best.top)) {
+            best = { text: r.children[0].textContent!.trim(), top };
+          }
+        }
+        return best;
+      });
+
+    const before = await readAnchor();
+    expect(before).not.toBeNull();
+
+    // Прыгаем близко к самому верху уже построенного диапазона, чтобы
+    // гарантированно завести сентинел и подгрузку.
+    await page.evaluate(() => {
+      let el: HTMLElement | null =
+        document.querySelector<HTMLElement>("[data-month-grid]")!.parentElement;
+      while (el) {
+        if (/(auto|scroll)/.test(getComputedStyle(el).overflowY)) {
+          el.scrollTop = 30;
+          return;
+        }
+        el = el.parentElement;
+      }
+    });
+    await page.waitForTimeout(1000);
+
+    const anchorAfterJump = await readAnchor();
+    // Дать подгрузке случиться и коррекции отработать, затем сверить, что
+    // визуальный якорь (какая строка стоит у верхней кромки) не «уехал».
+    await page.waitForTimeout(500);
+    const anchorSettled = await readAnchor();
+    expect(anchorAfterJump?.text).toBe(anchorSettled?.text);
+    expect(
+      Math.abs((anchorAfterJump?.top ?? 0) - (anchorSettled?.top ?? 0)),
+    ).toBeLessThanOrEqual(2);
   });
 
   test("тап по дню раскрывает полосу с задачами, нижние недели съезжают вниз", async ({
@@ -262,13 +375,12 @@ test.describe("«Предстоящее»: месяц", () => {
     await openScreen(page, "/upcoming");
 
     const before = await monthRows(page);
-    expect(before.length).toBe(6);
-
-    // День берём из ВТОРОГО ряда: под ним есть ряды, которым положено
-    // съехать (у шестого ряда сравнивать было бы не с чем). Колонка —
-    // третья, чтобы наверняка попасть в текущий месяц, а не в хвост
-    // предыдущего.
-    const targetRow = 1;
+    // Много недель заранее — не шесть, см. смок-тест выше. Ряд под тест
+    // берём около WEEKS_INITIAL_PAST (та неделя, что реально видна на
+    // экране после автоскролла к сегодня, не строка 0..1 — они после
+    // 20.08.2026 в основном выше видимой области).
+    expect(before.length).toBeGreaterThan(20);
+    const targetRow = 9;
     const cell = page.locator(MONTH_ROW).nth(targetRow).locator("> div").nth(2);
     const dayNum = Number((await cell.innerText()).trim().split("\n")[0]);
     expect(Number.isFinite(dayNum)).toBe(true);
@@ -279,23 +391,15 @@ test.describe("«Предстоящее»: месяц", () => {
     const strip = page.locator(DAY_STRIP);
     await expect(strip).toHaveCount(1);
     // Полоса подписана числом и днём недели раскрытого дня — месяц
-    // выводим из самой даты, а не зашиваем: первый ряд месяца легко
-    // оказывается хвостом предыдущего.
+    // выводим из самой даты, а не зашиваем: любой ряд может оказаться
+    // хвостом соседнего месяца.
     const stripText = await strip.innerText();
     expect(stripText).toContain(String(dayNum));
     const monthsInStrip = MONTHS_GEN.filter((m) => stripText.includes(m));
     expect(monthsInStrip.length).toBe(1);
 
-    // Полоса ВСТРАИВАЕТСЯ в календарь, а не удлиняет страницу: нижние
-    // недели обрезаются краем, а прокручиваться должен только список задач
-    // внутри самой полосы (владелец 19.08.2026: «сам календарик пусть будет
-    // фикс, а скроллить буду задачи внутри открывшегося окна»). Именно
-    // раскрытое состояние и способно сломать этот договор — свёрнутое
-    // проверяется отдельным тестом выше.
-    expect(await pageScrollerOverflow(page, MONTH_ROW)).toBe(0);
-
     const after = await monthRows(page);
-    expect(after.length).toBe(6);
+    expect(after.length).toBe(before.length);
 
     // Ряды ВЫШЕ раскрытого дня (и он сам) стоят на месте…
     for (let i = 0; i <= targetRow; i++) {
@@ -304,15 +408,22 @@ test.describe("«Предстоящее»: месяц", () => {
         `ряд ${i} сдвинулся, хотя он выше раскрытого дня`,
       ).toBeLessThanOrEqual(1);
     }
-    // …а те, что ниже, съехали вниз ровно на высоту полосы.
+    // …а те, что ниже, съехали вниз ровно на высоту полосы (владелец
+    // 19.08.2026: «не нужно сжимать все остальные... просто вниз уезжают
+    // те недели, что ниже»). Не до самого конца списка — там уже вступает
+    // подгрузка чанками, сравнивать нечего.
     const stripBox = (await strip.boundingBox())!;
-    for (let i = targetRow + 1; i < 6; i++) {
+    for (
+      let i = targetRow + 1;
+      i < Math.min(targetRow + 5, before.length);
+      i++
+    ) {
       const shift = after[i].top - before[i].top;
       expect(shift, `ряд ${i} не съехал вниз`).toBeGreaterThan(0);
       expect(Math.abs(shift - stripBox.height)).toBeLessThanOrEqual(1);
     }
     // Сам календарь при этом не изменился: высоты рядов те же.
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < before.length; i++) {
       expect(
         Math.abs(after[i].height - before[i].height),
         `высота ряда ${i} поехала: было ${before[i].height}, стало ${after[i].height}`,
@@ -325,7 +436,7 @@ test.describe("«Предстоящее»: месяц", () => {
     await page.waitForTimeout(400);
     await expect(strip).toHaveCount(0);
     const back = await monthRows(page);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i <= targetRow; i++) {
       expect(Math.abs(back[i].top - before[i].top)).toBeLessThanOrEqual(1);
     }
   });
