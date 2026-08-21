@@ -69,6 +69,9 @@ EXTERNAL_AGENTS = {
             str(HOME / ".hermes/hermes-agent/.venv/bin/python"),
             "-m", "hermes_cli.main", "-z",
         ],
+        # Каким флагом ему сказать модель, если на задаче висит метка.
+        # У каждого агента он свой, поэтому живёт здесь, а не в коде запуска.
+        "model_flag": "-m",
     },
     # DeepSeek Harness. Запускается из кеша npx — путь там меняется при
     # обновлении, поэтому ищем, а не зашиваем; PATH подменяем на Node 22,
@@ -81,6 +84,40 @@ EXTERNAL_AGENTS = {
                         + os.environ.get("PATH", "")},
     },
 }
+
+
+# Модель задаётся МЕТКОЙ НА ЗАДАЧЕ. Решение владельца 21.08.2026: «меткой
+# гораздо гибче и проще менять, чем каждый раз заходить в настройки перед
+# назначением» — метка вешается и снимается в один тап, в том числе с
+# телефона и уже после назначения.
+#
+# Метки нет — ничего не подставляем: у CLI своё умолчание (модель подписки),
+# и подменять его догадкой значит менять поведение там, где никто не просил.
+#
+# Имена совпадают с псевдонимами Claude Code; Гермесу они не подойдут — ему
+# метку вешать с его собственным именем модели, поэтому распознаём и
+# произвольное значение через префикс «модель:».
+MODEL_LABELS = {"opus", "sonnet", "haiku", "fable"}
+
+
+def model_of(task: dict) -> str:
+    """Модель из меток задачи или пустая строка.
+
+    Понимаем два вида метки: короткое имя из списка выше («Sonnet») и явную
+    форму «модель: что-угодно» — вторая нужна тем исполнителям, у кого свои
+    имена моделей, длинные и с косыми чертами.
+    """
+    for label in task.get("labels") or []:
+        name = str(label.get("name") or "").strip()
+        low = name.lower()
+        if low in MODEL_LABELS:
+            return low
+        for prefix in ("модель:", "model:"):
+            if low.startswith(prefix):
+                value = name[len(prefix):].strip()
+                if value:
+                    return value
+    return ""
 
 
 def find_dsh() -> list[str] | None:
@@ -342,8 +379,20 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             RUNNING.pop(task_id, None)
         return
 
-    cmd = agent["cmd"] + [build_prompt(task, reason)]
-    log(f"  зову «{agent['name']}» на задачу {task_id[:8]}")
+    # Метка модели — только если этот агент умеет её принимать флагом.
+    # У dsh модель задаётся профилем, а не аргументом: молча подставлять ему
+    # чужой флаг значит уронить запуск, поэтому у него model_flag нет.
+    model = model_of(task)
+    prefix = list(agent["cmd"])
+    flag = agent.get("model_flag")
+    if model and flag:
+        # Флаг разового запроса («-z», «--profile headless») идёт последним и
+        # забирает следующий аргумент как задание — модель вставляем ПЕРЕД
+        # ним, иначе она уедет в текст задачи.
+        prefix = prefix[:-1] + [flag, model, prefix[-1]]
+    cmd = prefix + [build_prompt(task, reason)]
+    log(f"  зову «{agent['name']}» на задачу {task_id[:8]}"
+        + (f", модель {model}" if model and flag else ""))
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -425,12 +474,19 @@ def run_claude(task: dict, reason: str) -> None:
     stop = threading.Event()
     threading.Thread(target=heartbeat_loop, args=(task_id, stop), daemon=True).start()
 
+    # Метка модели с карточки. Пусто — флаг не передаём вовсе (см. model_of).
+    model = model_of(task)
+    model_args = ["--model", model] if model else []
+    if model:
+        log(f"  модель с метки: {model}")
+
     if resume_sid and not fork:
         log(f"  продолжаю сессию {resume_sid[:8]} — контекст на месте")
         cmd = [
             CLAUDE_BIN, "-p", build_resume_prompt(task, reason),
             "--resume", resume_sid,
             "--permission-mode", "bypassPermissions",
+            *model_args,
         ]
     elif resume_sid and fork:
         cmd = [
@@ -438,12 +494,14 @@ def run_claude(task: dict, reason: str) -> None:
             "--resume", resume_sid, "--fork-session",
             "--session-id", new_sid,
             "--permission-mode", "bypassPermissions",
+            *model_args,
         ]
     else:
         cmd = [
             CLAUDE_BIN, "-p", build_prompt(task, reason),
             "--session-id", new_sid,
             "--permission-mode", "bypassPermissions",
+            *model_args,
         ]
     try:
         proc = subprocess.Popen(
