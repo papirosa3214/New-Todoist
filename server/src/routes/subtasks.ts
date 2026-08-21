@@ -9,6 +9,7 @@ import {
   logEvent,
   isStale,
   subtaskWorkRefusal,
+  RESULT_MAX,
 } from "../agentState.js";
 // Тот же расчёт state/agent_stale, что у GET /api/tasks/:id (tasks.ts) —
 // иначе ответы этого файла (add/patch/delete подзадачи, WS-рассылка)
@@ -189,15 +190,31 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       // Человека это не касается: он закрывает шаги руками в своём
       // интерфейсе, и требовать от него текст в каждой галочке — та самая
       // лишняя работа, от которой уходили.
-      if (done === true && !result && !subtask.result) {
+      if (done === true) {
         const caller = db
           .prepare("SELECT type FROM users WHERE id = ?")
           .get(req.userId) as { type?: string } | undefined;
         if (caller?.type === "ai") {
-          return reply.code(400).send({
-            error:
-              "result обязателен при закрытии шага: одно-два предложения, что сделано",
-          });
+          if (!result && !subtask.result) {
+            return reply.code(400).send({
+              error:
+                "result обязателен при закрытии шага: одно-два предложения, что сделано",
+            });
+          }
+          // Предел длины переехал сюда вместе с самим закрытием: раньше он
+          // стоял на сдаче шага в review, а с 21.08.2026 агенту этот путь
+          // закрыт — шаги он закрывает галочкой. Без переноса ограничение
+          // просто перестало бы действовать, и в карточке снова копились бы
+          // выдержки из аудита вместо человеческого «что вышло».
+          if ((result ?? "").length > RESULT_MAX) {
+            return reply.code(400).send({
+              error:
+                `result слишком длинный (${result.length} символов при пределе ${RESULT_MAX}). ` +
+                "Владельцу нужно одно-два предложения по-человечески: что в итоге " +
+                "сделано, чтобы он мог оценить факт выполнения. Технические " +
+                "детали и выдержки из аудита — в базу знаний, не в карточку.",
+            });
+          }
         }
       }
       if (result !== undefined) {

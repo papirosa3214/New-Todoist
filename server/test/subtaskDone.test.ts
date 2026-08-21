@@ -113,6 +113,29 @@ describe("Закрытие шага снимает отметку работы",
     expect(body.result).toBe("шаг сделан");
   });
 
+  it("агенту закрыт review на шаге — шаги закрываются галочкой", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/subtasks/${subtaskId}/work`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { state: "review", result: "сдаю шаг" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain("галочкой");
+    expect(res.json().error).toContain("на всю задачу");
+  });
+
+  it("длинный итог отклоняется: владельцу нужны одно-два предложения", async () => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/subtasks/${subtaskId}`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { done: true, result: "и".repeat(900) },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain("одно-два предложения");
+  });
+
   it("снятая владельцем галочка не воскрешает работу", async () => {
     const res = await app.inject({
       method: "PATCH",

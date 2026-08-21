@@ -150,30 +150,28 @@ describe("subtaskWorkRefusal — правила работы над шагом",
     ).toBeNull();
   });
 
-  it("агент не сдаёт шаг, который не был в работе", () => {
-    const r = subtaskWorkRefusal({ ...ai, from: null, to: "review" });
-    expect(r?.code).toBe(400);
-    expect(r?.error).toContain("in_progress");
+  // Приёмка шагов отменена 20.08.2026, а 21.08.2026 выяснилось, что одного
+  // текста правила исполнителю мало: агент наставил review пяти шагам
+  // подряд, хотя оно записано и в его инструкциях, и в памяти. Теперь
+  // правило держит сервер.
+  it("агент не ставит review на шаг — ни из работы, ни из блокировки", () => {
+    for (const from of ["in_progress", "blocked", null] as const) {
+      const r = subtaskWorkRefusal({ ...ai, from, to: "review" });
+      expect(r?.code).toBe(400);
+      expect(r?.error).toContain("галочкой");
+      expect(r?.error).toContain("на всю задачу");
+    }
   });
 
-  it("из работы и из блокировки сдать можно", () => {
+  it("владельцу review на шаге по-прежнему доступен", () => {
     expect(
-      subtaskWorkRefusal({ ...ai, from: "in_progress", to: "review" }),
+      subtaskWorkRefusal({
+        ...ai,
+        isAi: false,
+        from: "in_progress",
+        to: "review",
+      }),
     ).toBeNull();
-    expect(
-      subtaskWorkRefusal({ ...ai, from: "blocked", to: "review" }),
-    ).toBeNull();
-  });
-
-  it("сдача без результата отклоняется", () => {
-    const r = subtaskWorkRefusal({
-      ...ai,
-      hasResult: false,
-      from: "in_progress",
-      to: "review",
-    });
-    expect(r?.code).toBe(400);
-    expect(r?.error).toContain("result");
   });
 
   it("блокировка шага требует причины — молча упереться нельзя", () => {
@@ -190,16 +188,10 @@ describe("subtaskWorkRefusal — правила работы над шагом",
     ).toBeNull();
   });
 
-  it("длинный result отклоняется: владельцу нужны одно-два предложения", () => {
-    const r = subtaskWorkRefusal({
-      ...ai,
-      from: "in_progress",
-      to: "review",
-      resultLength: 900,
-    });
-    expect(r?.code).toBe(400);
-    expect(r?.error).toContain("одно-два предложения");
-  });
+  // Предел длины итога у агента проверяется теперь на ЗАКРЫТИИ шага
+  // галочкой (routes/subtasks.ts, тест в subtaskDone.test.ts): путь через
+  // review агенту закрыт, и оставлять проверку только там значило бы её
+  // потерять.
 
   it("человека предел длины не касается", () => {
     expect(
