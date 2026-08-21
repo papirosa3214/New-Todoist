@@ -18,11 +18,14 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+from pathlib import Path
 
 SERVER_NAME = "taskflow"
 SERVER_VERSION = "1.0.0"
@@ -276,9 +279,55 @@ def t_state(args):
     return out
 
 
+def upload_file(task_id: str, path: str) -> dict:
+    """Заливает файл к задаче и возвращает запись вложения.
+
+    Тело — сырые байты, имя уходит в query, тип — заголовком: так устроен
+    маршрут (server/src/routes/attachments.ts). Вложение рождается без
+    привязки к комментарию, её проставляет сам комментарий по списку id.
+    """
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise TaskFlowError(f"файла нет: {p}")
+    data = p.read_bytes()
+    mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    url = (
+        f"{BASE}/api/tasks/{task_id}/attachments"
+        f"?name={urllib.parse.quote(p.name)}&kind=comment"
+    )
+    req = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": mime},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read().decode() or "{}").get("attachment") or {}
+    except urllib.error.HTTPError as e:
+        raise TaskFlowError(f"загрузка {p.name} → {e.code}: {e.read().decode()[:200]}")
+
+
 def t_comment(args):
-    api("POST", f"/api/tasks/{args['id']}/comments", {"text": args["text"]})
-    return {"комментарий добавлен": args["id"]}
+    """Комментарий в ленту задачи, при необходимости — с файлами.
+
+    ⚠️ Без files скриншот показать негде: владелец читает задачи в TaskFlow,
+    и фраза «смотри скриншот выше» отсылает его в терминал, которого он не
+    видит (его слова 21.08.2026: «а ты его даже не прикрепил, хотя у нас
+    есть возможность туда что-то прикрепить»).
+    """
+    files = args.get("files") or []
+    attachment_ids = [
+        att["id"]
+        for att in (upload_file(args["id"], f) for f in files)
+        if att.get("id")
+    ]
+    body = {"text": args["text"]}
+    if attachment_ids:
+        body["attachment_ids"] = attachment_ids
+    api("POST", f"/api/tasks/{args['id']}/comments", body)
+    out = {"комментарий добавлен": args["id"]}
+    if attachment_ids:
+        out["вложений"] = len(attachment_ids)
+    return out
 
 
 def t_subtask_done(args):
@@ -478,10 +527,18 @@ TOOLS = [
     },
     {
         "name": "taskflow_comment",
-        "description": "Написать комментарий в ленту задачи.",
+        "description": "Написать комментарий в ленту задачи. files — пути к файлам на этой машине (скриншоты, логи): они прикрепятся к комментарию, и владелец увидит их в задаче. Ссылаться на картинку, не приложив её, бесполезно — терминала он не видит.",
         "inputSchema": {
             "type": "object",
-            "properties": {"id": {"type": "string"}, "text": {"type": "string"}},
+            "properties": {
+                "id": {"type": "string"},
+                "text": {"type": "string"},
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "пути к файлам, которые надо приложить",
+                },
+            },
             "required": ["id", "text"],
         },
         "fn": t_comment,
