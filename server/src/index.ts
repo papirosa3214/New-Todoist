@@ -1,13 +1,16 @@
 import { pathToFileURL } from "url";
+import fs from "fs";
+import path from "path";
+import { execFileSync } from "child_process";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import fastifyJwt from "@fastify/jwt";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
-import { migrate } from "./db.js";
+import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
-import { resolveUserIdFromToken } from "./auth.js";
+import { resolveUserIdFromToken, authOrApiToken } from "./auth.js";
 import { addClient, removeClient, resetAllOffline } from "./ws.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
@@ -142,6 +145,82 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // Health
   app.get("/api/health", async () => ({ ok: true, ts: Date.now() }));
+
+  // Состояние сервера — для раздела «Сервер» в настройках приложения.
+  //
+  // Владелец 21.08.2026: «выведи в настройках информацию о статусе сервера».
+  // Повод: сервер поднимается вручную и после перезапуска сам не встал —
+  // понять это можно было только из терминала, а в приложении просто
+  // «ничего не грузится». Владелец сидит с телефона, терминала у него нет.
+  //
+  // Отдаём то, по чему видно живость и свежесть, а не диагностический дамп:
+  // сколько работает, на каком коде, велика ли база, идёт ли будильник.
+  app.get("/api/server-status", { preHandler: authOrApiToken }, async () => {
+    const uptime = Math.round(process.uptime());
+    let commit: string | null = null;
+    let commitAt: string | null = null;
+    try {
+      const root = path.resolve(import.meta.dirname, "../..");
+      commit = execFileSync(
+        "git",
+        ["-C", root, "rev-parse", "--short", "HEAD"],
+        {
+          encoding: "utf8",
+          timeout: 3000,
+        },
+      ).trim();
+      commitAt = execFileSync(
+        "git",
+        ["-C", root, "log", "-1", "--format=%cI"],
+        { encoding: "utf8", timeout: 3000 },
+      ).trim();
+    } catch {
+      // Не в репозитории или git недоступен — не повод ронять весь ответ:
+      // остальные строки полезны сами по себе.
+    }
+
+    const counts = db
+      .prepare(
+        "SELECT (SELECT COUNT(*) FROM tasks WHERE status = 'active') AS active," +
+          " (SELECT COUNT(*) FROM tasks) AS total",
+      )
+      .get() as { active: number; total: number };
+
+    let dbBytes: number | null = null;
+    try {
+      dbBytes = fs.statSync(DB_PATH).size;
+    } catch {
+      dbBytes = null;
+    }
+
+    // Будильник — отдельная служба (taskflow-trigger.service): это она
+    // зовёт агентов в работу, и её молчание выглядит как «доска мёртвая».
+    let trigger: string | null = null;
+    try {
+      trigger = execFileSync(
+        "systemctl",
+        ["--user", "is-active", "taskflow-trigger.service"],
+        { encoding: "utf8", timeout: 3000 },
+      ).trim();
+    } catch (e: any) {
+      // is-active возвращает ненулевой код, когда служба не работает, —
+      // это ответ, а не ошибка.
+      trigger = (e?.stdout || "").toString().trim() || "unknown";
+    }
+
+    return {
+      ok: true,
+      started_at: new Date(Date.now() - uptime * 1000).toISOString(),
+      uptime_sec: uptime,
+      node: process.version,
+      commit,
+      commit_at: commitAt,
+      tasks_active: counts.active,
+      tasks_total: counts.total,
+      db_bytes: dbBytes,
+      trigger,
+    };
+  });
 
   // WebSocket for real-time. Auth via ?token=<jwt-or-api_token> — same token
   // accepted by the HTTP routes. The userId is derived from the token on the

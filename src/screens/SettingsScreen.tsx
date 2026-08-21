@@ -9,6 +9,7 @@ import {
   Avatar,
 } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
+import { useServerStatus } from "../api/server";
 import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
 import { getErrorMessage } from "../lib/errors";
 import { useAppStore } from "../store";
@@ -246,6 +247,105 @@ function AccountAvatarRow({
   );
 }
 
+/** «2 ч 15 мин», «3 дня» — человеку, а не 8127 секунд. */
+function fmtUptime(sec: number): string {
+  if (sec < 60) return `${sec} с`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} мин`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) {
+    const rest = min % 60;
+    return rest ? `${hours} ч ${rest} мин` : `${hours} ч`;
+  }
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours ? `${days} д ${restHours} ч` : `${days} д`;
+}
+
+function fmtBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+/** Состояние сервера — блок в настройках.
+ *
+ * Показываем ровно то, по чему видно живость и свежесть: работает ли,
+ * сколько уже, на каком коде, велика ли база, идёт ли будильник. Никаких
+ * технических дампов: владелец смотрит это с телефона и должен за две
+ * секунды понять «всё в порядке» или «вот что не так».
+ */
+function ServerSection() {
+  const { data, error, isLoading } = useServerStatus();
+
+  // Сервер не ответил — это и есть главная новость экрана, и сказать её
+  // надо словами, а не пустым местом.
+  if (error) {
+    return (
+      <FieldGroup>
+        <InfoRow
+          icon="x"
+          iconColor="#FF6B6B"
+          label="Сервер"
+          value="не отвечает"
+        />
+      </FieldGroup>
+    );
+  }
+  if (isLoading || !data) {
+    return (
+      <FieldGroup>
+        <InfoRow icon="activity" label="Сервер" value="проверяю…" />
+      </FieldGroup>
+    );
+  }
+
+  const triggerLabel =
+    data.trigger === "active"
+      ? "работает"
+      : data.trigger === "unknown" || !data.trigger
+        ? "неизвестно"
+        : "не работает";
+
+  return (
+    <FieldGroup>
+      <InfoRow
+        icon="activity"
+        iconColor="#4CAF50"
+        label="Сервер"
+        value={`работает ${fmtUptime(data.uptime_sec)}`}
+      />
+      {data.commit && (
+        <InfoRow
+          icon="tag"
+          iconColor="#4a9fd8"
+          label="Версия"
+          value={
+            data.commit_at
+              ? `${data.commit} · ${new Date(data.commit_at).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}`
+              : data.commit
+          }
+        />
+      )}
+      <InfoRow
+        icon="bell"
+        iconColor={data.trigger === "active" ? "#4CAF50" : "#FF6B6B"}
+        label="Будильник"
+        value={triggerLabel}
+      />
+      <InfoRow
+        icon="list"
+        iconColor="#9B8AFB"
+        label="Задачи"
+        value={
+          data.db_bytes
+            ? `${data.tasks_active} из ${data.tasks_total} · ${fmtBytes(data.db_bytes)}`
+            : `${data.tasks_active} из ${data.tasks_total}`
+        }
+      />
+    </FieldGroup>
+  );
+}
+
 export function SettingsScreen() {
   const navigate = useNavigate();
   const { data: user, error } = useCurrentUser();
@@ -333,6 +433,12 @@ export function SettingsScreen() {
             onClick={() => navigate("/settings/voice-models")}
           />
         </FieldGroup>
+      </div>
+
+      {/* Сервер */}
+      <div className="text-[13px] text-sub font-semibold px-1 mb-2">Сервер</div>
+      <div className="mb-4">
+        <ServerSection />
       </div>
 
       {/* Session */}
