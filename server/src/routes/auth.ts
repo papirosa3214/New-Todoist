@@ -189,12 +189,22 @@ export function registerAuthRoutes(app: FastifyInstance) {
   // and fetch their own profile the same way the web frontend does.
   app.get("/api/auth/me", {
     preHandler: authOrApiToken,
-    handler: async (req: any) => {
+    handler: async (req: any, reply: any) => {
       const user = db
         .prepare(
           "SELECT id, name, email, role, type, avatar_color, avatar_url, initials, status FROM users WHERE id = ?",
         )
         .get(req.userId);
+      // Токен разобрался, а пользователя с таким id уже нет (учётку удалили,
+      // база сменилась). Раньше отсюда уходило 200 с пустым телом: фронт
+      // получал undefined вместо профиля и показывал «Не удалось загрузить
+      // профиль» — то есть человек видел поломку там, где надо просто войти
+      // заново. Поймано 21.08.2026 на своём же скриншот-прогоне.
+      if (!user) {
+        return reply
+          .code(401)
+          .send({ error: "Пользователь не найден — войдите заново" });
+      }
       return { user };
     },
   });
