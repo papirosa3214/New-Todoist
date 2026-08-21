@@ -138,6 +138,9 @@ export interface ApiTask {
   // TaskBoard.tsx). Not scoped to any one column/project — see that file's
   // comment for why cross-column value collisions are harmless.
   position: number | null;
+  // Закреплена наверх списка внутри проекта (server/src/db.ts's additive
+  // migration, 20.08.2026) — независимо от position, см. ProjectTasksScreen.
+  pinned?: boolean | number;
   // Joined in on list/detail — not present on the raw row returned by
   // POST/PATCH.
   assignee_name?: string | null;
@@ -162,6 +165,10 @@ export interface ApiProject {
   color: string;
   owner_id: string;
   task_count: number;
+  // Ручной порядок и закрепление в блоке «Мои проекты» (OverviewScreen,
+  // 20.08.2026) — тот же смысл, что у ApiTask.position/pinned выше.
+  position?: number | null;
+  pinned?: boolean | number;
 }
 
 export interface ApiNotification {

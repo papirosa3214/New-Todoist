@@ -64,6 +64,7 @@ export interface UpdateTaskInput {
   status?: "active" | "completed";
   label_ids?: string[];
   position?: number | null;
+  pinned?: boolean;
 }
 
 export function useUpdateTask() {

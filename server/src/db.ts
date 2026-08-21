@@ -280,6 +280,33 @@ export function migrate() {
     db.exec("ALTER TABLE tasks ADD COLUMN position INTEGER");
   }
 
+  // Additive migration (20.08.2026): pinned — «закрепить наверх», отдельно
+  // от position (ручной порядок среди остальных). Владелец хочет и то, и
+  // другое сразу: переставлять местами свободно, но у части задач/проектов
+  // всегда быть сверху независимо от порядка. Булево, не встроено в
+  // position (например «отрицательный position = закреплено») — так
+  // закрепление/снятие не трогает соседние position у остальных строк, и
+  // сортировка на клиенте/сервере читается прямо: `pinned DESC, position
+  // ASC`. Тот же столбец нужен и projects (см. ниже) — заводится тем же
+  // паттерном, что и tasks.position выше.
+  if (!taskCols3.some((c) => c.name === "pinned")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN pinned INTEGER DEFAULT 0");
+  }
+
+  // projects.position/pinned — тот же смысл, что у tasks (см. коммент
+  // выше), для блока «Мои проекты» на «Обзоре»: владелец 20.08.2026 хочет
+  // сам переставлять проекты местами и закреплять важные наверх. NULL
+  // position — «никогда не переставляли вручную», как и у задач.
+  const projectCols = db.prepare("PRAGMA table_info(projects)").all() as Array<{
+    name: string;
+  }>;
+  if (!projectCols.some((c) => c.name === "position")) {
+    db.exec("ALTER TABLE projects ADD COLUMN position INTEGER");
+  }
+  if (!projectCols.some((c) => c.name === "pinned")) {
+    db.exec("ALTER TABLE projects ADD COLUMN pinned INTEGER DEFAULT 0");
+  }
+
   // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:
   // there is no PATCH/DELETE endpoint for individual events, which is what
   // makes the journal tamper-proof from the API side (see AGENT-PROTOCOL.md,

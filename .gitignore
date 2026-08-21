@@ -76,3 +76,7 @@ ios/App/output/
 ios/DerivedData/
 ios/**/xcuserdata/
 ios/**/*.xcuserstate
+
+# Артефакты прогонов playwright — не код
+test-results/
+server/scripts/__pycache__/

@@ -28,8 +28,17 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     // пустой список, хотя положить задачу в проект человека он был вправе, —
     // приходилось угадывать идентификатор проекта.
     const scope = visibleScope(req.userId, "p.owner_id");
+    // pinned сначала, дальше по position (NULL — «никогда не переставляли»
+    // — уезжает в конец через SQLite'вский ASC NULLS LAST-эквивалент: сырой
+    // ASC кладёт NULL первым, поэтому сортируем по «p.position IS NULL»
+    // как первому ключу), внутри одной группы — created_at, чтобы порядок
+    // был детерминирован и до первого ручного перетаскивания (20.08.2026,
+    // тот же паттерн, что и сортировка задач внутри проекта ниже).
     return db
-      .prepare(`SELECT p.*, ${countSql} FROM projects p WHERE ${scope.sql}`)
+      .prepare(
+        `SELECT p.*, ${countSql} FROM projects p WHERE ${scope.sql}
+         ORDER BY p.pinned DESC, p.position IS NULL, p.position ASC, p.created_at ASC`,
+      )
       .all(...scope.params);
   });
 
@@ -52,24 +61,64 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
 
   app.patch<{
     Params: { id: string };
-    Body: { name?: string; color?: string };
+    Body: {
+      name?: string;
+      color?: string;
+      position?: number | null;
+      pinned?: boolean;
+    };
   }>("/api/projects/:id", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const project = getProjectForUser(req.params.id, req.userId);
       if (!project) return reply.code(404).send({ error: "Not found" });
 
-      const name =
-        typeof req.body?.name === "string" ? req.body.name.trim() : "";
-      if (!name) {
-        return reply.code(400).send({ error: "Укажите название проекта" });
+      // Частичное обновление (20.08.2026, drag&drop/закрепление проектов):
+      // раньше name было обязательным всегда, потому что PATCH умел только
+      // «переименовать/перекрасить» из формы редактирования — запрос вида
+      // {position: 3} падал бы в 400 «Укажите название». Теперь name
+      // трогаем, только если он реально пришёл в теле; position/pinned
+      // обновляются независимо от него, тем же способом, что и
+      // tasks.position (PATCH /api/tasks/:id, routes/tasks.ts).
+      const { position, pinned } = req.body || {};
+      if (
+        position !== undefined &&
+        position !== null &&
+        !Number.isInteger(position)
+      ) {
+        return reply.code(400).send({ error: "position must be an integer" });
       }
-      const color = req.body?.color || project.color;
-      db.prepare("UPDATE projects SET name = ?, color = ? WHERE id = ?").run(
-        name,
-        color,
-        req.params.id,
-      );
+
+      const fields: string[] = [];
+      const values: unknown[] = [];
+      if (req.body?.name !== undefined) {
+        const name =
+          typeof req.body.name === "string" ? req.body.name.trim() : "";
+        if (!name) {
+          return reply.code(400).send({ error: "Укажите название проекта" });
+        }
+        fields.push("name = ?");
+        values.push(name);
+      }
+      if (req.body?.color !== undefined) {
+        fields.push("color = ?");
+        values.push(req.body.color);
+      }
+      if (position !== undefined) {
+        fields.push("position = ?");
+        values.push(position);
+      }
+      if (pinned !== undefined) {
+        fields.push("pinned = ?");
+        values.push(pinned ? 1 : 0);
+      }
+
+      if (fields.length) {
+        values.push(req.params.id);
+        db.prepare(`UPDATE projects SET ${fields.join(", ")} WHERE id = ?`).run(
+          ...values,
+        );
+      }
       return db
         .prepare("SELECT * FROM projects WHERE id = ?")
         .get(req.params.id);

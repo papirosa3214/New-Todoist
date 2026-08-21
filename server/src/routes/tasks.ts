@@ -86,13 +86,18 @@ function isValidDuration(n: unknown): boolean {
 // протухшая она или нет, — agent_stale ниже сам решит, каким показывать
 // бейдж: живым или «пропал».
 //
-// Второй заход (та же дата, чуть позже): PATCH /api/subtasks/:id (done)
-// трогает только колонку done, agent_state НЕ сбрасывает — см.
-// routes/subtasks.ts. Значит у любой когда-либо взятой в работу подзадачи
-// agent_state так и остаётся "in_progress"/"blocked" навсегда, даже после
-// done. Без фильтра !s.done роллап считал давно закрытые шаги живой
-// работой — задача с одним взятым и закрытым шагом из девяти показывала
-// бы «агент пропал» бесконечно, хотя там объективно нечему быть пропавшим.
+// Второй заход (та же дата, чуть позже): без фильтра !s.done роллап считал
+// давно закрытые шаги живой работой — задача с одним взятым и закрытым
+// шагом из девяти показывала бы «агент пропал» бесконечно, хотя там
+// объективно нечему быть пропавшим.
+//
+// УТОЧНЕНО 20.08.2026 (вечер): причина того остатка устранена в источнике —
+// PATCH /api/subtasks/:id с done=true теперь сам гасит agent_state, agent_id
+// и аренду (routes/subtasks.ts), а накопленные строки подчищены миграцией
+// 007. Раньше здесь стояло «agent_state НЕ сбрасывается никогда» — это
+// больше не так, не опирайтесь на это как на инвариант. Сам фильтр !s.done
+// оставлен: он ничего не стоит и держит роллап честным на старых базах,
+// куда миграция ещё не доехала.
 function withAgentStale(task: any, subtasks?: any[]) {
   let agent_state = task.agent_state;
   let agent_heartbeat_at = task.agent_heartbeat_at;
@@ -575,6 +580,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // migration). Any integer, including negative — TaskBoard reindexes a
       // whole column's cards to 0..n-1 on every drop, it never needs gaps.
       position: number | null;
+      // Закрепить наверх списка внутри проекта (db.ts's additive migration,
+      // 20.08.2026) — независимо от position, см. ProjectTasksScreen.
+      pinned: boolean;
     }>;
   }>("/api/tasks/:id", {
     preHandler: authPre,
@@ -700,6 +708,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "invalid label_ids" });
       }
 
+      // better-sqlite3 rejects a raw JS boolean as a bind parameter — same
+      // normalization as subtasks.ts's `done` before it reaches ALLOWED_FIELDS.
+      if (body.pinned !== undefined) {
+        body.pinned = body.pinned ? 1 : 0;
+      }
+
       // Whitelisted columns only — request body keys never reach raw SQL.
       const ALLOWED_FIELDS = [
         "title",
@@ -712,6 +726,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         "assignee_id",
         "status",
         "position",
+        "pinned",
       ] as const;
       const fields: string[] = [];
       const values: any[] = [];

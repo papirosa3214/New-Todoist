@@ -9,6 +9,7 @@ import {
 } from "../api/agents";
 import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
+import { ProjectList } from "../components/ProjectList";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { PROJECT_COLORS } from "../lib/projectColors";
 
@@ -341,22 +342,12 @@ export function OverviewScreen() {
         )}
 
         {!isLoading && !isError && (
-          <div className="space-y-[2px]">
-            {projects.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => navigate(`/projects/${p.id}`)}
-                className="tap-row w-full flex items-center gap-3 py-2.5 px-3 bg-card rounded-xl text-left min-h-[44px]"
-              >
-                <Icon name="hash" size={18} style={{ color: p.color }} />
-                <span className="text-[14px] text-text flex-1">{p.name}</span>
-                <span className="text-[13px] text-sub">{p.task_count}</span>
-              </button>
-            ))}
+          <>
+            <ProjectList projects={projects} />
             {projects.length === 0 && (
               <p className="px-3 text-[13px] text-dim">Проектов пока нет</p>
             )}
-          </div>
+          </>
         )}
       </div>
     </div>

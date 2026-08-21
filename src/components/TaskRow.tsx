@@ -173,6 +173,13 @@ export interface TaskRowProps {
   // ровно та же причина, что у showDueBadge выше (Upcoming/Today — дата
   // уже сказана группировкой экрана).
   showProjectBadge?: boolean;
+  // Закрепление внутри проекта (20.08.2026, «закреплять задачи — это
+  // внутри уже проекта») — только ProjectTasksScreen передаёт эту пару,
+  // остальные экраны не задают её и получают строку 1:1 как раньше.
+  // Не ActionsMenu: тут одно действие на строку, портал+anchorRef ради
+  // одной иконки на каждой из потенциально многих строк списка — лишнее.
+  pinned?: boolean;
+  onTogglePin?: () => void;
 }
 
 export function TaskRow({
@@ -185,6 +192,8 @@ export function TaskRow({
   showSubtasksBadge = true,
   showAvatar = true,
   showProjectBadge = true,
+  pinned,
+  onTogglePin,
 }: TaskRowProps) {
   const navigate = useNavigate();
   const isDone = task.status === "completed";
@@ -461,7 +470,10 @@ export function TaskRow({
         className="bg-bg"
         // Тень от правого края строки — вторая половина того же эффекта:
         // строка «нависает» над открывшейся кнопкой.
-        style={{ willChange: "transform", boxShadow: "6px 0 12px rgba(0,0,0,0.55)" }}
+        style={{
+          willChange: "transform",
+          boxShadow: "6px 0 12px rgba(0,0,0,0.55)",
+        }}
       >
         <button
           onClick={() => {
@@ -594,6 +606,31 @@ export function TaskRow({
               </div>
             )}
           </div>
+          {/* Закрепление (ProjectTasksScreen only) — третий flex-child
+              рядом с content column, тот же приём, что дальше в этом файле
+              не используется, но 1:1 со вторым интерактивным элементом
+              внутри чужой полноширинной кнопки — BoardCard в TaskBoard.tsx
+              (drag-хэндл там же: div со своими onClick/stopPropagation
+              внутри кнопки-карточки, не вложенный <button>). content
+              column выше — flex-1 min-w-0, поэтому уступает место сама,
+              никакого abs-position и риска наехать на truncate-текст. */}
+          {onTogglePin && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                onTogglePin();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="shrink-0 w-[28px] -mr-1 flex items-start justify-center pt-[2px] text-dim active:text-sub"
+              aria-label={pinned ? "Открепить" : "Закрепить"}
+            >
+              <Icon
+                name="pin"
+                size={16}
+                className={pinned ? "text-orange" : ""}
+              />
+            </div>
+          )}
         </button>
       </div>
     </div>

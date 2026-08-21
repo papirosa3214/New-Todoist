@@ -20,8 +20,15 @@ export function useCreateProject() {
 
 export interface UpdateProjectInput {
   id: string;
-  name: string;
+  // Раньше name было обязательным — PATCH умел только «переименовать» из
+  // формы редактирования. С 20.08.2026 (закрепление/reorder проектов на
+  // «Обзоре», server/src/routes/projects.ts) сервер принимает частичное
+  // тело — name опционален и здесь тоже, иначе PATCH с одним только
+  // position/pinned пришлось бы обходить этот хук.
+  name?: string;
   color?: string;
+  position?: number | null;
+  pinned?: boolean;
 }
 
 export function useUpdateProject() {

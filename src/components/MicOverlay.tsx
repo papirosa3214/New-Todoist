@@ -14,9 +14,14 @@ import { MicRing } from "./MicRing";
 // на весь экран (`body{display:flex;align-items:center;justify-content:
 // center}`), а не элемент в потоке. Portal в document.body + fixed inset-0
 // воспроизводит ровно это — тот же паттерн fixed-позиционирования, что уже
-// использует BottomNav/FAB (components/UI.tsx), z-[50] — выше их z-[35]/
-// z-30 с запасом (на этом экране они всё равно скрыты, TaskFormScreen не
-// входит в TAB_ROUTES Layout.tsx, но запас не помешает).
+// использует BottomNav/FAB (components/UI.tsx).
+//
+// z-[55], НЕ 50 (было до 20.08.2026): изначально запас брался только
+// против BottomNav/FAB (z-35/z-30). Когда 20.08.2026 запись подключили ещё
+// и внутри шторок (ReturnToWorkSheet, SubtaskFeed) — а те тоже z-50, тот же
+// стэкинг-контекст body — оверлей с шторкой сравнивались бы по порядку
+// вставки в DOM, что ненадёжно. 55 — выше шторок с тем же запасом, каким
+// раньше 50 было выше BottomNav.
 //
 // Показывается только пока идёт запись/распознавание (state !== "idle") —
 // в покое кнопка остаётся маленькой иконкой в потоке формы (TaskFormScreen),
@@ -34,7 +39,7 @@ export function MicOverlay({
 }) {
   return createPortal(
     <div
-      className="fixed inset-0 z-[50] flex flex-col items-center justify-center bg-bg"
+      className="fixed inset-0 z-[55] flex flex-col items-center justify-center bg-bg"
       role="dialog"
       aria-modal="true"
       aria-label={state === "recording" ? "Идёт запись" : "Распознаю речь"}

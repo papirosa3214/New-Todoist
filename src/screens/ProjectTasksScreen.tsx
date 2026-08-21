@@ -4,9 +4,14 @@
 // reads as part of the same app, just scoped to one project's tasks.
 import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useTasks } from "../api/tasks";
+import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
-import { ScreenHeader, ErrorBanner, Loading, BackButton } from "../components/UI";
+import {
+  ScreenHeader,
+  ErrorBanner,
+  Loading,
+  BackButton,
+} from "../components/UI";
 import { TaskRow } from "../components/TaskRow";
 
 export function ProjectTasksScreen() {
@@ -25,14 +30,24 @@ export function ProjectTasksScreen() {
     isError: tasksError,
     error: tasksErrorObj,
   } = useTasks();
+  const updateTask = useUpdateTask();
 
   const project = useMemo(
     () => projects.find((p) => p.id === id),
     [projects, id],
   );
 
+  // Закреплённые — единым блоком сверху, остальные в прежнем порядке между
+  // собой (20.08.2026, «закреплять задачи — это внутри уже проекта»). .sort
+  // здесь стабилен (спецификация ES2019+, которую и Chrome/Safari/Node
+  // держат) — сравнение только по pinned не трогает относительный порядок
+  // внутри каждой из двух групп, менять его незачем: на этом экране пока
+  // нет отдельного ручного reorder, только закрепление.
   const tasks = useMemo(
-    () => allTasks.filter((t) => t.project_id === id && t.status === "active"),
+    () =>
+      allTasks
+        .filter((t) => t.project_id === id && t.status === "active")
+        .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)),
     [allTasks, id],
   );
 
@@ -105,6 +120,10 @@ export function ProjectTasksScreen() {
             key={task.id}
             task={task}
             onClick={() => navigate(`/task/${task.id}`)}
+            pinned={!!task.pinned}
+            onTogglePin={() =>
+              updateTask.mutate({ id: task.id, pinned: !task.pinned })
+            }
           />
         ))}
       </div>
