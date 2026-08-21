@@ -208,6 +208,25 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         "UPDATE tasks SET agent_heartbeat_at = datetime('now') WHERE id = ?",
       ).run(task.id);
 
+      // Вместе с задачей продлевается и ШАГ, который этот же агент отметил
+      // как «в работе».
+      //
+      // ⚠️ Прецедент 21.08.2026: у шага своя аренда, и она протухала сама
+      // по себе — агент отмечал начало шага, уходил на полчаса писать код
+      // и молчал. Значок «в работе» у шага гас через пять минут, хотя
+      // работа шла: владелец видел статичный пунктирный кружок и спросил
+      // «почему перестало крутиться». Сигнал у нас один — живой ход агента,
+      // и делить его между задачей и шагом незачем: если аренда задачи
+      // продлена, то шаг, взятый тем же агентом, работает тоже.
+      //
+      // Условие по agent_id обязательно: на одной задаче шаги могут быть
+      // взяты разными агентами, и продлевать чужой шаг мы не вправе.
+      db.prepare(
+        `UPDATE subtasks SET agent_heartbeat_at = datetime('now')
+          WHERE task_id = ? AND agent_state = 'in_progress'
+            AND (agent_id IS NULL OR agent_id = ?)`,
+      ).run(task.id, req.userId);
+
       const updated = db
         .prepare("SELECT agent_heartbeat_at FROM tasks WHERE id = ?")
         .get(task.id) as any;
