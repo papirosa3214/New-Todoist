@@ -64,6 +64,7 @@ ME = "u2"        # Claude_Bot
 EXTERNAL_AGENTS = {
     "u3": {
         "name": "Гермес",
+        "token_env": "TASKFLOW_HERMES_TOKEN",
         "cmd": [
             str(HOME / ".hermes/hermes-agent/.venv/bin/python"),
             "-m", "hermes_cli.main", "-z",
@@ -306,6 +307,17 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             RUNNING.pop(task_id, None)
         return
 
+    # Взять карточку в работу ЗА него — его же ключом, иначе claim ляжет на
+    # учётку службы. Без этого агент работал, а доска показывала «не взята»:
+    # владелец смотрит на неё и видит, что ничего не происходит.
+    token = agent.get("token") or ""
+    claimed = api("POST", f"/api/tasks/{task_id}/claim", {}, token=token)
+    if claimed is None:
+        log(f"  не удалось взять задачу {task_id[:8]} за «{agent['name']}» — отменяю заход")
+        with LOCK:
+            RUNNING.pop(task_id, None)
+        return
+
     cmd = agent["cmd"] + [build_prompt(task, reason)]
     log(f"  зову «{agent['name']}» на задачу {task_id[:8]}")
     try:
@@ -533,6 +545,14 @@ def listen(owner_id: str, token: str, who: str) -> None:
 
 
 def main() -> None:
+    # Ключи соседей — в карту: ими служба берёт задачу за них и читает их
+    # уведомления. Своего ключа нет — агент просто не обслуживается.
+    for uid, agent in list(EXTERNAL_AGENTS.items()):
+        agent["token"] = os.environ.get(agent.get("token_env", ""), "").strip()
+        if not agent["token"]:
+            log(f"нет ключа для «{agent['name']}» — его задачи не обслуживаю")
+            EXTERNAL_AGENTS.pop(uid)
+
     if not TOKEN:
         print("Нет TASKFLOW_TOKEN в окружении — служба запускается через vault-run.py", file=sys.stderr)
         sys.exit(1)
