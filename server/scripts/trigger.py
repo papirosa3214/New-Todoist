@@ -454,10 +454,16 @@ def handle_task(task_id: str, why: str) -> None:
         threading.Thread(target=run_claude, args=(task, reason), daemon=True).start()
 
 
-def catch_up() -> None:
-    """Непрочитанные уведомления, накопившиеся пока службы не было."""
-    items = api("GET", "/api/notifications") or []
-    pending = [n for n in items if not n.get("read") and n.get("actor_id") != ME]
+def catch_up(owner_id: str = ME, token: str = "") -> None:
+    """Непрочитанные уведомления, накопившиеся пока службы не было.
+
+    ⚠️ Ходит ключом ТОГО соединения, которое её вызвало. Иначе соединение
+    Гермеса добирало мои уведомления и не видело его собственных: 21.08.2026
+    у него висели три непрочитанных «assigned», а служба молчала — «не берёт
+    в работу, будильник не зовёт».
+    """
+    items = api("GET", "/api/notifications", token=token) or []
+    pending = [n for n in items if not n.get("read") and n.get("actor_id") != owner_id]
     if pending:
         log(f"добираю пропущенное: {len(pending)} уведомлений")
     for n in pending:
@@ -467,7 +473,7 @@ def catch_up() -> None:
         # уведомления владельца: проверка службы не должна вычищать за него
         # колокольчик.
         if os.environ.get("TASKFLOW_TRIGGER_DRY") != "1":
-            api("PATCH", f"/api/notifications/{n['id']}/read", {})
+            api("PATCH", f"/api/notifications/{n['id']}/read", {}, token=token)
 
 
 def on_message_for(owner_id: str, token: str):
@@ -486,8 +492,8 @@ def _on_message(raw: str, owner_id: str = ME, token: str = "") -> None:
         return
     kind = event.get("type")
     if kind == "connected":
-        log("сокет открыт — Клод «онлайн» на экране агентов")
-        catch_up()
+        log(f"сокет открыт ({owner_id}) — агент «онлайн» на экране агентов")
+        catch_up(owner_id, token)
         return
     if kind != "notification:new":
         return
