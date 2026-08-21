@@ -339,11 +339,25 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
         // Re-entering in_progress (from blocked, or owner sending it back
         // from review) takes out a fresh lease — "берётся новая аренда".
-        // session_id обновляется тут же — тот же смысл, что в claim() выше:
-        // чей физически процесс возобновляет работу.
+        //
+        // ⚠️ COALESCE, а НЕ голое присваивание. Когда задачу возвращает
+        // ВЛАДЕЛЕЦ из браузера, у запроса нет ни заголовка X-Agent-Session,
+        // ни session_id в теле — sessionOf() отдаёт null, и прежняя запись
+        // затиралась. Связь с сессией агента терялась ровно в тот момент,
+        // когда она нужнее всего: будильник переставал понимать, куда
+        // возвращать работу, и поднял бы новую сессию с чистого листа.
+        //
+        // Живой прецедент 21.08.2026: Максим вернул карточку на доработку
+        // через трекер, у неё обнулился agent_session_id, и его сообщение
+        // просто легло в ленту — «я решил через TaskFlow с тобой
+        // прокоммуницировать, и у меня это не получилось».
+        //
+        // Своя сессия (агент возвращается из blocked) метку передаёт и
+        // перезапишет её, как и раньше.
         if (state === "in_progress") {
           db.prepare(
-            "UPDATE tasks SET agent_state = ?, agent_heartbeat_at = datetime('now'), agent_session_id = ? WHERE id = ?",
+            `UPDATE tasks SET agent_state = ?, agent_heartbeat_at = datetime('now'),
+               agent_session_id = COALESCE(?, agent_session_id) WHERE id = ?`,
           ).run(state, sessionOf(req), task.id);
         } else {
           db.prepare("UPDATE tasks SET agent_state = ? WHERE id = ?").run(
