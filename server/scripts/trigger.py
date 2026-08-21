@@ -41,6 +41,29 @@ STATE_DIR = HOME / ".local/state/taskflow-trigger"
 LOG_FILE = STATE_DIR / "trigger.log"
 
 ME = "u2"        # Claude_Bot
+
+# Кого будить под какую учётку.
+#
+# До 21.08.2026 будильник знал ровно одного исполнителя: задача, назначенная
+# на Гермеса или DeepSeek Harness, молча игнорировалась («исполнитель не я»),
+# и назначение выглядело как поломка — владелец назначил, а никто не пришёл.
+#
+# Ключ — id учётки в TaskFlow, значение — как запустить агента с одним
+# заданием: у каждого свой флаг разового запроса, интерактивную сессию тут
+# поднимать нечем.
+#
+# ⚠️ Claude идёт СВОИМ путём ниже (resume, форки, живые сессии) — у него
+# один диалог продолжается между заходами. У остальных каждый заход
+# самостоятельный, поэтому им хватает одной команды.
+EXTERNAL_AGENTS = {
+    "u3": {
+        "name": "Гермес",
+        "cmd": [
+            str(HOME / ".hermes/hermes-agent/.venv/bin/python"),
+            "-m", "hermes_cli.main", "-z",
+        ],
+    },
+}
 OWNER = "u1"     # Максим
 HEARTBEAT_SEC = 90    # аренда живёт 5 минут — сигнал втрое чаще, с запасом
                       # на пару пропущенных подряд (сеть, занятый сервер)
@@ -92,7 +115,8 @@ def decide(task: dict) -> tuple[bool, str]:
     можно». Без назначения служба молчит, что бы в задаче ни происходило."""
     if not task:
         return False, "задачи нет"
-    if task.get("assignee_id") != ME:
+    assignee = task.get("assignee_id")
+    if assignee != ME and assignee not in EXTERNAL_AGENTS:
         return False, "исполнитель не я"
     if task.get("status") != "active":
         return False, "задача не активна"
@@ -252,6 +276,49 @@ def heartbeat_loop(task_id: str, stop: threading.Event) -> None:
         api("POST", f"/api/tasks/{task_id}/heartbeat", {})
 
 
+def run_external(task: dict, reason: str, agent: dict) -> None:
+    """Позвать не-Claude агента одним разовым запросом.
+
+    У Гермеса и dsh нет продолжаемой сессии: каждый заход самостоятелен,
+    поэтому им отдаётся тот же вводный текст, что и Клоду при первом
+    заходе (build_prompt) — там и правила конвейера, и что за задача.
+
+    Аренду за них не держим: сервер продлевает её сам на каждое их
+    действие по задаче (комментарий, закрытие шага) — правка от
+    21.08.2026, после того как работающий Гермес выглядел пропавшим.
+    """
+    task_id = task["id"]
+    with LOCK:
+        if task_id in RUNNING:
+            log(f"  задача {task_id[:8]} уже выполняется — пропускаю")
+            return
+        RUNNING[task_id] = None
+
+    if os.environ.get("TASKFLOW_TRIGGER_DRY") == "1":
+        log(f"[сухой прогон] позвал бы «{agent['name']}» на «{task.get('title')}» ({reason})")
+        with LOCK:
+            RUNNING.pop(task_id, None)
+        return
+
+    cmd = agent["cmd"] + [build_prompt(task, reason)]
+    log(f"  зову «{agent['name']}» на задачу {task_id[:8]}")
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        out, _ = proc.communicate(timeout=3600)
+        tail = (out or "").strip()[-400:]
+        log(f"  «{agent['name']}» закончил (код {proc.returncode}): {tail}")
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        log(f"  «{agent['name']}» не уложился в час — снят")
+    except Exception as e:
+        log(f"  «{agent['name']}» не запустился: {e}")
+    finally:
+        with LOCK:
+            RUNNING.pop(task_id, None)
+
+
 def run_claude(task: dict, reason: str) -> None:
     task_id = task["id"]
     # Сухой прогон (TASKFLOW_TRIGGER_DRY=1): проверить, что служба видит
@@ -371,7 +438,14 @@ def handle_task(task_id: str, why: str) -> None:
     if not ok:
         log(f"  {why}: {reason} — не берусь")
         return
-    threading.Thread(target=run_claude, args=(task, reason), daemon=True).start()
+    # Кого звать — решает исполнитель задачи, а не то, кем служба запущена.
+    agent = EXTERNAL_AGENTS.get(task.get("assignee_id") or "")
+    if agent:
+        threading.Thread(
+            target=run_external, args=(task, reason, agent), daemon=True
+        ).start()
+    else:
+        threading.Thread(target=run_claude, args=(task, reason), daemon=True).start()
 
 
 def catch_up() -> None:
