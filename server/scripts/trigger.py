@@ -106,18 +106,34 @@ def model_of(task: dict) -> str:
     Понимаем два вида метки: короткое имя из списка выше («Sonnet») и явную
     форму «модель: что-угодно» — вторая нужна тем исполнителям, у кого свои
     имена моделей, длинные и с косыми чертами.
+
+    Все прочие метки владельца («Важно», «UX/UI», «Дом») проходят мимо: они
+    не совпадают ни со списком, ни с префиксом. Метки — его инструмент, и
+    заводить их он должен свободно, не оглядываясь на будильник.
     """
+    found: list[str] = []
     for label in task.get("labels") or []:
         name = str(label.get("name") or "").strip()
         low = name.lower()
         if low in MODEL_LABELS:
-            return low
+            found.append(low)
+            continue
         for prefix in ("модель:", "model:"):
             if low.startswith(prefix):
                 value = name[len(prefix):].strip()
                 if value:
-                    return value
-    return ""
+                    found.append(value)
+                break
+    if not found:
+        return ""
+    # Две метки моделей сразу — не ошибка владельца, а недосмотр: скорее
+    # всего забыл снять прежнюю. Берём первую и ГОВОРИМ об этом в журнале,
+    # иначе задача молча уйдёт не на той модели, а по карточке не понять,
+    # почему.
+    if len(found) > 1:
+        log(f"  ⚠️ на задаче несколько меток модели ({', '.join(found)})"
+            f" — беру первую: {found[0]}")
+    return found[0]
 
 
 def find_dsh() -> list[str] | None:
