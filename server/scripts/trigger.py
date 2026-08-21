@@ -18,6 +18,7 @@
 Токен приходит в окружении (TASKFLOW_TOKEN) — служба запускается через
 vault-run.py, значение нигде не печатается и на диске не лежит.
 """
+import hashlib
 import json
 import os
 import subprocess
@@ -384,17 +385,53 @@ def closed_steps(task_id: str) -> int:
     return sum(1 for s in subs if s.get("done"))
 
 
-def activity_mark(task_id: str) -> tuple:
-    """Отпечаток движения по задаче: закрытые шаги, шаги в работе, комментарии.
+# Репозитории, в которых работают агенты. Правка файлов — такое же
+# движение, как отметка на доске, и куда более частое: агент может целый
+# заход писать код внутри одного шага.
+REPOS = [
+    HOME / "Проекты" / "AI-Control-Center",
+    HOME / "Проекты" / "New-Todoist",
+]
 
-    Меняется на любое осмысленное действие агента. Аренда для этого не
-    годится — её шлём мы сами, и она горит даже у зависшего хода.
+
+def worktree_mark() -> tuple:
+    """Отпечаток рабочего дерева: последний коммит и состояние правок.
+
+    ⚠️ Без этого мерка движения врала. Прецедент 21.08.2026: Гермес целый
+    заход писал экран настроек (новый файл, правки в трёх соседних), но не
+    успел закоммитить и закрыть шаг — доска молчала, и служба дважды
+    ошиблась: сторож объявил тишину, а цепочка встала с «не сдвинул ни
+    одного шага». Работа при этом шла.
+    """
+    marks = []
+    for repo in REPOS:
+        try:
+            head = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            dirty = subprocess.run(
+                ["git", "-C", str(repo), "status", "--porcelain"],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+            marks.append((head, hashlib.md5(dirty.encode()).hexdigest()))
+        except Exception:  # репозитория нет или git занят — не мерка, но и не сбой
+            marks.append(("", ""))
+    return tuple(marks)
+
+
+def activity_mark(task_id: str) -> tuple:
+    """Отпечаток движения: доска плюс рабочее дерево.
+
+    Меняется на любое осмысленное действие агента — закрытый шаг, отметку
+    начала, комментарий, правку файла, коммит. Аренда для этого не годится:
+    её шлём мы сами, и она горит даже у зависшего хода.
     """
     subs = api("GET", f"/api/tasks/{task_id}/subtasks") or []
     comments = api("GET", f"/api/tasks/{task_id}/comments") or []
     closed = sum(1 for s in subs if s.get("done"))
     working = sum(1 for s in subs if s.get("agent_state") == "in_progress")
-    return (closed, working, len(comments))
+    return (closed, working, len(comments), worktree_mark())
 
 
 def set_state(task_id: str, state: str, comment: str, token: str = "") -> None:
@@ -446,7 +483,7 @@ def note(task_id: str, text: str) -> None:
     api("POST", f"/api/tasks/{task_id}/comments", {"text": text})
 
 
-def should_continue(task_id: str, before: int) -> tuple[bool, str]:
+def should_continue(task_id: str, before: tuple) -> tuple[bool, str]:
     """Звать ли агента снова после того, как он завершил заход.
 
     Три причины НЕ звать, и все они честные состояния, а не догадки:
@@ -466,9 +503,11 @@ def should_continue(task_id: str, before: int) -> tuple[bool, str]:
     subs = task.get("subtasks") or []
     if subs and all(s.get("done") for s in subs):
         return False, "все шаги закрыты"
-    after = sum(1 for s in subs if s.get("done"))
-    if after <= before:
-        return False, "заход не сдвинул ни одного шага"
+    # Движение меряем полным отпечатком — доска И рабочее дерево. По одним
+    # закрытым шагам мерить нельзя: заход целиком уходит внутрь одного
+    # крупного шага, и работа видна только в файлах (см. worktree_mark).
+    if activity_mark(task_id) == before:
+        return False, "заход не оставил следов — ни на доске, ни в файлах"
     return True, ""
 
 
@@ -553,7 +592,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         # готова, а остановлена» — его же слова на задаче по переносу чата),
         # и без внешнего повтора карточка так и замирает на середине.
         for run in range(1, MAX_RUNS + 1):
-            before = closed_steps(task_id)
+            before = activity_mark(task_id)
             if run > 1:
                 log(f"  зову «{agent['name']}» снова (заход {run} из {MAX_RUNS})")
             proc = subprocess.Popen(
