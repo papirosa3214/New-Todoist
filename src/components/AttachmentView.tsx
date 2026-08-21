@@ -55,12 +55,39 @@ export function AttachmentView({ attachment }: { attachment: ApiAttachment }) {
     };
   }, [attachment.id, attachment.mime]);
 
-  const open = async () => {
+  /** Открыть картинку в новой вкладке.
+   *
+   * ⚠️ Синхронно, БЕЗ await внутри обработчика: картинка уже загружена
+   * заранее в objectUrl. Раньше здесь стоял `await getBlob()` и только
+   * потом `window.open()` — к этому моменту браузер уже не считает
+   * открытие следствием клика и режет его как всплывающее окно. Владелец
+   * 21.08.2026: «не могу открывать файлы вложений, которые агент
+   * прикрепляет к комментариям».
+   */
+  const openImage = () => {
+    if (!objectUrl) return;
+    window.open(objectUrl, "_blank");
+  };
+
+  /** Сохранить документ.
+   *
+   * Для не-картинок открытие в новой вкладке бессмысленно вдвойне: у
+   * blob-ссылки нет имени файла, и `.docx` уезжал бы в загрузки под
+   * случайным набором символов, если бы вкладка вообще открылась. Поэтому
+   * ссылка со `download` — она несёт настоящее имя и не считается
+   * всплывающим окном, то есть не блокируется после await.
+   */
+  const download = async () => {
     try {
       const blob = await api.getBlob(`/api/attachments/${attachment.id}`);
       const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-      // Освобождаем не сразу: вкладка ещё читает ссылку в момент открытия.
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = attachment.file_name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Освобождаем не сразу: браузер ещё читает ссылку в момент сохранения.
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch {
       setFailed(true);
@@ -71,7 +98,8 @@ export function AttachmentView({ attachment }: { attachment: ApiAttachment }) {
     return (
       <button
         type="button"
-        onClick={open}
+        onClick={openImage}
+        disabled={!objectUrl}
         className="block w-full mt-2 rounded-xl overflow-hidden bg-card2"
         aria-label={`Открыть ${attachment.file_name}`}
       >
@@ -95,7 +123,7 @@ export function AttachmentView({ attachment }: { attachment: ApiAttachment }) {
   return (
     <button
       type="button"
-      onClick={open}
+      onClick={download}
       className="mt-2 w-full flex items-center gap-2 px-3 h-11 rounded-xl bg-card2 text-left"
     >
       <Icon name="paperclip" size={16} className="text-sub shrink-0" />
