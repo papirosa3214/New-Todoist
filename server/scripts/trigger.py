@@ -35,6 +35,12 @@ import websocket  # websocket-client
 API = os.environ.get("TASKFLOW_API", "http://localhost:3001")
 WS_URL = API.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
 TOKEN = os.environ.get("TASKFLOW_TOKEN", "").strip()
+# Токен Гермеса — вторым соединением. Уведомления сервер шлёт ТОЛЬКО
+# адресату, поэтому служба, слушающая под учёткой Claude_Bot, про
+# назначение задачи Гермесу не узнаёт вовсе: 21.08.2026 владелец назначил
+# карточку и ничего не произошло — «не берёт в работу, будильник не зовёт».
+# Одно соединение на агента, чьи задачи мы обслуживаем.
+HERMES_TOKEN = os.environ.get("TASKFLOW_HERMES_TOKEN", "").strip()
 HOME = Path.home()
 CLAUDE_BIN = str(HOME / ".npm-global/bin/claude")
 STATE_DIR = HOME / ".local/state/taskflow-trigger"
@@ -85,9 +91,9 @@ def log(msg: str) -> None:
         f.write(line + "\n")
 
 
-def api(method: str, path: str, body=None):
+def api(method: str, path: str, body=None, token: str = ""):
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"Authorization": f"Bearer {TOKEN}"}
+    headers = {"Authorization": f"Bearer {token or TOKEN}"}
     if body is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(API + path, data=data, method=method, headers=headers)
@@ -464,7 +470,16 @@ def catch_up() -> None:
             api("PATCH", f"/api/notifications/{n['id']}/read", {})
 
 
-def on_message(_ws, raw: str) -> None:
+def on_message_for(owner_id: str, token: str):
+    """Обработчик под конкретную учётку: у каждого соединения свой адресат."""
+
+    def handler(_ws, raw: str) -> None:
+        _on_message(raw, owner_id, token)
+
+    return handler
+
+
+def _on_message(raw: str, owner_id: str = ME, token: str = "") -> None:
     try:
         event = json.loads(raw)
     except Exception:
@@ -482,13 +497,33 @@ def on_message(_ws, raw: str) -> None:
     # Уведомление приходит только адресату, но действие мог совершить и сам
     # агент (например, комментарий от себя) — такие поводы пропускаем, иначе
     # отчёт разбудил бы сам себя.
-    items = api("GET", "/api/notifications") or []
+    items = api("GET", "/api/notifications", token=token) or []
     this = next((n for n in items if n.get("id") == event.get("notificationId")), None)
-    if this and this.get("actor_id") == ME:
+    if this and this.get("actor_id") == owner_id:
         log("  моё же действие — не повод")
         return
     actor = (this or {}).get("actor_name") or "кто-то"
     handle_task(task_id, f"{actor}: {(this or {}).get('type', 'событие')}")
+
+
+def listen(owner_id: str, token: str, who: str) -> None:
+    """Держать соединение за одну учётку и не отпускать.
+
+    Своё соединение на каждого обслуживаемого агента: уведомления сервер
+    доставляет только адресату, и чужие события в чужой сокет не приходят.
+    """
+    while True:
+        try:
+            ws = websocket.WebSocketApp(
+                f"{WS_URL}?token={token}",
+                on_message=on_message_for(owner_id, token),
+                on_error=lambda _w, e, w=who: log(f"сокет {w}: сбой {e}"),
+                on_close=lambda _w, *_, w=who: log(f"сокет {w} закрыт — переподключаюсь"),
+            )
+            ws.run_forever(ping_interval=30, ping_timeout=10)
+        except Exception as e:
+            log(f"цикл соединения {who} упал: {e}")
+        time.sleep(5)
 
 
 def main() -> None:
@@ -496,18 +531,18 @@ def main() -> None:
         print("Нет TASKFLOW_TOKEN в окружении — служба запускается через vault-run.py", file=sys.stderr)
         sys.exit(1)
     log("будильник TaskFlow запущен")
-    while True:
-        try:
-            ws = websocket.WebSocketApp(
-                f"{WS_URL}?token={TOKEN}",
-                on_message=on_message,
-                on_error=lambda _w, e: log(f"сокет: сбой {e}"),
-                on_close=lambda _w, *_: log("сокет закрыт — переподключаюсь"),
-            )
-            ws.run_forever(ping_interval=30, ping_timeout=10)
-        except Exception as e:
-            log(f"цикл соединения упал: {e}")
-        time.sleep(5)
+
+    # Соседние агенты — отдельными потоками. Нет токена — молча работаем
+    # как раньше, только за себя: отсутствие ключа не повод не запускаться.
+    if HERMES_TOKEN:
+        threading.Thread(
+            target=listen, args=("u3", HERMES_TOKEN, "Гермес"), daemon=True
+        ).start()
+        log("слушаю и задачи Гермеса")
+    else:
+        log("токена Гермеса нет — его задачи слушать нечем")
+
+    listen(ME, TOKEN, "Claude")
 
 
 if __name__ == "__main__":
