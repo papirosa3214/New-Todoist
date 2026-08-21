@@ -362,11 +362,83 @@ MAX_RUNS = 8
 RUN_GAP_SEC = 10
 
 
+# Сторож тишины ВНУТРИ хода. Аренда теперь продлевается, пока жив процесс,
+# и поэтому больше не ловит зависший ход: процесс дышит, а работа стоит.
+# Отличаем одно от другого движением на карточке — закрытые шаги и
+# комментарии. Пороги подобраны под живые заходы: 20 минут тишины бывают у
+# крупного шага, 45 — это уже не работа.
+SILENT_WARN_MIN = 20
+SILENT_KILL_MIN = 45
+
+# Хвост вывода агента, по которому видно, что он не работал, а отказал:
+# так о себе говорит его собственный CLI, когда не может пойти к модели
+# (нет провайдера, отвергнут ключ, кончился лимит).
+FAILURE_MARKS = ("agent failed", "no llm provider", "rate limit",
+                 "quota exceeded", "insufficient", "unauthorized")
+
+
 def closed_steps(task_id: str) -> int:
     """Сколько шагов задачи закрыто — мерка продвижения между заходами."""
     task = api("GET", f"/api/tasks/{task_id}") or {}
     subs = task.get("subtasks") or []
     return sum(1 for s in subs if s.get("done"))
+
+
+def activity_mark(task_id: str) -> tuple:
+    """Отпечаток движения по задаче: закрытые шаги, шаги в работе, комментарии.
+
+    Меняется на любое осмысленное действие агента. Аренда для этого не
+    годится — её шлём мы сами, и она горит даже у зависшего хода.
+    """
+    subs = api("GET", f"/api/tasks/{task_id}/subtasks") or []
+    comments = api("GET", f"/api/tasks/{task_id}/comments") or []
+    closed = sum(1 for s in subs if s.get("done"))
+    working = sum(1 for s in subs if s.get("agent_state") == "in_progress")
+    return (closed, working, len(comments))
+
+
+def set_state(task_id: str, state: str, comment: str, token: str = "") -> None:
+    """Состояние работы по задаче — от имени того, за кого мы её ведём."""
+    api("POST", f"/api/tasks/{task_id}/state",
+        {"state": state, "comment": comment}, token=token)
+
+
+def silence_watch(task_id: str, proc_box: dict, stop: threading.Event,
+                  agent_name: str) -> None:
+    """Смотрит, движется ли работа, пока идёт ход, и вмешивается по порогам.
+
+    Предупреждение — комментарием в карточку: владелец видит «идёт долго
+    без движения» и решает сам. Снятие — только на втором пороге и с
+    объяснением: висящий ход держит задачу и жжёт расход у провайдера
+    агента, а сказать об этом некому, кроме нас.
+    """
+    last = activity_mark(task_id)
+    since = time.time()
+    warned = False
+    while not stop.wait(60):
+        now = activity_mark(task_id)
+        if now != last:
+            last, since, warned = now, time.time(), False
+            continue
+        idle_min = (time.time() - since) / 60
+        if idle_min >= SILENT_KILL_MIN:
+            proc = proc_box.get("proc")
+            log(f"  ⛔ «{agent_name}»: {int(idle_min)} мин без движения — снимаю ход")
+            set_state(task_id, "blocked",
+                      f"Будильник снял ход: {int(idle_min)} минут ни одного "
+                      f"движения по задаче — ни закрытого шага, ни комментария. "
+                      f"Процесс был жив, но работа стояла. Что делать дальше — "
+                      f"решай ты: перезапустить или разобраться, на чём он встал.")
+            if proc and proc.returncode is None:
+                proc.terminate()
+            return
+        if idle_min >= SILENT_WARN_MIN and not warned:
+            warned = True
+            log(f"  ⚠️ «{agent_name}»: {int(idle_min)} мин без движения")
+            note(task_id,
+                 f"Будильник: «{agent_name}» работает, но {int(idle_min)} минут "
+                 f"не было ни одного движения по задаче. Пока не трогаю — если "
+                 f"тишина продлится до {SILENT_KILL_MIN} минут, ход сниму.")
 
 
 def note(task_id: str, text: str) -> None:
@@ -490,9 +562,42 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             )
             with LOCK:
                 RUNNING[task_id] = proc
-            out, _ = proc.communicate(timeout=3600)
+            # Сторож на время этого захода: процесс отдаём коробкой, чтобы
+            # он мог снять именно текущий, а не тот, что был в прошлом.
+            box = {"proc": proc}
+            hush = threading.Event()
+            threading.Thread(
+                target=silence_watch,
+                args=(task_id, box, hush, agent["name"]),
+                daemon=True,
+            ).start()
+            try:
+                out, _ = proc.communicate(timeout=3600)
+            finally:
+                hush.set()
             tail = (out or "").strip()[-400:]
             log(f"  «{agent['name']}» закончил заход {run} (код {proc.returncode}): {tail}")
+
+            # ОТКАЗ, а не работа: агент не смог пойти к модели (нет
+            # провайдера, отвергнут ключ, кончился лимит) либо вышел с
+            # ошибкой. Раньше это оставалось в журнале службы, куда владелец
+            # не смотрит, и на доске выглядело как «агент молча пропал».
+            low = (out or "").lower()
+            failed = proc.returncode not in (0, -15, 143) or any(
+                m in low for m in FAILURE_MARKS
+            )
+            if failed:
+                reason = next((m for m in FAILURE_MARKS if m in low), "")
+                log(f"  ⛔ «{agent['name']}» отказал: {reason or 'код ' + str(proc.returncode)}")
+                set_state(task_id, "blocked",
+                          f"Ход «{agent['name']}» не состоялся: "
+                          + (f"он ответил «{tail[-200:]}»" if tail
+                             else f"процесс вышел с кодом {proc.returncode}")
+                          + ". Это отказ на его стороне, а не работа — "
+                            "цепочку заходов останавливаю, чтобы не повторять "
+                            "одно и то же.",
+                          token=token)
+                break
 
             keep, why = should_continue(task_id, before)
             if not keep:
