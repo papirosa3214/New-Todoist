@@ -385,6 +385,42 @@ def t_projects(_args):
     }
 
 
+def t_project_tasks(args):
+    """Задачи проекта — чтобы агент брал работу по проекту, а не только ту,
+    что уже назначена на его учётку.
+
+    Дыра, найденная 21.08.2026: `taskflow_my_tasks` показывает лишь задачи с
+    assignee = агент, а работа проекта висит на владельце. Списка задач
+    проекта по MCP не было вовсе, и он добывался запросом к API руками —
+    ровно то, чего быть не должно.
+    """
+    want = (args.get("project") or "").strip().lower()
+    pid = args.get("project_id")
+    if not pid and want:
+        for p in api("GET", "/api/projects"):
+            if (p.get("name") or "").strip().lower() == want:
+                pid = p.get("id")
+                break
+        if not pid:
+            return {"ошибка": f"проект «{args['project']}» не найден",
+                    "подсказка": "список проектов — taskflow_projects"}
+    if not pid:
+        return {"ошибка": "нужен project_id или project (название)"}
+
+    tasks = [t for t in as_tasks(api("GET", "/api/tasks")) if t.get("project_id") == pid]
+    if args.get("include_completed") is not True:
+        tasks = [t for t in tasks if t.get("status") == "active"]
+    state = (args.get("state") or "").strip()
+    if state == "free":
+        tasks = [t for t in tasks if not t.get("agent_state")]
+    elif state:
+        tasks = [t for t in tasks if t.get("agent_state") == state]
+    # Просроченные и ближние по сроку — первыми: агент берёт следующую работу
+    # сверху списка, и порядок должен отвечать на вопрос «что горит».
+    tasks.sort(key=lambda t: (t.get("due_date") is None, t.get("due_date") or ""))
+    return {"всего": len(tasks), "задачи": [short(t) for t in tasks]}
+
+
 def t_create_task(args):
     body = {"title": args["title"]}
     for key in ("description", "project_id", "assignee_id", "due_date", "priority"):
@@ -533,6 +569,20 @@ TOOLS = [
         "description": "Проекты и их идентификаторы — чтобы класть задачу в нужный, а не во «Входящие».",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": t_projects,
+    },
+    {
+        "name": "taskflow_project_tasks",
+        "description": "Задачи проекта — не только назначенные на агента. Сортировка по сроку: что горит, то сверху. project — название («AI Control Center»), либо project_id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "название проекта"},
+                "project_id": {"type": "string"},
+                "state": {"type": "string", "description": "free | in_progress | review | blocked"},
+                "include_completed": {"type": "boolean", "description": "показать и выполненные"},
+            },
+        },
+        "fn": t_project_tasks,
     },
     {
         "name": "taskflow_create_task",
