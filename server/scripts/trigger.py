@@ -70,7 +70,31 @@ EXTERNAL_AGENTS = {
             "-m", "hermes_cli.main", "-z",
         ],
     },
+    # DeepSeek Harness. Запускается из кеша npx — путь там меняется при
+    # обновлении, поэтому ищем, а не зашиваем; PATH подменяем на Node 22,
+    # на 18-м dsh падает с «node:util не отдаёт parseEnv».
+    "b85212d6-abab-4afb-a4c6-0d379b6537a4": {
+        "name": "DeepSeek Harness",
+        "token_env": "TASKFLOW_DEEPSEEK_TOKEN",
+        "cmd": None,          # соберётся при старте, см. find_dsh()
+        "env": {"PATH": "/home/maksim/.nvm/versions/node/v22.23.1/bin:"
+                        + os.environ.get("PATH", "")},
+    },
 }
+
+
+def find_dsh() -> list[str] | None:
+    """Команда запуска dsh в headless-режиме или None, если его нет."""
+    direct = HOME / ".npm-global/bin/dsh"
+    if direct.exists():
+        return [str(direct), "--profile", "headless"]
+    cache = HOME / ".npm/_npx"
+    if cache.is_dir():
+        for entry in sorted(cache.iterdir()):
+            candidate = entry / "node_modules/.bin/dsh"
+            if candidate.exists():
+                return [str(candidate), "--profile", "headless"]
+    return None
 OWNER = "u1"     # Максим
 HEARTBEAT_SEC = 90    # аренда живёт 5 минут — сигнал втрое чаще, с запасом
                       # на пару пропущенных подряд (сеть, занятый сервер)
@@ -323,6 +347,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            env={**os.environ, **agent.get("env", {})},
         )
         out, _ = proc.communicate(timeout=3600)
         tail = (out or "").strip()[-400:]
@@ -549,8 +574,11 @@ def main() -> None:
     # уведомления. Своего ключа нет — агент просто не обслуживается.
     for uid, agent in list(EXTERNAL_AGENTS.items()):
         agent["token"] = os.environ.get(agent.get("token_env", ""), "").strip()
-        if not agent["token"]:
-            log(f"нет ключа для «{agent['name']}» — его задачи не обслуживаю")
+        if agent["cmd"] is None:
+            agent["cmd"] = find_dsh()
+        if not agent["token"] or not agent["cmd"]:
+            why = "нет ключа" if not agent["token"] else "не установлен"
+            log(f"«{agent['name']}»: {why} — его задачи не обслуживаю")
             EXTERNAL_AGENTS.pop(uid)
 
     if not TOKEN:
@@ -560,13 +588,14 @@ def main() -> None:
 
     # Соседние агенты — отдельными потоками. Нет токена — молча работаем
     # как раньше, только за себя: отсутствие ключа не повод не запускаться.
-    if HERMES_TOKEN:
+    # Поток на КАЖДОГО обслуживаемого агента, а не на одного жёстко: список
+    # растёт (Гермес, DeepSeek Harness, дальше — кто появится), и второе
+    # место, где перечислены агенты, разошлось бы с картой в первый же день.
+    for uid, agent in EXTERNAL_AGENTS.items():
         threading.Thread(
-            target=listen, args=("u3", HERMES_TOKEN, "Гермес"), daemon=True
+            target=listen, args=(uid, agent["token"], agent["name"]), daemon=True
         ).start()
-        log("слушаю и задачи Гермеса")
-    else:
-        log("токена Гермеса нет — его задачи слушать нечем")
+        log(f"слушаю задачи «{agent['name']}»")
 
     listen(ME, TOKEN, "Claude")
 
