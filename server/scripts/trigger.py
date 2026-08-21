@@ -355,9 +355,14 @@ def build_prompt(task: dict, reason: str) -> str:
 """
 
 
-def heartbeat_loop(task_id: str, stop: threading.Event) -> None:
+def heartbeat_loop(task_id: str, stop: threading.Event, token: str = "") -> None:
+    """Сигнал «работа идёт», пока жив запущенный нами процесс.
+
+    token — ключ ТОГО агента, за которого держим аренду: сервер продлевает
+    её только владельцу аренды, чужим ключом сигнал не считается.
+    """
     while not stop.wait(HEARTBEAT_SEC):
-        api("POST", f"/api/tasks/{task_id}/heartbeat", {})
+        api("POST", f"/api/tasks/{task_id}/heartbeat", {}, token=token)
 
 
 def run_external(task: dict, reason: str, agent: dict) -> None:
@@ -367,9 +372,16 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     поэтому им отдаётся тот же вводный текст, что и Клоду при первом
     заходе (build_prompt) — там и правила конвейера, и что за задача.
 
-    Аренду за них не держим: сервер продлевает её сам на каждое их
-    действие по задаче (комментарий, закрытие шага) — правка от
-    21.08.2026, после того как работающий Гермес выглядел пропавшим.
+    Аренду держим ПОКА ЖИВ ЕГО ПРОЦЕСС, его же ключом.
+
+    ⚠️ Раньше её не держали вовсе — считалось, что хватит продления на
+    каждое действие агента по задаче (комментарий, закрытие шага). Не
+    хватило: 21.08.2026 Гермес взял задачу по большому ТЗ, отметил первый
+    шаг и ушёл читать задание и писать код. Через пять минут молчания доска
+    показала «брошена», хотя процесс работал, — владелец увидел ровно то же,
+    что и в прошлый раз: «что-то он пропал». Длинный шаг — это норма, а не
+    признак пропажи, и отличить работающего агента от исчезнувшего может
+    только тот, кто его запустил.
     """
     task_id = task["id"]
     with LOCK:
@@ -409,6 +421,10 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     cmd = prefix + [build_prompt(task, reason)]
     log(f"  зову «{agent['name']}» на задачу {task_id[:8]}"
         + (f", модель {model}" if model and flag else ""))
+    stop = threading.Event()
+    threading.Thread(
+        target=heartbeat_loop, args=(task_id, stop, token), daemon=True
+    ).start()
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -423,6 +439,10 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     except Exception as e:
         log(f"  «{agent['name']}» не запустился: {e}")
     finally:
+        # Процесс кончился — сигнал прекращаем сразу: дальше «в работе»
+        # держит уже сам агент своими действиями, а если он не закрыл
+        # задачу, она честно должна остыть в брошенную.
+        stop.set()
         with LOCK:
             RUNNING.pop(task_id, None)
 
