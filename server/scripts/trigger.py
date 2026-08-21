@@ -355,6 +355,51 @@ def build_prompt(task: dict, reason: str) -> str:
 """
 
 
+# Сколько заходов подряд служба делает по одной задаче и сколько ждёт между
+# ними. Предел нужен не «на всякий случай»: заход это расход у провайдера
+# агента, и агент, застрявший на одном шаге, будет жечь его молча.
+MAX_RUNS = 8
+RUN_GAP_SEC = 10
+
+
+def closed_steps(task_id: str) -> int:
+    """Сколько шагов задачи закрыто — мерка продвижения между заходами."""
+    task = api("GET", f"/api/tasks/{task_id}") or {}
+    subs = task.get("subtasks") or []
+    return sum(1 for s in subs if s.get("done"))
+
+
+def note(task_id: str, text: str) -> None:
+    """Записка в карточку от службы — чтобы решение было видно владельцу."""
+    api("POST", f"/api/tasks/{task_id}/comments", {"text": text})
+
+
+def should_continue(task_id: str, before: int) -> tuple[bool, str]:
+    """Звать ли агента снова после того, как он завершил заход.
+
+    Три причины НЕ звать, и все они честные состояния, а не догадки:
+    агент сам сказал «жду владельца» (blocked) или сдал работу
+    (review/completed); все шаги закрыты; заход не сдвинул ни одного шага —
+    значит агент топчется, и следующий заход, скорее всего, потратит расход
+    впустую.
+    """
+    task = api("GET", f"/api/tasks/{task_id}")
+    if not task:
+        return False, "задачу больше не видно"
+    state = task.get("agent_state")
+    if state in ("blocked", "review", "completed"):
+        return False, f"агент сам поставил «{state}»"
+    if task.get("status") != "active":
+        return False, "задача больше не активна"
+    subs = task.get("subtasks") or []
+    if subs and all(s.get("done") for s in subs):
+        return False, "все шаги закрыты"
+    after = sum(1 for s in subs if s.get("done"))
+    if after <= before:
+        return False, "заход не сдвинул ни одного шага"
+    return True, ""
+
+
 def heartbeat_loop(task_id: str, stop: threading.Event, token: str = "") -> None:
     """Сигнал «работа идёт», пока жив запущенный нами процесс.
 
@@ -426,13 +471,54 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         target=heartbeat_loop, args=(task_id, stop, token), daemon=True
     ).start()
     try:
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            env={**os.environ, **agent.get("env", {})},
-        )
-        out, _ = proc.communicate(timeout=3600)
-        tail = (out or "").strip()[-400:]
-        log(f"  «{agent['name']}» закончил (код {proc.returncode}): {tail}")
+        # ЦЕПОЧКА ЗАХОДОВ. Решение владельца 21.08.2026: «когда он сам
+        # закончит, пусть выходит, а служба перезапустит».
+        #
+        # Почему так, а не «пусть работает до конца»: у Гермеса и dsh нет
+        # продолжаемой сессии — каждый заход это разовый запрос, агент
+        # отвечает столько, сколько считает нужным, и выходит. На большой
+        # задаче он честно останавливается посреди работы («работа не
+        # готова, а остановлена» — его же слова на задаче по переносу чата),
+        # и без внешнего повтора карточка так и замирает на середине.
+        for run in range(1, MAX_RUNS + 1):
+            before = closed_steps(task_id)
+            if run > 1:
+                log(f"  зову «{agent['name']}» снова (заход {run} из {MAX_RUNS})")
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                env={**os.environ, **agent.get("env", {})},
+            )
+            with LOCK:
+                RUNNING[task_id] = proc
+            out, _ = proc.communicate(timeout=3600)
+            tail = (out or "").strip()[-400:]
+            log(f"  «{agent['name']}» закончил заход {run} (код {proc.returncode}): {tail}")
+
+            keep, why = should_continue(task_id, before)
+            if not keep:
+                log(f"  цепочка окончена: {why}")
+                # Записку пишем только когда цепочка встала НЕ по-хорошему:
+                # «все шаги закрыты» и «агент сдал работу» владелец и так
+                # видит по карточке, лишний комментарий там только шум.
+                if why == "заход не сдвинул ни одного шага":
+                    note(task_id,
+                         f"Будильник: остановил цепочку — последний заход "
+                         f"«{agent['name']}» не закрыл ни одного шага "
+                         f"(заходов сделано: {run}). Работа не двигается: "
+                         f"либо шаг слишком крупный, либо агент упёрся и не "
+                         f"сказал об этом.")
+                break
+            if run == MAX_RUNS:
+                log(f"  цепочка окончена: предел {MAX_RUNS} заходов")
+                note(task_id,
+                     f"Будильник: остановил цепочку — сделано {MAX_RUNS} заходов "
+                     f"подряд, а работа не закончена. Дальше нужно твоё решение: "
+                     f"продолжить (сними и верни исполнителя) или разобрать, "
+                     f"почему шаги не двигаются.")
+                break
+            # Небольшая пауза: агент только что писал в карточку, дадим
+            # серверу дописать событие, а себе — не долбить запусками.
+            time.sleep(RUN_GAP_SEC)
     except subprocess.TimeoutExpired:
         proc.kill()
         log(f"  «{agent['name']}» не уложился в час — снят")
