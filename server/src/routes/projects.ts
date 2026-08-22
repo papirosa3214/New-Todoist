@@ -2,7 +2,12 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
-import { getProjectForUser, getLabelForUser, visibleScope } from "../access.js";
+import {
+  getProjectForUser,
+  getLabelForUser,
+  visibleScope,
+  ownerForNewShared,
+} from "../access.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -54,7 +59,10 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       const { color } = req.body;
       db.prepare(
         "INSERT INTO projects (id, name, color, owner_id) VALUES (?,?,?,?)",
-      ).run(id, name, color || "#4A9FD8", req.userId);
+        // Проект — общий инструмент: агент заводит его для работы, а не
+        // для себя. Записанный на агента, он не виден остальным (см.
+        // ownerForNewShared).
+      ).run(id, name, color || "#4A9FD8", ownerForNewShared(req.userId));
       return db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
     },
   });
@@ -162,7 +170,9 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       const { color } = req.body;
       db.prepare(
         "INSERT INTO labels (id, name, color, owner_id) VALUES (?,?,?,?)",
-      ).run(id, name, color || "#FF7A8A", req.userId);
+        // То же и с метками: их вешают на чужие задачи, значит видеть их
+        // должны все — и владелец, и агенты.
+      ).run(id, name, color || "#FF7A8A", ownerForNewShared(req.userId));
       return db.prepare("SELECT * FROM labels WHERE id = ?").get(id);
     },
   });

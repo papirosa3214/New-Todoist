@@ -39,7 +39,36 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const task = getTaskForWrite(req.params.id, req.userId);
-      if (!task) return reply.code(404).send({ error: "Not found" });
+      if (!task) {
+        // Задача может быть чужой, а не отсутствующей, и для агента это
+        // совсем разные новости. Голое «не найдено» сбивает с толку:
+        // 22.08.2026 Гермес получил его на не назначенную ему карточку и
+        // решил, что дело в пропавшем проекте — пошёл искать несуществующую
+        // причину вместо того, чтобы попросить назначить задачу на себя.
+        //
+        // Содержимое чужой задачи при этом не раскрываем — только сам факт
+        // и имя исполнителя: этого хватает, чтобы понять, что делать
+        // дальше, и не хватает, чтобы прочитать чужую работу.
+        const exists = db
+          .prepare(
+            `SELECT t.assignee_id, u.name AS assignee_name
+               FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
+              WHERE t.id = ?`,
+          )
+          .get(req.params.id) as
+          { assignee_id?: string; assignee_name?: string } | undefined;
+        if (exists) {
+          const who = exists.assignee_name
+            ? `назначена на «${exists.assignee_name}»`
+            : "не назначена ни на кого";
+          return reply.code(403).send({
+            error:
+              `эта задача ${who} — взять её в работу может только её ` +
+              `исполнитель. Попроси владельца назначить задачу на тебя.`,
+          });
+        }
+        return reply.code(404).send({ error: "Not found" });
+      }
 
       // Взять задачу в работу может только учётка-агент (type = 'ai').
       // Решение Максима 14.08.2026: сводка на «Обзоре» показывает «В

@@ -132,6 +132,22 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "008_shared_dictionaries_belong_to_owner",
+    description:
+      "проекты и метки, заведённые агентами, переписываются на владельца. Справочник — общий инструмент: им пользуются владелец и все агенты. Записанный на агента, он для остальных не существует, потому что агент видит только своё и принадлежащее владельцам. Поймано 22.08.2026: проект «AI Control Center» завёл Claude_Bot, и Гермес, получив задание по нему, не увидел проекта в списке вовсе — решил, что задачи нет, и завёл её у себя во внутреннем кабане. Источник закрыт в access.ts (ownerForNewShared), здесь переписываются уже заведённые.",
+    up: () => {
+      db.exec(`
+        UPDATE projects
+           SET owner_id = (SELECT id FROM users WHERE role = 'owner' ORDER BY id LIMIT 1)
+         WHERE owner_id IN (SELECT id FROM users WHERE type = 'ai');
+
+        UPDATE labels
+           SET owner_id = (SELECT id FROM users WHERE role = 'owner' ORDER BY id LIMIT 1)
+         WHERE owner_id IN (SELECT id FROM users WHERE type = 'ai');
+      `);
+    },
+  },
 ];
 
 /** Применить все ещё не применённые миграции, по одной транзакции на каждую. */
