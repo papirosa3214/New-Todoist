@@ -370,12 +370,13 @@ export function TaskDetailScreen() {
         className="mb-4"
       />
 
-      {/* Description — pl-[30px] = 18px ring + gap-3 (12px), keeps this
-          aligned under the title now that the ring shrank from 22px (was
-          pl-[34px] = 22+12 — recomputed here, same mismatch TaskBoard's
-          footer padding had after its own dot resize). */}
+      {/* Description — БЕЗ pl-[30px]: владелец 22.08.2026 хочет текст
+          вплотную по ширине экрана («выровнен по ширине мобильного
+          экрана, сейчас есть небольшой отступ»). Раньше отступ держал
+          описание под заголовком с кольцом, но это лишний воздух на
+          телефоне. */}
       {task.description && (
-        <p className="text-[14px] text-sub leading-relaxed mb-4 pl-[30px] whitespace-pre-wrap">
+        <p className="text-[14px] text-sub leading-relaxed mb-4 whitespace-pre-wrap">
           {task.description}
         </p>
       )}
@@ -383,11 +384,10 @@ export function TaskDetailScreen() {
       {/* Файлы самой задачи — приложенные в форме, под «Заметкой»
           (19.08.2026). Показываются здесь, а не в ленте: это часть
           описания задачи, а не сообщение в переписке. Тем же компонентом,
-          что и вложения ленты — картинка превью, документ строкой. Отступ
-          слева тот же pl-[30px], что у описания выше: файл продолжает
-          заметку, а не начинает новый уровень. */}
+          что и вложения ленты. Отступ слева убран вместе с описанием:
+          файл продолжает заметку вплотную к краю экрана. */}
       {task.attachments && task.attachments.length > 0 && (
-        <div className="mb-4 pl-[30px]">
+        <div className="mb-4">
           {task.attachments.map((att) => (
             <AttachmentView key={att.id} attachment={att} />
           ))}

@@ -50,9 +50,13 @@ const WEEKDAY_LETTERS = ["П", "В", "С", "Ч", "П", "С", "В"];
 // придумано заново, взято уже проверенное.
 const MONTH_ROW_H = 128;
 // Сколько недель заранее подгружено при первом открытии — до и после
-// начальной точки. Не «настоящая бесконечность с рождения Христова»: чем
-// дальше владелец проскроллит, тем больше довешивается чанками
-// (WEEKS_CHUNK) через IntersectionObserver на верхнем/нижнем сентинеле.
+// начальной точки. Начальная точка теперь — ПЕРВАЯ НЕДЕЛЯ ТЕКУЩЕГО МЕСЯЦА,
+// а не «8 недель до сегодня» (владелец 22.08.2026: «слишком много пустого
+// места до начала августа — подтянуть вверх»). При этом 8 недель ПРОШЛЫХ
+// остаются в списке намеренно: верхний sentinel имеет rootMargin 800px, и
+// если запас был бы меньше этой зоны (например 2 недели = 256px), он
+// срабатывал бы уже в первый кадр и дорисовывал сотни недель, уезжая от
+// начала месяца. 8 недель = 1024px > 800px — sentinel не виден на старте.
 const WEEKS_INITIAL_PAST = 8;
 const WEEKS_INITIAL_FUTURE = 16;
 const WEEKS_CHUNK = 12;
@@ -572,12 +576,28 @@ export function MonthGrid({
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
 
-  const [weeks, setWeeks] = useState<string[]>(() =>
-    Array.from(
+  // Список недель начинается С ПЕРВОЙ НЕДЕЛИ ТЕКУЩЕГО МЕСЯЦА (с запасом
+  // 2 недели наверх, чтобы верхний сентинел не дорисовывал сотни строк в
+  // первый кадр). Владелец 22.08.2026: «слишком много пустого места от
+  // предстоящего до начала августа — подтянуть вверх»; раньше список шёл
+  // от 8 недель ДО понедельника текущей недели, и при открытии месячного
+  // вида верх экрана занимала половина прошлого месяца.
+  const [weeks, setWeeks] = useState<string[]>(() => {
+    // Понедельник недели, содержащей 1-е число месяца от initialMonday.
+    const anchor = new Date(initialMonday + "T00:00:00");
+    const firstOf = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+    const dw = firstOf.getDay(); // 0 = вс
+    const firstWeekMonday = new Date(firstOf);
+    firstWeekMonday.setDate(firstOf.getDate() - (dw === 0 ? 6 : dw - 1));
+    const start = addDays(
+      firstWeekMonday.toISOString().slice(0, 10),
+      -WEEKS_INITIAL_PAST * 7,
+    );
+    return Array.from(
       { length: WEEKS_INITIAL_PAST + WEEKS_INITIAL_FUTURE + 1 },
-      (_, i) => addDays(initialMonday, (i - WEEKS_INITIAL_PAST) * 7),
-    ),
-  );
+      (_, i) => addDays(start, i * 7),
+    );
+  });
   // Список НАЧИНАЕТСЯ на WEEKS_INITIAL_PAST недель раньше сегодняшней —
   // без явной прокрутки первым кадром был бы виден самый край списка
   // (прошлый месяц), а не «сейчас», как ждёт владелец при открытии
@@ -592,6 +612,10 @@ export function MonthGrid({
       grid.getBoundingClientRect().top -
       sc.getBoundingClientRect().top +
       sc.scrollTop;
+    // Показываем ПЕРВУЮ НЕДЕЛЮ МЕСЯЦА: она на индексе WEEKS_INITIAL_PAST
+    // в списке (список начинается с WEEKS_INITIAL_PAST недель до неё).
+    // Владелец 22.08.2026: «подтянуть вверх, много пустого места до
+    // начала августа».
     sc.scrollTop = gridTop + WEEKS_INITIAL_PAST * MONTH_ROW_H;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
