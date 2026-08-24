@@ -27,6 +27,7 @@ import {
 import { todayStr, MONTHS_SHORT, addDays } from "../lib/date";
 import { isAgentAssignedTask } from "../lib/taskOwner";
 import { TaskRow } from "../components/TaskRow";
+import { AppleCalendarEvents } from "../components/AppleCalendarEvents";
 import {
   TaskFilterButton,
   TaskFilterSheet,
@@ -215,16 +216,12 @@ export function UpcomingScreen() {
     [allTasks, agents],
   );
 
-  // This screen only ever renders tasks that have a due_date (groupedTasks
-  // below drops everything else) — so the filter's task universe has to be
-  // `datedTasks`, not every active task, or the sheet would offer a
-  // project/label/assignee that exists only on undated tasks. Picking such
-  // an option would leave `tasks` matching real (undated) tasks while the
-  // calendar/list shows nothing and no "ничего не подошло" message fires,
-  // since that check also needs to compare against the dated universe.
+  // This screen only ever renders tasks that have a due_date >= today
+  // (просроченные задачи отображаются на экране «Сегодня», в «Предстоящих»
+  // отображаются только сегодняшние и будущие задачи).
   const datedTasks = useMemo(
-    () => activeTasks.filter((t) => t.due_date),
-    [activeTasks],
+    () => activeTasks.filter((t) => t.due_date && t.due_date >= today),
+    [activeTasks, today],
   );
 
   // Filter options from the full dated set (pre-filter), same rule as
@@ -1162,6 +1159,7 @@ export function UpcomingScreen() {
                 {formatFullDate(dateStr)}
               </span>
             </div>
+            <AppleCalendarEvents dateStr={dateStr} className="mb-2" />
             {groupedTasks[dateStr].map((task) => (
               <TaskRow
                 key={task.id}

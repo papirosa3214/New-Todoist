@@ -16,6 +16,7 @@ import { useAppStore } from "../store";
 import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
 import { TaskRow } from "../components/TaskRow";
 import { DayHours, type DayColumnData } from "../components/DayHours";
+import { AppleCalendarEvents } from "../components/AppleCalendarEvents";
 import { RescheduleSheet } from "../components/RescheduleSheet";
 import { ActionsMenu } from "../components/ActionsMenu";
 import {
@@ -556,6 +557,7 @@ export function TodayScreen() {
         </div>
       ) : (
         <div className="space-y-[2px]">
+          <AppleCalendarEvents dateStr={today} className="mb-2.5" />
           {waitingTasks.length > 0 && (
             <div className="flex items-center gap-1.5 px-1 pt-2 pb-1">
               <Icon name="bot" size={13} className="text-text" />

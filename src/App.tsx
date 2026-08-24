@@ -22,6 +22,8 @@ import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
 import { LabelTasksScreen } from "./screens/LabelTasksScreen";
 import { SearchScreen } from "./screens/SearchScreen";
 import { VoiceModelsScreen } from "./screens/VoiceModelsScreen";
+import { IntegrationsScreen } from "./screens/IntegrationsScreen";
+import { TemplatesScreen } from "./screens/TemplatesScreen";
 import { Icon } from "./components/UI";
 
 // Catch-all for unknown routes: without this a bad/typo'd URL renders the
@@ -102,6 +104,8 @@ export default function App() {
           <Route path="/labels/:id" element={<LabelTasksScreen />} />
           <Route path="/search" element={<SearchScreen />} />
           <Route path="/settings/voice-models" element={<VoiceModelsScreen />} />
+          <Route path="/settings/integrations" element={<IntegrationsScreen />} />
+          <Route path="/settings/templates" element={<TemplatesScreen />} />
         </Route>
       </Route>
 

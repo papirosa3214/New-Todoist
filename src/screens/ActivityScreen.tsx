@@ -37,6 +37,7 @@ import { Card, FieldRow } from "../components/TaskFields";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { parseServerDate, todayStr, addDays } from "../lib/date";
 import { useBottomSheet } from "../lib/useBottomSheet";
+import { ActivityChart } from "../components/ActivityChart";
 import type { ApiTask } from "../api/types";
 
 const MONTHS_FULL = [
@@ -54,7 +55,7 @@ const MONTHS_FULL = [
   "декабря",
 ];
 
-type Period = "week" | "month" | "all";
+export type Period = "week" | "month" | "quarter" | "year";
 
 interface Filters {
   projectId: string | null; // null = все проекты
@@ -73,7 +74,8 @@ const DEFAULT_FILTERS: Filters = {
 const PERIOD_OPTIONS: { key: Period; label: string }[] = [
   { key: "week", label: "Неделя" },
   { key: "month", label: "Месяц" },
-  { key: "all", label: "Всё время" },
+  { key: "quarter", label: "3 месяца" },
+  { key: "year", label: "Год" },
 ];
 
 // completed_at is SQLite `datetime('now')` (UTC, no offset marker) — must
@@ -603,11 +605,20 @@ export function ActivityScreen() {
   // means "last 7 days", so a task completed last Tuesday still counts on
   // this Monday. Recomputed only when the period selection changes.
   const periodCutoff = useMemo(() => {
-    if (filters.period === "all") return null;
-    const days = filters.period === "week" ? 7 : 30;
     const d = new Date();
-    d.setDate(d.getDate() - days);
-    return d;
+    if (filters.period === "week") {
+      d.setDate(d.getDate() - 7);
+      return d;
+    }
+    if (filters.period === "month") {
+      return new Date(d.getFullYear(), d.getMonth(), 1);
+    }
+    if (filters.period === "quarter") {
+      d.setDate(d.getDate() - 90);
+      return d;
+    }
+    // "year" — с 1 января текущего года
+    return new Date(d.getFullYear(), 0, 1);
   }, [filters.period]);
 
   const filtered = useMemo(() => {
@@ -651,6 +662,20 @@ export function ActivityScreen() {
       }));
   }, [filtered, today, yesterday]);
 
+  const filteredAllTasks = useMemo(() => {
+    return allTasks.filter((t) => {
+      if (filters.projectId && t.project_id !== filters.projectId) return false;
+      if (filters.labelId && !t.labels.some((l) => l.id === filters.labelId))
+        return false;
+      if (filters.assigneeKey === "__none") {
+        if (t.assignee_id) return false;
+      } else if (filters.assigneeKey && t.assignee_id !== filters.assigneeKey) {
+        return false;
+      }
+      return true;
+    });
+  }, [allTasks, filters]);
+
   const activeFilterCount =
     (filters.projectId ? 1 : 0) +
     (filters.labelId ? 1 : 0) +
@@ -662,10 +687,10 @@ export function ActivityScreen() {
       ? "неделю"
       : filters.period === "month"
         ? "месяц"
-        : null;
-  const summaryText = periodWord
-    ? `За ${periodWord} выполнено ${filtered.length}`
-    : `Всего выполнено ${filtered.length}`;
+        : filters.period === "quarter"
+          ? "3 месяца"
+          : "год";
+  const summaryText = `За ${periodWord} выполнено ${filtered.length}`;
 
   const showTrueEmpty = !isLoading && completed.length === 0;
   const showFilteredEmpty =
@@ -700,8 +725,16 @@ export function ActivityScreen() {
         className="mt-3"
       />
 
+      {!isLoading && (
+        <ActivityChart
+          tasks={filteredAllTasks}
+          period={filters.period}
+          onPeriodChange={(newP) => setFilters((f) => ({ ...f, period: newP }))}
+        />
+      )}
+
       {!isLoading && !showTrueEmpty && (
-        <p className="px-1 text-[13px] text-sub mt-3 mb-3">{summaryText}</p>
+        <p className="px-1 text-[13px] text-sub mt-2 mb-3">{summaryText}</p>
       )}
 
       {showTrueEmpty && (

@@ -248,59 +248,42 @@ function BoardCard({
             12px. Owner noticed the text sitting at a different distance
             from the dot depending on which screen/view showed the same
             task — this was the one outlier. */}
-        <div className="flex items-start gap-3">
-          {/* Квадратик-отметка убран (Максим 18.08.2026: «не надо мне эти
-              квадратики, они только всё портят») — закрыть задачу теперь
-              можно только изнутри неё (TaskDetailScreen.tsx), тап по
-              карточке целиком открывает её. Аватарка исполнителя осталась.
-              w-[24px] фиксирована и -ml-[6px] (забирает место у ручки-хвата
-              слева, есть запас — px-2/mr-1) — без этого колонка была бы по
-              ширине Avatar только когда исполнитель есть, и текст задачи
-              гулял бы вправо/влево (тот же баг всплыл 18.08.2026 из-за
-              квадратика, тут причина та же). */}
-          <div className="flex flex-col items-center shrink-0 w-[24px] -ml-[6px]">
+        <div className="w-full">
+          {/* Проект — верхней строкой над названием, решётка плюс
+              цветной текст без заливки. */}
+          {showProjectBadge && task.project_name && (
+            <div
+              className="mb-1 inline-flex min-w-0 max-w-full items-center gap-1 text-[10px] font-medium leading-none"
+              style={{ color: task.project_color || "#A6A6A6" }}
+            >
+              <Icon name="hash" size={9} className="shrink-0" />
+              <span className="truncate">{task.project_name}</span>
+            </div>
+          )}
+
+          {/* Строка названия с аватаркой исполнителя (если назначен) */}
+          <div className="w-full flex items-center gap-1.5 min-w-0">
             {task.assignee_id && task.assignee_initials && (
               <Avatar
                 initials={task.assignee_initials}
                 color={task.assignee_color || "#A6A6A6"}
                 avatar_url={task.assignee_avatar_url}
-                size={24}
+                size={18}
               />
             )}
-          </div>
-          <div className="min-w-0 flex-1">
-            {/* Проект — верхней строкой над названием, решётка плюс
-                цветной текст без заливки. Тот же вид, что в строке списка
-                и в карточке задачи (владелец 19.08.2026: «пусть везде
-                будет решётка и название, в самом верху, без заливки»).
-                Из футера ниже он убран — там он был пилюлей с подложкой. */}
-            {showProjectBadge && task.project_name && (
-              <div
-                // leading-none — не косметика: у строки 10px с обычным
-                // межстрочным интервалом сверху остаётся ~4pt полулидинга,
-                // и замер карточки давал 16pt воздуха сверху против 12pt
-                // снизу (владелец 19.08.2026: «посчитай расстояние от верха
-                // плашки до первого слова и от последней метки до низа —
-                // они должны быть одинаковыми, выровняй по нижней части»).
-                // С leading-none кромка текста садится на padding карточки.
-                className="mb-1 inline-flex min-w-0 max-w-full items-center gap-1 text-[10px] font-medium leading-none"
-                style={{ color: task.project_color || "#A6A6A6" }}
-              >
-                <Icon name="hash" size={9} className="shrink-0" />
-                <span className="truncate">{task.project_name}</span>
-              </div>
-            )}
             <div
-              className={`text-[13px] leading-snug line-clamp-2 ${isDone ? "line-through text-sub" : "text-text"}`}
+              className={`text-[13px] leading-snug line-clamp-2 flex-1 min-w-0 ${isDone ? "line-through text-sub" : "text-text"}`}
             >
               {task.title}
             </div>
-            {task.description && (
-              <div className="text-[11px] text-sub truncate mt-0.5">
-                {task.description}
-              </div>
-            )}
           </div>
+
+          {/* Описание */}
+          {task.description && (
+            <div className="text-[11px] text-sub truncate mt-0.5">
+              {task.description}
+            </div>
+          )}
         </div>
         {hasFooter && (
           // pl-[26px] = 18px dot + gap-2 (8px) — keeps the footer badges

@@ -25,6 +25,7 @@ import { registerAiRoutes } from "./routes/ai.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
 import { registerAgentServiceRoutes } from "./routes/agent-service.js";
+import { registerIntegrationRoutes } from "./routes/integrations.js";
 import { registerSeedRoutes } from "./seed.js";
 
 /**
@@ -141,6 +142,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // бессрочно — прямое решение владельца.
   registerDictationArchiveRoutes(app);
   registerAgentServiceRoutes(app);
+  registerIntegrationRoutes(app);
   registerSeedRoutes(app);
 
   // Health

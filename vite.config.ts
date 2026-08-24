@@ -21,8 +21,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), basicSsl()],
   server: {
     proxy: {
-      "/api": "http://localhost:3001",
-      "/ws": { target: "ws://localhost:3001", ws: true },
+      "/api": "http://192.168.1.110:3001",
+      "/ws": { target: "ws://192.168.1.110:3001", ws: true },
     },
   },
   // Vitest и Playwright — разные раннеры с одинаковым расширением файлов.

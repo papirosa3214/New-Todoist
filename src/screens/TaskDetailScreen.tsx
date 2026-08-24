@@ -38,6 +38,7 @@ import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import { combineDictatedText } from "../lib/dictationParser";
 import { useUploadAttachment, useDeleteAttachment } from "../api/attachments";
+import { TemplateStore } from "../lib/templates";
 import { AttachmentView } from "../components/AttachmentView";
 import type { ApiAttachment } from "../api/types";
 import { SubtaskFeed } from "../components/SubtaskFeed";
@@ -199,16 +200,26 @@ export function TaskDetailScreen() {
     setPending((prev) => prev.filter((a) => a.id !== attId));
   };
 
+  const [templateToast, setTemplateToast] = useState(false);
+
+  const handleSaveAsTemplate = () => {
+    if (!task) return;
+    TemplateStore.saveTemplate({
+      title: task.title,
+      description: task.description || undefined,
+      priority: task.priority || 4,
+      subtasks: task.subtasks?.map((st) => st.title) || [],
+      category: "Пользовательские",
+    });
+    setTemplateToast(true);
+    setTimeout(() => setTemplateToast(false), 2500);
+  };
+
   if (isLoading) {
     return <Loading variant="block" />;
   }
 
   if (isError) {
-    // A 404 (deleted task, stale link, someone else's task) is the common
-    // case here and isn't a connectivity problem — showing "проверьте
-    // соединение" for it would be misleading. useTask has retry: false, so
-    // any non-404 failure (offline, 5xx) falls through to the ErrorBanner
-    // below, which turns a raw ApiError/TypeError into real Russian copy.
     if (error instanceof ApiError && error.status === 404) {
       return (
         <div className="px-4 py-8 text-center text-sub">Задача не найдена</div>
@@ -231,51 +242,43 @@ export function TaskDetailScreen() {
     );
   }
 
-  // Цвет приоритета теперь показывает флажок у заголовка, а не обводка
-  // отметки (решение Максима 15.08.2026).
   const priority = PRIORITIES.find((p) => p.key === task.priority);
   const taskProject = projects.find((p) => p.id === task.project_id);
   const showPriorityFlag = !!task.priority && task.priority <= 3;
-  // Максим 17.08.2026: «когда есть подзадачи, убирать квадратик из главной
-  // задачи» — не только пока подзадачи не все закрыты (это уже было), а
-  // ВООБЩЕ, пока задача активна. Отметить готовой одним тычком по квадрату
-  // здесь больше нельзя, если есть хоть одна подзадача: закрытие идёт через
-  // приёмку сданной работы («Принять» в TaskJournal.tsx). Уже выполненную
-  // задачу тычком возвращают в работу как и раньше — это не «закрытие»,
-  // квадрат тут просто индикатор состояния.
   const showHeaderCheckbox =
     task.status === "completed" || task.subtasks.length === 0;
 
   return (
-    // pb-4 (16px) — исходный отступ снизу для «десктопной» рамки/Android,
-    // где 100dvh сам ужимается под клавиатуру (см. index.html:38,
-    // interactive-widget=resizes-content). На WebKit (Safari, режим «с
-    // домашнего экрана») этого не происходит — 16px тонет под клавиатурой
-    // высотой 280-340px, поэтому здесь добавлен --kb-inset
-    // (useVisualViewportInset.ts): пока клавиатура закрыта, переменная
-    // 0px и calc() равен ровно pb-4, как и было; открыта — отступ растёт
-    // на её высоту.
     <div className="px-4 pb-[calc(1rem+var(--kb-inset,0px))]">
       {dialog}
+      {templateToast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border border-teal/40 rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 text-sm text-teal">
+          <Icon name="check" size={16} />
+          <span>Задача сохранена в шаблоны!</span>
+        </div>
+      )}
       <ScreenHeader
         variant="compact"
         leading={<BackButton onClick={() => navigate(-1)} />}
         title=""
-        // Три точки → меню из двух пунктов убраны (Максим 18.08.2026):
-        // «Изменить» и так означает то же, что «Добавить подзадачу» внизу
-        // (обе ведут в форму редактирования — переименована и вынесена из-
-        // под условия ниже, теперь видна всегда, не только когда все
-        // подзадачи выполнены). «Удалить» — единственное действие, у
-        // которого не было своего места, и оно получает прямую кнопку:
-        // назад слева, корзина справа, без промежуточного меню.
         actions={
-          <button
-            onClick={handleDelete}
-            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
-            aria-label="Удалить задачу"
-          >
-            <Icon name="trash" size={18} className="text-coral" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleSaveAsTemplate}
+              className="tap-scale w-[40px] h-[44px] flex items-center justify-center text-dim active:text-amber-400"
+              aria-label="Сохранить как шаблон"
+              title="Сохранить как шаблон"
+            >
+              <Icon name="bookmark" size={18} />
+            </button>
+            <button
+              onClick={handleDelete}
+              className="tap-scale w-[40px] h-[44px] flex items-center justify-center"
+              aria-label="Удалить задачу"
+            >
+              <Icon name="trash" size={18} className="text-coral" />
+            </button>
+          </div>
         }
       />
 
@@ -289,7 +292,7 @@ export function TaskDetailScreen() {
           gap-3, чтобы бейдж встал по одной вертикали с текстом задачи, а
           не с отметкой. */}
       {taskProject && (
-        <div className="mb-2 pl-[30px]">
+        <div className="mb-2">
           {/* Без заливки — просто решётка и цветной текст, как в строке
               списка и на карточке доски (владелец 19.08.2026: «она не
               должна иметь заливку, просто цветной текст с решёткой»). */}
@@ -303,29 +306,9 @@ export function TaskDetailScreen() {
         </div>
       )}
 
-      {/* Priority ring + Title — owner 2026-08-13: was 22px (odd one out
-          against the 18px this app's other two priority dots — list rows,
-          board cards — now converge on), unified down to the same 18px so
-          every priority dot in the app measures the same. */}
+      {/* Priority ring + Title */}
       <div className="flex items-start gap-3 mb-4">
-        {/* Квадрат и серый — как в списке и на доске (решение Максима
-            15.08.2026): круг остаётся за подзадачами, цвет приоритета ушёл
-            во флажок. Отметка в шапке — только для задач без подзадач
-            (или уже выполненных, для возврата в работу) — см.
-            showHeaderCheckbox выше. */}
-        {showHeaderCheckbox ? (
-          // Зона нажатия — 44×44 (норма HIG), а сам квадрат остаётся 18×18:
-          // это ГЛАВНЫЙ контрол завершения задачи, и мазать по нему пальцем
-          // было нечем (замер 19.08.2026: проба elementFromPoint ±22pt не
-          // попадала ни по одной оси). Расширяем прозрачным ::before ровно
-          // 44×44 (h-11 w-11) по центру кнопки, а НЕ паддингом с
-          // отрицательным margin: паддинг раздул бы саму коробку кнопки, и
-          // gap-3 отодвинул бы заголовок вправо. Размер задан явно, а не
-          // через -inset: у кнопки рамка 2px, отсчёт inset идёт от
-          // padding-box (14×14), и «-inset-[13px]» дало бы 40×40 — замер это
-          // и показал. z-10 — потому что заголовок идёт в разметке ПОСЛЕ
-          // кнопки и без него перехватывал бы правую половину зоны (проба
-          // ±21.5pt вправо падала именно на h1).
+        {showHeaderCheckbox && (
           <button
             onClick={handleToggleStatus}
             className="relative z-10 mt-1 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center tap-scale before:absolute before:left-1/2 before:top-1/2 before:h-11 before:w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-['']"
@@ -334,16 +317,7 @@ export function TaskDetailScreen() {
               <Icon name="check" size={12} className="text-white" />
             )}
           </button>
-        ) : (
-          <div className="mt-1 w-[18px] h-[18px] shrink-0" aria-hidden="true" />
         )}
-        {/* leading-snug (1.375× = 27.5px) убран 20.08.2026: интерлиньяж
-            крупных кеглей задаёт таблица в index.css (@layer base), у 20px
-            там 23px — собственный бокс шрифта. Со snug заголовок карточки
-            шёл с тем же воздухом, что основной текст 15px, хотя по §15
-            крупному набору положено теснее; заодно уходила дробная высота
-            строки 27.5px. Утилита в разметке перебила бы таблицу (утилиты
-            лежат слоем выше), поэтому её именно снимаем, а не меняем. */}
         <h1
           className={`text-[20px] font-semibold flex-1 ${task.status === "completed" ? "line-through text-sub" : ""}`}
         >

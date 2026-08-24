@@ -33,7 +33,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useProjects } from "../api/projects";
-import { useLabels, useCreateLabel } from "../api/labels";
+import { useLabels } from "../api/labels";
 import { useAgents } from "../api/agents";
 import { useCreateTask, useTask, useUpdateTask } from "../api/tasks";
 import {
@@ -139,7 +139,6 @@ export function TaskFormScreen() {
   const { data: labels = [], isError: labelsError } = useLabels();
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
-  const createLabel = useCreateLabel();
   const {
     data: existingTask,
     isLoading: taskLoading,
@@ -636,11 +635,6 @@ export function TaskFormScreen() {
         ? prev.filter((l) => l !== labelId)
         : [...prev, labelId],
     );
-  };
-
-  const handleCreateLabel = async (name: string) => {
-    const label = await createLabel.mutateAsync({ name });
-    setSelectedLabelIds((prev) => [...prev, label.id]);
   };
 
   // Edit mode sends only what actually changed. Sending every field
@@ -1164,6 +1158,11 @@ export function TaskFormScreen() {
             )}
           </div>
           <PriorityField value={priority} onChange={setPriority} />
+          <LabelsField
+            labels={labels}
+            selectedIds={selectedLabelIds}
+            onToggle={toggleLabel}
+          />
         </Card>
       </div>
 
@@ -1268,23 +1267,6 @@ export function TaskFormScreen() {
             )}
           </>
         )}
-      </div>
-
-      {/* ── Labels — mockup .tags-row ── */}
-      <div className="text-[13px] text-sub font-semibold mb-2">Метки</div>
-      <div className="mb-4">
-        <LabelsField
-          labels={labels}
-          selectedIds={selectedLabelIds}
-          onToggle={toggleLabel}
-          onCreate={handleCreateLabel}
-        />
-        <ErrorBanner
-          error={createLabel.error}
-          fallback="Не удалось создать метку. Проверьте соединение."
-          variant="block"
-          className="mt-2"
-        />
       </div>
 
       {/* ── Диктовка — owner 2026-08-13, третий заход по концепции: не

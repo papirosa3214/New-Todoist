@@ -40,10 +40,11 @@ const MONTHS_FULL = [
   "ноября",
   "декабря",
 ];
-const WEEKDAYS_SHORT = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+const WEEKDAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 function genCalendar(year: number, month: number) {
-  const first = new Date(year, month, 1).getDay();
+  // Неделя начинается с понедельника: 0 = Пн, ..., 6 = Вс
+  const first = (new Date(year, month, 1).getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const cells: (number | null)[] = [];
   for (let i = 0; i < first; i++) cells.push(null);
@@ -139,8 +140,10 @@ export function RescheduleSheet({
   const weekend = addDays(today, satOffset);
   const mondayOffset = (1 - dow + 7) % 7 || 7; // ditto for Monday
   const nextWeek = addDays(today, mondayOffset);
-  const weekdayOf = (d: string) =>
-    WEEKDAYS_SHORT[new Date(d + "T00:00:00").getDay()];
+  const weekdayOf = (d: string) => {
+    const day = new Date(d + "T00:00:00").getDay();
+    return WEEKDAYS_SHORT[(day + 6) % 7];
+  };
 
   const quickOptions: QuickOption[] = [
     {

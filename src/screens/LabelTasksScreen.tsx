@@ -192,9 +192,8 @@ export function LabelTasksScreen() {
                       </span>
                     )}
                     {hasSubtasks && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                        <Icon name="check" size={10} /> {doneSub}/
-                        {task.subtasks.length}
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-card text-sub">
+                        {doneSub}/{task.subtasks.length}
                       </span>
                     )}
                   </div>

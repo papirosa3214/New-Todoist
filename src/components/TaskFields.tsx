@@ -28,7 +28,6 @@ import {
   todayStr,
   tomorrowStr,
 } from "../lib/date";
-import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { hapticCross, hapticNotch, hapticWarmup } from "../lib/haptics";
 import { PRIORITIES } from "../lib/priority";
 import type { ApiLabel } from "../api/types";
@@ -206,7 +205,8 @@ export function PriorityField({
 // ═══════════ DUE DATE ═══════════
 
 function miniCal(year: number, month: number) {
-  const first = new Date(year, month, 1).getDay();
+  // Неделя начинается с понедельника: 0 = Пн, ..., 6 = Вс
+  const first = (new Date(year, month, 1).getDay() + 6) % 7;
   const days = new Date(year, month + 1, 0).getDate();
   const cells: (number | null)[] = [];
   for (let i = 0; i < first; i++) cells.push(null);
@@ -780,7 +780,7 @@ export function DueDateField({
             </button>
           </div>
           <div className="grid grid-cols-7 gap-0">
-            {["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"].map((d) => (
+            {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((d) => (
               <div key={d} className="text-center text-[10px] text-dim py-1">
                 {d}
               </div>
@@ -889,105 +889,84 @@ export function LabelsField({
   labels,
   selectedIds,
   onToggle,
-  onCreate,
+  asCardRow = true,
 }: {
   labels: ApiLabel[];
   selectedIds: string[];
   onToggle: (id: string) => void;
-  onCreate: (name: string) => void | Promise<void>;
+  asCardRow?: boolean;
 }) {
-  const [creating, setCreating] = useState(false);
-  const [name, setName] = useState("");
-  // `saving` here is display-only (spinner/disabled styling) — the actual
-  // re-entrancy guard against a double tap creating the label twice is
-  // useGuardedCallback's synchronous ref below, not this state.
-  const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(false);
+  const selectedLabels = labels.filter((l) => selectedIds.includes(l.id));
 
-  const submit = useGuardedCallback(async () => {
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setCreating(false);
-      return;
-    }
-    setSaving(true);
-    try {
-      await onCreate(trimmed);
-      setName("");
-      setCreating(false);
-    } finally {
-      setSaving(false);
-    }
-  });
+  const content = (
+    <div className="flex flex-wrap gap-2 px-4 py-3 bg-card2/30">
+      {labels.map((l) => {
+        const active = selectedIds.includes(l.id);
+        return (
+          <button
+            key={l.id}
+            type="button"
+            onClick={() => onToggle(l.id)}
+            className="inline-flex items-center gap-1.5 text-[12px] font-semibold rounded-[10px] px-3 py-1.5 transition-colors active:scale-95"
+            style={{
+              backgroundColor: active
+                ? l.color + "33"
+                : "rgba(255,255,255,.08)",
+              color: active ? l.color : "#A6A6A6",
+              border: active ? `1px solid ${l.color}66` : "1px solid transparent",
+            }}
+          >
+            {active && <Icon name="check" size={11} />}
+            {l.name}
+          </button>
+        );
+      })}
+      {labels.length === 0 && (
+        <div className="text-[13px] text-dim py-1">Нет доступных меток</div>
+      )}
+    </div>
+  );
+
+  if (!asCardRow) {
+    return (
+      <div className="w-full bg-card rounded-2xl overflow-hidden">
+        {content}
+      </div>
+    );
+  }
 
   return (
-    <div className="w-full bg-card rounded-2xl overflow-hidden">
-      <div className="flex flex-wrap gap-2 px-4 py-3">
-        {labels.map((l) => {
-          const active = selectedIds.includes(l.id);
-          return (
-            <button
-              key={l.id}
-              onClick={() => onToggle(l.id)}
-              className="inline-flex items-center gap-1 text-[12px] font-semibold rounded-[10px] px-3 py-2 transition-colors"
-              style={{
-                backgroundColor: active
-                  ? l.color + "26"
-                  : "rgba(255,255,255,.08)",
-                color: active ? l.color : "#A6A6A6",
-              }}
-            >
-              {active && <Icon name="check" size={11} />}
-              {l.name}
-            </button>
-          );
-        })}
-        {/* Кнопка «+ новая» убрана 19.08.2026 по решению владельца: метки
-            заводятся в настройках («Метки»), и второй вход сюда же плодил
-            дубли — «я в настройках себе выставляю, а оно двоится». Здесь
-            остаётся только ВЫБОР из уже заведённых. Механизм создания
-            (creating/onCreate ниже) не удалён: им пользуется экран меток,
-            а удалять рабочий код ради одной скрытой кнопки — лишний риск,
-            уже наступали (см. историю PriorityPill выше в этом файле). */}
-      </div>
-      {creating && (
-        <div className="border-t border-stroke flex items-center gap-2 px-4 py-2.5">
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-              if (e.key === "Escape") {
-                setCreating(false);
-                setName("");
-              }
-            }}
-            placeholder="Название метки"
-            className="flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none"
-          />
-          <button
-            onClick={submit}
-            disabled={!name.trim() || saving}
-            className="p-2 -m-1 shrink-0 disabled:opacity-40"
-          >
-            <Icon name="check" size={18} className="text-red" />
-          </button>
-          <button
-            onClick={() => {
-              setCreating(false);
-              setName("");
-            }}
-            className="p-2 -m-1 shrink-0"
-          >
-            <Icon name="x" size={16} className="text-dim" />
-          </button>
-        </div>
-      )}
-      {labels.length === 0 && !creating && (
-        <div className="px-4 pb-3 -mt-1 text-[12px] text-dim">
-          Меток пока нет
-        </div>
-      )}
+    <div>
+      <FieldRow
+        icon="tag"
+        label="Метки"
+        value={
+          selectedLabels.length > 0 ? (
+            <span className="flex items-center gap-1.5 max-w-[200px] overflow-hidden">
+              {selectedLabels.slice(0, 2).map((l) => (
+                <span
+                  key={l.id}
+                  className="px-2 py-0.5 rounded-[6px] text-[11px] font-medium truncate"
+                  style={{ backgroundColor: l.color + "26", color: l.color }}
+                >
+                  {l.name}
+                </span>
+              ))}
+              {selectedLabels.length > 2 && (
+                <span className="text-[12px] text-dim">
+                  +{selectedLabels.length - 2}
+                </span>
+              )}
+            </span>
+          ) : (
+            "Нет"
+          )
+        }
+        chevronOpen={open}
+        onClick={() => setOpen((o) => !o)}
+      />
+      {open && <div className="border-t border-stroke">{content}</div>}
     </div>
   );
 }

@@ -115,6 +115,7 @@ export function FanMenu() {
   // Icon — обычный компонент без forwardRef, ref в него не пробросить —
   // вращаем обёртку-span вокруг него, визуально то же самое.
   const iconWrapRef = useRef<HTMLSpanElement | null>(null);
+  const shineRef = useRef<HTMLSpanElement | null>(null);
 
   // Один пункт = одна пружина на общем rAF-цикле (useMultiSpring), value
   // 0..1 разом двигает opacity/scale/смещение — тот же приём, что
@@ -222,7 +223,7 @@ export function FanMenu() {
               toggle(false);
               navigate(item.path);
             }}
-            className="tap-scale fixed left-1/2 z-[35] flex items-center justify-center rounded-full border border-stroke bg-card2 shadow-fan-item"
+            className="tap-scale fixed left-1/2 z-[35] flex items-center justify-center rounded-full border border-white/20 bg-card2/85 shadow-fan-item backdrop-blur-md active:scale-95"
             style={{
               width: ITEM_SIZE,
               height: ITEM_SIZE,
@@ -231,12 +232,16 @@ export function FanMenu() {
               opacity: 0,
               transform: "translate3d(0,0,0) scale(0.5)",
               pointerEvents: "none",
+              boxShadow: active
+                ? "inset 0 1px 1px 0 rgba(255,255,255,0.40), 0 8px 24px -2px rgba(228,67,50,0.35), 0 0 0 1px rgba(228,67,50,0.5)"
+                : "inset 0 1px 1px 0 rgba(255,255,255,0.30), inset 0 -1px 1px 0 rgba(0,0,0,0.20), 0 8px 24px -2px rgba(0,0,0,0.45)",
             }}
           >
             <Icon
               name={item.icon}
               size={22}
-              className={active ? "text-red" : "text-sub"}
+              className={active ? "text-red" : "text-text"}
+              style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.4))" }}
             />
           </button>
         );
@@ -244,37 +249,50 @@ export function FanMenu() {
 
       <button
         type="button"
-        // Короткий тап — веер, удержание — сразу новая задача (владелец
-        // 19.08.2026). Обработка на pointer-событиях, а не onClick:
-        // click приходит уже после отпускания, и отличить «подержал» от
-        // «нажал» в нём нечем. onPointerLeave/Cancel обязательны — палец
-        // может уехать с кнопки, и тогда не должно случиться ни того, ни
-        // другого.
+        // Короткий тап — веер, удержание — сразу новая задача.
         onPointerDown={() => {
           heldRef.current = false;
+          if (shineRef.current) {
+            shineRef.current.style.transition = "none";
+          }
           holdTimer.current = setTimeout(() => {
             heldRef.current = true;
-            // Порог удержания взят — и это надо СКАЗАТЬ пальцем, а не
-            // экраном (владелец 20.08.2026: «чтобы сигнализировал, что я
-            // перехожу в создание задачи, а не просто нажал»). До этого
-            // момента у короткого тапа и у удержания не было никакой
-            // разницы в ощущении, а расходятся они полностью: тап открывает
-            // веер, удержание уводит на новую задачу. Тот же вес, что у
-            // захвата карточки: это ровно оно и есть — жест «взял».
             hapticGrab();
             if (open) toggle(false);
             navigate("/task/new");
           }, HOLD_MS);
         }}
+        onPointerMove={(e) => {
+          if (shineRef.current) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const moveX = (x / rect.width) * 100 - 50;
+            const moveY = (y / rect.height) * 100 - 50;
+            shineRef.current.style.transform = `translate(${moveX * 0.4 - 10}%, ${moveY * 0.4 - 10}%)`;
+          }
+        }}
         onPointerUp={() => {
           if (holdTimer.current) clearTimeout(holdTimer.current);
+          if (shineRef.current) {
+            shineRef.current.style.transition = "transform 0.5s ease";
+            shineRef.current.style.transform = "translate(-10%, -10%)";
+          }
           if (!heldRef.current) toggle(!open);
         }}
         onPointerLeave={() => {
           if (holdTimer.current) clearTimeout(holdTimer.current);
+          if (shineRef.current) {
+            shineRef.current.style.transition = "transform 0.5s ease";
+            shineRef.current.style.transform = "translate(-10%, -10%)";
+          }
         }}
         onPointerCancel={() => {
           if (holdTimer.current) clearTimeout(holdTimer.current);
+          if (shineRef.current) {
+            shineRef.current.style.transition = "transform 0.5s ease";
+            shineRef.current.style.transform = "translate(-10%, -10%)";
+          }
         }}
         aria-expanded={open}
         aria-label={
@@ -282,45 +300,53 @@ export function FanMenu() {
             ? "Закрыть меню разделов"
             : "Открыть меню разделов, удержание — новая задача"
         }
-        // Матовое тёмное стекло вместо плоской красной заливки — Максим
-        // 17.08.2026: «оно выбивается из общего стиля», хотел тёмное и
-        // прозрачное, а из-под стекла — аккуратное свечение. Свечение
-        // (внешний shadow) Максим прямо попросил не трогать («забей на
-        // подсветку, всё нормально») — второй заход тем же днём был
-        // только про саму заливку: «более прозрачную кнопку, чтобы видно
-        // было, как текст мимо неё проходит, когда скроллю». alpha обеих
-        // стоп градиента снижена трижды (.5→.32→.28→.20, .55→.4→.3→.22) —
-        // тонкая светлая обводка (border-white/10) отделяет край стекла от
-        // фона за ним, как и положено стеклу.
-        //
-        // backdrop-blur снижался дважды по шкале Tailwind: -xl(24px) →
-        // -md(12px) было мало, текст под кнопкой всё ещё было не разобрать
-        // — до -sm(8px). Владелец 20.08.2026 после третьего захода по alpha
-        // (.28→.20): «абсолютно такая же самая мутная» — то есть держал
-        // именно blur, не заливку: alpha управляет тем, НАСКОЛЬКО кнопка
-        // тонирует то, что под ней, а blur — тем, ЧИТАЕТСЯ ли это через
-        // неё вообще; можно снизить первое хоть до нуля, а стекло всё равно
-        // останется мутным, если размытие не тронуто. Шаг вниз по шкале,
-        // которого ещё не было: -xs(4px) — ровно половина прежнего.
-        //
-        // Тем же ходом владелец уточнил направление: снижение alpha дальше
-        // не нужно — «прозрачность не надо уменьшать» — а нужно ЗАТЕМНЁННОЕ
-        // стекло: заливка темнее/плотнее, не светлее, при уже сниженном
-        // blur. Развернул alpha периферийного (тёмного) стопа обратно вверх
-        // — .22→.42, темнее прежних значений (было .3 на втором заходе);
-        // красный акцент в центре тоже поднят (.20→.30), чтобы свечение не
-        // потерялось на фоне заметно потемневшего края.
-        className="tap-scale fixed left-1/2 z-[36] flex items-center justify-center rounded-full border border-white/10 text-white shadow-fan-fab backdrop-blur-xs"
+        // Тёмный полупрозрачный рубиновый кристалл (Dark Ruby Translucent Glass):
+        // Благородный глубокий тёмно-красный оттенок в тон тёмной теме,
+        // мягкая полупрозрачность с лайтовым размытием текста под кнопкой.
+        className="tap-scale fixed left-1/2 z-[36] flex items-center justify-center rounded-full text-white overflow-hidden active:scale-95 select-none"
         style={{
           width: TRIGGER_SIZE,
           height: TRIGGER_SIZE,
           marginLeft: -TRIGGER_SIZE / 2,
           bottom: SAFE_BOTTOM,
-          background:
-            "radial-gradient(circle at 50% 35%, rgba(228,67,50,.30), rgba(23,23,23,.42) 72%)",
+          border: "0.5px solid rgba(255, 255, 255, 0.28)",
+          background: `
+            radial-gradient(ellipse 90% 50% at 50% 0%, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.08) 45%, transparent 70%),
+            linear-gradient(135deg, rgba(185, 30, 22, 0.78) 0%, rgba(135, 18, 12, 0.82) 50%, rgba(85, 10, 8, 0.88) 100%)
+          `,
+          backdropFilter: "blur(12px) saturate(180%) contrast(105%)",
+          WebkitBackdropFilter: "blur(12px) saturate(180%) contrast(105%)",
+          boxShadow: `
+            inset 0 1.5px 0.5px 0 rgba(255, 255, 255, 0.55),
+            inset 0 -1.5px 1px 0 rgba(0, 0, 0, 0.40),
+            0 8px 24px -2px rgba(135, 18, 12, 0.50),
+            0 4px 12px rgba(0, 0, 0, 0.40)
+          `,
+          transition: "transform 0.3s cubic-bezier(0.25, 1, 0.5, 1), box-shadow 0.3s ease",
+          WebkitTapHighlightColor: "transparent",
+          WebkitUserSelect: "none",
+          userSelect: "none",
         }}
       >
-        <span ref={iconWrapRef} className="inline-flex">
+        {/* Динамический слой блика (Apple dynamic shine-layer) */}
+        <span
+          ref={shineRef}
+          className="absolute -top-1/2 -left-1/2 w-[200%] h-[200%] pointer-events-none"
+          style={{
+            background:
+              "linear-gradient(135deg, rgba(255, 255, 255, 0) 30%, rgba(255, 255, 255, 0.18) 45%, rgba(255, 255, 255, 0.35) 50%, rgba(255, 255, 255, 0.18) 55%, rgba(255, 255, 255, 0) 70%)",
+            transform: "translate(-10%, -10%)",
+            willChange: "transform",
+          }}
+        />
+
+        <span
+          ref={iconWrapRef}
+          className="relative z-10 inline-flex pointer-events-none"
+          style={{
+            filter: "drop-shadow(0 1px 3px rgba(0, 0, 0, 0.50))",
+          }}
+        >
           <Icon name="plus" size={26} />
         </span>
       </button>

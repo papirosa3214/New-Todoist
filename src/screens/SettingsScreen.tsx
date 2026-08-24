@@ -5,7 +5,6 @@ import {
   Icon,
   ScreenHeader,
   ErrorBanner,
-  BackButton,
   Avatar,
 } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
@@ -355,19 +354,7 @@ export function SettingsScreen() {
 
   return (
     <div className="px-4 pb-4">
-      <ScreenHeader
-        variant="compact"
-        // Была своя красная кнопка-галочка справа («Готово») — Максим
-        // (17.08.2026): «тут не галочка нужна, тут справа обычная кнопка
-        // назад, как она везде у нас есть, стрелочка». Обычный BackButton
-        // слева — тот же паттерн, что у Agents/TaskDetail/LabelTasks и
-        // остальных compact-экранов (см. пример в комментарии самого
-        // ScreenHeader в UI.tsx).
-        leading={<BackButton onClick={() => navigate(-1)} />}
-        title="Настройки"
-        // Отступ снизу теперь встроен в сам ScreenHeader (UI.tsx) — Максим
-        // 17.08.2026 попросил унифицировать его по всем экранам разом.
-      />
+      <ScreenHeader title="Настройки" />
 
       <ErrorBanner
         error={error}
@@ -415,14 +402,16 @@ export function SettingsScreen() {
       <div className="mb-4">
         <FieldGroup>
           <Row
-            icon="bell"
-            label="Уведомления"
-            onClick={() => navigate("/notifications")}
+            icon="hash"
+            iconColor="#E44235"
+            label="Проекты"
+            onClick={() => navigate("/projects")}
           />
           <Row
-            icon="activity"
-            label="Активность"
-            onClick={() => navigate("/activity")}
+            icon="bookmark"
+            iconColor="#FF9500"
+            label="Шаблоны задач"
+            onClick={() => navigate("/settings/templates")}
           />
           <Row icon="tag" label="Метки" onClick={() => navigate("/labels")} />
           <Row icon="bot" label="Агенты" onClick={() => navigate("/agents")} />
@@ -431,6 +420,12 @@ export function SettingsScreen() {
             iconColor="#4a9fd8"
             label="Модели распознавания"
             onClick={() => navigate("/settings/voice-models")}
+          />
+          <Row
+            icon="share"
+            iconColor="#34C759"
+            label="Интеграции (Google, Apple)"
+            onClick={() => navigate("/settings/integrations")}
           />
         </FieldGroup>
       </div>

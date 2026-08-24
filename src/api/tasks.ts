@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { AgentState, ApiTask } from "./types";
+import { AppleIntegrations } from "../lib/appleIntegrations";
 
 export function useTasks() {
   return useQuery({
@@ -44,9 +45,12 @@ export function useCreateTask() {
   return useMutation({
     mutationFn: (body: CreateTaskInput) =>
       api.post<{ task: ApiTask }>("/api/tasks", body),
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["projects"] });
+      if (data?.task) {
+        AppleIntegrations.syncTaskToApple(data.task);
+      }
     },
   });
 }
@@ -72,10 +76,11 @@ export function useUpdateTask() {
   return useMutation({
     mutationFn: ({ id, ...body }: UpdateTaskInput) =>
       api.patch<{ task: ApiTask }>(`/api/tasks/${id}`, body),
-    onSuccess: () => {
-      // The response is the raw row with no labels/subtasks/joins —
-      // refetch instead of seeding the cache from it.
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["tasks"] });
+      if (data?.task) {
+        AppleIntegrations.syncTaskToApple(data.task);
+      }
     },
   });
 }
@@ -83,7 +88,10 @@ export function useUpdateTask() {
 export function useDeleteTask() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.delete<{ ok: boolean }>(`/api/tasks/${id}`),
+    mutationFn: (id: string) => {
+      AppleIntegrations.deleteTaskFromApple(id);
+      return api.delete<{ ok: boolean }>(`/api/tasks/${id}`);
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
   });
 }

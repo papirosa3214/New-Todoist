@@ -178,7 +178,7 @@ describe("Доступ по роли: владелец, агенты, посто
       url: `/api/tasks/${id}/claim`,
       headers: { authorization: `Bearer ${agentBToken}` },
     });
-    expect(claim.statusCode).toBe(404);
+    expect(claim.statusCode).toBe(403);
   });
 
   it("агент работает со своей задачей как раньше", async () => {

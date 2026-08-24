@@ -148,6 +148,42 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "009_integrations",
+    description:
+      "таблицы для интеграций с внешними сервисами (Google Tasks, Apple Reminders/Calendar): хранение токенов, настроек и маппинга внешних идентификаторов задач",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS user_integrations (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          provider TEXT NOT NULL,
+          account_email TEXT,
+          access_token TEXT,
+          refresh_token TEXT,
+          token_expires_at INTEGER,
+          settings TEXT DEFAULT '{}',
+          last_synced_at TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now')),
+          UNIQUE(user_id, provider)
+        );
+
+        CREATE TABLE IF NOT EXISTS task_external_mappings (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          provider TEXT NOT NULL,
+          external_id TEXT NOT NULL,
+          external_list_id TEXT,
+          last_synced_at TEXT DEFAULT (datetime('now')),
+          UNIQUE(task_id, provider)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_task_mappings_task ON task_external_mappings(task_id);
+        CREATE INDEX IF NOT EXISTS idx_task_mappings_ext ON task_external_mappings(provider, external_id);
+      `);
+    },
+  },
 ];
 
 /** Применить все ещё не применённые миграции, по одной транзакции на каждую. */

@@ -494,51 +494,43 @@ export function TaskRow({
           // сверху добавляются поле внутри PNG аватарки и полулидинг
           // первой строки, а нижние пилюли прижаты к своей кромке.
           // Выравнивание по нижней части, как он и просил.
-          className="tap-row w-full flex items-start gap-3 pt-[9px] pb-3 px-4 bg-bg text-left"
+          className="tap-row w-full flex items-start justify-between gap-2 pt-[9px] pb-3 px-4 bg-bg text-left"
         >
-          {/* w-[24px] фиксирована: без неё колонка была бы по ширине Avatar
-              (24px) только когда исполнитель есть, иначе не занимала бы места
-              вовсе — заголовок задачи гулял бы вправо/влево в зависимости от
-              того, назначен ли исполнитель (тот же баг всплыл на доске
-              18.08.2026, здесь тот же паттерн: место держится всегда). */}
-          <div className="flex flex-col items-center shrink-0 w-[24px]">
-            {showAvatar && task.assignee_id && task.assignee_initials && (
-              <Avatar
-                initials={task.assignee_initials}
-                color={task.assignee_color || "#A6A6A6"}
-                avatar_url={task.assignee_avatar_url}
-                size={24}
-              />
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            {/* Проект — САМОЙ ВЕРХНЕЙ строкой, над названием задачи, и
-                одинаково во всех представлениях: решётка плюс цветной
-                текст, без заливки (владелец 19.08.2026: «почему в списке
-                одна метка, а на доске другая? пусть везде будет решётка и
-                название, в самом верху, без заливки — просто цветной
-                текст»). Раньше здесь была пилюля с подложкой и без
-                решётки, а на доске — с решёткой, и одна задача выглядела
-                в двух местах по-разному. */}
+          <div className="flex-1 min-w-0 flex flex-col items-start">
+            {/* Проект — САМОЙ ВЕРХНЕЙ строкой, над названием задачи */}
             {hasProjectBadge && (
               <div
-                className="mb-0.5 inline-flex min-w-0 max-w-full items-center gap-1 text-[11px] font-medium"
+                className="mb-1 inline-flex min-w-0 max-w-full items-center gap-1 text-[11px] font-medium"
                 style={{ color: task.project_color || "#A6A6A6" }}
               >
                 <Icon name="hash" size={10} className="shrink-0" />
                 <span className="truncate">{task.project_name}</span>
               </div>
             )}
+
+          {/* Строка названия с аватаркой исполнителя (если назначен) */}
+          <div className="w-full flex items-center gap-2 min-w-0">
+            {showAvatar && task.assignee_id && task.assignee_initials && (
+              <Avatar
+                initials={task.assignee_initials}
+                color={task.assignee_color || "#A6A6A6"}
+                avatar_url={task.assignee_avatar_url}
+                size={20}
+              />
+            )}
             <div
-              className={`text-[15px] leading-snug truncate ${isDone ? "line-through text-sub" : "text-text"}`}
+              className={`text-[15px] leading-snug truncate flex-1 min-w-0 ${isDone ? "line-through text-sub" : "text-text"}`}
             >
               {task.title}
             </div>
-            {task.description && (
-              <div className="text-[13px] text-sub mt-0.5 line-clamp-2">
-                {task.description}
-              </div>
-            )}
+          </div>
+
+          {/* Описание — на всю ширину карточки */}
+          {task.description && (
+            <div className="w-full text-[13px] text-sub mt-1 line-clamp-2">
+              {task.description}
+            </div>
+          )}
             {hasMeta && (
               <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
                 {/* Приоритет флажком (решение Максима 15.08.2026). Раньше он
@@ -594,9 +586,8 @@ export function TaskRow({
                   </span>
                 )}
                 {hasSubtasksBadge && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                    <Icon name="check" size={10} /> {doneSub}/
-                    {task.subtasks.length}
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-card text-sub">
+                    {doneSub}/{task.subtasks.length}
                   </span>
                 )}
                 {/* После счётчика подзадач, не перед ним (просьба Максима

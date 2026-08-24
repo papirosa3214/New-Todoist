@@ -810,16 +810,59 @@ public class LocalAIPlugin: CAPPlugin, CAPBridgedPlugin {
 //
 // Класс лежит в этом файле осознанно: он уже в target App. Отдельный файл
 // потребовал бы правки project.pbxproj — лишний риск ради пяти строк.
+import SwiftUI
+
+// ════════════ ОФИЦИАЛЬНЫЙ APPLE SWIFTUI LIQUID GLASS ════════════
+public class GlassButtonState: ObservableObject {
+  @Published public var isOpen: Bool = false
+}
+
+public struct SwiftUIAppleGlassButton: View {
+  @ObservedObject var state: GlassButtonState
+  var onTap: () -> Void
+  var onLongPress: () -> Void
+
+  public var body: some View {
+    Button {
+      onTap()
+    } label: {
+      Image(systemName: "plus")
+        .font(.system(size: 26, weight: .semibold))
+        .foregroundStyle(.white)
+        .blendMode(.overlay)
+        .rotationEffect(.degrees(state.isOpen ? 45 : 0))
+        .frame(width: 64, height: 64)
+    }
+    .background(.ultraThinMaterial, in: Circle())
+    .overlay(
+      Circle()
+        .strokeBorder(
+          LinearGradient(
+            colors: [
+              Color.white.opacity(0.70),
+              Color.white.opacity(0.15)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+          ),
+          lineWidth: 0.75
+        )
+    )
+    .shadow(color: Color.black.opacity(0.35), radius: 14, x: 0, y: 8)
+    .simultaneousGesture(
+      LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+        let gen = UIImpactFeedbackGenerator(style: .heavy)
+        gen.impactOccurred()
+        onLongPress()
+      }
+    )
+  }
+}
+
 public class LocalAIBridgeViewController: CAPBridgeViewController {
   public override func capacitorDidLoad() {
     bridge?.registerPluginInstance(LocalAIPlugin())
-    // Виброотклик (TFHapticsPlugin.swift) — по той же причине руками.
-    // 20.08.2026 он был добавлен без этой строки, и промах вышел ровно
-    // такой, как описано выше: имя TFHaptics в списке Capacitor.Plugins
-    // появлялось (его туда кладёт registerPlugin на стороне JS), а первый
-    // же вызов отвечал «"TFHaptics" plugin is not implemented on ios», и
-    // весь отклик молча шёл слабым запасным путём. Поймано логом
-    // устройства, а не на глаз.
     bridge?.registerPluginInstance(TFHapticsPlugin())
+    bridge?.registerPluginInstance(EventKitPlugin())
   }
 }

@@ -32,7 +32,7 @@ import { flushArchiveQueue } from "../lib/dictationArchive";
 // matchPath, not string comparison) can only be wrong by omission, and the
 // four entries below are exhaustive by construction — every other screen in
 // App.tsx is deliberately absent.
-const TAB_ROUTES = ["/inbox", "/today", "/upcoming", "/overview"];
+const TAB_ROUTES = ["/inbox", "/today", "/upcoming", "/overview", "/settings"];
 
 // Переключатель нижней панели на мобильном — задача Максима 17.08.2026,
 // «попробовать веер вместо горбика+FAB». "fan" — новый FanMenu.tsx
