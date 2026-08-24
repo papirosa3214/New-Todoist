@@ -199,6 +199,7 @@ xcrun devicectl device process launch --device 00008150-001545400144401C \
 | Документ | Описание |
 | :--- | :--- |
 | [`STATUS.md`](STATUS.md) | **Живой статус проекта:** текущие задачи, кто работает, последние изменения. |
+| [`docs/AGENTS-SETUP-GUIDE.md`](docs/AGENTS-SETUP-GUIDE.md) | **Подключение агентов от А до Я:** создание, ключи, MCP, автономный будильник. |
 | [`AGENT-PROTOCOL.md`](AGENT-PROTOCOL.md) | **Правила агентов:** жизненный цикл задач, шаги, аренда, сдача работы. |
 | [`AGENT-API.md`](AGENT-API.md) | **API для агентов:** спецификация REST-эндпоинтов, токены, MCP. |
 | [`INTEGRATIONS.md`](INTEGRATIONS.md) | **Интеграции:** настройка Google Tasks, Apple Calendar и Reminders. |

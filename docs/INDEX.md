@@ -16,9 +16,10 @@
 
 ## 🤖 Протокол и API AI-агентов
 
-1. [**AGENT-PROTOCOL.md**](../AGENT-PROTOCOL.md) — строгие правила работы AI-агентов с доской, аренда задач, ведение подзадач, предотвращение дедлоков.
-2. [**AGENT-API.md**](../AGENT-API.md) — спецификация REST API и MCP-инструментов для внешних исполнителей.
-3. [**server/scripts/TRIGGER.md**](../server/scripts/TRIGGER.md) — документация службы-будильника (`trigger.py`), WebSocket-подключения, сухого прогона.
+1. [**AGENTS-SETUP-GUIDE.md**](AGENTS-SETUP-GUIDE.md) — **руководство по подключению и настройке AI-агентов от А до Я** (создание, токены, MCP для IDE, автономный будильник, аватарки).
+2. [**AGENT-PROTOCOL.md**](../AGENT-PROTOCOL.md) — строгие правила работы AI-агентов с доской, аренда задач, ведение подзадач, предотвращение дедлоков.
+3. [**AGENT-API.md**](../AGENT-API.md) — спецификация REST API и MCP-инструментов для внешних исполнителей.
+4. [**server/scripts/TRIGGER.md**](../server/scripts/TRIGGER.md) — документация службы-будильника (`trigger.py`), WebSocket-подключения, сухого прогона.
 
 ---
 
