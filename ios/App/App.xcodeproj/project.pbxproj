@@ -18,6 +18,7 @@
 		8958B4A2F410C3C33FBB84EC /* LocalAIPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DFC5411DECB8C009450481F /* LocalAIPlugin.swift */; };
 		7A1C4E20B3D94F1180AA0101 /* TFHapticsPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1C4E20B3D94F1180AA0102 /* TFHapticsPlugin.swift */; };
 		7A1C4E20B3D94F1180AA0201 /* EventKitPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1C4E20B3D94F1180AA0202 /* EventKitPlugin.swift */; };
+		7A1C4E20B3D94F1180AA0301 /* TaskFlowAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1C4E20B3D94F1180AA0302 /* TaskFlowAppIntents.swift */; };
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 /* End PBXBuildFile section */
 
@@ -25,6 +26,7 @@
 		2DFC5411DECB8C009450481F /* LocalAIPlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LocalAIPlugin.swift; sourceTree = "<group>"; };
 		7A1C4E20B3D94F1180AA0102 /* TFHapticsPlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TFHapticsPlugin.swift; sourceTree = "<group>"; };
 		7A1C4E20B3D94F1180AA0202 /* EventKitPlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = EventKitPlugin.swift; sourceTree = "<group>"; };
+		7A1C4E20B3D94F1180AA0302 /* TaskFlowAppIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskFlowAppIntents.swift; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -82,6 +84,7 @@
 				2DFC5411DECB8C009450481F /* LocalAIPlugin.swift */,
 				7A1C4E20B3D94F1180AA0102 /* TFHapticsPlugin.swift */,
 				7A1C4E20B3D94F1180AA0202 /* EventKitPlugin.swift */,
+				7A1C4E20B3D94F1180AA0302 /* TaskFlowAppIntents.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -174,6 +177,7 @@
 				8958B4A2F410C3C33FBB84EC /* LocalAIPlugin.swift in Sources */,
 				7A1C4E20B3D94F1180AA0101 /* TFHapticsPlugin.swift in Sources */,
 				7A1C4E20B3D94F1180AA0201 /* EventKitPlugin.swift in Sources */,
+				7A1C4E20B3D94F1180AA0301 /* TaskFlowAppIntents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
