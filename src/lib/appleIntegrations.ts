@@ -308,6 +308,7 @@ export const AppleIntegrations = {
       title: string;
       description?: string;
       due_date?: string;
+      start_time?: string;
       priority?: number;
       project_id?: string;
     }) => Promise<any>,
@@ -337,12 +338,25 @@ export const AppleIntegrations = {
 
       if (!existingTask) {
         // Создаем задачу в TaskFlow в проекте "Apple Напоминания"
-        const dueDate = rem.dueDate ? rem.dueDate.split("T")[0] : undefined;
+        let dueDate: string | undefined = undefined;
+        let startTime: string | undefined = undefined;
+        if (rem.dueDate) {
+          const parts = rem.dueDate.split("T");
+          dueDate = parts[0];
+          if (parts[1]) {
+            const timeParts = parts[1].split(":");
+            if (timeParts.length >= 2 && !(timeParts[0] === "00" && timeParts[1] === "00")) {
+              startTime = `${timeParts[0]}:${timeParts[1]}`;
+            }
+          }
+        }
+
         try {
           const res = await createTaskInTaskFlow({
             title: rem.title,
             description: rem.notes,
             due_date: dueDate,
+            start_time: startTime,
             priority: rem.priority,
             project_id: defaultProjectId,
           });
