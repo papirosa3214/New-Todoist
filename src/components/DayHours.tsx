@@ -548,6 +548,8 @@ export function DayHours({
   projectColor,
   onTaskClick,
   onSchedule,
+  onPrevDay,
+  onNextDay,
 }: {
   days: DayColumnData[];
   /** Цвет блока в сетке берётся от ПРОЕКТА задачи, не из отдельной
@@ -563,10 +565,78 @@ export function DayHours({
    *  ездить». Дата всегда та колонка, куда отпустили, даже если у задачи
    *  уже была другая (человек явно переносит её на другой день). */
   onSchedule?: (id: string, date: string, time: string) => void;
+  onPrevDay?: () => void;
+  onNextDay?: () => void;
 }) {
   const interactive = !!onSchedule;
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const swipeContainerRef = useRef<HTMLDivElement>(null);
+  const isHorizontalSwipeRef = useRef<boolean | null>(null);
+  const isSwipeDraggingRef = useRef(false);
+  const swipeStartXRef = useRef(0);
+  const swipeStartYRef = useRef(0);
+  const swipeCurrentXRef = useRef(0);
+
+  const setSwipeOffset = (x: number, animated = false) => {
+    swipeCurrentXRef.current = x;
+    if (swipeContainerRef.current) {
+      swipeContainerRef.current.style.transition = animated
+        ? "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)"
+        : "none";
+      swipeContainerRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
+    }
+  };
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    swipeStartXRef.current = e.clientX;
+    swipeStartYRef.current = e.clientY;
+    swipeCurrentXRef.current = 0;
+    isHorizontalSwipeRef.current = null;
+    isSwipeDraggingRef.current = true;
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isSwipeDraggingRef.current) return;
+    const dx = e.clientX - swipeStartXRef.current;
+    const dy = e.clientY - swipeStartYRef.current;
+    if (isHorizontalSwipeRef.current === null) {
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        isHorizontalSwipeRef.current = Math.abs(dx) > Math.abs(dy) * 1.2;
+      }
+    }
+    if (!isHorizontalSwipeRef.current) return;
+    let nextX = dx;
+    if (Math.abs(nextX) > 100) {
+      const over = Math.abs(nextX) - 100;
+      nextX = Math.sign(nextX) * (100 + over * 0.35);
+    }
+    setSwipeOffset(nextX, false);
+  };
+
+  const handlePointerUp = () => {
+    if (!isSwipeDraggingRef.current) return;
+    isSwipeDraggingRef.current = false;
+    if (!isHorizontalSwipeRef.current) {
+      setSwipeOffset(0, true);
+      return;
+    }
+    const dx = swipeCurrentXRef.current;
+    if (Math.abs(dx) >= 60) {
+      hapticNotch();
+      const dir = dx < 0 ? -1 : 1;
+      const targetW = swipeContainerRef.current?.clientWidth || 360;
+      setSwipeOffset(dir * targetW * 0.35, true);
+      setTimeout(() => {
+        if (dx < 0 && onNextDay) onNextDay();
+        else if (dx > 0 && onPrevDay) onPrevDay();
+        setSwipeOffset(0, false);
+      }, 120);
+    } else {
+      setSwipeOffset(0, true);
+    }
+  };
   // Хвоста сетки под кнопку здесь больше нет (был до 19.08.2026: сетке
   // добавлялась высота нижнего отступа страницы, погашенная отрицательным
   // margin, чтобы линии-элементы доходили под кнопку-веер). Его работу
@@ -1090,8 +1160,16 @@ export function DayHours({
             больше не спорят с приклеенным пулом выше — иначе они
             выигрывали бы у него как более поздние в DOM при равном
             z-index и рисовались бы поверх пула. */}
-        <div className="relative z-0 -mx-4">
-          <div ref={scrollRef} className="relative">
+        <div className="relative z-0 -mx-4 overflow-hidden">
+          <div
+            ref={swipeContainerRef}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            style={{ willChange: "transform", touchAction: "pan-y" }}
+          >
+            <div ref={scrollRef} className="relative">
             {/* Подписи дней раньше стояли здесь своим sticky-слоем под
                 шапкой. С 19.08.2026 они рендерятся ВНУТРИ ScreenHeader
                 (DayColumnsHeader ниже, передаётся из TodayScreen) — так у
@@ -1219,6 +1297,7 @@ export function DayHours({
             </div>
           </div>
         </div>
+      </div>
 
         {interactive && !anyTimed && (
           <p className="px-1 text-center text-[12px] text-dim">

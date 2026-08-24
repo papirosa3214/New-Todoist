@@ -197,26 +197,36 @@ export function TodayScreen() {
   // сетки исчезала бы — а время у неё чаще всего как раз проставлено.
   //
   // Агентские задачи в сетку НЕ идут вовсе (19.08.2026, владелец: «нахуя
-  // агентские задачи в календаре, они точно уж там не должны находиться»)
-  // — в отличие от списочного вида ниже, где они остаются как обычное
-  // текстовое напоминание, как было раньше.
+  const [hourDateOffset, setHourDateOffset] = useState(0);
+  const activeHourDate = useMemo(() => {
+    if (hourDateOffset === 0) return today;
+    const d = new Date(today + "T00:00:00");
+    d.setDate(d.getDate() + hourDateOffset);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, [today, hourDateOffset]);
+
   const hourDays: DayColumnData[] = useMemo(() => {
     const withoutAgent = (t: ApiTask) => !isAgentAssignedTask(t, agents);
+    const dateTasks = allTasks.filter((t) => t.due_date === activeHourDate);
+    const combined =
+      activeHourDate === today
+        ? Array.from(
+            new Map(
+              [...waitingTasks, ...todayTasks, ...overdueTasks].map((t) => [
+                t.id,
+                t,
+              ]),
+            ).values(),
+          )
+        : dateTasks;
     return [
       {
-        date: today,
-        tasks: Array.from(
-          new Map(
-            [...waitingTasks, ...todayTasks, ...overdueTasks].map((t) => [
-              t.id,
-              t,
-            ]),
-          ).values(),
-        ).filter(withoutAgent),
-        isToday: true,
+        date: activeHourDate,
+        tasks: combined.filter(withoutAgent),
+        isToday: activeHourDate === today,
       },
     ];
-  }, [today, waitingTasks, todayTasks, overdueTasks, agents]);
+  }, [activeHourDate, today, waitingTasks, todayTasks, overdueTasks, allTasks, agents]);
 
   // trueEmpty (unaffected by filters — from the "…All" sets) still drives
   // the big illustration screen below: it means there's genuinely nothing
@@ -318,7 +328,11 @@ export function TodayScreen() {
       // двадцатая — там же, где написано „Сегодня“, прямо в шапке»; и следом
       // — «во всех представлениях, и списки, и доска»). Раньше «часы» одни
       // показывали дату (снизу отдельной плашкой), список и доска — статику.
-      title={formatWeekdayDateLabel(today)}
+      title={
+        layout === "hours"
+          ? formatWeekdayDateLabel(activeHourDate)
+          : formatWeekdayDateLabel(today)
+      }
       // Раньше подпись дня жила отдельной плашкой под шапкой
       // (DayColumnsHeader, история — Максим 19.08.2026: «чтобы даты были
       // приклеены к верхней шапке»). Смысл сохранён — дата приклеена к
@@ -519,6 +533,8 @@ export function TodayScreen() {
               projects.find((p) => p.id === t.project_id)?.color || "#717171"
             }
             onTaskClick={(id) => navigate(`/task/${id}`)}
+            onPrevDay={() => setHourDateOffset((o) => o - 1)}
+            onNextDay={() => setHourDateOffset((o) => o + 1)}
             // Перетащили задачу на шкалу — назначаем и время, и дату
             // колонки, куда отпустили (20.08.2026: раньше только время, а
             // дата ставилась сегодняшней и только если её раньше не было —

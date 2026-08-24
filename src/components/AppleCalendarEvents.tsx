@@ -41,7 +41,14 @@ export function AppleCalendarEvents({ dateStr, className = "" }: Props) {
         return (
           <div
             key={ev.id}
-            className="flex items-start gap-2.5 px-3 py-2 rounded-xl bg-card border border-stroke/40 text-xs shadow-xs"
+            onClick={() => {
+              if (typeof window !== "undefined" && (window as any).Capacitor) {
+                import("@capacitor/haptics").then(({ Haptics, ImpactStyle }) => {
+                  Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
+                });
+              }
+            }}
+            className="flex items-start gap-2.5 px-3 py-2 rounded-xl bg-card border border-stroke/40 text-xs shadow-xs transition-transform active:scale-[0.98] cursor-pointer"
           >
             <div
               className="w-1.5 h-full min-h-[28px] rounded-full shrink-0"

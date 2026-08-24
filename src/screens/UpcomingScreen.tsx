@@ -1213,6 +1213,16 @@ export function UpcomingScreen() {
             navigate(`/task/${id}`);
           }}
           onClose={() => setOpenDay(null)}
+          onPrevDay={() => {
+            const d = new Date(openDay + "T00:00:00");
+            d.setDate(d.getDate() - 1);
+            setOpenDay(formatDateStr(d.getFullYear(), d.getMonth(), d.getDate()));
+          }}
+          onNextDay={() => {
+            const d = new Date(openDay + "T00:00:00");
+            d.setDate(d.getDate() + 1);
+            setOpenDay(formatDateStr(d.getFullYear(), d.getMonth(), d.getDate()));
+          }}
         />
       )}
 

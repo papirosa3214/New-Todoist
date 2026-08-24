@@ -707,6 +707,90 @@ export function DueDateField({
       ? `${formatDueLabel(value!)} · ${formatTimeRange(time, duration)}`
       : formatDueLabel(value!);
 
+  const calGridRef = useRef<HTMLDivElement>(null);
+  const isDraggingCalRef = useRef(false);
+  const calStartXRef = useRef(0);
+  const calStartYRef = useRef(0);
+  const calCurrentXRef = useRef(0);
+  const isHorizontalCalRef = useRef<boolean | null>(null);
+
+  const setCalOffset = (x: number, animated = false) => {
+    calCurrentXRef.current = x;
+    if (calGridRef.current) {
+      calGridRef.current.style.transition = animated
+        ? "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)"
+        : "none";
+      calGridRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
+    }
+  };
+
+  const handleCalPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    calStartXRef.current = e.clientX;
+    calStartYRef.current = e.clientY;
+    calCurrentXRef.current = 0;
+    isHorizontalCalRef.current = null;
+    isDraggingCalRef.current = true;
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+  };
+
+  const handleCalPointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingCalRef.current) return;
+    const dx = e.clientX - calStartXRef.current;
+    const dy = e.clientY - calStartYRef.current;
+    if (isHorizontalCalRef.current === null) {
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+        isHorizontalCalRef.current = Math.abs(dx) > Math.abs(dy);
+      }
+    }
+    if (!isHorizontalCalRef.current) return;
+    let nextX = dx;
+    if (Math.abs(nextX) > 80) {
+      const over = Math.abs(nextX) - 80;
+      nextX = Math.sign(nextX) * (80 + over * 0.35);
+    }
+    setCalOffset(nextX, false);
+  };
+
+  const handleCalPointerUp = (e: React.PointerEvent) => {
+    if (!isDraggingCalRef.current) return;
+    isDraggingCalRef.current = false;
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.releasePointerCapture(e.pointerId);
+    } catch {}
+    if (!isHorizontalCalRef.current) {
+      setCalOffset(0, true);
+      return;
+    }
+    const dx = calCurrentXRef.current;
+    if (Math.abs(dx) >= 50) {
+      if (typeof window !== "undefined" && (window as any).Capacitor) {
+        import("@capacitor/haptics").then(({ Haptics, ImpactStyle }) => {
+          Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
+        });
+      }
+      const dir = dx < 0 ? -1 : 1;
+      const targetW = target.clientWidth || 280;
+      setCalOffset(dir * targetW * 0.35, true);
+      setTimeout(() => {
+        if (dx < 0) {
+          calMonth === 11
+            ? (setCalMonth(0), setCalYear((y) => y + 1))
+            : setCalMonth((m) => m + 1);
+        } else {
+          calMonth === 0
+            ? (setCalMonth(11), setCalYear((y) => y - 1))
+            : setCalMonth((m) => m - 1);
+        }
+        setCalOffset(0, false);
+      }, 120);
+    } else {
+      setCalOffset(0, true);
+    }
+  };
+
   return (
     <>
       <FieldRow
@@ -779,33 +863,44 @@ export function DueDateField({
               <Icon name="chevron" size={16} className="text-sub" />
             </button>
           </div>
-          <div className="grid grid-cols-7 gap-0">
-            {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((d) => (
-              <div key={d} className="text-center text-[10px] text-dim py-1">
-                {d}
+          <div
+            className="overflow-hidden select-none"
+            onPointerDown={handleCalPointerDown}
+            onPointerMove={handleCalPointerMove}
+            onPointerUp={handleCalPointerUp}
+            onPointerCancel={handleCalPointerUp}
+            style={{ touchAction: "pan-y" }}
+          >
+            <div ref={calGridRef} style={{ willChange: "transform" }}>
+              <div className="grid grid-cols-7 gap-0">
+                {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((d) => (
+                  <div key={d} className="text-center text-[10px] text-dim py-1">
+                    {d}
+                  </div>
+                ))}
+                {cells.map((day, i) => {
+                  if (day === null) return <div key={i} />;
+                  const ds = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                  const selected = ds === value;
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        onChange(ds);
+                        if (!withTime) setOpen(false);
+                      }}
+                      className={`h-[32px] text-[13px] rounded-full transition-all ${
+                        selected
+                          ? "bg-red text-white font-semibold"
+                          : "text-text active:bg-card2"
+                      }`}
+                    >
+                      {day}
+                    </button>
+                  );
+                })}
               </div>
-            ))}
-            {cells.map((day, i) => {
-              if (day === null) return <div key={i} />;
-              const ds = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-              const selected = ds === value;
-              return (
-                <button
-                  key={i}
-                  onClick={() => {
-                    onChange(ds);
-                    if (!withTime) setOpen(false);
-                  }}
-                  className={`h-[32px] text-[13px] rounded-full transition-all ${
-                    selected
-                      ? "bg-red text-white font-semibold"
-                      : "text-text active:bg-card2"
-                  }`}
-                >
-                  {day}
-                </button>
-              );
-            })}
+            </div>
           </div>
 
           {withTime && (

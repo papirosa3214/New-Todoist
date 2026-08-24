@@ -1086,78 +1086,166 @@ export function DaySheet({
   tasks,
   onTaskClick,
   onClose,
+  onPrevDay,
+  onNextDay,
 }: {
   date: string;
   tasks: ApiTask[];
   onTaskClick: (id: string) => void;
   onClose: () => void;
+  onPrevDay?: () => void;
+  onNextDay?: () => void;
 }) {
   const d = new Date(date + "T00:00:00");
+  const contentRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
+  const startXRef = useRef(0);
+  const startYRef = useRef(0);
+  const currentXRef = useRef(0);
+  const isHorizontalRef = useRef<boolean | null>(null);
+
+  const setOffset = (x: number, animated = false) => {
+    currentXRef.current = x;
+    if (contentRef.current) {
+      contentRef.current.style.transition = animated
+        ? "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)"
+        : "none";
+      contentRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
+    }
+  };
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    startXRef.current = e.clientX;
+    startYRef.current = e.clientY;
+    currentXRef.current = 0;
+    isHorizontalRef.current = null;
+    isDraggingRef.current = true;
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingRef.current) return;
+    const dx = e.clientX - startXRef.current;
+    const dy = e.clientY - startYRef.current;
+    if (isHorizontalRef.current === null) {
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+        isHorizontalRef.current = Math.abs(dx) > Math.abs(dy);
+      }
+    }
+    if (!isHorizontalRef.current) return;
+    let nextX = dx;
+    if (Math.abs(nextX) > 80) {
+      const over = Math.abs(nextX) - 80;
+      nextX = Math.sign(nextX) * (80 + over * 0.35);
+    }
+    setOffset(nextX, false);
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.releasePointerCapture(e.pointerId);
+    } catch {}
+    if (!isHorizontalRef.current) {
+      setOffset(0, true);
+      return;
+    }
+    const dx = currentXRef.current;
+    if (Math.abs(dx) >= 60 && (onPrevDay || onNextDay)) {
+      if (typeof window !== "undefined" && (window as any).Capacitor) {
+        import("@capacitor/haptics").then(({ Haptics, ImpactStyle }) => {
+          Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
+        });
+      }
+      const dir = dx < 0 ? -1 : 1;
+      const targetW = target.clientWidth || 360;
+      setOffset(dir * targetW * 0.35, true);
+      setTimeout(() => {
+        if (dx < 0 && onNextDay) onNextDay();
+        else if (dx > 0 && onPrevDay) onPrevDay();
+        setOffset(0, false);
+      }, 120);
+    } else {
+      setOffset(0, true);
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-40 flex items-end bg-black/50"
       onClick={onClose}
     >
       <div
-        className="max-h-[70vh] w-full overflow-y-auto rounded-t-2xl bg-card p-4"
+        className="max-h-[70vh] w-full overflow-hidden rounded-t-2xl bg-card p-4 select-none"
         onClick={(e) => e.stopPropagation()}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        style={{ touchAction: "pan-y" }}
       >
-        <div className="mb-3 flex items-center gap-2">
-          <span className="text-[17px] font-semibold text-text">
-            {d.getDate()} {MONTHS_GEN[d.getMonth()]}
-          </span>
-          <span className="text-[13px] text-sub">
-            {WEEKDAYS_SHORT[(d.getDay() + 6) % 7]}
-          </span>
-          <button
-            onClick={onClose}
-            className="ml-auto text-[14px] text-red"
-            aria-label="Закрыть"
-          >
-            Готово
-          </button>
-        </div>
-        {tasks.length === 0 ? (
-          <p className="py-6 text-center text-[13px] text-dim">
-            На этот день ничего не запланировано
-          </p>
-        ) : (
-          <div className="flex flex-col gap-1.5">
-            {tasks.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => onTaskClick(t.id)}
-                className="flex items-center gap-2 rounded-xl bg-card2 px-3 py-2.5 text-left"
-              >
-                <span
-                  className={`flex h-[16px] w-[16px] shrink-0 items-center justify-center rounded-[5px] border-2 ${
-                    t.status === "completed"
-                      ? "border-dim bg-dim/30"
-                      : "border-dim"
-                  }`}
-                >
-                  {t.status === "completed" && (
-                    <Icon name="check" size={10} className="text-sub" />
-                  )}
-                </span>
-                <span
-                  className={`min-w-0 flex-1 truncate text-[14px] ${
-                    t.status === "completed"
-                      ? "text-sub line-through"
-                      : "text-text"
-                  }`}
-                >
-                  {t.title}
-                </span>
-                {t.start_time && (
-                  <span className="shrink-0 text-[12px] tabular-nums text-dim">
-                    {formatTimeRange(t.start_time, t.duration_min)}
-                  </span>
-                )}
-              </button>
-            ))}
+        <div ref={contentRef} style={{ willChange: "transform" }}>
+          <div className="mb-3 flex items-center gap-2">
+            <span className="text-[17px] font-semibold text-text">
+              {d.getDate()} {MONTHS_GEN[d.getMonth()]}
+            </span>
+            <span className="text-[13px] text-sub">
+              {WEEKDAYS_SHORT[(d.getDay() + 6) % 7]}
+            </span>
+            <button
+              onClick={onClose}
+              className="ml-auto text-[14px] text-red"
+              aria-label="Закрыть"
+            >
+              Готово
+            </button>
           </div>
-        )}
+          {tasks.length === 0 ? (
+            <p className="py-6 text-center text-[13px] text-dim">
+              На этот день ничего не запланировано
+            </p>
+          ) : (
+            <div className="flex flex-col gap-1.5 max-h-[50vh] overflow-y-auto">
+              {tasks.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => onTaskClick(t.id)}
+                  className="flex items-center gap-2 rounded-xl bg-card2 px-3 py-2.5 text-left"
+                >
+                  <span
+                    className={`flex h-[16px] w-[16px] shrink-0 items-center justify-center rounded-[5px] border-2 ${
+                      t.status === "completed"
+                        ? "border-dim bg-dim/30"
+                        : "border-dim"
+                    }`}
+                  >
+                    {t.status === "completed" && (
+                      <Icon name="check" size={10} className="text-sub" />
+                    )}
+                  </span>
+                  <span
+                    className={`min-w-0 flex-1 truncate text-[14px] ${
+                      t.status === "completed"
+                        ? "text-sub line-through"
+                        : "text-text"
+                    }`}
+                  >
+                    {t.title}
+                  </span>
+                  {t.start_time && (
+                    <span className="shrink-0 text-[12px] tabular-nums text-dim">
+                      {formatTimeRange(t.start_time, t.duration_min)}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
