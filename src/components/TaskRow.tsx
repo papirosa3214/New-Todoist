@@ -89,7 +89,6 @@ import {
   daysUntil,
   formatDaysLeft,
 } from "../lib/date";
-import { useSpring } from "../lib/useSpring";
 import type { ApiTask } from "../api/types";
 
 // Plain "8 авг" — no relative "Сегодня/Завтра" prefix, no trailing dot.
@@ -104,30 +103,6 @@ function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
 }
-
-// Swipe-to-edit thresholds — те же числа, что были у swipe-to-complete
-// (не подбирались заново, физика уже одобрена).
-const SWIPE_THRESHOLD = 72; // px displacement to trigger edit
-const SWIPE_VEL = 400; // px/s release velocity to trigger edit
-// Velocity сама по себе — мгновенная скорость по ПОСЛЕДНИМ ДВУМ сэмплам
-// (см. onUp), не средняя за весь жест. Короткое резкое касание в
-// несколько px за пару миллисекунд легко даёт >400px/s при почти нулевом
-// реальном смещении — «buквально миллиметрик — и сразу в изменении»,
-// живая жалоба владельца 19.08.2026 ПОСЛЕ первого захода тюнинга
-// (direction-lock ниже), то есть это отдельная, вторая дыра: velocity-
-// путь не требовал вообще никакого минимального смещения. Теперь требует
-// — половина SWIPE_THRESHOLD: скорость решает, дошёл ли до готового
-// действия РЕЗКИЙ свайп, а не заменяет собой факт движения.
-const SWIPE_VEL_MIN_DX = SWIPE_THRESHOLD / 2; // px — ниже этого velocity не считается
-// Direction-lock tuning — see the comment block above for why. Не путать
-// с SWIPE_THRESHOLD/SWIPE_VEL: те решают «отпустили — открывать
-// редактирование или нет», а эти два — «это вообще горизонтальный жест
-// или человек просто скроллит».
-// На сколько строка приоткрывается и остаётся стоять — ровно под кнопку с
-// карандашом: 72px под палец плюс её правый отступ 20px.
-const ACTION_W = 92;
-const DIRECTION_LOCK_PX = 10; // px до первого решения об оси (было 6)
-const DIRECTION_BIAS = 1.4; // dx должен явно преобладать над dy, не только edge out
 
 export interface TaskRowProps {
   task: ApiTask;
@@ -223,41 +198,46 @@ export function TaskRow({
     hasSubtasksBadge ||
     hasLabels;
 
-  // ── Swipe-to-edit (18.08.2026, восстановлено) ──────────────────────────
-  // Квадратик-отметка завершения остаётся убранным (Максим 18.08.2026:
-  // «не надо мне эти квадратики, они только всё портят») — это только
-  // жест, не чекбокс. Сам механизм 1:1 со старым swipe-to-complete
-  // (см. историю файла, коммит 8cd89bc~1), только released-действие другое.
+  // ── Плавный нативный iOS свайп для редактирования ──────────────────────────
+  const ACTION_W = 84; // ширина действия
   const rowRef = useRef<HTMLDivElement | null>(null);
   const actionRef = useRef<HTMLButtonElement | null>(null);
-  // Строка приоткрыта и держит кнопку — тап по самой строке в этом
-  // состоянии закрывает её, а не открывает задачу.
+  const currentXRef = useRef(0);
   const [revealed, setRevealed] = useState(false);
 
-  const spring = useSpring(
-    (value) => {
-      if (rowRef.current)
-        rowRef.current.style.transform = `translateX(${value}px)`;
-      if (actionRef.current) {
-        // Прозрачностью больше не играем: кнопка просто лежит под строкой
-        // и открывается по мере её сдвига — «как ящичек». Раньше слой
-        // проявлялся во всю ширину, и полотно синело целиком.
-        const frac = Math.min(Math.abs(value) / ACTION_W, 1);
-        actionRef.current.style.pointerEvents = frac > 0.9 ? "auto" : "none";
+  const setRowPosition = (x: number, animated = false) => {
+    currentXRef.current = x;
+    if (rowRef.current) {
+      if (animated) {
+        rowRef.current.style.transition = "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)";
+      } else {
+        rowRef.current.style.transition = "none";
       }
-    },
-    { response: 0.3, damping: 1 },
-  );
+      rowRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
+    }
+    if (actionRef.current) {
+      const progress = Math.min(Math.abs(x) / ACTION_W, 1.2);
+      actionRef.current.style.pointerEvents = Math.abs(x) >= ACTION_W * 0.7 ? "auto" : "none";
+      if (animated) {
+        actionRef.current.style.transition = "opacity 0.28s ease, transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)";
+      } else {
+        actionRef.current.style.transition = "none";
+      }
+      actionRef.current.style.opacity = String(Math.min(1, progress * 1.3));
+      actionRef.current.style.transform = `scale(${Math.min(1, 0.75 + progress * 0.25)})`;
+    }
+  };
 
   const swipeDrag = useRef({
     active: false,
     locked: false,
     isHorizontal: false,
-    // Прошли ли уже ширину кнопки — см. onMove, отклик на пересечении.
-    pastAction: false,
     startX: 0,
     startY: 0,
-    samples: [] as { x: number; t: number }[],
+    startOffset: 0,
+    lastX: 0,
+    lastTime: 0,
+    velocity: 0,
   });
 
   const onPointerDown = useCallback(
@@ -269,10 +249,12 @@ export function TaskRow({
         active: true,
         locked: false,
         isHorizontal: false,
-        pastAction: false,
         startX: e.clientX,
         startY: e.clientY,
-        samples: [{ x: e.clientX, t: performance.now() }],
+        startOffset: currentXRef.current,
+        lastX: e.clientX,
+        lastTime: performance.now(),
+        velocity: 0,
       };
 
       const onMove = (ev: PointerEvent) => {
@@ -282,49 +264,35 @@ export function TaskRow({
         const dx = ev.clientX - d.startX;
         const dy = ev.clientY - d.startY;
 
-        if (
-          !d.locked &&
-          (Math.abs(dx) > DIRECTION_LOCK_PX || Math.abs(dy) > DIRECTION_LOCK_PX)
-        ) {
-          d.isHorizontal = Math.abs(dx) > Math.abs(dy) * DIRECTION_BIAS;
+        if (!d.locked && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+          d.isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.3;
           d.locked = true;
           if (d.isHorizontal) {
             el.setPointerCapture(ev.pointerId);
-            // Строка «взялась» за палец. Отклик именно здесь, на решении об
-            // оси, а не на pointerdown: до этого места ещё не известно,
-            // свайп это или прокрутка списка, и щёлкать на каждом касании
-            // экрана значило бы щёлкать на прокрутке.
             hapticCross();
           }
         }
 
         if (!d.locked || !d.isHorizontal) return;
 
-        // Только влево. За пределом открытой позиции — РЕЗИНКА, а не жёсткий
-        // упор (Apple Design §9: у границы сопротивление нарастает, «стоп»
-        // читается как зависание). Формула оттуда же.
-        const raw = Math.min(0, dx);
-        const over = Math.max(0, -raw - ACTION_W);
-        const eased =
-          over > 0
-            ? -(ACTION_W + (over * ACTION_W * 0.55) / (ACTION_W + 0.55 * over))
-            : raw;
-        spring.stop();
-        if (rowRef.current)
-          rowRef.current.style.transform = `translateX(${eased}px)`;
-        // Прозрачность кнопки не трогаем: она открывается сдвигом строки.
-
-        // Кнопка вышла из-под строки целиком — с этого места отпускание
-        // оставит строку открытой. Порог перешли — щёлкнули, ровно один
-        // раз на пересечение (в обе стороны).
-        const past = -eased >= ACTION_W;
-        if (past !== d.pastAction) {
-          d.pastAction = past;
-          hapticCross();
+        const now = performance.now();
+        const dt = (now - d.lastTime) / 1000;
+        if (dt > 0.005) {
+          d.velocity = (ev.clientX - d.lastX) / dt;
+          d.lastX = ev.clientX;
+          d.lastTime = now;
         }
 
-        d.samples.push({ x: ev.clientX, t: performance.now() });
-        if (d.samples.length > 6) d.samples.shift();
+        const raw = d.startOffset + dx;
+        let pos = raw;
+        if (raw > 0) {
+          pos = raw * 0.18; // плавный rubber band вправо
+        } else if (raw < -ACTION_W) {
+          const over = -raw - ACTION_W;
+          pos = -ACTION_W - (over * 30) / (30 + over); // мягкое сопротивление влево
+        }
+
+        setRowPosition(pos, false);
       };
 
       const onUp = (ev: PointerEvent) => {
@@ -336,95 +304,48 @@ export function TaskRow({
 
         if (!d.isHorizontal) return;
 
-        const samples = d.samples;
-        let vel = 0;
-        if (samples.length >= 2) {
-          const last = samples[samples.length - 1];
-          const prev = samples[samples.length - 2];
-          const dt = (last.t - prev.t) / 1000;
-          if (dt > 0) vel = (last.x - prev.x) / dt;
+        const dx = ev.clientX - d.startX;
+        const currentPos = currentXRef.current;
+        const vel = d.velocity;
+
+        // Решение: открыть или закрыть
+        let shouldOpen = false;
+        if (d.startOffset === 0) {
+          // Открываем, если свайпнули влево больше 36px или с хорошей скоростью
+          shouldOpen = currentPos < -36 || vel < -280;
+        } else {
+          // Уже было открыто: закрываем, если свайпнули вправо
+          shouldOpen = !(dx > 25 || vel > 250);
         }
 
-        const currentDx = ev.clientX - d.startX;
-        const absDx = Math.abs(Math.min(0, currentDx));
-        const absVel = Math.abs(Math.min(0, vel));
-
-        // Свайп больше НЕ выполняет действие сам — он только приоткрывает
-        // строку и показывает кнопку с карандашом (владелец 19.08.2026:
-        // «чувствительность безумная, это меня уже раздражает; должно не
-        // сразу измениться, а просто чуть-чуть карточка сдвигается и
-        // появляется кнопка с карандашом, на которую я потом нажимаю»).
-        // Отсюда и снятая острота порогов: ошибиться теперь не страшно —
-        // цена промаха не «улетел в чужой экран», а «строка приоткрылась».
-        // Куда жест ЛЕТИТ, а не где отпустили: проекция точки остановки по
-        // затуханию инерции (Apple Design §6, их же формула с
-        // decelerationRate 0.998), и уже к ней подбирается ближайшая точка
-        // привязки — закрыто или открыто. Порог по расстоянию остаётся
-        // страховкой для медленного перетаскивания без скорости.
-        const projected =
-          -absDx + (Math.min(0, vel) / 1000) * (0.998 / (1 - 0.998));
-        // Проекция считается только после ощутимого хода: без этого порога
-        // короткий резкий рывок на 20px «долетал» до открытой позиции и
-        // открывал строку — ровно то «в пол пинка», от которого владелец и
-        // просил уйти (поймано своим же тестом 19.08.2026).
-        const projectionCounts = absDx > SWIPE_VEL_MIN_DX;
-        const shouldReveal =
-          (projectionCounts &&
-            Math.abs(projected - -ACTION_W) < Math.abs(projected - 0)) ||
-          absDx > SWIPE_THRESHOLD;
-        setRevealed(shouldReveal);
-        // Отклик только на открытии: закрытие — возврат в исходное, там
-        // «щёлкать» нечему.
-        if (shouldReveal) hapticDrop();
-        // Отскок — только если жест сам нёс инерцию (§4): брошенная строка
-        // имеет право чуть перелететь и вернуться, аккуратно доведённая —
-        // нет. Скорость пальца передаётся пружине как начальная (§5), шва
-        // между жестом и анимацией не остаётся.
-        const flick = absVel > SWIPE_VEL;
-        spring.animateTo(shouldReveal ? -ACTION_W : 0, -vel, {
-          response: flick ? 0.35 : 0.3,
-          damping: flick ? 0.78 : 1,
-        });
+        setRevealed(shouldOpen);
+        if (shouldOpen) {
+          hapticDrop();
+          setRowPosition(-ACTION_W, true);
+        } else {
+          setRowPosition(0, true);
+        }
       };
 
       el.addEventListener("pointermove", onMove);
       el.addEventListener("pointerup", onUp);
       el.addEventListener("pointercancel", onUp);
     },
-    [navigate, task.id, spring],
+    [navigate, task.id],
   );
 
   return (
-    // -mx-4 full-bleed (найдено 18.08.2026 по скриншоту свайпа: без неё
-    // synий action-фон обрывался на границе родительского px-4, до края
-    // экрана оставалась голая полоса тёмного фона — тот же класс бага,
-    // что чинили на доске, коммит 3e05468 «полоса честно full-bleed»,
-    // тот же приём переиспользован). Экран/список даёт px-4 (16px) с
-    // каждой стороны (см. InboxScreen.tsx и др.) — растягиваем ровно на
-    // него и возвращаем тот же отступ содержимому изнутри (px-4 на
-    // button ниже), а не полосе.
     <div
       style={{ position: "relative", overflow: "hidden" }}
-      // Разделительная линия переехала СЮДА со строки: строка уезжает при
-      // свайпе и уносила линию с собой, поэтому под открывшейся кнопкой
-      // линия обрывалась (владелец 19.08.2026: «скольжение идёт не по
-      // разделительной линии»). На обёртке она неподвижна и идёт через всю
-      // ширину, а кнопка заканчивается на 1px выше неё.
       className="-mx-4 border-b border-stroke/50"
     >
-      {/* Действие под свайпом — синий «редактировать» (был teal-check у
-          завершения; teal и вообще «готово»-семантика тут неуместны, это
-          другое действие). */}
-      {/* Кнопка «изменить» под строкой. Именно КНОПКА, а не декоративная
-          подложка: теперь действие выполняет нажатие на неё, а свайп лишь
-          открывает её. pointerEvents включается только когда строка
-          приоткрыта, иначе невидимый слой перехватывал бы тапы по строке. */}
+      {/* Нативная синяя кнопка «Изменить» под строкой */}
       <button
         ref={actionRef}
         onClick={(e) => {
           e.stopPropagation();
           setRevealed(false);
-          spring.animateTo(0, 0);
+          setRowPosition(0, true);
           navigate(`/task/${task.id}/edit`);
         }}
         aria-label="Изменить задачу"
@@ -432,47 +353,32 @@ export function TaskRow({
           position: "absolute",
           right: 0,
           top: 0,
-          // bottom: 0 — кнопка упирается ПРЯМО в разделительную линию,
-          // без зазора (владелец 19.08.2026: «на синем видно линию и потом
-          // ещё пару пикселей черноты — скольжение идёт не по ней»). Сама
-          // линия живёт на обёртке и проходит под кнопкой непрерывно,
-          // поэтому перекрыть её кнопка не может. Замер до: 3 физических
-          // пикселя фона между кромкой кнопки и линией.
           bottom: 0,
-          // Ширина — ровно кнопка, а не вся строка: при движении синим
-          // заливало всё полотно, а должно «открываться» только окошко
-          // кнопки, как выдвижной ящик под строкой.
           width: ACTION_W,
           display: "flex",
+          flexDirection: "column",
           justifyContent: "center",
           alignItems: "center",
-          backgroundColor: "var(--color-blue)",
-          // Тень внутрь от левого края — кнопка читается лежащей НИЖЕ
-          // строки, а строка — крышкой, которая её открывает.
-          boxShadow:
-            "inset 10px 0 14px -8px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.08)",
+          background: "linear-gradient(135deg, #007AFF 0%, #0056b3 100%)",
           pointerEvents: "none",
+          opacity: 0,
+          transform: "scale(0.8)",
+          transformOrigin: "center right",
+          border: "none",
         }}
       >
-        <Icon name="edit" size={22} className="text-white" />
+        <Icon name="edit" size={20} className="text-white mb-0.5" />
+        <span className="text-[11px] font-semibold text-white/95 leading-none">
+          Изменить
+        </span>
       </button>
 
       <div
         ref={rowRef}
         onPointerDown={onPointerDown}
-        // bg-bg на САМОМ едущем слое, а не только на кнопке внутри:
-        // .tap-row при нажатии подменяет фон на rgba(255,255,255,.04) —
-        // полупрозрачный, — и сквозь него просвечивала синяя кнопка,
-        // лежащая под строкой. Владелец 19.08.2026: «мне достаточно просто
-        // нажать, и происходит сразу же сдвиг этой карточки» — сдвига на
-        // самом деле не было, но выглядело именно так. Непрозрачный слой
-        // под нажимаемой кнопкой закрывает подложку при любом её состоянии.
         className="bg-bg"
-        // Тень от правого края строки — вторая половина того же эффекта:
-        // строка «нависает» над открывшейся кнопкой.
         style={{
           willChange: "transform",
-          boxShadow: "6px 0 12px rgba(0,0,0,0.55)",
         }}
       >
         <button
@@ -482,7 +388,7 @@ export function TaskRow({
             // куда-то провалиться.
             if (revealed) {
               setRevealed(false);
-              spring.animateTo(0, 0);
+              setRowPosition(0, true);
               return;
             }
             onClick();
