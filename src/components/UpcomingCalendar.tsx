@@ -352,11 +352,9 @@ export function WeekGrid({
 }) {
   const today = todayStr();
   const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
-  const innerGridRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
   const startXRef = useRef(0);
   const startYRef = useRef(0);
-  const currentXRef = useRef(0);
   const isHorizontalRef = useRef<boolean | null>(null);
 
   const triggerHaptic = () => {
@@ -367,25 +365,12 @@ export function WeekGrid({
     }
   };
 
-  const setOffset = (x: number, animated = false) => {
-    currentXRef.current = x;
-    if (innerGridRef.current) {
-      innerGridRef.current.style.transition = animated
-        ? "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)"
-        : "none";
-      innerGridRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
-    }
-  };
-
   function onPointerDown(e: React.PointerEvent) {
     if (e.button !== 0) return;
     startXRef.current = e.clientX;
     startYRef.current = e.clientY;
-    currentXRef.current = 0;
     isHorizontalRef.current = null;
     isDraggingRef.current = true;
-    const target = e.currentTarget as HTMLElement;
-    target.setPointerCapture(e.pointerId);
   }
 
   function onPointerMove(e: React.PointerEvent) {
@@ -393,47 +378,22 @@ export function WeekGrid({
     const dx = e.clientX - startXRef.current;
     const dy = e.clientY - startYRef.current;
     if (isHorizontalRef.current === null) {
-      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
-        isHorizontalRef.current = Math.abs(dx) > Math.abs(dy);
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        isHorizontalRef.current = Math.abs(dx) > Math.abs(dy) * 1.3;
       }
     }
-    if (!isHorizontalRef.current) return;
-
-    // Резиновый эффект при перетягивании
-    let nextX = dx;
-    if (Math.abs(nextX) > 120) {
-      const over = Math.abs(nextX) - 120;
-      nextX = Math.sign(nextX) * (120 + over * 0.35);
-    }
-    setOffset(nextX, false);
   }
 
   function onPointerUp(e: React.PointerEvent) {
     if (!isDraggingRef.current) return;
     isDraggingRef.current = false;
-    const target = e.currentTarget as HTMLElement;
-    try {
-      target.releasePointerCapture(e.pointerId);
-    } catch {}
+    if (!isHorizontalRef.current) return;
 
-    if (!isHorizontalRef.current) {
-      setOffset(0, true);
-      return;
-    }
-
-    const dx = currentXRef.current;
+    const dx = e.clientX - startXRef.current;
     if (Math.abs(dx) >= SWIPE_MIN_PX) {
       triggerHaptic();
-      const dir = dx < 0 ? -1 : 1;
-      const targetW = target.clientWidth || 360;
-      setOffset(dir * targetW * 0.35, true);
-      setTimeout(() => {
-        if (dx < 0) onNextWeek();
-        else onPrevWeek();
-        setOffset(0, false);
-      }, 120);
-    } else {
-      setOffset(0, true);
+      if (dx < 0) onNextWeek();
+      else onPrevWeek();
     }
   }
   // Высота сетки ЗАМЕРЯЕТСЯ, а не считается формулой из 100dvh: расчёт
@@ -514,26 +474,22 @@ export function WeekGrid({
     // что у MonthGrid: горизонтальный жест не даёт странице увести
     // вертикальный скролл вместе с ним.
     <div
-      className="-mx-4 select-none overflow-hidden"
+      className="-mx-4 select-none"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={() => (isDraggingRef.current = false)}
       style={{ touchAction: "pan-y" }}
     >
       <div
-        ref={innerGridRef}
-        style={{ willChange: "transform" }}
+        ref={gridRef}
+        data-week-grid
+        className="grid grid-cols-2"
+        style={{
+          height,
+          gridTemplateRows: "repeat(4, minmax(0, 1fr))",
+        }}
       >
-        <div
-          ref={gridRef}
-          data-week-grid
-          className="grid grid-cols-2"
-          style={{
-            height,
-            gridTemplateRows: "repeat(4, minmax(0, 1fr))",
-          }}
-        >
         <div className="min-h-0 border-b border-r border-stroke">
           <MiniMonth monday={monday} onPickDate={onPickDate} />
         </div>
@@ -592,8 +548,7 @@ export function WeekGrid({
         })}
       </div>
     </div>
-  </div>
-);
+  );
 }
 
 /** Месяц: 7×6, в ячейке число и мини-плашки. Не влезающие сворачиваются в
