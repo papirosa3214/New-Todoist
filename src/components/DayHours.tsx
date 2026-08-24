@@ -571,28 +571,15 @@ export function DayHours({
   const interactive = !!onSchedule;
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
-  const swipeContainerRef = useRef<HTMLDivElement>(null);
   const isHorizontalSwipeRef = useRef<boolean | null>(null);
   const isSwipeDraggingRef = useRef(false);
   const swipeStartXRef = useRef(0);
   const swipeStartYRef = useRef(0);
-  const swipeCurrentXRef = useRef(0);
-
-  const setSwipeOffset = (x: number, animated = false) => {
-    swipeCurrentXRef.current = x;
-    if (swipeContainerRef.current) {
-      swipeContainerRef.current.style.transition = animated
-        ? "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)"
-        : "none";
-      swipeContainerRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
-    }
-  };
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     swipeStartXRef.current = e.clientX;
     swipeStartYRef.current = e.clientY;
-    swipeCurrentXRef.current = 0;
     isHorizontalSwipeRef.current = null;
     isSwipeDraggingRef.current = true;
   };
@@ -602,39 +589,21 @@ export function DayHours({
     const dx = e.clientX - swipeStartXRef.current;
     const dy = e.clientY - swipeStartYRef.current;
     if (isHorizontalSwipeRef.current === null) {
-      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
-        isHorizontalSwipeRef.current = Math.abs(dx) > Math.abs(dy) * 1.2;
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+        isHorizontalSwipeRef.current = Math.abs(dx) > Math.abs(dy) * 1.3;
       }
     }
-    if (!isHorizontalSwipeRef.current) return;
-    let nextX = dx;
-    if (Math.abs(nextX) > 100) {
-      const over = Math.abs(nextX) - 100;
-      nextX = Math.sign(nextX) * (100 + over * 0.35);
-    }
-    setSwipeOffset(nextX, false);
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
     if (!isSwipeDraggingRef.current) return;
     isSwipeDraggingRef.current = false;
-    if (!isHorizontalSwipeRef.current) {
-      setSwipeOffset(0, true);
-      return;
-    }
-    const dx = swipeCurrentXRef.current;
-    if (Math.abs(dx) >= 60) {
+    if (!isHorizontalSwipeRef.current) return;
+    const dx = e.clientX - swipeStartXRef.current;
+    if (Math.abs(dx) >= 45) {
       hapticNotch();
-      const dir = dx < 0 ? -1 : 1;
-      const targetW = swipeContainerRef.current?.clientWidth || 360;
-      setSwipeOffset(dir * targetW * 0.35, true);
-      setTimeout(() => {
-        if (dx < 0 && onNextDay) onNextDay();
-        else if (dx > 0 && onPrevDay) onPrevDay();
-        setSwipeOffset(0, false);
-      }, 120);
-    } else {
-      setSwipeOffset(0, true);
+      if (dx < 0 && onNextDay) onNextDay();
+      else if (dx > 0 && onPrevDay) onPrevDay();
     }
   };
   // Хвоста сетки под кнопку здесь больше нет (был до 19.08.2026: сетке
@@ -1160,26 +1129,8 @@ export function DayHours({
             больше не спорят с приклеенным пулом выше — иначе они
             выигрывали бы у него как более поздние в DOM при равном
             z-index и рисовались бы поверх пула. */}
-        <div className="relative z-0 -mx-4 overflow-hidden">
-          <div
-            ref={swipeContainerRef}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
-            style={{ willChange: "transform", touchAction: "pan-y" }}
-          >
-            <div ref={scrollRef} className="relative">
-            {/* Подписи дней раньше стояли здесь своим sticky-слоем под
-                шапкой. С 19.08.2026 они рендерятся ВНУТРИ ScreenHeader
-                (DayColumnsHeader ниже, передаётся из TodayScreen) — так у
-                них общий с заголовком фон и общее затухание, а между ними
-                нет зазора, сквозь который просвечивала сетка. */}
-
-            {/* Высота — ровно сутки, до строки «24:00» включительно: она
-                приходится на нижнюю кромку, и пустого места под таблицей
-                не остаётся. Ниже 24:00 расчерчивает фон контейнера
-                прокрутки, высоты он не занимает и прокрутку не удлиняет. */}
+        <div className="relative z-0 -mx-4">
+          <div ref={scrollRef} className="relative">
             <div
               ref={gridRef}
               className="relative flex"
@@ -1188,7 +1139,7 @@ export function DayHours({
               {/* Левая колонка — только подписи часов, без линии под
                   ними: у Apple часовая линия начинается ровно на границе
                   первой колонки дня, а не под цифрами. */}
-              <div className="relative shrink-0" style={{ width: GUTTER_W }}>
+              <div className="relative shrink-0 select-none" style={{ width: GUTTER_W }}>
                 {labelHours.map((h) => (
                   <span
                     key={h}
@@ -1208,59 +1159,52 @@ export function DayHours({
                 ))}
               </div>
 
-              {columns.map(({ day, blocks }, colIndex) => (
-                <div
-                  key={day.date}
-                  // data-day-col — не для стилей, только для e2e (today-
-                  // hours.spec.ts): без него тест перетаскивания между
-                  // колонками не мог бы проверить, что задача улетела
-                  // именно в ПРАВИЛЬНУЮ дату, только «в какую-то».
-                  data-day-col={day.date}
-                  // Границы колонок — тоже фон контейнера прокрутки (второй
-                  // слой градиента), а не border: иначе вертикали
-                  // обрывались бы на 24:00, пока горизонтальные полосы идут
-                  // дальше. Отступ слева сохранён, чтобы блоки задач не
-                  // налезали на линию, как было при border.
-                  className="relative min-w-0 flex-1 pl-px"
-                >
-                  {/* Часовых линий здесь больше нет: они стали фоном
-                      контейнера прокрутки (эффект выше). Элементами их
-                      нельзя было продолжить за сутки, не удлинив прокрутку,
-                      — а именно обрыв полос владельцу и мешал. */}
+              {/* Область колонок: перехватывает свайп влево/вправо без сдвига сетки часов */}
+              <div
+                className="relative flex flex-1 min-w-0"
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={() => {
+                  isSwipeDraggingRef.current = false;
+                }}
+                style={{ touchAction: "pan-y" }}
+              >
+                {columns.map(({ day, blocks }, colIndex) => (
+                  <div
+                    key={day.date}
+                    data-day-col={day.date}
+                    className="relative min-w-0 flex-1 pl-px"
+                  >
+                    {blocks.map((b) => (
+                      <TimedBlock
+                        key={b.task.id}
+                        task={b.task}
+                        color={projectColor(b.task)}
+                        top={b.top}
+                        height={b.height}
+                        left={b.left}
+                        width={b.width}
+                        durKnown={b.durKnown}
+                        draggable={interactive}
+                        hidden={!!ghost && ghost.task.id === b.task.id}
+                        onClick={() =>
+                          !clickAfterDrag() && onTaskClick(b.task.id)
+                        }
+                      />
+                    ))}
 
-                  {blocks.map((b) => (
-                    <TimedBlock
-                      key={b.task.id}
-                      task={b.task}
-                      color={projectColor(b.task)}
-                      top={b.top}
-                      height={b.height}
-                      left={b.left}
-                      width={b.width}
-                      durKnown={b.durKnown}
-                      draggable={interactive}
-                      hidden={!!ghost && ghost.task.id === b.task.id}
-                      onClick={() =>
-                        !clickAfterDrag() && onTaskClick(b.task.id)
-                      }
-                    />
-                  ))}
-
-                  {/* Призрак — в той колонке дня, что сейчас под пальцем
-                      (ghost.colIndex, см. positionOf) — не обязательно
-                      «сегодня»: 20.08.2026, перетаскивание работает между
-                      всеми колонками 3-дневного вида, не только внутри
-                      одной. Взята ширина ИМЕННО этой колонки. */}
-                  {interactive && ghost && ghost.colIndex === colIndex && (
-                    <DragGhost
-                      task={ghost.task}
-                      color={projectColor(ghost.task)}
-                      top={ghost.top}
-                      height={ghost.height}
-                    />
-                  )}
-                </div>
-              ))}
+                    {interactive && ghost && ghost.colIndex === colIndex && (
+                      <DragGhost
+                        task={ghost.task}
+                        color={projectColor(ghost.task)}
+                        top={ghost.top}
+                        height={ghost.height}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
 
               {/* Время, на которое встанет задача, — в жёлобе часов, слева
                   от призрака, а не поверх него. Раньше подпись рисовалась
@@ -1269,12 +1213,6 @@ export function DayHours({
                   кромку будущей плашки и заодно связывает её с подписью. */}
               {interactive && preview && (
                 <div
-                  // -translate-y-1/2 обязателен: подписи часов слева
-                  // центрируются по своей линии ровно так же, и без этого
-                  // красная цифра стояла бы верхом на отметке времени, то
-                  // есть ниже соседней «11:00» на половину строки —
-                  // владелец 19.08.2026: «плитка времени по пикселям не
-                  // совпадает с тем, что написано на левой стороне».
                   className="pointer-events-none absolute left-0 right-0 z-30 flex -translate-y-1/2 items-center"
                   style={{
                     top:
@@ -1297,7 +1235,6 @@ export function DayHours({
             </div>
           </div>
         </div>
-      </div>
 
         {interactive && !anyTimed && (
           <p className="px-1 text-center text-[12px] text-dim">
