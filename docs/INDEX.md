@@ -29,3 +29,6 @@
 1. [**Сборка iOS и распознавание речи на устройстве**](lessons/2026-08-18-ios-build-and-on-device-speech.md) — разбор WhisperKit CoreML, Neural Engine, бенчмарки времени прогрева, профилирование и деплой через `devicectl`.
 2. [**Кастомная экранная клавиатура в WebView**](lessons/2026-08-18-custom-keyboard-in-webview.md) — разбор перехвата фокуса, `visualViewport` и управления вводом.
 3. [**Интеграция с Google Tasks, Apple Calendar и Reminders**](lessons/2026-08-23-integrations-google-tasks-apple-calendar-reminders.md) — разбор EventKit, OAuth 2.0 и синхронизации.
+4. [**Ультраплавный нативный iOS-свайп действий в WebView**](lessons/2026-08-24-lesson-1-native-ios-swipe-actions.md) — разбор Pointer Events, `setPointerCapture`, аппаратного ускорения `translate3d`, кривой Apple и отклика Haptics.
+5. [**Dynamic Island и Live Activities в Capacitor iOS**](lessons/2026-08-24-lesson-2-dynamic-island-live-activities-capacitor.md) — разбор ActivityKit, SwiftUI виджета (Compact/Expanded), спиннера активного шага и моста Capacitor.
+6. [**Виджет на экране блокировки и кнопка действия Action Button**](lessons/2026-08-24-lesson-3-lock-screen-widget-and-action-button.md) — разбор мгновенного запуска диктовки через Deep Links (`taskflow://dictate`), `AppIntents` и Shortcuts.
