@@ -9,6 +9,7 @@ import {
 } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
 import { useServerStatus } from "../api/server";
+import { useAgentService, useToggleAgentService } from "../api/agents";
 import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
 import { getErrorMessage } from "../lib/errors";
 import { useAppStore } from "../store";
@@ -275,6 +276,9 @@ function fmtBytes(bytes: number): string {
  */
 function ServerSection() {
   const { data, error, isLoading } = useServerStatus();
+  const { data: service } = useAgentService();
+  const toggleService = useToggleAgentService();
+  const serviceOn = service?.active ?? false;
 
   // Сервер не ответил — это и есть главная новость экрана, и сказать её
   // надо словами, а не пустым местом.
@@ -298,13 +302,6 @@ function ServerSection() {
     );
   }
 
-  const triggerLabel =
-    data.trigger === "active"
-      ? "работает"
-      : data.trigger === "unknown" || !data.trigger
-        ? "неизвестно"
-        : "не работает";
-
   return (
     <FieldGroup>
       <InfoRow
@@ -325,11 +322,13 @@ function ServerSection() {
           }
         />
       )}
-      <InfoRow
+      <ToggleRow
         icon="bell"
-        iconColor={data.trigger === "active" ? "#4CAF50" : "#FF6B6B"}
-        label="Будильник"
-        value={triggerLabel}
+        iconColor="#FF6B6B"
+        label="Будильник (служба)"
+        valueLabel={serviceOn ? "Включён" : "Выключен"}
+        checked={serviceOn}
+        onChange={() => toggleService.mutate(!serviceOn)}
       />
       <InfoRow
         icon="list"
@@ -414,7 +413,7 @@ export function SettingsScreen() {
             onClick={() => navigate("/settings/templates")}
           />
           <Row icon="tag" label="Метки" onClick={() => navigate("/labels")} />
-          <Row icon="bot" label="Агенты" onClick={() => navigate("/agents")} />
+          <Row icon="bot" label="Команда" onClick={() => navigate("/agents")} />
           <Row
             icon="mic"
             iconColor="#4a9fd8"

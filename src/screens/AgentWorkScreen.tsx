@@ -39,40 +39,44 @@ export function AgentWorkScreen() {
     return { inProgress, stale, review, blocked };
   }, [allTasks]);
 
-  const sections = [
-    {
-      key: "stale",
-      title: "Пропали",
-      hint: "Агент взялся и замолчал — задача висит без работы",
-      tasks: groups.stale,
-    },
-    {
-      key: "in_progress",
-      title: "В работе",
-      hint: "Агент занят этими задачами прямо сейчас",
-      tasks: groups.inProgress,
-    },
-    {
-      key: "review",
-      title: "Ждут вашей проверки",
-      hint: "Агент закончил и сдал работу",
-      tasks: groups.review,
-    },
-    {
-      key: "blocked",
-      title: "Уперлись",
-      hint: "Агент не может продолжить без вас",
-      tasks: groups.blocked,
-    },
-  ];
-  const ordered =
-    focus === "stale"
-      ? sections
-      : [...sections].sort((a, b) => {
-          if (a.key === "in_progress") return -1;
-          if (b.key === "in_progress") return 1;
-          return 0;
-        });
+  const sections = useMemo(
+    () => [
+      {
+        key: "in_progress",
+        title: "В работе",
+        hint: "Агент занят этими задачами прямо сейчас",
+        tasks: groups.inProgress,
+      },
+      {
+        key: "review",
+        title: "На проверке",
+        hint: "Агент закончил и сдал работу",
+        tasks: groups.review,
+      },
+      {
+        key: "blocked",
+        title: "Заблокированы",
+        hint: "Агент не может продолжить без вас",
+        tasks: groups.blocked,
+      },
+      {
+        key: "stale",
+        title: "Пропали",
+        hint: "Агент взялся и замолчал — задача висит без работы",
+        tasks: groups.stale,
+      },
+    ],
+    [groups],
+  );
+
+  const ordered = useMemo(() => {
+    if (!focus) return sections;
+    return [...sections].sort((a, b) => {
+      if (a.key === focus) return -1;
+      if (b.key === focus) return 1;
+      return 0;
+    });
+  }, [focus, sections]);
 
   const nothing =
     !isLoading && !isError && ordered.every((s) => s.tasks.length === 0);

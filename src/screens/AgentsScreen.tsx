@@ -29,7 +29,7 @@ export function AgentsScreen() {
       <ScreenHeader
         variant="compact"
         leading={<BackButton onClick={() => navigate(-1)} />}
-        title="Агенты"
+        title="Команда"
       />
 
       <ErrorBanner

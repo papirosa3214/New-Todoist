@@ -1,11 +1,6 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
-import {
-  useAgents,
-  useAgentService,
-  useToggleAgentService,
-} from "../api/agents";
 import { Icon, ScreenHeader } from "../components/UI";
 
 export function OverviewScreen() {
@@ -34,22 +29,16 @@ export function OverviewScreen() {
     [allTasks],
   );
 
-  // Дежурство службы. Служба-будильник держит соединение под учёткой
-  // агента, поэтому «хотя бы одна ИИ-учётка онлайн» и есть признак того,
-  // что назначенная задача будет подхвачена. Двойники, которых служба
-  // запускает, своих соединений не открывают — считать их здесь нечего,
-  // занятость показывает соседняя плашка «В работе».
-  // Состояние берём у самой службы, а не по косвенному признаку «онлайн ли
-  // ИИ-учётка»: плашка теперь не только показывает режим, но и переключает
-  // его, а переключатель обязан отражать то, чем управляет. Косвенный
-  // признак к тому же врал бы в первые секунды после включения — соединение
-  // открывается не мгновенно.
-  const { data: service } = useAgentService();
-  const toggleService = useToggleAgentService();
-  const serviceOn = service?.active ?? false;
-  // Список агентов нужен отдельно — по нему считаются задачи, назначенные
-  // ИИ-учёткам и никем не взятые (waitingCount ниже).
-  const { data: allAgents = [] } = useAgents();
+  const reviewCount = useMemo(
+    () => allTasks.filter((t) => t.status === "active" && t.agent_state === "review").length,
+    [allTasks],
+  );
+
+  const blockedCount = useMemo(
+    () => allTasks.filter((t) => t.status === "active" && t.agent_state === "blocked").length,
+    [allTasks],
+  );
+
   // Занятость — по задачам, а не по учёткам: сколько карточек агенты
   // реально делают сейчас. Протухшие сюда не входят, для них своя плашка.
   const workingCount = useMemo(
@@ -62,95 +51,75 @@ export function OverviewScreen() {
       ).length,
     [allTasks],
   );
-  // Назначено агенту, но никто не взял. Пока служба дежурит, это нормальная
-  // очередь — подхватит. А вот при выключенной службе ровно эти задачи и
-  // зависнут молча: назначил и ждёшь, а никто не придёт. Именно этого
-  // Максим и опасался, поэтому плашка дежурства становится тревожной не
-  // «когда служба выключена» вообще (её можно и не включать, работая через
-  // MCP руками), а когда выключена И есть кому простаивать.
-  const waitingCount = useMemo(
-    () =>
-      allTasks.filter(
-        (t) =>
-          t.status === "active" &&
-          !t.agent_state &&
-          !!t.assignee_id &&
-          allAgents.some((a) => a.id === t.assignee_id && a.type === "ai"),
-      ).length,
-    [allTasks, allAgents],
-  );
-  const serviceAlarm = !serviceOn && waitingCount > 0;
 
   return (
     <div className="px-4 pb-4">
       <ScreenHeader title="Обзор" />
 
-      {/* Сводка агентского слоя, три плашки в одну строку: работает ли
-          служба, сколько задач в работе, сколько брошено. Ноль —
-          нейтральный цвет (bg-card2/text-sub), тревожная из трёх только
-          «Пропали». Своих просроченных задач тут нет (см. комментарий к
-          подсчётам выше) — для них есть «Сегодня».
-
-          Размеры считаны, а не подобраны на глаз. Доступная ширина на
-          390px-экране: 100vw − px-4 с двух сторон = 358px; при gap-2 (8px)
-          три flex-1 basis-0 дают ровно (358 − 16) / 3 = 114px на плашку.
-          Подписи при 13px semibold (кириллица ~7.2px на символ) и px-2
-          (8px с каждой стороны): «Дежурит» ≈ 79px, «Выключен» ≈ 87px,
-          «В работе: 12» ≈ 102px, «Пропали: 12» ≈ 95px — запас есть у всех,
-          включая двузначные числа. Прежняя подпись «На дежурстве» (≈123px)
-          не помещалась и обрезалась бы — потому и укорочена.
-
-          Высота h-11 = 44px: все три кликабельны, это минимальная зона
-          нажатия, принятая в проекте. flex-wrap снят намеренно — с ним
-          перенос вернулся бы молча, стоит подписи подрасти; min-w-0 +
-          truncate на этот случай оставляют плашку в строке, подрезая
-          текст, а не ломая раскладку. */}
-      <div className="flex items-stretch gap-2 mb-4">
-        {/* 1. Дежурство — про СЛУЖБУ, а не про агентов */}
+      {/* Сводка агентских статусов (2x2 сетка) */}
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        {/* 1. В работе */}
         <button
-          role="switch"
-          aria-checked={serviceOn}
-          aria-label="Автономный режим: служба сама поднимает агента по назначенной задаче"
-          disabled={toggleService.isPending}
-          onClick={() => toggleService.mutate(!serviceOn)}
-          className={`tap-scale flex h-11 flex-1 basis-0 min-w-0 items-center justify-center gap-1.5 px-2 rounded-xl text-[13px] font-semibold whitespace-nowrap disabled:opacity-60 ${
-            serviceOn
-              ? "bg-green/15 text-green"
-              : serviceAlarm
-                ? "bg-coral/20 text-coral"
-                : "bg-card2 text-sub"
+          onClick={() => navigate("/agent-work?focus=in_progress")}
+          className={`tap-scale flex items-center justify-between p-3 rounded-2xl text-left ${
+            workingCount > 0 ? "bg-blue/15 text-blue" : "bg-card text-sub"
           }`}
         >
-          <span
-            className={`w-[7px] h-[7px] rounded-full shrink-0 ${
-              serviceOn ? "bg-green" : serviceAlarm ? "bg-coral" : "bg-dim"
-            }`}
-          />
-          <span className="truncate">
-            {serviceOn
-              ? "Дежурит"
-              : serviceAlarm
-                ? `Выключен: ${waitingCount}`
-                : "Выключен"}
-          </span>
+          <div className="min-w-0">
+            <div className="text-[12px] text-sub truncate">В работе</div>
+            <div className={`text-[20px] font-bold ${workingCount > 0 ? "text-blue" : "text-text"}`}>
+              {workingCount}
+            </div>
+          </div>
+          <Icon name="activity" size={20} className={workingCount > 0 ? "text-blue" : "text-dim"} />
         </button>
-        {/* 2. В работе — сколько задач агенты делают прямо сейчас. */}
+
+        {/* 2. На проверке */}
         <button
-          onClick={() => navigate("/agent-work")}
-          className={`tap-scale flex h-11 flex-1 basis-0 min-w-0 items-center justify-center px-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
-            workingCount > 0 ? "bg-blue/15 text-blue" : "bg-card2 text-sub"
+          onClick={() => navigate("/agent-work?focus=review")}
+          className={`tap-scale flex items-center justify-between p-3 rounded-2xl text-left ${
+            reviewCount > 0 ? "bg-amber-500/15 text-amber-400" : "bg-card text-sub"
           }`}
         >
-          <span className="truncate">В работе: {workingCount}</span>
+          <div className="min-w-0">
+            <div className="text-[12px] text-sub truncate">На проверке</div>
+            <div className={`text-[20px] font-bold ${reviewCount > 0 ? "text-amber-400" : "text-text"}`}>
+              {reviewCount}
+            </div>
+          </div>
+          <Icon name="check" size={20} className={reviewCount > 0 ? "text-amber-400" : "text-dim"} />
         </button>
-        {/* 3. Пропали — взялись и замолчали: единственная тревожная из трёх. */}
+
+        {/* 3. Заблокированы */}
+        <button
+          onClick={() => navigate("/agent-work?focus=blocked")}
+          className={`tap-scale flex items-center justify-between p-3 rounded-2xl text-left ${
+            blockedCount > 0 ? "bg-coral/20 text-coral" : "bg-card text-sub"
+          }`}
+        >
+          <div className="min-w-0">
+            <div className="text-[12px] text-sub truncate">Заблокированы</div>
+            <div className={`text-[20px] font-bold ${blockedCount > 0 ? "text-coral" : "text-text"}`}>
+              {blockedCount}
+            </div>
+          </div>
+          <Icon name="flag" size={20} className={blockedCount > 0 ? "text-coral" : "text-dim"} />
+        </button>
+
+        {/* 4. Пропали */}
         <button
           onClick={() => navigate("/agent-work?focus=stale")}
-          className={`tap-scale flex h-11 flex-1 basis-0 min-w-0 items-center justify-center px-2 rounded-xl text-[13px] font-semibold whitespace-nowrap ${
-            staleCount > 0 ? "bg-coral/20 text-coral" : "bg-card2 text-sub"
+          className={`tap-scale flex items-center justify-between p-3 rounded-2xl text-left ${
+            staleCount > 0 ? "bg-coral/20 text-coral" : "bg-card text-sub"
           }`}
         >
-          <span className="truncate">Пропали: {staleCount}</span>
+          <div className="min-w-0">
+            <div className="text-[12px] text-sub truncate">Пропали</div>
+            <div className={`text-[20px] font-bold ${staleCount > 0 ? "text-coral" : "text-text"}`}>
+              {staleCount}
+            </div>
+          </div>
+          <Icon name="bot" size={20} className={staleCount > 0 ? "text-coral" : "text-dim"} />
         </button>
       </div>
 
