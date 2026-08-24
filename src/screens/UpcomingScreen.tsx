@@ -307,55 +307,49 @@ export function UpcomingScreen() {
     return `${MONTHS_ABBR_DOT[thu.getMonth()]} ${thu.getFullYear()}`;
   }
 
-  // Отслеживание активной даты при скролле списка (22.08.2026): находим
-  // первый заголовок даты, который «доехал» до шапки (top >= высоты
-  // шапки), и ставим его activeDate. По нему свечение в свёрнутой ленте
-  // бежит по числам, и лента сама прокручивается к этому числу.
+  // ═══ Отслеживание активной даты при скролле списка (22.08.2026) ═══
   const activeScrollRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const sc =
-      activeScrollRef.current ??
-      (calInnerRef.current
-        ? findScrollContainer(calInnerRef.current)
-        : null);
+      (calInnerRef.current ? findScrollContainer(calInnerRef.current) : null) ||
+      (document.querySelector(".overflow-y-auto") as HTMLElement | null);
     if (!sc) return;
     activeScrollRef.current = sc;
-    const headerH = () => {
-      const v = getComputedStyle(sc).getPropertyValue("--screen-header-h");
-      return parseFloat(v) || 0;
-    };
+
     const onScroll = () => {
-      const headers = [
-        ...sc.querySelectorAll("[data-date-header]"),
-      ] as HTMLElement[];
+      const headers = Array.from(
+        sc.querySelectorAll("[data-date-header]"),
+      ) as HTMLElement[];
       if (!headers.length) return;
-      const hh = headerH();
-      // Активная дата — ПОСЛЕДНИЙ заголовок, который дошёл до шапки
-      // (top <= высоты шапки), т.е. прилип к ней. Ровно как в CRM:
-      // секция, что под планкой, и есть «текущая». Если ни один не дошёл
-      // (лист в самом верху) — берём первый заголовок.
-      let active: HTMLElement | null = null;
+
+      const calBottom = calOuterRef.current
+        ? calOuterRef.current.getBoundingClientRect().bottom
+        : 140;
+
+      let currentHeader: HTMLElement | null = null;
       for (const el of headers) {
-        if (el.getBoundingClientRect().top <= hh + 8) active = el;
-      }
-      if (!active) active = headers[0];
-      const d = active.getAttribute("data-date-header");
-      if (d && d !== activeDate) {
-        setActiveDate(d);
-        // Автопрокрутка ленты к активному числу (только если лента есть).
-        const strip = weekStripRef.current;
-        if (strip) {
-          const btn = strip.querySelector<HTMLElement>(
-            `[data-strip-day="${d}"]`,
-          );
-          btn?.scrollIntoView({ inline: "center", block: "nearest" });
+        const top = el.getBoundingClientRect().top;
+        if (top <= calBottom + 30) {
+          currentHeader = el;
         }
       }
+      if (!currentHeader && headers.length > 0) {
+        currentHeader = headers[0];
+      }
+      const d = currentHeader?.getAttribute("data-date-header");
+      if (d) {
+        setActiveDate((prev) => (prev === d ? prev : d));
+      }
     };
+
     onScroll();
     sc.addEventListener("scroll", onScroll, { passive: true });
-    return () => sc.removeEventListener("scroll", onScroll);
-  }, [activeDate]);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      sc.removeEventListener("scroll", onScroll);
+      window.removeEventListener("scroll", onScroll);
+    };
+  }, [tasks, view]);
 
   // Два рефа, не один — это была первая, ошибочная попытка с одним рефом:
   // измерять `scrollHeight` того же элемента, на который наложен явный
@@ -982,7 +976,11 @@ export function UpcomingScreen() {
                                           onClick={() =>
                                             setSelectedDate(date === selectedDate ? null : date)
                                           }
-                                          className="relative flex h-[44px] w-[44px] shrink-0 flex-col items-center justify-center rounded-full"
+                                          className={`relative flex h-[46px] w-[44px] shrink-0 flex-col items-center justify-center rounded-2xl transition-all ${
+                                            isActive && !isToday
+                                              ? "bg-red/15 ring-1 ring-red/30"
+                                              : ""
+                                          }`}
                                         >
                                           {/* Красное свечение позади активного числа —
                                               «размытое пятнышко», бегущее по числам.
