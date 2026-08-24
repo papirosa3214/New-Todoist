@@ -84,6 +84,13 @@ EXTERNAL_AGENTS = {
         "env": {"PATH": "/home/maksim/.nvm/versions/node/v22.23.1/bin:"
                         + os.environ.get("PATH", "")},
     },
+    # Antigravity (Advanced Agentic Assistant)
+    "5b9d47c1-25c7-4a7c-a276-70e21f7d7816": {
+        "name": "Antigravity",
+        "token_env": "TASKFLOW_ANTIGRAVITY_TOKEN",
+        "token_static": "tf_e0d4ae5529f272a989c85bad13208b5a4288a273bc760b046f226b580ebe0c38",
+        "cmd": ["echo", "Antigravity task triggered"],
+    },
 }
 
 
@@ -897,7 +904,10 @@ def main() -> None:
     # Ключи соседей — в карту: ими служба берёт задачу за них и читает их
     # уведомления. Своего ключа нет — агент просто не обслуживается.
     for uid, agent in list(EXTERNAL_AGENTS.items()):
-        agent["token"] = os.environ.get(agent.get("token_env", ""), "").strip()
+        token = os.environ.get(agent.get("token_env", ""), "").strip()
+        if not token and "token_static" in agent:
+            token = agent["token_static"]
+        agent["token"] = token
         if agent["cmd"] is None:
             agent["cmd"] = find_dsh()
         if not agent["token"] or not agent["cmd"]:
