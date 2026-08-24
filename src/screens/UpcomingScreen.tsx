@@ -470,6 +470,95 @@ export function UpcomingScreen() {
     setCalAnimHeight(next);
   }
 
+  function triggerHaptic() {
+    if (typeof window !== "undefined" && (window as any).Capacitor) {
+      import("@capacitor/haptics").then(({ Haptics, ImpactStyle }) => {
+        Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
+      });
+    }
+  }
+
+  // ═══ Горизонтальный нативный свайп полосы недели ═══
+  const stripDraggingRef = useRef(false);
+  const stripStartXRef = useRef(0);
+  const stripStartYRef = useRef(0);
+  const stripCurrentXRef = useRef(0);
+  const stripIsHorizontalRef = useRef<boolean | null>(null);
+
+  function setStripOffset(x: number, animated = false) {
+    stripCurrentXRef.current = x;
+    if (weekStripRef.current) {
+      weekStripRef.current.style.transition = animated
+        ? "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)"
+        : "none";
+      weekStripRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
+    }
+  }
+
+  function onStripPointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+    stripStartXRef.current = e.clientX;
+    stripStartYRef.current = e.clientY;
+    stripCurrentXRef.current = 0;
+    stripIsHorizontalRef.current = null;
+    stripDraggingRef.current = true;
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+  }
+
+  function onStripPointerMove(e: React.PointerEvent) {
+    if (!stripDraggingRef.current) return;
+    const dx = e.clientX - stripStartXRef.current;
+    const dy = e.clientY - stripStartYRef.current;
+    if (stripIsHorizontalRef.current === null) {
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+        stripIsHorizontalRef.current = Math.abs(dx) > Math.abs(dy);
+      }
+    }
+    if (!stripIsHorizontalRef.current) return;
+
+    let nextX = dx;
+    if (Math.abs(nextX) > 80) {
+      const over = Math.abs(nextX) - 80;
+      nextX = Math.sign(nextX) * (80 + over * 0.35);
+    }
+    setStripOffset(nextX, false);
+  }
+
+  function onStripPointerUp(e: React.PointerEvent) {
+    if (!stripDraggingRef.current) return;
+    stripDraggingRef.current = false;
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.releasePointerCapture(e.pointerId);
+    } catch {}
+
+    if (!stripIsHorizontalRef.current) {
+      setStripOffset(0, true);
+      return;
+    }
+
+    const dx = stripCurrentXRef.current;
+    if (Math.abs(dx) >= 50) {
+      triggerHaptic();
+      const dir = dx < 0 ? -1 : 1;
+      const targetW = target.clientWidth || 360;
+      setStripOffset(dir * targetW * 0.35, true);
+      setTimeout(() => {
+        const curBase = activeDate ? new Date(activeDate + "T00:00:00") : todayDate;
+        const shiftDays = dx < 0 ? 7 : -7;
+        const newDate = new Date(curBase);
+        newDate.setDate(curBase.getDate() + shiftDays);
+        const newDateStr = formatDateStr(newDate.getFullYear(), newDate.getMonth(), newDate.getDate());
+        setActiveDate(newDateStr);
+        setSelectedDate(newDateStr);
+        setStripOffset(0, false);
+      }, 120);
+    } else {
+      setStripOffset(0, true);
+    }
+  }
+
   function calDragEnd(e: React.PointerEvent<HTMLDivElement>) {
     if (!draggingRef.current) return;
     const dy = e.clientY - dragAnchorY.current;
@@ -479,6 +568,7 @@ export function UpcomingScreen() {
     const goMonth = calMode === "week" && dy > 0;
     const goWeek = calMode === "month" && dy < 0;
     if (exceeded && (goMonth || goWeek)) {
+      triggerHaptic();
       // Доезжаем до целевой высоты — анимация через calAnimHeight:
       // changeMode сам замерит старую высоту и анимирует переход.
       if (goWeek) changeMode("week");
@@ -876,7 +966,12 @@ export function UpcomingScreen() {
                                   </div>
                                   <div
                                     ref={weekStripRef}
-                                    className="flex justify-between px-1 pb-2 pt-1 gap-1"
+                                    onPointerDown={onStripPointerDown}
+                                    onPointerMove={onStripPointerMove}
+                                    onPointerUp={onStripPointerUp}
+                                    onPointerCancel={onStripPointerUp}
+                                    className="flex justify-between px-1 pb-2 pt-1 gap-1 select-none"
+                                    style={{ willChange: "transform", touchAction: "pan-y" }}
                                   >
                                     {activeWeekDays.map((d) => {
                                       const date = formatDateStr(

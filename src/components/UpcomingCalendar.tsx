@@ -352,20 +352,89 @@ export function WeekGrid({
 }) {
   const today = todayStr();
   const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
-  const swipeRef = useRef<{ x: number; y: number } | null>(null);
+  const innerGridRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
+  const startXRef = useRef(0);
+  const startYRef = useRef(0);
+  const currentXRef = useRef(0);
+  const isHorizontalRef = useRef<boolean | null>(null);
+
+  const triggerHaptic = () => {
+    if (typeof window !== "undefined" && (window as any).Capacitor) {
+      import("@capacitor/haptics").then(({ Haptics, ImpactStyle }) => {
+        Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
+      });
+    }
+  };
+
+  const setOffset = (x: number, animated = false) => {
+    currentXRef.current = x;
+    if (innerGridRef.current) {
+      innerGridRef.current.style.transition = animated
+        ? "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)"
+        : "none";
+      innerGridRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
+    }
+  };
+
   function onPointerDown(e: React.PointerEvent) {
-    swipeRef.current = { x: e.clientX, y: e.clientY };
+    if (e.button !== 0) return;
+    startXRef.current = e.clientX;
+    startYRef.current = e.clientY;
+    currentXRef.current = 0;
+    isHorizontalRef.current = null;
+    isDraggingRef.current = true;
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
   }
+
+  function onPointerMove(e: React.PointerEvent) {
+    if (!isDraggingRef.current) return;
+    const dx = e.clientX - startXRef.current;
+    const dy = e.clientY - startYRef.current;
+    if (isHorizontalRef.current === null) {
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+        isHorizontalRef.current = Math.abs(dx) > Math.abs(dy);
+      }
+    }
+    if (!isHorizontalRef.current) return;
+
+    // Резиновый эффект при перетягивании
+    let nextX = dx;
+    if (Math.abs(nextX) > 120) {
+      const over = Math.abs(nextX) - 120;
+      nextX = Math.sign(nextX) * (120 + over * 0.35);
+    }
+    setOffset(nextX, false);
+  }
+
   function onPointerUp(e: React.PointerEvent) {
-    const start = swipeRef.current;
-    swipeRef.current = null;
-    if (!start) return;
-    const dx = e.clientX - start.x;
-    const dy = e.clientY - start.y;
-    if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.6)
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.releasePointerCapture(e.pointerId);
+    } catch {}
+
+    if (!isHorizontalRef.current) {
+      setOffset(0, true);
       return;
-    if (dx < 0) onNextWeek();
-    else onPrevWeek();
+    }
+
+    const dx = currentXRef.current;
+    if (Math.abs(dx) >= SWIPE_MIN_PX) {
+      triggerHaptic();
+      const dir = dx < 0 ? -1 : 1;
+      const targetW = target.clientWidth || 360;
+      setOffset(dir * targetW * 0.35, true);
+      setTimeout(() => {
+        if (dx < 0) onNextWeek();
+        else onPrevWeek();
+        setOffset(0, false);
+      }, 120);
+    } else {
+      setOffset(0, true);
+    }
   }
   // Высота сетки ЗАМЕРЯЕТСЯ, а не считается формулой из 100dvh: расчёт
   // «экран минус шапка минус запас» промахнулся на 25px — в него не
@@ -445,34 +514,26 @@ export function WeekGrid({
     // что у MonthGrid: горизонтальный жест не даёт странице увести
     // вертикальный скролл вместе с ним.
     <div
-      className="-mx-4 select-none"
+      className="-mx-4 select-none overflow-hidden"
       onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={() => (swipeRef.current = null)}
+      onPointerCancel={onPointerUp}
       style={{ touchAction: "pan-y" }}
     >
-      {/* Высота — ровно оставшийся экран, поделённый на четыре ряда: на
-          скриншоте сетка занимает его целиком, а не кончается на середине с
-          пустотой внизу. Отсчёт от --screen-header-h (реальная высота шапки,
-          публикуется ScreenHeader) плюс запас под кнопку-веер, чтобы нижний
-          ряд не уезжал под неё.
-          БЕЗ прокрутки: вся неделя видна разом, крутить нечего (владелец
-          19.08.2026: «зачем здесь скроллить, вся неделя на экране — статика,
-          абсолютная статика»). Поэтому height, а не minHeight: сетка ровно в
-          оставшийся экран, страница не удлиняется ни на пиксель.
-          Замыкающих линий сверху и снизу нет намеренно — только внутренние
-          разделители. С рамкой по периметру сетка читалась «квадратиком»;
-          без неё края открыты и раскладка выглядит продолжающейся, как и
-          просил владелец («чтобы был такой воздушный, с продолжением»). */}
       <div
-        ref={gridRef}
-        data-week-grid
-        className="grid grid-cols-2"
-        style={{
-          height,
-          gridTemplateRows: "repeat(4, minmax(0, 1fr))",
-        }}
+        ref={innerGridRef}
+        style={{ willChange: "transform" }}
       >
+        <div
+          ref={gridRef}
+          data-week-grid
+          className="grid grid-cols-2"
+          style={{
+            height,
+            gridTemplateRows: "repeat(4, minmax(0, 1fr))",
+          }}
+        >
         <div className="min-h-0 border-b border-r border-stroke">
           <MiniMonth monday={monday} onPickDate={onPickDate} />
         </div>
@@ -531,7 +592,8 @@ export function WeekGrid({
         })}
       </div>
     </div>
-  );
+  </div>
+);
 }
 
 /** Месяц: 7×6, в ячейке число и мини-плашки. Не влезающие сворачиваются в
