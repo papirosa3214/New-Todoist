@@ -128,6 +128,8 @@ export function registerIntegrationRoutes(app: FastifyInstance) {
     const scopes = [
       "https://www.googleapis.com/auth/tasks",
       "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/calendar.events.readonly",
     ].join(" ");
 
     const params = new URLSearchParams({
@@ -243,6 +245,106 @@ export function registerIntegrationRoutes(app: FastifyInstance) {
       }
       const data = (await res.json()) as { items?: GoogleTaskList[] };
       return { lists: data.items || [] };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message });
+    }
+  });
+
+  // ═══════════ Google Calendar: Списки календарей ═══════════
+  app.get("/api/integrations/google/calendars", { preHandler: authOrApiToken }, async (req, reply) => {
+    const userId = getUserId(req);
+    const token = await getFreshGoogleToken(userId);
+    if (!token) {
+      return reply.code(401).send({ error: "Google аккаунт не подключён" });
+    }
+
+    try {
+      const res = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        return reply.code(res.status).send({ error: "Ошибка запроса календарей Google" });
+      }
+      const data = (await res.json()) as { items?: any[] };
+      const calendars = (data.items || []).map((c) => ({
+        id: c.id,
+        summary: c.summary || c.id,
+        backgroundColor: c.backgroundColor || "#4285F4",
+        primary: !!c.primary,
+      }));
+      return { calendars };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message });
+    }
+  });
+
+  // ═══════════ Google Calendar: События на дату ═══════════
+  app.get("/api/integrations/google/calendar-events", { preHandler: authOrApiToken }, async (req, reply) => {
+    const userId = getUserId(req);
+    const token = await getFreshGoogleToken(userId);
+    if (!token) {
+      return reply.code(401).send({ error: "Google аккаунт не подключён" });
+    }
+
+    const { date, calendarIds } = req.query as { date?: string; calendarIds?: string };
+    if (!date) {
+      return reply.code(400).send({ error: "Параметр date обязателен (YYYY-MM-DD)" });
+    }
+
+    const timeMin = `${date}T00:00:00Z`;
+    const timeMax = `${date}T23:59:59Z`;
+
+    let cIds = calendarIds ? calendarIds.split(",").map((s) => s.trim()).filter(Boolean) : [];
+
+    try {
+      if (cIds.length === 0) {
+        const listRes = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (listRes.ok) {
+          const listData = (await listRes.json()) as { items?: any[] };
+          cIds = (listData.items || []).map((c) => c.id);
+        }
+        if (cIds.length === 0) {
+          cIds = ["primary"];
+        }
+      }
+
+      const allEvents: any[] = [];
+
+      for (const cid of cIds) {
+        try {
+          const evRes = await fetch(
+            `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cid)}/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+          if (evRes.ok) {
+            const evData = (await evRes.json()) as { summary?: string; items?: any[] };
+            const calTitle = evData.summary || cid;
+            for (const item of evData.items || []) {
+              if (item.status === "cancelled") continue;
+              const isAllDay = !!item.start?.date && !item.start?.dateTime;
+              const startDate = item.start?.dateTime || `${item.start?.date}T00:00:00`;
+              const endDate = item.end?.dateTime || `${item.end?.date}T23:59:59`;
+              allEvents.push({
+                id: item.id,
+                calendarId: cid,
+                title: item.summary || "(Без названия)",
+                startDate,
+                endDate,
+                allDay: isAllDay,
+                calendarTitle: calTitle,
+                calendarColor: "#4285F4",
+                location: item.location || undefined,
+              });
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      return { events: allEvents };
     } catch (err: any) {
       return reply.code(500).send({ error: err.message });
     }

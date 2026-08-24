@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FieldGroup, ScreenHeader, BackButton, ErrorBanner, Icon } from "../components/UI";
+import { ScreenHeader, BackButton, ErrorBanner, Icon } from "../components/UI";
 import {
   AppleIntegrations,
   type CalendarInfo,
@@ -15,6 +15,7 @@ import {
   useDisconnectGoogle,
   useUpdateIntegrationSettings,
   useGoogleCallback,
+  useGoogleCalendars,
 } from "../api/integrations";
 import { useTasks, useCreateTask, useUpdateTask } from "../api/tasks";
 import { useProjects, useCreateProject } from "../api/projects";
@@ -33,9 +34,28 @@ export function IntegrationsScreen() {
       return [];
     }
   });
+  const [selectedGoogleCalIds, setSelectedGoogleCalIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("google_calendar_ids") || "[]");
+    } catch {
+      return [];
+    }
+  });
   const [selectedRemListId, setSelectedRemListId] = useState<string>(() => {
     return localStorage.getItem("apple_reminders_list_id") || "";
   });
+
+  // Состояние аккордеона (какая секция открыта)
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    appleCal: false,
+    appleRem: false,
+    googleTasks: true,
+    googleCal: false,
+  });
+
+  const toggleSection = (key: string) => {
+    setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   const [appleSyncStatus, setAppleSyncStatus] = useState<string | null>(null);
   const [isAppleSyncing, setIsAppleSyncing] = useState(false);
@@ -44,6 +64,7 @@ export function IntegrationsScreen() {
   // Google Integration API
   const { data: intStatus, isLoading: isStatusLoading, refetch: refetchStatus } = useIntegrationsStatus();
   const { data: gListsData, isLoading: isGListsLoading } = useGoogleLists();
+  const { data: gCalsData, isLoading: isGCalsLoading } = useGoogleCalendars(!!intStatus?.google?.connected);
   const getAuthUrl = useGoogleAuthUrl();
   const googleCallback = useGoogleCallback();
   const googleSync = useGoogleSync();
@@ -134,6 +155,14 @@ export function IntegrationsScreen() {
     localStorage.setItem("apple_calendar_ids", JSON.stringify(updated));
   };
 
+  const toggleGoogleCalendar = (id: string) => {
+    const updated = selectedGoogleCalIds.includes(id)
+      ? selectedGoogleCalIds.filter((cid) => cid !== id)
+      : [...selectedGoogleCalIds, id];
+    setSelectedGoogleCalIds(updated);
+    localStorage.setItem("google_calendar_ids", JSON.stringify(updated));
+  };
+
   const { data: allTasks = [] } = useTasks();
   const { data: projects = [] } = useProjects();
   const createProject = useCreateProject();
@@ -195,7 +224,7 @@ export function IntegrationsScreen() {
   };
 
   const handleDisconnectGoogle = () => {
-    if (!confirm("Отключить Google Задачи?")) return;
+    if (!confirm("Отключить Google аккаунт?")) return;
     disconnectGoogle.mutate(undefined, {
       onSuccess: () => {
         refetchStatus();
@@ -238,7 +267,7 @@ export function IntegrationsScreen() {
         title="Интеграции"
       />
 
-      <div className="px-4 space-y-6 max-w-lg mx-auto pt-2">
+      <div className="px-4 space-y-4 max-w-lg mx-auto pt-2">
         <ErrorBanner error={error} variant="block" />
 
         {appleSyncStatus && (
@@ -248,248 +277,385 @@ export function IntegrationsScreen() {
           </div>
         )}
 
-        {/* ═══════════ Apple Экосистема ═══════════ */}
-        <div>
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-sub px-1 mb-2">
+        {/* ═══════════ СЕКЦИЯ: APPLE ЭКОСИСТЕМА ═══════════ */}
+        <div className="space-y-3">
+          <div className="text-xs font-semibold uppercase tracking-wider text-sub px-1">
             Apple Экосистема (iOS)
-          </h2>
+          </div>
 
-          <FieldGroup>
-            {/* Apple Календарь */}
-            <div className="p-4 bg-card border-b border-stroke/50">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center text-red-500">
-                    <Icon name="calendar" size={18} />
-                  </div>
-                  <div>
-                    <div className="text-[15px] font-medium text-text">Apple Календарь</div>
-                    <div className="text-xs text-sub">
-                      {isApple
-                        ? calPerm.granted
-                          ? "Доступ открыт (события видны в Предстоящем)"
-                          : "Требуется разрешение"
-                        : "Доступно на iPhone"}
-                    </div>
+          {/* 1. Аккордеон: Apple Календарь */}
+          <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">
+            <button
+              onClick={() => toggleSection("appleCal")}
+              className="w-full p-4 flex items-center justify-between text-left hover:bg-card-hover/40 transition-colors"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-red-500/10 flex items-center justify-center text-red-500 shrink-0">
+                  <Icon name="calendar" size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[15px] font-medium text-text">Apple Календарь</div>
+                  <div className="text-xs text-sub truncate">
+                    {isApple
+                      ? calPerm.granted
+                        ? calendars.length > 0
+                          ? `Выбрано: ${selectedCalIds.length || "все"} из ${calendars.length}`
+                          : "Доступ открыт"
+                        : "Требуется разрешение"
+                      : "Доступно на iPhone"}
                   </div>
                 </div>
-
-                {isApple && (
-                  <div>
-                    {calPerm.granted ? (
-                      <span className="text-xs text-teal font-medium px-2 py-1 bg-teal/10 rounded-md">
-                        Включён
-                      </span>
-                    ) : (
-                      <button
-                        onClick={handleRequestCalendar}
-                        className="text-xs font-semibold px-3 py-1.5 bg-coral text-white rounded-lg active:scale-95 transition-transform"
-                      >
-                        Разрешить
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
 
-              {/* Выбор календарей */}
-              {calPerm.granted && calendars.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-stroke/40 space-y-2">
-                  <div className="text-xs font-medium text-sub">Отображать календари:</div>
-                  <div className="space-y-1.5">
-                    {calendars.map((cal) => {
-                      const isChecked = selectedCalIds.includes(cal.id);
-                      return (
-                        <button
-                          key={cal.id}
-                          onClick={() => toggleCalendar(cal.id)}
-                          className="w-full flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-card-hover transition-colors text-left"
+              <div className="flex items-center gap-2 shrink-0">
+                {isApple && calPerm.granted && (
+                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+                    Включён
+                  </span>
+                )}
+                <Icon
+                  name={openSections.appleCal ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  className="text-sub"
+                />
+              </div>
+            </button>
+
+            {openSections.appleCal && (
+              <div className="px-4 pb-4 pt-1 border-t border-stroke/40 space-y-3 bg-card2/30">
+                {!calPerm.granted ? (
+                  <div className="pt-2">
+                    <button
+                      onClick={handleRequestCalendar}
+                      className="w-full py-2 bg-coral text-white rounded-xl text-xs font-semibold active:scale-98 transition-transform"
+                    >
+                      Разрешить доступ к Apple Календарю
+                    </button>
+                  </div>
+                ) : calendars.length > 0 ? (
+                  <div className="pt-2 space-y-2">
+                    <div className="text-xs font-medium text-sub">Отображать календари в расписании:</div>
+                    <div className="space-y-1 bg-card rounded-xl p-2 border border-stroke/40">
+                      {calendars.map((cal) => {
+                        const isChecked =
+                          selectedCalIds.length === 0 || selectedCalIds.includes(cal.id);
+                        return (
+                          <button
+                            key={cal.id}
+                            onClick={() => toggleCalendar(cal.id)}
+                            className="w-full flex items-center justify-between py-1.5 px-2.5 rounded-lg hover:bg-card-hover transition-colors text-left"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className="w-2.5 h-2.5 rounded-full shrink-0"
+                                style={{ backgroundColor: cal.color }}
+                              />
+                              <span className="text-xs text-text truncate">{cal.title}</span>
+                            </div>
+                            {isChecked && (
+                              <Icon name="check" size={14} className="text-coral shrink-0 ml-2" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs text-sub pt-2">Календари не найдены</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 2. Аккордеон: Apple Напоминания */}
+          <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">
+            <button
+              onClick={() => toggleSection("appleRem")}
+              className="w-full p-4 flex items-center justify-between text-left hover:bg-card-hover/40 transition-colors"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-orange-500/10 flex items-center justify-center text-orange-500 shrink-0">
+                  <Icon name="calendar-check" size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[15px] font-medium text-text">Apple Напоминания</div>
+                  <div className="text-xs text-sub truncate">
+                    {isApple
+                      ? remPerm.granted
+                        ? "Двусторонняя синхронизация задач"
+                        : "Требуется разрешение"
+                      : "Доступно на iPhone"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {isApple && remPerm.granted && (
+                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+                    Включён
+                  </span>
+                )}
+                <Icon
+                  name={openSections.appleRem ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  className="text-sub"
+                />
+              </div>
+            </button>
+
+            {openSections.appleRem && (
+              <div className="px-4 pb-4 pt-1 border-t border-stroke/40 space-y-3 bg-card2/30">
+                {!remPerm.granted ? (
+                  <div className="pt-2">
+                    <button
+                      onClick={handleRequestReminders}
+                      className="w-full py-2 bg-coral text-white rounded-xl text-xs font-semibold active:scale-98 transition-transform"
+                    >
+                      Разрешить доступ к Apple Напоминаниям
+                    </button>
+                  </div>
+                ) : (
+                  <div className="pt-2 space-y-3">
+                    {reminderLists.length > 0 && (
+                      <div>
+                        <label className="text-xs text-sub block mb-1">Список Apple Напоминаний:</label>
+                        <select
+                          value={selectedRemListId}
+                          onChange={(e) => {
+                            setSelectedRemListId(e.target.value);
+                            localStorage.setItem("apple_reminders_list_id", e.target.value);
+                          }}
+                          className="w-full bg-card border border-stroke rounded-xl px-3 py-2 text-xs text-text focus:outline-none focus:border-coral"
                         >
-                          <div className="flex items-center gap-2">
-                            <span
-                              className="w-2.5 h-2.5 rounded-full shrink-0"
-                              style={{ backgroundColor: cal.color }}
-                            />
-                            <span className="text-xs text-text">{cal.title}</span>
-                          </div>
-                          {isChecked && <Icon name="check" size={14} className="text-coral" />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Apple Напоминания */}
-            <div className="p-4 bg-card">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-orange-500/10 flex items-center justify-center text-orange-500">
-                    <Icon name="calendar-check" size={18} />
-                  </div>
-                  <div>
-                    <div className="text-[15px] font-medium text-text">Apple Напоминания</div>
-                    <div className="text-xs text-sub">
-                      {isApple
-                        ? remPerm.granted
-                          ? "Доступ открыт"
-                          : "Требуется разрешение"
-                        : "Доступно на iPhone"}
-                    </div>
-                  </div>
-                </div>
-
-                {isApple && (
-                  <div>
-                    {remPerm.granted ? (
-                      <span className="text-xs text-teal font-medium px-2 py-1 bg-teal/10 rounded-md">
-                        Включён
-                      </span>
-                    ) : (
-                      <button
-                        onClick={handleRequestReminders}
-                        className="text-xs font-semibold px-3 py-1.5 bg-coral text-white rounded-lg active:scale-95 transition-transform"
-                      >
-                        Разрешить
-                      </button>
+                          {reminderLists.map((l) => (
+                            <option key={l.id} value={l.id}>
+                              {l.title} {l.isDefault ? "(по умолчанию)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     )}
+
+                    <button
+                      onClick={handleSyncAppleReminders}
+                      disabled={isAppleSyncing}
+                      className="w-full py-2.5 bg-card border border-stroke rounded-xl text-xs font-medium text-text flex items-center justify-center gap-2 active:scale-98 transition-transform disabled:opacity-50 shadow-2xs"
+                    >
+                      <Icon
+                        name="refresh-cw"
+                        size={14}
+                        className={isAppleSyncing ? "animate-spin text-coral" : "text-sub"}
+                      />
+                      <span>{isAppleSyncing ? "Синхронизация..." : "Синхронизировать сейчас"}</span>
+                    </button>
                   </div>
                 )}
               </div>
-
-              {/* Настройки напоминаний */}
-              {remPerm.granted && (
-                <div className="mt-3 pt-3 border-t border-stroke/40 space-y-3">
-                  {reminderLists.length > 0 && (
-                    <div>
-                      <label className="text-xs text-sub block mb-1">Список для синхронизации:</label>
-                      <select
-                        value={selectedRemListId}
-                        onChange={(e) => {
-                          setSelectedRemListId(e.target.value);
-                          localStorage.setItem("apple_reminders_list_id", e.target.value);
-                        }}
-                        className="w-full bg-card border border-stroke rounded-lg px-3 py-2 text-xs text-text focus:outline-none focus:border-coral"
-                      >
-                        {reminderLists.map((l) => (
-                          <option key={l.id} value={l.id}>
-                            {l.title} {l.isDefault ? "(по умолчанию)" : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={handleSyncAppleReminders}
-                    disabled={isAppleSyncing}
-                    className="w-full py-2 bg-card border border-stroke rounded-lg text-xs font-medium text-text flex items-center justify-center gap-2 active:scale-98 transition-transform disabled:opacity-50"
-                  >
-                    <Icon
-                      name="refresh-cw"
-                      size={14}
-                      className={isAppleSyncing ? "animate-spin text-coral" : "text-sub"}
-                    />
-                    <span>{isAppleSyncing ? "Синхронизация..." : "Синхронизировать напоминания"}</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          </FieldGroup>
+            )}
+          </div>
         </div>
 
-        {/* ═══════════ Google Задачи ═══════════ */}
-        <div>
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-sub px-1 mb-2">
-            Google Задачи (Google Tasks)
-          </h2>
+        {/* ═══════════ СЕКЦИЯ: GOOGLE СЕРВИСЫ ═══════════ */}
+        <div className="space-y-3 pt-2">
+          <div className="text-xs font-semibold uppercase tracking-wider text-sub px-1">
+            Google Сервисы
+          </div>
 
-          <FieldGroup>
-            <div className="p-4 bg-card">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-500">
-                    <Icon name="tag" size={18} />
-                  </div>
-                  <div>
-                    <div className="text-[15px] font-medium text-text">Google Задачи</div>
-                    <div className="text-xs text-sub">
-                      {isStatusLoading
-                        ? "Проверка..."
-                        : googleConnected
-                        ? intStatus?.google?.email || "Аккаунт подключён"
-                        : "Синхронизация списков и задач"}
-                    </div>
+          {/* 3. Аккордеон: Google Задачи */}
+          <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">
+            <button
+              onClick={() => toggleSection("googleTasks")}
+              className="w-full p-4 flex items-center justify-between text-left hover:bg-card-hover/40 transition-colors"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500 shrink-0">
+                  <Icon name="tag" size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[15px] font-medium text-text">Google Задачи</div>
+                  <div className="text-xs text-sub truncate">
+                    {isStatusLoading
+                      ? "Проверка..."
+                      : googleConnected
+                      ? intStatus?.google?.email || "Аккаунт подключён"
+                      : "Импорт задач и списков"}
                   </div>
                 </div>
+              </div>
 
-                <div>
-                  {googleConnected ? (
-                    <button
-                      onClick={handleDisconnectGoogle}
-                      disabled={disconnectGoogle.isPending}
-                      className="text-xs text-coral font-medium hover:underline"
-                    >
-                      Отключить
-                    </button>
-                  ) : (
+              <div className="flex items-center gap-2 shrink-0">
+                {googleConnected && (
+                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+                    В сети
+                  </span>
+                )}
+                <Icon
+                  name={openSections.googleTasks ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  className="text-sub"
+                />
+              </div>
+            </button>
+
+            {openSections.googleTasks && (
+              <div className="px-4 pb-4 pt-1 border-t border-stroke/40 space-y-3 bg-card2/30">
+                {!googleConnected ? (
+                  <div className="pt-2">
                     <button
                       onClick={handleConnectGoogle}
                       disabled={getAuthUrl.isPending}
-                      className="text-xs font-semibold px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg active:scale-95 transition-transform"
+                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold active:scale-98 transition-transform shadow-2xs"
                     >
-                      {getAuthUrl.isPending ? "..." : "Войти с Google"}
+                      {getAuthUrl.isPending ? "Формирование ссылки..." : "Войти через Google"}
                     </button>
-                  )}
+                  </div>
+                ) : (
+                  <div className="pt-2 space-y-3">
+                    {isGListsLoading ? (
+                      <div className="text-xs text-sub">Загрузка списков задач...</div>
+                    ) : gListsData?.lists && gListsData.lists.length > 0 ? (
+                      <div>
+                        <label className="text-xs text-sub block mb-1">Список Google Tasks:</label>
+                        <select
+                          value={intStatus?.google?.settings?.listId || "@default"}
+                          onChange={(e) => handleSelectGoogleList(e.target.value)}
+                          className="w-full bg-card border border-stroke rounded-xl px-3 py-2 text-xs text-text focus:outline-none focus:border-coral"
+                        >
+                          <option value="@default">Основной список (@default)</option>
+                          {gListsData.lists.map((l) => (
+                            <option key={l.id} value={l.id}>
+                              {l.title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : null}
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleSyncGoogle}
+                        disabled={googleSync.isPending}
+                        className="flex-1 py-2.5 bg-card border border-stroke rounded-xl text-xs font-medium text-text flex items-center justify-center gap-2 active:scale-98 transition-transform disabled:opacity-50 shadow-2xs"
+                      >
+                        <Icon
+                          name="refresh-cw"
+                          size={14}
+                          className={googleSync.isPending ? "animate-spin text-coral" : "text-sub"}
+                        />
+                        <span>{googleSync.isPending ? "Синхронизация..." : "Синхронизировать"}</span>
+                      </button>
+
+                      <button
+                        onClick={handleDisconnectGoogle}
+                        disabled={disconnectGoogle.isPending}
+                        className="px-3 py-2.5 bg-card border border-stroke rounded-xl text-xs text-coral font-medium active:scale-98 transition-transform hover:bg-red-500/10"
+                      >
+                        Отключить
+                      </button>
+                    </div>
+
+                    {intStatus?.google?.lastSyncedAt && (
+                      <div className="text-[11px] text-dim text-center">
+                        Последняя синхронизация: {new Date(intStatus.google.lastSyncedAt).toLocaleString("ru-RU")}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 4. Аккордеон: Google Календарь */}
+          <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">
+            <button
+              onClick={() => toggleSection("googleCal")}
+              className="w-full p-4 flex items-center justify-between text-left hover:bg-card-hover/40 transition-colors"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-blue-600/10 flex items-center justify-center text-blue-600 shrink-0">
+                  <Icon name="calendar" size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[15px] font-medium text-text">Google Календарь</div>
+                  <div className="text-xs text-sub truncate">
+                    {googleConnected
+                      ? gCalsData?.calendars && gCalsData.calendars.length > 0
+                        ? `Выбрано: ${selectedGoogleCalIds.length || "все"} из ${gCalsData.calendars.length}`
+                        : "События в Предстоящем и Сегодня"
+                      : "Требуется вход с Google"}
+                  </div>
                 </div>
               </div>
 
-              {/* Если Google подключен */}
-              {googleConnected && (
-                <div className="mt-3 pt-3 border-t border-stroke/40 space-y-3">
-                  {isGListsLoading ? (
-                    <div className="text-xs text-sub">Загрузка списков Google...</div>
-                  ) : gListsData?.lists && gListsData.lists.length > 0 ? (
-                    <div>
-                      <label className="text-xs text-sub block mb-1">Список Google Tasks:</label>
-                      <select
-                        value={intStatus?.google?.settings?.listId || "@default"}
-                        onChange={(e) => handleSelectGoogleList(e.target.value)}
-                        className="w-full bg-card border border-stroke rounded-lg px-3 py-2 text-xs text-text focus:outline-none focus:border-coral"
-                      >
-                        <option value="@default">Основной список (@default)</option>
-                        {gListsData.lists.map((l) => (
-                          <option key={l.id} value={l.id}>
-                            {l.title}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : null}
+              <div className="flex items-center gap-2 shrink-0">
+                {googleConnected && (
+                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+                    В сети
+                  </span>
+                )}
+                <Icon
+                  name={openSections.googleCal ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  className="text-sub"
+                />
+              </div>
+            </button>
 
-                  <button
-                    onClick={handleSyncGoogle}
-                    disabled={googleSync.isPending}
-                    className="w-full py-2 bg-card border border-stroke rounded-lg text-xs font-medium text-text flex items-center justify-center gap-2 active:scale-98 transition-transform disabled:opacity-50"
-                  >
-                    <Icon
-                      name="refresh-cw"
-                      size={14}
-                      className={googleSync.isPending ? "animate-spin text-coral" : "text-sub"}
-                    />
-                    <span>{googleSync.isPending ? "Синхронизация..." : "Синхронизировать сейчас"}</span>
-                  </button>
-
-                  {intStatus?.google?.lastSyncedAt && (
-                    <div className="text-[11px] text-dim text-center">
-                      Последняя синхронизация: {new Date(intStatus.google.lastSyncedAt).toLocaleString("ru-RU")}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </FieldGroup>
+            {openSections.googleCal && (
+              <div className="px-4 pb-4 pt-1 border-t border-stroke/40 space-y-3 bg-card2/30">
+                {!googleConnected ? (
+                  <div className="pt-2">
+                    <button
+                      onClick={handleConnectGoogle}
+                      disabled={getAuthUrl.isPending}
+                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold active:scale-98 transition-transform shadow-2xs"
+                    >
+                      {getAuthUrl.isPending ? "Формирование ссылки..." : "Войти через Google"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="pt-2 space-y-2">
+                    {isGCalsLoading ? (
+                      <div className="text-xs text-sub">Загрузка календарей Google...</div>
+                    ) : gCalsData?.calendars && gCalsData.calendars.length > 0 ? (
+                      <>
+                        <div className="text-xs font-medium text-sub">Отображать календари Google:</div>
+                        <div className="space-y-1 bg-card rounded-xl p-2 border border-stroke/40">
+                          {gCalsData.calendars.map((cal) => {
+                            const isChecked =
+                              selectedGoogleCalIds.length === 0 ||
+                              selectedGoogleCalIds.includes(cal.id);
+                            return (
+                              <button
+                                key={cal.id}
+                                onClick={() => toggleGoogleCalendar(cal.id)}
+                                className="w-full flex items-center justify-between py-1.5 px-2.5 rounded-lg hover:bg-card-hover transition-colors text-left"
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                                    style={{ backgroundColor: cal.backgroundColor || "#4285F4" }}
+                                  />
+                                  <span className="text-xs text-text truncate">
+                                    {cal.summary} {cal.primary ? "(Основной)" : ""}
+                                  </span>
+                                </div>
+                                {isChecked && (
+                                  <Icon name="check" size={14} className="text-blue-500 shrink-0 ml-2" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-xs text-sub">Календари не найдены или нет доступа</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

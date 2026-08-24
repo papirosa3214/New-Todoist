@@ -95,3 +95,43 @@ export function useUpdateIntegrationSettings() {
     },
   });
 }
+
+export interface GoogleCalendarInfo {
+  id: string;
+  summary: string;
+  backgroundColor?: string;
+  primary?: boolean;
+}
+
+export interface GoogleCalendarEvent {
+  id: string;
+  calendarId: string;
+  title: string;
+  startDate: string;
+  endDate: string;
+  allDay: boolean;
+  calendarTitle: string;
+  calendarColor: string;
+  location?: string;
+}
+
+export function useGoogleCalendars(enabled = true) {
+  return useQuery<{ calendars: GoogleCalendarInfo[] }>({
+    queryKey: ["google-calendars"],
+    queryFn: () => api.get<{ calendars: GoogleCalendarInfo[] }>("/api/integrations/google/calendars"),
+    enabled,
+    retry: false,
+  });
+}
+
+export function useGoogleCalendarEvents(dateStr: string, calIds?: string[], enabled = true) {
+  return useQuery<{ events: GoogleCalendarEvent[] }>({
+    queryKey: ["google-calendar-events", dateStr, calIds],
+    queryFn: () =>
+      api.get<{ events: GoogleCalendarEvent[] }>(
+        `/api/integrations/google/calendar-events?date=${dateStr}${calIds && calIds.length > 0 ? `&calendarIds=${encodeURIComponent(calIds.join(","))}` : ""}`,
+      ),
+    enabled,
+    staleTime: 60_000,
+  });
+}

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { AppleIntegrations, type CalendarEvent } from "../lib/appleIntegrations";
+import { useGoogleCalendarEvents, useIntegrationsStatus } from "../api/integrations";
 import { Icon } from "./UI";
 
 interface Props {
@@ -8,7 +9,26 @@ interface Props {
 }
 
 export function AppleCalendarEvents({ dateStr, className = "" }: Props) {
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [appleEvents, setAppleEvents] = useState<CalendarEvent[]>([]);
+  const { data: intStatus } = useIntegrationsStatus();
+  const isGoogleConnected = !!intStatus?.google?.connected;
+
+  const googleCalIds = useMemo(() => {
+    try {
+      const stored = localStorage.getItem("google_calendar_ids");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return undefined;
+  }, []);
+
+  const { data: googleData } = useGoogleCalendarEvents(
+    dateStr,
+    googleCalIds,
+    isGoogleConnected,
+  );
 
   useEffect(() => {
     if (!AppleIntegrations.isAvailable()) return;
@@ -29,14 +49,32 @@ export function AppleCalendarEvents({ dateStr, className = "" }: Props) {
     const start = `${dateStr}T00:00:00`;
     const end = `${dateStr}T23:59:59`;
 
-    AppleIntegrations.getEvents(start, end, calIds).then(setEvents);
+    AppleIntegrations.getEvents(start, end, calIds).then(setAppleEvents);
   }, [dateStr]);
 
-  if (!events || events.length === 0) return null;
+  const allEvents = useMemo(() => {
+    const combined = [...appleEvents];
+    if (googleData?.events) {
+      for (const gev of googleData.events) {
+        // Избегаем дублирования одинаковых событий
+        if (
+          !combined.some(
+            (aev) =>
+              aev.title.trim().toLowerCase() === gev.title.trim().toLowerCase(),
+          )
+        ) {
+          combined.push(gev);
+        }
+      }
+    }
+    return combined;
+  }, [appleEvents, googleData?.events]);
+
+  if (!allEvents || allEvents.length === 0) return null;
 
   return (
     <div className={`space-y-1.5 ${className}`}>
-      {events.map((ev) => {
+      {allEvents.map((ev) => {
         const startTime = ev.allDay
           ? "Весь день"
           : ev.startDate.split("T")[1]?.slice(0, 5) || "";
