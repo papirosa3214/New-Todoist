@@ -42,6 +42,8 @@ import { TemplateStore } from "../lib/templates";
 import { AttachmentView } from "../components/AttachmentView";
 import type { ApiAttachment } from "../api/types";
 import { SubtaskFeed } from "../components/SubtaskFeed";
+import { syncTaskToLiveActivity, stopTaskLiveActivity } from "../lib/liveActivity";
+import { hapticDrop } from "../lib/haptics";
 
 export function TaskDetailScreen() {
   const { id } = useParams<{ id: string }>();
@@ -145,6 +147,7 @@ export function TaskDetailScreen() {
       // Only the creator may delete (server enforces this with a 404, same
       // as "not found", so an assignee-only task shows this rather than a
       // 403).
+      await stopTaskLiveActivity(task.id);
       await deleteTask.mutateAsync(task.id);
       navigate(-1);
     } catch {
@@ -263,6 +266,19 @@ export function TaskDetailScreen() {
         title=""
         actions={
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                if (task) {
+                  syncTaskToLiveActivity(task);
+                  hapticDrop();
+                }
+              }}
+              className="tap-scale w-[40px] h-[44px] flex items-center justify-center text-dim active:text-blue"
+              aria-label="Вывести в Dynamic Island"
+              title="Вывести в Dynamic Island"
+            >
+              <Icon name="activity" size={18} />
+            </button>
             <button
               onClick={handleSaveAsTemplate}
               className="tap-scale w-[40px] h-[44px] flex items-center justify-center text-dim active:text-amber-400"
