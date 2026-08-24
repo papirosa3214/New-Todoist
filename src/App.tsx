@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { App as CapApp } from "@capacitor/app";
 import { useAppStore } from "./store";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
@@ -56,18 +57,48 @@ function NotFoundScreen() {
 }
 
 export default function App() {
-  // Реально применяет settings.theme (store/index.ts) на весь документ —
-  // на <html data-theme="..."> смотрит CSS-переопределение в index.css
-  // (LIGHT THEME OVERRIDE). На уровне App, а не Layout: LoginScreen/
-  // RegisterScreen рендерятся вне Layout и всё равно должны подхватывать
-  // тему. Ограничение: на перезагрузке страницы с сохранённой светлой
-  // темой возможна короткая вспышка тёмного фона (index.html красит
-  // документ тёмным ДО того, как этот эффект успевает отработать) — не
-  // устранено намеренно, правка index.html вне рамок этой задачи.
+  const navigate = useNavigate();
   const theme = useAppStore((s) => s.settings.theme);
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  // Обработка Deep Links (например, taskflow://dictate из Action Button / Экрана блокировки)
+  useEffect(() => {
+    const handleUrl = (data: { url: string }) => {
+      try {
+        const urlStr = data.url;
+        if (urlStr.startsWith("taskflow://")) {
+          const pathWithQuery = urlStr.replace("taskflow://", "");
+          const [pathPart] = pathWithQuery.split("?");
+          const host = pathPart.replace(/^\//, "").split("/")[0];
+
+          if (host === "dictate" || host === "new-task" || host === "new") {
+            navigate("/task/new?dictate=1");
+          } else if (host === "task") {
+            const taskId = pathPart.replace(/^\/?task\/?/, "");
+            if (taskId) navigate(`/task/${taskId}`);
+          } else if (host === "inbox") {
+            navigate("/inbox");
+          } else if (host === "today") {
+            navigate("/today");
+          } else if (host === "overview") {
+            navigate("/overview");
+          } else {
+            navigate("/task/new?dictate=1");
+          }
+        }
+      } catch (err) {
+        console.error("Deep link error:", err);
+      }
+    };
+
+    const listenerPromise = CapApp.addListener("appUrlOpen", handleUrl);
+    return () => {
+      listenerPromise.then((handle) => handle.remove());
+    };
+  }, [navigate]);
 
   return (
     <Routes>

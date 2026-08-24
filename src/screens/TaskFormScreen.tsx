@@ -518,6 +518,23 @@ export function TaskFormScreen() {
     return `${m}:${String(s).padStart(2, "0")}`;
   })();
 
+  // Автостарт диктовки при переходе по deep link (taskflow://dictate)
+  const autoDictateDone = useRef(false);
+  useEffect(() => {
+    const shouldDictate =
+      searchParams.get("dictate") === "1" ||
+      searchParams.get("autoDictate") === "1";
+    if (shouldDictate && !autoDictateDone.current && mic.state === "idle") {
+      autoDictateDone.current = true;
+      setVoiceTarget("title");
+      const t = setTimeout(() => {
+        hapticGrab();
+        mic.start();
+      }, 300);
+      return () => clearTimeout(t);
+    }
+  }, [searchParams, mic.state, mic.start]);
+
   // Дёргает эндпоинт разбивки — существующая задача шлёт свой id (сервер
   // сам подтянет title/description из БД), но тело всё равно везёт текущие
   // значения формы: если владелец правит заголовок/описание и ещё не
