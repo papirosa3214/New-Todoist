@@ -47,10 +47,23 @@ public class EventKitPlugin: CAPPlugin, CAPBridgedPlugin {
     guard let str = str, !str.isEmpty else { return nil }
     if let d = isoFormatter.date(from: str) { return d }
     if let d = fallbackIsoFormatter.date(from: str) { return d }
-    let simpleFormatter = DateFormatter()
-    simpleFormatter.dateFormat = "yyyy-MM-dd"
-    simpleFormatter.timeZone = TimeZone.current
-    return simpleFormatter.date(from: str)
+    
+    let formats = [
+      "yyyy-MM-dd'T'HH:mm:ss",
+      "yyyy-MM-dd'T'HH:mm:ssZ",
+      "yyyy-MM-dd'T'HH:mm:ss.SSS",
+      "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+      "yyyy-MM-dd HH:mm:ss",
+      "yyyy-MM-dd"
+    ]
+    for fmt in formats {
+      let df = DateFormatter()
+      df.dateFormat = fmt
+      df.locale = Locale(identifier: "en_US_POSIX")
+      df.timeZone = TimeZone.current
+      if let d = df.date(from: str) { return d }
+    }
+    return nil
   }
 
   private func hexColor(from cgColor: CGColor?) -> String {
