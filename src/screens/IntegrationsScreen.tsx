@@ -17,6 +17,7 @@ import {
   useGoogleCallback,
 } from "../api/integrations";
 import { useTasks, useCreateTask, useUpdateTask } from "../api/tasks";
+import { useProjects, useCreateProject } from "../api/projects";
 import { getErrorMessage } from "../lib/errors";
 
 export function IntegrationsScreen() {
@@ -134,6 +135,8 @@ export function IntegrationsScreen() {
   };
 
   const { data: allTasks = [] } = useTasks();
+  const { data: projects = [] } = useProjects();
+  const createProject = useCreateProject();
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
 
@@ -141,10 +144,27 @@ export function IntegrationsScreen() {
     setIsAppleSyncing(true);
     setError(null);
     try {
+      let appleProjectId: string | undefined = projects.find(
+        (p) => p.name === "Apple Напоминания",
+      )?.id;
+
+      if (!appleProjectId) {
+        try {
+          const created = await createProject.mutateAsync({
+            name: "Apple Напоминания",
+            color: "#FF9500",
+          });
+          appleProjectId = created.id;
+        } catch {
+          // ignore
+        }
+      }
+
       const res = await AppleIntegrations.syncAllReminders(
         allTasks,
         createTask.mutateAsync,
         updateTask.mutateAsync,
+        appleProjectId,
       );
       setAppleSyncStatus(
         `Синхронизация Apple Напоминаний: добавлено в TaskFlow: ${res.imported}, отправлено в Apple: ${res.exported}, обновлено: ${res.updated}`,

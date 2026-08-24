@@ -309,12 +309,14 @@ export const AppleIntegrations = {
       description?: string;
       due_date?: string;
       priority?: number;
+      project_id?: string;
     }) => Promise<any>,
     updateTaskInTaskFlow: (task: {
       id: string;
       status?: "active" | "completed";
       title?: string;
     }) => Promise<any>,
+    defaultProjectId?: string,
   ): Promise<{ imported: number; exported: number; updated: number }> {
     if (!isAppleNative) return { imported: 0, exported: 0, updated: 0 };
     const perm = await this.getRemindersStatus();
@@ -334,7 +336,7 @@ export const AppleIntegrations = {
       const existingTask = mappedTaskId ? tasks.find((t) => t.id === mappedTaskId) : undefined;
 
       if (!existingTask) {
-        // Создаем задачу в TaskFlow
+        // Создаем задачу в TaskFlow в проекте "Apple Напоминания"
         const dueDate = rem.dueDate ? rem.dueDate.split("T")[0] : undefined;
         try {
           const res = await createTaskInTaskFlow({
@@ -342,6 +344,7 @@ export const AppleIntegrations = {
             description: rem.notes,
             due_date: dueDate,
             priority: rem.priority,
+            project_id: defaultProjectId,
           });
 
           if (res?.task?.id) {

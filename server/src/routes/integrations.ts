@@ -275,6 +275,19 @@ export function registerIntegrationRoutes(app: FastifyInstance) {
       let imported = 0;
       let updated = 0;
 
+      // 1. Ищем или создаем проект "Google Задачи" для пользователя
+      let googleProject = db
+        .prepare("SELECT id FROM projects WHERE owner_id = ? AND name = 'Google Задачи'")
+        .get(userId) as { id: string } | undefined;
+
+      if (!googleProject) {
+        const pId = uid();
+        db.prepare(
+          "INSERT INTO projects (id, name, color, owner_id) VALUES (?, 'Google Задачи', '#4285F4', ?)",
+        ).run(pId, userId);
+        googleProject = { id: pId };
+      }
+
       for (const gt of googleTasks) {
         if (!gt.title || gt.deleted) continue;
 
@@ -292,18 +305,19 @@ export function registerIntegrationRoutes(app: FastifyInstance) {
             `UPDATE tasks
                 SET title = ?, description = COALESCE(?, description),
                     status = ?, due_date = COALESCE(?, due_date),
+                    project_id = COALESCE(project_id, ?),
                     completed_at = CASE WHEN ? = 'completed' AND completed_at IS NULL THEN datetime('now') ELSE completed_at END,
                     updated_at = datetime('now')
               WHERE id = ?`,
-          ).run(gt.title, gt.notes || null, isCompleted ? "completed" : "active", dueDate, isCompleted ? "completed" : "active", mapping.task_id);
+          ).run(gt.title, gt.notes || null, isCompleted ? "completed" : "active", dueDate, googleProject.id, isCompleted ? "completed" : "active", mapping.task_id);
           updated++;
         } else {
-          // Создаём новую задачу в TaskFlow
+          // Создаём новую задачу в TaskFlow в проекте "Google Задачи"
           const newTaskId = uid();
           db.prepare(
-            `INSERT INTO tasks (id, creator_id, title, description, status, priority, due_date, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))`,
-          ).run(newTaskId, userId, gt.title, gt.notes || "", isCompleted ? "completed" : "active", dueDate);
+            `INSERT INTO tasks (id, creator_id, title, description, status, priority, due_date, project_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now'))`,
+          ).run(newTaskId, userId, gt.title, gt.notes || "", isCompleted ? "completed" : "active", dueDate, googleProject.id);
 
           db.prepare(
             `INSERT INTO task_external_mappings (id, task_id, provider, external_id, external_list_id)
