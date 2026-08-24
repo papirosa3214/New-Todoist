@@ -247,10 +247,16 @@ export function AgentOwnerActions({
           </Button>
         )}
         {task.agent_state === "blocked" && (
-          <Button variant="primary" onClick={() => setAnswering(true)}>
-            <Icon name="sync" size={16} />
-            Ответить и вернуть в работу
-          </Button>
+          <>
+            <Button variant="primary" onClick={() => setAnswering(true)}>
+              <Icon name="sync" size={16} />
+              Ответить и вернуть в работу
+            </Button>
+            <Button variant="secondary" onClick={handleAccept}>
+              <Icon name="check" size={16} />
+              Принять и закрыть задачу
+            </Button>
+          </>
         )}
       </div>
       <ErrorBanner

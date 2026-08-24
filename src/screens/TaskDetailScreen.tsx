@@ -160,6 +160,21 @@ export function TaskDetailScreen() {
   const handleToggleStatus = useGuardedCallback(async () => {
     if (!task) return;
     const newStatus = task.status === "active" ? "completed" : "active";
+    if (newStatus === "completed") {
+      const openSubtasks = (task.subtasks || []).filter((st) => !st.done);
+      if (openSubtasks.length > 0) {
+        const ok = await confirm({
+          title: "Завершить задачу?",
+          description:
+            openSubtasks.length === 1
+              ? `Шаг «${openSubtasks[0].title}» останется невыполненным, а задача уйдёт в готовые.`
+              : `Осталось невыполненных шагов: ${openSubtasks.length}. Завершить задачу?`,
+          confirmLabel: "Завершить",
+          cancelLabel: "Отмена",
+        });
+        if (!ok) return;
+      }
+    }
     await updateTask.mutateAsync({ id: task.id, status: newStatus });
   });
 
@@ -248,8 +263,7 @@ export function TaskDetailScreen() {
   const priority = PRIORITIES.find((p) => p.key === task.priority);
   const taskProject = projects.find((p) => p.id === task.project_id);
   const showPriorityFlag = !!task.priority && task.priority <= 3;
-  const showHeaderCheckbox =
-    task.status === "completed" || task.subtasks.length === 0;
+  const showHeaderCheckbox = true;
 
   return (
     <div className="px-4 pb-[calc(1rem+var(--kb-inset,0px))]">
@@ -546,7 +560,21 @@ export function TaskDetailScreen() {
           закрытие идёт только через «Принять» на сданной задаче
           (TaskJournal.tsx) — итог сперва показывают владельцу, а не
           отправляют карточку с доски одним нажатием. */}
+      {/* Кнопки действий: если задача активна и не находится на проверке у агента,
+          владелец может завершить задачу (или открыть заново, если она закрыта). */}
       <div className="space-y-2 mb-4">
+        {task.status === "active" && !task.agent_state && (
+          <Button variant="primary" onClick={handleToggleStatus}>
+            <Icon name="check" size={16} />
+            Завершить задачу
+          </Button>
+        )}
+        {task.status === "completed" && (
+          <Button variant="secondary" onClick={handleToggleStatus}>
+            <Icon name="refresh" size={16} />
+            Открыть задачу заново
+          </Button>
+        )}
         <Button
           variant="outline"
           onClick={() => navigate(`/task/${task.id}/edit`)}
