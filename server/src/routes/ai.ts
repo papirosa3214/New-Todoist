@@ -88,7 +88,7 @@ async function suggestSubtasks(
 ): Promise<string[]> {
   let res: Response;
   try {
-    res = await fetch(`${OLLAMA_BASE_URL}/v1/chat/completions`, {
+    res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -98,7 +98,10 @@ async function suggestSubtasks(
           { role: "user", content: buildUserPrompt(title, description) },
         ],
         stream: false,
-        temperature: 0.4,
+        options: {
+          num_ctx: 16384,
+          temperature: 0.4,
+        },
       }),
       signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
     });
@@ -121,7 +124,8 @@ async function suggestSubtasks(
   }
 
   const data = (await res.json()) as any;
-  const content: string | undefined = data?.choices?.[0]?.message?.content;
+  const content: string | undefined =
+    data?.message?.content || data?.choices?.[0]?.message?.content;
   if (!content || typeof content !== "string") {
     throw new OllamaError("Модель вернула пустой ответ.");
   }
