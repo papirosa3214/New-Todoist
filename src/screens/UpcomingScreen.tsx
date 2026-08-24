@@ -613,13 +613,31 @@ export function UpcomingScreen() {
     return g;
   }, [tasks]);
 
-  // Tasks for selected date or all
+  // Последовательные даты вперёд на год (365 дней) + даты с задачами
   const visibleDates = useMemo(() => {
     if (selectedDate) {
-      return groupedTasks[selectedDate] ? [selectedDate] : [];
+      return [selectedDate];
     }
-    return Object.keys(groupedTasks).sort();
-  }, [selectedDate, groupedTasks]);
+    const datesSet = new Set<string>();
+
+    // Просроченные даты с задачами
+    Object.keys(groupedTasks).forEach((d) => {
+      if (d < today) datesSet.add(d);
+    });
+
+    // Непрерывная лента дней от сегодня на 365 дней вперёд
+    const base = new Date(today + "T00:00:00");
+    for (let i = 0; i < 365; i++) {
+      const d = new Date(base);
+      d.setDate(base.getDate() + i);
+      datesSet.add(formatDateStr(d.getFullYear(), d.getMonth(), d.getDate()));
+    }
+
+    // Задачи дальше 365 дней (если есть)
+    Object.keys(groupedTasks).forEach((d) => datesSet.add(d));
+
+    return Array.from(datesSet).sort();
+  }, [selectedDate, groupedTasks, today]);
 
   // Week view dates (Mon-based week containing the selected date, falling
   // Попап выбора месяца — рендерится вне calOuterRef (см. комментарий у
@@ -1251,7 +1269,7 @@ export function UpcomingScreen() {
               </span>
             </div>
             <AppleCalendarEvents dateStr={dateStr} className="mb-2" />
-            {groupedTasks[dateStr].map((task) => (
+            {(groupedTasks[dateStr] ?? []).map((task) => (
               <TaskRow
                 key={task.id}
                 task={task}
