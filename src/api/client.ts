@@ -1,10 +1,11 @@
-// ═══════════ Fetch wrapper for the TaskFlow API ═══════════
-//
-// Base URL comes from Vite env (VITE_API_URL). Falls back to same-origin
-// ("" → relative /api/... URLs, proxied to the server by vite dev — see
-// vite.config.ts) so the app works from any device on the LAN, not only
-// from the machine where "localhost" happens to be the server.
-const DEFAULT_BASE_URL = "";
+import { Capacitor } from "@capacitor/core";
+
+// Base URL comes from Vite env (VITE_API_URL). In native iOS (Capacitor),
+// defaults to http://192.168.1.110:3001 so the app can reach the backend.
+// In browser dev, falls back to same-origin ("" -> relative /api/... URLs).
+const DEFAULT_BASE_URL = Capacitor.isNativePlatform()
+  ? "http://192.168.1.110:3001"
+  : "";
 
 export const API_BASE_URL = (
   (import.meta.env.VITE_API_URL as string | undefined)?.trim() ||
