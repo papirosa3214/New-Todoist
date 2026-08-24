@@ -295,7 +295,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       const initials = name.trim().charAt(0).toUpperCase();
       db.prepare(
         `INSERT INTO users (id, name, email, password_hash, role, type, avatar_color, avatar_url, initials, status, api_token, is_system_bot, created_by)
-         VALUES (?, ?, ?, ?, 'agent', 'ai', '#A78BFA', ?, 'offline', ?, 0, ?)`,
+         VALUES (?, ?, ?, ?, 'agent', 'ai', '#A78BFA', NULL, ?, 'offline', ?, 0, ?)`,
         // В базу кладём ОТПЕЧАТОК ключа. Сам ключ уходит в ответе ниже и
         // больше нигде не хранится: показать его повторно невозможно, только
         // выпустить новый. Так утечка файла базы не даёт доступа агента.
