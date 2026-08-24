@@ -50,3 +50,23 @@ export function useLogout() {
     window.location.assign("/login");
   };
 }
+
+export function useUpdateProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      name?: string;
+      email?: string;
+      password?: string;
+      currentPassword?: string;
+    }) => api.put<AuthResponse>("/api/auth/profile", body),
+    onSuccess: (data) => {
+      if (data.token) {
+        setToken(data.token);
+      }
+      qc.setQueryData(["me"], data.user);
+      qc.invalidateQueries({ queryKey: ["me"] });
+    },
+  });
+}
+

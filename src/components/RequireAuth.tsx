@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Navigate, Outlet } from "react-router-dom";
 import { getToken, tryLanLogin } from "../api/client";
 
+import { BiometricLockGuard } from "./BiometricLockGuard";
+
 // Presence-of-token guard. If the token is stale/invalid, the first API
 // call any screen makes will 401 and the api client itself clears the
 // token and redirects to /login (see src/api/client.ts).
@@ -32,5 +34,9 @@ export function RequireAuth() {
   // локальной сети; спиннер тут мигал бы чаще, чем помогал.
   if (state === "checking") return null;
   if (state === "denied") return <Navigate to="/login" replace />;
-  return <Outlet />;
+  return (
+    <BiometricLockGuard>
+      <Outlet />
+    </BiometricLockGuard>
+  );
 }

@@ -225,4 +225,80 @@ export function registerAuthRoutes(app: FastifyInstance) {
       return { api_token: token };
     },
   });
+
+  // ═══════ UPDATE PROFILE (Email, Password, Name) ═══════
+  app.put<{
+    Body: {
+      name?: string;
+      email?: string;
+      password?: string;
+      currentPassword?: string;
+    };
+  }>("/api/auth/profile", {
+    preHandler: authMiddleware,
+    handler: async (req: any, reply: any) => {
+      const user = db
+        .prepare("SELECT * FROM users WHERE id = ?")
+        .get(req.userId) as any;
+      if (!user) {
+        return reply.code(404).send({ error: "Пользователь не найден" });
+      }
+
+      const { name, email, password, currentPassword } = req.body || {};
+
+      // If email is changing, verify no other user has it
+      if (email && email.toLowerCase().trim() !== user.email.toLowerCase()) {
+        const conflict = db
+          .prepare(
+            "SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id != ?",
+          )
+          .get(email.trim(), req.userId);
+        if (conflict) {
+          return reply
+            .code(409)
+            .send({ error: "Этот email/логин уже занят другим пользователем" });
+        }
+      }
+
+      // If password is changing, verify current password if set
+      if (password) {
+        if (password.length < 4) {
+          return reply
+            .code(400)
+            .send({ error: "Пароль должен быть не менее 4 символов" });
+        }
+        if (user.password_hash && currentPassword) {
+          if (!bcrypt.compareSync(currentPassword, user.password_hash)) {
+            return reply.code(400).send({ error: "Неверный текущий пароль" });
+          }
+        }
+      }
+
+      const newName = name?.trim() || user.name;
+      const newEmail = email?.trim().toLowerCase() || user.email;
+      const newHash = password
+        ? bcrypt.hashSync(password, 10)
+        : user.password_hash;
+      const initials =
+        newName
+          .split(" ")
+          .map((w: string) => w[0])
+          .join("")
+          .toUpperCase()
+          .slice(0, 2) || user.initials;
+
+      db.prepare(
+        "UPDATE users SET name = ?, email = ?, password_hash = ?, initials = ? WHERE id = ?",
+      ).run(newName, newEmail, newHash, initials, req.userId);
+
+      const updated = db
+        .prepare(
+          "SELECT id, name, email, role, type, avatar_color, avatar_url, initials, status FROM users WHERE id = ?",
+        )
+        .get(req.userId);
+
+      const token = app.jwt.sign({ id: req.userId }, { expiresIn: "30d" });
+      return { user: updated, token };
+    },
+  });
 }

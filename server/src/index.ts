@@ -210,6 +210,19 @@ export async function buildApp(): Promise<FastifyInstance> {
       trigger = (e?.stdout || "").toString().trim() || "unknown";
     }
 
+    // Проверка доступности локальной LLM (Ollama)
+    let ollamaOnline = false;
+    const ollamaBaseUrl = (process.env.OLLAMA_BASE_URL || "http://192.168.1.110:11434").replace(/\/+$/, "");
+    const ollamaModel = process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
+    try {
+      const ollamaRes = await fetch(`${ollamaBaseUrl}/api/tags`, {
+        signal: AbortSignal.timeout(1500),
+      });
+      ollamaOnline = ollamaRes.ok;
+    } catch {
+      ollamaOnline = false;
+    }
+
     return {
       ok: true,
       started_at: new Date(Date.now() - uptime * 1000).toISOString(),
@@ -221,6 +234,9 @@ export async function buildApp(): Promise<FastifyInstance> {
       tasks_total: counts.total,
       db_bytes: dbBytes,
       trigger,
+      ollama_online: ollamaOnline,
+      ollama_model: ollamaModel,
+      server_ip: "192.168.1.110",
     };
   });
 

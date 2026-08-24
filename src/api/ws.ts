@@ -20,39 +20,92 @@ export function useNotificationsSocket(enabled: boolean) {
     const httpBase = API_BASE_URL || window.location.origin;
     const wsUrl = `${httpBase.replace(/^http/, "ws")}/ws?token=${encodeURIComponent(token)}`;
 
-    let socket: WebSocket;
-    try {
-      socket = new WebSocket(wsUrl);
-    } catch {
-      return;
+    let socket: WebSocket | null = null;
+    let pingInterval: any = null;
+    let reconnectTimeout: any = null;
+    let isDisposed = false;
+
+    function connect() {
+      if (isDisposed) return;
+      try {
+        socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+          // При успешном подключении сразу обновляем задачи и уведомления
+          qc.invalidateQueries({ queryKey: ["notifications"] });
+          qc.invalidateQueries({ queryKey: ["tasks"] });
+        };
+
+        socket.onmessage = (evt) => {
+          let data: any;
+          try {
+            data = JSON.parse(evt.data);
+          } catch {
+            return;
+          }
+          if (
+            data?.type === "connected" ||
+            data?.type === "pong" ||
+            data?.type === "error"
+          )
+            return;
+
+          qc.invalidateQueries({ queryKey: ["notifications"] });
+          qc.invalidateQueries({ queryKey: ["tasks"] });
+          qc.invalidateQueries({ queryKey: ["projects"] });
+        };
+
+        socket.onclose = () => {
+          socket = null;
+          if (!isDisposed) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = setTimeout(connect, 3000);
+          }
+        };
+
+        socket.onerror = () => {
+          if (socket) {
+            socket.close();
+          }
+        };
+      } catch {
+        if (!isDisposed) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = setTimeout(connect, 3000);
+        }
+      }
     }
 
-    socket.onmessage = (evt) => {
-      let data: any;
-      try {
-        data = JSON.parse(evt.data);
-      } catch {
-        return;
-      }
-      if (
-        data?.type === "connected" ||
-        data?.type === "pong" ||
-        data?.type === "error"
-      )
-        return;
-      qc.invalidateQueries({ queryKey: ["notifications"] });
-      qc.invalidateQueries({ queryKey: ["tasks"] });
-    };
+    connect();
 
-    const pingInterval = setInterval(() => {
-      if (socket.readyState === WebSocket.OPEN) {
+    pingInterval = setInterval(() => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "ping" }));
       }
-    }, 25000);
+    }, 20000);
+
+    // При возвращении экрана из фона/блокировки сразу переподключаем и обновляем кэш
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        qc.invalidateQueries({ queryKey: ["tasks"] });
+        qc.invalidateQueries({ queryKey: ["notifications"] });
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          connect();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleVisibility);
 
     return () => {
+      isDisposed = true;
       clearInterval(pingInterval);
-      socket.close();
+      clearTimeout(reconnectTimeout);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleVisibility);
+      if (socket) {
+        socket.close();
+      }
     };
   }, [enabled, qc]);
 }

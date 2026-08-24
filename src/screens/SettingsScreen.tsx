@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import {
   FieldGroup,
   Icon,
@@ -12,7 +12,10 @@ import { useServerStatus } from "../api/server";
 import { useAgentService, useToggleAgentService } from "../api/agents";
 import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
 import { getErrorMessage } from "../lib/errors";
-import { useAppStore } from "../store";
+import { useAppStore, AI_PROVIDERS } from "../store";
+import { Biometrics } from "../lib/biometrics";
+import { EditProfileModal } from "../components/EditProfileModal";
+import { AiProviderModal } from "../components/AiProviderModal";
 
 interface RowProps {
   icon: string;
@@ -169,6 +172,7 @@ function AccountAvatarRow({
   initials,
   color,
   avatarUrl,
+  onEdit,
 }: {
   userId: string;
   name: string;
@@ -176,6 +180,7 @@ function AccountAvatarRow({
   initials?: string;
   color?: string;
   avatarUrl?: string | null;
+  onEdit?: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const upload = useUploadAvatar(userId);
@@ -225,24 +230,39 @@ function AccountAvatarRow({
         className="hidden"
         onChange={onPick}
       />
-      <div className="flex-1 min-w-0">
-        <div className="text-[15px] text-text truncate">{name}</div>
+      <div 
+        className="flex-1 min-w-0 cursor-pointer"
+        onClick={onEdit}
+      >
+        <div className="text-[15px] text-text font-medium truncate flex items-center gap-1.5">
+          {name}
+        </div>
         {email && <div className="text-[13px] text-sub truncate">{email}</div>}
         {error && <div className="text-[12px] text-coral mt-0.5">{error}</div>}
       </div>
-      {avatarUrl && (
-        <button
-          type="button"
-          onClick={() => del.mutate()}
-          disabled={busy}
-          aria-label="Убрать аватарку"
-          // tap-fade — текстовая ссылка: менять форму нечему, отклик несёт
-          // прозрачность.
-          className="tap-fade text-[13px] text-sub shrink-0"
-        >
-          Убрать
-        </button>
-      )}
+      
+      <div className="flex items-center gap-2 shrink-0">
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="tap-fade py-1 px-2.5 rounded-lg bg-card2 border border-stroke text-[12px] text-text font-medium"
+          >
+            Изменить
+          </button>
+        )}
+        {avatarUrl && (
+          <button
+            type="button"
+            onClick={() => del.mutate()}
+            disabled={busy}
+            aria-label="Убрать аватарку"
+            className="tap-fade text-[12px] text-sub"
+          >
+            Убрать фото
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -275,21 +295,47 @@ function fmtBytes(bytes: number): string {
  * секунды понять «всё в порядке» или «вот что не так».
  */
 function ServerSection() {
-  const { data, error, isLoading } = useServerStatus();
+  const { data, isLoading, error, refetch } = useServerStatus();
+  const localOllamaModel = useAppStore((s) => s.localOllamaModel);
   const { data: service } = useAgentService();
   const toggleService = useToggleAgentService();
   const serviceOn = service?.active ?? false;
+  const [pingResult, setPingResult] = useState<string | null>(null);
+  const [isPinging, setIsPinging] = useState(false);
 
-  // Сервер не ответил — это и есть главная новость экрана, и сказать её
-  // надо словами, а не пустым местом.
+  const handlePing = async () => {
+    setIsPinging(true);
+    const start = performance.now();
+    try {
+      const res = await refetch();
+      const elapsed = Math.round(performance.now() - start);
+      if (res.data?.ok) {
+        setPingResult(`⚡ ${elapsed} мс · 192.168.1.110 в сети`);
+      } else {
+        setPingResult(`❌ Ошибка ответа`);
+      }
+    } catch {
+      setPingResult(`❌ Сервер недоступен`);
+    } finally {
+      setIsPinging(false);
+    }
+  };
+
+  // Сервер не ответил
   if (error) {
     return (
       <FieldGroup>
         <InfoRow
           icon="x"
           iconColor="#FF6B6B"
-          label="Сервер"
-          value="не отвечает"
+          label="Сервер 192.168.1.110"
+          value="не отвечает 🔴"
+        />
+        <Row
+          icon="activity"
+          iconColor="#FF9500"
+          label="Повторить проверку"
+          onClick={handlePing}
         />
       </FieldGroup>
     );
@@ -297,7 +343,7 @@ function ServerSection() {
   if (isLoading || !data) {
     return (
       <FieldGroup>
-        <InfoRow icon="activity" label="Сервер" value="проверяю…" />
+        <InfoRow icon="activity" label="Сервер 192.168.1.110" value="проверяю связь…" />
       </FieldGroup>
     );
   }
@@ -306,9 +352,26 @@ function ServerSection() {
     <FieldGroup>
       <InfoRow
         icon="activity"
-        iconColor="#4CAF50"
-        label="Сервер"
-        value={`работает ${fmtUptime(data.uptime_sec)}`}
+        iconColor="#34C759"
+        label="Сервер (192.168.1.110)"
+        value={`В сети 🟢 · ${fmtUptime(data.uptime_sec)}`}
+      />
+      <InfoRow
+        icon="bot"
+        iconColor={data.ollama_online ? "#34C759" : "#FF6B6B"}
+        label="Локальная LLM (Ollama)"
+        value={
+          data.ollama_online
+            ? `${localOllamaModel.replace(":latest", "")} в сети 🟢`
+            : "Недоступна 🔴"
+        }
+      />
+      <Row
+        icon="zap"
+        iconColor="#0A84FF"
+        label="Проверить связь (Пинг)"
+        value={pingResult || (isPinging ? "Замеряю…" : "Проверить")}
+        onClick={handlePing}
       />
       {data.commit && (
         <InfoRow
@@ -350,6 +413,22 @@ export function SettingsScreen() {
   const logout = useLogout();
   const theme = useAppStore((s) => s.settings.theme);
   const setTheme = useAppStore((s) => s.setTheme);
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [bioType, setBioType] = useState<string>("none");
+  const [faceIdEnabled, setFaceIdEnabled] = useState(() => Biometrics.isEnabled());
+  const aiProvider = useAppStore((s) => s.aiProvider);
+  const localOllamaModel = useAppStore((s) => s.localOllamaModel);
+  const currentAiInfo = AI_PROVIDERS[aiProvider] || AI_PROVIDERS.local;
+
+  const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+
+  useEffect(() => {
+    Biometrics.isAvailable().then((info) => {
+      setBioAvailable(info.available);
+      setBioType(info.biometryType);
+    });
+  }, []);
 
   return (
     <div className="px-4 pb-4">
@@ -372,12 +451,21 @@ export function SettingsScreen() {
               initials={user.initials}
               color={user.avatar_color}
               avatarUrl={user.avatar_url}
+              onEdit={() => setIsEditProfileOpen(true)}
             />
           ) : (
             <Row icon="person" label="Аккаунт" />
           )}
         </FieldGroup>
       </div>
+
+      {user && (
+        <EditProfileModal
+          user={user}
+          isOpen={isEditProfileOpen}
+          onClose={() => setIsEditProfileOpen(false)}
+        />
+      )}
 
       {/* User settings */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">
@@ -392,7 +480,41 @@ export function SettingsScreen() {
             checked={theme === "dark"}
             onChange={() => setTheme(theme === "dark" ? "light" : "dark")}
           />
-          <InfoRow icon="image" label="Иконка" value="Todoist" />
+          {(bioAvailable || (typeof window !== "undefined" && !!(window as any).Capacitor?.isNativePlatform?.())) && (
+            <ToggleRow
+              icon="shield"
+              iconColor="#34C759"
+              label={bioType === "touchId" ? "Вход по Touch ID" : "Вход по Face ID"}
+              valueLabel={faceIdEnabled ? "Включён" : "Выключен"}
+              checked={faceIdEnabled}
+              onChange={() => {
+                const next = !faceIdEnabled;
+                setFaceIdEnabled(next);
+                Biometrics.setEnabled(next);
+              }}
+            />
+          )}
+          <InfoRow icon="image" iconColor="#FF2D55" label="Иконка" value="Pure Minimal Glass" />
+        </FieldGroup>
+      </div>
+
+      {/* AI Assistant Section */}
+      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
+        AI Ассистент и Интеллект
+      </div>
+      <div className="mb-4">
+        <FieldGroup>
+          <Row
+            icon="bot"
+            iconColor={currentAiInfo.color}
+            label="Основной AI Мозг"
+            value={
+              aiProvider === "local"
+                ? `Локальная (${localOllamaModel.replace(":latest", "")})`
+                : currentAiInfo.name
+            }
+            onClick={() => setIsAiModalOpen(true)}
+          />
         </FieldGroup>
       </div>
 
@@ -428,6 +550,11 @@ export function SettingsScreen() {
           />
         </FieldGroup>
       </div>
+
+      <AiProviderModal
+        isOpen={isAiModalOpen}
+        onClose={() => setIsAiModalOpen(false)}
+      />
 
       {/* Сервер */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">Сервер</div>

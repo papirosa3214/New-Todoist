@@ -84,12 +84,24 @@ EXTERNAL_AGENTS = {
         "env": {"PATH": "/home/maksim/.nvm/versions/node/v22.23.1/bin:"
                         + os.environ.get("PATH", "")},
     },
-    # Antigravity (Advanced Agentic Assistant)
     "5b9d47c1-25c7-4a7c-a276-70e21f7d7816": {
         "name": "Antigravity",
         "token_env": "TASKFLOW_ANTIGRAVITY_TOKEN",
         "token_static": "tf_e0d4ae5529f272a989c85bad13208b5a4288a273bc760b046f226b580ebe0c38",
-        "cmd": ["echo", "Antigravity task triggered"],
+        "cmd": [
+            "/usr/bin/python3",
+            "/home/maksim/Проекты/New-Todoist/server/scripts/antigravity_agent.py",
+            "-z",
+        ],
+        "model_flag": "-m",
+        "env": {
+            "HTTPS_PROXY": "http://127.0.0.1:10811",
+            "HTTP_PROXY": "http://127.0.0.1:10811",
+            "https_proxy": "http://127.0.0.1:10811",
+            "http_proxy": "http://127.0.0.1:10811",
+            "ALL_PROXY": "socks5://127.0.0.1:10808",
+            "all_proxy": "socks5://127.0.0.1:10808",
+        },
     },
 }
 
@@ -207,34 +219,25 @@ def decide(task: dict) -> tuple[bool, str]:
     можно». Без назначения служба молчит, что бы в задаче ни происходило."""
     if not task:
         return False, "задачи нет"
+    task_id = task.get("id")
     assignee = task.get("assignee_id")
     if assignee != ME and assignee not in EXTERNAL_AGENTS:
         return False, "исполнитель не я"
     if task.get("status") != "active":
         return False, "задача не активна"
+    
+    with LOCK:
+        proc = RUNNING.get(task_id)
+        is_running = task_id in RUNNING and (proc is None or proc.poll() is None)
+    if is_running:
+        return False, "уже в работе (процесс активен)"
+
     state = task.get("agent_state")
-    if state == "in_progress":
-        # «В работе» бывает двух разных сортов, и раньше служба их не
-        # различала. Аренда свежая — агент правда работает, лезть нельзя:
-        # два процесса на одной карточке дают кашу. Аренда протухла — по
-        # протоколу это «агент пропал», и если владелец в этот момент
-        # вернул задачу из review, ждать больше нечего и некого.
-        #
-        # Живой прецедент 21.08.2026: Максим вернул карточку на доработку,
-        # служба ответила «уже в работе» и промолчала — его сообщение так и
-        # осталось лежать в ленте («решил через TaskFlow прокоммуницировать,
-        # и у меня это не получилось»).
-        #
-        # agent_stale считает сервер (см. AGENT-PROTOCOL.md), своей арифметики
-        # по времени здесь не заводим — иначе два места будут решать одно.
-        if task.get("agent_stale"):
-            return True, "владелец вернул в работу, а агент молчит"
-        return False, "уже в работе"
     if state == "review":
         return False, "ждёт проверки владельца"
     if state == "blocked":
         return False, "заблокирована, ждёт владельца"
-    return True, "назначена на меня"
+    return True, "назначена на меня / требует выполнения"
 
 
 def live_sessions() -> dict:
@@ -564,7 +567,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     # владелец смотрит на неё и видит, что ничего не происходит.
     token = agent.get("token") or ""
     claimed = api("POST", f"/api/tasks/{task_id}/claim", {}, token=token)
-    if claimed is None:
+    if claimed is None and task.get("agent_state") != "in_progress":
         log(f"  не удалось взять задачу {task_id[:8]} за «{agent['name']}» — отменяю заход")
         with LOCK:
             RUNNING.pop(task_id, None)

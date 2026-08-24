@@ -126,3 +126,16 @@ export function hapticDrop(): void {
 export function hapticKey(): void {
   fire(0.6, 0.8, ImpactStyle.Light);
 }
+
+export function hapticTap(): void {
+  fire(0.7, 0.9, ImpactStyle.Light);
+}
+
+export function hapticSuccess(): void {
+  fire(0.9, 0.9, ImpactStyle.Medium);
+}
+
+export function hapticError(): void {
+  fire(1.0, 0.5, ImpactStyle.Heavy);
+}
+
