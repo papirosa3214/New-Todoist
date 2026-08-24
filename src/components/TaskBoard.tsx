@@ -286,12 +286,7 @@ function BoardCard({
           )}
         </div>
         {hasFooter && (
-          // pl-[26px] = 18px dot + gap-2 (8px) — keeps the footer badges
-          // aligned under the title text now that the dot grew from 12px
-          // (which paired with pl-[18px], a 2px mismatch already baked into
-          // the pre-existing code — recomputed here rather than carried
-          // forward, since the dot's own width changed anyway).
-          <div className="flex items-center gap-1.5 flex-wrap pl-[26px]">
+          <div className="w-full flex items-center gap-1.5 flex-wrap">
             {task.subtasks.length > 0 && (
               <span className="text-[10px] text-sub shrink-0 font-medium">
                 {doneSub}/{task.subtasks.length}
