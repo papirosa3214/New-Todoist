@@ -438,14 +438,15 @@ export function TaskRow({
             </div>
           )}
             {hasMeta && (
-              <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-                {/* Приоритет флажком (решение Максима 15.08.2026). Раньше он
-                жил цветом обводки отметки — но отметка теперь скрывается,
-                пока есть незакрытые подзадачи, и вместе с ней пропадал
-                единственный признак срочности. Флажок от отметки не
-                зависит и виден всегда. Низкий приоритет не показываем:
-                это значение по умолчанию, значок на каждой задаче
-                превратился бы в шум. */}
+              <div className="w-full flex items-center gap-1.5 flex-wrap mt-1.5 justify-start text-left">
+                {/* 1. Бейдж подзадач (всегда первый) */}
+                {hasSubtasksBadge && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-card text-sub font-medium">
+                    {doneSub}/{task.subtasks.length}
+                  </span>
+                )}
+
+                {/* 2. Приоритет флажком */}
                 {hasPriorityFlag && (
                   <Icon
                     name="flag"
@@ -454,28 +455,16 @@ export function TaskRow({
                     aria-label={`Приоритет: ${PRIORITIES.find((p) => p.key === task.priority)?.name ?? ""}`}
                   />
                 )}
-                {/* Проект отсюда убран — он теперь строкой над названием,
-                    см. выше. */}
+
+                {/* 3. Просрочено */}
                 {hasOverduePill && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red font-medium">
                     <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
                     {formatDueLabel(task.due_date!)}
                   </span>
                 )}
-                {visibleLabels.map((l) => (
-                  <span
-                    key={l.id}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
-                    style={{ backgroundColor: l.color + "26", color: l.color }}
-                  >
-                    <Icon name="tag" size={10} /> {l.name}
-                  </span>
-                ))}
-                {/* Дата + сколько дней осталось (просьба Максима
-                15.08.2026): «8 авг · осталось 3 дня». Сама дата отвечает
-                на «когда», отсчёт — на «скоро ли», и второе как раз то,
-                по чему решают, за что браться. Ближе трёх суток отсчёт
-                оранжевый: срок перестал быть абстрактным. */}
+
+                {/* 4. Дата + сколько дней осталось */}
                 {hasDueBadge && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
                     <Icon name="calendarSmall" size={10} />{" "}
@@ -491,14 +480,19 @@ export function TaskRow({
                     </span>
                   </span>
                 )}
-                {hasSubtasksBadge && (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-card text-sub">
-                    {doneSub}/{task.subtasks.length}
+
+                {/* 5. Метки */}
+                {visibleLabels.map((l) => (
+                  <span
+                    key={l.id}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+                    style={{ backgroundColor: l.color + "26", color: l.color }}
+                  >
+                    <Icon name="tag" size={10} /> {l.name}
                   </span>
-                )}
-                {/* После счётчика подзадач, не перед ним (просьба Максима
-                17.08.2026) — статичные счётчики сначала, живой статус
-                агента следом. Тот же порядок в TaskBoard.tsx. */}
+                ))}
+
+                {/* 6. Статус агента */}
                 {hasAgentTag && <AgentStateTag task={task} />}
               </div>
             )}

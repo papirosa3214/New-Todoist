@@ -292,6 +292,11 @@ function BoardCard({
           // the pre-existing code — recomputed here rather than carried
           // forward, since the dot's own width changed anyway).
           <div className="flex items-center gap-1.5 flex-wrap pl-[26px]">
+            {task.subtasks.length > 0 && (
+              <span className="text-[10px] text-sub shrink-0 font-medium">
+                {doneSub}/{task.subtasks.length}
+              </span>
+            )}
             {task.due_date && (
               <span
                 className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 ${
@@ -300,11 +305,6 @@ function BoardCard({
               >
                 <Icon name="calendarSmall" size={9} />
                 {formatCompactDate(task.due_date)}
-              </span>
-            )}
-            {task.subtasks.length > 0 && (
-              <span className="text-[10px] text-sub shrink-0">
-                {doneSub}/{task.subtasks.length}
               </span>
             )}
             {/* После счётчика подзадач, не перед ним (просьба Максима
