@@ -20,7 +20,6 @@ import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Highlight from "@tiptap/extension-highlight";
 import Placeholder from "@tiptap/extension-placeholder";
-import Link from "@tiptap/extension-link";
 import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import { ActionsMenu, type ActionsMenuItem } from "../components/ActionsMenu";
@@ -111,47 +110,11 @@ function ToolbarButton({
 }
 
 function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
-  // Кнопка «ссылка» требует URL — отдельный обработчик вместо прямого
-  // toggleMark. Снимаем ссылку, если курсор уже внутри неё; иначе
-  // расширяем выделение по link-марке и спрашиваем URL. window.prompt —
-  // минимум зависимостей; полноценный inline-инпут в поповере можно
-  // добавить позже, если понадобится (29.08.2026, задача 9b4c4984).
-  const handleLinkClick = () => {
-    if (disabled) return;
-    const previous = (editor.getAttributes("link").href as string | undefined) ?? "";
-    if (editor.isActive("link")) {
-      editor.chain().focus().extendMarkRange("link").unsetLink().run();
-      return;
-    }
-    const url = window.prompt("Адрес ссылки", previous || "https://");
-    if (url === null) return; // отмена
-    const trimmed = url.trim();
-    if (!trimmed) {
-      editor.chain().focus().extendMarkRange("link").unsetLink().run();
-      return;
-    }
-    editor
-      .chain()
-      .focus()
-      .extendMarkRange("link")
-      .setLink({ href: trimmed })
-      .run();
-  };
-
   return (
     <div
       // Тулбар прокручивается вбок — свайп «назад» не должен его перехватывать.
-      // Приклеен к верху под шапкой (--screen-header-h публикует
-      // usePublishHeaderHeight в UI.tsx) — иначе при наборе текста
-      // курсор уезжает вверх, редактор прокручивается, и тулбар
-      // исчезает за верхней кромкой. На десктопе шапка той же высоты,
-      // top=var(--screen-header-h, 0px) сажает тулбар сразу под неё.
-      // z-10, чтобы уходить под саму шапку (у неё z-20), но идти над
-      // содержимым редактора. Фон bg-bg обязателен: иначе под тулбаром
-      // будет виднеться текст, на который он наезжает.
       data-hswipe
-      style={{ top: "var(--screen-header-h, 0px)" }}
-      className="sticky z-10 flex items-center gap-0.5 overflow-x-auto py-1.5 border-b border-stroke mb-2 -mx-4 px-4 bg-bg"
+      className="flex items-center gap-0.5 overflow-x-auto py-1.5 border-b border-stroke mb-2 -mx-1 px-1"
     >
       <ToolbarButton
         label="Жирный"
@@ -175,32 +138,11 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
         onClick={() => editor.chain().focus().toggleUnderline().run()}
       />
       <ToolbarButton
-        label="Зачёркнутый"
-        icon="strike"
-        disabled={disabled}
-        active={editor.isActive("strike")}
-        onClick={() => editor.chain().focus().toggleStrike().run()}
-      />
-      <ToolbarButton
         label="Выделить маркером"
         icon="highlighter"
         disabled={disabled}
         active={editor.isActive("highlight")}
         onClick={() => editor.chain().focus().toggleHighlight().run()}
-      />
-      <ToolbarButton
-        label="Строчный код"
-        icon="inlineCode"
-        disabled={disabled}
-        active={editor.isActive("code")}
-        onClick={() => editor.chain().focus().toggleCode().run()}
-      />
-      <ToolbarButton
-        label="Ссылка"
-        icon="link"
-        disabled={disabled}
-        active={editor.isActive("link")}
-        onClick={handleLinkClick}
       />
       <div className="w-px h-5 bg-stroke mx-1 shrink-0" />
       <button
@@ -231,20 +173,6 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
       >
         H2
       </button>
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        disabled={disabled}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-        aria-pressed={editor.isActive("heading", { level: 3 })}
-        className={`tap-scale shrink-0 h-9 px-2 rounded-lg text-[13px] font-bold disabled:opacity-30 ${
-          editor.isActive("heading", { level: 3 })
-            ? "bg-red/15 text-red"
-            : "text-sub"
-        }`}
-      >
-        H3
-      </button>
       <div className="w-px h-5 bg-stroke mx-1 shrink-0" />
       <ToolbarButton
         label="Маркированный список"
@@ -266,27 +194,6 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
         disabled={disabled}
         active={editor.isActive("taskList")}
         onClick={() => editor.chain().focus().toggleTaskList().run()}
-      />
-      <div className="w-px h-5 bg-stroke mx-1 shrink-0" />
-      <ToolbarButton
-        label="Цитата"
-        icon="quote"
-        disabled={disabled}
-        active={editor.isActive("blockquote")}
-        onClick={() => editor.chain().focus().toggleBlockquote().run()}
-      />
-      <ToolbarButton
-        label="Блок кода"
-        icon="codeBlock"
-        disabled={disabled}
-        active={editor.isActive("codeBlock")}
-        onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-      />
-      <ToolbarButton
-        label="Разделитель"
-        icon="hr"
-        disabled={disabled}
-        onClick={() => editor.chain().focus().setHorizontalRule().run()}
       />
     </div>
   );
@@ -378,11 +285,6 @@ export function NoteEditorScreen() {
       TaskItem.configure({ nested: true }),
       Highlight,
       Placeholder.configure({ placeholder: "Пишите здесь что угодно…" }),
-      // Ссылка — отдельным расширением; StarterKit её не включает.
-      // openOnClick:false оставляет ссылку некликабельной прямо в
-      // редакторе — иначе тап по ней сразу открывал бы браузер, что
-      // мешает выделению и редактированию.
-      Link.configure({ openOnClick: false, autolink: true }),
     ],
     content: "",
     editable: false,

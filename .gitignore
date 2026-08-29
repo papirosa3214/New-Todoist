@@ -94,14 +94,3 @@ zzz.db
 
 # Отладочные снимки прогонов по референсу — 7,6 МБ, воспроизводятся screenshot.mjs
 mockup-reference/nav-artifact/_shots/
-
-# ═══════ Локальный WIP и артефакты (не для трекинга) ═══════
-# Реально нужные только на машине разработки (102). 110 игнорирует — у неё
-# своя копия. Добавлено 30.08.2026, чтобы git status не захлёбывался.
-ios/App/build_dev_signed/
-server/scripts/fix_clean_trigger.py
-server/scripts/patch_trigger_fix.py
-server/scripts/patches/
-server/src/activeAgent.ts
-src/screens/InboxScreen.tsx
-src/screens/KeyboardDemoScreen.tsx

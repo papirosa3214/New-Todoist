@@ -53,38 +53,3 @@ export function isTaskOwner(
 export function isTrackerOwner(user: ApiUser | null | undefined): boolean {
   return user?.role === "owner";
 }
-
-/**
- * Задача «ждёт владельца»: активная, не дочерняя (subtask),
- * владелец — текущий пользователь, агентское состояние = blocked или
- * review. Тот самый предикат, что рисует блок «Ждут вас» в «Сегодня».
- * Извлечён из TodayScreen в lib/ в Шаге 2 (feature/projects-decouple-
- * planner-merge), чтобы не дублировать между filter-aware (plannerTasks)
- * и «искренним» (allTasks) счётом — оба зовут один источник правды.
- * Раньше та же логика жила inline в двух useMemo, и ревьюер
- * (@local-macbook) счёл это техдолгом после фикса Шага 1.
- */
-export function isWaitingForUser(
-  task: Pick<
-    ApiTask,
-    "status" | "parent_id" | "creator_id" | "agent_state"
-  >,
-  user: ApiUser | null | undefined,
-): boolean {
-  if (!user) return false;
-  return (
-    task.status === "active" &&
-    !task.parent_id &&
-    isTaskOwner(user, task) &&
-    (task.agent_state === "blocked" || task.agent_state === "review")
-  );
-}
-
-/** Comparator для сортировки «ждут вас»: blocked впереди review.
- *  Тот же приоритет, что был inline в TodayScreen Шага 1. */
-export const waitingBlockedFirst = (
-  a: Pick<ApiTask, "agent_state">,
-  b: Pick<ApiTask, "agent_state">,
-): number =>
-  (a.agent_state === "blocked" ? 0 : 1) -
-  (b.agent_state === "blocked" ? 0 : 1);

@@ -22,16 +22,6 @@ export interface ApiUser {
   activity?: "working" | "blocked" | null;
   initials: string;
   status: string;
-  limits?: any;
-  // Признаки жизни агента (29.08.2026, 31f2759e). Сервер считает их
-  // по запросам к authOrApiToken и кладёт в users.last_seen_at / в
-  // память (activeAgent.ts). online — «запрос был в последнюю минуту»,
-  // last_action — что именно делает, last_action_title — название
-  // задачи, к которой обращение (для подписи UI).
-  online?: boolean;
-  last_seen_at?: string | null;
-  last_action?: string;
-  last_action_title?: string;
 }
 
 export interface ApiLabel {
@@ -236,16 +226,8 @@ export interface ApiTask {
   assignee_initials?: string | null;
   project_name?: string | null;
   project_color?: string | null;
-  parent_id?: string | null;
-  children?: ApiTask[];
   labels: ApiLabel[];
   subtasks: ApiSubtask[];
-  // Дочерние задачи (parent_task_id = this.id). Сервер подтягивает их в
-  // GET /api/tasks/:id и кладёт рядом с subtasks. TaskDetailScreen
-  // переключает таб «Подзадачи»/«Дочерние» в зависимости от того, что
-  // есть. Добавлено 30.08.2026, чтобы починить tsc после revert a1d077b
-  // (старый код ссылался на .children, которого не было в типе).
-  children?: ApiTask[];
   comments?: ApiComment[]; // only on GET /api/tasks/:id
   events?: ApiTaskEvent[]; // only on GET /api/tasks/:id
   // Файлы, приложенные к самой задаче (kind='task' на сервере), а не к

@@ -38,7 +38,6 @@ import {
   TaskFilterButton,
   TaskFilterSheet,
 } from "../components/TaskFilterSheet";
-import { PlannerProjectChips } from "../components/PlannerProjectChips";
 import {
   DEFAULT_TASK_FILTERS,
   filterTasks,
@@ -217,37 +216,7 @@ export function UpcomingScreen() {
   // This screen only ever renders tasks that have a due_date >= today
   // (просроченные задачи отображаются на экране «Сегодня», в «Предстоящих»
   // отображаются только сегодняшние и будущие задачи).
-  // Шаг 2 (feature/projects-decouple-planner-merge): симметрично с
-  // TodayScreen.plannerTasks — по умолчанию только задачи без проекта
-  // (т.е. «Входящие»), проектные задачи попадают, только если их
-  // проект есть в plannerVisibleProjects.
-  const visibleProjectIds = useAppStore((s) => s.plannerVisibleProjects);
-  const togglePlannerVisibleProject = useAppStore(
-    (s) => s.togglePlannerVisibleProject,
-  );
   const datedTasks = useMemo(
-    () =>
-      allTasks.filter(
-        (t) =>
-          !isAgentAssignedTask(t, agents) &&
-          t.due_date &&
-          t.due_date >= today &&
-          (!t.project_id || !!visibleProjectIds[t.project_id]),
-      ),
-    [allTasks, agents, today, visibleProjectIds],
-  );
-
-  // Шаг 2 фикс (blocker 2, @local-macbook): раньше *FilterOptions здесь
-  // строились от datedTasks, который после Шага 1/2 отражает ТОЛЬКО то,
-  // что сейчас показано (входящие + видимые проекты с будущей датой).
-  // Фильтр «Проект» в шторке не предлагал проекты, которые юзер ещё НЕ
-  // добавил в раздел — picker их показывает, фильтр нет. Здесь берём
-  // полный allTasks, отфильтрованный только по тем же «разделам
-  // экрана», что и datedTasks: агентские задачи и просроченные
-  // исключаем (их в «Предстоящем» не было и не будет — фильтровать по
-  // ним бессмысленно). Проект-фильтр НЕ применяем, чтобы фильтр
-  // «Проект» отражал «что МОЖНО сузить», а не «что сужено сейчас».
-  const optionDatedTasks = useMemo(
     () =>
       allTasks.filter(
         (t) =>
@@ -255,17 +224,20 @@ export function UpcomingScreen() {
       ),
     [allTasks, agents, today],
   );
+
+  // Filter options from the full dated set (pre-filter), same rule as
+  // Inbox/Today/ActivityScreen.
   const projectFilterOptions = useMemo(
-    () => buildProjectOptions(optionDatedTasks),
-    [optionDatedTasks],
+    () => buildProjectOptions(datedTasks),
+    [datedTasks],
   );
   const labelFilterOptions = useMemo(
-    () => buildLabelOptions(optionDatedTasks),
-    [optionDatedTasks],
+    () => buildLabelOptions(datedTasks),
+    [datedTasks],
   );
   const assigneeFilterOptions = useMemo(
-    () => buildAssigneeOptions(optionDatedTasks),
-    [optionDatedTasks],
+    () => buildAssigneeOptions(datedTasks),
+    [datedTasks],
   );
 
   const tasks = useMemo(
@@ -1304,12 +1276,6 @@ export function UpcomingScreen() {
         )}
       </div>
 
-      <PlannerProjectChips
-        projects={projects}
-        visibleProjectIds={visibleProjectIds}
-        onAdd={() => setFilterSheetOpen(true)}
-      />
-
       <TaskFilterSheet
         open={filterSheetOpen}
         onClose={() => setFilterSheetOpen(false)}
@@ -1318,12 +1284,6 @@ export function UpcomingScreen() {
         projectOptions={projectFilterOptions}
         labelOptions={labelFilterOptions}
         assigneeOptions={assigneeFilterOptions}
-        plannerProjects={{
-          projects,
-          visibleProjectIds,
-          onToggle: togglePlannerVisibleProject,
-          defaultOpenSection: "planner",
-        }}
       />
     </div>
   );

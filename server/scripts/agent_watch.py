@@ -18,10 +18,6 @@
   4. Задача сдана на приёмку, а её шаги не сданы и не закрыты.
   5. Задача агента без проекта или без исполнителя — «ничья».
   6. Шаг сдан на приёмку без текста результата.
-  7. Задача назначена агенту, но никто её не взял дольше разумного срока —
-     будильник её поднять не смог (агент занят или событие проскочило), а
-     доска молча показывает «активна, исполнитель назначен». Прецедент
-     29.08.2026: три такие задачи висели до ручного вмешательства.
 
 КАК ДОКЛАДЫВАЕТ: уведомлением владельцу в самом трекере, и только о НОВЫХ
 нарушениях (состояние помнит в agent-watch.state.json рядом с базой).
@@ -50,13 +46,6 @@ LEASE_MINUTES = 5  # синхронно с server/src/agentState.ts
 # службы, снимать его за это нельзя.
 STALE_BLOCK_MINUTES = 30
 REVIEW_STUCK_HOURS = 48  # шаг висит в приёмке дольше — напомнить один раз
-# Задача назначена агенту, но висит «активна» без взятия дольше этого — то же
-# явление, что и «агент пропал», только в обратную сторону: не взял никто.
-# 29.08.2026: три такие задачи провисели до ручного вмешательства, и видны
-# они были только из базы. С будильником (обход раз в 3 минуты, см. trigger.
-# py:BOARD_SCAN_SEC) порог стоит с запасом: даём обходу время сработать,
-# иначе сторож заспамит владельца тем же самым каждый час.
-UNASSIGNED_MINUTES = 15
 
 
 def utc(value):
@@ -78,9 +67,8 @@ def collect(db):
     out = []
 
     tasks = db.execute(
-        """SELECT t.id, t.title, t.created_at, t.updated_at, t.agent_state,
-                  t.agent_heartbeat_at, t.project_id, t.assignee_id,
-                  t.agent_session_id, u.type AS assignee_type, u.name AS assignee_name
+        """SELECT t.id, t.title, t.agent_state, t.agent_heartbeat_at, t.project_id,
+                  t.assignee_id, t.agent_session_id, u.type AS assignee_type
              FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
             WHERE t.status = 'active'"""
     ).fetchall()
@@ -184,29 +172,6 @@ def collect(db):
                             f"приёмки больше {REVIEW_STUCK_HOURS} ч.",
                         )
                     )
-
-        # Назначена агенту и НИКТО её не взял — будильник не помог (агент занят
-        # другой задачей или событие проскочило мимо), а доска молча показывает
-        # «активна, исполнитель назначен». Без отдельного класса этого никто
-        # не замечает, и задача повисает до ручного вмешательства (29.08.2026).
-        # Ключ содержит created_at, чтобы после автопробуждения (если оно
-        # всё-таки случится) замечание пропало и через час не повторилось.
-        if (t["agent_state"] is None
-                and t["assignee_id"]
-                and t["assignee_type"] == "ai"):
-            created = utc(t["created_at"])
-            if created and now - created > timedelta(minutes=UNASSIGNED_MINUTES):
-                mins = int((now - created).total_seconds() // 60)
-                who = t["assignee_name"] or "агент"
-                out.append(
-                    (
-                        f"unassigned:{t['id']}:{t['created_at']}",
-                        t["id"],
-                        f"«{name}» назначена «{who}» {mins} мин назад, "
-                        "а никто не взял — будильник не помог. "
-                        "Загляни в карточку или переназначь.",
-                    )
-                )
 
     return out
 

@@ -206,16 +206,15 @@ describe("Доступ по роли: владелец, агенты, посто
     expect(patch.statusCode).toBe(200);
   });
 
-  // Приёмка передана оркестратору (29.08.2026, задача be329d8e): агент,
-  // которому задача назначена, больше НЕ может её закрыть — приёмку делает
-  // владелец или оркестратор. Прежний контракт «агент закрывает свою сам»
-  // снят (20.08.2026, тогда это было решением, отменённым владельцем).
-  it("агент НЕ может закрыть назначенную ему задачу (403, только владелец/оркестратор)", async () => {
+  // Приёмка отдельным шагом отменена 20.08.2026: агент, которому задача
+  // назначена, закрывает её сам. Разграничение доступа при этом остаётся —
+  // закрыть можно свою задачу, не чужую (это проверяют тесты выше).
+  it("агент закрывает назначенную ему задачу сам", async () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/tasks",
       headers: { authorization: `Bearer ${ownerToken}` },
-      payload: { title: "Закрытие агентом — запрещено", assignee_id: agentAId },
+      payload: { title: "Закрытие агентом", assignee_id: agentAId },
     });
     const id = created.json().task.id;
 
@@ -225,18 +224,8 @@ describe("Доступ по роли: владелец, агенты, посто
       headers: { authorization: `Bearer ${agentAToken}` },
       payload: { status: "completed" },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toMatch(/владелец или оркестратор/);
-
-    // Владелец закрывает ту же задачу — это и есть приёмка.
-    const ownerCloses = await app.inject({
-      method: "PATCH",
-      url: `/api/tasks/${id}`,
-      headers: { authorization: `Bearer ${ownerToken}` },
-      payload: { status: "completed" },
-    });
-    expect(ownerCloses.statusCode).toBe(200);
-    expect(ownerCloses.json().task.status).toBe("completed");
+    expect(res.statusCode).toBe(200);
+    expect(res.json().task.status).toBe("completed");
   });
 
   /** Регистрация на :5180 открыта, поэтому «видно всё» не должно

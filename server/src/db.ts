@@ -69,7 +69,6 @@ export function migrate() {
       description TEXT,
       due_date TEXT,
       project_id TEXT REFERENCES projects(id),
-      parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       priority INTEGER DEFAULT 1 CHECK(priority BETWEEN 1 AND 4),
       assignee_id TEXT REFERENCES users(id),
       creator_id TEXT REFERENCES users(id),
@@ -324,18 +323,6 @@ export function migrate() {
   }
   if (!projectCols.some((c) => c.name === "pinned")) {
     db.exec("ALTER TABLE projects ADD COLUMN pinned INTEGER DEFAULT 0");
-  }
-
-  // Additive migration (29.08.2026, задача 31f2759e): users.last_seen_at —
-  // метка последнего обращения агента к серверу (UTC, ISO 8601). В памяти
-  // живёт «прямо сейчас» в activeAgent.ts (Map), в БД — последняя
-  // зафиксированная, чтобы переживать рестарт сервера. Пишется не чаще
-  // раза в 30 секунд на агента (троттлинг в activeAgent.ts).
-  const userCols2 = db.prepare("PRAGMA table_info(users)").all() as Array<{
-    name: string;
-  }>;
-  if (!userCols2.some((c) => c.name === "last_seen_at")) {
-    db.exec("ALTER TABLE users ADD COLUMN last_seen_at TEXT");
   }
 
   // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:
