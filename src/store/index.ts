@@ -130,6 +130,17 @@ interface AppState {
   // нечем.
   hiddenDailyPlannerProjects: Record<string, boolean>;
   toggleDailyPlannerProjectHidden: (projectId: string) => void;
+  // Шаг 2 (feature/projects-decouple-planner-merge): opt-in список проектов
+  // для ежедневника. Семантика противоположна hiddenDailyPlannerProjects
+  // (там «скрыть», здесь «показать»); новое поле, потому что
+  // инвертировать hidden в UI — это плодить путаницу. По умолчанию {} —
+  // пустой выбор = только входящие (как и в Шаге 1). Чтобы добавить
+  // проект в ежедневник, пользователь тапает [+] в полоске чипов и
+  // выбирает в picker внутри TaskFilterSheet. Старый
+  // hiddenDailyPlannerProjects сохранён как legacy и будет выпилен в
+  // Шаге 3 после того, как все юзеры перейдут на новую схему.
+  plannerVisibleProjects: Record<string, true>;
+  togglePlannerVisibleProject: (projectId: string) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -186,6 +197,17 @@ export const useAppStore = create<AppState>()(
             [projectId]: !state.hiddenDailyPlannerProjects[projectId],
           },
         })),
+      plannerVisibleProjects: {},
+      togglePlannerVisibleProject: (projectId) =>
+        set((state) => {
+          const next = { ...state.plannerVisibleProjects };
+          if (next[projectId]) {
+            delete next[projectId];
+          } else {
+            next[projectId] = true;
+          }
+          return { plannerVisibleProjects: next };
+        }),
     }),
     {
       name: "taskflow-ui",
@@ -196,7 +218,17 @@ export const useAppStore = create<AppState>()(
       // раньше, и при мёрже персистентное значение побеждает над новым
       // дефолтом. version+migrate — разовая правка именно этого битого
       // значения, не трогает выбор, если он был осознанно другим.
-      version: 2,
+      // v2 (26.08.2026): БЫЛА миграция «coder30b битая → заменить на 27b»
+      // по подстроке. Диагноз не подтвердился (Максим: модель рабочая,
+      // временный тупняк сервера), но миграция уже применилась у всех —
+      // оставлена как есть (повторно не сработает, version уже 2), выбор
+      // coder30b руками снова возможен и переживает перезапуск.
+      // v3 (30.08.2026, feature/projects-decouple-planner-merge, Шаг 2):
+      // добавлен plannerVisibleProjects. Семантика другая, чем у
+      // hiddenDailyPlannerProjects, поэтому переносить значения нельзя —
+      // старый словарь остаётся в persist как legacy до Шага 3. Дефолт
+      // для нового поля — {}, как и в инициализации стора.
+      version: 3,
       migrate: (persisted: any, version) => {
         if (
           version < 1 &&
@@ -204,16 +236,15 @@ export const useAppStore = create<AppState>()(
         ) {
           persisted.localOllamaModel = "qwen3.6-27b-iq4-16k:latest";
         }
-        // v2 (26.08.2026): БЫЛА миграция «coder30b битая → заменить на 27b»
-        // по подстроке. Диагноз не подтвердился (Максим: модель рабочая,
-        // временный тупняк сервера), но миграция уже применилась у всех —
-        // оставлена как есть (повторно не сработает, version уже 2), выбор
-        // coder30b руками снова возможен и переживает перезапуск.
         if (
           version < 2 &&
           /coder30b/i.test(persisted?.localOllamaModel || "")
         ) {
           persisted.localOllamaModel = "qwen3.6-27b-iq4-16k:latest";
+        }
+        if (version < 3) {
+          persisted.plannerVisibleProjects =
+            persisted.plannerVisibleProjects || {};
         }
         return persisted;
       },
@@ -223,6 +254,7 @@ export const useAppStore = create<AppState>()(
         upcomingLayout: state.upcomingLayout,
         collapsedInboxProjects: state.collapsedInboxProjects,
         hiddenDailyPlannerProjects: state.hiddenDailyPlannerProjects,
+        plannerVisibleProjects: state.plannerVisibleProjects,
         aiProvider: state.aiProvider,
         localOllamaModel: state.localOllamaModel,
         antigravityModel: state.antigravityModel,

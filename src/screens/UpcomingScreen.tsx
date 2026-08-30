@@ -38,6 +38,7 @@ import {
   TaskFilterButton,
   TaskFilterSheet,
 } from "../components/TaskFilterSheet";
+import { PlannerProjectChips } from "../components/PlannerProjectChips";
 import {
   DEFAULT_TASK_FILTERS,
   filterTasks,
@@ -216,6 +217,14 @@ export function UpcomingScreen() {
   // This screen only ever renders tasks that have a due_date >= today
   // (просроченные задачи отображаются на экране «Сегодня», в «Предстоящих»
   // отображаются только сегодняшние и будущие задачи).
+  // Шаг 2 (feature/projects-decouple-planner-merge): симметрично с
+  // TodayScreen.plannerTasks — по умолчанию только задачи без проекта
+  // (т.е. «Входящие»), проектные задачи попадают, только если их
+  // проект есть в plannerVisibleProjects.
+  const visibleProjectIds = useAppStore((s) => s.plannerVisibleProjects);
+  const togglePlannerVisibleProject = useAppStore(
+    (s) => s.togglePlannerVisibleProject,
+  );
   const datedTasks = useMemo(
     () =>
       allTasks.filter(
@@ -223,12 +232,9 @@ export function UpcomingScreen() {
           !isAgentAssignedTask(t, agents) &&
           t.due_date &&
           t.due_date >= today &&
-          // Шаг 1: «Предстоящее» = по умолчанию только задачи без проекта
-          // (симметрично с TodayScreen.plannerTasks). Проектные задачи
-          // доступны только из своего проекта.
-          !t.project_id,
+          (!t.project_id || !!visibleProjectIds[t.project_id]),
       ),
-    [allTasks, agents, today],
+    [allTasks, agents, today, visibleProjectIds],
   );
 
   // Filter options from the full dated set (pre-filter), same rule as
@@ -1282,6 +1288,12 @@ export function UpcomingScreen() {
         )}
       </div>
 
+      <PlannerProjectChips
+        projects={projects}
+        visibleProjectIds={visibleProjectIds}
+        onAdd={() => setFilterSheetOpen(true)}
+      />
+
       <TaskFilterSheet
         open={filterSheetOpen}
         onClose={() => setFilterSheetOpen(false)}
@@ -1290,6 +1302,12 @@ export function UpcomingScreen() {
         projectOptions={projectFilterOptions}
         labelOptions={labelFilterOptions}
         assigneeOptions={assigneeFilterOptions}
+        plannerProjects={{
+          projects,
+          visibleProjectIds,
+          onToggle: togglePlannerVisibleProject,
+          defaultOpenSection: "planner",
+        }}
       />
     </div>
   );

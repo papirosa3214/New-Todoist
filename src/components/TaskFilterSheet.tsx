@@ -140,19 +140,32 @@ export function TaskFilterSheet({
    *  шапке дублировала фильтр по виду и путала — переехала СЮДА, отдельной
    *  секцией; её место в шапке занял Дневник. Отличие от «Проект» выше
    *  осталось прежним: там разовый выбор ОДНОГО проекта, здесь постоянный
-   *  список тех, что вообще показывать. */
+   *  список тех, что вообще показывать.
+   *
+   *  Шаг 2 (feature/projects-decouple-planner-merge): заменили
+   *  `hiddenProjectIds` на `visibleProjectIds` (Record<string, true>) —
+   *  семантика противоположная, новое поле в сторе
+   *  plannerVisibleProjects. Старый hidden-словарь остался в сторе как
+   *  legacy, но в формулах больше не используется. `disabled` оставлено
+   *  как deprecated на случай Шага 3. */
   plannerProjects?: {
     projects: ApiProject[];
-    hiddenProjectIds: Record<string, boolean>;
+    visibleProjectIds: Record<string, true>;
     onToggle: (projectId: string) => void;
-    // Шаг 1 (feature/projects-decouple-planner-merge): при true свитчеры
-    // в секции «Показывать в разделе» остаются видимыми, но заморожены.
-    // Применяется на TodayScreen, пока не появится opt-in переключатель
-    // режимов (Шаг 2).
+    /** Если передано, при монтировании шторки эта секция сразу
+     *  раскрыта. Используется экраном для тапа по [+] в PlannerProjectChips
+     *  — пользователь сразу видит picker, без второго клика. При
+     *  повторном открытии шторки (useEffect ниже) — сбрасывается. */
+    defaultOpenSection?: "planner";
+    /** Deprecated: заморозка UI Шага 1. В Шаге 2 не передаётся. */
     disabled?: boolean;
   };
 }) {
-  const [openSection, setOpenSection] = useState<string | null>(null);
+  const [openSection, setOpenSection] = useState<string | null>(
+    // Шаг 2: если экран просит сразу раскрыть секцию «Показывать в
+    // разделе» (через defaultOpenSection), открываем её на монтировании.
+    plannerProjects?.defaultOpenSection ?? null,
+  );
 
   useEffect(() => {
     if (open) setOpenSection(null);
@@ -169,9 +182,13 @@ export function TaskFilterSheet({
     !!filters.assigneeKey ||
     filters.showCompleted;
 
-  const plannerHiddenCount = plannerProjects
+  // Шаг 2: visible-семантика — счётчик «сколько проектов добавлено
+  // пользователем в ежедневник». Раньше здесь был plannerHiddenCount
+  // (сколько спрятано), но Шаг 1 фикс уже сделал hidden-словарь
+  // legacy; теперь UI водим только по visible-словарю.
+  const plannerVisibleCount = plannerProjects
     ? plannerProjects.projects.filter(
-        (p) => plannerProjects.hiddenProjectIds[p.id],
+        (p) => plannerProjects.visibleProjectIds[p.id],
       ).length
     : 0;
 
@@ -392,16 +409,24 @@ export function TaskFilterSheet({
               Не «чем сузить прямо сейчас» (это всё выше и сбрасывается
               «Сбросить»), а «что этот раздел показывает вообще» — поэтому
               своей карточкой внизу, с раскрытием, и НЕ трогается кнопкой
-              «Сбросить». */}
+              «Сбросить».
+
+              Шаг 2 (feature/projects-decouple-planner-merge): перевернули
+              семантику с «скрыть проект» на «включить проект в раздел».
+              Раньше здесь был свитчер с логикой «выключено = задачи
+              проекта не попадают в ежедневник». Теперь «включено = задачи
+              попадают», а дефолт (visible пустой) = ежедневник показывает
+              только входящие. Шапка чипов PlannerProjectChips — парный
+              UI: видно что выбрано, добавить — через эту секцию. */}
           {plannerProjects && plannerProjects.projects.length > 0 && (
             <Card>
               <FieldRow
                 icon="folder"
                 label="Показывать в разделе"
                 value={
-                  plannerHiddenCount === 0
-                    ? "Все проекты"
-                    : `Скрыто: ${plannerHiddenCount}`
+                  plannerVisibleCount === 0
+                    ? "Проекты не выбраны"
+                    : `Проектов: ${plannerVisibleCount}`
                 }
                 chevronOpen={openSection === "planner"}
                 onClick={() =>
@@ -413,53 +438,80 @@ export function TaskFilterSheet({
                   <div className="px-4 pt-2.5 pb-1 text-[12px] text-dim">
                     {plannerProjects.disabled
                       ? "В этот раздел попадают только задачи без проекта. Чтобы добавить проект — открой настройки раздела."
-                      : "Выключенные проекты не появятся в этом разделе, пока не включишь обратно. На другие разделы не влияет."}
+                      : "Выбери проекты, задачи которых показывать в этом разделе. По умолчанию раздел показывает только задачи без проекта."}
                   </div>
-                  {plannerProjects.projects.map((p) => {
-                    const hidden = !!plannerProjects.hiddenProjectIds[p.id];
-                    const isDisabled = !!plannerProjects.disabled;
-                    return (
-                      <button
-                        key={p.id}
-                        onClick={() => {
-                          if (isDisabled) return;
-                          plannerProjects.onToggle(p.id);
-                        }}
-                        role="switch"
-                        aria-checked={!hidden}
-                        disabled={isDisabled}
-                        aria-disabled={isDisabled}
-                        className={
-                          "tap-row w-full flex items-center gap-3 py-2.5 px-4 text-left" +
-                          (isDisabled ? " opacity-40 cursor-not-allowed" : "")
-                        }
-                      >
-                        <Icon
-                          name="hash"
-                          size={16}
-                          style={{ color: p.color }}
-                        />
-                        <span
+                  {(() => {
+                    if (plannerProjects.projects.length === 0) {
+                      return (
+                        <div className="px-4 py-3 text-[13px] text-dim">
+                          Нет проектов для добавления
+                        </div>
+                      );
+                    }
+                    const allAdded = plannerProjects.projects.every(
+                      (p) => plannerProjects.visibleProjectIds[p.id],
+                    );
+                    if (allAdded) {
+                      return (
+                        <div className="px-4 py-3 text-[13px] text-dim">
+                          Все проекты уже в разделе
+                        </div>
+                      );
+                    }
+                    // Та же multi-select UX, что и в Шаге 1, только
+                    // семантика инвертирована: «включено = проект в
+                    // ежедневнике», а не «выключено = спрятан».
+                    // Удаление через picker — тап по уже включённому
+                    // (Максим: «свайп по чипу — слишком мелкая цель,
+                    // лучше явная кнопка»).
+                    return plannerProjects.projects.map((p) => {
+                      const isIn = !!plannerProjects.visibleProjectIds[p.id];
+                      const isDisabled = !!plannerProjects.disabled;
+                      return (
+                        <button
+                          key={p.id}
+                          onClick={() => {
+                            if (isDisabled) return;
+                            plannerProjects.onToggle(p.id);
+                          }}
+                          role="switch"
+                          aria-checked={isIn}
+                          disabled={isDisabled}
+                          aria-disabled={isDisabled}
                           className={
-                            "text-[14px] flex-1 truncate " +
-                            (isDisabled ? "text-sub" : "text-text")
+                            "tap-row w-full flex items-center gap-3 py-2.5 px-4 text-left" +
+                            (isDisabled ? " opacity-40 cursor-not-allowed" : "")
                           }
                         >
-                          {p.name}
-                        </span>
-                        <span
-                          className={`relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors ${
-                            !hidden ? "bg-red" : "bg-card2 border border-stroke"
-                          }`}
-                        >
-                          <span
-                            className="absolute top-[2.5px] w-[20px] h-[20px] rounded-full bg-white shadow-toggle transition-[right] duration-150"
-                            style={{ right: !hidden ? "2.5px" : "20.5px" }}
+                          <Icon
+                            name="hash"
+                            size={16}
+                            style={{ color: p.color }}
                           />
-                        </span>
-                      </button>
-                    );
-                  })}
+                          <span
+                            className={
+                              "text-[14px] flex-1 truncate " +
+                              (isDisabled ? "text-sub" : "text-text")
+                            }
+                          >
+                            {p.name}
+                          </span>
+                          <span
+                            className={`relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors ${
+                              isIn
+                                ? "bg-red"
+                                : "bg-card2 border border-stroke"
+                            }`}
+                          >
+                            <span
+                              className="absolute top-[2.5px] w-[20px] h-[20px] rounded-full bg-white shadow-toggle transition-[right] duration-150"
+                              style={{ right: isIn ? "2.5px" : "20.5px" }}
+                            />
+                          </span>
+                        </button>
+                      );
+                    });
+                  })()}
                 </div>
               )}
             </Card>

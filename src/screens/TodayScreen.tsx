@@ -5,7 +5,7 @@ import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
-import { isTaskOwner, isAgentAssignedTask } from "../lib/taskOwner";
+import { isAgentAssignedTask, isWaitingForUser, waitingBlockedFirst } from "../lib/taskOwner";
 import { useAgents } from "../api/agents";
 import {
   todayStr,
@@ -24,6 +24,7 @@ import {
   TaskFilterButton,
   TaskFilterSheet,
 } from "../components/TaskFilterSheet";
+import { PlannerProjectChips } from "../components/PlannerProjectChips";
 import {
   DEFAULT_TASK_FILTERS,
   filterTasks,
@@ -86,39 +87,36 @@ export function TodayScreen() {
   const menuAnchorRef = useRef<HTMLButtonElement>(null);
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
-  // 25.08.2026: персистентный выбор видимых проектов (store), отдельно от
-  // ephemeral filters выше — секция «Показывать в разделе» в TaskFilterSheet.
-  const hiddenPlannerProjects = useAppStore(
-    (s) => s.hiddenDailyPlannerProjects,
-  );
-  const toggleDailyPlannerProjectHidden = useAppStore(
-    (s) => s.toggleDailyPlannerProjectHidden,
-  );
-  const hiddenPlannerProjectCount = useMemo(
-    () => projects.filter((p) => hiddenPlannerProjects[p.id]).length,
-    [projects, hiddenPlannerProjects],
+  // hiddenDailyPlannerProjects остаётся в сторе как legacy (Шаг 1
+  // привык к этому полю, persist у пользователей его содержит). В Шаге 2
+  // оно не используется в формулах на этом экране, поэтому на этом
+  // экране не читаем — ререндер на изменение legacy-поля тут не нужен.
+  // Шаг 3 будет решать, мигрировать или выпиливать.
+
+  // Шаг 2 (feature/projects-decouple-planner-merge): opt-in список
+  // проектов для ежедневника. Семантика противоположна legacy hidden —
+  // «включить проект в раздел», а не «спрятать». По умолчанию {} —
+  // пустой выбор = только входящие (как в Шаге 1). Чтобы добавить
+  // проект в ежедневник, пользователь тапает [+] в полоске чипов
+  // (PlannerProjectChips) и выбирает в picker внутри TaskFilterSheet.
+  const visibleProjectIds = useAppStore((s) => s.plannerVisibleProjects);
+  const togglePlannerVisibleProject = useAppStore(
+    (s) => s.togglePlannerVisibleProject,
   );
 
   // Отфильтрованный по видимым проектам универсум задач — источник для
   // всего экрана (список/доска/сетка часов) ниже. Задачи без project_id
-  // (Входящие) не трогаем: скрыть проект нечем, если у задачи его нет.
+  // (Входящие) присутствуют всегда; проектные задачи попадают, только
+  // если пользователь явно opt-in'нул проект в picker'е (см.
+  // plannerVisibleProjects в сторе). hiddenDailyPlannerProjects выше
+  // остаётся в сторе как legacy и сейчас НЕ участвует в формуле —
+  // Шаг 3 будет решать, мигрировать ли значения.
   const plannerTasks = useMemo(
     () =>
       allTasks.filter(
-        (t) =>
-          // Шаг 1 (feature/projects-decouple-planner-merge): ежедневник по
-          // умолчанию = только задачи без проекта («Входящие»). Проектные
-          // задачи живут внутри своего проекта и в ежедневник не идут.
-          // hiddenDailyPlannerProjects из стора сохранён и учитывается:
-          // если пользователь раньше что-то скрыл, мы это уважаем. Если
-          // хоть один проект сейчас «не скрыт» (hiddenPlannerProjectCount
-          // ровно 0 — фильтр выключен), проектные задачи всё равно не
-          // пускаем: иначе старый дефолт «показывать всё» вернётся.
-          !t.project_id ||
-          (hiddenPlannerProjectCount > 0 &&
-            !hiddenPlannerProjects[t.project_id]),
+        (t) => !t.project_id || !!visibleProjectIds[t.project_id],
       ),
-    [allTasks, hiddenPlannerProjects, hiddenPlannerProjectCount],
+    [allTasks, visibleProjectIds],
   );
 
   // Single source for "просрочено vs. сегодня" — shared by both layouts
@@ -143,18 +141,8 @@ export function TodayScreen() {
   const waitingTasksAll = useMemo(() => {
     if (!currentUser) return [];
     return plannerTasks
-      .filter(
-        (t) =>
-          t.status === "active" &&
-          // Дочерние задачи оркестратора принимает сам оркестратор, а не владелец
-          !t.parent_id &&
-          isTaskOwner(currentUser, t) &&
-          (t.agent_state === "blocked" || t.agent_state === "review"),
-      )
-      .sort((a, b) => {
-        const rank = (t: ApiTask) => (t.agent_state === "blocked" ? 0 : 1);
-        return rank(a) - rank(b);
-      });
+      .filter((t) => isWaitingForUser(t, currentUser))
+      .sort(waitingBlockedFirst);
   }, [plannerTasks, currentUser]);
 
   // Filter options built from the full pre-filter screen universe (every
@@ -296,17 +284,8 @@ export function TodayScreen() {
   const trueWaitingAll = useMemo(() => {
     if (!currentUser) return [];
     return allTasks
-      .filter(
-        (t) =>
-          t.status === "active" &&
-          !t.parent_id &&
-          isTaskOwner(currentUser, t) &&
-          (t.agent_state === "blocked" || t.agent_state === "review"),
-      )
-      .sort((a, b) => {
-        const rank = (t: ApiTask) => (t.agent_state === "blocked" ? 0 : 1);
-        return rank(a) - rank(b);
-      });
+      .filter((t) => isWaitingForUser(t, currentUser))
+      .sort(waitingBlockedFirst);
   }, [allTasks, currentUser]);
   const trueEmpty =
     !isLoading &&
@@ -583,6 +562,15 @@ export function TodayScreen() {
   return (
     <div className="px-4 pb-4">
       {header}
+      {/* Шаг 2: полоска чипов под шапкой. Показывает текущий выбор
+          проектов + [+] для добавления через picker в TaskFilterSheet.
+          Скрыта на иллюстрации «ничего на сегодня» — там выше early
+          return, сюда поток не доходит. */}
+      <PlannerProjectChips
+        projects={projects}
+        visibleProjectIds={visibleProjectIds}
+        onAdd={() => setFilterSheetOpen(true)}
+      />
       {isLoading && <Loading />}
       <ErrorBanner
         error={error}
@@ -740,13 +728,12 @@ export function TodayScreen() {
         assigneeOptions={assigneeFilterOptions}
         plannerProjects={{
           projects,
-          hiddenProjectIds: hiddenPlannerProjects,
-          onToggle: toggleDailyPlannerProjectHidden,
-          // Шаг 1 (feature/projects-decouple-planner-merge): секция
-          // «Показывать в разделе» заморожена, пока в Шаге 2 не появится
-          // opt-in picker (чипы проектов в шапке). На Шаге 2 здесь будет
-          // просто `disabled={!optInEnabled}`, без хардкода.
-          disabled: true,
+          visibleProjectIds,
+          onToggle: togglePlannerVisibleProject,
+          // Шаг 2: при тапе по [+] в PlannerProjectChips шторка
+          // открывается сразу с раскрытой секцией «Показывать в
+          // разделе», чтобы пользователь не делал лишний клик.
+          defaultOpenSection: "planner",
         }}
       />
     </div>
