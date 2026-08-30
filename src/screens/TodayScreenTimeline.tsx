@@ -6,7 +6,7 @@ import { Icon } from "../components/UI";
 import { useOpenTask } from "../lib/useOpenTask";
 import { isAgentAssignedTask } from "../lib/taskOwner";
 import { useAgents } from "../api/agents";
-import type { ApiTask } from "../api/types";
+import type { ApiTask, ApiUser } from "../api/types";
 
 // ═══════════ TodayScreenTimeline — Time-Thread UI, этап2 ═══════════
 //
@@ -148,7 +148,11 @@ export function TodayScreenTimeline() {
         <WeekLayer days={week} />
       </Layer>
       <Layer active={zoom === 2}>
-        <MonthPlaceholder />
+        <MonthGrid
+          tasks={allTasks}
+          agents={agents}
+          onOpenTask={(id) => openTask(id)}
+        />
       </Layer>
 
       {/* Индикатор зума — три точки, активная белая */}
@@ -294,15 +298,102 @@ function WeekLayer({
   );
 }
 
-// Слой «Месяц» — placeholder в этапе2, реальная сетка в этапе3.
-function MonthPlaceholder() {
+// Слой «Месяц» — 7×5 (или 6) сетка с числами дней. Неделя начинается с
+// понедельника (как в остальных местах проекта). Точка под числом —
+// приоритет первой задачи дня; если задач несколько — несколько точек
+// разных цветов (как в HTML-референсе).
+function MonthGrid({
+  tasks,
+  agents,
+  onOpenTask,
+}: {
+  tasks: ApiTask[];
+  agents: ApiUser[];
+  onOpenTask: (id: string) => void;
+}) {
+  const today = todayStr();
+  const todayDate = new Date(today + "T00:00:00");
+  const year = todayDate.getFullYear();
+  const month = todayDate.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  // Понедельник = 0. JS: getDay() воскресенье=0, понедельник=1.
+  // Переводим к «ПН=0»: ((d.getDay() + 6) % 7).
+  const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
+
+  // Группируем задачи по дню месяца.
+  const tasksByDay = useMemo(() => {
+    const map = new Map<number, ApiTask[]>();
+    tasks.forEach((t) => {
+      if (!t.due_date) return;
+      if (t.status === "completed") return;
+      if (isAgentAssignedTask(t, agents)) return;
+      // Парсим YYYY-MM-DD без timezone-сдвига.
+      const [y, m, d] = t.due_date.slice(0, 10).split("-").map(Number);
+      if (y !== year || m !== month + 1) return;
+      const arr = map.get(d) || [];
+      arr.push(t);
+      map.set(d, arr);
+    });
+    return map;
+  }, [tasks, agents, year, month]);
+
+  // Сетка: пустые ячейки до первого дня + числа 1..daysInMonth.
+  const cells: ({ day: number } | null)[] = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d });
+
   return (
-    <div className="flex-1 flex items-center justify-center text-sub text-sm">
-      <div className="text-center">
-        <div className="text-xs text-dim tracking-widest uppercase mb-2">
-          Этап 3
+    <div className="relative flex-1 overflow-y-auto">
+      <div className="px-2">
+        <div className="text-center text-xs text-dim mb-4">
+          ПН · ВТ · СР · ЧТ · ПТ · СБ · ВС
         </div>
-        <div>Сетка месяца — следующий коммит.</div>
+        <div className="grid grid-cols-7 gap-y-8 text-center">
+          {cells.map((cell, idx) => {
+            if (!cell) {
+              return <div key={`empty-${idx}`} />;
+            }
+            const isToday = cell.day === todayDate.getDate();
+            const dayTasks = tasksByDay.get(cell.day) || [];
+            return (
+              <button
+                key={cell.day}
+                onClick={() => {
+                  // Не открываем задачу — открываем день. Для POC просто
+                  // лог; в этапе4 — переход на /timeline?day=...
+                  if (dayTasks.length === 1) onOpenTask(dayTasks[0].id);
+                }}
+                className={`flex flex-col items-center ${
+                  isToday ? "" : "opacity-60"
+                }`}
+              >
+                <span
+                  className={`text-xl ${
+                    isToday
+                      ? "text-text font-medium"
+                      : "text-sub font-light"
+                  }`}
+                >
+                  {cell.day}
+                </span>
+                {isToday && dayTasks.length > 0 ? (
+                  <div className="mx-auto mt-1 w-1 h-1 bg-orange rounded-full shadow-[0_0_8px_#ff9a14]" />
+                ) : dayTasks.length > 0 ? (
+                  <div className="flex gap-0.5 mt-1 justify-center">
+                    {dayTasks.slice(0, 4).map((t) => (
+                      <span
+                        key={t.id}
+                        className={`w-1 h-1 rounded-full ${priorityDotColor(
+                          t.priority,
+                        )}`}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
