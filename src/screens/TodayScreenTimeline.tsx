@@ -1,60 +1,32 @@
 import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useTasks, useUpdateTask } from "../api/tasks";
-import { useProjects } from "../api/projects";
-import { useCurrentUser } from "../api/auth";
-import { useAgents } from "../api/agents";
-import {
-  todayStr,
-  partitionOverdueToday,
-  formatDueLabel,
-  MONTHS_SHORT,
-  addDays,
-} from "../lib/date";
-import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
-import {
-  isAgentAssignedTask,
-  isWaitingForUser,
-  waitingBlockedFirst,
-} from "../lib/taskOwner";
-import { useAppStore } from "../store";
-import { TaskBoard, type BoardColumn } from "../components/TaskBoard";
-import { TaskRow } from "../components/TaskRow";
-import { DayHours, type DayColumnData } from "../components/DayHours";
-import { AppleCalendarEvents } from "../components/AppleCalendarEvents";
-import { RescheduleSheet } from "../components/RescheduleSheet";
-import { ActionsMenu } from "../components/ActionsMenu";
-import {
-  TaskFilterButton,
-  TaskFilterSheet,
-} from "../components/TaskFilterSheet";
-import { PlannerProjectChips } from "../components/PlannerProjectChips";
-import {
-  DEFAULT_TASK_FILTERS,
-  filterTasks,
-  buildProjectOptions,
-  buildLabelOptions,
-  buildAssigneeOptions,
-  type TaskFilters,
-} from "../lib/taskFilters";
+import { useTasks } from "../api/tasks";
+import { todayStr, formatDueLabel, MONTHS_SHORT } from "../lib/date";
+import { Icon } from "../components/UI";
 import { useOpenTask } from "../lib/useOpenTask";
+import { isAgentAssignedTask } from "../lib/taskOwner";
+import { useAgents } from "../api/agents";
 import type { ApiTask, ApiUser } from "../api/types";
 
-// ═══════════ TodayScreenTimeline — полноценный Time-Thread для /today ═══════════
+// ═══════════ TodayScreenTimeline — Time-Thread UI, этап2 ═══════════
 //
-// 30.08.2026. Замена TodayScreen.tsx на вариант с тремя «зум-слоями»
-// (День / Неделя / Месяц), переключаемыми свайпом по горизонтали. Полная
-// логика экрана (фильтры, доска, проект-чипы, ожидающие/просроченные/
-// сегодня задачи, drag-to-schedule в сетке часов) переехала сюда без
-// потерь.
+// 30.08.2026. Этап2 (по HTML-референсу):
+// - Три слоя: День (zoom=0), Неделя (zoom=1), Месяц (zoom=2)
+// - Свайп влево/вправо по горизонтали с порогом 50px
+// - Заголовок и точки-индикатор меняются при смене слоя
+// - Анимация смены через CSS transform/opacity/filter (как в HTML)
 //
-// Доступ: /today (теперь рендерит этот компонент вместо TodayScreen).
-// TodayScreen.tsx оставлен на диске для быстрого отката.
+// Этап3 добавит полноценный слой «Месяц» (7×5 сетка). Сейчас —
+// простой placeholder «Этап 3», чтобы проверить свайп+анимацию.
+//
+// Доступ: /timeline (POC, рядом с /today). TodayScreen.tsx не трогаем.
 
 type Zoom = 0 | 1 | 2;
 
 const ZOOM_LABELS = ["Фокус дня", "Обзор недели", "Сетка месяца"] as const;
 
+// Локальная копия WEEKDAYS_FULL из TodayScreen.tsx (там она приватная).
+// В этапе3 вынесу в lib/date.ts и переиспользую там и там.
 const WEEKDAYS_FULL = [
   "Воскресенье",
   "Понедельник",
@@ -65,591 +37,133 @@ const WEEKDAYS_FULL = [
   "Суббота",
 ];
 
-function formatColumnDateLabel(dateStr: string): string {
-  const d = new Date(dateStr + "T00:00:00");
-  return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}. · ${WEEKDAYS_FULL[d.getDay()]}`;
-}
-
-function formatWeekdayDateLabel(dateStr: string): string {
-  const d = new Date(dateStr + "T00:00:00");
-  return `${WEEKDAYS_FULL[d.getDay()]}, ${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}.`;
-}
-
 export function TodayScreenTimeline() {
-  const { data: allTasks = [], isLoading, isError, error } = useTasks();
-  const { data: currentUser, isLoading: isLoadingUser } = useCurrentUser();
+  const { data: allTasks = [], isLoading } = useTasks();
   const { data: agents = [] } = useAgents();
   const openTask = useOpenTask();
   const navigate = useNavigate();
   const today = todayStr();
-  const layout = useAppStore((s) => s.taskLayout.today);
-  const { data: projects = [] } = useProjects();
-  const updateTask = useUpdateTask();
-  const setTaskLayout = useAppStore((s) => s.setTaskLayout);
-  const [rescheduleOpen, setRescheduleOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuAnchorRef = useRef<HTMLButtonElement>(null);
-  const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
-  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
-  const visibleProjectIds = useAppStore((s) => s.plannerVisibleProjects);
-  const togglePlannerVisibleProject = useAppStore(
-    (s) => s.togglePlannerVisibleProject,
-  );
-
-  // Зум-слой (День/Неделя/Месяц)
   const [zoom, setZoom] = useState<Zoom>(0);
+  // Refs для свайпа
+  const startXRef = useRef<number | null>(null);
 
-  // ── Планировщик задач (логика из TodayScreen) ──
-  const plannerTasks = useMemo(
-    () =>
-      allTasks.filter(
-        (t) => !t.project_id || !!visibleProjectIds[t.project_id],
-      ),
-    [allTasks, visibleProjectIds],
-  );
-
-  const { overdue: rawOverdueAll, todayTasks: rawTodayAll } = useMemo(
-    () => partitionOverdueToday(plannerTasks, today),
-    [plannerTasks, today],
-  );
-
-  const waitingTasksAll = useMemo(() => {
-    if (!currentUser) return [];
-    return plannerTasks
-      .filter((t) => isWaitingForUser(t, currentUser))
-      .sort(waitingBlockedFirst);
-  }, [plannerTasks, currentUser]);
-
-  const optionUniverse = useMemo(() => allTasks, [allTasks]);
-  const projectFilterOptions = useMemo(
-    () => buildProjectOptions(optionUniverse),
-    [optionUniverse],
-  );
-  const labelFilterOptions = useMemo(
-    () => buildLabelOptions(optionUniverse),
-    [optionUniverse],
-  );
-  const assigneeFilterOptions = useMemo(
-    () => buildAssigneeOptions(optionUniverse),
-    [optionUniverse],
-  );
-
-  const waitingTasks = useMemo(
-    () => filterTasks(waitingTasksAll, filters),
-    [waitingTasksAll, filters],
-  );
-  const rawOverdueTasks = useMemo(
-    () => filterTasks(rawOverdueAll, filters),
-    [rawOverdueAll, filters],
-  );
-  const rawTodayTasks = useMemo(
-    () => filterTasks(rawTodayAll, filters),
-    [rawTodayAll, filters],
-  );
-  const waitingIds = useMemo(
-    () => new Set(waitingTasks.map((t) => t.id)),
-    [waitingTasks],
-  );
-  const overdueTasks = useMemo(
-    () => rawOverdueTasks.filter((t) => !waitingIds.has(t.id)),
-    [rawOverdueTasks, waitingIds],
-  );
-  const todayTasks = useMemo(
-    () => rawTodayTasks.filter((t) => !waitingIds.has(t.id)),
-    [rawTodayTasks, waitingIds],
-  );
-
-  // День для сетки часов — тот же day, что и в TodayScreen.
-  const [hourDateOffset, setHourDateOffset] = useState(0);
-  const activeHourDate = useMemo(() => {
-    if (hourDateOffset === 0) return today;
-    return addDays(today, hourDateOffset);
-  }, [today, hourDateOffset]);
-
-  const hourDays: DayColumnData[] = useMemo(() => {
-    const withoutAgent = (t: ApiTask) => !isAgentAssignedTask(t, agents);
-    const dateTasks = plannerTasks.filter((t) => t.due_date === activeHourDate);
-    const combined =
-      activeHourDate === today
-        ? Array.from(
-            new Map(
-              [...waitingTasks, ...todayTasks, ...overdueTasks].map((t) => [
-                t.id,
-                t,
-              ]),
-            ).values(),
-          )
-        : dateTasks;
-    return [
-      {
-        date: activeHourDate,
-        tasks: combined.filter(withoutAgent),
-        isToday: activeHourDate === today,
-      },
-    ];
-  }, [
-    activeHourDate,
-    today,
-    waitingTasks,
-    todayTasks,
-    overdueTasks,
-    plannerTasks,
-    agents,
-  ]);
-
-  // trueEmpty/filteredEmpty для пустого состояния.
-  const { overdue: trueOverdueAll, todayTasks: trueTodayAll } = useMemo(
-    () => partitionOverdueToday(allTasks, today),
-    [allTasks, today],
-  );
-  const trueWaitingAll = useMemo(() => {
-    if (!currentUser) return [];
+  // Активные задачи на сегодня — слой «День».
+  const todays = useMemo(() => {
     return allTasks
-      .filter((t) => isWaitingForUser(t, currentUser))
-      .sort(waitingBlockedFirst);
-  }, [allTasks, currentUser]);
-  const trueEmpty =
-    !isLoading &&
-    !isLoadingUser &&
-    !isError &&
-    trueWaitingAll.length === 0 &&
-    trueOverdueAll.length === 0 &&
-    trueTodayAll.length === 0;
-  const filteredEmpty =
-    !trueEmpty &&
-    !isLoading &&
-    !isLoadingUser &&
-    !isError &&
-    overdueTasks.length === 0 &&
-    todayTasks.length === 0 &&
-    waitingTasks.length === 0;
-
-  // Доска.
-  const boardColumns: BoardColumn[] = useMemo(() => {
-    const cols: BoardColumn[] = [];
-    if (waitingTasks.length > 0) {
-      cols.push({
-        id: "waiting",
-        title: `Ждут вас ${waitingTasks.length}`,
-        tasks: waitingTasks,
-        showProjectBadge: true,
+      .filter((t) => {
+        if (!t.due_date) return false;
+        if (t.status === "completed") return false;
+        return t.due_date.startsWith(today);
+      })
+      .filter((t) => !isAgentAssignedTask(t, agents))
+      .sort((a, b) => {
+        const ta = a.start_time ?? "";
+        const tb = b.start_time ?? "";
+        if (!ta && !tb) return (a.position ?? 0) - (b.position ?? 0);
+        if (!ta) return 1;
+        if (!tb) return -1;
+        return ta.localeCompare(tb);
       });
-    }
-    if (overdueTasks.length > 0) {
-      cols.push({
-        id: "overdue",
-        title: `Просрочено ${overdueTasks.length}`,
-        titleClassName: "text-red",
-        tasks: overdueTasks,
-        dueBadgeVariant: "overdue",
-        showProjectBadge: true,
-        headerAction: (
-          <button
-            onClick={() => setRescheduleOpen(true)}
-            className="tap-fade shrink-0 min-h-11 px-2.5 flex items-center justify-center rounded-lg text-[12px] font-semibold text-red"
-          >
-            Перенести
-          </button>
-        ),
-      });
-    }
-    cols.push({
-      id: "today",
-      title: formatColumnDateLabel(today),
-      tasks: todayTasks,
-      showProjectBadge: true,
-      footer: (
-        <button
-          onClick={() => navigate("/task/new")}
-          className="tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 text-[13px] font-semibold text-red"
-        >
-          <Icon name="plus" size={16} />
-          Добавить задачу
-        </button>
-      ),
-    });
-    return cols;
-  }, [waitingTasks, overdueTasks, todayTasks, today, navigate]);
+  }, [allTasks, today, agents]);
 
-  // Заголовок — единый стиль, динамический текст по слою + меню.
-  const header = (
-    <ScreenHeader
-      className=""
-      title={
-        zoom === 0
-          ? layout === "hours"
-            ? formatWeekdayDateLabel(activeHourDate)
-            : formatWeekdayDateLabel(today)
-          : zoom === 1
-            ? "Неделя"
-            : `${MONTHS_SHORT[new Date(today + "T00:00:00").getMonth()]} ${new Date(today + "T00:00:00").getFullYear()}`
-      }
-      actions={
-        <>
-          <TaskFilterButton onClick={() => setFilterSheetOpen(true)} />
-          <button
-            ref={menuAnchorRef}
-            onClick={() => setMenuOpen((v) => !v)}
-            aria-label="Ещё"
-            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
-          >
-            <Icon name="dots" size={18} />
-          </button>
-          <ActionsMenu
-            open={menuOpen}
-            onClose={() => setMenuOpen(false)}
-            anchorRef={menuAnchorRef}
-            items={[
-              {
-                icon: "list",
-                label: (
-                  <span
-                    className={
-                      zoom === 0 && layout === "list"
-                        ? "font-semibold text-red"
-                        : ""
-                    }
-                  >
-                    День · Список
-                  </span>
-                ),
-                onClick: () => {
-                  setZoom(0);
-                  setTaskLayout("today", "list");
-                },
-              },
-              {
-                icon: "grid",
-                label: (
-                  <span
-                    className={
-                      zoom === 0 && layout === "board"
-                        ? "font-semibold text-red"
-                        : ""
-                    }
-                  >
-                    День · Доска
-                  </span>
-                ),
-                onClick: () => {
-                  setZoom(0);
-                  setTaskLayout("today", "board");
-                },
-              },
-              {
-                icon: "calendar",
-                label: (
-                  <span
-                    className={
-                      zoom === 0 && layout === "hours"
-                        ? "font-semibold text-red"
-                        : ""
-                    }
-                  >
-                    День · Часы
-                  </span>
-                ),
-                onClick: () => {
-                  setZoom(0);
-                  setTaskLayout("today", "hours");
-                },
-              },
-              {
-                icon: "calendar",
-                label: (
-                  <span
-                    className={
-                      zoom === 1 ? "font-semibold text-red" : ""
-                    }
-                  >
-                    Неделя
-                  </span>
-                ),
-                onClick: () => setZoom(1),
-              },
-              {
-                icon: "grid",
-                label: (
-                  <span
-                    className={
-                      zoom === 2 ? "font-semibold text-red" : ""
-                    }
-                  >
-                    Месяц
-                  </span>
-                ),
-                onClick: () => setZoom(2),
-              },
-              {
-                icon: "search",
-                label: "Поиск",
-                onClick: () => navigate("/search"),
-              },
-            ]}
-          />
-        </>
-      }
-    />
-  );
-
-  // Большая иллюстрация для пустого дня — только список, не доска/часы.
-  if (trueEmpty && zoom === 0 && layout === "list") {
-    return (
-      <div className="px-4 pb-4 flex flex-col items-center">
-        {header}
-        <div className="flex-1 flex flex-col items-center justify-center mt-8">
-          <svg width="200" height="180" viewBox="0 0 200 180" className="mb-6">
-            <circle cx="100" cy="80" r="48" fill="var(--color-card2)" />
-            <circle cx="85" cy="72" r="4" fill="white" />
-            <circle cx="115" cy="72" r="4" fill="white" />
-            <path
-              d="M88 90 Q100 100 112 90"
-              stroke="white"
-              strokeWidth="2.5"
-              fill="none"
-              strokeLinecap="round"
-            />
-            <ellipse
-              cx="68"
-              cy="55"
-              rx="6"
-              ry="3"
-              fill="var(--color-teal)"
-              transform="rotate(-20 68 55)"
-            />
-            <ellipse
-              cx="132"
-              cy="55"
-              rx="6"
-              ry="3"
-              fill="var(--color-teal)"
-              transform="rotate(20 132 55)"
-            />
-            <circle
-              cx="50"
-              cy="130"
-              r="18"
-              fill="none"
-              stroke="var(--color-green)"
-              strokeWidth="2"
-            />
-            <circle
-              cx="150"
-              cy="120"
-              r="14"
-              fill="none"
-              stroke="var(--color-green)"
-              strokeWidth="2"
-            />
-            <circle
-              cx="80"
-              cy="150"
-              r="10"
-              fill="none"
-              stroke="var(--color-green)"
-              strokeWidth="1.5"
-            />
-          </svg>
-          <h3 className="text-[17px] font-semibold mb-2">
-            Чёткое видение грядущего дня
-          </h3>
-          <p className="text-[14px] text-sub text-center px-8 leading-relaxed">
-            Задачи на сегодня появятся здесь, когда вы назначите дедлайн.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // День-список с дедупом и блоками.
-  const dayList = (
-    <div className="space-y-[2px]">
-      <AppleCalendarEvents dateStr={today} className="mb-2.5" />
-      {waitingTasks.length > 0 && (
-        <div className="flex items-center gap-1.5 px-1 pt-3 pb-1.5">
-          <Icon name="bot" size={16} className="text-text" />
-          <span className="text-[17px] font-semibold text-text">
-            Ждут вас
-          </span>
-        </div>
-      )}
-      {waitingTasks.map((t) => (
-        <TaskRow
-          key={t.id}
-          task={t}
-          overdue={t.due_date !== null && t.due_date < today}
-          showAgentState
-          showDueBadge={false}
-          onClick={() => openTask(t.id)}
-        />
-      ))}
-      {overdueTasks.length > 0 && (
-        <div className="flex items-center gap-1.5 px-1 pt-3 pb-1.5">
-          <span className="text-[17px] font-semibold text-red">
-            Просрочено
-          </span>
-        </div>
-      )}
-      {overdueTasks.map((t) => (
-        <TaskRow
-          key={t.id}
-          task={t}
-          overdue
-          showAgentState
-          showDueBadge={false}
-          onClick={() => openTask(t.id)}
-        />
-      ))}
-      {todayTasks.length > 0 &&
-        (overdueTasks.length > 0 || waitingTasks.length > 0) && (
-          <div className="text-[17px] font-semibold text-sub px-1 pt-3 pb-1.5">
-            {formatDueLabel(today)}
-          </div>
-        )}
-      {todayTasks.map((t) => (
-        <TaskRow
-          key={t.id}
-          task={t}
-          overdue={false}
-          showAgentState
-          showDueBadge={false}
-          onClick={() => openTask(t.id)}
-        />
-      ))}
-    </div>
-  );
-
-  // Неделя.
+  // Группировка задач по дням на ближайшую неделю (относительно today).
+  // Ключ — YYYY-MM-DD, значение — массив задач этого дня.
   const week = useMemo(() => {
+    const todayDate = new Date(today + "T00:00:00");
     const out: { date: string; label: string; tasks: ApiTask[] }[] = [];
     for (let i = -3; i <= 3; i++) {
-      const date = addDays(today, i);
+      const d = new Date(todayDate);
+      d.setDate(todayDate.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
       const isCurrent = i === 0;
       const label = isCurrent
         ? "Сегодня"
-        : `${new Date(date + "T00:00:00").getDate()} ${MONTHS_SHORT[new Date(date + "T00:00:00").getMonth()]}`;
-      const dayTasks = filterTasks(
-        plannerTasks.filter((t) => t.due_date === date),
-        filters,
-      );
-      out.push({ date, label, tasks: dayTasks });
+        : `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
+      const tasks = allTasks
+        .filter((t) => {
+          if (!t.due_date) return false;
+          if (t.status === "completed") return false;
+          return t.due_date.startsWith(key);
+        })
+        .filter((t) => !isAgentAssignedTask(t, agents))
+        .sort((a, b) => {
+          const ta = a.start_time ?? "";
+          const tb = b.start_time ?? "";
+          if (!ta && !tb) return (a.position ?? 0) - (b.position ?? 0);
+          if (!ta) return 1;
+          if (!tb) return -1;
+          return ta.localeCompare(tb);
+        });
+      out.push({ date: key, label, tasks });
     }
     return out;
-  }, [plannerTasks, today, filters]);
+  }, [allTasks, today, agents]);
+
+  // Свайп
+  function handleSwipe(diffX: number) {
+    if (Math.abs(diffX) < 50) return;
+    if (diffX > 0 && zoom < 2) setZoom((zoom + 1) as Zoom);
+    else if (diffX < 0 && zoom > 0) setZoom((zoom - 1) as Zoom);
+  }
 
   return (
-    <div className="pb-4">
-      {header}
-      <PlannerProjectChips
-        projects={projects}
-        visibleProjectIds={visibleProjectIds}
-        onAdd={() => setFilterSheetOpen(true)}
-      />
-      {isLoading && <Loading />}
-      <ErrorBanner
-        error={error}
-        fallback="Не удалось загрузить задачи"
-        className="mt-2"
-      />
-      {filteredEmpty && (
-        <div className="px-1 pt-2 flex items-center gap-2 flex-wrap text-[13px] text-dim">
-          Под выбранные фильтры ничего не подошло
-          <button
-            onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
-            className="text-red font-medium"
-          >
-            Сбросить фильтры
-          </button>
-        </div>
-      )}
-
-      {/* Свайп-область. На iPhone свайп пальцем — основной жест, mouse мы
-          не обрабатываем (там есть мышь в web-режиме, но это побочно). */}
-      <div
-        className="px-4"
-        onTouchStart={(e) => {
-          (window as unknown as { __swipeStartX: number }).__swipeStartX =
-            e.touches[0].clientX;
-        }}
-        onTouchEnd={(e) => {
-          const start = (window as unknown as { __swipeStartX?: number })
-            .__swipeStartX;
-          if (start === undefined) return;
-          (window as unknown as { __swipeStartX?: number }).__swipeStartX = undefined;
-          const diff = start - e.changedTouches[0].clientX;
-          if (Math.abs(diff) < 50) return;
-          if (diff > 0 && zoom < 2) setZoom((zoom + 1) as Zoom);
-          else if (diff < 0 && zoom > 0) setZoom((zoom - 1) as Zoom);
-        }}
-      >
-        {/* Слой 1: День */}
-        {zoom === 0 && (
-          <div className="mt-2">
-            {layout === "hours" ? (
-              <DayHours
-                days={hourDays}
-                projectColor={(t) =>
-                  projects.find((p) => p.id === t.project_id)?.color ||
-                  "#717171"
-                }
-                onTaskClick={openTask}
-                onPrevDay={() => setHourDateOffset((o) => o - 1)}
-                onNextDay={() => setHourDateOffset((o) => o + 1)}
-                onSchedule={(id, date, time) => {
-                  const task = allTasks.find((t) => t.id === id);
-                  updateTask.mutate({
-                    id,
-                    start_time: time,
-                    due_date: date,
-                    ...(task?.duration_min == null
-                      ? { duration_min: 15 }
-                      : null),
-                  });
-                }}
-              />
-            ) : layout === "board" ? (
-              <TaskBoard
-                columns={boardColumns}
-                onTaskClick={openTask}
-                isLoading={isLoading}
-              />
-            ) : (
-              dayList
-            )}
-          </div>
-        )}
-
-        {/* Слой 2: Неделя */}
-        {zoom === 1 && (
-          <WeekLayer
-            days={week}
-            today={today}
-            onOpenTask={(id) => openTask(id)}
-          />
-        )}
-
-        {/* Слой 3: Месяц */}
-        {zoom === 2 && (
-          <MonthGrid
-            tasks={plannerTasks}
-            filters={filters}
-            agents={agents}
-            onOpenTask={(id) => openTask(id)}
-          />
-        )}
-      </div>
-
-      {/* Индикатор зума — три точки */}
-      <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex items-center gap-4 z-40">
-        <div className="text-[10px] text-neutral-600 tracking-widest uppercase">
+    <div
+      className="min-h-screen bg-bg text-text pb-12 relative overflow-hidden"
+      onTouchStart={(e) => {
+        startXRef.current = e.touches[0].clientX;
+      }}
+      onTouchEnd={(e) => {
+        if (startXRef.current !== null) {
+          handleSwipe(startXRef.current - e.changedTouches[0].clientX);
+          startXRef.current = null;
+        }
+      }}
+    >
+      <header className="px-8 pt-12 pb-4 z-50 relative">
+        <div
+          key={zoom}
+          className="text-sm text-dim tracking-widest uppercase animate-fade-in"
+        >
           {ZOOM_LABELS[zoom]}
+        </div>
+        <div className="text-3xl font-medium mt-1">{formatDueLabel(today)}</div>
+        <button
+          onClick={() => navigate(-1)}
+          className="mt-3 inline-flex items-center gap-1 text-[12px] text-sub hover:text-text transition-colors"
+        >
+          <Icon name="chevron" size={14} className="rotate-90" />
+          <span>Назад (демо)</span>
+        </button>
+      </header>
+
+      {/* СЛОИ — три одновременно, видимый — через scale/opacity/blur */}
+      <Layer active={zoom === 0}>
+        <DayLayer
+          tasks={todays}
+          isLoading={isLoading}
+          onOpenTask={(id) => openTask(id)}
+        />
+      </Layer>
+      <Layer active={zoom === 1}>
+        <WeekLayer days={week} />
+      </Layer>
+      <Layer active={zoom === 2}>
+        <MonthGrid
+          tasks={allTasks}
+          agents={agents}
+          onOpenTask={(id) => openTask(id)}
+        />
+      </Layer>
+
+      {/* Индикатор зума — три точки, активная белая */}
+      <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex items-center gap-4 z-50">
+        <div className="text-[10px] text-neutral-600 tracking-widest uppercase">
+          Свайп влево/вправо
         </div>
         <div className="flex gap-2">
           {[0, 1, 2].map((i) => (
-            <button
+            <div
               key={i}
-              onClick={() => setZoom(i as Zoom)}
-              aria-label={`Зум ${ZOOM_LABELS[i]}`}
               className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
                 i === zoom ? "bg-text" : "bg-neutral-700"
               }`}
@@ -657,114 +171,143 @@ export function TodayScreenTimeline() {
           ))}
         </div>
       </div>
-
-      <RescheduleSheet
-        open={rescheduleOpen}
-        onClose={() => setRescheduleOpen(false)}
-        taskIds={overdueTasks.map((t) => t.id)}
-      />
-
-      <TaskFilterSheet
-        open={filterSheetOpen}
-        onClose={() => setFilterSheetOpen(false)}
-        filters={filters}
-        setFilters={setFilters}
-        projectOptions={projectFilterOptions}
-        labelOptions={labelFilterOptions}
-        assigneeOptions={assigneeFilterOptions}
-        plannerProjects={{
-          projects,
-          visibleProjectIds,
-          onToggle: togglePlannerVisibleProject,
-          defaultOpenSection: "planner",
-        }}
-      />
     </div>
   );
 }
 
-// ═══════════ Подслои (День-список / Неделя / Месяц) ═══════════════════
+// Один слой в стеке. active=true → видимый. active=false → прозрачный +
+// размытый + чуть сжат. CSS-transition на transform/opacity/filter.
+// (Здесь простой вариант: один scale(0.95) для неактивных. В этапе3
+// добавим разные scale для index< и index> — это даёт ощущение «уехал
+// влево» / «уехал вправо» при свайпе, как в HTML-референсе.)
+function Layer({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="absolute inset-0 pt-32 px-8 transition-all duration-[600ms] ease-[cubic-bezier(0.22,1,0.36,1)] flex flex-col"
+      style={{
+        transform: active ? "scale(1)" : "scale(0.95)",
+        opacity: active ? 1 : 0,
+        filter: active ? "blur(0)" : "blur(4px)",
+        pointerEvents: active ? "auto" : "none",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
-// Неделя — 7 дней вокруг сегодня, с количеством задач.
-function WeekLayer({
-  days,
-  today,
+// Слой «День» — те же точки на time-thread, что и в этапе1.
+function DayLayer({
+  tasks,
+  isLoading,
   onOpenTask,
 }: {
-  days: { date: string; label: string; tasks: ApiTask[] }[];
-  today: string;
+  tasks: ApiTask[];
+  isLoading: boolean;
   onOpenTask: (id: string) => void;
 }) {
   return (
-    <div className="space-y-2 mt-4">
-      {days.map((d) => {
-        const isCurrent = d.date === today;
-        const dateObj = new Date(d.date + "T00:00:00");
-        return (
-          <button
-            key={d.date}
-            onClick={() => {
-              // В POC: открываем первую задачу дня, если она одна.
-              // В этапе4 — переход на /timeline?day=...
-              if (d.tasks.length === 1) onOpenTask(d.tasks[0].id);
-            }}
-            className={`relative pl-8 w-full text-left py-2 ${
-              isCurrent ? "" : "opacity-40"
-            }`}
-          >
-            <div
-              aria-hidden
-              className={`absolute left-${
-                isCurrent ? "[-4px] w-2 h-2" : "[-2px] w-1 h-1"
-              } top-3 bg-white rounded-full`}
-            />
-            <div
-              className={`text-xs mb-1 tracking-widest uppercase ${
-                isCurrent ? "text-text font-medium" : "text-dim"
-              }`}
-            >
-              {d.label}
-              {isCurrent && " · " + WEEKDAYS_FULL[dateObj.getDay()]}
-            </div>
-            {d.tasks.length > 0 ? (
-              <div className="flex items-center gap-2">
-                <div className="text-lg">
-                  {d.tasks.length === 1
-                    ? "1 задача"
-                    : d.tasks.length < 5
-                      ? `${d.tasks.length} задачи`
-                      : `${d.tasks.length} задач`}
-                </div>
-                <div className="flex gap-1.5 ml-2">
-                  {d.tasks.slice(0, 6).map((t) => (
-                    <div
-                      key={t.id}
-                      className={`w-1.5 h-1.5 rounded-full ${priorityDotColor(
-                        t.priority,
-                      )}`}
-                    />
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="text-lg text-sub">Отдых</div>
-            )}
-          </button>
-        );
-      })}
+    <div className="relative flex-1 overflow-y-auto">
+      <div
+        aria-hidden
+        className="absolute left-[24px] top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent"
+      />
+      {isLoading ? (
+        <div className="text-sub text-sm pl-8 py-8">Загрузка…</div>
+      ) : tasks.length === 0 ? (
+        <div className="text-sub text-sm pl-8 py-8">На сегодня задач нет.</div>
+      ) : (
+        <div className="space-y-12">
+          {tasks.map((t) => (
+            <TimelineTask key={t.id} task={t} onOpen={() => onOpenTask(t.id)} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-// Месяц — 7×6 сетка с числами и точками приоритетов.
+// Слой «Неделя» — 7 дней вокруг today, каждый как день со счётчиком задач.
+function WeekLayer({
+  days,
+}: {
+  days: { date: string; label: string; tasks: ApiTask[] }[];
+}) {
+  const today = todayStr();
+  return (
+    <div className="relative flex-1 overflow-y-auto">
+      <div
+        aria-hidden
+        className="absolute left-[24px] top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent"
+      />
+      <div className="space-y-8">
+        {days.map((d) => {
+          const isCurrent = d.date === today;
+          return (
+            <div
+              key={d.date}
+              className={`relative pl-8 ${isCurrent ? "" : "opacity-40"}`}
+            >
+              <div
+                aria-hidden
+                className={`absolute left-${
+                  isCurrent ? "[-4px] w-2 h-2" : "[-2px] w-1 h-1"
+                } top-3 bg-white rounded-full`}
+              />
+              <div
+                className={`text-xs mb-1 tracking-widest uppercase ${
+                  isCurrent ? "text-text font-medium" : "text-dim"
+                }`}
+              >
+                {d.label}
+                {d.date === today && " · " + WEEKDAYS_FULL[new Date(d.date + "T00:00:00").getDay()]}
+              </div>
+              {d.tasks.length > 0 ? (
+                <div className="flex items-center gap-2">
+                  <div className="text-lg">
+                    {d.tasks.length === 1
+                      ? "1 задача"
+                      : d.tasks.length < 5
+                        ? `${d.tasks.length} задачи`
+                        : `${d.tasks.length} задач`}
+                  </div>
+                  {/* Цветные точки — приоритеты задач дня */}
+                  <div className="flex gap-1.5 ml-2">
+                    {d.tasks.slice(0, 6).map((t) => (
+                      <div
+                        key={t.id}
+                        className={`w-1.5 h-1.5 rounded-full ${priorityDotColor(t.priority)}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-lg text-sub">Отдых</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Слой «Месяц» — 7×5 (или 6) сетка с числами дней. Неделя начинается с
+// понедельника (как в остальных местах проекта). Точка под числом —
+// приоритет первой задачи дня; если задач несколько — несколько точек
+// разных цветов (как в HTML-референсе).
 function MonthGrid({
   tasks,
-  filters,
   agents,
   onOpenTask,
 }: {
   tasks: ApiTask[];
-  filters: TaskFilters;
   agents: ApiUser[];
   onOpenTask: (id: string) => void;
 }) {
@@ -773,15 +316,18 @@ function MonthGrid({
   const year = todayDate.getFullYear();
   const month = todayDate.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
+  // Понедельник = 0. JS: getDay() воскресенье=0, понедельник=1.
+  // Переводим к «ПН=0»: ((d.getDay() + 6) % 7).
   const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
 
+  // Группируем задачи по дню месяца.
   const tasksByDay = useMemo(() => {
     const map = new Map<number, ApiTask[]>();
-    const filtered = filterTasks(tasks, filters);
-    filtered.forEach((t) => {
+    tasks.forEach((t) => {
       if (!t.due_date) return;
       if (t.status === "completed") return;
       if (isAgentAssignedTask(t, agents)) return;
+      // Парсим YYYY-MM-DD без timezone-сдвига.
       const [y, m, d] = t.due_date.slice(0, 10).split("-").map(Number);
       if (y !== year || m !== month + 1) return;
       const arr = map.get(d) || [];
@@ -789,60 +335,103 @@ function MonthGrid({
       map.set(d, arr);
     });
     return map;
-  }, [tasks, filters, agents, year, month]);
+  }, [tasks, agents, year, month]);
 
+  // Сетка: пустые ячейки до первого дня + числа 1..daysInMonth.
   const cells: ({ day: number } | null)[] = [];
   for (let i = 0; i < firstWeekday; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d });
 
   return (
-    <div className="px-2 mt-4">
-      <div className="text-center text-xs text-dim mb-4">
-        ПН · ВТ · СР · ЧТ · ПТ · СБ · ВС
-      </div>
-      <div className="grid grid-cols-7 gap-y-8 text-center">
-        {cells.map((cell, idx) => {
-          if (!cell) {
-            return <div key={`empty-${idx}`} />;
-          }
-          const isToday = cell.day === todayDate.getDate();
-          const dayTasks = tasksByDay.get(cell.day) || [];
-          return (
-            <button
-              key={cell.day}
-              onClick={() => {
-                if (dayTasks.length === 1) onOpenTask(dayTasks[0].id);
-              }}
-              className={`flex flex-col items-center ${
-                isToday ? "" : "opacity-60"
-              }`}
-            >
-              <span
-                className={`text-xl ${
-                  isToday ? "text-text font-medium" : "text-sub font-light"
+    <div className="relative flex-1 overflow-y-auto">
+      <div className="px-2">
+        <div className="text-center text-xs text-dim mb-4">
+          ПН · ВТ · СР · ЧТ · ПТ · СБ · ВС
+        </div>
+        <div className="grid grid-cols-7 gap-y-8 text-center">
+          {cells.map((cell, idx) => {
+            if (!cell) {
+              return <div key={`empty-${idx}`} />;
+            }
+            const isToday = cell.day === todayDate.getDate();
+            const dayTasks = tasksByDay.get(cell.day) || [];
+            return (
+              <button
+                key={cell.day}
+                onClick={() => {
+                  // Не открываем задачу — открываем день. Для POC просто
+                  // лог; в этапе4 — переход на /timeline?day=...
+                  if (dayTasks.length === 1) onOpenTask(dayTasks[0].id);
+                }}
+                className={`flex flex-col items-center ${
+                  isToday ? "" : "opacity-60"
                 }`}
               >
-                {cell.day}
-              </span>
-              {isToday && dayTasks.length > 0 ? (
-                <div className="mx-auto mt-1 w-1 h-1 bg-orange rounded-full shadow-[0_0_8px_#ff9a14]" />
-              ) : dayTasks.length > 0 ? (
-                <div className="flex gap-0.5 mt-1 justify-center">
-                  {dayTasks.slice(0, 4).map((t) => (
-                    <span
-                      key={t.id}
-                      className={`w-1 h-1 rounded-full ${priorityDotColor(
-                        t.priority,
-                      )}`}
-                    />
-                  ))}
-                </div>
-              ) : null}
-            </button>
-          );
-        })}
+                <span
+                  className={`text-xl ${
+                    isToday
+                      ? "text-text font-medium"
+                      : "text-sub font-light"
+                  }`}
+                >
+                  {cell.day}
+                </span>
+                {isToday && dayTasks.length > 0 ? (
+                  <div className="mx-auto mt-1 w-1 h-1 bg-orange rounded-full shadow-[0_0_8px_#ff9a14]" />
+                ) : dayTasks.length > 0 ? (
+                  <div className="flex gap-0.5 mt-1 justify-center">
+                    {dayTasks.slice(0, 4).map((t) => (
+                      <span
+                        key={t.id}
+                        className={`w-1 h-1 rounded-full ${priorityDotColor(
+                          t.priority,
+                        )}`}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
+  );
+}
+
+function TimelineTask({ task, onOpen }: { task: ApiTask; onOpen: () => void }) {
+  const priorityColor =
+    task.priority === 1
+      ? "bg-red shadow-[0_0_8px_#e44332]"
+      : task.priority === 2
+        ? "bg-orange shadow-[0_0_8px_#ff9a14]"
+        : task.priority === 3
+          ? "bg-blue shadow-[0_0_8px_#4a9fd8]"
+          : "bg-white";
+
+  const time =
+    task.start_time && task.duration_min
+      ? `${task.start_time}—${formatEnd(task.start_time, task.duration_min)}`
+      : task.start_time
+        ? `${task.start_time}`
+        : "Без времени";
+
+  return (
+    <button
+      onClick={onOpen}
+      className="relative pl-8 w-full text-left group"
+    >
+      <div
+        aria-hidden
+        className={`absolute left-[-4px] top-1.5 w-2 h-2 rounded-full ${priorityColor}`}
+      />
+      <div className="text-xs text-dim font-mono mb-1 tracking-widest">
+        {time}
+      </div>
+      <div className="text-lg font-light leading-tight group-hover:text-text transition-colors">
+        {task.title}
+      </div>
+    </button>
   );
 }
 
@@ -851,4 +440,12 @@ function priorityDotColor(priority: number): string {
   if (priority === 2) return "bg-orange";
   if (priority === 3) return "bg-blue";
   return "bg-white";
+}
+
+function formatEnd(start: string, durationMin: number): string {
+  const [h, m] = start.split(":").map(Number);
+  const total = h * 60 + m + durationMin;
+  const eh = Math.floor(total / 60) % 24;
+  const em = total % 60;
+  return `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
 }
