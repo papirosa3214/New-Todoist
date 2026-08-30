@@ -228,6 +228,10 @@ export interface ApiTask {
   project_color?: string | null;
   labels: ApiLabel[];
   subtasks: ApiSubtask[];
+  // Дочерние задачи (parent_task_id = this.id). Сервер отдаёт в GET /api/tasks/:id
+  // рядом с subtasks. TaskDetailScreen переключает таб по наличию.
+  // Добавлено 30.08.2026 — старый код ссылался на .children, которого не было в типе.
+  children?: ApiTask[];
   comments?: ApiComment[]; // only on GET /api/tasks/:id
   events?: ApiTaskEvent[]; // only on GET /api/tasks/:id
   // Файлы, приложенные к самой задаче (kind='task' на сервере), а не к
