@@ -494,22 +494,6 @@ const migrations: Migration[] = [
       }
     },
   },
-  {
-    id: "020_task_parent_id",
-    description:
-      "Иерархия задач (parent_id) для поддержки концепции Проекты/Подзадачи. Дочерние задачи раздаются Оркестратором на агентов.",
-    up: () => {
-      const cols = db
-        .prepare("PRAGMA table_info(tasks)")
-        .all() as Array<{ name: string }>;
-      if (!cols.some((c) => c.name === "parent_id")) {
-        db.exec(`
-          ALTER TABLE tasks ADD COLUMN parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE;
-          CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
-        `);
-      }
-    },
-  },
 ];
 
 /** Применить все ещё не применённые миграции, по одной транзакции на каждую. */

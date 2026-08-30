@@ -39,16 +39,6 @@ describe("Снятие задачи с агента расклинивает к�
       },
     });
     ownerToken = ownerReg.json().token;
-    // Регистрация по умолчанию ставит role='agent' (см. auth.ts). В
-    // server/test другие тесты полагаются на «первый зарегистрированный —
-    // owner», и при параллельном запуске это не гарантировано: явно
-    // поднимаем роль. Иначе правки be329d8e делают PATCH status 403 даже
-    // для owner'а, и тест падает на «закрытая задача не показывает
-    // агент пропал» — ровно потому, что мы тут проверяем, что закрытая
-    // карточка ведёт себя как закрытая.
-    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(
-      ownerReg.json().user.id,
-    );
 
     const agentReg = await app.inject({
       method: "POST",

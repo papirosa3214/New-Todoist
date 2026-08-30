@@ -20,13 +20,11 @@ import {
   Bold,
   Bookmark,
   Bot,
-  Braces,
   Clock,
   Calendar,
   CalendarCheck,
   CalendarDays,
   Check,
-  Code,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -59,7 +57,6 @@ import {
   MapPin,
   Menu,
   MessageCircle,
-  Minus,
   Notebook,
   Mic,
   Paperclip,
@@ -68,7 +65,6 @@ import {
   Pencil,
   Play,
   Plus,
-  Quote,
   Scissors,
   ListTree,
   RefreshCw,
@@ -78,7 +74,6 @@ import {
   Shield,
   Sparkles,
   Star,
-  Strikethrough,
   Tag,
   Trash2,
   Underline,
@@ -222,16 +217,6 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   listBullet: List,
   listOrdered: ListOrdered,
   listChecks: ListChecks,
-  // Кнопки форматирования, добавленные 29.08.2026 к панели редактора заметок
-  // (карточка 9b4c4984): Quote/Code/Strikethrough/Minus/Braces. Braces — для
-  // инлайн-кода, чтобы он не выглядел как ещё одна кнопка Code (блочный
-  // код). Minus — разделитель: лаконичнее трёх точек или палки. "link"
-  // уже зарегистрирован выше и используется в ActionsMenu.
-  quote: Quote,
-  codeBlock: Code,
-  strike: Strikethrough,
-  hr: Minus,
-  inlineCode: Braces,
   // Адресат «всем» в строке ввода чата и в пузыре (28.08.2026): силуэт
   // группы против одиночного bot — по значку видно, обращаются к одному
   // участнику или ко всему каналу.

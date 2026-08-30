@@ -30,6 +30,55 @@ export PATH="/opt/homebrew/bin:$PATH"
 
 cd "$PROJECT"
 
+# ═══════ Подтянуть актуальное с origin перед сборкой ═══════
+# Добавлено 30.08.2026: чтобы кнопка «собрать» в инфра-панели (а также
+# tf-install) всегда работала с последним коммитом main, а не с тем, что
+# случайно залежалось в локальной копии. Поведение:
+#   - нет сети / origin недоступен → предупреждение, сборка на локальной
+#     копии (не блокируем оффлайн-работу)
+#   - локально позади origin → fast-forward pull
+#   - локальная копия РАСХОДИТСЯ с origin (незапушенные коммиты или
+#     незакоммиченные правки) → стоп, подробное сообщение что делать;
+#     иначе молча перезатёрло бы чужие правки (см. баг 29.08: a1d077b
+#     снёс 320 файлов, и reset на 102 затёр локальные несохранённые
+#     копии). Это та защита, которая нужна.
+# Отключить: TASKFLOW_SKIP_GIT_PULL=1 tf-install
+if [ "${TASKFLOW_SKIP_GIT_PULL:-0}" != "1" ]; then
+  шаг "Подтягиваю изменения с origin (если есть)"
+  if ! git fetch origin main 2>&1; then
+    printf '\033[33m⚠ git fetch не прошёл (нет сети?). Собираю на локальной копии.\033[0m\n' >&2
+  else
+    LOCAL=$(git rev-parse HEAD)
+    REMOTE=$(git rev-parse origin/main)
+    if [ "$LOCAL" != "$REMOTE" ]; then
+      # Считаем, насколько мы позади — pull нужен только если отстаём
+      if ! git merge --ff-only origin/main 2>&1; then
+        printf '\n\033[31m✗ Локальная копия РАСХОДИТСЯ с origin/main — fast-forward невозможен.\033[0m\n\n' >&2
+        printf '  Сборка НЕ продолжена, чтобы не перетереть локальные правки.\n' >&2
+        printf '\n' >&2
+        printf '  Что это значит:\n' >&2
+        printf '    • либо в локальной копии есть незапушенные коммиты,\n' >&2
+        printf '    • либо есть незакоммиченные изменения в рабочей копии.\n' >&2
+        printf '\n' >&2
+        printf '  Что делать (выбери одно):\n' >&2
+        printf '    1) Закоммить и запушить:\n' >&2
+        printf '         cd %s\n' "$PROJECT" >&2
+        printf '         git add -A && git commit -m "..." && git push origin main\n' >&2
+        printf '    2) Откатить локальные правки (если они не нужны):\n' >&2
+        printf '         cd %s\n' "$PROJECT" >&2
+        printf '         git reset --hard origin/main\n' >&2
+        printf '    3) Построить на текущей локальной копии (отключив pull):\n' >&2
+        printf '         TASKFLOW_SKIP_GIT_PULL=1 tf-install\n' >&2
+        printf '\n' >&2
+        printf '  Диагностика:\n' >&2
+        printf '    git -C %s status\n' "$PROJECT" >&2
+        printf '    git -C %s log --oneline origin/main..HEAD\n' "$PROJECT" >&2
+        exit 1
+      fi
+    fi
+  fi
+fi
+
 if [ "${1:-}" != "--fast" ]; then
   шаг "Собираю веб"
   npm run build

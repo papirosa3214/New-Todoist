@@ -58,24 +58,24 @@ describe("когда звать модель", () => {
   const now = 1_000_000;
 
   it("зовёт на правку с куском изменения", () => {
-    expect(shouldExplain({ kind: "edit", diff: DIFF } as any, 0, now)).toBe(true);
+    expect(shouldExplain({ kind: "edit", diff: DIFF }, 0, now)).toBe(true);
   });
 
   it("молчит на чтении: объяснять нечего", () => {
-    expect(shouldExplain({ kind: "read", diff: DIFF } as any, 0, now)).toBe(false);
+    expect(shouldExplain({ kind: "read", diff: DIFF }, 0, now)).toBe(false);
   });
 
   it("молчит без куска правки", () => {
     // Без диффа модель начнёт выдумывать по имени файла — это хуже честной
     // строки от сервера, ради которой всё и делалось.
-    expect(shouldExplain({ kind: "edit" } as any, 0, now)).toBe(false);
-    expect(shouldExplain({ kind: "edit", diff: "  \n " } as any, 0, now)).toBe(false);
-    expect(shouldExplain({ kind: "edit", diff: "x = 1" } as any, 0, now)).toBe(false);
+    expect(shouldExplain({ kind: "edit" }, 0, now)).toBe(false);
+    expect(shouldExplain({ kind: "edit", diff: "  \n " }, 0, now)).toBe(false);
+    expect(shouldExplain({ kind: "edit", diff: "x = 1" }, 0, now)).toBe(false);
   });
 
   it("держит паузу между вызовами", () => {
     // Модель считает на телефоне: без паузы пачка правок посадит батарею.
-    const event = { kind: "edit", diff: DIFF } as any;
+    const event = { kind: "edit", diff: DIFF };
     expect(shouldExplain(event, now - 1000, now)).toBe(false);
     expect(shouldExplain(event, now - EXPLAIN_EVERY_MS, now)).toBe(true);
   });

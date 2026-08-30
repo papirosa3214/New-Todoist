@@ -246,13 +246,12 @@ def short(task: dict) -> dict:
 # --------------------------------------------------------------------------- инструменты
 
 def t_my_tasks(args):
-    """Список задач, назначенных на твою учётку."""
     state = (args.get("state") or "").strip()
     # /api/auth/me отдаёт профиль как {"user": {...}} — своя обёртка, не та,
     # что у задач, поэтому unwrap здесь не годится.
     profile = api("GET", "/api/auth/me")
     me = (profile.get("user") or profile).get("id")
-    tasks = [t for t in as_tasks(api("GET", "/api/tasks?include_children=true")) if t.get("assignee_id") == me]
+    tasks = [t for t in as_tasks(api("GET", "/api/tasks")) if t.get("assignee_id") == me]
     if args.get("include_completed") is not True:
         tasks = [t for t in tasks if t.get("status") == "active"]
     if state == "free":
@@ -323,65 +322,6 @@ def t_claim(args):
     return out
 
 
-def t_close(args):
-    """Закрыть задачу или вернуть её в работу (29.08.2026, задача be329d8e).
-
-    Тонкий инструмент: прежде исполнитель мог закрыть карточку своим
-    ключом через PATCH /api/tasks/:id, и сервер это пропускал без проверки
-    роли (server/src/routes/tasks.ts). Владелец передал приёмку работы
-    оркестратору: «ты раздаёшь пачками эти задачи, поэтому сам их и
-    принимай. Мне главное результат: я тебя озадачиваю, ты мне
-    отчитываешься — вот это я буду ревьюить». Условие: инструмент
-    должен быть у оркестратора и НЕ передаваться другим агентам, чтобы
-    они не начали всё закрывать сами.
-
-    Серверная проверка: только role='owner' и role='orchestrator' могут
-    закрыть и вернуть в работу. Исполнитель, дёрнувший PATCH status
-    напрямую через /api/tasks/:id, получит 403 — описание инструмента
-    и серверная правка должны совпадать по смыслу.
-    """
-    status = (args.get("status") or "completed").strip()
-    if status not in ("completed", "active"):
-        raise TaskFlowError(
-            'status должен быть "completed" (закрыть) или "active" '
-            "(вернуть в работу); без status по умолчанию закрытие"
-        )
-    body: dict = {"status": status}
-    # Серверный PATCH /api/tasks/:id уже сам гасит agent_state на обоих
-    # переходах (active→completed и completed→active) и release'ит шаги.
-    api("PATCH", f"/api/tasks/{args['id']}", body)
-    # send_activity — то же, что в t_state/t_comment: один и тот же
-    # цикл активности задачи. Без него лента «что делал оркестратор» не
-    # получит записи о приёмке.
-    send_activity(
-        args["id"], "edit",
-        f"принял работу и {'закрыл' if status == 'completed' else 'вернул в работу'}",
-    )
-    task_row = unwrap(api("GET", f"/api/tasks/{args['id']}"))
-    if isinstance(task_row, dict) and task_row.get("parent_id"):
-        send_activity(
-            task_row["parent_id"], "edit",
-            f"принял подзадачу: «{task_row.get('title', '')}»",
-        )
-    if status == "completed":
-        return {
-            "задача": args["id"],
-            "новый статус": "completed",
-            "дальше": (
-                "закрытая карточка ушла с доски. Перед сдачей следующей убедись, "
-                "что все шаги закрыты и сама задача в review — иначе вернётся с претензией."
-            ),
-        }
-    return {
-        "задача": args["id"],
-        "новый статус": "active",
-        "дальше": (
-            "карточка снова активна. Назначьте исполнителя заново, "
-            "если хотите продолжить."
-        ),
-    }
-
-
 def t_heartbeat(args):
     api("POST", f"/api/tasks/{args['id']}/heartbeat", {})
     out = {"аренда продлена": args["id"]}
@@ -408,18 +348,15 @@ def t_state(args):
     # постоянно. Владелец 28.08.2026: «ты к инструкции обратился один раз
     # когда-то давно и всё; пиши эти моменты в MCP-сервер». Только на
     # review — на blocked и возврат в работу подсказка была бы шумом.
-    if args["state"] in ("review", "blocked"):
-        out["не потеряй знание и доложи руководителю"] = (
-            "1. Работа закончена или заблокирована — итог и найденные грабли положи отдельной "
+    if args["state"] == "review":
+        out["не потеряй знание"] = (
+            "Работа закончена — итог и найденные грабли положи отдельной "
             "заметкой в документацию проекта (taskflow_doc_write). Карточку "
             "закроют, и всё написанное в ней уйдёт с доски; в документации "
             "знание останется и достанется следующему. Рабочий рецепт или "
             "причину сбоя — уроком в базу знаний "
             "(~/kb/lessons/ГГГГ-ММ-ДД-имя.md + python3 ~/kb/kb_add.py <файл>), "
-            "короткий устойчивый факт — в память через mnemosyne_remember. "
-            "2. ОБЯЗАТЕЛЬНО вызови инструмент `taskflow_chat_send` и напиши Оркестратору "
-            "сообщение (например: 'Я закончил подзадачу #ID, прими работу' или 'Я заблокирован, нужна помощь'). "
-            "Система автоматически его не позовёт, это должен сделать ты!"
+            "короткий устойчивый факт — в память через mnemosyne_remember."
         )
     return out
 
@@ -723,7 +660,7 @@ def t_chat_read(args):
         api("POST", "/api/chat/read")
     except TaskFlowError:
         pass  # отметка прочтения необязательна — история важнее
-    result = {
+    return {
         "сообщения": [
             {
                 "когда": m.get("created_at"),
@@ -739,15 +676,6 @@ def t_chat_read(args):
         ],
         "ещё есть": resp.get("has_more", False),
     }
-
-    result["системное_напоминание"] = (
-        "Если тебе (как Оркестратору) поставили задачу напрямую в чат — "
-        "обязательно прочитай свой актуальный регламент работы в файле "
-        "docs/taskflow-orchestrator.md (как бить на куски, использовать parent_id и заводить проекты). "
-        "Не фантазируй, действуй строго по этому регламенту!"
-    )
-    
-    return result
 
 
 def t_subtask_work(args):
@@ -926,7 +854,7 @@ def t_project_tasks(args):
     if not pid:
         return {"ошибка": "нужен project_id или project (название)"}
 
-    tasks = [t for t in as_tasks(api("GET", "/api/tasks?include_children=true")) if t.get("project_id") == pid]
+    tasks = [t for t in as_tasks(api("GET", "/api/tasks")) if t.get("project_id") == pid]
     if args.get("include_completed") is not True:
         tasks = [t for t in tasks if t.get("status") == "active"]
     state = (args.get("state") or "").strip()
@@ -942,15 +870,12 @@ def t_project_tasks(args):
 
 def t_create_task(args):
     body = {"title": args["title"]}
-    for key in ("description", "project_id", "parent_id", "assignee_id", "due_date", "priority"):
+    for key in ("description", "project_id", "assignee_id", "due_date", "priority"):
         if args.get(key) is not None:
             body[key] = args[key]
     if args.get("subtasks"):
         body["subtasks"] = args["subtasks"]
-    created = unwrap(api("POST", "/api/tasks", body))
-    if args.get("parent_id"):
-        send_activity(args["parent_id"], "edit", f"создал подзадачу: «{args['title']}»")
-    return {"задача создана": short(created)}
+    return {"задача создана": short(unwrap(api("POST", "/api/tasks", body)))}
 
 
 def t_create_project(args):
@@ -1066,29 +991,6 @@ TOOLS = [
         "description": "Взять задачу в работу (agent_state → in_progress). Дальше нужно продлевать аренду: срок 5 минут.",
         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
         "fn": t_claim,
-    },
-    {
-        "name": "taskflow_close",
-        "description": (
-            "Принять работу исполнителя и ЗАКРЫТЬ задачу (status=completed) "
-            "или ВЕРНУТЬ в работу (status=active). "
-            "Доступно ТОЛЬКО владельцу и оркестратору: сервер отдаёт 403, "
-            "если ключ исполнителя попытается закрыть карточку сам (29.08.2026, "
-            "задача be329d8e). Исполнитель сдаёт через taskflow_state state=review, "
-            "а приёмку делает оркестратор или владелец — этим инструментом."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "description": "id задачи"},
-                "status": {
-                    "type": "string",
-                    "description": 'completed (по умолчанию) — закрыть; active — вернуть в работу',
-                },
-            },
-            "required": ["id"],
-        },
-        "fn": t_close,
     },
     {
         "name": "taskflow_heartbeat",
@@ -1339,7 +1241,6 @@ TOOLS = [
                 "title": {"type": "string"},
                 "description": {"type": "string"},
                 "project_id": {"type": "string"},
-                "parent_id": {"type": "string", "description": "id родительской задачи, если это подзадача/делегированный кусок"},
                 "assignee_id": {"type": "string"},
                 "due_date": {"type": "string", "description": "ГГГГ-ММ-ДД"},
                 "priority": {"type": "integer", "description": "1 срочный … 4 низкий"},
