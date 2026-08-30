@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { snapshotFor } from "../activeAgent.js";
 import {
   getProjectForUser,
   getProjectForWrite,
@@ -297,10 +298,11 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   // Email is intentionally never selected: the frontend doesn't use it
   // (see src/screens/AgentsScreen.tsx, src/screens/TaskFormScreen.tsx).
   app.get("/api/agents", { preHandler: authPre }, async (req: any) => {
-    return db
+    const rows = db
       .prepare(
         `SELECT id, name, role, type, avatar_color, avatar_url,
                 avatar_url_working, avatar_url_blocked, initials, status,
+                last_seen_at,
                 -- «Живая» аватарка (27.08.2026): что сейчас держит агент как
                 -- исполнитель (assignee_id) — blocked приоритетнее working,
                 -- застрять важнее показать, чем «просто работает». NULL —
@@ -326,7 +328,25 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
               SELECT creator_id FROM tasks WHERE assignee_id = ? AND creator_id IS NOT NULL
             )`,
       )
-      .all(req.userId, req.userId, req.userId, req.userId);
+      .all(req.userId, req.userId, req.userId, req.userId) as Array<{
+        id: string;
+        last_seen_at: string | null;
+      }>;
+
+    // Отпечаток активности (29.08.2026, задача 31f2759e): в памяти
+    // лежит «когда агент последний раз стучался и что делал». SQL берёт
+    // last_seen_at как страховку (если процесс рестартовался, in-memory
+    // снимок пуст), а online/last_action приходят из живого модуля.
+    // Для людей модуль возвращает null — у них и так online не нужен.
+    return rows.map((row) => {
+      const snap = snapshotFor(row.id);
+      return {
+        ...row,
+        online: snap?.online ?? false,
+        last_action: snap?.lastAction ?? null,
+        last_action_title: snap?.lastActionTitle ?? null,
+      };
+    });
   });
 
   // ── Завести агента ── кнопка «Пригласить агента» на экране агентов.

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import db, { hashApiToken } from "./db.js";
 import { isOrchestrator } from "./access.js";
+import { touchActive } from "./activeAgent.js";
 
 /**
  * Оркестратору удаление запрещено — на любом объекте и любым способом.
@@ -165,6 +166,11 @@ export async function authOrApiToken(req: FastifyRequest, reply: FastifyReply) {
   if (userId) {
     if (deleteForbidden(req, reply, userId)) return reply;
     (req as any).userId = userId;
+    // Отпечаток активности (29.08.2026, задача 31f2759e): на каждый запрос
+    // агента обновляем «когда видели» и «что делает». Используется в
+    // GET /api/agents (online/last_action) и в WS-событиях активности.
+    // Не бросает — упавший отпечаток не должен ронять авторизацию.
+    touchActive(userId, req.method, req.url);
     return;
   }
   // Токена нет или он протух — из домашней сети пускаем владельцем, но
