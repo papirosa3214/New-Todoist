@@ -248,6 +248,17 @@ function AgentRow({
         <AgentAvatar agent={agent} />
         <div className="flex-1 min-w-0">
           <div className="text-[15px] text-text truncate">{agent.name}</div>
+          {/* Чем агент занят прямо сейчас (29.08.2026, 31f2759e).
+              Показываем только если онлайн: иначе «работает» означало бы
+              последнее действие, которое могло быть вчера. last_action +
+              last_action_title идут вместе: «читает задачу "Время в
+              трекере отстаёт на три часа"». */}
+          {agent.online && agent.last_action ? (
+            <div className="text-[12px] text-sub truncate mt-0.5">
+              {agent.last_action}
+              {agent.last_action_title ? ` «${agent.last_action_title}»` : ""}
+            </div>
+          ) : null}
         </div>
         <span
           className="text-[12px] font-medium px-2 py-0.5 rounded text-white shrink-0"
@@ -265,12 +276,24 @@ function AgentRow({
           {roleLabel(agent.role)}
         </span>
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Живой индикатор «онлайн» теперь опирается на agent.online —
+              вычисляется сервером из lastSeenAt (29.08.2026, 31f2759e),
+              а не на agent.status, который у агента без сокета всегда
+              'offline' и соврёт. */}
           <div
-            className={`w-[7px] h-[7px] rounded-full ${agent.status === "online" ? "bg-green" : "bg-dim"}`}
+            className={`w-[7px] h-[7px] rounded-full ${agent.online ? "bg-green" : "bg-dim"}`}
           />
           <span className="text-[12px] text-sub">
-            {agent.status === "online" ? "Онлайн" : "Офлайн"}
+            {agent.online ? "Онлайн" : "Офлайн"}
           </span>
+          {/* Limits display */}
+          {agent.limits ? (
+            <span className="ml-2 text-[11px] text-sub">
+              Остаток: {agent.limits.remaining ?? "неизвестно"}
+            </span>
+          ) : (
+            <span className="ml-2 text-[11px] text-sub">без лимита</span>
+          )}
         </div>
       </div>
     </div>

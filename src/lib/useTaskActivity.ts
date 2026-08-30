@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { onTaskActivity, type TaskActivityEvent } from "../api/ws";
 import { explainAction } from "./localLLM";
+import { LocalNotifications } from "@capacitor/local-notifications";
 
 /** Пауза между вызовами модели. Было 10 с «бережём батарею», но модель
  *  зовётся только при ОТКРЫТОЙ карточке (см. active) — Максим 26.08.2026:
@@ -22,14 +23,41 @@ export const EXPLAIN_EVERY_MS = 5_000;
  * она начнёт выдумывать по имени файла, и это будет ХУЖЕ честной строки от
  * сервера.
  */
+/** Что функция реально читает из события — kind/diff (для правок) и
+ *  text (опционально: только для распознавания state-change по словам
+ *  «review/blocked/...»; правки без text идут по kind/diff ветке).
+ *  Полный TaskActivityEvent строже, чем нужно: тесты гоняют shouldExplain
+ *  на минимальных {kind, diff}, без task_id/actor_name/at/text, которые
+ *  для логики «звать ли модель» не нужны. */
+interface ShouldExplainEvent {
+  kind?: TaskActivityEvent["kind"];
+  diff?: TaskActivityEvent["diff"];
+  text?: TaskActivityEvent["text"];
+}
+
 export function shouldExplain(
-  event: { kind?: string; diff?: string },
+  event: ShouldExplainEvent,
   lastAt: number,
   now: number,
 ): boolean {
-  if (event.kind !== "edit") return false;
-  if (!event.diff || event.diff.trim().length < 10) return false;
-  return now - lastAt >= EXPLAIN_EVERY_MS;
+  // text опционален — функция дёргается и на минимальных событиях без
+  // строки (правки приходят только с kind/diff), и на полных, где есть
+  // строка для распознавания state-change по словам.
+  const text = event.text ?? "";
+  const isStateChange =
+    text.includes("review") ||
+    text.includes("blocked") ||
+    text.toLowerCase().includes("проверк") ||
+    text.toLowerCase().includes("ошибк") ||
+    text.toLowerCase().includes("заблокирован");
+
+  if (!isStateChange) {
+    if (event.kind !== "edit") return false;
+    if (!event.diff || event.diff.trim().length < 10) return false;
+    if (now - lastAt < EXPLAIN_EVERY_MS) return false;
+  }
+
+  return true;
 }
 
 /** Что скармливаем модели: действие плюс сам кусок правки. */
@@ -145,9 +173,30 @@ export function useTaskActivity(
       lastExplainAt.current = Date.now();
       void explainAction(explainInput(event), stepOf(event.text)).then((phrase) => {
         if (cancelled || !phrase) return;
+
+        let cleanPhrase = phrase;
+        const notifyMatch = cleanPhrase.match(/\[NOTIFY:\s*(.+?)\]/);
+        if (notifyMatch) {
+          const notifyMessage = notifyMatch[1];
+          cleanPhrase = cleanPhrase.replace(notifyMatch[0], '').trim();
+          void LocalNotifications.requestPermissions().then((perm) => {
+            if (perm.display === 'granted') {
+              void LocalNotifications.schedule({
+                notifications: [{
+                  title: "TaskFlow: Внимание",
+                  body: notifyMessage,
+                  id: Date.now(),
+                }]
+              });
+            }
+          });
+        }
+
+        if (!cleanPhrase) return;
+
         setState((prev) =>
           prev.at === event.at
-            ? { ...prev, text: mergeExplained(event.text, phrase) }
+            ? { ...prev, text: mergeExplained(event.text, cleanPhrase) }
             : prev,
         );
       });

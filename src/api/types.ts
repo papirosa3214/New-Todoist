@@ -22,6 +22,17 @@ export interface ApiUser {
   activity?: "working" | "blocked" | null;
   initials: string;
   status: string;
+  // Признаки жизни агента. Сервер считает по запросам к authOrApiToken
+  // и кладёт в users.last_seen_at / в память (activeAgent.ts). online —
+  // «запрос был в последнюю минуту», last_action — что именно делает,
+  // last_action_title — название задачи, к которой обращение (для подписи
+  // в UI). limits — лимиты агента, если есть. Отдаются только в
+  // GET /api/agents, остальные ответы их не включают.
+  online?: boolean;
+  last_seen_at?: string | null;
+  last_action?: string;
+  last_action_title?: string;
+  limits?: { remaining?: number | string } | null;
 }
 
 export interface ApiLabel {

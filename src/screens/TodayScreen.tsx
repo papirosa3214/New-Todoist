@@ -5,7 +5,7 @@ import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
-import { isTaskOwner, isAgentAssignedTask } from "../lib/taskOwner";
+import { isAgentAssignedTask, isWaitingForUser, waitingBlockedFirst } from "../lib/taskOwner";
 import { useAgents } from "../api/agents";
 import {
   todayStr,
@@ -24,6 +24,7 @@ import {
   TaskFilterButton,
   TaskFilterSheet,
 } from "../components/TaskFilterSheet";
+import { PlannerProjectChips } from "../components/PlannerProjectChips";
 import {
   DEFAULT_TASK_FILTERS,
   filterTasks,
@@ -86,30 +87,29 @@ export function TodayScreen() {
   const menuAnchorRef = useRef<HTMLButtonElement>(null);
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
-  // 25.08.2026: персистентный выбор видимых проектов (store), отдельно от
-  // ephemeral filters выше — секция «Показывать в разделе» в TaskFilterSheet.
-  const hiddenPlannerProjects = useAppStore(
-    (s) => s.hiddenDailyPlannerProjects,
-  );
-  const toggleDailyPlannerProjectHidden = useAppStore(
-    (s) => s.toggleDailyPlannerProjectHidden,
-  );
-  const hiddenPlannerProjectCount = useMemo(
-    () => projects.filter((p) => hiddenPlannerProjects[p.id]).length,
-    [projects, hiddenPlannerProjects],
+
+  // Шаг 2 (feature/projects-decouple-planner-merge): opt-in список
+  // проектов для ежедневника. Семантика «включить проект в раздел».
+  // По умолчанию {} — пустой выбор = только входящие (как в Шаге 1).
+  // Чтобы добавить проект в ежедневник, пользователь тапает [+] в
+  // полоске чипов (PlannerProjectChips) и выбирает в picker внутри
+  // TaskFilterSheet. Раннее поле hiddenDailyPlannerProjects (Шаг 0,
+  // до Шага 1) имело противоположную семантику и удалено в Шаге 3.
+  const visibleProjectIds = useAppStore((s) => s.plannerVisibleProjects);
+  const togglePlannerVisibleProject = useAppStore(
+    (s) => s.togglePlannerVisibleProject,
   );
 
   // Отфильтрованный по видимым проектам универсум задач — источник для
   // всего экрана (список/доска/сетка часов) ниже. Задачи без project_id
-  // (Входящие) не трогаем: скрыть проект нечем, если у задачи его нет.
+  // (Входящие) присутствуют всегда; проектные задачи попадают, только
+  // если пользователь явно opt-in'нул проект в picker'е.
   const plannerTasks = useMemo(
     () =>
-      hiddenPlannerProjectCount === 0
-        ? allTasks
-        : allTasks.filter(
-            (t) => !t.project_id || !hiddenPlannerProjects[t.project_id],
-          ),
-    [allTasks, hiddenPlannerProjects, hiddenPlannerProjectCount],
+      allTasks.filter(
+        (t) => !t.project_id || !!visibleProjectIds[t.project_id],
+      ),
+    [allTasks, visibleProjectIds],
   );
 
   // Single source for "просрочено vs. сегодня" — shared by both layouts
@@ -134,40 +134,29 @@ export function TodayScreen() {
   const waitingTasksAll = useMemo(() => {
     if (!currentUser) return [];
     return plannerTasks
-      .filter(
-        (t) =>
-          t.status === "active" &&
-          // Владелец трекера принимает и то, что агент завёл сам, —
-          // см. lib/taskOwner.ts (правило по роли, 18.08.2026).
-          isTaskOwner(currentUser, t) &&
-          (t.agent_state === "blocked" || t.agent_state === "review"),
-      )
-      .sort((a, b) => {
-        const rank = (t: ApiTask) => (t.agent_state === "blocked" ? 0 : 1);
-        return rank(a) - rank(b);
-      });
+      .filter((t) => isWaitingForUser(t, currentUser))
+      .sort(waitingBlockedFirst);
   }, [plannerTasks, currentUser]);
 
-  // Filter options built from the full pre-filter screen universe (every
-  // task that could ever appear here across all three blocks) — same rule
-  // as Inbox/ActivityScreen. The three raw arrays overlap (a waiting task
-  // can also be overdue) but build*Options dedups by id/project/label
-  // internally, so a plain concat is enough.
-  const screenTaskUniverse = useMemo(
-    () => [...waitingTasksAll, ...rawOverdueAll, ...rawTodayAll],
-    [waitingTasksAll, rawOverdueAll, rawTodayAll],
-  );
+  // «…All» raw sets (waiting/overdue/today) уже вычислены от
+  // plannerTasks выше — они и есть «экран»: рендер строк списка/доски
+  // и счётчики в заголовках. screenTaskUniverse, который тут раньше
+  // жил как concat трёх …All, ушёл вместе с фиксом блокера 2
+  // (*FilterOptions теперь берутся из полного optionUniverse, чтобы
+  // секции «Проект»/«Метка»/«Исполнитель» в шторке фильтра не
+  // ограничивались текущим подмножеством видимых).
+  const optionUniverse = useMemo(() => allTasks, [allTasks]);
   const projectFilterOptions = useMemo(
-    () => buildProjectOptions(screenTaskUniverse),
-    [screenTaskUniverse],
+    () => buildProjectOptions(optionUniverse),
+    [optionUniverse],
   );
   const labelFilterOptions = useMemo(
-    () => buildLabelOptions(screenTaskUniverse),
-    [screenTaskUniverse],
+    () => buildLabelOptions(optionUniverse),
+    [optionUniverse],
   );
   const assigneeFilterOptions = useMemo(
-    () => buildAssigneeOptions(screenTaskUniverse),
-    [screenTaskUniverse],
+    () => buildAssigneeOptions(optionUniverse),
+    [optionUniverse],
   );
 
   // Дедуп по приоритету блока: «Ждут вас» → «Просрочено» → «Сегодня». Одна
@@ -266,20 +255,37 @@ export function TodayScreen() {
   // due today, not that a filter is hiding everything. filteredEmpty is
   // the new, lighter case — something's due, the current filter just
   // doesn't match any of it.
-  // 25.08.2026: hiddenPlannerProjectCount === 0 — те самые "…All" множества
-  // выше уже посчитаны от plannerTasks (после выбора видимых проектов), а
-  // не от allTasks. Пока хоть один проект скрыт, им нельзя верить как
-  // "искренне пусто" — задачи вполне могут быть, просто их проект спрятан.
-  // В этом случае экран падает в ветку filteredEmpty ниже вместо большой
-  // иллюстрации «ничего на сегодня».
+  // Шаг 1 (фикс): trueEmpty теперь опирается на «искренние» множества от
+  // allTasks целиком, а не на plannerTasks. До Шага 1 plannerTasks = всё
+  // минус скрытые проекты, и условие hiddenPlannerProjectCount === 0
+  // защищало иллюстрацию «ничего на сегодня» от случая «у пользователя
+  // есть задачи в скрытых проектах, мы их не видим — рисовать пустой
+  // экран было бы ложью». После Шага 1 plannerTasks = только входящие
+  // плюс (если что-то скрыто) видимые проекты — то есть проектные
+  // задачи в принципе не попадают в источник. Условие
+  // hiddenPlannerProjectCount === 0 утратило смысл как маркер
+  // «показываем всё», а «plannerTasks пуст» больше не равно «у юзера
+  // ничего нет». Поэтому для trueEmpty берём полный allTasks,
+  // отфильтрованный только по дате/agent_state — этот счётчик отвечает
+  // на вопрос «у пользователя вообще есть хоть одна задача, достойная
+  // ежедневника», независимо от того, в проекте она или нет.
+  const { overdue: trueOverdueAll, todayTasks: trueTodayAll } = useMemo(
+    () => partitionOverdueToday(allTasks, today),
+    [allTasks, today],
+  );
+  const trueWaitingAll = useMemo(() => {
+    if (!currentUser) return [];
+    return allTasks
+      .filter((t) => isWaitingForUser(t, currentUser))
+      .sort(waitingBlockedFirst);
+  }, [allTasks, currentUser]);
   const trueEmpty =
     !isLoading &&
     !isLoadingUser &&
     !isError &&
-    hiddenPlannerProjectCount === 0 &&
-    waitingTasksAll.length === 0 &&
-    rawOverdueAll.length === 0 &&
-    rawTodayAll.length === 0;
+    trueWaitingAll.length === 0 &&
+    trueOverdueAll.length === 0 &&
+    trueTodayAll.length === 0;
   const filteredEmpty =
     !trueEmpty &&
     !isLoading &&
@@ -548,6 +554,15 @@ export function TodayScreen() {
   return (
     <div className="px-4 pb-4">
       {header}
+      {/* Шаг 2: полоска чипов под шапкой. Показывает текущий выбор
+          проектов + [+] для добавления через picker в TaskFilterSheet.
+          Скрыта на иллюстрации «ничего на сегодня» — там выше early
+          return, сюда поток не доходит. */}
+      <PlannerProjectChips
+        projects={projects}
+        visibleProjectIds={visibleProjectIds}
+        onAdd={() => setFilterSheetOpen(true)}
+      />
       {isLoading && <Loading />}
       <ErrorBanner
         error={error}
@@ -705,8 +720,12 @@ export function TodayScreen() {
         assigneeOptions={assigneeFilterOptions}
         plannerProjects={{
           projects,
-          hiddenProjectIds: hiddenPlannerProjects,
-          onToggle: toggleDailyPlannerProjectHidden,
+          visibleProjectIds,
+          onToggle: togglePlannerVisibleProject,
+          // Шаг 2: при тапе по [+] в PlannerProjectChips шторка
+          // открывается сразу с раскрытой секцией «Показывать в
+          // разделе», чтобы пользователь не делал лишний клик.
+          defaultOpenSection: "planner",
         }}
       />
     </div>
