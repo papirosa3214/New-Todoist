@@ -145,6 +145,11 @@ export function TaskFilterSheet({
     projects: ApiProject[];
     hiddenProjectIds: Record<string, boolean>;
     onToggle: (projectId: string) => void;
+    // Шаг 1 (feature/projects-decouple-planner-merge): при true свитчеры
+    // в секции «Показывать в разделе» остаются видимыми, но заморожены.
+    // Применяется на TodayScreen, пока не появится opt-in переключатель
+    // режимов (Шаг 2).
+    disabled?: boolean;
   };
 }) {
   const [openSection, setOpenSection] = useState<string | null>(null);
@@ -406,25 +411,40 @@ export function TaskFilterSheet({
               {openSection === "planner" && (
                 <div className="border-t border-stroke">
                   <div className="px-4 pt-2.5 pb-1 text-[12px] text-dim">
-                    Выключенные проекты не появятся в этом разделе, пока не
-                    включишь обратно. На другие разделы не влияет.
+                    {plannerProjects.disabled
+                      ? "Шаг 1: раздел «Сегодня» показывает только задачи без проекта. Переключатель режимов появится позже."
+                      : "Выключенные проекты не появятся в этом разделе, пока не включишь обратно. На другие разделы не влияет."}
                   </div>
                   {plannerProjects.projects.map((p) => {
                     const hidden = !!plannerProjects.hiddenProjectIds[p.id];
+                    const isDisabled = !!plannerProjects.disabled;
                     return (
                       <button
                         key={p.id}
-                        onClick={() => plannerProjects.onToggle(p.id)}
+                        onClick={() => {
+                          if (isDisabled) return;
+                          plannerProjects.onToggle(p.id);
+                        }}
                         role="switch"
                         aria-checked={!hidden}
-                        className="tap-row w-full flex items-center gap-3 py-2.5 px-4 text-left"
+                        disabled={isDisabled}
+                        aria-disabled={isDisabled}
+                        className={
+                          "tap-row w-full flex items-center gap-3 py-2.5 px-4 text-left" +
+                          (isDisabled ? " opacity-40 cursor-not-allowed" : "")
+                        }
                       >
                         <Icon
                           name="hash"
                           size={16}
                           style={{ color: p.color }}
                         />
-                        <span className="text-[14px] text-text flex-1 truncate">
+                        <span
+                          className={
+                            "text-[14px] flex-1 truncate " +
+                            (isDisabled ? "text-sub" : "text-text")
+                          }
+                        >
                           {p.name}
                         </span>
                         <span

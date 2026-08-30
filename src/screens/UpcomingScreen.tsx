@@ -220,7 +220,13 @@ export function UpcomingScreen() {
     () =>
       allTasks.filter(
         (t) =>
-          !isAgentAssignedTask(t, agents) && t.due_date && t.due_date >= today,
+          !isAgentAssignedTask(t, agents) &&
+          t.due_date &&
+          t.due_date >= today &&
+          // Шаг 1: «Предстоящее» = по умолчанию только задачи без проекта
+          // (симметрично с TodayScreen.plannerTasks). Проектные задачи
+          // доступны только из своего проекта.
+          !t.project_id,
       ),
     [allTasks, agents, today],
   );

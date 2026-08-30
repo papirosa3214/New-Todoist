@@ -104,11 +104,20 @@ export function TodayScreen() {
   // (Входящие) не трогаем: скрыть проект нечем, если у задачи его нет.
   const plannerTasks = useMemo(
     () =>
-      hiddenPlannerProjectCount === 0
-        ? allTasks
-        : allTasks.filter(
-            (t) => !t.project_id || !hiddenPlannerProjects[t.project_id],
-          ),
+      allTasks.filter(
+        (t) =>
+          // Шаг 1 (feature/projects-decouple-planner-merge): ежедневник по
+          // умолчанию = только задачи без проекта («Входящие»). Проектные
+          // задачи живут внутри своего проекта и в ежедневник не идут.
+          // hiddenDailyPlannerProjects из стора сохранён и учитывается:
+          // если пользователь раньше что-то скрыл, мы это уважаем. Если
+          // хоть один проект сейчас «не скрыт» (hiddenPlannerProjectCount
+          // ровно 0 — фильтр выключен), проектные задачи всё равно не
+          // пускаем: иначе старый дефолт «показывать всё» вернётся.
+          !t.project_id ||
+          (hiddenPlannerProjectCount > 0 &&
+            !hiddenPlannerProjects[t.project_id]),
+      ),
     [allTasks, hiddenPlannerProjects, hiddenPlannerProjectCount],
   );
 
@@ -707,6 +716,9 @@ export function TodayScreen() {
           projects,
           hiddenProjectIds: hiddenPlannerProjects,
           onToggle: toggleDailyPlannerProjectHidden,
+          // Шаг 1: секция «Показывать в разделе» рисуется, но свитчеры
+          // заморожены — opt-in ещё не завезён (это Шаг 2).
+          disabled: true,
         }}
       />
     </div>
