@@ -104,6 +104,30 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
+  // Передаём выбранный AI Мозг (local, claude, hermes, antigravity, deepseek) и модель
+  if (path.includes("/ai/") || path.includes("suggest-subtasks")) {
+    try {
+      const state = JSON.parse(localStorage.getItem("taskflow-ui") || "{}");
+      const provider = state?.state?.aiProvider || "local";
+      // 25.08.2026: coder30b-abl:latest роняет Ollama CUDA-ошибкой на любом
+      // реальном промпте (см. server/src/routes/ai.ts) — дефолт сменён.
+      const localModel =
+        state?.state?.localOllamaModel || "qwen3.6-27b-iq4-16k:latest";
+      const antigravityModel =
+        state?.state?.antigravityModel || "gemini-3.7-flash-high";
+      const claudeModel = state?.state?.claudeModel || "claude-3-7-sonnet";
+      const hermesModel = state?.state?.hermesModel || "nous-hermes-3-405b";
+      const deepseekModel = state?.state?.deepseekModel || "deepseek-r1";
+
+      headers["x-ai-provider"] = provider;
+      headers["x-ollama-model"] = localModel;
+      if (provider === "antigravity") headers["x-ai-model"] = antigravityModel;
+      else if (provider === "claude") headers["x-ai-model"] = claudeModel;
+      else if (provider === "hermes") headers["x-ai-model"] = hermesModel;
+      else if (provider === "deepseek") headers["x-ai-model"] = deepseekModel;
+    } catch {}
+  }
+
   const res = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
   const body = await parseBody(res);
 

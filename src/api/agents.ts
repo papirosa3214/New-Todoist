@@ -30,6 +30,30 @@ export function useCreateAgent() {
   });
 }
 
+// Переименовать агента (карандаш на строке в «Команде»). Только владелец —
+// сервер и так это проверит (403), но кнопку владелец видит только у себя,
+// см. AgentsScreen.tsx.
+export function useRenameAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      api.patch<{ agent: ApiUser }>(`/api/agents/${id}`, { name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
+  });
+}
+
+// Удалить агента (корзина на той же строке). Сервер отказывает 403 на
+// системных ботов (Claude_Bot/Hermes/DeepSeek-Agent — зашиты в конвейер) и
+// 409, если за агентом остались задачи/комментарии — тогда сначала их
+// нужно переназначить или удалить самому.
+export function useDeleteAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<{ ok: true }>(`/api/agents/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agents"] }),
+  });
+}
+
 /** Состояние службы-будильника: включён ли автономный режим. */
 export interface AgentServiceState {
   /** Служба работает прямо сейчас. */

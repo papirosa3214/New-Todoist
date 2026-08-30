@@ -12,6 +12,16 @@
 // Отсюда три круга, а не один:
 //
 //   role='owner'  — владелец трекера. Читает и меняет что угодно.
+//   role='orchestrator'
+//                 — оркестратор: ведёт работу ботов. Читает и правит любые
+//                   проекты и задачи, назначает исполнителей, заводит
+//                   подзадачи — как владелец, но БЕЗ права удаления
+//                   (задача af2107b2, 28.08.2026). Запрет на удаление
+//                   стоит одной дверью в authOrApiToken (auth.ts) и
+//                   накрывает все DELETE разом; поэтому здесь, в access.ts,
+//                   оркестратору расширены только чтение и правка, а
+//                   функции поиска «что можно удалить» оставлены как были —
+//                   два слоя говорят одно и то же.
 //   type='ai'     — агент. Заводится ТОЛЬКО владельцем (POST /api/agents),
 //                   регистрация такую учётку выдать не может (auth.ts).
 //                   Читает всё, меняет лишь то, что создал сам или что ему
@@ -38,6 +48,18 @@ function callerOf(userId: string): Caller | undefined {
 /** Владелец трекера — карт-бланш на чтение и на правку. */
 export function isOwner(userId: string): boolean {
   return callerOf(userId)?.role === "owner";
+}
+
+/**
+ * Оркестратор — распорядитель работы ботов.
+ *
+ * Читает и правит что угодно наравне с владельцем, но не удаляет ничего:
+ * он раздаёт и переставляет работу, а решение «этого больше не нужно»
+ * остаётся за человеком. Отказ выдаётся раньше роутов — в authOrApiToken
+ * (auth.ts), на любой DELETE.
+ */
+export function isOrchestrator(userId: string): boolean {
+  return callerOf(userId)?.role === "orchestrator";
 }
 
 /**
@@ -70,7 +92,7 @@ export function ownerForNewShared(userId: string): string {
  */
 export function seesEveryTask(userId: string): boolean {
   const c = callerOf(userId);
-  return c?.role === "owner" || c?.type === "ai";
+  return c?.role === "owner" || c?.role === "orchestrator" || c?.type === "ai";
 }
 
 /**
@@ -92,7 +114,11 @@ export function visibleScope(
   ownerColumn: string,
 ): { sql: string; params: any[] } {
   const caller = callerOf(userId);
-  if (caller?.role === "owner") return { sql: "1 = 1", params: [] };
+  if (caller?.role === "owner" || caller?.role === "orchestrator") {
+    // Оркестратор распоряжается ЧУЖИМИ проектами, значит и в списке обязан
+    // видеть все — иначе распорядиться нечем.
+    return { sql: "1 = 1", params: [] };
+  }
   if (caller?.type === "ai") {
     // Именно владельцы (role='owner'), а не «любой человек»: регистрация
     // открыта, и по «type != 'ai'» агент видел бы справочники случайного
@@ -134,15 +160,20 @@ export function getTaskForRead(
  * Задача для ПРАВКИ (поля, состояние работы, подзадачи, комментарии,
  * вложения).
  *
- * Владелец — любая. Агент — только своя: создал сам или назначена ему.
- * Это и есть «назначен не ты — туда не лезть»: чужая задача агенту видна,
- * но неизменяема.
+ * Владелец и оркестратор — любая. Агент — только своя: создал сам или
+ * назначена ему. Это и есть «назначен не ты — туда не лезть»: чужая задача
+ * агенту видна, но неизменяема.
+ *
+ * Оркестратор идёт здесь вместе с владельцем осознанно: переназначить
+ * исполнителя, поправить формулировку и добавить шаг в ЧУЖУЮ задачу — это
+ * и есть его работа (задача af2107b2). Удаления это ему не открывает:
+ * DELETE отсекается в authOrApiToken до любого роута.
  */
 export function getTaskForWrite(
   taskId: string,
   userId: string,
 ): any | undefined {
-  if (isOwner(userId)) return taskById().get(taskId);
+  if (isOwner(userId) || isOrchestrator(userId)) return taskById().get(taskId);
 
   const caller = callerOf(userId);
   if (caller?.type === "ai") {
@@ -177,7 +208,12 @@ export function getTaskForOwnerDelete(
     .get(taskId, userId);
 }
 
-/** Проект для правки/удаления: владельцу — любой, остальным — свой. */
+/**
+ * Проект для УДАЛЕНИЯ: владельцу — любой, остальным — свой.
+ *
+ * Оркестратор сюда намеренно не добавлен: удалять он не вправе вовсе, и
+ * пусть это видно и здесь, а не только в общей двери authOrApiToken.
+ */
 export function getProjectForUser(
   projectId: string,
   userId: string,
@@ -188,6 +224,17 @@ export function getProjectForUser(
   return db
     .prepare("SELECT * FROM projects WHERE id = ? AND owner_id = ?")
     .get(projectId, userId);
+}
+
+/** Проект для ПРАВКИ: то же самое плюс оркестратор, которому доступен любой. */
+export function getProjectForWrite(
+  projectId: string,
+  userId: string,
+): any | undefined {
+  if (isOrchestrator(userId)) {
+    return db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId);
+  }
+  return getProjectForUser(projectId, userId);
 }
 
 /**
@@ -208,8 +255,10 @@ export function getProjectForFiling(
   userId: string,
   assigneeId: string | null | undefined,
 ): any | undefined {
-  const own = getProjectForUser(projectId, userId);
-  if (own) return own;
+  // Оркестратор кладёт задачу в любой существующий проект: он раздаёт
+  // работу ботам по всей доске, а не ведёт свой угол.
+  const forWrite = getProjectForWrite(projectId, userId);
+  if (forWrite) return forWrite;
 
   const caller = callerOf(userId);
   if (caller?.type !== "ai") return undefined;

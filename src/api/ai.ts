@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import { suggestSubtasksOnDevice } from "../lib/localAI";
 
@@ -67,5 +67,111 @@ export function useSuggestSubtasksForDraft() {
       );
       return { ...server, source: "server" };
     },
+  });
+}
+
+export interface StructuredTask {
+  title: string;
+  description: string;
+  subtasks: string[];
+  dueDate: string | null;
+  priority: number;
+}
+
+export function useStructureTaskWithAI() {
+  return useMutation({
+    mutationFn: async (text: string): Promise<StructuredTask> => {
+      return await api.post<StructuredTask>("/api/ai/structure-task", { text });
+    },
+  });
+}
+
+export interface WeeklySummary {
+  greeting: string;
+  accomplishments: string[];
+  missed_or_overdue: string[];
+  next_week_focus: string[];
+  productivity_score: number;
+  stats: {
+    completed_count: number;
+    overdue_count: number;
+    active_count: number;
+  };
+  generated_at: string;
+}
+
+export function useWeeklySummary() {
+  return useQuery({
+    queryKey: ["weekly-summary"],
+    queryFn: async (): Promise<WeeklySummary> => {
+      return await api.get<WeeklySummary>("/api/ai/weekly-summary");
+    },
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
+export function useRefreshWeeklySummary() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<WeeklySummary> => {
+      return await api.post<WeeklySummary>("/api/ai/weekly-summary/refresh");
+    },
+    onSuccess: (data) => {
+      qc.setQueryData(["weekly-summary"], data);
+    },
+  });
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  size: number;
+  details?: {
+    family?: string;
+    parameter_size?: string;
+    quantization_level?: string;
+  };
+}
+
+// ═══════════ Дневник: AI-действия + мост в задачи ═══════════
+export type JournalAssistAction = "continue" | "shorten" | "expand";
+
+export function useJournalAssist() {
+  return useMutation({
+    mutationFn: async (body: {
+      text: string;
+      action: JournalAssistAction;
+    }): Promise<{ result: string }> => {
+      return await api.post<{ result: string }>("/api/ai/journal-assist", body);
+    },
+  });
+}
+
+export interface ExtractedTask {
+  title: string;
+  description: string;
+  priority: number;
+  due_date: string | null;
+}
+
+export function useExtractTasksFromText() {
+  return useMutation({
+    mutationFn: async (text: string): Promise<{ tasks: ExtractedTask[] }> => {
+      return await api.post<{ tasks: ExtractedTask[] }>(
+        "/api/ai/extract-tasks",
+        { text },
+      );
+    },
+  });
+}
+
+export function useLocalOllamaModels() {
+  return useQuery({
+    queryKey: ["local-ollama-models"],
+    queryFn: async (): Promise<{ models: OllamaModelInfo[] }> => {
+      return await api.get<{ models: OllamaModelInfo[] }>(
+        "/api/ai/local-models",
+      );
+    },
+    staleTime: 60 * 1000,
   });
 }

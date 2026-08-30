@@ -11,7 +11,7 @@
 import { useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTasks } from "../api/tasks";
-import { ScreenHeader, ErrorBanner, Loading, BackButton } from "../components/UI";
+import { ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { TaskRow } from "../components/TaskRow";
 
 export function AgentWorkScreen() {
@@ -85,7 +85,6 @@ export function AgentWorkScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Работа агентов"
       />
 

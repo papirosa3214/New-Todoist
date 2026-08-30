@@ -20,6 +20,16 @@ public struct TaskActivityAttributes: ActivityAttributes {
     public var projectName: String?        // Проект
     public var projectColor: String?       // Hex color: "#E44235"
     public var updatedAt: Date
+    // Короткое имя картинки участника в ассетах расширения (avatar-claude и
+    // т.п.). Сети у Live Activity нет вообще — картинку по ссылке не забрать,
+    // поэтому в островок кладутся заранее ужатые файлы, а сюда приходит только
+    // имя. Пусто или незнакомое имя — рисуется буква, как раньше.
+    public var assigneeSlug: String?
+    // С какого момента идёт работа: по нему островок сам крутит счётчик
+    // времени. Крутящихся значков в Live Activity не бывает (Apple режет
+    // анимации двумя секундами), а бегущее время — официально поддержанный
+    // способ показать, что процесс живой.
+    public var startedAt: Date
 
     public init(
       status: String = "in_progress",
@@ -34,7 +44,9 @@ public struct TaskActivityAttributes: ActivityAttributes {
       taskTitle: String = "Задача",
       projectName: String? = nil,
       projectColor: String? = nil,
-      updatedAt: Date = Date()
+      updatedAt: Date = Date(),
+      assigneeSlug: String? = nil,
+      startedAt: Date = Date()
     ) {
       self.status = status
       self.statusLabel = statusLabel
@@ -49,6 +61,8 @@ public struct TaskActivityAttributes: ActivityAttributes {
       self.projectName = projectName
       self.projectColor = projectColor
       self.updatedAt = updatedAt
+      self.assigneeSlug = assigneeSlug
+      self.startedAt = startedAt
     }
   }
 

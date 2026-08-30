@@ -2,7 +2,7 @@
 // Kept snake_case on purpose — this is what the API returns, and screens
 // consume it directly. No camelCase mapping layer.
 
-export type Role = "owner" | "agent" | "viewer";
+export type Role = "owner" | "agent" | "viewer" | "orchestrator";
 export type UserType = "human" | "ai";
 
 export interface ApiUser {
@@ -13,8 +13,25 @@ export interface ApiUser {
   type: UserType;
   avatar_color: string;
   avatar_url?: string | null;
+  // «Живая» аватарка (27.08.2026) — необязательные варианты и вычисленное
+  // сервером текущее состояние (GET /api/agents). Приходят только там,
+  // остальные ответы (задачи, комментарии) их не отдают — там достаточно
+  // дефолтной avatar_url.
+  avatar_url_working?: string | null;
+  avatar_url_blocked?: string | null;
+  activity?: "working" | "blocked" | null;
   initials: string;
   status: string;
+  limits?: any;
+  // Признаки жизни агента (29.08.2026, 31f2759e). Сервер считает их
+  // по запросам к authOrApiToken и кладёт в users.last_seen_at / в
+  // память (activeAgent.ts). online — «запрос был в последнюю минуту»,
+  // last_action — что именно делает, last_action_title — название
+  // задачи, к которой обращение (для подписи UI).
+  online?: boolean;
+  last_seen_at?: string | null;
+  last_action?: string;
+  last_action_title?: string;
 }
 
 export interface ApiLabel {
@@ -68,6 +85,72 @@ export interface ApiComment {
   user_initials?: string | null;
   /** Приложенные файлы — приходят вместе с задачей (GET /api/tasks/:id). */
   attachments?: ApiAttachment[];
+}
+
+// Чат агентов (server/src/routes/chat.ts): общий канал, to_user_id — адресный
+// намёк (кого будить), не приватное ЛС — остальные видят сообщение тоже.
+/** Канал сообщения (28.08.2026): «owner» — разговор владельца с
+    оркестратором, «agents» — рабочая переписка исполнителей. Проставляет
+    сервер по ролям отправителя и адресата, клиент его не выбирает. */
+export type ChatChannel = "owner" | "agents";
+
+export interface ApiChatMessage {
+  id: string;
+  channel: ChatChannel;
+  from_user_id: string;
+  to_user_id: string | null;
+  task_id: string | null;
+  kind: "совещание" | "делегирование" | "находка" | null;
+  text: string;
+  created_at: string;
+  from_user_name?: string | null;
+  from_user_color?: string | null;
+  from_user_avatar_url?: string | null;
+  from_user_initials?: string | null;
+  /** Имя адресата. Пусто при to_user_id = null — это сообщение всей ленте
+      («всем»), с 28.08.2026 такой же ЯВНЫЙ выбор, как и любой другой. */
+  to_user_name?: string | null;
+  to_user_color?: string | null;
+  task_title?: string | null;
+  /** Приложенные файлы. Приезжают вместе с сообщением — и в истории, и в
+      живой рассылке по сокету, чтобы пузырь не дорисовывал скрепку позже. */
+  attachments?: ApiChatAttachment[];
+}
+
+/** Сводка «кто кого озадачивает» (28.08.2026). Ключи русские — как у
+    остальных счётчиков сервера (ср. «непрочитано»). */
+export interface ApiChatStats {
+  всего: number;
+  кому: Array<{ id: string | null; имя: string; сообщений: number }>;
+  от_кого: Array<{ id: string; имя: string; сообщений: number }>;
+  пары: Array<{
+    от_id: string;
+    от: string;
+    кому_id: string | null;
+    кому: string;
+    сообщений: number;
+  }>;
+}
+
+/** Вложение сообщения чата — только то, что нужно пузырю. Полный
+    ApiAttachment сюда не тянем: comment_id и created_at здесь бессмысленны. */
+export interface ApiChatAttachment {
+  id: string;
+  file_name: string;
+  mime: string;
+  size: number;
+}
+
+export interface ApiChatParticipant {
+  id: string;
+  name: string;
+  type: string;
+  /** Роль нужна экрану, чтобы найти оркестратора: в канале владельца он
+      единственный собеседник, и адресат там не выбирается, а показывается. */
+  role?: Role;
+  avatar_color?: string | null;
+  avatar_url?: string | null;
+  initials?: string | null;
 }
 
 // tasks.agent_state / tasks.agent_heartbeat_at — see AGENT-PROTOCOL.md and
@@ -132,6 +215,10 @@ export interface ApiTask {
   // on every read (server/src/agentState.ts isStale), never trust a stale
   // client-cached value.
   agent_stale?: boolean;
+  // Момент последнего взятия задачи агентом — вычисляется из журнала на каждой
+  // отдаче (hydrateTask). Нужен островку: он крутит время работы от этой точки,
+  // иначе счётчик обнулялся бы каждый раз, когда приложение открывают заново.
+  agent_started_at?: string | null;
   // Manual sort order within a TaskBoard column (server/src/db.ts's
   // additive migration) — NULL until the card is dragged for the first
   // time, in which case the view's own default order applies (see
@@ -149,6 +236,8 @@ export interface ApiTask {
   assignee_initials?: string | null;
   project_name?: string | null;
   project_color?: string | null;
+  parent_id?: string | null;
+  children?: ApiTask[];
   labels: ApiLabel[];
   subtasks: ApiSubtask[];
   comments?: ApiComment[]; // only on GET /api/tasks/:id
@@ -169,6 +258,10 @@ export interface ApiProject {
   // 20.08.2026) — тот же смысл, что у ApiTask.position/pinned выше.
   position?: number | null;
   pinned?: boolean | number;
+  /** Папка заметок проекта — ссылка на папку Дневника (journal_folders).
+   *  Своей иерархии у проекта нет: папка живёт в общем дереве заметок,
+   *  проект лишь указывает на неё (26.08.2026). */
+  notes_folder_id?: number | null;
 }
 
 export interface ApiNotification {

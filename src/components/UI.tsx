@@ -17,13 +17,16 @@ import {
   ArrowUp,
   Bell,
   BellOff,
+  Bold,
   Bookmark,
   Bot,
+  Braces,
   Clock,
   Calendar,
   CalendarCheck,
   CalendarDays,
   Check,
+  Code,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -34,26 +37,40 @@ import {
   Ellipsis,
   EllipsisVertical,
   Eye,
+  FileText,
   Filter,
   Flag,
-  GripVertical,
+  Folder,
+  FolderPlus,
   Hash,
+  Highlighter,
   Home,
   Image,
   Inbox,
   Info,
+  Italic,
   LayoutGrid,
   Link,
+  List,
+  ListChecks,
+  ListOrdered,
   Lock,
   Mail,
   MapPin,
   Menu,
+  MessageCircle,
+  Minus,
+  Notebook,
   Mic,
   Paperclip,
   Moon,
+  PenLine,
   Pencil,
   Play,
   Plus,
+  Quote,
+  Scissors,
+  ListTree,
   RefreshCw,
   Search,
   Settings,
@@ -61,19 +78,25 @@ import {
   Shield,
   Sparkles,
   Star,
+  Strikethrough,
   Tag,
   Trash2,
+  Underline,
   User,
   X,
   Zap,
+  Users,
+  ChartColumn,
   type LucideIcon,
 } from "lucide-react";
 import { useTasks } from "../api/tasks";
 import { API_BASE_URL } from "../api/client";
 import { todayStr, formatRelativeTime } from "../lib/date";
 import { getErrorMessage } from "../lib/errors";
+import { hapticTap } from "../lib/haptics";
 import type { ApiTask } from "../api/types";
 import { AnimatedTabBar, type TabItem } from "./AnimatedTabBar";
+import { CreateMenu } from "./CreateMenu";
 import type { BottomSheetDragProps } from "../lib/useBottomSheet";
 import { NAV_ITEMS } from "../lib/navItems";
 
@@ -157,8 +180,11 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   arrowDown: ArrowDown,
   pin: MapPin,
   sparkles: Sparkles,
-  // Доска задач (TaskBoard.tsx) — хендл ручного перетаскивания карточки.
-  grip: GripVertical,
+  // AI-действия в редакторе заметки (26.08.2026) — по иконке на
+  // действие вместо одинаковых красных пилюль со звёздочкой.
+  penLine: PenLine,
+  scissors: Scissors,
+  listTree: ListTree,
   // Кнопка микрофона (TaskFormScreen) — запись голоса → свой ASR.
   mic: Mic,
   // Вложения комментариев: кнопка «приложить файл» и строка документа в
@@ -171,6 +197,47 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   // Кнопка «скопировать команду» — AgentStatusRow (TaskJournal.tsx), зайти
   // в терминал двойника.
   copy: Copy,
+  // 25.08.2026: выбор видимых проектов в «Ежедневнике»
+  // (DailyPlannerProjectsSheet) и вход в «Дневник» из её же шапки.
+  folder: Folder,
+  // Папка со знаком «+» — «завести папку заметок под проект»
+  // (ProjectNotes.tsx, 26.08.2026).
+  folderPlus: FolderPlus,
+  fileText: FileText,
+  // Раздел «Дневник» — заметки остаются на /notes (доступны из поиска и
+  // напрямую), просто больше не в основной четвёрке таб-бара.
+  notebook: Notebook,
+  // Раздел «Чат» в таб-баре (28.08.2026, владелец: «убери дневник, воткни
+  // вместо него чат») — пузырёк переписки, силуэт, который не спутать ни
+  // с одной из оставшихся трёх иконок.
+  chat: MessageCircle,
+  // Панель форматирования NoteEditorScreen.tsx — блочный редактор TipTap.
+  // "list" уже занят (Menu, переключатель вида «Список» на Входящих/
+  // Ежедневнике) — маркированный список получает отдельный ключ.
+  bold: Bold,
+  italic: Italic,
+  underline: Underline,
+  // Маркер-выделитель в тулбаре Дневника (26.08.2026).
+  highlighter: Highlighter,
+  listBullet: List,
+  listOrdered: ListOrdered,
+  listChecks: ListChecks,
+  // Кнопки форматирования, добавленные 29.08.2026 к панели редактора заметок
+  // (карточка 9b4c4984): Quote/Code/Strikethrough/Minus/Braces. Braces — для
+  // инлайн-кода, чтобы он не выглядел как ещё одна кнопка Code (блочный
+  // код). Minus — разделитель: лаконичнее трёх точек или палки. "link"
+  // уже зарегистрирован выше и используется в ActionsMenu.
+  quote: Quote,
+  codeBlock: Code,
+  strike: Strikethrough,
+  hr: Minus,
+  inlineCode: Braces,
+  // Адресат «всем» в строке ввода чата и в пузыре (28.08.2026): силуэт
+  // группы против одиночного bot — по значку видно, обращаются к одному
+  // участнику или ко всему каналу.
+  users: Users,
+  // Кнопка сводки чата — «кого озадачивают чаще всего».
+  chart: ChartColumn,
 };
 
 // Аудит 20.08.2026, п.8: 7 разных числовых размеров без названия
@@ -189,6 +256,98 @@ const ICON_SIZE: Record<"xs" | "sm" | "md" | "lg", number> = {
   lg: 26,
 };
 
+// Календарь с ЖИВЫМ числом сегодняшнего дня — иконка «Ежедневника» в
+// навигации (веер/BottomNav/SideNav), как в системном Календаре iOS
+// (Максим 26.08.2026: «чтобы всегда стояло актуальное число, 26, 27»).
+// Раньше там была статичная CalendarCheck — галочка, одинаковая круглый год.
+//
+// Рисуется руками, а не берётся из Lucide: числа внутри значка библиотека
+// дать не может. Геометрия повторяет Lucide Calendar (viewBox 24, та же
+// рамка/ушки/линия шапки, stroke-width 2, currentColor) — значок стоит в
+// одном ряду с соседними и не выбивается толщиной.
+//
+// Отдельный компонент, а не ветка внутри Icon: ему нужен свой таймер на
+// полночь (приложение живёт открытым сутками — иначе число замерло бы на
+// вчерашнем), а хук внутри Icon завёл бы таймер каждой иконке приложения.
+function TodayDateIcon({
+  size,
+  className,
+  style,
+}: {
+  size: number;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  const [day, setDay] = useState(() => new Date().getDate());
+
+  useEffect(() => {
+    // Просыпаемся ровно в 00:00:05 следующего дня, а не каждую минуту:
+    // одна перерисовка в сутки вместо 1440 опросов.
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(24, 0, 5, 0);
+      timer = setTimeout(() => {
+        setDay(new Date().getDate());
+        schedule();
+      }, next.getTime() - now.getTime());
+    };
+    schedule();
+    // Возврат из фона (телефон лежал ночь в кармане) — таймер в спящем
+    // WebView мог не сработать вовремя, пересчитываем сразу.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        setDay(new Date().getDate());
+        clearTimeout(timer);
+        schedule();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      style={style}
+      aria-hidden="true"
+    >
+      <path d="M8 2v4" />
+      <path d="M16 2v4" />
+      <rect width="18" height="18" x="3" y="4" rx="2" />
+      <path d="M3 10h18" />
+      <text
+        x="12"
+        y="18"
+        textAnchor="middle"
+        fill="currentColor"
+        stroke="none"
+        style={{
+          // Двузначное число уже, чтобы влезть в окно рамки без обрезки.
+          fontSize: day > 9 ? "9px" : "10px",
+          fontWeight: 700,
+          fontFamily: "inherit",
+          letterSpacing: day > 9 ? "-0.6px" : "0",
+        }}
+      >
+        {day}
+      </text>
+    </svg>
+  );
+}
+
 export const Icon = ({
   name,
   size = 22,
@@ -201,6 +360,12 @@ export const Icon = ({
   style?: CSSProperties;
 }) => {
   const resolvedSize = typeof size === "string" ? ICON_SIZE[size] : size;
+  // Живое число сегодняшнего дня — см. TodayDateIcon выше.
+  if (name === "todayDate") {
+    return (
+      <TodayDateIcon size={resolvedSize} className={className} style={style} />
+    );
+  }
   // Единственное исключение из Lucide: многоцветный логотип Google.
   if (name === "google") {
     return (
@@ -438,16 +603,21 @@ const AGENT_TAG_META: Record<
 // цвет и тот же смысл, что и в списке (TodayScreen) — меняется только
 // геометрия: чуть меньше паддинг и относительное время скрыто целиком
 // (не обрезано — обрезанное "· 5 …" читалось бы как баг, а не как дизайн).
+// `plain` (просьба Максима 26.08.2026) — без плашки-фона вовсе: просто
+// цветное слово. Так статус агента ставится отдельной строкой сразу после
+// заметки (описания) в TaskRow/BoardCard, а не пилюлей в ряду бейджей.
 export function AgentStateTag({
   task,
   compact = false,
+  plain = false,
 }: {
   task: ApiTask;
   compact?: boolean;
+  plain?: boolean;
 }) {
   if (!task.agent_state) return null;
 
-  const pad = compact ? "px-1.5 py-0.5" : "px-2 py-0.5";
+  const pad = plain ? "" : compact ? "px-1.5 py-0.5" : "px-2 py-0.5";
 
   // "Агент пропал" — аренда истекла, задача всё ещё числится in_progress.
   // Отдельная, тревожная подача (плотнее заливка, жирный текст) — это
@@ -457,7 +627,7 @@ export function AgentStateTag({
   if (task.agent_state === "in_progress" && task.agent_stale) {
     return (
       <span
-        className={`inline-flex items-center gap-1 ${pad} rounded text-[11px] font-semibold bg-coral/20 text-coral`}
+        className={`inline-flex items-center gap-1 ${pad} rounded text-[11px] font-semibold ${plain ? "" : "bg-coral/20 "}text-coral`}
       >
         <Icon name="bot" size={10} />
         Агент пропал
@@ -473,7 +643,7 @@ export function AgentStateTag({
   const meta = AGENT_TAG_META[task.agent_state];
   return (
     <span
-      className={`inline-flex items-center gap-1 ${pad} rounded text-[11px] ${meta.bg} ${meta.text}`}
+      className={`inline-flex items-center gap-1 ${pad} rounded text-[11px] ${plain ? "" : `${meta.bg} `}${meta.text}`}
     >
       <Icon name="bot" size={10} />
       {meta.label}
@@ -553,9 +723,12 @@ export function BottomNav() {
   // точку — решение владельца (11.08.2026): в меню показывается только
   // «сколько задач на сегодня», а то, что ждёт его решения, он видит
   // блоком «Ждут вас» на самом экране «Сегодня», когда туда заходит.
-  const activeIndex = Math.max(
-    0,
-    NAV_ITEMS.findIndex((item) => item.path === location.pathname),
+  // -1 — намеренно, без clamp к нулю. Панель теперь висит на КАЖДОМ экране
+  // (владелец 27.08.2026), и на не-вкладке (настройки, метки, задача…) ни
+  // одна вкладка не активна: иначе горб вставал на «Входящие» и панель
+  // врала, что ты там. AnimatedTabBar на -1 прячет горб и круг.
+  const navIndex = NAV_ITEMS.findIndex(
+    (item) => item.path === location.pathname,
   );
 
   const tabItems: TabItem[] = NAV_ITEMS.map((item) => {
@@ -584,6 +757,20 @@ export function BottomNav() {
     };
   });
 
+  // Центральная кнопка не ведёт никуда — она открывает меню «что создать»
+  // (27.08.2026, по референсу владельца). Экранные действия («новая метка»,
+  // «новый шаблон») через неё больше не проходят: у тех экранов создание
+  // осталось своей кнопкой в теле списка, а панель везде делает одно и то же.
+  const [createOpen, setCreateOpen] = useState(false);
+
+  // Ушли с экрана — меню закрываем: иначе оно висело бы поверх нового
+  // раздела, к которому уже не относится.
+  useEffect(() => {
+    setCreateOpen(false);
+  }, [location.pathname]);
+
+  const activeIndex = navIndex;
+
   return (
     <nav
       // z-35, было z-20: FAB (z-30, ../UI.tsx FAB) стоит над панелью и тащит
@@ -591,13 +778,29 @@ export function BottomNav() {
       // кнопки. Вставать выше диалогов (z-40/z-50, см. Dialog.tsx,
       // RescheduleSheet.tsx, TaskJournal.tsx, ActivityScreen.tsx,
       // ActionsMenu.tsx) z-35 не даёт — они по-прежнему перекрывают панель.
-      className="fixed inset-x-0 bottom-0 z-[35] px-4"
-      style={{ paddingBottom: "max(env(safe-area-inset-bottom), 16px)" }}
+      // Панель ПРИЛИПАЕТ к низу экрана, а не висит над ним пилюлей
+      // (Максим 27.08.2026: «адаптируй её именно не как висячую, а именно
+      // как стандартную, которая прилипает к низу экрана»). Отсюда ушли
+      // боковые отступы и подъём над краем; safe-area теперь внутри самой
+      // панели (index.css, .nt-tabbar-menu), чтобы её фон доходил до
+      // нижней кромки, а иконки стояли выше домашней полоски iPhone.
+      // fixed сам по себе — точка отсчёта для absolute внутри: меню
+      // создания позиционируется от верхней кромки этой панели.
+      className="fixed inset-x-0 bottom-0 z-[35]"
     >
+      <CreateMenu open={createOpen} onClose={() => setCreateOpen(false)} />
       <AnimatedTabBar
         items={tabItems}
         defaultIndex={activeIndex}
         onTabChange={(i) => navigate(NAV_ITEMS[i].path)}
+        centerAction={{
+          label: createOpen ? "Закрыть меню создания" : "Создать",
+          open: createOpen,
+          onPress: () => {
+            hapticTap();
+            setCreateOpen((v) => !v);
+          },
+        }}
       />
     </nav>
   );
@@ -666,8 +869,16 @@ export function SideNav() {
 
 // ═══════════ FAB ═══════════
 
+// Долгое нажатие — альтернативное действие FAB на некоторых разделах
+// (27.08.2026: на «Проектах» короткое нажатие заводит задачу, долгое —
+// сам проект; на «Дневнике» — заметку). Порог 500мс — тот же, что у
+// системных long-press в iOS. onLongPress не задан → кнопка ведёт себя
+// ровно как раньше, ничего не меняется на остальных разделах.
+const LONG_PRESS_MS = 500;
+
 export function FAB({
   onClick,
+  onLongPress,
   // Создание из раздела «Сегодня» сразу проставляет сегодняшний срок
   // (владелец 19.08.2026: «логично, если я и сегодня создаю»). В
   // остальных разделах задача по-прежнему заводится БЕЗ срока — это
@@ -676,14 +887,47 @@ export function FAB({
   dueToday,
 }: {
   onClick?: () => void;
+  onLongPress?: () => void;
   dueToday?: boolean;
 }) {
   const navigate = useNavigate();
+  const firedLongPress = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTimer = () => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+
+  const handlePointerDown = () => {
+    if (!onLongPress) return; // раздел не завёл альтернативное действие
+    firedLongPress.current = false;
+    timer.current = setTimeout(() => {
+      firedLongPress.current = true;
+      hapticTap();
+      onLongPress();
+    }, LONG_PRESS_MS);
+  };
+
+  const handleClick = () => {
+    // Долгое нажатие уже отработало — обычный click, пришедший следом за
+    // pointerup, гасим, иначе сработали бы оба действия разом.
+    if (firedLongPress.current) {
+      firedLongPress.current = false;
+      return;
+    }
+    (onClick ?? (() => navigate(`/task/new${dueToday ? "?due=today" : ""}`)))();
+  };
+
   return (
     <button
-      onClick={
-        onClick ?? (() => navigate(`/task/new${dueToday ? "?due=today" : ""}`))
-      }
+      onClick={handleClick}
+      onPointerDown={handlePointerDown}
+      onPointerUp={clearTimer}
+      onPointerLeave={clearTimer}
+      onPointerCancel={clearTimer}
       className="fab-safe-bottom fixed right-[18px] w-[58px] h-[58px] rounded-full bg-red flex items-center justify-center shadow-fab z-30 tap-scale"
     >
       <Icon name="plus" size={26} className="text-white" />
@@ -735,9 +979,18 @@ export function BackButton({
 //
 //   <ScreenHeader
 //     variant="compact"
-//     leading={<BackButton onClick={() => navigate(-1)} />}
+//     leading={<BackButton onClick={() => navigate("/login")} />}
 //     title="Регистрация"
 //   />
+//
+// Кнопок «Назад» на обычных экранах БОЛЬШЕ НЕТ (26.08.2026, Максим: «свайп
+// нужно назад добавить, соответственно избавиться от этих кнопочек
+// маленьких назад»). Возврат — жестом от левого края (lib/useSwipeBack.ts,
+// подключён один раз в Layout.tsx). BackButton остался ровно для одного
+// случая — RegisterScreen: там кнопка ведёт не «назад по истории», а на
+// конкретный экран входа, и сам экран живёт вне Layout, где жеста нет.
+// Не возвращать её в обычные экраны: место в шапке занято, а действие
+// дублирует жест.
 //
 // Renders `sticky top-0`, so drop it as the first child inside a screen's
 // existing `px-4 ...` root div — no extra wrapper/margin needed, it just
@@ -977,6 +1230,29 @@ export function ScreenHeader({
   className?: string;
 }) {
   const isCompact = variant === "compact";
+  // ═══ Стрелка «назад» появляется сама ═══
+  //
+  // 26.08.2026 маленькие кнопки «назад» убрали в пользу свайпа («избавиться
+  // от этих кнопочек маленьких назад»). 27.08.2026 владелец попросил вернуть
+  // значок: «не всегда без него удобно». Ставить его руками на пятнадцати
+  // экранах — гарантия, что где-то забудешь; поэтому шапка решает сама:
+  // экран не корневая вкладка и своего leading не передал — рисуем стрелку.
+  // Вкладки (Сегодня, Обзор, Планирование, Дневник) её не получают: из
+  // корневого раздела уходить некуда.
+  const headerLocation = useLocation();
+  const headerNavigate = useNavigate();
+  const isRootTab = NAV_ITEMS.some(
+    (item) => item.path === headerLocation.pathname,
+  );
+  const goBack = () => {
+    // Прямой вход по ссылке (истории нет) не должен выкидывать из
+    // приложения — тогда уходим в «Обзор», он же стартовый экран.
+    if (window.history.length > 1) headerNavigate(-1);
+    else headerNavigate("/overview");
+  };
+  const leadingNode =
+    leading ?? (isRootTab ? null : <BackButton onClick={goBack} />);
+
   const rootRef = useRef<HTMLDivElement>(null);
   const bleed = useFullBleedInset(rootRef);
   usePublishHeaderHeight(rootRef);
@@ -1053,6 +1329,25 @@ export function ScreenHeader({
         style={{
           left: fixedBox ? fixedBox.left : undefined,
           width: fixedBox ? fixedBox.width : undefined,
+          // ═══ Шапка следует за ВИДИМОЙ областью, а не за окном ═══
+          //
+          // position:fixed прибивает элемент к layout-вьюпорту, то есть к
+          // окну. iOS при открытии клавиатуры окно не трогает — он
+          // сдвигает и сжимает ВИЗУАЛЬНУЮ область (visualViewport), и
+          // fixed-шапка уезжает вверх вместе с окном: под статус-бар, под
+          // время и Wi-Fi. Максим 26.08.2026: «кнопки создания, назад и
+          // звёздочка с AI-функциями уезжают под интерфейс, под Wi-Fi,
+          // под всю ерунду».
+          //
+          // --vv-top — насколько визуальная область сдвинута вниз
+          // относительно layout-вьюпорта (публикуется хуком
+          // useVisualViewportInset, там же --vv-height). Сдвигая шапку на
+          // эту величину, возвращаем её на видимый верх. Без клавиатуры
+          // переменная равна 0 — поведение прежнее.
+          //
+          // Именно transform, а не top: top пересчитывал бы раскладку на
+          // каждый кадр анимации клавиатуры, transform едет на композиторе.
+          transform: "translateY(var(--vv-top, 0px))",
           paddingLeft: bleed.left,
           paddingRight: bleed.right,
           // До первого замера шапку не показываем — иначе на первом кадре
@@ -1113,7 +1408,7 @@ export function ScreenHeader({
             isCompact ? "h-[48px]" : "min-h-[56px] pt-0.5 pb-3.5"
           }`}
         >
-          {leading}
+          {leadingNode}
           {isCompact ? (
             <h2 className="absolute left-1/2 -translate-x-1/2 text-[17px] font-semibold whitespace-nowrap">
               {title}
@@ -1141,51 +1436,6 @@ export function ScreenHeader({
         )}
       </div>
     </div>
-  );
-}
-
-// ═══════════ PANEL (reference sidebar) ═══════════
-
-const PANEL_ITEMS = [
-  { label: "Обзор", path: "/overview" },
-  { label: "Настройки", path: "/settings" },
-  { label: "Предстоящее", path: "/upcoming" },
-  { label: "Сегодня (пусто)", path: "/today" },
-  { label: "Входящие", path: "/inbox" },
-  { label: "Логин", path: "/login" },
-  { label: "Регистрация", path: "/register" },
-  { label: "Новая задача", path: "/task/new" },
-  { label: "Уведомления", path: "/notifications" },
-  { label: "Агенты", path: "/agents" },
-  { label: "Проекты", path: "/projects" },
-  { label: "Поиск", path: "/search" },
-];
-
-export function Panel() {
-  const navigate = useNavigate();
-  return (
-    <aside className="hidden xl:flex flex-col w-[260px] p-4 border-l border-stroke gap-2">
-      <h4 className="text-[11px] uppercase tracking-wider text-dim font-semibold mb-1">
-        Экраны · Референсы
-      </h4>
-      {PANEL_ITEMS.map((item, i) => (
-        <button
-          key={item.path}
-          onClick={() => navigate(item.path)}
-          className="w-full flex items-center gap-2 px-2 py-[5px] rounded-lg tap-row text-left text-[13px] text-sub hover:text-text"
-        >
-          <span className="w-4 text-[11px] text-dim text-right shrink-0">
-            {i + 1}
-          </span>
-          {item.label}
-        </button>
-      ))}
-      <div className="mt-auto text-center text-[11px] text-dim leading-relaxed">
-        React + Tailwind · Todoist dark
-        <br />
-        собран 1:1 по скриншотам от 10.08.2026
-      </div>
-    </aside>
   );
 }
 

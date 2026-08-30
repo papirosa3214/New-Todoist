@@ -116,6 +116,25 @@
   border-top-right-radius: 1.25rem;
 }
 
+/* Десктоп-QA 25.08.2026 (скриншоты 1024/1440/1920px): все нижние шторки
+   (TaskFilterSheet, DailyPlannerProjectsSheet, JournalDateSheet,
+   TasksFromTextSheet, RescheduleSheet, TaskJournal, ActivityScreen,
+   Dialog — 9 мест, всех объединяет именно этот класс на теле шторки, см.
+   grep) растягивались на всю ширину окна — на 1440px строка «Проект ···
+   Все проекты» превращалась в две подписи на разных краях экрана с почти
+   пустым метром между ними, читалось как незаконченная вёрстка, не как
+   осознанный десктопный вид. Брейкпоинт — тот же lg (1024px), что и
+   Layout.tsx useIsMobile(): ниже него мобильная раскладка не тронута,
+   шторка по-прежнему на всю ширину. Общее правило одним местом, а не 9
+   правок по файлам — все шторки уже стоят на одном классе для скругления,
+   он же и подошёл как крючок под ширину. */
+@media (min-width: 1024px) {
+  .rounded-sheet-top {
+    max-width: 640px;
+    margin-inline: auto;
+  }
+}
+
 /* ═══════════════ LIGHT THEME OVERRIDE ═══════════════
    Владелец 2026-08-12: тема должна реально переключаться (settings.theme в
    store/index.ts), а не быть навсегда тёмной строкой в SettingsScreen.
@@ -317,8 +336,10 @@
      Высота бара — 4em (padding 0.55em+0.85em + иконка 2.6em, все числа из
      перенесённого блока в index.css) и растёт с font-size:clamp(10px,3vw,12px)
      самого бара — на 430px это уже 12px×4=48px (измерено live: 40 / 46.8 /
-     48px на 320/390/430). Отступ <nav> снизу — max(env(...),16px) (см.
-     BottomNav в UI.tsx). 48 (макс. бар) + 16 (мин. отступ) + 8 запаса = 72. */
+     48px на 320/390/430). 27.08.2026 панель прилипла к низу (Максим: «не
+     висячая, а стандартная»), отступа <nav> снизу больше нет — было
+     48+16+8=72, стало 48 (макс. бар) + 8 запаса = 56. safe-area отдельным
+     слагаемым: она теперь внутри самой панели и добавляет ей высоты. */
   .pb-content-safe {
     padding-bottom: calc(72px + env(safe-area-inset-bottom));
   }
@@ -333,9 +354,11 @@
      переносе, скриншот port-390-tab-overview-close.png: два красных круга
      сливались в один). Посчитано, не на глаз: макс. высота бара 48px (font
      12px) + высота бугра 2.4em=28.8px + мин. отступ 16px = 92.8px нужного
-     просвета от низа экрана до верха бугра; 104px даёт живой запас ~11px. */
+     просвета от низа экрана до верха бугра; 104px даёт живой запас ~11px.
+     27.08.2026: панель прилипла к низу и больше не поднята на 16px — те же
+     92.8 без этого подъёма дают 76.8, оставляем 88px (запас ~11px тот же). */
   .fab-safe-bottom {
-    bottom: calc(104px + env(safe-area-inset-bottom));
+    bottom: calc(112px + env(safe-area-inset-bottom));
   }
 }
 
@@ -415,6 +438,24 @@
     background-color: rgba(255, 255, 255, 0.06);
   }
 
+  /* «Подъём» захваченного элемента при перетаскивании (26.08.2026, вместе
+     с уборкой грип-хендлов) — тот же язык, что iOS использует для иконок
+     на домашнем экране при long-press: элемент чуть вырастает и отбрасывает
+     тень, «отклеиваясь» от поверхности. Ровно в момент, когда 200мс
+     удержания истекли и dnd-kit захватил элемент — вместе с hapticGrab
+     это и даёт нативное «взял в руку». Вешается на DragOverlay-превью
+     (доска) и на сам элемент (списки без overlay). Пружина — cubic-bezier
+     с лёгким овершутом, как у системных анимаций UIKit. */
+  .drag-lift {
+    transform: scale(1.04);
+    box-shadow:
+      0 12px 28px rgba(0, 0, 0, 0.45),
+      0 2px 8px rgba(0, 0, 0, 0.35);
+    transition:
+      transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+      box-shadow 0.22s ease;
+  }
+
   /* Аудит 20.08.2026, п.14: disabled:opacity-50 был только у Button —
      остальные disabled-кнопки в проекте (иконки-кнопки, чипы, пункты
      меню — все они уже несут .tap-scale/-row/-fade/-menu) не имели
@@ -438,15 +479,21 @@
       opacity: 0.75;
     }
 
+    /* Захват при перетаскивании: без роста и пружины, «взято» читается
+       по тени (и по haptic'у на устройстве). */
+    .drag-lift {
+      transform: none;
+      transition: none;
+    }
+
     /* Tabbar icon stroke draw -> instant opacity flash (no @keyframes).
        Active tab still reads via position shift, circle and color change. */
     .nt-tabbar-menu__item.active svg {
       animation: none !important;
     }
 
-    /* Tabbar bubble/item positions -> move instantly (no vestibular translate3d). */
-    .nt-tabbar-menu__item,
-    .nt-tabbar-menu__border {
+    /* Tabbar item positions -> move instantly (no vestibular translate3d). */
+.nt-tabbar-menu__item {
       transition: transform 0ms ease-out;
     }
 
@@ -549,23 +596,262 @@
   position: relative;
   display: flex;
   width: 100%;
-  max-width: 28rem;
-  margin: 0 auto;
-  /* Опорный размер всей геометрии оригинала (иконка 2.6em, круг 4.2em и т.д.). */
-  font-size: clamp(10px, 3vw, 12px);
-  padding: 0 2.85em;
+  /* Прилипшая панель, а не плавающая пилюля (Максим 27.08.2026). Ушли
+     max-width 28rem и margin auto: бар во всю ширину, нижней кромкой на край
+     экрана. safe-area — внутри панели, чтобы её фон доходил до самого низа,
+     а иконки стояли выше домашней полоски.
+
+     ГЕОМЕТРИЯ ПЕРЕСЧИТАНА В ЦЕЛЫХ ПИКСЕЛЯХ (27.08.2026, скилл
+     design-by-measurement + референс владельца — исходный Animated Tab Bar
+     на 21st.dev). Было: всё в em от clamp(10px,3vw,12px) — то есть на 390px
+     панель 46.77px, иконка 30.41px, поля 6.42/9.94. Дробные пиксели и
+     несимметричные поля это и есть «кривое», плюс панель выходила слишком
+     низкой («не такая узкая, как ты делаешь»).
+
+     Пропорции взяты с референса замером, а не на глаз (в долях высоты
+     панели H): иконка 0.44H, круг активной вкладки 0.87H, подъём круга
+     0.25H, горб над панелью 0.5H. При H=64 (4×16) все они дают целое и
+     кратное четырём: 28 / 56 / 16 / 32. Модуль 4px — канон проекта. */
+  /* 27.08.2026, вторая правка по замечанию владельца: «панель чуть-чуть надо
+     срезать низ, там очень много пустого пространства». Срезано снизу 8px —
+     верхнее поле осталось 16, нижнее стало 8: под панелью на телефоне ещё
+     идёт safe-area (домашняя полоска ~34px), и вместе с ней симметричные
+     18/18 давали внизу лишний воздух. 56 = 4×14, поля 16 и 8 — тоже по 4. */
+  --tab-h: 52px;
+  --tab-icon: 28px;
+  /* Круг-«шарик» под активной иконкой ВПИСАН в панель: 44 + 4 + 4 = 52.
+     Раньше он был 56 и вылезал наверх вместе с горбом — 27.08.2026 владелец
+     прислал референс, где ряд ровный: «по бокам кнопочки, никакого горбика
+     не надо… как шарик у нас просто появляется, с анимацией». */
+  --tab-orb: 44px;
+  /* Кнопка создания в центре — того же диаметра, что шарик активной
+     вкладки: ряд читается как один ритм, а не как круг поверх круга. */
+  --tab-fab: 44px;
+  /* font-size остаётся только для счётчика задач (.nt-tabbar-badge) —
+     фиксированный, чтобы цифра не прыгала по ширинам. */
+  font-size: 12px;
+  /* Safe-area больше НЕ висит целиком под иконками. Раньше панель была
+     52px высотой плюс 34px нижней полоски iPhone снизу — на телефоне это
+     давало 12px над иконкой и 46px под ней, что владелец и увидел
+     («сверху, снизу отступы должны быть одинаковые, а у нас ни грамма»).
+     На скриншотах playwright это не проявлялось: env() там равен нулю.
+     Теперь полоска делится поровну между верхним и нижним полем самих
+     пунктов (см. .nt-tabbar-menu__item) — на iPhone выходит 29/29 при той
+     же общей высоте 86px, в браузере 12/12 при 52px. */
+  padding: 0 8px;
   align-items: center;
   justify-content: center;
   list-style: none;
-  background-color: var(--bgColorMenu);
-  border-radius: 9999px;
+  /* Заливки у панели больше НЕТ: 27.08.2026 владелец попросил «точно такой
+     же эффект, как наверху, с затуханием, чтобы расплывчата была, а не
+     ровная граница». Плотность и муть дают два слоя ниже (::before/::after)
+     — тот же приём и те же профили масок, что у ScreenHeader (UI.tsx,
+     HEADER_FADE_STRONG/SOFT/TINT), только развёрнутые снизу вверх. */
+  background-color: transparent;
+  /* Углов нет вообще. Пилюля (9999px) была нужна, пока панель висела над
+     краем; прилипшей панели скругление противопоказано: снизу она упирается
+     в кромку экрана, а сверху теперь ровная прямая кромка — горб убран.
+     27.08.2026: сначала поставил 1.25rem сверху, владелец сразу поймал. */
+  border-radius: 0;
   overflow: visible;
-  /* ЕДИНАЯ тень на весь gooey-силуэт (панель + холмик + поднятый круг):
-     drop-shadow на .menu обводит объединённую форму всего поддерева разом.
-     Две раздельные тени (box-shadow бара + drop-shadow холмика) давали бы
-     двойное затемнение у шва. Направление вверх; радиус /2 — у drop-shadow
-     размытие визуально ~вдвое сильнее box-shadow (комментарий оригинала). */
-  filter: drop-shadow(var(--shadow-tabbar));
+  /* Тени тоже нет. Она отделяла плашку от контента ровной линией — ровно
+     то, от чего избавлялись; и filter на родителе сделал бы его containing
+     block, из-за чего backdrop-filter слоёв ниже перестал бы видеть
+     страницу за панелью. */
+}
+
+/* Два слоя затухания — зеркало шапки. У нижней кромки экрана плотно (под
+   панелью не должно просвечивать ничего), кверху сходит на нет: сильный
+   blur обрывается раньше, мягкий тянется дальше, поэтому граница получается
+   размытой, а не линией. Проценты — те же, что в HEADER_FADE_* (UI.tsx),
+   только направление to top. */
+.nt-tabbar-menu::before,
+.nt-tabbar-menu::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.nt-tabbar-menu::before {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  mask-image: linear-gradient(
+    to top,
+    #000 0%,
+    #000 40%,
+    rgb(0 0 0 / 0.55) 62%,
+    rgb(0 0 0 / 0.2) 80%,
+    transparent 94%
+  );
+  -webkit-mask-image: linear-gradient(
+    to top,
+    #000 0%,
+    #000 40%,
+    rgb(0 0 0 / 0.55) 62%,
+    rgb(0 0 0 / 0.2) 80%,
+    transparent 94%
+  );
+}
+
+.nt-tabbar-menu::after {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  background: linear-gradient(
+    to top,
+    var(--color-bg) 0%,
+    var(--color-bg) 46%,
+    color-mix(in srgb, var(--color-bg) 74%, transparent) 66%,
+    color-mix(in srgb, var(--color-bg) 34%, transparent) 84%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to top,
+    #000 0%,
+    #000 52%,
+    rgb(0 0 0 / 0.5) 74%,
+    rgb(0 0 0 / 0.18) 88%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to top,
+    #000 0%,
+    #000 52%,
+    rgb(0 0 0 / 0.5) 74%,
+    rgb(0 0 0 / 0.18) 88%,
+    transparent 100%
+  );
+}
+
+/* Прозрачность отключена системно — возвращаем сплошную плашку: муть там
+   не рисуется, и без заливки панель осталась бы дырой. */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .nt-tabbar-menu {
+    background-color: var(--color-card);
+  }
+
+  .nt-tabbar-menu::before,
+  .nt-tabbar-menu::after {
+    display: none;
+  }
+}
+
+    /* ═══════════ СТРОКА ВВОДА ЧАТА ═══════════
+   Экран /chat — единственный, где вместо панели навигации внизу стоит поле
+   ввода (28.08.2026, владелец: «я открываю чатик, и у меня вся страничка
+   исключительно чатика — это единственное окно, где это уместно»).
+
+   Растворение ленты над ней — те же два слоя, что у .nt-tabbar-menu, и по
+   той же причине: сообщения должны сходить на нет, а не обрываться линией.
+   Скопировано СОЗНАТЕЛЬНО, а не вынесено в общий класс: панель навигации
+   работает и правится своей задачей, а общий предок связал бы их так, что
+   правка в одной молча меняла бы вторую.
+
+   Геометрия строки считается, а не подбирается (владелец: «посчитай
+   математику, интервалы, чтобы всё было симметрично»), и живёт в разметке
+   ChatComposer.tsx — здесь только слои затухания и привязка к клавиатуре.
+
+   bottom = --kb-height, а НЕ --kb-inset: строка position:fixed, крепится к
+   layout-вьюпорту и в панорамировании страницы не участвует — та же
+   разница, что уже разобрана для шторки задачи (TaskJournal.tsx).
+
+   padding-bottom одной формулой закрывает оба состояния: клавиатура убрана
+   — под домашнюю полоску уходит safe-area; клавиатура открыта — она сама
+   закрывает полоску, вычитание уводит значение в минус, и остаётся ровно
+   базовые 8px. Без этого над клавиатурой висел бы пустой карман высотой с
+   home indicator. */
+.nt-composer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--kb-height, 0px);
+  z-index: 35;
+  padding-top: 8px;
+  padding-bottom: max(8px, calc(env(safe-area-inset-bottom, 0px) - var(--kb-height, 0px)));
+}
+
+/* Зона растворения ВЫШЕ самой строки на 24px. У панели навигации хватало
+   её собственной высоты: под панелью почти всегда пусто, списки держат
+   нижний отступ. Лента чата прокручивается вплотную, и владелец попросил
+   именно так: «тоже должны исчезать, чуть выше окна ввода». 24 = 6 шагов
+   сетки; при высоте строки 60 это даёт 84px хода — сопоставимо с панелью
+   (52px) и заметно мягче, чем обрыв. */
+.nt-composer::before,
+.nt-composer::after {
+  content: "";
+  position: absolute;
+  inset: -24px 0 0 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.nt-composer::before {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  mask-image: linear-gradient(
+    to top,
+    #000 0%,
+    #000 40%,
+    rgb(0 0 0 / 0.55) 62%,
+    rgb(0 0 0 / 0.2) 80%,
+    transparent 94%
+  );
+  -webkit-mask-image: linear-gradient(
+    to top,
+    #000 0%,
+    #000 40%,
+    rgb(0 0 0 / 0.55) 62%,
+    rgb(0 0 0 / 0.2) 80%,
+    transparent 94%
+  );
+}
+
+.nt-composer::after {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  background: linear-gradient(
+    to top,
+    var(--color-bg) 0%,
+    var(--color-bg) 46%,
+    color-mix(in srgb, var(--color-bg) 74%, transparent) 66%,
+    color-mix(in srgb, var(--color-bg) 34%, transparent) 84%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to top,
+    #000 0%,
+    #000 52%,
+    rgb(0 0 0 / 0.5) 74%,
+    rgb(0 0 0 / 0.18) 88%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to top,
+    #000 0%,
+    #000 52%,
+    rgb(0 0 0 / 0.5) 74%,
+    rgb(0 0 0 / 0.18) 88%,
+    transparent 100%
+  );
+}
+
+/* Содержимое — над слоями затухания, иначе поле окажется под ними. */
+.nt-composer > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Прозрачность отключена системно — сплошная плашка, как у панели. */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .nt-composer {
+    background-color: var(--color-bg);
+  }
+
+  .nt-composer::before,
+  .nt-composer::after {
+    display: none;
+  }
 }
 
 .nt-tabbar-menu__item {
@@ -579,7 +865,11 @@
   align-items: center;
   will-change: transform;
   justify-content: center;
-  padding: 0.55em 0 0.85em;
+  /* Поля поровну сверху и снизу — вместе с нижней полоской iPhone, которая
+     делится пополам (обоснование в блоке .nt-tabbar-menu выше):
+       браузер (полоски нет): 12 + 28 + 12 = 52
+       iPhone (полоска 34):   29 + 28 + 29 = 86 */
+  padding: calc(12px + env(safe-area-inset-bottom, 0px) / 2) 0;
   color: var(--color-dim);
   transition:
     transform var(--timeOut, var(--duration)),
@@ -587,13 +877,61 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Цветной круг под активной вкладкой. z-index:-1 кладёт его под иконку, но
-   поверх «пузыря»: кнопка (z-index:100) целиком выше .menu__border. */
+/* Кнопка создания в центре ряда (27.08.2026, по референсу владельца). Это
+   не вкладка: горба у неё нет, активной она не бывает — она открывает меню
+   «что создать». Красная заливка — единственное акцентное пятно панели. */
+.nt-tabbar-menu__action {
+  all: unset;
+  flex-grow: 1;
+  z-index: 100;
+  display: flex;
+  cursor: pointer;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  padding: calc(12px + env(safe-area-inset-bottom, 0px) / 2) 0;
+  color: #fff;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.nt-tabbar-menu__action::before {
+  content: "";
+  position: absolute;
+  width: var(--tab-fab);
+  height: var(--tab-fab);
+  border-radius: 50%;
+  background-color: var(--color-red);
+  z-index: -1;
+  transition: transform var(--duration);
+}
+
+.nt-tabbar-menu__action svg {
+  width: var(--tab-icon);
+  height: var(--tab-icon);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  /* Меню открыто — «плюс» доворачивается в «крестик»: одна и та же кнопка
+     и открывает список, и закрывает его. */
+  transition: transform var(--duration);
+}
+
+.nt-tabbar-menu__action.open svg {
+  transform: rotate(45deg);
+}
+
+.nt-tabbar-menu__action:active {
+  transform: scale(0.94);
+}
+
+/* Круг-«шарик» под активной вкладкой. z-index:-1 кладёт его под иконку,
+   оставляя саму иконку читаемой поверх подложки. */
 .nt-tabbar-menu__item::before {
   content: "";
   z-index: -1;
-  width: 4.2em;
-  height: 4.2em;
+  width: var(--tab-orb);
+  height: var(--tab-orb);
   border-radius: 50%;
   position: absolute;
   transform: scale(0);
@@ -603,13 +941,15 @@
 }
 
 .nt-tabbar-menu__item.active {
-  transform: translate3d(0, -0.8em, 0);
   color: var(--color-text);
 }
 
+/* Шарик активной вкладки — светлая подложка, а не красная заливка. Красный
+   в панели остался ровно один — кнопка создания в центре; два алых пятна в
+   одном ряду спорили друг с другом за внимание. */
 .nt-tabbar-menu__item.active::before {
   transform: scale(1);
-  background-color: var(--color-red);
+  background-color: rgb(255 255 255 / 0.1);
 }
 
 /* Иконки — наши Lucide (stroke=currentColor уже задан компонентом Icon);
@@ -618,8 +958,8 @@
    штрих не меняет — нужен только для reverse-анимации прорисовки при
    активации. */
 .nt-tabbar-menu__item svg {
-  width: 2.6em;
-  height: 2.6em;
+  width: var(--tab-icon);
+  height: var(--tab-icon);
   stroke-dasharray: 400;
 }
 
@@ -633,31 +973,11 @@
   }
 }
 
-/* «Пузырь»: плоский прямоугольник 10.9×2.4em НАД баром (bottom:99% — нижним
-   краем на верхнем крае .menu), форму бугра даёт clip-path из
-   AnimatedTabBar.tsx; ширина больше одного пункта — видна только «горка» у
-   своего центра. Позиция по X — transform, его пишет JS-часть компонента
-   инлайн-стилем (см. AnimatedTabBar.tsx). */
-.nt-tabbar-menu__border {
-  position: absolute;
-  left: 0;
-  bottom: 99%;
-  width: 10.9em;
-  height: 2.4em;
-  transition: transform var(--timeOut, var(--duration));
-  will-change: transform;
-  /* Тень у холмика — НЕ здесь: единый drop-shadow висит на .nt-tabbar-menu и
-     обводит общий силуэт (см. коммент там). Форму режет ::before —
-     box-shadow/фильтры на самом клипнутом элементе срезаются clip-path'ом. */
-}
-
-.nt-tabbar-menu__border::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  clip-path: url(#nt-tabbar-menu-clip-path);
-  background-color: var(--bgColorMenu);
-}
+/* Горб («пузырь» над баром) УБРАН 27.08.2026 по прямой просьбе владельца:
+   «по бокам кнопочки, никакого горбика не надо». Разметка и clip-path
+   удалены из AnimatedTabBar.tsx вместе с расчётом позиции — здесь не
+   осталось ни правила, ни переменных под него. Ряд ровный, активную
+   вкладку показывает только шарик-подложка выше по файлу. */
 
 /* Счётчик задач на «Сегодня» — ДОПОЛНЕНИЕ к оригиналу (обоснование выше в
    шапке блока), не его часть. Маленькая цифра без подложки, вынесена за
@@ -1237,4 +1557,357 @@ body::-webkit-scrollbar {
    ломать строй; иконка отличает её от остальных. */
 .kb-demo .kb-key-mic {
   font-size: 20px;
+}
+
+/* ═══════════ ЗАМЕТКИ (TipTap, NotesScreen.tsx) ═══════════
+   25.08.2026: единая страница «Заметки» — блочный редактор в духе Notion.
+   TipTap/ProseMirror рендерит голый .ProseMirror без своих стилей — весь
+   вид (типографика, отступы, чек-боксы списка задач) задан здесь, теми же
+   токенами цвета, что и остальной проект (--color-text/--color-sub/
+   --color-red), без отдельной палитры. */
+/* Тап-зона редактора должна физически совпадать с видимой пустой
+   областью, а не быть одной строкой посреди неё (25.08.2026, жалоба
+   «на мобильном клава не вызывается, как будто нет поля ввода»). Раньше
+   `.tiptap-content` был `flex-1` (растягивался на весь остаток экрана),
+   но НЕ был flex-контейнером для своего ребёнка — сам `.ProseMirror`
+   оставался высотой ровно в одну строку (пустой документ — один пустой
+   `<p>`). Визуально это читалось как большое поле ввода, а фактически
+   тап почти везде в нём попадал МИМО contenteditable-узла, в обёртку
+   `.tiptap-content` — а её `onClick` вызывает `editor.focus()`
+   ПРОГРАММНО. WKWebView/iOS Safari системную клавиатуру по такому вызову
+   не поднимает (поднимает только по НАСТОЯЩЕМУ тапу на сам
+   contenteditable-узел) — контрол при этом честно получал фокус
+   (document.activeElement менялся), только без клавиатуры, отсюда и
+   ощущение «поля ввода будто нет». Теперь `.ProseMirror` сам растянут на
+   всю высоту обёртки — почти любой тап внутри видимой области попадает
+   на него напрямую, без обходного onClick. */
+.tiptap-content {
+  display: flex;
+  flex-direction: column;
+}
+/* @tiptap/react оборачивает сам contenteditable-узел (.ProseMirror) в свой
+   собственный безымянный div (EditorContent) — между `.tiptap-content` и
+   `.ProseMirror` есть ещё один уровень. Без этого правила flex:1 у
+   `.ProseMirror` ниже не сработал бы: он flex-item только относительно
+   ближайшего flex-родителя, а тот безымянный div flex-контейнером не
+   является сам по себе. */
+.tiptap-content > * {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.tiptap-content .ProseMirror {
+  outline: none;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--color-text);
+  flex: 1;
+  min-height: 160px;
+}
+.tiptap-content .ProseMirror p {
+  margin: 0 0 0.6em;
+}
+/* Маркер-выделитель (26.08.2026). Жёлтый как у бумажного маркера, но
+   приглушённый под тёмную тему — на 55% прозрачности он подсвечивает, а
+   не забивает текст; сам текст остаётся своего цвета и читается поверх.
+   Скруглённая подложка с небольшим полем — как в Apple Notes, а не
+   прямоугольная заливка встык. */
+.tiptap-content .ProseMirror mark {
+  background-color: rgba(255, 214, 10, 0.55);
+  color: inherit;
+  padding: 0.1em 0.15em;
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+/* На светлой теме тот же жёлтый бьёт по глазам (белый фон + яркая
+   заливка) — плотность ниже, как у настоящего маркера по бумаге. */
+:root[data-theme="light"] .tiptap-content .ProseMirror mark {
+  background-color: rgba(255, 204, 0, 0.42);
+}
+.tiptap-content .ProseMirror p:last-child {
+  margin-bottom: 0;
+}
+.tiptap-content .ProseMirror h1,
+.tiptap-content .ProseMirror h2,
+.tiptap-content .ProseMirror h3 {
+  font-weight: 700;
+  margin: 1.1em 0 0.4em;
+}
+.tiptap-content .ProseMirror h1:first-child,
+.tiptap-content .ProseMirror h2:first-child,
+.tiptap-content .ProseMirror h3:first-child {
+  margin-top: 0;
+}
+.tiptap-content .ProseMirror h1 {
+  font-size: 22px;
+}
+.tiptap-content .ProseMirror h2 {
+  font-size: 19px;
+}
+.tiptap-content .ProseMirror h3 {
+  font-size: 16px;
+}
+/* Списки в редакторе. list-style обязателен: Tailwind (preflight) сбрасывает
+   маркеры у ВСЕХ ul/ol, поэтому без явного возврата маркированный и
+   нумерованный списки выглядят одинаково — просто отступ, ни точек, ни цифр
+   (Максим 26.08.2026: «что нумерованный, что не нумерованный — два абсолютно
+   одинаковых явления»). Чек-лист ниже сбрасывает маркер обратно: там вместо
+   него настоящий чекбокс. */
+.tiptap-content .ProseMirror ul,
+.tiptap-content .ProseMirror ol {
+  padding-left: 1.3em;
+  margin: 0 0 0.6em;
+}
+.tiptap-content .ProseMirror ul {
+  list-style: disc;
+}
+.tiptap-content .ProseMirror ol {
+  list-style: decimal;
+}
+/* Вложенные уровни — как в обычном тексте: круг и строчные латинские,
+   чтобы вложенность читалась без счёта отступов. */
+.tiptap-content .ProseMirror ul ul {
+  list-style: circle;
+}
+.tiptap-content .ProseMirror ol ol {
+  list-style: lower-alpha;
+}
+.tiptap-content .ProseMirror li::marker {
+  color: var(--color-sub);
+}
+.tiptap-content .ProseMirror li {
+  margin: 0.15em 0;
+}
+.tiptap-content .ProseMirror blockquote {
+  border-left: 3px solid var(--color-stroke);
+  padding-left: 0.8em;
+  color: var(--color-sub);
+  margin: 0 0 0.6em;
+}
+/* Разделитель — добавлен вместе с кнопкой в тулбаре (29.08.2026,
+   карточка 9b4c4984). Раньше не было и кнопки: горизонтальная линия
+   была доступна через разметку, но без UI. Tailwind (preflight)
+   выпиливает дефолтные рамки/тени у hr, без явного правила он
+   невидим — остаётся один margin. 1px тонкая линия под цветом
+   обводки, как у панелей проекта. */
+.tiptap-content .ProseMirror hr {
+  border: 0;
+  border-top: 1px solid var(--color-stroke);
+  margin: 1.2em 0;
+}
+/* Зачёркивание — кнопка Strikethrough в тулбаре. TipTap рендерит
+   марку strike как <s>, в исторических браузерах тот же селектор
+   покрывал и <strike> (deprecated). Цвет sub, чтобы не путать с
+   маркером выделения, остальная геометрия — текстовая (никакой
+   собственной обводки), начертание само сообщает о формате. */
+.tiptap-content .ProseMirror s,
+.tiptap-content .ProseMirror strike {
+  text-decoration: line-through;
+  color: var(--color-sub);
+}
+/* Ссылка — собственный оттенок, чтобы отличать её от выделения и
+   маркера; подчёркивание убрано при наведении/фокусе — иначе
+   ссылки дёргались бы вёрсткой при тапе в редакторе (TipTap
+   openOnClick:false не открывает адрес, но :hover на iOS WebKit
+   срабатывает перед :active, и прыжок подчёркивания заметен). */
+.tiptap-content .ProseMirror a {
+  color: var(--color-blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.tiptap-content .ProseMirror a:hover,
+.tiptap-content .ProseMirror a:focus-visible {
+  text-decoration: none;
+}
+.tiptap-content .ProseMirror code {
+  background: var(--color-card2);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+/* Таблица и блок кода — стили под TipTap-расширения table и code-block-lowlight
+   (29.08.2026, задача 9af4af2a). Расширения ставит соседний кусок;
+   тут — только правила отрисовки. Тёмная тема держится на токенах
+   --color-card2 / --color-stroke / --color-sub (фоны и обводки),
+   подсветка lowlight — на цветах дизайн-системы (зелёный/teal для строк,
+   синий/purple для ключевых слов, sub для комментариев). Новых токенов
+   в :root не заводим. */
+.tiptap-content .ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.6em 0;
+  table-layout: auto;
+}
+.tiptap-content .ProseMirror th,
+.tiptap-content .ProseMirror td {
+  border: 1px solid var(--color-stroke);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  min-width: 4em;
+}
+.tiptap-content .ProseMirror th {
+  background: var(--color-card2);
+  font-weight: 600;
+  color: var(--color-text);
+}
+.tiptap-content .ProseMirror td {
+  background: transparent;
+}
+.tiptap-content .ProseMirror pre {
+  background: var(--color-card2);
+  border: 1px solid var(--color-stroke);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0.6em 0;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+/* Внутри <pre> <code> — не «бейджик», а сам код: фон и скругления уже
+   дал pre, остаётся только убрать собственный бейджик у code внутри. */
+.tiptap-content .ProseMirror pre code {
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  font-size: inherit;
+}
+/* Inline-код, который не лежит внутри <pre>. */
+.tiptap-content .ProseMirror code:not(pre code) {
+  background: var(--color-card2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  color: var(--color-text);
+}
+/* Подсветка lowlight. Низкоуровневые правила lowlight (стандартные имена
+   .hljs-*) раскрашиваем через ТЕ ЖЕ цвета, что используются в дизайне
+   для статусов и меток, — без новых переменных. Семантика та же:
+   теал/зелёный = строки и значения, оранж/фиолетовый = ключевые
+   слова, sub = комментарии. */
+.tiptap-content .ProseMirror .hljs-keyword,
+.tiptap-content .ProseMirror .hljs-selector-tag,
+.tiptap-content .ProseMirror .hljs-built_in,
+.tiptap-content .ProseMirror .hljs-meta {
+  color: var(--color-purple);
+}
+.tiptap-content .ProseMirror .hljs-string,
+.tiptap-content .ProseMirror .hljs-attr-value,
+.tiptap-content .ProseMirror .hljs-literal,
+.tiptap-content .ProseMirror .hljs-symbol,
+.tiptap-content .ProseMirror .hljs-addition {
+  color: var(--color-teal);
+}
+.tiptap-content .ProseMirror .hljs-number,
+.tiptap-content .ProseMirror .hljs-literal {
+  color: var(--color-orange);
+}
+.tiptap-content .ProseMirror .hljs-comment,
+.tiptap-content .ProseMirror .hljs-quote,
+.tiptap-content .ProseMirror .hljs-deletion {
+  color: var(--color-sub);
+  font-style: italic;
+}
+.tiptap-content .ProseMirror .hljs-function .hljs-title,
+.tiptap-content .ProseMirror .hljs-title.function_,
+.tiptap-content .ProseMirror .hljs-title.function {
+  color: var(--color-blue);
+}
+.tiptap-content .ProseMirror .hljs-variable,
+.tiptap-content .ProseMirror .hljs-attribute,
+.tiptap-content .ProseMirror .hljs-name,
+.tiptap-content .ProseMirror .hljs-params {
+  color: var(--color-text);
+}
+/* Узкий экран — на телефоне таблица должна умещаться без горизонтального
+   скролла внутри ячейки. */
+@media (max-width: 480px) {
+  .tiptap-content .ProseMirror th,
+  .tiptap-content .ProseMirror td {
+    padding: 4px 6px;
+    font-size: 13px;
+  }
+  .tiptap-content .ProseMirror pre {
+    font-size: 12px;
+    padding: 10px 12px;
+  }
+}
+/* Чек-боксы (TaskList/TaskItem) — свой список, без маркера/номера, с
+   реальным <input type="checkbox"> ProseMirror сам ставит на каждый li. */
+.tiptap-content .ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.2em;
+}
+.tiptap-content .ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+}
+.tiptap-content .ProseMirror ul[data-type="taskList"] li > label {
+  margin-top: 0.2em;
+  user-select: none;
+}
+.tiptap-content .ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+.tiptap-content .ProseMirror ul[data-type="taskList"] input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--color-red);
+}
+.tiptap-content
+  .ProseMirror
+  ul[data-type="taskList"]
+  li[data-checked="true"]
+  > div {
+  color: var(--color-dim);
+  text-decoration: line-through;
+}
+/* Placeholder (extension-placeholder) — плейсхолдер пустого документа. */
+.tiptap-content .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--color-dim);
+  pointer-events: none;
+}
+
+/* «Печатает…» в чате координации (28.08.2026). Три точки, гаснущие волной —
+   тот же приём, что у dash-glow у шага в работе: ничего не двигается
+   физически, меняется только прозрачность. Числа выведены из подписи, а не
+   подобраны: текст строки 12px → точка 12/3 = 4px, зазор 4px (spacing.xs),
+   вся группа 3×4 + 2×4 = 20px. Период 1.2s и сдвиг 0.2s на точку дают
+   волну, которая успевает пройти группу и не мельтешит. */
+@keyframes nt-typing-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+.nt-typing-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: nt-typing-dot 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Волну гасим, точки остаются видимыми: состояние здесь несёт сама
+     подпись «печатает», движение только помогает её заметить. */
+  .nt-typing-dot {
+    animation: none;
+    opacity: 0.6;
+  }
 }

@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useOpenTask } from "../lib/useOpenTask";
 import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
@@ -26,7 +27,6 @@ import {
 import {
   DEFAULT_TASK_FILTERS,
   filterTasks,
-  countActiveTaskFilters,
   buildProjectOptions,
   buildLabelOptions,
   buildAssigneeOptions,
@@ -73,6 +73,7 @@ export function TodayScreen() {
   // см. hourDays ниже и isAgentAssignedTask.
   const { data: agents = [] } = useAgents();
   const navigate = useNavigate();
+  const openTask = useOpenTask();
   const today = todayStr();
   const layout = useAppStore((s) => s.taskLayout.today);
   // Цвет блока в сетке часов берётся от проекта задачи (см. DayHours).
@@ -85,6 +86,31 @@ export function TodayScreen() {
   const menuAnchorRef = useRef<HTMLButtonElement>(null);
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  // 25.08.2026: персистентный выбор видимых проектов (store), отдельно от
+  // ephemeral filters выше — секция «Показывать в разделе» в TaskFilterSheet.
+  const hiddenPlannerProjects = useAppStore(
+    (s) => s.hiddenDailyPlannerProjects,
+  );
+  const toggleDailyPlannerProjectHidden = useAppStore(
+    (s) => s.toggleDailyPlannerProjectHidden,
+  );
+  const hiddenPlannerProjectCount = useMemo(
+    () => projects.filter((p) => hiddenPlannerProjects[p.id]).length,
+    [projects, hiddenPlannerProjects],
+  );
+
+  // Отфильтрованный по видимым проектам универсум задач — источник для
+  // всего экрана (список/доска/сетка часов) ниже. Задачи без project_id
+  // (Входящие) не трогаем: скрыть проект нечем, если у задачи его нет.
+  const plannerTasks = useMemo(
+    () =>
+      hiddenPlannerProjectCount === 0
+        ? allTasks
+        : allTasks.filter(
+            (t) => !t.project_id || !hiddenPlannerProjects[t.project_id],
+          ),
+    [allTasks, hiddenPlannerProjects, hiddenPlannerProjectCount],
+  );
 
   // Single source for "просрочено vs. сегодня" — shared by both layouts
   // (see lib/date.ts) so the list and the board can never quietly disagree
@@ -94,8 +120,8 @@ export function TodayScreen() {
   // filter cleared, used below to tell "genuinely nothing due" (trueEmpty)
   // apart from "filters hid everything" (filteredEmpty).
   const { overdue: rawOverdueAll, todayTasks: rawTodayAll } = useMemo(
-    () => partitionOverdueToday(allTasks, today),
-    [allTasks, today],
+    () => partitionOverdueToday(plannerTasks, today),
+    [plannerTasks, today],
   );
 
   // «Ждут вас» — вычисляемая выборка, НЕ переброска assignee_id
@@ -107,12 +133,12 @@ export function TodayScreen() {
   // готовая-к-приёмке работа.
   const waitingTasksAll = useMemo(() => {
     if (!currentUser) return [];
-    return allTasks
+    return plannerTasks
       .filter(
         (t) =>
           t.status === "active" &&
-          // Владелец трекера принимает и то, что агент завёл сам, —
-          // см. lib/taskOwner.ts (правило по роли, 18.08.2026).
+          // Дочерние задачи оркестратора принимает сам оркестратор, а не владелец
+          !t.parent_id &&
           isTaskOwner(currentUser, t) &&
           (t.agent_state === "blocked" || t.agent_state === "review"),
       )
@@ -120,7 +146,7 @@ export function TodayScreen() {
         const rank = (t: ApiTask) => (t.agent_state === "blocked" ? 0 : 1);
         return rank(a) - rank(b);
       });
-  }, [allTasks, currentUser]);
+  }, [plannerTasks, currentUser]);
 
   // Filter options built from the full pre-filter screen universe (every
   // task that could ever appear here across all three blocks) — same rule
@@ -143,7 +169,6 @@ export function TodayScreen() {
     () => buildAssigneeOptions(screenTaskUniverse),
     [screenTaskUniverse],
   );
-  const activeFilterCount = countActiveTaskFilters(filters);
 
   // Дедуп по приоритету блока: «Ждут вас» → «Просрочено» → «Сегодня». Одна
   // и та же задача рисуется РОВНО один раз, в самом верхнем блоке, которому
@@ -207,7 +232,7 @@ export function TodayScreen() {
 
   const hourDays: DayColumnData[] = useMemo(() => {
     const withoutAgent = (t: ApiTask) => !isAgentAssignedTask(t, agents);
-    const dateTasks = allTasks.filter((t) => t.due_date === activeHourDate);
+    const dateTasks = plannerTasks.filter((t) => t.due_date === activeHourDate);
     const combined =
       activeHourDate === today
         ? Array.from(
@@ -226,17 +251,32 @@ export function TodayScreen() {
         isToday: activeHourDate === today,
       },
     ];
-  }, [activeHourDate, today, waitingTasks, todayTasks, overdueTasks, allTasks, agents]);
+  }, [
+    activeHourDate,
+    today,
+    waitingTasks,
+    todayTasks,
+    overdueTasks,
+    plannerTasks,
+    agents,
+  ]);
 
   // trueEmpty (unaffected by filters — from the "…All" sets) still drives
   // the big illustration screen below: it means there's genuinely nothing
   // due today, not that a filter is hiding everything. filteredEmpty is
   // the new, lighter case — something's due, the current filter just
   // doesn't match any of it.
+  // 25.08.2026: hiddenPlannerProjectCount === 0 — те самые "…All" множества
+  // выше уже посчитаны от plannerTasks (после выбора видимых проектов), а
+  // не от allTasks. Пока хоть один проект скрыт, им нельзя верить как
+  // "искренне пусто" — задачи вполне могут быть, просто их проект спрятан.
+  // В этом случае экран падает в ветку filteredEmpty ниже вместо большой
+  // иллюстрации «ничего на сегодня».
   const trueEmpty =
     !isLoading &&
     !isLoadingUser &&
     !isError &&
+    hiddenPlannerProjectCount === 0 &&
     waitingTasksAll.length === 0 &&
     rawOverdueAll.length === 0 &&
     rawTodayAll.length === 0;
@@ -342,10 +382,11 @@ export function TodayScreen() {
       // несколько, заголовком одну дату не выразить).
       actions={
         <>
-          <TaskFilterButton
-            onClick={() => setFilterSheetOpen(true)}
-            active={activeFilterCount > 0}
-          />
+          {/* Кнопки «Дневник» здесь больше нет (26.08.2026): раздел
+              вынесен в веер отдельным пунктом, и вход в него должен быть
+              один. До этого он успел побывать пунктом под тремя точками
+              и кнопкой в шапке — оба следа сняты. */}
+          <TaskFilterButton onClick={() => setFilterSheetOpen(true)} />
           <button
             ref={menuAnchorRef}
             onClick={() => setMenuOpen((v) => !v)}
@@ -413,6 +454,8 @@ export function TodayScreen() {
                 label: "Поиск",
                 onClick: () => navigate("/search"),
               },
+              // «Дневник» отсюда убран 26.08.2026 — он теперь отдельной
+              // кнопкой в шапке (см. actions выше).
             ]}
           />
         </>
@@ -532,7 +575,7 @@ export function TodayScreen() {
             projectColor={(t) =>
               projects.find((p) => p.id === t.project_id)?.color || "#717171"
             }
-            onTaskClick={(id) => navigate(`/task/${id}`)}
+            onTaskClick={openTask}
             onPrevDay={() => setHourDateOffset((o) => o - 1)}
             onNextDay={() => setHourDateOffset((o) => o + 1)}
             // Перетащили задачу на шкалу — назначаем и время, и дату
@@ -567,7 +610,7 @@ export function TodayScreen() {
         <div className="mt-2">
           <TaskBoard
             columns={boardColumns}
-            onTaskClick={(id) => navigate(`/task/${id}`)}
+            onTaskClick={openTask}
             isLoading={isLoading}
           />
         </div>
@@ -575,9 +618,14 @@ export function TodayScreen() {
         <div className="space-y-[2px]">
           <AppleCalendarEvents dateStr={today} className="mb-2.5" />
           {waitingTasks.length > 0 && (
-            <div className="flex items-center gap-1.5 px-1 pt-2 pb-1">
-              <Icon name="bot" size={13} className="text-text" />
-              <span className="text-[13px] font-semibold text-text">
+            /* 17px, а не 13px: заголовок раздела был МЕЛЬЧЕ строки задачи
+               (15px) и читался как её подпись. Владелец 27.08.2026: «они
+               сливаются с текстом, сразу не понять, что это разделы, а не
+               просто текст задачи». 17px — ступень title из DESIGN.md,
+               ближайшая крупнее body; промежуточных в шкале нет. */
+            <div className="flex items-center gap-1.5 px-1 pt-3 pb-1.5">
+              <Icon name="bot" size={16} className="text-text" />
+              <span className="text-[17px] font-semibold text-text">
                 Ждут вас
               </span>
             </div>
@@ -592,12 +640,12 @@ export function TodayScreen() {
               overdue={t.due_date !== null && t.due_date < today}
               showAgentState
               showDueBadge={false}
-              onClick={() => navigate(`/task/${t.id}`)}
+              onClick={() => openTask(t.id)}
             />
           ))}
           {overdueTasks.length > 0 && (
-            <div className="flex items-center gap-1.5 px-1 pt-2 pb-1">
-              <span className="text-[13px] font-semibold text-red">
+            <div className="flex items-center gap-1.5 px-1 pt-3 pb-1.5">
+              <span className="text-[17px] font-semibold text-red">
                 Просрочено
               </span>
             </div>
@@ -609,7 +657,7 @@ export function TodayScreen() {
               overdue
               showAgentState
               showDueBadge={false}
-              onClick={() => navigate(`/task/${t.id}`)}
+              onClick={() => openTask(t.id)}
             />
           ))}
           {/* Раньше проверялось только overdueTasks.length > 0 — но после
@@ -624,7 +672,7 @@ export function TodayScreen() {
               не читалось на фоне «Ждут вас» так же ясно, как дата в доске. */}
           {todayTasks.length > 0 &&
             (overdueTasks.length > 0 || waitingTasks.length > 0) && (
-              <div className="text-[13px] font-semibold text-sub px-1 pt-3 pb-1">
+              <div className="text-[17px] font-semibold text-sub px-1 pt-3 pb-1.5">
                 {formatDueLabel(today)}
               </div>
             )}
@@ -635,7 +683,7 @@ export function TodayScreen() {
               overdue={false}
               showAgentState
               showDueBadge={false}
-              onClick={() => navigate(`/task/${t.id}`)}
+              onClick={() => openTask(t.id)}
             />
           ))}
         </div>
@@ -655,6 +703,11 @@ export function TodayScreen() {
         projectOptions={projectFilterOptions}
         labelOptions={labelFilterOptions}
         assigneeOptions={assigneeFilterOptions}
+        plannerProjects={{
+          projects,
+          hiddenProjectIds: hiddenPlannerProjects,
+          onToggle: toggleDailyPlannerProjectHidden,
+        }}
       />
     </div>
   );

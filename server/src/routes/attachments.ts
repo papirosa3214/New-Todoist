@@ -48,6 +48,11 @@ const ALLOWED_MIME = [
   /^image\//,
   /^application\/pdf$/,
   /^text\/plain$/,
+  // markdown — тот же простой текст, и именно им агенты отдают отчёты и описи.
+  // 26.08.2026 попытка приложить к задаче отчёт .md отлетела с 415: клиент
+  // проставляет `text/markdown`, а в списке был только `text/plain`. Браузеру
+  // такой файл отдаётся как текст, исполняемым он не становится.
+  /^text\/markdown$/,
   /^application\/msword$/,
   /^application\/vnd\.openxmlformats-officedocument\./,
   /^application\/vnd\.oasis\.opendocument\./,
@@ -55,6 +60,85 @@ const ALLOWED_MIME = [
 
 function mimeAllowed(mime: string): boolean {
   return ALLOWED_MIME.some((re) => re.test(mime));
+}
+
+/** Файл не приняли — со статусом, который надо вернуть клиенту. */
+export class UploadRejected extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Общая часть заливки: проверить байты, тип и имя, положить файл на диск и
+ * завести строку в базе. Куда именно она ссылается — на задачу, на
+ * комментарий или на сообщение чата — знает только вызывающий, он и пишет
+ * свой INSERT. Раньше всё это жило внутри одного маршрута; когда файлы
+ * понадобились чату (28.08.2026), проверки пришлось бы копировать — а
+ * разъехавшийся предел размера или список типов в двух местах никто бы не
+ * заметил, пока файл не пролез мимо.
+ */
+export function saveUploadedFile(
+  req: { body: unknown; name?: unknown; mime?: unknown },
+  insert: (fields: {
+    id: string;
+    fileName: string;
+    mime: string;
+    size: number;
+    storedName: string;
+  }) => void,
+): string {
+  const body = req.body;
+  if (!body || !Buffer.isBuffer(body) || body.length === 0) {
+    throw new UploadRejected(400, "пустой файл");
+  }
+  if (body.length > MAX_SIZE) {
+    throw new UploadRejected(
+      413,
+      `файл больше ${Math.round(MAX_SIZE / 1024 / 1024)} МБ`,
+    );
+  }
+
+  const mime = String(req.mime || "application/octet-stream")
+    .split(";")[0]
+    .trim();
+  if (!mimeAllowed(mime)) {
+    throw new UploadRejected(415, `такие файлы не принимаем: ${mime}`);
+  }
+
+  // Имя приходит закодированным (в нём бывают пробелы и кириллица).
+  // Битую кодировку не роняем в 500 — берём как есть.
+  let fileName = "файл";
+  if (typeof req.name === "string" && req.name.trim()) {
+    try {
+      fileName = decodeURIComponent(req.name).trim();
+    } catch {
+      fileName = req.name.trim();
+    }
+  }
+  // Из имени берём только его само: ни путей, ни разделителей.
+  fileName = path.basename(fileName).slice(0, 200);
+
+  const id = uid();
+  const ext = path.extname(fileName).slice(0, 12);
+  const storedName = `${id}${ext}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, storedName), body);
+  insert({ id, fileName, mime, size: body.length, storedName });
+  return id;
+}
+
+// Кому файл виден. У вложения задачи — тому, кто видит задачу. У вложения
+// чата задачи нет вовсе: чат общий канал (v1, routes/chat.ts — «сообщение
+// видит каждый»), поэтому виден любому участнику. Ещё не подобранный файл
+// (обе ссылки NULL) виден только тому, кто его залил: он существует ровно
+// между выбором файла и отправкой сообщения.
+function canRead(att: any, userId: string): boolean {
+  if (att.task_id) return Boolean(getTaskForRead(att.task_id, userId));
+  if (att.chat_message_id) return true;
+  return att.user_id === userId;
 }
 
 export function attachmentRow(id: string) {
@@ -93,63 +177,40 @@ export function registerAttachmentRoutes(app: FastifyInstance) {
       const task = getTaskForWrite(req.params.taskId, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
-      const body: Buffer = req.body;
-      if (!body || !Buffer.isBuffer(body) || body.length === 0) {
-        return reply.code(400).send({ error: "пустой файл" });
-      }
-      if (body.length > MAX_SIZE) {
-        return reply.code(413).send({
-          error: `файл больше ${Math.round(MAX_SIZE / 1024 / 1024)} МБ`,
-        });
-      }
-
-      const mime = (req.headers["content-type"] || "application/octet-stream")
-        .split(";")[0]
-        .trim();
-      if (!mimeAllowed(mime)) {
-        return reply
-          .code(415)
-          .send({ error: `такие файлы не принимаем: ${mime}` });
-      }
-
-      // Имя приходит закодированным (в нём бывают пробелы и кириллица).
-      // Битую кодировку не роняем в 500 — берём как есть.
-      let fileName = "файл";
-      const raw = req.query?.name;
-      if (typeof raw === "string" && raw.trim()) {
-        try {
-          fileName = decodeURIComponent(raw).trim();
-        } catch {
-          fileName = raw.trim();
-        }
-      }
-      // Из имени берём только его само: ни путей, ни разделителей.
-      fileName = path.basename(fileName).slice(0, 200);
-
       // Вид — только из двух известных: неизвестное слово в query не должно
       // заводить в базе третий, никем не читаемый вид вложений.
       const kind = req.query?.kind === "task" ? "task" : "comment";
 
-      const id = uid();
-      const ext = path.extname(fileName).slice(0, 12);
-      const storedName = `${id}${ext}`;
-      fs.writeFileSync(path.join(UPLOAD_DIR, storedName), body);
-
-      db.prepare(
-        `INSERT INTO attachments (id, task_id, comment_id, kind, user_id, file_name, mime, size, stored_name)
-         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        id,
-        req.params.taskId,
-        kind,
-        req.userId,
-        fileName,
-        mime,
-        body.length,
-        storedName,
-      );
-
-      return reply.code(201).send({ attachment: attachmentRow(id) });
+      try {
+        const id = saveUploadedFile(
+          {
+            body: req.body,
+            name: req.query?.name,
+            mime: req.headers["content-type"],
+          },
+          (f) =>
+            db
+              .prepare(
+                `INSERT INTO attachments (id, task_id, comment_id, kind, user_id, file_name, mime, size, stored_name)
+                 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                f.id,
+                req.params.taskId,
+                kind,
+                req.userId,
+                f.fileName,
+                f.mime,
+                f.size,
+                f.storedName,
+              ),
+        );
+        return reply.code(201).send({ attachment: attachmentRow(id) });
+      } catch (e) {
+        if (e instanceof UploadRejected)
+          return reply.code(e.status).send({ error: e.message });
+        throw e;
+      }
     },
   );
 
@@ -163,7 +224,7 @@ export function registerAttachmentRoutes(app: FastifyInstance) {
         .prepare("SELECT * FROM attachments WHERE id = ?")
         .get(req.params.id) as any;
       if (!att) return reply.code(404).send({ error: "Not found" });
-      if (!getTaskForRead(att.task_id, req.userId)) {
+      if (!canRead(att, req.userId)) {
         return reply.code(404).send({ error: "Not found" });
       }
 

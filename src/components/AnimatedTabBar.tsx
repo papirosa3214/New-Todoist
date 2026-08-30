@@ -1,127 +1,131 @@
-import {
-  useCallback,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useState, useLayoutEffect, type ReactNode } from "react";
 
-// Дословный порт ~/Проекты/CRM/CRM-Castom/frontend/src/components/ui/
-// AnimatedTabBar.tsx (118 строк, эталон, утверждён владельцем 2026-07-29 в
-// том проекте). Задача 2026-08-11: перенести «горбик» 1:1, а не «по мотивам»
-// — предыдущая попытка изобрела свою calc()-формулу позиционирования и не
-// взяла CSS-геометрию оригинала, за что была забракована.
-// Логика этого файла НЕ ТРОНУТА относительно оригинала: измерение позиции
-// активной кнопки через getBoundingClientRect, ResizeObserver, --timeOut
-// трюк для мгновенного «прыжка» без анимации при ресайзе, ре-синхронизация
-// activeIndex с defaultIndex. Единственное отличие от оригинала — имена CSS-
-// классов: там `.menu`/`.menu__item`/`.menu__border`, здесь с префиксом
-// `nt-tabbar-*`, чтобы не столкнуться с уже существующими классами проекта
-// (в index.css уже есть свой смысл у слова «меню» — плавающее меню действий).
-// Сама CSS-геометрия (размеры в em, форма волны clip-path, тени) перенесена
-// без изменений в index.css, блок "AnimatedTabBar (перенос из CRM...)".
+// Порт нижней панели из клиентского мини-аппа CRM (~/Проекты/CRM/CRM-Castom/
+// frontend/src/components/ui/AnimatedTabBar.tsx). От оригинала осталась суть —
+// ряд иконок, где активная подсвечивается кругом, — но два его фирменных
+// приёма сняты по решению владельца 27.08.2026:
+//
+//  • ГОРБ («пузырь» с clip-path, ехавший за активной вкладкой) убран целиком:
+//    «по бокам кнопочки, никакого горбика не надо». Вместе с ним ушли расчёт
+//    позиции через getBoundingClientRect, ResizeObserver и трюк --timeOut —
+//    двигать больше нечего, ряд статичный.
+//  • ПОДЪЁМ активной вкладки убран там же: круг-«шарик» появляется под
+//    иконкой прямо в полосе (CSS-анимация scale, см. index.css).
+//
+// Что добавлено против оригинала — центральная кнопка создания: по референсу
+// владельца (скриншот 27.08.2026) четыре вкладки стоят по бокам, а посередине
+// круглая кнопка, открывающая меню «что создать». Она НЕ вкладка: активной не
+// бывает, в нумерации вкладок не участвует.
 
 export interface TabItem {
   icon: ReactNode;
-  // Только для aria-label — оригинал тоже не рисует подпись под иконкой
-  // (см. AGENTS замечание в отчёте о переносе: подписи физически не влезают
-  // в геометрию оригинала без правки его чисел, поэтому их здесь нет).
+  // Только для aria-label — панель не рисует подписи под иконками
+  // (в геометрию оригинала они не влезают, и владелец их не просил).
   label?: string;
+}
+
+export interface CenterAction {
+  label: string;
+  onPress: () => void;
+  /** Меню открыто — кнопка доворачивает «плюс» в «крестик». */
+  open?: boolean;
 }
 
 export interface AnimatedTabBarProps {
   items: TabItem[];
   defaultIndex?: number;
   onTabChange?: (index: number) => void;
+  /** Кнопка создания в середину ряда. Без неё панель — просто ряд вкладок. */
+  centerAction?: CenterAction;
 }
 
 export function AnimatedTabBar({
   items,
   defaultIndex = 0,
   onTabChange,
+  centerAction,
 }: AnimatedTabBarProps) {
   const [activeIndex, setActiveIndex] = useState(defaultIndex);
-  const menuRef = useRef<HTMLMenuElement>(null);
-  const menuBorderRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  const offsetMenuBorder = useCallback(() => {
-    const activeItem = itemRefs.current[activeIndex];
-    const menu = menuRef.current;
-    const menuBorder = menuBorderRef.current;
-    if (!activeItem || !menu || !menuBorder) return;
-    const offsetActiveItem = activeItem.getBoundingClientRect();
-    const left = Math.floor(
-      offsetActiveItem.left -
-        menu.getBoundingClientRect().left -
-        (menuBorder.offsetWidth - offsetActiveItem.width) / 2,
-    );
-    menuBorder.style.transform = `translate3d(${left}px, 0, 0)`;
-  }, [activeIndex]);
-
-  useLayoutEffect(() => {
-    offsetMenuBorder();
-    const snapInstantly = () => {
-      menuRef.current?.style.setProperty("--timeOut", "none");
-      offsetMenuBorder();
-    };
-    window.addEventListener("resize", snapInstantly);
-    // ResizeObserver — бар может смонтироваться скрытым (мобильная/десктоп
-    // раскладка Layout.tsx) и стать видимым без resize-события окна, иначе
-    // бегунок застревает в translate3d(0,0,0).
-    const ro = new ResizeObserver(snapInstantly);
-    if (menuRef.current) ro.observe(menuRef.current);
-    return () => {
-      window.removeEventListener("resize", snapInstantly);
-      ro.disconnect();
-    };
-  }, [offsetMenuBorder, items.length]);
-
-  // Ре-синхронизация при смене вкладки извне (навигация не только кликом по
-  // бару, а и, например, программным navigate()).
+  // Ре-синхронизация при смене вкладки извне (программный navigate, переход
+  // по ссылке, экран вне вкладок — тогда приходит -1 и активной нет ни одной).
   useLayoutEffect(() => {
     setActiveIndex(defaultIndex);
   }, [defaultIndex]);
 
   const handleItemClick = (index: number) => {
-    menuRef.current?.style.removeProperty("--timeOut");
     if (activeIndex === index) return;
     setActiveIndex(index);
     onTabChange?.(index);
   };
 
-  return (
-    <>
-      <div className="nt-tabbar-svg-container" aria-hidden="true">
-        <svg viewBox="0 0 202.9 45.5">
-          <clipPath
-            id="nt-tabbar-menu-clip-path"
-            clipPathUnits="objectBoundingBox"
-            transform="scale(0.0049285362247413 0.021978021978022)"
-          >
-            <path d="M6.7,45.5c5.7,0.1,14.1-0.4,23.3-4c5.7-2.3,9.9-5,18.1-10.5c10.7-7.1,11.8-9.2,20.6-14.3c5-2.9,9.2-5.2,15.2-7 c7.1-2.1,13.3-2.3,17.6-2.1c4.2-0.2,10.5,0.1,17.6,2.1c6.1,1.8,10.2,4.1,15.2,7c8.8,5,9.9,7.1,20.6,14.3c8.3,5.5,12.4,8.2,18.1,10.5 c9.2,3.6,17.6,4.2,23.3,4H6.7z" />
-          </clipPath>
-        </svg>
-      </div>
+  // Кнопка встаёт ровно в середину: при четырёх вкладках это две слева и две
+  // справа — то, что владелец и просил («получится у нас как раз 4 кнопки по
+  // бокам, центральная посередине»).
+  const centerAt = Math.ceil(items.length / 2);
 
-      <menu className="nt-tabbar-menu" ref={menuRef}>
-        {items.map((item, index) => (
-          <button
+  return (
+    <menu className="nt-tabbar-menu">
+      {items.slice(0, centerAt).map((item, index) => (
+        <TabButton
+          key={index}
+          item={item}
+          index={index}
+          active={activeIndex === index}
+          onClick={handleItemClick}
+        />
+      ))}
+
+      {centerAction && (
+        <button
+          type="button"
+          className={`nt-tabbar-menu__action ${centerAction.open ? "open" : ""}`}
+          onClick={centerAction.onPress}
+          aria-label={centerAction.label}
+          aria-expanded={centerAction.open ?? false}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+      )}
+
+      {items.slice(centerAt).map((item, i) => {
+        const index = centerAt + i;
+        return (
+          <TabButton
             key={index}
-            ref={(el) => {
-              itemRefs.current[index] = el;
-            }}
-            type="button"
-            className={`nt-tabbar-menu__item ${activeIndex === index ? "active" : ""}`}
-            onClick={() => handleItemClick(index)}
-            aria-label={item.label ?? `Tab ${index + 1}`}
-            aria-current={activeIndex === index ? "page" : undefined}
-          >
-            {item.icon}
-          </button>
-        ))}
-        <div className="nt-tabbar-menu__border" ref={menuBorderRef} />
-      </menu>
-    </>
+            item={item}
+            index={index}
+            active={activeIndex === index}
+            onClick={handleItemClick}
+          />
+        );
+      })}
+    </menu>
+  );
+}
+
+function TabButton({
+  item,
+  index,
+  active,
+  onClick,
+}: {
+  item: TabItem;
+  index: number;
+  active: boolean;
+  onClick: (index: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`nt-tabbar-menu__item ${active ? "active" : ""}`}
+      onClick={() => onClick(index)}
+      aria-label={item.label ?? `Tab ${index + 1}`}
+      aria-current={active ? "page" : undefined}
+    >
+      {item.icon}
+    </button>
   );
 }

@@ -12,10 +12,9 @@ import { useServerStatus } from "../api/server";
 import { useAgentService, useToggleAgentService } from "../api/agents";
 import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
 import { getErrorMessage } from "../lib/errors";
-import { useAppStore, AI_PROVIDERS } from "../store";
+import { useAppStore } from "../store";
 import { Biometrics } from "../lib/biometrics";
 import { EditProfileModal } from "../components/EditProfileModal";
-import { AiProviderModal } from "../components/AiProviderModal";
 
 interface RowProps {
   icon: string;
@@ -230,17 +229,14 @@ function AccountAvatarRow({
         className="hidden"
         onChange={onPick}
       />
-      <div 
-        className="flex-1 min-w-0 cursor-pointer"
-        onClick={onEdit}
-      >
+      <div className="flex-1 min-w-0 cursor-pointer" onClick={onEdit}>
         <div className="text-[15px] text-text font-medium truncate flex items-center gap-1.5">
           {name}
         </div>
         {email && <div className="text-[13px] text-sub truncate">{email}</div>}
         {error && <div className="text-[12px] text-coral mt-0.5">{error}</div>}
       </div>
-      
+
       <div className="flex items-center gap-2 shrink-0">
         {onEdit && (
           <button
@@ -343,7 +339,11 @@ function ServerSection() {
   if (isLoading || !data) {
     return (
       <FieldGroup>
-        <InfoRow icon="activity" label="Сервер 192.168.1.110" value="проверяю связь…" />
+        <InfoRow
+          icon="activity"
+          label="Сервер 192.168.1.110"
+          value="проверяю связь…"
+        />
       </FieldGroup>
     );
   }
@@ -380,7 +380,7 @@ function ServerSection() {
           label="Версия"
           value={
             data.commit_at
-              ? `${data.commit} · ${new Date(data.commit_at).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}`
+              ? `${data.commit} · ${new Date(data.commit_at).toLocaleDateString("ru-RU", { day: "numeric", month: "short", timeZone: "Europe/Moscow" })}`
               : data.commit
           }
         />
@@ -415,13 +415,11 @@ export function SettingsScreen() {
   const setTheme = useAppStore((s) => s.setTheme);
   const [bioAvailable, setBioAvailable] = useState(false);
   const [bioType, setBioType] = useState<string>("none");
-  const [faceIdEnabled, setFaceIdEnabled] = useState(() => Biometrics.isEnabled());
-  const aiProvider = useAppStore((s) => s.aiProvider);
-  const localOllamaModel = useAppStore((s) => s.localOllamaModel);
-  const currentAiInfo = AI_PROVIDERS[aiProvider] || AI_PROVIDERS.local;
+  const [faceIdEnabled, setFaceIdEnabled] = useState(() =>
+    Biometrics.isEnabled(),
+  );
 
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
-  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
 
   useEffect(() => {
     Biometrics.isAvailable().then((info) => {
@@ -480,11 +478,15 @@ export function SettingsScreen() {
             checked={theme === "dark"}
             onChange={() => setTheme(theme === "dark" ? "light" : "dark")}
           />
-          {(bioAvailable || (typeof window !== "undefined" && !!(window as any).Capacitor?.isNativePlatform?.())) && (
+          {(bioAvailable ||
+            (typeof window !== "undefined" &&
+              !!(window as any).Capacitor?.isNativePlatform?.())) && (
             <ToggleRow
               icon="shield"
               iconColor="#34C759"
-              label={bioType === "touchId" ? "Вход по Touch ID" : "Вход по Face ID"}
+              label={
+                bioType === "touchId" ? "Вход по Touch ID" : "Вход по Face ID"
+              }
               valueLabel={faceIdEnabled ? "Включён" : "Выключен"}
               checked={faceIdEnabled}
               onChange={() => {
@@ -494,26 +496,28 @@ export function SettingsScreen() {
               }}
             />
           )}
-          <InfoRow icon="image" iconColor="#FF2D55" label="Иконка" value="Pure Minimal Glass" />
+          <InfoRow
+            icon="image"
+            iconColor="#FF2D55"
+            label="Иконка"
+            value="Pure Minimal Glass"
+          />
         </FieldGroup>
       </div>
 
-      {/* AI Assistant Section */}
+      {/* AI — ВЕСЬ в одном разделе (Максим 26.08.2026: «уже нагородили —
+          мозг в одном месте, модели в другом, Ollama в третьем»). Одна
+          строка-вход, всё внутри: /settings/voice-models. */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">
-        AI Ассистент и Интеллект
+        Искусственный интеллект
       </div>
       <div className="mb-4">
         <FieldGroup>
           <Row
-            icon="bot"
-            iconColor={currentAiInfo.color}
-            label="Основной AI Мозг"
-            value={
-              aiProvider === "local"
-                ? `Локальная (${localOllamaModel.replace(":latest", "")})`
-                : currentAiInfo.name
-            }
-            onClick={() => setIsAiModalOpen(true)}
+            icon="sparkles"
+            iconColor="#AF52DE"
+            label="Искусственный интеллект"
+            onClick={() => navigate("/settings/voice-models")}
           />
         </FieldGroup>
       </div>
@@ -522,12 +526,11 @@ export function SettingsScreen() {
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">Общие</div>
       <div className="mb-4">
         <FieldGroup>
-          <Row
-            icon="hash"
-            iconColor="#E44235"
-            label="Проекты"
-            onClick={() => navigate("/projects")}
-          />
+          {/* Строки «Проекты» здесь больше нет (26.08.2026): проекты стали
+              пунктом веера, а Настройки — сами по себе строка в «Обзоре».
+              Держать вход и там, и там значило бы вести к одному экрану
+              двумя путями, причём этот был длиннее: Обзор → Настройки →
+              Проекты. */}
           <Row
             icon="bookmark"
             iconColor="#FF9500"
@@ -537,12 +540,6 @@ export function SettingsScreen() {
           <Row icon="tag" label="Метки" onClick={() => navigate("/labels")} />
           <Row icon="bot" label="Команда" onClick={() => navigate("/agents")} />
           <Row
-            icon="mic"
-            iconColor="#4a9fd8"
-            label="Модели распознавания"
-            onClick={() => navigate("/settings/voice-models")}
-          />
-          <Row
             icon="share"
             iconColor="#34C759"
             label="Интеграции (Google, Apple)"
@@ -550,11 +547,6 @@ export function SettingsScreen() {
           />
         </FieldGroup>
       </div>
-
-      <AiProviderModal
-        isOpen={isAiModalOpen}
-        onClose={() => setIsAiModalOpen(false)}
-      />
 
       {/* Сервер */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">Сервер</div>

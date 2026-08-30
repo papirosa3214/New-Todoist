@@ -2,8 +2,10 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { snapshot } from "../activeAgent.js";
 import {
   getProjectForUser,
+  getProjectForWrite,
   getLabelForUser,
   visibleScope,
   ownerForNewShared,
@@ -47,25 +49,48 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       .all(...scope.params);
   });
 
-  app.post<{ Body: { name: string; color?: string } }>("/api/projects", {
-    preHandler: authPre,
-    handler: async (req: any, reply) => {
-      const name =
-        typeof req.body?.name === "string" ? req.body.name.trim() : "";
-      if (!name) {
-        return reply.code(400).send({ error: "Укажите название проекта" });
-      }
-      const id = uid();
-      const { color } = req.body;
-      db.prepare(
-        "INSERT INTO projects (id, name, color, owner_id) VALUES (?,?,?,?)",
-        // Проект — общий инструмент: агент заводит его для работы, а не
-        // для себя. Записанный на агента, он не виден остальным (см.
-        // ownerForNewShared).
-      ).run(id, name, color || "#4A9FD8", ownerForNewShared(req.userId));
-      return db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
+  app.post<{ Body: { name: string; color?: string; with_docs?: boolean } }>(
+    "/api/projects",
+    {
+      preHandler: authPre,
+      handler: async (req: any, reply) => {
+        const name =
+          typeof req.body?.name === "string" ? req.body.name.trim() : "";
+        if (!name) {
+          return reply.code(400).send({ error: "Укажите название проекта" });
+        }
+        const id = uid();
+        const { color } = req.body;
+        db.prepare(
+          "INSERT INTO projects (id, name, color, owner_id) VALUES (?,?,?,?)",
+          // Проект — общий инструмент: агент заводит его для работы, а не
+          // для себя. Записанный на агента, он не виден остальным (см.
+          // ownerForNewShared).
+        ).run(id, name, color || "#4A9FD8", ownerForNewShared(req.userId));
+
+        // Папка документации — по запросу (26.08.2026, для агентов).
+        // Не по умолчанию: человек заводит проекты из интерфейса и пустая
+        // папка на каждый из них засорила бы дерево заметок. Агент же
+        // просит явно и сразу складывает туда документацию.
+        if (req.body?.with_docs === true) {
+          const pos = db
+            .prepare(
+              "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM journal_folders WHERE parent_id IS NULL",
+            )
+            .get() as { p: number };
+          const res = db
+            .prepare(
+              "INSERT INTO journal_folders (parent_id, name, position) VALUES (NULL, ?, ?)",
+            )
+            .run(name, pos.p);
+          db.prepare(
+            "UPDATE projects SET notes_folder_id = ? WHERE id = ?",
+          ).run(res.lastInsertRowid, id);
+        }
+        return db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
+      },
     },
-  });
+  );
 
   app.patch<{
     Params: { id: string };
@@ -74,11 +99,38 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       color?: string;
       position?: number | null;
       pinned?: boolean;
+      /** Папка заметок проекта; null — отвязать. */
+      notes_folder_id?: number | null;
     };
   }>("/api/projects/:id", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const project = getProjectForUser(req.params.id, req.userId);
+      // Правка — write-путь: он же пускает оркестратора в чужой проект
+      // (access.ts). Удаление ниже осталось на getProjectForUser.
+      let project = getProjectForWrite(req.params.id, req.userId);
+
+      // Особый случай: агент прикрепляет папку документации к проекту
+      // человека (26.08.2026). Обычный PATCH пускает только владельца — и
+      // правильно делает, чужие проекты агент переименовывать не должен.
+      // Но привязка папки заметок — не редактирование проекта, а ровно то,
+      // ради чего документация и заводилась: агент кладёт в неё описания,
+      // разборы, ТЗ. Разрешаем узко: ТОЛЬКО когда в теле нет ничего, кроме
+      // notes_folder_id.
+      if (!project) {
+        const keys = Object.keys(req.body || {});
+        const onlyFolder = keys.length === 1 && keys[0] === "notes_folder_id";
+        const isAgent =
+          (
+            db
+              .prepare("SELECT type FROM users WHERE id = ?")
+              .get(req.userId) as { type?: string } | undefined
+          )?.type === "ai";
+        if (onlyFolder && isAgent) {
+          project = db
+            .prepare("SELECT * FROM projects WHERE id = ?")
+            .get(req.params.id);
+        }
+      }
       if (!project) return reply.code(404).send({ error: "Not found" });
 
       // Частичное обновление (20.08.2026, drag&drop/закрепление проектов):
@@ -119,6 +171,25 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       if (pinned !== undefined) {
         fields.push("pinned = ?");
         values.push(pinned ? 1 : 0);
+      }
+      // Папка заметок проекта. Ссылается на существующую папку Дневника
+      // (journal_folders), своей иерархии у проекта нет — так папка
+      // остаётся видна в Дневнике и работает перетаскивание.
+      if (req.body?.notes_folder_id !== undefined) {
+        const raw = req.body.notes_folder_id;
+        if (raw !== null) {
+          if (!Number.isInteger(raw)) {
+            return reply.code(400).send({ error: "Неверный notes_folder_id" });
+          }
+          const exists = db
+            .prepare("SELECT id FROM journal_folders WHERE id = ?")
+            .get(raw) as { id: number } | undefined;
+          if (!exists) {
+            return reply.code(400).send({ error: "Папка не найдена" });
+          }
+        }
+        fields.push("notes_folder_id = ?");
+        values.push(raw);
       }
 
       if (fields.length) {
@@ -227,20 +298,52 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   // Email is intentionally never selected: the frontend doesn't use it
   // (see src/screens/AgentsScreen.tsx, src/screens/TaskFormScreen.tsx).
   app.get("/api/agents", { preHandler: authPre }, async (req: any) => {
-    return db
+    // Return all AI agents (type='ai') and system bots regardless of shared tasks
+    const rows = db
       .prepare(
-        `SELECT id, name, role, type, avatar_color, avatar_url, initials, status
+        `SELECT id, name, role, type, avatar_color, avatar_url,
+                avatar_url_working, avatar_url_blocked, initials, status,
+                last_seen_at,
+                (CASE
+                   WHEN EXISTS (
+                     SELECT 1 FROM tasks t
+                     WHERE t.assignee_id = users.id AND t.agent_state = 'blocked'
+                   ) THEN 'blocked'
+                   WHEN EXISTS (
+                     SELECT 1 FROM tasks t
+                     WHERE t.assignee_id = users.id AND t.agent_state = 'in_progress'
+                   ) THEN 'working'
+                   ELSE NULL
+                 END) AS activity,
+                (SELECT limits FROM user_integrations WHERE user_id = users.id AND provider = 'google') AS limits
          FROM users
-         WHERE is_system_bot = 1
-            OR id = ?
-            OR created_by = ?
-            OR id IN (
-              SELECT assignee_id FROM tasks WHERE creator_id = ? AND assignee_id IS NOT NULL
-              UNION
-              SELECT creator_id FROM tasks WHERE assignee_id = ? AND creator_id IS NOT NULL
-            )`,
+         WHERE type = 'ai' OR is_system_bot = 1`
       )
-      .all(req.userId, req.userId, req.userId, req.userId);
+      .all();
+    // Active snapshot из памяти — last_action, last_action_title, признак
+    // «онлайн» (активен в STALE_AFTER_MS окне). Для людей пусто, по ним
+    // фронт ничего не показывает (карточка «Агенты» — это про ботов).
+    const snap = new Map(snapshot().map((s) => [s.userId, s]));
+    // Parse limits JSON if present
+    return rows.map((r: any) => {
+      let limitsObj: any = null;
+      if (r.limits) {
+        try {
+          limitsObj = JSON.parse(r.limits);
+        } catch {
+          limitsObj = { raw: r.limits };
+        }
+      }
+      const a = snap.get(r.id);
+      return {
+        ...r,
+        limits: limitsObj,
+        online: !!(a?.online),
+        last_seen_at: a?.lastSeenAt ? new Date(a.lastSeenAt).toISOString() : (r.last_seen_at || null),
+        last_action: a?.lastAction || "",
+        last_action_title: a?.lastActionTitle || "",
+      };
+    });
   });
 
   // ── Завести агента ── кнопка «Пригласить агента» на экране агентов.
@@ -315,6 +418,93 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
         )
         .get(id);
       return reply.code(201).send({ agent, api_token: apiToken });
+    },
+  );
+
+  // ── Переименовать агента ── карандаш на строке агента (экран «Команда»,
+  // 27.08.2026). Только владелец — по роли, не по canManageAvatar: та
+  // функция про «чей это агент», а тут прямое «человек управляет ботами».
+  app.patch<{ Params: { id: string }; Body: { name?: string } }>(
+    "/api/agents/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const caller = db
+        .prepare("SELECT role FROM users WHERE id = ?")
+        .get(req.userId) as { role?: string } | undefined;
+      if (caller?.role !== "owner") {
+        return reply
+          .code(403)
+          .send({ error: "переименовывать агентов может только владелец" });
+      }
+      const target = db
+        .prepare("SELECT id, type FROM users WHERE id = ?")
+        .get(req.params.id) as { id?: string; type?: string } | undefined;
+      if (!target || target.type !== "ai") {
+        return reply.code(404).send({ error: "Not found" });
+      }
+      const name = (req.body?.name ?? "").trim();
+      if (!name) return reply.code(400).send({ error: "нужно имя" });
+      const initials = name.charAt(0).toUpperCase();
+      db.prepare("UPDATE users SET name = ?, initials = ? WHERE id = ?").run(
+        name,
+        initials,
+        req.params.id,
+      );
+      const agent = db
+        .prepare(
+          "SELECT id, name, role, type, avatar_color, avatar_url, initials, status FROM users WHERE id = ?",
+        )
+        .get(req.params.id);
+      return { agent };
+    },
+  );
+
+  // ── Удалить агента ── корзина на строке агента, только владелец.
+  // is_system_bot=1 (Claude_Bot/Hermes/DeepSeek-Agent) блокируем жёстко:
+  // их id зашиты в server/scripts/trigger.py (EXTERNAL_AGENTS) и в базовых
+  // правах доступа — удаление строки не снимет их из конфига службы,
+  // конвейер тихо сломается на эту учётку при следующем пробуждении.
+  //
+  // Если у агента есть задачи/комментарии/шаги — foreign_keys=ON (db.ts) и
+  // не даёт удалить строку (ON DELETE NO ACTION у всех ссылок на users),
+  // так и остаётся: молча каскадом стереть чужую историю опаснее, чем
+  // отказать понятным сообщением.
+  app.delete<{ Params: { id: string } }>(
+    "/api/agents/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const caller = db
+        .prepare("SELECT role FROM users WHERE id = ?")
+        .get(req.userId) as { role?: string } | undefined;
+      if (caller?.role !== "owner") {
+        return reply
+          .code(403)
+          .send({ error: "удалять агентов может только владелец" });
+      }
+      const target = db
+        .prepare("SELECT id, type, is_system_bot FROM users WHERE id = ?")
+        .get(req.params.id) as
+        { id?: string; type?: string; is_system_bot?: number } | undefined;
+      if (!target || target.type !== "ai") {
+        return reply.code(404).send({ error: "Not found" });
+      }
+      if (target.is_system_bot) {
+        return reply.code(403).send({
+          error: "это системный агент, вшитый в конвейер — удалить его нельзя",
+        });
+      }
+      try {
+        db.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
+      } catch (err: any) {
+        if (err?.code === "SQLITE_CONSTRAINT_FOREIGNKEY") {
+          return reply.code(409).send({
+            error:
+              "у агента есть задачи, шаги или комментарии — сначала переназначь или удали их",
+          });
+        }
+        throw err;
+      }
+      return { ok: true };
     },
   );
 }

@@ -54,7 +54,39 @@ SUBTASK_STATE_RU = {
 # работой того же бота) — единственное поле, по которому Stop-хук отличает
 # «моя» работа от «чужая под тем же ботом».
 ENV_SESSION_ID = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
-TRANSCRIPTS_DIR = os.path.expanduser("~/.claude/projects/-home-maksim")
+PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+
+
+def _own_transcript_dir() -> str:
+    """Папка с транскриптами именно этой сессии/проекта.
+
+    Claude Code кодирует в имя папки закодированный путь проекта, а он
+    разный у каждого воркутри (git worktree меняет cwd). Раньше здесь стоял
+    один прошитый путь "-home-maksim/projects" — он был именем папки только
+    для сессий, запущенных прямо из ~/Проекты/New-Todoist, а не из
+    worktree.
+
+    Найдено 25.08.2026 живьём: в этом воркутри (traycer-cosmic-tiger-...)
+    та прошитая папка указывала на ПОСТОРОННИЕ, более старые сессии из
+    других проектов. current_session_id() ниже находил там «более свежий»
+    файл чужой сессии и молча подменял им ENV_SESSION_ID — agent_session_id
+    задачи расходился с тем CLAUDE_CODE_SESSION_ID, что видят хуки,
+    taskflow-heartbeat.py переставал считать задачу «своей» (mine) и не
+    продлевал аренду, несмотря на непрерывную работу: задача часами
+    показывала «брошена» между тем, как агент явно её продлевал.
+
+    Правильно — не угадывать имя папки, а найти ту, где реально лежит файл
+    ENV_SESSION_ID.jsonl.
+    """
+    if not ENV_SESSION_ID:
+        return ""
+    try:
+        for name in os.listdir(PROJECTS_DIR):
+            if os.path.exists(os.path.join(PROJECTS_DIR, name, f"{ENV_SESSION_ID}.jsonl")):
+                return os.path.join(PROJECTS_DIR, name)
+    except Exception:
+        pass
+    return ""
 
 
 def current_session_id() -> str:
@@ -67,22 +99,25 @@ def current_session_id() -> str:
     никогда и пропускал любую незакрытую работу (найдено 18.08.2026).
 
     Поэтому: если транскрипт «своей» сессии больше не пополняется, а рядом
-    есть более свежий — значит сессию сменили, и текущая та, что пишется
-    сейчас. Файл транскрипта Claude Code обновляет на каждом ходе, так что
-    свежесть здесь надёжнее переменной. Не нашли ничего — возвращаем
-    переменную, поведение как раньше.
+    (в ТОЙ ЖЕ папке, см. _own_transcript_dir) есть более свежий — значит
+    сессию сменили, и текущая та, что пишется сейчас. Файл транскрипта
+    Claude Code обновляет на каждом ходе, так что свежесть здесь надёжнее
+    переменной. Не нашли свою папку — возвращаем переменную как есть.
     """
     try:
+        transcripts_dir = _own_transcript_dir()
+        if not transcripts_dir:
+            return ENV_SESSION_ID
         newest, newest_mtime = "", 0.0
-        for name in os.listdir(TRANSCRIPTS_DIR):
+        for name in os.listdir(transcripts_dir):
             if not name.endswith(".jsonl"):
                 continue
-            mtime = os.path.getmtime(os.path.join(TRANSCRIPTS_DIR, name))
+            mtime = os.path.getmtime(os.path.join(transcripts_dir, name))
             if mtime > newest_mtime:
                 newest, newest_mtime = name[: -len(".jsonl")], mtime
         if not newest or newest == ENV_SESSION_ID:
             return ENV_SESSION_ID
-        own = os.path.join(TRANSCRIPTS_DIR, f"{ENV_SESSION_ID}.jsonl")
+        own = os.path.join(transcripts_dir, f"{ENV_SESSION_ID}.jsonl")
         own_mtime = os.path.getmtime(own) if os.path.exists(own) else 0.0
         # Минута форы своей сессии: при двух параллельных сессиях чужой ход
         # не должен перебивать наш только потому, что случился секундой позже.
@@ -133,10 +168,33 @@ def api(method: str, path: str, body=None):
             raw = r.read().decode()
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
-        detail = e.read().decode()[:300]
+        detail = e.read().decode()[:4000]
         raise TaskFlowError(f"{method} {path} → {e.code}: {detail}")
     except Exception as e:
         raise TaskFlowError(f"{method} {path} → {e}")
+
+
+def send_activity(task_id: str, kind: str, target: str, detail: str | None = None) -> None:
+    """Живая строка «чем занят агент» (тикет mcp-sender) — для агентов без
+    хука Claude Code (Hermes, DeepSeek, Antigravity): у них нет PostToolUse,
+    единственное, что от них видно, — обращения к самому трекеру.
+
+    Необязательна: тот же принцип, что у подсказки «дальше» в t_comment
+    (см. комментарий там) — ошибка здесь не должна ронять ответ основного
+    инструмента. Сервер активности недоступен или лежит — вызовы taskflow_*
+    просто отработают как обычно, тихо, без активности в карточке.
+
+    Не дублирует хук: TOOL_KIND в taskflow-heartbeat.py не знает про
+    mcp__taskflow__* инструменты, а этот канал не знает про Read/Edit/Bash —
+    для одного и того же действия Клода сработает только один из двух.
+    """
+    try:
+        body: dict = {"kind": kind, "target": target}
+        if detail:
+            body["detail"] = detail
+        api("POST", f"/api/tasks/{task_id}/activity", body)
+    except Exception:
+        pass
 
 
 def unwrap(payload):
@@ -188,12 +246,13 @@ def short(task: dict) -> dict:
 # --------------------------------------------------------------------------- инструменты
 
 def t_my_tasks(args):
+    """Список задач, назначенных на твою учётку."""
     state = (args.get("state") or "").strip()
     # /api/auth/me отдаёт профиль как {"user": {...}} — своя обёртка, не та,
     # что у задач, поэтому unwrap здесь не годится.
     profile = api("GET", "/api/auth/me")
     me = (profile.get("user") or profile).get("id")
-    tasks = [t for t in as_tasks(api("GET", "/api/tasks")) if t.get("assignee_id") == me]
+    tasks = [t for t in as_tasks(api("GET", "/api/tasks?include_children=true")) if t.get("assignee_id") == me]
     if args.get("include_completed") is not True:
         tasks = [t for t in tasks if t.get("status") == "active"]
     if state == "free":
@@ -206,6 +265,7 @@ def t_my_tasks(args):
 def t_task(args):
     d = api("GET", f"/api/tasks/{args['id']}")
     task = unwrap(d) if "task" in d else d
+    send_activity(args["id"], "read", "карточке задачи")
     feed = []
     for c in d.get("comments", []) or []:
         feed.append({"когда": c.get("created_at"), "кто": c.get("user_name"), "комментарий": c.get("text")})
@@ -252,16 +312,83 @@ def t_claim(args):
     session = current_session_id()
     body = {"session_id": session} if session else {}
     resp = api("POST", f"/api/tasks/{args['id']}/claim", body)
+    send_activity(args["id"], "edit", "статус: взял задачу в работу")
     out = {"взято в работу": short(unwrap(resp))}
     rules = rules_of(resp)
     if rules:
         out["правила"] = rules
+    tail = _unread_tail()
+    if tail:
+        out["чат"] = tail
     return out
+
+
+def t_close(args):
+    """Закрыть задачу или вернуть её в работу (29.08.2026, задача be329d8e).
+
+    Тонкий инструмент: прежде исполнитель мог закрыть карточку своим
+    ключом через PATCH /api/tasks/:id, и сервер это пропускал без проверки
+    роли (server/src/routes/tasks.ts). Владелец передал приёмку работы
+    оркестратору: «ты раздаёшь пачками эти задачи, поэтому сам их и
+    принимай. Мне главное результат: я тебя озадачиваю, ты мне
+    отчитываешься — вот это я буду ревьюить». Условие: инструмент
+    должен быть у оркестратора и НЕ передаваться другим агентам, чтобы
+    они не начали всё закрывать сами.
+
+    Серверная проверка: только role='owner' и role='orchestrator' могут
+    закрыть и вернуть в работу. Исполнитель, дёрнувший PATCH status
+    напрямую через /api/tasks/:id, получит 403 — описание инструмента
+    и серверная правка должны совпадать по смыслу.
+    """
+    status = (args.get("status") or "completed").strip()
+    if status not in ("completed", "active"):
+        raise TaskFlowError(
+            'status должен быть "completed" (закрыть) или "active" '
+            "(вернуть в работу); без status по умолчанию закрытие"
+        )
+    body: dict = {"status": status}
+    # Серверный PATCH /api/tasks/:id уже сам гасит agent_state на обоих
+    # переходах (active→completed и completed→active) и release'ит шаги.
+    api("PATCH", f"/api/tasks/{args['id']}", body)
+    # send_activity — то же, что в t_state/t_comment: один и тот же
+    # цикл активности задачи. Без него лента «что делал оркестратор» не
+    # получит записи о приёмке.
+    send_activity(
+        args["id"], "edit",
+        f"принял работу и {'закрыл' if status == 'completed' else 'вернул в работу'}",
+    )
+    task_row = unwrap(api("GET", f"/api/tasks/{args['id']}"))
+    if isinstance(task_row, dict) and task_row.get("parent_id"):
+        send_activity(
+            task_row["parent_id"], "edit",
+            f"принял подзадачу: «{task_row.get('title', '')}»",
+        )
+    if status == "completed":
+        return {
+            "задача": args["id"],
+            "новый статус": "completed",
+            "дальше": (
+                "закрытая карточка ушла с доски. Перед сдачей следующей убедись, "
+                "что все шаги закрыты и сама задача в review — иначе вернётся с претензией."
+            ),
+        }
+    return {
+        "задача": args["id"],
+        "новый статус": "active",
+        "дальше": (
+            "карточка снова активна. Назначьте исполнителя заново, "
+            "если хотите продолжить."
+        ),
+    }
 
 
 def t_heartbeat(args):
     api("POST", f"/api/tasks/{args['id']}/heartbeat", {})
-    return {"аренда продлена": args["id"]}
+    out = {"аренда продлена": args["id"]}
+    tail = _unread_tail()
+    if tail:
+        out["чат"] = tail
+    return out
 
 
 def t_state(args):
@@ -276,6 +403,24 @@ def t_state(args):
     rules = rules_of(resp)
     if rules:
         out["правила"] = rules
+    # Напоминание приходит В МОМЕНТ СДАЧИ, а не при старте сессии: общую
+    # инструкцию агент читает один раз и забывает, а инструмент дёргает
+    # постоянно. Владелец 28.08.2026: «ты к инструкции обратился один раз
+    # когда-то давно и всё; пиши эти моменты в MCP-сервер». Только на
+    # review — на blocked и возврат в работу подсказка была бы шумом.
+    if args["state"] in ("review", "blocked"):
+        out["не потеряй знание и доложи руководителю"] = (
+            "1. Работа закончена или заблокирована — итог и найденные грабли положи отдельной "
+            "заметкой в документацию проекта (taskflow_doc_write). Карточку "
+            "закроют, и всё написанное в ней уйдёт с доски; в документации "
+            "знание останется и достанется следующему. Рабочий рецепт или "
+            "причину сбоя — уроком в базу знаний "
+            "(~/kb/lessons/ГГГГ-ММ-ДД-имя.md + python3 ~/kb/kb_add.py <файл>), "
+            "короткий устойчивый факт — в память через mnemosyne_remember. "
+            "2. ОБЯЗАТЕЛЬНО вызови инструмент `taskflow_chat_send` и напиши Оркестратору "
+            "сообщение (например: 'Я закончил подзадачу #ID, прими работу' или 'Я заблокирован, нужна помощь'). "
+            "Система автоматически его не позовёт, это должен сделать ты!"
+        )
     return out
 
 
@@ -324,6 +469,7 @@ def t_comment(args):
     if attachment_ids:
         body["attachment_ids"] = attachment_ids
     api("POST", f"/api/tasks/{args['id']}/comments", body)
+    send_activity(args["id"], "edit", "ленту задачи: оставил комментарий")
     out = {"комментарий добавлен": args["id"]}
     if attachment_ids:
         out["вложений"] = len(attachment_ids)
@@ -372,7 +518,9 @@ def t_subtask_done(args):
     # в 400 и либо не закрывал шаг, либо шёл в обход сырым curl.
     if args.get("result"):
         body["result"] = args["result"]
-    api("PATCH", f"/api/subtasks/{args['id']}", body)
+    row = api("PATCH", f"/api/subtasks/{args['id']}", body)
+    if done and row.get("task_id"):
+        send_activity(row["task_id"], "edit", f"шаг «{row.get('title', '')}»: закрыл")
     out = {"шаг отмечен" if done else "отметка снята": args["id"]}
     # Напоминание в ответе, а не только в инструкции при подключении:
     # инструкцию агент видит один раз в начале сессии, а спотыкается о
@@ -391,6 +539,16 @@ def t_subtask_add(args):
         body["after_id"] = args["after_id"]
     s = api("POST", f"/api/tasks/{args['task_id']}/subtasks", body)
     return {"шаг добавлен": s.get("title"), "id": s.get("id")}
+
+
+def t_rules(_args):
+    """Правила ведения учёта — с сервера, а не из чьей-то памятки.
+
+    Те же AGENT_RULES, что приходят в ответе на claim и на взятие шага, но
+    их можно спросить отдельно: Control Center показывает их исполнителю на
+    экране задач и не имеет права держать свою копию.
+    """
+    return {"правила": api("GET", "/api/agent/rules").get("rules", [])}
 
 
 def t_status(_args):
@@ -427,6 +585,171 @@ def t_agents(_args):
     }
 
 
+TO_ALL_WORDS = {"all", "всем", "*"}
+
+
+def _resolve_addressee(who: str | None) -> str:
+    """Кому адресовано сообщение — ОБЯЗАТЕЛЬНО (28.08.2026, владелец: «как я
+    должен догадаться, что ты мне написал, не упомянув ни слова обо мне»).
+
+    Принимает id участника или его имя (Hermes, Claude_Bot, Максим…) — тот же
+    приём, что у _project_id для проектов. Через /api/chat/participants, НЕ
+    /api/agents: тот намеренно узкий (видит только тех, с кем есть общая
+    задача) — для адресации в общем канале координации нужны все участники.
+
+    «Всем» — это слово, а не пустое поле: раньше и пропуск, и ОПЕЧАТКА в имени
+    молча превращались в рассылку всем, то есть промах адресации выглядел как
+    норма. Теперь непонятное имя — ошибка со списком, кого можно назвать."""
+    raw = (who or "").strip()
+    if not raw:
+        raise TaskFlowError(
+            'кому? укажи to: имя участника или "всем". '
+            "Пустое поле больше не значит «всем» — это должен быть явный выбор"
+        )
+    if raw.lower() in TO_ALL_WORDS:
+        return "all"
+    # Use full agents list instead of chat participants to allow addressing any agent
+    people = api("GET", "/api/agents")
+    for a in people:
+        if a.get("id") == raw.lower() or (a.get("name") or "").strip().lower() == raw.lower():
+            return a.get("id")
+    known = ", ".join(a.get("name") or a.get("id") for a in people)
+    raise TaskFlowError(
+        f'адресат «{raw}» не найден. Можно назвать: {known} — или "всем"'
+    )
+
+
+def _unread_tail() -> str | None:
+    """«У тебя N непрочитанных» — не отдельный опрос: heartbeat/claim/
+    subtask_work агент и так дёргает на каждом шаге, переиспользуем эти
+    заходы вместо второго троттлинга поверх чата."""
+    try:
+        n = api("GET", "/api/chat/unread").get("непрочитано", 0)
+    except TaskFlowError:
+        return None
+    if not n:
+        return None
+    return f"в чате {n} непрочитанных — taskflow_chat_read()"
+
+
+def t_chat_send(args):
+    """Написать в канал координации агентов.
+
+    ДВА КАНАЛА (28.08.2026, решение владельца). Твой — рабочая переписка
+    исполнителей и оркестратора; второй, разговор Максима с оркестратором,
+    тебе недоступен. Заговорить с Максимом первым нельзя: своё несёшь
+    оркестратору, он решает сам или выносит владельцу. Канал выбирать не
+    надо и нечем — сервер сам кладёт сообщение куда следует.
+
+    НО ЕСЛИ МАКСИМ НАПИСАЛ ТЕБЕ САМ — отвечай ему, и отвечай прямо
+    (28.08.2026, карточка 4caa266f): to = «Максим», ответ ляжет в ту же
+    рабочую ленту, где он спросил, и оркестратор его увидит. Право
+    ответить живёт сутки от последнего его сообщения тебе — пока разговор
+    идёт. Не относящееся к этому разговору по-прежнему адресуется
+    оркестратору.
+
+    КОМУ — ОБЯЗАТЕЛЬНО, и для переписки агентов между собой тоже: «to»
+    заполняется всегда, «всем» пишется словом. Сообщение без адресата
+    сервер не примет.
+
+    ПОВОД, А НЕ СЧЁТЧИК (правило владельца 27.08.2026): без task_id
+    сообщение ложится в общую ленту и никого не будит — адресуй задачу,
+    если ждёшь ответа. У сообщения есть тип: совещание (ждёшь ответа),
+    делегирование, находка. Разговор закрывает МОЛЧАНИЕ: на «принято/
+    сделал» новым ответом не отвечать, этим и гасится «спасибо-пожалуйста».
+    Делегирование работы — через доску (assignee задачи/шага), это
+    сообщение — контекст к уже назначенному, не замена назначению. Находка —
+    указатель на урок/память (kb_add.py, mnemosyne_shared_remember), не
+    пересказ текстом: пересказ умрёт вместе с сессией.
+    """
+    to_user_id = _resolve_addressee(args.get("to"))
+    body: dict = {"text": args["text"], "to_user_id": to_user_id}
+    if args.get("task_id"):
+        body["task_id"] = args["task_id"]
+    if args.get("kind"):
+        body["kind"] = args["kind"]
+    msg = api("POST", "/api/chat", body)
+    if args.get("task_id"):
+        send_activity(args["task_id"], "edit", "чат: написал по задаче")
+    return {
+        "отправлено": msg.get("text"),
+        "кому": "всем" if to_user_id == "all" else args.get("to"),
+        "id": msg.get("id"),
+    }
+
+
+def t_chat_typing(args):
+    """Отметка «печатает…» в чате — для тех, у кого нет клавиатуры.
+
+    У человека отметку зажигает сама строка ввода, у агента её зажигать
+    нечем: сигнал подаётся явно, ОДИН раз, перед тем как браться за ответ.
+    Продлевать по ходу нельзя и не нужно — пока модель сочиняет, вызвать
+    инструмент она не может, поэтому сервер даёт агенту срок с запасом
+    (минута) и гасит отметку сам, как только сообщение отправлено.
+
+    Ставить её, только если действительно собираешься ответить: отметка —
+    обещание Максиму, что ответ идёт, а не признак того, что сообщение
+    прочитано.
+    """
+    body = {"state": "stop"} if args.get("state") == "stop" else {}
+    resp = api("POST", "/api/chat/typing", body)
+    return {
+        "печатает": resp.get("печатает"),
+        "гаснет через": f"{int(resp.get('гаснет_через_мс', 0) / 1000)} с"
+        if resp.get("печатает")
+        else "—",
+    }
+
+
+def t_chat_read(args):
+    """История канала. limit по умолчанию 20 — это сводка для агента, не
+    постраничная лента фронтенда. Заодно отмечает прочтение (chat_reads),
+    поэтому хвост «N непрочитанных» после вызова обнулится.
+
+    Без channel отдаётся всё, что тебе видно. Для исполнителя это рабочая
+    переписка, для оркестратора — обе ленты сразу, и в каждой строке
+    написано, из какой она: у него разговор с владельцем и служебный канал
+    идут вперемешку по времени, и различать их надо по полю, а не по
+    догадке."""
+    limit = int(args.get("limit") or 20)
+    qs = {"limit": str(limit)}
+    if args.get("task_id"):
+        qs["task_id"] = args["task_id"]
+    if args.get("channel"):
+        qs["channel"] = args["channel"]
+    resp = api("GET", "/api/chat?" + urllib.parse.urlencode(qs))
+    names = {a["id"]: a["name"] for a in api("GET", "/api/chat/participants")}
+    try:
+        api("POST", "/api/chat/read")
+    except TaskFlowError:
+        pass  # отметка прочтения необязательна — история важнее
+    result = {
+        "сообщения": [
+            {
+                "когда": m.get("created_at"),
+                "канал": "с владельцем" if m.get("channel") == "owner" else "рабочий",
+                "от": m.get("from_user_name"),
+                "кому": names.get(m.get("to_user_id"), "всем") if m.get("to_user_id") else "всем",
+                "тип": m.get("kind") or "—",
+                "задача": m.get("task_title"),
+                "task_id": m.get("task_id"),
+                "текст": m.get("text"),
+            }
+            for m in resp.get("messages", [])
+        ],
+        "ещё есть": resp.get("has_more", False),
+    }
+
+    result["системное_напоминание"] = (
+        "Если тебе (как Оркестратору) поставили задачу напрямую в чат — "
+        "обязательно прочитай свой актуальный регламент работы в файле "
+        "docs/taskflow-orchestrator.md (как бить на куски, использовать parent_id и заводить проекты). "
+        "Не фантазируй, действуй строго по этому регламенту!"
+    )
+    
+    return result
+
+
 def t_subtask_work(args):
     """Взяться за подзадачу, продлить работу, упереться или отпустить.
 
@@ -445,7 +768,9 @@ def t_subtask_work(args):
     if args.get("result") is not None:
         body["result"] = args["result"]
     row = api("POST", f"/api/subtasks/{args['id']}/work", body)
-    return {
+    if args.get("state") == "in_progress" and row.get("task_id"):
+        send_activity(row["task_id"], "edit", f"шаг «{row.get('title', '')}»: начал")
+    out = {
         "подзадача": row.get("title"),
         # То же вычисленное поле, что и в карточке задачи (см. t_task).
         "состояние": SUBTASK_STATE_RU.get(
@@ -453,6 +778,10 @@ def t_subtask_work(args):
         ),
         "итог": row.get("result") or "—",
     }
+    tail = _unread_tail()
+    if tail:
+        out["чат"] = tail
+    return out
 
 
 def t_projects(_args):
@@ -465,7 +794,12 @@ def t_projects(_args):
     return {
         "проекты": [
             {"id": p.get("id"), "название": p.get("name"),
-             "активных задач": p.get("task_count")}
+             "активных задач": p.get("task_count"),
+             # Папка документации: есть — можно читать и писать заметки
+             # по проекту (taskflow_docs). Нет — она заводится при
+             # создании проекта или вручную владельцем.
+             "документация": ("есть" if p.get("notes_folder_id")
+                              else "не заведена")}
             for p in api("GET", "/api/projects")
         ],
         "как пользоваться": (
@@ -473,6 +807,101 @@ def t_projects(_args):
             "assignee_id — тот же человек, чей это проект."
         ),
     }
+
+
+def _project_id(args):
+    """Принимает project_id или название — как это делает t_project_tasks."""
+    pid = args.get("project_id")
+    if pid:
+        return pid
+    name = (args.get("project") or "").strip().lower()
+    if not name:
+        return None
+    for p in api("GET", "/api/projects"):
+        if (p.get("name") or "").strip().lower() == name:
+            return p.get("id")
+    return None
+
+
+def t_docs(args):
+    """Документация проекта: папка и все заметки в ней, включая вложенные."""
+    pid = _project_id(args)
+    if not pid:
+        return {"ошибка": "не нашёл проект",
+                "подсказка": "список — taskflow_projects"}
+    data = api("GET", f"/api/projects/{pid}/docs")
+    folder = data.get("folder")
+    notes = data.get("notes") or []
+    if folder is None:
+        return {
+            "проект": (data.get("project") or {}).get("name"),
+            "документация": "папка не заведена",
+            "как завести": (
+                "создать проект с with_docs=true, либо попросить владельца "
+                "прикрепить папку на экране проекта"
+            ),
+        }
+    return {
+        "проект": (data.get("project") or {}).get("name"),
+        "папка": folder.get("name"),
+        "заметок": len(notes),
+        "заметки": [
+            {"id": n.get("id"), "название": n.get("title") or "без названия",
+             "папка": n.get("папка"), "начало": n.get("preview"),
+             "изменена": n.get("updated_at")}
+            for n in notes
+        ],
+        "как читать": "полный текст — taskflow_doc_read по id",
+    }
+
+
+def t_doc_read(args):
+    """Заметка целиком, в markdown."""
+    note_id = args.get("id")
+    if not note_id:
+        return {"ошибка": "нужен id заметки (его даёт taskflow_docs)"}
+    n = api("GET", f"/api/notes/{note_id}?format=markdown")
+    return {
+        "название": n.get("title") or "без названия",
+        "текст": n.get("markdown") or "",
+        "изменена": n.get("updated_at"),
+    }
+
+
+def t_doc_write(args):
+    """Создать заметку в папке проекта или дополнить существующую.
+
+    Дописывание (mode=append) читает текущий текст и склеивает — иначе
+    агент затёр бы чужую документацию, обновляя свой раздел.
+    """
+    text = args.get("markdown") or ""
+    if not text.strip():
+        return {"ошибка": "нечего записывать: markdown пуст"}
+
+    note_id = args.get("id")
+    if note_id:
+        mode = args.get("mode") or "append"
+        if mode == "append":
+            cur = api("GET", f"/api/notes/{note_id}?format=markdown")
+            text = ((cur.get("markdown") or "").rstrip() + "\n\n" + text).strip()
+        n = api("PATCH", f"/api/notes/{note_id}", {"markdown": text})
+        return {"готово": "заметка обновлена", "id": n.get("id"),
+                "название": n.get("title")}
+
+    pid = _project_id(args)
+    if not pid:
+        return {"ошибка": "не нашёл проект",
+                "подсказка": "укажи project_id или project, либо id заметки"}
+    docs = api("GET", f"/api/projects/{pid}/docs")
+    folder = docs.get("folder")
+    if not folder:
+        return {"ошибка": "у проекта нет папки документации",
+                "как завести": "создать проект с with_docs=true "
+                               "или попросить владельца прикрепить папку"}
+    n = api("POST", "/api/notes",
+            {"markdown": text, "folder_id": folder.get("id")})
+    return {"готово": "заметка создана", "id": n.get("id"),
+            "название": n.get("title"), "папка": folder.get("name")}
 
 
 def t_project_tasks(args):
@@ -497,7 +926,7 @@ def t_project_tasks(args):
     if not pid:
         return {"ошибка": "нужен project_id или project (название)"}
 
-    tasks = [t for t in as_tasks(api("GET", "/api/tasks")) if t.get("project_id") == pid]
+    tasks = [t for t in as_tasks(api("GET", "/api/tasks?include_children=true")) if t.get("project_id") == pid]
     if args.get("include_completed") is not True:
         tasks = [t for t in tasks if t.get("status") == "active"]
     state = (args.get("state") or "").strip()
@@ -513,12 +942,104 @@ def t_project_tasks(args):
 
 def t_create_task(args):
     body = {"title": args["title"]}
-    for key in ("description", "project_id", "assignee_id", "due_date", "priority"):
+    for key in ("description", "project_id", "parent_id", "assignee_id", "due_date", "priority"):
         if args.get(key) is not None:
             body[key] = args[key]
     if args.get("subtasks"):
         body["subtasks"] = args["subtasks"]
-    return {"задача создана": short(unwrap(api("POST", "/api/tasks", body)))}
+    created = unwrap(api("POST", "/api/tasks", body))
+    if args.get("parent_id"):
+        send_activity(args["parent_id"], "edit", f"создал подзадачу: «{args['title']}»")
+    return {"задача создана": short(created)}
+
+
+def t_create_project(args):
+    """Завести проект — дверь, которой у агента не было до 27.08.2026.
+
+    Замысел владельца: «Переговорка» — это ХАБ. Он кидает туда одну задачу,
+    оркестратор подхватывает её и заводит ПОД НЕЁ отдельный проект, где и
+    разворачивает работу с исполнителями. В заходе 26.08 замысел не сработал
+    по двум причинам сразу: этого инструмента не существовало, а промпт прямо
+    велел заводить дочерние задачи в том же проекте «Переговорка». Оркестратор
+    отработал ровно по инструкции — винить его не в чем.
+
+    with_docs=True по умолчанию: у проекта сразу появляется папка
+    документации, чтобы итог работы было куда сложить (server/src/routes/
+    projects.ts заводит её только по явному запросу).
+    """
+    body = {"name": args["name"], "with_docs": args.get("with_docs", True)}
+    if args.get("color"):
+        body["color"] = args["color"]
+    created = unwrap(api("POST", "/api/projects", body))
+    return {
+        "проект создан": {
+            "id": (created or {}).get("id"),
+            "название": (created or {}).get("name"),
+            "папка документации": "заведена" if body["with_docs"] else "нет",
+        },
+        "дальше": "id подставлять в taskflow_create_task(project_id=...) и "
+                  "taskflow_doc_write(project_id=...)",
+    }
+
+
+def t_suggest_subtasks(args):
+    """Умная разбивка на подзадачи — та же кнопка, что у владельца в форме
+    задачи (server/src/routes/ai.ts, suggestSubtasks). Дан id существующей
+    задачи — разбивает её; без id — черновик по title/description, который
+    ещё не создан.
+
+    Заведено 26.08.2026 для оркестратора: владелец прямо попросил, чтобы
+    агенты, дробящие работу на подзадачи, пользовались тем же умным
+    инструментом, что и он сам, а не изобретали разбивку в голове.
+
+    Ничего не сохраняет — возвращает список строк, дальше решаешь сам:
+    taskflow_subtask_add по каждому пункту или subtasks= при
+    taskflow_create_task.
+    """
+    body = {}
+    if args.get("provider"):
+        body["provider"] = args["provider"]
+    if args.get("id"):
+        if args.get("title"):
+            body["title"] = args["title"]
+        if args.get("description") is not None:
+            body["description"] = args["description"]
+        resp = api("POST", f"/api/tasks/{args['id']}/suggest-subtasks", body)
+    else:
+        if not args.get("title"):
+            raise TaskFlowError("нужен либо id существующей задачи, либо title черновика")
+        body["title"] = args["title"]
+        if args.get("description") is not None:
+            body["description"] = args["description"]
+        resp = api("POST", "/api/ai/suggest-subtasks", body)
+    return {"подзадачи": resp.get("subtasks", [])}
+
+
+def t_structure_dictation(args):
+    """Причесать сырой/надиктованный текст в чистую задачу — тот же AI-мост,
+    что у владельца при голосовой диктовке (server/src/routes/ai.ts,
+    structureTask). Полезно, когда владелец в TaskFlow/Telegram накидал
+    задачу разговорным текстом, а оркестратору нужно ЧИСТОЕ title +
+    description + subtasks + due_date + priority, прежде чем заводить
+    задачи и раздавать их дальше.
+
+    Ничего не создаёт сам — возвращает разобранную структуру, дальше
+    taskflow_create_task с этими полями.
+    """
+    text = (args.get("text") or "").strip()
+    if not text:
+        raise TaskFlowError("text не может быть пустым")
+    body = {"text": text}
+    if args.get("provider"):
+        body["provider"] = args["provider"]
+    resp = api("POST", "/api/ai/structure-task", body)
+    return {
+        "название": resp.get("title"),
+        "описание": resp.get("description"),
+        "подзадачи": resp.get("subtasks", []),
+        "срок": resp.get("dueDate"),
+        "приоритет": resp.get("priority"),
+    }
 
 
 TOOLS = [
@@ -545,6 +1066,29 @@ TOOLS = [
         "description": "Взять задачу в работу (agent_state → in_progress). Дальше нужно продлевать аренду: срок 5 минут.",
         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
         "fn": t_claim,
+    },
+    {
+        "name": "taskflow_close",
+        "description": (
+            "Принять работу исполнителя и ЗАКРЫТЬ задачу (status=completed) "
+            "или ВЕРНУТЬ в работу (status=active). "
+            "Доступно ТОЛЬКО владельцу и оркестратору: сервер отдаёт 403, "
+            "если ключ исполнителя попытается закрыть карточку сам (29.08.2026, "
+            "задача be329d8e). Исполнитель сдаёт через taskflow_state state=review, "
+            "а приёмку делает оркестратор или владелец — этим инструментом."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "id задачи"},
+                "status": {
+                    "type": "string",
+                    "description": 'completed (по умолчанию) — закрыть; active — вернуть в работу',
+                },
+            },
+            "required": ["id"],
+        },
+        "fn": t_close,
     },
     {
         "name": "taskflow_heartbeat",
@@ -623,6 +1167,12 @@ TOOLS = [
         "fn": t_subtask_add,
     },
     {
+        "name": "taskflow_rules",
+        "description": "Правила ведения учёта задач — как их требует сервер TaskFlow. Те же, что приходят при взятии задачи и шага; здесь их можно спросить, ничего не занимая.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": t_rules,
+    },
+    {
         "name": "taskflow_status",
         "description": "Что сейчас происходит: работает ли служба, какие задачи агенты делают прямо сейчас (с временем последнего сигнала), что брошено, что ждёт проверки. Начинать проверку состояния — отсюда.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -633,6 +1183,91 @@ TOOLS = [
         "description": "Кто есть в команде и кто сейчас на связи.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": t_agents,
+    },
+    {
+        "name": "taskflow_chat_send",
+        "description": (
+            "Написать в рабочий канал координации агентов (Клод, Гермес и "
+            "остальные). МАКСИМУ НАПРЯМУЮ НЕ ПИШУТ: у него отдельный канал с "
+            "оркестратором, ответа от владельца ждать не нужно — вопрос неси "
+            "оркестратору, он решит сам или вынесет владельцу. "
+            "КОМУ — ОБЯЗАТЕЛЬНО, включая переписку агентов "
+            "между собой: `to` = имя участника или слово «всем». Без "
+            "адресата сервер сообщение не примет. ПОВОД, А НЕ СЧЁТЧИК: без task_id сообщение ложится "
+            "в общую ленту и никого не будит — указывай task_id, если ждёшь "
+            "ответа по делу. kind — тип сообщения: совещание (ждёшь ответа), "
+            "делегирование, находка. Разговор закрывает молчание: на "
+            "«принято/сделал» новым сообщением не отвечать. Делегирование "
+            "работы идёт через назначение на доске, не через этот чат — "
+            "здесь только контекст к уже назначенной задаче."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "to": {
+                    "type": "string",
+                    "description": (
+                        "Кому — ОБЯЗАТЕЛЬНО: имя участника (Hermes, "
+                        "Claude_Bot, Максим…), его id или слово «всем». "
+                        "Пропустить нельзя, «всем» пишется явно."
+                    ),
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Задача, к которой относится сообщение — без неё никого не будит.",
+                },
+                "kind": {
+                    "type": "string",
+                    "description": "совещание | делегирование | находка",
+                },
+            },
+            "required": ["text", "to"],
+        },
+        "fn": t_chat_send,
+    },
+    {
+        "name": "taskflow_chat_typing",
+        "description": (
+            "Зажечь в чате отметку «печатает…» под своим именем — вызывать "
+            "ПЕРЕД тем, как сочинять ответ, чтобы Максим видел, что ответ "
+            "идёт, а не тишина. Одного вызова хватает на весь ответ: отметка "
+            "живёт минуту и гаснет сама, а отправленное сообщение снимает её "
+            "сразу. state='stop' — передумал отвечать. Ставить только когда "
+            "действительно отвечаешь: это обещание ответа, а не отметка "
+            "«прочитал»."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "description": "stop — снять отметку (передумал отвечать)",
+                },
+            },
+        },
+        "fn": t_chat_typing,
+    },
+    {
+        "name": "taskflow_chat_read",
+        "description": (
+            "История канала координации, свежие сообщения. Заодно отмечает "
+            "прочитанным. Без channel отдаётся всё, что тебе видно; у каждого "
+            "сообщения написано, из рабочего оно канала или из разговора "
+            "владельца с оркестратором."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "по умолчанию 20"},
+                "task_id": {"type": "string", "description": "только переписка по этой задаче"},
+                "channel": {
+                    "type": "string",
+                    "description": "owner (разговор владельца с оркестратором) | agents (рабочая переписка). Пусто — всё видимое.",
+                },
+            },
+        },
+        "fn": t_chat_read,
     },
     {
         "name": "taskflow_subtask_work",
@@ -682,6 +1317,20 @@ TOOLS = [
         "fn": t_project_tasks,
     },
     {
+        "name": "taskflow_create_project",
+        "description": "Завести проект под задачу и сразу с папкой документации. Нужен оркестратору: работа по крупной задаче разворачивается в СВОЁМ проекте, а не в хабе, куда её положил владелец.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "название по смыслу задачи"},
+                "color": {"type": "string"},
+                "with_docs": {"type": "boolean", "description": "папка документации, по умолчанию да"},
+            },
+            "required": ["name"],
+        },
+        "fn": t_create_project,
+    },
+    {
         "name": "taskflow_create_task",
         "description": "Завести задачу. subtasks — список названий шагов.",
         "inputSchema": {
@@ -690,6 +1339,7 @@ TOOLS = [
                 "title": {"type": "string"},
                 "description": {"type": "string"},
                 "project_id": {"type": "string"},
+                "parent_id": {"type": "string", "description": "id родительской задачи, если это подзадача/делегированный кусок"},
                 "assignee_id": {"type": "string"},
                 "due_date": {"type": "string", "description": "ГГГГ-ММ-ДД"},
                 "priority": {"type": "integer", "description": "1 срочный … 4 низкий"},
@@ -698,6 +1348,95 @@ TOOLS = [
             "required": ["title"],
         },
         "fn": t_create_task,
+    },
+    {
+        "name": "taskflow_suggest_subtasks",
+        "description": (
+            "Умная разбивка на подзадачи локальной/облачной AI-моделью — тот "
+            "же инструмент, что у владельца в форме задачи, не своя ручная "
+            "разбивка. Передай id существующей задачи (разобьёт её title/"
+            "description) ЛИБО title черновика ещё не созданной задачи. "
+            "Ничего не сохраняет — только возвращает список строк-шагов; "
+            "сохранить их — taskflow_subtask_add по каждому или subtasks= "
+            "при taskflow_create_task."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "id существующей задачи (опционально)"},
+                "title": {"type": "string", "description": "нужен, если id не передан"},
+                "description": {"type": "string"},
+                "provider": {"type": "string", "description": "local | claude | hermes | deepseek | antigravity — необязательно"},
+            },
+        },
+        "fn": t_suggest_subtasks,
+    },
+    {
+        "name": "taskflow_structure_dictation",
+        "description": (
+            "Причесать сырой/надиктованный текст в чистую задачу тем же "
+            "AI-мостом, что у владельца при голосовой диктовке: вернёт "
+            "title, description, subtasks, due_date, priority. Полезно, "
+            "когда задание пришло разговорным текстом (из чата, транскрипта, "
+            "заметки) и нужна структура ПЕРЕД тем, как заводить задачи и "
+            "раздавать их. Ничего не создаёт сам."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "provider": {"type": "string", "description": "local | claude | hermes | deepseek | antigravity — необязательно"},
+            },
+            "required": ["text"],
+        },
+        "fn": t_structure_dictation,
+    },
+    {
+        "name": "taskflow_docs",
+        "description": (
+            "Документация проекта: папка заметок и всё, что в ней лежит "
+            "(включая вложенные папки). Отсюда берутся id для "
+            "taskflow_doc_read. project — название либо project_id."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "название проекта"},
+                "project_id": {"type": "string"},
+            },
+        },
+        "fn": t_docs,
+    },
+    {
+        "name": "taskflow_doc_read",
+        "description": "Прочитать заметку документации целиком, в markdown. id даёт taskflow_docs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        },
+        "fn": t_doc_read,
+    },
+    {
+        "name": "taskflow_doc_write",
+        "description": (
+            "Записать документацию. Без id — новая заметка в папке проекта. "
+            "С id — дополнить существующую (mode=append, по умолчанию) или "
+            "переписать целиком (mode=replace). Текст — markdown; первая "
+            "строка становится названием."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "markdown": {"type": "string", "description": "текст заметки"},
+                "project": {"type": "string", "description": "название проекта"},
+                "project_id": {"type": "string"},
+                "id": {"type": "string", "description": "id существующей заметки"},
+                "mode": {"type": "string", "description": "append | replace"},
+            },
+            "required": ["markdown"],
+        },
+        "fn": t_doc_write,
     },
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
@@ -739,6 +1478,13 @@ def handle(msg):
             # шагам review вместо галочек, — «можно какую-то вставку делать,
             # чтобы как только кто-то подключается к MCP, приходило: строго
             # соблюдать правила. Напоминалка дополнительная».
+            #
+            # Пункт 7 — владелец 25.08.2026: Клод, попадая на чужую задачу,
+            # сам писал «сессии по задаче не было, начинаю с чистого листа,
+            # помню только карточку». Ни сервер, ни этот файл такого не
+            # требовали — это была его личная привычка, и остальные агенты
+            # так не делали. Раз поведение полезное, ему место здесь, а не в
+            # ~/.claude/CLAUDE.md, который Гермесу и DeepSeek не указ.
             "instructions": (
                 "Задачи TaskFlow под учёткой агента. Правила соблюдать строго, "
                 "они проверяются сервером и нарушения отклоняются.\n"
@@ -762,7 +1508,36 @@ def handle(msg):
                 "считается.\n"
                 "6. Ссылаешься на скриншот или файл — прикладывай его "
                 "(taskflow_comment, параметр files): владелец читает работу "
-                "здесь, а не в твоём терминале."
+                "здесь, а не в твоём терминале.\n"
+                "7. ВЗЯЛ ЗАДАЧУ, А ЛЕНТА ПУСТАЯ — первым действием короткий "
+                "taskflow_comment: с чего начинаешь и на чём основываешься. "
+                "Памяти о прошлых сессиях у тебя нет, знаешь только то, что "
+                "написано в карточке, — скажи это прямо. Иначе владелец не "
+                "понимает, помнишь ты предысторию или нет, и объясняет "
+                "заново то, что уже объяснял.\n"
+                "8. ДРОБИШЬ ЗАДАЧУ НА ПОДЗАДАЧИ (оркестратор) — сначала "
+                "taskflow_suggest_subtasks (та же умная разбивка, что у "
+                "владельца в форме задачи), не выдумывай шаги в голове. "
+                "Задание пришло сырым/разговорным текстом — сначала "
+                "taskflow_structure_dictation, чтобы получить чистые title/"
+                "description/subtasks, и уже из них заводи задачи.\n"
+                "9. ПАМЯТЬ И БАЗА ЗНАНИЙ — не украшение, а часть работы, "
+                "и правило одинаковое для всех исполнителей. ДО работы: "
+                "похожее уже делали? спроси базу — "
+                "`python3 ~/kb/kb_query.py \"вопрос своими словами\"`, и если "
+                "урок нашёлся, читай его целиком и иди по нему, а не "
+                "изобретай заново. ПОСЛЕ работы: рабочий рецепт, причина "
+                "сбоя, трасса разбора — уроком в базу "
+                "(`~/kb/lessons/ГГГГ-ММ-ДД-имя.md` + "
+                "`python3 ~/kb/kb_add.py <файл>`); короткий устойчивый факт "
+                "(порт, повадка модели, предпочтение владельца) — в память "
+                "через mnemosyne_remember. Находка, оставленная только в "
+                "ленте задачи или в своей сессии, умирает вместе с ними: "
+                "21.08.2026 диагноз бага пролежал в комментарии неделю, и "
+                "28.08 ту же причину искали заново с нуля. Владелец "
+                "28.08.2026: правила должны быть у всех абсолютно "
+                "одинаковые, и держать их должен сервер, а не память "
+                "отдельного агента."
             ),
         })
 

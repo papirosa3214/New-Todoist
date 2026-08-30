@@ -1,9 +1,15 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useOpenTask } from "../lib/useOpenTask";
 import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useAgents } from "../api/agents";
-import { Icon, ScreenHeader, ErrorBanner, Loading, findScrollContainer } from "../components/UI";
+import {
+  Icon,
+  ScreenHeader,
+  ErrorBanner,
+  Loading,
+  findScrollContainer,
+} from "../components/UI";
 import { ActionsMenu } from "../components/ActionsMenu";
 import { useAppStore } from "../store";
 import {
@@ -35,7 +41,6 @@ import {
 import {
   DEFAULT_TASK_FILTERS,
   filterTasks,
-  countActiveTaskFilters,
   buildProjectOptions,
   buildLabelOptions,
   buildAssigneeOptions,
@@ -201,27 +206,23 @@ export function UpcomingScreen() {
   // «Три дня» ниже, перенесённый со «Сегодня» (20.08.2026).
   const { data: projects = [] } = useProjects();
   const updateTask = useUpdateTask();
-  const navigate = useNavigate();
+  const openTask = useOpenTask();
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   // Агентские задачи сюда не попадают вовсе (19.08.2026, владелец: «кроме
   // как во входящих в конкретном проекте, нигде маячить не должна» —
   // Предстоящее не исключение). См. isAgentAssignedTask.
-  const activeTasks = useMemo(
-    () =>
-      allTasks.filter(
-        (t) => t.status === "active" && !isAgentAssignedTask(t, agents),
-      ),
-    [allTasks, agents],
-  );
-
   // This screen only ever renders tasks that have a due_date >= today
   // (просроченные задачи отображаются на экране «Сегодня», в «Предстоящих»
   // отображаются только сегодняшние и будущие задачи).
   const datedTasks = useMemo(
-    () => activeTasks.filter((t) => t.due_date && t.due_date >= today),
-    [activeTasks, today],
+    () =>
+      allTasks.filter(
+        (t) =>
+          !isAgentAssignedTask(t, agents) && t.due_date && t.due_date >= today,
+      ),
+    [allTasks, agents, today],
   );
 
   // Filter options from the full dated set (pre-filter), same rule as
@@ -238,7 +239,6 @@ export function UpcomingScreen() {
     () => buildAssigneeOptions(datedTasks),
     [datedTasks],
   );
-  const activeFilterCount = countActiveTaskFilters(filters);
 
   const tasks = useMemo(
     () => filterTasks(datedTasks, filters),
@@ -406,10 +406,6 @@ export function UpcomingScreen() {
     setCalMode(next);
   }
 
-  function toggleCalMode() {
-    changeMode(calMode === "month" ? "week" : "month");
-  }
-
   // ═══ Свайп-раскрытие календаря («за краюшек», 22.08.2026) ═══
   // Палец цепляется за нижнюю ручку-кромку и тянет её:
   //  • тянем вниз — контент сразу становится МЕСЯЦЕМ, высота растёт за пальцем;
@@ -438,10 +434,7 @@ export function UpcomingScreen() {
     // ограничиваться её высотой, иначе развернуть в месяц не удалось бы
     // (лимит = высота недели). Берём величину с запасом, а окончательную
     // высоту решает calDragEnd (плавный добор до месяца/недели).
-    fullHRef.current = Math.max(
-      el.getBoundingClientRect().height,
-      700,
-    );
+    fullHRef.current = Math.max(el.getBoundingClientRect().height, 700);
     setDragStartH(el.getBoundingClientRect().height);
     draggingRef.current = true;
     setDragging(true);
@@ -505,7 +498,9 @@ export function UpcomingScreen() {
     const dx = e.clientX - stripStartXRef.current;
     if (Math.abs(dx) >= 45) {
       triggerHaptic();
-      const curBase = activeDate ? new Date(activeDate + "T00:00:00") : todayDate;
+      const curBase = activeDate
+        ? new Date(activeDate + "T00:00:00")
+        : todayDate;
       const shiftDays = dx < 0 ? 7 : -7;
       const newDate = new Date(curBase);
       newDate.setDate(curBase.getDate() + shiftDays);
@@ -694,30 +689,12 @@ export function UpcomingScreen() {
   // местах (см. оба места использования).
   const headerActions = (
     <>
-      <TaskFilterButton
-        onClick={() => setFilterSheetOpen(true)}
-        active={activeFilterCount > 0}
-      />
-      {/* Свернуть/развернуть календарь-ленту — только в виде
-          «список»: в календарных видах ленты нет вовсе, и кнопка
-          управляла бы тем, чего на экране не видно. */}
-      {view === "list" && (
-        <button
-          onClick={toggleCalMode}
-          className="w-[44px] h-[44px] flex items-center justify-center active:scale-95 transition-transform"
-          aria-label={
-            calMode === "month"
-              ? "Свернуть календарь в неделю"
-              : "Развернуть календарь в месяц"
-          }
-        >
-          <Icon
-            name={calMode === "month" ? "grid" : "list"}
-            size={16}
-            className="text-text"
-          />
-        </button>
-      )}
+      <TaskFilterButton onClick={() => setFilterSheetOpen(true)} />
+      {/* Кнопка сворачивания/разворачивания календаря-ленты убрана
+          (27.08.2026, владелец: «зачем она, у меня для этого жест уже
+          есть») — вертикальный свайп по ленте (calDragStart, см. ниже)
+          вызывает changeMode() напрямую и делает то же самое; отдельная
+          toggleCalMode() была только у этой кнопки — удалена вместе с ней. */}
       {/* Виды экрана — под тремя точками, ровно как в «Сегодня»
           (19.08.2026: «под троеточие спрячь список, доска, один
           день, три дня»). Список, неделя, месяц — плюс «Три дня»
@@ -769,7 +746,7 @@ export function UpcomingScreen() {
           (calOuterRef) и попап месяца, обёртка им нужна взаправду. */}
       {view === "hours" ? (
         <ScreenHeader
-          title="Предстоящее"
+          title="Планирование"
           below={<DayColumnsHeader days={hourDays} />}
           actions={headerActions}
         />
@@ -786,7 +763,7 @@ export function UpcomingScreen() {
           className="sticky top-0 z-20 -mx-4 px-4 bg-bg border-b border-stroke shadow-sticky"
         >
           <ScreenHeader
-            title="Предстоящее"
+            title="Планирование"
             // !mb-0: у ScreenHeader встроено mb-4 (16px) — общий отступ под
             // всеми шапками. На этом экране календарь-лента живёт внутри
             // того же sticky-блока и обязан начинаться СРАЗУ под шапкой,
@@ -897,154 +874,155 @@ export function UpcomingScreen() {
                                       (владелец 22.08.2026: «месячный был уже и меньший шрифт,
                                       сделай одинаковыми — просто числа, не надо ячеек»).
                                       Крупный шрифт как в неделе, 7 колонок = вся ширина. */}
-                                    <div className="grid grid-cols-7 gap-0 py-1">
-                                      {bigMonthDays.map((d) => {
-                                        const dateStr = formatDateStr(
-                                          d.getFullYear(),
-                                          d.getMonth(),
-                                          d.getDate(),
-                                        );
-                                        const firstOfMonth = d.getDate() === 1;
-                                        const isToday = dateStr === today;
-                                        const isSel = dateStr === selectedDate;
-                                        const hasTasks = (groupedTasks[dateStr]?.length ?? 0) > 0;
-                                        const isFilled = isSel || isToday;
-                                        // Дни не текущего месяца — приглушены
-                                        const dim =
-                                          d.getFullYear() !== bigMonthYear ||
-                                          d.getMonth() !== bigMonthMonth;
-                                        return (
-                                          <button
-                                            key={dateStr}
-                                            data-date={dateStr}
-                                            onClick={() =>
-                                              setSelectedDate(isSel ? null : dateStr)
-                                            }
-                                            className="min-h-[44px] w-full flex flex-col items-center justify-center gap-[2px] py-1 transition-all active:scale-90"
-                                          >
-                                            {firstOfMonth && (
-                                              <span
-                                                className={`text-[10px] leading-none ${
-                                                  isFilled ? "text-red" : "text-sub"
-                                                }`}
-                                              >
-                                                {MONTHS_ABBR_DOT[d.getMonth()]}
-                                              </span>
-                                            )}
-                                            <span
-                                              className={`text-[16px] leading-none w-[30px] h-[30px] rounded-full flex items-center justify-center ${
-                                                isFilled
-                                                  ? "bg-red text-white font-semibold"
-                                                  : dim
-                                                    ? "text-dim/50"
-                                                    : hasTasks
-                                                      ? "text-text"
-                                                      : "text-text"
-                                              }`}
-                                            >
-                                              {d.getDate()}
-                                            </span>
-                                            {hasTasks && !isFilled && (
-                                              <div className="w-[4px] h-[4px] rounded-full bg-red" />
-                                            )}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  </>
-                                ) : (
+                  <div className="grid grid-cols-7 gap-0 py-1">
+                    {bigMonthDays.map((d) => {
+                      const dateStr = formatDateStr(
+                        d.getFullYear(),
+                        d.getMonth(),
+                        d.getDate(),
+                      );
+                      const firstOfMonth = d.getDate() === 1;
+                      const isToday = dateStr === today;
+                      const isSel = dateStr === selectedDate;
+                      const hasTasks = (groupedTasks[dateStr]?.length ?? 0) > 0;
+                      const isFilled = isSel || isToday;
+                      // Дни не текущего месяца — приглушены
+                      const dim =
+                        d.getFullYear() !== bigMonthYear ||
+                        d.getMonth() !== bigMonthMonth;
+                      return (
+                        <button
+                          key={dateStr}
+                          data-date={dateStr}
+                          onClick={() =>
+                            setSelectedDate(isSel ? null : dateStr)
+                          }
+                          className="min-h-[44px] w-full flex flex-col items-center justify-center gap-[2px] py-1 transition-all active:scale-90"
+                        >
+                          {firstOfMonth && (
+                            <span
+                              className={`text-[10px] leading-none ${
+                                isFilled ? "text-red" : "text-sub"
+                              }`}
+                            >
+                              {MONTHS_ABBR_DOT[d.getMonth()]}
+                            </span>
+                          )}
+                          <span
+                            className={`text-[16px] leading-none w-[30px] h-[30px] rounded-full flex items-center justify-center ${
+                              isFilled
+                                ? "bg-red text-white font-semibold"
+                                : dim
+                                  ? "text-dim/50"
+                                  : hasTasks
+                                    ? "text-text"
+                                    : "text-text"
+                            }`}
+                          >
+                            {d.getDate()}
+                          </span>
+                          {hasTasks && !isFilled && (
+                            <div className="w-[4px] h-[4px] rounded-full bg-red" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
                 /* Свёрнутый вид — ПОЛОСА НЕДЕЛИ (7 дней), как в Todoist/CRM
                                (владелец 22.08.2026): лента идёт по дням,
                                при скролле списка активный день едет по
                                полосе — неделя полосы следует за ним.
                                Сверху — название месяца активной недели. */
-                                <>
-                                  <div className="relative flex items-center justify-between pt-1 pb-0.5 px-1">
-                                    <span className="text-[13px] font-semibold text-red">
-                                      {formatMonthOfWeek(activeWeekDays)}
-                                    </span>
-                                  </div>
-                                  <div
-                                    ref={weekStripRef}
-                                    onPointerDown={onStripPointerDown}
-                                    onPointerMove={onStripPointerMove}
-                                    onPointerUp={onStripPointerUp}
-                                    onPointerCancel={onStripPointerUp}
-                                    className="flex justify-between px-1 pb-2 pt-1 gap-1 select-none"
-                                    style={{ touchAction: "pan-y" }}
-                                  >
-                                    {activeWeekDays.map((d) => {
-                                      const date = formatDateStr(
-                                        d.getFullYear(),
-                                        d.getMonth(),
-                                        d.getDate(),
-                                      );
-                                      const dow = d.getDay(); // 0 = вс
-                                      const short = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][dow];
-                                      const isActive =
-                                        activeDate === date ||
-                                        (activeDate == null && date === today);
-                                      const isToday = date === today;
-                                      const hasTasks =
-                                        (groupedTasks[date]?.length ?? 0) > 0;
-                                      return (
-                                        <button
-                                          key={date}
-                                          data-strip-day={date}
-                                          onClick={() =>
-                                            setSelectedDate(date === selectedDate ? null : date)
-                                          }
-                                          className={`relative flex h-[46px] w-[44px] shrink-0 flex-col items-center justify-center rounded-2xl transition-all ${
-                                            isActive && !isToday
-                                              ? "bg-red/15 ring-1 ring-red/30"
-                                              : ""
-                                          }`}
-                                        >
-                                          {/* Красное свечение позади активного числа —
+                <>
+                  <div className="relative flex items-center justify-between pt-1 pb-0.5 px-1">
+                    <span className="text-[13px] font-semibold text-red">
+                      {formatMonthOfWeek(activeWeekDays)}
+                    </span>
+                  </div>
+                  <div
+                    ref={weekStripRef}
+                    onPointerDown={onStripPointerDown}
+                    onPointerMove={onStripPointerMove}
+                    onPointerUp={onStripPointerUp}
+                    onPointerCancel={onStripPointerUp}
+                    className="flex justify-between px-1 pb-2 pt-1 gap-1 select-none"
+                    style={{ touchAction: "pan-y" }}
+                  >
+                    {activeWeekDays.map((d) => {
+                      const date = formatDateStr(
+                        d.getFullYear(),
+                        d.getMonth(),
+                        d.getDate(),
+                      );
+                      const dow = d.getDay(); // 0 = вс
+                      const short = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][
+                        dow
+                      ];
+                      const isActive =
+                        activeDate === date ||
+                        (activeDate == null && date === today);
+                      const isToday = date === today;
+                      const hasTasks = (groupedTasks[date]?.length ?? 0) > 0;
+                      return (
+                        <button
+                          key={date}
+                          data-strip-day={date}
+                          onClick={() =>
+                            setSelectedDate(date === selectedDate ? null : date)
+                          }
+                          className={`relative flex h-[46px] w-[44px] shrink-0 flex-col items-center justify-center rounded-2xl transition-all ${
+                            isActive && !isToday
+                              ? "bg-red/15 ring-1 ring-red/30"
+                              : ""
+                          }`}
+                        >
+                          {/* Красное свечение позади активного числа —
                                               «размытое пятнышко», бегущее по числам.
                                               Не рисуем под кружком «сегодня». */}
-                                          {isActive && !isToday && (
-                                            <span
-                                              aria-hidden
-                                              className="pointer-events-none absolute inset-0 rounded-full"
-                                              style={{
-                                                background:
-                                                  "radial-gradient(circle, rgba(255,59,48,0.28) 0%, transparent 70%)",
-                                              }}
-                                            />
-                                          )}
-                                          <span
-                                            className={`relative text-[10px] font-medium uppercase ${
-                                              isActive || isToday ? "text-red" : "text-sub"
-                                            }`}
-                                          >
-                                            {short}
-                                          </span>
-                                          <span
-                                            className={`relative text-[15px] font-medium ${
-                                              // Сегодня — ВСЕГДА красный кружок (как
-                                              // было изначально); свечение — только у
-                                              // активной даты скролла, если это не
-                                              // сегодня (иначе кружок с ней конфликтует).
-                                              isToday
-                                                ? "flex h-[28px] w-[28px] items-center justify-center rounded-full bg-red text-white"
-                                                : isActive
-                                                  ? "text-red font-semibold"
-                                                  : date === selectedDate
-                                                    ? "text-text font-semibold"
-                                                    : "text-text"
-                                            }`}
-                                          >
-                                            {d.getDate()}
-                                          </span>
-                                          {hasTasks && !isActive && (
-                                            <span className="relative h-[4px] w-[4px] rounded-full bg-red" />
-                                          )}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </>
+                          {isActive && !isToday && (
+                            <span
+                              aria-hidden
+                              className="pointer-events-none absolute inset-0 rounded-full"
+                              style={{
+                                background:
+                                  "radial-gradient(circle, rgba(255,59,48,0.28) 0%, transparent 70%)",
+                              }}
+                            />
+                          )}
+                          <span
+                            className={`relative text-[10px] font-medium uppercase ${
+                              isActive || isToday ? "text-red" : "text-sub"
+                            }`}
+                          >
+                            {short}
+                          </span>
+                          <span
+                            className={`relative text-[15px] font-medium ${
+                              // Сегодня — ВСЕГДА красный кружок (как
+                              // было изначально); свечение — только у
+                              // активной даты скролла, если это не
+                              // сегодня (иначе кружок с ней конфликтует).
+                              isToday
+                                ? "flex h-[28px] w-[28px] items-center justify-center rounded-full bg-red text-white"
+                                : isActive
+                                  ? "text-red font-semibold"
+                                  : date === selectedDate
+                                    ? "text-text font-semibold"
+                                    : "text-text"
+                            }`}
+                          >
+                            {d.getDate()}
+                          </span>
+                          {hasTasks && !isActive && (
+                            <span className="relative h-[4px] w-[4px] rounded-full bg-red" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
               )}
             </div>
           </div>
@@ -1053,24 +1031,24 @@ export function UpcomingScreen() {
                       «мы правим только список, а не неделю и месяц — отдельные
                       виды, а ты ручку поставил везде»). В неделе и месяце это
                       полноценные отдельные вкладки, им свайп-кромка не нужна. */}
-                    {view === "list" && (
-                    <div
-                      onPointerDown={calDragStart}
-                      onPointerMove={calDragMove}
-                      onPointerUp={calDragEnd}
-                      onPointerCancel={calDragEnd}
-                      style={{
-                        touchAction: "none", // не отдавать вертикальный жест скроллу
-                        cursor: "row-resize",
-                      }}
-                      data-cal-handle
-                      className="group -mx-4 flex h-5 items-center justify-center"
-                    >
-                      {/* Сама полоска-«защёлка» — узкая, в цвет фона календаря,
+          {view === "list" && (
+            <div
+              onPointerDown={calDragStart}
+              onPointerMove={calDragMove}
+              onPointerUp={calDragEnd}
+              onPointerCancel={calDragEnd}
+              style={{
+                touchAction: "none", // не отдавать вертикальный жест скроллу
+                cursor: "row-resize",
+              }}
+              data-cal-handle
+              className="group -mx-4 flex h-5 items-center justify-center"
+            >
+              {/* Сама полоска-«защёлка» — узкая, в цвет фона календаря,
                           с лёгким откликом при нажатии. */}
-                      <div className="h-[4px] w-9 rounded-full bg-stroke transition-opacity group-active:opacity-70" />
-                    </div>
-                    )}
+              <div className="h-[4px] w-9 rounded-full bg-stroke transition-opacity group-active:opacity-70" />
+            </div>
+          )}
 
           {/* Попап выбора месяца — соседний с calOuterRef элемент (НЕ
             потомок), чтобы overflow-hidden/анимируемая height на
@@ -1157,7 +1135,7 @@ export function UpcomingScreen() {
         <WeekGrid
           monday={gridMonday}
           byDate={byDate}
-          onTaskClick={(id) => navigate(`/task/${id}`)}
+          onTaskClick={openTask}
           onDayClick={(d) => setOpenDay(d)}
           onPickDate={(d) => setGridMonday(weekStartOf(d))}
           onPrevWeek={() => setGridMonday((m) => addDays(m, -7))}
@@ -1174,7 +1152,7 @@ export function UpcomingScreen() {
           openDay={openDay}
           // Повторный тап по тому же дню сворачивает полосу.
           onDayClick={(d) => setOpenDay((prev) => (prev === d ? null : d))}
-          onTaskClick={(id) => navigate(`/task/${id}`)}
+          onTaskClick={openTask}
           // Список недель — внутреннее дело MonthGrid (continuous-scroll,
           // 20.08.2026); он лишь сообщает, что сейчас основное на экране,
           // для заголовка «Август» в шапке ниже.
@@ -1192,7 +1170,7 @@ export function UpcomingScreen() {
           projectColor={(t) =>
             projects.find((p) => p.id === t.project_id)?.color || "#717171"
           }
-          onTaskClick={(id) => navigate(`/task/${id}`)}
+          onTaskClick={openTask}
           // Перетащили задачу на шкалу — назначаем и время, и дату колонки,
           // куда отпустили; длительность 15 минут (SNAP_MIN), если её
           // раньше не было — та же логика, что была на «Сегодня», см.
@@ -1214,18 +1192,22 @@ export function UpcomingScreen() {
           tasks={byDate.get(openDay) ?? []}
           onTaskClick={(id) => {
             setOpenDay(null);
-            navigate(`/task/${id}`);
+            openTask(id);
           }}
           onClose={() => setOpenDay(null)}
           onPrevDay={() => {
             const d = new Date(openDay + "T00:00:00");
             d.setDate(d.getDate() - 1);
-            setOpenDay(formatDateStr(d.getFullYear(), d.getMonth(), d.getDate()));
+            setOpenDay(
+              formatDateStr(d.getFullYear(), d.getMonth(), d.getDate()),
+            );
           }}
           onNextDay={() => {
             const d = new Date(openDay + "T00:00:00");
             d.setDate(d.getDate() + 1);
-            setOpenDay(formatDateStr(d.getFullYear(), d.getMonth(), d.getDate()));
+            setOpenDay(
+              formatDateStr(d.getFullYear(), d.getMonth(), d.getDate()),
+            );
           }}
         />
       )}
@@ -1242,32 +1224,38 @@ export function UpcomingScreen() {
                 (владелец 22.08.2026: «дата перемещается... текущая дата
                 осталась, а красненькое размытое пятнышко шло за той
                 датой, на которой я остановился»). top учитывает высоту
-                шапки (--screen-header-h), чтобы не прятаться под неё. */}
-            <div
-              data-date-header={dateStr}
-              className={`sticky z-10 -mx-4 mb-2 flex items-center gap-2 px-4 py-1 ${
-                dateStr === today ? "text-red" : "text-sub"
-              }`}
-              style={{
-                top: "var(--screen-header-h, 0px)",
-                // Свечение позади активной даты: мягкое красное пятно,
-                // размытое, как и просил владелец.
-                ...(dateStr === today
-                  ? {
-                      background:
-                        "radial-gradient(120px 28px at 50% 50%, rgba(255,59,48,0.18), transparent 70%)",
-                    }
-                  : {}),
-                backdropFilter:
-                  dateStr === today ? "blur(2px)" : undefined,
-                WebkitBackdropFilter:
-                  dateStr === today ? "blur(2px)" : undefined,
-              }}
-            >
-              <span className="text-[13px] font-semibold">
-                {formatFullDate(dateStr)}
-              </span>
-            </div>
+                шапки (--screen-header-h), чтобы не прятаться под неё.
+                Скрыт при выбранной дате (27.08.2026, владелец: «тыкаю на
+                календаре — та же подпись дублируется») — «Selected date
+                indicator» (красная плашка выше) уже показывает то же
+                самое, а список в этом режиме и так ровно из одной группы,
+                sticky-слежению за скроллом тут нечего делать. */}
+            {!selectedDate && (
+              <div
+                data-date-header={dateStr}
+                className={`sticky z-10 -mx-4 mb-2 flex items-center gap-2 px-4 py-1 ${
+                  dateStr === today ? "text-red" : "text-sub"
+                }`}
+                style={{
+                  top: "var(--screen-header-h, 0px)",
+                  // Свечение позади активной даты: мягкое красное пятно,
+                  // размытое, как и просил владелец.
+                  ...(dateStr === today
+                    ? {
+                        background:
+                          "radial-gradient(120px 28px at 50% 50%, rgba(255,59,48,0.18), transparent 70%)",
+                      }
+                    : {}),
+                  backdropFilter: dateStr === today ? "blur(2px)" : undefined,
+                  WebkitBackdropFilter:
+                    dateStr === today ? "blur(2px)" : undefined,
+                }}
+              >
+                <span className="text-[13px] font-semibold">
+                  {formatFullDate(dateStr)}
+                </span>
+              </div>
+            )}
             <AppleCalendarEvents dateStr={dateStr} className="mb-2" />
             {(groupedTasks[dateStr] ?? []).map((task) => (
               <TaskRow
@@ -1275,7 +1263,7 @@ export function UpcomingScreen() {
                 task={task}
                 maxLabels={1}
                 showDueBadge={false}
-                onClick={() => navigate(`/task/${task.id}`)}
+                onClick={() => openTask(task.id)}
               />
             ))}
           </div>

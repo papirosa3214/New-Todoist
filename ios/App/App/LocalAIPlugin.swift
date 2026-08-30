@@ -37,6 +37,7 @@
 import AVFoundation
 import Capacitor
 import Foundation
+import LocalAuthentication
 import Speech
 import UIKit
 import WhisperKit
@@ -859,10 +860,87 @@ public struct SwiftUIAppleGlassButton: View {
   }
 }
 
+@objc(TFBiometricPlugin)
+public class TFBiometricPlugin: CAPPlugin, CAPBridgedPlugin {
+  public let identifier = "TFBiometricPlugin"
+  public let jsName = "TFBiometric"
+  public let pluginMethods: [CAPPluginMethod] = [
+    CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
+    CAPPluginMethod(name: "authenticate", returnType: CAPPluginReturnPromise),
+  ]
+
+  @objc func isAvailable(_ call: CAPPluginCall) {
+    let context = LAContext()
+    var error: NSError?
+    let canAuth = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+
+    var biometryType = "none"
+    if #available(iOS 11.0, *) {
+      switch context.biometryType {
+      case .faceID:
+        biometryType = "faceId"
+      case .touchID:
+        biometryType = "touchId"
+      case .opticID:
+        biometryType = "opticId"
+      default:
+        biometryType = "none"
+      }
+    }
+
+    call.resolve([
+      "available": canAuth,
+      "biometryType": biometryType,
+      "error": error?.localizedDescription as Any
+    ])
+  }
+
+  @objc func authenticate(_ call: CAPPluginCall) {
+    let reason = call.getString("reason") ?? "Подтвердите личность для доступа к TaskFlow"
+    let context = LAContext()
+    context.localizedCancelTitle = "Отмена"
+
+    var error: NSError?
+    let policy: LAPolicy = .deviceOwnerAuthentication
+
+    if context.canEvaluatePolicy(policy, error: &error) {
+      context.evaluatePolicy(policy, localizedReason: reason) { success, evalError in
+        DispatchQueue.main.async {
+          if success {
+            call.resolve(["success": true])
+          } else {
+            call.resolve([
+              "success": false,
+              "error": evalError?.localizedDescription ?? "Ошибка аутентификации"
+            ])
+          }
+        }
+      }
+    } else {
+      call.resolve([
+        "success": false,
+        "error": error?.localizedDescription ?? "Биометрия недоступна"
+      ])
+    }
+  }
+}
+// Единственное место, где приложение объявляет свои плагины. Capacitor 8 их
+// САМ НЕ НАХОДИТ: registerPlugins() берёт только packageClassList из
+// capacitor.config.json (туда `cap sync` кладёт лишь плагины из npm — App,
+// Haptics, StatusBar) и то, что явно добавлено здесь. Сканирования ObjC-рантайма
+// в CapacitorBridge.swift нет вовсе. Поэтому забытая строка = плагин, которого
+// для JS не существует: registerPlugin() на стороне веба вернёт заглушку, а
+// каждый вызов уйдёт в reject. Именно так 24.08.2026 молча не работал островок —
+// LiveActivityPlugin был написан, собран и подписан, но не зарегистрирован.
+// Добавляешь сюда новый плагин — сразу добавь строку в этот список.
 public class LocalAIBridgeViewController: CAPBridgeViewController {
   public override func capacitorDidLoad() {
     bridge?.registerPluginInstance(LocalAIPlugin())
     bridge?.registerPluginInstance(TFHapticsPlugin())
     bridge?.registerPluginInstance(EventKitPlugin())
+    bridge?.registerPluginInstance(TFBiometricPlugin())
+    bridge?.registerPluginInstance(LiveActivityPlugin())
+    // Языковая модель на устройстве через MLX — см. LocalLLMPlugin.swift.
+    bridge?.registerPluginInstance(TFLocalLLMPlugin())
   }
 }

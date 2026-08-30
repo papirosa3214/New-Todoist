@@ -11,7 +11,7 @@ import {
   getProjectForFiling,
   seesEveryTask,
 } from "../access.js";
-import { isStale, logEvent } from "../agentState.js";
+import { isStale, logEvent, releaseSubtaskWork } from "../agentState.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -98,7 +98,7 @@ function isValidDuration(n: unknown): boolean {
 // больше не так, не опирайтесь на это как на инвариант. Сам фильтр !s.done
 // оставлен: он ничего не стоит и держит роллап честным на старых базах,
 // куда миграция ещё не доехала.
-function withAgentStale(task: any, subtasks?: any[]) {
+export function withAgentStale(task: any, subtasks?: any[], children?: any[]) {
   let agent_state = task.agent_state;
   let agent_heartbeat_at = task.agent_heartbeat_at;
 
@@ -114,11 +114,14 @@ function withAgentStale(task: any, subtasks?: any[]) {
     }
   }
 
+  // Оркестратор не считается пропавшим, пока его дочерние задачи активны (в работе у других ботов)
+  const hasActiveChildren = children && children.some((c: any) => c.status === "active");
+
   return {
     ...task,
     agent_state,
     agent_heartbeat_at,
-    agent_stale: agent_state === "in_progress" && isStale(agent_heartbeat_at),
+    agent_stale: hasActiveChildren ? false : (agent_state === "in_progress" && isStale(agent_heartbeat_at)),
   };
 }
 
@@ -152,7 +155,20 @@ export function withSubtaskState(s: any) {
   };
 }
 
+export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
+             p.name as project_name, p.color as project_color`;
+export const TASK_JOINS = `FROM tasks t
+      LEFT JOIN users u ON t.assignee_id = u.id
+      LEFT JOIN projects p ON t.project_id = p.id`;
+
+export function getTaskRow(id: string) {
+  return db
+    .prepare(`SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.id = ?`)
+    .get(id) as any;
+}
+
 export function hydrateTask(task: any) {
+  if (!task) return task;
   const labels = db
     .prepare(
       `SELECT l.id, l.name, l.color FROM labels l
@@ -163,7 +179,53 @@ export function hydrateTask(task: any) {
     .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
     .all(task.id)
     .map(withSubtaskState);
-  return { ...withAgentStale(task, subtasks), labels, subtasks };
+  const children = db
+    .prepare(`SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`)
+    .all(task.id)
+    .map(t => {
+       const childLabels = db
+        .prepare(
+          `SELECT l.id, l.name, l.color FROM labels l
+           JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?`,
+        )
+        .all((t as any).id);
+       const childSubtasks = db
+        .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
+        .all((t as any).id)
+        .map(withSubtaskState);
+       return { ...withAgentStale(t, childSubtasks), labels: childLabels, subtasks: childSubtasks };
+    });
+
+  return {
+    ...withAgentStale(task, subtasks, children),
+    labels,
+    subtasks,
+    children,
+    agent_started_at: agentStartedAt(task),
+  };
+}
+
+/** Когда агент в последний раз взял эту задачу.
+ *
+ *  Не хранится в строке задачи — берётся из журнала, единственного места, где
+ *  этот момент вообще зафиксирован (kind='claimed', AGENT-PROTOCOL.md). Нужно
+ *  островку на телефоне: он показывает время работы, и точка отсчёта обязана
+ *  быть моментом взятия задачи, а не моментом, когда человек открыл
+ *  приложение. Иначе таймер обнуляется каждый раз, когда телефон достали из
+ *  кармана. Пусто — задачу никто не брал.
+ *
+ *  Журнал неизменяем и индексирован по (task_id, created_at), так что это
+ *  дешёвое чтение хвоста, а не скан. */
+function agentStartedAt(task: any): string | null {
+  if (!task?.id || !task.agent_state) return null;
+  const row = db
+    .prepare(
+      `SELECT created_at FROM task_events
+       WHERE task_id = ? AND kind = 'claimed'
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(task.id) as any;
+  return row?.created_at || null;
 }
 
 // ═══════ TASKS CRUD ═══════
@@ -178,22 +240,21 @@ export function registerTaskRoutes(app: FastifyInstance) {
   // не показывалась владельцу вообще.
   app.get("/api/tasks", { preHandler: authPre }, async (req: any) => {
     const userId = req.userId;
-    const columns = `t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
-             p.name as project_name, p.color as project_color`;
-    const joins = `FROM tasks t
-      LEFT JOIN users u ON t.assignee_id = u.id
-      LEFT JOIN projects p ON t.project_id = p.id`;
+    const includeChildren = req.query.include_children === "true";
+    const parentFilter = includeChildren ? "" : "t.parent_id IS NULL AND ";
+    const columns = TASK_COLUMNS;
+    const joins = TASK_JOINS;
 
     const tasks = (
       seesEveryTask(userId)
         ? db
-            .prepare(`SELECT ${columns} ${joins} ORDER BY t.created_at DESC`)
+            .prepare(`SELECT ${columns} ${joins} ${includeChildren ? "" : "WHERE (t.parent_id IS NULL OR t.project_id IS NOT NULL)"} ORDER BY t.created_at DESC`)
             .all()
         : db
             .prepare(
               `SELECT ${columns} ${joins}
-      WHERE t.creator_id = ? OR t.assignee_id = ?
-         OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?)
+      WHERE ${includeChildren ? "" : "(t.parent_id IS NULL OR t.project_id IS NOT NULL) AND "}(t.creator_id = ? OR t.assignee_id = ?
+         OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))
       ORDER BY t.created_at DESC`,
             )
             .all(userId, userId, userId)
@@ -206,6 +267,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const stmtSub = db.prepare(
       "SELECT * FROM subtasks WHERE task_id = ? ORDER BY position",
     );
+    const stmtChildren = db.prepare(
+      "SELECT id, status FROM tasks WHERE parent_id = ?",
+    );
 
     // Метка сессии вызывающего: кто именно спрашивает. По ней каждая
     // задача помечается `mine` — ведёт ли её ЭТА сессия. Учётка агента
@@ -217,14 +281,19 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const session = sessionOf(req);
     return tasks.map((t: any) => {
       const subtasks = stmtSub.all(t.id).map(withSubtaskState);
+      const children = stmtChildren.all(t.id);
       const bySubtask = subtasks.some(
         (s: any) => s.agent_session_id && s.agent_session_id === session,
       );
       return {
-        ...withAgentStale(t, subtasks),
+        ...withAgentStale(t, subtasks, children),
         mine: session ? t.agent_session_id === session || bySubtask : null,
         labels: stmtLabels.all(t.id),
         subtasks,
+        // Третий путь отдачи задачи, и он тоже собирается вручную мимо
+        // hydrateTask. Островок на телефоне живёт как раз от списка, так что
+        // без этой строки время работы считалось бы от открытия приложения.
+        agent_started_at: agentStartedAt(t),
       };
     });
   });
@@ -237,12 +306,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const task = getTaskForRead(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
-      const full = db
-        .prepare(
-          `SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials
-           FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.id = ?`,
-        )
-        .get(task.id) as any;
+      const full = getTaskRow(task.id);
 
       const labels = db
         .prepare(
@@ -253,6 +317,22 @@ export function registerTaskRoutes(app: FastifyInstance) {
         .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
         .all(task.id)
         .map(withSubtaskState);
+      const children = db
+        .prepare(`SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`)
+        .all(task.id)
+        .map(t => {
+           const childLabels = db
+            .prepare(
+              `SELECT l.id, l.name, l.color FROM labels l
+               JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?`,
+            )
+            .all((t as any).id);
+           const childSubtasks = db
+            .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
+            .all((t as any).id)
+            .map(withSubtaskState);
+           return { ...withAgentStale(t, childSubtasks), labels: childLabels, subtasks: childSubtasks };
+        });
       const comments = db
         .prepare(
           `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.avatar_url as user_avatar_url, u.initials as user_initials
@@ -297,12 +377,17 @@ export function registerTaskRoutes(app: FastifyInstance) {
         .all(task.id);
 
       return {
-        ...withAgentStale(full, subtasks),
+        ...withAgentStale(full, subtasks, children),
         labels,
         subtasks,
+        children,
         comments,
         attachments: taskAttachments,
         events,
+        // Тот же расчёт, что в hydrateTask: карточка задачи собирается здесь
+        // вручную и мимо него, и поле, добавленное только туда, на этом пути
+        // молча пропало бы (ровно так уже терялось имя проекта).
+        agent_started_at: agentStartedAt(full),
       };
     },
   );
@@ -322,6 +407,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       priority?: number;
       assignee_id?: string;
       label_ids?: string[];
+      parent_id?: string;
       // Optional bulk-create for subtasks, created in the same transaction
       // as the task (see below). Accepts either plain titles or objects
       // shaped like { title } — TaskFormScreen currently sends plain
@@ -342,6 +428,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         priority,
         assignee_id,
         label_ids,
+        parent_id,
         subtasks,
       } = req.body;
 
@@ -459,8 +546,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const createTaskTxn = db.transaction(() => {
         db.prepare(
           `
-          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         ).run(
           id,
@@ -476,6 +563,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
           priority || 1,
           assignee_id || null,
           req.userId,
+          parent_id || null,
         );
 
         if (label_ids?.length) {
@@ -552,12 +640,27 @@ export function registerTaskRoutes(app: FastifyInstance) {
         });
       }
 
-      const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
-      broadcastToUsers([req.userId, assignee_id], {
+      const task = getTaskRow(id);
+      const hydrated = hydrateTask(task);
+      const ownerRow = db.prepare("SELECT id FROM users WHERE role = 'owner'").get() as any;
+      const notifyUsers = new Set<string>([req.userId, assignee_id, ownerRow?.id].filter(Boolean));
+      broadcastToUsers(Array.from(notifyUsers), {
         type: "task:created",
-        task: hydrateTask(task),
+        task: hydrated,
       });
-      return { task };
+
+      if (parent_id) {
+        const parentTask = getTaskRow(parent_id);
+        if (parentTask) {
+          const hydratedParent = hydrateTask(parentTask);
+          const parentNotifyUsers = new Set<string>([parentTask.creator_id, parentTask.assignee_id, ownerRow?.id].filter(Boolean));
+          broadcastToUsers(Array.from(parentNotifyUsers), {
+            type: "task:updated",
+            task: hydratedParent,
+          });
+        }
+      }
+      return { task: hydrated };
     },
   });
 
@@ -656,12 +759,38 @@ export function registerTaskRoutes(app: FastifyInstance) {
       if (body.status !== undefined && !ALLOWED_STATUS.includes(body.status)) {
         return reply.code(400).send({ error: "invalid status" });
       }
-      // Задачу закрывает тот, кто её сделал, — включая агента. Решение
-      // Максима 20.08.2026 по итогам живой работы с конвейером: приёмка
-      // отдельным шагом оказалась лишним телодвижением, недовольство
-      // результатом он выражает комментарием или новой задачей, а не
-      // отказом закрыть старую. Прежний запрет (403 для type='ai') снят
-      // здесь же — см. симметричную правку в routes/subtasks.ts.
+      // ЗАКРЫТИЕ И ВОЗВРАТ В РАБОТУ — только владельцу и оркестратору
+      // (29.08.2026, задача be329d8e). Владелец передал приёмку работы
+      // исполнителей оркестратору: «ты раздаёшь пачками эти задачи, поэтому
+      // сам их и принимай. Мне главное результат». Закрытая карточка
+      // уходит с доски вместе со всей своей историей, и если её сможет
+      // захлопнуть сам исполнитель, у которого «кажется, что готово», он
+      // уберёт с глаз работу, которую владелец не видел.
+      //
+      // Прежний режим (20.08.2026) разрешал любому type='ai' закрывать —
+      // «приёмка отдельным шагом оказалась лишним телодвижением». Сейчас
+      // владелец это решение отменил и переложил приёмку на оркестратора.
+      // Запрет на сервере: файл MCP общий, и агенту ничто не мешает
+      // дёрнуть API напрямую, а описание инструмента — это соглашение,
+      // которое легко забыть.
+      //
+      // Применяется к ОБОИМ переходам: completed (active→completed) и
+      // active (completed→active, «вернуть в работу»). Возврат — та же
+      // ручка, что и закрытие: нельзя закрыть «не глядя», нельзя и
+      // заново открыть «не глядя».
+      if (body.status !== undefined && body.status !== existing.status) {
+        const actor = db
+          .prepare("SELECT role FROM users WHERE id = ?")
+          .get(req.userId) as { role?: string } | undefined;
+        const role = actor?.role ?? "";
+        if (role !== "owner" && role !== "orchestrator") {
+          return reply.code(403).send({
+            error:
+              "закрывать задачу и возвращать её в работу может только владелец " +
+              "или оркестратор: исполнитель сдаёт через review, а приёмку делает оркестратор",
+          });
+        }
+      }
       if (
         body.priority !== undefined &&
         !(body.priority >= 1 && body.priority <= 4)
@@ -722,6 +851,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         "start_time",
         "duration_min",
         "project_id",
+        "parent_id",
         "priority",
         "assignee_id",
         "status",
@@ -747,18 +877,23 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // finished task (e.g. its description) would re-stamp completed_at
       // to now and slide it into "today" on an Activity screen grouped by
       // completion day, which is exactly the bug this column exists to fix.
+      // Задачу перестал вести агент — гасим отметки о работе и на её шагах
+      // (см. ниже, releaseSubtaskWork).
+      let releasesAgentWork = false;
       if (body.status !== undefined) {
         if (body.status === "completed" && existing.status !== "completed") {
           fields.push("completed_at = datetime('now')");
           // A completed task is done — any in-flight agent_state (usually
           // 'review', it's the owner accepting) no longer means anything.
           fields.push("agent_state = NULL");
+          releasesAgentWork = true;
         } else if (body.status === "active") {
           fields.push("completed_at = NULL");
           // completed -> active is "вернуть в работу" (AGENT-PROTOCOL.md
           // transition matrix) — starts clean, nobody's mid-lease on it.
           if (existing.status === "completed") {
             fields.push("agent_state = NULL");
+            releasesAgentWork = true;
           }
         }
       }
@@ -769,6 +904,15 @@ export function registerTaskRoutes(app: FastifyInstance) {
         db.prepare(`UPDATE tasks SET ${fields.join(", ")} WHERE id = ?`).run(
           ...values,
         );
+      }
+
+      // Гашение agent_state у самой задачи выше очищало только её колонку, а
+      // незакрытый шаг в in_progress/blocked продолжал поднимать состояние
+      // наверх роллапом (withAgentStale) — уже на ЗАКРЫТОЙ задаче. Владелец
+      // видел «Агент пропал» на карточке, с которой работа давно снята, а
+      // заново открытая задача сразу выглядела занятой.
+      if (releasesAgentWork) {
+        releaseSubtaskWork(id);
       }
 
       // Status changes go in the journal too — the "смена состояния"
@@ -886,9 +1030,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
         });
       }
 
-      const task = db
-        .prepare("SELECT * FROM tasks WHERE id = ?")
-        .get(id) as any;
+      const task = getTaskRow(id);
+      const hydrated = hydrateTask(task);
       const eventType =
         body.status === "completed" ? "task:completed" : "task:updated";
       // Notify old + new assignee, and the creator, so nobody's client goes stale.
@@ -896,11 +1039,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
         [existing.creator_id, existing.assignee_id, task.assignee_id],
         {
           type: eventType,
-          task: hydrateTask(task),
+          task: hydrated,
         },
       );
 
-      return { task };
+      return { task: hydrated };
     },
   });
 

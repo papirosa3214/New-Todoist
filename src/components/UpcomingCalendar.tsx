@@ -474,6 +474,9 @@ export function WeekGrid({
     // что у MonthGrid: горизонтальный жест не даёт странице увести
     // вертикальный скролл вместе с ним.
     <div
+      // Листание недель — свой горизонтальный жест (useSwipeBack исключает
+      // помеченные узлы).
+      data-hswipe
       className="-mx-4 select-none"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -819,6 +822,8 @@ export function MonthGrid({
   return (
     <div
       data-month-grid
+      // Листание месяцев — свой горизонтальный жест.
+      data-hswipe
       className="-mx-4 select-none"
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}

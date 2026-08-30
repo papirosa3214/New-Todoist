@@ -41,6 +41,26 @@ const STRUCTURE_SYSTEM_PROMPT = `Ты умный персональный асс
   "priority": 4
 }`;
 
+// ═══════════ Дневник: AI-действия над текстом + мост в задачи ═══════════
+// 25.08.2026, владелец: «дневник с ии мостом в проекты». Три действия над
+// выделением (или всей записью, если ничего не выделено) плюс отдельное
+// извлечение задач из текста — см. NoteEditorScreen.tsx.
+const JOURNAL_ASSIST_PROMPTS: Record<
+  "continue" | "shorten" | "expand",
+  string
+> = {
+  continue: `Ты помогаешь человеку писать личный дневник. Тебе дан текст — последняя часть его мысли. Продолжи мысль естественно, от того же лица, в том же тоне, 1-3 предложения. Ответь ТОЛЬКО продолжением текста, без кавычек, без вступлений и пояснений.`,
+  shorten: `Сократи присланный текст до сути, сохранив смысл и авторский тон. Результат — не длиннее половины исходного объёма. Ответь ТОЛЬКО сокращённым текстом, без пояснений.`,
+  expand: `Разверни присланную мысль в конкретный список пунктов — что сделать или на что обратить внимание. Ответь маркированным списком, каждый пункт с новой строки, начинается с "- ". Без вступления и пояснений.`,
+};
+
+const EXTRACT_TASKS_SYSTEM_PROMPT = `Ты помощник, который находит в тексте личного дневника конкретные дела и намерения — то, что человек хочет СДЕЛАТЬ, а не просто мысли или наблюдения.
+Дан текст дневниковой записи. Извлеки из него только конкретные, выполнимые задачи (0-10 штук). Если в тексте нет ничего похожего на задачу — верни пустой массив.
+Ответь СТРОГО валидным JSON-массивом объектов и ничем больше — без markdown, без пояснений до или после:
+[{"title": "Короткий заголовок задачи, начинается с глагола", "description": "", "priority": 4, "due_date": null}]
+"priority" — число 1-4 (1 — срочно, 4 — обычный; если из текста не ясно — 4).
+"due_date" — "YYYY-MM-DD", если дата явно упомянута или ясна из контекста, иначе null.`;
+
 function buildUserPrompt(
   title: string,
   description: string | null | undefined,
@@ -107,13 +127,19 @@ async function callUnifiedAi(opts: {
   localModel?: string;
   aiModel?: string;
   temperature?: number;
+  /** Включить reasoning-фазу («думание») у локальной модели. По умолчанию
+   *  ВЫКЛ — для разбивки задач и наблюдателя скорость важнее (10с против
+   *  60-76с). Максим 26.08.2026: для Дневника пусть думает — там качество
+   *  текста важнее секунд. */
+  think?: boolean;
 }): Promise<string> {
   const provider = (opts.provider || "local").toLowerCase();
   const requestedModel = opts.aiModel;
 
   // 1. Claude Code / Anthropic
   if (provider === "claude" && process.env.ANTHROPIC_API_KEY) {
-    const claudeModel = requestedModel || process.env.CLAUDE_MODEL || "claude-sonnet-4.6";
+    const claudeModel =
+      requestedModel || process.env.CLAUDE_MODEL || "claude-sonnet-4.6";
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -142,7 +168,10 @@ async function callUnifiedAi(opts: {
 
   // 2. Hermes / OpenRouter
   if (provider === "hermes" && process.env.OPENROUTER_API_KEY) {
-    const hermesModel = requestedModel || process.env.HERMES_MODEL || "nousresearch/hermes-3-llama-3.1-405b";
+    const hermesModel =
+      requestedModel ||
+      process.env.HERMES_MODEL ||
+      "nousresearch/hermes-3-llama-3.1-405b";
     try {
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
@@ -171,7 +200,8 @@ async function callUnifiedAi(opts: {
 
   // 3. DeepSeek API
   if (provider === "deepseek" && process.env.DEEPSEEK_API_KEY) {
-    const deepseekModel = requestedModel || process.env.DEEPSEEK_MODEL || "deepseek-chat";
+    const deepseekModel =
+      requestedModel || process.env.DEEPSEEK_MODEL || "deepseek-chat";
     try {
       const res = await fetch("https://api.deepseek.com/chat/completions", {
         method: "POST",
@@ -198,10 +228,37 @@ async function callUnifiedAi(opts: {
     }
   }
 
-  // 4. Antigravity / Gemini
-  if (provider === "antigravity" && (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)) {
+  const ANTIGRAVITY_TO_GEMINI_API_MAP: Record<string, string> = {
+    "gemini-3.7-flash-high": "gemini-3-flash-preview",
+    "gemini-3.7-flash-medium": "gemini-3-flash-preview",
+    "gemini-3.7-flash-low": "gemini-3-flash-preview",
+    "gemini-3.6-flash-high": "gemini-3-flash-preview",
+    "gemini-3.6-flash-medium": "gemini-3-flash-preview",
+    "gemini-3.6-flash-low": "gemini-3-flash-preview",
+    "gemini-3.5-flash-high": "gemini-2.5-flash",
+    "gemini-3.5-flash-medium": "gemini-2.5-flash",
+    "gemini-3.5-flash-low": "gemini-2.5-flash",
+    "gemini-3.1-pro-high": "gemini-3.1-pro-preview",
+    "gemini-3.1-pro-low": "gemini-3.1-pro-preview",
+    "claude-sonnet-4-6": "gemini-3.1-pro-preview",
+    "claude-sonnet-4.6": "gemini-3.1-pro-preview",
+    "claude-opus-4-6-thinking": "gemini-3.1-pro-preview",
+    "claude-opus-4.6": "gemini-3.1-pro-preview",
+    "gpt-oss-120b-medium": "gemini-2.5-pro",
+    "gpt-oss-120b": "gemini-2.5-pro",
+  };
+
+  // 4. Antigravity / Direct Gemini API
+  if (
+    (provider === "antigravity" || provider === "gemini") &&
+    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)
+  ) {
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    const geminiModel = requestedModel || process.env.GEMINI_MODEL || "gemini-3.1-pro";
+    const mappedModel = requestedModel
+      ? ANTIGRAVITY_TO_GEMINI_API_MAP[requestedModel] || requestedModel
+      : undefined;
+    const geminiModel =
+      mappedModel || process.env.GEMINI_MODEL || "gemini-3.1-pro-preview";
     try {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`,
@@ -209,7 +266,11 @@ async function callUnifiedAi(opts: {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `${opts.systemPrompt}\n\n${opts.userPrompt}` }] }],
+            contents: [
+              {
+                parts: [{ text: `${opts.systemPrompt}\n\n${opts.userPrompt}` }],
+              },
+            ],
           }),
           signal: AbortSignal.timeout(60_000),
         },
@@ -220,12 +281,24 @@ async function callUnifiedAi(opts: {
         if (text) return text;
       }
     } catch (e) {
-      console.warn("Antigravity/Gemini error, falling back to local Ollama:", e);
+      console.warn(
+        "Antigravity/Gemini error, falling back to local Ollama:",
+        e,
+      );
     }
   }
 
   // Default: Local Ollama on 192.168.1.110
-  const targetModel = opts.localModel || process.env.OLLAMA_MODEL || "coder30b-abl:latest";
+  //
+  // ПОПРАВКА 26.08.2026 (Максим): coder30b-abl НЕ битая. Вчерашний диагноз
+  // «CUDA error / битый GGUF» был ложной тревогой — временный тупняк
+  // сервера (после перезагрузки воспроизвести не удаётся: живые прогоны
+  // 26.08 отрабатывают чисто, ~12с на реальную разбивку задачи). Модель
+  // оставлена в списке выбора как вариант. Дефолт — qwen3.6-27b: она
+  // reasoning-класса и по умолчанию отвечает без «думания» (см. think
+  // ниже), для Дневника думание включается точечно.
+  const targetModel =
+    opts.localModel || process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
   let res: Response;
   try {
     res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
@@ -234,13 +307,20 @@ async function callUnifiedAi(opts: {
       body: JSON.stringify({
         model: targetModel,
         messages: [
-          { role: "system", content: `${opts.systemPrompt}\nРассуждай кратко. Верни СТРОГО результат.` },
+          {
+            role: "system",
+            content: `${opts.systemPrompt}\nРассуждай кратко. Верни СТРОГО результат.`,
+          },
           { role: "user", content: opts.userPrompt },
         ],
         stream: false,
+        think: opts.think ?? false,
         options: {
           num_ctx: 8192,
-          num_predict: 2048,
+          // С выключенным think реальный ответ укладывается в ~200 токенов
+          // (замер), 2048 — щедрый запас. С включённым (Дневник) бюджет
+          // должен вместить и <think>, и сам текст — поэтому больше.
+          num_predict: opts.think ? 4096 : 2048,
           temperature: opts.temperature ?? 0.2,
         },
       }),
@@ -254,14 +334,14 @@ async function callUnifiedAi(opts: {
   }
 
   if (!res.ok) {
-    throw new OllamaError(`Локальная модель ${targetModel} ответила ошибкой (HTTP ${res.status}).`);
+    throw new OllamaError(
+      `Локальная модель ${targetModel} ответила ошибкой (HTTP ${res.status}).`,
+    );
   }
 
   const data = (await res.json()) as any;
   let content: string =
-    data?.message?.content ||
-    data?.choices?.[0]?.message?.content ||
-    "";
+    data?.message?.content || data?.choices?.[0]?.message?.content || "";
 
   // Если модель reasoning поместила результат в thinking или content пуст:
   if (!content || !content.trim()) {
@@ -325,7 +405,10 @@ export interface WeeklySummary {
 }
 
 // In-memory кэш сводки на пользователя (срок жизни 6 часов, чтобы не долбить модель при каждом входе)
-const summaryCache = new Map<string, { summary: WeeklySummary; timestamp: number }>();
+const summaryCache = new Map<
+  string,
+  { summary: WeeklySummary; timestamp: number }
+>();
 
 async function generateWeeklySummary(
   userId: string,
@@ -335,35 +418,43 @@ async function generateWeeklySummary(
 ): Promise<WeeklySummary> {
   const db = (await import("../db.js")).default;
 
+  // ВАЖНО: в таблице tasks НЕТ колонки user_id — есть creator_id и
+  // assignee_id (см. server/src/db.ts). Запросы ниже спрашивали user_id и
+  // валились с «no such column: user_id» — сводка не работала вообще
+  // (Максим 26.08.2026: «не работает сводка недели, ошибку выдаёт»).
+  // Принадлежность задачи пользователю здесь — «создал ИЛИ назначен на
+  // него», ровно как её понимает остальной сервер (access.ts).
+  const OWNED = "(creator_id = ? OR assignee_id = ?)";
+
   const completedRows = db
     .prepare(
       `SELECT title, description, completed_at 
        FROM tasks 
-       WHERE user_id = ? AND status = 'completed' AND completed_at >= datetime('now', '-7 days')
+       WHERE ${OWNED} AND status = 'completed' AND completed_at >= datetime('now', '-7 days')
        ORDER BY completed_at DESC 
-       LIMIT 25`
+       LIMIT 25`,
     )
-    .all(userId) as any[];
+    .all(userId, userId) as any[];
 
   const overdueRows = db
     .prepare(
       `SELECT title, description, due_date, priority 
        FROM tasks 
-       WHERE user_id = ? AND status = 'active' AND due_date IS NOT NULL AND due_date < date('now')
+       WHERE ${OWNED} AND status = 'active' AND due_date IS NOT NULL AND due_date < date('now')
        ORDER BY priority ASC, due_date ASC 
-       LIMIT 15`
+       LIMIT 15`,
     )
-    .all(userId) as any[];
+    .all(userId, userId) as any[];
 
   const activeRows = db
     .prepare(
       `SELECT title, description, due_date, priority 
        FROM tasks 
-       WHERE user_id = ? AND status = 'active'
+       WHERE ${OWNED} AND status = 'active'
        ORDER BY priority ASC, (due_date IS NULL) ASC, due_date ASC 
-       LIMIT 20`
+       LIMIT 20`,
     )
-    .all(userId) as any[];
+    .all(userId, userId) as any[];
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const prompt = `Ты — персональный AI-коуч по продуктивности и Second Brain.
@@ -391,7 +482,8 @@ ${activeRows.map((r) => `  * [P${r.priority}] ${r.title} ${r.due_date ? `(до $
 }`;
 
   const raw = await callUnifiedAi({
-    systemPrompt: "Ты — аналитический AI-ассистент. Отвечай СТРОГО валидным JSON-объектом.",
+    systemPrompt:
+      "Ты — аналитический AI-ассистент. Отвечай СТРОГО валидным JSON-объектом.",
     userPrompt: prompt,
     provider,
     localModel,
@@ -415,10 +507,19 @@ ${activeRows.map((r) => `  * [P${r.priority}] ${r.title} ${r.due_date ? `(до $
 
   return {
     greeting: String(parsed.greeting || "Вот ваша сводка за неделю:"),
-    accomplishments: Array.isArray(parsed.accomplishments) ? parsed.accomplishments.map(String) : [],
-    missed_or_overdue: Array.isArray(parsed.missed_or_overdue) ? parsed.missed_or_overdue.map(String) : [],
-    next_week_focus: Array.isArray(parsed.next_week_focus) ? parsed.next_week_focus.map(String) : [],
-    productivity_score: typeof parsed.productivity_score === "number" ? Math.min(100, Math.max(0, parsed.productivity_score)) : 80,
+    accomplishments: Array.isArray(parsed.accomplishments)
+      ? parsed.accomplishments.map(String)
+      : [],
+    missed_or_overdue: Array.isArray(parsed.missed_or_overdue)
+      ? parsed.missed_or_overdue.map(String)
+      : [],
+    next_week_focus: Array.isArray(parsed.next_week_focus)
+      ? parsed.next_week_focus.map(String)
+      : [],
+    productivity_score:
+      typeof parsed.productivity_score === "number"
+        ? Math.min(100, Math.max(0, parsed.productivity_score))
+        : 80,
     stats: {
       completed_count: completedRows.length,
       overdue_count: overdueRows.length,
@@ -458,18 +559,166 @@ async function structureTask(
   }
 
   return {
-    title: typeof parsed?.title === "string" ? parsed.title.trim() : rawText.slice(0, 50),
-    description: typeof parsed?.description === "string" ? parsed.description.trim() : rawText,
+    title:
+      typeof parsed?.title === "string"
+        ? parsed.title.trim()
+        : rawText.slice(0, 50),
+    description:
+      typeof parsed?.description === "string"
+        ? parsed.description.trim()
+        : rawText,
     subtasks: Array.isArray(parsed?.subtasks)
-      ? parsed.subtasks.map((s: any) => String(s).trim()).filter((s: string) => s.length > 0)
+      ? parsed.subtasks
+          .map((s: any) => String(s).trim())
+          .filter((s: string) => s.length > 0)
       : [],
-    dueDate: typeof parsed?.due_date === "string" ? parsed.due_date.trim() : null,
-    priority: typeof parsed?.priority === "number" && parsed.priority >= 1 && parsed.priority <= 4 ? parsed.priority : 4,
+    dueDate:
+      typeof parsed?.due_date === "string" ? parsed.due_date.trim() : null,
+    priority:
+      typeof parsed?.priority === "number" &&
+      parsed.priority >= 1 &&
+      parsed.priority <= 4
+        ? parsed.priority
+        : 4,
   };
+}
+
+async function journalAssist(
+  text: string,
+  action: "continue" | "shorten" | "expand",
+  provider?: string,
+  localModel?: string,
+  aiModel?: string,
+): Promise<string> {
+  const raw = await callUnifiedAi({
+    systemPrompt: JOURNAL_ASSIST_PROMPTS[action],
+    userPrompt: text.trim().slice(0, 6000),
+    provider,
+    localModel,
+    aiModel,
+    temperature: action === "continue" ? 0.6 : 0.3,
+    // Дневник — единственное место с включённым «думанием» (Максим
+    // 26.08.2026): качество текста здесь важнее скорости ответа.
+    think: true,
+  });
+  const cleaned = stripCodeFences(stripThinkTags(raw)).trim();
+  if (!cleaned) {
+    throw new OllamaError("Модель вернула пустой ответ. Попробуйте ещё раз.");
+  }
+  return cleaned;
+}
+
+interface ExtractedTaskResult {
+  title: string;
+  description: string;
+  priority: number;
+  due_date: string | null;
+}
+
+/** Достаёт массив предложенных задач из сырого content ответа модели. */
+function parseExtractedTasks(rawContent: string): ExtractedTaskResult[] {
+  const cleaned = stripCodeFences(stripThinkTags(rawContent)).trim();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf("[");
+    const end = cleaned.lastIndexOf("]");
+    if (start === -1 || end === -1 || end <= start) {
+      throw new Error("no JSON array found");
+    }
+    parsed = JSON.parse(cleaned.slice(start, end + 1));
+  }
+
+  if (!Array.isArray(parsed)) throw new Error("not an array");
+
+  const items = parsed
+    .map((x): ExtractedTaskResult | null => {
+      if (!x || typeof x !== "object") return null;
+      const title =
+        typeof (x as any).title === "string" ? (x as any).title.trim() : "";
+      if (!title) return null;
+      const description =
+        typeof (x as any).description === "string"
+          ? (x as any).description.trim()
+          : "";
+      const priority =
+        typeof (x as any).priority === "number" &&
+        (x as any).priority >= 1 &&
+        (x as any).priority <= 4
+          ? (x as any).priority
+          : 4;
+      const due_date =
+        typeof (x as any).due_date === "string"
+          ? (x as any).due_date.trim()
+          : "";
+      return { title, description, priority, due_date: due_date || null };
+    })
+    .filter((x): x is ExtractedTaskResult => x !== null);
+
+  return items.slice(0, 10);
+}
+
+async function extractTasksFromText(
+  text: string,
+  provider?: string,
+  localModel?: string,
+  aiModel?: string,
+): Promise<ExtractedTaskResult[]> {
+  const content = await callUnifiedAi({
+    systemPrompt: EXTRACT_TASKS_SYSTEM_PROMPT,
+    userPrompt: text.trim().slice(0, 6000),
+    provider,
+    localModel,
+    aiModel,
+    temperature: 0.2,
+  });
+
+  try {
+    return parseExtractedTasks(content);
+  } catch {
+    throw new OllamaError(
+      "Не удалось разобрать ответ модели как список задач. Попробуйте ещё раз.",
+    );
+  }
 }
 
 export function registerAiRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
+
+  // Короткий статус серверной модели — для раздела «ИИ» в настройках.
+  //
+  // Владелец 26.08.2026 хочет видеть ВСЕ модели системы в одном месте, включая
+  // ту, что крутится на сервере: «локальная модель на сервере, крупная,
+  // большая, отвечающая за такие-то функции». Списка моделей (local-models)
+  // для этого мало — нужен ответ «работает или нет» и какая выбрана.
+  //
+  // Телефон сам до Ollama не ходит: она слушает на .110, а приложение знает
+  // только адрес сервера. Поэтому проверяет сервер и отдаёт готовый ответ.
+  app.get("/api/ai/status", {
+    preHandler: authPre,
+    handler: async () => {
+      const model = process.env.OLLAMA_MODEL || OLLAMA_MODEL;
+      try {
+        const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!res.ok) return { online: false, model, host: OLLAMA_BASE_URL };
+        const data = (await res.json()) as any;
+        const names = (data.models || []).map((m: any) => m.name);
+        return {
+          online: true,
+          model,
+          host: OLLAMA_BASE_URL,
+          // Модель из конфига могли удалить с сервера — тогда «работает» врёт.
+          installed: names.includes(model),
+        };
+      } catch {
+        return { online: false, model, host: OLLAMA_BASE_URL };
+      }
+    },
+  });
 
   // Список доступных локальных моделей в Ollama
   app.get("/api/ai/local-models", {
@@ -496,63 +745,111 @@ export function registerAiRoutes(app: FastifyInstance) {
   });
 
   // Получить недельную сводку (из кэша или сгенерировать)
-  app.get<{ Querystring: { provider?: string; localModel?: string; aiModel?: string } }>("/api/ai/weekly-summary", {
+  app.get<{
+    Querystring: { provider?: string; localModel?: string; aiModel?: string };
+  }>("/api/ai/weekly-summary", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const provider = String(req.headers["x-ai-provider"] || req.query?.provider || "local");
-      const localModel = String(req.headers["x-ollama-model"] || req.query?.localModel || "");
-      const aiModel = String(req.headers["x-ai-model"] || req.query?.aiModel || "");
+      const provider = String(
+        req.headers["x-ai-provider"] || req.query?.provider || "local",
+      );
+      const localModel = String(
+        req.headers["x-ollama-model"] || req.query?.localModel || "",
+      );
+      const aiModel = String(
+        req.headers["x-ai-model"] || req.query?.aiModel || "",
+      );
       const cacheKey = `${req.userId}:${provider}:${localModel}:${aiModel}`;
       const cached = summaryCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < 6 * 3600 * 1000) {
         return cached.summary;
       }
       try {
-        const summary = await generateWeeklySummary(req.userId, provider, localModel, aiModel);
+        const summary = await generateWeeklySummary(
+          req.userId,
+          provider,
+          localModel,
+          aiModel,
+        );
         summaryCache.set(cacheKey, { summary, timestamp: Date.now() });
         return summary;
       } catch (err: any) {
         if (cached) return cached.summary;
-        return reply.code(502).send({ error: err?.message || "Не удалось сгенерировать недельную сводку" });
+        return reply.code(502).send({
+          error: err?.message || "Не удалось сгенерировать недельную сводку",
+        });
       }
     },
   });
 
   // Принудительное обновление недельной сводки
-  app.post<{ Body: { provider?: string; localModel?: string; aiModel?: string } }>("/api/ai/weekly-summary/refresh", {
+  app.post<{
+    Body: { provider?: string; localModel?: string; aiModel?: string };
+  }>("/api/ai/weekly-summary/refresh", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const provider = String(req.headers["x-ai-provider"] || req.body?.provider || "local");
-      const localModel = String(req.headers["x-ollama-model"] || req.body?.localModel || "");
-      const aiModel = String(req.headers["x-ai-model"] || req.body?.aiModel || "");
+      const provider = String(
+        req.headers["x-ai-provider"] || req.body?.provider || "local",
+      );
+      const localModel = String(
+        req.headers["x-ollama-model"] || req.body?.localModel || "",
+      );
+      const aiModel = String(
+        req.headers["x-ai-model"] || req.body?.aiModel || "",
+      );
       const cacheKey = `${req.userId}:${provider}:${localModel}:${aiModel}`;
       try {
-        const summary = await generateWeeklySummary(req.userId, provider, localModel, aiModel);
+        const summary = await generateWeeklySummary(
+          req.userId,
+          provider,
+          localModel,
+          aiModel,
+        );
         summaryCache.set(cacheKey, { summary, timestamp: Date.now() });
         return summary;
       } catch (err: any) {
-        return reply.code(502).send({ error: err?.message || "Не удалось обновить недельную сводку" });
+        return reply.code(502).send({
+          error: err?.message || "Не удалось обновить недельную сводку",
+        });
       }
     },
   });
 
   // Структурирование надиктованной задачи через выбранный AI Мозг
-  app.post<{ Body: { text: string; provider?: string; localModel?: string; aiModel?: string } }>("/api/ai/structure-task", {
+  app.post<{
+    Body: {
+      text: string;
+      provider?: string;
+      localModel?: string;
+      aiModel?: string;
+    };
+  }>("/api/ai/structure-task", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
-      const provider = String(req.headers["x-ai-provider"] || req.body?.provider || "local");
-      const localModel = String(req.headers["x-ollama-model"] || req.body?.localModel || "");
-      const aiModel = String(req.headers["x-ai-model"] || req.body?.aiModel || "");
+      const text =
+        typeof req.body?.text === "string" ? req.body.text.trim() : "";
+      const provider = String(
+        req.headers["x-ai-provider"] || req.body?.provider || "local",
+      );
+      const localModel = String(
+        req.headers["x-ollama-model"] || req.body?.localModel || "",
+      );
+      const aiModel = String(
+        req.headers["x-ai-model"] || req.body?.aiModel || "",
+      );
       if (!text) {
-        return reply.code(400).send({ error: "Текст диктовки не может быть пустым" });
+        return reply
+          .code(400)
+          .send({ error: "Текст диктовки не может быть пустым" });
       }
 
       try {
         const result = await structureTask(text, provider, localModel, aiModel);
         return result;
       } catch (err: any) {
-        return reply.code(502).send({ error: err?.message || "Не удалось структурировать задачу" });
+        return reply
+          .code(502)
+          .send({ error: err?.message || "Не удалось структурировать задачу" });
       }
     },
   });
@@ -560,16 +857,29 @@ export function registerAiRoutes(app: FastifyInstance) {
   // Существующая задача — разбивка на подзадачи
   app.post<{
     Params: { id: string };
-    Body: { title?: string; description?: string; provider?: string; localModel?: string } | undefined;
+    Body:
+      | {
+          title?: string;
+          description?: string;
+          provider?: string;
+          localModel?: string;
+        }
+      | undefined;
   }>("/api/tasks/:id/suggest-subtasks", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const task = getTaskForRead(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
-      const provider = String(req.headers["x-ai-provider"] || req.body?.provider || "local");
-      const localModel = String(req.headers["x-ollama-model"] || req.body?.localModel || "");
-      const aiModel = String(req.headers["x-ai-model"] || req.body?.aiModel || "");
+      const provider = String(
+        req.headers["x-ai-provider"] || req.body?.provider || "local",
+      );
+      const localModel = String(
+        req.headers["x-ollama-model"] || req.body?.localModel || "",
+      );
+      const aiModel = String(
+        req.headers["x-ai-model"] || req.body?.aiModel || "",
+      );
       const bodyTitle = req.body?.title;
       const bodyDescription = req.body?.description;
       const title =
@@ -588,7 +898,13 @@ export function registerAiRoutes(app: FastifyInstance) {
       }
 
       try {
-        const subtasks = await suggestSubtasks(title, description, provider, localModel, aiModel);
+        const subtasks = await suggestSubtasks(
+          title,
+          description,
+          provider,
+          localModel,
+          aiModel,
+        );
         return { subtasks };
       } catch (err: any) {
         return reply
@@ -599,35 +915,150 @@ export function registerAiRoutes(app: FastifyInstance) {
   });
 
   // Черновик задачи
-  app.post<{ Body: { title?: string; description?: string; provider?: string; localModel?: string; aiModel?: string } }>(
-    "/api/ai/suggest-subtasks",
-    {
-      preHandler: authPre,
-      handler: async (req: any, reply) => {
-        const provider = String(req.headers["x-ai-provider"] || req.body?.provider || "local");
-        const localModel = String(req.headers["x-ollama-model"] || req.body?.localModel || "");
-        const aiModel = String(req.headers["x-ai-model"] || req.body?.aiModel || "");
-        const title =
-          typeof req.body?.title === "string" ? req.body.title.trim() : "";
-        if (!title) {
-          return reply
-            .code(400)
-            .send({ error: "название задачи не может быть пустым" });
-        }
-        const description =
-          typeof req.body?.description === "string"
-            ? req.body.description
-            : undefined;
+  app.post<{
+    Body: {
+      title?: string;
+      description?: string;
+      provider?: string;
+      localModel?: string;
+      aiModel?: string;
+    };
+  }>("/api/ai/suggest-subtasks", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const provider = String(
+        req.headers["x-ai-provider"] || req.body?.provider || "local",
+      );
+      const localModel = String(
+        req.headers["x-ollama-model"] || req.body?.localModel || "",
+      );
+      const aiModel = String(
+        req.headers["x-ai-model"] || req.body?.aiModel || "",
+      );
+      const title =
+        typeof req.body?.title === "string" ? req.body.title.trim() : "";
+      if (!title) {
+        return reply
+          .code(400)
+          .send({ error: "название задачи не может быть пустым" });
+      }
+      const description =
+        typeof req.body?.description === "string"
+          ? req.body.description
+          : undefined;
 
-        try {
-          const subtasks = await suggestSubtasks(title, description, provider, localModel, aiModel);
-          return { subtasks };
-        } catch (err: any) {
-          return reply
-            .code(502)
-            .send({ error: err?.message || "Не удалось получить подзадачи" });
-        }
-      },
+      try {
+        const subtasks = await suggestSubtasks(
+          title,
+          description,
+          provider,
+          localModel,
+          aiModel,
+        );
+        return { subtasks };
+      } catch (err: any) {
+        return reply
+          .code(502)
+          .send({ error: err?.message || "Не удалось получить подзадачи" });
+      }
     },
-  );
+  });
+
+  // Дневник: действие над текстом (выделение или вся запись) — продолжить/
+  // сократить/развить в шаги. Ничего не сохраняет сам — результат подставляет
+  // клиент (NoteEditorScreen).
+  app.post<{
+    Body: {
+      text: string;
+      action?: string;
+      provider?: string;
+      localModel?: string;
+      aiModel?: string;
+    };
+  }>("/api/ai/journal-assist", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const text =
+        typeof req.body?.text === "string" ? req.body.text.trim() : "";
+      const action = req.body?.action;
+      if (!text) {
+        return reply.code(400).send({ error: "Текст не может быть пустым" });
+      }
+      if (
+        action !== "continue" &&
+        action !== "shorten" &&
+        action !== "expand"
+      ) {
+        return reply.code(400).send({ error: "Неизвестное действие" });
+      }
+      const provider = String(
+        req.headers["x-ai-provider"] || req.body?.provider || "local",
+      );
+      const localModel = String(
+        req.headers["x-ollama-model"] || req.body?.localModel || "",
+      );
+      const aiModel = String(
+        req.headers["x-ai-model"] || req.body?.aiModel || "",
+      );
+
+      try {
+        const result = await journalAssist(
+          text,
+          action,
+          provider,
+          localModel,
+          aiModel,
+        );
+        return { result };
+      } catch (err: any) {
+        return reply
+          .code(502)
+          .send({ error: err?.message || "Не удалось получить ответ от AI" });
+      }
+    },
+  });
+
+  // Дневник → Проекты: извлечь из текста конкретные задачи. Владелец
+  // подтверждает/правит список ПЕРЕД созданием (TasksFromTextSheet) —
+  // этот эндпоинт только предлагает, ничего не создаёт сам.
+  app.post<{
+    Body: {
+      text: string;
+      provider?: string;
+      localModel?: string;
+      aiModel?: string;
+    };
+  }>("/api/ai/extract-tasks", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const text =
+        typeof req.body?.text === "string" ? req.body.text.trim() : "";
+      if (!text) {
+        return reply.code(400).send({ error: "Текст не может быть пустым" });
+      }
+      const provider = String(
+        req.headers["x-ai-provider"] || req.body?.provider || "local",
+      );
+      const localModel = String(
+        req.headers["x-ollama-model"] || req.body?.localModel || "",
+      );
+      const aiModel = String(
+        req.headers["x-ai-model"] || req.body?.aiModel || "",
+      );
+
+      try {
+        const tasks = await extractTasksFromText(
+          text,
+          provider,
+          localModel,
+          aiModel,
+        );
+        return { tasks };
+      } catch (err: any) {
+        return reply
+          .code(502)
+          .send({ error: err?.message || "Не удалось извлечь задачи" });
+      }
+    },
+  });
 }

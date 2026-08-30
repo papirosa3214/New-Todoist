@@ -22,7 +22,7 @@
 // padding scale, tap-scale/tap-fade for touch feedback, the Dialog.tsx/
 // RescheduleSheet.tsx bottom-sheet shape for the "Вернуть на доработку"
 // comment prompt).
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Avatar, Button, ErrorBanner, Icon, SheetHandle } from "./UI";
 import { useDialog } from "./Dialog";
 import { useSetAgentState, useUpdateTask } from "../api/tasks";
@@ -32,13 +32,18 @@ import { useProjects } from "../api/projects";
 import { PRIORITIES } from "../lib/priority";
 import { AttachmentView } from "./AttachmentView";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
-import { formatDueLabel, formatRelativeTime } from "../lib/date";
+import { formatDueLabel, formatRelativeTime, formatAbsoluteTime } from "../lib/date";
 import { useBottomSheet } from "../lib/useBottomSheet";
 import { MicKeyboardBar } from "./MicKeyboardBar";
 import { MicOverlay } from "./MicOverlay";
 import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import { combineDictatedText } from "../lib/dictationParser";
+import {
+  useTaskActivity,
+  fetchRecentActivity,
+  type ActivityAction,
+} from "../lib/useTaskActivity";
 import type { ApiComment, ApiTask, ApiTaskEvent } from "../api/types";
 
 // ═══════════ STATUS ROW ═══════════
@@ -85,7 +90,146 @@ function ResumeSessionButton({ sessionId }: { sessionId: string }) {
   );
 }
 
+// «N с назад» для отметки времени живой строки — своя, помельче
+// formatRelativeTime (та начинается с минут: «5 мин. назад», «только
+// что»), а строка обновляется каждые пару секунд и должна это показывать.
+function activityAgoLabel(atMs: number | null, nowMs: number): string {
+  if (!atMs) return "";
+  const diffSec = Math.max(0, Math.round((nowMs - atMs) / 1000));
+  if (diffSec < 60) return `${diffSec} с назад`;
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} мин. назад`;
+  return `${Math.round(diffMin / 60)} ч. назад`;
+}
+
+// Живая строка «чем занят агент прямо сейчас», под плашкой статуса —
+// см. tickets/live-line-ui. Заменяется на месте (не копится), тап
+// раскрывает последние действия из серверного буфера. Рендерится только
+// когда AgentStatusRow передаёт activity с непустым text — сама решает,
+// стоит ли вообще её монтировать (agent_state !== in_progress / stale —
+// не стоит, см. isLive в AgentStatusRow).
+function AgentActivityLine({
+  taskId,
+  activity,
+}: {
+  taskId: string;
+  activity: {
+    text: string | null;
+    actorName: string | null;
+    at: number | null;
+  };
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [actions, setActions] = useState<ActivityAction[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Тикает раз в 2 с — та же частота, с которой сервер вообще может
+  // прислать новую строку (троттлинг в activity.ts), чаще смысла нет.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!expanded) return;
+    let cancelled = false;
+    fetchRecentActivity(taskId)
+      .then((a) => {
+        if (!cancelled) setActions(a);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, taskId]);
+
+  if (!activity.text) return null;
+
+  // Сервер склеивает строку как «шаг · действие» (activity.ts, buildText).
+  // Свёрнутой видна одна строка, и в неё влезает не всё: название шага
+  // длиннее действия и съедало её целиком — на экране оставалось «Вернуть
+  // потерянные хвосты 113 обр…», то есть ровно то, что и так видно в списке
+  // подзадач ниже, а САМО действие обрезалось. Поэтому режем обратно:
+  // действие — крупно и основным цветом, шаг — мелкой строкой под ним.
+  const sep = activity.text.indexOf(" · ");
+  const stepTitle = sep > 0 ? activity.text.slice(0, sep) : null;
+  const doingNow = sep > 0 ? activity.text.slice(sep + 3) : activity.text;
+
+  return (
+    <div className="rounded-xl bg-card overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="tap-fade w-full flex items-start gap-2 py-2.5 px-4 text-left"
+      >
+        <Icon name="bot" size={13} className="text-teal shrink-0 mt-0.5" />
+        <span className="flex-1 min-w-0 flex flex-col gap-0.5">
+          {/* Подпись: без неё непонятно, что это за панель и зачем она. */}
+          <span className="text-[10px] uppercase tracking-wide text-dim">
+            Чем занят агент
+          </span>
+          {/* Полностью, с переносами — не truncate: Максим 26.08.2026,
+              «полтора слова влазит и всё», обрезанная фраза бесполезна.
+              Фразы короткие по построению (сервер режет: наблюдатель до
+              70 символов, шаг до 40) — простыни тут не бывает. */}
+          <span className="text-[13px] text-text leading-snug break-words">
+            {doingNow}
+          </span>
+          {stepTitle && (
+            <span className="text-[11px] text-dim break-words">
+              по шагу: {stepTitle}
+            </span>
+          )}
+        </span>
+        <span className="text-[11px] text-dim shrink-0 mt-0.5">
+          {activityAgoLabel(activity.at, now)}
+        </span>
+        <Icon
+          name="chevronDown"
+          size={14}
+          className={`text-dim shrink-0 mt-0.5 transition-transform ${expanded ? "rotate-180" : ""}`}
+        />
+      </button>
+      {expanded && (
+        <div className="border-t border-stroke px-4 py-2 flex flex-col gap-1 max-h-48 overflow-y-auto">
+          <p className="text-[10px] uppercase tracking-wide text-dim pb-0.5">
+            Последние действия
+          </p>
+          {actions.length === 0 ? (
+            <p className="text-[12px] text-sub py-1">пока пусто</p>
+          ) : (
+            actions
+              .slice()
+              .reverse()
+              .map((a, i) => (
+                // text-sub, а не text-dim: здесь это основное содержимое, а
+                // не фоновая подпись — приглушённым оно не читалось вовсе.
+                // И break-words вместо truncate: у пути важен хвост с именем
+                // файла, а обрезка съедала именно его.
+                //
+                // Печатаем a.text — ГОТОВУЮ фразу от сервера («разбирается в
+                // src/lib/search.ts»). Раньше здесь был голый a.target, и
+                // список выглядел выпиской из лога вызовов. Формулировка —
+                // на сервере (describeAction), одна на всех потребителей.
+                <p key={i} className="text-[12px] text-sub break-words">
+                  {a.text || a.target}
+                </p>
+              ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AgentStatusRow({ task }: { task: ApiTask }) {
+  // Хук обязан звать безусловно (правила React) — «есть ли смысл слушать»
+  // передаётся аргументом, а не оборачивает вызов. Строка живая, только
+  // пока задача реально in_progress и не пропала: у «пропал» и у прочих
+  // agent_state своя ветка ниже, там строке взяться неоткуда.
+  const isLive = task.agent_state === "in_progress" && !task.agent_stale;
+  const activity = useTaskActivity(task.id, isLive);
+
   if (!task.agent_state) return null;
 
   // "Агент пропал" — aренда истекла while still nominally in_progress.
@@ -114,17 +258,20 @@ export function AgentStatusRow({ task }: { task: ApiTask }) {
 
   const meta = AGENT_STATE_META[task.agent_state];
   return (
-    <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
-      <Icon name="bot" size={18} className={`${meta.color} shrink-0`} />
-      <span className={`text-[14px] flex-1 ${meta.color}`}>{meta.label}</span>
-      {task.agent_state === "in_progress" && task.agent_heartbeat_at && (
-        <span className="text-[12px] text-dim shrink-0">
-          {formatRelativeTime(task.agent_heartbeat_at)}
-        </span>
-      )}
-      {task.agent_session_id && (
-        <ResumeSessionButton sessionId={task.agent_session_id} />
-      )}
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
+        <Icon name="bot" size={18} className={`${meta.color} shrink-0`} />
+        <span className={`text-[14px] flex-1 ${meta.color}`}>{meta.label}</span>
+        {task.agent_state === "in_progress" && task.agent_heartbeat_at && (
+          <span className="text-[12px] text-dim shrink-0">
+            {formatRelativeTime(task.agent_heartbeat_at)}
+          </span>
+        )}
+        {task.agent_session_id && (
+          <ResumeSessionButton sessionId={task.agent_session_id} />
+        )}
+      </div>
+      {isLive && <AgentActivityLine taskId={task.id} activity={activity} />}
     </div>
   );
 }
@@ -210,26 +357,74 @@ export function AgentOwnerActions({
     setComment("");
   });
 
+  // «Вернуть на доработку» ведёт себя по-разному в зависимости от того,
+  // откуда возвращают, — и это не косметика, а разные переходы:
+  //
+  //  • из review — задача уходит обратно В РАБОТУ тем же запросом
+  //    (state: 'in_progress' с обязательным комментарием), сессия агента
+  //    сохраняется (сервер бережёт agent_session_id через COALESCE).
+  //  • из in_progress — вернуть «в работу» то, что и так в работе, нельзя:
+  //    сервер такой переход не пропускает (agentState.ts, матрица), да и
+  //    смысла нет — задачу надо ОСВОБОДИТЬ, чтобы будильник поднял её
+  //    заново. Поэтому здесь тот же путь, что у ответа на блокировку:
+  //    сначала снять состояние, потом комментарий с заданием.
+  //
+  // Порядок вызовов во второй ветке (state ПЕРЕД comment) — тот же, что в
+  // handleAnswer, и по той же причине: будильник просыпается по
+  // уведомлению о комментарии и сразу перечитывает задачу. Успеет
+  // прочитать её ещё занятой — пройдёт мимо, и ответ повиснет.
   const handleReturn = useGuardedCallback(async () => {
     const trimmed = comment.trim();
     if (!trimmed) return;
-    await setAgentState.mutateAsync({
-      id: task.id,
-      state: "in_progress",
-      comment: trimmed,
-    });
+    if (task.agent_state === "review") {
+      await setAgentState.mutateAsync({
+        id: task.id,
+        state: "in_progress",
+        comment: trimmed,
+      });
+    } else {
+      await setAgentState.mutateAsync({ id: task.id, state: null });
+      await addComment.mutateAsync({ text: trimmed });
+    }
     setReturning(false);
     setComment("");
   });
 
-  // Владельческие кнопки есть только у сданной («Принять» / «Вернуть на
-  // доработку») и у заблокированной («Ответить и вернуть в работу»).
-  // Пока агент просто работает, решать владельцу нечего — раньше здесь
-  // всегда висела «Вернуть в ожидание», а без неё блок остался бы пустой
-  // рамкой с отступом.
+  // Владельческие кнопки есть у сданной («Принять» / «Вернуть на
+  // доработку»), у заблокированной («Ответить и вернуть в работу») и —
+  // с 24.08.2026 — у ВЗЯТОЙ В РАБОТУ.
+  //
+  // Раньше последней ветки не было: считалось, что пока агент работает,
+  // владельцу решать нечего. На практике вышло наоборот — именно там
+  // карточка и залипала. Агент берёт задачу, сессия обрывается (или он
+  // доделал, но не успел сдать), состояние остаётся «в работе» навсегда, и
+  // у владельца на всём экране остаётся одна кнопка «Изменить», которая от
+  // залипания не спасает. Слова Максима 24.08.2026: «остаются
+  // заблокированными даже после выполнения задачи… отсутствует возможность
+  // отправить задачу на доработку агенту, из-за чего карточка зависает».
+  //
+  // Кнопки те же самые, что у заблокированной, — новых сущностей не
+  // заводим: вернуть на доработку с заданием или принять и закрыть.
+  //
+  // ⚠️ И только пока задача АКТИВНА. У закрытой карточки состояние агента
+  // тоже может гореть — старым остатком на незакрытом шаге, который
+  // поднимается роллапом (withAgentStale), — но обе кнопки там были бы
+  // ложью: «Принять и закрыть» на уже закрытой задаче не проходит guard в
+  // PATCH (status тот же самый) и не делает ничего. Кнопка, нажатие
+  // которой ни к чему не приводит, — ровно то, на что Максим и жаловался.
+  // У закрытой задачи свой путь: «Открыть задачу заново».
   const hasOwnerActions =
-    task.agent_state === "review" || task.agent_state === "blocked";
+    task.status === "active" &&
+    (task.agent_state === "review" ||
+      task.agent_state === "blocked" ||
+      task.agent_state === "in_progress");
   if (!isOwner || !hasOwnerActions) return null;
+
+  // Агент пропал — аренда истекла (считает сервер, см. agent_stale). Работу
+  // никто не ведёт, поэтому возврат на доработку здесь главное действие и
+  // выглядит главным; пока агент жив — это вмешательство в идущую работу,
+  // и кнопка остаётся второстепенной.
+  const agentGone = task.agent_state === "in_progress" && task.agent_stale;
 
   return (
     <div className="mb-4">
@@ -251,6 +446,21 @@ export function AgentOwnerActions({
             <Button variant="primary" onClick={() => setAnswering(true)}>
               <Icon name="sync" size={16} />
               Ответить и вернуть в работу
+            </Button>
+            <Button variant="secondary" onClick={handleAccept}>
+              <Icon name="check" size={16} />
+              Принять и закрыть задачу
+            </Button>
+          </>
+        )}
+        {task.agent_state === "in_progress" && (
+          <>
+            <Button
+              variant={agentGone ? "primary" : "secondary"}
+              onClick={() => setReturning(true)}
+            >
+              <Icon name="sync" size={16} />
+              Вернуть на доработку
             </Button>
             <Button variant="secondary" onClick={handleAccept}>
               <Icon name="check" size={16} />
@@ -291,8 +501,20 @@ export function AgentOwnerActions({
           open={returning}
           value={comment}
           onChange={setComment}
-          busy={setAgentState.isPending}
-          error={setAgentState.error}
+          // Из работы возврат идёт двумя запросами (см. handleReturn), и
+          // «отправляется» лист должен оставаться, пока не прошли оба.
+          busy={setAgentState.isPending || addComment.isPending}
+          error={setAgentState.error || addComment.error}
+          // Из review задача возвращается тому же агенту и продолжается с
+          // места; из работы — освобождается и берётся заново. Обещать
+          // владельцу одно и то же в двух разных случаях нельзя.
+          hint={
+            task.agent_state === "review"
+              ? undefined
+              : agentGone
+                ? "Задача освободится, а ваш комментарий станет заданием: будильник поднимет её заново."
+                : "Задача освободится, а ваш комментарий станет заданием — её возьмёт следующий заход агента."
+          }
           onCancel={() => {
             setReturning(false);
             setComment("");
@@ -663,27 +885,41 @@ function JournalLine({
         {describeEvent(event, look)}
       </span>
       <span className="text-[11px] text-dim shrink-0">
-        {formatRelativeTime(event.created_at)}
+        {formatRelativeTime(event.created_at)} · {formatAbsoluteTime(event.created_at)}
       </span>
     </div>
   );
 }
 
 function CommentCard({ comment }: { comment: ApiComment }) {
+  // Комментарий без автора пишет сам сервер — сторож, снимающий задачу с
+  // молчащего исполнителя (см. agent-state.ts, user_id = NULL). Раньше лента
+  // подписывала такие «Неизвестный», как будто это чей-то потерянный
+  // комментарий; владелец 27.08.2026: «когда сторож снимает задачу, надо
+  // писать не неизвестный, а Система». Вместо буквенной аватарки — шестерня,
+  // тем же приёмом, что уже разводит системные и людские уведомления
+  // (NotificationsScreen).
+  const isSystem = !comment.user_name;
   return (
     <div className="bg-card rounded-2xl p-3">
       <div className="flex items-center gap-2 mb-1">
-        <Avatar
-          initials={comment.user_initials || "?"}
-          color={comment.user_color || "#A6A6A6"}
-          avatar_url={comment.user_avatar_url}
-          size={20}
-        />
+        {isSystem ? (
+          <span className="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-dim shrink-0">
+            <Icon name="gear" size={12} />
+          </span>
+        ) : (
+          <Avatar
+            initials={comment.user_initials || "?"}
+            color={comment.user_color || "#A6A6A6"}
+            avatar_url={comment.user_avatar_url}
+            size={20}
+          />
+        )}
         <span className="text-[13px] font-medium">
-          {comment.user_name || "Неизвестный"}
+          {comment.user_name || "Система"}
         </span>
         <span className="text-[11px] text-dim ml-auto">
-          {formatRelativeTime(comment.created_at)}
+          {formatRelativeTime(comment.created_at)} · {formatAbsoluteTime(comment.created_at)}
         </span>
       </div>
       {comment.text && (

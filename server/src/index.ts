@@ -12,12 +12,16 @@ import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserIdFromToken, authOrApiToken } from "./auth.js";
 import { addClient, removeClient, resetAllOffline } from "./ws.js";
+// touchTyping подключается через auth.ts (см. комментарий в buildApp), а
+// не на root-уровне addHook — глобальные preHandler-хуки Fastify v5
+// отрабатывают раньше route-level preHandler, и req.userId ещё не стоит.
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
 import { registerProjectLabelRoutes } from "./routes/projects.js";
 import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
+import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerAvatarRoutes } from "./routes/avatars.js";
@@ -26,6 +30,13 @@ import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
 import { registerAgentServiceRoutes } from "./routes/agent-service.js";
 import { registerIntegrationRoutes } from "./routes/integrations.js";
+import { registerJournalFolderRoutes } from "./routes/journalFolders.js";
+import { registerNoteRoutes } from "./routes/notes.js";
+import { registerChatRoutes } from "./routes/chat.js";
+import {
+  registerActivityRoutes,
+  startActivityObserver,
+} from "./routes/activity.js";
 import { registerSeedRoutes } from "./seed.js";
 
 /**
@@ -68,12 +79,33 @@ export async function buildApp(): Promise<FastifyInstance> {
   const ATTACHMENT_CONTENT_TYPES = [
     /^image\//,
     /^text\/plain/,
+    // markdown принимаем наравне с обычным текстом: в нём приходят отчёты и
+    // описи агентов. 26.08.2026 такой файл отлетал с сырым 415 ещё ДО маршрута —
+    // разборщика тела на этот тип не было, и понятный ответ маршрута не успевал
+    // сработать. Список разрешённого для самого вложения — в routes/attachments.ts.
+    /^text\/markdown/,
     "application/pdf",
     "application/octet-stream",
     "application/msword",
     /^application\/vnd\.openxmlformats-officedocument\./,
     /^application\/vnd\.oasis\.opendocument\./,
   ];
+  // У Fastify два разборщика тела ИЗ КОРОБКИ: application/json и text/plain.
+  // Встроенный text/plain отдаёт тело СТРОКОЙ, и он выигрывает у нашего
+  // регулярного /^text\/plain/ — то есть любой .txt приезжал в маршрут не
+  // буфером, и проверка Buffer.isBuffer отвергала его как «пустой файл».
+  // Ошибка тихая: понятного текста про тип не было, файл просто не грузился.
+  //
+  // Заметно это стало 28.08.2026 на вложениях чата, но касается ВСЕГО
+  // приложения — вложения задач ломались ровно так же. Правка от 26.08 про
+  // markdown сработала только потому, что у text/markdown встроенного
+  // разборщика нет.
+  //
+  // Снимаем встроенный перед регистрацией своих: обычный текст нам нужен
+  // сырыми байтами, как и остальные вложения. JSON не трогаем — на нём
+  // держится весь остальной API.
+  app.removeContentTypeParser("text/plain");
+
   for (const type of ATTACHMENT_CONTENT_TYPES) {
     app.addContentTypeParser(
       type as any,
@@ -102,7 +134,13 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(cors, {
     origin: allOrigins,
     credentials: true,
-    methods: ["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],
+    // PUT здесь обязателен: сохранение записи Дневника идёт через
+    // PUT /api/journal/:date, и без него браузер рубит запрос на
+    // preflight — в UI это выглядит как вечное «Не удалось сохранить»
+    // (Максим 26.08.2026), причём в логах сервера виден только OPTIONS,
+    // а самого PUT нет вовсе. Список методов должен покрывать ВСЕ
+    // глаголы, которые реально использует клиент (api/client.ts).
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
   // ensureJwtSecret() выше гарантирует, что JWT_SECRET уже в process.env —
   // без литерала-запасного варианта: он либо пришёл снаружи, либо сгенерирован
@@ -120,6 +158,16 @@ export async function buildApp(): Promise<FastifyInstance> {
   // routes/auth.ts), где оно и нужно: подбор пароля идёт только туда.
   await app.register(fastifyRateLimit, { global: false });
 
+  // Отметка «печатает…» по факту работы агента (29.08.2026, задача
+  // a56f35f6) живёт внутри authOrApiToken (auth.ts): там в момент, когда
+  // userId уже стоит, мы зовём touchTyping. Через addHook('preHandler')
+  // нельзя — в Fastify v5 global preHandler-хуки отрабатывают ДО route-
+  // level preHandler, и мы видели бы req.userId=undefined (проверено
+  // логом в chat.test.ts, 29.08.2026). Импорт touchTyping ниже остаётся
+  // на случай, если когда-нибудь захочется добавить хук в инкапсулированном
+  // плагине через app.register(async () => { … }) — root-уровень addHook
+  // тут не работает.
+
   // DB
   migrate();
   // Версионные миграции поверх — новые изменения схемы идут сюда, не в
@@ -133,6 +181,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerProjectLabelRoutes(app);
   registerSubtaskCommentRoutes(app);
   registerNotificationRoutes(app);
+  registerLiveActivityRoutes(app);
   registerSearchRoutes(app);
   registerAttachmentRoutes(app);
   registerAvatarRoutes(app);
@@ -143,6 +192,15 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerDictationArchiveRoutes(app);
   registerAgentServiceRoutes(app);
   registerIntegrationRoutes(app);
+  registerJournalFolderRoutes(app);
+  registerNoteRoutes(app);
+  registerChatRoutes(app);
+  registerActivityRoutes(app);
+
+  // Тикет ollama-observer: слой 3 живой строки — необязательное улучшение
+  // поверх уже рабочих слоёв 1-2, включается/выключается на лету через
+  // ACTIVITY_OBSERVER_ENABLED (см. комментарий в activity.ts).
+  startActivityObserver();
   registerSeedRoutes(app);
 
   // Health
@@ -212,8 +270,11 @@ export async function buildApp(): Promise<FastifyInstance> {
 
     // Проверка доступности локальной LLM (Ollama)
     let ollamaOnline = false;
-    const ollamaBaseUrl = (process.env.OLLAMA_BASE_URL || "http://192.168.1.110:11434").replace(/\/+$/, "");
-    const ollamaModel = process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
+    const ollamaBaseUrl = (
+      process.env.OLLAMA_BASE_URL || "http://192.168.1.110:11434"
+    ).replace(/\/+$/, "");
+    const ollamaModel =
+      process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
     try {
       const ollamaRes = await fetch(`${ollamaBaseUrl}/api/tags`, {
         signal: AbortSignal.timeout(1500),

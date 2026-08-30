@@ -63,7 +63,15 @@ export function ActionsMenu({
   anchorRef: RefObject<HTMLElement | null>;
 }) {
   const [mounted, setMounted] = useState(open);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  // top ИЛИ bottom — какой стороной меню приклеено к кнопке. Держать обе
+  // нельзя: приклеенная сторона и есть та, от которой меню растёт.
+  const [pos, setPos] = useState<{
+    top?: number;
+    bottom?: number;
+    left?: number;
+    right?: number;
+    maxHeight: number;
+  } | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   // Spring drives opacity + scale directly on the panel DOM node.
@@ -116,8 +124,40 @@ export function ActionsMenu({
     const el = anchorRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
-  }, [open, anchorRef]);
+
+    // Куда раскрываться. Раньше меню всегда падало ВНИЗ — годилось, пока
+    // все его кнопки жили в шапке. С кнопкой у нижней кромки (выбор
+    // адресата в строке ввода чата, 28.08.2026) оно уезжало за экран
+    // целиком, и владелец видел пустоту.
+    //
+    // Высота прикидывается по числу пунктов (строка меню — min-h-[44px]),
+    // и точность тут не критична: при развороте вверх меню приклеено
+    // СНИЗУ, поэтому ошибка в прикидке двигает не край у кнопки, а
+    // дальний край — за экран он всё равно не уйдёт, его держит maxHeight.
+    const GAP = 6;
+    const EDGE = 8;
+    const guess = items.length * 44 + 2;
+    const below = window.innerHeight - r.bottom - GAP - EDGE;
+    const above = r.top - GAP - EDGE;
+    const flip = below < guess && above > below;
+
+    // Какой стороной цепляться по горизонтали. Меню всегда цеплялось
+    // ПРАВЫМ краем — верно для кнопки «три точки», которая стоит справа.
+    // Кнопка адресата в строке ввода чата стоит СЛЕВА (x=16), и от неё
+    // меню шириной 192 уезжало за левый край экрана: на снимке было видно
+    // обрезанные пункты, вылезающие из-за кромки. Сторона выбирается по
+    // тому, в какой половине экрана стоит кнопка.
+    const anchorLeft = r.left + r.width / 2 < window.innerWidth / 2;
+    const side = anchorLeft
+      ? { left: r.left }
+      : { right: window.innerWidth - r.right };
+
+    setPos(
+      flip
+        ? { bottom: window.innerHeight - r.top + GAP, ...side, maxHeight: above }
+        : { top: r.bottom + GAP, ...side, maxHeight: below },
+    );
+  }, [open, anchorRef, items.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -135,17 +175,41 @@ export function ActionsMenu({
       {/* Click-outside catcher — deliberately transparent, this is a menu
           not a modal, so the rest of the screen must stay visible and
           undimmed. */}
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        // Свайп «назад» не должен уводить экран из-под шторки
+        // (useSwipeBack ищет этот атрибут).
+        data-overlay
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+      />
       <div
         ref={panelRef}
         role="menu"
         style={{
           top: pos.top,
+          bottom: pos.bottom,
+          left: pos.left,
           right: pos.right,
+          maxHeight: pos.maxHeight,
           opacity: 0,
           transform: "scale(0.95) translateZ(0)",
         }}
-        className="fixed z-50 min-w-[192px] max-w-[calc(100vw-32px)] origin-top-right overflow-hidden rounded-2xl border border-stroke bg-card2 shadow-pop"
+        // origin — та сторона, которой меню приклеено к кнопке: пружина
+        // масштаба должна выращивать его ИЗ кнопки, а не из дальнего угла.
+        // overflow-y-auto (было overflow-hidden): длинный список пунктов
+        // упирается в maxHeight и прокручивается, а не обрезается.
+        // Имена классов ЦЕЛИКОМ, а не собранные из кусков: Tailwind ищет
+        // их в исходнике текстом, и `"origin-" + x` он не увидит — стиля
+        // просто не будет в сборке.
+        className={`fixed z-50 min-w-[192px] max-w-[calc(100vw-32px)] overflow-y-auto rounded-2xl border border-stroke bg-card2 shadow-pop ${
+          pos.bottom === undefined
+            ? pos.left === undefined
+              ? "origin-top-right"
+              : "origin-top-left"
+            : pos.left === undefined
+              ? "origin-bottom-right"
+              : "origin-bottom-left"
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="divide-y divide-stroke">

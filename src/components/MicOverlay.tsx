@@ -39,6 +39,16 @@ export function MicOverlay({
 }) {
   return createPortal(
     <div
+      // Свайп «назад» не должен уводить экран из-под шторки
+      // (useSwipeBack ищет этот атрибут).
+      data-overlay
+      // Клик НЕ всплывает дальше. Портал уходит в document.body, но в React
+      // событие всплывает по дереву КОМПОНЕНТОВ, а не по DOM: оверлей,
+      // отрисованный изнутри шторки, отдаёт клик её подложке
+      // (ReturnToWorkSheet: внешний div с onClick={onCancel}) — и шторка
+      // закрывается прямо под записью. 27.08.2026, владелец: «невозможно
+      // записать голосом комментарий про возврат на доработку».
+      onClick={(e) => e.stopPropagation()}
       className="fixed inset-0 z-[55] flex flex-col items-center justify-center bg-bg"
       role="dialog"
       aria-modal="true"

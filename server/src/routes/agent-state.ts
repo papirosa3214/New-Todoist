@@ -7,7 +7,7 @@ import db from "../db.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForWrite, isOwner as isTrackerOwner } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
-import { hydrateTask } from "./tasks.js";
+import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
   AGENT_RULES,
   AGENT_STATES,
@@ -17,12 +17,234 @@ import {
   isStale,
   leaseExpiresAt,
   logEvent,
+  releaseSubtaskWork,
 } from "../agentState.js";
 
 const uid = () => crypto.randomUUID();
 
+// О ЧУЖОЙ сданной задаче предупреждаем один раз на сессию: свою работу
+// исполнитель доделает сам, а чужую — нет, и держать ход закрытым намертво
+// незачем. Раньше эта отметка лежала файлом рядом с хуком, поэтому у каждой
+// сессии был свой счёт и своё «уже говорили». Здесь она общая.
+//
+// Живёт в памяти процесса намеренно: отметка нужна на время жизни сессии,
+// которая всегда короче жизни сервера, а таблица ради неё — лишняя миграция
+// и лишний мусор в базе.
+const warnedBySession = new Map<string, Set<string>>();
+
+function alreadyWarned(session: string | null, taskId: string): boolean {
+  if (!session) return false;
+  return warnedBySession.get(session)?.has(taskId) ?? false;
+}
+
+function rememberWarned(session: string | null, taskIds: string[]): void {
+  if (!session || !taskIds.length) return;
+  let set = warnedBySession.get(session);
+  if (!set) {
+    set = new Set();
+    warnedBySession.set(session, set);
+  }
+  for (const id of taskIds) set.add(id);
+}
+
 export function registerAgentStateRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
+
+  // ═══════ ПРАВИЛА ═══════
+  // GET /api/agent/rules — те же AGENT_RULES, что приходят в ответе на claim
+  // и на взятие шага, но их можно СПРОСИТЬ, не занимая задачу.
+  //
+  // Понадобилось для Control Center: он показывает правила исполнителю на
+  // экране задач. Показывать их из своей копии он не может по решению
+  // 20.08.2026 — правила живут на сервере трекера, чтобы действовать на
+  // любого агента, а не только на прочитавшего чей-то CLAUDE.md. Значит
+  // единственный честный способ их показать — спросить у нас.
+  app.get("/api/agent/rules", { preHandler: authPre }, async () => ({
+    rules: AGENT_RULES,
+  }));
+
+  // ═══════ МОЖНО ЛИ ЗАКОНЧИТЬ ХОД ═══════
+  // GET /api/agent/can-stop — «у меня остались незакрытые шаги?»
+  //
+  // Максим 26.08.2026: «этот твой жёсткий гейт… ты можешь его перевести на
+  // систему? На сервер, чтобы это сервер делал, а не твой хук». Правила
+  // жили в Stop-хуке Claude Code — 295 строк, действовавших на одного
+  // исполнителя и правившихся отдельно от сервера. Дважды за неделю их
+  // приходилось менять (что считать закрытым шагом, как быть с чужой
+  // сессией), и каждый раз правка доставалась только тому агенту, у кого
+  // этот хук стоит.
+  //
+  // Само событие «ход заканчивается» видно только внутри клиента, поэтому
+  // хук остаётся — но становится курьером: спросил, показал ответ. Решение
+  // и формулировка причины теперь здесь и действуют на любого агента.
+  app.get("/api/agent/can-stop", { preHandler: authPre }, async (req: any) => {
+    const mySession = sessionOf(req);
+    const tasks = db
+      .prepare(
+        `SELECT id, title, agent_state, agent_session_id
+           FROM tasks
+          WHERE assignee_id = ? AND status = 'active'`,
+      )
+      .all(req.userId) as Array<{
+      id: string;
+      title: string;
+      agent_state: string | null;
+      agent_session_id: string | null;
+    }>;
+
+    const stepsOf = db.prepare(
+      `SELECT done, agent_state, agent_heartbeat_at FROM subtasks WHERE task_id = ?`,
+    );
+    const unfinished: Array<{
+      id: string;
+      title: string;
+      closed: number;
+      total: number;
+      state: string | null;
+      foreign: boolean;
+    }> = [];
+
+    // Координационная карточка оркестратора собственных шагов не имеет:
+    // работа разложена по ДОЧЕРНИМ ЗАДАЧАМ, а формальной связи с ними в
+    // базе нет — оркестратор пишет её строкой «Часть координационной
+    // задачи #id» в описание каждого куска (build_orchestrator_prompt).
+    // По этой же нити его теперь будит и будильник.
+    //
+    // Зачем ручке про них знать (28.08.2026, владелец: «как он мог
+    // отключаться, если он не выполнил задачу?»): гейт пропускал такую
+    // карточку насквозь по `!steps.length`, и оркестратор заканчивал ход,
+    // оставив сданную работу непринятой. Держим его ТОЛЬКО когда ребёнок
+    // уже сдался или упёрся: пока дети работают, уходить ему можно и нужно
+    // — заход стоит денег, а смотреть не на что.
+    const childrenWaiting = db.prepare(
+      `SELECT id, title, agent_state FROM tasks
+        WHERE status = 'active' AND creator_id = ? AND id <> ?
+          AND agent_state IN ('review', 'blocked')
+          AND description LIKE '%' || ? || '%'`,
+    );
+    const awaiting: Array<{
+      id: string;
+      title: string;
+      children: Array<{ id: string; title: string; agent_state: string }>;
+    }> = [];
+
+    for (const t of tasks) {
+      const steps = stepsOf.all(t.id) as Array<{
+        done: number;
+        agent_state: string | null;
+        agent_heartbeat_at: string | null;
+      }>;
+      // Состояние задачи ВЫЧИСЛЯЕТСЯ из шагов, а не лежит в её строке:
+      // у задачи, которую ведут пошагово, собственный agent_state годами
+      // остаётся NULL (см. withAgentStale в routes/tasks.ts). Первая
+      // редакция этой ручки читала сырое поле и потому тянула в выдачу
+      // задачу, давно помеченную blocked через шаг.
+      const state = withAgentStale(t, steps).agent_state as string | null;
+
+      // Упёрся и сказал об этом — незакрытые шаги там законны.
+      if (state === "blocked") continue;
+
+      // Задачу, которую прямо сейчас ведёт другой процесс под тем же ботом,
+      // доделать нельзя: не зная, что там сделано, честного result не
+      // напишешь. Но СДАННУЮ работу проверяем всегда, чья бы сессия ни
+      // стояла — иначе дыра: 18.08.2026 выяснилось, что MCP-процесс может
+      // писать ИД уже завершённой сессии, совпадения не случается никогда
+      // и гейт молча пропускает всё подряд.
+      const foreign = Boolean(
+        t.agent_session_id && mySession && t.agent_session_id !== mySession,
+      );
+      if (foreign && state !== "review") continue;
+      if (foreign && alreadyWarned(mySession, t.id)) continue;
+
+      const kids = childrenWaiting.all(req.userId, t.id, t.id) as Array<{
+        id: string;
+        title: string;
+        agent_state: string;
+      }>;
+      if (kids.length) {
+        awaiting.push({ id: t.id, title: t.title, children: kids });
+      }
+
+      if (!steps.length) continue;
+      // Шаг закрыт: сделан ЛИБО сдан на проверку. «Сделан» с 20.08.2026
+      // доступен и агенту — обязательная приёмка владельцем отменена.
+      const closed = steps.filter(
+        (s) => Boolean(s.done) || s.agent_state === "review",
+      ).length;
+      if (closed < steps.length) {
+        unfinished.push({
+          id: t.id,
+          title: t.title,
+          closed,
+          total: steps.length,
+          state,
+          foreign,
+        });
+      }
+    }
+
+    if (!unfinished.length && !awaiting.length) return { can_stop: true, tasks: [] };
+
+    rememberWarned(
+      mySession,
+      unfinished.filter((u) => u.foreign).map((u) => u.id),
+    );
+
+    const lines: string[] = ["⛔ ЖЁСТКИЙ ГЕЙТ: ход пытается закончиться, а работа не отпущена."];
+
+    if (awaiting.length) {
+      lines.push(
+        "",
+        "Тебе сдали работу и ждут твоего слова — уйти сейчас значит бросить её:",
+      );
+      for (const a of awaiting) {
+        lines.push(`  • «${a.title}» (${a.id.slice(0, 8)}…):`);
+        for (const k of a.children) {
+          const what =
+            k.agent_state === "review" ? "сдал на проверку" : "упёрся и ждёт решения";
+          lines.push(`      — «${k.title}» (${k.id.slice(0, 8)}…) ${what}`);
+        }
+      }
+      lines.push(
+        "Прими сделанное или верни на доработку (taskflow_state с comment). " +
+          "Дети ещё в работе — тогда уходить можно, гейт про них не спрашивает.",
+      );
+    }
+
+    if (unfinished.length) {
+      lines.push("", "Задача с незакрытыми шагами, которую ты ведёшь:");
+    }
+    let sold = false;
+    for (const u of unfinished) {
+      let mark = u.state === "review" ? " — задача уже сдана в review!" : "";
+      if (u.foreign) mark += " (сдала другая сессия — предупреждаю один раз)";
+      sold = sold || (u.state === "review" && !u.foreign);
+      lines.push(
+        `  • «${u.title}» (${u.id.slice(0, 8)}…) — закрыто ${u.closed}/${u.total} шагов${mark}`,
+      );
+    }
+    if (sold) {
+      lines.push(
+        "Сдана задача, а шаги при ней не сданы — так владелец не видит, " +
+          "что именно сделано по каждому. Пройди шаги " +
+          "(taskflow_subtask_work со state='review' и честным result).",
+      );
+    }
+    if (unfinished.length) {
+      lines.push(
+        "Либо продолжи следующий шаг (taskflow_subtask_work), либо закрой " +
+          "все шаги и сдай задачу (taskflow_state), либо переведи её в blocked " +
+          "с честной причиной — тогда ход закроется.",
+      );
+    }
+
+    return {
+      can_stop: false,
+      reason: lines.join("\n"),
+      tasks: unfinished,
+      coordination: awaiting,
+    };
+  });
 
   // ═══════ CLAIM ═══════
   // Take the task into work: agent_state -> 'in_progress', heartbeat = now,
@@ -192,9 +414,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       });
       claimTxn();
 
-      const updated = db
-        .prepare("SELECT * FROM tasks WHERE id = ?")
-        .get(task.id) as any;
+      const updated = getTaskRow(task.id);
       const hydrated = hydrateTask(updated);
       // Same shape as task:created/task:updated (hydrateTask, with labels +
       // subtasks) — a client that merges task:state through the same store
@@ -414,6 +634,15 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           );
         }
 
+        // «Снять с агента» снимает работу и с ШАГОВ — иначе задача тут же
+        // перечитается занятой: её состояние могло приходить не из своей
+        // колонки, а роллапом с незакрытого шага (см. releaseSubtaskWork и
+        // withAgentStale в routes/tasks.ts). Именно из-за этого владелец
+        // 24.08.2026 не мог расклинить карточку с пропавшим агентом.
+        if (state === null) {
+          releaseSubtaskWork(task.id);
+        }
+
         logEvent({
           taskId: task.id,
           actorId: req.userId,
@@ -425,9 +654,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       });
       stateTxn();
 
-      const updated = db
-        .prepare("SELECT * FROM tasks WHERE id = ?")
-        .get(task.id) as any;
+      const updated = getTaskRow(task.id);
       const hydrated = hydrateTask(updated);
 
       // Owner attention required — notify + WS, outside the transaction (not
@@ -451,6 +678,46 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             taskId: task.id,
           });
         }
+      }
+
+      // Владелец вернул задачу из review в работу — единственный путь,
+      // отправляющий agent_state и комментарий ОДНИМ атомарным запросом
+      // (см. AGENT-PROTOCOL.md, строка «review → in_progress»). У всех
+      // остальных owner-переходов с заданием (ответ на blocked, снятие
+      // с агента) комментарий идёт ВТОРЫМ отдельным POST на /comments,
+      // и именно ТОТ маршрут будит будильник (taskflow-trigger слушает
+      // строго notification:new, см. trigger.py::_on_message). У этой
+      // атомарной ветки такого второго запроса нет и никогда не было —
+      // будильник не просыпался ни разу, задача просто зависала «в работе»
+      // без реального захода агента. Найдено 27.08.2026 при разборе
+      // f381c5a1 (карточка про «баг сохранения подзадачи»): само действие
+      // всегда отрабатывало 200 и без него, но внешний агент об этом
+      // никогда не узнавал.
+      if (
+        from === "review" &&
+        state === "in_progress" &&
+        comment &&
+        task.assignee_id &&
+        task.assignee_id !== req.userId
+      ) {
+        const actor = db
+          .prepare("SELECT name FROM users WHERE id = ?")
+          .get(req.userId) as { name?: string } | undefined;
+        const notifId = uid();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'commented', ?, ?, ?)",
+        ).run(
+          notifId,
+          task.assignee_id,
+          task.id,
+          `${actor?.name || "Кто-то"} прокомментировал: ${task.title}`,
+          req.userId,
+        );
+        broadcastToUsers([task.assignee_id], {
+          type: "notification:new",
+          notificationId: notifId,
+          taskId: task.id,
+        });
       }
 
       broadcastToUsers([updated.creator_id, updated.assignee_id], {

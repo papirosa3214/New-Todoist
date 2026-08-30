@@ -67,7 +67,8 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   useDroppable,
   useSensor,
@@ -170,9 +171,8 @@ function BoardCard({
   overdue,
   showProjectBadge,
   onClick,
-  dragHandleListeners,
-  dragHandleAttributes,
-  setDragHandleRef,
+  dragListeners,
+  dragAttributes,
   isDragging,
 }: {
   task: ApiTask;
@@ -180,10 +180,9 @@ function BoardCard({
   showProjectBadge: boolean;
   onClick: () => void;
   // Undefined outside a DndContext (the DragOverlay preview renders a bare
-  // BoardCard with no handle needed — see TaskBoard below).
-  dragHandleListeners?: DraggableSyntheticListeners;
-  dragHandleAttributes?: DraggableAttributes;
-  setDragHandleRef?: (el: HTMLElement | null) => void;
+  // BoardCard with no drag wiring needed — see TaskBoard below).
+  dragListeners?: DraggableSyntheticListeners;
+  dragAttributes?: DraggableAttributes;
   isDragging?: boolean;
 }) {
   const isDone = task.status === "completed";
@@ -193,8 +192,7 @@ function BoardCard({
     !!task.due_date ||
     task.subtasks.length > 0 ||
     !!label ||
-    (showProjectBadge && !!task.project_name) ||
-    !!task.agent_state;
+    (showProjectBadge && !!task.project_name);
 
   // Открываем задачу только на настоящем тапе: если палец ехал (прокрутка
   // колонок вбок или страницы вниз почти всегда начинается пальцем на
@@ -204,6 +202,8 @@ function BoardCard({
   return (
     <button
       {...tap}
+      {...(dragAttributes ?? {})}
+      {...(dragListeners ?? {})}
       // pt-2 против pb-3 — намеренная асимметрия ОТСТУПОВ ради симметрии
       // ВОЗДУХА (владелец 19.08.2026: «посчитай расстояние от верха плашки
       // до первого слова и от последней метки до низа — они должны быть
@@ -213,32 +213,20 @@ function BoardCard({
       // ровно 12/12, — а в том, что у аватарки внутри PNG своё поле ~4pt,
       // а нижние пилюли прижаты к своей кромке вплотную. Padding снизу
       // трогать нельзя (там всё уже ровно), поэтому убавлен верхний.
+      //
+      // Перетаскивание — ВСЕЙ карточкой (Максим 26.08.2026: «зажимаю
+      // карточку и перетаскиваю», грип-точки убраны). На тач-устройстве
+      // жест разводит TouchSensor (delay 200мс — см. sensors ниже): тап
+      // открывает задачу, движение сразу — прокрутка, удержание — захват.
+      // touchAction: manipulation, а не touch-none — иначе палец на
+      // карточке не мог бы прокручивать колонку вовсе (тот же приём, что
+      // у плашек DayHours). Синтетический клик после завершённого drag
+      // гасит useTapGuard — палец двигался, значит это был не тап.
+      style={{ touchAction: "manipulation", WebkitTouchCallout: "none" }}
       className={`tap-row w-full text-left bg-card rounded-xl px-3 pb-3 pt-2 flex items-stretch gap-1 ${
         isDragging ? "opacity-40" : ""
       }`}
     >
-      {dragHandleListeners && (
-        // Drag starts ONLY from this handle, never from the rest of the
-        // card — the card's own onClick above (open task detail) has to
-        // keep working for a plain tap, and a mouse/touch-down anywhere
-        // else in the card must still be free to scroll the page or the
-        // column strip. touch-none stops the browser from starting its
-        // own scroll gesture the instant a finger lands here (without it,
-        // the scroll wins the race and cancels the drag before it starts).
-        // stopPropagation on click swallows the synthetic click a
-        // finished drag gesture leaves behind — otherwise every completed
-        // drag would also fire the card's onClick and navigate away.
-        <div
-          ref={setDragHandleRef}
-          {...dragHandleAttributes}
-          {...dragHandleListeners}
-          onClick={(e) => e.stopPropagation()}
-          className="touch-none shrink-0 -my-3 -ml-3 mr-1 px-2 flex items-center justify-center self-stretch text-dim active:text-sub"
-          aria-label="Перетащить задачу"
-        >
-          <Icon name="grip" size={14} />
-        </div>
-      )}
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         {/* gap-3 (12px), not gap-2 — owner 2026-08-13, tenth pass: dot size
             got unified to 18px everywhere in the first pass, but this row's
@@ -284,6 +272,16 @@ function BoardCard({
               {task.description}
             </div>
           )}
+
+          {/* Статус агента — сразу после заметки, своей строкой, просто
+              цветное слово без плашки (Максим 26.08.2026: «после заметки…
+              и фон не ставится, просто цветное слово»). Из футер-ряда
+              пилюль убран — см. hasFooter выше. */}
+          {task.agent_state && (
+            <div className="mt-0.5">
+              <AgentStateTag task={task} compact plain />
+            </div>
+          )}
         </div>
         {hasFooter && (
           <div className="w-full flex items-center gap-1.5 flex-wrap">
@@ -302,10 +300,8 @@ function BoardCard({
                 {formatCompactDate(task.due_date)}
               </span>
             )}
-            {/* После счётчика подзадач, не перед ним (просьба Максима
-                17.08.2026) — статичные счётчики сначала, живой статус
-                агента следом. */}
-            {task.agent_state && <AgentStateTag task={task} compact />}
+            {/* Статус агента был здесь пилюлей — переехал под заметку
+                отдельной строкой (Максим 26.08.2026), см. выше. */}
             {label && (
               <span
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0"
@@ -328,10 +324,10 @@ function BoardCard({
 
 // Wraps BoardCard with dnd-kit's per-item sortable hook. The whole card
 // still receives `transform`/`transition` (so it slides out of the way
-// during a neighbor's drag) — only `listeners` (the handlers that actually
-// START a drag on pointerdown) go to the handle sub-element via BoardCard's
-// props, per the file-header note on why the whole card can't be the
-// trigger.
+// during a neighbor's drag). `listeners`/`attributes` now go onto the card
+// itself — drag starts by press-and-hold anywhere on the card (Максим
+// 26.08.2026), the tap-vs-drag-vs-scroll split lives in the sensors'
+// activation constraints (see TaskBoard below), not in a dedicated handle.
 function SortableBoardCard({
   task,
   overdue,
@@ -347,7 +343,6 @@ function SortableBoardCard({
     attributes,
     listeners,
     setNodeRef,
-    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
@@ -365,9 +360,8 @@ function SortableBoardCard({
         overdue={overdue}
         showProjectBadge={showProjectBadge}
         onClick={onClick}
-        dragHandleListeners={listeners}
-        dragHandleAttributes={attributes}
-        setDragHandleRef={setActivatorNodeRef}
+        dragListeners={listeners}
+        dragAttributes={attributes}
         isDragging={isDragging}
       />
     </div>
@@ -429,6 +423,13 @@ export function TaskBoard({
   );
   const [activeId, setActiveId] = useState<string | null>(null);
   const persistingRef = useRef(false);
+  // Размер исходной карточки в ref — приходит из
+  // active.rect.current.initial в onDragStart и кладётся сюда СИНХРОННО,
+  // до первого рендера <DragOverlay>. Иначе overlay монтируется без
+  // ширины, схлопывается в min-content (карточка flex-1 вне колонки),
+  // а на следующем кадре расширяется до измеренной ширины —
+  // «плоская узкая, потом расширяется» (Максим 26.08.2026).
+  const dragRectRef = useRef<{ width: number; height: number } | null>(null);
   // Which column the active card started in — set on drag start, read on
   // drag end to tell "reordered in place" apart from "moved to another
   // column" (onDragOver below may already have relocated the id in
@@ -606,15 +607,20 @@ export function TaskBoard({
     return Object.keys(colItems).find((key) => colItems[key].includes(id));
   }
 
-  // dnd-kit recommends PointerSensor alone (not PointerSensor+TouchSensor
-  // together) for apps that need both mouse and touch — Pointer Events
-  // already unify the two, and running both sensors risks a touch starting
-  // both at once. `distance` (not a time delay) is safe here specifically
-  // because the handle is a dedicated element with nothing else to
-  // activate on it — a plain tap there was never a valid gesture to begin
-  // with, so there's no tap-vs-drag ambiguity to resolve with a delay.
+  // Перетаскивание всей карточкой (грип-хендл убран, Максим 26.08.2026) —
+  // тап, скролл и drag разводятся так же, как у плашек в DayHours:
+  //   мышь  — порог 4px: курсор точный, тап без движения остаётся кликом
+  //           (открыть задачу), а задержка была бы только раздражением;
+  //   палец — удержание 200мс с допуском 8px: короткий тап открывает
+  //           задачу, движение сразу — прокручивает колонку/полосу,
+  //           удержание берёт карточку. Ровно жест «зажал и потащил».
+  // PointerSensor с одним distance здесь больше нельзя: любое движение
+  // пальца по карточке (начало прокрутки!) стартовало бы drag.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 8 },
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     }),
@@ -625,6 +631,10 @@ export function TaskBoard({
     setActiveId(id);
     dragSourceColRef.current = findColumnOf(id) ?? null;
     dragSnapshotRef.current = colItems;
+    // initial rect приходит на самом первом тике drag — кладём в ref,
+    // чтобы overlay при монтировании сразу знал свою ширину и высоту.
+    const r = event.active.rect.current.initial;
+    if (r) dragRectRef.current = { width: r.width, height: r.height };
     hapticGrab();
     lastOverRef.current = id;
   }
@@ -734,18 +744,32 @@ export function TaskBoard({
           if (current?.project_id !== value) body.project_id = value;
         }
         if (Object.keys(body).length > 0) {
-          patches.push(api.patch(`/api/tasks/${taskId}`, body));
+          // Оптимистично применяем изменения в кэше ['tasks'] до
+          // отправки PATCH — иначе карточка на одну-две отрисовки
+          // возвращается на старое место. Откатываем при ошибке.
+          patches.push(
+            api.patch(`/api/tasks/${taskId}`, body).catch((err) => {
+              console.error("Не удалось сохранить порядок задач", err);
+              throw err;
+            }),
+          );
+          qc.setQueryData<ApiTask[] | undefined>(["tasks"], (prev) => {
+            if (!prev) return prev;
+            return prev.map((t) =>
+              t.id === taskId ? ({ ...t, ...body } as ApiTask) : t,
+            );
+          });
         }
       });
       if (patches.length > 0) {
         await Promise.all(patches);
         await qc.invalidateQueries({ queryKey: ["tasks"] });
       }
-    } catch (err) {
-      console.error("Не удалось сохранить порядок задач", err);
-      await qc.invalidateQueries({ queryKey: ["tasks"] });
     } finally {
       persistingRef.current = false;
+      // invalidate в любом случае — прийти свежий ответ, перезаписать
+      // оптимистичный кэш (или откатить, если ответ пришёл с ошибкой).
+      await qc.invalidateQueries({ queryKey: ["tasks"] });
     }
   }
 
@@ -821,6 +845,10 @@ export function TaskBoard({
           ...(stripMinH ? { minHeight: stripMinH } : undefined),
           WebkitOverflowScrolling: "touch",
         }}
+        // Полоса колонок прокручивается вбок со снапом — свайп «назад»
+        // (useSwipeBack, ловится по всему экрану с 26.08.2026) не должен
+        // перехватывать это движение.
+        data-hswipe
         className={`-mx-4 flex gap-3 overflow-x-auto pb-2 ${
           // Scroll-snap fights dnd-kit's auto-scroll-to-edge while a drag is
           // active (each auto-scroll tick gets pulled back toward the
@@ -948,14 +976,30 @@ export function TaskBoard({
       {/* Rendered outside any column's scroll/transform context — dnd-kit's
           own recipe for dragging inside a scrollable container, otherwise
           the floating card inherits the strip's scroll offset and drifts. */}
-      <DragOverlay>
-        {activeTask ? (
-          <BoardCard
-            task={activeTask}
-            overdue={activeColumn?.dueBadgeVariant === "overdue"}
-            showProjectBadge={!!activeColumn?.showProjectBadge}
-            onClick={() => {}}
-          />
+      <DragOverlay dropAnimation={null}>
+        {activeTask && dragRectRef.current ? (
+          // drag-lift — «подъём» карточки в руке (масштаб + тень, как
+          // иконки на домашнем экране iOS при long-press); сама карточка
+          // на старом месте в этот момент полупрозрачна (opacity-40).
+          //
+          // Ширина и высота ФИКСИРОВАНЫ размером исходной карточки —
+          // без этого overlay (он вне колонки, flex-1 родителя не имеет)
+          // схлопывается в min-content и расширяется на следующем
+          // кадре: «узкая плоская, потом расширяется» (Максим 26.08.2026).
+          <div
+            className="drag-lift rounded-xl"
+            style={{
+              width: dragRectRef.current.width,
+              height: dragRectRef.current.height,
+            }}
+          >
+            <BoardCard
+              task={activeTask}
+              overdue={activeColumn?.dueBadgeVariant === "overdue"}
+              showProjectBadge={!!activeColumn?.showProjectBadge}
+              onClick={() => {}}
+            />
+          </div>
         ) : null}
       </DragOverlay>
     </DndContext>

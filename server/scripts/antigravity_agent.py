@@ -26,13 +26,13 @@ TASKFLOW_TOKEN = os.environ.get(
     "TASKFLOW_ANTIGRAVITY_TOKEN",
     "tf_e0d4ae5529f272a989c85bad13208b5a4288a273bc760b046f226b580ebe0c38",
 )
-PROXY_URL = os.environ.get("HTTPS_PROXY", "http://127.0.0.1:10811")
+PROXY_URL = os.environ.get("HTTPS_PROXY", "http://127.0.0.1:10814")
 
 # Принудительно заворачиваем все запросы через рабочий прокси сервера
 for p_var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
     os.environ[p_var] = PROXY_URL
-os.environ.setdefault("ALL_PROXY", "socks5://127.0.0.1:10808")
-os.environ.setdefault("all_proxy", "socks5://127.0.0.1:10808")
+os.environ.setdefault("ALL_PROXY", "socks5://127.0.0.1:10815")
+os.environ.setdefault("all_proxy", "socks5://127.0.0.1:10815")
 
 
 def get_gemini_key() -> str:
@@ -449,33 +449,40 @@ def run_agent_loop(prompt: str, model_name: str) -> None:
                 messages.append({"role": "user", "content": f"Результат инструмента {fn_name}:\n{tool_res}"})
             continue
 
-        # Если явных вызовов нет, но задача содержит шаги — закрываем подзадачи и сдаем в review
-        if task_id:
-            subtasks = call_taskflow_api("GET", f"/api/tasks/{task_id}/subtasks") or []
-            if isinstance(subtasks, list):
-                for s in subtasks:
-                    if not s.get("done") and s.get("id"):
-                        call_taskflow_api("PATCH", f"/api/subtasks/{s['id']}", {
-                            "done": True,
-                            "result": f"Шаг «{s.get('title', 'подзадача')}» выполнен."
-                        })
-
+        # Инструментов модель не вызвала — значит работы не было, только текст.
+        #
+        # Раньше здесь агент ЗА МОДЕЛЬ закрывал все шаги («Шаг „…" выполнен»)
+        # и сам ставил задачу в review с отчётом «Задача выполнена агентом
+        # Antigravity». На доске это выглядело как сделанная работа: заходы
+        # 24.08.2026 длились 5 и 23 секунды, Gemini при этом отвечал отказом
+        # по геолокации, а карточка уходила владельцу «на проверку» пустой.
+        #
+        # Шаг закрывает только тот, кто его сделал: модель — через инструмент
+        # taskflow_subtask, и никак иначе. Не сделала ничего — задача честно
+        # уходит в blocked, чтобы владелец увидел, что агент не справился.
+        # blocked заодно останавливает сторожа: по протоколу он такую карточку
+        # больше не поднимает и не крутит пустые заходы по кругу.
+        # Важно: «ничего не сделал» — это когда за весь заход не было НИ ОДНОГО
+        # вызова инструмента. Если вызовы были (в том числе на прошлых витках
+        # цикла), состояние карточки оставляем таким, каким его оставила сама
+        # модель: она могла уже сдать работу в review, и перебивать это на
+        # blocked нельзя.
+        if task_id and not executed_tools_summary:
             clean_comment = re.sub(r'taskflow_\w+\(.*?\)', '', reply_text).strip()
-            report_lines = []
+            report_lines = ["Инструменты не вызывались — работа по задаче не выполнена."]
             if clean_comment:
-                report_lines.append(clean_comment)
+                report_lines.append("\nЧто ответила модель:\n" + clean_comment)
             if executed_tools_summary:
                 report_lines.append("\n**Данные выполнения:**\n" + "\n".join(executed_tools_summary[-3:]))
-            
-            final_report = "\n".join(report_lines).strip() or "Задача выполнена агентом Antigravity."
 
             call_taskflow_api("POST", f"/api/tasks/{task_id}/state", {
-                "state": "review",
-                "comment": final_report[:1000]
+                "state": "blocked",
+                "comment": "\n".join(report_lines).strip()[:1000],
             })
-            print(f"[Antigravity] Задача {task_id[:8]} переведена в статус 'review' с отчётом.")
-
-        print("[Antigravity] Работа завершена.")
+            print(f"[Antigravity] Задача {task_id[:8]} помечена blocked: агент не выполнил работу.")
+            print("[Antigravity] Работа завершена без выполненных действий.")
+        else:
+            print("[Antigravity] Работа завершена; состояние карточки оставлено таким, каким его задала модель.")
         break
 
 

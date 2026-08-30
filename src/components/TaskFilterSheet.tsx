@@ -20,30 +20,26 @@ import {
   type TaskFilterOption,
   type TaskAssigneeOptions,
 } from "../lib/taskFilters";
+import type { ApiProject } from "../api/types";
 
 // ═══════════ FILTER BUTTON (header trigger) ═══════════
-// Icon-only, 44×44 — matches every other header action across these three
-// screens (layout toggle, "..." menu, calendar toggle) rather than
-// ActivityScreen's text pill: that screen's compact header has room to
-// spare (back button + centered title + one action), these screens'
-// "large" header already crowds a title against 1-2 icon buttons.
-export function TaskFilterButton({
-  onClick,
-  active,
-}: {
-  onClick: () => void;
-  active: boolean;
-}) {
+// Icon-only, 44×44 — единый вид кнопки фильтра во ВСЁМ приложении
+// (26.08.2026: ActivityScreen была единственным исключением — текстовая
+// пилюля «Фильтры», приведена к этому же виду).
+//
+// Красной точки-индикатора «что-то выбрано» НЕТ — убрана по прямой
+// просьбе Максима 26.08.2026 («не надо подсвечивать, что что-то там
+// выбрано, мне надо — я зайду посмотрю»). Проп `active` больше не
+// принимается: экраны не должны считать счётчики ради несуществующего
+// индикатора.
+export function TaskFilterButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      aria-label="Открыть фильтры"
-      className="tap-scale relative w-[44px] h-[44px] flex items-center justify-center"
+      aria-label="Фильтры"
+      className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
     >
       <Icon name="filter" size={18} className="text-text" />
-      {active && (
-        <span className="absolute top-[9px] right-[9px] w-[7px] h-[7px] rounded-full bg-red" />
-      )}
     </button>
   );
 }
@@ -130,6 +126,7 @@ export function TaskFilterSheet({
   projectOptions,
   labelOptions,
   assigneeOptions,
+  plannerProjects,
 }: {
   open: boolean;
   onClose: () => void;
@@ -138,6 +135,17 @@ export function TaskFilterSheet({
   projectOptions: TaskFilterOption[];
   labelOptions: TaskFilterOption[];
   assigneeOptions: TaskAssigneeOptions;
+  /** Постоянный набор проектов экрана («Показывать в разделе») — только
+   *  «Сегодня» его передаёт. Максим 26.08.2026: отдельная кнопка-папка в
+   *  шапке дублировала фильтр по виду и путала — переехала СЮДА, отдельной
+   *  секцией; её место в шапке занял Дневник. Отличие от «Проект» выше
+   *  осталось прежним: там разовый выбор ОДНОГО проекта, здесь постоянный
+   *  список тех, что вообще показывать. */
+  plannerProjects?: {
+    projects: ApiProject[];
+    hiddenProjectIds: Record<string, boolean>;
+    onToggle: (projectId: string) => void;
+  };
 }) {
   const [openSection, setOpenSection] = useState<string | null>(null);
 
@@ -155,6 +163,12 @@ export function TaskFilterSheet({
     !!filters.labelId ||
     !!filters.assigneeKey ||
     filters.showCompleted;
+
+  const plannerHiddenCount = plannerProjects
+    ? plannerProjects.projects.filter(
+        (p) => plannerProjects.hiddenProjectIds[p.id],
+      ).length
+    : 0;
 
   const projectLabel =
     (filters.projectId &&
@@ -174,6 +188,9 @@ export function TaskFilterSheet({
 
   return (
     <div
+      // Свайп «назад» не должен уводить экран из-под шторки
+      // (useSwipeBack ищет этот атрибут).
+      data-overlay
       className="fixed inset-0 z-50 flex flex-col justify-end"
       onClick={onClose}
     >
@@ -364,6 +381,69 @@ export function TaskFilterSheet({
               </span>
             </button>
           </Card>
+
+          {/* ═══ Показывать в разделе ═══
+              Постоянный набор проектов экрана (бывшая кнопка-папка в шапке).
+              Не «чем сузить прямо сейчас» (это всё выше и сбрасывается
+              «Сбросить»), а «что этот раздел показывает вообще» — поэтому
+              своей карточкой внизу, с раскрытием, и НЕ трогается кнопкой
+              «Сбросить». */}
+          {plannerProjects && plannerProjects.projects.length > 0 && (
+            <Card>
+              <FieldRow
+                icon="folder"
+                label="Показывать в разделе"
+                value={
+                  plannerHiddenCount === 0
+                    ? "Все проекты"
+                    : `Скрыто: ${plannerHiddenCount}`
+                }
+                chevronOpen={openSection === "planner"}
+                onClick={() =>
+                  setOpenSection(openSection === "planner" ? null : "planner")
+                }
+              />
+              {openSection === "planner" && (
+                <div className="border-t border-stroke">
+                  <div className="px-4 pt-2.5 pb-1 text-[12px] text-dim">
+                    Выключенные проекты не появятся в этом разделе, пока не
+                    включишь обратно. На другие разделы не влияет.
+                  </div>
+                  {plannerProjects.projects.map((p) => {
+                    const hidden = !!plannerProjects.hiddenProjectIds[p.id];
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => plannerProjects.onToggle(p.id)}
+                        role="switch"
+                        aria-checked={!hidden}
+                        className="tap-row w-full flex items-center gap-3 py-2.5 px-4 text-left"
+                      >
+                        <Icon
+                          name="hash"
+                          size={16}
+                          style={{ color: p.color }}
+                        />
+                        <span className="text-[14px] text-text flex-1 truncate">
+                          {p.name}
+                        </span>
+                        <span
+                          className={`relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors ${
+                            !hidden ? "bg-red" : "bg-card2 border border-stroke"
+                          }`}
+                        >
+                          <span
+                            className="absolute top-[2.5px] w-[20px] h-[20px] rounded-full bg-white shadow-toggle transition-[right] duration-150"
+                            style={{ right: !hidden ? "2.5px" : "20.5px" }}
+                          />
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+          )}
         </div>
       </div>
     </div>

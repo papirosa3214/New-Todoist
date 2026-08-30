@@ -1,13 +1,24 @@
-import { Outlet, useLocation, matchPath } from "react-router-dom";
-import { BottomNav, SideNav, FAB, Panel } from "./UI";
+import { Outlet, useLocation, matchPath, useNavigate } from "react-router-dom";
+import { BottomNav, SideNav, FAB, Icon } from "./UI";
+import { TaskDetailPanel } from "./TaskDetailPanel";
 import { FanMenu, FAN_MENU_CONTENT_PADDING } from "./FanMenu";
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCurrentUser } from "../api/auth";
 import { useAppStore } from "../store";
 import { useNotificationsSocket } from "../api/ws";
+import { useLiveActivitySync } from "../lib/useLiveActivitySync";
 import { useVisualViewportInset } from "../lib/useVisualViewportInset";
+import { usePullToRefresh } from "../lib/usePullToRefresh";
+import { useSwipeBack } from "../lib/useSwipeBack";
+import { NAV_ITEMS } from "../lib/navItems";
 import { warmUpWhisper } from "../lib/localAI";
 import { flushArchiveQueue } from "../lib/dictationArchive";
+import { useIsMobile, useDesktopPanelEligible } from "../lib/viewport";
+import {
+  useRealLocation,
+  getOverlayState,
+} from "../lib/backgroundLocationContext";
 
 // Bottom nav + FAB belong only to the app's four top-level tab screens —
 // the ones BottomNav itself renders a tab for (see NAV_ITEMS in UI.tsx) and
@@ -32,45 +43,57 @@ import { flushArchiveQueue } from "../lib/dictationArchive";
 // matchPath, not string comparison) can only be wrong by omission, and the
 // four entries below are exhaustive by construction — every other screen in
 // App.tsx is deliberately absent.
-const TAB_ROUTES = ["/inbox", "/today", "/upcoming", "/overview", "/settings"];
+// /notes добавлен 26.08.2026: «Дневник» стал самостоятельным разделом
+// веера, а не drill-down из Ежедневника. Только сам корень — /notes/:id
+// остаётся вложенным экраном со своей кнопкой «Назад» и без навигации.
+// /settings ИЗ СПИСКА УБРАН (26.08.2026). Он попал сюда, когда Настройки
+// были пунктом веера. Теперь это строка внутри «Обзора», то есть обычный
+// вложенный экран — Максим: «раз это у нас подпункт меню, убрать веер
+// там». Заодно на нём заработал свайп назад: он включается ровно там, где
+// навигации нет.
+// /projects добавлен 26.08.2026 — стал пунктом веера вместо /inbox
+// («Проекты» вели на переименованные Входящие, а настоящий экран проектов
+// лежал в Настройках). Тогда же /inbox УДАЛЁН целиком — Максим: «зачем эти
+// входящие нам нужны, они по сути часть ежедневника; из ежедневника я могу
+// сделать всё, и входящие, и не входящие».
+// 27.08.2026: список больше ни на что не влияет — панель висит на каждом
+// экране, а какая вкладка подсвечена, решает сам BottomNav по своим
+// NAV_ITEMS (components/UI.tsx). Оставлен как справка о том, какие пять
+// маршрутов считаются вкладками.
+const TAB_ROUTES = ["/projects", "/today", "/upcoming", "/overview", "/notes"];
+void TAB_ROUTES;
 
 // Переключатель нижней панели на мобильном — задача Максима 17.08.2026,
 // «попробовать веер вместо горбика+FAB». "fan" — новый FanMenu.tsx
 // (BottomNav и FAB не удалены, просто не рендерятся на мобильном, пока
 // стоит "fan" — один флаг возвращает прежнее поведение). Десктоп
 // (SideNav+FAB) эта задача не касалась, там всё как было.
-const MOBILE_NAV_STYLE: "fan" | "tabbar" = "fan";
-
-function isTabRoute(pathname: string) {
-  return TAB_ROUTES.some((path) => matchPath({ path, end: true }, pathname));
-}
-
-// Брейкпоинт — Tailwind `lg` (1024px), не `md` (768px, старое значение
-// здесь). Ниже 1024 остаётся мобильная раскладка (single-column, полная
-// ширина вьюпорта) — это осознанно шире, чем «телефон», и накрывает узкие
-// ноутбучные окна/таблеты в портретной ориентации: до этой правки такое
-// окно попадало в старую desktop-ветку и получало 390px рамку с мёртвым
-// полем вокруг — то есть уже тогда фактически показывало «мобильный» вид,
-// просто через фейковую рамку вместо честной полноширинной раскладки.
-// Приложение мобильное по духу (см. задание), поэтому граница поставлена
-// консервативно: только экраны, где реально помещается боковая колонка
-// навигации + читаемая колонка контента (см. desktop-ветку ниже), получают
-// десктопный вид.
-function useIsMobile() {
-  const [m, setM] = useState(
-    typeof window !== "undefined" ? window.innerWidth < 1024 : false,
-  );
-  useEffect(() => {
-    const onResize = () => setM(window.innerWidth < 1024);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  return m;
-}
+const MOBILE_NAV_STYLE: "fan" | "tabbar" = "tabbar";
 
 export function Layout() {
+  // `loc` — location, которую видит этот Layout: на десктопе с открытой
+  // панелью задачи это подменённый App.tsx location ФОНА (список), не
+  // /task/:id — react-router подставляет его через <Routes location> выше
+  // по дереву (см. lib/backgroundLocation.tsx), а Layout как раз рендерится
+  // внутри этого дерева. Поэтому весь код ниже, завязанный на «какая сейчас
+  // вкладка/таб» (hideNav, hideFAB, dueToday), продолжает работать НЕ
+  // меняясь: он и раньше судил по location.pathname, а теперь получает
+  // pathname списка позади панели вместо /task/:id — то есть ведёт себя
+  // ровно так, как будто панели нет, что и требуется (нижняя/боковая
+  // навигация не должна прятаться из-за открытой панели).
   const loc = useLocation();
+  // Реальный (не подменённый) location — только для того, чтобы узнать,
+  // что на САМОМ ДЕЛЕ открыт /task/:id с фоном, и нарисовать панель.
+  const realLoc = useRealLocation();
   const isMobile = useIsMobile();
+  const panelEligible = useDesktopPanelEligible();
+  const overlayTaskId = matchPath(
+    { path: "/task/:id", end: true },
+    realLoc.pathname,
+  )?.params.id;
+  const hasBackground = !!getOverlayState(realLoc)?.backgroundLocation;
+  const showTaskPanel =
+    !isMobile && panelEligible && hasBackground && !!overlayTaskId;
   // Инсет экранной клавиатуры (--kb-inset на <html>) — см.
   // src/lib/useVisualViewportInset.ts за подробным «почему». Подключён
   // безусловно (не только для мобильной ветки ниже): на десктопе экранной
@@ -119,7 +142,27 @@ export function Layout() {
   // driftable condition (the old `|| pathname.startsWith("/settings")` was
   // exactly that: a patch for FAB alone that left nav itself still showing
   // on /settings).
-  const hideNav = !isTabRoute(loc.pathname);
+  // 27.08.2026, требование владельца: «панель теперь должна находиться в
+  // каждом окне». Раньше она жила только на пяти таб-экранах (TAB_ROUTES), а
+  // на любом drill-down (задача, форма, настройки, агенты, проект) исчезала —
+  // и переход между разделами оттуда требовал сначала уйти назад. Теперь
+  // панель показывается везде внутри Layout; сам список TAB_ROUTES остаётся
+  // нужен ниже — по нему решается судьба кнопки «+», а не панели.
+  //
+  // 28.08.2026 у правила «панель в каждом окне» появилось РОВНО ОДНО
+  // исключение — экран чата. Владелец: «вот это окно ввода нужно всё-таки
+  // приземлить, прилепить — на замену этой менюшке с плюсиком; я открываю
+  // чатик, и у меня вся страничка исключительно чатика, потому что это
+  // единственное окно, где это уместно». То есть панель тут не «спрятана
+  // за ненадобностью», а ЗАМЕНЕНА другим постоянным низом — строкой ввода
+  // (ChatComposer, position:fixed). Две прибитые к низу полосы одна над
+  // другой не уживаются: вместе они съедали бы четверть экрана и ловили
+  // тапы друг у друга.
+  //
+  // Выход с экрана поэтому переехал в шапку — кнопка «назад» в «Обзор»
+  // (ChatScreen.tsx). Убирать это исключение можно только вместе со
+  // строкой ввода, иначе с /chat станет некуда уйти.
+  const hideNav = !!matchPath({ path: "/chat", end: true }, loc.pathname);
   // Плюс к этому: на доске «Сегодня» и на доске «Входящие» кнопка «+»
   // прячется, потому что там под каждой колонкой уже есть пилюля
   // «Добавить задачу» (TodayScreen.tsx — footer колонки «Сегодня»;
@@ -128,12 +171,11 @@ export function Layout() {
   // именно «есть замена — прячем», а не «доска — прячем»: список на обоих
   // экранах пилюль не показывает, так что там кнопка остаётся на месте.
   const todayLayout = useAppStore((s) => s.taskLayout.today);
-  const inboxLayout = useAppStore((s) => s.taskLayout.inbox);
+  // Ветка про доску Входящих убрана вместе с самим экраном (26.08.2026):
+  // осталась только доска «Сегодня».
   const fabReplacedByPill =
-    (todayLayout === "board" &&
-      !!matchPath({ path: "/today", end: true }, loc.pathname)) ||
-    (inboxLayout === "board" &&
-      !!matchPath({ path: "/inbox", end: true }, loc.pathname));
+    todayLayout === "board" &&
+    !!matchPath({ path: "/today", end: true }, loc.pathname);
   // «Обзор» — сводный экран (поиск, свои проекты, «ждут вас»), а не список
   // задач: задачу заводят там, где её потом видно — на «Входящих» или
   // «Сегодня». Поэтому кнопки «+» здесь нет вообще, в отличие от случая
@@ -144,9 +186,52 @@ export function Layout() {
     { path: "/overview", end: true },
     loc.pathname,
   );
-  const hideFAB = hideNav || fabReplacedByPill || fabHiddenOnOverview;
+  // Плюс открытая панель задачи (десктоп, showTaskPanel): FAB — `fixed
+  // right-[18px]` от ОКНА (UI.tsx), то есть ровно там, где садится правый
+  // край TaskDetailPanel — без этого условия кнопка «+» плавала бы поверх
+  // текста задачи.
+  const hideFAB =
+    hideNav || fabReplacedByPill || fabHiddenOnOverview || showTaskPanel;
   const { data: currentUser } = useCurrentUser();
   useNotificationsSocket(!!currentUser);
+  // Островок ведёт себя как часть приложения, а не как функция экрана задачи:
+  // пока агент работает, прогресс висит в Dynamic Island сам, из любого
+  // раздела. Здесь же он и гаснет, когда работа кончилась.
+  useLiveActivitySync(!!currentUser);
+
+  // ── Pull-to-refresh (Максим 26.08.2026: «потянул — обновил», WS-инвали-
+  // дация иногда не долетает, приходилось выходить-заходить в раздел) ──
+  // Здесь, на общем скроллере Layout, а не по экранам: жест должен работать
+  // одинаково во всех разделах. Обновление — invalidate ВСЕХ активных
+  // React Query-запросов: у каждого экрана свои ключи (tasks, projects,
+  // notifications…), перечислять их здесь означало бы чинить этот список
+  // при каждом новом экране. refetchType: "active" — дёргаются только
+  // запросы, на которые сейчас реально смотрит экран.
+  const qc = useQueryClient();
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const pull = usePullToRefresh(
+    scrollerRef,
+    () => qc.invalidateQueries({ refetchType: "active" }),
+    isMobile, // на десктопе жеста «потянуть» нет — там мышь и live-WS
+  );
+  // Свайп «назад» — только на вложенных экранах: из корневого раздела
+  // уходить некуда, а жест там дрался бы с горизонтальными свайпами внутри
+  // контента (листание дней, свайп строки задачи).
+  //
+  // Условием раньше было hideNav («панель спрятана — значит вложенный
+  // экран»). 27.08.2026 панель показывается ВЕЗДЕ, hideNav стал константой
+  // false — и свайп молча выключился на всём приложении (владелец: «свайпы
+  // ты убрал»). Теперь условие спрашивает прямо то, что и имелось в виду:
+  // текущий путь — не корневая вкладка.
+  const navigate = useNavigate();
+  const isRootTab = NAV_ITEMS.some((item) => item.path === loc.pathname);
+  useSwipeBack(() => {
+    // Та же защита, что у стрелки в шапке (ScreenHeader): если экран открыт
+    // по прямой ссылке и истории за ним нет, шаг назад выкинул бы из
+    // приложения (в вебе — на пустую вкладку). Уходим в «Обзор».
+    if (window.history.length > 1) navigate(-1);
+    else navigate("/overview");
+  }, !isRootTab);
 
   /* ── Mobile: full-viewport, no frame ──
      2026-08-11: this used to be `min-h-[100dvh]` with NO nested overflow
@@ -184,36 +269,93 @@ export function Layout() {
   if (isMobile) {
     const isFan = MOBILE_NAV_STYLE === "fan";
     return (
-      <div className="h-[100dvh] overflow-hidden flex flex-col bg-bg">
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain">
+      <>
+        <div className="h-[100dvh] overflow-hidden flex flex-col bg-bg">
           <div
-            className={isFan ? undefined : "pb-content-safe"}
-            style={
-              isFan ? { paddingBottom: FAN_MENU_CONTENT_PADDING } : undefined
-            }
+            ref={scrollerRef}
+            className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain"
           >
-            <Outlet />
+            {/* ── Индикатор pull-to-refresh ──
+              Едет из-за верхней кромки вместе с пальцем (высота = pull),
+              стрелка по мере натяжения доворачивается на 180° и после
+              порога меняет цвет на акцент («отпускай»); после отпускания
+              стрелку сменяет системный спиннер. transition только когда
+              жеста нет (pull едет с пальцем 1:1, анимировать нечего) —
+              чтобы сворачивание после отпускания было плавным. */}
+            <div
+              aria-hidden={pull.pull === 0}
+              className="pointer-events-none sticky top-0 z-20 -mb-px flex items-end justify-center overflow-hidden"
+              style={{
+                height: pull.pull,
+                transition:
+                  pull.refreshing || pull.pull === 0
+                    ? "height 0.25s ease"
+                    : "none",
+              }}
+            >
+              <div className="pb-2">
+                {pull.refreshing ? (
+                  <div className="h-5 w-5 rounded-full border-2 border-stroke border-t-red animate-spin" />
+                ) : (
+                  <Icon
+                    name="arrowDown"
+                    size={18}
+                    className={pull.armed ? "text-red" : "text-dim"}
+                    style={{
+                      transform: pull.armed ? "rotate(180deg)" : "rotate(0deg)",
+                      transition: "transform 0.2s ease, color 0.2s ease",
+                    }}
+                  />
+                )}
+              </div>
+            </div>
+            {/* Контент за пальцем НЕ едет (26.08.2026). Сначала он ехал
+              через translateX — красиво, но шапка внутри прибита к экрану
+              (position:fixed), а fixed внутри элемента с transform
+              привязывается к ЭТОМУ элементу, а не к окну. Итог: заголовок
+              ездил вместе с контентом и мог остаться прижатым к краю —
+              Максим: «дневник название всё время елозит куда-то и к левому
+              краю прицеплено». Чинить это вычитанием сдвига в замере
+              шапки значило бы лечить симптом на каждом кадре жеста.
+              Ощущение жеста несёт сама смена экрана. */}
+            <div
+              className={isFan ? undefined : "pb-content-safe"}
+              style={
+                isFan ? { paddingBottom: FAN_MENU_CONTENT_PADDING } : undefined
+              }
+            >
+              <Outlet />
+            </div>
           </div>
+          {!hideNav && isFan && <FanMenu />}
+          {!hideNav && !isFan && <BottomNav />}
+          {/* Отдельной плавающей кнопки на мобильном больше нет: её действие
+            переехало в красный круг внутри самой панели (27.08.2026,
+            владелец: «кружочек этот красный вместо вот этих всяких плюсиков
+            левых наверху»). У веера своя кнопка, там FAB и не рисовался. */}
         </div>
-        {!hideNav && isFan && <FanMenu />}
-        {!hideNav && !isFan && <BottomNav />}
-        {!hideFAB && !isFan && <FAB dueToday={loc.pathname === "/today"} />}
-      </div>
+      </>
     );
   }
 
-  /* ── Desktop: sidebar + content, no phone frame ──
+  /* ── Desktop: sidebar + content(+panel), no phone frame ──
      Replaces the old "shrink the whole app into a 390×844 phone mockup and
      float it in the middle of the browser window" staging. Real desktop
-     layout instead: SideNav (UI.tsx) takes BottomNav's job — same four
-     destinations, same `hideNav` condition, just a column instead of a row
-     — and the content gets a `max-w`, not an edge-to-edge stretch: every
-     screen under this Layout (list rows, form fields, compact drill-down
-     headers) was built at 390px reference width, and letting rows go
-     arbitrarily wide on a 2000px monitor would spread icon/label/chevron
-     across mostly empty space, not show "more". 640px keeps it a single
-     narrow column — wider than the phone, nowhere near a multi-pane
-     dashboard, per the brief ("не делай навороченный десктопный дашборд").
+     layout: SideNav (UI.tsx) takes BottomNav's job — same four destinations,
+     same `hideNav` condition, just a column instead of a row.
+     Content width — REVISED 25.08.2026, owner: «это разве десктоп, надо как
+     все такие приложения сделать, а не мобильная версия с адаптацией» →
+     «сделай как Linear и Todoist, ты же знаешь как они выглядят». That
+     directly overturns the older brief quoted in git history here
+     ("не делай навороченный десктопный дашборд", which had capped this at a
+     narrow single 640px column) — 640px read as an enlarged phone screen
+     with a lot of dead margin either side, not an intentional desktop view.
+     Now: a wider list (880px) and, on genuinely wide desktops, a
+     TaskDetailPanel.tsx column that opens a task ALONGSIDE the list instead
+     of navigating away — Todoist/Linear's master-detail pattern. Below
+     `useDesktopPanelEligible`'s 1280px floor, or on mobile, a task click
+     stays a full navigation (useOpenTask.ts) — three fixed-width columns
+     (nav + list + panel) don't fit readably any narrower.
      Same definite-height / `min-*-0` / nested-scroll shape as the mobile
      branch above, just row-direction: the wrapper's `h-[100dvh]` is the
      definite size flex `stretch` (the default for row-direction children)
@@ -221,19 +363,38 @@ export function Layout() {
      contains scroll; `min-w-0` is this row's version of the mobile branch's
      `min-h-0` — a flex item's automatic minimum size is its content size on
      the *main* axis unless told otherwise, and here the main axis is width.
+     `max-w-[880px] mx-auto` is a ceiling, not a fixed width: when the panel
+     is open, this column already sits in a narrower flex-1 slot (nav 240 +
+     panel 460 eaten out of the viewport first), so it simply fills that —
+     no separate "panel open" width variant needed.
      No `transform` needed for FAB's `position: fixed` (unlike the old phone
      frame, which needed one as a containing-block trick): this shell already
      *is* the full viewport, so plain `fixed` already lands where it should. */
   return (
-    <div className="h-[100dvh] overflow-hidden flex bg-bg">
-      {!hideNav && <SideNav />}
-      <div className="flex-1 min-w-0 h-full overflow-y-auto overflow-x-hidden overscroll-y-contain">
-        <div className="max-w-[640px] mx-auto pb-bottom-safe">
-          <Outlet />
+    <>
+      <div className="h-[100dvh] overflow-hidden flex bg-bg">
+        {!hideNav && <SideNav />}
+        <div className="flex-1 min-w-0 h-full overflow-y-auto overflow-x-hidden overscroll-y-contain">
+          <div className="max-w-[880px] mx-auto pb-bottom-safe">
+            <Outlet />
+          </div>
         </div>
+        {showTaskPanel && overlayTaskId && (
+          <TaskDetailPanel location={realLoc} />
+        )}
+        {!hideFAB && (
+          <FAB
+            dueToday={loc.pathname === "/today"}
+            onLongPress={
+              loc.pathname === "/projects"
+                ? () => navigate("/projects?create=1")
+                : loc.pathname === "/notes"
+                  ? () => navigate("/notes?create=1")
+                  : undefined
+            }
+          />
+        )}
       </div>
-      {!hideFAB && <FAB dueToday={loc.pathname === "/today"} />}
-      <Panel />
-    </div>
+    </>
   );
 }

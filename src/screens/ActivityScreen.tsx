@@ -30,7 +30,6 @@ import {
   ScreenHeader,
   ErrorBanner,
   Loading,
-  BackButton,
   SheetHandle,
 } from "../components/UI";
 import { Card, FieldRow } from "../components/TaskFields";
@@ -521,7 +520,6 @@ function ActivityFilterSheet({
 // ═══════════ SCREEN ═══════════
 
 export function ActivityScreen() {
-  const navigate = useNavigate();
   const { data: allTasks = [], isLoading, error } = useTasks();
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -676,11 +674,8 @@ export function ActivityScreen() {
     });
   }, [allTasks, filters]);
 
-  const activeFilterCount =
-    (filters.projectId ? 1 : 0) +
-    (filters.labelId ? 1 : 0) +
-    (filters.assigneeKey ? 1 : 0) +
-    (filters.period !== "week" ? 1 : 0);
+  // Счётчик активных фильтров больше не нужен: индикатор с кнопки убран
+  // (26.08.2026). Шторка сама показывает, что выбрано.
 
   const periodWord =
     filters.period === "week"
@@ -700,19 +695,21 @@ export function ActivityScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Активность"
         actions={
+          /* Кнопка фильтра — ровно та же, что на остальных экранах
+             (TaskFilterButton): иконка-воронка 44×44, без подписи и без
+             своей плашки. Раньше здесь была пилюля bg-card2 со словом
+             «Фильтры» и иконкой списка — единственная такая в приложении
+             (Максим 26.08.2026: «в активностях фильтры не как воронка, как
+             везде, а какое-то слово»). Красной точки-индикатора нет ни
+             здесь, ни на других экранах — по его же просьбе. */
           <button
             onClick={() => setSheetOpen(true)}
-            className="tap-scale h-11 pl-3 pr-3.5 rounded-full bg-card2 flex items-center gap-1.5 text-[13px] text-text"
-            aria-label="Открыть фильтры"
+            aria-label="Фильтры"
+            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
           >
-            <Icon name="list" size={15} className="text-sub" />
-            Фильтры
-            {activeFilterCount > 0 && (
-              <span className="w-[6px] h-[6px] rounded-full bg-red" />
-            )}
+            <Icon name="filter" size={18} />
           </button>
         }
       />

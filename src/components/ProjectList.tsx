@@ -24,7 +24,8 @@ import { useNavigate } from "react-router-dom";
 import {
   DndContext,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   useSensor,
   useSensors,
@@ -85,8 +86,15 @@ function ProjectGroup({ projects }: { projects: ApiProject[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects]);
 
+  // Тащат всю строку (грип-хендл убран, Максим 26.08.2026): мышь — от
+  // 4px движения, палец — удержание 200мс (тап открывает проект, движение
+  // сразу — скролл страницы). Та же пара сенсоров, что на доске и в
+  // DayHours.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 8 },
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     }),
@@ -165,7 +173,6 @@ function ProjectRow({
     attributes,
     listeners,
     setNodeRef,
-    setActivatorNodeRef,
     transform,
     transition,
   } = useSortable({ id: project.id });
@@ -175,26 +182,33 @@ function ProjectRow({
   return (
     <div
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`flex items-stretch gap-0.5 bg-card rounded-xl ${isDragging ? "opacity-40" : ""}`}
+      // scale — в самом inline-transform: у sortable-строки transform уже
+      // занят переносом (translate), класс с transform:scale был бы им
+      // перебит. drag-lift здесь даёт только тень и пружину.
+      style={{
+        transform: isDragging
+          ? `${CSS.Transform.toString(transform) ?? ""} scale(1.04)`
+          : CSS.Transform.toString(transform),
+        transition,
+      }}
+      // drag-lift при захвате — здесь нет DragOverlay (строка едет на
+      // своём месте), поэтому подъём вешается прямо на неё.
+      className={`flex items-stretch gap-0.5 bg-card rounded-xl ${isDragging ? "drag-lift relative z-10" : ""}`}
     >
-      {/* Drag начинается ТОЛЬКО с ручки — клик по остальной строке должен
-          продолжать открывать проект (см. тот же приём в TaskBoard.tsx,
-          BoardCard). stopPropagation гасит синтетический click, который
-          отпускание после драга оставляет за собой. */}
-      <div
-        ref={setActivatorNodeRef}
-        {...attributes}
-        {...listeners}
-        onClick={(e) => e.stopPropagation()}
-        className="touch-none shrink-0 flex items-center justify-center pl-2 pr-1 text-dim active:text-sub"
-        aria-label="Перетащить проект"
-      >
-        <Icon name="grip" size={14} />
-      </div>
+      {/* Грип-хендл убран (Максим 26.08.2026) — drag начинается удержанием
+          прямо на строке (TouchSensor delay 200мс / MouseSensor distance
+          4px, см. sensors выше). Слушатели — на основной кнопке, НЕ на
+          обёртке: удержание на кнопке «Ещё» должно открывать меню, а не
+          таскать строку. Синтетический click после драга гасит useTapGuard.
+          touchAction: manipulation — палец на строке всё ещё может начать
+          прокрутку страницы. select-none/WebkitTouchCallout — чтобы
+          удержание не выделяло текст и не поднимало системное меню. */}
       <button
         {...tap}
-        className="flex-1 min-w-0 flex items-center gap-3 py-2.5 pr-1 text-left min-h-[44px]"
+        {...attributes}
+        {...listeners}
+        style={{ touchAction: "manipulation", WebkitTouchCallout: "none" }}
+        className="flex-1 min-w-0 flex items-center gap-3 py-2.5 pl-3 pr-1 text-left min-h-[44px] select-none"
       >
         <Icon name="hash" size={18} style={{ color: project.color }} />
         {!!project.pinned && (

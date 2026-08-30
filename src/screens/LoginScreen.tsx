@@ -48,10 +48,12 @@ export function LoginScreen() {
           token = await tryLanLogin();
         }
         if (token) {
-          navigate("/inbox", { replace: true });
+          navigate("/overview", { replace: true });
           return;
         } else {
-          setBioError("Введите логин и пароль один раз для привязки устройства");
+          setBioError(
+            "Введите логин и пароль один раз для привязки устройства",
+          );
         }
       }
     } catch {
@@ -67,15 +69,15 @@ export function LoginScreen() {
     await login.mutateAsync({ email: email.trim(), password });
     // Включаем биометрию на устройстве после успешного входа
     Biometrics.setEnabled(true);
-    navigate("/inbox", { replace: true });
+    navigate("/overview", { replace: true });
   });
 
   const isFaceId = bioInfo.biometryType === "faceId";
   const bioTitle = isFaceId
     ? "Войти с Face ID"
     : bioInfo.biometryType === "touchId"
-    ? "Войти с Touch ID"
-    : "Войти по биометрии";
+      ? "Войти с Touch ID"
+      : "Войти по биометрии";
 
   return (
     <div className="pb-bottom-safe px-5 flex flex-col min-h-[100dvh]">
@@ -101,7 +103,16 @@ export function LoginScreen() {
             >
               <div className="w-7 h-7 rounded-xl bg-coral/10 text-coral flex items-center justify-center">
                 {isFaceId ? (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M7 3H5a2 2 0 0 0-2 2v2" />
                     <path d="M17 3h2a2 2 0 0 1 2 2v2" />
                     <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
@@ -118,12 +129,16 @@ export function LoginScreen() {
             </button>
 
             {bioError && (
-              <div className="text-xs text-coral mt-2 text-center">{bioError}</div>
+              <div className="text-xs text-coral mt-2 text-center">
+                {bioError}
+              </div>
             )}
 
             <div className="relative flex py-4 items-center">
               <div className="flex-grow border-t border-stroke/40"></div>
-              <span className="flex-shrink mx-4 text-xs text-dim">или по паролю</span>
+              <span className="flex-shrink mx-4 text-xs text-dim">
+                или по паролю
+              </span>
               <div className="flex-grow border-t border-stroke/40"></div>
             </div>
           </div>

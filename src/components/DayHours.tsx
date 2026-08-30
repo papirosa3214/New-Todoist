@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
+  DragOverlay,
   MouseSensor,
   TouchSensor,
   useDraggable,
@@ -11,7 +12,13 @@ import {
 } from "@dnd-kit/core";
 import type { ApiTask } from "../api/types";
 import { PRIORITIES } from "../lib/priority";
-import { hapticCross, hapticDrop, hapticGrab, hapticNotch } from "../lib/haptics";
+import {
+  hapticCross,
+  hapticDrop,
+  hapticGrab,
+  hapticNotch,
+} from "../lib/haptics";
+import { useTapGuard } from "../lib/useTapGuard";
 import { Icon, findScrollContainer } from "./UI";
 
 // ═══════════ Календарная развёртка по часам — 1 или 3 дня ═══════════
@@ -224,10 +231,16 @@ function UntimedRow({
   const showFlag = !!task.priority && task.priority <= 3;
   const subtasks = task.subtasks ?? [];
   const doneSubtasks = subtasks.filter((s) => s.done).length;
+  // Клик — только настоящий тап: после завершённого drag браузер шлёт
+  // синтетический click, и без гарда каждое перетаскивание заканчивалось
+  // бы открытием задачи (тот же приём, что у карточек доски).
+  const tap = useTapGuard(onClick);
   return (
     <div
       ref={setNodeRef}
-      onClick={onClick}
+      {...attributes}
+      {...listeners}
+      {...tap}
       className={`flex w-full select-none items-center gap-2 pl-3 text-left active:bg-white/[0.04] ${
         first ? "" : "border-t border-stroke"
       } ${isDragging ? "opacity-30" : ""}`}
@@ -239,6 +252,14 @@ function UntimedRow({
         // уже поверх этого. select-none в классе гасит выделение,
         // WebkitTouchCallout — само меню (у Tailwind свойства для него
         // нет).
+        //
+        // Ручка-грип убрана (Максим 26.08.2026: «зажал и подтащил», точки
+        // убрать везде) — слушатели drag теперь на всей строке. Скролл
+        // пула это не ломает: сенсор общий на весь экран (см. sensors),
+        // палец с движением сразу — прокрутка, удержание 200мс — захват.
+        // touchAction: manipulation, не none — иначе строка перестала бы
+        // пролистываться вовсе.
+        touchAction: "manipulation",
         WebkitTouchCallout: "none",
       }}
     >
@@ -263,38 +284,15 @@ function UntimedRow({
         </span>
       )}
       <span
-        className={`min-w-0 flex-1 truncate py-1.5 text-[13px] ${
+        className={`min-w-0 flex-1 truncate py-1.5 pr-3 text-[13px] ${
           task.status === "completed" ? "text-sub line-through" : "text-text"
         }`}
       >
         {task.title}
       </span>
-      {/* Тащат ТОЛЬКО за эту ручку, а не за всю строку — иначе пул нельзя
-          пролистать. Проверено 19.08.2026: медленный жест по строке (а
-          именно так тянутся к нижним пунктам короткого списка) не успевает
-          выйти за допуск 8px и через 200мс превращается в перетаскивание —
-          список стоит на месте, а задача улетает на шкалу. Ручка
-          конфликта не создаёт: тап по ней ничего другого не значит, и
-          именно это она всё время и обещала видом (иконка была здесь и
-          раньше, но ничего не делала).
-          Рецепт тот же, что у карточек доски (TaskBoard): выделенная
-          ручка — единственное место, где жест однозначен.
-          py-3 и увеличенная ширина — палец должен попадать по ней
-          уверенно, иконка 14px сама по себе слишком мелкая цель. */}
-      <span
-        {...attributes}
-        {...listeners}
-        // Клик по ручке не должен открывать задачу: она не для этого.
-        onClick={(e) => e.stopPropagation()}
-        aria-label="Перетащить на шкалу"
-        className="flex shrink-0 cursor-grab items-center justify-center self-stretch px-4 text-dim active:text-sub"
-        // manipulation, а не none: даже начатый с ручки быстрый свайп
-        // должен листать пул, а не пропадать впустую. Тащит по-прежнему
-        // удержание — сенсор один на весь экран (см. sensors).
-        style={{ touchAction: "manipulation", WebkitTouchCallout: "none" }}
-      >
-        <Icon name="grip" size={14} />
-      </span>
+      {/* Ручка-грип убрана (26.08.2026) — тащат всю строку удержанием,
+          см. комментарий у style выше. pr-3 на названии возвращает правый
+          отступ, который раньше давал px-4 ручки. */}
     </div>
   );
 }
@@ -354,7 +352,7 @@ function TimedBlock({
       {...(draggable ? attributes : null)}
       {...(draggable ? listeners : null)}
       onClick={onClick}
-      className="absolute flex select-none items-center gap-1.5 overflow-hidden rounded-[6px] px-2 text-left"
+      className="absolute flex select-none flex-col items-stretch justify-start gap-y-0 overflow-hidden rounded-[6px] px-2 py-1 text-left"
       style={{
         top,
         height,
@@ -365,7 +363,18 @@ function TimedBlock({
         // прокручивает день прямо с плашки, а тащит её по удержанию.
         touchAction: draggable ? "manipulation" : undefined,
         WebkitTouchCallout: draggable ? "none" : undefined,
-        opacity: hidden ? 0 : isDragging ? 0.35 : done ? 0.5 : 1,
+        // Раньше здесь был opacity:hidden?0:isDragging?0.35:done?0.5:1 —
+        // от него задача «моргала тык-тык» (Максим 26.08.2026):
+        // полупрозрачная плашка рисовалась НА СТАРОМ МЕСТЕ каждый кадр,
+        // пока сверху ехал свой DragGhost. Два слоя перерисовывались
+        // на каждый mousemove, и при смене веток условий (hidden ↔
+        // isDragging) плашка дёргалась в прозрачности. С DragOverlay
+        // от dnd-kit (см. <DragOverlay> ниже) плашка-источник не нужна
+        // совсем: прячем её visibility:hidden, а над сеткой едет ОДИН
+        // нативный overlay-элемент из body, через CSS-translate3d, без
+        // React-рендера на каждом пикселе.
+        visibility: hidden || isDragging ? "hidden" : "visible",
+        opacity: done ? 0.5 : 1,
         // Конец не задан — низ плашки размыт, чтобы он не читался как
         // «задача точно кончится здесь».
         ...(durKnown
@@ -377,15 +386,22 @@ function TimedBlock({
             }),
       }}
     >
-      <Icon
-        name="circle"
-        size={9}
-        className="shrink-0 opacity-70"
-        style={{ color: CHIP_INK }}
-      />
+      {/* Кружок-маркер убран (Максим 26.08.2026): неактивный декор, ничего
+          не делает, а место в узкой плашке отнимает. */}
       <span
-        style={{ color: CHIP_INK }}
-        className={`min-w-0 flex-1 truncate text-[12px] font-medium ${
+        style={{
+          color: CHIP_INK,
+          // Сколько строк влезет в плашку: высота минус вертикальные
+          // паддинги (py-1 = 4+4=8), делим на высоту строки 16px.
+          // Получаем 1 строку для 24px (минимальная плашка), 2 для 40px,
+          // 3 для 56px и т.д. — текст заполняет плашку переносами, а не
+          // висит одной строкой по центру. Огромные описания всё равно
+          // обрезаются, чтобы не вылезать за пределы (Максим
+          // 26.08.2026: «почему нельзя эту задачу, текст в эту плашку
+          // прям с переносами всю запихать»).
+          WebkitLineClamp: Math.max(1, Math.floor((height - 8) / 16)),
+        }}
+        className={`min-w-0 flex-1 whitespace-pre-wrap break-words text-[12px] leading-[16px] font-medium [display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden ${
           done ? "line-through opacity-70" : ""
         }`}
       >
@@ -409,49 +425,6 @@ function TimedBlock({
  *  Отдельным слоем поверх сетки (pointer-events: none), а не подменой
  *  самой плашки: задачу тащат и из пула, где плашки в сетке ещё нет вовсе,
  *  и обе дороги должны выглядеть одинаково. */
-function DragGhost({
-  task,
-  color,
-  top,
-  height,
-}: {
-  task: ApiTask;
-  color: string;
-  top: number;
-  height: number;
-}) {
-  return (
-    <div
-      className="pointer-events-none absolute left-0 z-20 flex select-none items-center gap-1.5 overflow-hidden rounded-[6px] px-2"
-      style={{
-        top,
-        height,
-        width: `calc(100% - ${RIGHT_INSET}px)`,
-        backgroundColor: color,
-        // Приподнятость: тень и чуть увеличенный масштаб — плашка «взята в
-        // руку» и идёт над сеткой, а не лежит в ней. Origin слева, чтобы
-        // рост не выехал за границу колонки.
-        boxShadow: "0 10px 24px rgba(0,0,0,0.5)",
-        transform: "scale(1.015)",
-        transformOrigin: "left center",
-      }}
-    >
-      <Icon
-        name="circle"
-        size={9}
-        className="shrink-0 opacity-70"
-        style={{ color: CHIP_INK }}
-      />
-      <span
-        style={{ color: CHIP_INK }}
-        className="min-w-0 flex-1 truncate text-[12px] font-medium"
-      >
-        {task.title}
-      </span>
-    </div>
-  );
-}
-
 /** Один интервал времени задачи — вход для раскладки по колонкам. */
 interface TimedItem {
   task: ApiTask;
@@ -640,12 +613,22 @@ export function DayHours({
   }, [overscan]);
   const [dragging, setDragging] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  // После отпускания плашка-источник должна оставаться скрытой, пока
+  // React не отрендерит сетку с новыми days (оптимистичный апдейт
+  // сделал таск на новом месте). Без этого на одну отрисовку она
+  // видна на СТАРОМ месте и на долю секунды «моргает». Сам dragging
+  // к этому моменту уже null — React-плашка-источник видна потому,
+  // что hidden={b.task.id === dragging || b.task.id === justDropped}. Держим id скрытой плашки в
+  // отдельном state, который сбрасывается через 200мс setTimeout.
+  const [justDropped, setJustDropped] = useState<string | null>(null);
+  const justDroppedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   // Какая из колонок дня сейчас под пальцем — только у 3-дневного вида
   // это не всегда 0. Отдельный стейт, а не часть preview: preview — это
   // только время (Y), колонка — это X, они меняются по разным осям и
   // разной частоте (короткий вертикальный доводок внутри своего дня не
   // должен пересчитывать горизонталь).
-  const [dragCol, setDragCol] = useState<number | null>(null);
 
   // Мышь и палец — РАЗНЫМИ сенсорами, и это осознанное отступление от
   // рецепта соседнего файла (TaskBoard: «PointerSensor одного хватает»).
@@ -704,22 +687,18 @@ export function DayHours({
   // длительности задачи, а у той, что ещё лежит в пуле, длительности нет:
   // берём те же 15 минут, которые проставит onSchedule при отпускании
   // (TodayScreen), чтобы призрак был ровно размером с будущую плашку.
-  const ghost = useMemo(() => {
-    if (!dragging || !preview || dragCol == null) return null;
-    // Задача-источник может лежать в ЛЮБОЙ из колонок (уже размещённая на
-    // своём дне) или в общем пуле без времени — id уникален по всем days,
-    // flatMap ищет её независимо от того, где она была до перетаскивания.
-    const task = days.flatMap((d) => d.tasks).find((t) => t.id === dragging);
-    if (!task) return null;
-    const [h, m] = preview.split(":").map(Number);
-    const dur = task.duration_min ?? SNAP_MIN;
-    return {
-      task,
-      colIndex: dragCol,
-      top: (h + m / 60) * HOUR_H + 1,
-      height: Math.max(MIN_H, (dur / 60) * HOUR_H - 3),
-    };
-  }, [dragging, preview, dragCol, days]);
+  // Snapshot тащимой задачи в REF, а не в state. Ref обновляется
+  // СИНХРОННО в onDragStart, до того как dnd-kit смонтирует overlay —
+  // первый кадр overlay сразу получает актуальные данные задачи и не
+  // «моргает» предыдущим значением (Максим 26.08.2026: «сначала там
+  // моргнёт, потом там появится»). В state `dragging` держим только id —
+  // нужно для ре-рендера сетки (плашка-источник должна спрятаться).
+  const ghostRef = useRef<{
+    task: ApiTask;
+    height: number;
+    width: number;
+    colIndex: number;
+  } | null>(null);
 
   // Прокрутка к текущему часу при открытии — иначе экран открывается на
   // полночь, а человек смотрит день в середине дня. 120px запаса сверху,
@@ -886,13 +865,16 @@ export function DayHours({
   // для этого мало — состояние сбрасывается в handleDragEnd, а click от
   // браузера приходит уже после него.
   const dragEndedAtRef = useRef(0);
+
   // Ячейка под пальцем на прошлом кадре — «колонка:время». Виброотклик
   // положен на ПЕРЕСЕЧЕНИЕ границы, а не на движение: onDragMove приходит
   // каждый кадр, а шаг сетки — SNAP_MIN, и между двумя соседними кадрами
   // время чаще всего то же самое.
   const lastCellRef = useRef<string | null>(null);
 
-  function cellKeyOf(pos: { top: number; colIndex: number } | null): string | null {
+  function cellKeyOf(
+    pos: { top: number; colIndex: number } | null,
+  ): string | null {
     if (!pos || pos.top < -HOUR_H) return null;
     return `${pos.colIndex}:${timeFromOffset(pos.top)}`;
   }
@@ -904,6 +886,30 @@ export function DayHours({
 
   function handleDragStart(e: DragStartEvent) {
     const id = String(e.active.id);
+    const task = days.flatMap((d) => d.tasks).find((t) => t.id === id);
+    if (!task) return; // источника нет — анимации не будет
+    const startH = hoursFromTime(task.start_time);
+    const dur = task.duration_min ?? SNAP_MIN;
+    // Заполняем ghostRef СИНХРОННО, до setDragging — иначе overlay при
+    // первом монтировании возьмёт старый snapshot (предыдущая задача или
+    // null) и мигнёт чужим цветом/высотой. Это и было «сначала там
+    // моргнёт, потом там появится».
+    // Ширину overlay берём из РЕАЛЬНОЙ колонки сетки, а не из calc на
+    // 100% (родитель overlay — body, у него ширина viewport, и в 3-дневном
+    // виде плашка растягивается на всю ширину, в 1-дневном — нормально
+    // своя колонка). Это «плоская узкая, потом расширяется» при
+    // переключении layout посреди drag (Максим 26.08.2026).
+    const gridRect = gridRef.current?.getBoundingClientRect();
+    const colCount = Math.max(1, days.length);
+    const colW = gridRect
+      ? (gridRect.width - GUTTER_W) / colCount - RIGHT_INSET
+      : 0;
+    ghostRef.current = {
+      task,
+      height: Math.max(MIN_H, (dur / 60) * HOUR_H - 3),
+      width: colW,
+      colIndex: 0,
+    };
     setDragging(id);
     // Плашка оторвалась от сетки — это и есть момент «взял».
     hapticGrab();
@@ -922,9 +928,6 @@ export function DayHours({
     // Верх плашки и так однозначно считается из start_time, зависеть тут
     // от внутренностей библиотеки незачем. Ищем по ВСЕМ дням (20.08.2026)
     // — задача-источник может лежать в любой из трёх колонок, id уникален.
-    const startH = hoursFromTime(
-      days.flatMap((d) => d.tasks).find((t) => t.id === id)?.start_time,
-    );
     const offsetInBlock =
       startH !== null && grid && pt
         ? pt.y - (grid.getBoundingClientRect().top + startH * HOUR_H + 1)
@@ -942,7 +945,7 @@ export function DayHours({
     const pos = positionOf(zeroDelta);
     if (pos) {
       setPreview(pos.top < -HOUR_H ? null : timeFromOffset(pos.top));
-      setDragCol(pos.top < -HOUR_H ? null : pos.colIndex);
+      if (ghostRef.current) ghostRef.current.colIndex = pos.colIndex;
     }
     lastCellRef.current = cellKeyOf(pos);
   }
@@ -1003,9 +1006,19 @@ export function DayHours({
   }
 
   function handleDragEnd(e: DragEndEvent) {
+    // Очищаем overlay СИНХРОННО, до setDragging(null) — иначе React
+    // успеет отрисовать один кадр, где dragging уже null, а ghost ещё
+    // показывается.
+    ghostRef.current = null;
+    const id = String(e.active.id);
+    setJustDropped(id);
+    if (justDroppedTimerRef.current) clearTimeout(justDroppedTimerRef.current);
+    justDroppedTimerRef.current = setTimeout(() => {
+      setJustDropped(null);
+      justDroppedTimerRef.current = null;
+    }, 250);
     setDragging(null);
     setPreview(null);
-    setDragCol(null);
     lastCellRef.current = null;
     dragEndedAtRef.current = Date.now();
     if (!onSchedule) return;
@@ -1021,26 +1034,40 @@ export function DayHours({
     onSchedule(String(e.active.id), date, timeFromOffset(pos.top));
   }
 
+  // Таймер justDropped должен быть отменён при размонтировании, иначе
+  // setState после анмаунта и утечка. Других постоянных эффектов тут
+  // не нужно — всё остальное либо в useEffect ниже по дереву (фон
+  // сетки), либо чисто рефы.
+  useEffect(() => {
+    return () => {
+      if (justDroppedTimerRef.current) {
+        clearTimeout(justDroppedTimerRef.current);
+        justDroppedTimerRef.current = null;
+      }
+    };
+  }, []);
+
   function handleDragMove(e: {
     activatorEvent: Event;
     delta: { x: number; y: number };
   }) {
     const pos = positionOf(e);
     if (!pos) return;
-    setPreview(pos.top < -HOUR_H ? null : timeFromOffset(pos.top));
-    setDragCol(pos.top < -HOUR_H ? null : pos.colIndex);
+    // Раньше setPreview/setDragCol вызывались на КАЖДЫЙ mousemove — на
+    // 120 Hz экране это 120 React-рендеров сетки в секунду, и каждый
+    // перерисовывал все плашки-кандидаты на скрытие (hidden), потому что
+    // hidden зависел от ghost.colIndex, который зависел от dragCol. Отсюда
+    // «моргание тык-тык» (Максим 26.08.2026). Теперь состояние поднимаем
+    // только при реальной смене ячейки — то же условие, что для хаптика.
     const cell = cellKeyOf(pos);
     if (cell !== lastCellRef.current) {
+      setPreview(pos.top < -HOUR_H ? null : timeFromOffset(pos.top));
+      // colIndex едет СИНХРОННО — overlay позиционируется через CSS-translate
+      // от центра, и на первом кадре после смены колонки ref уже новый.
+      if (ghostRef.current) ghostRef.current.colIndex = pos.colIndex;
       const prev = lastCellRef.current;
       lastCellRef.current = cell;
-      // Уход ВЫШЕ сетки (cell === null) — не пересечение ячеек, а выход из
-      // поля целиком; щёлкать там нечему.
       if (cell) {
-        // Шкала времени прощупывается: каждые SNAP_MIN — мелкая засечка,
-        // ровный час — крупная (владелец 20.08.2026: «как будто бы засечки
-        // временные прощупывались»). Смена КОЛОНКИ дня тоже считается
-        // крупной: это переход на другой день, событие того же веса, что
-        // час, а не четверть часа.
         const colChanged =
           prev !== null && prev.split(":")[0] !== cell.split(":")[0];
         if (hourNotch(cell) || colChanged) hapticNotch();
@@ -1057,11 +1084,56 @@ export function DayHours({
       onDragEnd={handleDragEnd}
       onDragCancel={() => {
         setDragging(null);
-        setPreview(null);
-        setDragCol(null);
+        ghostRef.current = null;
         lastCellRef.current = null;
       }}
     >
+      {/* Нативный DragOverlay от dnd-kit (портал в body): едет за пальцем
+          через CSS-translate3d, без React-рендеров на каждом mousemove.
+          Это и есть «перейти на нативные вещи» (Максим 26.08.2026) —
+          библиотека сама перерисовывает ОДИН overlay-элемент, пока
+          приложение ничего не делает. Самописный <DragGhost> внутри
+          сетки убран: он вызывал перерисовку ВСЕЙ колонки при смене
+          ghost.colIndex, а это уже второй слой перерисовки поверх
+          полупрозрачной плашки-источника — отсюда и моргание «тык-тык». */}
+      <DragOverlay dropAnimation={null}>
+        {dragging && ghostRef.current ? (
+          // Overlay едет за пальцем через CSS-translate3d. Чтобы плашка
+          // сразу была нужной высоты (а не схлопывалась до высоты текста и
+          // потом раздувалась на следующем рендере — «уменьшается до
+          // минимума, а потом увеличивается», Максим 26.08.2026),
+          // высота и флаг лежат в REF, не в state. На первом же кадре
+          // монтирования overlay уже знает свою геометрию.
+          <div
+            className="pointer-events-none flex select-none flex-col items-stretch justify-start gap-y-0 overflow-hidden rounded-[6px] px-2 py-1"
+            style={{
+              width: ghostRef.current.width || undefined,
+              height: ghostRef.current.height,
+              backgroundColor: projectColor(ghostRef.current.task),
+              boxShadow: "0 10px 24px rgba(0,0,0,0.5)",
+              transform: "scale(1.015)",
+              transformOrigin: "left center",
+            }}
+          >
+            <span
+              style={{
+                color: CHIP_INK,
+                // Считаем число строк так же, как у TimedBlock, чтобы
+                // призрак не «схлопывался до текста и потом раздувался»
+                // (Максим 26.08.2026): на длинной задаче призрак уже
+                // нужной высоты и текста хватает.
+                WebkitLineClamp: Math.max(
+                  1,
+                  Math.floor((ghostRef.current.height - 8) / 16),
+                ),
+              }}
+              className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[12px] leading-[16px] font-medium [display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden"
+            >
+              {ghostRef.current.task.title}
+            </span>
+          </div>
+        ) : null}
+      </DragOverlay>
       <div className="mt-2 flex flex-col gap-3">
         {/* Задачи со сроком на сегодня, но без времени — ПРИКЛЕЕННЫМ пулом
             наверху, под шапкой (владелец 19.08.2026: «они просто должны
@@ -1139,7 +1211,10 @@ export function DayHours({
               {/* Левая колонка — только подписи часов, без линии под
                   ними: у Apple часовая линия начинается ровно на границе
                   первой колонки дня, а не под цифрами. */}
-              <div className="relative shrink-0 select-none" style={{ width: GUTTER_W }}>
+              <div
+                className="relative shrink-0 select-none"
+                style={{ width: GUTTER_W }}
+              >
                 {labelHours.map((h) => (
                   <span
                     key={h}
@@ -1161,6 +1236,9 @@ export function DayHours({
 
               {/* Область колонок: перехватывает свайп влево/вправо без сдвига сетки часов */}
               <div
+                // Горизонтальное листание дней — свой жест, свайп «назад»
+                // сюда не лезет (см. useSwipeBack, data-hswipe).
+                data-hswipe
                 className="relative flex flex-1 min-w-0"
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
@@ -1170,7 +1248,7 @@ export function DayHours({
                 }}
                 style={{ touchAction: "pan-y" }}
               >
-                {columns.map(({ day, blocks }, colIndex) => (
+                {columns.map(({ day, blocks }) => (
                   <div
                     key={day.date}
                     data-day-col={day.date}
@@ -1187,21 +1265,18 @@ export function DayHours({
                         width={b.width}
                         durKnown={b.durKnown}
                         draggable={interactive}
-                        hidden={!!ghost && ghost.task.id === b.task.id}
+                        hidden={
+                          b.task.id === dragging || b.task.id === justDropped
+                        }
                         onClick={() =>
                           !clickAfterDrag() && onTaskClick(b.task.id)
                         }
                       />
                     ))}
 
-                    {interactive && ghost && ghost.colIndex === colIndex && (
-                      <DragGhost
-                        task={ghost.task}
-                        color={projectColor(ghost.task)}
-                        top={ghost.top}
-                        height={ghost.height}
-                      />
-                    )}
+                    {/* Самописный DragGhost убран (26.08.2026) — едет в
+                        нативном <DragOverlay> выше; тот живёт в body и
+                        не трогает сетку. */}
                   </div>
                 ))}
               </div>

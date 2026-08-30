@@ -20,6 +20,9 @@ export interface ServerStatus {
   db_bytes: number | null;
   /** active | inactive | failed | unknown — служба будильника. */
   trigger: string | null;
+  ollama_online?: boolean;
+  ollama_model?: string;
+  server_ip?: string;
 }
 
 export function useServerStatus() {

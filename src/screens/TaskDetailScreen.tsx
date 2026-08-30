@@ -5,6 +5,7 @@
 // «точно такой же интерфейс должен открываться при редактировании» —
 // переиспользуем форму создания вместо отдельного подменю).
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { TaskRow } from "../components/TaskRow";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTask, useUpdateTask, useDeleteTask } from "../api/tasks";
@@ -20,7 +21,6 @@ import {
   ScreenHeader,
   ErrorBanner,
   Loading,
-  BackButton,
 } from "../components/UI";
 import { PRIORITIES } from "../components/TaskFields";
 import {
@@ -42,7 +42,11 @@ import { TemplateStore } from "../lib/templates";
 import { AttachmentView } from "../components/AttachmentView";
 import type { ApiAttachment } from "../api/types";
 import { SubtaskFeed } from "../components/SubtaskFeed";
-import { syncTaskToLiveActivity, stopTaskLiveActivity } from "../lib/liveActivity";
+import {
+  setManualIslandTask,
+  stopTaskLiveActivity,
+  syncTaskToLiveActivity,
+} from "../lib/liveActivity";
 import { hapticDrop } from "../lib/haptics";
 
 export function TaskDetailScreen() {
@@ -74,6 +78,7 @@ export function TaskDetailScreen() {
   const uploadAttachment = useUploadAttachment(id || "");
   const deleteAttachment = useDeleteAttachment();
   const [pending, setPending] = useState<ApiAttachment[]>([]);
+  const [activeTab, setActiveTab] = useState<"details" | "team">("details");
 
   // Микрофон в ленте — та же плавающая кнопка над клавиатурой, что и в
   // форме задачи (MicKeyboardBar), а не отдельный значок внутри поля:
@@ -147,6 +152,10 @@ export function TaskDetailScreen() {
       // Only the creator may delete (server enforces this with a 404, same
       // as "not found", so an assignee-only task shows this rather than a
       // 403).
+      // Задачи не станет — снимаем и карточку из островка, и пометку
+      // «эту вывели руками», иначе автозапуск будет считать, что владелец
+      // всё ещё смотрит на удалённую задачу.
+      setManualIslandTask(null);
       await stopTaskLiveActivity(task.id);
       await deleteTask.mutateAsync(task.id);
       navigate(-1);
@@ -219,6 +228,13 @@ export function TaskDetailScreen() {
   };
 
   const [templateToast, setTemplateToast] = useState(false);
+  // Раньше здесь был флаг: тост «выведено в Dynamic Island» загорался всегда,
+  // потому что вызов не дожидались, а его ошибку глушили. Полгода функция была
+  // мертва (плагин не зарегистрирован), а приложение рапортовало успехом.
+  // Теперь тост несёт настоящий итог.
+  const [liveActivityToast, setLiveActivityToast] = useState<
+    { ok: boolean; text: string } | null
+  >(null);
 
   const handleSaveAsTemplate = () => {
     if (!task) return;
@@ -263,29 +279,55 @@ export function TaskDetailScreen() {
   const priority = PRIORITIES.find((p) => p.key === task.priority);
   const taskProject = projects.find((p) => p.id === task.project_id);
   const showPriorityFlag = !!task.priority && task.priority <= 3;
-  const showHeaderCheckbox = true;
+  // Квадратик завершения убран из шапки карточки (Максим, 24.08.2026) — тем
+  // же решением, что раньше вычистило чекбоксы из списка и с доски: задачу он
+  // закрывает кнопками внизу, а квадратик только съедал место слева и тянул
+  // заголовок вправо. handleToggleStatus остаётся: им пользуются кнопки.
 
   return (
     <div className="px-4 pb-[calc(1rem+var(--kb-inset,0px))]">
       {dialog}
       {templateToast && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border border-teal/40 rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 text-sm text-teal">
-          <Icon name="check" size={16} />
-          <span>Задача сохранена в шаблоны!</span>
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border border-stroke rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 text-sm text-text">
+          <Icon name="check" size={16} className="text-sub" />
+          <span>Задача сохранена в шаблоны</span>
+        </div>
+      )}
+      {liveActivityToast && (
+        <div
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 text-sm max-w-[calc(100vw-2rem)] ${
+            liveActivityToast.ok
+              ? "border-blue-500/40 text-blue-400"
+              : "border-red-500/40 text-red-400"
+          }`}
+        >
+          <Icon name={liveActivityToast.ok ? "activity" : "info"} size={16} />
+          <span>{liveActivityToast.text}</span>
         </div>
       )}
       <ScreenHeader
         variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
         title=""
         actions={
           <div className="flex items-center gap-1">
             <button
-              onClick={() => {
-                if (task) {
-                  syncTaskToLiveActivity(task);
-                  hapticDrop();
-                }
+              onClick={async () => {
+                if (!task) return;
+                hapticDrop();
+                // force: кнопка выводит в островок любую задачу, даже когда
+                // работа по ней ещё не идёт. Сам собой он загорается только
+                // на задачах в работе — см. syncTaskToLiveActivity.
+                // Карточек теперь до трёх, и эта не вытесняет работу агентов,
+                // а встаёт в тройку первой: раскладку пересобирает
+                // useLiveActivitySync, он же погасит лишнее сверх трёх.
+                setManualIslandTask(task.id);
+                const res = await syncTaskToLiveActivity(task, { force: true });
+                setLiveActivityToast(
+                  res.ok
+                    ? { ok: true, text: "Задача выведена в Dynamic Island" }
+                    : { ok: false, text: res.reason },
+                );
+                setTimeout(() => setLiveActivityToast(null), 3000);
               }}
               className="tap-scale w-[40px] h-[44px] flex items-center justify-center text-dim active:text-blue"
               aria-label="Вывести в Dynamic Island"
@@ -338,16 +380,6 @@ export function TaskDetailScreen() {
 
       {/* Priority ring + Title */}
       <div className="flex items-start gap-3 mb-4">
-        {showHeaderCheckbox && (
-          <button
-            onClick={handleToggleStatus}
-            className="relative z-10 mt-1 w-[18px] h-[18px] rounded-md border-2 border-dim shrink-0 flex items-center justify-center tap-scale before:absolute before:left-1/2 before:top-1/2 before:h-11 before:w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-['']"
-          >
-            {task.status === "completed" && (
-              <Icon name="check" size={12} className="text-white" />
-            )}
-          </button>
-        )}
         <h1
           className={`text-[20px] font-semibold flex-1 ${task.status === "completed" ? "line-through text-sub" : ""}`}
         >
@@ -471,9 +503,34 @@ export function TaskDetailScreen() {
         </div>
       )}
 
-      {/* Subtasks — quick toggle only; add/rename/delete happens in the
-          edit form (see the "Изменить" button below). */}
-      {task.subtasks.length > 0 && (
+      {/* Tabs navigation — only needed if BOTH subtasks and child tasks exist */}
+      {task.subtasks.length > 0 && task.children && task.children.length > 0 && (
+        <div className="flex gap-4 border-b border-sub/20 mb-4 px-1">
+          <button
+            className={`pb-2 text-[14px] font-medium transition-colors border-b-2 ${
+              activeTab === "details"
+                ? "border-red text-text"
+                : "border-transparent text-sub hover:text-text"
+            }`}
+            onClick={() => setActiveTab("details")}
+          >
+            Чек-лист ({task.subtasks.length})
+          </button>
+          <button
+            className={`pb-2 text-[14px] font-medium transition-colors border-b-2 ${
+              activeTab === "team"
+                ? "border-red text-text"
+                : "border-transparent text-sub hover:text-text"
+            }`}
+            onClick={() => setActiveTab("team")}
+          >
+            Команда ({task.children.length})
+          </button>
+        </div>
+      )}
+
+      {/* Subtasks checklist */}
+      {task.subtasks.length > 0 && (!task.children?.length || activeTab === "details") && (
         <>
           <SubtaskFeed
             subtasks={task.subtasks}
@@ -481,12 +538,6 @@ export function TaskDetailScreen() {
             onToggle={(st) =>
               updateSubtask.mutateAsync({ id: st.id, done: !st.done })
             }
-            // Возврат — комментарий с вложениями идёт в общую ленту задачи
-            // (18.08.2026, прямая просьба: «фото, что не нравится»), не
-            // только в result подзадачи — только у comments/attachments
-            // есть файлы, у result всегда был просто текст. result всё
-            // равно пишется тем же текстом (без файла) — то, что видно при
-            // раскрытии шага без похода в общую ленту.
             onReturn={async (st, comment, attachmentIds) => {
               await subtaskWork.mutateAsync({
                 id: st.id,
@@ -498,31 +549,6 @@ export function TaskDetailScreen() {
                 attachmentIds,
               });
             }}
-            // Ответ на блокировку — комментарий в общую ленту И снятие
-            // блокировки (state: null → «ждёт», та же семантика, что у
-            // «Вернуть в ожидание» на уровне задачи). Раньше (18.08.2026,
-            // прямая просьба) state сознательно не трогали — «агент сам
-            // разблокирует, когда сможет продолжить». Владелец 20.08.2026
-            // на практике: «статус не меняется... это ни на что не
-            // влияет» — кругляшок остаётся заблокированным навсегда, если
-            // агент не заходит сам снять его явно, а с точки зрения
-            // владельца это выглядит как форма, которая никуда не ведёт.
-            // Прежнее решение не ошибка — просто не пережило столкновения
-            // с реальным использованием, отменено тем же владельцем.
-            //
-            // ⚠️ Порядок вызовов (state ПЕРЕД comment, не после) — не
-            // косметика. addComment шлёт WS notification:new немедленно;
-            // будильник (trigger.py) читает task/subtask сразу по этому
-            // событию и решает, браться ли за задачу. Живой инцидент
-            // 20.08.2026: при обратном порядке (comment первым) будильник
-            // успевал прочитать ЕЩЁ старое (blocked) состояние подзадачи —
-            // до того как второй запрос (subtaskWork null) вообще долетал —
-            // и решал «заблокирована, не берусь». Второго уведомления на
-            // само снятие блокировки нет, так что решение не пересматривалось
-            // никогда: комментарий уходил, а задача так и висела «висит».
-            // Тот же порядок уже был верным в TaskJournal.tsx (красная
-            // кнопка задачи, строки ~199-200) — именно поэтому там эта
-            // гонка не проявлялась.
             onComment={async (st, comment, attachmentIds) => {
               await subtaskWork.mutateAsync({ id: st.id, state: null });
               await addComment.mutateAsync({
@@ -535,13 +561,6 @@ export function TaskDetailScreen() {
               return res.attachment;
             }}
           />
-          {/* Ответ на заблокированный/возвращаемый шаг (onComment/onReturn
-              выше) шлёт addComment/subtaskWork, а не updateSubtask — без
-              них баннер молчал именно там, где отправка реально падает.
-              Единственный другой ErrorBanner на addComment.error стоит НИЖЕ
-              всей ленты комментариев, за пределами экрана в момент, когда
-              форма подзадачи только что закрылась (владелец 20.08.2026,
-              подзадача под «упёрлась»: «не могу там ответить»). */}
           <ErrorBanner
             error={updateSubtask.error || addComment.error || subtaskWork.error}
             fallback="Не удалось обновить подзадачу"
@@ -549,6 +568,22 @@ export function TaskDetailScreen() {
             className="-mt-2 mb-4"
           />
         </>
+      )}
+
+      {/* Children tasks / Delegated tasks */}
+      {task.children && task.children.length > 0 && (!task.subtasks.length || activeTab === "team") && (
+        <div className="mb-4 space-y-1">
+          <div className="text-[11px] text-sub font-medium px-1 mb-2">
+            Дочерние задачи ({task.children.length})
+          </div>
+          {task.children.map((child: any) => (
+            <TaskRow
+              key={child.id}
+              task={child}
+              onClick={() => navigate(`/task/${child.id}`)}
+            />
+          ))}
+        </div>
       )}
 
       {/* «Изменить» — единственный путь в форму редактирования, поэтому
@@ -585,13 +620,11 @@ export function TaskDetailScreen() {
       </div>
 
       {/* Лента — комментарии и журнал задачи в одном хронологическом
-          потоке (AGENT-PROTOCOL.md, "Журнал задачи"): комментарии
-          полноценными карточками, системные записи — приглушённой
-          компактной строкой, чтобы живой текст не тонул среди служебных
-          отметок. См. src/components/TaskJournal.tsx. */}
+          потоке (AGENT-PROTOCOL.md, "Журнал задачи"): поле ввода
+          комментариев перенесено в начало секции перед списком записей,
+          чтобы можно было оставлять комментарии без прокрутки всей ленты. */}
       <div>
         <h3 className="text-[13px] text-sub font-semibold mb-2 px-1">Лента</h3>
-        <TaskFeed task={task} />
         <ErrorBanner
           error={addComment.error}
           fallback="Не удалось отправить комментарий"
@@ -636,7 +669,7 @@ export function TaskDetailScreen() {
         />
         <form
           onSubmit={handleSubmitComment}
-          className="flex items-center gap-2"
+          className="flex items-center gap-2 mb-3"
         >
           {/* Скрепка слева от поля — размер тот же 40×40, что у кнопки
               отправки справа, чтобы строка ввода не перекосилась. */}
@@ -670,16 +703,10 @@ export function TaskDetailScreen() {
             // interactive-widget=resizes-content, на который это
             // поведение обычно опирается, в WebKit не реализован — см.
             // useVisualViewportInset.ts) — не полагаемся только на него,
-            // добиваем явным скроллом. block:"end" — это поле последнее
-            // в ленте, его естественное место при открытой клавиатуре —
-            // у самого низа видимой области. На десктопе (клавиатуры нет)
-            // это не более чем обычный скролл контейнера к уже почти
-            // видимому полю — если оно и так внизу, scrollIntoView
-            // фактически не двигает содержимое (проверено скриншотами,
-            // см. отчёт).
+            // добиваем явным скроллом.
             onFocus={() => {
               setCommentFocused(true);
-              commentInputRef.current?.scrollIntoView({ block: "end" });
+              commentInputRef.current?.scrollIntoView({ block: "nearest" });
             }}
             // Кнопка микрофона живёт в портале над клавиатурой и фокус не
             // крадёт (MicKeyboardBar гасит mousedown), но blur всё равно
@@ -703,11 +730,12 @@ export function TaskDetailScreen() {
               addComment.isPending
             }
             // Та же добивка зоны до 44×44, что у скрепки слева.
-            className="relative w-[40px] h-[40px] rounded-xl bg-red flex items-center justify-center shrink-0 disabled:opacity-50 tap-scale before:absolute before:-inset-[2px] before:content-['']"
+            className="relative w-[40px] h-[40px] rounded-xl bg-red flex items-center justify-center shrink-0 disabled:opacity-50 disabled:cursor-not-allowed tap-scale before:absolute before:-inset-[2px] before:content-['']"
           >
             <Icon name="chevron" size={16} className="text-white -rotate-90" />
           </button>
         </form>
+        <TaskFeed task={task} />
       </div>
       {/* Микрофон — та же плавающая кнопка над клавиатурой, что в форме
           задачи. Появляется, пока курсор в поле комментария; надиктованный

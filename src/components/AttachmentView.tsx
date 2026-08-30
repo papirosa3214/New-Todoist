@@ -14,6 +14,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { Icon } from "./UI";
+import { AttachmentViewerSheet, canPreview } from "./AttachmentViewerSheet";
 import type { ApiAttachment } from "../api/types";
 
 // Килобайты/мегабайты — человеку, а не 1048576. Экспортируется: тем же
@@ -31,6 +32,7 @@ function isImage(mime: string): boolean {
 export function AttachmentView({ attachment }: { attachment: ApiAttachment }) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [viewing, setViewing] = useState(false);
 
   useEffect(() => {
     // Заранее грузим только картинки — их надо показать. Документ незачем
@@ -120,19 +122,49 @@ export function AttachmentView({ attachment }: { attachment: ApiAttachment }) {
     );
   }
 
+  // Документ: по строке — посмотреть, если файл вообще можно показать;
+  // скачивание вынесено отдельной кнопкой. Раньше строка только скачивала,
+  // и прочитать приложенный отчёт с телефона было нечем — ради этого
+  // подзадача и заведена (владелец, 26.08.2026).
+  const previewable = canPreview(attachment);
   return (
-    <button
-      type="button"
-      onClick={download}
-      className="mt-2 w-full flex items-center gap-2 px-3 h-11 rounded-xl bg-card2 text-left"
-    >
-      <Icon name="paperclip" size={16} className="text-sub shrink-0" />
-      <span className="flex-1 min-w-0 truncate text-[13px] text-text">
-        {attachment.file_name}
-      </span>
-      <span className="text-[12px] text-dim shrink-0">
-        {formatSize(attachment.size)}
-      </span>
-    </button>
+    <>
+      <div className="mt-2 w-full flex items-center gap-1 rounded-xl bg-card2">
+        <button
+          type="button"
+          onClick={() => (previewable ? setViewing(true) : download())}
+          className="flex-1 min-w-0 flex items-center gap-2 pl-3 h-11 text-left"
+          aria-label={
+            previewable
+              ? `Посмотреть ${attachment.file_name}`
+              : `Скачать ${attachment.file_name}`
+          }
+        >
+          <Icon name="paperclip" size={16} className="text-sub shrink-0" />
+          <span className="flex-1 min-w-0 truncate text-[13px] text-text">
+            {attachment.file_name}
+          </span>
+          <span className="text-[12px] text-dim shrink-0">
+            {formatSize(attachment.size)}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={download}
+          aria-label={`Скачать ${attachment.file_name}`}
+          className="tap-scale w-11 h-11 flex items-center justify-center shrink-0"
+        >
+          <Icon name="arrowDown" size={16} className="text-sub" />
+        </button>
+      </div>
+      {previewable && (
+        <AttachmentViewerSheet
+          attachment={attachment}
+          open={viewing}
+          onClose={() => setViewing(false)}
+          onDownload={download}
+        />
+      )}
+    </>
   );
 }

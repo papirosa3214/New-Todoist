@@ -5,7 +5,11 @@ import type { ApiNotification } from "./types";
 // Canonical implementation now lives in ../lib/date.ts (shared by
 // comments/activity too, not just notifications) — re-exported here so
 // existing `from "../api/notifications"` imports keep working unchanged.
-export { parseServerDate, formatRelativeTime } from "../lib/date";
+export {
+  parseServerDate,
+  formatRelativeTime,
+  formatAbsoluteTime,
+} from "../lib/date";
 
 export function useNotifications() {
   return useQuery({

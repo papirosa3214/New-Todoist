@@ -1,4 +1,16 @@
-import type { ApiTask, ApiUser } from "../api/types";
+import type { ApiTask, ApiUser, Role } from "../api/types";
+
+/**
+ * Подпись роли на плашке рядом с именем — в списке агентов и в выборе
+ * исполнителя. Раньше в трёх местах стоял один и тот же тернарник
+ * «владелец или агент»; с появлением оркестратора (28.08.2026) вариантов
+ * стало три, и место у них теперь одно.
+ */
+export function roleLabel(role: Role | undefined): string {
+  if (role === "owner") return "Владелец";
+  if (role === "orchestrator") return "Оркестратор";
+  return "Агент";
+}
 
 /**
  * Задача назначена агенту (ИИ-исполнителю), а не человеку — по фактическому

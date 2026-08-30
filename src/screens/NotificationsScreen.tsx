@@ -6,6 +6,7 @@ import {
   useMarkNotificationRead,
   useDeleteNotification,
   formatRelativeTime,
+  formatAbsoluteTime,
 } from "../api/notifications";
 import {
   Icon,
@@ -13,7 +14,6 @@ import {
   ScreenHeader,
   ErrorBanner,
   Loading,
-  BackButton,
 } from "../components/UI";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 
@@ -68,7 +68,7 @@ function NotificationRow({ n }: { n: ApiNotification }) {
             <div className="text-[13px] text-sub mt-0.5">{n.task_title}</div>
           )}
           <div className="text-[12px] text-dim mt-0.5">
-            {formatRelativeTime(n.created_at)}
+            {formatRelativeTime(n.created_at)} · {formatAbsoluteTime(n.created_at)}
           </div>
         </button>
         <ErrorBanner
@@ -101,7 +101,6 @@ function NotificationRow({ n }: { n: ApiNotification }) {
 }
 
 export function NotificationsScreen() {
-  const navigate = useNavigate();
   const {
     data: notifications = [],
     isLoading,
@@ -118,7 +117,6 @@ export function NotificationsScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Уведомления"
         actions={
           <button

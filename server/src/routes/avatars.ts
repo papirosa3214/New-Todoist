@@ -39,6 +39,22 @@ function mimeAllowed(mime: string): boolean {
   return ALLOWED_MIME.some((re) => re.test(mime));
 }
 
+// Три состояния «живой» аватарки агента (27.08.2026): дефолт (простаивает)
+// + необязательные варианты на agent_state='in_progress'/'blocked' — какую
+// колонку читать/писать решает ?variant= в запросе. Явный список вместо
+// произвольной строки в SQL — единственная защита от инъекции имени
+// колонки, раз колонка выбирается динамически.
+const VARIANT_COLUMN: Record<string, string> = {
+  working: "avatar_url_working",
+  blocked: "avatar_url_blocked",
+};
+
+function avatarColumn(variant: unknown): string {
+  return typeof variant === "string" && VARIANT_COLUMN[variant]
+    ? VARIANT_COLUMN[variant]
+    : "avatar_url";
+}
+
 // Своя аватарка, аватарка агента, которого сам завёл (created_by), или
 // системного бота (is_system_bot=1 — общий для всех, та же логика, что и
 // в GET /api/agents, projects.ts:190). Не «владелец = любой залогиненный»:
@@ -56,7 +72,7 @@ function canManageAvatar(actorId: string, targetId: string): boolean {
 export function registerAvatarRoutes(app: FastifyInstance) {
   fs.mkdirSync(AVATAR_DIR, { recursive: true });
 
-  app.post<{ Params: { id: string } }>(
+  app.post<{ Params: { id: string }; Querystring: { variant?: string } }>(
     "/api/users/:id/avatar",
     { preHandler: authOrApiToken },
     async (req: any, reply) => {
@@ -83,17 +99,18 @@ export function registerAvatarRoutes(app: FastifyInstance) {
           .send({ error: `изображение в этом формате не принимаем: ${mime}` });
       }
 
+      const column = avatarColumn(req.query?.variant);
       const ext = mime === "image/svg+xml" ? ".svg" : `.${mime.split("/")[1]}`;
       const storedName = `${uid()}${ext}`;
 
-      // Старый файл, если был, убираем — иначе на диске копится мусор при
-      // каждой смене аватарки без единого способа его найти (avatar_url в
-      // базе уже перезаписан на новый).
+      // Старый файл этого же варианта, если был, убираем — иначе на диске
+      // копится мусор при каждой смене без единого способа его найти
+      // (колонка в базе уже перезаписана на новый путь).
       const prev = db
-        .prepare("SELECT avatar_url FROM users WHERE id = ?")
-        .get(req.params.id) as { avatar_url: string | null } | undefined;
-      if (prev?.avatar_url) {
-        const prevName = path.basename(prev.avatar_url);
+        .prepare(`SELECT ${column} AS url FROM users WHERE id = ?`)
+        .get(req.params.id) as { url: string | null } | undefined;
+      if (prev?.url) {
+        const prevName = path.basename(prev.url);
         const prevFull = path.join(AVATAR_DIR, prevName);
         try {
           if (fs.existsSync(prevFull)) fs.unlinkSync(prevFull);
@@ -104,7 +121,7 @@ export function registerAvatarRoutes(app: FastifyInstance) {
 
       fs.writeFileSync(path.join(AVATAR_DIR, storedName), body);
       const avatarUrl = `/api/avatars/${storedName}`;
-      db.prepare("UPDATE users SET avatar_url = ? WHERE id = ?").run(
+      db.prepare(`UPDATE users SET ${column} = ? WHERE id = ?`).run(
         avatarUrl,
         req.params.id,
       );
@@ -113,25 +130,26 @@ export function registerAvatarRoutes(app: FastifyInstance) {
     },
   );
 
-  app.delete<{ Params: { id: string } }>(
+  app.delete<{ Params: { id: string }; Querystring: { variant?: string } }>(
     "/api/users/:id/avatar",
     { preHandler: authOrApiToken },
     async (req: any, reply) => {
       if (!canManageAvatar(req.userId, req.params.id)) {
         return reply.code(404).send({ error: "Not found" });
       }
+      const column = avatarColumn(req.query?.variant);
       const row = db
-        .prepare("SELECT avatar_url FROM users WHERE id = ?")
-        .get(req.params.id) as { avatar_url: string | null } | undefined;
-      if (row?.avatar_url) {
-        const full = path.join(AVATAR_DIR, path.basename(row.avatar_url));
+        .prepare(`SELECT ${column} AS url FROM users WHERE id = ?`)
+        .get(req.params.id) as { url: string | null } | undefined;
+      if (row?.url) {
+        const full = path.join(AVATAR_DIR, path.basename(row.url));
         try {
           if (fs.existsSync(full)) fs.unlinkSync(full);
         } catch {
           // см. выше — не критично
         }
       }
-      db.prepare("UPDATE users SET avatar_url = NULL WHERE id = ?").run(
+      db.prepare(`UPDATE users SET ${column} = NULL WHERE id = ?`).run(
         req.params.id,
       );
       return { ok: true };

@@ -1,0 +1,14 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "https://localhost:5180",
+      "localStorage": [
+        {
+          "name": "taskflow_token",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjNjZWIzOWQyLTYwYTYtNDE2OS1hYzFkLTAxMjY5MTEwN2Q0YSIsImlhdCI6MTc4Njk5NzExMiwiZXhwIjoxNzg5NTg5MTEyfQ.-6J8-ayt1nCtUIOeAIoFv4jIdjU4JPdYY0R93vBOO0w"
+        }
+      ]
+    }
+  ]
+}

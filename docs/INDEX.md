@@ -21,7 +21,8 @@
 2. [**AGENTS-SETUP-GUIDE.md**](AGENTS-SETUP-GUIDE.md) — **руководство по подключению и настройке AI-агентов от А до Я** (создание, токены, MCP для IDE, автономный будильник, аватарки).
 3. [**AGENT-PROTOCOL.md**](../AGENT-PROTOCOL.md) — строгие правила работы AI-агентов с доской, аренда задач, ведение подзадач, предотвращение дедлоков.
 4. [**AGENT-API.md**](../AGENT-API.md) — спецификация REST API и MCP-инструментов для внешних исполнителей.
-5. [**server/scripts/TRIGGER.md**](../server/scripts/TRIGGER.md) — документация службы-будильника (`trigger.py`), WebSocket-подключения, сухого прогона.
+5. [**AGENT-MODELS.md**](AGENT-MODELS.md) — **какая модель достаётся исполнителю при автономном заходе**: метки на карточке, что настроено у каждого агента, подменный `DSH_HOME` у DeepSeek Harness, проверка маршрута.
+6. [**server/scripts/TRIGGER.md**](../server/scripts/TRIGGER.md) — документация службы-будильника (`trigger.py`), WebSocket-подключения, сухого прогона.
 
 ---
 

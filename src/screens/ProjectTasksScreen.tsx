@@ -6,13 +6,9 @@ import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
-import {
-  ScreenHeader,
-  ErrorBanner,
-  Loading,
-  BackButton,
-} from "../components/UI";
+import { ScreenHeader, ErrorBanner, Loading, Icon } from "../components/UI";
 import { TaskRow } from "../components/TaskRow";
+import { ProjectNotes } from "../components/ProjectNotes";
 
 export function ProjectTasksScreen() {
   const { id } = useParams<{ id: string }>();
@@ -61,7 +57,6 @@ export function ProjectTasksScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
         title={
           project ? (
             <span className="inline-flex max-w-[62vw] items-center gap-2">
@@ -73,6 +68,24 @@ export function ProjectTasksScreen() {
             </span>
           ) : (
             "Проект"
+          )
+        }
+        actions={
+          // Не было способа завести задачу прямо в проекте — на «дрилл-даун»
+          // экранах FAB намеренно не показывается (Layout.tsx), но здесь
+          // взамен него не появилось вообще ничего (в отличие от «Сегодня»/
+          // «Входящих», где роль FAB играет пилюля под колонкой). Максим
+          // 27.08.2026: «проваливаюсь в проект, а кнопки создать нет».
+          // ?project= уже понимает TaskFormScreen — просто не было, кому на
+          // него сослаться.
+          project && (
+            <button
+              onClick={() => navigate(`/task/new?project=${project.id}`)}
+              aria-label="Новая задача"
+              className="w-[44px] h-[44px] flex items-center justify-center tap-row"
+            >
+              <Icon name="plus" size={20} className="text-red" />
+            </button>
           )
         }
       />
@@ -124,9 +137,19 @@ export function ProjectTasksScreen() {
             onTogglePin={() =>
               updateTask.mutate({ id: task.id, pinned: !task.pinned })
             }
+            // Название проекта на каждой строке избыточно — владелец и так
+            // внутри этого проекта (Максим 27.08.2026). На «Сегодня» бейдж
+            // остаётся: там задачи из разных проектов вперемешку.
+            showProjectBadge={false}
           />
         ))}
       </div>
+
+      {/* Документация проекта — папка заметок (26.08.2026, выбор Максима:
+          «если есть какой-то проект, я бы мог прям прикрепить папку
+          заметки и туда по этому проекту всю документацию скидывать»).
+          Под задачами, а не над: задачи — то, ради чего экран открывают. */}
+      {project && <ProjectNotes project={project} />}
     </div>
   );
 }

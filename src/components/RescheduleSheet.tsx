@@ -190,6 +190,9 @@ export function RescheduleSheet({
 
   return (
     <div
+      // Свайп «назад» не должен уводить экран из-под шторки
+      // (useSwipeBack ищет этот атрибут).
+      data-overlay
       className="fixed inset-0 z-50 flex flex-col justify-end"
       onClick={onClose}
     >

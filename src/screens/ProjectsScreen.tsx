@@ -1,13 +1,14 @@
-import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   useProjects,
   useCreateProject,
   useUpdateProject,
   useDeleteProject,
 } from "../api/projects";
-import { Icon, ScreenHeader, ErrorBanner, Loading, BackButton } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { useDialog } from "../components/Dialog";
+import { useRowSwipe, ROW_ACTION_W } from "../lib/useRowSwipe";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { taskWord } from "../lib/pluralize";
 import { PROJECT_COLORS } from "../lib/projectColors";
@@ -29,6 +30,8 @@ function ProjectRow({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(project.name);
   const [color, setColor] = useState(project.color);
+  // Слева «Удалить», справа «Изменить» — как в строке задачи.
+  const swipe = useRowSwipe(true, true);
 
   const startEdit = () => {
     setName(project.name);
@@ -102,55 +105,116 @@ function ProjectRow({
   }
 
   return (
-    <div className="w-full flex items-center bg-card rounded-xl mb-[2px]">
-      {/* Отклики по той же системе, что на экране-близнеце «Метки»
+    // Свайп вместо двух иконок в строке (26.08.2026, Максим: «раз проекты
+    // сразу открываются списком, то вот это „изменить, удалить“, которые
+    // иконки стоят, имеет смысл точно так же обозначить свайпами, которые
+    // у нас уже есть»). Направления те же, что у строки задачи: вправо —
+    // удалить (красное), влево — изменить (синее).
+    //
+    // data-hswipe исключает строку из свайпа «назад», который ловится по
+    // всему экрану (useSwipeBack).
+    <div
+      data-hswipe
+      className="relative overflow-hidden rounded-xl mb-[2px]"
+      onPointerDown={swipe.onPointerDown}
+    >
+      {/* Удалить — слева, открывается свайпом вправо */}
+      <button
+        onClick={() => {
+          swipe.close();
+          onRequestDelete(project);
+        }}
+        aria-label="Удалить проект"
+        className="absolute inset-y-0 left-0 flex flex-col items-center justify-center gap-0.5 text-white"
+        style={{ width: ROW_ACTION_W, background: "#FF3B30" }}
+      >
+        <Icon name="trash" size={18} />
+        <span className="text-[11px] font-medium">Удалить</span>
+      </button>
+      {/* Изменить — справа, открывается свайпом влево */}
+      <button
+        onClick={() => {
+          swipe.close();
+          startEdit();
+        }}
+        aria-label="Переименовать проект"
+        className="absolute inset-y-0 right-0 flex flex-col items-center justify-center gap-0.5 text-white"
+        style={{ width: ROW_ACTION_W, background: "#007AFF" }}
+      >
+        <Icon name="edit" size={18} />
+        <span className="text-[11px] font-medium">Изменить</span>
+      </button>
+
+      <div
+        className="relative w-full flex items-center bg-card rounded-xl"
+        style={{
+          transform: `translateX(${swipe.x}px)`,
+          transition: swipe.animate
+            ? "transform 0.25s cubic-bezier(0.32,0.72,0,1)"
+            : "none",
+        }}
+      >
+        {/* Отклики по той же системе, что на экране-близнеце «Метки»
           (LabelsScreen): tap-row строкам и иконкам, tap-fade — красной
           кнопке подтверждения. Без них ни один контрол этого экрана
           нажимался без видимой реакции: глобальный
           -webkit-tap-highlight-color: transparent снял системную подсветку,
           а замены не дали. rounded-l-xl — чтобы заливка отклика не
           квадратила левый скруглённый угол карточки строки. */}
-      <button
-        onClick={() => navigate(`/projects/${project.id}`)}
-        className="tap-row rounded-l-xl flex-1 min-w-0 flex items-center gap-3 py-3 pl-4 pr-1 text-left"
-      >
-        <div
-          className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
-          style={{ backgroundColor: project.color + "20" }}
+        <button
+          onClick={() => navigate(`/projects/${project.id}`)}
+          className="tap-row rounded-xl flex-1 min-w-0 flex items-center gap-3 py-3 pl-4 pr-4 text-left"
         >
-          <Icon name="hash" size={16} style={{ color: project.color }} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-[15px] text-text truncate">{project.name}</div>
-          <div className="text-[12px] text-sub">{project.task_count} задач</div>
-        </div>
-      </button>
-      <button
-        onClick={startEdit}
-        aria-label="Переименовать проект"
-        className="w-[44px] h-[44px] flex items-center justify-center shrink-0 text-dim tap-row"
-      >
-        <Icon name="edit" size={16} />
-      </button>
-      <button
-        onClick={() => onRequestDelete(project)}
-        aria-label="Удалить проект"
-        className="w-[44px] h-[44px] mr-1 flex items-center justify-center shrink-0 text-dim tap-row"
-      >
-        <Icon name="trash" size={16} />
-      </button>
+          <div
+            className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
+            style={{ backgroundColor: project.color + "20" }}
+          >
+            <Icon name="hash" size={16} style={{ color: project.color }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[15px] text-text truncate">{project.name}</div>
+            <div className="text-[12px] text-sub">
+              {project.task_count} задач
+            </div>
+          </div>
+        </button>
+      </div>
     </div>
   );
 }
 
 export function ProjectsScreen() {
-  const navigate = useNavigate();
   const { data: projects = [], isLoading, isError, error } = useProjects();
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
   const { confirm, dialog } = useDialog();
+  const [searchParams, setSearchParams] = useSearchParams();
 
+  // Ни кнопки в шапке, ни плашки внизу больше нет (27.08.2026, владелец:
+  // «зачем он нужен» / убрать плашку) — единственный вход теперь удержание
+  // главной кнопки (FanMenu.tsx / FAB.onLongPress), которое приходит сюда
+  // через ?create=1, тем же приёмом, что ?due=/?project= у TaskFormScreen.
+  //
+  // useEffect, НЕ ленивый useState(() => ...): удержание с ЭТОГО ЖЕ экрана
+  // не размонтирует компонент (маршрут тот же, меняется только query) —
+  // ленивый инициализатор в таком случае не перезапускается, и форма не
+  // открылась бы у того, кто уже стоит на «Проектах» (поймано вживую
+  // playwright'ом: URL сменился на ?create=1, форма — нет). Параметр сразу
+  // же убирается из адресной строки — иначе Cancel не отличить от
+  // «параметр всё ещё висит», и обновление страницы переоткрывало бы форму.
   const [showCreate, setShowCreate] = useState(false);
+  useEffect(() => {
+    if (searchParams.get("create") !== "1") return;
+    setShowCreate(true);
+    setSearchParams(
+      (prev) => {
+        prev.delete("create");
+        return prev;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setSearchParams меняется каждый рендер, а условие — только по значению самого параметра
+  }, [searchParams]);
   const [name, setName] = useState("");
   const [color, setColor] = useState(PROJECT_COLORS[0]);
   const [deleteError, setDeleteError] = useState<unknown>(null);
@@ -193,22 +257,7 @@ export function ProjectsScreen() {
   return (
     <div className="px-4 pb-4">
       {dialog}
-      <ScreenHeader
-        variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
-        title="Проекты"
-        actions={
-          <button
-            onClick={() => setShowCreate((v) => !v)}
-            aria-label={
-              showCreate ? "Отменить создание проекта" : "Новый проект"
-            }
-            className="w-[44px] h-[44px] flex items-center justify-center tap-row"
-          >
-            <Icon name={showCreate ? "x" : "plus"} size={18} />
-          </button>
-        }
-      />
+      <ScreenHeader variant="compact" title="Проекты" />
 
       {showCreate && (
         <form onSubmit={handleCreate} className="bg-card rounded-2xl p-4 mb-4">
@@ -240,13 +289,22 @@ export function ProjectsScreen() {
             variant="block"
             className="mb-3"
           />
-          <button
-            type="submit"
-            disabled={!name.trim() || createProject.isPending}
-            className="w-full h-12 bg-red rounded-xl text-[14px] font-semibold text-white disabled:opacity-50 tap-fade"
-          >
-            {createProject.isPending ? "Создаём…" : "Создать"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowCreate(false)}
+              className="flex-1 h-11 rounded-xl bg-card2 text-[14px] text-sub font-semibold tap-row"
+            >
+              Отмена
+            </button>
+            <button
+              type="submit"
+              disabled={!name.trim() || createProject.isPending}
+              className="flex-1 h-11 rounded-xl bg-red text-[14px] font-semibold text-white disabled:opacity-50 tap-fade"
+            >
+              {createProject.isPending ? "Создаём…" : "Создать"}
+            </button>
+          </div>
         </form>
       )}
 
@@ -271,19 +329,11 @@ export function ProjectsScreen() {
           <ProjectRow key={p.id} project={p} onRequestDelete={handleDelete} />
         ))}
         {!isLoading && !isError && projects.length === 0 && !showCreate && (
-          <p className="px-1 text-[13px] text-dim">Проектов пока нет</p>
+          <p className="px-1 text-[13px] text-dim">
+            Проектов пока нет — удержите кнопку внизу, чтобы создать
+          </p>
         )}
       </div>
-
-      {!showCreate && (
-        <button
-          onClick={() => setShowCreate(true)}
-          className="w-full flex items-center gap-3 py-3 px-4 mt-4 border border-dashed border-stroke rounded-xl tap-row"
-        >
-          <Icon name="plus" size={18} className="text-dim" />
-          <span className="text-[14px] text-sub">Создать проект</span>
-        </button>
-      )}
     </div>
   );
 }

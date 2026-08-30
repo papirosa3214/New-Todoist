@@ -76,6 +76,37 @@ export function useUpdateTask() {
   return useMutation({
     mutationFn: ({ id, ...body }: UpdateTaskInput) =>
       api.patch<{ task: ApiTask }>(`/api/tasks/${id}`, body),
+    // Оптимистичный апдейт (26.08.2026, Максим): при перетаскивании
+    // задачи в сетке часов DayHours плашка-источник прячется по `hidden`
+    // сразу, как только React видит `dragging=null` в новом рендере
+    // (т.е. после отпускания). До этого момента данные в кэше не
+    // переехали — задача на старом месте уже скрыта, на новом ещё
+    // не появилась, и пользователь видит пустое место, потом
+    // появляется задача. «Моргнул — потом появился».
+    //
+    // В onMutate ПАТЧИМ кэш ["tasks"] синхронно, до ответа сервера:
+    // задача сразу едет на новые due_date/start_time, и при следующем
+    // рендере сетка уже видит её на новом месте. onSuccess ниже всё
+    // равно делает invalidateQueries — там прилетит свежий ответ и
+    // перезапишет кэш, но пользователь этого уже не заметит.
+    onMutate: async ({ id, ...patch }) => {
+      await qc.cancelQueries({ queryKey: ["tasks"] });
+      const prev = qc.getQueryData<ApiTask[]>(["tasks"]);
+      if (prev) {
+        qc.setQueryData<ApiTask[]>(
+          ["tasks"],
+          prev.map((t) =>
+            t.id === id ? ({ ...t, ...patch } as ApiTask) : t,
+          ),
+        );
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      // Откат при ошибке сети/сервера — иначе плашка зависнет на
+      // оптимистичной позиции и будет расходиться с реальностью.
+      if (ctx?.prev) qc.setQueryData(["tasks"], ctx.prev);
+    },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["tasks"] });
       if (data?.task) {

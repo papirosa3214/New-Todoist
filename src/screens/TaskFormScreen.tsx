@@ -18,7 +18,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   DndContext,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   useSensor,
   useSensors,
@@ -41,10 +42,7 @@ import {
   useDeleteSubtask,
   useUpdateSubtask,
 } from "../api/subtasks";
-import {
-  useSuggestSubtasksForDraft,
-  useSuggestSubtasksForTask,
-} from "../api/ai";
+import { useStructureTaskWithAI } from "../api/ai";
 import {
   Icon,
   Avatar,
@@ -62,6 +60,7 @@ import {
   AddSubtaskRow,
 } from "../components/TaskFields";
 import { AttachmentsField } from "../components/AttachmentsField";
+import { AiBusyPill } from "../components/AiBusyPill";
 import { uploadAttachment } from "../api/attachments";
 import { useDialog } from "../components/Dialog";
 import { MicOverlay } from "../components/MicOverlay";
@@ -78,11 +77,14 @@ import { todayStr } from "../lib/date";
 import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import type { UpdateTaskInput } from "../api/tasks";
+import { roleLabel } from "../lib/taskOwner";
 
 // Тот же приём, что SortableBoardCard у TaskBoard.tsx: dnd-kit даёт
-// transform/transition/listeners, но реальная ручка — отдельный
-// sub-элемент внутри SubtaskRow (см. её комментарий), не вся строка,
-// иначе тап по названию (переименование) и драг спорили бы за один жест.
+// transform/transition/listeners — и с 26.08.2026 слушатели идут на ВСЮ
+// строку (грип-точки убраны, Максим: «зажал и подтащил»). Тап-против-драга
+// разводят сенсоры (TouchSensor delay 200мс / MouseSensor distance 4px,
+// см. subtaskSensors ниже), а поля ввода/кнопки внутри строки глушат
+// старт драга сами — см. SubtaskRow.
 function SortableSubtaskRow({
   id,
   title,
@@ -100,27 +102,33 @@ function SortableSubtaskRow({
     attributes,
     listeners,
     setNodeRef,
-    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
   } = useSortable({ id });
 
   const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
+    // scale — в inline-transform (класс drag-lift был бы перебит
+    // sortable-translate'ом): «подъём» строки при захвате, как на доске.
+    transform: isDragging
+      ? `${CSS.Transform.toString(transform) ?? ""} scale(1.04)`
+      : CSS.Transform.toString(transform),
     transition,
   };
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={isDragging ? "drag-lift relative z-10 rounded-xl bg-card" : ""}
+    >
       <SubtaskRow
         title={title}
         done={done}
         onRename={onRename}
         onDelete={onDelete}
-        dragHandleListeners={listeners}
-        dragHandleAttributes={attributes}
-        setDragHandleRef={setActivatorNodeRef}
+        dragListeners={listeners}
+        dragAttributes={attributes}
         isDragging={isDragging}
       />
     </div>
@@ -147,11 +155,8 @@ export function TaskFormScreen() {
   const createSubtask = useCreateSubtask(id || "");
   const updateSubtask = useUpdateSubtask();
   const deleteSubtask = useDeleteSubtask();
-  // Обе ветки вызываются безусловно (правило хуков) — какую из двух
-  // реально дёргать (и чьи isPending/error читать), решает isEdit ниже,
-  // тем же паттерном, что createTask/updateTask выше.
-  const suggestForTask = useSuggestSubtasksForTask(id || "");
-  const suggestForDraft = useSuggestSubtasksForDraft();
+  const structureTaskWithAI = useStructureTaskWithAI();
+  const [isStructuring, setIsStructuring] = useState(false);
 
   const { alert, dialog } = useDialog();
 
@@ -213,8 +218,14 @@ export function TaskFormScreen() {
   // Над какой подзадачей палец висел на прошлом событии — виброотклик
   // должен приходиться на пересечение границы строки, не на каждый кадр.
   const lastSubtaskOverRef = useRef<string | null>(null);
+  // Тащат всю строку подзадачи (грип убран, 26.08.2026): мышь — от 4px,
+  // палец — удержание 200мс; тап по названию по-прежнему открывает
+  // переименование, движение сразу — скролл формы.
   const subtaskSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 8 },
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     }),
@@ -258,20 +269,7 @@ export function TaskFormScreen() {
       persistingSubtaskOrder.current = false;
     }
   }
-  // Предложение локальной модели, ждущее подтверждения владельцем —
-  // ничего в нём не сохранено, пока он не нажал «Добавить выбранные».
-  // Второй клик по «Разбить» полностью заменяет этот список, а не
-  // добавляет к нему.
-  const [suggestions, setSuggestions] = useState<
-    { text: string; checked: boolean }[] | null
-  >(null);
-  // Источник последнего разбора подзадач — тот же смысл, что voiceSource
-  // выше (18.08.2026, «как понять, что реально работает через Apple
-  // Intelligence»).
-  const [suggestSource, setSuggestSource] = useState<
-    "device" | "server" | null
-  >(null);
-  const [confirmingSuggestions, setConfirmingSuggestions] = useState(false);
+
   // Owner 2026-08-10: a new task must start with NO due date (Todoist-style
   // — undated tasks land in Inbox, "Сегодня" only shows what was actually
   // put there). Edit mode overwrites this from existingTask.due_date right
@@ -405,7 +403,11 @@ export function TaskFormScreen() {
         navigate(`/task/${created.task.id}`);
         return;
       }
-      navigate("/inbox");
+      // Назад, откуда пришли: задачу заводят и из «Ежедневника», и из
+      // проекта, и из «Планирования» — уводить всех в один список
+      // неправильно. Раньше здесь были «Входящие» (экран удалён
+      // 26.08.2026: «зачем эти входящие, они по сути часть ежедневника»).
+      navigate(-1);
     }
   });
   const isSaving = createTask.isPending || updateTask.isPending;
@@ -472,19 +474,63 @@ export function TaskFormScreen() {
       100,
     );
   };
+  const handleStructureWithAI = async (textToProcess?: string) => {
+    const raw =
+      typeof textToProcess === "string"
+        ? textToProcess
+        : `${title}\n${desc}`.trim();
+    if (!raw) {
+      await alert(
+        "Введите или надиктуйте текст в название или заметку перед структурированием.",
+      );
+      return;
+    }
+    setIsStructuring(true);
+    try {
+      hapticGrab();
+      const res = await structureTaskWithAI.mutateAsync(raw);
+      if (res.title) setTitle(res.title);
+      if (res.description) setDesc(res.description);
+      if (res.dueDate) {
+        setDueDate(res.dueDate.slice(0, 10));
+        const timeMatch = res.dueDate.match(/(?:T|\s)(\d{2}:\d{2})/);
+        if (timeMatch) setStartTime(timeMatch[1]);
+      }
+      if ((res as any).startTime) {
+        setStartTime((res as any).startTime);
+        if (!res.dueDate) setDueDate(todayStr());
+      }
+      if (res.priority) setPriority(res.priority);
+      if (Array.isArray(res.subtasks) && res.subtasks.length > 0) {
+        if (isEdit && id) {
+          for (const st of res.subtasks) {
+            await createSubtask.mutateAsync(st);
+          }
+        } else {
+          setLocalSubtasks((prev) =>
+            Array.from(new Set([...prev, ...res.subtasks])),
+          );
+        }
+      }
+      hapticDrop();
+    } catch (e: any) {
+      console.error("AI Structure error:", e);
+      await alert(
+        `Не удалось структурировать задачу: ${e?.message || "модель не ответила вовремя"}. Проверьте связь с сервером 192.168.1.110 в Настройках.`,
+      );
+    } finally {
+      setIsStructuring(false);
+    }
+  };
+
   const transcribeAudio = useTranscribeAudio();
   const mic = useMicRecorder(async (blob) => {
     try {
       const { text, source } = await transcribeAudio.mutateAsync(blob);
       setVoiceSource(source);
       if (voiceTarget === "desc") {
-        // Описание — произвольный текст, без parseDictation: маркеры
-        // #Проект/!приоритет/дата разбираются только в заголовке.
         setDesc(combineDictatedText(desc, text));
       } else if (voiceTarget === "subtask") {
-        // Подзадача — тоже произвольный текст, без parseDictation: маркеры
-        // #Проект/!приоритет/дата в названии подзадачи не имеют смысла, это
-        // формат только для заголовка задачи.
         setSubtaskInput((prev) => combineDictatedText(prev, text));
       } else {
         const combined = combineDictatedText(title, text);
@@ -493,7 +539,13 @@ export function TaskFormScreen() {
         } else {
           const parsed = parseDictation(combined);
           setTitle(parsed.title);
-          if (parsed.dueDate) setDueDate(parsed.dueDate);
+          if (parsed.dueDate) {
+            setDueDate(parsed.dueDate);
+            if (parsed.startTime) setStartTime(parsed.startTime);
+          } else if (parsed.startTime) {
+            setDueDate(todayStr());
+            setStartTime(parsed.startTime);
+          }
           if (parsed.priority) setPriority(parsed.priority);
           if (parsed.projectName) {
             const match = findProjectByName(projects, parsed.projectName);
@@ -503,8 +555,7 @@ export function TaskFormScreen() {
         }
       }
     } catch {
-      // transcribeAudio.error уже несёт причину — ErrorBanner ниже её
-      // покажет, дублировать текст здесь не нужно.
+      // transcribeAudio.error уже несёт причину
     } finally {
       mic.finish();
     }
@@ -534,62 +585,6 @@ export function TaskFormScreen() {
       return () => clearTimeout(t);
     }
   }, [searchParams, mic.state, mic.start]);
-
-  // Дёргает эндпоинт разбивки — существующая задача шлёт свой id (сервер
-  // сам подтянет title/description из БД), но тело всё равно везёт текущие
-  // значения формы: если владелец правит заголовок/описание и ещё не
-  // сохранил, разбивать нужно по свежему тексту, а не по тому, что лежит
-  // в базе.
-  const suggestPending = isEdit
-    ? suggestForTask.isPending
-    : suggestForDraft.isPending;
-  const suggestError = isEdit ? suggestForTask.error : suggestForDraft.error;
-  const handleSuggestSubtasks = useGuardedCallback(async () => {
-    if (!title.trim()) return;
-    const body = {
-      title: title.trim(),
-      description: desc.trim() || undefined,
-    };
-    const res =
-      isEdit && id
-        ? await suggestForTask.mutateAsync(body)
-        : await suggestForDraft.mutateAsync(body);
-    setSuggestions(res.subtasks.map((text) => ({ text, checked: true })));
-    setSuggestSource(res.source);
-  });
-
-  const toggleSuggestion = (index: number) => {
-    setSuggestions((prev) =>
-      prev
-        ? prev.map((s, i) => (i === index ? { ...s, checked: !s.checked } : s))
-        : prev,
-    );
-  };
-
-  // Подтверждённые подзадачи попадают ровно туда же, куда обычные,
-  // добавленные вручную через AddSubtaskRow ниже: у существующей задачи —
-  // сразу в API (последовательно, не Promise.all — сервер считает позицию
-  // как MAX+1 на каждый запрос, параллельные вставки схлопнутся в
-  // одинаковую позицию), у черновика — в localSubtasks, откуда их заберёт
-  // handleSave при создании задачи.
-  const handleConfirmSuggestions = useGuardedCallback(async () => {
-    if (!suggestions) return;
-    const chosen = suggestions.filter((s) => s.checked).map((s) => s.text);
-    if (chosen.length === 0) return;
-    setConfirmingSuggestions(true);
-    try {
-      if (isEdit && id) {
-        for (const text of chosen) {
-          await createSubtask.mutateAsync(text);
-        }
-      } else {
-        setLocalSubtasks((prev) => [...prev, ...chosen]);
-      }
-      setSuggestions(null);
-    } finally {
-      setConfirmingSuggestions(false);
-    }
-  });
 
   // ⚠️ Разбор маркеров диктовки — ДО ранних return ниже, а не рядом со
   // своей функцией. Хук после условного выхода вызывается не на каждом
@@ -729,25 +724,15 @@ export function TaskFormScreen() {
   const applyDictationParse = () => {
     if (isEdit) return;
     const parsed = parseDictation(title);
-    // Сравнение с ОБРЕЗАННЫМ заголовком, а не с сырым. parseDictation
-    // обрезает пробелы по краям сам (dictationParser.ts, .trim() перед
-    // return), поэтому у сырого сравнения любой хвостовой пробел выглядел
-    // как «разбор что-то изменил», и заголовок переписывался обрезанным.
-    //
-    // Ловилось это только на устройстве (замер логом 20.08.2026, жалоба
-    // «нажимаю пробел — каретка тут же возвращается назад»): разбор висит
-    // на onBlur, а свою клавиатуру blur сопровождает КАЖДОЕ нажатие —
-    // клавиши настоящие кнопки, и фокус уходит на них. В обычном Chrome
-    // preventMouseDownDefault у simple-keyboard фокус в поле удерживает,
-    // blur не приходит вовсе, и то же самое место работает верно — отсюда
-    // и «в вебе нормально, в приложении нет». Побочно из-за той же строки
-    // на каждом пробеле срабатывал ещё и capitalizeFirst ниже.
     if (parsed.title === title.trim()) return; // ни одного маркера — не трогаем
-    // Заглавная после вырезания маркера: если дата стояла в начале фразы
-    // («4 сентября 2027 года надо продлить ОСАГО»), заголовок оставался со
-    // строчной буквы.
     setTitle(capitalizeFirst(parsed.title));
-    if (parsed.dueDate) setDueDate(parsed.dueDate);
+    if (parsed.dueDate) {
+      setDueDate(parsed.dueDate);
+      if (parsed.startTime) setStartTime(parsed.startTime);
+    } else if (parsed.startTime) {
+      setDueDate(todayStr());
+      setStartTime(parsed.startTime);
+    }
     if (parsed.priority) setPriority(parsed.priority);
     if (parsed.projectName) {
       const match = findProjectByName(projects, parsed.projectName);
@@ -769,6 +754,9 @@ export function TaskFormScreen() {
       {/* Сообщение о файлах, не легших к уже созданной задаче (handleSave)
           — тем же диалогом, что и остальные предупреждения приложения. */}
       {dialog}
+      {/* Статус ИИ — плашкой вверху экрана, под вырезом: структурирование
+          занимает секунды, и подписи на самой кнопке мало (26.08.2026). */}
+      <AiBusyPill visible={isStructuring} label="Структурирую задачу…" />
       <ScreenHeader
         variant="compact"
         leading={
@@ -843,8 +831,24 @@ export function TaskFormScreen() {
           выше рендерят null и не держат места, когда ошибок нет (обычный
           случай). 16px — тот же межблочный модуль, что mb-4 держит между
           остальными секциями формы ниже. */}
-      <div className="text-[17px] text-sub font-semibold mb-2 mt-4">
-        {isEdit ? "Изменить задачу" : "Новая задача"}
+      <div className="flex items-center justify-between mb-2 mt-4">
+        <div className="text-[17px] text-sub font-semibold">
+          {isEdit ? "Изменить задачу" : "Новая задача"}
+        </div>
+        {(title.trim() || desc.trim()) && (
+          <button
+            type="button"
+            onClick={() => handleStructureWithAI()}
+            disabled={isStructuring}
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold text-white bg-gradient-to-r from-[#FF2D55] to-[#FF9500] active:scale-95 transition-transform disabled:opacity-50 shadow-sm"
+          >
+            <Icon name="sparkles" size={12} />
+            {/* Подпись кнопки НЕ меняется на «думает»: статус теперь
+                плашкой вверху экрана (AiBusyPill), под вырезом — одинаково
+                во всех местах, где работает ИИ. Кнопка просто гаснет. */}
+            Структурировать с AI
+          </button>
+        )}
       </div>
       <textarea
         ref={titleRef}
@@ -915,79 +919,7 @@ export function TaskFormScreen() {
           между ними. */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-[17px] text-sub font-semibold">Подзадачи</span>
-        <button
-          onClick={handleSuggestSubtasks}
-          disabled={!title.trim() || suggestPending}
-          className="inline-flex items-center gap-1 text-[12px] font-semibold text-red active:opacity-70 disabled:opacity-40"
-        >
-          <Icon name="sparkles" size={13} />
-          {suggestPending ? "Разбиваю…" : "Разбить на подзадачи"}
-        </button>
       </div>
-      <ErrorBanner
-        error={suggestError}
-        fallback="Не удалось разбить задачу на подзадачи. Проверьте, что локальная модель запущена."
-        variant="block"
-        className="mb-2"
-      />
-
-      {/* ── AI-предложение — ждёт подтверждения владельцем, ничего не
-          создаётся, пока он не нажмёт «Добавить выбранные» ── */}
-      {suggestions && (
-        <div className="mb-3 bg-card rounded-2xl overflow-hidden">
-          <div className="px-4 pt-3 pb-1 text-[12px] text-dim">
-            Предложение модели — уберите лишнее и подтвердите
-            {suggestSource && (
-              <>
-                {" "}
-                ·{" "}
-                {suggestSource === "device" ? "на устройстве" : "через сервер"}
-              </>
-            )}
-          </div>
-          {suggestions.map((s, i) => (
-            <button
-              key={i}
-              onClick={() => toggleSuggestion(i)}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-left border-t border-stroke active:bg-white/[0.04] transition-colors"
-            >
-              <div
-                className={`w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center shrink-0 ${
-                  s.checked ? "bg-red border-red" : "border-dim"
-                }`}
-              >
-                {s.checked && (
-                  <Icon name="check" size={12} className="text-white" />
-                )}
-              </div>
-              <span
-                className={`text-[14px] flex-1 ${
-                  s.checked ? "text-text" : "text-dim line-through"
-                }`}
-              >
-                {s.text}
-              </span>
-            </button>
-          ))}
-          <div className="flex gap-2 px-3 py-3 border-t border-stroke">
-            <button
-              onClick={() => setSuggestions(null)}
-              className="flex-1 h-[38px] rounded-xl text-[13px] font-medium text-sub bg-card2 active:opacity-70"
-            >
-              Отмена
-            </button>
-            <button
-              onClick={handleConfirmSuggestions}
-              disabled={
-                !suggestions.some((s) => s.checked) || confirmingSuggestions
-              }
-              className="flex-1 h-[38px] rounded-xl text-[13px] font-semibold text-white bg-red active:opacity-70 disabled:opacity-50"
-            >
-              {confirmingSuggestions ? "Добавляю…" : "Добавить выбранные"}
-            </button>
-          </div>
-        </div>
-      )}
 
       <div>
         {/* No Card wrapper here on purpose (see comment above) — rows lost
@@ -1228,7 +1160,7 @@ export function TaskFormScreen() {
                   )}
                 </div>
                 <span className="text-[12px] text-sub bg-card2 px-2 py-0.5 rounded shrink-0">
-                  {u.role === "owner" ? "Владелец" : "Агент"}
+                  {roleLabel(u.role)}
                 </span>
                 {assignee === u.id ? (
                   <Icon name="check" size={18} className="text-red" />
@@ -1265,7 +1197,7 @@ export function TaskFormScreen() {
                       <div className="text-[14px] text-text">{u.name}</div>
                     </div>
                     <span className="text-[12px] text-sub bg-card2 px-2 py-0.5 rounded">
-                      {u.role === "owner" ? "Владелец" : "Агент"}
+                      {roleLabel(u.role)}
                     </span>
                     <Icon name="check" size={18} className="text-red" />
                   </button>

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Icon, ScreenHeader, BackButton, ErrorBanner } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner } from "../components/UI";
 import { TemplateStore, type TaskTemplate } from "../lib/templates";
 import { useCreateTask } from "../api/tasks";
 import { getErrorMessage } from "../lib/errors";
@@ -122,21 +122,15 @@ export function TemplatesScreen() {
   const userTemplates = templates.filter((t) => !t.is_builtin);
   const builtinTemplates = templates.filter((t) => t.is_builtin);
 
+  // Красная кнопка панели заводит шаблон — плюсик из шапки убран
+  // (27.08.2026, владелец: «кружочек этот красный вместо вот этих всяких
+  // плюсиков левых наверху»).
+
   return (
     <div className="min-h-screen bg-bg text-text pb-12">
       <ScreenHeader
         variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Шаблоны задач"
-        actions={
-          <button
-            onClick={handleOpenCreate}
-            aria-label="Новый шаблон"
-            className="w-[44px] h-[44px] flex items-center justify-center text-text tap-row"
-          >
-            <Icon name="plus" size={18} />
-          </button>
-        }
       />
 
       <div className="px-4 space-y-6 max-w-lg mx-auto pt-2">

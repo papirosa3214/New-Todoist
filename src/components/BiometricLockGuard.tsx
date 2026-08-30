@@ -64,7 +64,9 @@ export function BiometricLockGuard({ children }: Props) {
       if (!isActive) {
         lastBackgroundTime.current = Date.now();
       } else {
-        const bgDuration = lastBackgroundTime.current ? Date.now() - lastBackgroundTime.current : 0;
+        const bgDuration = lastBackgroundTime.current
+          ? Date.now() - lastBackgroundTime.current
+          : 0;
         lastBackgroundTime.current = null;
 
         // Блокируем только если приложение РЕАЛЬНО было свёрнуто дольше минуты
@@ -88,7 +90,12 @@ export function BiometricLockGuard({ children }: Props) {
 
   // Минималистичный экран ожидания без лишней графики
   return (
-    <div className="fixed inset-0 z-[99999] bg-bg flex flex-col items-center justify-center p-6 select-none safe-area-all">
+    <div
+      // Свайп «назад» не должен уводить экран из-под шторки
+      // (useSwipeBack ищет этот атрибут).
+      data-overlay
+      className="fixed inset-0 z-[99999] bg-bg flex flex-col items-center justify-center p-6 select-none safe-area-all"
+    >
       <button
         type="button"
         onClick={() => {

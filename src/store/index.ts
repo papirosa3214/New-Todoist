@@ -27,46 +27,209 @@ export type TaskLayout = "list" | "board" | "hours";
 // сочетание.
 export type UpcomingLayout = "list" | "week" | "month" | "hours";
 
+export type AiProviderType =
+  "local" | "claude" | "hermes" | "antigravity" | "deepseek";
+
+export interface AiProviderInfo {
+  id: AiProviderType;
+  name: string;
+  subtitle: string;
+  badge: string;
+  iconName: string;
+  color: string;
+}
+
+export const AI_PROVIDERS: Record<AiProviderType, AiProviderInfo> = {
+  local: {
+    id: "local",
+    name: "Локальная модель",
+    subtitle: "Ollama / Локальный домашний сервер",
+    badge: "Локально",
+    iconName: "server",
+    color: "#34C759",
+  },
+  claude: {
+    id: "claude",
+    name: "Claude Code",
+    subtitle: "Anthropic Claude Agent Hub",
+    badge: "Claude",
+    iconName: "brain",
+    color: "#D97706",
+  },
+  hermes: {
+    id: "hermes",
+    name: "Hermes Agent",
+    subtitle: "OpenRouter & Autonomous Routing Hub",
+    badge: "Agentic",
+    iconName: "sparkles",
+    color: "#8B5CF6",
+  },
+  antigravity: {
+    id: "antigravity",
+    name: "Antigravity",
+    subtitle: "Google DeepMind / Gemini & Sidecars",
+    badge: "Gemini",
+    iconName: "zap",
+    color: "#06B6D4",
+  },
+  deepseek: {
+    id: "deepseek",
+    name: "DeepSeek",
+    subtitle: "DeepSeek Engine (Reasoner / Chat)",
+    badge: "DeepSeek",
+    iconName: "cpu",
+    color: "#3B82F6",
+  },
+};
+
 interface AppState {
   settings: {
     theme: "dark" | "light";
     calendarView: "month" | "week";
   };
+  aiProvider: AiProviderType;
+  setAiProvider: (provider: AiProviderType) => void;
+  localOllamaModel: string;
+  setLocalOllamaModel: (model: string) => void;
+  antigravityModel: string;
+  setAntigravityModel: (model: string) => void;
+  claudeModel: string;
+  setClaudeModel: (model: string) => void;
+  hermesModel: string;
+  setHermesModel: (model: string) => void;
+  deepseekModel: string;
+  setDeepseekModel: (model: string) => void;
   setCalendarView: (view: "month" | "week") => void;
-  // Реальный переключатель темы (SettingsScreen.tsx) — settings.theme уже
-  // существовал и персистился, но до 2026-08-12 ничто его не читало и не
-  // меняло: SettingsScreen показывал захардкоженную строку «Темный».
-  // App.tsx применяет текущее значение на <html data-theme> при каждом
-  // изменении (см. index.css, LIGHT THEME OVERRIDE).
   setTheme: (theme: "dark" | "light") => void;
-  // Список↔доска, per screen. Kept as one object with a key per screen
-  // (not a single flat value like calendarView above) because Inbox and
-  // Today are independent screens that can each sit in their own mode at
-  // once — switching one to "board" must not drag the other along.
   taskLayout: {
+    // `inbox` осиротел 26.08.2026 вместе с удалённым экраном Входящих, но
+    // поле оставлено намеренно: оно лежит в persist-хранилище на устройствах,
+    // и выкидывать его из формы состояния без миграции — ломать сохранённые
+    // настройки ради одной неиспользуемой строки.
     inbox: TaskLayout;
     today: TaskLayout;
   };
   setTaskLayout: (screen: "inbox" | "today", layout: TaskLayout) => void;
   upcomingLayout: UpcomingLayout;
   setUpcomingLayout: (layout: UpcomingLayout) => void;
+  // 25.08.2026: «Входящие», вид списка — секция проекта сворачивается
+  // аккордеоном, чтобы задачи одного плотного проекта не захламляли ленту
+  // (просьба Максима). Только вид списка — на доске у колонки и так есть
+  // явные границы, сворачивать там нечего. id проекта → свёрнута ли;
+  // отсутствие ключа = развёрнута (иначе пришлось бы заранее знать все id).
+  collapsedInboxProjects: Record<string, boolean>;
+  toggleInboxProjectCollapsed: (projectId: string) => void;
+  // 25.08.2026: «Ежедневник» (бывш. «Сегодня») — владелец хочет сам
+  // выбирать, какие проекты попадают в выборку («Просрочено»/«Сегодня»/
+  // «Ждут вас» + сетка часов), а не видеть задачи из всех проектов разом.
+  // id проекта → скрыт ли; отсутствие ключа = виден — тот же приём, что у
+  // collapsedInboxProjects чуть выше, не нужно заранее знать все id, и
+  // новый проект по умолчанию виден без отдельной миграции состояния.
+  // Задачи без project_id (Входящие) фильтром не затрагиваются — они не
+  // принадлежат ни одному проекту, скрывать их через «скрыть проект»
+  // нечем.
+  hiddenDailyPlannerProjects: Record<string, boolean>;
+  toggleDailyPlannerProjectHidden: (projectId: string) => void;
 }
 
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
-      settings: { theme: "dark", calendarView: "month" },
+      settings: {
+        theme: "dark",
+        calendarView: "month",
+      },
+      aiProvider: "local",
+      setAiProvider: (provider) => set({ aiProvider: provider }),
+      // Дефолт — qwen3.6-27b (Максим 26.08.2026). coder30b рабочая (диагноз
+      // «битая» от 25.08 не подтвердился — был временный тупняк сервера) и
+      // доступна в выборе, но 27b по умолчанию.
+      localOllamaModel: "qwen3.6-27b-iq4-16k:latest",
+      setLocalOllamaModel: (model) => set({ localOllamaModel: model }),
+      antigravityModel: "gemini-3.7-flash-high",
+      setAntigravityModel: (model) => set({ antigravityModel: model }),
+      claudeModel: "claude-sonnet-4.6",
+      setClaudeModel: (model) => set({ claudeModel: model }),
+      hermesModel: "nous-hermes-3-405b",
+      setHermesModel: (model) => set({ hermesModel: model }),
+      deepseekModel: "deepseek-r1",
+      setDeepseekModel: (model) => set({ deepseekModel: model }),
       setCalendarView: (view) =>
-        set((s) => ({ settings: { ...s.settings, calendarView: view } })),
-      setTheme: (theme) => set((s) => ({ settings: { ...s.settings, theme } })),
-      taskLayout: { inbox: "list", today: "list" },
+        set((state) => ({
+          settings: { ...state.settings, calendarView: view },
+        })),
+      setTheme: (theme) =>
+        set((state) => ({ settings: { ...state.settings, theme } })),
+      taskLayout: {
+        inbox: "list",
+        today: "list",
+      },
       setTaskLayout: (screen, layout) =>
-        set((s) => ({ taskLayout: { ...s.taskLayout, [screen]: layout } })),
-      upcomingLayout: "list",
+        set((state) => ({
+          taskLayout: { ...state.taskLayout, [screen]: layout },
+        })),
+      upcomingLayout: "month",
       setUpcomingLayout: (layout) => set({ upcomingLayout: layout }),
+      collapsedInboxProjects: {},
+      toggleInboxProjectCollapsed: (projectId) =>
+        set((state) => ({
+          collapsedInboxProjects: {
+            ...state.collapsedInboxProjects,
+            [projectId]: !state.collapsedInboxProjects[projectId],
+          },
+        })),
+      hiddenDailyPlannerProjects: {},
+      toggleDailyPlannerProjectHidden: (projectId) =>
+        set((state) => ({
+          hiddenDailyPlannerProjects: {
+            ...state.hiddenDailyPlannerProjects,
+            [projectId]: !state.hiddenDailyPlannerProjects[projectId],
+          },
+        })),
     }),
-    // Renamed from "taskflow-store" so any previously persisted mock
-    // tasks/projects/users don't hydrate into the reshaped store.
-    { name: "taskflow-ui" },
+    {
+      name: "taskflow-ui",
+      // 25.08.2026: coder30b-abl:latest — старый дефолт localOllamaModel —
+      // надёжно роняет Ollama CUDA-ошибкой (см. server/src/routes/ai.ts).
+      // Смены значения ТОЛЬКО в коде недостаточно: persist уже записал
+      // старый дефолт в localStorage у каждого, кто открывал приложение
+      // раньше, и при мёрже персистентное значение побеждает над новым
+      // дефолтом. version+migrate — разовая правка именно этого битого
+      // значения, не трогает выбор, если он был осознанно другим.
+      version: 2,
+      migrate: (persisted: any, version) => {
+        if (
+          version < 1 &&
+          persisted?.localOllamaModel === "coder30b-abl:latest"
+        ) {
+          persisted.localOllamaModel = "qwen3.6-27b-iq4-16k:latest";
+        }
+        // v2 (26.08.2026): БЫЛА миграция «coder30b битая → заменить на 27b»
+        // по подстроке. Диагноз не подтвердился (Максим: модель рабочая,
+        // временный тупняк сервера), но миграция уже применилась у всех —
+        // оставлена как есть (повторно не сработает, version уже 2), выбор
+        // coder30b руками снова возможен и переживает перезапуск.
+        if (
+          version < 2 &&
+          /coder30b/i.test(persisted?.localOllamaModel || "")
+        ) {
+          persisted.localOllamaModel = "qwen3.6-27b-iq4-16k:latest";
+        }
+        return persisted;
+      },
+      partialize: (state) => ({
+        settings: state.settings,
+        taskLayout: state.taskLayout,
+        upcomingLayout: state.upcomingLayout,
+        collapsedInboxProjects: state.collapsedInboxProjects,
+        hiddenDailyPlannerProjects: state.hiddenDailyPlannerProjects,
+        aiProvider: state.aiProvider,
+        localOllamaModel: state.localOllamaModel,
+        antigravityModel: state.antigravityModel,
+        claudeModel: state.claudeModel,
+        hermesModel: state.hermesModel,
+        deepseekModel: state.deepseekModel,
+      }),
+    },
   ),
 );

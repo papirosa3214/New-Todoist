@@ -90,6 +90,7 @@ import {
   formatDaysLeft,
 } from "../lib/date";
 import type { ApiTask } from "../api/types";
+import { useDeleteTask } from "../api/tasks";
 
 // Plain "8 авг" — no relative "Сегодня/Завтра" prefix, no trailing dot.
 // Distinct from lib/date.ts's `formatDueLabel` (used just below for the
@@ -193,38 +194,67 @@ export function TaskRow({
     hasProjectBadge ||
     hasPriorityFlag ||
     hasOverduePill ||
-    hasAgentTag ||
     hasDueBadge ||
     hasSubtasksBadge ||
     hasLabels;
 
-  // ── Плавный нативный iOS свайп для редактирования ──────────────────────────
-  const ACTION_W = 84; // ширина действия
+  // ── Плавный нативный iOS свайп ────────────────────────────────────────────
+  // Влево → синяя «Изменить»; вправо → красная «Удалить».
+  // Та же физика, те же пороги, тот же rubber-band.
+  const ACTION_W = 84; // ширина каждого действия
   const rowRef = useRef<HTMLDivElement | null>(null);
-  const actionRef = useRef<HTMLButtonElement | null>(null);
+  const editActionRef = useRef<HTMLButtonElement | null>(null); // правая, синяя
+  const deleteActionRef = useRef<HTMLButtonElement | null>(null); // левая, красная
   const currentXRef = useRef(0);
   const [revealed, setRevealed] = useState(false);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleteTask = useDeleteTask();
 
   const setRowPosition = (x: number, animated = false) => {
     currentXRef.current = x;
     if (rowRef.current) {
       if (animated) {
-        rowRef.current.style.transition = "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)";
+        rowRef.current.style.transition =
+          "transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)";
       } else {
         rowRef.current.style.transition = "none";
       }
       rowRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
     }
-    if (actionRef.current) {
-      const progress = Math.min(Math.abs(x) / ACTION_W, 1.2);
-      actionRef.current.style.pointerEvents = Math.abs(x) >= ACTION_W * 0.7 ? "auto" : "none";
+    // Правая кнопка (Изменить) — появляется при x < 0, ширина растёт вместе со строкой
+    if (editActionRef.current) {
+      const absX = Math.max(-x, 0);
+      const progress = Math.min(absX / ACTION_W, 1.2);
+      const btnW = Math.max(absX, ACTION_W); // растягиваем на весь rubber-band
+      editActionRef.current.style.pointerEvents =
+        absX >= ACTION_W * 0.7 ? "auto" : "none";
+      editActionRef.current.style.width = `${btnW}px`;
       if (animated) {
-        actionRef.current.style.transition = "opacity 0.28s ease, transform 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)";
+        editActionRef.current.style.transition =
+          "opacity 0.28s ease, width 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)";
       } else {
-        actionRef.current.style.transition = "none";
+        editActionRef.current.style.transition = "none";
       }
-      actionRef.current.style.opacity = String(Math.min(1, progress * 1.3));
-      actionRef.current.style.transform = `scale(${Math.min(1, 0.75 + progress * 0.25)})`;
+      editActionRef.current.style.opacity = String(Math.min(1, progress * 1.3));
+    }
+    // Левая кнопка (Удалить) — появляется при x > 0, ширина растёт вместе со строкой
+    if (deleteActionRef.current) {
+      const absX = Math.max(x, 0);
+      const progress = Math.min(absX / ACTION_W, 1.2);
+      const btnW = Math.max(absX, ACTION_W); // растягиваем на весь rubber-band
+      deleteActionRef.current.style.pointerEvents =
+        absX >= ACTION_W * 0.7 ? "auto" : "none";
+      deleteActionRef.current.style.width = `${btnW}px`;
+      if (animated) {
+        deleteActionRef.current.style.transition =
+          "opacity 0.28s ease, width 0.28s cubic-bezier(0.2, 0.9, 0.28, 1)";
+      } else {
+        deleteActionRef.current.style.transition = "none";
+      }
+      deleteActionRef.current.style.opacity = String(
+        Math.min(1, progress * 1.3),
+      );
     }
   };
 
@@ -269,6 +299,7 @@ export function TaskRow({
           d.locked = true;
           if (d.isHorizontal) {
             el.setPointerCapture(ev.pointerId);
+            setIsSwiping(true);
             hapticCross();
           }
         }
@@ -285,11 +316,14 @@ export function TaskRow({
 
         const raw = d.startOffset + dx;
         let pos = raw;
-        if (raw > 0) {
-          pos = raw * 0.18; // плавный rubber band вправо
+        if (raw > ACTION_W) {
+          // rubber-band вправо за пределами ACTION_W
+          const over = raw - ACTION_W;
+          pos = ACTION_W + (over * 30) / (30 + over);
         } else if (raw < -ACTION_W) {
+          // rubber-band влево за пределами ACTION_W
           const over = -raw - ACTION_W;
-          pos = -ACTION_W - (over * 30) / (30 + over); // мягкое сопротивление влево
+          pos = -ACTION_W - (over * 30) / (30 + over);
         }
 
         setRowPosition(pos, false);
@@ -298,6 +332,7 @@ export function TaskRow({
       const onUp = (ev: PointerEvent) => {
         const d = swipeDrag.current;
         d.active = false;
+        setIsSwiping(false);
         el.removeEventListener("pointermove", onMove);
         el.removeEventListener("pointerup", onUp);
         el.removeEventListener("pointercancel", onUp);
@@ -308,22 +343,30 @@ export function TaskRow({
         const currentPos = currentXRef.current;
         const vel = d.velocity;
 
-        // Решение: открыть или закрыть
-        let shouldOpen = false;
         if (d.startOffset === 0) {
-          // Открываем, если свайпнули влево больше 36px или с хорошей скоростью
-          shouldOpen = currentPos < -36 || vel < -280;
+          if (currentPos < -36 || vel < -280) {
+            // Свайп влево → открыть «Изменить»
+            setRevealed(true);
+            hapticDrop();
+            setRowPosition(-ACTION_W, true);
+          } else if (currentPos > 36 || vel > 280) {
+            // Свайп вправо → открыть «Удалить»
+            setRevealed(true);
+            hapticDrop();
+            setRowPosition(ACTION_W, true);
+          } else {
+            setRowPosition(0, true);
+          }
+        } else if (d.startOffset < 0) {
+          // Уже открыто «Изменить» (x < 0)
+          const shouldKeep = !(dx > 25 || vel > 250);
+          setRevealed(shouldKeep);
+          setRowPosition(shouldKeep ? -ACTION_W : 0, true);
         } else {
-          // Уже было открыто: закрываем, если свайпнули вправо
-          shouldOpen = !(dx > 25 || vel > 250);
-        }
-
-        setRevealed(shouldOpen);
-        if (shouldOpen) {
-          hapticDrop();
-          setRowPosition(-ACTION_W, true);
-        } else {
-          setRowPosition(0, true);
+          // Уже открыто «Удалить» (x > 0)
+          const shouldKeep = !(dx < -25 || vel < -250);
+          setRevealed(shouldKeep);
+          setRowPosition(shouldKeep ? ACTION_W : 0, true);
         }
       };
 
@@ -335,169 +378,216 @@ export function TaskRow({
   );
 
   return (
-    <div
-      style={{ position: "relative", overflow: "hidden" }}
-      className="-mx-4 border-b border-stroke/50"
-    >
-      {/* Нативная синяя кнопка «Изменить» под строкой */}
-      <button
-        ref={actionRef}
-        onClick={(e) => {
-          e.stopPropagation();
-          setRevealed(false);
-          setRowPosition(0, true);
-          navigate(`/task/${task.id}/edit`);
-        }}
-        aria-label="Изменить задачу"
-        style={{
-          position: "absolute",
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: ACTION_W,
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "center",
-          alignItems: "center",
-          background: "linear-gradient(135deg, #007AFF 0%, #0056b3 100%)",
-          pointerEvents: "none",
-          opacity: 0,
-          transform: "scale(0.8)",
-          transformOrigin: "center right",
-          border: "none",
-        }}
-      >
-        <Icon name="edit" size={20} className="text-white mb-0.5" />
-        <span className="text-[11px] font-semibold text-white/95 leading-none">
-          Изменить
-        </span>
-      </button>
-
+    <>
       <div
-        ref={rowRef}
-        onPointerDown={onPointerDown}
-        className="bg-bg"
-        style={{
-          willChange: "transform",
-        }}
+        style={{ position: "relative", overflow: "hidden" }}
+        className="-mx-4 border-b border-stroke/50"
       >
+        {/* Красная кнопка «Удалить» — слева, появляется при свайпе вправо */}
         <button
-          onClick={() => {
-            // Строка приоткрыта — первый тап её закрывает, а не открывает
-            // задачу: иначе промахнуться мимо кнопки значило бы всё равно
-            // куда-то провалиться.
-            if (revealed) {
-              setRevealed(false);
-              setRowPosition(0, true);
-              return;
-            }
-            onClick();
+          ref={deleteActionRef}
+          onClick={(e) => {
+            e.stopPropagation();
+            setRevealed(false);
+            setRowPosition(0, true);
+            hapticDrop();
+            setConfirmDelete(true);
           }}
-          // pt меньше pb — та же правка, что на карточках доски
-          // (владелец 19.08.2026: «это и списков касается»). Симметричные
-          // py-3 давали НЕсимметричный воздух: замер по чернильным
-          // пикселям — сверху 15.3–17.7pt против 13–14pt снизу, потому что
-          // сверху добавляются поле внутри PNG аватарки и полулидинг
-          // первой строки, а нижние пилюли прижаты к своей кромке.
-          // Выравнивание по нижней части, как он и просил.
-          className="tap-row w-full flex items-start justify-between gap-2 pt-[9px] pb-3 px-4 bg-bg text-left"
+          aria-label="Удалить задачу"
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: ACTION_W,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            alignItems: "center",
+            paddingLeft: 0,
+            background: "#FF3B30",
+            pointerEvents: "none",
+            opacity: 0,
+            border: "none",
+            overflow: "hidden",
+          }}
         >
-          <div className="flex-1 min-w-0 flex flex-col items-start">
-            {/* Проект — САМОЙ ВЕРХНЕЙ строкой, над названием задачи */}
-            {hasProjectBadge && (
-              <div
-                className="mb-1 inline-flex min-w-0 max-w-full items-center gap-1 text-[11px] font-medium"
-                style={{ color: task.project_color || "#A6A6A6" }}
-              >
-                <Icon name="hash" size={10} className="shrink-0" />
-                <span className="truncate">{task.project_name}</span>
-              </div>
-            )}
+          <Icon name="trash" size={28} className="text-white" />
+        </button>
 
-          {/* Строка названия с аватаркой исполнителя (если назначен) */}
-          <div className="w-full flex items-center gap-2 min-w-0">
-            {showAvatar && task.assignee_id && task.assignee_initials && (
-              <Avatar
-                initials={task.assignee_initials}
-                color={task.assignee_color || "#A6A6A6"}
-                avatar_url={task.assignee_avatar_url}
-                size={20}
-              />
-            )}
-            <div
-              className={`text-[15px] leading-snug truncate flex-1 min-w-0 ${isDone ? "line-through text-sub" : "text-text"}`}
-            >
-              {task.title}
-            </div>
-          </div>
+        {/* Синяя кнопка «Изменить» — справа, появляется при свайпе влево */}
+        <button
+          ref={editActionRef}
+          onClick={(e) => {
+            e.stopPropagation();
+            setRevealed(false);
+            setRowPosition(0, true);
+            navigate(`/task/${task.id}/edit`);
+          }}
+          aria-label="Изменить задачу"
+          style={{
+            position: "absolute",
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: ACTION_W,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            alignItems: "center",
+            paddingRight: 0,
+            background: "#007AFF",
+            pointerEvents: "none",
+            opacity: 0,
+            border: "none",
+            overflow: "hidden",
+          }}
+        >
+          <Icon name="edit" size={28} className="text-white" />
+        </button>
 
-          {/* Описание — на всю ширину карточки */}
-          {task.description && (
-            <div className="w-full text-[13px] text-sub mt-1 line-clamp-2">
-              {task.description}
-            </div>
-          )}
-            {hasMeta && (
-              <div className="w-full flex items-center gap-1.5 flex-wrap mt-1.5 justify-start text-left">
-                {/* 1. Бейдж подзадач (всегда первый) */}
-                {hasSubtasksBadge && (
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-card text-sub font-medium">
-                    {doneSub}/{task.subtasks.length}
-                  </span>
-                )}
+        <div
+          ref={rowRef}
+          // Свайп строки (влево — изменить, вправо — удалить) конфликтует со
+          // свайпом «назад», который с 26.08.2026 ловится по всему экрану.
+          // Атрибут исключает строку из его зоны (useSwipeBack).
+          data-hswipe
+          onPointerDown={onPointerDown}
+          className="bg-bg"
+          style={{
+            willChange: "transform",
+            WebkitTapHighlightColor: "transparent",
+          }}
+        >
+          <button
+            onClick={() => {
+              // Строка приоткрыта — первый тап её закрывает, а не открывает
+              // задачу: иначе промахнуться мимо кнопки значило бы всё равно
+              // куда-то провалиться.
+              if (revealed) {
+                setRevealed(false);
+                setRowPosition(0, true);
+                return;
+              }
+              onClick();
+            }}
+            // pt меньше pb — та же правка, что на карточках доски
+            // (владелец 19.08.2026: «это и списков касается»). Симметричные
+            // py-3 давали НЕсимметричный воздух: замер по чернильным
+            // пикселям — сверху 15.3–17.7pt против 13–14pt снизу, потому что
+            // сверху добавляются поле внутри PNG аватарки и полулидинг
+            // первой строки, а нижние пилюли прижаты к своей кромке.
+            // Выравнивание по нижней части, как он и просил.
+            className={`w-full flex items-start justify-between gap-2 pt-[9px] pb-3 px-4 bg-bg text-left${isSwiping ? "" : " tap-row"}`}
+          >
+            <div className="flex-1 min-w-0 flex flex-col items-start">
+              {/* Проект — САМОЙ ВЕРХНЕЙ строкой, над названием задачи */}
+              {hasProjectBadge && (
+                <div
+                  className="mb-1 inline-flex min-w-0 max-w-full items-center gap-1 text-[11px] font-medium"
+                  style={{ color: task.project_color || "#A6A6A6" }}
+                >
+                  <Icon name="hash" size={10} className="shrink-0" />
+                  <span className="truncate">{task.project_name}</span>
+                </div>
+              )}
 
-                {/* 2. Приоритет флажком */}
-                {hasPriorityFlag && (
-                  <Icon
-                    name="flag"
-                    size={12}
-                    style={{ color: getPriorityColor(task.priority) }}
-                    aria-label={`Приоритет: ${PRIORITIES.find((p) => p.key === task.priority)?.name ?? ""}`}
+              {/* Строка названия с аватаркой исполнителя (если назначен) */}
+              <div className="w-full flex items-center gap-2 min-w-0">
+                {showAvatar && task.assignee_id && task.assignee_initials && (
+                  <Avatar
+                    initials={task.assignee_initials}
+                    color={task.assignee_color || "#A6A6A6"}
+                    avatar_url={task.assignee_avatar_url}
+                    size={20}
                   />
                 )}
-
-                {/* 3. Просрочено */}
-                {hasOverduePill && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red font-medium">
-                    <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
-                    {formatDueLabel(task.due_date!)}
-                  </span>
-                )}
-
-                {/* 4. Дата + сколько дней осталось */}
-                {hasDueBadge && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
-                    <Icon name="calendarSmall" size={10} />{" "}
-                    {formatDue(task.due_date!)}
-                    <span
-                      className={
-                        daysUntil(task.due_date!) <= 3
-                          ? "text-orange"
-                          : "text-dim"
-                      }
-                    >
-                      · {formatDaysLeft(task.due_date!)}
-                    </span>
-                  </span>
-                )}
-
-                {/* 5. Метки */}
-                {visibleLabels.map((l) => (
-                  <span
-                    key={l.id}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
-                    style={{ backgroundColor: l.color + "26", color: l.color }}
-                  >
-                    <Icon name="tag" size={10} /> {l.name}
-                  </span>
-                ))}
-
-                {/* 6. Статус агента */}
-                {hasAgentTag && <AgentStateTag task={task} />}
+                <div
+                  className={`text-[15px] leading-snug truncate flex-1 min-w-0 ${isDone ? "line-through text-sub" : "text-text"}`}
+                >
+                  {task.title}
+                </div>
               </div>
-            )}
-          </div>
-          {/* Закрепление (ProjectTasksScreen only) — третий flex-child
+
+              {/* Описание — на всю ширину карточки */}
+              {task.description && (
+                <div className="w-full text-[13px] text-sub mt-1 line-clamp-2">
+                  {task.description}
+                </div>
+              )}
+
+              {/* Статус агента — сразу после заметки (описания), своей
+              строкой, просто цветное слово без плашки-фона (Максим
+              26.08.2026). Из ряда бейджей ниже убран. */}
+              {hasAgentTag && (
+                <div className="w-full mt-1">
+                  <AgentStateTag task={task} plain />
+                </div>
+              )}
+              {hasMeta && (
+                <div className="w-full flex items-center gap-1.5 flex-wrap mt-1.5 justify-start text-left">
+                  {/* 1. Бейдж подзадач (всегда первый) */}
+                  {hasSubtasksBadge && (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-card text-sub font-medium">
+                      {doneSub}/{task.subtasks.length}
+                    </span>
+                  )}
+
+                  {/* 2. Приоритет флажком */}
+                  {hasPriorityFlag && (
+                    <Icon
+                      name="flag"
+                      size={12}
+                      style={{ color: getPriorityColor(task.priority) }}
+                      aria-label={`Приоритет: ${PRIORITIES.find((p) => p.key === task.priority)?.name ?? ""}`}
+                    />
+                  )}
+
+                  {/* 3. Просрочено */}
+                  {hasOverduePill && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red font-medium">
+                      <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
+                      {formatDueLabel(task.due_date!)}
+                    </span>
+                  )}
+
+                  {/* 4. Дата + сколько дней осталось */}
+                  {hasDueBadge && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
+                      <Icon name="calendarSmall" size={10} />{" "}
+                      {formatDue(task.due_date!)}
+                      <span
+                        className={
+                          daysUntil(task.due_date!) <= 3
+                            ? "text-orange"
+                            : "text-dim"
+                        }
+                      >
+                        · {formatDaysLeft(task.due_date!)}
+                      </span>
+                    </span>
+                  )}
+
+                  {/* 5. Метки */}
+                  {visibleLabels.map((l) => (
+                    <span
+                      key={l.id}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+                      style={{
+                        backgroundColor: l.color + "26",
+                        color: l.color,
+                      }}
+                    >
+                      <Icon name="tag" size={10} /> {l.name}
+                    </span>
+                  ))}
+
+                  {/* 6. Статус агента переехал под заметку отдельной
+                    строкой (Максим 26.08.2026) — см. выше. */}
+                </div>
+              )}
+            </div>
+            {/* Закрепление (ProjectTasksScreen only) — третий flex-child
               рядом с content column, тот же приём, что дальше в этом файле
               не используется, но 1:1 со вторым интерактивным элементом
               внутри чужой полноширинной кнопки — BoardCard в TaskBoard.tsx
@@ -505,25 +595,129 @@ export function TaskRow({
               внутри кнопки-карточки, не вложенный <button>). content
               column выше — flex-1 min-w-0, поэтому уступает место сама,
               никакого abs-position и риска наехать на truncate-текст. */}
-          {onTogglePin && (
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-                onTogglePin();
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              className="shrink-0 w-[28px] -mr-1 flex items-start justify-center pt-[2px] text-dim active:text-sub"
-              aria-label={pinned ? "Открепить" : "Закрепить"}
-            >
-              <Icon
-                name="pin"
-                size={16}
-                className={pinned ? "text-orange" : ""}
-              />
-            </div>
-          )}
-        </button>
+            {onTogglePin && (
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTogglePin();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="shrink-0 w-[28px] -mr-1 flex items-start justify-center pt-[2px] text-dim active:text-sub"
+                aria-label={pinned ? "Открепить" : "Закрепить"}
+              >
+                <Icon
+                  name="pin"
+                  size={16}
+                  className={pinned ? "text-orange" : ""}
+                />
+              </div>
+            )}
+          </button>
+        </div>
       </div>
-    </div>
+
+      {/* Подтверждение удаления — iOS action sheet стиль */}
+      {confirmDelete && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "flex-end",
+            background: "rgba(0,0,0,0.45)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+          }}
+          onClick={() => setConfirmDelete(false)}
+        >
+          <div
+            style={{
+              margin: "0 12px 12px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Карточка с текстом и кнопкой «Удалить» */}
+            <div
+              style={{
+                background: "rgba(30,30,32,0.97)",
+                borderRadius: 16,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  padding: "16px 16px 12px",
+                  textAlign: "center",
+                  borderBottom: "1px solid rgba(255,255,255,0.08)",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "rgba(255,255,255,0.95)",
+                    marginBottom: 4,
+                  }}
+                >
+                  Удалить задачу?
+                </div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "rgba(255,255,255,0.5)",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  «{task.title}» будет удалена безвозвратно
+                </div>
+              </div>
+              <button
+                style={{
+                  width: "100%",
+                  padding: "15px 16px",
+                  fontSize: 17,
+                  fontWeight: 600,
+                  color: "#FF3B30",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+                onClick={() => {
+                  setConfirmDelete(false);
+                  hapticDrop();
+                  deleteTask.mutate(task.id);
+                }}
+              >
+                Удалить
+              </button>
+            </div>
+
+            {/* Кнопка «Отмена» — отдельная карточка */}
+            <button
+              style={{
+                width: "100%",
+                padding: "16px",
+                fontSize: 17,
+                fontWeight: 600,
+                color: "rgba(255,255,255,0.95)",
+                background: "rgba(30,30,32,0.97)",
+                border: "none",
+                borderRadius: 16,
+                cursor: "pointer",
+                marginBottom: "env(safe-area-inset-bottom, 0px)",
+              }}
+              onClick={() => setConfirmDelete(false)}
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

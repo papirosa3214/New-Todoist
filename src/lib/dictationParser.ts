@@ -54,6 +54,8 @@ export interface ParsedDictation {
   title: string;
   /** "YYYY-MM-DD" или null, если дата в тексте не найдена. */
   dueDate: string | null;
+  /** "HH:mm" (например "15:30") или null, если время не найдено. */
+  startTime: string | null;
   /** Сырое имя после `#`, как есть (без ведущего `#`) — сверка со списком
    *  проектов остаётся за вызывающим кодом (только он знает список). */
   projectName: string | null;
@@ -308,6 +310,60 @@ function extractDate(text: string, today: Date): DateExtraction {
   return { dueDate: null, rest: text };
 }
 
+interface TimeExtraction {
+  startTime: string | null;
+  rest: string;
+}
+
+function extractTime(text: string): TimeExtraction {
+  // 1. "в 15:30", "в 15.30", "к 9:45", "на 18:00", "15:30"
+  {
+    const re = /(?:(?<![a-zа-яё0-9])(?:в|во|к|на)\s+)?(?<![0-9:])(\d{1,2})[:.](\d{2})(?![0-9:])/iu;
+    const m = text.match(re);
+    if (m) {
+      const hour = parseInt(m[1], 10);
+      const minute = parseInt(m[2], 10);
+      if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+        const timeStr = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+        return { startTime: timeStr, rest: cutMatch(text, m) };
+      }
+    }
+  }
+
+  // 2. "в 5 вечера", "в 10 утра", "в 3 часа дня", "в 12 ночи", "в 12 дня"
+  {
+    const re = /(?:(?<![a-zа-яё0-9])(?:в|во|к|на)\s+)?(?<![0-9])(\d{1,2})\s*(?:часов|часа|ч)?\s*(вечера|ночи|дня|утра)(?![a-zа-яё0-9])/iu;
+    const m = text.match(re);
+    if (m) {
+      let hour = parseInt(m[1], 10);
+      const period = m[2].toLowerCase();
+      if (hour >= 1 && hour <= 12) {
+        if (period === "вечера" && hour < 12) hour += 12;
+        else if (period === "ночи" && hour === 12) hour = 0;
+        else if (period === "дня" && hour < 12) hour += 12;
+        else if (period === "утра" && hour === 12) hour = 0;
+        const timeStr = `${String(hour).padStart(2, "0")}:00`;
+        return { startTime: timeStr, rest: cutMatch(text, m) };
+      }
+    }
+  }
+
+  // 3. "в 18 часов", "в 14 ч", "к 20 часам"
+  {
+    const re = /(?<![a-zа-яё0-9])(?:в|во|к|на)\s+(\d{1,2})\s*(?:часов|часа|часам|ч)(?![a-zа-яё0-9])/iu;
+    const m = text.match(re);
+    if (m) {
+      const hour = parseInt(m[1], 10);
+      if (hour >= 0 && hour <= 23) {
+        const timeStr = `${String(hour).padStart(2, "0")}:00`;
+        return { startTime: timeStr, rest: cutMatch(text, m) };
+      }
+    }
+  }
+
+  return { startTime: null, rest: text };
+}
+
 // ═══════════ Точка входа ═══════════
 
 // `now` — только для тестируемости (фиксированная «сегодня» вместо
@@ -330,13 +386,6 @@ export function parseDictation(
   if (labelMatch) labelName = labelMatch[1];
   text = text.replace(LABEL_MARKER_RE_G, "");
 
-  // Маркер вырезается из заголовка ТОЛЬКО если слово после `!` реально
-  // распознано как приоритет. «Купить !молоко» — не приоритет и не мусор,
-  // это часть заголовка пользователя; молча съесть «молоко» вместе с
-  // нераспознанным маркером было бы разрушительным и незаметным для него —
-  // хуже, чем просто не сработавший парсинг. Для `#Проект` то же самое не
-  // применяется сознательно: там маркер всегда синтаксис, а не потенциально
-  // случайный текст, см. findProjectByName ниже.
   let priority: number | null = null;
   const priorityMatch = text.match(PRIORITY_MARKER_RE);
   if (priorityMatch) {
@@ -344,8 +393,11 @@ export function parseDictation(
     if (priority !== null) text = cutMatch(text, priorityMatch);
   }
 
-  const { dueDate, rest } = extractDate(text, today);
-  text = rest;
+  const { dueDate, rest: afterDate } = extractDate(text, today);
+  text = afterDate;
+
+  const { startTime, rest: afterTime } = extractTime(text);
+  text = afterTime;
 
   // Финальная зачистка: схлопнуть пробелы, подтянуть пунктуацию, убрать
   // осиротевшие знаки препинания по краям, оставшиеся на месте вырезанных
@@ -356,7 +408,7 @@ export function parseDictation(
     .replace(/^[\s,.;:]+|[\s,.;:]+$/g, "")
     .trim();
 
-  return { title: text, dueDate, projectName, labelName, priority };
+  return { title: text, dueDate, startTime, projectName, labelName, priority };
 }
 
 // ═══════════ Кнопка микрофона: вставка распознанного текста ═══════════

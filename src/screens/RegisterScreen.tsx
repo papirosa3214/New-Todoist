@@ -32,7 +32,7 @@ export function RegisterScreen() {
       email: email.trim(),
       password,
     });
-    navigate("/inbox", { replace: true });
+    navigate("/overview", { replace: true });
   });
 
   return (

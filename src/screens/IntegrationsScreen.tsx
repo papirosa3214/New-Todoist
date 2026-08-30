@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ScreenHeader, BackButton, ErrorBanner, Icon } from "../components/UI";
+
+import { ScreenHeader, ErrorBanner, Icon } from "../components/UI";
 import {
   AppleIntegrations,
   type CalendarInfo,
@@ -22,7 +22,6 @@ import { useProjects, useCreateProject } from "../api/projects";
 import { getErrorMessage } from "../lib/errors";
 
 export function IntegrationsScreen() {
-  const navigate = useNavigate();
   const [calPerm, setCalPerm] = useState<PermissionStatus>({ status: "notDetermined", granted: false });
   const [remPerm, setRemPerm] = useState<PermissionStatus>({ status: "notDetermined", granted: false });
   const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
@@ -263,7 +262,6 @@ export function IntegrationsScreen() {
     <div className="min-h-screen bg-bg text-text pb-12">
       <ScreenHeader
         variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Интеграции"
       />
 
@@ -556,7 +554,7 @@ export function IntegrationsScreen() {
 
                     {intStatus?.google?.lastSyncedAt && (
                       <div className="text-[11px] text-dim text-center">
-                        Последняя синхронизация: {new Date(intStatus.google.lastSyncedAt).toLocaleString("ru-RU")}
+                        Последняя синхронизация: {new Date(intStatus.google.lastSyncedAt).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })}
                       </div>
                     )}
                   </div>

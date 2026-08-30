@@ -12,9 +12,9 @@ const ASR_BASE_URL = (
   process.env.ASR_BASE_URL || "http://192.168.1.110:1235"
 ).replace(/\/+$/, "");
 
-// CPU-инференс медленнее GPU — длинная диктовка (до ~60с, см. лимит на
+// CPU-инференс медленнее GPU — длинная диктовка (до 5 минут, см. лимит на
 // фронтенде) должна успеть обработаться. С запасом.
-const ASR_TIMEOUT_MS = 90_000;
+const ASR_TIMEOUT_MS = 300_000;
 
 class AsrError extends Error {
   constructor(message: string) {

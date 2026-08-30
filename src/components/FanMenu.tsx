@@ -27,7 +27,14 @@ import { useMultiSpring } from "../lib/useMultiSpring";
 const TRIGGER_SIZE = 64;
 const ITEM_SIZE = 56;
 const RADIUS = 100;
-const STEP_DEG = 45;
+// Шаг между пунктами. Раньше был жёстко 45°, и это работало ровно до
+// пяти пунктов: 4 промежутка × 45° = 180°, точный полукруг. Шестой пункт
+// (Дневник, 26.08.2026) дал бы 225° — два крайних кружка уехали бы НИЖЕ
+// центра триггера, то есть под нижний край экрана. Поэтому шаг считается
+// от числа пунктов: дуга всегда ровно 180°, кружки просто становятся
+// теснее. При 5 пунктах формула даёт те же 45°, что и раньше.
+const FAN_ARC_DEG = 180;
+const stepFor = (n: number) => (n > 1 ? FAN_ARC_DEG / (n - 1) : 0);
 // Кнопка и кружки веера всегда центрированы на одной точке — центре
 // триггера. bottom:SAFE_BOTTOM у триггера даёт его НИЖНИЙ край; центр —
 // на TRIGGER_SIZE/2 выше. Кружку веера, чтобы его СОБСТВЕННЫЙ центр попал
@@ -52,18 +59,16 @@ type FanItem = { path: string; label: string; icon: string };
 // центральной кнопки — она на экране всегда, поэтому дублировать её
 // пунктом внутри того же меню незачем.
 
-// Настройки — крайним пунктом веера (владелец 19.08.2026: «добавить
-// задачу всегда по центру, а все остальные настройки в самом крайнее
-// правое»). Раньше до них приходилось идти через «Обзор», что владелец
-// назвал неудобным.
-const SETTINGS_ITEM: FanItem = {
-  path: "/settings",
-  label: "Настройки",
-  icon: "gear",
-};
+// Настроек в веере БОЛЬШЕ НЕТ (26.08.2026). Они стояли крайним пунктом с
+// 19.08.2026, когда до них приходилось идти через «Обзор» и это было
+// неудобно. Теперь в «Обзоре» они лежат обычной широкой строкой под
+// «Активностью и статистикой» — Максим: «не маленькую шестеренку, чтобы
+// тянуться до нее далеко было, а просто кнопку такую же самую». Место в
+// веере освободилось, и он вернулся к пяти пунктам (шаг дуги снова 45°).
+// Держать оба входа нельзя: одна функция — один вход.
 
 function buildItems(): FanItem[] {
-  return [...NAV_ITEMS, SETTINGS_ITEM];
+  return [...NAV_ITEMS];
 }
 
 // Порог удержания. 400 мс — обычный системный «long press»: короче
@@ -102,7 +107,7 @@ export function FanMenu() {
   const offsets = useMemo(() => {
     const mid = (n - 1) / 2;
     return menuItems.map((_, i) => {
-      const angleRad = ((-90 + (i - mid) * STEP_DEG) * Math.PI) / 180;
+      const angleRad = ((-90 + (i - mid) * stepFor(n)) * Math.PI) / 180;
       return {
         tx: Math.cos(angleRad) * RADIUS,
         ty: Math.sin(angleRad) * RADIUS,
@@ -249,7 +254,14 @@ export function FanMenu() {
 
       <button
         type="button"
-        // Короткий тап — веер, удержание — сразу новая задача.
+        // Короткий тап — веер, удержание — новая задача по умолчанию, но
+        // раздел может подменить действие (27.08.2026, владелец): на
+        // «Проектах» держим — заводим проект, на «Дневнике» — заметку,
+        // на «Сегодня» — задачу сразу с сегодняшней датой (раньше уходила
+        // в /task/new без даты и на этом экране тоже, хотя по короткому
+        // тапу с прежним FAB дата подставлялась — расхождение и было
+        // причиной жалобы). Everywhere else — без изменений: обычная
+        // задача без даты, включая доску (решение 19.08.2026).
         onPointerDown={() => {
           heldRef.current = false;
           if (shineRef.current) {
@@ -259,7 +271,15 @@ export function FanMenu() {
             heldRef.current = true;
             hapticGrab();
             if (open) toggle(false);
-            navigate("/task/new");
+            if (location.pathname === "/projects") {
+              navigate("/projects?create=1");
+            } else if (location.pathname === "/notes") {
+              navigate("/notes?create=1");
+            } else if (location.pathname === "/today") {
+              navigate("/task/new?due=today");
+            } else {
+              navigate("/task/new");
+            }
           }, HOLD_MS);
         }}
         onPointerMove={(e) => {
@@ -322,7 +342,8 @@ export function FanMenu() {
             0 8px 24px -2px rgba(135, 18, 12, 0.50),
             0 4px 12px rgba(0, 0, 0, 0.40)
           `,
-          transition: "transform 0.3s cubic-bezier(0.25, 1, 0.5, 1), box-shadow 0.3s ease",
+          transition:
+            "transform 0.3s cubic-bezier(0.25, 1, 0.5, 1), box-shadow 0.3s ease",
           WebkitTapHighlightColor: "transparent",
           WebkitUserSelect: "none",
           userSelect: "none",

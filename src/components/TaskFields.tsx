@@ -86,7 +86,7 @@ export function FieldRow({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-3 px-4 text-left active:bg-white/[0.04] transition-colors"
+      className="w-full flex items-center gap-3 px-4 text-left active:bg-stroke transition-colors"
       style={{ minHeight }}
     >
       {icon && (
@@ -182,7 +182,7 @@ export function PriorityField({
                 onChange(p.key);
                 setOpen(false);
               }}
-              className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-white/[0.04] transition-colors"
+              className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-stroke transition-colors"
             >
               <span
                 className="w-[24px] h-[24px] rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
@@ -864,6 +864,9 @@ export function DueDateField({
             </button>
           </div>
           <div
+            // Календарь листается вбок по месяцам — свой горизонтальный
+            // жест, свайп «назад» сюда не лезет (useSwipeBack).
+            data-hswipe
             className="overflow-hidden select-none"
             onPointerDown={handleCalPointerDown}
             onPointerMove={handleCalPointerMove}
@@ -874,7 +877,10 @@ export function DueDateField({
             <div ref={calGridRef} style={{ willChange: "transform" }}>
               <div className="grid grid-cols-7 gap-0">
                 {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((d) => (
-                  <div key={d} className="text-center text-[10px] text-dim py-1">
+                  <div
+                    key={d}
+                    className="text-center text-[10px] text-dim py-1"
+                  >
                     {d}
                   </div>
                 ))}
@@ -1009,7 +1015,9 @@ export function LabelsField({
                 ? l.color + "33"
                 : "rgba(255,255,255,.08)",
               color: active ? l.color : "#A6A6A6",
-              border: active ? `1px solid ${l.color}66` : "1px solid transparent",
+              border: active
+                ? `1px solid ${l.color}66`
+                : "1px solid transparent",
             }}
           >
             {active && <Icon name="check" size={11} />}
@@ -1077,22 +1085,21 @@ export function SubtaskRow({
   done,
   onRename,
   onDelete,
-  dragHandleListeners,
-  dragHandleAttributes,
-  setDragHandleRef,
+  dragListeners,
+  dragAttributes,
   isDragging,
 }: {
   title: string;
   done: boolean;
   onRename: (title: string) => void;
   onDelete: () => void;
-  // Перетаскивание — см. SortableSubtaskRow в TaskFormScreen.tsx. Опционально:
-  // без dnd-kit-обёртки (create-mode ещё без id, или будущий вызов без
-  // переупорядочивания) строка просто не получает ручку и ведёт себя как
-  // раньше.
-  dragHandleListeners?: DraggableSyntheticListeners;
-  dragHandleAttributes?: DraggableAttributes;
-  setDragHandleRef?: (el: HTMLElement | null) => void;
+  // Перетаскивание — см. SortableSubtaskRow в TaskFormScreen.tsx. С
+  // 26.08.2026 слушатели вешаются на всю строку (грип-точки убраны):
+  // старт драга — удержание (TouchSensor delay) или ведение мышью
+  // (MouseSensor distance). Опционально: без dnd-kit-обёртки (create-mode
+  // ещё без id) строка просто не перетаскивается и ведёт себя как раньше.
+  dragListeners?: DraggableSyntheticListeners;
+  dragAttributes?: DraggableAttributes;
   isDragging?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -1111,46 +1118,38 @@ export function SubtaskRow({
     // здесь этот отступ был нужен, пока строка стояла внутри Card-рамки
     // (убрана пятым заходом), сейчас это просто лишний сдвиг вправо
     // относительно title/desc textarea и остальных лейблов формы.
+    //
+    // Слушатели drag — на всей строке (26.08.2026, грип-хендл убран).
+    // Поле ввода при переименовании и кнопка-крестик отмечают
+    // pointerdown как «своё» (stopPropagation) — иначе удержание пальца
+    // на input при выделении текста или на крестике стартовало бы драг.
+    // select-none/WebkitTouchCallout — удержание не должно выделять текст
+    // и поднимать системное меню; touchAction: manipulation — скролл
+    // формы с пальца на строке продолжает работать.
     <div
-      className={`relative flex items-center gap-3 py-3 ${isDragging ? "opacity-40" : ""}`}
+      {...(dragAttributes ?? {})}
+      {...(dragListeners ?? {})}
+      style={{ touchAction: "manipulation", WebkitTouchCallout: "none" }}
+      className={`relative flex items-center gap-3 py-3 select-none ${isDragging ? "opacity-40" : ""}`}
     >
-      {dragHandleListeners && (
-        // Тот же приём, что у BoardCard на доске (TaskBoard.tsx): ручка —
-        // отдельный элемент, перетаскивание стартует только с неё, тап по
-        // остальной строке (переименование, `input`) не задет. touch-none —
-        // чтобы палец не начинал скролл раньше, чем dnd-kit распознает драг.
-        //
-        // absolute, НЕ в потоке: строка (её родитель наследует px-4 формы,
-        // своего отступа не имеет — см. комментарий выше) не может отдать
-        // ручке место в потоке, не сдвинув текст вправо относительно
-        // AddSubtaskRow и textarea названия — ровно та рассинхронизация,
-        // которую семь заходов правок этого файла как раз убирали. Ручка
-        // вместо этого встаёт в сам px-4 gutter слева от строки: left:-16px
-        // (=-px-4) до 0 — ровно ширина этого отступа, ни пикселем в текст.
-        // Хуже 44×44 канона (TaskFilterButton и т.п.), но шире отступа
-        // взять некуда, не сдвинув текст всей формы — цена этого выбора.
-        <div
-          ref={setDragHandleRef}
-          {...dragHandleAttributes}
-          {...dragHandleListeners}
-          className="absolute left-[-16px] top-0 bottom-0 w-4 flex items-center justify-center touch-none text-dim active:text-sub"
-          aria-label="Перетащить подзадачу"
-        >
-          <Icon name="grip" size={12} />
-        </div>
-      )}
       {/* Кружка-переключателя здесь нет (решение Максима 15.08.2026): это
           раздел «Изменить», в нём подзадачи правят и удаляют, а отмечают
           выполненными в самой карточке. Лишний элемент только загружал
           строку. Галочка у уже выполненной остаётся — она несёт смысл,
           показывая, что шаг закрыт. */}
       {done && <Icon name="check" size={14} className="text-green shrink-0" />}
+      {/* stopPropagation на pointer/mouse/touch-down: dnd-kit вешает старт
+          драга на всю строку — удержание пальца на поле ввода (выделение
+          текста) или на крестике не должно поднимать строку. */}
       {editing ? (
         <input
           autoFocus
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onBlur={commit}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
           onKeyDown={(e) => {
             if (e.key === "Enter") commit();
             if (e.key === "Escape") {
@@ -1175,7 +1174,13 @@ export function SubtaskRow({
           </span>
         </button>
       )}
-      <button onClick={onDelete} className="p-2 -m-1 shrink-0">
+      <button
+        onClick={onDelete}
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        className="p-2 -m-1 shrink-0"
+      >
         <Icon name="x" size={14} className="text-dim" />
       </button>
     </div>

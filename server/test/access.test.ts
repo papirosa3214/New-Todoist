@@ -206,15 +206,16 @@ describe("Доступ по роли: владелец, агенты, посто
     expect(patch.statusCode).toBe(200);
   });
 
-  // Приёмка отдельным шагом отменена 20.08.2026: агент, которому задача
-  // назначена, закрывает её сам. Разграничение доступа при этом остаётся —
-  // закрыть можно свою задачу, не чужую (это проверяют тесты выше).
-  it("агент закрывает назначенную ему задачу сам", async () => {
+  // Приёмка передана оркестратору (29.08.2026, задача be329d8e): агент,
+  // которому задача назначена, больше НЕ может её закрыть — приёмку делает
+  // владелец или оркестратор. Прежний контракт «агент закрывает свою сам»
+  // снят (20.08.2026, тогда это было решением, отменённым владельцем).
+  it("агент НЕ может закрыть назначенную ему задачу (403, только владелец/оркестратор)", async () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/tasks",
       headers: { authorization: `Bearer ${ownerToken}` },
-      payload: { title: "Закрытие агентом", assignee_id: agentAId },
+      payload: { title: "Закрытие агентом — запрещено", assignee_id: agentAId },
     });
     const id = created.json().task.id;
 
@@ -224,8 +225,18 @@ describe("Доступ по роли: владелец, агенты, посто
       headers: { authorization: `Bearer ${agentAToken}` },
       payload: { status: "completed" },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().task.status).toBe("completed");
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toMatch(/владелец или оркестратор/);
+
+    // Владелец закрывает ту же задачу — это и есть приёмка.
+    const ownerCloses = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { status: "completed" },
+    });
+    expect(ownerCloses.statusCode).toBe(200);
+    expect(ownerCloses.json().task.status).toBe("completed");
   });
 
   /** Регистрация на :5180 открыта, поэтому «видно всё» не должно
@@ -376,5 +387,254 @@ describe("Доступ по роли: владелец, агенты, посто
     expect(strangerIds).toContain(strangerProjectId);
     expect(strangerIds).not.toContain(ownerProject.json().id);
     expect(ownerId).toBeTruthy();
+  });
+});
+
+// Роль оркестратора — задача af2107b2, формулировка владельца: «полные
+// права на управление проектами и задачами ботов… право на удаление
+// объектов должно быть запрещено».
+describe("Оркестратор: правит всё, не удаляет ничего", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+  let ownerId: string;
+  let orchToken: string;
+  let agentToken: string;
+  let agentId: string;
+
+  async function makeUser(
+    name: string,
+    email: string,
+    patch?: { role?: string; type?: string },
+  ) {
+    const reg = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name, email, password: "password123" },
+    });
+    expect(reg.statusCode).toBe(200);
+    const body = reg.json();
+    if (patch?.role)
+      db.prepare("UPDATE users SET role = ? WHERE id = ?").run(
+        patch.role,
+        body.user.id,
+      );
+    if (patch?.type)
+      db.prepare("UPDATE users SET type = ? WHERE id = ?").run(
+        patch.type,
+        body.user.id,
+      );
+    return { id: body.user.id as string, jwt: body.token as string };
+  }
+
+  async function apiToken(jwt: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/api-token",
+      headers: { authorization: `Bearer ${jwt}` },
+    });
+    return res.json().api_token as string;
+  }
+
+  /** Задача владельца, назначенная рядовому боту, — типичный предмет работы. */
+  async function ownerTaskForAgent(title: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title, assignee_id: agentId },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().task.id as string;
+  }
+
+  beforeAll(async () => {
+    app = await buildApp();
+
+    const owner = await makeUser("Владелец", "owner@orch.test", {
+      role: "owner",
+    });
+    ownerId = owner.id;
+    ownerToken = owner.jwt;
+
+    // Оркестратор — учётка ИИ с собственной ролью, ходит api-токеном.
+    const orch = await makeUser("Оркестратор", "orch@orch.test", {
+      role: "orchestrator",
+      type: "ai",
+    });
+    orchToken = await apiToken(orch.jwt);
+
+    const agent = await makeUser("Рядовой бот", "worker@orch.test", {
+      type: "ai",
+    });
+    agentId = agent.id;
+    agentToken = await apiToken(agent.jwt);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("роль orchestrator принимается схемой", () => {
+    const row = db
+      .prepare("SELECT role FROM users WHERE email = ?")
+      .get("orch@orch.test") as { role?: string };
+    expect(row?.role).toBe("orchestrator");
+  });
+
+  it("правит чужую задачу и переназначает исполнителя", async () => {
+    const id = await ownerTaskForAgent("Задача бота");
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${id}`,
+      headers: { authorization: `Bearer ${orchToken}` },
+      payload: { title: "Переставил оркестратор", assignee_id: ownerId },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().task.title).toBe("Переставил оркестратор");
+    expect(patch.json().task.assignee_id).toBe(ownerId);
+  });
+
+  it("заводит шаг в чужой задаче", async () => {
+    const id = await ownerTaskForAgent("Задача под разбор на шаги");
+
+    const sub = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${id}/subtasks`,
+      headers: { authorization: `Bearer ${orchToken}` },
+      payload: { title: "Шаг от оркестратора" },
+    });
+    expect(sub.statusCode).toBe(200);
+    expect(sub.json().title).toBe("Шаг от оркестратора");
+  });
+
+  it("создаёт проект и задачу, кладёт задачу в чужой проект", async () => {
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Проект владельца под оркестровку" },
+    });
+    const projectId = project.json().id;
+
+    const own = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${orchToken}` },
+      payload: { name: "Проект от оркестратора" },
+    });
+    expect(own.statusCode).toBe(200);
+
+    const filed = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${orchToken}` },
+      payload: {
+        title: "Задача боту в проект владельца",
+        project_id: projectId,
+        assignee_id: agentId,
+      },
+    });
+    expect(filed.statusCode).toBe(200);
+    expect(filed.json().task.project_id).toBe(projectId);
+  });
+
+  it("правит чужой проект", async () => {
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Проект на переименование" },
+    });
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${project.json().id}`,
+      headers: { authorization: `Bearer ${orchToken}` },
+      payload: { name: "Переименовал оркестратор" },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().name).toBe("Переименовал оркестратор");
+  });
+
+  it("не удаляет ничего: ни задачу, ни свой проект, ни шаг, ни метку", async () => {
+    const taskId = await ownerTaskForAgent("Задача, которую не удалить");
+
+    const step = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/subtasks`,
+      headers: { authorization: `Bearer ${orchToken}` },
+      payload: { title: "Шаг, который не удалить" },
+    });
+    const stepId = step.json().id;
+
+    // Проект и метка заведены САМИМ оркестратором — то есть отказ не про
+    // «чужое», а именно про действие: своё он тоже не удаляет.
+    const ownProject = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: `Bearer ${orchToken}` },
+      payload: { name: "Свой проект оркестратора" },
+    });
+    const ownLabel = await app.inject({
+      method: "POST",
+      url: "/api/labels",
+      headers: { authorization: `Bearer ${orchToken}` },
+      payload: { name: "Своя метка оркестратора" },
+    });
+
+    for (const url of [
+      `/api/tasks/${taskId}`,
+      `/api/subtasks/${stepId}`,
+      `/api/projects/${ownProject.json().id}`,
+      `/api/labels/${ownLabel.json().id}`,
+    ]) {
+      const del = await app.inject({
+        method: "DELETE",
+        url,
+        headers: { authorization: `Bearer ${orchToken}` },
+      });
+      expect(del.statusCode, `DELETE ${url}`).toBe(403);
+      expect(del.json().error).toMatch(/не удаляет/);
+    }
+
+    // Объекты на месте: отказ отказом, а данные целы.
+    const stillThere = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(stillThere.statusCode).toBe(200);
+  });
+
+  it("прежние права не изменились: рядовой бот в чужое не лезет и удаляет своё", async () => {
+    const alien = await ownerTaskForAgent("Задача другому исполнителю");
+    await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${alien}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { assignee_id: ownerId },
+    });
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${alien}`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { title: "Влез в чужую" },
+    });
+    expect(patch.statusCode).toBe(404);
+
+    const own = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { title: "Своя задача бота" },
+    });
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/api/tasks/${own.json().task.id}`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    expect(del.statusCode).toBe(200);
   });
 });

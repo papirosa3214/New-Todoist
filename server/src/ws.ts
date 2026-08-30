@@ -3,6 +3,7 @@
 // module cycle — index.ts registers the routes and starts the listener).
 
 import db from "./db.js";
+import { queueLiveActivityPush } from "./apns.js";
 
 type Socket = { readyState: number; send: (data: string) => void };
 
@@ -40,7 +41,30 @@ export function removeClient(userId: string, socket: Socket) {
   if (set.size === 0) {
     clients.delete(userId);
     setStatus(userId, "offline");
+    for (const listener of goneListeners) listener(userId);
   }
+}
+
+// «Последний сокет участника закрылся» нужно знать не только статусу: на
+// этом же событии гаснет отметка «печатает» (chatTyping.ts). Импортировать
+// её отсюда нельзя — она сама зависит от broadcastToUsers, вышел бы цикл;
+// поэтому не вызов по имени, а подписка: желающий регистрирует обработчик.
+type GoneListener = (userId: string) => void;
+const goneListeners = new Set<GoneListener>();
+
+export function onUserGone(listener: GoneListener) {
+  goneListeners.add(listener);
+}
+
+// Событие про задачу уходит не только в открытые сокеты. Если по этой задаче
+// на iPhone висит островок, его надо двигать и тогда, когда приложение
+// свёрнуто, — а свёрнутое приложение сокет не слушает. Единственный путь туда
+// лежит через APNs (apns.ts). Точка одна и та же, потому что и повод один:
+// задача изменилась.
+function alsoPushToIsland(event: unknown) {
+  const e = event as { type?: string; task?: { id?: string } };
+  if (!e?.type?.startsWith("task:") || !e.task?.id) return;
+  queueLiveActivityPush(e.task);
 }
 
 /** Push an event to every open socket for a single user. */
@@ -59,6 +83,8 @@ export function broadcastToUsers(
   userIds: Array<string | null | undefined>,
   event: unknown,
 ) {
+  // Островок трогаем один раз на событие, а не на каждого адресата.
+  alsoPushToIsland(event);
   const seen = new Set<string>();
   for (const id of userIds) {
     if (!id || seen.has(id)) continue;

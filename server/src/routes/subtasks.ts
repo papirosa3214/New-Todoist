@@ -15,18 +15,13 @@ import {
 // иначе ответы этого файла (add/patch/delete подзадачи, WS-рассылка)
 // отдают сырой agent_state вместо вычисленного state, и два места отдачи
 // задачи расходятся в контракте. Максим 18.08.2026: «почини».
-import { withSubtaskState } from "./tasks.js";
+import { withSubtaskState, getTaskRow } from "./tasks.js";
 
 const uid = () => crypto.randomUUID();
 
 /** Get full task state with assignee info, labels, subtasks, and comments. */
 function getFullTask(taskId: string) {
-  const full = db
-    .prepare(
-      `SELECT t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials
-       FROM tasks t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.id = ?`,
-    )
-    .get(taskId) as any;
+  const full = getTaskRow(taskId);
   if (!full) return undefined;
 
   const labels = db
@@ -69,7 +64,7 @@ function getSubtaskWithTaskForUser(
     )
     .get(subtaskId) as any;
   if (!subtask) return undefined;
-  return getTaskForWrite(subtask.task_id, userId) ? subtask : undefined;
+  return getTaskForRead(subtask.task_id, userId) ? subtask : undefined;
 }
 
 export function registerSubtaskCommentRoutes(app: FastifyInstance) {

@@ -53,6 +53,11 @@ public class LiveActivityPlugin: CAPPlugin, CAPBridgedPlugin {
     let currentSubtask = call.getString("currentSubtask")
     let status = call.getString("status") ?? "in_progress"
     let statusLabel = call.getString("statusLabel") ?? "В работе"
+    let assigneeSlug = call.getString("assigneeSlug")
+    // Точка отсчёта таймера приходит из приложения: это момент, когда агент
+    // взял задачу (журнал задачи), а не момент запуска карточки. Иначе счётчик
+    // обнулялся бы каждый раз, когда человек открывает приложение заново.
+    let startedAt = call.getDouble("startedAtUnix").map { Date(timeIntervalSince1970: $0) } ?? Date()
 
     let progress: Double
     if totalSubtasks > 0 {
@@ -75,7 +80,9 @@ public class LiveActivityPlugin: CAPPlugin, CAPBridgedPlugin {
       taskTitle: taskTitle,
       projectName: projectName,
       projectColor: projectColor,
-      updatedAt: Date()
+      updatedAt: Date(),
+      assigneeSlug: assigneeSlug,
+      startedAt: startedAt
     )
 
     // Завершаем предыдущие активити для этой же задачи, если были
@@ -86,11 +93,26 @@ public class LiveActivityPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     do {
-      let activity = try Activity<TaskActivityAttributes>.request(
-        attributes: attributes,
-        contentState: initialContentState,
-        pushType: nil
-      )
+      // pushType: .token — единственный способ двигать островок, пока
+      // приложение свёрнуто: JS в фоне не выполняется, и обновлять активность
+      // изнутри некому. С токеном это делает сервер через APNs
+      // (server/src/apns.ts). Без него карточка замирала на данных момента
+      // запуска — ровно то, на что жаловался Максим 24.08.2026.
+      let activity: Activity<TaskActivityAttributes>
+      if #available(iOS 16.2, *) {
+        activity = try Activity.request(
+          attributes: attributes,
+          content: ActivityContent(state: initialContentState, staleDate: Self.staleDate()),
+          pushType: .token
+        )
+      } else {
+        activity = try Activity.request(
+          attributes: attributes,
+          contentState: initialContentState,
+          pushType: .token
+        )
+      }
+      observePushToken(activity)
       call.resolve([
         "id": activity.id,
         "taskId": taskId,
@@ -98,6 +120,41 @@ public class LiveActivityPlugin: CAPPlugin, CAPBridgedPlugin {
       ])
     } catch {
       call.reject("Ошибка запуска Live Activity: \(error.localizedDescription)")
+    }
+  }
+
+  /// После этого момента iOS считает данные карточки протухшими и рисует её
+  /// приглушённо. Пуш с сервера каждый раз отодвигает границу; если сервер
+  /// замолчал, человек это видит, а не смотрит на устаревшие цифры как на
+  /// свежие.
+  @available(iOS 16.2, *)
+  private static func staleDate() -> Date {
+    Date().addingTimeInterval(15 * 60)
+  }
+
+  /// Токен активности выдаётся не сразу и меняется со временем, поэтому его
+  /// не вернуть ответом на startTaskActivity — он приходит потоком. Каждое
+  /// значение уходит событием в JS, а тот отдаёт его серверу.
+  @available(iOS 16.1, *)
+  private func observePushToken(_ activity: Activity<TaskActivityAttributes>) {
+    Task { [weak self] in
+      for await tokenData in activity.pushTokenUpdates {
+        let hex = tokenData.map { String(format: "%02x", $0) }.joined()
+        self?.notifyListeners(
+          "activityPushToken",
+          data: ["taskId": activity.attributes.taskId, "token": hex]
+        )
+      }
+    }
+  }
+
+  /// Приложение перезапустили, а активность с прошлого раза жива: её токен
+  /// система могла сменить, и без повторной подписки сервер будет слать пуши
+  /// в никуда.
+  override public func load() {
+    guard #available(iOS 16.1, *) else { return }
+    for activity in Activity<TaskActivityAttributes>.activities {
+      observePushToken(activity)
     }
   }
 
@@ -134,6 +191,10 @@ public class LiveActivityPlugin: CAPPlugin, CAPBridgedPlugin {
       if let assigneeColor = call.getString("assigneeColor") { current.assigneeColor = assigneeColor }
       if let projectName = call.getString("projectName") { current.projectName = projectName }
       if let projectColor = call.getString("projectColor") { current.projectColor = projectColor }
+      if let assigneeSlug = call.getString("assigneeSlug") { current.assigneeSlug = assigneeSlug }
+      // startedAt намеренно не трогаем: это точка отсчёта таймера, она задаётся
+      // один раз при запуске карточки. Перезапишем — счётчик будет прыгать в
+      // ноль на каждом обновлении.
 
       if current.totalSubtasks > 0 {
         current.progress = Double(current.doneSubtasks) / Double(current.totalSubtasks)
@@ -142,8 +203,14 @@ public class LiveActivityPlugin: CAPPlugin, CAPBridgedPlugin {
       }
       current.updatedAt = Date()
 
-      Task {
-        await activity.update(using: current)
+      Task { [current] in
+        if #available(iOS 16.2, *) {
+          await activity.update(
+            ActivityContent(state: current, staleDate: Self.staleDate())
+          )
+        } else {
+          await activity.update(using: current)
+        }
       }
     }
 

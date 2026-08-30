@@ -38,7 +38,7 @@ export function migrate() {
       name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'agent' CHECK(role IN ('owner','agent','viewer')),
+      role TEXT NOT NULL DEFAULT 'agent' CHECK(role IN ('owner','agent','viewer','orchestrator')),
       type TEXT NOT NULL DEFAULT 'human' CHECK(type IN ('human','ai')),
       avatar_color TEXT DEFAULT '#A6A6A6',
       initials TEXT DEFAULT '',
@@ -69,6 +69,7 @@ export function migrate() {
       description TEXT,
       due_date TEXT,
       project_id TEXT REFERENCES projects(id),
+      parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       priority INTEGER DEFAULT 1 CHECK(priority BETWEEN 1 AND 4),
       assignee_id TEXT REFERENCES users(id),
       creator_id TEXT REFERENCES users(id),
@@ -220,6 +221,24 @@ export function migrate() {
     db.exec("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT NULL");
   }
 
+  // Additive migration: users.avatar_url_working / avatar_url_blocked —
+  // «живая» аватарка агента (27.08.2026, просьба владельца: пусть краб
+  // ведёт себя по активности, не одна статичная картинка). avatar_url
+  // остаётся дефолтом (простаивает); эти два — необязательные варианты на
+  // agent_state='in_progress'/'blocked' (см. computeActivity в
+  // routes/projects.ts, GET /api/agents). NULL — просто нет своего
+  // варианта, рендерится дефолт, ничего не падает.
+  if (!userCols.some((c) => c.name === "avatar_url_working")) {
+    db.exec(
+      "ALTER TABLE users ADD COLUMN avatar_url_working TEXT DEFAULT NULL",
+    );
+  }
+  if (!userCols.some((c) => c.name === "avatar_url_blocked")) {
+    db.exec(
+      "ALTER TABLE users ADD COLUMN avatar_url_blocked TEXT DEFAULT NULL",
+    );
+  }
+
   // Additive migration: tasks.completed_at may be missing on a DB created
   // before this column was added. Unlike updated_at (touched on every
   // PATCH), completed_at is set only on the active→completed transition and
@@ -307,6 +326,18 @@ export function migrate() {
     db.exec("ALTER TABLE projects ADD COLUMN pinned INTEGER DEFAULT 0");
   }
 
+  // Additive migration (29.08.2026, задача 31f2759e): users.last_seen_at —
+  // метка последнего обращения агента к серверу (UTC, ISO 8601). В памяти
+  // живёт «прямо сейчас» в activeAgent.ts (Map), в БД — последняя
+  // зафиксированная, чтобы переживать рестарт сервера. Пишется не чаще
+  // раза в 30 секунд на агента (троттлинг в activeAgent.ts).
+  const userCols2 = db.prepare("PRAGMA table_info(users)").all() as Array<{
+    name: string;
+  }>;
+  if (!userCols2.some((c) => c.name === "last_seen_at")) {
+    db.exec("ALTER TABLE users ADD COLUMN last_seen_at TEXT");
+  }
+
   // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:
   // there is no PATCH/DELETE endpoint for individual events, which is what
   // makes the journal tamper-proof from the API side (see AGENT-PROTOCOL.md,
@@ -328,6 +359,32 @@ export function migrate() {
     CREATE INDEX IF NOT EXISTS idx_task_events_task_created
       ON task_events(task_id, created_at);
   `);
+
+  // Токены Live Activity (Dynamic Island). Один живой островок = одна строка:
+  // ключ по задаче, потому что и активность на устройстве заводится по задаче
+  // (TaskActivityAttributes.taskId). Токен выдаёт сама iOS и со временем
+  // меняет, поэтому строка перезаписывается по task_id, а не копится.
+  //
+  // Хранить их вечно нельзя и не нужно: как только активность погашена,
+  // APNs отвечает на такой токен отказом, и apns.ts строку убирает.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS live_activity_tokens (
+      task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+      user_id TEXT REFERENCES users(id),
+      token TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // Момент, с которого островок считает время работы. Живёт здесь, а не в
+  // приложении: пуш перезаписывает карточку целиком, и если сервер не будет
+  // знать точку отсчёта, счётчик будет прыгать в ноль на каждом обновлении.
+  const latCols = db
+    .prepare("PRAGMA table_info(live_activity_tokens)")
+    .all() as any[];
+  if (!latCols.some((c) => c.name === "started_at")) {
+    db.exec("ALTER TABLE live_activity_tokens ADD COLUMN started_at TEXT");
+  }
 }
 
 export default db;

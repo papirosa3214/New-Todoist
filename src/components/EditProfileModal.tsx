@@ -64,12 +64,17 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
           hapticError();
           setError(getErrorMessage(err));
         },
-      }
+      },
     );
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in safe-area-all">
+    <div
+      // Свайп «назад» не должен уводить экран из-под шторки
+      // (useSwipeBack ищет этот атрибут).
+      data-overlay
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in safe-area-all"
+    >
       <div className="w-full max-w-md bg-[#1C1C1E] border border-white/10 rounded-3xl p-6 shadow-2xl animate-scale-up text-white flex flex-col max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-5">
@@ -144,7 +149,10 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
           {/* Password Change Divider */}
           <div className="pt-2 border-t border-white/10">
             <span className="text-[13px] font-semibold text-white/70 block mb-3">
-              Смена пароля <span className="text-xs text-white/40 font-normal">(оставьте пустым, если не меняете)</span>
+              Смена пароля{" "}
+              <span className="text-xs text-white/40 font-normal">
+                (оставьте пустым, если не меняете)
+              </span>
             </span>
 
             <div className="flex flex-col gap-3">
@@ -184,7 +192,9 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
 
           {/* Info notice */}
           <div className="text-[12px] text-white/40 bg-white/[0.02] border border-white/5 p-3 rounded-xl leading-relaxed mt-1">
-            💡 Все ваши задачи, проекты, метки, интеграции и история диалогов с AI моделями сохраняются в полном объёме при изменении логина и пароля.
+            💡 Все ваши задачи, проекты, метки, интеграции и история диалогов с
+            AI моделями сохраняются в полном объёме при изменении логина и
+            пароля.
           </div>
 
           {/* Actions */}

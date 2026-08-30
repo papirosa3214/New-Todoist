@@ -3,9 +3,107 @@
 
 import ActivityKit
 import SwiftUI
+import UIKit
 import WidgetKit
 
 @available(iOS 16.1, *)
+// Цвета островка — те же, что в приложении (src/index.css, DESIGN.md §2).
+// Раньше здесь стояли системные синий и оранжевый «на глаз»: в приложении
+// «в работе» бирюзовый, «на проверке» синий, а островок красил их синим и
+// оранжевым — один и тот же статус выглядел двумя разными вещами.
+enum TFColor {
+  static let teal = Color(hex: "#35B8A3")   // в работе
+  static let blue = Color(hex: "#4A9FD8")   // на проверке
+  static let orange = Color(hex: "#FF9A14") // заблокирована
+  static let green = Color(hex: "#15937E")  // выполнена
+  static let dim = Color(hex: "#A6A6A6")
+}
+
+/// Один цвет на состояние — им красится и текст ярлыка, и полоса прогресса,
+/// и счётчик шагов, чтобы карточка читалась одним взглядом.
+@available(iOS 16.1, *)
+func tfAccent(for status: String) -> Color {
+  switch status {
+  case "review": return TFColor.blue
+  case "blocked": return TFColor.orange
+  case "completed": return TFColor.green
+  default: return TFColor.teal
+  }
+}
+
+/// Картинка участника, а если её в расширении нет — буква на цветном кружке,
+/// как было раньше. Файлы лежат в ассетах самого расширения: сети у Live
+/// Activity нет, скачать нечего и негде.
+@available(iOS 16.1, *)
+struct AssigneeBadge: View {
+  let slug: String?
+  let initials: String
+  let color: String
+  let size: CGFloat
+
+  private var hasImage: Bool {
+    guard let slug, !slug.isEmpty else { return false }
+    return UIImage(named: "avatar-\(slug)") != nil
+  }
+
+  var body: some View {
+    if hasImage, let slug {
+      Image("avatar-\(slug)")
+        .resizable()
+        .scaledToFit()
+        .frame(width: size, height: size)
+    } else {
+      Circle()
+        .fill(Color(hex: color))
+        .frame(width: size, height: size)
+        .overlay(
+          Text(initials)
+            .font(.system(size: size * 0.5, weight: .bold))
+            .foregroundColor(.white)
+        )
+    }
+  }
+}
+
+/// Аватарка в кольце прогресса — для свёрнутого островка и минимального
+/// кружка. Когда в работе несколько задач, система показывает две карточки:
+/// одну у выреза камеры, вторую отдельным кружком справа. В этом кружке
+/// помещается ровно один значок, и он должен отвечать сразу на два вопроса:
+/// чья это задача и далеко ли до конца. Цифры туда не влезают, кольцо — влезает.
+@available(iOS 16.1, *)
+struct AssigneeProgressBadge: View {
+  let slug: String?
+  let initials: String
+  let color: String
+  let progress: Double
+  let accent: Color
+  /// Диаметр самой картинки, кольцо рисуется вокруг неё.
+  let size: CGFloat
+
+  // Кольцо выводится из размера картинки, а не подбирается на глаз: толщина —
+  // восьмая часть диаметра, зазор между картинкой и кольцом — половина
+  // толщины. При size = 14 это 1.75 и 0.88, внешний габарит 19.25 pt: влезает
+  // и в компактную зону островка, и в минимальный кружок.
+  private var stroke: CGFloat { size / 8 }
+  private var outer: CGFloat { size + stroke * 3 }
+
+  var body: some View {
+    ZStack {
+      Circle()
+        .stroke(Color.white.opacity(0.18), lineWidth: stroke)
+      Circle()
+        // Минимум 0.02 — чтобы в самом начале работы кольцо не пропадало
+        // вовсе: точка на месте старта читается как «взялись», пустота — как
+        // «сломалось».
+        .trim(from: 0, to: max(0.02, min(1.0, progress)))
+        .stroke(accent, style: StrokeStyle(lineWidth: stroke, lineCap: .round))
+        .rotationEffect(.degrees(-90))
+      AssigneeBadge(slug: slug, initials: initials, color: color, size: size)
+    }
+    .frame(width: outer, height: outer)
+  }
+}
+
 struct TaskActivityWidget: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: TaskActivityAttributes.self) { context in
@@ -17,68 +115,55 @@ struct TaskActivityWidget: Widget {
       // ── Dynamic Island ──
       DynamicIsland {
         // 1. РАЗВЁРНУТЫЙ ВИД (Expanded) при зажатии или тапе на островок
+        //
+        // Верх обходит вырез камеры и делится пополам — длинному тексту там
+        // не место, но и пустым его оставлять нельзя: пустой блок системе не
+        // схлопнуть, он всё равно держит высоту, и весь остальной контент
+        // уезжает вниз с огромным провалом (так и вышло с первой попытки —
+        // Максим 24.08.2026: «зачем ты вниз спустил так сильно»). Поэтому по
+        // бокам от выреза стоит то, что и должно быть коротким: слева
+        // картинка участника, справа счёт шагов.
         DynamicIslandExpandedRegion(.leading) {
-          VStack(alignment: .leading, spacing: 3) {
-            if let proj = context.state.projectName, !proj.isEmpty {
-              HStack(spacing: 4) {
-                Circle()
-                  .fill(Color(hex: context.state.projectColor ?? "#A6A6A6"))
-                  .frame(width: 6, height: 6)
-                Text(proj)
-                  .font(.system(size: 11, weight: .semibold))
-                  .foregroundColor(Color(hex: context.state.projectColor ?? "#A6A6A6"))
-                  .lineLimit(1)
-              }
-            }
-            Text(context.state.taskTitle)
-              .font(.system(size: 14, weight: .bold))
-              .foregroundColor(.white)
-              .lineLimit(2)
-          }
-          .padding(.leading, 8)
+          AssigneeBadge(
+            slug: context.state.assigneeSlug,
+            initials: context.state.assigneeInitials,
+            color: context.state.assigneeColor,
+            size: 34
+          )
+          .padding(.leading, 6)
         }
 
         DynamicIslandExpandedRegion(.trailing) {
-          VStack(alignment: .trailing, spacing: 4) {
-            // Аватарка исполнителя
-            HStack(spacing: 4) {
-              Text(context.state.assigneeName)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.gray)
-                .lineLimit(1)
-
-              Circle()
-                .fill(Color(hex: context.state.assigneeColor))
-                .frame(width: 20, height: 20)
-                .overlay(
-                  Text(context.state.assigneeInitials)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white)
-                )
-            }
-
-            // Кольцо прогресса
+          Group {
             if context.state.totalSubtasks > 0 {
               Text("\(context.state.doneSubtasks)/\(context.state.totalSubtasks)")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
             } else {
               Text("\(Int(context.state.progress * 100))%")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundColor(Color(hex: "#007AFF"))
             }
           }
+          .font(.system(size: 17, weight: .bold, design: .rounded))
+          .foregroundColor(tfAccent(for: context.state.status))
           .padding(.trailing, 8)
         }
 
         DynamicIslandExpandedRegion(.bottom) {
-          VStack(alignment: .leading, spacing: 6) {
-            // Текущая подзадача
+          VStack(alignment: .leading, spacing: 4) {
+            // Название — во всю ширину, под вырезом. Две строки: третья уже
+            // распирает карточку по высоте, а обрезка по многоточию читается
+            // не хуже.
+            Text(context.state.taskTitle)
+              .font(.system(size: 15, weight: .bold))
+              .foregroundColor(.white)
+              .lineLimit(2)
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Текущий шаг
             if let sub = context.state.currentSubtask, !sub.isEmpty {
               HStack(spacing: 5) {
                 Image(systemName: "arrow.triangle.2.circlepath")
                   .font(.system(size: 10, weight: .bold))
-                  .foregroundColor(Color(hex: "#007AFF"))
+                  .foregroundColor(tfAccent(for: context.state.status))
                 Text(sub)
                   .font(.system(size: 12, weight: .medium))
                   .foregroundColor(.white.opacity(0.9))
@@ -95,7 +180,10 @@ struct TaskActivityWidget: Widget {
                 Capsule()
                   .fill(
                     LinearGradient(
-                      colors: [Color(hex: "#007AFF"), Color(hex: "#34C759")],
+                      colors: [
+                        tfAccent(for: context.state.status),
+                        tfAccent(for: context.state.status).opacity(0.65),
+                      ],
                       startPoint: .leading,
                       endPoint: .trailing
                     )
@@ -105,8 +193,9 @@ struct TaskActivityWidget: Widget {
             }
             .frame(height: 6)
 
-            // Статус
-            HStack {
+            // Нижняя строка: проект и статус слева, время справа. Счёт шагов
+            // сюда не дублируем — он крупно стоит наверху, у выреза.
+            HStack(spacing: 6) {
               Text(context.state.statusLabel)
                 .font(.system(size: 10, weight: .semibold))
                 .padding(.horizontal, 6)
@@ -115,75 +204,83 @@ struct TaskActivityWidget: Widget {
                 .foregroundColor(statusTextColor(for: context.state.status))
                 .cornerRadius(6)
 
+              if let proj = context.state.projectName, !proj.isEmpty {
+                Text(proj)
+                  .font(.system(size: 10, weight: .medium))
+                  .foregroundColor(Color(hex: context.state.projectColor ?? "#A6A6A6"))
+                  .lineLimit(1)
+              }
+
               Spacer()
 
-              Text(timeAgo(date: context.state.updatedAt))
-                .font(.system(size: 10))
-                .foregroundColor(.gray)
+              // Бегущее время работы — единственная честная «живость» в
+              // островке: система сама тикает этим текстом каждую секунду,
+              // без анимаций и без обновлений с сервера. Раньше здесь висело
+              // «N мин назад», которое замирало намертво, стоило свернуть
+              // приложение.
+              Text(
+                timerInterval: context.state.startedAt...context.state.startedAt.addingTimeInterval(24 * 3600),
+                countsDown: false
+              )
+              .font(.system(size: 11, design: .rounded))
+              .monospacedDigit()
+              .foregroundColor(.gray)
+              .frame(maxWidth: 46, alignment: .trailing)
             }
           }
           .padding(.horizontal, 8)
-          .padding(.top, 4)
+          .padding(.top, 2)
         }
       } compactLeading: {
         // 2. КОМПАКТНЫЙ ВИД СЛЕВА
-        HStack(spacing: 3) {
-          Circle()
-            .fill(Color(hex: context.state.assigneeColor))
-            .frame(width: 14, height: 14)
-            .overlay(
-              Text(context.state.assigneeInitials)
-                .font(.system(size: 8, weight: .bold))
-                .foregroundColor(.white)
-            )
-        }
+        AssigneeProgressBadge(
+          slug: context.state.assigneeSlug,
+          initials: context.state.assigneeInitials,
+          color: context.state.assigneeColor,
+          progress: context.state.progress,
+          accent: tfAccent(for: context.state.status),
+          size: 14
+        )
       } compactTrailing: {
         // 3. КОМПАКТНЫЙ ВИД СПРАВА
         if context.state.totalSubtasks > 0 {
           Text("\(context.state.doneSubtasks)/\(context.state.totalSubtasks)")
             .font(.system(size: 11, weight: .bold, design: .rounded))
-            .foregroundColor(Color(hex: "#007AFF"))
+            .foregroundColor(tfAccent(for: context.state.status))
         } else {
           Text("\(Int(context.state.progress * 100))%")
             .font(.system(size: 11, weight: .bold, design: .rounded))
-            .foregroundColor(Color(hex: "#007AFF"))
+            .foregroundColor(tfAccent(for: context.state.status))
         }
       } minimal: {
         // 4. МИНИМАЛЬНЫЙ ВИД
-        Circle()
-          .fill(Color(hex: context.state.assigneeColor))
-          .frame(width: 12, height: 12)
+        //
+        // Сюда система отправляет вторую задачу, когда в работе их несколько.
+        // Раньше здесь был просто цветной кружок: две задачи одного агента
+        // выглядели одинаково, и понять, что за работа идёт справа, было
+        // нельзя — только разворачивать. Теперь тот же значок, что и в
+        // компактном виде: чья задача и сколько пройдено.
+        AssigneeProgressBadge(
+          slug: context.state.assigneeSlug,
+          initials: context.state.assigneeInitials,
+          color: context.state.assigneeColor,
+          progress: context.state.progress,
+          accent: tfAccent(for: context.state.status),
+          size: 14
+        )
       }
       .widgetURL(URL(string: "taskflow://task/\(context.attributes.taskId)"))
     }
   }
 
   private func statusBackgroundColor(for status: String) -> Color {
-    switch status {
-    case "in_progress": return Color.blue.opacity(0.2)
-    case "review": return Color.orange.opacity(0.2)
-    case "blocked": return Color.red.opacity(0.2)
-    case "completed": return Color.green.opacity(0.2)
-    default: return Color.gray.opacity(0.2)
-    }
+    tfAccent(for: status).opacity(0.18)
   }
 
   private func statusTextColor(for status: String) -> Color {
-    switch status {
-    case "in_progress": return Color(hex: "#3B82F6")
-    case "review": return Color(hex: "#F59E0B")
-    case "blocked": return Color(hex: "#EF4444")
-    case "completed": return Color(hex: "#10B981")
-    default: return Color.gray
-    }
+    tfAccent(for: status)
   }
 
-  private func timeAgo(date: Date) -> String {
-    let seconds = Int(-date.timeIntervalSinceNow)
-    if seconds < 60 { return "только что" }
-    let mins = seconds / 60
-    return "\(mins) мин назад"
-  }
 }
 
 // ── Баннер на экране блокировки ──
@@ -210,14 +307,12 @@ struct LockScreenActivityView: View {
         Spacer()
 
         HStack(spacing: 4) {
-          Circle()
-            .fill(Color(hex: state.assigneeColor))
-            .frame(width: 16, height: 16)
-            .overlay(
-              Text(state.assigneeInitials)
-                .font(.system(size: 8, weight: .bold))
-                .foregroundColor(.white)
-            )
+          AssigneeBadge(
+            slug: state.assigneeSlug,
+            initials: state.assigneeInitials,
+            color: state.assigneeColor,
+            size: 16
+          )
           Text(state.assigneeName)
             .font(.system(size: 12, weight: .medium))
             .foregroundColor(.white)
@@ -235,7 +330,7 @@ struct LockScreenActivityView: View {
         HStack(spacing: 6) {
           Image(systemName: "arrow.triangle.2.circlepath")
             .font(.system(size: 11, weight: .bold))
-            .foregroundColor(Color(hex: "#007AFF"))
+            .foregroundColor(tfAccent(for: state.status))
           Text(sub)
             .font(.system(size: 13, weight: .medium))
             .foregroundColor(.white.opacity(0.9))
@@ -253,7 +348,10 @@ struct LockScreenActivityView: View {
             Capsule()
               .fill(
                 LinearGradient(
-                  colors: [Color(hex: "#007AFF"), Color(hex: "#34C759")],
+                  colors: [
+                    tfAccent(for: state.status),
+                    tfAccent(for: state.status).opacity(0.65),
+                  ],
                   startPoint: .leading,
                   endPoint: .trailing
                 )
@@ -272,7 +370,7 @@ struct LockScreenActivityView: View {
           Spacer()
           Text("\(Int(state.progress * 100))%")
             .font(.system(size: 11, weight: .bold, design: .rounded))
-            .foregroundColor(Color(hex: "#007AFF"))
+            .foregroundColor(tfAccent(for: state.status))
         }
       }
     }

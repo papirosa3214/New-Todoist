@@ -18,7 +18,6 @@ import {
   ScreenHeader,
   ErrorBanner,
   Loading,
-  BackButton,
   Button,
 } from "../components/UI";
 import { useDialog } from "../components/Dialog";
@@ -189,7 +188,6 @@ function LabelRow({
 }
 
 export function LabelsScreen() {
-  const navigate = useNavigate();
   const { data: labels = [], isLoading, isError, error } = useLabels();
   const createLabel = useCreateLabel();
   const deleteLabel = useDeleteLabel();
@@ -263,17 +261,7 @@ export function LabelsScreen() {
       {dialog}
       <ScreenHeader
         variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
         title="Метки"
-        actions={
-          <button
-            onClick={() => setShowCreate((v) => !v)}
-            aria-label={showCreate ? "Отменить создание метки" : "Новая метка"}
-            className="w-[44px] h-[44px] flex items-center justify-center tap-row"
-          >
-            <Icon name={showCreate ? "x" : "plus"} size={18} />
-          </button>
-        }
       />
 
       {showCreate && (

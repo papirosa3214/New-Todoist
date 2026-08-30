@@ -18,6 +18,10 @@
   4. Задача сдана на приёмку, а её шаги не сданы и не закрыты.
   5. Задача агента без проекта или без исполнителя — «ничья».
   6. Шаг сдан на приёмку без текста результата.
+  7. Задача назначена агенту, но никто её не взял дольше разумного срока —
+     будильник её поднять не смог (агент занят или событие проскочило), а
+     доска молча показывает «активна, исполнитель назначен». Прецедент
+     29.08.2026: три такие задачи висели до ручного вмешательства.
 
 КАК ДОКЛАДЫВАЕТ: уведомлением владельцу в самом трекере, и только о НОВЫХ
 нарушениях (состояние помнит в agent-watch.state.json рядом с базой).
@@ -37,7 +41,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("DB_PATH") or os.path.join(HERE, "..", "taskflow.db")
 STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "agent-watch.state.json")
 LEASE_MINUTES = 5  # синхронно с server/src/agentState.ts
+# Через сколько минут мёртвой аренды сторож не только докладывает, но и
+# СНИМАЕТ задачу с работы. 27.08.2026: три задачи провисели «в работе» почти
+# сутки при аренде, истёкшей вечером, — сторож их видел и каждый час писал в
+# журнал «агент пропал», но доска всё это время показывала владельцу работу,
+# которой не было. Молчаливая отметка — это и есть тихий отказ.
+# Порог с запасом от 5-минутной аренды: агент мог моргнуть на перезапуске
+# службы, снимать его за это нельзя.
+STALE_BLOCK_MINUTES = 30
 REVIEW_STUCK_HOURS = 48  # шаг висит в приёмке дольше — напомнить один раз
+# Задача назначена агенту, но висит «активна» без взятия дольше этого — то же
+# явление, что и «агент пропал», только в обратную сторону: не взял никто.
+# 29.08.2026: три такие задачи провисели до ручного вмешательства, и видны
+# они были только из базы. С будильником (обход раз в 3 минуты, см. trigger.
+# py:BOARD_SCAN_SEC) порог стоит с запасом: даём обходу время сработать,
+# иначе сторож заспамит владельца тем же самым каждый час.
+UNASSIGNED_MINUTES = 15
 
 
 def utc(value):
@@ -59,8 +78,9 @@ def collect(db):
     out = []
 
     tasks = db.execute(
-        """SELECT t.id, t.title, t.agent_state, t.agent_heartbeat_at, t.project_id,
-                  t.assignee_id, t.agent_session_id, u.type AS assignee_type
+        """SELECT t.id, t.title, t.created_at, t.updated_at, t.agent_state,
+                  t.agent_heartbeat_at, t.project_id, t.assignee_id,
+                  t.agent_session_id, u.type AS assignee_type, u.name AS assignee_name
              FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
             WHERE t.status = 'active'"""
     ).fetchall()
@@ -165,6 +185,29 @@ def collect(db):
                         )
                     )
 
+        # Назначена агенту и НИКТО её не взял — будильник не помог (агент занят
+        # другой задачей или событие проскочило мимо), а доска молча показывает
+        # «активна, исполнитель назначен». Без отдельного класса этого никто
+        # не замечает, и задача повисает до ручного вмешательства (29.08.2026).
+        # Ключ содержит created_at, чтобы после автопробуждения (если оно
+        # всё-таки случится) замечание пропало и через час не повторилось.
+        if (t["agent_state"] is None
+                and t["assignee_id"]
+                and t["assignee_type"] == "ai"):
+            created = utc(t["created_at"])
+            if created and now - created > timedelta(minutes=UNASSIGNED_MINUTES):
+                mins = int((now - created).total_seconds() // 60)
+                who = t["assignee_name"] or "агент"
+                out.append(
+                    (
+                        f"unassigned:{t['id']}:{t['created_at']}",
+                        t["id"],
+                        f"«{name}» назначена «{who}» {mins} мин назад, "
+                        "а никто не взял — будильник не помог. "
+                        "Загляни в карточку или переназначь.",
+                    )
+                )
+
     return out
 
 
@@ -173,6 +216,47 @@ def owner_id(db):
         "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1"
     ).fetchone()
     return row["id"] if row else None
+
+
+def release_abandoned(db):
+    """Задачи с мёртвой арендой — в blocked, с объяснением в ленте.
+
+    Возвращает названия снятых. Отдельной функцией, а не внутри collect():
+    collect только смотрит и обязан оставаться безопасным для --dry.
+    """
+    now = datetime.now(timezone.utc)
+    limit = timedelta(minutes=STALE_BLOCK_MINUTES)
+    freed = []
+    rows = db.execute(
+        """SELECT t.id, t.title, t.agent_heartbeat_at, u.name AS who
+             FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
+            WHERE t.status = 'active' AND t.agent_state = 'in_progress'
+              AND t.agent_heartbeat_at IS NOT NULL"""
+    ).fetchall()
+    for r in rows:
+        beat = utc(r["agent_heartbeat_at"])
+        if not beat or now - beat <= limit:
+            continue
+        mins = int((now - beat).total_seconds() // 60)
+        db.execute(
+            "UPDATE tasks SET agent_state = 'blocked', agent_heartbeat_at = NULL,"
+            " updated_at = datetime('now') WHERE id = ?",
+            (r["id"],),
+        )
+        db.execute(
+            "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,NULL,?)",
+            (
+                str(uuid.uuid4()),
+                r["id"],
+                f"Сторож снял задачу с работы: исполнитель «{r['who'] or 'агент'}» "
+                f"молчит {mins} мин, аренда давно истекла. Задача была отмечена как "
+                f"выполняемая, хотя её никто не вёл. Можно назначить заново.",
+            ),
+        )
+        freed.append((r["title"] or "")[:40])
+    if freed:
+        db.commit()
+    return freed
 
 
 def main():
@@ -207,6 +291,13 @@ def main():
                 (str(uuid.uuid4()), owner, "agent_watch", task_id, msg),
             )
         db.commit()
+
+    # Снять с работы то, что брошено по-настоящему. Докладом дело не
+    # заканчивается: пока задача висит in_progress, доска врёт владельцу, а
+    # будильник считает её занятой и не отдаёт другому исполнителю.
+    freed = release_abandoned(db)
+    for title in freed:
+        print(f"СНЯТО С РАБОТЫ · «{title}» — аренда мертва дольше {STALE_BLOCK_MINUTES} мин")
 
     # Помним только то, что нашли сейчас: исправленное нарушение забывается
     # и, если вернётся, доложится снова.

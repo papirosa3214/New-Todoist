@@ -16,7 +16,6 @@ import {
   ScreenHeader,
   ErrorBanner,
   Loading,
-  BackButton,
 } from "../components/UI";
 import { MONTHS_SHORT } from "../lib/date";
 import { PRIORITY_COLORS } from "../lib/priority";
@@ -64,7 +63,6 @@ export function LabelTasksScreen() {
     <div className="px-4 pb-4">
       <ScreenHeader
         variant="compact"
-        leading={<BackButton onClick={() => navigate(-1)} />}
         title={
           label ? (
             <span className="inline-flex max-w-[62vw] items-center gap-2">

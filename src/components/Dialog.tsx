@@ -122,6 +122,9 @@ export function useDialog(): {
 
   const dialog: ReactNode = sheet.mounted && state && (
     <div
+      // Свайп «назад» не должен уводить экран из-под шторки
+      // (useSwipeBack ищет этот атрибут).
+      data-overlay
       className="fixed inset-0 z-50 flex flex-col justify-end"
       onClick={() => settle(false)}
     >

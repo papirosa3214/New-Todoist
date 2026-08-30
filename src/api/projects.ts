@@ -29,6 +29,8 @@ export interface UpdateProjectInput {
   color?: string;
   position?: number | null;
   pinned?: boolean;
+  /** Папка заметок проекта; null — отвязать (26.08.2026). */
+  notes_folder_id?: number | null;
 }
 
 export function useUpdateProject() {

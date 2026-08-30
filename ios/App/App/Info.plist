@@ -22,8 +22,6 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>LSRequiresIPhoneOS</key>
-	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -78,6 +76,8 @@
 	<string>Нужен для синхронизации задач с Apple Напоминаниями</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Нужен для создания и управления напоминаниями в Apple Напоминаниях</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Используется для быстрого и безопасного входа в TaskFlow</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Приложение обращается к серверу задач в домашней сети</string>
 	<key>NSAppTransportSecurity</key>
@@ -105,6 +105,8 @@
 		</dict>
 	</array>
 	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
 	<true/>
 </dict>
 </plist>
