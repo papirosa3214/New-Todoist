@@ -474,6 +474,22 @@ export function TaskFormScreen() {
       100,
     );
   };
+  // Progressive disclosure для деталей (30.08.2026, дизайн-ревью): экран
+  // открывается «сценой» — большое поле названия + голос как первый жест.
+  // Все остальные поля (заметка, подзадачи, срок, проект, приоритет, метки,
+  // исполнитель, файлы) живут за одной кнопкой «Добавить детали» и
+  // раскрываются плавно. По умолчанию свернуты в create-mode; в edit-mode
+  // открыты сразу — пользователь пришёл редактировать существующее, всё
+  // уже наполнено, скрывать нечего.
+  const [detailsOpen, setDetailsOpen] = useState<boolean>(!!id);
+  // Открыть голос «первым жестом»: фокусируем title (voiceTarget='title'
+  // + keyboardFieldFocused=true), MicKeyboardBar появляется сама.
+  const startVoiceFromTop = () => {
+    setVoiceTarget("title");
+    if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+    setKeyboardFieldFocused(true);
+    titleRef.current?.focus();
+  };
   const handleStructureWithAI = async (textToProcess?: string) => {
     const raw =
       typeof textToProcess === "string"
@@ -763,26 +779,35 @@ export function TaskFormScreen() {
           <button
             onClick={() => navigate(-1)}
             className="w-[44px] h-[44px] flex items-center justify-center active:scale-95"
+            aria-label="Закрыть"
           >
             <Icon name="x" size={18} />
           </button>
         }
         title=""
         actions={
-          <button
-            onClick={handleSave}
-            disabled={!title.trim() || isSaving}
-            /* 16px → 17px (20.08.2026). 16px в проекте — не кегль из
-               шкалы, а защита полей ввода от автозума iOS (правило
-               input/select/textarea в index.css), и вне полей ему делать
-               нечего. Здесь это обычная кнопка навбара, а рядом в той же
-               шапке заголовок набран 17px. Тем же заходом на 17px
-               переведены заголовки четырёх шторок — теперь весь неполевой
-               17px значит одно: «крупный, но не заголовок экрана». */
-            className="text-[17px] font-semibold text-red active:opacity-70 disabled:opacity-50"
-          >
-            {isSaving ? "Сохранение…" : "Готово"}
-          </button>
+          <div className="flex items-center gap-1">
+            {/* Голос как первый жест (30.08.2026, дизайн-ревью): заметная
+                монохромная кнопка в шапке — открывает MicKeyboardBar без
+                обязательного тапа в textarea. Те же haptic-каналы, что у
+                on-screen mic: focus на title + keyboardFieldFocused=true,
+                панель появляется сама. */}
+            <button
+              onClick={startVoiceFromTop}
+              className="h-9 px-3 inline-flex items-center gap-1.5 rounded-full bg-card2 hover:bg-card2/80 text-sub hover:text-text text-[13px] font-medium transition-[background-color,color] duration-150 active:scale-95"
+              aria-label="Надиктовать задачу"
+            >
+              <Icon name="mic" size={14} />
+              <span className="hidden sm:inline">Надиктовать</span>
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!title.trim() || isSaving}
+              className="text-[17px] font-semibold text-red active:opacity-70 disabled:opacity-50 px-2"
+            >
+              {isSaving ? "Сохранение…" : "Готово"}
+            </button>
+          </div>
         }
       />
 
@@ -831,22 +856,26 @@ export function TaskFormScreen() {
           выше рендерят null и не держат места, когда ошибок нет (обычный
           случай). 16px — тот же межблочный модуль, что mb-4 держит между
           остальными секциями формы ниже. */}
-      <div className="flex items-center justify-between mb-2 mt-4">
-        <div className="text-[17px] text-sub font-semibold">
-          {isEdit ? "Изменить задачу" : "Новая задача"}
-        </div>
+      {/* Большая «сцена» ввода (30.08.2026, дизайн-ревью): убрана отдельная
+          строка «Новая задача» с градиентной AI-кнопкой. Заголовок-сцена —
+          сам placeholder в textarea. Над полем — маленькая подсказка,
+          которая уходит, как только человек начал вводить. */}
+      <div className="mt-6 mb-2 flex items-center gap-2 min-h-[18px]">
+        {!title.trim() && (
+          <span className="text-[12px] text-dim tracking-wide">
+            Надиктуйте или напишите — остальное можно раскрыть ниже
+          </span>
+        )}
         {(title.trim() || desc.trim()) && (
           <button
             type="button"
             onClick={() => handleStructureWithAI()}
             disabled={isStructuring}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold text-white bg-gradient-to-r from-[#FF2D55] to-[#FF9500] active:scale-95 transition-transform disabled:opacity-50 shadow-sm"
+            className="inline-flex items-center gap-1.5 text-[12px] font-medium text-sub hover:text-text transition-[color] duration-150 disabled:opacity-50"
+            aria-label="Структурировать задачу с помощью ИИ"
           >
-            <Icon name="sparkles" size={12} />
-            {/* Подпись кнопки НЕ меняется на «думает»: статус теперь
-                плашкой вверху экрана (AiBusyPill), под вырезом — одинаково
-                во всех местах, где работает ИИ. Кнопка просто гаснет. */}
-            Структурировать с AI
+            <Icon name="sparkles" size={12} className="text-red/70" />
+            <span>Структурировать с AI</span>
           </button>
         )}
       </div>
@@ -859,8 +888,8 @@ export function TaskFormScreen() {
           handleFieldBlur();
         }}
         onFocus={() => handleFieldFocus("title")}
-        placeholder="Название задачи"
-        className="block w-full bg-transparent text-[13px] text-text placeholder:text-dim resize-none outline-none mb-4 min-h-[20px] overflow-hidden"
+        placeholder="Что нужно сделать?"
+        className="block w-full bg-transparent text-[22px] leading-[1.3] font-semibold text-text placeholder:text-dim/70 resize-none outline-none mb-2 min-h-[56px] overflow-hidden"
         rows={1}
       />
 
@@ -885,7 +914,43 @@ export function TaskFormScreen() {
           textarea измерялся 12px вместо 8px, как у «Новая задача»→
           textarea и «Подзадачи»→«Добавить подзадачу». Текст теперь прямо
           в div, тем же приёмом, что и заголовок экрана выше. */}
-      <div className="text-[17px] text-sub font-semibold mb-2">Заметка</div>
+      {/* Прогрессивное раскрытие «деталей» (30.08.2026, дизайн-ревью).
+          По умолчанию свернуто в create-mode, открыто в edit-mode (см. useState
+          выше). Контейнер использует grid-rows-[0fr|1fr] для max-height без
+          измерения scrollHeight: animation-duration — 220ms, та же шкала, что
+          у MicKeyboardBar. Внутри min-h-0 нужен grid-трюку, иначе ряд
+          растягивается по контенту и анимации нет. */}
+      {!detailsOpen ? (
+        <button
+          type="button"
+          onClick={() => setDetailsOpen(true)}
+          className="mt-4 mb-2 inline-flex items-center gap-1.5 text-[13px] font-medium text-sub hover:text-text transition-[color] duration-150 active:opacity-70"
+          aria-label="Раскрыть детали задачи"
+          aria-expanded={false}
+        >
+          <Icon name="chevron" size={14} className="rotate-90" />
+          <span>Добавить детали</span>
+        </button>
+      ) : (
+        <div
+          className="grid transition-[grid-template-rows,opacity] duration-[220ms] ease-out"
+          style={{
+            gridTemplateRows: "1fr",
+            opacity: 1,
+          }}
+          aria-hidden={false}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setDetailsOpen(false)}
+              className="mt-4 mb-2 inline-flex items-center gap-1.5 text-[13px] font-medium text-sub hover:text-text transition-[color] duration-150 active:opacity-70"
+              aria-label="Скрыть детали задачи"
+              aria-expanded={true}
+            >
+              <Icon name="chevron" size={14} className="-rotate-90" />
+              <span>Скрыть детали</span>
+            </button>
       <textarea
         ref={descRef}
         value={desc}
@@ -1217,6 +1282,10 @@ export function TaskFormScreen() {
           </>
         )}
       </div>
+
+          </div>
+        </div>
+      )}
 
       {/* ── Диктовка — owner 2026-08-13, третий заход по концепции: не
           отдельная кнопка в потоке формы (перекрывала форму, некуда было
