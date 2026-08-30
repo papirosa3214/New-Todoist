@@ -412,7 +412,7 @@ export function TaskFilterSheet({
                 <div className="border-t border-stroke">
                   <div className="px-4 pt-2.5 pb-1 text-[12px] text-dim">
                     {plannerProjects.disabled
-                      ? "Шаг 1: раздел «Сегодня» показывает только задачи без проекта. Переключатель режимов появится позже."
+                      ? "В этот раздел попадают только задачи без проекта. Чтобы добавить проект — открой настройки раздела."
                       : "Выключенные проекты не появятся в этом разделе, пока не включишь обратно. На другие разделы не влияет."}
                   </div>
                   {plannerProjects.projects.map((p) => {

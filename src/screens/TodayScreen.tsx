@@ -275,20 +275,46 @@ export function TodayScreen() {
   // due today, not that a filter is hiding everything. filteredEmpty is
   // the new, lighter case — something's due, the current filter just
   // doesn't match any of it.
-  // 25.08.2026: hiddenPlannerProjectCount === 0 — те самые "…All" множества
-  // выше уже посчитаны от plannerTasks (после выбора видимых проектов), а
-  // не от allTasks. Пока хоть один проект скрыт, им нельзя верить как
-  // "искренне пусто" — задачи вполне могут быть, просто их проект спрятан.
-  // В этом случае экран падает в ветку filteredEmpty ниже вместо большой
-  // иллюстрации «ничего на сегодня».
+  // Шаг 1 (фикс): trueEmpty теперь опирается на «искренние» множества от
+  // allTasks целиком, а не на plannerTasks. До Шага 1 plannerTasks = всё
+  // минус скрытые проекты, и условие hiddenPlannerProjectCount === 0
+  // защищало иллюстрацию «ничего на сегодня» от случая «у пользователя
+  // есть задачи в скрытых проектах, мы их не видим — рисовать пустой
+  // экран было бы ложью». После Шага 1 plannerTasks = только входящие
+  // плюс (если что-то скрыто) видимые проекты — то есть проектные
+  // задачи в принципе не попадают в источник. Условие
+  // hiddenPlannerProjectCount === 0 утратило смысл как маркер
+  // «показываем всё», а «plannerTasks пуст» больше не равно «у юзера
+  // ничего нет». Поэтому для trueEmpty берём полный allTasks,
+  // отфильтрованный только по дате/agent_state — этот счётчик отвечает
+  // на вопрос «у пользователя вообще есть хоть одна задача, достойная
+  // ежедневника», независимо от того, в проекте она или нет.
+  const { overdue: trueOverdueAll, todayTasks: trueTodayAll } = useMemo(
+    () => partitionOverdueToday(allTasks, today),
+    [allTasks, today],
+  );
+  const trueWaitingAll = useMemo(() => {
+    if (!currentUser) return [];
+    return allTasks
+      .filter(
+        (t) =>
+          t.status === "active" &&
+          !t.parent_id &&
+          isTaskOwner(currentUser, t) &&
+          (t.agent_state === "blocked" || t.agent_state === "review"),
+      )
+      .sort((a, b) => {
+        const rank = (t: ApiTask) => (t.agent_state === "blocked" ? 0 : 1);
+        return rank(a) - rank(b);
+      });
+  }, [allTasks, currentUser]);
   const trueEmpty =
     !isLoading &&
     !isLoadingUser &&
     !isError &&
-    hiddenPlannerProjectCount === 0 &&
-    waitingTasksAll.length === 0 &&
-    rawOverdueAll.length === 0 &&
-    rawTodayAll.length === 0;
+    trueWaitingAll.length === 0 &&
+    trueOverdueAll.length === 0 &&
+    trueTodayAll.length === 0;
   const filteredEmpty =
     !trueEmpty &&
     !isLoading &&
@@ -716,8 +742,10 @@ export function TodayScreen() {
           projects,
           hiddenProjectIds: hiddenPlannerProjects,
           onToggle: toggleDailyPlannerProjectHidden,
-          // Шаг 1: секция «Показывать в разделе» рисуется, но свитчеры
-          // заморожены — opt-in ещё не завезён (это Шаг 2).
+          // Шаг 1 (feature/projects-decouple-planner-merge): секция
+          // «Показывать в разделе» заморожена, пока в Шаге 2 не появится
+          // opt-in picker (чипы проектов в шапке). На Шаге 2 здесь будет
+          // просто `disabled={!optInEnabled}`, без хардкода.
           disabled: true,
         }}
       />
