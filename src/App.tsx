@@ -14,7 +14,8 @@ import { getOverlayState } from "./lib/backgroundLocationContext";
 import { RequireAuth } from "./components/RequireAuth";
 import { LoginScreen } from "./screens/LoginScreen";
 import { RegisterScreen } from "./screens/RegisterScreen";
-import { TodayScreen } from "./screens/TodayScreen";
+// TodayScreen ОТКЛЮЧЁН 30.08.2026 (заменён на TodayScreenTimeline в /today).
+// Файл оставлен — git revert одной строки вернёт его, если не зайдёт.
 import { TodayScreenTimeline } from "./screens/TodayScreenTimeline";
 import { InboxScreenTimeline } from "./screens/InboxScreenTimeline";
 import { UpcomingScreen } from "./screens/UpcomingScreen";
@@ -135,7 +136,7 @@ export default function App() {
             нетронутыми, но нигде не подключены — см. шапку AppKeyboard.tsx. */}
           <Route element={<Layout />}>
             <Route path="/" element={<Navigate to="/overview" replace />} />
-            <Route path="/today" element={<TodayScreen />} />
+            <Route path="/today" element={<TodayScreenTimeline />} />
             <Route path="/timeline" element={<TodayScreenTimeline />} />
             <Route path="/inbox-timeline" element={<InboxScreenTimeline />} />
             <Route path="/upcoming" element={<UpcomingScreen />} />
