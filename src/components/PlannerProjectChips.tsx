@@ -36,7 +36,7 @@ export function PlannerProjectChips({
   return (
     <div
       data-hswipe
-      style={{ top: "var(--screen-header-h, 0px)" }}
+      style={{ top: 0 }}
       className="sticky z-10 bg-bg border-b border-stroke"
     >
       <div className="flex items-center gap-2 overflow-x-auto px-4 py-2 -mx-4">
