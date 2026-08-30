@@ -1757,63 +1757,11 @@ body::-webkit-scrollbar {
   animation: nt-typing-dot 1.2s ease-in-out infinite;
 }
 
-/* TaskFormScreen progressive disclosure (30.08.2026, design-review
-   итерация 2). Тонкая анимация появления формы:
-   - hint под textarea: fade+translateY вверх при первом монтировании
-   - содержимое деталей: stagger 40ms между секциями при раскрытии
-   - AI-кнопка: fade при первом появлении
-   Числа из motion budget'а: hint 250ms (page-level), stagger 220ms
-   между секциями (medium-UI), opacity — единственное свойство, transform
-   используем только для translateY (микро-движение без reflow).
-   prefers-reduced-motion: всё мгновенно, без translate. */
-@keyframes nt-taskform-hint-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes nt-taskform-section-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.nt-taskform-hint {
-  animation: nt-taskform-hint-in 250ms ease-out both;
-}
-
-.nt-taskform-section {
-  animation: nt-taskform-section-in 220ms ease-out both;
-  /* Шаг 40ms между секциями — оборачиваются в одну обёртку (Заметка /
-     Подзадачи / Файлы / Card со срок-проект-приоритет-метки / Назначить).
-     CSS-variable --nt-stagger проставляется на каждой секции через
-     style, от 0 до 4. 40мс * 4 + 220мс анимации = 380мс до последней
-     секции — укладывается в микро-восприятие «открылось». */
-  animation-delay: calc(var(--nt-stagger, 0) * 40ms);
-}
-
 @media (prefers-reduced-motion: reduce) {
   /* Волну гасим, точки остаются видимыми: состояние здесь несёт сама
      подпись «печатает», движение только помогает её заметить. */
   .nt-typing-dot {
     animation: none;
-  }
-
-  /* TaskFormScreen: hint и stagger мгновенно появляются, без translate.
-     Контент остаётся видимым — убираем и opacity (он бы остался 1,
-     but без animation: none transition из деталей не виден). */
-  .nt-taskform-hint,
-  .nt-taskform-section {
-    animation: none;
+    opacity: 0.6;
   }
 }

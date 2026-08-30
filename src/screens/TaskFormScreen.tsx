@@ -981,12 +981,7 @@ export function TaskFormScreen() {
           блока (см. её комментарий) — соседство с title, ради которого
           подзадачи сюда и подняли пятым заходом, этим не портится: оба
           поля всё ещё в одном экране без скролла, просто заметка теперь
-          между ними.
-
-          Stagger-обёртка (30.08.2026): Заметка+Подзадачи = первая «полоса
-          ввода» со stagger=0. Файлы / Card / Назначить — отдельные
-          stagger=1/2/3 ниже. */}
-      <div className="nt-taskform-section" style={{ ["--nt-stagger" as any]: 0 }}>
+          между ними. */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-[17px] text-sub font-semibold">Подзадачи</span>
       </div>
@@ -1101,7 +1096,6 @@ export function TaskFormScreen() {
           className="mt-2"
         />
       </div>
-      </div>{/* /stagger=0 Заметка+Подзадачи */}
 
       {/* ── Файлы — Максим 19.08.2026: «чтобы в заметках я уже изначально
           мог прикреплять скриншоты и документы». Само поле и разница между
@@ -1112,18 +1106,15 @@ export function TaskFormScreen() {
           Так наверху формы подряд идёт то, что заполняется всегда —
           название, заметка, шаги, — а вложение остаётся редким довеском и не
           разрывает этот ряд. */}
-      <div className="nt-taskform-section" style={{ ["--nt-stagger" as any]: 1 }}>
-        <AttachmentsField
-          taskId={isEdit ? id : undefined}
-          saved={existingTask?.attachments}
-          files={newFiles}
-          onFilesChange={setNewFiles}
-        />
-      </div>
+      <AttachmentsField
+        taskId={isEdit ? id : undefined}
+        saved={existingTask?.attachments}
+        files={newFiles}
+        onFilesChange={setNewFiles}
+      />
 
       {/* ── Срок / Проект / Приоритет — mockup .card (screen 11) ── */}
-      <div className="nt-taskform-section" style={{ ["--nt-stagger" as any]: 2 }}>
-        <div className="mb-4">
+      <div className="mb-4">
         <Card>
           <DueDateField
             time={startTime}
@@ -1187,12 +1178,10 @@ export function TaskFormScreen() {
             onToggle={toggleLabel}
           />
         </Card>
-        </div>
-      </div>{/* /stagger=2 Card */}
+      </div>
 
       {/* ── Assignee (tappable → picker) ── */}
-      <div className="nt-taskform-section" style={{ ["--nt-stagger" as any]: 3 }}>
-        <div className="text-[13px] text-sub font-semibold mb-2">Назначить</div>
+      <div className="text-[13px] text-sub font-semibold mb-2">Назначить</div>
       <div className="bg-card rounded-[14px] overflow-hidden mb-4">
         {showAssigneePicker ? (
           <>
@@ -1293,7 +1282,6 @@ export function TaskFormScreen() {
           </>
         )}
       </div>
-      </div>{/* /stagger=3 Назначить */}
 
           </div>
         </div>
