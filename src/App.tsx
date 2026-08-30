@@ -16,6 +16,7 @@ import { LoginScreen } from "./screens/LoginScreen";
 import { RegisterScreen } from "./screens/RegisterScreen";
 import { TodayScreen } from "./screens/TodayScreen";
 import { TodayScreenTimeline } from "./screens/TodayScreenTimeline";
+import { InboxScreenTimeline } from "./screens/InboxScreenTimeline";
 import { UpcomingScreen } from "./screens/UpcomingScreen";
 import { OverviewScreen } from "./screens/OverviewScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
@@ -136,6 +137,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/overview" replace />} />
             <Route path="/today" element={<TodayScreen />} />
             <Route path="/timeline" element={<TodayScreenTimeline />} />
+            <Route path="/inbox-timeline" element={<InboxScreenTimeline />} />
             <Route path="/upcoming" element={<UpcomingScreen />} />
             <Route path="/overview" element={<OverviewScreen />} />
             <Route path="/settings" element={<SettingsScreen />} />
