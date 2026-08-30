@@ -15,6 +15,7 @@ import { RequireAuth } from "./components/RequireAuth";
 import { LoginScreen } from "./screens/LoginScreen";
 import { RegisterScreen } from "./screens/RegisterScreen";
 import { TodayScreen } from "./screens/TodayScreen";
+import { TodayScreenTimeline } from "./screens/TodayScreenTimeline";
 import { UpcomingScreen } from "./screens/UpcomingScreen";
 import { OverviewScreen } from "./screens/OverviewScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
@@ -134,6 +135,7 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<Navigate to="/overview" replace />} />
             <Route path="/today" element={<TodayScreen />} />
+            <Route path="/timeline" element={<TodayScreenTimeline />} />
             <Route path="/upcoming" element={<UpcomingScreen />} />
             <Route path="/overview" element={<OverviewScreen />} />
             <Route path="/settings" element={<SettingsScreen />} />
