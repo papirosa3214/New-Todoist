@@ -145,26 +145,25 @@ export function TodayScreen() {
       .sort(waitingBlockedFirst);
   }, [plannerTasks, currentUser]);
 
-  // Filter options built from the full pre-filter screen universe (every
-  // task that could ever appear here across all three blocks) — same rule
-  // as Inbox/ActivityScreen. The three raw arrays overlap (a waiting task
-  // can also be overdue) but build*Options dedups by id/project/label
-  // internally, so a plain concat is enough.
-  const screenTaskUniverse = useMemo(
-    () => [...waitingTasksAll, ...rawOverdueAll, ...rawTodayAll],
-    [waitingTasksAll, rawOverdueAll, rawTodayAll],
-  );
+  // «…All» raw sets (waiting/overdue/today) уже вычислены от
+  // plannerTasks выше — они и есть «экран»: рендер строк списка/доски
+  // и счётчики в заголовках. screenTaskUniverse, который тут раньше
+  // жил как concat трёх …All, ушёл вместе с фиксом блокера 2
+  // (*FilterOptions теперь берутся из полного optionUniverse, чтобы
+  // секции «Проект»/«Метка»/«Исполнитель» в шторке фильтра не
+  // ограничивались текущим подмножеством видимых).
+  const optionUniverse = useMemo(() => allTasks, [allTasks]);
   const projectFilterOptions = useMemo(
-    () => buildProjectOptions(screenTaskUniverse),
-    [screenTaskUniverse],
+    () => buildProjectOptions(optionUniverse),
+    [optionUniverse],
   );
   const labelFilterOptions = useMemo(
-    () => buildLabelOptions(screenTaskUniverse),
-    [screenTaskUniverse],
+    () => buildLabelOptions(optionUniverse),
+    [optionUniverse],
   );
   const assigneeFilterOptions = useMemo(
-    () => buildAssigneeOptions(screenTaskUniverse),
-    [screenTaskUniverse],
+    () => buildAssigneeOptions(optionUniverse),
+    [optionUniverse],
   );
 
   // Дедуп по приоритету блока: «Ждут вас» → «Просрочено» → «Сегодня». Одна

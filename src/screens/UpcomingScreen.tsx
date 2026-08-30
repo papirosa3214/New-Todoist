@@ -237,19 +237,35 @@ export function UpcomingScreen() {
     [allTasks, agents, today, visibleProjectIds],
   );
 
-  // Filter options from the full dated set (pre-filter), same rule as
-  // Inbox/Today/ActivityScreen.
+  // Шаг 2 фикс (blocker 2, @local-macbook): раньше *FilterOptions здесь
+  // строились от datedTasks, который после Шага 1/2 отражает ТОЛЬКО то,
+  // что сейчас показано (входящие + видимые проекты с будущей датой).
+  // Фильтр «Проект» в шторке не предлагал проекты, которые юзер ещё НЕ
+  // добавил в раздел — picker их показывает, фильтр нет. Здесь берём
+  // полный allTasks, отфильтрованный только по тем же «разделам
+  // экрана», что и datedTasks: агентские задачи и просроченные
+  // исключаем (их в «Предстоящем» не было и не будет — фильтровать по
+  // ним бессмысленно). Проект-фильтр НЕ применяем, чтобы фильтр
+  // «Проект» отражал «что МОЖНО сузить», а не «что сужено сейчас».
+  const optionDatedTasks = useMemo(
+    () =>
+      allTasks.filter(
+        (t) =>
+          !isAgentAssignedTask(t, agents) && t.due_date && t.due_date >= today,
+      ),
+    [allTasks, agents, today],
+  );
   const projectFilterOptions = useMemo(
-    () => buildProjectOptions(datedTasks),
-    [datedTasks],
+    () => buildProjectOptions(optionDatedTasks),
+    [optionDatedTasks],
   );
   const labelFilterOptions = useMemo(
-    () => buildLabelOptions(datedTasks),
-    [datedTasks],
+    () => buildLabelOptions(optionDatedTasks),
+    [optionDatedTasks],
   );
   const assigneeFilterOptions = useMemo(
-    () => buildAssigneeOptions(datedTasks),
-    [datedTasks],
+    () => buildAssigneeOptions(optionDatedTasks),
+    [optionDatedTasks],
   );
 
   const tasks = useMemo(
