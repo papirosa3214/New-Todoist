@@ -228,6 +228,10 @@ export interface ApiTask {
   project_color?: string | null;
   labels: ApiLabel[];
   subtasks: ApiSubtask[];
+  // id родительской задачи (null = корневая). Добавлено 30.08.2026 под origin'овский
+  // taskOwner.ts, где Pick<ApiTask, "status"|"agent_state"|"creator_id"|"parent_id">
+  // требует поле обязательно.
+  parent_id: string | null;
   // Дочерние задачи (parent_task_id = this.id). Сервер отдаёт в GET /api/tasks/:id
   // рядом с subtasks. TaskDetailScreen переключает таб по наличию.
   // Добавлено 30.08.2026 — старый код ссылался на .children, которого не было в типе.
