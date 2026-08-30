@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
-import { snapshot } from "../activeAgent.js";
 import {
   getProjectForUser,
   getProjectForWrite,
@@ -298,52 +297,36 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   // Email is intentionally never selected: the frontend doesn't use it
   // (see src/screens/AgentsScreen.tsx, src/screens/TaskFormScreen.tsx).
   app.get("/api/agents", { preHandler: authPre }, async (req: any) => {
-    // Return all AI agents (type='ai') and system bots regardless of shared tasks
-    const rows = db
+    return db
       .prepare(
         `SELECT id, name, role, type, avatar_color, avatar_url,
                 avatar_url_working, avatar_url_blocked, initials, status,
-                last_seen_at,
+                -- «Живая» аватарка (27.08.2026): что сейчас держит агент как
+                -- исполнитель (assignee_id) — blocked приоритетнее working,
+                -- застрять важнее показать, чем «просто работает». NULL —
+                -- простаивает, рендерится дефолтная avatar_url.
                 (CASE
                    WHEN EXISTS (
                      SELECT 1 FROM tasks t
-                     WHERE t.assignee_id = users.id AND t.agent_state = 'blocked'
+                      WHERE t.assignee_id = users.id AND t.agent_state = 'blocked'
                    ) THEN 'blocked'
                    WHEN EXISTS (
                      SELECT 1 FROM tasks t
-                     WHERE t.assignee_id = users.id AND t.agent_state = 'in_progress'
+                      WHERE t.assignee_id = users.id AND t.agent_state = 'in_progress'
                    ) THEN 'working'
                    ELSE NULL
-                 END) AS activity,
-                (SELECT limits FROM user_integrations WHERE user_id = users.id AND provider = 'google') AS limits
+                 END) AS activity
          FROM users
-         WHERE type = 'ai' OR is_system_bot = 1`
+         WHERE is_system_bot = 1
+            OR id = ?
+            OR created_by = ?
+            OR id IN (
+              SELECT assignee_id FROM tasks WHERE creator_id = ? AND assignee_id IS NOT NULL
+              UNION
+              SELECT creator_id FROM tasks WHERE assignee_id = ? AND creator_id IS NOT NULL
+            )`,
       )
-      .all();
-    // Active snapshot из памяти — last_action, last_action_title, признак
-    // «онлайн» (активен в STALE_AFTER_MS окне). Для людей пусто, по ним
-    // фронт ничего не показывает (карточка «Агенты» — это про ботов).
-    const snap = new Map(snapshot().map((s) => [s.userId, s]));
-    // Parse limits JSON if present
-    return rows.map((r: any) => {
-      let limitsObj: any = null;
-      if (r.limits) {
-        try {
-          limitsObj = JSON.parse(r.limits);
-        } catch {
-          limitsObj = { raw: r.limits };
-        }
-      }
-      const a = snap.get(r.id);
-      return {
-        ...r,
-        limits: limitsObj,
-        online: !!(a?.online),
-        last_seen_at: a?.lastSeenAt ? new Date(a.lastSeenAt).toISOString() : (r.last_seen_at || null),
-        last_action: a?.lastAction || "",
-        last_action_title: a?.lastActionTitle || "",
-      };
-    });
+      .all(req.userId, req.userId, req.userId, req.userId);
   });
 
   // ── Завести агента ── кнопка «Пригласить агента» на экране агентов.

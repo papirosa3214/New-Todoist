@@ -12,9 +12,6 @@ import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserIdFromToken, authOrApiToken } from "./auth.js";
 import { addClient, removeClient, resetAllOffline } from "./ws.js";
-// touchTyping подключается через auth.ts (см. комментарий в buildApp), а
-// не на root-уровне addHook — глобальные preHandler-хуки Fastify v5
-// отрабатывают раньше route-level preHandler, и req.userId ещё не стоит.
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
@@ -158,16 +155,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   // routes/auth.ts), где оно и нужно: подбор пароля идёт только туда.
   await app.register(fastifyRateLimit, { global: false });
 
-  // Отметка «печатает…» по факту работы агента (29.08.2026, задача
-  // a56f35f6) живёт внутри authOrApiToken (auth.ts): там в момент, когда
-  // userId уже стоит, мы зовём touchTyping. Через addHook('preHandler')
-  // нельзя — в Fastify v5 global preHandler-хуки отрабатывают ДО route-
-  // level preHandler, и мы видели бы req.userId=undefined (проверено
-  // логом в chat.test.ts, 29.08.2026). Импорт touchTyping ниже остаётся
-  // на случай, если когда-нибудь захочется добавить хук в инкапсулированном
-  // плагине через app.register(async () => { … }) — root-уровень addHook
-  // тут не работает.
-
   // DB
   migrate();
   // Версионные миграции поверх — новые изменения схемы идут сюда, не в
@@ -196,7 +183,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerNoteRoutes(app);
   registerChatRoutes(app);
   registerActivityRoutes(app);
-
   // Тикет ollama-observer: слой 3 живой строки — необязательное улучшение
   // поверх уже рабочих слоёв 1-2, включается/выключается на лету через
   // ACTIVITY_OBSERVER_ENABLED (см. комментарий в activity.ts).

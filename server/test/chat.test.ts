@@ -312,17 +312,11 @@ describe("Чат агентов /api/chat", () => {
     expect(res.statusCode).toBe(401);
   });
 
-  // Отметка «печатает» в чате. Проверяем три свойства:
-  //   1) видна ДРУГОМУ участнику в снимке (без этого открывший экран посреди
-  //      чужого ответа не увидел бы ничего);
-  //   2) НЕ гаснет на отправленном сообщении — это враньё, на которое
-  //      жаловался владелец 29.08.2026 (задача a56f35f6): reply не конец
-  //      работы, конец — это затихание;
-  //   3) гаснет по явному state='stop'.
-  //
-  // Старое правило «reply гасит» здесь удалено вместе с самой гашением в
-  // routes/chat.ts (см. комментарий там же).
-  it("«печатает» видно в снимке и НЕ гаснет на отправке", async () => {
+  // Отметка «печатает» (28.08.2026). Проверяем ровно то, что может
+  // подтвердить только сервер: отметка видна ДРУГОМУ участнику в снимке
+  // (без него открывший экран посреди чужого ответа не увидел бы ничего) и
+  // гаснет на отправленном сообщении, не дожидаясь своего срока.
+  it("«печатает» видно в снимке и гаснет на отправке", async () => {
     const on = await app.inject({
       method: "POST",
       url: "/api/chat/typing",
@@ -346,16 +340,12 @@ describe("Чат агентов /api/chat", () => {
       payload: { text: "дописал", to_user_id: "all" },
     });
 
-    // После reply отметка ОБЯЗАНА остаться: иначе длинная работа с
-    // несколькими сообщениями подряд будет мигать «печатает / пусто /
-    // печатает / пусто». Сам POST /api/chat — это обращение к серверу, и
-    // общий preHandler (index.ts) уже продлил отметку.
     const after = await app.inject({
       method: "GET",
       url: "/api/chat/typing",
       headers: { authorization: `Bearer ${aliceToken}` },
     });
-    expect(after.json().typing.map((t: any) => t.name)).toContain("Bob");
+    expect(after.json().typing.map((t: any) => t.name)).not.toContain("Bob");
   });
 
   it("«печатает» снимается явным state=stop", async () => {
@@ -379,91 +369,5 @@ describe("Чат агентов /api/chat", () => {
       headers: { authorization: `Bearer ${bobToken}` },
     });
     expect(seen.json().typing.map((t: any) => t.name)).not.toContain("Alice");
-  });
-});
-
-// Отметка по факту работы агента (29.08.2026, задача a56f35f6): был запрос
-// от учётки-агента к серверу за последние N — горит. Здесь проверяем
-// ровно то, что может подтвердить сервер: учётка с type='ai' зажигается
-// ЛЮБЫМ своим запросом (без явного POST /api/chat/typing), и человеческий
-// запрос — нет. Сессию делаем напрямую SQL, чтобы не возиться с agent-
-// сервисом; это тот же сценарий «агент пошёл к доске», просто поданный
-// через тот же бэкенд-канал.
-describe("Отметка по факту работы агента", () => {
-  let app: FastifyInstance;
-  let ownerToken: string;
-  let agentToken: string;
-  let agentId: string;
-
-  beforeAll(async () => {
-    app = await buildApp();
-
-    // Владелец — для снимка GET /api/chat/typing. Учётку делаем человечьей
-    // (default type='human'), ей одной достаточно, чтобы видеть отметку
-    // другого.
-    const owner = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: {
-        name: "Owner",
-        email: "owner@typing.test",
-        password: "password123",
-      },
-    });
-    ownerToken = owner.json().token;
-
-    // Агент — учётка через прямой INSERT с type='ai' и собственным
-    // api_token. Так мы получаем «агентский ключ» без отдельного роута
-    // создания агентов, который проверяется в agentState-тестах.
-    // Шаблон колонок взять пришлось из routes/projects.ts (POST /api/agents)
-    // — это единственное место в проекте, где такая запись делается
-    // «руками», минуя /api/auth/register.
-    const { default: db, hashApiToken } = await import("../src/db.js");
-    const crypto = await import("crypto");
-    agentId = crypto.randomUUID();
-    agentToken = crypto.randomUUID();
-    db.prepare(
-      `INSERT INTO users (id, name, email, password_hash, role, type, avatar_color, avatar_url, initials, status, api_token, is_system_bot, created_by)
-       VALUES (?, 'Agent', ?, '', 'agent', 'ai', '#A78BFA', NULL, 'A', 'offline', ?, 0, NULL)`,
-    ).run(
-      agentId,
-      `agent-${agentId}@typing.test`,
-      hashApiToken(agentToken),
-    );
-  });
-
-  afterAll(async () => {
-    await app.close();
-  });
-
-  it("зажигается любым запросом учётки-агента, без явного /api/chat/typing", async () => {
-    // Агент НЕ вызывал /api/chat/typing — идёт прямо к доске. Если общий
-    // preHandler в index.ts не сработал, снимок у владельца будет пустой.
-    const task = await app.inject({
-      method: "POST",
-      url: "/api/tasks",
-      headers: { authorization: `Bearer ${agentToken}` },
-      payload: { title: "агентская задача" },
-    });
-    expect(task.statusCode).toBe(200);
-
-    const seen = await app.inject({
-      method: "GET",
-      url: "/api/chat/typing",
-      headers: { authorization: `Bearer ${ownerToken}` },
-    });
-    expect(seen.json().typing.map((t: any) => t.name)).toContain("Agent");
-  });
-
-  it("НЕ зажигается от запроса учётки-человека", async () => {
-    // Владелец только что зарегистрировался и не дёргал /api/chat/typing.
-    // GET /api/chat/participants — обычный человеческий запрос; общий
-    // preHandler должен быть no-op для него.
-    const seen = await app.inject({
-      method: "GET",
-      url: "/api/chat/typing",
-      headers: { authorization: `Bearer ${ownerToken}` },
-    });
-    expect(seen.json().typing.map((t: any) => t.name)).not.toContain("Owner");
   });
 });

@@ -1,8 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import db, { hashApiToken } from "./db.js";
 import { isOrchestrator } from "./access.js";
-import { touchTyping } from "./chatTyping.js";
-import { touchActive } from "./activeAgent.js";
 
 /**
  * Оркестратору удаление запрещено — на любом объекте и любым способом.
@@ -158,12 +156,6 @@ export async function authMiddleware(req: FastifyRequest, reply: FastifyReply) {
 /**
  * Auth accepting EITHER a JWT (web frontend) OR an Authorization: Bearer
  * <api_token> (agents). This is the auth used on all data routes.
- *
- * 29.08.2026, задача 31f2759e: в этой же точке фиксируется отпечаток
- * активности агента (touchActive). Это не дубликат touchTyping — тот
- * держит WS-отметку «работает», этот — карту последнего действия
- * (последний путь, last_action, last_action_title). Делят один userId,
- * живут рядом, и в этой точке он гарантированно есть.
  */
 export async function authOrApiToken(req: FastifyRequest, reply: FastifyReply) {
   const token = extractBearer(req);
@@ -173,15 +165,6 @@ export async function authOrApiToken(req: FastifyRequest, reply: FastifyReply) {
   if (userId) {
     if (deleteForbidden(req, reply, userId)) return reply;
     (req as any).userId = userId;
-    // Отметка «печатает…» по факту работы агента (29.08.2026, задача
-    // a56f35f6). Стоит здесь, в общей двери авторизации, а не отдельным
-    // global preHandler-хуком: глобальные preHandler-хуки в Fastify v5
-    // выполняются ДО route-level preHandler, и из хука мы видели бы
-    // req.userId=undefined. authOrApiToken — это и есть тот момент, когда
-    // userId гарантированно стоит. Цикла импортов нет: chatTyping.ts
-    // импортирует ws.ts, ws.ts auth.ts не трогает.
-    touchTyping(userId);
-    touchActive(userId, req.method, req.url);
     return;
   }
   // Токена нет или он протух — из домашней сети пускаем владельцем, но
@@ -190,13 +173,12 @@ export async function authOrApiToken(req: FastifyRequest, reply: FastifyReply) {
   if (owner) {
     if (deleteForbidden(req, reply, owner)) return reply;
     (req as any).userId = owner;
-    touchTyping(owner);
     return;
   }
   return reply.code(401).send({
     error: token
       ? "Invalid token"
-      : "нужен ключ: агент ходит своим api_token (Authorization: Bearer *** " +
+      : "нужен ключ: агент ходит своим api_token (Authorization: Bearer …), " +
         "вход без пароля из домашней сети работает только в браузере",
   });
 }

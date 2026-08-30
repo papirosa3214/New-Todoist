@@ -8,7 +8,6 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { onTaskActivity, type TaskActivityEvent } from "../api/ws";
 import { explainAction } from "./localLLM";
-import { LocalNotifications } from "@capacitor/local-notifications";
 
 /** Пауза между вызовами модели. Было 10 с «бережём батарею», но модель
  *  зовётся только при ОТКРЫТОЙ карточке (см. active) — Максим 26.08.2026:
@@ -24,24 +23,13 @@ export const EXPLAIN_EVERY_MS = 5_000;
  * сервера.
  */
 export function shouldExplain(
-  event: TaskActivityEvent,
+  event: { kind?: string; diff?: string },
   lastAt: number,
   now: number,
 ): boolean {
-  const isStateChange =
-    event.text.includes("review") ||
-    event.text.includes("blocked") ||
-    event.text.toLowerCase().includes("проверк") ||
-    event.text.toLowerCase().includes("ошибк") ||
-    event.text.toLowerCase().includes("заблокирован");
-
-  if (!isStateChange) {
-    if (event.kind !== "edit") return false;
-    if (!event.diff || event.diff.trim().length < 10) return false;
-    if (now - lastAt < EXPLAIN_EVERY_MS) return false;
-  }
-
-  return true;
+  if (event.kind !== "edit") return false;
+  if (!event.diff || event.diff.trim().length < 10) return false;
+  return now - lastAt >= EXPLAIN_EVERY_MS;
 }
 
 /** Что скармливаем модели: действие плюс сам кусок правки. */
@@ -157,30 +145,9 @@ export function useTaskActivity(
       lastExplainAt.current = Date.now();
       void explainAction(explainInput(event), stepOf(event.text)).then((phrase) => {
         if (cancelled || !phrase) return;
-
-        let cleanPhrase = phrase;
-        const notifyMatch = cleanPhrase.match(/\[NOTIFY:\s*(.+?)\]/);
-        if (notifyMatch) {
-          const notifyMessage = notifyMatch[1];
-          cleanPhrase = cleanPhrase.replace(notifyMatch[0], '').trim();
-          void LocalNotifications.requestPermissions().then((perm) => {
-            if (perm.display === 'granted') {
-              void LocalNotifications.schedule({
-                notifications: [{
-                  title: "TaskFlow: Внимание",
-                  body: notifyMessage,
-                  id: Date.now(),
-                }]
-              });
-            }
-          });
-        }
-
-        if (!cleanPhrase) return;
-
         setState((prev) =>
           prev.at === event.at
-            ? { ...prev, text: mergeExplained(event.text, cleanPhrase) }
+            ? { ...prev, text: mergeExplained(event.text, phrase) }
             : prev,
         );
       });
