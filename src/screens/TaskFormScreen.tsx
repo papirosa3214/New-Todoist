@@ -64,7 +64,10 @@ import { AiBusyPill } from "../components/AiBusyPill";
 import { uploadAttachment } from "../api/attachments";
 import { useDialog } from "../components/Dialog";
 import { MicOverlay } from "../components/MicOverlay";
-import { MicKeyboardBar } from "../components/MicKeyboardBar";
+import {
+  QuickActionsBar,
+  type QuickActionPicker,
+} from "../components/QuickActionsBar";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { hapticCross, hapticDrop, hapticGrab } from "../lib/haptics";
 import {
@@ -73,7 +76,7 @@ import {
   capitalizeFirst,
   parseDictation,
 } from "../lib/dictationParser";
-import { todayStr } from "../lib/date";
+import { todayStr, formatDueLabel } from "../lib/date";
 import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import type { UpdateTaskInput } from "../api/tasks";
@@ -461,18 +464,18 @@ export function TaskFormScreen() {
   // подзадачи — setTimeout на blur даёт запасные 100мс, чтобы не мигать при
   // переключении фокуса между этими двумя полями (blur одного срабатывает
   // раньше focus другого).
-  const [keyboardFieldFocused, setKeyboardFieldFocused] = useState(false);
-  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 30.08.2026 итер.4: панель над клавиатурой показывается ВСЕГДА, не
+  // только при фокусе в поле. Поэтому keyboardFieldFocused/blurTimeoutRef
+  // больше не нужны — отслеживать состояние фокуса ради видимости панели
+  // не требуется. handleFieldFocus/handleFieldBlur тоже упростились:
+  // они только проставляют voiceTarget.
   const handleFieldFocus = (target: "title" | "desc" | "subtask") => {
-    if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
     setVoiceTarget(target);
-    setKeyboardFieldFocused(true);
   };
   const handleFieldBlur = () => {
-    blurTimeoutRef.current = setTimeout(
-      () => setKeyboardFieldFocused(false),
-      100,
-    );
+    // Ничего не делаем: панель не зависит от фокуса, voiceTarget
+    // сохраняется — голос из панели уйдёт в то поле, на котором был
+    // последний фокус.
   };
   // Progressive disclosure для деталей (30.08.2026, дизайн-ревью): экран
   // открывается «сценой» — большое поле названия + голос как первый жест.
@@ -482,14 +485,12 @@ export function TaskFormScreen() {
   // открыты сразу — пользователь пришёл редактировать существующее, всё
   // уже наполнено, скрывать нечего.
   const [detailsOpen, setDetailsOpen] = useState<boolean>(!!id);
-  // Открыть голос «первым жестом»: фокусируем title (voiceTarget='title'
-  // + keyboardFieldFocused=true), MicKeyboardBar появляется сама.
-  const startVoiceFromTop = () => {
-    setVoiceTarget("title");
-    if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
-    setKeyboardFieldFocused(true);
-    titleRef.current?.focus();
-  };
+  // Панель над клавиатурой: какой пикер сейчас открыт (30.08.2026, итер.4).
+  const [openPicker, setOpenPicker] = useState<QuickActionPicker>(null);
+  // Открыть голос «первым жестом» — больше не нужен: микрофон живёт
+  // в QuickActionsBar над клавиатурой, голос стартует оттуда напрямую.
+  // (См. QuickActionsBar onMicStart — переиспользует тот же voiceTarget
+  // и keyboardFieldFocused каналы.)
   const handleStructureWithAI = async (textToProcess?: string) => {
     const raw =
       typeof textToProcess === "string"
@@ -786,28 +787,13 @@ export function TaskFormScreen() {
         }
         title=""
         actions={
-          <div className="flex items-center gap-1">
-            {/* Голос как первый жест (30.08.2026, дизайн-ревью): заметная
-                монохромная кнопка в шапке — открывает MicKeyboardBar без
-                обязательного тапа в textarea. Те же haptic-каналы, что у
-                on-screen mic: focus на title + keyboardFieldFocused=true,
-                панель появляется сама. */}
-            <button
-              onClick={startVoiceFromTop}
-              className="h-9 px-3 inline-flex items-center gap-1.5 rounded-full bg-card2 hover:bg-card2/80 text-sub hover:text-text text-[13px] font-medium transition-[background-color,color] duration-150 active:scale-95"
-              aria-label="Надиктовать задачу"
-            >
-              <Icon name="mic" size={14} />
-              <span className="hidden sm:inline">Надиктовать</span>
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!title.trim() || isSaving}
-              className="text-[17px] font-semibold text-red active:opacity-70 disabled:opacity-50 px-2"
-            >
-              {isSaving ? "Сохранение…" : "Готово"}
-            </button>
-          </div>
+          <button
+            onClick={handleSave}
+            disabled={!title.trim() || isSaving}
+            className="text-[17px] font-semibold text-red active:opacity-70 disabled:opacity-50 px-2"
+          >
+            {isSaving ? "Сохранение…" : "Готово"}
+          </button>
         }
       />
 
@@ -856,29 +842,23 @@ export function TaskFormScreen() {
           выше рендерят null и не держат места, когда ошибок нет (обычный
           случай). 16px — тот же межблочный модуль, что mb-4 держит между
           остальными секциями формы ниже. */}
-      {/* Большая «сцена» ввода (30.08.2026, дизайн-ревью): убрана отдельная
-          строка «Новая задача» с градиентной AI-кнопкой. Заголовок-сцена —
-          сам placeholder в textarea. Над полем — маленькая подсказка,
-          которая уходит, как только человек начал вводить. */}
-      <div className="mt-6 mb-2 flex items-center gap-2 min-h-[18px]">
-        {!title.trim() && (
-          <span className="text-[12px] text-dim tracking-wide">
-            Надиктуйте или напишите — остальное можно раскрыть ниже
-          </span>
-        )}
-        {(title.trim() || desc.trim()) && (
-          <button
-            type="button"
-            onClick={() => handleStructureWithAI()}
-            disabled={isStructuring}
-            className="inline-flex items-center gap-1.5 text-[12px] font-medium text-sub hover:text-text transition-[color] duration-150 disabled:opacity-50"
-            aria-label="Структурировать задачу с помощью ИИ"
-          >
-            <Icon name="sparkles" size={12} className="text-red/70" />
-            <span>Структурировать с AI</span>
-          </button>
-        )}
-      </div>
+      {/* Заголовок-сцена: только placeholder в textarea, без подсказки.
+                (Владелец 30.08.2026: «убери эту хрень». Микрофон теперь в панели
+                над клавиатурой, дополнительный hint над textarea лишний.) */}
+            <div className="mt-6 mb-2 flex items-center gap-2 min-h-[18px]">
+              {(title.trim() || desc.trim()) && (
+                <button
+                  type="button"
+                  onClick={() => handleStructureWithAI()}
+                  disabled={isStructuring}
+                  className="nt-taskform-hint inline-flex items-center gap-1.5 text-[12px] font-medium text-sub hover:text-text transition-[color] duration-150 disabled:opacity-50"
+                  aria-label="Структурировать задачу с помощью ИИ"
+                >
+                  <Icon name="sparkles" size={12} className="text-red/70" />
+                  <span>Структурировать с AI</span>
+                </button>
+              )}
+            </div>
       <textarea
         ref={titleRef}
         value={title}
@@ -1331,18 +1311,47 @@ export function TaskFormScreen() {
               : "через сервер"}
         </p>
       )}
-      {keyboardFieldFocused && mic.state === "idle" && (
-        <MicKeyboardBar
-          onStart={mic.start}
-          ariaLabel={
-            voiceTarget === "desc"
-              ? "Надиктовать описание"
-              : voiceTarget === "subtask"
-                ? "Надиктовать подзадачу"
-                : "Надиктовать название"
+      <QuickActionsBar
+        onMicStart={() => {
+          // Голос из панели: voiceTarget по умолчанию идёт в title; если
+          // фокус уже в desc/подзадаче — направляем туда.
+          if (
+            voiceTarget !== "title" &&
+            voiceTarget !== "desc" &&
+            voiceTarget !== "subtask"
+          ) {
+            setVoiceTarget("title");
           }
-        />
-      )}
+          mic.start();
+        }}
+        micAriaLabel="Надиктовать задачу"
+        dueDateLabel={dueDate ? formatDueLabel(dueDate) : null}
+        onOpenDate={() => setOpenPicker(openPicker === "date" ? null : "date")}
+        dueDateActive={!!dueDate}
+        projectLabel={currentProject?.name || "Входящие"}
+        onOpenProject={() =>
+          setOpenPicker(openPicker === "project" ? null : "project")
+        }
+        projectActive={!!effectiveProjectId}
+        projectColor={currentProject?.color}
+        priorityKey={priority}
+        onOpenPriority={() =>
+          setOpenPicker(openPicker === "priority" ? null : "priority")
+        }
+        labelsCount={selectedLabelIds.length}
+        onOpenLabels={() =>
+          setOpenPicker(openPicker === "labels" ? null : "labels")
+        }
+        labelsActive={selectedLabelIds.length > 0}
+        detailsOpen={detailsOpen}
+        onToggleDetails={() => setDetailsOpen((o) => !o)}
+        openPicker={openPicker}
+        onClosePicker={() => setOpenPicker(null)}
+        datePicker={null}
+        projectPicker={null}
+        priorityPicker={null}
+        labelsPicker={null}
+      />
       {(mic.state === "recording" || mic.state === "processing") && (
         <MicOverlay
           state={mic.state}
