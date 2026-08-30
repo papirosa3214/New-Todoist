@@ -87,18 +87,14 @@ export function TodayScreen() {
   const menuAnchorRef = useRef<HTMLButtonElement>(null);
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
-  // hiddenDailyPlannerProjects остаётся в сторе как legacy (Шаг 1
-  // привык к этому полю, persist у пользователей его содержит). В Шаге 2
-  // оно не используется в формулах на этом экране, поэтому на этом
-  // экране не читаем — ререндер на изменение legacy-поля тут не нужен.
-  // Шаг 3 будет решать, мигрировать или выпиливать.
 
   // Шаг 2 (feature/projects-decouple-planner-merge): opt-in список
-  // проектов для ежедневника. Семантика противоположна legacy hidden —
-  // «включить проект в раздел», а не «спрятать». По умолчанию {} —
-  // пустой выбор = только входящие (как в Шаге 1). Чтобы добавить
-  // проект в ежедневник, пользователь тапает [+] в полоске чипов
-  // (PlannerProjectChips) и выбирает в picker внутри TaskFilterSheet.
+  // проектов для ежедневника. Семантика «включить проект в раздел».
+  // По умолчанию {} — пустой выбор = только входящие (как в Шаге 1).
+  // Чтобы добавить проект в ежедневник, пользователь тапает [+] в
+  // полоске чипов (PlannerProjectChips) и выбирает в picker внутри
+  // TaskFilterSheet. Раннее поле hiddenDailyPlannerProjects (Шаг 0,
+  // до Шага 1) имело противоположную семантику и удалено в Шаге 3.
   const visibleProjectIds = useAppStore((s) => s.plannerVisibleProjects);
   const togglePlannerVisibleProject = useAppStore(
     (s) => s.togglePlannerVisibleProject,
@@ -107,10 +103,7 @@ export function TodayScreen() {
   // Отфильтрованный по видимым проектам универсум задач — источник для
   // всего экрана (список/доска/сетка часов) ниже. Задачи без project_id
   // (Входящие) присутствуют всегда; проектные задачи попадают, только
-  // если пользователь явно opt-in'нул проект в picker'е (см.
-  // plannerVisibleProjects в сторе). hiddenDailyPlannerProjects выше
-  // остаётся в сторе как legacy и сейчас НЕ участвует в формуле —
-  // Шаг 3 будет решать, мигрировать ли значения.
+  // если пользователь явно opt-in'нул проект в picker'е.
   const plannerTasks = useMemo(
     () =>
       allTasks.filter(

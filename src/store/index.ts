@@ -119,26 +119,15 @@ interface AppState {
   // отсутствие ключа = развёрнута (иначе пришлось бы заранее знать все id).
   collapsedInboxProjects: Record<string, boolean>;
   toggleInboxProjectCollapsed: (projectId: string) => void;
-  // 25.08.2026: «Ежедневник» (бывш. «Сегодня») — владелец хочет сам
-  // выбирать, какие проекты попадают в выборку («Просрочено»/«Сегодня»/
-  // «Ждут вас» + сетка часов), а не видеть задачи из всех проектов разом.
-  // id проекта → скрыт ли; отсутствие ключа = виден — тот же приём, что у
-  // collapsedInboxProjects чуть выше, не нужно заранее знать все id, и
-  // новый проект по умолчанию виден без отдельной миграции состояния.
-  // Задачи без project_id (Входящие) фильтром не затрагиваются — они не
-  // принадлежат ни одному проекту, скрывать их через «скрыть проект»
-  // нечем.
-  hiddenDailyPlannerProjects: Record<string, boolean>;
-  toggleDailyPlannerProjectHidden: (projectId: string) => void;
   // Шаг 2 (feature/projects-decouple-planner-merge): opt-in список проектов
-  // для ежедневника. Семантика противоположна hiddenDailyPlannerProjects
-  // (там «скрыть», здесь «показать»); новое поле, потому что
-  // инвертировать hidden в UI — это плодить путаницу. По умолчанию {} —
-  // пустой выбор = только входящие (как и в Шаге 1). Чтобы добавить
-  // проект в ежедневник, пользователь тапает [+] в полоске чипов и
-  // выбирает в picker внутри TaskFilterSheet. Старый
-  // hiddenDailyPlannerProjects сохранён как legacy и будет выпилен в
-  // Шаге 3 после того, как все юзеры перейдут на новую схему.
+  // для ежедневника. Семантика «показать»: пусто = только входящие (как
+  // и в Шаге 1). Чтобы добавить проект в ежедневник, пользователь тапает
+  // [+] в полоске чипов и выбирает в picker внутри TaskFilterSheet.
+  // Раннее поле hiddenDailyPlannerProjects (Шаг 0, до Шага 1) имело
+  // противоположную семантику и удалено в Шаге 3: инвертировать его в UI
+  // плодит путаницу, и с Шага 1 оно уже не читалось кодом. Юзеры, у
+  // которых оно было заполнено, после апгрейда на v4 увидят дефолт
+  // «только входящие» и должны сами добавить нужные проекты через чипы.
   plannerVisibleProjects: Record<string, true>;
   togglePlannerVisibleProject: (projectId: string) => void;
 }
@@ -189,14 +178,6 @@ export const useAppStore = create<AppState>()(
             [projectId]: !state.collapsedInboxProjects[projectId],
           },
         })),
-      hiddenDailyPlannerProjects: {},
-      toggleDailyPlannerProjectHidden: (projectId) =>
-        set((state) => ({
-          hiddenDailyPlannerProjects: {
-            ...state.hiddenDailyPlannerProjects,
-            [projectId]: !state.hiddenDailyPlannerProjects[projectId],
-          },
-        })),
       plannerVisibleProjects: {},
       togglePlannerVisibleProject: (projectId) =>
         set((state) => {
@@ -226,9 +207,12 @@ export const useAppStore = create<AppState>()(
       // v3 (30.08.2026, feature/projects-decouple-planner-merge, Шаг 2):
       // добавлен plannerVisibleProjects. Семантика другая, чем у
       // hiddenDailyPlannerProjects, поэтому переносить значения нельзя —
-      // старый словарь остаётся в persist как legacy до Шага 3. Дефолт
-      // для нового поля — {}, как и в инициализации стора.
-      version: 3,
+      // старый словарь оставался в persist как legacy до Шага 3.
+      // v4 (30.08.2026, Шаг 3): поле hiddenDailyPlannerProjects удалено из
+      // стора. У юзеров, у которых оно было заполнено, после апгрейда
+      // значение молча отбрасывается — они увидят дефолт «только
+      // входящие» и должны сами добавить нужные проекты через чипы.
+      version: 4,
       migrate: (persisted: any, version) => {
         if (
           version < 1 &&
@@ -246,6 +230,12 @@ export const useAppStore = create<AppState>()(
           persisted.plannerVisibleProjects =
             persisted.plannerVisibleProjects || {};
         }
+        if (version < 4) {
+          // Дроп legacy hiddenDailyPlannerProjects. Никаких преобразований
+          // — поле просто отсутствует в сторе. Юзер теряет свой «чёрный
+          // список», что и ожидается (см. STATUS.md).
+          delete persisted.hiddenDailyPlannerProjects;
+        }
         return persisted;
       },
       partialize: (state) => ({
@@ -253,7 +243,6 @@ export const useAppStore = create<AppState>()(
         taskLayout: state.taskLayout,
         upcomingLayout: state.upcomingLayout,
         collapsedInboxProjects: state.collapsedInboxProjects,
-        hiddenDailyPlannerProjects: state.hiddenDailyPlannerProjects,
         plannerVisibleProjects: state.plannerVisibleProjects,
         aiProvider: state.aiProvider,
         localOllamaModel: state.localOllamaModel,
