@@ -161,15 +161,26 @@ export function TaskFilterSheet({
     disabled?: boolean;
   };
 }) {
-  const [openSection, setOpenSection] = useState<string | null>(
-    // Шаг 2: если экран просит сразу раскрыть секцию «Показывать в
-    // разделе» (через defaultOpenSection), открываем её на монтировании.
-    plannerProjects?.defaultOpenSection ?? null,
-  );
+  const [openSection, setOpenSection] = useState<string | null>(null);
 
+  // Синхронизируем openSection с prop'ом open и plannerProjects.defaultOpenSection.
+  // До Шага 2 тут был простой if (open) setOpenSection(null) — работал, потому
+  // что openSection инициализировался дефолтом шторки (никаких preferred-секций).
+  // Шаг 2 ввёл defaultOpenSection: "planner" — экран хочет, чтобы при тапе по
+  // [+] в PlannerProjectChips picker сразу был раскрыт. Прошлый useEffect
+  // срабатывал на первом монтировании с open=true и затирал useState-init
+  // до null, поэтому фикс проваливался. Теперь: при открытии шторки ставим
+  // defaultOpenSection (если экран её просил), при закрытии — null.
+  // Повторное открытие с тем же defaultOpenSection снова раскрывает нужную
+  // секцию, потому что зависимость [open, defaultOpenSection] валидна на
+  // каждом переходе open.
   useEffect(() => {
-    if (open) setOpenSection(null);
-  }, [open]);
+    if (open) {
+      setOpenSection(plannerProjects?.defaultOpenSection ?? null);
+    } else {
+      setOpenSection(null);
+    }
+  }, [open, plannerProjects?.defaultOpenSection]);
 
   // §3 Interruptibility, §5 Velocity handoff, §7 Spatial consistency
   const sheet = useBottomSheet({ open, onClose });
