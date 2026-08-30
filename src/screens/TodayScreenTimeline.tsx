@@ -1,29 +1,41 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
-import { todayStr, formatDueLabel } from "../lib/date";
+import { todayStr, formatDueLabel, MONTHS_SHORT } from "../lib/date";
 import { Icon } from "../components/UI";
 import { useOpenTask } from "../lib/useOpenTask";
 import { isAgentAssignedTask } from "../lib/taskOwner";
 import { useAgents } from "../api/agents";
 import type { ApiTask } from "../api/types";
 
-// ═══════════ TodayScreenTimeline — proof-of-concept «Time-Thread UI» ═══════════
+// ═══════════ TodayScreenTimeline — Time-Thread UI, этап2 ═══════════
 //
-// 30.08.2026, этап1 (владелец прислал HTML-референс с зум-слоями День/Неделя/
-// Месяц и анимацией scale+blur при свайпе). Этот файл — ТОЛЬКО слой «День»,
-// в минимальной версии: вертикальная time-line слева, задачи дня как точки
-// на ней, заголовок экрана в едином стиле.
+// 30.08.2026. Этап2 (по HTML-референсу):
+// - Три слоя: День (zoom=0), Неделя (zoom=1), Месяц (zoom=2)
+// - Свайп влево/вправо по горизонтали с порогом 50px
+// - Заголовок и точки-индикатор меняются при смене слоя
+// - Анимация смены через CSS transform/opacity/filter (как в HTML)
 //
-// Цель этапа1 — собрать обратную связь по визуалу, прежде чем пилить
-// свайп + два других слоя. Если визуал ок — следующим коммитом добавим
-// остальные слои.
+// Этап3 добавит полноценный слой «Месяц» (7×5 сетка). Сейчас —
+// простой placeholder «Этап 3», чтобы проверить свайп+анимацию.
 //
-// Пока не трогает TodayScreen.tsx — доступен за флагом /timeline. Решение
-// о замене — после визуального одобрения на устройстве.
-//
-// Компонент НЕ включает в себя доску/проект-чипы/фильтры из TodayScreen —
-// только список задач дня. Цель: показать новую геометрию.
+// Доступ: /timeline (POC, рядом с /today). TodayScreen.tsx не трогаем.
+
+type Zoom = 0 | 1 | 2;
+
+const ZOOM_LABELS = ["Фокус дня", "Обзор недели", "Сетка месяца"] as const;
+
+// Локальная копия WEEKDAYS_FULL из TodayScreen.tsx (там она приватная).
+// В этапе3 вынесу в lib/date.ts и переиспользую там и там.
+const WEEKDAYS_FULL = [
+  "Воскресенье",
+  "Понедельник",
+  "Вторник",
+  "Среда",
+  "Четверг",
+  "Пятница",
+  "Суббота",
+];
 
 export function TodayScreenTimeline() {
   const { data: allTasks = [], isLoading } = useTasks();
@@ -31,10 +43,11 @@ export function TodayScreenTimeline() {
   const openTask = useOpenTask();
   const navigate = useNavigate();
   const today = todayStr();
+  const [zoom, setZoom] = useState<Zoom>(0);
+  // Refs для свайпа
+  const startXRef = useRef<number | null>(null);
 
-  // Только задачи на сегодня, отсортированные по времени (если есть).
-  // Из того же расчёта, что в TodayScreen — агенты исключаются (они в
-  // сетке часов не показываются), но стартовое время берётся.
+  // Активные задачи на сегодня — слой «День».
   const todays = useMemo(() => {
     return allTasks
       .filter((t) => {
@@ -44,7 +57,6 @@ export function TodayScreenTimeline() {
       })
       .filter((t) => !isAgentAssignedTask(t, agents))
       .sort((a, b) => {
-        // Сортировка по времени: задачи без времени идут после задач с временем.
         const ta = a.start_time ?? "";
         const tb = b.start_time ?? "";
         if (!ta && !tb) return (a.position ?? 0) - (b.position ?? 0);
@@ -54,16 +66,65 @@ export function TodayScreenTimeline() {
       });
   }, [allTasks, today, agents]);
 
+  // Группировка задач по дням на ближайшую неделю (относительно today).
+  // Ключ — YYYY-MM-DD, значение — массив задач этого дня.
+  const week = useMemo(() => {
+    const todayDate = new Date(today + "T00:00:00");
+    const out: { date: string; label: string; tasks: ApiTask[] }[] = [];
+    for (let i = -3; i <= 3; i++) {
+      const d = new Date(todayDate);
+      d.setDate(todayDate.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      const isCurrent = i === 0;
+      const label = isCurrent
+        ? "Сегодня"
+        : `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
+      const tasks = allTasks
+        .filter((t) => {
+          if (!t.due_date) return false;
+          if (t.status === "completed") return false;
+          return t.due_date.startsWith(key);
+        })
+        .filter((t) => !isAgentAssignedTask(t, agents))
+        .sort((a, b) => {
+          const ta = a.start_time ?? "";
+          const tb = b.start_time ?? "";
+          if (!ta && !tb) return (a.position ?? 0) - (b.position ?? 0);
+          if (!ta) return 1;
+          if (!tb) return -1;
+          return ta.localeCompare(tb);
+        });
+      out.push({ date: key, label, tasks });
+    }
+    return out;
+  }, [allTasks, today, agents]);
+
+  // Свайп
+  function handleSwipe(diffX: number) {
+    if (Math.abs(diffX) < 50) return;
+    if (diffX > 0 && zoom < 2) setZoom((zoom + 1) as Zoom);
+    else if (diffX < 0 && zoom > 0) setZoom((zoom - 1) as Zoom);
+  }
+
   return (
-    <div className="min-h-screen bg-bg text-text pb-12">
-      {/* Шапка — единый стиль с референса (mix-blend-difference даёт
-          инверсию цвета на любой подложке, как у Apple Music в light mode).
-          В dark mode проекта blend-mode визуально неотличим от обычного
-          белого текста; оставляю на случай, если когда-нибудь появится
-          светлая тема. */}
-      <header className="px-8 pt-12 pb-4">
-        <div className="text-sm text-dim tracking-widest uppercase">
-          Фокус дня
+    <div
+      className="min-h-screen bg-bg text-text pb-12 relative overflow-hidden"
+      onTouchStart={(e) => {
+        startXRef.current = e.touches[0].clientX;
+      }}
+      onTouchEnd={(e) => {
+        if (startXRef.current !== null) {
+          handleSwipe(startXRef.current - e.changedTouches[0].clientX);
+          startXRef.current = null;
+        }
+      }}
+    >
+      <header className="px-8 pt-12 pb-4 z-50 relative">
+        <div
+          key={zoom}
+          className="text-sm text-dim tracking-widest uppercase animate-fade-in"
+        >
+          {ZOOM_LABELS[zoom]}
         </div>
         <div className="text-3xl font-medium mt-1">{formatDueLabel(today)}</div>
         <button
@@ -75,34 +136,173 @@ export function TodayScreenTimeline() {
         </button>
       </header>
 
-      {/* Тело — вертикальная time-line слева (24px от края), задачи как
-          точки на ней. */}
-      <div className="relative px-8 pt-2">
-        <div
-          aria-hidden
-          className="absolute left-[24px] top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent"
+      {/* СЛОИ — три одновременно, видимый — через scale/opacity/blur */}
+      <Layer active={zoom === 0}>
+        <DayLayer
+          tasks={todays}
+          isLoading={isLoading}
+          onOpenTask={(id) => openTask(id)}
         />
+      </Layer>
+      <Layer active={zoom === 1}>
+        <WeekLayer days={week} />
+      </Layer>
+      <Layer active={zoom === 2}>
+        <MonthPlaceholder />
+      </Layer>
 
-        {isLoading ? (
-          <div className="text-sub text-sm pl-8 py-8">Загрузка…</div>
-        ) : todays.length === 0 ? (
-          <div className="text-sub text-sm pl-8 py-8">
-            На сегодня задач нет.
-          </div>
-        ) : (
-          <div className="space-y-8">
-            {todays.map((t) => (
-              <TimelineTask key={t.id} task={t} onOpen={() => openTask(t.id)} />
-            ))}
-          </div>
-        )}
+      {/* Индикатор зума — три точки, активная белая */}
+      <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex items-center gap-4 z-50">
+        <div className="text-[10px] text-neutral-600 tracking-widest uppercase">
+          Свайп влево/вправо
+        </div>
+        <div className="flex gap-2">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
+                i === zoom ? "bg-text" : "bg-neutral-700"
+              }`}
+            />
+          ))}
+        </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Подсказка снизу — в референсе «СВАЙП ВЛЕВО/ВПРАВО ДЛЯ ЗУМА», но
-          свайпа пока нет (этап1). Подсказка одна: «Time-Thread — этап1,
-          только день». Это позволит сразу понять, что экран — POC. */}
-      <div className="fixed bottom-12 left-1/2 -translate-x-1/2 text-[10px] text-neutral-600 tracking-widest uppercase">
-        Time-Thread · Этап 1 из 4
+// Один слой в стеке. active=true → видимый. active=false → прозрачный +
+// размытый + чуть сжат. CSS-transition на transform/opacity/filter.
+// (Здесь простой вариант: один scale(0.95) для неактивных. В этапе3
+// добавим разные scale для index< и index> — это даёт ощущение «уехал
+// влево» / «уехал вправо» при свайпе, как в HTML-референсе.)
+function Layer({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="absolute inset-0 pt-32 px-8 transition-all duration-[600ms] ease-[cubic-bezier(0.22,1,0.36,1)] flex flex-col"
+      style={{
+        transform: active ? "scale(1)" : "scale(0.95)",
+        opacity: active ? 1 : 0,
+        filter: active ? "blur(0)" : "blur(4px)",
+        pointerEvents: active ? "auto" : "none",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// Слой «День» — те же точки на time-thread, что и в этапе1.
+function DayLayer({
+  tasks,
+  isLoading,
+  onOpenTask,
+}: {
+  tasks: ApiTask[];
+  isLoading: boolean;
+  onOpenTask: (id: string) => void;
+}) {
+  return (
+    <div className="relative flex-1 overflow-y-auto">
+      <div
+        aria-hidden
+        className="absolute left-[24px] top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent"
+      />
+      {isLoading ? (
+        <div className="text-sub text-sm pl-8 py-8">Загрузка…</div>
+      ) : tasks.length === 0 ? (
+        <div className="text-sub text-sm pl-8 py-8">На сегодня задач нет.</div>
+      ) : (
+        <div className="space-y-12">
+          {tasks.map((t) => (
+            <TimelineTask key={t.id} task={t} onOpen={() => onOpenTask(t.id)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Слой «Неделя» — 7 дней вокруг today, каждый как день со счётчиком задач.
+function WeekLayer({
+  days,
+}: {
+  days: { date: string; label: string; tasks: ApiTask[] }[];
+}) {
+  const today = todayStr();
+  return (
+    <div className="relative flex-1 overflow-y-auto">
+      <div
+        aria-hidden
+        className="absolute left-[24px] top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent"
+      />
+      <div className="space-y-8">
+        {days.map((d) => {
+          const isCurrent = d.date === today;
+          return (
+            <div
+              key={d.date}
+              className={`relative pl-8 ${isCurrent ? "" : "opacity-40"}`}
+            >
+              <div
+                aria-hidden
+                className={`absolute left-${
+                  isCurrent ? "[-4px] w-2 h-2" : "[-2px] w-1 h-1"
+                } top-3 bg-white rounded-full`}
+              />
+              <div
+                className={`text-xs mb-1 tracking-widest uppercase ${
+                  isCurrent ? "text-text font-medium" : "text-dim"
+                }`}
+              >
+                {d.label}
+                {d.date === today && " · " + WEEKDAYS_FULL[new Date(d.date + "T00:00:00").getDay()]}
+              </div>
+              {d.tasks.length > 0 ? (
+                <div className="flex items-center gap-2">
+                  <div className="text-lg">
+                    {d.tasks.length === 1
+                      ? "1 задача"
+                      : d.tasks.length < 5
+                        ? `${d.tasks.length} задачи`
+                        : `${d.tasks.length} задач`}
+                  </div>
+                  {/* Цветные точки — приоритеты задач дня */}
+                  <div className="flex gap-1.5 ml-2">
+                    {d.tasks.slice(0, 6).map((t) => (
+                      <div
+                        key={t.id}
+                        className={`w-1.5 h-1.5 rounded-full ${priorityDotColor(t.priority)}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-lg text-sub">Отдых</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Слой «Месяц» — placeholder в этапе2, реальная сетка в этапе3.
+function MonthPlaceholder() {
+  return (
+    <div className="flex-1 flex items-center justify-center text-sub text-sm">
+      <div className="text-center">
+        <div className="text-xs text-dim tracking-widest uppercase mb-2">
+          Этап 3
+        </div>
+        <div>Сетка месяца — следующий коммит.</div>
       </div>
     </div>
   );
@@ -142,6 +342,13 @@ function TimelineTask({ task, onOpen }: { task: ApiTask; onOpen: () => void }) {
       </div>
     </button>
   );
+}
+
+function priorityDotColor(priority: number): string {
+  if (priority === 1) return "bg-red";
+  if (priority === 2) return "bg-orange";
+  if (priority === 3) return "bg-blue";
+  return "bg-white";
 }
 
 function formatEnd(start: string, durationMin: number): string {
