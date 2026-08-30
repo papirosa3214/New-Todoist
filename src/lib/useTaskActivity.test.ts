@@ -75,7 +75,7 @@ describe("когда звать модель", () => {
 
   it("держит паузу между вызовами", () => {
     // Модель считает на телефоне: без паузы пачка правок посадит батарею.
-    const event = { kind: "edit", diff: DIFF };
+    const event = { kind: "edit" as const, diff: DIFF };
     expect(shouldExplain(event, now - 1000, now)).toBe(false);
     expect(shouldExplain(event, now - EXPLAIN_EVERY_MS, now)).toBe(true);
   });
