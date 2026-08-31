@@ -10,6 +10,13 @@ import SwiftUI
 /// появились 31.08.2026 уже по ходу этой задачи) — здесь только их подключение:
 /// состояние вкладки/меню, переходы, бейдж «Сегодня». Само оформление панели
 /// этот файл не трогает (правило `ARCHITECTURE.md`: DesignSystem — только читать).
+/// Черновик быстрой задачи: `.sheet(item:)` требует `Identifiable`, а
+/// `TaskFormViewModel` — общий класс формы и своего `id` не имеет.
+private struct QuickAddDraft: Identifiable {
+    let id = UUID()
+    let viewModel: TaskFormViewModel
+}
+
 struct RootShellView: View {
     enum Tab: Int, CaseIterable, Hashable {
         case today, overview, upcoming, chat
@@ -53,6 +60,21 @@ struct RootShellView: View {
     // срабатывание onChange помечало бы его просмотренным при каждом запуске).
     @State private var selectedTab: Tab = .overview
     @State private var isCreateMenuOpen = false
+    /// Панель быстрого создания задачи: своя вью-модель живёт здесь, чтобы
+    /// пережить переход «развернуть» в полную форму без потери введённого.
+    ///
+    /// Подаётся `.sheet(item:)`, а НЕ `.sheet(isPresented:)` с `if let` внутри:
+    /// при втором варианте содержимое замыкания строится в той же транзакции,
+    /// где вью-модель ещё `nil`, и шторка открывается пустой во весь экран
+    /// (детент из пустого содержимого тоже не применяется). Проверено кадром
+    /// симулятора 31.08.2026 — даже отладочный `Text` внутри `if let` не рисовался.
+    @State private var quickAddDraft: QuickAddDraft?
+    /// «Развернуть» из панели — полная форма с ТОЙ ЖЕ вью-моделью. Через
+    /// `fullScreenCover`, а не пуш маршрута `/task/new`: маршрут строит экран
+    /// заново и заводит СВОЮ вью-модель, то есть введённое в панели название,
+    /// срок и выбранные файлы пропадали бы (проверено по коду `TaskFormScreen`
+    /// 01.09.2026 — у него для этого есть `init(expandingFrom:)`).
+    @State private var expandedDraft: QuickAddDraft?
     @State private var paths: [Tab: NavigationPath] = [:]
     /// Зеркало `taskflow_today_badge_seen_date` из веба (spec §2.1) —
     /// `UserDefaults` вместо `localStorage`, тот же принцип: бейдж гаснет
@@ -99,6 +121,55 @@ struct RootShellView: View {
             }
         }
         .animation(.easeOut(duration: TFAnimation.createMenu), value: isCreateMenuOpen)
+        .sheet(item: $quickAddDraft) { draft in
+            QuickAddTaskView(
+                viewModel: draft.viewModel,
+                onSaved: { quickAddDraft = nil },
+                onExpand: {
+                    // Развернуть — тот же незаконченный черновик, только
+                    // полной формой: вью-модель передаётся как есть,
+                    // введённое не теряется.
+                    let draftViewModel = draft.viewModel
+                    quickAddDraft = nil
+                    expandedDraft = QuickAddDraft(viewModel: draftViewModel)
+                }
+            )
+        }
+        .fullScreenCover(item: $expandedDraft) { draft in
+            NavigationStack {
+                TaskFormScreen(expandingFrom: draft.viewModel)
+            }
+        }
+        #if DEBUG
+        // Отладочный автопереход: снять экран в симуляторе иначе нечем —
+        // тапать по нему из командной строки нельзя, а показывать владельцу
+        // нужно конкретный экран, а не только стартовый. Задаётся переменной
+        // окружения при запуске, в релиз не попадает.
+        .task {
+            guard let raw = ProcessInfo.processInfo.environment["TASKFLOW_DEBUG_ROUTE"],
+                  raw.isEmpty == false else { return }
+            // Небольшая пауза: сторы должны успеть загрузиться, иначе экран
+            // откроется пустым и кадр окажется бесполезным.
+            try? await Task.sleep(for: .seconds(2))
+            let parts = raw.split(separator: ":", maxSplits: 1).map(String.init)
+            switch parts[0] {
+            case "create":
+                isCreateMenuOpen = true
+            case "quickadd":
+                quickAddDraft = QuickAddDraft(viewModel: TaskFormViewModel(taskID: nil))
+            case "task" where parts.count == 2:
+                paths[selectedTab, default: NavigationPath()].append(AppRoute.taskDetail(taskID: parts[1]))
+            case "notifications": paths[selectedTab, default: NavigationPath()].append(AppRoute.notifications)
+            case "projects": paths[selectedTab, default: NavigationPath()].append(AppRoute.projects)
+            case "settings": paths[selectedTab, default: NavigationPath()].append(AppRoute.settings)
+            case "notes": paths[selectedTab, default: NavigationPath()].append(AppRoute.notes)
+            case "today": selectedTab = .today
+            case "upcoming": selectedTab = .upcoming
+            case "chat": selectedTab = .chat
+            default: break
+            }
+        }
+        #endif
         .onChange(of: selectedTab, initial: true) { _, newTab in
             if newTab == .today {
                 todayBadgeSeenDate = DateFormats.todayString()
@@ -127,7 +198,12 @@ struct RootShellView: View {
     private var createMenuItems: [TFCreateMenuItem] {
         [
             TFCreateMenuItem(icon: "checkmark", title: "Задача", subtitle: "Со сроком и шагами") {
-                openCreateMenuTarget(.taskForm(taskID: nil))
+                // Задача заводится компактной панелью над клавиатурой, а не
+                // полноэкранным бланком: владелец так и просил — нажал «плюс»,
+                // написал название, сохранил. Полная форма остаётся за кнопкой
+                // «развернуть» внутри самой панели.
+                isCreateMenuOpen = false
+                quickAddDraft = QuickAddDraft(viewModel: TaskFormViewModel(taskID: nil))
             },
             TFCreateMenuItem(icon: "book", title: "Заметка", subtitle: "Запись в дневнике") {
                 openCreateMenuTarget(.notes)

@@ -25,32 +25,32 @@ func routeDestination(_ route: AppRoute) -> some View {
     case .notes:
         NotesScreen()
     case .noteEditor(let noteID):
-        ScreenStub("NoteEditorScreenStub", detail: "noteID: \(noteID)")
+        NoteEditorScreen(noteID: noteID)
     case .projects:
-        ScreenStub("ProjectsScreenStub")
+        ProjectsScreen()
     case .projectTasks(let projectID):
-        ScreenStub("ProjectTasksScreenStub", detail: "projectID: \(projectID)")
+        ProjectTasksScreen(projectID: projectID)
     case .labels:
-        ScreenStub("LabelsScreenStub")
+        LabelsScreen()
     case .labelTasks(let labelID):
-        ScreenStub("LabelTasksScreenStub", detail: "labelID: \(labelID)")
+        LabelTasksScreen(labelID: labelID)
     case .search:
-        ScreenStub("SearchScreenStub")
+        SearchScreen()
     case .activity:
-        ScreenStub("ActivityScreenStub")
+        ActivityScreen()
     case .notifications:
-        ScreenStub("NotificationsScreenStub")
+        NotificationsScreen()
     case .agents:
         AgentsScreen()
     case .agentWork:
-        ScreenStub("AgentWorkScreenStub")
+        AgentWorkScreen()
     case .settings:
         SettingsScreen()
     case .integrations:
-        ScreenStub("IntegrationsScreenStub")
+        IntegrationsScreen()
     case .templates:
-        ScreenStub("TemplatesScreenStub")
+        TemplatesScreen()
     case .voiceModels:
-        ScreenStub("VoiceModelsScreenStub")
+        VoiceModelsScreen()
     }
 }

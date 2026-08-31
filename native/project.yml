@@ -8,7 +8,9 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    DEVELOPMENT_TEAM: ""
+    # Та же команда разработчика, что у рабочей Capacitor-сборки — иначе
+    # автоматическая подпись не найдёт профиль под этот телефон.
+    DEVELOPMENT_TEAM: RUD4WAP9DF
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"

@@ -44,6 +44,17 @@ public final class SessionStore {
     /// поэтому проверяем его `GET /auth/me`, а не доверяем на слово.
     public func bootstrap() async {
         defer { isBootstrapping = false }
+        #if DEBUG
+        // Отладочный вход: сервер выдаёт постоянный api_token, который живёт
+        // в том же заголовке `Authorization`, что и JWT. Токен передаётся
+        // переменной окружения при запуске в симуляторе — так экраны можно
+        // посмотреть, не вводя руками пароль и ничего не зашивая в код.
+        // Только для отладочной сборки: в релиз этот путь не попадает.
+        if let debugToken = ProcessInfo.processInfo.environment["TASKFLOW_DEBUG_TOKEN"],
+           debugToken.isEmpty == false {
+            KeychainService.shared.token = debugToken
+        }
+        #endif
         guard KeychainService.shared.token != nil else { return }
         do {
             currentUser = try await apiClient.me()

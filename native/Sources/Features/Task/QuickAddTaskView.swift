@@ -42,12 +42,6 @@ struct QuickAddTaskView: View {
     @Environment(LabelStore.self) private var labelStore
     @FocusState private var isTitleFocused: Bool
     @State private var activePicker: QuickAddPicker?
-    /// Высота шторки, снятая с РЕАЛЬНОГО контента (см. `QuickAddHeightKey`
-    /// ниже) — не константа: 128pt из задания снято с образца TickTick БЕЗ
-    /// поля «Описание», у нас оно есть, плюс шрифт может масштабироваться
-    /// (Dynamic Type) — детент должен следовать за содержимым, а не за
-    /// одним измеренным числом.
-    @State private var contentHeight: CGFloat = 160
     /// Тост «голос не подключён» — реакция на тап по заглушке микрофона
     /// (см. `trailingActionButton`), не пустая кнопка без отклика.
     @State private var toastMessage: TaskToastMessage?
@@ -67,15 +61,14 @@ struct QuickAddTaskView: View {
         .padding(.top, TFSpacing.md)
         .padding(.bottom, TFSpacing.lg)
         .padding(.horizontal, TFSpacing.screenHorizontal)
-        .background {
-            GeometryReader { geo in
-                Color.clear.preference(key: QuickAddHeightKey.self, value: geo.size.height)
-            }
-        }
-        .onPreferenceChange(QuickAddHeightKey.self) { contentHeight = $0 }
         .background(Color.tfCard)
         .clipShape(.rect(topLeadingRadius: TFRadius.sheet, topTrailingRadius: TFRadius.sheet))
-        .presentationDetents([.height(contentHeight)])
+        // Высота фиксированная, НЕ от содержимого: измерение через
+        // preference замыкало круг «контент → детент → новый размер →
+        // снова контент», и экран вставал пустым (проверено снимком с
+        // симулятора 31.08.2026). Число — 128pt панели с образца TickTick
+        // плюс наша строка описания и поля.
+        .presentationDetents([.height(QuickAddMetrics.sheetHeight)])
         .presentationDragIndicator(.hidden)
         .presentationBackground(Color.tfCard)
         .taskToast($toastMessage)
@@ -103,7 +96,22 @@ struct QuickAddTaskView: View {
                 .focused($isTitleFocused)
                 .submitLabel(.done)
                 .onSubmit { save() }
+            expandButton
         }
+    }
+
+    /// Единственный вход в полную форму при создании: без этой кнопки
+    /// `onExpand` был объявлен, но никем не вызывался, и развёрнутый бланк
+    /// становился недостижим (найдено при сверке 01.09.2026).
+    private var expandButton: some View {
+        Button { onExpand() } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.tfDim)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(TFTapScaleStyle())
+        .accessibilityLabel("Развернуть в полную форму")
     }
 
     private var descriptionField: some View {
@@ -126,8 +134,13 @@ struct QuickAddTaskView: View {
                     attachmentsChip
                 }
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Приоритет раскладки кнопке: без него горизонтальный ScrollView
+            // забирает всю ширину по своему содержимому и выталкивает круглую
+            // кнопку за правый край (кадр симулятора 31.08.2026 — микрофон
+            // был срезан пополам).
             trailingActionButton
+                .layoutPriority(1)
         }
         .frame(height: QuickAddMetrics.rowHeight)
     }
@@ -289,13 +302,11 @@ enum QuickAddMetrics {
     /// Круглые кнопки («+», микрофон/отправка) И чипы-капсулы — ОДНА высота
     /// (108px = 36pt по обоим измерено идентично).
     static let rowHeight: CGFloat = 36
+    /// Высота шторки: 128pt панели образца плюс строка описания, которой у
+    /// образца нет. Фиксированная сознательно — см. комментарий у детента.
+    /// 146 — не на глаз: при 196 кадр симулятора показал 50pt пустоты между
+    /// нижним чипом (низ на 474pt) и низом шторки (540pt) сверх нужных 16pt
+    /// нижнего паддинга; 196 − 50 = 146.
+    static let sheetHeight: CGFloat = 146
 }
 
-/// Читает фактическую высоту содержимого панели, чтобы `.presentationDetents`
-/// повторял её, а не жил по угаданной константе (см. `contentHeight` выше).
-private struct QuickAddHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 160
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}

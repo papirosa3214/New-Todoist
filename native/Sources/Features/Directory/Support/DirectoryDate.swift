@@ -62,6 +62,55 @@ enum DirectoryDate {
         return "\(comps.day ?? 1) \(month), \(hm)"
     }
 
+    // MARK: - Строка задачи (ProjectTasksScreen/LabelTasksScreen) — `lib/date.ts`,
+    // те же формулы, что `TodayDate.swift` (тот файл чужой, Features/Today —
+    // дубль по тому же принципу, что и весь этот файл, см. шапку). Московское
+    // время, НЕ таймзона устройства — «сегодня» в `daysUntil` должно совпадать
+    // с тем, что покажет `/today` на другом телефоне в другом поясе.
+
+    /// «31 авг» — обычный бейдж срока строки задачи (`formatDue` в `TaskRow.tsx`).
+    static func formatDuePlain(_ dueDate: String) -> String {
+        dueShort(dueDate)
+    }
+
+    /// МСК-«сегодня» как `YYYY-MM-DD` — та же формула, что `TodayDate.todayString()`.
+    private static func todayStringMoscow() -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = moscow
+        let comps = calendar.dateComponents([.year, .month, .day], from: Date())
+        return String(format: "%04d-%02d-%02d", comps.year ?? 1970, comps.month ?? 1, comps.day ?? 1)
+    }
+
+    /// 0 — сегодня, 1 — завтра, отрицательное — просрочено (МСК).
+    static func daysUntil(_ dueDate: String) -> Int {
+        guard let target = calendarDate(dueDate), let base = calendarDate(todayStringMoscow()) else { return 0 }
+        let seconds = target.timeIntervalSince(base)
+        return Int((seconds / 86_400).rounded())
+    }
+
+    /// «осталось 3 дня» / «сегодня» / «завтра» / «вчера» / «просрочено на N дней».
+    static func formatDaysLeft(_ dueDate: String) -> String {
+        let d = daysUntil(dueDate)
+        if d == 0 { return "сегодня" }
+        if d == 1 { return "завтра" }
+        if d == -1 { return "вчера" }
+        let n = abs(d)
+        let hundred = n % 100
+        let unit = n % 10
+        let word: String
+        if hundred >= 11 && hundred <= 14 { word = "дней" }
+        else if unit == 1 { word = "день" }
+        else if unit >= 2 && unit <= 4 { word = "дня" }
+        else { word = "дней" }
+        return d > 0 ? "осталось \(n) \(word)" : "просрочено на \(n) \(word)"
+    }
+
+    /// Календарная дата в UTC-полночь из `YYYY-MM-DD` — тот же парсер, что
+    /// `dueShort` использует неявно через `DateFormats.calendarDate`.
+    private static func calendarDate(_ raw: String) -> Date? {
+        DateFormats.calendarDate(raw)
+    }
+
     // MARK: - Активность: группировка выполненных задач по дню — ЛОКАЛЬНАЯ
     // таймзона устройства (см. предупреждение в шапке файла).
 
