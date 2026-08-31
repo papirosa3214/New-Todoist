@@ -3,6 +3,13 @@ import SwiftUI
 /// Форма задачи — spec/SCREENS-1.md §5.5, обслуживает `/task/new` и
 /// `/task/:id/edit` ОДНОЙ структурой (различие — заголовок секции и способ
 /// отправки патча). Имя и параметр — контракт `INTEGRATION.md`, буквально.
+///
+/// ⚠️ 31.08.2026, задача «компактное создание»: полноэкранный бланк при
+/// СОЗДАНИИ (`taskID == nil`) владелец назвал «формой заявки на анкету» —
+/// заменён компактной панелью `QuickAddTaskView` (см. файл рядом), эта
+/// структура при создании теперь ТОЛЬКО хост для неё и площадка для
+/// «развернуть». Редактирование (`taskID != nil`) — без изменений, старое
+/// полноэкранное тело (`fullFormBody`) как было.
 struct TaskFormScreen: View {
     let taskID: String?
 
@@ -13,6 +20,17 @@ struct TaskFormScreen: View {
     @Environment(LabelStore.self) private var labelStore
     @FocusState private var isTitleFocused: Bool
 
+    /// Показывает `QuickAddTaskView` как `.sheet` НАД этим экраном — временный
+    /// мост, пока точка входа («+» → «Задача» в `RootShellView.swift`, App/,
+    /// чужая папка) не переключена на прямой показ панели без пуша (диф —
+    /// в отчёте оркестратору). Пока мост жив: перед панелью на мгновение
+    /// виден пустой фон вместо экрана-источника — известный, не финальный вид.
+    @State private var showQuickAdd: Bool
+    /// «Развернуть» из панели — та же вью-модель (не копия: в
+    /// `TaskAttachmentsController` уже могут лежать выбранные локальные
+    /// файлы, копия их потеряла бы), эта же структура показывает `fullFormBody`.
+    @State private var isExpanded: Bool
+
     /// `presetDueToday`/`startDictation` — контракт `INTEGRATION.md`,
     /// обновлён оркестратором по ходу этой задачи (`/task/new?due=today`,
     /// `/task/new?dictate=1` из `CreateMenu` веба). Диктовку саму не
@@ -22,9 +40,51 @@ struct TaskFormScreen: View {
     init(taskID: String?, presetDueToday: Bool = false, startDictation: Bool = false) {
         self.taskID = taskID
         self._viewModel = State(initialValue: TaskFormViewModel(taskID: taskID, presetDueToday: presetDueToday, startDictation: startDictation))
+        self._showQuickAdd = State(initialValue: taskID == nil)
+        self._isExpanded = State(initialValue: false)
+    }
+
+    /// «Развернуть» из `QuickAddTaskView` — тот же экран, СРАЗУ с готовой
+    /// вью-моделью и в режиме полной формы (сохранение всё ещё «создание»:
+    /// `viewModel.taskID == nil`, поэтому различаем через `isExpanded`, не
+    /// через `isEditing`).
+    init(expandingFrom viewModel: TaskFormViewModel) {
+        self.taskID = viewModel.taskID
+        self._viewModel = State(initialValue: viewModel)
+        self._showQuickAdd = State(initialValue: false)
+        self._isExpanded = State(initialValue: true)
     }
 
     var body: some View {
+        if viewModel.isEditing || isExpanded {
+            fullFormBody
+        } else {
+            // Создание, панель ещё не показана/уже закрыта — фон-заглушка
+            // моста (см. комментарий у `showQuickAdd`).
+            Color.tfBackground
+                .ignoresSafeArea()
+                .toolbar(.hidden, for: .navigationBar)
+                .sheet(isPresented: $showQuickAdd, onDismiss: {
+                    // `isExpanded` к этому моменту уже true, если сюда пришли
+                    // через «развернуть» (устанавливается синхронно ДО сброса
+                    // showQuickAdd в onExpand ниже) — тогда экран не закрываем,
+                    // а показываем `fullFormBody`. Иначе (сохранили или смахнули
+                    // панель вниз) — обычное закрытие экрана создания.
+                    if !isExpanded { dismiss() }
+                }) {
+                    QuickAddTaskView(
+                        viewModel: viewModel,
+                        onSaved: { showQuickAdd = false },
+                        onExpand: {
+                            isExpanded = true
+                            showQuickAdd = false
+                        }
+                    )
+                }
+        }
+    }
+
+    private var fullFormBody: some View {
         VStack(spacing: 0) {
             header
             if viewModel.isLoadingTask {
