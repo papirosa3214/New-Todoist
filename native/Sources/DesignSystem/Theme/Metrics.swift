@@ -113,8 +113,10 @@ public enum TFIconSize {
 
 /// Геометрия нижней навигации (`.nt-tabbar-menu` + AnimatedTabBar.tsx) — самая
 /// узнаваемая часть интерфейса, числа сняты буквально, ничего не додумано.
-/// Горб — убран владельцем 27.08.2026, панель ровная (см. компонент TFTabBar).
-public enum TFTabBar {
+/// Горб — убран владельцем 27.08.2026, панель ровная (см. компонент `TFTabBar`
+/// в `Navigation/TFTabBar.swift` — имя этого enum'а с суффиксом `Metrics`,
+/// чтобы не конфликтовать с ним, как и у `TFButtonMetrics` выше).
+public enum TFTabBarMetrics {
     /// Высота панели без safe-area (значение в браузере).
     public static let heightCompact: CGFloat = 52
     public static let iconSize: CGFloat = 28
@@ -129,7 +131,8 @@ public enum TFTabBar {
 
 /// Меню «что создать» (`CreateMenu.tsx`) — всплывающая карточка над центральной
 /// кнопкой, НЕ боковой веер (FanMenu — легаси, не используется, MOBILE_NAV_STYLE="tabbar").
-public enum TFCreateMenu {
+/// Имя с суффиксом `Metrics` — сам компонент `TFCreateMenu` в `Navigation/TFTabBar.swift`.
+public enum TFCreateMenuMetrics {
     public static let width: CGFloat = 232
     public static let itemIconSlot: CGFloat = 32
     public static let itemIconSlotRadius: CGFloat = 12

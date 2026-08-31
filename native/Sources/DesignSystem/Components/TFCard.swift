@@ -108,12 +108,20 @@ public struct TFListRow: View {
 /// Разделитель между строками внутри карточки-списка (`TFListRow` и подобных) —
 /// 1px `stroke`, вставляется вручную между строками (спека держит инсет
 /// разный по месту, поэтому не делаем это неявным поведением контейнера).
+///
+/// `dimmed` — вариант `stroke/50` (спека §4 «Строка задачи»: разделитель между
+/// строками списка задач вдвое прозрачнее обычного, Tailwind `/50` умножает
+/// альфу цвета на 50%, а не задаёт непрозрачность заново).
 public struct TFDivider: View {
     let inset: CGFloat
-    public init(inset: CGFloat = 0) { self.inset = inset }
+    let dimmed: Bool
+    public init(inset: CGFloat = 0, dimmed: Bool = false) {
+        self.inset = inset
+        self.dimmed = dimmed
+    }
     public var body: some View {
         Rectangle()
-            .fill(Color.tfStroke)
+            .fill(Color.tfStroke.opacity(dimmed ? 0.5 : 1))
             .frame(height: TFBorder.width)
             .padding(.leading, inset)
     }

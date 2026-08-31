@@ -105,32 +105,48 @@ public struct TFSubtaskStatusRing: View {
 /// Точные углы сегментов веба (atan2 от центра, шаг 45°) на native не нужны —
 /// `Circle().trim` кладёт сегменты равномерно сама; воспроизводим ЧИСЛА
 /// (длительности, доля дуги, направления вращения), не пиксельные пути SVG.
+///
+/// Три слоя считаются от времени через `TimelineView(.animation)`, а не через
+/// `withAnimation` на дискретном `@State`: SwiftUI анимирует только animatable-
+/// модификаторы через интерполяцию, а чтение состояния в теле `body` (чтобы
+/// решить, какой сегмент зажечь) в момент вызова `withAnimation` сразу видит
+/// целевое значение — «змейка» дискретных withAnimation-шагов на деле стояла
+/// на месте. От времени кадра — честно непрерывно.
 private struct DashedRing: View {
     let active: Bool
 
-    @State private var rotation: Double = 0
-    @State private var pulse: CGFloat = 1
-    @State private var glowPhase: Double = 0
-
     private let segmentCount = 8
     private let litFraction = 5.0 / 8.0 // 5 из 8 сегментов зажжены разом
+    private let rotationPeriod: Double = 1.6   // dash-spin, linear
+    private let pulsePeriod: Double = 1.6      // dash-pulse, ease-in-out туда-обратно
+    private let glowPeriod: Double = 0.8       // dash-glow, «змейка» по кругу
 
     var body: some View {
+        if active {
+            TimelineView(.animation) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                ring(rotationDeg: rotation(t), scale: pulse(t), glowPhase: glow(t))
+            }
+        } else {
+            ring(rotationDeg: 0, scale: 1, glowPhase: nil)
+        }
+    }
+
+    private func ring(rotationDeg: Double, scale: CGFloat, glowPhase: Double?) -> some View {
         ZStack {
             ForEach(0..<segmentCount, id: \.self) { i in
-                segment(index: i)
+                segment(index: i, glowPhase: glowPhase)
             }
         }
         .frame(width: 21, height: 21)
-        .scaleEffect(active ? pulse : 1)
-        .rotationEffect(.degrees(active ? rotation : 0))
-        .onAppear { if active { startAnimating() } }
+        .scaleEffect(scale)
+        .rotationEffect(.degrees(rotationDeg))
     }
 
-    private func segment(index: Int) -> some View {
+    private func segment(index: Int, glowPhase: Double?) -> some View {
         let start = Double(index) / Double(segmentCount)
         let span = 0.35 / Double(segmentCount) // короткая дуга, промежутки между сегментами (14° приём из веба)
-        let lit = active && litSegment(index)
+        let lit = glowPhase.map { litSegment(index, glowPhase: $0) } ?? false
         return Circle()
             .trim(from: start, to: start + span)
             .stroke(
@@ -139,23 +155,33 @@ private struct DashedRing: View {
             )
     }
 
-    private func litSegment(_ index: Int) -> Bool {
-        // Волна «змейкой» по кругу: окно из 5 соседних сегментов, сдвигается фазой glowPhase.
+    private func litSegment(_ index: Int, glowPhase: Double) -> Bool {
+        // Волна «змейкой» по кругу: окно из 5 соседних сегментов, сдвигается фазой 0..1.
         let offset = Int(glowPhase * Double(segmentCount)) % segmentCount
         let rel = (index - offset + segmentCount) % segmentCount
         return Double(rel) < Double(segmentCount) * litFraction
     }
 
-    private func startAnimating() {
-        withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) {
-            rotation = -360 // против часовой
-        }
-        withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
-            pulse = 23.0 / 21.0 // 1.0952
-        }
-        withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
-            glowPhase = 1
-        }
+    /// Вращение обёртки — 1.6s linear, против часовой (отрицательный угол).
+    private func rotation(_ t: TimeInterval) -> Double {
+        let phase = (t.truncatingRemainder(dividingBy: rotationPeriod)) / rotationPeriod
+        return -360 * phase
+    }
+
+    /// Пульсация — 1.6s ease-in-out туда-обратно, scale(0.8571↔1.0952) = 18↔23px на базе 21px.
+    private func pulse(_ t: TimeInterval) -> CGFloat {
+        let half = pulsePeriod / 2
+        let phase = (t.truncatingRemainder(dividingBy: pulsePeriod)) / half // 0..2
+        let triangle = phase <= 1 ? phase : 2 - phase // 0→1→0, треугольная волна
+        let eased = triangle * triangle * (3 - 2 * triangle) // smoothstep ≈ ease-in-out
+        let minScale: CGFloat = 18.0 / 21.0  // 0.8571
+        let maxScale: CGFloat = 23.0 / 21.0  // 1.0952
+        return minScale + (maxScale - minScale) * CGFloat(eased)
+    }
+
+    /// Цвет-волна — 0.8s, фаза 0..1 по кругу.
+    private func glow(_ t: TimeInterval) -> Double {
+        (t.truncatingRemainder(dividingBy: glowPeriod)) / glowPeriod
     }
 }
 

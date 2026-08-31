@@ -157,7 +157,7 @@ public struct TFTaskRow: View {
             isOverdue: true,
             labels: [("UX/UI", .tfPurple)]
         )) {}
-        TFDivider(inset: TFSpacing.lg)
+        TFDivider(inset: TFSpacing.lg, dimmed: true) // stroke/50 — спека §4 «Строка задачи»
         TFTaskRow(TFTaskRowModel(
             title: "Готовая задача",
             isDone: true,
