@@ -48,6 +48,9 @@ struct QuickAddTaskView: View {
     /// (Dynamic Type) — детент должен следовать за содержимым, а не за
     /// одним измеренным числом.
     @State private var contentHeight: CGFloat = 160
+    /// Тост «голос не подключён» — реакция на тап по заглушке микрофона
+    /// (см. `trailingActionButton`), не пустая кнопка без отклика.
+    @State private var toastMessage: TaskToastMessage?
 
     /// Имя с префиксом `QuickAdd` — не `Picker`, чтобы не затенять
     /// одноимённый системный `SwiftUI.Picker` в этом файле.
@@ -75,6 +78,7 @@ struct QuickAddTaskView: View {
         .presentationDetents([.height(contentHeight)])
         .presentationDragIndicator(.hidden)
         .presentationBackground(Color.tfCard)
+        .taskToast($toastMessage)
         .task {
             // Своя вью-модель может прийти уже с id (правка через
             // «развернуть» и назад технически не бывает — taskID==nil тут
@@ -174,7 +178,14 @@ struct QuickAddTaskView: View {
     /// («по кнопке») рядом с Return на клавиатуре.
     private var trailingActionButton: some View {
         Button {
-            if viewModel.isSaveEnabled { save() }
+            if viewModel.isSaveEnabled {
+                save()
+            } else {
+                // Пустое название — тут не «Сохранить», а голос. Задание
+                // просит «понятную заглушку», не мёртвую кнопку без реакции —
+                // тост тем же компонентом, что уже есть у экранов задачи.
+                toastMessage = TaskToastMessage("Голосовой ввод пока не подключён")
+            }
         } label: {
             ZStack {
                 Circle()
@@ -187,8 +198,6 @@ struct QuickAddTaskView: View {
         }
         .buttonStyle(TFTapScaleStyle())
         .disabled(viewModel.isSaving)
-        // Заглушка — микрофон сам звук не пишет, см. header. Тап при пустом
-        // названии ничего не делает (не diagnostические кнопки без реакции).
         .accessibilityLabel(viewModel.isSaveEnabled ? "Сохранить" : "Голосовой ввод (не подключён)")
     }
 
