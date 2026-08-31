@@ -42,3 +42,35 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.maksim.taskflow.native
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
         TARGETED_DEVICE_FAMILY: "1"
+
+  # UI-тесты: гоняют приложение целиком в симуляторе — открывают экраны,
+  # нажимают, проверяют, что пришли живые данные сервера. Снимок показывает
+  # только вид в один момент; это ловит неработающее (01.09.2026, по замечанию
+  # владельца «приложение сырое» — вслепую по спекам писали, живьём не гоняли).
+  TaskFlowUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: TaskFlow
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.maksim.taskflow.native.uitests
+        TEST_TARGET_NAME: TaskFlow
+        # Свой Info.plist тест-бандлу не нужен, но подписать его без него
+        # нельзя — пусть Xcode генерирует сам.
+        GENERATE_INFOPLIST_FILE: true
+
+schemes:
+  TaskFlow:
+    build:
+      targets:
+        TaskFlow: all
+        TaskFlowUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TaskFlowUITests
