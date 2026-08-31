@@ -169,9 +169,31 @@ export function registerAuthRoutes(app: FastifyInstance) {
       if (!email || !password)
         return reply.code(400).send({ error: "email, password required" });
 
-      const user = db
-        .prepare("SELECT * FROM users WHERE email = ?")
-        .get(email) as any;
+      // Поле называется email (так шлёт веб), но принимаем и ЛОГИН —
+      // просьба Максима 01.09.2026: «можно не имейл, а просто логин».
+      // Логином считается имя учётки («Максим») или короткое имя из почты
+      // («maksim» для maksim@test.com) — отдельного поля в таблице для
+      // этого не заводим, миграция ради одного человека не нужна.
+      const identifier = String(email).trim();
+      let user = db
+        .prepare("SELECT * FROM users WHERE lower(email) = lower(?)")
+        .get(identifier) as any;
+      if (!user) {
+        // Сравнение регистра — в JS, а не в SQL: sqlite-шный lower() знает
+        // только латиницу, и «Логинов» под логином «логинов» не находился
+        // (тест loginByUsername.test.ts ловит именно это). Учёток в трекере
+        // единицы — полный проход дешевле, чем расширение сборки sqlite.
+        const needle = identifier.toLowerCase();
+        // Неоднозначность (две учётки с одинаковым именем или одинаковым
+        // началом почты в разных доменах) — отказ, а не «первый попавшийся»:
+        // иначе пароль одного человека открывал бы чужую запись.
+        const candidates = (db.prepare("SELECT * FROM users").all() as any[]).filter(
+          (candidate) =>
+            String(candidate.name ?? "").toLowerCase() === needle ||
+            String(candidate.email ?? "").toLowerCase().split("@")[0] === needle,
+        );
+        if (candidates.length === 1) user = candidates[0];
+      }
       if (!user || !bcrypt.compareSync(password, user.password_hash)) {
         return reply.code(401).send({ error: "Invalid credentials" });
       }

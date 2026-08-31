@@ -55,7 +55,13 @@ public final class SessionStore {
             KeychainService.shared.token = debugToken
         }
         #endif
-        guard KeychainService.shared.token != nil else { return }
+        guard KeychainService.shared.token != nil else {
+            // Токена нет — пробуем войти без пароля, как это делает веб в
+            // домашней сети. Снаружи сервер отвечает 404, тогда просто
+            // покажем форму входа.
+            await tryLanLogin()
+            return
+        }
         do {
             currentUser = try await apiClient.me()
         } catch {
@@ -63,6 +69,19 @@ public final class SessionStore {
             // (например, сервер недоступен при старте) токен НЕ трогаем —
             // не разлогинивать только из-за того, что сеть/сервер сейчас
             // недоступны; следующий запуск/ручной повтор попробует снова.
+            currentUser = nil
+        }
+    }
+
+    /// Вход без пароля из домашней сети. Молчаливый: не удалось — просто
+    /// остаёмся без сессии, ошибку владельцу не показываем (снаружи дома
+    /// это НЕ сбой, а ожидаемый 404).
+    private func tryLanLogin() async {
+        do {
+            let response = try await apiClient.lanLogin()
+            KeychainService.shared.token = response.token
+            currentUser = response.user
+        } catch {
             currentUser = nil
         }
     }

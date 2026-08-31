@@ -78,6 +78,10 @@ public final class APIClient: Sendable {
 
         var request = URLRequest(url: url)
         request.httpMethod = method.rawValue
+        // Признак «это приложение, а не скрипт»: по нему сервер пускает вход
+        // без пароля из домашней сети (`looksLikeBrowser` в server/src/auth.ts).
+        // Браузер там опознаётся по своим заголовкам, у нативного клиента их нет.
+        request.setValue("ios-native", forHTTPHeaderField: "X-TaskFlow-Client")
         if let token = KeychainService.shared.token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }

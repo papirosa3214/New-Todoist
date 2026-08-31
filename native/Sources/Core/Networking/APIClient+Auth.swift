@@ -15,8 +15,19 @@ public extension APIClient {
     /// это учтено отдельной обёрткой, а не `ApiUser` в лоб.
     private struct MeResponse: Decodable { let user: ApiUser }
 
+    /// Поле называется `email`, но сервер с 01.09.2026 принимает и логин —
+    /// имя учётки или короткое имя из почты (`server/src/routes/auth.ts`).
     func login(email: String, password: String) async throws -> AuthResponse {
         try await request(.post, "/auth/login", body: ["email": email, "password": password] as [String: String])
+    }
+
+    /// Вход без пароля из домашней сети — тот же маршрут, которым уже
+    /// пользуется веб (`src/api/client.ts`): сервер при `TASKFLOW_LAN_NO_AUTH=1`
+    /// и запросе с приватного адреса молча отдаёт сессию владельца, а снаружи
+    /// отвечает 404. Требование Максима 19.08.2026: «в своей домашней сети не
+    /// хочу постоянно вбивать пароли».
+    func lanLogin() async throws -> AuthResponse {
+        try await request(.post, "/auth/lan", body: [String: String]())
     }
 
     /// **Закрыта по умолчанию** — 403, если в базе уже есть хоть один

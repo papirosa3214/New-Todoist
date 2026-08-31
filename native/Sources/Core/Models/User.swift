@@ -60,7 +60,13 @@ public struct ApiUser: Codable, Identifiable, Sendable, Hashable {
     public let initials: String?
     public let status: UserPresenceStatus?
     public let createdAt: String?
-    public let isSystemBot: Bool?
+    /// ⚠️ Число, а не `Bool`: sqlite хранит булево как 0/1, и `/api/auth/login`
+    /// отдаёт строку пользователя как есть (`SELECT *` минус секреты), то есть
+    /// `"is_system_bot": 0`. Swift такой JSON в `Bool` не разбирает — вход
+    /// падал с «Не удалось разобрать ответ сервера» (01.09.2026, поймано на
+    /// живом телефоне). У `/api/auth/me` этого поля в выборке нет, поэтому
+    /// там ошибка не всплывала. Читать через `isSystemBotFlag`.
+    public let isSystemBot: Int?
     public let createdBy: String?
     public let avatarUrl: String?
     public let avatarUrlWorking: String?
@@ -93,6 +99,9 @@ public struct ApiUser: Codable, Identifiable, Sendable, Hashable {
         case lastActionTitle = "last_action_title"
         case limits
     }
+
+    /// Системный бот? — человеческий вид сырого 0/1 из sqlite.
+    public var isSystemBotFlag: Bool { (isSystemBot ?? 0) != 0 }
 
     public var lastSeenDate: Date? { DateFormats.iso8601(lastSeenAt) }
     public var createdAtDate: Date? { DateFormats.sqliteUTC(createdAt) }

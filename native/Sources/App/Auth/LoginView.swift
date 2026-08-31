@@ -27,9 +27,12 @@ struct LoginView: View {
             }
 
             VStack(spacing: TFSpacing.md) {
-                TFTextField("Email", text: $email, icon: "envelope")
+                // Логин, а не почта: сервер с 01.09.2026 принимает и имя
+                // учётки, и короткое имя из почты (просьба Максима — «можно
+                // не имейл, а просто логин»). Почта тоже подходит, поэтому
+                // подпись говорит про оба варианта.
+                TFTextField("Логин или почта", text: $email, icon: "person")
                     .textInputAutocapitalization(.never)
-                    .keyboardType(.emailAddress)
                     .autocorrectionDisabled()
                 // `DesignSystem` пока не даёт secure-вариант `TFTextField` —
                 // а пароль открытым текстом на экране входа это не «мелкая
