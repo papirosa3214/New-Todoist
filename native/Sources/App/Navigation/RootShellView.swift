@@ -75,6 +75,12 @@ struct RootShellView: View {
     /// срок и выбранные файлы пропадали бы (проверено по коду `TaskFormScreen`
     /// 01.09.2026 — у него для этого есть `init(expandingFrom:)`).
     @State private var expandedDraft: QuickAddDraft?
+    /// Куда переходим ПОСЛЕ закрытия панели: открыть полную форму в той же
+    /// транзакции, где закрывается шторка, iOS не даёт — второе окно просто
+    /// не появляется. Поэтому «развернуть» лишь запоминает вью-модель, а
+    /// показ идёт из `onDismiss` (тем же приёмом сделан переход внутри
+    /// `TaskFormScreen`).
+    @State private var pendingExpand: TaskFormViewModel?
     @State private var paths: [Tab: NavigationPath] = [:]
     /// Зеркало `taskflow_today_badge_seen_date` из веба (spec §2.1) —
     /// `UserDefaults` вместо `localStorage`, тот же принцип: бейдж гаснет
@@ -121,7 +127,12 @@ struct RootShellView: View {
             }
         }
         .animation(.easeOut(duration: TFAnimation.createMenu), value: isCreateMenuOpen)
-        .sheet(item: $quickAddDraft) { draft in
+        .sheet(item: $quickAddDraft, onDismiss: {
+            if let viewModel = pendingExpand {
+                pendingExpand = nil
+                expandedDraft = QuickAddDraft(viewModel: viewModel)
+            }
+        }) { draft in
             QuickAddTaskView(
                 viewModel: draft.viewModel,
                 onSaved: { quickAddDraft = nil },
@@ -129,9 +140,8 @@ struct RootShellView: View {
                     // Развернуть — тот же незаконченный черновик, только
                     // полной формой: вью-модель передаётся как есть,
                     // введённое не теряется.
-                    let draftViewModel = draft.viewModel
+                    pendingExpand = draft.viewModel
                     quickAddDraft = nil
-                    expandedDraft = QuickAddDraft(viewModel: draftViewModel)
                 }
             )
         }
@@ -157,6 +167,8 @@ struct RootShellView: View {
                 isCreateMenuOpen = true
             case "quickadd":
                 quickAddDraft = QuickAddDraft(viewModel: TaskFormViewModel(taskID: nil))
+            case "expand":
+                expandedDraft = QuickAddDraft(viewModel: TaskFormViewModel(taskID: nil))
             case "task" where parts.count == 2:
                 paths[selectedTab, default: NavigationPath()].append(AppRoute.taskDetail(taskID: parts[1]))
             case "notifications": paths[selectedTab, default: NavigationPath()].append(AppRoute.notifications)
