@@ -25,6 +25,7 @@ struct TodayScreen: View {
             agents: vm.agents,
             filters: vm.filters,
             visibleProjectIds: vm.visibleProjectIds,
+            hasConfiguredVisibleProjects: vm.hasConfiguredVisibleProjects,
             today: today,
             activeHourDate: activeHourDate,
             isLoading: taskStore.isLoading,
@@ -41,12 +42,12 @@ struct TodayScreen: View {
                 if c.trueEmpty && vm.layout == .list {
                     TodayEmptyIllustration()
                 } else {
-                    PlannerProjectChips(
-                        projects: projectStore.projects,
-                        visibleProjectIds: vm.visibleProjectIds,
-                        onAdd: { openPlannerSectionOnOpen = true; filterSheetOpen = true }
-                    )
-
+                    // Полоска проектов с «плюсом» убрана по просьбе владельца
+                    // (01.09.2026): тот же выбор проектов ежедневника уже есть
+                    // в шторке фильтров, а сверху списка он только занимал
+                    // место — «это всё есть в фильтре, зачем это наверху».
+                    // Сам компонент `PlannerProjectChips` оставлен: выбор
+                    // никуда не делся, просто попадают в него теперь фильтром.
                     if taskStore.isLoading {
                         TFLoading(.block)
                     }

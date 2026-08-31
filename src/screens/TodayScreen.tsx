@@ -24,7 +24,6 @@ import {
   TaskFilterButton,
   TaskFilterSheet,
 } from "../components/TaskFilterSheet";
-import { PlannerProjectChips } from "../components/PlannerProjectChips";
 import {
   DEFAULT_TASK_FILTERS,
   filterTasks,
@@ -554,15 +553,11 @@ export function TodayScreen() {
   return (
     <div className="px-4 pb-4">
       {header}
-      {/* Шаг 2: полоска чипов под шапкой. Показывает текущий выбор
-          проектов + [+] для добавления через picker в TaskFilterSheet.
-          Скрыта на иллюстрации «ничего на сегодня» — там выше early
-          return, сюда поток не доходит. */}
-      <PlannerProjectChips
-        projects={projects}
-        visibleProjectIds={visibleProjectIds}
-        onAdd={() => setFilterSheetOpen(true)}
-      />
+      {/* Полоска чипов проектов с [+] убрана по просьбе Максима
+          (01.09.2026): тот же выбор проектов ежедневника уже есть в шторке
+          фильтров, а над списком задач он только занимал место — «это всё
+          есть в фильтре, зачем это наверху». Сам компонент оставлен, выбор
+          проектов никуда не делся: он в фильтре, раздел «Ежедневник». */}
       {isLoading && <Loading />}
       <ErrorBanner
         error={error}

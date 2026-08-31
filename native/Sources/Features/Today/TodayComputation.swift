@@ -28,14 +28,20 @@ struct TodayComputation {
     let agents: [ApiUser]
     let filters: TodayTaskFilters
     let visibleProjectIds: [String: Bool]
+    /// Выбор проектов ежедневника уже настраивали руками? См. `plannerTasks`.
+    let hasConfiguredVisibleProjects: Bool
     let today: String
     let activeHourDate: String
     let isLoading: Bool
     let isError: Bool
 
-    /// Задачи без project_id (Входящие) — всегда; проектные — только opt-in (spec §3.10).
+    /// Задачи без project_id (Входящие) — всегда; проектные — только opt-in
+    /// (spec §3.10). Исключение: пока пользователь ни разу не открывал этот
+    /// выбор, показываем ВСЁ — иначе свежепоставленное приложение встречает
+    /// пустым экраном при полном списке задач на сервере.
     var plannerTasks: [ApiTask] {
-        allTasks.filter { $0.projectId == nil || visibleProjectIds[$0.projectId!] == true }
+        guard hasConfiguredVisibleProjects else { return allTasks }
+        return allTasks.filter { $0.projectId == nil || visibleProjectIds[$0.projectId!] == true }
     }
 
     private func partitionOverdueToday(_ tasks: [ApiTask]) -> (overdue: [ApiTask], todayTasks: [ApiTask]) {

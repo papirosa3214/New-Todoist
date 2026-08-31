@@ -34,14 +34,27 @@ final class TodayViewModel {
     /// делит эту настройку) — оркестратору свести оба экрана на одном сторе,
     /// если `UpcomingScreen` заведёт своё собственное имя ключа.
     var visibleProjectIds: [String: Bool] {
-        didSet { Self.saveVisibleProjects(visibleProjectIds) }
+        didSet {
+            hasConfiguredVisibleProjects = true
+            Self.saveVisibleProjects(visibleProjectIds)
+        }
     }
+
+    /// Пользователь хоть раз сам выбирал проекты ежедневника?
+    ///
+    /// В вебе этот выбор у владельца сделан давно и лежит в браузере, а
+    /// свежепоставленное приложение начинало с пустым списком — и «Сегодня»
+    /// открывался пустым, хотя задачи есть (01.09.2026, поймано UI-тестом и
+    /// подтверждено кадром). Поэтому «ни разу не настраивал» = показывать
+    /// все проекты; как только выбор сделан руками, он уважается как есть.
+    private(set) var hasConfiguredVisibleProjects: Bool
 
     private static let layoutKey = "taskflow_today_layout"
     private static let visibleProjectsKey = "taskflow_planner_visible_projects"
 
     init() {
         layout = TodayLayout(rawValue: UserDefaults.standard.string(forKey: Self.layoutKey) ?? "") ?? .list
+        hasConfiguredVisibleProjects = UserDefaults.standard.data(forKey: Self.visibleProjectsKey) != nil
         visibleProjectIds = Self.loadVisibleProjects()
     }
 

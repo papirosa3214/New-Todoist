@@ -51,8 +51,11 @@ final class SmokeTests: XCTestCase {
         let app = запустить()
         XCTAssertTrue(ждать(app.staticTexts["Обзор"]))
 
+        // Шапка «Сегодня» — это дата («Вторник, 1 сен.»), слова «Сегодня» на
+        // экране нет; опознаём вкладку по её кнопке фильтров и списку.
         app.buttons["Сегодня"].tap()
-        XCTAssertTrue(ждать(app.staticTexts["Сегодня"]), "Вкладка «Сегодня» не открылась")
+        XCTAssertTrue(ждать(app.buttons["Фильтры"]) || ждать(app.staticTexts["Ждут вас"], 5),
+                      "Вкладка «Сегодня» не открылась")
 
         app.buttons["Планирование"].tap()
         XCTAssertTrue(ждать(app.staticTexts["Планирование"]), "Вкладка «Планирование» не открылась")
