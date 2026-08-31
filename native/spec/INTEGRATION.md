@@ -23,7 +23,7 @@
 | Лента дня        | `/timeline`              | `TimelineScreen`      | —                               |
 | Чат              | `/chat`                  | `ChatScreen`          | —                               |
 | Карточка задачи  | `/task/:id`              | `TaskDetailScreen`    | `taskID: String`                |
-| Создание задачи  | `/task/new`              | `TaskFormScreen`      | `taskID: String?` (nil — новая) |
+| Создание задачи  | `/task/new`              | `TaskFormScreen`      | `taskID: String?` (nil — новая), `presetDueToday: Bool = false`, `startDictation: Bool = false` |
 | Заметки          | `/notes`                 | `NotesScreen`         | —                               |
 | Редактор заметки | `/notes/:id`             | `NoteEditorScreen`    | `noteID: String`                |
 | Проекты          | `/projects`              | `ProjectsScreen`      | —                               |
@@ -39,6 +39,11 @@
 | Интеграции       | `/settings/integrations` | `IntegrationsScreen`  | —                               |
 | Шаблоны          | `/settings/templates`    | `TemplatesScreen`     | —                               |
 | Голосовые модели | `/settings/voice-models` | `VoiceModelsScreen`   | —                               |
+
+Два дополнительных параметра формы задачи — не украшение: в вебе меню создания
+открывает форму ссылками вида `/task/new?due=today` и `/task/new?dictate=1`
+(«задача на сегодня» и «надиктовать»). Без них эти пункты меню теряют смысл,
+поэтому у формы они есть со значениями по умолчанию.
 
 Маршрута `/inbox` в приложении нет — экран убран из веба 26.08.2026, нативный
 аналог не делаем.
