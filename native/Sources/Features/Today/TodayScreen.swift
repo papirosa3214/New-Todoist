@@ -149,6 +149,8 @@ struct TodayScreen: View {
             .overlay(alignment: .trailing) {
                 HStack(spacing: TFSpacing.headerActionsGap) {
                     TFIconButton("line.3.horizontal.decrease") { filterSheetOpen = true }
+                        .accessibilityLabel("Фильтры")
+                        .accessibilityIdentifier("today.filters")
                     Menu {
                         Picker("Вид", selection: Binding(get: { vm.layout }, set: { vm.layout = $0 })) {
                             Label("Список", systemImage: "list.bullet").tag(TodayLayout.list)
@@ -162,6 +164,8 @@ struct TodayScreen: View {
                             .font(.system(size: 18))
                             .foregroundStyle(Color.tfText)
                             .frame(width: TFHitTarget.min, height: TFHitTarget.min)
+                            .accessibilityLabel("Вид")
+                            .accessibilityIdentifier("today.view-switcher")
                     }
                 }
                 .padding(.horizontal, TFSpacing.screenHorizontal)
