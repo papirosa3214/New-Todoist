@@ -64,16 +64,17 @@ struct ProjectsScreen: View {
         // projectStore.load(). Сегодня не трогаю по требованию владельца.
         .refreshable { await projectStore.load() }
         .background(Color.tfBackground)
-        // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
-        // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        // Нативная сворачивающаяся шапка.
+        // Штатная SwiftUI-шапка. Кнопка «назад» — через `DirectoryBackButton`
+        // в `.topBarLeading` (тот же канонический ответ, что в
+        // NotificationsScreen/ActivityScreen). Дубль заголовка снят.
         .navigationTitle("Проекты")
-        .navigationBarTitleDisplayMode(.large)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            // `TFScreenHeader` сама стрелку «назад» не рисует (проверено кодом) —
-            // `DirectoryBackButton()` тот же канонический ответ, что уже
-            // используют соседи по папке (`NotificationsScreen`/`ActivityScreen`).
-            TFScreenHeader("Проекты", variant: .compact, leading: { AnyView(DirectoryBackButton()) })
+        .toolbarTitleDisplayMode(.large)
+        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+        .toolbarBackgroundVisibility(.automatic, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                DirectoryBackButton()
+            }
         }
         .task { if projectStore.projects.isEmpty { await projectStore.load() } }
         .directoryConfirm($deleteRequest)
