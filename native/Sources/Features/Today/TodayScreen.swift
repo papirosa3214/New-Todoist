@@ -166,6 +166,9 @@ struct TodayScreen: View {
         TFScreenHeader(title, variant: .large)
             .overlay(alignment: .trailing) {
                 HStack(spacing: TFSpacing.headerActionsGap) {
+                    TFIconButton("magnifyingglass") { route = .search }
+                        .accessibilityLabel("Поиск")
+                        .accessibilityIdentifier("today.search")
                     TFIconButton("line.3.horizontal.decrease") { filterSheetOpen = true }
                         .accessibilityLabel("Фильтры")
                         .accessibilityIdentifier("today.filters")
