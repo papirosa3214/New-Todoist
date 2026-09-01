@@ -44,7 +44,6 @@ struct DirectoryCompactHeader: View {
         .frame(height: 48)
         // `.top` + заход под статус-бар — как у эталонной шапки «Уведомлений».
         // Было `.bottom`: градиент перевёрнут, и полоса не накрывала статус-бар.
-        .background(TFHeaderScrim().ignoresSafeArea(edges: .top))
-        .tfHeaderLift()
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
     }
 }

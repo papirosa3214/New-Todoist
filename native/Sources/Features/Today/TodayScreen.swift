@@ -62,9 +62,7 @@ struct TodayScreen: View {
                     // Место под две строки переднего слоя. Сам текст находится
                     // над glow, а этот прозрачный резерв уезжает вместе с
                     // лентой, позволяя задачам заходить под общую шапку.
-                    // Резерв под шапку минус общий подъём: шапка поднялась
-                    // на строку (`tfHeaderLift`), лента идёт за ней.
-                    Color.clear.frame(height: expandedHeaderHeight(c: c) - TFHeaderMetrics.topLift)
+                    Color.clear.frame(height: expandedHeaderHeight(c: c))
                 if c.trueEmpty && vm.layout == .list {
                     TodayEmptyIllustration()
                 } else {
@@ -183,7 +181,6 @@ struct TodayScreen: View {
 
             headerChrome(c: c)
                 .offset(y: headerPullDown)
-                .tfHeaderLift()
         }
         .background(Color.tfBackground.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
@@ -301,10 +298,18 @@ struct TodayScreen: View {
     /// Один чёрный полупрозрачный слой между лентой и передним текстом шапки.
     /// Поэтому задачи под ним затухают, а названия и кнопки остаются чёткими.
     private var headerFrost: some View {
-        // Общая подложка шапок: тот же градиент, что на остальных экранах,
-        // и потемневший вместе с ними (владелец 01.09.2026 — «потемнее и
-        // верхнюю шапку, и навигационную панельку»).
-        TFHeaderScrim()
+        LinearGradient(
+            stops: [
+                .init(color: Color.tfBackground.opacity(0.96), location: 0.00),
+                .init(color: Color.tfBackground.opacity(0.90), location: 0.42),
+                .init(color: Color.tfBackground.opacity(0.58), location: 0.68),
+                .init(color: Color.tfBackground.opacity(0.18), location: 0.86),
+                .init(color: Color.tfBackground.opacity(0.00), location: 1.00),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .allowsHitTesting(false)
     }
 
     private func headerActions(c: TodayComputation) -> some View {

@@ -85,8 +85,7 @@ struct NotificationsScreen: View {
         .frame(height: 48)
         // Тот же фон, что у шапок остальных экранов: `.ultraThinMaterial`
         // выбивался — он светлее и не совпадал с подложкой приложения.
-        .background(TFHeaderScrim().ignoresSafeArea(edges: .top))
-        .tfHeaderLift()
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
     }
 
     private var allRead: Bool { notificationStore.notifications.allSatisfy(\.read) }

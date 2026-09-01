@@ -25,7 +25,6 @@ struct SettingsHeaderChrome: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: 48)
-        .background(TFHeaderScrim().ignoresSafeArea(edges: .top))
-        .tfHeaderLift()
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
     }
 }

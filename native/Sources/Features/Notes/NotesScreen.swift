@@ -149,8 +149,7 @@ public struct NotesScreen: View {
             // владелец 01.09.2026 увидел это как «разнобой в цветах и шрифтах».
             .frame(height: 48)
         }
-        .background(TFHeaderScrim().ignoresSafeArea(edges: .top))
-        .tfHeaderLift()
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
         .overlay {
             Text("Дневник")
                 .tfText(.title)

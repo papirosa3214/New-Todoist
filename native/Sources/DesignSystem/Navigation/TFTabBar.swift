@@ -122,7 +122,7 @@ public struct TFTabBar: View {
         // должна быть у НИЖНЕЙ кромки экрана («под панелью не просвечивает
         // ничего»), а таять кверху — зеркально шапке. С `.top` градиент был
         // перевёрнут и панель читалась сплошной.
-        .background(TFHeaderScrim(axis: .bottom).ignoresSafeArea(edges: .bottom))
+        .background(FrostedGlass(axis: .bottom).ignoresSafeArea(edges: .bottom))
     }
 
     private func tabButton(_ index: Int) -> some View {

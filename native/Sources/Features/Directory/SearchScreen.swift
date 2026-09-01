@@ -98,11 +98,7 @@ struct SearchScreen: View {
             .frame(height: 48)
             TFDivider()
         }
-        // Тот же двухслойный блюр с затуханием, что у остальных шапок
-        // (владелец 01.09.2026: «чтобы везде у шапки был этот эффект
-        // расплывчатости») — `.ultraThinMaterial` даёт один слой и резкую границу.
-        .background(TFHeaderScrim().ignoresSafeArea(edges: .top))
-        .tfHeaderLift()
+        .background(.ultraThinMaterial)
     }
 
     // MARK: - Тело
