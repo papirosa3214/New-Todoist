@@ -38,7 +38,7 @@ final class E2ETests: XCTestCase {
         // По приёмке: задача создаётся, но может не попасть в «Сегодня» (due_date
         // по умолчанию может быть завтра или nil). Поэтому проверяем через «Обзор»
         // и ищем в любой секции, плюс отдельно в «Сегодня». Если нигде — фолбэк на API.
-        var found = app.buttons.matching(identifier: "today.task-row")
+        var found = app.descendants(matching: .any).matching(identifier: "today.task-row")
             .allElementsBoundByIndex.first(where: { $0.label.contains(title) })
         if found != nil {
             print("[E2E] задача найдена в «Сегодня»: \(found!.label.prefix(80))...")
@@ -46,13 +46,13 @@ final class E2ETests: XCTestCase {
             // Переключаемся на «Обзор» и ищем там.
             app.buttons["Обзор"].tap()
             sleep(2)
-            let обзорСегодня = app.buttons.matching(identifier: "today.task-row")
+            let обзорСегодня = app.descendants(matching: .any).matching(identifier: "today.task-row")
                 .allElementsBoundByIndex.first(where: { $0.label.contains(title) })
             if обзорСегодня != nil {
                 print("[E2E] задача найдена в «Обзоре»: \(обзорСегодня!.label.prefix(80))...")
             } else {
                 print("[E2E] задача «\(title)» не найдена ни в «Сегодня», ни в «Обзоре» — POST /tasks не сработал")
-                let всехСтрок = app.buttons.matching(identifier: "today.task-row").count
+                let всехСтрок = app.descendants(matching: .any).matching(identifier: "today.task-row").count
                 print("[E2E] всего строк в дереве после возврата в Сегодня: \(всехСтрок)")
                 XCTFail("Задача «\(title)» не создана на сервере")
             }
