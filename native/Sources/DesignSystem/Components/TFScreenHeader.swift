@@ -68,7 +68,10 @@ public struct TFScreenHeader: View {
 
             below?()
         }
-        .background(FrostedGlass(axis: .bottom))
+        // `.top`: у шапки плотная часть затухания — у ВЕРХНЕЙ кромки экрана,
+        // тает вниз (веб: HEADER_FADE_* «to bottom»). Стояло `.bottom` —
+        // градиент был перевёрнут, и шапка читалась сплошной плашкой.
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
     }
 
     @ViewBuilder

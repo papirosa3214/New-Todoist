@@ -191,7 +191,7 @@ struct RootShellView: View {
 
     private var tabItems: [TFTabItem] {
         Tab.allCases.map { tab in
-            TFTabItem(icon: tab.icon, accessibilityLabel: tab.label, badgeCount: tab == .today ? todayBadgeCount : nil)
+            TFTabItem(icon: tab.icon, accessibilityLabel: tab.label, badgeCount: tab == .today ? todayBadgeCount : nil, showsTodayDate: tab == .today)
         }
     }
 

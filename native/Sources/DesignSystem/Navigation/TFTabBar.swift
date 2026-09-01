@@ -24,11 +24,58 @@ public struct TFTabItem: Identifiable {
     let accessibilityLabel: String
     /// Только у вкладки «Сегодня» — счётчик активных задач на сегодня.
     let badgeCount: Int?
+    /// Вкладка «Сегодня» рисует не пустой значок календаря, а рамку с
+    /// ЧИСЛОМ текущего дня — как в вебе (`TodayDateIcon` в UI.tsx) и как
+    /// это делает системный «Календарь». Владелец 01.09.2026: «сегодня он
+    /// отражает фактическую дату, у тебя она не отражается в иконке».
+    let showsTodayDate: Bool
 
-    public init(icon: String, accessibilityLabel: String, badgeCount: Int? = nil) {
+    public init(icon: String, accessibilityLabel: String, badgeCount: Int? = nil, showsTodayDate: Bool = false) {
         self.icon = icon
         self.accessibilityLabel = accessibilityLabel
         self.badgeCount = badgeCount
+        self.showsTodayDate = showsTodayDate
+    }
+}
+
+/// Значок календаря с числом сегодняшнего дня.
+///
+/// Число берётся у системного календаря и обновляется по `NSCalendarDayChanged`
+/// — штатному уведомлению о смене суток. Таймер на полночь (как в вебе) здесь
+/// не нужен: система шлёт это уведомление и после возврата из фона, поэтому
+/// число не застревает на вчерашнем, если телефон пролежал ночь в кармане.
+struct TFTodayDateIcon: View {
+    let size: CGFloat
+    @State private var day = Calendar.current.component(.day, from: Date())
+
+    var body: some View {
+        ZStack {
+            // Значок — СИСТЕМНЫЙ «calendar», как у соседних вкладок (тот же
+            // вес и форма, иначе выбивается из ряда). Убрана только его
+            // внутренняя сетка точек: маска оставляет рамку и шапку, а окно
+            // вырезает `destinationOut`. Владелец 01.09.2026: «используй ту
+            // иконку, просто почисти точки и поставь единичку».
+            Image(systemName: "calendar")
+                .font(.system(size: size))
+                .mask(
+                    ZStack {
+                        Rectangle()
+                        // Окно под число: от линии шапки до низа рамки.
+                        Rectangle()
+                            .frame(width: size * 0.62, height: size * 0.44)
+                            .offset(y: size * 0.14)
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+                )
+            // Число там же, где в вебе: в окне под шапкой календаря.
+            Text("\(day)")
+                .font(.system(size: size * (day > 9 ? 0.375 : 0.417), weight: .bold))
+                .offset(y: size * 0.13)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            day = Calendar.current.component(.day, from: Date())
+        }
     }
 }
 
@@ -64,7 +111,11 @@ public struct TFTabBar: View {
         }
         .frame(height: TFTabBarMetrics.heightCompact)
         .frame(maxWidth: .infinity)
-        .background(FrostedGlass(axis: .top))
+        // `.bottom`, не `.top`: у нижней панели плотная часть затухания
+        // должна быть у НИЖНЕЙ кромки экрана («под панелью не просвечивает
+        // ничего»), а таять кверху — зеркально шапке. С `.top` градиент был
+        // перевёрнут и панель читалась сплошной.
+        .background(FrostedGlass(axis: .bottom).ignoresSafeArea(edges: .bottom))
     }
 
     private func tabButton(_ index: Int) -> some View {
@@ -74,15 +125,18 @@ public struct TFTabBar: View {
             onSelect(index)
         } label: {
             ZStack {
-                if isActive {
-                    Circle()
-                        .fill(TFTabBarMetrics.bubbleColor)
-                        .frame(width: TFTabBarMetrics.bubbleSize, height: TFTabBarMetrics.bubbleSize)
-                        .transition(.scale(scale: 0).combined(with: .opacity))
+                // Кружка-подложки под активной вкладкой нет (владелец,
+                // 01.09.2026: «не надо никаких кружков»). Выделение несёт
+                // только цвет значка: серый → белый.
+                Group {
+                    if item.showsTodayDate {
+                        TFTodayDateIcon(size: TFTabBarMetrics.iconSize)
+                    } else {
+                        Image(systemName: item.icon)
+                            .font(.system(size: TFTabBarMetrics.iconSize))
+                    }
                 }
-                Image(systemName: item.icon)
-                    .font(.system(size: TFTabBarMetrics.iconSize))
-                    .foregroundStyle(isActive ? Color.tfText : Color.tfDim)
+                .foregroundStyle(isActive ? Color.tfText : Color.tfDim)
                 if let count = item.badgeCount, count > 0 {
                     Text("\(count)")
                         .font(.system(size: 12, weight: .bold))
@@ -249,3 +303,4 @@ public struct TFTapMenuStyle: ButtonStyle {
         }
     }
 }
+

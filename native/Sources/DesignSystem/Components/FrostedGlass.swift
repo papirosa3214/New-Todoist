@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 // Затухание шапки и таб-бара как в вебе `ScreenHeader` / `AnimatedTabBar`:
 // сплошной плашки нет, только два слоя blur со сдвинутыми масками
@@ -25,59 +24,72 @@ public struct FrostedGlass: View {
     public var body: some View {
         ZStack {
             // Сильный слой — эквивалент `backdrop-filter: blur(20px)` с жёсткой маской.
-            BlurLayer(strength: .systemUltraThinMaterial, axis: axis, profile: .strong)
+            BlurLayer(material: .ultraThinMaterial, axis: axis, profile: .strong)
             // Мягкий слой — эквивалент `backdrop-filter: blur(6px)` с растянутой маской.
-            BlurLayer(strength: .systemThinMaterial, axis: axis, profile: .soft)
+            BlurLayer(material: .thinMaterial, axis: axis, profile: .soft)
+            // Третий слой веба — подложка цветом фона (UI.tsx HEADER_TINT,
+            // index.css `.nt-tabbar-menu::after`). Без неё заголовок и иконки
+            // читаются не над любым содержимым: размытие оставляет цвет, и
+            // светлая карточка под шапкой «просвечивает» в текст.
+            tint
         }
         .allowsHitTesting(false)
     }
+
+    /// Проценты дословно из `HEADER_TINT`: плотно у кромки, к середине тает.
+    private var tint: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .tfBackground, location: 0.00),
+                .init(color: .tfBackground, location: 0.46),
+                .init(color: .tfBackground.opacity(0.74), location: 0.66),
+                .init(color: .tfBackground.opacity(0.34), location: 0.84),
+                .init(color: .tfBackground.opacity(0.00), location: 1.00),
+            ],
+            startPoint: axis == .top ? .top : .bottom,
+            endPoint: axis == .top ? .bottom : .top
+        )
+    }
 }
 
-// MARK: - UIViewRepresentable
+// MARK: - Слои размытия
 
 private enum Profile { case strong, soft }
 
-private struct BlurLayer: UIViewRepresentable {
-    let strength: UIBlurEffect.Style
+/// Один слой размытия с маской-градиентом.
+///
+/// ⚠️ Реализация переведена с `UIVisualEffectView` на материал SwiftUI
+/// (01.09.2026): обёрнутый в `UIViewRepresentable` эффект размывал не
+/// содержимое экрана, а пустоту — на кадре под таб-баром текст оставался
+/// чётким. `.ultraThinMaterial`/`.thinMaterial` в `background` размывают
+/// именно то, что лежит под ними в SwiftUI-иерархии, и маска к ним
+/// применяется штатным `.mask`, без ручного управления слоями и их frame.
+private struct BlurLayer: View {
+    let material: Material
     let axis: FrostedGlass.Axis
     let profile: Profile
 
-    func makeUIView(context: Context) -> UIVisualEffectView {
-        let effect = UIBlurEffect(style: strength)
-        let view = UIVisualEffectView(effect: effect)
-        view.backgroundColor = .clear
-        view.layer.mask = makeMask(axis: axis, profile: profile)
-        return view
+    var body: some View {
+        Rectangle()
+            .fill(material)
+            .mask(alignment: .center) {
+                LinearGradient(
+                    stops: stops,
+                    startPoint: axis == .top ? .top : .bottom,
+                    endPoint: axis == .top ? .bottom : .top
+                )
+            }
     }
 
-    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
-
-    /// Профили сняты с веба. UI.tsx HEADER_FADE_STRONG/SOFT и index.css
-    /// `.nt-tabbar-menu::before/::after` имеют одинаковые цифры — разное
-    /// только направление (to bottom для шапки, to top для таб-бара).
-    private func makeMask(axis: FrostedGlass.Axis, profile: Profile) -> CAGradientLayer {
-        let strongPoints: [CGFloat] = [0.0, 0.0, 0.55, 0.78, 0.94, 1.0]
-        let strongAlphas: [CGFloat] = [1, 1, 0.55, 0.20, 0.00, 0.00]
-        let softPoints:   [CGFloat] = [0.0, 0.10, 0.52, 0.84, 1.0, 1.0]
-        let softAlphas:   [CGFloat] = [1, 1, 0.74, 0.34, 0.00, 0.00]
-        let points = profile == .strong ? strongPoints : softPoints
-        let alphas = profile == .strong ? strongAlphas : softAlphas
-        // Для шапки (axis: .top): opacity=1 у y=0, opacity=0 у y=1 — плотно к верху.
-        // Для таб-бара (axis: .bottom): наоборот.
-        let layer = CAGradientLayer()
-        switch axis {
-        case .top:
-            layer.startPoint = CGPoint(x: 0.5, y: 0)
-            layer.endPoint   = CGPoint(x: 0.5, y: 1)
-            layer.locations  = points.map { NSNumber(value: Double($0)) }
-            layer.colors     = alphas.map { UIColor.white.withAlphaComponent($0).cgColor }
-        case .bottom:
-            layer.startPoint = CGPoint(x: 0.5, y: 1)
-            layer.endPoint   = CGPoint(x: 0.5, y: 0)
-            layer.locations  = points.map { NSNumber(value: Double(1 - $0)) }
-            layer.colors     = alphas.reversed().map { UIColor.white.withAlphaComponent($0).cgColor }
-        }
-        return layer
+    /// Профили сняты с веба: UI.tsx `HEADER_FADE_STRONG`/`HEADER_FADE_SOFT`
+    /// и index.css `.nt-tabbar-menu::before/::after` — цифры одинаковые,
+    /// разное только направление (`to bottom` у шапки, `to top` у панели),
+    /// и оно задаётся точками градиента, а не переворотом массива.
+    private var stops: [Gradient.Stop] {
+        let strong: [(CGFloat, CGFloat)] = [(0.00, 1), (0.40, 1), (0.62, 0.55), (0.80, 0.20), (0.94, 0)]
+        let soft:   [(CGFloat, CGFloat)] = [(0.00, 1), (0.52, 1), (0.74, 0.50), (0.88, 0.18), (1.00, 0)]
+        let points = profile == .strong ? strong : soft
+        return points.map { .init(color: .black.opacity($0.1), location: $0.0) }
     }
 }
 
