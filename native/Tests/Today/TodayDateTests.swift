@@ -133,6 +133,16 @@ final class TodayDateTests: XCTestCase {
         XCTAssertEqual(TodayDate.formatWeekdayDateLabel("xxx"), "xxx")
     }
 
+    // MARK: formatWeekdayLabel — только день недели для большой шапки
+
+    func testFormatWeekdayLabelВозвращаетТолькоДеньНедели() {
+        XCTAssertEqual(TodayDate.formatWeekdayLabel("2026-09-01"), "Вторник")
+    }
+
+    func testFormatWeekdayLabelНевалиднаяВозвращаетИсходную() {
+        XCTAssertEqual(TodayDate.formatWeekdayLabel("xxx"), "xxx")
+    }
+
     // MARK: calendarDate / calendarDateString — round-trip
 
     func testCalendarDateRoundTrip() {

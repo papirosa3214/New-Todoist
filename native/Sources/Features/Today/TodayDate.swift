@@ -77,12 +77,19 @@ enum TodayDate {
         return "\(day) \(month)."
     }
 
-    /// «Вторник 1» — крупный заголовок шапки: день недели и число, без месяца
-    /// и запятой (владелец 01.09.2026). Месяц целиком показывает компактная
-    /// дата в схлопнутой шапке.
+    /// «Вторник 1» — старый формат крупного заголовка. Оставлен для мест,
+    /// которым действительно нужны и день недели, и число.
     static func formatWeekdayDateLabel(_ dateStr: String) -> String {
         guard let (day, _, _, weekday) = dayMonth(dateStr) else { return dateStr }
         return "\(weekdaysFull[weekday]) \(day)"
+    }
+
+    /// «Вторник» — крупный заголовок «Сегодня». Число намеренно не дублируем:
+    /// оно появляется только в компактной дате («1 сентября») после схлопывания
+    /// большого заголовка.
+    static func formatWeekdayLabel(_ dateStr: String) -> String {
+        guard let (_, _, _, weekday) = dayMonth(dateStr) else { return dateStr }
+        return weekdaysFull[weekday]
     }
 
     /// «1 сентября» — компактная дата в схлопнутой шапке: месяц целиком.
