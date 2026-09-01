@@ -156,6 +156,11 @@ npm run dev
 
 Подробный разбор сборки: [`docs/lessons/2026-08-18-ios-build-and-on-device-speech.md`](docs/lessons/2026-08-18-ios-build-and-on-device-speech.md).
 
+> **Рабочая ветка iOS — `native-app`.** Перед любой правкой или сборкой
+> проверьте `git branch --show-current`; правила синхронизации и публикации
+> описаны в [`docs/BRANCHING.md`](docs/BRANCHING.md). `main` не является
+> веткой текущей разработки нативного приложения.
+
 ### Сборка и деплой на физическое устройство за одну команду:
 
 ```bash
@@ -204,6 +209,7 @@ xcrun devicectl device process launch --device 00008150-001545400144401C \
 | Документ | Описание |
 | :--- | :--- |
 | [`STATUS.md`](STATUS.md) | **Живой статус проекта:** текущие задачи, кто работает, последние изменения. |
+| [`docs/BRANCHING.md`](docs/BRANCHING.md) | **Ветки и рабочие копии:** активная `native-app`, источник iOS-изменений и порядок синхронизации. |
 | [`docs/TASK-LIFECYCLE-SCENARIOS.md`](docs/TASK-LIFECYCLE-SCENARIOS.md) | **Матрица сценариев и состояний задач:** человек, агент, блокеры, приёмка, доработка. |
 | [`docs/AGENTS-SETUP-GUIDE.md`](docs/AGENTS-SETUP-GUIDE.md) | **Подключение агентов от А до Я:** создание, ключи, MCP, автономный будильник. |
 | [`AGENT-PROTOCOL.md`](AGENT-PROTOCOL.md) | **Правила агентов:** жизненный цикл задач, шаги, аренда, сдача работы. |
