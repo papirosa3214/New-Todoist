@@ -25,7 +25,7 @@ struct TodayListView: View {
         // так он всегда находится НАД общей полупрозрачной подложкой. Остальные
         // заголовки едут в ленте и сообщают шапке свою позицию; когда очередной
         // доезжает наверх, шапка заменяет им текущий подзаголовок.
-        LazyVStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
             if !waitingTasks.isEmpty {
                 Section {
                     ForEach(waitingTasks) { task in

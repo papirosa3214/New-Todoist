@@ -171,12 +171,20 @@ struct TodayScreen: View {
                 .frame(height: 148)
                 .ignoresSafeArea(edges: .top)
                 .offset(y: headerPullDown)
+                // По официальным гайдам SwiftUI — системный эффект «заблюренного стекла»,
+                // а не кастомный LinearGradient. .ultraThinMaterial даёт именно его.
+                .background(.ultraThinMaterial)
 
             headerChrome(c: c)
                 .offset(y: headerPullDown)
         }
         .background(Color.tfBackground.ignoresSafeArea())
-        .toolbar(.hidden, for: .navigationBar)
+        // По официальным гайдлайнам SwiftUI: большая сворачивающаяся шапка
+        // через .navigationTitle + .navigationBarTitleDisplayMode(.large),
+        // и нативное прилипание секций через LazyVStack(pinnedViews: [.sectionHeaders]).
+        // Размытие шапки — системный .ultraThinMaterial (вместо кастомного FrostedGlass).
+        .navigationTitle("Сегодня")
+        .navigationBarTitleDisplayMode(.large)
         .navigationDestination(item: $route) { routeDestination($0) }
         .task { await vm.loadAgentsIfNeeded() }
         .tfBottomSheet(isPresented: $rescheduleOpen) {
