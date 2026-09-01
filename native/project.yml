@@ -62,15 +62,35 @@ targets:
         # нельзя — пусть Xcode генерирует сам.
         GENERATE_INFOPLIST_FILE: true
 
+  # Unit-тесты: чистая логика без UI и без сети. Покрывают TodayComputation
+  # (plannerTasks, partitionOverdueToday, waitingTasks, trueEmpty/filteredEmpty),
+  # TodayFilterEngine (matches, опции), TodayDate (addDays, daysUntil, форматы),
+  # декодирование моделей (ApiUser с is_system_bot числом, ApiTask с null),
+  # TaskFormViewModel (isSaveEnabled).
+  TaskFlowTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: TaskFlow
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.maksim.taskflow.native.tests
+        TEST_TARGET_NAME: TaskFlow
+        GENERATE_INFOPLIST_FILE: true
+
 schemes:
   TaskFlow:
     build:
       targets:
         TaskFlow: all
         TaskFlowUITests: [test]
+        TaskFlowTests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - TaskFlowUITests
+        - TaskFlowTests
