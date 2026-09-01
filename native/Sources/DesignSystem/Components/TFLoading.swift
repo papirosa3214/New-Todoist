@@ -17,8 +17,14 @@ public struct TFLoading: View {
         case .inline:
             text
         case .block:
-            text.frame(maxWidth: .infinity)
-                .padding(.vertical, TFSpacing.xl)
+            // Штатный ProgressView в центре плюс текст «Загрузка…».
+            VStack(spacing: TFSpacing.sm) {
+                ProgressView()
+                    .controlSize(.large)
+                text
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, TFSpacing.xl)
         }
     }
 }
