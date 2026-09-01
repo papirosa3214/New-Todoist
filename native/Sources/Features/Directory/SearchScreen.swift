@@ -38,10 +38,14 @@ struct SearchScreen: View {
                 .padding(.bottom, TFSpacing.xl)
         }
         .background(Color.tfBackground)
-        // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
-        // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        .toolbar(.hidden, for: .navigationBar)
-        .safeAreaInset(edge: .top, spacing: 0) { searchBar }
+        // Штатный .searchable — iOS 15+. Заменяет самодельную searchBar
+        // в safeAreaInset: поле поиска и кнопка «Отмена» рисуются
+        // системным навбаром (поведение Cancel при dismiss).
+        .searchable(
+            text: $query,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "Задачи, проекты, метки"
+        )
         .navigationDestination(item: $route) { routeDestination($0) }
         .onAppear { fieldFocused = true }
         // Дебаунс 300мс на САМ запрос (не на отображение вводимого текста):
