@@ -25,9 +25,9 @@ public struct FrostedGlass: View {
     public var body: some View {
         ZStack {
             // Сильный слой — эквивалент `backdrop-filter: blur(20px)` с жёсткой маской.
-            BlurLayer(strength: .systemUltraThinMaterialLight, axis: axis, profile: .strong)
+            BlurLayer(strength: .systemUltraThinMaterial, axis: axis, profile: .strong)
             // Мягкий слой — эквивалент `backdrop-filter: blur(6px)` с растянутой маской.
-            BlurLayer(strength: .systemThinMaterialLight, axis: axis, profile: .soft)
+            BlurLayer(strength: .systemThinMaterial, axis: axis, profile: .soft)
         }
         .allowsHitTesting(false)
     }

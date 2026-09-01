@@ -22,6 +22,6 @@ struct SettingsHeaderChrome: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: 56)
-        .background(FrostedGlass(axis: .top))
+        .background(FrostedGlass(axis: .bottom))
     }
 }
