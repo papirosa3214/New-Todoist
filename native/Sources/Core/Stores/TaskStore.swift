@@ -20,10 +20,13 @@ public final class TaskStore {
         self.apiClient = apiClient
     }
 
-    public func load() async {
-        isLoading = true
+    /// `silent` — обновление в фоне, без спиннера. Нужно для рефетча после
+    /// переподключения: спиннер вставлялся блоком в начало ленты, список
+    /// прыгал, и владелец видел это как «экран моргает сам по себе».
+    public func load(silent: Bool = false) async {
+        if !silent { isLoading = true }
         errorMessage = nil
-        defer { isLoading = false }
+        defer { if !silent { isLoading = false } }
         do {
             tasks = try await apiClient.tasks()
         } catch {
@@ -96,7 +99,7 @@ public final class TaskStore {
     /// не хранит очередь пропущенного за время разрыва (spec §4.2), поэтому
     /// полный рефетч, а не точечная синхронизация.
     public func refreshAfterReconnect() async {
-        await load()
+        await load(silent: true)
     }
 
     private func upsert(_ task: ApiTask) {

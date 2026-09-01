@@ -61,9 +61,13 @@ struct TFTodayDateIcon: View {
                     ZStack {
                         Rectangle()
                         // Окно под число: от линии шапки до низа рамки.
+                        // Окно во всю внутренность рамки: при узком вырезе над
+                        // цифрой оставались точки сетки, и владелец 01.09.2026
+                        // их видел — «три точечки болтаются, пусть будет просто
+                        // циферка».
                         Rectangle()
-                            .frame(width: size * 0.62, height: size * 0.44)
-                            .offset(y: size * 0.14)
+                            .frame(width: size * 0.78, height: size * 0.60)
+                            .offset(y: size * 0.16)
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()

@@ -40,6 +40,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.maksim.taskflow.native
+        # Без этой настройки Xcode не назначает иконку приложения, и на
+        # домашнем экране остаётся серая заглушка — при том что сам значок
+        # (Resources/Assets.xcassets/AppIcon.appiconset) лежит в проекте.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
         TARGETED_DEVICE_FAMILY: "1"
 

@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum TodayHeaderMetrics {
+    /// Высота линии шапки — ровно зона нажатия кнопки, без запаса воздуха.
+    static let barHeight: CGFloat = 44
+}
+
 // «Сегодня» (`/today`) — spec/SCREENS-1.md §5.1. Имя структуры и параметры
 // (никаких) — контракт `spec/INTEGRATION.md`.
 struct TodayScreen: View {
@@ -20,9 +25,6 @@ struct TodayScreen: View {
     /// прозрачность двух дат (крупной в ленте и мелкой в шапке): высоты
     /// фиксированы, иначе шапка дрожит на каждом кадре прокрутки.
     @State private var collapse: CGFloat = 0
-    /// Секция, чей заголовок уже ушёл под полосу шапки. Её название шапка
-    /// показывает слева — на месте, где в покое стоит крупная дата.
-    @State private var activeSection: TodaySectionMark?
 
     private var today: String { TodayDate.todayString() }
     private var activeHourDate: String {
@@ -57,7 +59,9 @@ struct TodayScreen: View {
                     // место — «это всё есть в фильтре, зачем это наверху».
                     // Сам компонент `PlannerProjectChips` оставлен: выбор
                     // никуда не делся, просто попадают в него теперь фильтром.
-                    if taskStore.isLoading {
+                    // Спиннер только на первой загрузке: при обновлении уже
+                    // показанного списка он вставлялся сверху и сдвигал ленту.
+                    if taskStore.isLoading && taskStore.tasks.isEmpty {
                         TFLoading(.block)
                     }
                     TFErrorBanner(taskStore.errorMessage, variant: .inline)
@@ -148,25 +152,15 @@ struct TodayScreen: View {
             guard new != collapse else { return }
             if abs(new - collapse) > 0.01 || new == 0 || new == 1 { collapse = new }
         }
-        .coordinateSpace(name: todayScrollSpace)
         // Наверху та секция, чей заголовок уже уехал под полосу. Пишем в
         // состояние только при СМЕНЕ названия: сами координаты меняются на
         // каждом кадре прокрутки, и запись по ним перерисовывала бы весь экран.
-        .onPreferenceChange(TodaySectionKey.self) { marks in
-            // Порог -TFSpacing.md, а не 0: у заголовка сверху столько же
-            // отступа, и при нуле надпись ещё стоит в ленте на виду — шапка
-            // показывала её вторым экземпляром поверх крупной даты.
-            let passed = marks.filter { $0.minY < -TFSpacing.md }.max { $0.minY < $1.minY }
-            let next = passed.map {
-                TodaySectionMark(title: $0.title, icon: $0.icon, color: $0.color, minY: 0)
-            }
-            if next?.title != activeSection?.title {
-                withAnimation(.easeOut(duration: 0.18)) { activeSection = next }
-            }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            compactBar
-        }
+        // Шапка снова резервирует место: прилипший заголовок паркуется вплотную
+        // под ней. Поверх неё он встать не может — она рисуется над лентой, и
+        // любой «внахлёст» означал бы, что название рисует сама шапка, а не
+        // лента (владелец такую имитацию забраковал: она не выталкивалась и
+        // пропадала).
+        .safeAreaInset(edge: .top, spacing: 0) { compactBar(c: c) }
         .background(Color.tfBackground)
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $route) { routeDestination($0) }
@@ -213,7 +207,7 @@ struct TodayScreen: View {
     // слева на освободившееся место въезжает название текущей секции. Лента
     // при этом уходит под полосу целиком — заголовки секций не прилипают
     // сами, они лишь сообщают наверх свою координату.
-    private var collapseDistance: CGFloat { 20 }
+    private var collapseDistance: CGFloat { TodayHeaderMetrics.barHeight }
 
     private var headerDate: String { vm.layout == .hours ? activeHourDate : today }
 
@@ -221,37 +215,20 @@ struct TodayScreen: View {
     /// название текущей секции. Владелец 01.09.2026: «чтобы вторник 1 сентября
     /// большими буквами был прям в одну линию с фильтром и троеточием, и
     /// „Ждут вас“ заезжал на эту же линию, только слева».
-    @ViewBuilder
     private var leadingTitle: some View {
-        ZStack(alignment: .leading) {
-            Text(TodayDate.formatWeekdayDateLabel(headerDate))
-                .tfText(.titleLarge)
-                .foregroundStyle(Color.tfText)
-                .lineLimit(1)
-                .opacity(1 - collapse)
-                .accessibilityIdentifier("today.title-large")
-
-            if let section = activeSection {
-                HStack(spacing: 6) {
-                    if let icon = section.icon {
-                        Image(systemName: icon).font(.system(size: 16)).foregroundStyle(Color.tfText)
-                    }
-                    Text(section.title)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(section.color)
-                }
-                .lineLimit(1)
-                .transition(.opacity)
-                .accessibilityIdentifier("today.section-current")
-            }
-        }
+        Text(TodayDate.formatWeekdayDateLabel(headerDate))
+            .tfText(.titleLarge)
+            .foregroundStyle(Color.tfText)
+            .lineLimit(1)
+            .opacity(1 - collapse)
+            .accessibilityIdentifier("today.title-large")
     }
 
-    private var compactBar: some View {
+    private func compactBar(c: TodayComputation) -> some View {
         ZStack {
             // «Просто дата» под островком — проявляется ровно на том пути,
             // на котором гаснет крупная.
-            Text(TodayDate.formatDuePlain(headerDate))
+            Text(TodayDate.formatDayMonthFull(headerDate))
                 .tfText(.title)
                 .foregroundStyle(Color.tfText)
                 .lineLimit(1)
@@ -291,12 +268,14 @@ struct TodayScreen: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         // 48: в полосе теперь стоит и крупная дата 28pt, ей нужно место.
-        .frame(height: 48)
+        .frame(height: TodayHeaderMetrics.barHeight)
         // Плотная часть подложки накрывает полосу целиком, затухание свисает
         // ниже неё — иначе под датой и кнопками читается лента.
+        // Подложка шапки — сплошная, БЕЗ хвоста затухания: хвост был
+        // полупрозрачным, и лента проезжала прямо в нём под самой датой.
+        // Затухание живёт у прилипшего подзаголовка, а не здесь.
         .background(alignment: .top) {
-            TFHeaderBackdrop()
-                .padding(.bottom, -26)
+            TFHeaderBackdrop(tail: 0)
                 .ignoresSafeArea(edges: .top)
         }
     }

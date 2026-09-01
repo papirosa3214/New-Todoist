@@ -77,11 +77,25 @@ enum TodayDate {
         return "\(day) \(month)."
     }
 
-    /// «Четверг, 31 авг.» — заголовок шапки в виде «часы»/списка/доски (spec §5.1).
+    /// «Вторник 1» — крупный заголовок шапки: день недели и число, без месяца
+    /// и запятой (владелец 01.09.2026). Месяц целиком показывает компактная
+    /// дата в схлопнутой шапке.
     static func formatWeekdayDateLabel(_ dateStr: String) -> String {
-        guard let (day, month, _, weekday) = dayMonth(dateStr) else { return dateStr }
-        return "\(weekdaysFull[weekday]), \(day) \(month)."
+        guard let (day, _, _, weekday) = dayMonth(dateStr) else { return dateStr }
+        return "\(weekdaysFull[weekday]) \(day)"
     }
+
+    /// «1 сентября» — компактная дата в схлопнутой шапке: месяц целиком.
+    static func formatDayMonthFull(_ dateStr: String) -> String {
+        guard let (day, _, _, _) = dayMonth(dateStr), let d = calendarDate(dateStr) else { return dateStr }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = moscow
+        let index = calendar.component(.month, from: d) - 1
+        return "\(day) \(monthsGenitive[index])"
+    }
+
+    static let monthsGenitive = ["января", "февраля", "марта", "апреля", "мая", "июня",
+                                 "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 
     /// «31 авг. · Понедельник» — заголовок колонки «Сегодня» на доске (spec §5.1, formatColumnDateLabel).
     static func formatColumnDateLabel(_ dateStr: String) -> String {
