@@ -62,7 +62,9 @@ struct TodayScreen: View {
                     // Место под две строки переднего слоя. Сам текст находится
                     // над glow, а этот прозрачный резерв уезжает вместе с
                     // лентой, позволяя задачам заходить под общую шапку.
-                    Color.clear.frame(height: expandedHeaderHeight(c: c))
+                    // Резерв под шапку минус общий подъём: шапка поднялась
+                    // на строку (`tfHeaderLift`), лента идёт за ней.
+                    Color.clear.frame(height: expandedHeaderHeight(c: c) - TFHeaderMetrics.topLift)
                 if c.trueEmpty && vm.layout == .list {
                     TodayEmptyIllustration()
                 } else {
@@ -181,6 +183,7 @@ struct TodayScreen: View {
 
             headerChrome(c: c)
                 .offset(y: headerPullDown)
+                .tfHeaderLift()
         }
         .background(Color.tfBackground.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)

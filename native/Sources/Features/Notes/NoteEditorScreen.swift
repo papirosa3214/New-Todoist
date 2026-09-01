@@ -220,7 +220,8 @@ struct NoteEditorScreen: View {
         }
         .frame(height: 48)
         // Тот же общий фон шапок, см. комментарий в TaskFormScreen.
-        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
+        .background(TFHeaderScrim().ignoresSafeArea(edges: .top))
+        .tfHeaderLift()
     }
 
     /// «заголовком автоматически становится первый непустой блок… или

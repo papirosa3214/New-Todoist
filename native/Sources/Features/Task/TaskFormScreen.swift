@@ -164,7 +164,8 @@ struct TaskFormScreen: View {
         // Общий фон шапок, а не `.ultraThinMaterial`: материал в тёмной теме
         // подсвечивает полосу (#1C1C1C против фона #171717) и экран выбивается
         // из остальных — сверено кадрами 01.09.2026.
-        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
+        .background(TFHeaderScrim().ignoresSafeArea(edges: .top))
+        .tfHeaderLift()
     }
 
     // MARK: - Тело
