@@ -143,6 +143,7 @@ struct TodayScreen: View {
             let scrolled = geo.contentOffset.y + geo.contentInsets.top
             return max(0, min(1, scrolled / collapseDistance))
         } action: { _, new in
+            guard new != collapse else { return }
             if abs(new - collapse) > 0.01 || new == 0 || new == 1 { collapse = new }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
