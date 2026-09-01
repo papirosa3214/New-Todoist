@@ -113,11 +113,6 @@ public struct NotesScreen: View {
                     .buttonStyle(TFTapScaleStyle())
                 }
 
-                Text("Дневник")
-                    .tfText(.titleLarge)
-                    .foregroundStyle(Color.tfText)
-                    .lineLimit(1)
-
                 Spacer()
 
                 if viewModel.isSelecting {
@@ -149,9 +144,19 @@ public struct NotesScreen: View {
                 }
             }
             .padding(.horizontal, TFSpacing.screenHorizontal)
-            .frame(height: 56)
+            // 48 и общий фон вместо 56 и `.ultraThinMaterial`: полоса была
+            // светлее ленты и выше остальных шапок, а заголовок вдвое крупнее —
+            // владелец 01.09.2026 увидел это как «разнобой в цветах и шрифтах».
+            .frame(height: 48)
         }
-        .background(.ultraThinMaterial)
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
+        .overlay {
+            Text("Дневник")
+                .tfText(.title)
+                .foregroundStyle(Color.tfText)
+                .lineLimit(1)
+                .allowsHitTesting(false)
+        }
     }
 
     private var kebabMenu: some View {

@@ -219,7 +219,8 @@ struct NoteEditorScreen: View {
                 .allowsHitTesting(false)
         }
         .frame(height: 48)
-        .background(.ultraThinMaterial)
+        // Тот же общий фон шапок, см. комментарий в TaskFormScreen.
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
     }
 
     /// «заголовком автоматически становится первый непустой блок… или

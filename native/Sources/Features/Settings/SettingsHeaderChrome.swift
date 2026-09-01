@@ -1,27 +1,30 @@
 import SwiftUI
 
-// Шапка вида `.large` ТОЛЬКО с заголовком — стрелку «назад» рисует
-// NavigationStack сам, отдельная кнопка поверх неё была дублем
-// (ревьюер 01.09.2026: «две кнопки «назад» одна над другой — оставить
-// одну, системную»). Эта шапка была workaround-ом против гэпа
-// `TFScreenHeader.large` (DesignSystem, чужой файл) — тот не принимает
-// `leading`. Сейчас leading не нужен, но `.large`-типографика всё ещё
-// нужна (Интеграции/Шаблоны используют `.compact` со своим `leading`,
-// а здесь — крупная левая). Оставляем собственную композицию, чтобы
-// не патчить общий файл (правило ARCHITECTURE.md).
+// Шапка настроек приведена к эталону «Уведомлений» (владелец 01.09.2026:
+// «возьми за референс уведомления — где заголовок и где стрелка назад, и так
+// по всем экранам»): стрелка слева, заголовок по центру, высота 48, фон
+// FrostedGlass с заходом под статус-бар.
+//
+// Стрелка теперь СВОЯ, а не системная: системный навбар на всех экранах скрыт
+// (`.toolbar(.hidden, for: .navigationBar)`) — иначе он рисовал вторую кнопку
+// «назад» в кругляшке прямо поверх нашей.
 struct SettingsHeaderChrome: View {
     let title: String
 
     var body: some View {
-        HStack(spacing: TFSpacing.sm) {
+        ZStack {
+            HStack {
+                DirectoryBackButton()
+                Spacer()
+            }
             Text(title)
-                .tfText(.titleLarge)
+                .tfText(.title)
                 .foregroundStyle(Color.tfText)
                 .lineLimit(1)
-            Spacer()
+                .allowsHitTesting(false)
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
-        .frame(height: 56)
-        .background(FrostedGlass(axis: .bottom))
+        .frame(height: 48)
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
     }
 }

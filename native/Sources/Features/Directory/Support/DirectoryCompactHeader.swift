@@ -42,6 +42,8 @@ struct DirectoryCompactHeader: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: 48)
-        .background(FrostedGlass(axis: .bottom))
+        // `.top` + заход под статус-бар — как у эталонной шапки «Уведомлений».
+        // Было `.bottom`: градиент перевёрнут, и полоса не накрывала статус-бар.
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
     }
 }
