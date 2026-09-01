@@ -39,13 +39,23 @@ struct OverviewScreen: View {
             .padding(.bottom, TFSpacing.xl)
         }
         .background(Color.tfBackground)
-        // Нативная сворачивающаяся шапка по официальным гайдам SwiftUI.
+        // Штатная SwiftUI-шапка. Кнопка поиска переехала из
+        // самодельного TFScreenHeader в `.toolbar { .topBarTrailing }` —
+        // дубль заголовка «Обзор» (системный + наш поверх) ушёл.
+        // `toolbarTitleDisplayMode(.large)` — iOS 17+ (кросс-платформенный
+        // аналог `navigationBarTitleDisplayMode`, тот депрекейтнут на iOS 27).
         .navigationTitle("Обзор")
-        .navigationBarTitleDisplayMode(.large)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            TFScreenHeader("Обзор", variant: .large, actions: [
-                TFHeaderAction(icon: "magnifyingglass") { searchOpen = true },
-            ])
+        .toolbarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    searchOpen = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityLabel("Поиск")
+                .accessibilityIdentifier("overview.search")
+            }
         }
         // Кнопка в шапке — обработчик без своего Label-контейнера, поэтому
         // переход не через `NavigationLink(value:)` (тому нужен собственный
