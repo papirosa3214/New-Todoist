@@ -147,6 +147,12 @@ struct TodayScreen: View {
                 }
             )
         }
+        // Сбросить rescheduleTask при ЛЮБОМ закрытии шторки (включая свайп вниз,
+        // когда onClose не вызывается). Иначе следующее групповое «Перенести
+        // просроченные» применится к одной задаче вместо группы.
+        .onChange(of: rescheduleOpen) { _, open in
+            if !open { rescheduleTask = nil }
+        }
         .onChange(of: filterSheetOpen) { _, open in
             if !open { openPlannerSectionOnOpen = false }
         }
