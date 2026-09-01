@@ -30,12 +30,15 @@ final class AccessibilityTests: XCTestCase {
     }
 
     /// Полный audit на «Обзоре»: самый насыщенный экран.
+    /// По решению владельца (01.09.2026): исключаем Dynamic Type из аудита —
+    /// вся дизайн-система на фиксированных .font(.system(size: N)), чтобы пиксель
+    /// в пиксель совпадать с вебом. 105 из 142 нарушений были Dynamic Type.
     func testAuditОбзор() throws {
         guard #available(iOS 17.0, *) else {
             throw XCTSkip("performAccessibilityAudit требует iOS 17+")
         }
         let app = запустить()
-        try app.performAccessibilityAudit()
+        try app.performAccessibilityAudit(for: .all.subtracting(.dynamicType))
     }
 
     /// Audit на «Сегодня» — там раньше были кнопки без label (А1).
@@ -46,7 +49,7 @@ final class AccessibilityTests: XCTestCase {
         let app = запустить()
         открытьВкладку("Сегодня", app)
         XCTAssertTrue(app.staticTexts.firstMatch.waitForExistence(timeout: 5))
-        try app.performAccessibilityAudit()
+        try app.performAccessibilityAudit(for: .all.subtracting(.dynamicType))
     }
 
     /// Audit на «Планировании».
@@ -57,7 +60,7 @@ final class AccessibilityTests: XCTestCase {
         let app = запустить()
         открытьВкладку("Планирование", app)
         XCTAssertTrue(app.staticTexts["Планирование"].waitForExistence(timeout: 5))
-        try app.performAccessibilityAudit()
+        try app.performAccessibilityAudit(for: .all.subtracting(.dynamicType))
     }
 
     /// Audit на «Чате».
@@ -68,7 +71,7 @@ final class AccessibilityTests: XCTestCase {
         let app = запустить()
         открытьВкладку("Чат", app)
         XCTAssertTrue(app.textFields.firstMatch.waitForExistence(timeout: 15))
-        try app.performAccessibilityAudit()
+        try app.performAccessibilityAudit(for: .all.subtracting(.dynamicType))
     }
 
     // MARK: - smoke-проверки меток и identifier'ов
