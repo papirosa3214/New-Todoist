@@ -1,10 +1,11 @@
 import SwiftUI
 
-// Пустое состояние — числами спека не покрывает отдельно, снято с
-// компоновки в скриншотах (`search.png`: крупная иконка `sub`, подпись
-// `body`/`sub` под ней по центру; `today.png`: пустое состояние-ссылка
-// «Сбросить фильтры» текстом акцента без иконки). Даём оба варианта одним
-// компонентом — иконка опциональна.
+// Пустое состояние — теперь обёртка над штатным
+// `ContentUnavailableView` (iOS 17+). Старый кастом был скопией того,
+// что iOS делает сам; обёртка оставлена, потому что в проекте 9 мест
+// вызова, и общий API (`icon`/`text`/`action`) привычнее, чем разные
+// формы `ContentUnavailableView`. Внутри — один кастомный конструктор,
+// оборачивающий штатный.
 public struct TFEmptyState: View {
     let icon: String?
     let text: String
@@ -19,27 +20,22 @@ public struct TFEmptyState: View {
     }
 
     public var body: some View {
-        VStack(spacing: TFSpacing.md) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: 36))
-                    .foregroundStyle(Color.tfSub)
+        let img = icon ?? "tray"
+        if let actionTitle, let action {
+            ContentUnavailableView {
+                Label(text, systemImage: img)
+            } description: {
+                EmptyView()
+            } actions: {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.tfRed)
             }
-            Text(text)
-                .tfText(.body)
-                .foregroundStyle(Color.tfSub)
-                .multilineTextAlignment(.center)
-            if let actionTitle, let action {
-                Button(action: action) {
-                    Text(actionTitle)
-                        .tfText(.body)
-                        .foregroundStyle(Color.tfRed)
-                }
-                .buttonStyle(TFTapFadeStyle())
-            }
+        } else if icon != nil {
+            ContentUnavailableView(text, systemImage: img)
+        } else {
+            ContentUnavailableView(text, systemImage: "tray")
         }
-        .padding(.horizontal, TFSpacing.xl)
-        .frame(maxWidth: .infinity)
     }
 }
 
