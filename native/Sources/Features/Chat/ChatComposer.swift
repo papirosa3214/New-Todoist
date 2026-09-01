@@ -159,6 +159,7 @@ struct ChatComposer: View {
                 .foregroundStyle(Color.tfText)
                 .focused($isFieldFocused)
                 .lineLimit(1...4)
+                .accessibilityIdentifier("chat.message")
 
             // Скрепка и микрофон — тап не должен отбирать фокус у поля
             // (иначе открытая клавиатура дёргалась бы на каждый тап,
@@ -223,6 +224,8 @@ struct ChatComposer: View {
         .buttonStyle(TFTapScaleStyle())
         .opacity(viewModel.canSend ? 1 : 0.4)
         .disabled(!viewModel.canSend)
+        .accessibilityLabel("Отправить")
+        .accessibilityIdentifier("chat.send")
     }
 
     // MARK: - Вложения
