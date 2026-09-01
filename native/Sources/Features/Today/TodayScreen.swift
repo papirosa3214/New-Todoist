@@ -230,7 +230,7 @@ struct TodayScreen: View {
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: TodayHeaderMetrics.barHeight)
         .background(alignment: .top) {
-            TFHeaderBackdrop(tail: 0)
+            headerFrost
                 .ignoresSafeArea(edges: .top)
         }
         .accessibilityIdentifier("today.header-large")
@@ -258,15 +258,33 @@ struct TodayScreen: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: TodayHeaderMetrics.barHeight)
-        // Плотная часть подложки накрывает полосу целиком, затухание свисает
-        // ниже неё — иначе под датой и кнопками читается лента.
-        // Подложка шапки — сплошная, БЕЗ хвоста затухания: хвост был
-        // полупрозрачным, и лента проезжала прямо в нём под самой датой.
-        // Затухание живёт у прилипшего подзаголовка, а не здесь.
+        // Та же полупрозрачная frost-плёнка тянется до Dynamic Island. Нижний
+        // переход в ленту рисует уже сам прилипший подзаголовок.
         .background(alignment: .top) {
-            TFHeaderBackdrop(tail: 0)
+            headerFrost
                 .ignoresSafeArea(edges: .top)
         }
+    }
+
+    /// Верх не становится ни прозрачной дырой, ни глухой чёрной плашкой:
+    /// материал размывает контент под ним, а тёмный tint оставляет читаемыми
+    /// дату и кнопки. Градиентный хвост живёт в фоне подзаголовка, поэтому
+    /// эффект непрерывно тянется от Dynamic Island к первой строке.
+    private var headerFrost: some View {
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            LinearGradient(
+                stops: [
+                    .init(color: Color.tfBackground.opacity(0.62), location: 0),
+                    .init(color: Color.tfBackground.opacity(0.55), location: 0.48),
+                    .init(color: Color.tfBackground.opacity(0.34), location: 0.82),
+                    .init(color: Color.tfBackground.opacity(0.12), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .allowsHitTesting(false)
     }
 
     /// Действия дублируются только на время кроссфейда: большая строка уезжает
