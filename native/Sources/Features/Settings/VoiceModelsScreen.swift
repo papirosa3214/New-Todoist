@@ -44,7 +44,9 @@ struct VoiceModelsScreen: View {
         }
         // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
         // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка.
+        .navigationTitle("Модели и голоса")
+        .navigationBarTitleDisplayMode(.large)
         .background(Color.tfBackground)
         .task { await loadServerStatus() }
     }

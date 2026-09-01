@@ -64,7 +64,9 @@ public struct NotesScreen: View {
         }
         .background(Color.tfBackground)
         .navigationBarBackButtonHidden(true)
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка.
+        .navigationTitle("Заметки")
+        .navigationBarTitleDisplayMode(.large)
         .task { await viewModel.load() }
         // Редактор берём из общей фабрики маршрутов: пока экран не написан,
         // она отдаёт заглушку, и список заметок от этого не ломается.

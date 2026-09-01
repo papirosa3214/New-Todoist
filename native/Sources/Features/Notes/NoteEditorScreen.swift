@@ -46,7 +46,9 @@ struct NoteEditorScreen: View {
         .overlay(alignment: .bottomTrailing) {
             if focusedBlockID != nil && !viewModel.aiBusy { micKeyboardBar }
         }
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка.
+        .navigationTitle(viewModel.document.derivedTitle.isEmpty ? "Заметка" : viewModel.document.derivedTitle)
+        .navigationBarTitleDisplayMode(.large)
         .task { await viewModel.load() }
         .onDisappear { viewModel.flushOnExit() }
         .onChange(of: viewModel.pendingFocus) { _, pending in

@@ -41,7 +41,9 @@ struct SettingsScreen: View {
         }
         // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
         // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка по официальным гайдам SwiftUI.
+        .navigationTitle("Настройки")
+        .navigationBarTitleDisplayMode(.large)
         .background(Color.tfBackground)
         .environment(viewModel)
         .tfBottomSheet(isPresented: $isEditProfilePresented) {

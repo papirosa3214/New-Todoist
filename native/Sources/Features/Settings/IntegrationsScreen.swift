@@ -259,7 +259,9 @@ struct IntegrationsScreen: View {
         }
         // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
         // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка.
+        .navigationTitle("Интеграции")
+        .navigationBarTitleDisplayMode(.large)
         .background(Color.tfBackground)
         .task {
             viewModel.loadAppleState()
