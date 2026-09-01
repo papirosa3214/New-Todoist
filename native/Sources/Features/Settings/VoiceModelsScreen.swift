@@ -42,6 +42,9 @@ struct VoiceModelsScreen: View {
                 .padding(.bottom, TFSpacing.xl * 2)
             }
         }
+        // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
+        // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
+        .toolbar(.hidden, for: .navigationBar)
         .background(Color.tfBackground)
         .task { await loadServerStatus() }
     }

@@ -86,8 +86,12 @@ struct AgentWorkScreen: View {
             .padding(.bottom, TFSpacing.xl)
         }
         .background(Color.tfBackground)
+        // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
+        // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
+        .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .top, spacing: 0) {
-            TFScreenHeader("Работа агентов", variant: .compact)
+            TFScreenHeader("Работа агентов", variant: .compact,
+                            leading: { AnyView(DirectoryBackButton()) })
                 .background(Color.tfBackground)
         }
         .navigationDestination(item: $route) { routeDestination($0) }

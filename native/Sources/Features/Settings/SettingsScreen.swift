@@ -39,6 +39,9 @@ struct SettingsScreen: View {
                 Color.clear.frame(height: TFTabBarMetrics.heightCompact)
             }
         }
+        // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
+        // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
+        .toolbar(.hidden, for: .navigationBar)
         .background(Color.tfBackground)
         .environment(viewModel)
         .tfBottomSheet(isPresented: $isEditProfilePresented) {

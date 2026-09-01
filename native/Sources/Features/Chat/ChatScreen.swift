@@ -69,6 +69,9 @@ struct ChatScreen: View {
 
             ChatComposer(viewModel: viewModel)
         }
+        // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
+        // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
+        .toolbar(.hidden, for: .navigationBar)
         .background(Color.tfBackground)
         .accessibilityIdentifier("chat.screen")
         .task {
