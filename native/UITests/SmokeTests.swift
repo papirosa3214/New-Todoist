@@ -61,7 +61,8 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(ждать(app.staticTexts["Планирование"]), "Вкладка «Планирование» не открылась")
 
         app.buttons["Чат"].tap()
-        XCTAssertTrue(ждать(app.staticTexts["Чат"]), "Вкладка «Чат» не открылась")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "chat.screen").firstMatch.waitForExistence(timeout: 15),
+                      "Вкладка «Чат» не открылась — chat.screen identifier не найден")
     }
 
     func testПанельСозданияЗадачиОткрываетсяСодержимой() {
