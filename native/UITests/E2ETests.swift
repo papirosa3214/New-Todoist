@@ -85,8 +85,9 @@ final class E2ETests: XCTestCase {
     // MARK: - helpers
 
     /// Создаёт задачу через панель быстрого создания на «Сегодня» (если найдена).
-    /// Шаги: нажать «+» в таб-баре → набрать заголовок → нажать «Сохранить» (или
-    /// крестик/галка, в зависимости от реализации).
+    /// Шаги: нажать «+» в таб-баре → выбрать «Задача» в меню (по разбору ревьюера,
+    /// «+» открывает меню Задача/Заметка/Проект, поле ввода появляется только после
+    /// выбора «Задача») → набрать заголовок → нажать «Сохранить».
     private func создатьЗадачуСЗаголовком(_ title: String, в app: XCUIApplication) throws {
         // «+» в таб-баре.
         let addButton = app.buttons.matching(identifier: "tab.add").firstMatch
@@ -94,10 +95,17 @@ final class E2ETests: XCTestCase {
                       "Нет кнопки «+» с identifier 'tab.add'")
         addButton.tap()
 
+        // Меню создания: тапаем «Задача» (RootShellView.createMenuItems — Задача/Заметка/Проект).
+        // По разбору ревьюера: искать по стабильному identifier «create.task».
+        let задачаItem = app.buttons.matching(identifier: "create.task").firstMatch
+        XCTAssertTrue(задачаItem.waitForExistence(timeout: 5),
+                      "В меню «+» нет пункта «Задача» (identifier 'create.task')")
+        задачаItem.tap()
+
         // Поле ввода задачи.
         let titleField = app.textFields.firstMatch
         XCTAssertTrue(titleField.waitForExistence(timeout: 5),
-                      "Поле ввода задачи не появилось после тапа на «+»")
+                      "Поле ввода задачи не появилось после выбора «Задача»")
         titleField.tap()
         titleField.typeText(title)
 

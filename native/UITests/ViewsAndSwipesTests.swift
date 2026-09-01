@@ -122,9 +122,12 @@ final class ViewsAndSwipesTests: XCTestCase {
     func testКарточкаЗадачиОткрываетсяПоТапу() {
         let app = запустить()
         открыть(вкладку: "Сегодня", app)
-        let задача = app.cells.firstMatch.exists ? app.cells.firstMatch : app.staticTexts.element(boundBy: 3)
+        // По разбору ревьюера: app.cells.firstMatch / staticTexts.element(boundBy: 3)
+        // — это случайный текст в LazyVStack (cells=0). Переписано на стабильный
+        // identifier строки, как в testСвайпПоЗадачеДаётДействия.
+        let задача = app.buttons.matching(identifier: "today.task-row").firstMatch
         guard задача.waitForExistence(timeout: 15) else {
-            XCTFail("На «Сегодня» нет задач — карточку не открыть")
+            XCTFail("На «Сегодня» нет задач (не найден row по identifier today.task-row)")
             return
         }
         задача.tap()

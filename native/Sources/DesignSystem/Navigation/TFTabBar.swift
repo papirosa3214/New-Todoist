@@ -159,6 +159,16 @@ public struct TFCreateMenu: View {
         self.items = items
     }
 
+    /// Стабильный identifier для пункта меню по его title (русскому).
+    static func identifier(for title: String) -> String {
+        switch title {
+        case "Задача": return "create.task"
+        case "Заметка": return "create.note"
+        case "Проект": return "create.project"
+        default: return "create.\(title.lowercased())"
+        }
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -186,6 +196,8 @@ public struct TFCreateMenu: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(TFTapMenuStyle())
+                .accessibilityLabel(item.title)
+                .accessibilityIdentifier(Self.identifier(for: item.title))
             }
         }
         .frame(width: TFCreateMenuMetrics.width)
