@@ -58,6 +58,7 @@ final class ChatViewModel {
     private var typingSweepTask: Task<Void, Never>?
     private var typingDeadlines: [String: (name: String, until: Date)] = [:]
     private var lastTypingSignalSentAt: Date?
+    private var historyCursor: String?
 
     init() {
         realtime.onEvent = { [weak self] event in self?.handle(event) }
@@ -153,8 +154,20 @@ final class ChatViewModel {
         isLoadingHistory = messages.isEmpty
         defer { isLoadingHistory = false }
         do {
-            let page = try await api.fetchChatHistory(channel: activeChannel)
-            messages = page.messages
+            // Первая загрузка — только последние сообщения, чтобы экран открылся быстро.
+            // Остальное подгружается при прокрутке вверх (loadMoreHistory).
+            let limit: Int = messages.isEmpty ? 50 : 50
+            let page = try await api.fetchChatHistory(
+                channel: activeChannel,
+                before: historyCursor,
+                limit: limit
+            )
+            if messages.isEmpty {
+                messages = page.messages
+            } else {
+                messages.append(contentsOf: page.messages)
+            }
+            historyCursor = page.hasMore ? page.messages.first?.id : nil
             historyErrorMessage = nil
         } catch {
             historyErrorMessage = Self.message(for: error)

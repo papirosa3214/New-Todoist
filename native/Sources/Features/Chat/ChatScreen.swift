@@ -71,7 +71,11 @@ struct ChatScreen: View {
         .background(Color.tfBackground)
         .task {
             viewModel.configure(currentUser: session.currentUser)
-            await viewModel.start()
+            // Fire-and-forget: экран показывается сразу, данные подтягиваются в фоне.
+            // Это и было главной причиной 27 с открытия чата — `start()` ждал
+            // `reloadAll()` (участники + история + typing snapshot + markChatRead),
+            // экран не отрисовывался пока все запросы не завершатся.
+            Task { await viewModel.start() }
         }
         .onDisappear {
             viewModel.stop()
