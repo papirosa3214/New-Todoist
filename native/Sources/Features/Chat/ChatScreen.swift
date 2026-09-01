@@ -43,6 +43,10 @@ private struct ChannelTabs: View {
 /// сигнал только один: `TypingLine`.
 struct ChatScreen: View {
     @Environment(SessionStore.self) private var session
+    /// Стрелка «назад» в шапке: на чате нижняя панель вкладок скрыта, и это
+    /// единственный выход. Действие кладёт `RootShellView` — чат корневая
+    /// вкладка, `dismiss()` тут закрывать нечего.
+    @Environment(\.chatBackAction) private var chatBack
     @State private var viewModel = ChatViewModel()
 
     var body: some View {
@@ -50,6 +54,7 @@ struct ChatScreen: View {
             TFScreenHeader(
                 viewModel.headerTitle,
                 variant: .compact,
+                leading: chatBack.map { back in { AnyView(DirectoryBackButton(action: back)) } },
                 actions: [TFHeaderAction(icon: "chart.bar") { /* ChatStatsSheet — вне охвата, см. отчёт */ }],
                 below: viewModel.bothChannelsVisible ? {
                     AnyView(ChannelTabs(

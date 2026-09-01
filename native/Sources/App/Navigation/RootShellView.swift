@@ -59,6 +59,9 @@ struct RootShellView: View {
     // расходилось со спекой и заодно ломало бейдж «Сегодня» ниже: initial-
     // срабатывание onChange помечало бы его просмотренным при каждом запуске).
     @State private var selectedTab: Tab = .overview
+    /// Откуда зашли в чат: на нём панель вкладок скрыта, и стрелка «назад»
+    /// в его шапке возвращает именно на прежнюю вкладку, а не всегда в «Обзор».
+    @State private var tabBeforeChat: Tab = .overview
     @State private var isCreateMenuOpen = false
     /// Панель быстрого создания задачи: своя вью-модель живёт здесь, чтобы
     /// пережить переход «развернуть» в полную форму без потери введённого.
@@ -109,6 +112,8 @@ struct RootShellView: View {
                     .onTapGesture { isCreateMenuOpen = false }
             }
 
+            // На чате нижней панели нет: её место занимает панель ввода
+            // (владелец 01.09.2026). Выход — стрелка «назад» в шапке чата.
             VStack(spacing: 0) {
                 if isCreateMenuOpen {
                     TFCreateMenu(items: createMenuItems)
@@ -128,13 +133,20 @@ struct RootShellView: View {
                         if tab == selectedTab {
                             paths[tab] = NavigationPath()
                         } else {
+                            if tab == .chat { tabBeforeChat = selectedTab }
                             selectedTab = tab
                         }
                     },
                     onCreateTap: { isCreateMenuOpen.toggle() }
                 )
             }
+            .opacity(selectedTab == .chat ? 0 : 1)
+            .allowsHitTesting(selectedTab != .chat)
         }
+        .environment(\.chatBackAction, {
+            isCreateMenuOpen = false
+            selectedTab = tabBeforeChat
+        })
         .animation(.easeOut(duration: TFAnimation.createMenu), value: isCreateMenuOpen)
         .sheet(item: $quickAddDraft, onDismiss: {
             if let viewModel = pendingExpand {
@@ -210,7 +222,10 @@ struct RootShellView: View {
         Binding(
             get: { selectedTab.rawValue },
             set: { newValue in
-                if let newValue, let tab = Tab(rawValue: newValue) { selectedTab = tab }
+                if let newValue, let tab = Tab(rawValue: newValue) {
+                    if tab == .chat, selectedTab != .chat { tabBeforeChat = selectedTab }
+                    selectedTab = tab
+                }
             }
         )
     }

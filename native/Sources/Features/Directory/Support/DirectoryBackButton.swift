@@ -10,10 +10,14 @@ import SwiftUI
 // `@Environment(\.dismiss)` годится, потому что оба экрана реально запушены
 // в `NavigationStack` через `routeDestination`/`AppRoute`, не корневые табы.
 struct DirectoryBackButton: View {
+    /// Своё действие вместо `dismiss()` — для чата: он корневая вкладка,
+    /// закрывать в стеке нечего, надо вернуться на прежнюю вкладку.
+    var action: (() -> Void)?
+
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        Button(action: { dismiss() }) {
+        Button(action: { if let action { action() } else { dismiss() } }) {
             Image(systemName: "chevron.left")
                 .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(Color.tfText)
