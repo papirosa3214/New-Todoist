@@ -76,17 +76,33 @@ struct DueDateFieldView: View {
             if dueDate == nil {
                 Text("сначала выберите день").tfText(.action).foregroundStyle(Color.tfDim)
             } else {
-                TimeWheelView(minutesOfDay: startMinutesBinding, durationMin: durationMin)
+                // Штатный DatePicker (iOS 14+ .wheel) вместо самодельного
+                // TimeWheelView с цилиндром и scrollTransition. Конверт
+                // Int (минуты от полуночи) ↔ Date.
+                DatePicker(
+                    "Время",
+                    selection: startTimeBinding,
+                    displayedComponents: .hourAndMinute
+                )
+                .datePickerStyle(.wheel)
+                .labelsHidden()
             }
         }
     }
 
-    /// `TimeWheelView` работает с ненулевым `Int` — по умолчанию 09:00,
-    /// пока пользователь ничего не выбрал (спека не оговаривает старт барабана явно).
-    private var startMinutesBinding: Binding<Int> {
+    /// DatePicker работает с `Date` — конверт в `Int` минуты от полуночи.
+    /// По умолчанию 09:00, пока пользователь ничего не выбрал (как было
+    /// в TimeWheelView).
+    private var startTimeBinding: Binding<Date> {
         Binding(
-            get: { startMinutes ?? 9 * 60 },
-            set: { startMinutes = $0 }
+            get: {
+                let m = startMinutes ?? 9 * 60
+                return Calendar.current.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: Date()) ?? Date()
+            },
+            set: { newDate in
+                let comps = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                startMinutes = (comps.hour ?? 9) * 60 + (comps.minute ?? 0)
+            }
         )
     }
 
