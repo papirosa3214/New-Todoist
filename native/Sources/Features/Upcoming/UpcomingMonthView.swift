@@ -171,9 +171,14 @@ struct UpcomingMonthView: View {
         return (0..<(weeksInitialPast + weeksInitialFuture + 1)).map { UpcomingDate.addDays(start, $0 * 7) }
     }
 
-    /// Понедельник недели, содержащей 1-е число месяца `(year, month)`
-    /// (0-based). Стартовая точка ленты — отдельно от `weekMonth`,
-    /// которая считает «доминирующий» месяц по четвергу.
+    /// Понедельник недели, ПРЕДШЕСТВУЮЩЕЙ неделе с 1-м числом месяца
+    /// `(year, month)` (0-based). Возвращаем на неделю раньше, потому что
+    /// шапка с днями недели приклеена к верху (`pinnedViews: [.sectionHeaders]`):
+    /// `scrollTo` с `anchor: .top` поместит target под шапку, и сам 1-й день
+    /// месяца окажется за ней. Минус 7 дней → целевая неделя встаёт под
+    /// шапку целиком, а 1-е число месяца видно в первой полной строке.
+    /// Стартовая точка ленты — отдельно от `weekMonth`, которая считает
+    /// «доминирующий» месяц по четвергу.
     private static func firstWeekMondayOfMonth(year: Int, month: Int) -> String {
         var comps = DateComponents()
         comps.year = year; comps.month = month + 1; comps.day = 1
@@ -181,6 +186,7 @@ struct UpcomingMonthView: View {
         cal.timeZone = TimeZone(identifier: "UTC")!
         guard let firstOf = cal.date(from: comps) else { return "" }
         let firstOfStr = UpcomingDate.calendarDateString(firstOf)
-        return UpcomingDate.mondayOf(firstOfStr)
+        let week = UpcomingDate.mondayOf(firstOfStr)
+        return UpcomingDate.addDays(week, -7)
     }
 }
