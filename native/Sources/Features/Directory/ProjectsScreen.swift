@@ -60,6 +60,9 @@ struct ProjectsScreen: View {
             .padding(.top, TFSpacing.sm)
             .padding(.bottom, TFSpacing.xl)
         }
+        // Штатный pull-to-refresh (iOS 15+). Прокрути вниз и потяни — вызовет
+        // projectStore.load(). Сегодня не трогаю по требованию владельца.
+        .refreshable { await projectStore.load() }
         .background(Color.tfBackground)
         // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
         // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
