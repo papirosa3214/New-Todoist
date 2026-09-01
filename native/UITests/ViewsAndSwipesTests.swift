@@ -62,7 +62,10 @@ final class ViewsAndSwipesTests: XCTestCase {
         let app = запустить()
         открыть(вкладку: "Сегодня", app)
 
-        let строка = app.buttons.matching(identifier: "today.task-row").element(boundBy: 0)
+        // Строка в дереве — элемент типа «other», а не кнопка: она собрана
+        // как единый accessibility-элемент ради VoiceOver, и трейт кнопки её
+        // тип не меняет. Поэтому ищем среди всех потомков по идентификатору.
+        let строка = app.descendants(matching: .any).matching(identifier: "today.task-row").element(boundBy: 0)
         guard строка.waitForExistence(timeout: 15) else {
             XCTFail("На «Сегодня» нет ни одной задачи (не найден row по identifier today.task-row) — свайпы проверить не на чем")
             return
@@ -70,19 +73,51 @@ final class ViewsAndSwipesTests: XCTestCase {
         // До свайпа все кнопки свайпа скрыты (accessibilityHidden) — isHittable=false.
         XCTAssertFalse(app.buttons["Завершить"].isHittable, "Кнопка «Завершить» уже доступна без свайпа")
 
+        // Стороны — те же, что в вебе (`src/lib/useRowSwipe.ts`, TaskRow.tsx):
+        // ВЛЕВО открывается правый край с «Завершить»/«Перенести», ВПРАВО —
+        // левый край с красным «Удалить». Жест единый в вебе и в нативе.
         строка.swipeLeft()
-        let появилась = app.buttons["Завершить"].waitForExistence(timeout: 5)
-        XCTAssertTrue(появилась, "После свайпа влево не появилась кнопка «Завершить»")
+        XCTAssertTrue(app.buttons["Завершить"].waitForExistence(timeout: 5),
+                      "После свайпа влево не появилась кнопка «Завершить»")
 
         // Ф4 из разбора ревьюера: `.offset()` двигает отрисовку, не layout — кнопка
         // визуально видна, но accessibility-frame не сдвигается и `isHittable=false`.
         // Тапаем координатой (как сделал бы пользователь пальцем по видимой кнопке).
         // Сам факт успешного тапа — уже доказательство «свайп открыл действие».
         let кнопка = app.buttons["Завершить"].firstMatch
-        let центр = кнопка.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        центр.tap()
+        кнопка.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
-        строка.swipeRight()
+        // Обратная сторона: свайп вправо обязан дать «Удалить». Не тапаем —
+        // за ним диалог подтверждения, он тесту не нужен.
+        let строка2 = app.descendants(matching: .any).matching(identifier: "today.task-row").element(boundBy: 0)
+        guard строка2.waitForExistence(timeout: 5) else { return }
+        строка2.swipeRight()
+        XCTAssertTrue(app.buttons["Удалить"].waitForExistence(timeout: 5),
+                      "После свайпа вправо не появилась кнопка «Удалить»")
+        строка2.swipeLeft()
+    }
+
+    /// Прокрутка ПАЛЬЦЕМ ПО СТРОКЕ, а не по пустому месту.
+    ///
+    /// Прежний тест листал `otherElements.firstMatch` и потому не замечал
+    /// главного: собственный DragGesture на строке забирал жест себе, и
+    /// список стоял намертво, если вести палец по задаче (а иначе по нему и
+    /// не ведут). Проверяем по факту сдвига: координата строки обязана
+    /// измениться после свайпа вверх.
+    func testСписокЛистаетсяПальцемПоЗадаче() {
+        let app = запустить()
+        открыть(вкладку: "Сегодня", app)
+        let строка = app.descendants(matching: .any).matching(identifier: "today.task-row").firstMatch
+        guard строка.waitForExistence(timeout: 15) else {
+            XCTFail("На «Сегодня» нет задач — прокрутку проверить не на чем")
+            return
+        }
+        let было = строка.frame.origin.y
+        строка.swipeUp()
+        Thread.sleep(forTimeInterval: 1)
+        let стало = app.descendants(matching: .any).matching(identifier: "today.task-row").firstMatch.frame.origin.y
+        XCTAssertNotEqual(было, стало, accuracy: 0.5,
+                          "Список не сдвинулся: жест по строке съел вертикальную прокрутку")
     }
 
     func testСписокЛистаетсяВертикально() {
@@ -125,7 +160,7 @@ final class ViewsAndSwipesTests: XCTestCase {
         // По разбору ревьюера: app.cells.firstMatch / staticTexts.element(boundBy: 3)
         // — это случайный текст в LazyVStack (cells=0). Переписано на стабильный
         // identifier строки, как в testСвайпПоЗадачеДаётДействия.
-        let задача = app.buttons.matching(identifier: "today.task-row").firstMatch
+        let задача = app.descendants(matching: .any).matching(identifier: "today.task-row").firstMatch
         guard задача.waitForExistence(timeout: 15) else {
             XCTFail("На «Сегодня» нет задач (не найден row по identifier today.task-row)")
             return

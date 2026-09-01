@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // Строка задачи со свайпом — spec/SCREENS-1.md §3.3 + живой `TaskRow.tsx`.
 //
@@ -20,7 +21,7 @@ struct TodayTaskRow: View {
 
     private let actionWidth: CGFloat = 84
     /// Точка покоя строки: 0 (закрыта), −actionWidth («Завершить» открыта),
-    /// −2×actionWidth («Завершить» + «Перенести» открыты), +actionWidth («Удалить» открыта).
+    /// −2×actionWidth («Завершить» + «Перенести»), +actionWidth («Удалить»).
     @State private var settledOffset: CGFloat = 0
     @State private var dragOffset: CGFloat = 0
     @State private var confirmDelete = false
@@ -34,29 +35,10 @@ struct TodayTaskRow: View {
     var body: some View {
         ZStack {
             HStack(spacing: 0) {
-                Button(action: { close(); onComplete() }) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: actionWidth, height: measuredHeight)
-                .background(Color.tfGreen)
-                .opacity(offsetX < 0 ? 1 : 0)
-                .accessibilityHidden(offsetX >= 0)
-                .accessibilityLabel("Завершить")
-                .accessibilityIdentifier("row.swipe.complete")
-                Button(action: { close(); onReschedule() }) {
-                    Image(systemName: "calendar")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: actionWidth, height: measuredHeight)
-                .background(Color.tfOrange)
-                .opacity(offsetX < 0 ? 1 : 0)
-                .accessibilityHidden(offsetX >= 0)
-                .accessibilityLabel("Перенести")
-                .accessibilityIdentifier("row.swipe.reschedule")
-                Spacer(minLength: 0)
+                // Порядок сторон взят из веба (TaskRow.tsx §3.3, useRowSwipe):
+                // свайп ВПРАВО обнажает левый край и красное «Удалить», свайп
+                // ВЛЕВО — правый край с действиями. Единый жест в вебе и в
+                // нативе важнее локальных вкусов: пальцевая память одна.
                 Button(action: { close(); confirmDelete = true }) {
                     Image(systemName: "trash")
                         .font(.system(size: 22, weight: .regular))
@@ -68,13 +50,55 @@ struct TodayTaskRow: View {
                 .accessibilityHidden(offsetX <= 0)
                 .accessibilityLabel("Удалить")
                 .accessibilityIdentifier("row.swipe.delete")
+                Spacer(minLength: 0)
+                // «Перенести» стоит дальше от края: при лёгком свайпе видна
+                // только «Завершить», сильный открывает обе.
+                Button(action: { close(); onReschedule() }) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: actionWidth, height: measuredHeight)
+                .background(Color.tfOrange)
+                .opacity(offsetX < -actionWidth ? 1 : 0)
+                .accessibilityHidden(offsetX >= -actionWidth)
+                .accessibilityLabel("Перенести")
+                .accessibilityIdentifier("row.swipe.reschedule")
+                Button(action: { close(); onComplete() }) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: actionWidth, height: measuredHeight)
+                .background(Color.tfGreen)
+                .opacity(offsetX < 0 ? 1 : 0)
+                .accessibilityHidden(offsetX >= 0)
+                .accessibilityLabel("Завершить")
+                .accessibilityIdentifier("row.swipe.complete")
             }
 
             row
                 .offset(x: offsetX)
-                .highPriorityGesture(swipeGesture)
+// Свайп ловит UIKit-распознаватель, а не DragGesture: любой
+                // собственный SwiftUI-жест внутри ScrollView забирает касание
+                // себе, и список перестаёт листаться пальцем по задаче
+                // (владелец, 01.09.2026, третий заход: «скролла нет»).
+                // Подробности и числа — HorizontalPan.swift.
+                .gesture(
+                    HorizontalPan(
+                        onBegin: { UIImpactFeedbackGenerator(style: .soft).impactOccurred() },
+                        onChange: { dx in dragOffset = dx },
+                        onEnd: { dx, velocity in settle(dx: dx, velocity: velocity) }
+                    )
+                )
         }
         .clipped()
+        // Разделитель под строкой — веб `border-b border-stroke/50`.
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.tfStroke.opacity(0.5))
+                .frame(height: TFBorder.width)
+        }
         .confirmationDialog("Удалить задачу?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Удалить", role: .destructive, action: onDelete)
             Button("Отмена", role: .cancel) {}
@@ -164,9 +188,18 @@ struct TodayTaskRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(TFTapRowStyle())
-        .accessibilityIdentifier("today.task-row")
+        // ⚠️ Порядок важен: `accessibilityElement(children:)` создаёт НОВЫЙ
+        // элемент и отбрасывает всё, что задано до него, — идентификатор,
+        // поставленный выше, молча пропадал, и тесты не находили строку.
+        // Сначала собираем элемент, потом даём ему имя и идентификатор.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(rowAccessibilityLabel)
+        .accessibilityIdentifier("today.task-row")
+        // Строка ЯВЛЯЕТСЯ кнопкой, но `children: .ignore` собирает новый
+        // элемент и трейт кнопки при этом теряется: в дереве строка
+        // становится «Other», VoiceOver не говорит «кнопка», а тесты её не
+        // находят среди `app.buttons`. Трейт возвращаем руками.
+        .accessibilityAddTraits(.isButton)
     }
 
     private var hasBadges: Bool {
@@ -189,45 +222,47 @@ struct TodayTaskRow: View {
         }
     }
 
-    // Тот же порог/резина, что в TaskRow.tsx (§3.3): открытие >36px или >280px/с,
-    // закрытие обратным сдвигом >25px или >250px/с, за ACTION_W — rubber-band over×30/(30+over).
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { value in
-                dragOffset = value.translation.width
-            }
-            .onEnded { value in
-                let velocity = value.predictedEndTranslation.width - value.translation.width
-                let finalOffset = clamp(settledOffset + value.translation.width)
-                withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
-                    if settledOffset == 0 {
-                        if finalOffset < -72 || velocity < -360 {
-                            settledOffset = -2 * actionWidth
-                        } else if finalOffset < -36 || velocity < -280 {
-                            settledOffset = -actionWidth
-                        } else if finalOffset > 36 || velocity > 280 {
-                            settledOffset = actionWidth
-                        } else {
-                            settledOffset = 0
-                        }
-                    } else if settledOffset < 0 {
-                        let dx = value.translation.width
-                        let shouldKeep = !(dx > 25 || velocity > 250)
-                        if shouldKeep {
-                            settledOffset = (settledOffset == -actionWidth || dx > actionWidth / 2)
-                                ? -2 * actionWidth
-                                : -actionWidth
-                        } else {
-                            settledOffset = 0
-                        }
-                    } else {
-                        let dx = value.translation.width
-                        let shouldKeep = !(dx < -25 || velocity < -250)
-                        settledOffset = shouldKeep ? actionWidth : 0
-                    }
-                    dragOffset = 0
+    /// Куда строка встаёт после жеста. Числа — из веба (`useRowSwipe.ts`):
+    /// открытие при сдвиге >36px ИЛИ броске >280px/с, закрытие встречным
+    /// движением >25px или >250px/с, «резина» за пределом — в `clamp`.
+    ///
+    /// Скорость здесь настоящая, от UIKit (px/с). Раньше она бралась как
+    /// `predictedEndTranslation − translation` у SwiftUI-жеста — это НЕ px/с,
+    /// а прогноз доката в пикселях, и сравнение с веб-порогом 280 срабатывало
+    /// невпопад: бросок открывал строку через раз.
+    private func settle(dx: CGFloat, velocity: CGFloat) {
+        let finalOffset = clamp(settledOffset + dx)
+        withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
+            if settledOffset == 0 {
+                // Влево — правые действия: сильный жест открывает обе кнопки
+                // («Завершить» + «Перенести»), лёгкий только «Завершить».
+                // Вправо — одна левая, «Удалить».
+                if finalOffset < -72 || velocity < -360 {
+                    settledOffset = -2 * actionWidth
+                } else if finalOffset < -36 || velocity < -280 {
+                    settledOffset = -actionWidth
+                } else if finalOffset > 36 || velocity > 280 {
+                    settledOffset = actionWidth
+                } else {
+                    settledOffset = 0
                 }
+            } else if settledOffset < 0 {
+                // Открыты правые кнопки: закрываем обратным движением.
+                let shouldKeep = !(dx > 25 || velocity > 250)
+                if shouldKeep {
+                    settledOffset = (settledOffset == -actionWidth && dx < -actionWidth / 2)
+                        ? -2 * actionWidth
+                        : settledOffset
+                } else {
+                    settledOffset = 0
+                }
+            } else {
+                // Открыта левая кнопка «Удалить».
+                let shouldKeep = !(dx < -25 || velocity < -250)
+                settledOffset = shouldKeep ? actionWidth : 0
             }
+            dragOffset = 0
+        }
     }
 
     private func clamp(_ raw: CGFloat) -> CGFloat {

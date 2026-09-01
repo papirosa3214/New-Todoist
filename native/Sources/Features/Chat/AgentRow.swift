@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import PhotosUI
 
 // Аватар агента с произвольным пикселем — веб использует 36px (строка) и
@@ -62,11 +63,8 @@ struct AgentRow: View {
     @State private var offsetX: CGFloat = 0
     @State private var animateOffset = false
     @State private var dragStartOffset: CGFloat = 0
-    @State private var horizontalLocked = false
-    @State private var isHorizontalDrag = false
-    @State private var lastDragX: CGFloat = 0
-    @State private var lastDragTime: Date = .now
-    @State private var velocity: CGFloat = 0
+    // Замок оси и счёт скорости переехали в HorizontalPanRecognizer —
+    // распознаватель отдаёт готовое смещение и скорость в px/с.
 
     private let actionWidth: CGFloat = 88
 
@@ -103,7 +101,23 @@ struct AgentRow: View {
             rowContent
                 .background(Color.tfCard)
                 .offset(x: offsetX)
-                .gesture(editable ? swipeGesture : nil)
+                // Свайп на UIKit-распознавателе (HorizontalPan.swift): SwiftUI-жест
+                // внутри ScrollView отбирает вертикальную прокрутку у списка.
+                .gesture(
+                    HorizontalPan(
+                        // Неизменяемые строки (свои агенты) не свайпаются — как
+                        // в вебе, где хук просто не подключался. Отключаем
+                        // внутри замыканий: у моста `gesture(_:isEnabled:)` нет,
+                        // эта перегрузка только для настоящих `Gesture`.
+                        onBegin: {
+                            guard editable else { return }
+                            dragStartOffset = offsetX
+                            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                        },
+                        onChange: { dx in if editable { drag(dx) } },
+                        onEnd: { dx, velocity in if editable { settle(dx: dx, velocity: velocity) } }
+                    )
+                )
         }
         .clipShape(Rectangle())
     }
@@ -211,69 +225,43 @@ struct AgentRow: View {
         offsetX = 0
     }
 
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if !horizontalLocked {
-                    let dx = value.translation.width
-                    let dy = value.translation.height
-                    if abs(dx) > 8 || abs(dy) > 8 {
-                        horizontalLocked = true
-                        isHorizontalDrag = abs(dx) > abs(dy) * 1.3
-                        if isHorizontalDrag {
-                            dragStartOffset = offsetX
-                            lastDragX = value.location.x
-                            lastDragTime = Date()
-                        }
-                    }
-                }
-                guard horizontalLocked, isHorizontalDrag else { return }
-                let now = Date()
-                let dt = now.timeIntervalSince(lastDragTime)
-                if dt > 0.005 {
-                    velocity = (value.location.x - lastDragX) / CGFloat(dt)
-                    lastDragX = value.location.x
-                    lastDragTime = now
-                }
-                // hasLeft/hasRight веба здесь не нужны отдельно: жест вообще
-                // не подключается, если строка не `editable` (см. `swipeRow`),
-                // а у editable-строки открыты оба направления.
-                let raw = dragStartOffset + value.translation.width
-                var pos = raw
-                if raw > actionWidth {
-                    let over = raw - actionWidth
-                    pos = actionWidth + (over * 30) / (30 + over)
-                } else if raw < -actionWidth {
-                    let over = -raw - actionWidth
-                    pos = -actionWidth - (over * 30) / (30 + over)
-                }
-                animateOffset = false
-                offsetX = pos
+    private func drag(_ dx: CGFloat) {
+        // hasLeft/hasRight веба здесь не нужны отдельно: жест вообще не
+        // подключается, если строка не `editable` (см. `swipeRow`), а у
+        // editable-строки открыты оба направления.
+        let raw = dragStartOffset + dx
+        var pos = raw
+        if raw > actionWidth {
+            let over = raw - actionWidth
+            pos = actionWidth + (over * 30) / (30 + over)
+        } else if raw < -actionWidth {
+            let over = -raw - actionWidth
+            pos = -actionWidth - (over * 30) / (30 + over)
+        }
+        animateOffset = false
+        offsetX = pos
+    }
+
+    /// Скорость приходит от UIKit в px/с — с веб-порогами (280/250) она
+    /// сравнима напрямую, в отличие от прежнего самодельного счёта по
+    /// `value.location` и `Date()`.
+    private func settle(dx: CGFloat, velocity: CGFloat) {
+        animateOffset = true
+        if dragStartOffset == 0 {
+            if offsetX < -36 || velocity < -280 {
+                offsetX = -actionWidth
+            } else if offsetX > 36 || velocity > 280 {
+                offsetX = actionWidth
+            } else {
+                offsetX = 0
             }
-            .onEnded { value in
-                defer {
-                    horizontalLocked = false
-                    isHorizontalDrag = false
-                }
-                guard isHorizontalDrag else { return }
-                animateOffset = true
-                let dx = value.translation.width
-                if dragStartOffset == 0 {
-                    if offsetX < -36 || velocity < -280 {
-                        offsetX = -actionWidth
-                    } else if offsetX > 36 || velocity > 280 {
-                        offsetX = actionWidth
-                    } else {
-                        offsetX = 0
-                    }
-                } else if dragStartOffset < 0 {
-                    let keep = !(dx > 25 || velocity > 250)
-                    offsetX = keep ? -actionWidth : 0
-                } else {
-                    let keep = !(dx < -25 || velocity < -250)
-                    offsetX = keep ? actionWidth : 0
-                }
-            }
+        } else if dragStartOffset < 0 {
+            let keep = !(dx > 25 || velocity > 250)
+            offsetX = keep ? -actionWidth : 0
+        } else {
+            let keep = !(dx < -25 || velocity < -250)
+            offsetX = keep ? actionWidth : 0
+        }
     }
 
     // MARK: - Форма правки (инлайн, на месте строки)
