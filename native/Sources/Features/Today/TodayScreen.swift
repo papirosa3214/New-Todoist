@@ -41,8 +41,6 @@ struct TodayScreen: View {
         let c = computation
         ScrollView {
             VStack(spacing: 0) {
-                header(c: c)
-
                 if c.trueEmpty && vm.layout == .list {
                     TodayEmptyIllustration()
                 } else {
@@ -82,7 +80,11 @@ struct TodayScreen: View {
                                 onReschedule: { task in rescheduleTask = task; rescheduleOpen = true },
                                 onDelete: { task in Task { await taskStore.delete(taskId: task.id) } }
                             )
-                            .padding(.horizontal, TFSpacing.lg)
+                            // Без горизонтальных полей: строка задачи идёт во
+                            // ВСЮ ширину экрана, как в вебе (там у контейнера
+                            // строки `-mx-4`, гасящий поля списка), а отступы
+                            // живут внутри самой строки. Поля на списке
+                            // превращали строку в узкую полоску.
                         case .board:
                             TodayBoardView(
                                 columns: c.boardColumns,
@@ -118,7 +120,19 @@ struct TodayScreen: View {
                     }
                 }
             }
-            .padding(.bottom, TFSpacing.xl)
+            // Нижний край: контент проходит ПОД таб-баром (он лежит в ZStack
+            // поверх), поэтому запас должен быть не меньше его высоты, иначе
+            // последняя задача остаётся под панелью и её не доскроллить.
+            .padding(.bottom, TFTabBarMetrics.heightCompact + TFSpacing.lg)
+        }
+        // Шапка вынесена ИЗ прокрутки (01.09.2026). Раньше она была первой
+        // строкой VStack внутри ScrollView: уезжала вместе со списком, и
+        // размывать ей было нечего — отсюда «сплошная плашка» вместо
+        // затухания. `safeAreaInset` резервирует под неё место в покое, но
+        // при прокрутке содержимое идёт ПОД ней — это и даёт эффект веба.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            header(c: c)
+                .background(FrostedGlass(axis: .top))
         }
         .background(Color.tfBackground)
         .toolbar(.hidden, for: .navigationBar)

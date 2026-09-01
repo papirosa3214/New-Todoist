@@ -37,7 +37,7 @@ struct TodayListView: View {
                 Text(TodayDate.formatDueLabel(today))
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Color.tfSub)
-                    .padding(.horizontal, TFSpacing.xs)
+                    .padding(.horizontal, TFSpacing.lg)
                     .padding(.top, TFSpacing.md)
                     .padding(.bottom, 6)
             }
@@ -58,7 +58,7 @@ struct TodayListView: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(color)
         }
-        .padding(.horizontal, TFSpacing.xs)
+        .padding(.horizontal, TFSpacing.lg)
         .padding(.top, TFSpacing.md)
         .padding(.bottom, 6)
     }
