@@ -83,11 +83,13 @@ struct NotificationsScreen: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: 48)
-        // Свой `.background(Color.tfCard)`, потому что toolbarBackground
+        // Свой `.background(.ultraThinMaterial)`, потому что toolbarBackground
         // системного навбара сюда не доходит (экран скрывает навбар через
         // `.toolbar(.hidden, for: .navigationBar)`). Без фона шапка сливается
         // с `Color.tfBackground` экрана (Claude_Bot приёмка 02.09.2026).
-        .background(Color.tfCard)
+        // Полупрозрачный blur, как в вебе (frosted glass) — НЕ сплошной
+        // `.background(Color.tfCard)`, как было в коммите 13.
+        .background(.ultraThinMaterial)
     }
 
     private var allRead: Bool { notificationStore.notifications.allSatisfy(\.read) }

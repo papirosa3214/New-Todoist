@@ -150,10 +150,12 @@ public struct NotesScreen: View {
             // светлее ленты и выше остальных шапок, а заголовок вдвое крупнее —
             // владелец 01.09.2026 увидел это как «разнобой в цветах и шрифтах».
             .frame(height: 48)
-            // Свой `.background(Color.tfCard)`: шапка лежит в safeAreaInset,
+            // Свой `.background(.ultraThinMaterial)`: шапка лежит в safeAreaInset,
             // не в NavigationBar — штатный `toolbarBackground` сюда не
             // доходит, а раньше был FrostedGlass (Claude_Bot приёмка 02.09.2026).
-            .background(Color.tfCard)
+            // Полупрозрачный blur, как в вебе (frosted glass) — НЕ сплошной
+            // `.background(Color.tfCard)`, как было в коммите 12.
+            .background(.ultraThinMaterial)
         }
         // Штатный фон навбара — вызывающий код добавляет
         // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +

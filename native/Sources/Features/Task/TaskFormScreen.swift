@@ -163,16 +163,12 @@ struct TaskFormScreen: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: 48)
-        // Общий фон шапок, а не `.ultraThinMaterial`: материал в тёмной теме
-        // подсвечивает полосу (#1C1C1C против фона #171717) и экран выбивается
-        // из остальных — сверено кадрами 01.09.2026.
-        // Штатный фон навбара добавляется вызывающий кодом через
-        // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +
-        // .toolbarBackgroundVisibility(.automatic, for: .navigationBar).
-        // (FrostedGlass удалён — см. коммит 9 в native-app.)
-        // safeAreaInset, не навбар — добавляем явный `.background`,
-        // иначе шапка сольётся с `tfBackground` экрана.
-        .background(Color.tfCard)
+        // Общий фон шапок — полупрозрачный blur (frosted glass) в вебе,
+        // в SwiftUI это `.background(.ultraThinMaterial)`. Сплошной Color.tfCard
+        // (был в коммите 12) — это НЕ как в вебе.
+        // safeAreaInset, не навбар — явный `.background`, потому что
+        // штатный `toolbarBackground` сюда не доходит (Claude_Bot 02.09.2026).
+        .background(.ultraThinMaterial)
     }
 
     // MARK: - Тело

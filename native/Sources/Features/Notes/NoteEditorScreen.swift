@@ -229,7 +229,7 @@ struct NoteEditorScreen: View {
         // Свой `.background(Color.tfCard)`: safeAreaInset, не навбар —
         // штатный toolbarBackground не доходит, а раньше был FrostedGlass
         // (Claude_Bot приёмка 02.09.2026).
-        .background(Color.tfCard)
+        .background(.ultraThinMaterial)
     }
 
     /// «заголовком автоматически становится первый непустой блок… или

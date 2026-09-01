@@ -69,10 +69,10 @@ public struct TFScreenHeader: View {
             below?()
         }
         // Шапка лежит в safeAreaInset вызывающего экрана — штатный
-        // toolbarBackground сюда не доходит. Явный `.background(Color.tfCard)`
-        // чтобы шапка не сливалась с tfBackground экрана (Claude_Bot
-        // приёмка 02.09.2026).
-        .background(Color.tfCard)
+        // toolbarBackground сюда не доходит. Явный `.background(.ultraThinMaterial)` —
+        // полупрозрачный blur, как в вебе (frosted glass). Color.tfCard был
+        // бы сплошным и не соответствовал бы вебу.
+        .background(.ultraThinMaterial)
     }
 
     @ViewBuilder

@@ -29,8 +29,9 @@ struct SettingsHeaderChrome: View {
         // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +
         // .toolbarBackgroundVisibility(.automatic, for: .navigationBar).
         // (FrostedGlass удалён — см. коммит 9 в native-app.)
-        // safeAreaInset, не навбар — явный `.background`, иначе шапка
-        // сольётся с экраном (Claude_Bot приёмка 02.09.2026).
-        .background(Color.tfCard)
+        // safeAreaInset, не навбар — явный `.background(.ultraThinMaterial)`,
+        // полупрозрачный blur (frosted glass, как в вебе). Иначе шапка
+        // сольётся с tfBackground экрана (Claude_Bot приёмка 02.09.2026).
+        .background(.ultraThinMaterial)
     }
 }
