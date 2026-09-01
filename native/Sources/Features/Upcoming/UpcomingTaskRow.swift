@@ -16,47 +16,45 @@ struct UpcomingTaskRow: View {
 
     /// Ширина зоны действия свайпа — `ACTION_W` (spec §3.3).
     private let actionWidth: CGFloat = 84
+    private let openThreshold: CGFloat = 36
+    private let openVelocity: CGFloat = 280
+    private let closeThreshold: CGFloat = 25
+    private let closeVelocity: CGFloat = 250
     @State private var settledOffset: CGFloat = 0
     @State private var dragOffset: CGFloat = 0
     @State private var confirmDelete = false
-    @State private var measuredHeight: CGFloat = 60
 
     private var offsetX: CGFloat { clamp(settledOffset + dragOffset) }
 
     var body: some View {
         ZStack {
+            // Кнопки растут за пальцем и проявляются по ходу жеста —
+            // разбор веб-модели в TodayTaskRow.
             HStack(spacing: 0) {
-                // Стороны как в вебе и в TodayTaskRow: вправо — «Удалить»,
-                // влево — действия.
-                Button(action: { close(); confirmDelete = true }) {
-                    Image(systemName: "trash").font(.system(size: 22)).foregroundStyle(.white)
-                }
-                .frame(width: actionWidth, height: measuredHeight)
-                .background(Color.tfSwipeDelete)
-                .opacity(offsetX > 0 ? 1 : 0)
-                .accessibilityHidden(offsetX <= 0)
-                .accessibilityLabel("Удалить")
-                .accessibilityIdentifier("row.swipe.delete")
+                actionButton(
+                    icon: "trash", label: "Удалить",
+                    identifier: "row.swipe.delete", color: .tfSwipeDelete
+                ) { close(); confirmDelete = true }
+                .frame(width: leftRevealWidth)
+                .opacity(revealOpacity(leftRevealWidth))
+
                 Spacer(minLength: 0)
-                Button(action: { close(); onReschedule() }) {
-                    Image(systemName: "calendar").font(.system(size: 22)).foregroundStyle(.white)
-                }
-                .frame(width: actionWidth, height: measuredHeight)
-                .background(Color.tfOrange)
-                .opacity(offsetX < -actionWidth ? 1 : 0)
-                .accessibilityHidden(offsetX >= -actionWidth)
-                .accessibilityLabel("Перенести")
-                .accessibilityIdentifier("row.swipe.reschedule")
-                Button(action: { close(); onComplete() }) {
-                    Image(systemName: "checkmark").font(.system(size: 22)).foregroundStyle(.white)
-                }
-                .frame(width: actionWidth, height: measuredHeight)
-                .background(Color.tfGreen)
-                .opacity(offsetX < 0 ? 1 : 0)
-                .accessibilityHidden(offsetX >= 0)
-                .accessibilityLabel("Завершить")
-                .accessibilityIdentifier("row.swipe.complete")
+
+                actionButton(
+                    icon: "calendar", label: "Перенести",
+                    identifier: "row.swipe.reschedule", color: .tfOrange
+                ) { close(); onReschedule() }
+                .frame(width: rightRevealWidth / 2)
+                .opacity(revealOpacity(rightRevealWidth))
+
+                actionButton(
+                    icon: "checkmark", label: "Завершить",
+                    identifier: "row.swipe.complete", color: .tfGreen
+                ) { close(); onComplete() }
+                .frame(width: rightRevealWidth / 2)
+                .opacity(revealOpacity(rightRevealWidth))
             }
+            .frame(maxHeight: .infinity)
 
             TFTaskRow(Self.model(for: task)) {
                 if settledOffset != 0 { close() } else { onOpen() }
@@ -71,11 +69,9 @@ struct UpcomingTaskRow: View {
         // становится «Other», VoiceOver не говорит «кнопка», а тесты её не
         // находят среди `app.buttons`. Трейт возвращаем руками.
         .accessibilityAddTraits(.isButton)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(key: UpcomingRowHeightKey.self, value: geo.size.height)
-                }
-            )
+            // Непрозрачный фон (веб `bg-bg`), иначе текст задачи читается
+            // поверх цветной кнопки, пока строка над ней проезжает.
+            .background(Color.tfBackground)
             .offset(x: offsetX)
 // Свайп — на UIKit-распознавателе, см. HorizontalPan.swift:
             // SwiftUI-жест внутри ScrollView отбирает вертикальную прокрутку.
@@ -87,7 +83,6 @@ struct UpcomingTaskRow: View {
                 )
             )
         }
-        .onPreferenceChange(UpcomingRowHeightKey.self) { measuredHeight = $0 }
         .clipped()
         .confirmationDialog("Удалить задачу?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Удалить", role: .destructive, action: onDelete)
@@ -125,6 +120,32 @@ struct UpcomingTaskRow: View {
         )
     }
 
+    private var leftRevealWidth: CGFloat { max(offsetX, 0) }
+    private var rightRevealWidth: CGFloat { max(-offsetX, 0) }
+
+    private func revealOpacity(_ width: CGFloat) -> Double {
+        min(1, Double(width / actionWidth) * 1.3)
+    }
+
+    private func actionButton(
+        icon: String, label: String, identifier: String, color: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 22))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(color)
+        }
+        .buttonStyle(.plain)
+        .clipped()
+        .allowsHitTesting(abs(offsetX) >= actionWidth * 0.7)
+        .accessibilityHidden(abs(offsetX) < actionWidth * 0.7)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(identifier)
+    }
+
     private func close() {
         withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
             settledOffset = 0
@@ -139,44 +160,37 @@ struct UpcomingTaskRow: View {
         let finalOffset = clamp(settledOffset + dx)
         withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
             if settledOffset == 0 {
-                if finalOffset < -72 || velocity < -360 {
+                if finalOffset < -openThreshold || velocity < -openVelocity {
                     settledOffset = -2 * actionWidth
-                } else if finalOffset < -36 || velocity < -280 {
-                    settledOffset = -actionWidth
-                } else if finalOffset > 36 || velocity > 280 {
+                } else if finalOffset > openThreshold || velocity > openVelocity {
                     settledOffset = actionWidth
                 } else {
                     settledOffset = 0
                 }
             } else if settledOffset < 0 {
-                let shouldKeep = !(dx > 25 || velocity > 250)
-                settledOffset = shouldKeep
-                    ? ((settledOffset == -actionWidth && dx < -actionWidth / 2) ? -2 * actionWidth : settledOffset)
-                    : 0
+                settledOffset = (dx > closeThreshold || velocity > closeVelocity) ? 0 : -2 * actionWidth
             } else {
-                let shouldKeep = !(dx < -25 || velocity < -250)
-                settledOffset = shouldKeep ? actionWidth : 0
+                settledOffset = (dx < -closeThreshold || velocity < -closeVelocity) ? 0 : actionWidth
             }
             dragOffset = 0
         }
     }
 
     private func clamp(_ raw: CGFloat) -> CGFloat {
-        if raw > actionWidth {
-            let over = raw - actionWidth
-            return actionWidth + (over * 30) / (30 + over)
-        } else if raw < -actionWidth {
-            let over = -raw - actionWidth
-            return -actionWidth - (over * 30) / (30 + over)
+        let limit = raw > 0 ? actionWidth : 2 * actionWidth
+        if raw > limit {
+            let over = raw - limit
+            return limit + (over * 30) / (30 + over)
+        } else if raw < -limit {
+            let over = -raw - limit
+            return -limit - (over * 30) / (30 + over)
         }
         return raw
     }
 }
 
-private struct UpcomingRowHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 60
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
+// Высота строки больше не измеряется: кнопки свайпа растягиваются на высоту
+// ZStack, которую задаёт сама строка (веб: кнопка прибита `top: 0; bottom: 0`).
 
 /// Статус агента плоским текстом — spec §3.11 `AgentStateTag` (вариант «plain», без подложки).
 enum UpcomingAgentStateTag {

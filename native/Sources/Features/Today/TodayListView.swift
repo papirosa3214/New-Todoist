@@ -16,35 +16,47 @@ struct TodayListView: View {
     let onDelete: (ApiTask) -> Void
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
+        // Заголовки секций прилипают к шапке: доехав до верха, «Ждут вас»
+        // встаёт под шапкой, лента продолжает идти под ним, а следующий
+        // заголовок («Просрочено») выталкивает предыдущий вверх и занимает
+        // его место — обычное поведение списков iOS, владелец попросил
+        // 01.09.2026. В SwiftUI это `pinnedViews` + `Section`, свои
+        // измерения прокрутки не нужны.
+        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
             if !waitingTasks.isEmpty {
-                sectionHeader("Ждут вас", icon: "person.crop.circle.badge.clock", color: .tfText)
-                ForEach(waitingTasks) { task in
-                    TodayTaskRow(task: task, overdue: task.dueDate != nil && task.dueDate! < today,
-                                 onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
-                                 onReschedule: { onReschedule(task) }, onDelete: { onDelete(task) })
+                Section {
+                    ForEach(waitingTasks) { task in
+                        TodayTaskRow(task: task, overdue: task.dueDate != nil && task.dueDate! < today,
+                                     onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
+                                     onReschedule: { onReschedule(task) }, onDelete: { onDelete(task) })
+                    }
+                } header: {
+                    sectionHeader("Ждут вас", icon: "person.crop.circle.badge.clock", color: .tfText)
                 }
             }
             if !overdueTasks.isEmpty {
-                sectionHeader("Просрочено", color: .tfRed)
-                ForEach(overdueTasks) { task in
-                    TodayTaskRow(task: task, overdue: true,
+                Section {
+                    ForEach(overdueTasks) { task in
+                        TodayTaskRow(task: task, overdue: true,
+                                     onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
+                                     onReschedule: { onReschedule(task) }, onDelete: { onDelete(task) })
+                    }
+                } header: {
+                    sectionHeader("Просрочено", color: .tfRed)
+                }
+            }
+            Section {
+                ForEach(todayTasks) { task in
+                    TodayTaskRow(task: task, overdue: false,
                                  onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
                                  onReschedule: { onReschedule(task) }, onDelete: { onDelete(task) })
                 }
-            }
-            if !todayTasks.isEmpty && (!overdueTasks.isEmpty || !waitingTasks.isEmpty) {
-                Text(TodayDate.formatDueLabel(today))
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.tfSub)
-                    .padding(.horizontal, TFSpacing.lg)
-                    .padding(.top, TFSpacing.md)
-                    .padding(.bottom, 6)
-            }
-            ForEach(todayTasks) { task in
-                TodayTaskRow(task: task, overdue: false,
-                             onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
-                             onReschedule: { onReschedule(task) }, onDelete: { onDelete(task) })
+            } header: {
+                // Дата — заголовок последней секции, но только когда выше уже
+                // была секция: иначе она дублировала бы шапку экрана.
+                if !todayTasks.isEmpty && (!overdueTasks.isEmpty || !waitingTasks.isEmpty) {
+                    sectionHeader(TodayDate.formatDueLabel(today), color: .tfSub)
+                }
             }
         }
     }
@@ -61,5 +73,18 @@ struct TodayListView: View {
         .padding(.horizontal, TFSpacing.lg)
         .padding(.top, TFSpacing.md)
         .padding(.bottom, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Подложка — то же затухание, что у шапки, а не сплошная плашка
+        // (владелец, 01.09.2026: «надо сделать прозрачный фон у этой
+        // прилипалки… но чтобы текст гасился, а не прокручивался сквозь
+        // надпись»). `FrostedGlass` размывает и притемняет ленту под
+        // заголовком у верхней кромки и мягко сходит на нет к нижней —
+        // строки уходят под него, а не сквозь.
+        .background(FrostedGlass(axis: .top))
+        // Заголовок чуть заходит под нижнюю, самую прозрачную кромку шапки —
+        // владелец просил «пусть чуть-чуть наслаивается, главное чтобы на
+        // текст не наслаивалось». Сдвиг визуальный (`offset`), поэтому
+        // положение прилипания и высота секции не меняются.
+        .offset(y: -6)
     }
 }

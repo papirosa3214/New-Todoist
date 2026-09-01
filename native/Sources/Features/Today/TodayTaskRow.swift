@@ -20,66 +20,68 @@ struct TodayTaskRow: View {
     let onDelete: () -> Void
 
     private let actionWidth: CGFloat = 84
+    /// Пороги открытия/закрытия — числа веб-хука `useRowSwipe.ts`.
+    private let openThreshold: CGFloat = 36
+    private let openVelocity: CGFloat = 280
+    private let closeThreshold: CGFloat = 25
+    private let closeVelocity: CGFloat = 250
     /// Точка покоя строки: 0 (закрыта), −actionWidth («Завершить» открыта),
     /// −2×actionWidth («Завершить» + «Перенести»), +actionWidth («Удалить»).
     @State private var settledOffset: CGFloat = 0
     @State private var dragOffset: CGFloat = 0
     @State private var confirmDelete = false
-    /// Фиксированная высота строки для кнопок свайпа. Раньше измерялась через
-    /// GeometryReader + PreferenceKey (двойной рендер — основная причина
-    /// testОткрытиеСегодня 2.44с). 70pt покрывает строку с подзадачами/бейджами.
-    private let measuredHeight: CGFloat = 70
 
     private var offsetX: CGFloat { clamp(settledOffset + dragOffset) }
 
     var body: some View {
         ZStack {
+            // ═══ Действия под строкой ═══
+            //
+            // Веб (`TaskRow.tsx`, `setRowPosition`) делает три вещи, которых
+            // здесь не было, и владелец назвал все три (01.09.2026):
+            //
+            // 1. Кнопка РАСТЁТ вместе с пальцем: `btnW = max(absX, ACTION_W)`.
+            //    Было — фиксированные 84pt, и кнопка выглядела «гораздо меньше
+            //    самой карточки».
+            // 2. Кнопка ПРОЯВЛЯЕТСЯ по ходу жеста: `opacity = min(1, progress×1.3)`.
+            //    Было — `opacity(offsetX > 0 ? 1 : 0)`, то есть «появляется
+            //    сразу, а не плавно вылазит».
+            // 3. Кнопка занимает ВСЮ высоту строки (`top: 0; bottom: 0`).
+            //    Было — фиксированные 70pt независимо от содержимого строки.
             HStack(spacing: 0) {
-                // Порядок сторон взят из веба (TaskRow.tsx §3.3, useRowSwipe):
-                // свайп ВПРАВО обнажает левый край и красное «Удалить», свайп
-                // ВЛЕВО — правый край с действиями. Единый жест в вебе и в
-                // нативе важнее локальных вкусов: пальцевая память одна.
-                Button(action: { close(); confirmDelete = true }) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: actionWidth, height: measuredHeight)
-                .background(Color.tfSwipeDelete)
-                .opacity(offsetX > 0 ? 1 : 0)
-                .accessibilityHidden(offsetX <= 0)
-                .accessibilityLabel("Удалить")
-                .accessibilityIdentifier("row.swipe.delete")
+                actionButton(
+                    icon: "trash", label: "Удалить",
+                    identifier: "row.swipe.delete", color: .tfSwipeDelete
+                ) { close(); confirmDelete = true }
+                .frame(width: leftRevealWidth)
+                .opacity(revealOpacity(leftRevealWidth))
+
                 Spacer(minLength: 0)
-                // «Перенести» стоит дальше от края: при лёгком свайпе видна
-                // только «Завершить», сильный открывает обе.
-                Button(action: { close(); onReschedule() }) {
-                    Image(systemName: "calendar")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: actionWidth, height: measuredHeight)
-                .background(Color.tfOrange)
-                .opacity(offsetX < -actionWidth ? 1 : 0)
-                .accessibilityHidden(offsetX >= -actionWidth)
-                .accessibilityLabel("Перенести")
-                .accessibilityIdentifier("row.swipe.reschedule")
-                Button(action: { close(); onComplete() }) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: actionWidth, height: measuredHeight)
-                .background(Color.tfGreen)
-                .opacity(offsetX < 0 ? 1 : 0)
-                .accessibilityHidden(offsetX >= 0)
-                .accessibilityLabel("Завершить")
-                .accessibilityIdentifier("row.swipe.complete")
+
+                actionButton(
+                    icon: "calendar", label: "Перенести",
+                    identifier: "row.swipe.reschedule", color: .tfOrange
+                ) { close(); onReschedule() }
+                .frame(width: rightRevealWidth / 2)
+                .opacity(revealOpacity(rightRevealWidth))
+
+                actionButton(
+                    icon: "checkmark", label: "Завершить",
+                    identifier: "row.swipe.complete", color: .tfGreen
+                ) { close(); onComplete() }
+                .frame(width: rightRevealWidth / 2)
+                .opacity(revealOpacity(rightRevealWidth))
             }
+            .frame(maxHeight: .infinity)
 
             row
+                // Непрозрачный фон — веб `className="bg-bg"` на строке. Без
+                // него текст задачи читался ПОВЕРХ цветной кнопки, когда
+                // строка над ней проезжала (владелец: «текст накладывается
+                // на цветную кнопку»).
+                .background(Color.tfBackground)
                 .offset(x: offsetX)
-// Свайп ловит UIKit-распознаватель, а не DragGesture: любой
+                // Свайп ловит UIKit-распознаватель, а не DragGesture: любой
                 // собственный SwiftUI-жест внутри ScrollView забирает касание
                 // себе, и список перестаёт листаться пальцем по задаче
                 // (владелец, 01.09.2026, третий заход: «скролла нет»).
@@ -105,6 +107,39 @@ struct TodayTaskRow: View {
         } message: {
             Text("«\(task.title)» будет удалена безвозвратно")
         }
+    }
+
+    /// Насколько раскрыт левый край (кнопка «Удалить») — прямо за пальцем.
+    private var leftRevealWidth: CGFloat { max(offsetX, 0) }
+    /// То же для правого края: там две кнопки, делят раскрытие пополам.
+    private var rightRevealWidth: CGFloat { max(-offsetX, 0) }
+
+    /// Проявление кнопки по ходу жеста. Веб: `min(1, (absX / ACTION_W) × 1.3)`
+    /// — к трети ширины кнопка уже читается, дальше просто растёт.
+    private func revealOpacity(_ width: CGFloat) -> Double {
+        min(1, Double(width / actionWidth) * 1.3)
+    }
+
+    private func actionButton(
+        icon: String, label: String, identifier: String, color: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(color)
+        }
+        .buttonStyle(.plain)
+        // Иконка не должна вылезать за узкую кнопку в начале жеста.
+        .clipped()
+        // Кнопка доступна для нажатия, только когда раскрыта заметно —
+        // веб: `pointerEvents = absX >= ACTION_W * 0.7 ? "auto" : "none"`.
+        .allowsHitTesting(abs(offsetX) >= actionWidth * 0.7)
+        .accessibilityHidden(abs(offsetX) < actionWidth * 0.7)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(identifier)
     }
 
     private var row: some View {
@@ -234,44 +269,36 @@ struct TodayTaskRow: View {
         let finalOffset = clamp(settledOffset + dx)
         withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
             if settledOffset == 0 {
-                // Влево — правые действия: сильный жест открывает обе кнопки
-                // («Завершить» + «Перенести»), лёгкий только «Завершить».
-                // Вправо — одна левая, «Удалить».
-                if finalOffset < -72 || velocity < -360 {
+                // Влево открываются ОБЕ правые кнопки сразу — так ведёт себя
+                // родная «Почта» и так честнее: раньше лёгкий свайп давал одну
+                // кнопку, сильный вторую, и переход между ступенями дёргался.
+                if finalOffset < -openThreshold || velocity < -openVelocity {
                     settledOffset = -2 * actionWidth
-                } else if finalOffset < -36 || velocity < -280 {
-                    settledOffset = -actionWidth
-                } else if finalOffset > 36 || velocity > 280 {
+                } else if finalOffset > openThreshold || velocity > openVelocity {
                     settledOffset = actionWidth
                 } else {
                     settledOffset = 0
                 }
             } else if settledOffset < 0 {
-                // Открыты правые кнопки: закрываем обратным движением.
-                let shouldKeep = !(dx > 25 || velocity > 250)
-                if shouldKeep {
-                    settledOffset = (settledOffset == -actionWidth && dx < -actionWidth / 2)
-                        ? -2 * actionWidth
-                        : settledOffset
-                } else {
-                    settledOffset = 0
-                }
+                // Открыто — закрываем встречным движением.
+                settledOffset = (dx > closeThreshold || velocity > closeVelocity) ? 0 : -2 * actionWidth
             } else {
-                // Открыта левая кнопка «Удалить».
-                let shouldKeep = !(dx < -25 || velocity < -250)
-                settledOffset = shouldKeep ? actionWidth : 0
+                settledOffset = (dx < -closeThreshold || velocity < -closeVelocity) ? 0 : actionWidth
             }
             dragOffset = 0
         }
     }
 
+    /// «Резина» за пределом раскрытия — веб: `W + over × 30 / (30 + over)`.
+    /// Предел разный по сторонам: слева одна кнопка, справа две.
     private func clamp(_ raw: CGFloat) -> CGFloat {
-        if raw > actionWidth {
-            let over = raw - actionWidth
-            return actionWidth + (over * 30) / (30 + over)
-        } else if raw < -actionWidth {
-            let over = -raw - actionWidth
-            return -actionWidth - (over * 30) / (30 + over)
+        let limit = raw > 0 ? actionWidth : 2 * actionWidth
+        if raw > limit {
+            let over = raw - limit
+            return limit + (over * 30) / (30 + over)
+        } else if raw < -limit {
+            let over = -raw - limit
+            return -limit - (over * 30) / (30 + over)
         }
         return raw
     }
@@ -279,4 +306,6 @@ struct TodayTaskRow: View {
 
 // RowHeightKey был удалён вместе с GeometryReader — измерение высоты через
 // PreferenceKey вызывало двойной рендер (открытие «Сегодня» 2.44с вместо <2с).
-// measuredHeight теперь фиксированная константа.
+// Высота кнопок свайпа больше не измеряется вовсе: они растягиваются на
+// высоту ZStack (`frame(maxHeight: .infinity)`), которую задаёт сама строка,
+// — как в вебе, где кнопка прибита `top: 0; bottom: 0`.
