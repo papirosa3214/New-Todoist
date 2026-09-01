@@ -16,6 +16,10 @@ struct TodayScreen: View {
     /// именно для неё. Приоритет над `rescheduleOpen` (тот для группы
     /// просроченных с доски).
     @State private var rescheduleTask: ApiTask?
+    /// 0…1 — насколько крупная дата уехала под шапку. Меняет ТОЛЬКО
+    /// прозрачность двух дат (крупной в ленте и мелкой в шапке): высоты
+    /// фиксированы, иначе шапка дрожит на каждом кадре прокрутки.
+    @State private var collapse: CGFloat = 0
 
     private var today: String { TodayDate.todayString() }
     private var activeHourDate: String {
@@ -41,6 +45,7 @@ struct TodayScreen: View {
         let c = computation
         ScrollView {
             VStack(spacing: 0) {
+                largeTitle
                 if c.trueEmpty && vm.layout == .list {
                     TodayEmptyIllustration()
                 } else {
@@ -130,9 +135,18 @@ struct TodayScreen: View {
         // размывать ей было нечего — отсюда «сплошная плашка» вместо
         // затухания. `safeAreaInset` резервирует под неё место в покое, но
         // при прокрутке содержимое идёт ПОД ней — это и даёт эффект веба.
+        // Прогресс схлопывания. В покое `contentOffset.y` РАВЕН минус верхнему
+        // инсету, поэтому считаем от суммы — иначе шапка стартует наполовину
+        // схлопнутой. Пишем в @State только при заметном изменении: каждый
+        // такой кадр перерисовывает весь body вместе с фильтрацией задач.
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            let scrolled = geo.contentOffset.y + geo.contentInsets.top
+            return max(0, min(1, scrolled / collapseDistance))
+        } action: { _, new in
+            if abs(new - collapse) > 0.01 || new == 0 || new == 1 { collapse = new }
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
-            header(c: c)
-                .background(FrostedGlass(axis: .top))
+            compactBar
         }
         .background(Color.tfBackground)
         .toolbar(.hidden, for: .navigationBar)
@@ -174,36 +188,82 @@ struct TodayScreen: View {
 
     // MARK: - Шапка
 
-    @ViewBuilder
-    private func header(c: TodayComputation) -> some View {
-        let title = vm.layout == .hours ? TodayDate.formatWeekdayDateLabel(activeHourDate) : TodayDate.formatWeekdayDateLabel(today)
-        TFScreenHeader(title, variant: .large)
-            .overlay(alignment: .trailing) {
-                HStack(spacing: TFSpacing.headerActionsGap) {
-                    TFIconButton("magnifyingglass") { route = .search }
-                        .accessibilityLabel("Поиск")
-                        .accessibilityIdentifier("today.search")
-                    TFIconButton("line.3.horizontal.decrease") { filterSheetOpen = true }
-                        .accessibilityLabel("Фильтры")
-                        .accessibilityIdentifier("today.filters")
-                    Menu {
-                        Picker("Вид", selection: Binding(get: { vm.layout }, set: { vm.layout = $0 })) {
-                            Label("Список", systemImage: "list.bullet").tag(TodayLayout.list)
-                            Label("Доска", systemImage: "square.grid.2x2").tag(TodayLayout.board)
-                            Label("Один день", systemImage: "calendar").tag(TodayLayout.hours)
-                        }
-                        .pickerStyle(.inline)
-                        Button { route = .search } label: { Label("Поиск", systemImage: "magnifyingglass") }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 18))
-                            .foregroundStyle(Color.tfText)
-                            .frame(width: TFHitTarget.min, height: TFHitTarget.min)
+    // Родная механика large title: схлопывается не полоса, а САМ заголовок.
+    // Полоса всегда 48pt (кнопки + мелкая дата), крупная дата лежит первой
+    // строкой ленты и уезжает под полосу вместе со списком. За ней вплотную
+    // встаёт прилипший заголовок секции — зазора, через который просвечивала
+    // лента, больше нет. Просьба владельца 01.09.2026: «чтобы день недели и
+    // число уменьшалось и под динамический островок маленьким вставало».
+    private var collapseDistance: CGFloat { 34 }
+
+    private var headerDate: String { vm.layout == .hours ? activeHourDate : today }
+
+    private var largeTitle: some View {
+        Text(TodayDate.formatWeekdayDateLabel(headerDate))
+            .tfText(.titleLarge)
+            .foregroundStyle(Color.tfText)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, TFSpacing.screenHorizontal)
+            // 42, а не 56: полоса с кнопками теперь отдельная строка, и при
+            // прежней высоте над датой копился воздух — владелец 01.09.2026:
+            // «день недели сильно спустился вниз, много пустого места вверху».
+            .frame(height: 42)
+            .opacity(1 - collapse)
+            .accessibilityIdentifier("today.title-large")
+    }
+
+    private var compactBar: some View {
+        ZStack {
+            // «Просто дата» под островком — проявляется ровно на том пути,
+            // на котором гаснет крупная.
+            Text(TodayDate.formatDuePlain(headerDate))
+                .tfText(.title)
+                .foregroundStyle(Color.tfText)
+                .lineLimit(1)
+                .opacity(collapse)
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("today.title-compact")
+                // Держим дату в свободной середине: три кнопки справа занимают
+                // 3 зоны по 44pt, столько же резервируем слева ради симметрии.
+                .padding(.horizontal, 3 * TFHitTarget.min)
+
+            HStack(spacing: TFSpacing.headerActionsGap) {
+                Spacer()
+                // Отдельной лупы в ряду нет (владелец 01.09.2026: «в трёх
+                // точках уже есть поиск, зачем он ещё иконкой в ряду»).
+                // Поиск живёт пунктом меню — одно действие, одно место.
+                TFIconButton("line.3.horizontal.decrease") { filterSheetOpen = true }
+                    .accessibilityLabel("Фильтры")
+                    .accessibilityIdentifier("today.filters")
+                Menu {
+                    Picker("Вид", selection: Binding(get: { vm.layout }, set: { vm.layout = $0 })) {
+                        Label("Список", systemImage: "list.bullet").tag(TodayLayout.list)
+                        Label("Доска", systemImage: "square.grid.2x2").tag(TodayLayout.board)
+                        Label("Один день", systemImage: "calendar").tag(TodayLayout.hours)
                     }
-                    .accessibilityLabel("Вид")
-                    .accessibilityIdentifier("today.view-switcher")
+                    .pickerStyle(.inline)
+                    Button { route = .search } label: { Label("Поиск", systemImage: "magnifyingglass") }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Color.tfText)
+                        .frame(width: TFHitTarget.min, height: TFHitTarget.min)
                 }
-                .padding(.horizontal, TFSpacing.screenHorizontal)
+                .accessibilityLabel("Вид")
+                .accessibilityIdentifier("today.view-switcher")
             }
+        }
+        .padding(.horizontal, TFSpacing.screenHorizontal)
+        // 44 = зона нажатия кнопки, без запаса: полоса несёт только кнопки
+        // и мелкую дату.
+        .frame(height: 44)
+        // Плотная часть подложки накрывает полосу целиком, затухание свисает
+        // ниже неё — иначе под датой и кнопками читается лента.
+        .background(alignment: .top) {
+            TFHeaderBackdrop()
+                .padding(.bottom, -26)
+                .ignoresSafeArea(edges: .top)
+        }
     }
 }
