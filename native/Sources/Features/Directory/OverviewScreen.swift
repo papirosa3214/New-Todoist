@@ -46,6 +46,12 @@ struct OverviewScreen: View {
         // аналог `navigationBarTitleDisplayMode`, тот депрекейтнут на iOS 27).
         .navigationTitle("Обзор")
         .toolbarTitleDisplayMode(.large)
+        // Штатный фон навбара — замена кастомного `FrostedGlass`.
+        // `toolbarBackground(_:for:)` с Material — iOS 16.0+; `.automatic`
+        // фон виден только когда контент заехал под навбар (та самая
+        // механика, которую раньше давал наш blur с масками).
+        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+        .toolbarBackgroundVisibility(.automatic, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
