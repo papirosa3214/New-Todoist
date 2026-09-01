@@ -222,7 +222,10 @@ struct NoteEditorScreen: View {
         }
         .frame(height: 48)
         // Тот же общий фон шапок, см. комментарий в TaskFormScreen.
-        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
+        // Штатный фон навбара — вызывающий код добавляет
+        // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +
+        // .toolbarBackgroundVisibility(.automatic, for: .navigationBar).
+        // (FrostedGlass удалён — см. коммит 9 в native-app.)
     }
 
     /// «заголовком автоматически становится первый непустой блок… или

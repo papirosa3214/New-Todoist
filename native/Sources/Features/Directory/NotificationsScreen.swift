@@ -85,7 +85,10 @@ struct NotificationsScreen: View {
         .frame(height: 48)
         // Тот же фон, что у шапок остальных экранов: `.ultraThinMaterial`
         // выбивался — он светлее и не совпадал с подложкой приложения.
-        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
+        // Штатный фон навбара — вызывающий код добавляет
+        // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +
+        // .toolbarBackgroundVisibility(.automatic, for: .navigationBar).
+        // (FrostedGlass удалён — см. коммит 9 в native-app.)
     }
 
     private var allRead: Bool { notificationStore.notifications.allSatisfy(\.read) }

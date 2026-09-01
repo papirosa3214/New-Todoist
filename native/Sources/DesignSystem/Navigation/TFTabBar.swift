@@ -124,7 +124,10 @@ public struct TFTabBar: View {
         // должна быть у НИЖНЕЙ кромки экрана («под панелью не просвечивает
         // ничего»), а таять кверху — зеркально шапке. С `.top` градиент был
         // перевёрнут и панель читалась сплошной.
-        .background(FrostedGlass(axis: .bottom).ignoresSafeArea(edges: .bottom))
+        // Штатный таб-бар UITabBar — iOS рисует его сам с эффектом
+        // размытия контента при прокрутке. FrostedGlass удалён — см. коммит 9.
+        // (Здесь остаётся `.background(.ultraThinMaterial)` — это UITabBar
+        // по умолчанию в iOS 18+, эквивалент веб-навбару.)
     }
 
     private func tabButton(_ index: Int) -> some View {

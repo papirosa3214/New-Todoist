@@ -68,10 +68,10 @@ public struct TFScreenHeader: View {
 
             below?()
         }
-        // `.top`: у шапки плотная часть затухания — у ВЕРХНЕЙ кромки экрана,
-        // тает вниз (веб: HEADER_FADE_* «to bottom»). Стояло `.bottom` —
-        // градиент был перевёрнут, и шапка читалась сплошной плашкой.
-        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
+        // Фон шапки теперь штатный — добавляет вызывающий код через
+        // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +
+        // .toolbarBackgroundVisibility(.automatic, for: .navigationBar).
+        // (См. коммит 6c89b57 на OverviewScreen и коммит 8 на ProjectsScreen.)
     }
 
     @ViewBuilder

@@ -25,6 +25,9 @@ struct SettingsHeaderChrome: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: 48)
-        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
+        // Штатный фон навбара — вызывающий код добавляет
+        // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +
+        // .toolbarBackgroundVisibility(.automatic, for: .navigationBar).
+        // (FrostedGlass удалён — см. коммит 9 в native-app.)
     }
 }
