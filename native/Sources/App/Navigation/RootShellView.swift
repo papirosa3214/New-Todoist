@@ -120,7 +120,16 @@ struct RootShellView: View {
                     selectedIndex: selectedIndexBinding,
                     isCreateMenuOpen: isCreateMenuOpen,
                     onSelect: { index in
-                        if let tab = Tab(rawValue: index) { selectedTab = tab }
+                        guard let tab = Tab(rawValue: index) else { return }
+                        // Повторный тап по УЖЕ активной вкладке возвращает в её
+                        // корень — как в родных приложениях. Без этого из
+                        // «Проектов» нельзя было вернуться в «Обзор» тапом по
+                        // самой вкладке: она уже выбрана, ничего не менялось.
+                        if tab == selectedTab {
+                            paths[tab] = NavigationPath()
+                        } else {
+                            selectedTab = tab
+                        }
                     },
                     onCreateTap: { isCreateMenuOpen.toggle() }
                 )
@@ -175,6 +184,8 @@ struct RootShellView: View {
             case "projects": paths[selectedTab, default: NavigationPath()].append(AppRoute.projects)
             case "settings": paths[selectedTab, default: NavigationPath()].append(AppRoute.settings)
             case "notes": paths[selectedTab, default: NavigationPath()].append(AppRoute.notes)
+            case "noteeditor" where parts.count == 2:
+                paths[selectedTab, default: NavigationPath()].append(AppRoute.noteEditor(noteID: parts[1]))
             case "today": selectedTab = .today
             case "upcoming": selectedTab = .upcoming
             case "chat": selectedTab = .chat
