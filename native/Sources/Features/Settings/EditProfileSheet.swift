@@ -97,6 +97,8 @@ struct ProfileAccountRow: View {
                         Text(email)
                             .tfText(.action)
                             .foregroundStyle(Color.tfSub)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
                 Spacer()
