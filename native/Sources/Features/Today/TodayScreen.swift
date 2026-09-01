@@ -50,6 +50,10 @@ struct TodayScreen: View {
         let c = computation
         ScrollView {
             VStack(spacing: 0) {
+                // Большая шапка — ЧАСТЬ ленты, а не закреплённый inset. Поэтому
+                // «Вторник» и первый подраздел физически едут вместе при
+                // pull-to-refresh. При обычной прокрутке её заменяет compactBar.
+                largeBar(c: c)
                 if c.trueEmpty && vm.layout == .list {
                     TodayEmptyIllustration()
                 } else {
@@ -136,11 +140,11 @@ struct TodayScreen: View {
             // последняя задача остаётся под панелью и её не доскроллить.
             .padding(.bottom, TFTabBarMetrics.heightCompact + TFSpacing.lg)
         }
-        // Шапка вынесена ИЗ прокрутки (01.09.2026). Раньше она была первой
-        // строкой VStack внутри ScrollView: уезжала вместе со списком, и
-        // размывать ей было нечего — отсюда «сплошная плашка» вместо
-        // затухания. `safeAreaInset` резервирует под неё место в покое, но
-        // при прокрутке содержимое идёт ПОД ней — это и даёт эффект веба.
+        // В покое inset имеет нулевую высоту: сверху видна большая шапка из
+        // ленты. По мере прокрутки inset плавно вырастает до компактной полосы;
+        // pinnedViews тогда паркует подзаголовок точно под ней. Так большой день
+        // недели и первый подраздел оттягиваются вниз вместе, а не живут в двух
+        // независимых слоях.
         // Прогресс схлопывания. В покое `contentOffset.y` РАВЕН минус верхнему
         // инсету, поэтому считаем от суммы — иначе шапка стартует наполовину
         // схлопнутой. Пишем в @State только при заметном изменении: каждый
@@ -152,12 +156,12 @@ struct TodayScreen: View {
             guard new != collapse else { return }
             if abs(new - collapse) > 0.01 || new == 0 || new == 1 { collapse = new }
         }
-        // Шапка резервирует место: прилипший заголовок паркуется вплотную
-        // под ней. Поверх неё он встать не может — она рисуется над лентой, и
-        // любой «внахлёст» означал бы, что название рисует сама шапка, а не
-        // лента (владелец такую имитацию забраковал: она не выталкивалась и
-        // пропадала).
-        .safeAreaInset(edge: .top, spacing: 0) { compactBar(c: c) }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            compactBar(c: c)
+                .frame(height: TodayHeaderMetrics.barHeight * collapse, alignment: .bottom)
+                .opacity(collapse)
+                .clipped()
+        }
         .background(Color.tfBackground)
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $route) { routeDestination($0) }
@@ -198,20 +202,16 @@ struct TodayScreen: View {
 
     // MARK: - Шапка
 
-    // Всё живёт на ОДНОЙ линии высотой 44pt: слева крупный день недели, справа
-    // кнопки, по центру мелкая дата. При прокрутке крупная дата гаснет, в
-    // центре проявляется короткая («1 сен» — «под динамический островок»), а
-    // слева на освободившееся место въезжает название текущей секции. Лента
-    // при этом уходит под полосу целиком — заголовки секций не прилипают
-    // сами, они лишь сообщают наверх свою координату.
+    // В покое крупный день недели с кнопками живёт в ленте. При прокрутке он
+    // уходит вверх, а закреплённая компактная полоса проявляет «1 сентября».
+    // Заголовки секций остаются настоящими pinnedViews и потому корректно
+    // выталкивают друг друга.
     private var collapseDistance: CGFloat { TodayHeaderMetrics.barHeight }
 
     private var headerDate: String { vm.layout == .hours ? activeHourDate : today }
 
-    /// Слева на линии: в покое — только день недели, при прокрутке его место
-    /// занимает компактная дата в центре. Первый подзаголовок живёт сразу под
-    /// этой линией в ленте: при pull-to-refresh обе части верхнего блока едут
-    /// вниз вместе, а при прокрутке подзаголовок штатно прилипает под шапкой.
+    /// Большой заголовок части ленты: только день недели. Его не дублирует
+    /// компактная дата, которая проявляется отдельно после схлопывания.
     private var leadingTitle: some View {
         Text(TodayDate.formatWeekdayLabel(headerDate))
             .tfText(.titleLarge)
@@ -219,6 +219,21 @@ struct TodayScreen: View {
             .lineLimit(1)
             .opacity(1 - collapse)
             .accessibilityIdentifier("today.title-large")
+    }
+
+    private func largeBar(c: TodayComputation) -> some View {
+        HStack(spacing: TFSpacing.headerActionsGap) {
+            leadingTitle
+            Spacer(minLength: TFSpacing.sm)
+            headerActions
+        }
+        .padding(.horizontal, TFSpacing.screenHorizontal)
+        .frame(height: TodayHeaderMetrics.barHeight)
+        .background(alignment: .top) {
+            TFHeaderBackdrop(tail: 0)
+                .ignoresSafeArea(edges: .top)
+        }
+        .accessibilityIdentifier("today.header-large")
     }
 
     private func compactBar(c: TodayComputation) -> some View {
@@ -236,31 +251,9 @@ struct TodayScreen: View {
                 // 3 зоны по 44pt, столько же резервируем слева ради симметрии.
                 .padding(.horizontal, 3 * TFHitTarget.min)
 
-            HStack(spacing: TFSpacing.headerActionsGap) {
-                leadingTitle
-                Spacer(minLength: TFSpacing.sm)
-                // Отдельной лупы в ряду нет (владелец 01.09.2026: «в трёх
-                // точках уже есть поиск, зачем он ещё иконкой в ряду»).
-                // Поиск живёт пунктом меню — одно действие, одно место.
-                TFIconButton("line.3.horizontal.decrease") { filterSheetOpen = true }
-                    .accessibilityLabel("Фильтры")
-                    .accessibilityIdentifier("today.filters")
-                Menu {
-                    Picker("Вид", selection: Binding(get: { vm.layout }, set: { vm.layout = $0 })) {
-                        Label("Список", systemImage: "list.bullet").tag(TodayLayout.list)
-                        Label("Доска", systemImage: "square.grid.2x2").tag(TodayLayout.board)
-                        Label("Один день", systemImage: "calendar").tag(TodayLayout.hours)
-                    }
-                    .pickerStyle(.inline)
-                    Button { route = .search } label: { Label("Поиск", systemImage: "magnifyingglass") }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 18))
-                        .foregroundStyle(Color.tfText)
-                        .frame(width: TFHitTarget.min, height: TFHitTarget.min)
-                }
-                .accessibilityLabel("Вид")
-                .accessibilityIdentifier("today.view-switcher")
+            HStack {
+                Spacer()
+                headerActions
             }
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
@@ -273,6 +266,35 @@ struct TodayScreen: View {
         .background(alignment: .top) {
             TFHeaderBackdrop(tail: 0)
                 .ignoresSafeArea(edges: .top)
+        }
+    }
+
+    /// Действия дублируются только на время кроссфейда: большая строка уезжает
+    /// с лентой, а компактная появляется на её месте, поэтому кнопки не
+    /// пропадают и не прыгают между состояниями.
+    private var headerActions: some View {
+        HStack(spacing: TFSpacing.headerActionsGap) {
+            // Отдельной лупы в ряду нет: поиск живёт пунктом меню — одно
+            // действие, одно место.
+            TFIconButton("line.3.horizontal.decrease") { filterSheetOpen = true }
+                .accessibilityLabel("Фильтры")
+                .accessibilityIdentifier("today.filters")
+            Menu {
+                Picker("Вид", selection: Binding(get: { vm.layout }, set: { vm.layout = $0 })) {
+                    Label("Список", systemImage: "list.bullet").tag(TodayLayout.list)
+                    Label("Доска", systemImage: "square.grid.2x2").tag(TodayLayout.board)
+                    Label("Один день", systemImage: "calendar").tag(TodayLayout.hours)
+                }
+                .pickerStyle(.inline)
+                Button { route = .search } label: { Label("Поиск", systemImage: "magnifyingglass") }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Color.tfText)
+                    .frame(width: TFHitTarget.min, height: TFHitTarget.min)
+            }
+            .accessibilityLabel("Вид")
+            .accessibilityIdentifier("today.view-switcher")
         }
     }
 }

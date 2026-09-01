@@ -6,6 +6,10 @@ import SwiftUI
 // (`spec/NATIVE-PARTS.md` относит интеграцию с системным календарём к
 // более поздней волне), здесь не рисуется.
 struct TodayListView: View {
+    /// Зазор после затухающей плашки: первая строка не должна начинаться прямо
+    /// под её хвостом, иначе цвет проекта выглядит выцветшим уже в покое.
+    private static let sectionContentTopInset: CGFloat = 16
+
     let waitingTasks: [ApiTask]
     let overdueTasks: [ApiTask]
     let todayTasks: [ApiTask]
@@ -27,6 +31,7 @@ struct TodayListView: View {
         LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
             if !waitingTasks.isEmpty {
                 Section {
+                    Color.clear.frame(height: Self.sectionContentTopInset)
                     ForEach(waitingTasks) { task in
                         TodayTaskRow(task: task, overdue: task.dueDate != nil && task.dueDate! < today,
                                      onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
@@ -38,6 +43,7 @@ struct TodayListView: View {
             }
             if !overdueTasks.isEmpty {
                 Section {
+                    Color.clear.frame(height: Self.sectionContentTopInset)
                     ForEach(overdueTasks) { task in
                         TodayTaskRow(task: task, overdue: true,
                                      onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
@@ -48,6 +54,7 @@ struct TodayListView: View {
                 }
             }
             Section {
+                Color.clear.frame(height: Self.sectionContentTopInset)
                 ForEach(todayTasks) { task in
                     TodayTaskRow(task: task, overdue: false,
                                  onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
@@ -88,7 +95,7 @@ struct TodayListView: View {
                 // Плотность у текста и длинный мягкий хвост ниже него: строки
                 // не проступают через подпись, но растворяются в фоне без
                 // жёсткой горизонтальной границы.
-                TFHeaderBackdrop(tail: 38).padding(.bottom, -38)
+                TFHeaderBackdrop(tail: 28).padding(.bottom, -28)
             }
         }
     }
