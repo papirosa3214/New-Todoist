@@ -31,7 +31,7 @@ struct UpcomingDayStrip: View {
                     .padding(.vertical, 8)
             } else {
                 ScrollView {
-                    VStack(spacing: 4) {
+                    LazyVStack(spacing: 4) {
                         ForEach(tasks, id: \.id) { task in
                             UpcomingDayListRow(task: task, checkboxSize: 13, titleSize: 13, timeSize: 11) {
                                 onTaskTap(task.id)

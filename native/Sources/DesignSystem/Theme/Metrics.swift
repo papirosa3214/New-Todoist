@@ -119,6 +119,11 @@ public enum TFIconSize {
 public enum TFTabBarMetrics {
     /// Высота панели без safe-area (значение в браузере).
     public static let heightCompact: CGFloat = 52
+    /// Общий оптический canvas четырёх вкладок. SF Symbols имеют разные
+    /// intrinsic bounds даже при одинаковом pointSize, поэтому один только
+    /// `.font(size:)` не делает значки визуально одинаковыми.
+    public static let tabIconSize: CGFloat = 32
+    /// Размер glyph внутри отдельной центральной кнопки создания.
     public static let iconSize: CGFloat = 28
     /// Круг-«шарик» под активной вкладкой.
     public static let bubbleSize: CGFloat = 44

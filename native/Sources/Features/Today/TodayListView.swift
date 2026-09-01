@@ -14,6 +14,7 @@ struct TodayListView: View {
     let onComplete: (ApiTask) -> Void
     let onReschedule: (ApiTask) -> Void
     let onDelete: (ApiTask) -> Void
+    let onSectionBoundary: (TodaySectionInfo, CGFloat) -> Void
 
     private var sections: [TodaySectionInfo] {
         TodaySectionInfo.list(waiting: waitingTasks, overdue: overdueTasks, today: todayTasks, todayDate: today)
@@ -69,7 +70,10 @@ struct TodayListView: View {
             Group {
                 if index == 0 {
                     // Первая подпись уже нарисована в TodayScreen над glow.
-                    // Нулевая метка остаётся здесь только для геометрии.
+                    // Геометрическую метку для неё не публикуем: при
+                    // виртуализации LazyVStack нулевая метка могла повторно
+                    // появиться рядом с порогом и вернуть sticky-подпись с
+                    // «Просрочено» обратно на «Ждут вас».
                     Color.clear.frame(height: 0)
                 } else {
                     HStack(spacing: 6) {
@@ -86,18 +90,14 @@ struct TodayListView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .background {
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: TodaySectionKey.self,
-                        value: [TodaySectionMark(
-                            title: info.title,
-                            icon: info.icon,
-                            color: info.color,
-                            minY: geo.frame(in: .named(todayScrollSpace)).minY
-                        )]
-                    )
-                }
+            // Каждая НЕ первая секция сама сообщает пересечение порога.
+            // Это намеренно не PreferenceKey: внутри LazyVStack preference-
+            // массив может на кадр стать пустым или потерять отдельный header,
+            // из-за чего «Просрочено» не заменяло «Ждут вас».
+            .onGeometryChange(for: CGFloat.self) { geo in
+                geo.frame(in: .named(todayScrollSpace)).minY
+            } action: { _, minY in
+                if index > 0 { onSectionBoundary(info, minY) }
             }
         }
     }
@@ -142,9 +142,34 @@ struct TodaySectionMark: Equatable {
     let minY: CGFloat
 }
 
-enum TodaySectionKey: PreferenceKey {
-    static let defaultValue: [TodaySectionMark] = []
-    static func reduce(value: inout [TodaySectionMark], nextValue: () -> [TodaySectionMark]) {
-        value.append(contentsOf: nextValue())
+/// Редуктор переходов sticky-подзаголовка. Все реальные секции равноправны;
+/// nil означает первую существующую секцию, которую рисует fallback шапки.
+enum TodaySectionTracker {
+    static func next(
+        current: TodaySectionMark?,
+        crossing: TodaySectionInfo,
+        minY: CGFloat,
+        sections: [TodaySectionInfo],
+        threshold: CGFloat
+    ) -> TodaySectionMark? {
+        guard let boundaryIndex = sections.firstIndex(where: { $0.kind == crossing.kind }) else {
+            return current
+        }
+        let currentIndex = current.flatMap { mark in
+            sections.firstIndex(where: { $0.title == mark.title })
+        } ?? 0
+
+        if minY <= threshold {
+            guard boundaryIndex >= currentIndex else { return current }
+            return mark(crossing)
+        }
+
+        guard boundaryIndex == currentIndex else { return current }
+        let previousIndex = boundaryIndex - 1
+        return previousIndex > 0 ? mark(sections[previousIndex]) : nil
+    }
+
+    private static func mark(_ info: TodaySectionInfo) -> TodaySectionMark {
+        TodaySectionMark(title: info.title, icon: info.icon, color: info.color, minY: 0)
     }
 }

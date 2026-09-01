@@ -49,7 +49,7 @@ struct ProjectTasksScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: TFSpacing.md) {
+            LazyVStack(alignment: .leading, spacing: TFSpacing.md) {
                 TFErrorBanner(projectStore.errorMessage, variant: .inline)
                 TFErrorBanner(taskStore.errorMessage, variant: .inline)
 

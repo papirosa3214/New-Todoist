@@ -25,7 +25,7 @@ struct ActivityScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: TFSpacing.md) {
+            LazyVStack(alignment: .leading, spacing: TFSpacing.md) {
                 TFErrorBanner(taskStore.errorMessage, variant: .inline)
                     .padding(.horizontal, TFSpacing.screenHorizontal)
 

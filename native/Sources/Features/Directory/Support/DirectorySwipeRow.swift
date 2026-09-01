@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // Свайп строки — spec/SCREENS-2.md §0.6 (`useRowSwipe`), числа сверены живьём
 // с `src/lib/useRowSwipe.ts`: ширина панели действия 88pt, направление
@@ -16,14 +17,11 @@ struct DirectorySwipeRow<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     private let actionWidth: CGFloat = 88
-    private let directionLock: CGFloat = 8
-    private let directionBias: CGFloat = 1.3
     private let openPx: CGFloat = 36
     private let openVelocity: CGFloat = 280
 
     @State private var settledOffset: CGFloat = 0
     @State private var dragOffset: CGFloat = 0
-    @State private var measuredHeight: CGFloat = 60
 
     private var offsetX: CGFloat { clamp(settledOffset + dragOffset) }
 
@@ -35,7 +33,8 @@ struct DirectorySwipeRow<Content: View>: View {
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(.white)
                 }
-                .frame(width: max(offsetX, 0), height: measuredHeight)
+                .frame(width: max(offsetX, 0))
+                .frame(maxHeight: .infinity)
                 .background(Color.tfSwipeDelete)
                 .opacity(offsetX > 0 ? 1 : 0)
                 Spacer(minLength: 0)
@@ -44,22 +43,24 @@ struct DirectorySwipeRow<Content: View>: View {
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(.white)
                 }
-                .frame(width: max(-offsetX, 0), height: measuredHeight)
+                .frame(width: max(-offsetX, 0))
+                .frame(maxHeight: .infinity)
                 .background(Color.tfSwipeEdit)
                 .opacity(offsetX < 0 ? 1 : 0)
             }
+            .frame(maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: TFRadius.lg))
 
             content()
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(key: DirectorySwipeHeightKey.self, value: geo.size.height)
-                    }
-                )
                 .offset(x: offsetX)
-                .gesture(swipeGesture)
+                .gesture(
+                    HorizontalPan(
+                        onBegin: { UIImpactFeedbackGenerator(style: .soft).impactOccurred() },
+                        onChange: { dx in dragOffset = dx },
+                        onEnd: { dx, velocity in settle(dx: dx, velocity: velocity) }
+                    )
+                )
         }
-        .onPreferenceChange(DirectorySwipeHeightKey.self) { measuredHeight = $0 }
         .clipShape(RoundedRectangle(cornerRadius: TFRadius.lg))
     }
 
@@ -70,41 +71,24 @@ struct DirectorySwipeRow<Content: View>: View {
         }
     }
 
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: directionLock)
-            .onChanged { value in
-                // Прокрутка списка не должна дёргать строку: игнорируем жест,
-                // пока вертикаль весомее горизонтали в 1.3 раза (spec §0.6).
-                let dx = value.translation.width
-                let dy = value.translation.height
-                guard abs(dx) > abs(dy) * directionBias else { return }
-                dragOffset = dx
-            }
-            .onEnded { value in
-                let dx = value.translation.width
-                let dy = value.translation.height
-                guard abs(dx) > abs(dy) * directionBias else { return }
-                let velocity = value.predictedEndTranslation.width - dx
-                let finalOffset = clamp(settledOffset + dx)
-                withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
-                    if settledOffset == 0 {
-                        if finalOffset < -openPx || velocity < -openVelocity {
-                            settledOffset = -actionWidth
-                        } else if finalOffset > openPx || velocity > openVelocity {
-                            settledOffset = actionWidth
-                        } else {
-                            settledOffset = 0
-                        }
-                    } else if settledOffset < 0 {
-                        let shouldKeep = !(dx > openPx || velocity > openVelocity)
-                        settledOffset = shouldKeep ? -actionWidth : 0
-                    } else {
-                        let shouldKeep = !(dx < -openPx || velocity < -openVelocity)
-                        settledOffset = shouldKeep ? actionWidth : 0
-                    }
-                    dragOffset = 0
+    private func settle(dx: CGFloat, velocity: CGFloat) {
+        let finalOffset = clamp(settledOffset + dx)
+        withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
+            if settledOffset == 0 {
+                if finalOffset < -openPx || velocity < -openVelocity {
+                    settledOffset = -actionWidth
+                } else if finalOffset > openPx || velocity > openVelocity {
+                    settledOffset = actionWidth
+                } else {
+                    settledOffset = 0
                 }
+            } else if settledOffset < 0 {
+                settledOffset = (dx > openPx || velocity > openVelocity) ? 0 : -actionWidth
+            } else {
+                settledOffset = (dx < -openPx || velocity < -openVelocity) ? 0 : actionWidth
             }
+            dragOffset = 0
+        }
     }
 
     private func clamp(_ raw: CGFloat) -> CGFloat {
@@ -116,12 +100,5 @@ struct DirectorySwipeRow<Content: View>: View {
             return -actionWidth - (over * 30) / (30 + over)
         }
         return raw
-    }
-}
-
-private struct DirectorySwipeHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 60
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }

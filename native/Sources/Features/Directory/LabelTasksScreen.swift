@@ -29,7 +29,7 @@ struct LabelTasksScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 TFErrorBanner(labelStore.errorMessage, variant: .inline)
                 TFErrorBanner(taskStore.errorMessage, variant: .inline)
                 if labelStore.isLoading || taskStore.isLoading { TFLoading(.block) }

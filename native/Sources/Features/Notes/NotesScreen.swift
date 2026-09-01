@@ -31,7 +31,7 @@ public struct NotesScreen: View {
         VStack(spacing: 0) {
             header
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     TFErrorBanner(viewModel.foldersErrorMessage)
                         .padding(.horizontal, TFSpacing.screenHorizontal)
                     TFErrorBanner(viewModel.notesErrorMessage)

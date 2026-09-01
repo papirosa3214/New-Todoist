@@ -31,7 +31,7 @@ struct ChatComposer: View {
                 .padding(.bottom, TFSpacing.sm)
             }
 
-            HStack(spacing: TFSpacing.sm) {
+            HStack(alignment: .bottom, spacing: TFSpacing.sm) {
                 addresseeSlot
                 fieldRow
                 sendButton
@@ -153,12 +153,13 @@ struct ChatComposer: View {
     // MARK: - Поле
 
     private var fieldRow: some View {
-        HStack(spacing: 4) {
+        HStack(alignment: .bottom, spacing: 4) {
             TextField("", text: $viewModel.draftText, prompt: Text(placeholder).foregroundStyle(Color.tfDim), axis: .vertical)
                 .tfText(.input)
                 .foregroundStyle(Color.tfText)
                 .focused($isFieldFocused)
                 .lineLimit(1...4)
+                .padding(.vertical, 11)
                 .accessibilityIdentifier("chat.message")
 
             // Скрепка и микрофон — тап не должен отбирать фокус у поля
@@ -177,7 +178,12 @@ struct ChatComposer: View {
         }
         .padding(.leading, TFSpacing.md)
         .padding(.trailing, 6)
-        .frame(height: H)
+        // Фиксированная высота 44pt обрезала многострочный TextField, хотя
+        // `axis: .vertical` и `lineLimit(1...4)` уже были заданы. Теперь
+        // капсула растёт вместе с полем до четырёх строк, после чего SwiftUI
+        // включает внутреннюю прокрутку; боковые кнопки остаются у нижней
+        // кромки и не прыгают относительно кнопки отправки.
+        .frame(minHeight: H)
         .background(Color.tfCard)
         .clipShape(RoundedRectangle(cornerRadius: TFRadius.lg))
     }

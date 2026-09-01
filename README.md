@@ -211,6 +211,8 @@ xcrun devicectl device process launch --device 00008150-001545400144401C \
 | [`STATUS.md`](STATUS.md) | **Живой статус проекта:** текущие задачи, кто работает, последние изменения. |
 | [`docs/BRANCHING.md`](docs/BRANCHING.md) | **Ветки и рабочие копии:** активная `native-app`, источник iOS-изменений и порядок синхронизации. |
 | [`docs/NATIVE-IOS-TODAY-CHROME.md`](docs/NATIVE-IOS-TODAY-CHROME.md) | **Экран «Сегодня» на iOS:** слои липкой шапки, поведение свайпов и нативное стеклянное меню фильтров. |
+| [`docs/NATIVE-IOS-CHAT.md`](docs/NATIVE-IOS-CHAT.md) | **Экран чата на iOS:** отдельная нижняя панель ввода, размытая шапка и возврат в «Обзор». |
+| [`docs/NATIVE-IOS-PERFORMANCE.md`](docs/NATIVE-IOS-PERFORMANCE.md) | **Аудит плавности iOS:** устранённые горячие пути, жесты и ограничения профилирования. |
 | [`docs/TASK-LIFECYCLE-SCENARIOS.md`](docs/TASK-LIFECYCLE-SCENARIOS.md) | **Матрица сценариев и состояний задач:** человек, агент, блокеры, приёмка, доработка. |
 | [`docs/AGENTS-SETUP-GUIDE.md`](docs/AGENTS-SETUP-GUIDE.md) | **Подключение агентов от А до Я:** создание, ключи, MCP, автономный будильник. |
 | [`AGENT-PROTOCOL.md`](AGENT-PROTOCOL.md) | **Правила агентов:** жизненный цикл задач, шаги, аренда, сдача работы. |

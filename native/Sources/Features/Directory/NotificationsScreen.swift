@@ -33,7 +33,7 @@ struct NotificationsScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: TFSpacing.sm) {
+            LazyVStack(alignment: .leading, spacing: TFSpacing.sm) {
                 TFErrorBanner(notificationStore.errorMessage, variant: .inline)
                 TFErrorBanner(markAllErrorMessage, variant: .inline)
 

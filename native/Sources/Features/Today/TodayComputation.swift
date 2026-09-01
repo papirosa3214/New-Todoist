@@ -35,16 +35,112 @@ struct TodayComputation {
     let isLoading: Bool
     let isError: Bool
 
+    // Результаты цепочки вычисляются один раз при создании снимка экрана.
+    // Раньше это были computed properties: один проход `TodayScreen.body`
+    // обращался к одним и тем же filter/sort до десятка раз, а состояние
+    // липкой шапки обновляет body во время прокрутки. На длинной ленте именно
+    // эта повторная работа на main thread ощущалась как микрорывки.
+    let plannerTasks: [ApiTask]
+    let waitingTasksAll: [ApiTask]
+    let rawOverdueAll: [ApiTask]
+    let rawTodayAll: [ApiTask]
+    let waitingTasks: [ApiTask]
+    let overdueTasks: [ApiTask]
+    let todayTasks: [ApiTask]
+    let projectOptions: [TodayFilterOption]
+    let labelOptions: [TodayFilterOption]
+    let assigneeOptions: (list: [TodayAssigneeOption], hasUnassigned: Bool)
+    let trueEmpty: Bool
+    let filteredEmpty: Bool
+    let hourDays: [TodayHourDay]
+    let boardColumns: [TodayBoardColumn]
+
+    init(
+        allTasks: [ApiTask], currentUser: ApiUser?, agents: [ApiUser],
+        filters: TodayTaskFilters, visibleProjectIds: [String: Bool],
+        hasConfiguredVisibleProjects: Bool, today: String,
+        activeHourDate: String, isLoading: Bool, isError: Bool
+    ) {
+        self.allTasks = allTasks
+        self.currentUser = currentUser
+        self.agents = agents
+        self.filters = filters
+        self.visibleProjectIds = visibleProjectIds
+        self.hasConfiguredVisibleProjects = hasConfiguredVisibleProjects
+        self.today = today
+        self.activeHourDate = activeHourDate
+        self.isLoading = isLoading
+        self.isError = isError
+
+        let planner = hasConfiguredVisibleProjects
+            ? allTasks.filter { task in
+                guard let projectID = task.projectId else { return true }
+                return visibleProjectIds[projectID] == true
+            }
+            : allTasks
+        plannerTasks = planner
+
+        let plannerPartition = Self.partitionOverdueToday(planner, today: today)
+        let waitingAll = Self.waitingTasks(from: planner, currentUser: currentUser)
+        waitingTasksAll = waitingAll
+        rawOverdueAll = plannerPartition.overdue
+        rawTodayAll = plannerPartition.todayTasks
+
+        let filteredWaiting = TodayFilterEngine.filter(waitingAll, filters)
+        let filteredOverdue = TodayFilterEngine.filter(plannerPartition.overdue, filters)
+        let filteredToday = TodayFilterEngine.filter(plannerPartition.todayTasks, filters)
+        let waitingIDs = Set(filteredWaiting.map(\.id))
+        waitingTasks = filteredWaiting
+        overdueTasks = filteredOverdue.filter { !waitingIDs.contains($0.id) }
+        todayTasks = filteredToday.filter { !waitingIDs.contains($0.id) }
+
+        projectOptions = TodayFilterEngine.projectOptions(allTasks)
+        labelOptions = TodayFilterEngine.labelOptions(allTasks)
+        assigneeOptions = TodayFilterEngine.assigneeOptions(allTasks)
+
+        let trueWaiting = hasConfiguredVisibleProjects
+            ? Self.waitingTasks(from: allTasks, currentUser: currentUser)
+            : waitingAll
+        let truePartition = hasConfiguredVisibleProjects
+            ? Self.partitionOverdueToday(allTasks, today: today)
+            : plannerPartition
+        let isTrulyEmpty = !isLoading && !isError
+            && trueWaiting.isEmpty
+            && truePartition.overdue.isEmpty
+            && truePartition.todayTasks.isEmpty
+        trueEmpty = isTrulyEmpty
+        filteredEmpty = !isTrulyEmpty && !isLoading && !isError
+            && overdueTasks.isEmpty && todayTasks.isEmpty && waitingTasks.isEmpty
+
+        let combined: [ApiTask]
+        if activeHourDate == today {
+            var seen = Set<String>()
+            combined = (filteredWaiting + todayTasks + overdueTasks).filter { seen.insert($0.id).inserted }
+        } else {
+            combined = planner.filter { $0.dueDate == activeHourDate }
+        }
+        hourDays = [TodayHourDay(
+            date: activeHourDate,
+            tasks: combined.filter { !TodayTaskOwner.isAgentAssigned($0, agents) },
+            isToday: activeHourDate == today
+        )]
+
+        var columns: [TodayBoardColumn] = []
+        if !filteredWaiting.isEmpty {
+            columns.append(.init(id: .waiting, title: "Ждут вас \(filteredWaiting.count)", tasks: filteredWaiting, titleIsRed: false))
+        }
+        if !overdueTasks.isEmpty {
+            columns.append(.init(id: .overdue, title: "Просрочено \(overdueTasks.count)", tasks: overdueTasks, titleIsRed: true))
+        }
+        columns.append(.init(id: .today, title: TodayDate.formatColumnDateLabel(today), tasks: todayTasks, titleIsRed: false))
+        boardColumns = columns
+    }
+
     /// Задачи без project_id (Входящие) — всегда; проектные — только opt-in
     /// (spec §3.10). Исключение: пока пользователь ни разу не открывал этот
     /// выбор, показываем ВСЁ — иначе свежепоставленное приложение встречает
     /// пустым экраном при полном списке задач на сервере.
-    var plannerTasks: [ApiTask] {
-        guard hasConfiguredVisibleProjects else { return allTasks }
-        return allTasks.filter { $0.projectId == nil || visibleProjectIds[$0.projectId!] == true }
-    }
-
-    private func partitionOverdueToday(_ tasks: [ApiTask]) -> (overdue: [ApiTask], todayTasks: [ApiTask]) {
+    private static func partitionOverdueToday(_ tasks: [ApiTask], today: String) -> (overdue: [ApiTask], todayTasks: [ApiTask]) {
         let overdue = tasks
             .filter { ($0.dueDate ?? "") != "" && $0.dueDate! < today }
             .sorted { ($0.dueDate ?? "") < ($1.dueDate ?? "") }
@@ -52,82 +148,11 @@ struct TodayComputation {
         return (overdue, todayTasks)
     }
 
-    private func waitingTasks(from tasks: [ApiTask]) -> [ApiTask] {
+    private static func waitingTasks(from tasks: [ApiTask], currentUser: ApiUser?) -> [ApiTask] {
         guard currentUser != nil else { return [] }
         return tasks
             .filter { TodayTaskOwner.isWaitingForUser($0, currentUser) }
             .sorted { TodayTaskOwner.waitingSort($0, $1) }
     }
 
-    // MARK: «…All» — до фильтра проект/метка/исполнитель, но уже в рамках plannerTasks.
-
-    var waitingTasksAll: [ApiTask] { waitingTasks(from: plannerTasks) }
-    var rawOverdueAll: [ApiTask] { partitionOverdueToday(plannerTasks).overdue }
-    var rawTodayAll: [ApiTask] { partitionOverdueToday(plannerTasks).todayTasks }
-
-    // MARK: Отфильтрованные + дедуплицированные — источник правды для рендера и счётчиков.
-
-    var waitingTasks: [ApiTask] { TodayFilterEngine.filter(waitingTasksAll, filters) }
-    private var rawOverdueTasks: [ApiTask] { TodayFilterEngine.filter(rawOverdueAll, filters) }
-    private var rawTodayTasks: [ApiTask] { TodayFilterEngine.filter(rawTodayAll, filters) }
-
-    private var waitingIds: Set<String> { Set(waitingTasks.map(\.id)) }
-    var overdueTasks: [ApiTask] { rawOverdueTasks.filter { !waitingIds.contains($0.id) } }
-    var todayTasks: [ApiTask] { rawTodayTasks.filter { !waitingIds.contains($0.id) } }
-
-    // MARK: Опции фильтров — из ПОЛНОГО allTasks, не из plannerTasks (spec §4.3).
-
-    var projectOptions: [TodayFilterOption] { TodayFilterEngine.projectOptions(allTasks) }
-    var labelOptions: [TodayFilterOption] { TodayFilterEngine.labelOptions(allTasks) }
-    var assigneeOptions: (list: [TodayAssigneeOption], hasUnassigned: Bool) { TodayFilterEngine.assigneeOptions(allTasks) }
-
-    // MARK: trueEmpty/filteredEmpty — от allTasks целиком, независимо от фильтров/видимых проектов.
-
-    private var trueWaitingAll: [ApiTask] { waitingTasks(from: allTasks) }
-    private var trueOverdueTodayAll: (overdue: [ApiTask], todayTasks: [ApiTask]) { partitionOverdueToday(allTasks) }
-
-    var trueEmpty: Bool {
-        !isLoading && !isError
-            && trueWaitingAll.isEmpty
-            && trueOverdueTodayAll.overdue.isEmpty
-            && trueOverdueTodayAll.todayTasks.isEmpty
-    }
-
-    var filteredEmpty: Bool {
-        !trueEmpty && !isLoading && !isError
-            && overdueTasks.isEmpty && todayTasks.isEmpty && waitingTasks.isEmpty
-    }
-
-    // MARK: «Часы» — ровно один день (spec §5.1 «hours»), агентские задачи исключены.
-
-    var hourDays: [TodayHourDay] {
-        let withoutAgent: (ApiTask) -> Bool = { !TodayTaskOwner.isAgentAssigned($0, agents) }
-        let combined: [ApiTask]
-        if activeHourDate == today {
-            var seen = Set<String>()
-            var merged: [ApiTask] = []
-            for t in waitingTasks + todayTasks + overdueTasks where !seen.contains(t.id) {
-                seen.insert(t.id)
-                merged.append(t)
-            }
-            combined = merged
-        } else {
-            combined = plannerTasks.filter { $0.dueDate == activeHourDate }
-        }
-        return [TodayHourDay(date: activeHourDate, tasks: combined.filter(withoutAgent), isToday: activeHourDate == today)]
-    }
-
-    // MARK: Доска — «Ждут вас» / «Просрочено» / «Сегодня», без группировки по проектам (spec §5.1).
-
-    var boardColumns: [TodayBoardColumn] {
-        var cols: [TodayBoardColumn] = []
-        if !waitingTasks.isEmpty {
-            cols.append(TodayBoardColumn(id: .waiting, title: "Ждут вас \(waitingTasks.count)", tasks: waitingTasks, titleIsRed: false))
-        }
-        if !overdueTasks.isEmpty {
-            cols.append(TodayBoardColumn(id: .overdue, title: "Просрочено \(overdueTasks.count)", tasks: overdueTasks, titleIsRed: true))
-        }
-        cols.append(TodayBoardColumn(id: .today, title: TodayDate.formatColumnDateLabel(today), tasks: todayTasks, titleIsRed: false))
-        return cols
-    }
 }

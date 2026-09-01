@@ -1,11 +1,56 @@
 import Foundation
 
 /// Единая точка разбора дат сервера — spec/API.md §1: ТРИ разных формата,
-/// не путать. Разбор через одноразовые форматтеры (не общий статичный
-/// экземпляр) — `DateFormatter`/`ISO8601DateFormatter` не документированы
-/// как безопасные при конкурентном использовании из разных потоков, а объём
-/// данных личного трекера не требует переиспользования ради производительности.
+/// не путать. Форматтеры переиспользуются под общей блокировкой: создание
+/// `DateFormatter` дорого и раньше происходило для каждой видимой строки при
+/// каждом проходе SwiftUI body. Блокировка сохраняет корректность, если
+/// парсинг однажды будет вызван не только с главного потока.
 public enum DateFormats {
+    private static let formatterLock = NSLock()
+
+    private static let sqliteFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
+
+    private static let calendarFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static let localDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = .autoupdatingCurrent
+        formatter.locale = .autoupdatingCurrent
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static let isoWithFraction: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let isoPlain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private static func locked<T>(_ work: () -> T) -> T {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return work()
+    }
 
     /// `created_at`/`updated_at`/`completed_at`/... — SQLite `DATETIME('now')`,
     /// UTC, БЕЗ суффикса `T`/`Z` (пример: `"2026-08-31 12:00:00"`). Наивный
@@ -19,12 +64,7 @@ public enum DateFormats {
     /// пробуем sqlite-формат первым, ISO8601 — запасным вариантом.
     public static func sqliteUTC(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        if let date = formatter.date(from: raw) { return date }
+        if let date = locked({ sqliteFormatter.date(from: raw) }) { return date }
         return iso8601(raw)
     }
 
@@ -32,12 +72,9 @@ public enum DateFormats {
     /// у `last_seen_at` (проверено живым запросом к :3001, 31.08.2026).
     public static func iso8601(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = withFraction.date(from: raw) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: raw)
+        return locked {
+            isoWithFraction.date(from: raw) ?? isoPlain.date(from: raw)
+        }
     }
 
     /// `due_date` — календарная дата БЕЗ времени, `YYYY-MM-DD`. Разбирается в
@@ -46,22 +83,12 @@ public enum DateFormats {
     /// соседний день у пользователей восточнее UTC ближе к полуночи.
     public static func calendarDate(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: raw)
+        return locked { calendarFormatter.date(from: raw) }
     }
 
     /// Обратное преобразование — `Date` → `YYYY-MM-DD` для отправки в `due_date`.
     public static func calendarDateString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        locked { calendarFormatter.string(from: date) }
     }
 
     /// Сегодняшняя календарная дата в формате `YYYY-MM-DD` — для сравнения с
@@ -69,9 +96,11 @@ public enum DateFormats {
     /// таймзона устройства, НЕ UTC: due_date — это про календарный день
     /// пользователя, а не абсолютный момент.
     public static func todayString() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
+        locked {
+            localDayFormatter.calendar = .autoupdatingCurrent
+            localDayFormatter.timeZone = .autoupdatingCurrent
+            return localDayFormatter.string(from: Date())
+        }
     }
 
     /// `start_time` — `HH:MM`, локальное время суток, НЕ привязано к таймзоне.

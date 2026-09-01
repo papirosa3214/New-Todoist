@@ -59,9 +59,6 @@ struct RootShellView: View {
     // расходилось со спекой и заодно ломало бейдж «Сегодня» ниже: initial-
     // срабатывание onChange помечало бы его просмотренным при каждом запуске).
     @State private var selectedTab: Tab = .overview
-    /// Откуда зашли в чат: на нём панель вкладок скрыта, и стрелка «назад»
-    /// в его шапке возвращает именно на прежнюю вкладку, а не всегда в «Обзор».
-    @State private var tabBeforeChat: Tab = .overview
     @State private var isCreateMenuOpen = false
     /// Панель быстрого создания задачи: своя вью-модель живёт здесь, чтобы
     /// пережить переход «развернуть» в полную форму без потери введённого.
@@ -133,7 +130,6 @@ struct RootShellView: View {
                         if tab == selectedTab {
                             paths[tab] = NavigationPath()
                         } else {
-                            if tab == .chat { tabBeforeChat = selectedTab }
                             selectedTab = tab
                         }
                     },
@@ -145,7 +141,8 @@ struct RootShellView: View {
         }
         .environment(\.chatBackAction, {
             isCreateMenuOpen = false
-            selectedTab = tabBeforeChat
+            paths[.chat] = NavigationPath()
+            selectedTab = .overview
         })
         .animation(.easeOut(duration: TFAnimation.createMenu), value: isCreateMenuOpen)
         .sheet(item: $quickAddDraft, onDismiss: {
@@ -223,7 +220,6 @@ struct RootShellView: View {
             get: { selectedTab.rawValue },
             set: { newValue in
                 if let newValue, let tab = Tab(rawValue: newValue) {
-                    if tab == .chat, selectedTab != .chat { tabBeforeChat = selectedTab }
                     selectedTab = tab
                 }
             }

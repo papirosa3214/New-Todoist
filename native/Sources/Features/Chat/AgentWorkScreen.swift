@@ -54,7 +54,7 @@ struct AgentWorkScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 TFErrorBanner(taskStore.errorMessage.map { _ in "Не удалось загрузить задачи" })
                     .padding(.horizontal, TFSpacing.screenHorizontal)
                     .padding(.top, TFSpacing.sm)

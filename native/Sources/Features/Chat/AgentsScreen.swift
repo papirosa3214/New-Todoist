@@ -13,7 +13,7 @@ struct AgentsScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: TFSpacing.xl) {
+            LazyVStack(alignment: .leading, spacing: TFSpacing.xl) {
                 TFErrorBanner(viewModel.listErrorMessage.map { _ in "Не удалось загрузить список агентов" })
 
                 teamSection

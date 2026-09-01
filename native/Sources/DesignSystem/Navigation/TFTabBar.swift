@@ -56,7 +56,9 @@ struct TFTodayDateIcon: View {
             // вырезает `destinationOut`. Владелец 01.09.2026: «используй ту
             // иконку, просто почисти точки и поставь единичку».
             Image(systemName: "calendar")
-                .font(.system(size: size))
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
                 .mask(
                     ZStack {
                         Rectangle()
@@ -137,20 +139,25 @@ public struct TFTabBar: View {
                 // только цвет значка: серый → белый.
                 Group {
                     if item.showsTodayDate {
-                        // Замер по кадру 01.09.2026: рисунок «calendar» давал
-                        // 27.3pt против 31.7–33.0 у соседей — значок выбивался
-                        // из ряда. Коэффициент 1.19 приводит его ширину к тем
-                        // же ~32.5pt.
-                        TFTodayDateIcon(size: TFTabBarMetrics.iconSize * 1.19)
+                        TFTodayDateIcon(size: TFTabBarMetrics.tabIconSize)
                     } else {
                         Image(systemName: item.icon)
-                            .font(.system(size: TFTabBarMetrics.iconSize))
+                            .resizable()
+                            .scaledToFit()
+                            .frame(
+                                width: TFTabBarMetrics.tabIconSize,
+                                height: TFTabBarMetrics.tabIconSize
+                            )
                             // У `calendar.badge.clock` бейдж висит справа и
                             // тянет всю массу рисунка на 2.9pt вправо: центр
                             // значка не совпадал с центром своей ячейки.
                             .offset(x: item.icon == "calendar.badge.clock" ? -2.9 : 0)
                     }
                 }
+                .frame(
+                    width: TFTabBarMetrics.tabIconSize,
+                    height: TFTabBarMetrics.tabIconSize
+                )
                 .foregroundStyle(isActive ? Color.tfText : Color.tfDim)
                 if let count = item.badgeCount, count > 0 {
                     Text("\(count)")
@@ -318,4 +325,3 @@ public struct TFTapMenuStyle: ButtonStyle {
         }
     }
 }
-

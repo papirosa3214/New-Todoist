@@ -27,7 +27,7 @@ struct ProjectsScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 2) {
+            LazyVStack(spacing: 2) {
                 ForEach(projectStore.projects) { project in
                     if editingID == project.id {
                         ProjectEditForm(project: project, apiClient: apiClient, onSaved: {

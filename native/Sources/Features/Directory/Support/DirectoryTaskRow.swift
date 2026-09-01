@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // Строка задачи для ProjectTasksScreen — дубль `src/components/TaskRow.tsx`
 // (общий компонент, которым пользуется чужой набор экранов), тем же приёмом
@@ -30,7 +31,6 @@ struct DirectoryTaskRow: View {
     @State private var settledOffset: CGFloat = 0
     @State private var dragOffset: CGFloat = 0
     @State private var confirmDelete = false
-    @State private var measuredHeight: CGFloat = 60
 
     private var offsetX: CGFloat { clamp(settledOffset + dragOffset) }
 
@@ -49,15 +49,19 @@ struct DirectoryTaskRow: View {
             }
 
             row
-                .background(
-                    GeometryReader { geo in
-                        Color.tfBackground.preference(key: DirectoryTaskRowHeightKey.self, value: geo.size.height)
-                    }
-                )
+                .background(Color.tfBackground)
                 .offset(x: offsetX)
-                .gesture(swipeGesture)
+                // UIKit-pan не забирает вертикальный жест у ScrollView.
+                // Обычный DragGesture здесь делал начало прокрутки вязким:
+                // список ждал, решит ли строка трактовать касание как свайп.
+                .gesture(
+                    HorizontalPan(
+                        onBegin: { UIImpactFeedbackGenerator(style: .soft).impactOccurred() },
+                        onChange: { dx in dragOffset = dx },
+                        onEnd: { dx, velocity in settle(dx: dx, velocity: velocity) }
+                    )
+                )
         }
-        .onPreferenceChange(DirectoryTaskRowHeightKey.self) { measuredHeight = $0 }
         .clipped()
         // Ближайший native-эквивалент своего нижнего экшн-листа из TaskRow.tsx
         // (красная «Удалить» текстом + отдельная карточка «Отмена») — тот же
@@ -78,7 +82,8 @@ struct DirectoryTaskRow: View {
             }
             .foregroundStyle(.white)
         }
-        .frame(width: width, height: measuredHeight)
+        .frame(width: width)
+        .frame(maxHeight: .infinity)
         .opacity(visible ? 1 : 0)
     }
 
@@ -175,31 +180,24 @@ struct DirectoryTaskRow: View {
 
     // Пороги 1:1 с `TaskRow.tsx`: открытие >36px/280px·с⁻¹, закрытие
     // обратным сдвигом >25px/250px·с⁻¹ — асимметрично, легче закрыть, чем открыть.
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { value in dragOffset = value.translation.width }
-            .onEnded { value in
-                let velocity = value.predictedEndTranslation.width - value.translation.width
-                let finalOffset = clamp(settledOffset + value.translation.width)
-                withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
-                    if settledOffset == 0 {
-                        if finalOffset < -36 || velocity < -280 {
-                            settledOffset = -actionWidth
-                        } else if finalOffset > 36 || velocity > 280 {
-                            settledOffset = actionWidth
-                        } else {
-                            settledOffset = 0
-                        }
-                    } else if settledOffset < 0 {
-                        let dx = value.translation.width
-                        settledOffset = (dx > 25 || velocity > 250) ? 0 : -actionWidth
-                    } else {
-                        let dx = value.translation.width
-                        settledOffset = (dx < -25 || velocity < -250) ? 0 : actionWidth
-                    }
-                    dragOffset = 0
+    private func settle(dx: CGFloat, velocity: CGFloat) {
+        let finalOffset = clamp(settledOffset + dx)
+        withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
+            if settledOffset == 0 {
+                if finalOffset < -36 || velocity < -280 {
+                    settledOffset = -actionWidth
+                } else if finalOffset > 36 || velocity > 280 {
+                    settledOffset = actionWidth
+                } else {
+                    settledOffset = 0
                 }
+            } else if settledOffset < 0 {
+                settledOffset = (dx > 25 || velocity > 250) ? 0 : -actionWidth
+            } else {
+                settledOffset = (dx < -25 || velocity < -250) ? 0 : actionWidth
             }
+            dragOffset = 0
+        }
     }
 
     private func clamp(_ raw: CGFloat) -> CGFloat {
@@ -211,13 +209,6 @@ struct DirectoryTaskRow: View {
             return -actionWidth - (over * 30) / (30 + over)
         }
         return raw
-    }
-}
-
-private struct DirectoryTaskRowHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 60
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }
 

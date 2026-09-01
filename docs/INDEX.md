@@ -10,10 +10,12 @@
 2. [**STATUS.md**](../STATUS.md) — живой журнал состояния проекта: кто работает, что сделано последним, известные нюансы.
 3. [**BRANCHING.md**](BRANCHING.md) — **карта веток и рабочих копий:** iOS-разработка в `native-app`, проверка контекста и безопасная публикация.
 4. [**NATIVE-IOS-TODAY-CHROME.md**](NATIVE-IOS-TODAY-CHROME.md) — **зафиксированная реализация экрана «Сегодня»:** слои липкой шапки, pull-down, схлопывание и системное стеклянное меню фильтров.
-5. [**TASK-LIFECYCLE-SCENARIOS.md**](TASK-LIFECYCLE-SCENARIOS.md) — **матрица всех сценариев, состояний и кнопок задач** (человек, агент, блокеры, приёмка, доработка).
-6. [**ARCHITECTURE.md**](ARCHITECTURE.md) — детальная архитектура: схема взаимодействия, потоки данных, система авторизации, iOS-плагины.
-7. [**INTEGRATIONS.md**](../INTEGRATIONS.md) — руководство по интеграциям с Google Tasks, Apple Calendar и Apple Reminders.
-8. [**DESIGN.md**](../DESIGN.md) — гайдлайны по UI/UX: дизайн-система, цветовая палитра, микро-анимации, система откликов.
+5. [**NATIVE-IOS-CHAT.md**](NATIVE-IOS-CHAT.md) — **контракт нативного чата:** отдельная нижняя панель ввода, размытая шапка и возврат в «Обзор».
+6. [**NATIVE-IOS-PERFORMANCE.md**](NATIVE-IOS-PERFORMANCE.md) — **аудит плавности:** исправленные горячие пути и ограничения измерений Simulator.
+7. [**TASK-LIFECYCLE-SCENARIOS.md**](TASK-LIFECYCLE-SCENARIOS.md) — **матрица всех сценариев, состояний и кнопок задач** (человек, агент, блокеры, приёмка, доработка).
+8. [**ARCHITECTURE.md**](ARCHITECTURE.md) — детальная архитектура: схема взаимодействия, потоки данных, система авторизации, iOS-плагины.
+9. [**INTEGRATIONS.md**](../INTEGRATIONS.md) — руководство по интеграциям с Google Tasks, Apple Calendar и Apple Reminders.
+10. [**DESIGN.md**](../DESIGN.md) — гайдлайны по UI/UX: дизайн-система, цветовая палитра, микро-анимации, система откликов.
 
 ---
 
