@@ -1,5 +1,10 @@
 import SwiftUI
 
+// Обёртка для использования String в .sheet(item:) — стандартный String не Identifiable.
+private struct IdentifiableDate: Identifiable, Equatable {
+    let id: String
+}
+
 // Экран «Планирование» (`/upcoming`) — spec/SCREENS-1.md §5.2. Имя структуры
 // и параметры инициализации фиксированы контрактом (spec/INTEGRATION.md):
 // `UpcomingScreen`, без параметров.
@@ -31,7 +36,11 @@ public struct UpcomingScreen: View {
     @State private var rescheduleOpen = false
 
     @State private var gridMonday = UpcomingDate.mondayOf(UpcomingDate.todayString())
-    @State private var gridMonth: (year: Int, month: Int) = UpcomingDate.yearMonth(UpcomingDate.todayString())
+    /// Опциональный: до первого появления экрана и до прихода первого
+    /// `onVisibleMonthChange` — пусто. Без этого View запоминал бы месяц
+    /// на момент своей инициализации (запуск в августе → в сентябре всё
+    /// ещё показывает август).
+    @State private var gridMonth: (year: Int, month: Int)? = nil
     private let monthGridInitialMonday = UpcomingDate.mondayOf(UpcomingDate.todayString())
 
     /// Зеркало `store/index.ts` `plannerVisibleProjects` — общая точка со
@@ -76,20 +85,11 @@ public struct UpcomingScreen: View {
             viewModeButton(.hours, "Три дня")
             Button("Отмена", role: .cancel) {}
         }
-        .sheet(isPresented: openDaySheetBinding) { daySheet }
-        .sheet(isPresented: $filterSheetOpen) { filterSheet }
-        .sheet(isPresented: $rescheduleOpen) {
-            if let task = rescheduleTask {
-                RescheduleSheetContent(
-                    taskIds: [task.id],
-                    taskStore: taskStore,
-                    onClose: {
-                        rescheduleTask = nil
-                        rescheduleOpen = false
-                    }
-                )
-            }
+        .sheet(item: Binding(get: { openDay.map(IdentifiableDate.init) }, set: { _ in openDay = nil })) { day in
+            daySheet(date: day.id)
         }
+        .sheet(isPresented: $filterSheetOpen) { filterSheet }
+        .sheet(item: $rescheduleTask) { task in rescheduleSheet(task: task) }
         .navigationDestination(isPresented: Binding(
             get: { pushedTaskID != nil }, set: { if !$0 { pushedTaskID = nil } }
         )) {
@@ -101,6 +101,12 @@ public struct UpcomingScreen: View {
             if let id = editingTaskID { routeDestination(.taskForm(taskID: id)) }
         }
         .task { await agentsProvider.load() }
+        .onAppear {
+            // Сбрасываем заголовок на месяц «сегодня» каждый раз при появлении
+            // экрана (а не только при первом создании View — иначе View,
+            // созданный в августе, остаётся с августом и в сентябре).
+            gridMonth = UpcomingDate.yearMonth(UpcomingDate.todayString())
+        }
     }
 
     @ViewBuilder
@@ -130,7 +136,9 @@ public struct UpcomingScreen: View {
                 )
             case .month:
                 UpcomingMonthView(
-                    initialMonday: monthGridInitialMonday, byDate: byDate, openDay: openDay,
+                    initialMonday: monthGridInitialMonday,
+                    initialMonth: UpcomingDate.yearMonth(UpcomingDate.todayString()),
+                    byDate: byDate, openDay: openDay,
                     onDayTap: { d in openDay = openDay == d ? nil : d },
                     onTaskTap: { pushedTaskID = $0 },
                     onVisibleMonthChange: { y, m in gridMonth = (y, m) }
@@ -149,24 +157,34 @@ public struct UpcomingScreen: View {
     }
 
     @ViewBuilder
-    private var daySheet: some View {
-        if let openDay, view == .week {
-            TFBottomSheetContent(
-                title: UpcomingDaySheetTitle.text(openDay), actionTitle: "Готово",
-                action: { self.openDay = nil }, onClose: { self.openDay = nil }
-            ) {
-                UpcomingDaySheetContent(
-                    date: openDay, tasks: byDate[openDay] ?? [],
-                    onTaskTap: { self.openDay = nil; pushedTaskID = $0 },
-                    onPrevDay: { self.openDay = UpcomingDate.addDays(openDay, -1) },
-                    onNextDay: { self.openDay = UpcomingDate.addDays(openDay, 1) }
-                )
-            }
-            .presentationDragIndicator(.hidden)
-            .presentationCornerRadius(TFRadius.sheet)
-            .presentationBackground(Color.tfCard)
-            .presentationDetents([.medium, .large])
+    private func daySheet(date openDay: String) -> some View {
+        TFBottomSheetContent(
+            title: UpcomingDaySheetTitle.text(openDay), actionTitle: "Готово",
+            action: { self.openDay = nil }, onClose: { self.openDay = nil }
+        ) {
+            UpcomingDaySheetContent(
+                date: openDay, tasks: byDate[openDay] ?? [],
+                onTaskTap: { self.openDay = nil; pushedTaskID = $0 },
+                onPrevDay: { self.openDay = UpcomingDate.addDays(openDay, -1) },
+                onNextDay: { self.openDay = UpcomingDate.addDays(openDay, 1) }
+            )
         }
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(TFRadius.sheet)
+        .presentationBackground(Color.tfCard)
+        .presentationDetents([.medium, .large])
+    }
+
+    @ViewBuilder
+    private func rescheduleSheet(task: ApiTask) -> some View {
+        RescheduleSheetContent(
+            taskIds: [task.id],
+            taskStore: taskStore,
+            onClose: {
+                rescheduleTask = nil
+                rescheduleOpen = false
+            }
+        )
     }
 
     private var filterSheet: some View {
@@ -264,7 +282,8 @@ public struct UpcomingScreen: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, TFSpacing.screenHorizontal).padding(.bottom, 6)
         case .month:
-            Text(UpcomingDate.monthsNom[gridMonth.month])
+            let m = gridMonth ?? UpcomingDate.yearMonth(UpcomingDate.todayString())
+            Text(UpcomingDate.monthsNom[m.month])
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.tfText)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, TFSpacing.screenHorizontal).padding(.bottom, 6)

@@ -21,6 +21,12 @@ private let weeksChunk = 12
 
 struct UpcomingMonthView: View {
     let initialMonday: String
+    /// Месяц, на котором должна открыться лента (обычно месяц «сегодня»).
+    /// Передаётся явно из родителя: если взять месяц самой `initialMonday`,
+    /// а она приходится на последние дни предыдущего месяца (как `mondayOf`
+    /// от 1 числа), стартовая неделя уедет на месяц назад — открываемся
+    /// на прошедшем месяце, а не на текущем.
+    let initialMonth: (year: Int, month: Int)
     let byDate: [String: [ApiTask]]
     let openDay: String?
     let onDayTap: (String) -> Void
@@ -29,6 +35,21 @@ struct UpcomingMonthView: View {
 
     @State private var weeks: [String] = []
     @State private var didInitialScroll = false
+
+    init(
+        initialMonday: String, initialMonth: (year: Int, month: Int),
+        byDate: [String: [ApiTask]], openDay: String?,
+        onDayTap: @escaping (String) -> Void, onTaskTap: @escaping (String) -> Void,
+        onVisibleMonthChange: @escaping (Int, Int) -> Void
+    ) {
+        self.initialMonday = initialMonday
+        self.initialMonth = initialMonth
+        self.byDate = byDate
+        self.openDay = openDay
+        self.onDayTap = onDayTap
+        self.onTaskTap = onTaskTap
+        self.onVisibleMonthChange = onVisibleMonthChange
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -45,10 +66,13 @@ struct UpcomingMonthView: View {
                 }
             }
             .onAppear {
-                if weeks.isEmpty { weeks = Self.buildInitialWeeks(around: initialMonday) }
+                if weeks.isEmpty { weeks = Self.buildInitialWeeks(around: initialMonday, initialMonth: initialMonth) }
                 guard !didInitialScroll else { return }
                 didInitialScroll = true
-                let target = Self.firstWeekMondayOfMonth(containing: initialMonday)
+                let target = Self.firstWeekMondayOfMonth(year: initialMonth.year, month: initialMonth.month)
+                // Заголовок экрана сразу показывает месяц `initialMonth`, а не
+                // месяц первой попавшей в кадр недели (она может быть в прошлом).
+                onVisibleMonthChange(initialMonth.year, initialMonth.month)
                 DispatchQueue.main.async {
                     proxy.scrollTo(target, anchor: .top)
                 }
@@ -135,21 +159,21 @@ struct UpcomingMonthView: View {
         .onTapGesture { onDayTap(ds) }
     }
 
-    private static func buildInitialWeeks(around initialMonday: String) -> [String] {
-        let firstWeekMonday = firstWeekMondayOfMonth(containing: initialMonday)
+    private static func buildInitialWeeks(around initialMonday: String, initialMonth: (year: Int, month: Int)) -> [String] {
+        let firstWeekMonday = firstWeekMondayOfMonth(year: initialMonth.year, month: initialMonth.month)
         let start = UpcomingDate.addDays(firstWeekMonday, -weeksInitialPast * 7)
         return (0..<(weeksInitialPast + weeksInitialFuture + 1)).map { UpcomingDate.addDays(start, $0 * 7) }
     }
 
-    /// Понедельник недели, содержащей 1-е число месяца САМОЙ `initialMonday`
-    /// (не по правилу четверга — это стартовая точка ленты, а не подпись).
-    private static func firstWeekMondayOfMonth(containing initialMonday: String) -> String {
-        let (y, m) = UpcomingDate.yearMonth(initialMonday)
+    /// Понедельник недели, содержащей 1-е число месяца `(year, month)`
+    /// (0-based). Стартовая точка ленты — отдельно от `weekMonth`,
+    /// которая считает «доминирующий» месяц по четвергу.
+    private static func firstWeekMondayOfMonth(year: Int, month: Int) -> String {
         var comps = DateComponents()
-        comps.year = y; comps.month = m + 1; comps.day = 1
+        comps.year = year; comps.month = month + 1; comps.day = 1
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
-        guard let firstOf = cal.date(from: comps) else { return initialMonday }
+        guard let firstOf = cal.date(from: comps) else { return "" }
         let firstOfStr = UpcomingDate.calendarDateString(firstOf)
         return UpcomingDate.mondayOf(firstOfStr)
     }
