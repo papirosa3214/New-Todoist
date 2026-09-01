@@ -68,10 +68,11 @@ public struct TFScreenHeader: View {
 
             below?()
         }
-        // Фон шапки теперь штатный — добавляет вызывающий код через
-        // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +
-        // .toolbarBackgroundVisibility(.automatic, for: .navigationBar).
-        // (См. коммит 6c89b57 на OverviewScreen и коммит 8 на ProjectsScreen.)
+        // Шапка лежит в safeAreaInset вызывающего экрана — штатный
+        // toolbarBackground сюда не доходит. Явный `.background(Color.tfCard)`
+        // чтобы шапка не сливалась с tfBackground экрана (Claude_Bot
+        // приёмка 02.09.2026).
+        .background(Color.tfCard)
     }
 
     @ViewBuilder
