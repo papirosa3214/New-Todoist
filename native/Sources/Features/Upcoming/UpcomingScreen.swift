@@ -27,6 +27,8 @@ public struct UpcomingScreen: View {
     @State private var openDay: String?
     @State private var pushedTaskID: String?
     @State private var editingTaskID: String?
+    @State private var rescheduleTask: ApiTask?
+    @State private var rescheduleOpen = false
 
     @State private var gridMonday = UpcomingDate.mondayOf(UpcomingDate.todayString())
     @State private var gridMonth: (year: Int, month: Int) = UpcomingDate.yearMonth(UpcomingDate.todayString())
@@ -76,6 +78,18 @@ public struct UpcomingScreen: View {
         }
         .sheet(isPresented: openDaySheetBinding) { daySheet }
         .sheet(isPresented: $filterSheetOpen) { filterSheet }
+        .sheet(isPresented: $rescheduleOpen) {
+            if let task = rescheduleTask {
+                RescheduleSheetContent(
+                    taskIds: [task.id],
+                    taskStore: taskStore,
+                    onClose: {
+                        rescheduleTask = nil
+                        rescheduleOpen = false
+                    }
+                )
+            }
+        }
         .navigationDestination(isPresented: Binding(
             get: { pushedTaskID != nil }, set: { if !$0 { pushedTaskID = nil } }
         )) {
@@ -102,7 +116,8 @@ public struct UpcomingScreen: View {
                     tasks: tasks, selectedDate: $selectedDate,
                     onTaskTap: { pushedTaskID = $0 },
                     onEditTask: { editingTaskID = $0 },
-                    onDeleteTask: { deleteTask($0) }
+                    onDeleteTask: { deleteTask($0) },
+                    onRescheduleTask: { task in rescheduleTask = task; rescheduleOpen = true }
                 )
             case .week:
                 UpcomingWeekView(

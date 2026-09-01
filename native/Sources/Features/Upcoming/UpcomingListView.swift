@@ -18,6 +18,7 @@ struct UpcomingListView: View {
     let onTaskTap: (String) -> Void
     let onEditTask: (String) -> Void
     let onDeleteTask: (String) -> Void
+    let onRescheduleTask: (ApiTask) -> Void
 
     @State private var calMode: CalMode = .month
     @State private var pickerYear: Int
@@ -28,13 +29,14 @@ struct UpcomingListView: View {
 
     init(
         tasks: [ApiTask], selectedDate: Binding<String?>,
-        onTaskTap: @escaping (String) -> Void, onEditTask: @escaping (String) -> Void, onDeleteTask: @escaping (String) -> Void
+        onTaskTap: @escaping (String) -> Void, onEditTask: @escaping (String) -> Void, onDeleteTask: @escaping (String) -> Void, onRescheduleTask: @escaping (ApiTask) -> Void
     ) {
         self.tasks = tasks
         self._selectedDate = selectedDate
         self.onTaskTap = onTaskTap
         self.onEditTask = onEditTask
         self.onDeleteTask = onDeleteTask
+        self.onRescheduleTask = onRescheduleTask
         let today = UpcomingDate.todayString()
         let (y, m) = UpcomingDate.yearMonth(today)
         _pickerYear = State(initialValue: y)
@@ -262,7 +264,7 @@ struct UpcomingListView: View {
                                             task: task,
                                             onOpen: { onTaskTap(task.id) },
                                             onComplete: { /* TODO: завершить задачу через taskStore */ },
-                                            onReschedule: { /* TODO: перенести через RescheduleSheet */ },
+                                            onReschedule: { onRescheduleTask(task) },
                                             onDelete: { onDeleteTask(task.id) }
                                         )
                                     }

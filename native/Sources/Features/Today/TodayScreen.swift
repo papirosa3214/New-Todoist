@@ -12,6 +12,10 @@ struct TodayScreen: View {
     @State private var filterSheetOpen = false
     @State private var openPlannerSectionOnOpen = false
     @State private var rescheduleOpen = false
+    /// Конкретная задача, перенесённая через свайп — открывает RescheduleSheet
+    /// именно для неё. Приоритет над `rescheduleOpen` (тот для группы
+    /// просроченных с доски).
+    @State private var rescheduleTask: ApiTask?
 
     private var today: String { TodayDate.todayString() }
     private var activeHourDate: String {
@@ -75,7 +79,7 @@ struct TodayScreen: View {
                                 today: today,
                                 onOpen: { route = .taskDetail(taskID: $0.id) },
                                 onComplete: { task in Task { await taskStore.patch(taskId: task.id, fields: ["status": .string("completed")]) { _ in } } },
-                                onReschedule: { _ in /* TODO: открыть RescheduleSheet для одной задачи */ },
+                                onReschedule: { task in rescheduleTask = task; rescheduleOpen = true },
                                 onDelete: { task in Task { await taskStore.delete(taskId: task.id) } }
                             )
                             .padding(.horizontal, TFSpacing.lg)
@@ -134,7 +138,14 @@ struct TodayScreen: View {
             )
         }
         .tfBottomSheet(isPresented: $rescheduleOpen) {
-            RescheduleSheetContent(taskIds: c.overdueTasks.map(\.id), taskStore: taskStore, onClose: { rescheduleOpen = false })
+            RescheduleSheetContent(
+                taskIds: rescheduleTask.map { [$0.id] } ?? c.overdueTasks.map(\.id),
+                taskStore: taskStore,
+                onClose: {
+                    rescheduleTask = nil
+                    rescheduleOpen = false
+                }
+            )
         }
         .onChange(of: filterSheetOpen) { _, open in
             if !open { openPlannerSectionOnOpen = false }
