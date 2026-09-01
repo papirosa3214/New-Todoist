@@ -64,7 +64,7 @@ public struct TFTabBar: View {
         }
         .frame(height: TFTabBarMetrics.heightCompact)
         .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial)
+        .background(FrostedGlass(axis: .bottom))
     }
 
     private func tabButton(_ index: Int) -> some View {

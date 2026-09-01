@@ -42,6 +42,6 @@ struct DirectoryCompactHeader: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: 48)
-        .background(.ultraThinMaterial)
+        .background(FrostedGlass(axis: .top))
     }
 }

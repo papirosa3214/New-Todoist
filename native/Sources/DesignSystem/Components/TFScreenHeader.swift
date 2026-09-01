@@ -68,7 +68,7 @@ public struct TFScreenHeader: View {
 
             below?()
         }
-        .background(.ultraThinMaterial)
+        .background(FrostedGlass(axis: .top))
     }
 
     @ViewBuilder
