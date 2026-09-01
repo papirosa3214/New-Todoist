@@ -97,6 +97,18 @@ public struct TFTabBar: View {
         .buttonStyle(TFTapScaleStyle())
         .animation(.easeOut(duration: TFAnimation.tabSwitch), value: isActive)
         .accessibilityLabel(item.accessibilityLabel)
+        .accessibilityIdentifier(Self.identifier(for: item.icon))
+    }
+
+    /// Стабильный идентификатор вкладки по её SF Symbol. Не завязан на локаль.
+    static func identifier(for icon: String) -> String {
+        switch icon {
+        case "calendar": return "tab.today"
+        case "house": return "tab.directory"
+        case "calendar.badge.clock": return "tab.upcoming"
+        case "message": return "tab.chat"
+        default: return "tab.\(icon)"
+        }
     }
 
     private var createButton: some View {
@@ -115,6 +127,8 @@ public struct TFTabBar: View {
         }
         .buttonStyle(TFTapScaleStyle())
         .animation(.easeOut(duration: TFAnimation.createMenu), value: isCreateMenuOpen)
+        .accessibilityLabel("Новая задача")
+        .accessibilityIdentifier("tab.add")
     }
 }
 

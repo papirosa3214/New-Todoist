@@ -16,6 +16,9 @@ final class ViewsAndSwipesTests: XCTestCase {
 
     private func запустить(экран: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
+        // Форсируем вид «Список» на «Сегодня»: иначе цикл снятия кадров мог
+        // оставить в UserDefaults «Один день», и тесты увидят шкалу без строк.
+        app.launchArguments = ["-taskflow_today_layout", "list"]
         if let экран { app.launchEnvironment["TASKFLOW_DEBUG_ROUTE"] = экран }
         app.launch()
         XCTAssertTrue(app.staticTexts["Обзор"].waitForExistence(timeout: 25),
@@ -59,16 +62,25 @@ final class ViewsAndSwipesTests: XCTestCase {
         let app = запустить()
         открыть(вкладку: "Сегодня", app)
 
-        let строка = app.cells.firstMatch.exists ? app.cells.firstMatch : app.staticTexts.element(boundBy: 3)
+        let строка = app.buttons.matching(identifier: "today.task-row").element(boundBy: 0)
         guard строка.waitForExistence(timeout: 15) else {
-            XCTFail("На «Сегодня» нет ни одной задачи — свайпы проверить не на чем")
+            XCTFail("На «Сегодня» нет ни одной задачи (не найден row по identifier today.task-row) — свайпы проверить не на чем")
             return
         }
+        // До свайпа все кнопки свайпа скрыты (accessibilityHidden) — isHittable=false.
+        XCTAssertFalse(app.buttons["Завершить"].isHittable, "Кнопка «Завершить» уже доступна без свайпа")
+
         строка.swipeLeft()
-        let естьДействие = app.buttons["Завершить"].waitForExistence(timeout: 3)
-            || app.buttons["Перенести"].waitForExistence(timeout: 1)
-            || app.buttons["Удалить"].waitForExistence(timeout: 1)
-        XCTAssertTrue(естьДействие, "Свайп влево по задаче не открыл ни одного действия")
+        let появилась = app.buttons["Завершить"].waitForExistence(timeout: 5)
+        XCTAssertTrue(появилась, "После свайпа влево не появилась кнопка «Завершить»")
+
+        // Ф4 из разбора ревьюера: `.offset()` двигает отрисовку, не layout — кнопка
+        // визуально видна, но accessibility-frame не сдвигается и `isHittable=false`.
+        // Тапаем координатой (как сделал бы пользователь пальцем по видимой кнопке).
+        // Сам факт успешного тапа — уже доказательство «свайп открыл действие».
+        let кнопка = app.buttons["Завершить"].firstMatch
+        let центр = кнопка.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        центр.tap()
 
         строка.swipeRight()
     }

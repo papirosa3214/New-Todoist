@@ -11,7 +11,8 @@ struct TodayListView: View {
     let todayTasks: [ApiTask]
     let today: String
     let onOpen: (ApiTask) -> Void
-    let onEdit: (ApiTask) -> Void
+    let onComplete: (ApiTask) -> Void
+    let onReschedule: (ApiTask) -> Void
     let onDelete: (ApiTask) -> Void
 
     var body: some View {
@@ -20,14 +21,16 @@ struct TodayListView: View {
                 sectionHeader("Ждут вас", icon: "person.crop.circle.badge.clock", color: .tfText)
                 ForEach(waitingTasks) { task in
                     TodayTaskRow(task: task, overdue: task.dueDate != nil && task.dueDate! < today,
-                                 onOpen: { onOpen(task) }, onEdit: { onEdit(task) }, onDelete: { onDelete(task) })
+                                 onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
+                                 onReschedule: { onReschedule(task) }, onDelete: { onDelete(task) })
                 }
             }
             if !overdueTasks.isEmpty {
                 sectionHeader("Просрочено", color: .tfRed)
                 ForEach(overdueTasks) { task in
                     TodayTaskRow(task: task, overdue: true,
-                                 onOpen: { onOpen(task) }, onEdit: { onEdit(task) }, onDelete: { onDelete(task) })
+                                 onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
+                                 onReschedule: { onReschedule(task) }, onDelete: { onDelete(task) })
                 }
             }
             if !todayTasks.isEmpty && (!overdueTasks.isEmpty || !waitingTasks.isEmpty) {
@@ -40,7 +43,8 @@ struct TodayListView: View {
             }
             ForEach(todayTasks) { task in
                 TodayTaskRow(task: task, overdue: false,
-                             onOpen: { onOpen(task) }, onEdit: { onEdit(task) }, onDelete: { onDelete(task) })
+                             onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
+                             onReschedule: { onReschedule(task) }, onDelete: { onDelete(task) })
             }
         }
     }

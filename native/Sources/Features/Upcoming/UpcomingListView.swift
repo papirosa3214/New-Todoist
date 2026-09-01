@@ -261,7 +261,8 @@ struct UpcomingListView: View {
                                         UpcomingTaskRow(
                                             task: task,
                                             onOpen: { onTaskTap(task.id) },
-                                            onEdit: { onEditTask(task.id) },
+                                            onComplete: { /* TODO: завершить задачу через taskStore */ },
+                                            onReschedule: { /* TODO: перенести через RescheduleSheet */ },
                                             onDelete: { onDeleteTask(task.id) }
                                         )
                                     }

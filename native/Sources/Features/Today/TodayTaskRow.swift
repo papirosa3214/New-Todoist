@@ -14,11 +14,13 @@ struct TodayTaskRow: View {
     /// вместо обычного бейджа срока (spec: `overdue` проп TaskRow.tsx).
     let overdue: Bool
     let onOpen: () -> Void
-    let onEdit: () -> Void
+    let onComplete: () -> Void
+    let onReschedule: () -> Void
     let onDelete: () -> Void
 
     private let actionWidth: CGFloat = 84
-    /// Точка покоя строки: 0 (закрыта), −actionWidth («Изменить» открыта), +actionWidth («Удалить» открыта).
+    /// Точка покоя строки: 0 (закрыта), −actionWidth («Завершить» открыта),
+    /// −2×actionWidth («Завершить» + «Перенести» открыты), +actionWidth («Удалить» открыта).
     @State private var settledOffset: CGFloat = 0
     @State private var dragOffset: CGFloat = 0
     @State private var confirmDelete = false
@@ -29,23 +31,40 @@ struct TodayTaskRow: View {
     var body: some View {
         ZStack {
             HStack(spacing: 0) {
+                Button(action: { close(); onComplete() }) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: actionWidth, height: measuredHeight)
+                .background(Color.tfGreen)
+                .opacity(offsetX < 0 ? 1 : 0)
+                .accessibilityHidden(offsetX >= 0)
+                .accessibilityLabel("Завершить")
+                .accessibilityIdentifier("row.swipe.complete")
+                Button(action: { close(); onReschedule() }) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: actionWidth, height: measuredHeight)
+                .background(Color.tfOrange)
+                .opacity(offsetX < 0 ? 1 : 0)
+                .accessibilityHidden(offsetX >= 0)
+                .accessibilityLabel("Перенести")
+                .accessibilityIdentifier("row.swipe.reschedule")
+                Spacer(minLength: 0)
                 Button(action: { close(); confirmDelete = true }) {
                     Image(systemName: "trash")
                         .font(.system(size: 22, weight: .regular))
                         .foregroundStyle(.white)
                 }
-                .frame(width: max(offsetX, 0), height: measuredHeight)
+                .frame(width: actionWidth, height: measuredHeight)
                 .background(Color.tfSwipeDelete)
                 .opacity(offsetX > 0 ? 1 : 0)
-                Spacer(minLength: 0)
-                Button(action: { close(); onEdit() }) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: max(-offsetX, 0), height: measuredHeight)
-                .background(Color.tfSwipeEdit)
-                .opacity(offsetX < 0 ? 1 : 0)
+                .accessibilityHidden(offsetX <= 0)
+                .accessibilityLabel("Удалить")
+                .accessibilityIdentifier("row.swipe.delete")
             }
 
             row
@@ -55,7 +74,7 @@ struct TodayTaskRow: View {
                     }
                 )
                 .offset(x: offsetX)
-                .gesture(swipeGesture)
+                .highPriorityGesture(swipeGesture)
         }
         .onPreferenceChange(RowHeightKey.self) { measuredHeight = $0 }
         .clipped()
@@ -148,10 +167,22 @@ struct TodayTaskRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(TFTapRowStyle())
+        .accessibilityIdentifier("today.task-row")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(rowAccessibilityLabel)
     }
 
     private var hasBadges: Bool {
         !task.subtasks.isEmpty || task.priority <= 3 || overdue || task.dueDate != nil || !task.labels.isEmpty
+    }
+
+    /// Короткое имя для VoiceOver: название задачи, опционально проект.
+    /// Без проекта и бейджей — одна строка; с проектом — «Проект, Задача».
+    private var rowAccessibilityLabel: String {
+        if let projectName = task.projectName, !projectName.isEmpty {
+            return "\(projectName), \(task.title)"
+        }
+        return task.title
     }
 
     private func close() {
@@ -173,7 +204,9 @@ struct TodayTaskRow: View {
                 let finalOffset = clamp(settledOffset + value.translation.width)
                 withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
                     if settledOffset == 0 {
-                        if finalOffset < -36 || velocity < -280 {
+                        if finalOffset < -72 || velocity < -360 {
+                            settledOffset = -2 * actionWidth
+                        } else if finalOffset < -36 || velocity < -280 {
                             settledOffset = -actionWidth
                         } else if finalOffset > 36 || velocity > 280 {
                             settledOffset = actionWidth
@@ -183,7 +216,13 @@ struct TodayTaskRow: View {
                     } else if settledOffset < 0 {
                         let dx = value.translation.width
                         let shouldKeep = !(dx > 25 || velocity > 250)
-                        settledOffset = shouldKeep ? -actionWidth : 0
+                        if shouldKeep {
+                            settledOffset = (settledOffset == -actionWidth || dx > actionWidth / 2)
+                                ? -2 * actionWidth
+                                : -actionWidth
+                        } else {
+                            settledOffset = 0
+                        }
                     } else {
                         let dx = value.translation.width
                         let shouldKeep = !(dx < -25 || velocity < -250)

@@ -74,7 +74,8 @@ struct TodayScreen: View {
                                 waitingTasks: c.waitingTasks, overdueTasks: c.overdueTasks, todayTasks: c.todayTasks,
                                 today: today,
                                 onOpen: { route = .taskDetail(taskID: $0.id) },
-                                onEdit: { route = .taskForm(taskID: $0.id) },
+                                onComplete: { task in Task { await taskStore.patch(taskId: task.id, fields: ["status": .string("completed")]) { _ in } } },
+                                onReschedule: { _ in /* TODO: открыть RescheduleSheet для одной задачи */ },
                                 onDelete: { task in Task { await taskStore.delete(taskId: task.id) } }
                             )
                             .padding(.horizontal, TFSpacing.lg)
@@ -164,9 +165,9 @@ struct TodayScreen: View {
                             .font(.system(size: 18))
                             .foregroundStyle(Color.tfText)
                             .frame(width: TFHitTarget.min, height: TFHitTarget.min)
-                            .accessibilityLabel("Вид")
-                            .accessibilityIdentifier("today.view-switcher")
                     }
+                    .accessibilityLabel("Вид")
+                    .accessibilityIdentifier("today.view-switcher")
                 }
                 .padding(.horizontal, TFSpacing.screenHorizontal)
             }

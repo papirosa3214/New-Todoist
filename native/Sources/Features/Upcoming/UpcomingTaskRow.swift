@@ -9,7 +9,8 @@ import SwiftUI
 struct UpcomingTaskRow: View {
     let task: ApiTask
     let onOpen: () -> Void
-    let onEdit: () -> Void
+    let onComplete: () -> Void
+    let onReschedule: () -> Void
     let onDelete: () -> Void
 
     /// Ширина зоны действия свайпа — `ACTION_W` (spec §3.3).
@@ -24,31 +25,49 @@ struct UpcomingTaskRow: View {
     var body: some View {
         ZStack {
             HStack(spacing: 0) {
+                Button(action: { close(); onComplete() }) {
+                    Image(systemName: "checkmark").font(.system(size: 22)).foregroundStyle(.white)
+                }
+                .frame(width: actionWidth, height: measuredHeight)
+                .background(Color.tfGreen)
+                .opacity(offsetX < 0 ? 1 : 0)
+                .accessibilityHidden(offsetX >= 0)
+                .accessibilityLabel("Завершить")
+                .accessibilityIdentifier("row.swipe.complete")
+                Button(action: { close(); onReschedule() }) {
+                    Image(systemName: "calendar").font(.system(size: 22)).foregroundStyle(.white)
+                }
+                .frame(width: actionWidth, height: measuredHeight)
+                .background(Color.tfOrange)
+                .opacity(offsetX < 0 ? 1 : 0)
+                .accessibilityHidden(offsetX >= 0)
+                .accessibilityLabel("Перенести")
+                .accessibilityIdentifier("row.swipe.reschedule")
+                Spacer(minLength: 0)
                 Button(action: { close(); confirmDelete = true }) {
                     Image(systemName: "trash").font(.system(size: 22)).foregroundStyle(.white)
                 }
-                .frame(width: max(offsetX, 0), height: measuredHeight)
+                .frame(width: actionWidth, height: measuredHeight)
                 .background(Color.tfSwipeDelete)
                 .opacity(offsetX > 0 ? 1 : 0)
-                Spacer(minLength: 0)
-                Button(action: { close(); onEdit() }) {
-                    Image(systemName: "pencil").font(.system(size: 22)).foregroundStyle(.white)
-                }
-                .frame(width: max(-offsetX, 0), height: measuredHeight)
-                .background(Color.tfSwipeEdit)
-                .opacity(offsetX < 0 ? 1 : 0)
+                .accessibilityHidden(offsetX <= 0)
+                .accessibilityLabel("Удалить")
+                .accessibilityIdentifier("row.swipe.delete")
             }
 
             TFTaskRow(Self.model(for: task)) {
                 if settledOffset != 0 { close() } else { onOpen() }
             }
+            .accessibilityIdentifier("upcoming.task-row")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(rowAccessibilityLabel)
             .background(
                 GeometryReader { geo in
                     Color.clear.preference(key: UpcomingRowHeightKey.self, value: geo.size.height)
                 }
             )
             .offset(x: offsetX)
-            .gesture(swipeGesture)
+            .highPriorityGesture(swipeGesture)
         }
         .onPreferenceChange(UpcomingRowHeightKey.self) { measuredHeight = $0 }
         .clipped()
@@ -58,6 +77,14 @@ struct UpcomingTaskRow: View {
         } message: {
             Text("«\(task.title)» будет удалена безвозвратно")
         }
+    }
+
+    /// Короткое имя для VoiceOver.
+    private var rowAccessibilityLabel: String {
+        if let projectName = task.projectName, !projectName.isEmpty {
+            return "\(projectName), \(task.title)"
+        }
+        return task.title
     }
 
     static func model(for task: ApiTask) -> TFTaskRowModel {
@@ -98,7 +125,9 @@ struct UpcomingTaskRow: View {
                 let finalOffset = clamp(settledOffset + value.translation.width)
                 withAnimation(.timingCurve(0.2, 0.9, 0.28, 1, duration: 0.28)) {
                     if settledOffset == 0 {
-                        if finalOffset < -36 || velocity < -280 {
+                        if finalOffset < -72 || velocity < -360 {
+                            settledOffset = -2 * actionWidth
+                        } else if finalOffset < -36 || velocity < -280 {
                             settledOffset = -actionWidth
                         } else if finalOffset > 36 || velocity > 280 {
                             settledOffset = actionWidth
@@ -107,7 +136,14 @@ struct UpcomingTaskRow: View {
                         }
                     } else if settledOffset < 0 {
                         let dx = value.translation.width
-                        settledOffset = (dx > 25 || velocity > 250) ? 0 : -actionWidth
+                        let shouldKeep = !(dx > 25 || velocity > 250)
+                        if shouldKeep {
+                            settledOffset = (settledOffset == -actionWidth || dx > actionWidth / 2)
+                                ? -2 * actionWidth
+                                : -actionWidth
+                        } else {
+                            settledOffset = 0
+                        }
                     } else {
                         let dx = value.translation.width
                         settledOffset = (dx < -25 || velocity < -250) ? 0 : actionWidth
