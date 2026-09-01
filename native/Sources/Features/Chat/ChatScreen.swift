@@ -65,6 +65,7 @@ struct ChatScreen: View {
                 .padding(.top, TFSpacing.sm)
 
             messageList
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             ChatComposer(viewModel: viewModel)
         }
