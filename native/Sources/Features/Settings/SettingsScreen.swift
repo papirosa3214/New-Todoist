@@ -187,7 +187,11 @@ struct SettingsScreen: View {
     }
 
     private func infoValue(_ text: String) -> some View {
-        Text(text).tfText(.body).foregroundStyle(Color.tfSub)
+        Text(text)
+            .tfText(.body)
+            .foregroundStyle(Color.tfSub)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 
     private var rowDividerInset: CGFloat { TFSpacing.lg + 40 + TFSpacing.md }
