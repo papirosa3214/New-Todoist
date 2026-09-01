@@ -28,6 +28,14 @@ struct SettingsScreen: View {
                 }
                 .padding(.vertical, TFSpacing.lg)
             }
+            // TFTabBar рисуется поверх push-навигаций в ZStack RootShellView —
+            // без safe-area-inset снизу последняя секция уезжает под него.
+            // Шаблон для всех push-навигаций папки Настроек, см. также
+            // `IntegrationsScreen`/`TemplatesScreen`/`VoiceModelsScreen` —
+            // если ревью увидит срез где-то ещё, фикс симметричный.
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: TFTabBarMetrics.heightCompact)
+            }
         }
         .background(Color.tfBackground)
         .environment(viewModel)
