@@ -68,6 +68,7 @@ struct ActivityScreen: View {
             .padding(.bottom, TFSpacing.xl)
         }
         .background(Color.tfBackground)
+        .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .top, spacing: 0) {
             TFScreenHeader(
                 "Активность", variant: .compact,

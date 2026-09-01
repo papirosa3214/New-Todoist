@@ -61,13 +61,16 @@ struct TFTodayDateIcon: View {
                     ZStack {
                         Rectangle()
                         // Окно под число: от линии шапки до низа рамки.
-                        // Окно во всю внутренность рамки: при узком вырезе над
-                        // цифрой оставались точки сетки, и владелец 01.09.2026
-                        // их видел — «три точечки болтаются, пусть будет просто
-                        // циферка».
+                        // Окно расширено ТОЛЬКО ВВЕРХ — до шапки календаря:
+                        // там оставались точки сетки. Нижний край там же, где
+                        // был (0.36·size), иначе вырез съедает низ рамки —
+                        // 01.09.2026 владелец это сразу увидел.
                         Rectangle()
-                            .frame(width: size * 0.78, height: size * 0.60)
-                            .offset(y: size * 0.16)
+                            // Ширина и нижняя кромка — РОВНО как были
+                            // (0.62 и 0.36·size). Поднят только верх: с -0.08
+                            // до -0.14·size, где и оставались точки сетки.
+                            .frame(width: size * 0.62, height: size * 0.50)
+                            .offset(y: size * 0.11)
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()
@@ -134,10 +137,18 @@ public struct TFTabBar: View {
                 // только цвет значка: серый → белый.
                 Group {
                     if item.showsTodayDate {
-                        TFTodayDateIcon(size: TFTabBarMetrics.iconSize)
+                        // Замер по кадру 01.09.2026: рисунок «calendar» давал
+                        // 27.3pt против 31.7–33.0 у соседей — значок выбивался
+                        // из ряда. Коэффициент 1.19 приводит его ширину к тем
+                        // же ~32.5pt.
+                        TFTodayDateIcon(size: TFTabBarMetrics.iconSize * 1.19)
                     } else {
                         Image(systemName: item.icon)
                             .font(.system(size: TFTabBarMetrics.iconSize))
+                            // У `calendar.badge.clock` бейдж висит справа и
+                            // тянет всю массу рисунка на 2.9pt вправо: центр
+                            // значка не совпадал с центром своей ячейки.
+                            .offset(x: item.icon == "calendar.badge.clock" ? -2.9 : 0)
                     }
                 }
                 .foregroundStyle(isActive ? Color.tfText : Color.tfDim)

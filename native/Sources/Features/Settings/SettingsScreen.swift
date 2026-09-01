@@ -9,6 +9,8 @@ import SwiftUI
 /// `ScreenHeader.tsx` 27.08.2026), а нативный `TFScreenHeader.large` стрелку
 /// не рисует вовсе — гэп, не мой файл чинить.
 struct SettingsScreen: View {
+    @State private var appIconSheetOpen = false
+    @State private var appIcon: AppIconOption = .current
     @Environment(SessionStore.self) private var session
     @State private var viewModel = SettingsViewModel()
     @State private var profileOverride: ApiUser?
@@ -45,6 +47,9 @@ struct SettingsScreen: View {
                     profileOverride = updated
                 }
             }
+        }
+        .tfBottomSheet(isPresented: $appIconSheetOpen) {
+            AppIconPickerSheet(selection: $appIcon) { appIconSheetOpen = false }
         }
     }
 
@@ -92,7 +97,14 @@ struct SettingsScreen: View {
                 toggleRow(icon: viewModel.biometryKind == .faceID ? "faceid" : "touchid", tint: .tfTeal, title: viewModel.biometryLabel, valueLabel: viewModel.isBiometryEnabled ? "Включён" : "Выключен", isOn: $viewModel.isBiometryEnabled)
             }
             TFDivider(inset: rowDividerInset)
-            TFListRow(icon: "photo", iconTint: .tfPink, title: "Иконка", trailing: AnyView(infoValue("Pure Minimal Glass")))
+            Button {
+                appIconSheetOpen = true
+            } label: {
+                TFListRow(icon: "photo", iconTint: .tfPink, title: "Иконка",
+                          trailing: AnyView(infoValue(appIcon.title)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("settings.app-icon")
             TFDivider(inset: rowDividerInset)
             toggleRow(icon: "keyboard", tint: .tfBlue, title: "Своя клавиатура", valueLabel: viewModel.isCustomKeyboardEnabled ? "Включена" : "Системная", isOn: $viewModel.isCustomKeyboardEnabled)
         }

@@ -55,6 +55,9 @@ struct NotificationsScreen: View {
             .padding(.bottom, TFSpacing.xl)
         }
         .background(Color.tfBackground)
+        // Своя кнопка «назад» уже есть в шапке; без скрытия системного навбара
+        // на экране два значка «назад» (владелец 01.09.2026).
+        .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .top, spacing: 0) { header }
         .navigationDestination(item: $route) { routeDestination($0) }
         .task { await notificationStore.load() }
@@ -80,7 +83,9 @@ struct NotificationsScreen: View {
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
         .frame(height: 48)
-        .background(.ultraThinMaterial)
+        // Тот же фон, что у шапок остальных экранов: `.ultraThinMaterial`
+        // выбивался — он светлее и не совпадал с подложкой приложения.
+        .background(FrostedGlass(axis: .top).ignoresSafeArea(edges: .top))
     }
 
     private var allRead: Bool { notificationStore.notifications.allSatisfy(\.read) }
