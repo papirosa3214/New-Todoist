@@ -69,6 +69,7 @@ struct ChatScreen: View {
             ChatComposer(viewModel: viewModel)
         }
         .background(Color.tfBackground)
+        .accessibilityIdentifier("chat.screen")
         .task {
             viewModel.configure(currentUser: session.currentUser)
             // Fire-and-forget: экран показывается сразу, данные подтягиваются в фоне.
