@@ -75,6 +75,12 @@ struct UpcomingMonthView: View {
                 onVisibleMonthChange(initialMonth.year, initialMonth.month)
                 DispatchQueue.main.async {
                     proxy.scrollTo(target, anchor: .top)
+                    // Дождаться, пока `weekBlock.onAppear` отработают на новом
+                    // диапазоне видимых недель: иначе самая нижняя видимая неделя
+                    // (зачастую уже в следующем месяце) перезапишет заголовок.
+                    DispatchQueue.main.async {
+                        onVisibleMonthChange(initialMonth.year, initialMonth.month)
+                    }
                 }
             }
         }
