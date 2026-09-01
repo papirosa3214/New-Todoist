@@ -68,13 +68,16 @@ struct LabelsScreen: View {
             .padding(.bottom, TFSpacing.xl)
         }
         .background(Color.tfBackground)
-        // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
-        // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        // Нативная сворачивающаяся шапка.
+        // Штатная SwiftUI-шапка. Кнопка «назад» — через DirectoryBackButton
+        // в .topBarLeading. Дубль заголовка снят (шаблон шага 1 из 92aa0973).
         .navigationTitle("Метки")
-        .navigationBarTitleDisplayMode(.large)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            TFScreenHeader("Метки", variant: .compact, leading: { AnyView(DirectoryBackButton()) })
+        .toolbarTitleDisplayMode(.large)
+        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+        .toolbarBackgroundVisibility(.automatic, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                DirectoryBackButton()
+            }
         }
         .task {
             if labelStore.labels.isEmpty { await labelStore.load() }

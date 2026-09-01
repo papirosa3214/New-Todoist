@@ -68,15 +68,23 @@ struct ActivityScreen: View {
             .padding(.bottom, TFSpacing.xl)
         }
         .background(Color.tfBackground)
-        // Нативная сворачивающаяся шапка.
+        // Штатная SwiftUI-шапка. Кнопки «назад» и «фильтры» — в .toolbar.
         .navigationTitle("Активность")
-        .navigationBarTitleDisplayMode(.large)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            TFScreenHeader(
-                "Активность", variant: .compact,
-                leading: { AnyView(DirectoryBackButton()) },
-                actions: [TFHeaderAction(icon: "line.3.horizontal.decrease") { sheetOpen = true }]
-            )
+        .toolbarTitleDisplayMode(.large)
+        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+        .toolbarBackgroundVisibility(.automatic, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                DirectoryBackButton()
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    sheetOpen = true
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
+                }
+                .accessibilityLabel("Фильтры")
+            }
         }
         .navigationDestination(item: $route) { routeDestination($0) }
         .tfBottomSheet(isPresented: $sheetOpen, title: "Фильтры", actionTitle: "Сбросить", action: resetFilters) {
