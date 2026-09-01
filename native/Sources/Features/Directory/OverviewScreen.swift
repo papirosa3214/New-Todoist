@@ -39,9 +39,9 @@ struct OverviewScreen: View {
             .padding(.bottom, TFSpacing.xl)
         }
         .background(Color.tfBackground)
-        // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
-        // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка по официальным гайдам SwiftUI.
+        .navigationTitle("Обзор")
+        .navigationBarTitleDisplayMode(.large)
         .safeAreaInset(edge: .top, spacing: 0) {
             TFScreenHeader("Обзор", variant: .large, actions: [
                 TFHeaderAction(icon: "magnifyingglass") { searchOpen = true },

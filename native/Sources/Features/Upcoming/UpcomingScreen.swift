@@ -74,7 +74,9 @@ public struct UpcomingScreen: View {
         }
         // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
         // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка по официальным гайдам SwiftUI.
+        .navigationTitle("Планирование")
+        .navigationBarTitleDisplayMode(.large)
         .background(Color.tfBackground)
         .confirmationDialog("Вид", isPresented: $actionsMenuOpen, titleVisibility: .visible) {
             // ⚠️ Замена `ActionsMenu` (плоский попап, спека §5.2) на системный
