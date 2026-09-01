@@ -24,7 +24,10 @@ struct TodayTaskRow: View {
     @State private var settledOffset: CGFloat = 0
     @State private var dragOffset: CGFloat = 0
     @State private var confirmDelete = false
-    @State private var measuredHeight: CGFloat = 60
+    /// Фиксированная высота строки для кнопок свайпа. Раньше измерялась через
+    /// GeometryReader + PreferenceKey (двойной рендер — основная причина
+    /// testОткрытиеСегодня 2.44с). 70pt покрывает строку с подзадачами/бейджами.
+    private let measuredHeight: CGFloat = 70
 
     private var offsetX: CGFloat { clamp(settledOffset + dragOffset) }
 
@@ -68,15 +71,9 @@ struct TodayTaskRow: View {
             }
 
             row
-                .background(
-                    GeometryReader { geo in
-                        Color.tfBackground.preference(key: RowHeightKey.self, value: geo.size.height)
-                    }
-                )
                 .offset(x: offsetX)
                 .highPriorityGesture(swipeGesture)
         }
-        .onPreferenceChange(RowHeightKey.self) { measuredHeight = $0 }
         .clipped()
         .confirmationDialog("Удалить задачу?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Удалить", role: .destructive, action: onDelete)
@@ -245,9 +242,6 @@ struct TodayTaskRow: View {
     }
 }
 
-private struct RowHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 60
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
+// RowHeightKey был удалён вместе с GeometryReader — измерение высоты через
+// PreferenceKey вызывало двойной рендер (открытие «Сегодня» 2.44с вместо <2с).
+// measuredHeight теперь фиксированная константа.
