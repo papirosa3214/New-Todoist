@@ -226,6 +226,10 @@ struct NoteEditorScreen: View {
         // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +
         // .toolbarBackgroundVisibility(.automatic, for: .navigationBar).
         // (FrostedGlass удалён — см. коммит 9 в native-app.)
+        // Свой `.background(Color.tfCard)`: safeAreaInset, не навбар —
+        // штатный toolbarBackground не доходит, а раньше был FrostedGlass
+        // (Claude_Bot приёмка 02.09.2026).
+        .background(Color.tfCard)
     }
 
     /// «заголовком автоматически становится первый непустой блок… или

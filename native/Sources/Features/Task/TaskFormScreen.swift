@@ -166,10 +166,13 @@ struct TaskFormScreen: View {
         // Общий фон шапок, а не `.ultraThinMaterial`: материал в тёмной теме
         // подсвечивает полосу (#1C1C1C против фона #171717) и экран выбивается
         // из остальных — сверено кадрами 01.09.2026.
-        // Штатный фон навбара добавляется вызывающим кодом через
+        // Штатный фон навбара добавляется вызывающий кодом через
         // .toolbarBackground(.ultraThinMaterial, for: .navigationBar) +
         // .toolbarBackgroundVisibility(.automatic, for: .navigationBar).
         // (FrostedGlass удалён — см. коммит 9 в native-app.)
+        // safeAreaInset, не навбар — добавляем явный `.background`,
+        // иначе шапка сольётся с `tfBackground` экрана.
+        .background(Color.tfCard)
     }
 
     // MARK: - Тело
