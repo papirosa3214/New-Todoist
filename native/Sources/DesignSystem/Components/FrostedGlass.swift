@@ -74,7 +74,7 @@ private struct BlurLayer: UIViewRepresentable {
         case .bottom:
             layer.startPoint = CGPoint(x: 0.5, y: 1)
             layer.endPoint   = CGPoint(x: 0.5, y: 0)
-            layer.locations  = points.map { 1 - NSNumber(value: Double($0)) }
+            layer.locations  = points.map { NSNumber(value: Double(1 - $0)) }
             layer.colors     = alphas.reversed().map { UIColor.white.withAlphaComponent($0).cgColor }
         }
         return layer
