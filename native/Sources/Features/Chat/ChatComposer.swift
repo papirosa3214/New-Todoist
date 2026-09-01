@@ -39,7 +39,9 @@ struct ChatComposer: View {
             .padding(.horizontal, TFSpacing.lg)
             .padding(.vertical, TFSpacing.sm)
         }
-        .background(.ultraThinMaterial)
+        // Тот же тёмный градиент, что у шапки и нижней панели (владелец
+        // 01.09.2026: «в чате этого нету, расплывчатости… и панельку потемнее»).
+        .background(TFHeaderScrim(axis: .bottom).ignoresSafeArea(edges: .bottom))
         .fileImporter(
             isPresented: $isFileImporterPresented,
             allowedContentTypes: [.image, .pdf, .plainText, .text, .item],

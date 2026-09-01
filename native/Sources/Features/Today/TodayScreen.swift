@@ -301,18 +301,10 @@ struct TodayScreen: View {
     /// Один чёрный полупрозрачный слой между лентой и передним текстом шапки.
     /// Поэтому задачи под ним затухают, а названия и кнопки остаются чёткими.
     private var headerFrost: some View {
-        LinearGradient(
-            stops: [
-                .init(color: Color.tfBackground.opacity(0.96), location: 0.00),
-                .init(color: Color.tfBackground.opacity(0.90), location: 0.42),
-                .init(color: Color.tfBackground.opacity(0.58), location: 0.68),
-                .init(color: Color.tfBackground.opacity(0.18), location: 0.86),
-                .init(color: Color.tfBackground.opacity(0.00), location: 1.00),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .allowsHitTesting(false)
+        // Общая подложка шапок: тот же градиент, что на остальных экранах,
+        // и потемневший вместе с ними (владелец 01.09.2026 — «потемнее и
+        // верхнюю шапку, и навигационную панельку»).
+        TFHeaderScrim()
     }
 
     private func headerActions(c: TodayComputation) -> some View {

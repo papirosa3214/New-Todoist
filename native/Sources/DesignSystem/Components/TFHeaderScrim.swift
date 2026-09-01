@@ -6,23 +6,42 @@ import SwiftUI
 // растворяется, поэтому лента под шапкой затухает, а заголовок и кнопки
 // остаются чёткими.
 //
-// Не `FrostedGlass`: тот даёт два слоя реального размытия (UIVisualEffectView).
-// Владелец выбрал именно градиент — чистое затухание цветом, без блюра.
+// Внутри — `FrostedGlass` (два слоя реального размытия) и тёмный градиент
+// поверх: владелец просил и «потемнее», и чтобы размытие в чате осталось.
 public struct TFHeaderScrim: View {
-    public init() {}
+    /// Куда смотрит плотная часть: `.top` — шапка (плотно у верхней кромки,
+    /// тает вниз), `.bottom` — нижняя панель и панель ввода чата.
+    public enum Axis { case top, bottom }
+
+    let axis: Axis
+
+    public init(axis: Axis = .top) { self.axis = axis }
 
     public var body: some View {
+        ZStack {
+            // Реальное размытие: под шапкой и панелью ввода контент мутнеет,
+            // а не просто затемняется (владелец 01.09.2026: «в чате тоже
+            // размытие эффект, а то мне показалось, что нет»).
+            FrostedGlass(axis: axis == .top ? .top : .bottom)
+            затемнение
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// Тёмный слой поверх размытия — «потемнее» из той же просьбы.
+    private var затемнение: some View {
         LinearGradient(
             stops: [
-                .init(color: Color.tfBackground.opacity(0.96), location: 0.00),
-                .init(color: Color.tfBackground.opacity(0.90), location: 0.42),
-                .init(color: Color.tfBackground.opacity(0.58), location: 0.68),
-                .init(color: Color.tfBackground.opacity(0.18), location: 0.86),
-                .init(color: Color.tfBackground.opacity(0.00), location: 1.00),
+                // Чёрный, а не цвет фона: владелец 01.09.2026 просил «потемнее»
+                // и шапку, и нижнюю панель — под ними не должно просвечивать.
+                .init(color: .black.opacity(1.00), location: 0.00),
+                .init(color: .black.opacity(0.94), location: 0.45),
+                .init(color: .black.opacity(0.62), location: 0.70),
+                .init(color: .black.opacity(0.22), location: 0.87),
+                .init(color: .black.opacity(0.00), location: 1.00),
             ],
-            startPoint: .top,
-            endPoint: .bottom
+            startPoint: axis == .top ? .top : .bottom,
+            endPoint: axis == .top ? .bottom : .top
         )
-        .allowsHitTesting(false)
     }
 }
