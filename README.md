@@ -2,6 +2,8 @@
 
 # ⚡️ TaskFlow (New-Todoist)
 
+📍 **Где что лежит и где единственная копия кода — [INDEX.md](INDEX.md). Читать первым.**
+
 **Личный таск-трекер нового поколения с протоколом работы автономных AI-агентов, нативным распознаванием речи на устройстве и интеграцией с экосистемами Apple и Google.**
 
 [![React](https://img.shields.io/badge/React-19.2-61dafb?logo=react&logoColor=black)](https://react.dev/)
