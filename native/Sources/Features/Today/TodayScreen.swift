@@ -102,10 +102,7 @@ struct TodayScreen: View {
                                 onOpen: { route = .taskDetail(taskID: $0.id) },
                                 onComplete: { task in Task { await taskStore.patch(taskId: task.id, fields: ["status": .string("completed")]) { _ in } } },
                                 onReschedule: { task in rescheduleTask = task; rescheduleOpen = true },
-                                onDelete: { task in Task { await taskStore.delete(taskId: task.id) } },
-                                onSectionBoundary: { info, minY in
-                                    updateActiveSection(info, minY: minY, computation: c)
-                                }
+                                onDelete: { task in Task { await taskStore.delete(taskId: task.id) } }
                             )
                             // Без горизонтальных полей: строка задачи идёт во
                             // ВСЮ ширину экрана, как в вебе (там у контейнера
@@ -164,6 +161,16 @@ struct TodayScreen: View {
                     headerPullDown = new.pullDown
                 }
             }
+            .onPreferenceChange(TodaySectionKey.self) { marks in
+                let threshold = TodayHeaderMetrics.barHeight
+                let passed = marks.filter { $0.minY <= threshold }.max { $0.minY < $1.minY }
+                let next = passed.map {
+                    TodaySectionMark(title: $0.title, icon: $0.icon, color: $0.color, minY: 0)
+                }
+                if next?.title != activeSection?.title {
+                    withAnimation(.easeOut(duration: 0.16)) { activeSection = next }
+                }
+            }
 
             // Порядок принципиален: лента → одна полупрозрачная подложка →
             // чёткие заголовки и кнопки.
@@ -171,20 +178,12 @@ struct TodayScreen: View {
                 .frame(height: 148)
                 .ignoresSafeArea(edges: .top)
                 .offset(y: headerPullDown)
-                // По официальным гайдам SwiftUI — системный эффект «заблюренного стекла»,
-                // а не кастомный LinearGradient. .ultraThinMaterial даёт именно его.
-                .background(.ultraThinMaterial)
 
             headerChrome(c: c)
                 .offset(y: headerPullDown)
         }
         .background(Color.tfBackground.ignoresSafeArea())
-        // По официальным гайдлайнам SwiftUI: большая сворачивающаяся шапка
-        // через .navigationTitle + .navigationBarTitleDisplayMode(.large),
-        // и нативное прилипание секций через LazyVStack(pinnedViews: [.sectionHeaders]).
-        // Размытие шапки — системный .ultraThinMaterial (вместо кастомного FrostedGlass).
-        .navigationTitle("Сегодня")
-        .navigationBarTitleDisplayMode(.large)
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $route) { routeDestination($0) }
         .task { await vm.loadAgentsIfNeeded() }
         .tfBottomSheet(isPresented: $rescheduleOpen) {
@@ -202,12 +201,6 @@ struct TodayScreen: View {
         // просроченные» применится к одной задаче вместо группы.
         .onChange(of: rescheduleOpen) { _, open in
             if !open { rescheduleTask = nil }
-        }
-        // После смены фильтра/раскладки/состава секций прежняя активная метка
-        // больше не относится к показанному списку. Начинаем с первого реально
-        // существующего раздела; дальнейшие переходы снова задаёт геометрия.
-        .onChange(of: sectionInfos(c: c).map(\.title)) { _, _ in
-            activeSection = nil
         }
     }
 
@@ -239,19 +232,6 @@ struct TodayScreen: View {
         if let activeSection { return activeSection }
         guard let first = sectionInfos(c: c).first else { return nil }
         return TodaySectionMark(title: first.title, icon: first.icon, color: first.color, minY: 0)
-    }
-
-    private func updateActiveSection(_ info: TodaySectionInfo, minY: CGFloat, computation c: TodayComputation) {
-        let next = TodaySectionTracker.next(
-            current: activeSection,
-            crossing: info,
-            minY: minY,
-            sections: sectionInfos(c: c),
-            threshold: TodayHeaderMetrics.barHeight
-        )
-        if next?.title != activeSection?.title {
-            withAnimation(.easeOut(duration: 0.16)) { activeSection = next }
-        }
     }
 
     /// В покое — только день недели. На пути схлопывания он гаснет, а в центре
