@@ -28,17 +28,23 @@ public struct TFHeaderScrim: View {
         .allowsHitTesting(false)
     }
 
-    /// Тёмный слой поверх размытия — «потемнее» из той же просьбы.
+    /// Цвет слоя. Снизу — чёрный («нижнюю панельку делай чёрной»), сверху —
+    /// цвет фона: чёрная шапка на сером фоне ленты давала резкую границу,
+    /// особенно при оттяжке, когда слой уезжает и из-под него видно серое
+    /// (владелец 01.09.2026: «чтобы однородно смотрелось… если этого нельзя
+    /// сделать, тогда только нижнюю панельку делай чёрной»). Чернота под
+    /// шапкой потребовала бы перекрасить фон всего приложения.
+    private var тон: Color { axis == .top ? .tfBackground : .black }
+
+    /// Плотный слой поверх размытия.
     private var затемнение: some View {
         LinearGradient(
             stops: [
-                // Чёрный, а не цвет фона: владелец 01.09.2026 просил «потемнее»
-                // и шапку, и нижнюю панель — под ними не должно просвечивать.
-                .init(color: .black.opacity(1.00), location: 0.00),
-                .init(color: .black.opacity(0.94), location: 0.45),
-                .init(color: .black.opacity(0.62), location: 0.70),
-                .init(color: .black.opacity(0.22), location: 0.87),
-                .init(color: .black.opacity(0.00), location: 1.00),
+                .init(color: тон.opacity(1.00), location: 0.00),
+                .init(color: тон.opacity(0.94), location: 0.45),
+                .init(color: тон.opacity(0.62), location: 0.70),
+                .init(color: тон.opacity(0.22), location: 0.87),
+                .init(color: тон.opacity(0.00), location: 1.00),
             ],
             startPoint: axis == .top ? .top : .bottom,
             endPoint: axis == .top ? .bottom : .top
