@@ -106,7 +106,9 @@ struct TaskFormScreen: View {
         }
         .background(Color.tfBackground)
         .overlay(alignment: .bottomTrailing) { if isTitleFocused { micKeyboardBar } }
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка по официальным гайдам SwiftUI.
+        .navigationTitle(viewModel.title.isEmpty ? "Новая задача" : viewModel.title)
+        .navigationBarTitleDisplayMode(.large)
         .task {
             await viewModel.loadIfNeeded()
             await viewModel.loadAgents()

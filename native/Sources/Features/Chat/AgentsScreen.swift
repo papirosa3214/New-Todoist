@@ -24,9 +24,9 @@ struct AgentsScreen: View {
             .padding(.vertical, TFSpacing.lg)
         }
         .background(Color.tfBackground)
-        // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
-        // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка по официальным гайдам SwiftUI.
+        .navigationTitle("Команда")
+        .navigationBarTitleDisplayMode(.large)
         .safeAreaInset(edge: .top, spacing: 0) {
             TFScreenHeader("Команда", variant: .compact,
                             leading: { AnyView(DirectoryBackButton()) })

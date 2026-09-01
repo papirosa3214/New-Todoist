@@ -63,7 +63,9 @@ struct ProjectsScreen: View {
         .background(Color.tfBackground)
         // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
         // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка.
+        .navigationTitle("Проекты")
+        .navigationBarTitleDisplayMode(.large)
         .safeAreaInset(edge: .top, spacing: 0) {
             // `TFScreenHeader` сама стрелку «назад» не рисует (проверено кодом) —
             // `DirectoryBackButton()` тот же канонический ответ, что уже

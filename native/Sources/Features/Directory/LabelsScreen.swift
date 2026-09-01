@@ -70,7 +70,9 @@ struct LabelsScreen: View {
         .background(Color.tfBackground)
         // Своя шапка уже несёт заголовок и кнопку «назад» — системный навбар
         // поверх неё давал ВТОРУЮ стрелку и лишнюю полосу.
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка.
+        .navigationTitle("Метки")
+        .navigationBarTitleDisplayMode(.large)
         .safeAreaInset(edge: .top, spacing: 0) {
             TFScreenHeader("Метки", variant: .compact, leading: { AnyView(DirectoryBackButton()) })
         }

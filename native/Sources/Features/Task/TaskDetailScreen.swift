@@ -132,7 +132,9 @@ struct TaskDetailScreen: View {
                 }
             }
         }
-        .toolbar(.hidden, for: .navigationBar)
+        // Нативная сворачивающаяся шапка (большой заголовок сворачивается в плашку).
+        .navigationTitle(viewModel.task?.title ?? "Задача")
+        .navigationBarTitleDisplayMode(.large)
         .taskToast($toast)
         .taskConfirm($confirmRequest)
         .fileImporter(isPresented: $isTaskFilePickerPresented, allowedContentTypes: [.item]) { result in
