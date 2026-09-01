@@ -12,6 +12,9 @@ import SnapshotTesting
 final class TaskRowSnapshotTests: XCTestCase {
 
     private let deviceConfig: ViewImageConfig = .iPhone13Pro
+    // Эталоны уже записаны (record = true → прогон → false → коммит PNG).
+    // По разбору ревьюера: PNG должны быть в git, иначе каждый CI красный
+    // при чистой копии (rsync --delete сносит эталоны на маке).
     private var record: Bool { false }
 
     private func make(
