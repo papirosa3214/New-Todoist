@@ -15,8 +15,6 @@ import SwiftUI
 // в прошлое дальше стартовых 8 недель нельзя — ограничение, не молчаливое.
 private let monthRowH: CGFloat = 128
 private let monthChipLimit = 4
-private let weeksInitialPast = 8
-private let weeksInitialFuture = 16
 private let weeksChunk = 12
 
 struct UpcomingMonthView: View {
@@ -67,21 +65,13 @@ struct UpcomingMonthView: View {
             }
             .onAppear {
                 if weeks.isEmpty { weeks = Self.buildInitialWeeks(around: initialMonday, initialMonth: initialMonth) }
+                // Лента уже начинается с недели 1-го числа `initialMonth`
+                // (см. `buildInitialWeeks`), никакого scrollTo не требуется —
+                // pinned header в SwiftUI + LazyVStack прячет первую строку.
+                // Сразу ставим заголовок на `initialMonth`.
                 guard !didInitialScroll else { return }
                 didInitialScroll = true
-                let target = Self.firstWeekMondayOfMonth(year: initialMonth.year, month: initialMonth.month)
-                // Заголовок экрана сразу показывает месяц `initialMonth`, а не
-                // месяц первой попавшей в кадр недели (она может быть в прошлом).
                 onVisibleMonthChange(initialMonth.year, initialMonth.month)
-                DispatchQueue.main.async {
-                    proxy.scrollTo(target, anchor: .top)
-                    // Дождаться, пока `weekBlock.onAppear` отработают на новом
-                    // диапазоне видимых недель: иначе самая нижняя видимая неделя
-                    // (зачастую уже в следующем месяце) перезапишет заголовок.
-                    DispatchQueue.main.async {
-                        onVisibleMonthChange(initialMonth.year, initialMonth.month)
-                    }
-                }
             }
         }
     }
@@ -166,19 +156,21 @@ struct UpcomingMonthView: View {
     }
 
     private static func buildInitialWeeks(around initialMonday: String, initialMonth: (year: Int, month: Int)) -> [String] {
+        // Первая неделя ленты — неделя с 1-м числом `initialMonth` (например,
+        // 31 августа для сентября 2026). 4 недели назад и 20 вперёд: пользователь
+        // чаще листает в будущее, чем в прошлое; scrollTo не используется,
+        // потому что с `pinnedViews: [.sectionHeaders]` он кладёт первую строку
+        // под шапку — и 1-е число месяца оказывается скрытым.
         let firstWeekMonday = firstWeekMondayOfMonth(year: initialMonth.year, month: initialMonth.month)
-        let start = UpcomingDate.addDays(firstWeekMonday, -weeksInitialPast * 7)
-        return (0..<(weeksInitialPast + weeksInitialFuture + 1)).map { UpcomingDate.addDays(start, $0 * 7) }
+        let weeksBefore = 4
+        let weeksAfter = 20
+        let start = UpcomingDate.addDays(firstWeekMonday, -weeksBefore * 7)
+        return (0..<(weeksBefore + weeksAfter + 1)).map { UpcomingDate.addDays(start, $0 * 7) }
     }
 
-    /// Понедельник недели, ПРЕДШЕСТВУЮЩЕЙ неделе с 1-м числом месяца
-    /// `(year, month)` (0-based). Возвращаем на неделю раньше, потому что
-    /// шапка с днями недели приклеена к верху (`pinnedViews: [.sectionHeaders]`):
-    /// `scrollTo` с `anchor: .top` поместит target под шапку, и сам 1-й день
-    /// месяца окажется за ней. Минус 7 дней → целевая неделя встаёт под
-    /// шапку целиком, а 1-е число месяца видно в первой полной строке.
-    /// Стартовая точка ленты — отдельно от `weekMonth`, которая считает
-    /// «доминирующий» месяц по четвергу.
+    /// Понедельник недели, содержащей 1-е число месяца `(year, month)`
+    /// (0-based). Стартовая точка ленты — отдельно от `weekMonth`,
+    /// которая считает «доминирующий» месяц по четвергу.
     private static func firstWeekMondayOfMonth(year: Int, month: Int) -> String {
         var comps = DateComponents()
         comps.year = year; comps.month = month + 1; comps.day = 1
@@ -186,7 +178,6 @@ struct UpcomingMonthView: View {
         cal.timeZone = TimeZone(identifier: "UTC")!
         guard let firstOf = cal.date(from: comps) else { return "" }
         let firstOfStr = UpcomingDate.calendarDateString(firstOf)
-        let week = UpcomingDate.mondayOf(firstOfStr)
-        return UpcomingDate.addDays(week, -7)
+        return UpcomingDate.mondayOf(firstOfStr)
     }
 }
