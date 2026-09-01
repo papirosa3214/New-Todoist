@@ -56,6 +56,23 @@ final class ViewsAndSwipesTests: XCTestCase {
         }
     }
 
+    func testФильтрСегодняОткрываетсяНативнымМеню() {
+        let app = запустить()
+        открыть(вкладку: "Сегодня", app)
+
+        let фильтр = app.buttons["Фильтры"]
+        XCTAssertTrue(фильтр.waitForExistence(timeout: 10), "Нет кнопки фильтров")
+        фильтр.tap()
+
+        XCTAssertTrue(app.buttons["Проект"].waitForExistence(timeout: 5),
+                      "Фильтр не открыл системное меню с пунктом «Проект»")
+        XCTAssertTrue(app.buttons["Метка"].exists, "В системном меню нет пункта «Метка»")
+        XCTAssertTrue(app.buttons["Исполнитель"].exists, "В системном меню нет пункта «Исполнитель»")
+        XCTAssertTrue(app.switches["Показывать выполненные"].exists
+                      || app.buttons["Показывать выполненные"].exists,
+                      "В системном меню нет нативного переключателя выполненных")
+    }
+
     // MARK: - Свайпы по строке задачи
 
     func testСвайпПоЗадачеДаётДействия() {

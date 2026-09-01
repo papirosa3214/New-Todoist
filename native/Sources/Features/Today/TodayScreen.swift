@@ -19,8 +19,6 @@ struct TodayScreen: View {
 
     @State private var vm = TodayViewModel()
     @State private var route: AppRoute?
-    @State private var filterSheetOpen = false
-    @State private var openPlannerSectionOnOpen = false
     @State private var rescheduleOpen = false
     /// Конкретная задача, перенесённая через свайп — открывает RescheduleSheet
     /// именно для неё. Приоритет над `rescheduleOpen` (тот для группы
@@ -188,19 +186,6 @@ struct TodayScreen: View {
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $route) { routeDestination($0) }
         .task { await vm.loadAgentsIfNeeded() }
-        .tfBottomSheet(isPresented: $filterSheetOpen) {
-            TodayFilterSheetContent(
-                filters: Binding(get: { vm.filters }, set: { vm.filters = $0 }),
-                onClose: { filterSheetOpen = false },
-                projectOptions: c.projectOptions,
-                labelOptions: c.labelOptions,
-                assigneeOptions: c.assigneeOptions,
-                allProjects: projectStore.projects,
-                visibleProjectIds: vm.visibleProjectIds,
-                onTogglePlannerProject: { vm.toggleVisibleProject($0) },
-                openPlannerSection: openPlannerSectionOnOpen
-            )
-        }
         .tfBottomSheet(isPresented: $rescheduleOpen) {
             RescheduleSheetContent(
                 taskIds: rescheduleTask.map { [$0.id] } ?? c.overdueTasks.map(\.id),
@@ -216,9 +201,6 @@ struct TodayScreen: View {
         // просроченные» применится к одной задаче вместо группы.
         .onChange(of: rescheduleOpen) { _, open in
             if !open { rescheduleTask = nil }
-        }
-        .onChange(of: filterSheetOpen) { _, open in
-            if !open { openPlannerSectionOnOpen = false }
         }
     }
 
@@ -278,7 +260,7 @@ struct TodayScreen: View {
                 HStack(spacing: TFSpacing.headerActionsGap) {
                     leadingTitle
                     Spacer(minLength: TFSpacing.sm)
-                    headerActions
+                    headerActions(c: c)
                 }
             }
             .padding(.horizontal, TFSpacing.screenHorizontal)
@@ -330,16 +312,9 @@ struct TodayScreen: View {
         .allowsHitTesting(false)
     }
 
-    /// Действия дублируются только на время кроссфейда: большая строка уезжает
-    /// с лентой, а компактная появляется на её месте, поэтому кнопки не
-    /// пропадают и не прыгают между состояниями.
-    private var headerActions: some View {
+    private func headerActions(c: TodayComputation) -> some View {
         HStack(spacing: TFSpacing.headerActionsGap) {
-            // Отдельной лупы в ряду нет: поиск живёт пунктом меню — одно
-            // действие, одно место.
-            TFIconButton("line.3.horizontal.decrease") { filterSheetOpen = true }
-                .accessibilityLabel("Фильтры")
-                .accessibilityIdentifier("today.filters")
+            filterMenu(c: c)
             Menu {
                 Picker("Вид", selection: Binding(get: { vm.layout }, set: { vm.layout = $0 })) {
                     Label("Список", systemImage: "list.bullet").tag(TodayLayout.list)
@@ -356,6 +331,122 @@ struct TodayScreen: View {
             }
             .accessibilityLabel("Вид")
             .accessibilityIdentifier("today.view-switcher")
+        }
+    }
+
+    /// Нативное системное меню — тот же presentation и стеклянный материал,
+    /// что у соседнего меню «…». Никаких `.sheet` и кастомной карточки.
+    private func filterMenu(c: TodayComputation) -> some View {
+        Menu {
+            Menu {
+                filterOption("Все проекты", selected: vm.filters.projectId == nil) {
+                    vm.filters.projectId = nil
+                }
+                if c.projectOptions.isEmpty {
+                    Text("Нет задач с проектом")
+                } else {
+                    ForEach(c.projectOptions) { option in
+                        filterOption(option.label, selected: vm.filters.projectId == option.id) {
+                            vm.filters.projectId = option.id
+                        }
+                    }
+                }
+            } label: {
+                Label("Проект", systemImage: "folder")
+            }
+
+            Menu {
+                filterOption("Все метки", selected: vm.filters.labelId == nil) {
+                    vm.filters.labelId = nil
+                }
+                if c.labelOptions.isEmpty {
+                    Text("Нет задач с метками")
+                } else {
+                    ForEach(c.labelOptions) { option in
+                        filterOption(option.label, selected: vm.filters.labelId == option.id) {
+                            vm.filters.labelId = option.id
+                        }
+                    }
+                }
+            } label: {
+                Label("Метка", systemImage: "tag")
+            }
+
+            Menu {
+                filterOption("Все исполнители", selected: vm.filters.assigneeKey == nil) {
+                    vm.filters.assigneeKey = nil
+                }
+                if c.assigneeOptions.hasUnassigned {
+                    filterOption("Без исполнителя", selected: vm.filters.assigneeKey == "__none") {
+                        vm.filters.assigneeKey = "__none"
+                    }
+                }
+                if c.assigneeOptions.list.isEmpty && !c.assigneeOptions.hasUnassigned {
+                    Text("Нет данных об исполнителях")
+                } else {
+                    ForEach(c.assigneeOptions.list) { option in
+                        filterOption(option.name, selected: vm.filters.assigneeKey == option.id) {
+                            vm.filters.assigneeKey = option.id
+                        }
+                    }
+                }
+            } label: {
+                Label("Исполнитель", systemImage: "person")
+            }
+
+            Divider()
+
+            Toggle(isOn: Binding(
+                get: { vm.filters.showCompleted },
+                set: { vm.filters.showCompleted = $0 }
+            )) {
+                Label("Показывать выполненные", systemImage: "checkmark.circle")
+            }
+
+            Menu {
+                if projectStore.projects.isEmpty {
+                    Text("Нет проектов")
+                } else {
+                    ForEach(projectStore.projects) { project in
+                        filterOption(
+                            project.name,
+                            selected: vm.visibleProjectIds[project.id] == true
+                        ) {
+                            vm.toggleVisibleProject(project.id)
+                        }
+                    }
+                }
+            } label: {
+                Label("Показывать в разделе", systemImage: "eye")
+            }
+
+            if vm.filters.isActive {
+                Divider()
+                Button(role: .destructive) { vm.filters = .empty } label: {
+                    Label("Сбросить фильтры", systemImage: "arrow.counterclockwise")
+                }
+            }
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 18))
+                .foregroundStyle(vm.filters.isActive ? Color.tfRed : Color.tfText)
+                .frame(width: TFHitTarget.min, height: TFHitTarget.min)
+        }
+        .accessibilityLabel("Фильтры")
+        .accessibilityIdentifier("today.filters")
+    }
+
+    private func filterOption(
+        _ title: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            if selected {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
         }
     }
 }
