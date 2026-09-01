@@ -80,6 +80,29 @@ targets:
         TEST_TARGET_NAME: TaskFlow
         GENERATE_INFOPLIST_FILE: true
 
+  # Snapshot-тесты: ловят визуальные регрессии дизайн-системы (строка задачи
+  # во всех состояниях, шапки, панель быстрого создания, пустые состояния).
+  # Эталоны — в репо, размер экрана владельца: 420×912 @3x. Требует SPM-пакет
+  # swift-snapshot-testing — см. `packages:` ниже.
+  TaskFlowSnapshotTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SnapshotTests
+    dependencies:
+      - target: TaskFlow
+      - package: SnapshotTesting
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.maksim.taskflow.native.snapshots
+        TEST_TARGET_NAME: TaskFlow
+        GENERATE_INFOPLIST_FILE: true
+
+packages:
+  SnapshotTesting:
+    url: https://github.com/pointfreeco/swift-snapshot-testing
+    from: 1.18.0
+
 schemes:
   TaskFlow:
     build:
@@ -87,6 +110,7 @@ schemes:
         TaskFlow: all
         TaskFlowUITests: [test]
         TaskFlowTests: [test]
+        TaskFlowSnapshotTests: [test]
     run:
       config: Debug
     test:
@@ -94,3 +118,4 @@ schemes:
       targets:
         - TaskFlowUITests
         - TaskFlowTests
+        - TaskFlowSnapshotTests
