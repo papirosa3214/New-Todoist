@@ -5,6 +5,11 @@ enum TodayHeaderMetrics {
     static let barHeight: CGFloat = 44
 }
 
+private struct TodayHeaderScrollState: Equatable {
+    let collapse: CGFloat
+    let pullDown: CGFloat
+}
+
 // «Сегодня» (`/today`) — spec/SCREENS-1.md §5.1. Имя структуры и параметры
 // (никаких) — контракт `spec/INTEGRATION.md`.
 struct TodayScreen: View {
@@ -25,6 +30,11 @@ struct TodayScreen: View {
     /// прозрачность двух дат (крупной в ленте и мелкой в шапке): высоты
     /// фиксированы, иначе шапка дрожит на каждом кадре прокрутки.
     @State private var collapse: CGFloat = 0
+    /// Положительное смещение при pull-down: вся шапка едет вниз вместе с
+    /// лентой. При прокрутке вверх всегда 0 — тогда шапка липнет к верху.
+    @State private var headerPullDown: CGFloat = 0
+    /// Последняя секция, дошедшая до верхней строки общей шапки.
+    @State private var activeSection: TodaySectionMark?
 
     private var today: String { TodayDate.todayString() }
     private var activeHourDate: String {
@@ -48,12 +58,13 @@ struct TodayScreen: View {
 
     var body: some View {
         let c = computation
-        ScrollView {
-            VStack(spacing: 0) {
-                // Большая шапка — ЧАСТЬ ленты, а не закреплённый inset. Поэтому
-                // «Вторник» и первый подраздел физически едут вместе при
-                // pull-to-refresh. При обычной прокрутке её заменяет compactBar.
-                largeBar(c: c)
+        ZStack(alignment: .top) {
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Место под две строки переднего слоя. Сам текст находится
+                    // над glow, а этот прозрачный резерв уезжает вместе с
+                    // лентой, позволяя задачам заходить под общую шапку.
+                    Color.clear.frame(height: expandedHeaderHeight(c: c))
                 if c.trueEmpty && vm.layout == .list {
                     TodayEmptyIllustration()
                 } else {
@@ -134,35 +145,46 @@ struct TodayScreen: View {
                         }
                     }
                 }
+                }
+                .padding(.bottom, TFTabBarMetrics.heightCompact + TFSpacing.lg)
             }
-            // Нижний край: контент проходит ПОД таб-баром (он лежит в ZStack
-            // поверх), поэтому запас должен быть не меньше его высоты, иначе
-            // последняя задача остаётся под панелью и её не доскроллить.
-            .padding(.bottom, TFTabBarMetrics.heightCompact + TFSpacing.lg)
+            .coordinateSpace(name: todayScrollSpace)
+            .onScrollGeometryChange(for: TodayHeaderScrollState.self) { geo in
+                let scrolled = geo.contentOffset.y + geo.contentInsets.top
+                return TodayHeaderScrollState(
+                    collapse: max(0, min(1, scrolled / collapseDistance)),
+                    pullDown: max(0, -scrolled)
+                )
+            } action: { _, new in
+                if abs(new.collapse - collapse) > 0.01 || new.collapse == 0 || new.collapse == 1 {
+                    collapse = new.collapse
+                }
+                if abs(new.pullDown - headerPullDown) > 0.5 || new.pullDown == 0 {
+                    headerPullDown = new.pullDown
+                }
+            }
+            .onPreferenceChange(TodaySectionKey.self) { marks in
+                let threshold = TodayHeaderMetrics.barHeight
+                let passed = marks.filter { $0.minY <= threshold }.max { $0.minY < $1.minY }
+                let next = passed.map {
+                    TodaySectionMark(title: $0.title, icon: $0.icon, color: $0.color, minY: 0)
+                }
+                if next?.title != activeSection?.title {
+                    withAnimation(.easeOut(duration: 0.16)) { activeSection = next }
+                }
+            }
+
+            // Порядок принципиален: лента → одна полупрозрачная подложка →
+            // чёткие заголовки и кнопки.
+            headerFrost
+                .frame(height: 148)
+                .ignoresSafeArea(edges: .top)
+                .offset(y: headerPullDown)
+
+            headerChrome(c: c)
+                .offset(y: headerPullDown)
         }
-        // В покое inset имеет нулевую высоту: сверху видна большая шапка из
-        // ленты. По мере прокрутки inset плавно вырастает до компактной полосы;
-        // pinnedViews тогда паркует подзаголовок точно под ней. Так большой день
-        // недели и первый подраздел оттягиваются вниз вместе, а не живут в двух
-        // независимых слоях.
-        // Прогресс схлопывания. В покое `contentOffset.y` РАВЕН минус верхнему
-        // инсету, поэтому считаем от суммы — иначе шапка стартует наполовину
-        // схлопнутой. Пишем в @State только при заметном изменении: каждый
-        // такой кадр перерисовывает весь body вместе с фильтрацией задач.
-        .onScrollGeometryChange(for: CGFloat.self) { geo in
-            let scrolled = geo.contentOffset.y + geo.contentInsets.top
-            return max(0, min(1, scrolled / collapseDistance))
-        } action: { _, new in
-            guard new != collapse else { return }
-            if abs(new - collapse) > 0.01 || new == 0 || new == 1 { collapse = new }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            compactBar(c: c)
-                .frame(height: TodayHeaderMetrics.barHeight * collapse, alignment: .bottom)
-                .opacity(collapse)
-                .clipped()
-        }
-        .background(Color.tfBackground)
+        .background(Color.tfBackground.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $route) { routeDestination($0) }
         .task { await vm.loadAgentsIfNeeded() }
@@ -202,16 +224,36 @@ struct TodayScreen: View {
 
     // MARK: - Шапка
 
-    // В покое крупный день недели с кнопками живёт в ленте. При прокрутке он
-    // уходит вверх, а закреплённая компактная полоса проявляет «1 сентября».
-    // Заголовки секций остаются настоящими pinnedViews и потому корректно
-    // выталкивают друг друга.
+    // Две строки образуют ОДНУ липкую шапку. При pull-down она получает
+    // положительный offset и едет вместе со списком; при прокрутке вверх offset
+    // становится нулевым, шапка остаётся наверху и меняет компоновку.
     private var collapseDistance: CGFloat { TodayHeaderMetrics.barHeight }
+    private var sectionLineHeight: CGFloat { 34 }
 
     private var headerDate: String { vm.layout == .hours ? activeHourDate : today }
 
-    /// Большой заголовок части ленты: только день недели. Его не дублирует
-    /// компактная дата, которая проявляется отдельно после схлопывания.
+    private func sectionInfos(c: TodayComputation) -> [TodaySectionInfo] {
+        guard vm.layout == .list else { return [] }
+        return TodaySectionInfo.list(
+            waiting: c.waitingTasks,
+            overdue: c.overdueTasks,
+            today: c.todayTasks,
+            todayDate: today
+        )
+    }
+
+    private func expandedHeaderHeight(c: TodayComputation) -> CGFloat {
+        TodayHeaderMetrics.barHeight + (sectionInfos(c: c).isEmpty ? 0 : sectionLineHeight)
+    }
+
+    private func shownSection(c: TodayComputation) -> TodaySectionMark? {
+        if let activeSection { return activeSection }
+        guard let first = sectionInfos(c: c).first else { return nil }
+        return TodaySectionMark(title: first.title, icon: first.icon, color: first.color, minY: 0)
+    }
+
+    /// В покое — только день недели. На пути схлопывания он гаснет, а в центре
+    /// независимо проявляется полная компактная дата.
     private var leadingTitle: some View {
         Text(TodayDate.formatWeekdayLabel(headerDate))
             .tfText(.titleLarge)
@@ -221,69 +263,70 @@ struct TodayScreen: View {
             .accessibilityIdentifier("today.title-large")
     }
 
-    private func largeBar(c: TodayComputation) -> some View {
-        HStack(spacing: TFSpacing.headerActionsGap) {
-            leadingTitle
-            Spacer(minLength: TFSpacing.sm)
-            headerActions
-        }
-        .padding(.horizontal, TFSpacing.screenHorizontal)
-        .frame(height: TodayHeaderMetrics.barHeight)
-        .background(alignment: .top) {
-            headerFrost
-                .ignoresSafeArea(edges: .top)
-        }
-        .accessibilityIdentifier("today.header-large")
-    }
+    private func headerChrome(c: TodayComputation) -> some View {
+        ZStack(alignment: .topLeading) {
+            ZStack {
+                Text(TodayDate.formatDayMonthFull(headerDate))
+                    .tfText(.title)
+                    .foregroundStyle(Color.tfText)
+                    .lineLimit(1)
+                    .opacity(collapse)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("today.title-compact")
+                    .padding(.horizontal, 3 * TFHitTarget.min)
 
-    private func compactBar(c: TodayComputation) -> some View {
-        ZStack {
-            // «Просто дата» под островком — проявляется ровно на том пути,
-            // на котором гаснет крупная.
-            Text(TodayDate.formatDayMonthFull(headerDate))
-                .tfText(.title)
-                .foregroundStyle(Color.tfText)
-                .lineLimit(1)
-                .opacity(collapse)
-                .allowsHitTesting(false)
-                .accessibilityIdentifier("today.title-compact")
-                // Держим дату в свободной середине: три кнопки справа занимают
-                // 3 зоны по 44pt, столько же резервируем слева ради симметрии.
-                .padding(.horizontal, 3 * TFHitTarget.min)
+                HStack(spacing: TFSpacing.headerActionsGap) {
+                    leadingTitle
+                    Spacer(minLength: TFSpacing.sm)
+                    headerActions
+                }
+            }
+            .padding(.horizontal, TFSpacing.screenHorizontal)
+            .frame(height: TodayHeaderMetrics.barHeight)
 
-            HStack {
-                Spacer()
-                headerActions
+            if let section = shownSection(c: c) {
+                sectionLabel(section)
+                    // 44pt в покое: подпись стоит второй строкой. При
+                    // схлопывании она поднимается ровно на место «Вторника».
+                    .offset(y: TodayHeaderMetrics.barHeight * (1 - collapse))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("today.section-current")
             }
         }
-        .padding(.horizontal, TFSpacing.screenHorizontal)
-        .frame(height: TodayHeaderMetrics.barHeight)
-        // Та же полупрозрачная frost-плёнка тянется до Dynamic Island. Нижний
-        // переход в ленту рисует уже сам прилипший подзаголовок.
-        .background(alignment: .top) {
-            headerFrost
-                .ignoresSafeArea(edges: .top)
-        }
+        .frame(height: expandedHeaderHeight(c: c), alignment: .top)
+        .accessibilityIdentifier("today.header")
     }
 
-    /// Верх не становится ни прозрачной дырой, ни глухой чёрной плашкой:
-    /// материал размывает контент под ним, а тёмный tint оставляет читаемыми
-    /// дату и кнопки. Градиентный хвост живёт в фоне подзаголовка, поэтому
-    /// эффект непрерывно тянется от Dynamic Island к первой строке.
-    private var headerFrost: some View {
-        ZStack {
-            Rectangle().fill(.ultraThinMaterial)
-            LinearGradient(
-                stops: [
-                    .init(color: Color.tfBackground.opacity(0.62), location: 0),
-                    .init(color: Color.tfBackground.opacity(0.55), location: 0.48),
-                    .init(color: Color.tfBackground.opacity(0.34), location: 0.82),
-                    .init(color: Color.tfBackground.opacity(0.12), location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+    private func sectionLabel(_ section: TodaySectionMark) -> some View {
+        HStack(spacing: 6) {
+            if let icon = section.icon {
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundStyle(Color.tfText)
+            }
+            Text(section.title)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(section.color)
+                .lineLimit(1)
         }
+        .padding(.horizontal, TFSpacing.lg)
+        .frame(height: sectionLineHeight, alignment: .leading)
+    }
+
+    /// Один чёрный полупрозрачный слой между лентой и передним текстом шапки.
+    /// Поэтому задачи под ним затухают, а названия и кнопки остаются чёткими.
+    private var headerFrost: some View {
+        LinearGradient(
+            stops: [
+                .init(color: Color.tfBackground.opacity(0.96), location: 0.00),
+                .init(color: Color.tfBackground.opacity(0.90), location: 0.42),
+                .init(color: Color.tfBackground.opacity(0.58), location: 0.68),
+                .init(color: Color.tfBackground.opacity(0.18), location: 0.86),
+                .init(color: Color.tfBackground.opacity(0.00), location: 1.00),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
         .allowsHitTesting(false)
     }
 

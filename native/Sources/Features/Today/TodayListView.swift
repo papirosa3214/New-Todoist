@@ -6,10 +6,6 @@ import SwiftUI
 // (`spec/NATIVE-PARTS.md` относит интеграцию с системным календарём к
 // более поздней волне), здесь не рисуется.
 struct TodayListView: View {
-    /// Зазор после затухающей плашки: первая строка не должна начинаться прямо
-    /// под её хвостом, иначе цвет проекта выглядит выцветшим уже в покое.
-    private static let sectionContentTopInset: CGFloat = 16
-
     let waitingTasks: [ApiTask]
     let overdueTasks: [ApiTask]
     let todayTasks: [ApiTask]
@@ -24,14 +20,13 @@ struct TodayListView: View {
     }
 
     var body: some View {
-        // Настоящее прилипание штатным `pinnedViews`: первый существующий
-        // подзаголовок уже на первом кадре вплотную примыкает к «Вторнику»,
-        // а при прокрутке паркуется под компактной шапкой и выталкивается
-        // следующим. Никаких координат и подмены текста в шапке нет.
-        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+        // Первый существующий подзаголовок рисует передний слой TodayScreen:
+        // так он всегда находится НАД общей полупрозрачной подложкой. Остальные
+        // заголовки едут в ленте и сообщают шапке свою позицию; когда очередной
+        // доезжает наверх, шапка заменяет им текущий подзаголовок.
+        LazyVStack(alignment: .leading, spacing: 0) {
             if !waitingTasks.isEmpty {
                 Section {
-                    Color.clear.frame(height: Self.sectionContentTopInset)
                     ForEach(waitingTasks) { task in
                         TodayTaskRow(task: task, overdue: task.dueDate != nil && task.dueDate! < today,
                                      onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
@@ -43,7 +38,6 @@ struct TodayListView: View {
             }
             if !overdueTasks.isEmpty {
                 Section {
-                    Color.clear.frame(height: Self.sectionContentTopInset)
                     ForEach(overdueTasks) { task in
                         TodayTaskRow(task: task, overdue: true,
                                      onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
@@ -54,7 +48,6 @@ struct TodayListView: View {
                 }
             }
             Section {
-                Color.clear.frame(height: Self.sectionContentTopInset)
                 ForEach(todayTasks) { task in
                     TodayTaskRow(task: task, overdue: false,
                                  onOpen: { onOpen(task) }, onComplete: { onComplete(task) },
@@ -73,36 +66,39 @@ struct TodayListView: View {
         let secs = sections
         if let index = secs.firstIndex(where: { $0.kind == kind }) {
             let info = secs[index]
-            HStack(spacing: 6) {
-                if let icon = info.icon {
-                    Image(systemName: icon).font(.system(size: 16)).foregroundStyle(Color.tfText)
+            Group {
+                if index == 0 {
+                    // Первая подпись уже нарисована в TodayScreen над glow.
+                    // Нулевая метка остаётся здесь только для геометрии.
+                    Color.clear.frame(height: 0)
+                } else {
+                    HStack(spacing: 6) {
+                        if let icon = info.icon {
+                            Image(systemName: icon).font(.system(size: 16)).foregroundStyle(Color.tfText)
+                        }
+                        Text(info.title)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(info.color)
+                    }
+                    .padding(.horizontal, TFSpacing.lg)
+                    .padding(.top, 8)
+                    .padding(.bottom, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Text(info.title)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(info.color)
             }
-            .padding(.horizontal, TFSpacing.lg)
-            // Без верхнего отступа: первый заголовок образует с большим днём
-            // недели единый стартовый блок, а припаркованный остаётся вплотную
-            // под компактной датой.
-            .padding(.top, 2)
-            .padding(.bottom, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Затухание — здесь, у подзаголовка (просьба владельца): плотная
-            // часть под самой надписью, а ниже неё хвост, в котором строка
-            // мягко уходит под заголовок. У шапки хвоста нет.
-            .background(alignment: .top) {
-                // Сильный blur начинается ещё в зоне подзаголовка, а не после
-                // пустого отступа: лента под ним быстро становится мутной и
-                // затем растворяется. Высота 58pt вместе с 16pt inset ниже
-                // оставляет первой синей строке уже чистый фон.
-                FrostedGlass(axis: .top)
-                    .frame(height: 58)
-                    .padding(.bottom, -24)
+            .background {
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: TodaySectionKey.self,
+                        value: [TodaySectionMark(
+                            title: info.title,
+                            icon: info.icon,
+                            color: info.color,
+                            minY: geo.frame(in: .named(todayScrollSpace)).minY
+                        )]
+                    )
+                }
             }
-            // При pinnedViews фон заголовка должен лежать поверх уезжающих
-            // строк, иначе blur остаётся только декоративным фоном позади них.
-            .zIndex(1)
         }
     }
 }
@@ -127,10 +123,28 @@ struct TodaySectionInfo: Equatable {
         if !overdue.isEmpty {
             result.append(.init(kind: .overdue, title: "Просрочено", icon: nil, color: .tfRed))
         }
-        if !today.isEmpty && !result.isEmpty {
+        if !today.isEmpty {
             result.append(.init(kind: .today, title: TodayDate.formatDueLabel(todayDate),
                                 icon: nil, color: .tfSub))
         }
         return result
+    }
+}
+
+// MARK: - Координаты секций для общей шапки
+
+let todayScrollSpace = "today.scroll"
+
+struct TodaySectionMark: Equatable {
+    let title: String
+    let icon: String?
+    let color: Color
+    let minY: CGFloat
+}
+
+enum TodaySectionKey: PreferenceKey {
+    static let defaultValue: [TodaySectionMark] = []
+    static func reduce(value: inout [TodaySectionMark], nextValue: () -> [TodaySectionMark]) {
+        value.append(contentsOf: nextValue())
     }
 }
