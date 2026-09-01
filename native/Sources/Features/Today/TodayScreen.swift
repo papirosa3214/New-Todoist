@@ -20,6 +20,9 @@ struct TodayScreen: View {
     /// прозрачность двух дат (крупной в ленте и мелкой в шапке): высоты
     /// фиксированы, иначе шапка дрожит на каждом кадре прокрутки.
     @State private var collapse: CGFloat = 0
+    /// Секция, чей заголовок уже ушёл под полосу шапки. Её название шапка
+    /// показывает слева — на месте, где в покое стоит крупная дата.
+    @State private var activeSection: TodaySectionMark?
 
     private var today: String { TodayDate.todayString() }
     private var activeHourDate: String {
@@ -45,7 +48,6 @@ struct TodayScreen: View {
         let c = computation
         ScrollView {
             VStack(spacing: 0) {
-                largeTitle
                 if c.trueEmpty && vm.layout == .list {
                     TodayEmptyIllustration()
                 } else {
@@ -146,6 +148,22 @@ struct TodayScreen: View {
             guard new != collapse else { return }
             if abs(new - collapse) > 0.01 || new == 0 || new == 1 { collapse = new }
         }
+        .coordinateSpace(name: todayScrollSpace)
+        // Наверху та секция, чей заголовок уже уехал под полосу. Пишем в
+        // состояние только при СМЕНЕ названия: сами координаты меняются на
+        // каждом кадре прокрутки, и запись по ним перерисовывала бы весь экран.
+        .onPreferenceChange(TodaySectionKey.self) { marks in
+            // Порог -TFSpacing.md, а не 0: у заголовка сверху столько же
+            // отступа, и при нуле надпись ещё стоит в ленте на виду — шапка
+            // показывала её вторым экземпляром поверх крупной даты.
+            let passed = marks.filter { $0.minY < -TFSpacing.md }.max { $0.minY < $1.minY }
+            let next = passed.map {
+                TodaySectionMark(title: $0.title, icon: $0.icon, color: $0.color, minY: 0)
+            }
+            if next?.title != activeSection?.title {
+                withAnimation(.easeOut(duration: 0.18)) { activeSection = next }
+            }
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             compactBar
         }
@@ -189,29 +207,44 @@ struct TodayScreen: View {
 
     // MARK: - Шапка
 
-    // Родная механика large title: схлопывается не полоса, а САМ заголовок.
-    // Полоса всегда 48pt (кнопки + мелкая дата), крупная дата лежит первой
-    // строкой ленты и уезжает под полосу вместе со списком. За ней вплотную
-    // встаёт прилипший заголовок секции — зазора, через который просвечивала
-    // лента, больше нет. Просьба владельца 01.09.2026: «чтобы день недели и
-    // число уменьшалось и под динамический островок маленьким вставало».
-    private var collapseDistance: CGFloat { 34 }
+    // Всё живёт на ОДНОЙ линии высотой 48pt: слева крупная дата, справа
+    // кнопки, по центру мелкая дата. При прокрутке крупная дата гаснет, в
+    // центре проявляется короткая («1 сен» — «под динамический островок»), а
+    // слева на освободившееся место въезжает название текущей секции. Лента
+    // при этом уходит под полосу целиком — заголовки секций не прилипают
+    // сами, они лишь сообщают наверх свою координату.
+    private var collapseDistance: CGFloat { 20 }
 
     private var headerDate: String { vm.layout == .hours ? activeHourDate : today }
 
-    private var largeTitle: some View {
-        Text(TodayDate.formatWeekdayDateLabel(headerDate))
-            .tfText(.titleLarge)
-            .foregroundStyle(Color.tfText)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, TFSpacing.screenHorizontal)
-            // 42, а не 56: полоса с кнопками теперь отдельная строка, и при
-            // прежней высоте над датой копился воздух — владелец 01.09.2026:
-            // «день недели сильно спустился вниз, много пустого места вверху».
-            .frame(height: 42)
-            .opacity(1 - collapse)
-            .accessibilityIdentifier("today.title-large")
+    /// Слева на линии: в покое — крупная дата, при прокрутке её место занимает
+    /// название текущей секции. Владелец 01.09.2026: «чтобы вторник 1 сентября
+    /// большими буквами был прям в одну линию с фильтром и троеточием, и
+    /// „Ждут вас“ заезжал на эту же линию, только слева».
+    @ViewBuilder
+    private var leadingTitle: some View {
+        ZStack(alignment: .leading) {
+            Text(TodayDate.formatWeekdayDateLabel(headerDate))
+                .tfText(.titleLarge)
+                .foregroundStyle(Color.tfText)
+                .lineLimit(1)
+                .opacity(1 - collapse)
+                .accessibilityIdentifier("today.title-large")
+
+            if let section = activeSection {
+                HStack(spacing: 6) {
+                    if let icon = section.icon {
+                        Image(systemName: icon).font(.system(size: 16)).foregroundStyle(Color.tfText)
+                    }
+                    Text(section.title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(section.color)
+                }
+                .lineLimit(1)
+                .transition(.opacity)
+                .accessibilityIdentifier("today.section-current")
+            }
+        }
     }
 
     private var compactBar: some View {
@@ -230,7 +263,8 @@ struct TodayScreen: View {
                 .padding(.horizontal, 3 * TFHitTarget.min)
 
             HStack(spacing: TFSpacing.headerActionsGap) {
-                Spacer()
+                leadingTitle
+                Spacer(minLength: TFSpacing.sm)
                 // Отдельной лупы в ряду нет (владелец 01.09.2026: «в трёх
                 // точках уже есть поиск, зачем он ещё иконкой в ряду»).
                 // Поиск живёт пунктом меню — одно действие, одно место.
@@ -256,9 +290,8 @@ struct TodayScreen: View {
             }
         }
         .padding(.horizontal, TFSpacing.screenHorizontal)
-        // 44 = зона нажатия кнопки, без запаса: полоса несёт только кнопки
-        // и мелкую дату.
-        .frame(height: 44)
+        // 48: в полосе теперь стоит и крупная дата 28pt, ей нужно место.
+        .frame(height: 48)
         // Плотная часть подложки накрывает полосу целиком, затухание свисает
         // ниже неё — иначе под датой и кнопками читается лента.
         .background(alignment: .top) {

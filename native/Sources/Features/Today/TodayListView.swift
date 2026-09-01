@@ -16,13 +16,13 @@ struct TodayListView: View {
     let onDelete: (ApiTask) -> Void
 
     var body: some View {
-        // Заголовки секций прилипают к шапке: доехав до верха, «Ждут вас»
-        // встаёт под шапкой, лента продолжает идти под ним, а следующий
-        // заголовок («Просрочено») выталкивает предыдущий вверх и занимает
-        // его место — обычное поведение списков iOS, владелец попросил
-        // 01.09.2026. В SwiftUI это `pinnedViews` + `Section`, свои
-        // измерения прокрутки не нужны.
-        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+        // Заголовки секций НЕ прилипают сами (`pinnedViews` убран 01.09.2026):
+        // владелец попросил, чтобы название секции вставало не под шапкой, а
+        // НА ту же линию, где стоят дата и кнопки. Поэтому заголовок едет с
+        // лентой как обычная строка, публикуя свою координату; какой из них
+        // сейчас «наверху», решает `TodayScreen` и показывает его в шапке
+        // слева, на месте крупной даты.
+        LazyVStack(alignment: .leading, spacing: 0) {
             if !waitingTasks.isEmpty {
                 Section {
                     ForEach(waitingTasks) { task in
@@ -74,18 +74,42 @@ struct TodayListView: View {
         .padding(.top, TFSpacing.md)
         .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Подложка — то же затухание, что у шапки, а не сплошная плашка
-        // (владелец, 01.09.2026: «надо сделать прозрачный фон у этой
-        // прилипалки… но чтобы текст гасился, а не прокручивался сквозь
-        // надпись»). Плотная часть накрывает саму надпись целиком, хвост в
-        // 14pt свисает ниже: строка уходит под заголовок через размытие.
-        // `FrostedGlass` здесь не годился — он растягивает затухание на всю
-        // свою высоту, и справа от надписи читался текст ленты.
-        .background(alignment: .top) {
-            TFHeaderBackdrop(tail: 14).padding(.bottom, -14)
+        // Своей подложки больше нет: под шапку заголовок уходит целиком, а
+        // гасит его подложка самой шапки. Вместо этого он сообщает наверх,
+        // где сейчас находится, — по этой координате шапка и выбирает,
+        // название какой секции показывать слева.
+        .background {
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: TodaySectionKey.self,
+                    value: [TodaySectionMark(
+                        title: title,
+                        icon: icon,
+                        color: color,
+                        minY: geo.frame(in: .named(todayScrollSpace)).minY
+                    )]
+                )
+            }
         }
-        // Костыль `.offset(y: -6)` убран 01.09.2026: он компенсировал зазор
-        // под крупной шапкой. Теперь полоса шапки компактная и фиксированная,
-        // заголовок прилипает к её нижней кромке вплотную сам.
+    }
+}
+
+// MARK: - Какая секция сейчас наверху
+
+/// Имя системы координат прокрутки «Сегодня»: в ней заголовки меряют, ушли ли
+/// они под полосу шапки.
+let todayScrollSpace = "today.scroll"
+
+struct TodaySectionMark: Equatable {
+    let title: String
+    let icon: String?
+    let color: Color
+    let minY: CGFloat
+}
+
+enum TodaySectionKey: PreferenceKey {
+    static let defaultValue: [TodaySectionMark] = []
+    static func reduce(value: inout [TodaySectionMark], nextValue: () -> [TodaySectionMark]) {
+        value.append(contentsOf: nextValue())
     }
 }
