@@ -26,14 +26,14 @@ struct UpcomingFilterSheetContent: View {
         VStack(spacing: 0) {
             HStack {
                 Button(action: onClose) {
-                    Image(systemName: "xmark").font(.system(size: 18)).foregroundStyle(Color.tfSub)
+                    Image(systemName: "xmark").font(.system(size: TFIconSize.sm)).foregroundStyle(Color.tfSub)
                         .frame(width: 44, height: 44)
                 }
                 Spacer()
                 Text("Фильтры").tfText(.title).foregroundStyle(Color.tfText)
                 Spacer()
                 Button("Сбросить") { filters = .empty }
-                    .font(.system(size: 13))
+                    .tfText(.action)
                     .foregroundStyle(Color.tfSub)
                     .opacity(filters.isActive ? 1 : 0.4)
                     .disabled(!filters.isActive)
@@ -146,7 +146,7 @@ struct UpcomingFilterSheetContent: View {
                 filters.showCompleted.toggle()
             } label: {
                 HStack(spacing: TFSpacing.md) {
-                    Image(systemName: "checkmark").font(.system(size: 18)).foregroundStyle(Color.tfSub)
+                    Image(systemName: "checkmark").font(.system(size: TFIconSize.sm)).foregroundStyle(Color.tfSub)
                     Text("Показывать выполненные").tfText(.row).foregroundStyle(Color.tfText)
                     Spacer()
                     TFToggle(isOn: $filters.showCompleted)
@@ -210,7 +210,7 @@ struct UpcomingFilterSheetContent: View {
     private func fieldRow(icon: String, label: String, value: String, isOpen: Bool, onTap: @escaping () -> Void) -> some View {
         Button(action: onTap) {
             HStack(spacing: TFSpacing.md) {
-                Image(systemName: icon).font(.system(size: 18)).foregroundStyle(Color.tfSub).frame(width: 22)
+                Image(systemName: icon).font(.system(size: TFIconSize.sm)).foregroundStyle(Color.tfSub).frame(width: 22)
                 Text(label).tfText(.body).foregroundStyle(Color.tfText)
                 Spacer()
                 Text(value).tfText(.body).foregroundStyle(Color.tfSub).lineLimit(1)
