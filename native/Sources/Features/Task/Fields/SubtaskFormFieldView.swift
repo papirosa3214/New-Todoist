@@ -42,7 +42,7 @@ struct SubtaskDraftListView: View {
             Button {
                 drafts.removeAll { $0.id == draft.id }
             } label: {
-                Image(systemName: "xmark").font(.system(size: 14)).foregroundStyle(Color.tfDim)
+                Image(systemName: "xmark").font(.system(size: TFIconSize.xs)).foregroundStyle(Color.tfDim)
                     .frame(width: TFHitTarget.min, height: TFHitTarget.min)
             }
             .buttonStyle(TFTapScaleStyle())
@@ -133,7 +133,7 @@ struct SubtaskEditListView: View {
             Button {
                 onDelete(subtask)
             } label: {
-                Image(systemName: "xmark").font(.system(size: 14)).foregroundStyle(Color.tfDim)
+                Image(systemName: "xmark").font(.system(size: TFIconSize.xs)).foregroundStyle(Color.tfDim)
                     .frame(width: TFHitTarget.min, height: TFHitTarget.min)
             }
             .buttonStyle(TFTapScaleStyle())

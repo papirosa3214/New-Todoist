@@ -29,7 +29,7 @@ struct AssigneeFieldView: View {
                             .strokeBorder(Color.tfDim, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                             .frame(width: 30, height: 30)
                             .overlay {
-                                Image(systemName: "plus").font(.system(size: 14)).foregroundStyle(Color.tfDim)
+                                Image(systemName: "plus").font(.system(size: TFIconSize.xs)).foregroundStyle(Color.tfDim)
                             }
                         Text("Выбрать исполнителя").tfText(.body).foregroundStyle(Color.tfSub)
                     }

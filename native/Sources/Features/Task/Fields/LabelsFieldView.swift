@@ -22,7 +22,7 @@ struct LabelsFieldView: View {
                     Spacer()
                     collapsedValue
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13))
+                        .tfText(.action)
                         .foregroundStyle(Color.tfDim)
                 }
                 .padding(.horizontal, TFField.cardInsetH)

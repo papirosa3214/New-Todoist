@@ -224,7 +224,7 @@ struct TaskJournalView: View {
         return HStack(alignment: .top, spacing: TFSpacing.sm) {
             if isSystem {
                 Image(systemName: "gearshape.fill")
-                    .font(.system(size: 14))
+                    .tfText(.row)
                     .foregroundStyle(Color.tfDim)
                     .frame(width: 28, height: 28)
                     .background(Color.tfCard2)

@@ -50,7 +50,7 @@ struct PriorityFieldView: View {
                 Spacer()
                 if option == priority {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 16))
+                        .tfText(.input)
                         .foregroundStyle(Color.tfRed)
                 }
             }

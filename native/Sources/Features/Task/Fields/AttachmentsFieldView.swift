@@ -149,7 +149,7 @@ struct AttachmentsFieldView: View {
             Spacer()
             Button(action: onRemove) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14))
+                    .tfText(.row)
                     .foregroundStyle(Color.tfDim)
                     .frame(width: TFHitTarget.min, height: TFHitTarget.min)
             }
