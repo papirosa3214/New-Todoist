@@ -104,7 +104,7 @@ struct ProfileAccountRow: View {
                 Spacer()
                 Button("Изменить", action: onEdit)
                     .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
+                    .tfText(.meta)
                     .foregroundStyle(Color.tfText)
                     .padding(.horizontal, TFSpacing.sm)
                     .padding(.vertical, TFSpacing.xs)

@@ -73,7 +73,7 @@ struct TemplatesScreen: View {
     private func successBanner(_ text: String) -> some View {
         HStack(spacing: TFSpacing.sm) {
             Image(systemName: "checkmark")
-                .font(.system(size: 16))
+                .tfText(.input)
                 .foregroundStyle(Color.tfTeal)
             Text(text).tfText(.action).foregroundStyle(Color.tfTeal)
         }
@@ -94,7 +94,7 @@ struct TemplatesScreen: View {
                     .tfText(.body).fontWeight(.semibold).foregroundStyle(Color.tfText)
                 Spacer()
                 Button(action: closeForm) {
-                    Image(systemName: "xmark").font(.system(size: 14)).foregroundStyle(Color.tfSub)
+                    Image(systemName: "xmark").font(.system(size: TFIconSize.xs)).foregroundStyle(Color.tfSub)
                         .frame(width: TFHitTarget.min, height: TFHitTarget.min)
                 }
                 .buttonStyle(TFTapScaleStyle())
@@ -363,11 +363,11 @@ private struct TemplateCardView: View {
                 if let onEdit, let onDelete {
                     HStack(spacing: TFSpacing.xs) {
                         Button(action: onEdit) {
-                            Image(systemName: "pencil").font(.system(size: 14)).foregroundStyle(Color.tfDim)
+                            Image(systemName: "pencil").font(.system(size: TFIconSize.xs)).foregroundStyle(Color.tfDim)
                                 .frame(width: TFHitTarget.min, height: TFHitTarget.min)
                         }.buttonStyle(TFTapScaleStyle())
                         Button(action: onDelete) {
-                            Image(systemName: "trash").font(.system(size: 14)).foregroundStyle(Color.tfDim)
+                            Image(systemName: "trash").font(.system(size: TFIconSize.xs)).foregroundStyle(Color.tfDim)
                                 .frame(width: TFHitTarget.min, height: TFHitTarget.min)
                         }.buttonStyle(TFTapScaleStyle())
                     }
