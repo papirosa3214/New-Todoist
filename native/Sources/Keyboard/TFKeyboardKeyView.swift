@@ -40,7 +40,7 @@ struct TFKeyboardKeyView: View {
                 // быть статичной «ру», как было бы, если бы латиницы не было).
                 if let mark = key.overlayMark {
                     Text(mark)
-                        .font(.system(size: 13))
+                        .tfText(.action)
                         .foregroundStyle(TFKeyboardPalette.spaceLanguageLabel)
                         .padding(.trailing, 10)
                 }
