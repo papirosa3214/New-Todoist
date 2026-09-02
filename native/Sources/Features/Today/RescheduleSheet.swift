@@ -25,7 +25,7 @@ struct RescheduleSheetContent: View {
                 Spacer()
                 Button(action: confirm) {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 22))
+                        .font(.system(size: TFIconSize.md))
                         .foregroundStyle(pendingDate != nil && !isRescheduling ? Color.tfRed : Color.tfDim)
                 }
                 .disabled(pendingDate == nil || isRescheduling)

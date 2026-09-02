@@ -39,7 +39,7 @@ struct TimelineScreen: View {
 
             VStack(spacing: TFSpacing.md) {
                 Text("СВАЙП ВЛЕВО/ВПРАВО")
-                    .font(.system(size: 10, weight: .medium))
+                    .tfText(.micro)
                     .tracking(1.5)
                     .foregroundStyle(Color(hex: "#525252"))
                 HStack(spacing: TFSpacing.sm) {
@@ -64,7 +64,7 @@ struct TimelineScreen: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(Self.zoomLabels[zoom])
-                .font(.system(size: 13))
+                .tfText(.action)
                 .tracking(2)
                 .foregroundStyle(Color.tfDim)
                 .id(zoom) // фейд при смене подписи, как key={zoom} в вебе

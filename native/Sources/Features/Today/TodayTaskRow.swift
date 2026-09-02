@@ -126,7 +126,7 @@ struct TodayTaskRow: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 22, weight: .regular))
+                .font(.system(size: TFIconSize.md))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(color)

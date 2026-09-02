@@ -287,7 +287,7 @@ struct TodayScreen: View {
                     .foregroundStyle(Color.tfText)
             }
             Text(section.title)
-                .font(.system(size: 17, weight: .semibold))
+                .tfText(.title)
                 .foregroundStyle(section.color)
                 .lineLimit(1)
         }
@@ -325,7 +325,7 @@ struct TodayScreen: View {
                 Button { route = .search } label: { Label("Поиск", systemImage: "magnifyingglass") }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 18))
+                    .font(.system(size: TFIconSize.sm))
                     .foregroundStyle(Color.tfText)
                     .frame(width: TFHitTarget.min, height: TFHitTarget.min)
             }
@@ -428,7 +428,7 @@ struct TodayScreen: View {
             }
         } label: {
             Image(systemName: "line.3.horizontal.decrease")
-                .font(.system(size: 18))
+                .font(.system(size: TFIconSize.sm))
                 .foregroundStyle(vm.filters.isActive ? Color.tfRed : Color.tfText)
                 .frame(width: TFHitTarget.min, height: TFHitTarget.min)
         }

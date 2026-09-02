@@ -192,7 +192,7 @@ struct TodayHoursView: View {
         let hidden = dragState?.taskID == block.task.id
 
         return Text(block.task.title)
-            .font(.system(size: 12, weight: .medium))
+            .tfText(.meta)
             .foregroundStyle(todayChipInk)
             .strikethrough(done)
             .opacity(done ? 0.7 : 1)
@@ -216,7 +216,7 @@ struct TodayHoursView: View {
 
     private func ghostView(_ state: DragState) -> some View {
         Text(state.title)
-            .font(.system(size: 12, weight: .medium))
+            .tfText(.meta)
             .foregroundStyle(todayChipInk)
             .lineLimit(max(1, Int((state.height - 8) / 16)))
             .padding(.horizontal, TFSpacing.sm)
@@ -296,7 +296,7 @@ private struct TodayNowLine: View {
         }
         .overlay(alignment: .leading) {
             Text(now.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))
-                .font(.system(size: 10, weight: .medium))
+                .tfText(.micro)
                 .foregroundStyle(Color.tfRed)
                 .background(Color.tfBackground)
                 .offset(x: -TodayHoursMetrics.gutterW)

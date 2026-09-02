@@ -77,7 +77,7 @@ struct TodayListView: View {
                             Image(systemName: icon).font(.system(size: 16)).foregroundStyle(Color.tfText)
                         }
                         Text(info.title)
-                            .font(.system(size: 17, weight: .semibold))
+                            .tfText(.title)
                             .foregroundStyle(info.color)
                     }
                     .padding(.horizontal, TFSpacing.lg)
