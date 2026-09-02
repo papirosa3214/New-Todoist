@@ -96,7 +96,7 @@ private struct ChatFileChip: View {
     var body: some View {
         HStack(spacing: TFSpacing.sm) {
             Image(systemName: "paperclip")
-                .font(.system(size: 13))
+                .tfText(.action)
                 .foregroundStyle(Color.tfSub)
             Text(fileName)
                 .tfText(.meta)

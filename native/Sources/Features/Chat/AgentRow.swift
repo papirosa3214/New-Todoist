@@ -175,7 +175,7 @@ struct AgentRow: View {
     private func actionButton(icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 2) {
-                Image(systemName: icon).font(.system(size: 18))
+                Image(systemName: icon).font(.system(size: TFIconSize.sm))
                 Text(label).tfText(.caption)
             }
             .foregroundStyle(.white)

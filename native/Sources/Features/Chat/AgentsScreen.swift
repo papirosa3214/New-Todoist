@@ -93,7 +93,7 @@ struct AgentsScreen: View {
                     } label: {
                         HStack(spacing: TFSpacing.md) {
                             Image(systemName: "plus")
-                                .font(.system(size: 18))
+                                .font(.system(size: TFIconSize.sm))
                                 .foregroundStyle(Color.tfRed)
                             Text("Завести агента")
                                 .tfText(.row)
@@ -228,7 +228,7 @@ struct AgentsScreen: View {
     private func roleInfoRow(icon: String, color: Color, name: String, text: String) -> some View {
         HStack(alignment: .top, spacing: TFSpacing.sm) {
             Image(systemName: icon)
-                .font(.system(size: 16))
+                .tfText(.input)
                 .foregroundStyle(color)
                 .padding(.top, 1)
             (Text("\(name) ").foregroundStyle(Color.tfText).fontWeight(.medium) + Text("— \(text)").foregroundStyle(Color.tfSub))

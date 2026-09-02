@@ -137,7 +137,7 @@ struct ChatComposer: View {
         Button(action: action) {
             HStack(spacing: TFSpacing.sm) {
                 Image(systemName: isSelected ? "checkmark" : "cpu")
-                    .font(.system(size: 14))
+                    .font(.system(size: TFIconSize.xs))
                     .foregroundStyle(Color.tfRed)
                     .frame(width: 18)
                 Text(label).tfText(.row).foregroundStyle(Color.tfText)
@@ -251,7 +251,7 @@ struct ChatComposer: View {
                 Task { await viewModel.removePendingAttachment(attachment.id) }
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14))
+                    .font(.system(size: TFIconSize.xs))
                     .foregroundStyle(Color.tfDim)
                     .frame(width: 28, height: 28)
             }
