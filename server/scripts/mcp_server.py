@@ -5,18 +5,40 @@
 которых поднимает будильник: посмотреть свои задачи, взять в работу,
 отметить шаги, сдать на проверку или сообщить о затыке.
 
-Протокол — JSON-RPC по stdin/stdout, без внешних зависимостей: ровно тем же
-способом, что и рабочий mcp_server.py «Пульта .110», проверенный на этой
-машине. Ставить SDK ради двух десятков строк протокола незачем.
+Два способа запуска, handle() и весь протокол — общие, разница только в
+транспорте:
+
+  stdio (по умолчанию, без аргументов)
+      JSON-RPC по stdin/stdout, без внешних зависимостей: ровно тем же
+      способом, что и рабочий mcp_server.py «Пульта .110». Так подключены
+      локальные сессии Claude Code/Гермеса/DSH на этой машине — каждая
+      получает свой процесс через spawn, ставить SDK ради двух десятков
+      строк протокола незачем.
+
+  --serve [PORT] (сеть, Streamable HTTP)
+      Долгоживущий сервер для клиентов ВНЕ этой машины (Claude Code на
+      другом хосте и т.п.). Слушает TASKFLOW_MCP_HOST:TASKFLOW_MCP_PORT
+      (по умолчанию 0.0.0.0:8802), путь /mcp, только POST. Каждый запрос
+      обязан нести `Authorization: Bearer <токен>` — отдельный ключ
+      TASKFLOW_MCP_TOKEN, не тот, что ходит в TaskFlow API (см. ниже);
+      сервер сам достаёт его из vault при старте. Юнит:
+      taskflow-mcp-net.service.
+      ⚠️ Известный пробел: current_session_id() ниже различает несколько
+      ПАРАЛЛЕЛЬНЫХ локальных сессий по CLAUDE_CODE_SESSION_ID и файлам
+      транскриптов — у сетевого запроса ни того, ни другого нет, поэтому
+      все вызовы через --serve неотличимы друг от друга для
+      taskflow-progress-gate.py. Не чинится в этом заходе (нужен отдельный
+      протокол идентификации клиента), задокументировано намеренно.
 
 Ключ доступа сервер берёт сам при старте — `vault-get.py --raw`. Значение
 живёт только в памяти этого процесса: в конфиг MCP оно не попадает, в
 транскрипт сессии тоже. Запускать через vault-run.py нельзя — тот ждёт
 завершения дочернего процесса и процеживает его вывод, а MCP это
-долгоживущий двусторонний диалог по stdout.
+долгоживущий двусторонний диалог по stdout/по HTTP-соединению.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import mimetypes
 import os
@@ -25,6 +47,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 SERVER_NAME = "taskflow"
@@ -1505,5 +1528,90 @@ def main():
             sys.stdout.flush()
 
 
+# --------------------------------------------------------------------------- сеть (Streamable HTTP)
+
+def load_net_token() -> str:
+    """Гейт-токен самого сетевого эндпоинта — отдельный от TOKEN (тот ходит
+    в TaskFlow API). Имя ключа переопределяется TASKFLOW_MCP_VAULT_KEY."""
+    key = os.environ.get("TASKFLOW_MCP_VAULT_KEY", "TASKFLOW_MCP_TOKEN")
+    try:
+        r = subprocess.run(
+            [sys.executable, VAULT_GET, "--raw", key],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception as e:
+        raise TaskFlowError(f"не удалось прочитать сетевой ключ из хранилища: {e}")
+    if r.returncode != 0 or not r.stdout.strip():
+        raise TaskFlowError(f"ключ {key} не выдан хранилищем: {r.stderr.strip()[:200]}")
+    return r.stdout.strip()
+
+
+class _MCPHTTPHandler(BaseHTTPRequestHandler):
+    net_token = ""  # выставляется в serve_http() до запуска сервера
+
+    def log_message(self, fmt, *args):  # noqa: A003 — перекрываем стандартный лог
+        log(f"http {self.address_string()}: {fmt % args}")
+
+    def _send_json(self, status: int, payload: bytes):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_POST(self):
+        if self.path.split("?", 1)[0].rstrip("/") != "/mcp":
+            self.send_response(404)
+            self.end_headers()
+            return
+        auth = self.headers.get("Authorization", "")
+        presented = auth[7:] if auth.startswith("Bearer ") else ""
+        if not (presented and hmac.compare_digest(presented, self.net_token)):
+            return self._send_json(401, b'{"error":"unauthorized"}')
+        length = int(self.headers.get("Content-Length") or "0")
+        raw = self.rfile.read(length) if length else b""
+        try:
+            msg = json.loads(raw) if raw else {}
+        except ValueError:
+            return self._send_json(400, b'{"error":"bad json"}')
+        try:
+            out = handle(msg)
+        except Exception as e:
+            log(f"http: внутренняя ошибка: {e!r}")
+            out = error(msg.get("id"), -32603, str(e))
+        if out is None:
+            # Уведомление (без id) — по спеке Streamable HTTP пустой ответ.
+            self.send_response(202)
+            self.end_headers()
+            return
+        self._send_json(200, json.dumps(out, ensure_ascii=False).encode())
+
+    def do_GET(self):
+        # Сервер-инициированный SSE-поток не реализован — Streamable HTTP
+        # это разрешает, отвечаем 405.
+        self.send_response(405)
+        self.end_headers()
+
+
+def serve_http(host: str, port: int) -> None:
+    global TOKEN
+    try:
+        TOKEN = load_token()
+    except TaskFlowError as e:
+        log(str(e))
+        TOKEN = ""
+    _MCPHTTPHandler.net_token = load_net_token()
+    log(f"http-режим {host}:{port}/mcp, инструментов {len(TOOLS)}, "
+        f"ключ TaskFlow {'получен' if TOKEN else 'НЕ получен'}")
+    ThreadingHTTPServer((host, port), _MCPHTTPHandler).serve_forever()
+
+
 if __name__ == "__main__":
-    main()
+    if "--serve" in sys.argv:
+        _i = sys.argv.index("--serve")
+        _rest = sys.argv[_i + 1:]
+        _port = int(_rest[0]) if _rest and _rest[0].isdigit() else int(
+            os.environ.get("TASKFLOW_MCP_PORT", "8802"))
+        serve_http(os.environ.get("TASKFLOW_MCP_HOST", "0.0.0.0"), _port)
+    else:
+        main()
