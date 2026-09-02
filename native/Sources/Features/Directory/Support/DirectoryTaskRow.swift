@@ -77,8 +77,8 @@ struct DirectoryTaskRow: View {
     private func swipeActionButton(icon: String, label: String, width: CGFloat, visible: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 2) {
-                Image(systemName: icon).font(.system(size: 22, weight: .regular))
-                Text(label).font(.system(size: 11, weight: .medium))
+                Image(systemName: icon).font(.system(size: TFIconSize.md))
+                Text(label).tfText(.caption)
             }
             .foregroundStyle(.white)
         }
@@ -151,7 +151,7 @@ struct DirectoryTaskRow: View {
                 // тап по пину не должен открывать задачу.
                 Button(action: onTogglePin) {
                     Image(systemName: "pin.fill")
-                        .font(.system(size: 16))
+                        .tfText(.input)
                         .foregroundStyle(pinned ? Color.tfOrange : Color.tfDim)
                         .frame(width: 28, height: 28)
                         .contentShape(Rectangle())

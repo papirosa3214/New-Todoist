@@ -124,7 +124,7 @@ struct ActivityScreen: View {
                 Task { await restore(task) }
             } label: {
                 HStack(spacing: TFSpacing.xs) {
-                    Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 14))
+                    Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: TFIconSize.xs))
                     Text("Вернуть в работу").tfText(.action).fontWeight(.semibold)
                 }
                 .foregroundStyle(Color.tfRed)
@@ -427,7 +427,7 @@ struct ActivityScreen: View {
         Button(action: action) {
             HStack(spacing: TFSpacing.sm) {
                 if let icon, let color {
-                    Image(systemName: icon).font(.system(size: 14)).foregroundStyle(color)
+                    Image(systemName: icon).font(.system(size: TFIconSize.xs)).foregroundStyle(color)
                 }
                 Text(label).tfText(.row).foregroundStyle(Color.tfText).lineLimit(1)
                 Spacer()

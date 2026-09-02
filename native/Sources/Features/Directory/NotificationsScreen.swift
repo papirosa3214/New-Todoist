@@ -123,7 +123,7 @@ struct NotificationsScreen: View {
                     Button {
                         Task { await delete(n) }
                     } label: {
-                        Image(systemName: "trash").font(.system(size: 18)).foregroundStyle(Color.tfDim)
+                        Image(systemName: "trash").font(.system(size: TFIconSize.sm)).foregroundStyle(Color.tfDim)
                             .frame(width: TFHitTarget.min, height: TFHitTarget.min)
                     }
                     .buttonStyle(TFTapScaleStyle())

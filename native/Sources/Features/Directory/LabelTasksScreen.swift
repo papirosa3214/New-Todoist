@@ -64,7 +64,7 @@ struct LabelTasksScreen: View {
                 accessory: label.map { l in
                     { AnyView(
                         Image(systemName: "tag")
-                            .font(.system(size: 14))
+                            .tfText(.row)
                             .foregroundStyle(Color(hex: l.color ?? "#A6A6A6"))
                     ) }
                 }

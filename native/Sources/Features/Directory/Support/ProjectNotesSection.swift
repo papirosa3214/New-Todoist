@@ -74,7 +74,7 @@ struct ProjectNotesSection: View {
             NavigationLink(value: AppRoute.notes) {
                 HStack(spacing: TFSpacing.sm) {
                     Image(systemName: "folder")
-                        .font(.system(size: 17))
+                        .tfText(.title)
                         .foregroundStyle(Color.tfSub)
                     Text(folder.name)
                         .tfText(.body)
@@ -85,7 +85,7 @@ struct ProjectNotesSection: View {
                         .tfText(.caption)
                         .foregroundStyle(Color.tfDim)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13))
+                        .tfText(.action)
                         .foregroundStyle(Color.tfDim)
                 }
                 .frame(minHeight: 42)
@@ -101,7 +101,7 @@ struct ProjectNotesSection: View {
                     Button { pendingNoteID = note.id } label: {
                         HStack(spacing: TFSpacing.sm) {
                             Image(systemName: "doc.text")
-                                .font(.system(size: 16))
+                                .tfText(.input)
                                 .foregroundStyle(Color.tfDim)
                             Text(note.title.isEmpty ? "Без названия" : note.title)
                                 .tfText(.body)

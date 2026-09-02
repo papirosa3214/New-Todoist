@@ -44,7 +44,7 @@ struct LabelsScreen: View {
                         } label: {
                             HStack(spacing: TFSpacing.md) {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 18))
+                                    .font(.system(size: TFIconSize.sm))
                                     .foregroundStyle(Color.tfDim)
                                 Text("Создать метку")
                                     .tfText(.action)

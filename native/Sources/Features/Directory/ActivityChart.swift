@@ -140,7 +140,7 @@ struct ActivityChart: View {
                     .fill(chartGreen.opacity(0.15))
                     .frame(width: 28, height: 28)
                     .overlay {
-                        Image(systemName: "waveform.path.ecg").font(.system(size: 14)).foregroundStyle(chartGreen)
+                        Image(systemName: "waveform.path.ecg").font(.system(size: TFIconSize.xs)).foregroundStyle(chartGreen)
                     }
             }
             VStack(alignment: .leading, spacing: 1) {

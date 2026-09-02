@@ -163,7 +163,7 @@ struct OverviewScreen: View {
                     .frame(width: 32, height: 32)
                     .overlay {
                         Image(systemName: icon)
-                            .font(.system(size: 16))
+                            .tfText(.input)
                             .foregroundStyle(tint)
                     }
                 VStack(alignment: .leading, spacing: 2) {

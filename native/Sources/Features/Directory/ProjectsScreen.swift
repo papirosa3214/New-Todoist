@@ -88,7 +88,7 @@ struct ProjectsScreen: View {
                     .frame(width: 28, height: 28)
                     .overlay {
                         Image(systemName: "number")
-                            .font(.system(size: 16))
+                            .tfText(.input)
                             .foregroundStyle(Color(hex: project.color ?? "#A6A6A6"))
                     }
                 VStack(alignment: .leading, spacing: 1) {
