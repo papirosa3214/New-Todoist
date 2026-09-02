@@ -88,7 +88,7 @@ struct UpcomingHoursView: View {
             ForEach(0..<25, id: \.self) { h in
                 HStack(alignment: .top, spacing: 0) {
                     Text(String(format: "%02d:00", h))
-                        .font(.system(size: 10, weight: .medium))
+                        .tfText(.micro)
                         .monospacedDigit()
                         .foregroundStyle(Color.tfDim)
                         .frame(width: gutterW, alignment: .trailing)
@@ -137,7 +137,7 @@ struct UpcomingHoursView: View {
         let pos = CGFloat(comps.hour ?? 0) * hourH + CGFloat(comps.minute ?? 0) / 60 * hourH
         return HStack(spacing: 4) {
             Text(String(format: "%02d:%02d", comps.hour ?? 0, comps.minute ?? 0))
-                .font(.system(size: 10, weight: .medium))
+                .tfText(.micro)
                 .monospacedDigit()
                 .foregroundStyle(Color.tfRed)
                 .frame(width: gutterW, alignment: .trailing)
@@ -272,7 +272,7 @@ private struct UpcomingUntimedRow: View {
                         .font(.system(size: 11)).monospacedDigit().foregroundStyle(Color.tfDim)
                 }
                 Text(task.title)
-                    .font(.system(size: 13))
+                    .tfText(.action)
                     .foregroundStyle(task.status == .completed ? Color.tfSub : Color.tfText)
                     .strikethrough(task.status == .completed)
                     .lineLimit(1)
@@ -298,7 +298,7 @@ private struct UpcomingTimedBlock: View {
     var body: some View {
         Button(action: onTap) {
             Text(task.title)
-                .font(.system(size: 12, weight: .medium))
+                .tfText(.meta)
                 .foregroundStyle(Color(hex: "#141414"))
                 .strikethrough(task.status == .completed)
                 .lineLimit(nil)
