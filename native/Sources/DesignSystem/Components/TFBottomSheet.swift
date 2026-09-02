@@ -41,7 +41,7 @@ public struct TFBottomSheetContent<Content: View>: View {
                 HStack {
                     Button(action: onClose) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 18))
+                            .font(.system(size: TFIconSize.sm))
                             .foregroundStyle(Color.tfText)
                             .frame(width: TFSheet.headerCloseSize, height: TFSheet.headerCloseSize)
                     }
