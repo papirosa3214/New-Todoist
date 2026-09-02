@@ -1,0 +1,133 @@
+name: TaskFlow
+options:
+  bundleIdPrefix: com.maksim.taskflow
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    # Та же команда разработчика, что у рабочей Capacitor-сборки — иначе
+    # автоматическая подпись не найдёт профиль под этот телефон.
+    DEVELOPMENT_TEAM: RUD4WAP9DF
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  TaskFlow:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      # Каталог ассетов ОБЯЗАН быть в `sources`: ключа `resources` у xcodegen
+      # нет, он молча игнорировался — каталог не попадал в проект вообще
+      # (`grep Assets.xcassets project.pbxproj` давал 0), поэтому не собирались
+      # ни иконка приложения, ни альтернативные значки, и
+      # `supportsAlternateIcons` возвращал false.
+      - path: Resources/Assets.xcassets
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Задачи
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIUserInterfaceStyle: Dark
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: Приложение обращается к серверу задач в домашней сети.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.maksim.taskflow.native
+        # Без этой настройки Xcode не назначает иконку приложения, и на
+        # домашнем экране остаётся серая заглушка — при том что сам значок
+        # (Resources/Assets.xcassets/AppIcon.appiconset) лежит в проекте.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Сменные значки: строка «Иконка» в настройках переключает их через
+        # штатный `setAlternateIconName`. Без этих двух ключей альтернативные
+        # наборы не попадают в сборку и вызов падает с ошибкой.
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: AppIconClassic AppIconDark
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: true
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
+        TARGETED_DEVICE_FAMILY: "1"
+
+  # UI-тесты: гоняют приложение целиком в симуляторе — открывают экраны,
+  # нажимают, проверяют, что пришли живые данные сервера. Снимок показывает
+  # только вид в один момент; это ловит неработающее (01.09.2026, по замечанию
+  # владельца «приложение сырое» — вслепую по спекам писали, живьём не гоняли).
+  TaskFlowUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: TaskFlow
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.maksim.taskflow.native.uitests
+        TEST_TARGET_NAME: TaskFlow
+        # Свой Info.plist тест-бандлу не нужен, но подписать его без него
+        # нельзя — пусть Xcode генерирует сам.
+        GENERATE_INFOPLIST_FILE: true
+
+  # Unit-тесты: чистая логика без UI и без сети. Покрывают TodayComputation
+  # (plannerTasks, partitionOverdueToday, waitingTasks, trueEmpty/filteredEmpty),
+  # TodayFilterEngine (matches, опции), TodayDate (addDays, daysUntil, форматы),
+  # декодирование моделей (ApiUser с is_system_bot числом, ApiTask с null),
+  # TaskFormViewModel (isSaveEnabled).
+  TaskFlowTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: TaskFlow
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.maksim.taskflow.native.tests
+        TEST_TARGET_NAME: TaskFlow
+        GENERATE_INFOPLIST_FILE: true
+
+  # Snapshot-тесты: ловят визуальные регрессии дизайн-системы (строка задачи
+  # во всех состояниях, шапки, панель быстрого создания, пустые состояния).
+  # Эталоны — в репо, размер экрана владельца: 420×912 @3x. Требует SPM-пакет
+  # swift-snapshot-testing — см. `packages:` ниже.
+  TaskFlowSnapshotTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SnapshotTests
+    dependencies:
+      - target: TaskFlow
+      - package: SnapshotTesting
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.maksim.taskflow.native.snapshots
+        TEST_TARGET_NAME: TaskFlow
+        GENERATE_INFOPLIST_FILE: true
+
+packages:
+  SnapshotTesting:
+    url: https://github.com/pointfreeco/swift-snapshot-testing
+    from: 1.18.0
+
+schemes:
+  TaskFlow:
+    build:
+      targets:
+        TaskFlow: all
+        TaskFlowUITests: [test]
+        TaskFlowTests: [test]
+        TaskFlowSnapshotTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TaskFlowUITests
+        - TaskFlowTests
+        - TaskFlowSnapshotTests
