@@ -144,7 +144,7 @@ struct UpcomingListView: View {
                         .foregroundStyle(filled ? Color.tfRed : Color.tfSub)
                 }
                 Text("\(UpcomingDate.day(ds))")
-                    .font(.system(size: 16))
+                    .tfText(.input)
                     .monospacedDigit()
                     .fontWeight(filled ? .semibold : .regular)
                     .foregroundStyle(filled ? .white : (dim ? Color.tfDim.opacity(0.5) : Color.tfText))
@@ -182,7 +182,7 @@ struct UpcomingListView: View {
                     } label: {
                         VStack(spacing: 2) {
                             Text(["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"][UpcomingDate.jsWeekday(ds)])
-                                .font(.system(size: 10, weight: .medium))
+                                .tfText(.micro)
                                 .textCase(.uppercase)
                                 .foregroundStyle(isToday || isSelected ? Color.tfRed : Color.tfSub)
                             Text("\(UpcomingDate.day(ds))")
@@ -226,12 +226,12 @@ struct UpcomingListView: View {
     private func selectedPill(_ date: String) -> some View {
         Button { selectedDate = nil } label: {
             HStack(spacing: 8) {
-                Image(systemName: "calendar").font(.system(size: 14))
+                Image(systemName: "calendar").font(.system(size: TFIconSize.xs))
                 Text(UpcomingDate.formatFullDate(date))
                 Spacer()
-                Image(systemName: "xmark").font(.system(size: 14))
+                Image(systemName: "xmark").font(.system(size: TFIconSize.xs))
             }
-            .font(.system(size: 13))
+            .tfText(.action)
             .foregroundStyle(Color.tfRed)
             .padding(.horizontal, TFSpacing.md).padding(.vertical, 8)
             .background(Color.tfRed.opacity(0.15))
