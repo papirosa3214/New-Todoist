@@ -133,7 +133,7 @@ struct UpcomingTaskRow: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 22))
+                .font(.system(size: TFIconSize.md))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(color)

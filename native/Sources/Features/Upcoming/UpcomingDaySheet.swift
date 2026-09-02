@@ -64,7 +64,7 @@ struct UpcomingDaySheetContent: View {
         Group {
             if tasks.isEmpty {
                 Text("На этот день ничего не запланировано")
-                    .font(.system(size: 13))
+                    .tfText(.action)
                     .foregroundStyle(Color.tfDim)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
