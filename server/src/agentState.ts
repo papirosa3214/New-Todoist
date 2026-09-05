@@ -51,6 +51,7 @@ export function isStale(heartbeatAt: string | null | undefined): boolean {
 type Caller = {
   isOwner: boolean;
   isExecutor: boolean;
+  isReviewer?: boolean;
   // Only meaningful for the from==='in_progress' rows: whether the lease
   // has expired. Drives the in_progress -> in_progress self-reclaim row —
   // see canTransition below.
@@ -101,7 +102,7 @@ export function canTransition(
     return via === "claim" && who.isExecutor && !!who.leaseExpired;
   }
   if (from === "review" && to === "in_progress") {
-    return via === "state" && (who.isOwner || who.isExecutor);
+    return via === "state" && (who.isOwner || who.isExecutor || who.isReviewer);
   }
   // "любое → NULL, владелец, снять с агента"
   if (to === null) return who.isOwner;

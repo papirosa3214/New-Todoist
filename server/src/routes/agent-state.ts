@@ -5,7 +5,12 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
-import { getTaskForWrite, isOwner as isTrackerOwner } from "../access.js";
+import {
+  getTaskForReview,
+  getTaskForWrite,
+  isOwner as isTrackerOwner,
+  isReviewer as isTaskReviewer,
+} from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
@@ -260,7 +265,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/claim", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForWrite(req.params.id, req.userId);
+      const task = getTaskForWrite(req.params.id, req.userId) ??
+        getTaskForReview(req.params.id, req.userId);
       if (!task) {
         // Задача может быть чужой, а не отсутствующей, и для агента это
         // совсем разные новости. Голое «не найдено» сбивает с толку:
@@ -570,6 +576,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         // правило по роли уже жило в access.ts — сюда его не донесли.
         isOwner: isTrackerOwner(req.userId) || task.creator_id === req.userId,
         isExecutor: task.assignee_id === req.userId,
+        isReviewer: isTaskReviewer(req.userId),
       };
       if (!canTransition(from, state, who, "state")) {
         return reply.code(400).send({ error: "invalid transition" });

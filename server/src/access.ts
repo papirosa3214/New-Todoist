@@ -62,6 +62,11 @@ export function isOrchestrator(userId: string): boolean {
   return callerOf(userId)?.role === "orchestrator";
 }
 
+/** Reviewer читает всю доску, но возвращает только сданную задачу в работу. */
+export function isReviewer(userId: string): boolean {
+  return callerOf(userId)?.role === "reviewer";
+}
+
 /**
  * На кого записывать справочник (проект, метку), который заводит агент.
  *
@@ -92,7 +97,10 @@ export function ownerForNewShared(userId: string): string {
  */
 export function seesEveryTask(userId: string): boolean {
   const c = callerOf(userId);
-  return c?.role === "owner" || c?.role === "orchestrator" || c?.type === "ai";
+  return c?.role === "owner" ||
+    c?.role === "orchestrator" ||
+    c?.role === "reviewer" ||
+    c?.type === "ai";
 }
 
 /**
@@ -192,6 +200,20 @@ export function getTaskForWrite(
        )`,
     )
     .get(taskId, userId, userId, userId);
+}
+
+/**
+ * Узкое право Reviewer: только сданная в review задача и только для
+ * маршрута /state. Не использовать как общий доступ к правке задачи.
+ */
+export function getTaskForReview(
+  taskId: string,
+  userId: string,
+): any | undefined {
+  if (!isReviewer(userId)) return undefined;
+  return db
+    .prepare("SELECT * FROM tasks WHERE id = ? AND agent_state = 'review'")
+    .get(taskId);
 }
 
 /**

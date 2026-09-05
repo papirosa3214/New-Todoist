@@ -19,6 +19,7 @@ const executor = { isOwner: false, isExecutor: true };
 const owner = { isOwner: true, isExecutor: false };
 const both = { isOwner: true, isExecutor: true };
 const stranger = { isOwner: false, isExecutor: false };
+const reviewer = { isOwner: false, isExecutor: false, isReviewer: true };
 
 describe("canTransition — матрица переходов (AGENT-PROTOCOL.md, «Матрица переходов»)", () => {
   it("NULL -> in_progress: только исполнитель, через claim или state", () => {
@@ -76,6 +77,8 @@ describe("canTransition — матрица переходов (AGENT-PROTOCOL.md
     expect(canTransition("review", "in_progress", executor, "claim")).toBe(
       false,
     );
+    expect(canTransition("review", "in_progress", reviewer, "state")).toBe(true);
+    expect(canTransition("review", "in_progress", reviewer, "claim")).toBe(false);
   });
 
   it("любое -> NULL: только владелец", () => {
@@ -83,6 +86,12 @@ describe("canTransition — матрица переходов (AGENT-PROTOCOL.md
     expect(canTransition("blocked", null, owner, "state")).toBe(true);
     expect(canTransition("review", null, owner, "state")).toBe(true);
     expect(canTransition("in_progress", null, executor, "state")).toBe(false);
+  });
+
+  it("Reviewer не получает другие переходы", () => {
+    expect(canTransition(null, "in_progress", reviewer, "state")).toBe(false);
+    expect(canTransition("in_progress", "blocked", reviewer, "state")).toBe(false);
+    expect(canTransition("review", null, reviewer, "state")).toBe(false);
   });
 
   it("создатель, взявший свою же задачу, держит обе роли разом", () => {
