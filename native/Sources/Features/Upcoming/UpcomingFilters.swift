@@ -98,8 +98,9 @@ enum UpcomingFilterEngine {
     /// Задача назначена ИИ-агенту, а не человеку — `isAgentAssignedTask` (spec §5.2):
     /// такие задачи на «Планировании» не показываются вовсе.
     static func isAgentAssigned(_ task: ApiTask, _ agents: [ApiUser]) -> Bool {
-        guard let assigneeId = task.assigneeId else { return false }
-        return agents.contains { $0.id == assigneeId && $0.type == .ai }
+        // `assignee_type` приходит в самой задаче: не ждём отдельный запрос
+        // списка агентов и не смешиваем поручения с личным планированием.
+        task.assigneeType == .ai
     }
 }
 

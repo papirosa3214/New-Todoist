@@ -52,6 +52,8 @@ public struct ApiTask: Codable, Identifiable, Sendable, Hashable {
     /// ТОЛЬКО в `GET /api/tasks` (список), завязано на текущую сессию.
     public let mine: Bool?
     public let assigneeName: String?
+    /// Тип назначенного исполнителя приходит прямо в строке задачи.
+    public let assigneeType: UserType?
     public let assigneeColor: String?
     public let assigneeAvatarUrl: String?
     public let assigneeInitials: String?
@@ -91,6 +93,7 @@ public struct ApiTask: Codable, Identifiable, Sendable, Hashable {
         case agentStartedAt = "agent_started_at"
         case mine
         case assigneeName = "assignee_name"
+        case assigneeType = "assignee_type"
         case assigneeColor = "assignee_color"
         case assigneeAvatarUrl = "assignee_avatar_url"
         case assigneeInitials = "assignee_initials"
@@ -125,6 +128,7 @@ public struct ApiTask: Codable, Identifiable, Sendable, Hashable {
         agentStartedAt = try c.decodeIfPresent(String.self, forKey: .agentStartedAt)
         mine = try c.decodeIfPresent(Bool.self, forKey: .mine)
         assigneeName = try c.decodeIfPresent(String.self, forKey: .assigneeName)
+        assigneeType = try c.decodeIfPresent(UserType.self, forKey: .assigneeType)
         assigneeColor = try c.decodeIfPresent(String.self, forKey: .assigneeColor)
         assigneeAvatarUrl = try c.decodeIfPresent(String.self, forKey: .assigneeAvatarUrl)
         assigneeInitials = try c.decodeIfPresent(String.self, forKey: .assigneeInitials)
@@ -164,6 +168,7 @@ public struct ApiTask: Codable, Identifiable, Sendable, Hashable {
         try c.encodeIfPresent(agentStartedAt, forKey: .agentStartedAt)
         try c.encodeIfPresent(mine, forKey: .mine)
         try c.encodeIfPresent(assigneeName, forKey: .assigneeName)
+        try c.encodeIfPresent(assigneeType, forKey: .assigneeType)
         try c.encodeIfPresent(assigneeColor, forKey: .assigneeColor)
         try c.encodeIfPresent(assigneeAvatarUrl, forKey: .assigneeAvatarUrl)
         try c.encodeIfPresent(assigneeInitials, forKey: .assigneeInitials)

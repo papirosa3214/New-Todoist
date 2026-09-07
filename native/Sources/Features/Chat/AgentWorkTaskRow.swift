@@ -62,7 +62,7 @@ enum AgentWorkStateTag {
     }
 
     static func text(_ task: ApiTask) -> String? {
-        guard let state = task.agentState else { return nil }
+        guard let state = task.agentState else { return "ожидает запуска" }
         let stale = state == .inProgress && task.agentStale == true
         let base: String
         switch state {
@@ -79,7 +79,7 @@ enum AgentWorkStateTag {
     }
 
     static func color(_ task: ApiTask) -> Color {
-        guard let state = task.agentState else { return .tfTeal }
+        guard let state = task.agentState else { return .tfDim }
         if state == .inProgress, task.agentStale == true { return .tfCoral }
         switch state {
         case .inProgress: return .tfTeal

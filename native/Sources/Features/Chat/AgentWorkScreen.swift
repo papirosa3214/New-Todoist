@@ -1,43 +1,11 @@
 import SwiftUI
 
-/// Какой из четырёх разделов поднять первым — веб-параметр URL `?focus=`
-/// (`AgentWorkScreen.tsx`), значения дословно совпадают с ключами секций
-/// там же. У `AppRoute.agentWork` (контракт, `spec/INTEGRATION.md`) СЕЙЧАС
-/// нет параметров вообще — см. развёрнутый комментарий у `init` ниже и
-/// отчёт по задаче: это не самодеятельность, а подготовленное место под
-/// правку контракта каркасным исполнителем.
-enum AgentWorkFocus: String {
-    case inProgress = "in_progress"
-    case review
-    case blocked
-    case stale
-}
-
-/// «Работа агента» — `/agent-work` (SCREENS-2 §5), сводка активности
-/// агентов по четырём состояниям. 1:1 `src/screens/AgentWorkScreen.tsx` —
-/// спека в SCREENS-2 §5 самих текстов подсказок не даёт, они сняты с
-/// живого экрана (заголовок, hint под каждым разделом, тексты пустого/
-/// ошибки состояний — дословно оттуда).
-///
-/// Источник данных — общий `TaskStore` (тот же кэш, что у «Обзора» и
-/// «Сегодня»): свой запрос/поллинг экрану не нужен, `TaskFlowApp` грузит
-/// список один раз при входе и держит живым реалтаймом (spec §4.2).
+/// «Работа агентов» — отдельный контур поручений, назначенных ИИ.
+/// Проект отвечает на вопрос «к чему относится задача», исполнитель —
+/// «кто ею занимается», поэтому карточка видна здесь у исполнителя и
+/// остаётся доступной в самом проекте.
 struct AgentWorkScreen: View {
     @Environment(TaskStore.self) private var taskStore
-
-    /// `nil` — обычный порядок разделов. Задан контрактом строго без
-    /// параметров (`AgentWorkScreen` в таблице INTEGRATION.md — «—»), но
-    /// сам параметр инициализатора СВЕРХ контракта не ломает его: вызов
-    /// `AgentWorkScreen()` без аргументов (как сейчас в фабрике маршрутов,
-    /// `RouteDestinationView.swift`, чужой файл) остаётся валиден дословно.
-    /// Это подготовленное место под будущую правку: у `AppRoute.agentWork`
-    /// пока нет ассоциированного значения, чтобы донести фокус сюда с
-    /// плиток «Обзора» — чего именно не хватает, см. отчёт по задаче.
-    let focus: AgentWorkFocus?
-
-    init(focus: AgentWorkFocus? = nil) {
-        self.focus = focus
-    }
 
     /// Тот же приём, что `TodayScreen`/`TimelineScreen` — не `ApiTask?`,
     /// а сразу маршрут: `.navigationDestination(item:)` по `AppRoute` не
@@ -45,11 +13,10 @@ struct AgentWorkScreen: View {
     @State private var route: AppRoute?
 
     private struct Section: Identifiable {
-        let key: AgentWorkFocus
-        let title: String
-        let hint: String
+        let assigneeID: String
+        let name: String
         let tasks: [ApiTask]
-        var id: AgentWorkFocus { key }
+        var id: String { assigneeID }
     }
 
     var body: some View {
@@ -70,14 +37,14 @@ struct AgentWorkScreen: View {
                 }
 
                 if isNothing {
-                    Text("Агенты сейчас ничем не заняты — назначьте задачу, и она появится здесь.")
+                    Text("Агентам пока ничего не назначено.")
                         .tfText(.action)
                         .foregroundStyle(Color.tfDim)
                         .padding(.horizontal, TFSpacing.screenHorizontal)
                         .padding(.top, TFSpacing.md)
                 }
 
-                ForEach(orderedSections) { section in
+                ForEach(sections) { section in
                     if !section.tasks.isEmpty {
                         sectionView(section)
                     }
@@ -100,10 +67,10 @@ struct AgentWorkScreen: View {
     private func sectionView(_ section: Section) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(section.title) \(section.tasks.count)")
+                Text("\(section.name) · \(section.tasks.count)")
                     .tfText(.action).fontWeight(.semibold)
                     .foregroundStyle(Color.tfText)
-                Text(section.hint)
+                Text("Все назначенные задачи и их состояния")
                     .tfText(.meta)
                     .foregroundStyle(Color.tfSub)
             }
@@ -118,50 +85,34 @@ struct AgentWorkScreen: View {
         .padding(.bottom, TFSpacing.sm)
     }
 
-    // MARK: - Группировка (буквально `AgentWorkScreen.tsx`, useMemo groups)
+    // MARK: - Группировка по исполнителям
 
-    private var active: [ApiTask] {
-        taskStore.tasks.filter { $0.status == .active }
-    }
-
-    private var groupInProgress: [ApiTask] {
-        active.filter { $0.agentState == .inProgress && $0.agentStale != true }
-    }
-
-    private var groupStale: [ApiTask] {
-        active.filter { $0.agentState == .inProgress && $0.agentStale == true }
-    }
-
-    private var groupReview: [ApiTask] {
-        active.filter { $0.agentState == .review }
-    }
-
-    private var groupBlocked: [ApiTask] {
-        active.filter { $0.agentState == .blocked }
+    private var agentTasks: [ApiTask] {
+        taskStore.tasks.filter { $0.status == .active && $0.assigneeType == .ai }
     }
 
     private var sections: [Section] {
-        [
-            Section(key: .inProgress, title: "В работе", hint: "Агент занят этими задачами прямо сейчас", tasks: groupInProgress),
-            Section(key: .review, title: "На проверке", hint: "Агент закончил и сдал работу", tasks: groupReview),
-            Section(key: .blocked, title: "Заблокированы", hint: "Агент не может продолжить без вас", tasks: groupBlocked),
-            Section(key: .stale, title: "Пропали", hint: "Агент взялся и замолчал — задача висит без работы", tasks: groupStale),
-        ]
+        Dictionary(grouping: agentTasks, by: { $0.assigneeId ?? "unknown" })
+            .map { id, tasks in
+                Section(
+                    assigneeID: id,
+                    name: tasks.first?.assigneeName ?? "Агент",
+                    tasks: tasks.sorted { stateRank($0) < stateRank($1) }
+                )
+            }
+            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
-    /// `?focus=` в вебе двигает совпавший раздел на первое место, остальные
-    /// остаются в исходном порядке (стабильная сортировка JS) — Swift
-    /// `sorted` стабильность не гарантирует, поэтому явный remove+insert,
-    /// а не компаратор.
-    private var orderedSections: [Section] {
-        guard let focus, let index = sections.firstIndex(where: { $0.key == focus }) else { return sections }
-        var result = sections
-        let matched = result.remove(at: index)
-        result.insert(matched, at: 0)
-        return result
+    private func stateRank(_ task: ApiTask) -> Int {
+        switch task.agentState {
+        case .inProgress: return task.agentStale == true ? 3 : 0
+        case .review: return 1
+        case .blocked: return 2
+        case nil: return 4
+        }
     }
 
     private var isNothing: Bool {
-        !taskStore.isLoading && taskStore.errorMessage == nil && sections.allSatisfy { $0.tasks.isEmpty }
+        !taskStore.isLoading && taskStore.errorMessage == nil && agentTasks.isEmpty
     }
 }

@@ -118,8 +118,9 @@ enum TodayTaskOwner {
 
     /// Задача назначена ИИ-агенту (не человеку) — spec `isAgentAssignedTask`.
     static func isAgentAssigned(_ task: ApiTask, _ agents: [ApiUser]) -> Bool {
-        guard let assigneeId = task.assigneeId else { return false }
-        return agents.contains { $0.id == assigneeId && $0.type == .ai }
+        // `assignee_type` приходит в самой задаче: не ждём отдельный запрос
+        // списка агентов и не смешиваем поручения с личным планированием.
+        task.assigneeType == .ai
     }
 }
 

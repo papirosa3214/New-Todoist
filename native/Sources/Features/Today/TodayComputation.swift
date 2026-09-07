@@ -72,16 +72,21 @@ struct TodayComputation {
         self.isLoading = isLoading
         self.isError = isError
 
+        // Личное планирование не содержит агентские поручения ни в одном
+        // виде. Их проект остаётся контекстом, а исполнение видно только в
+        // «Работе агентов».
+        let personalTasks = allTasks.filter { !TodayTaskOwner.isAgentAssigned($0, agents) }
         let planner = hasConfiguredVisibleProjects
-            ? allTasks.filter { task in
+            ? personalTasks.filter { task in
                 guard let projectID = task.projectId else { return true }
                 return visibleProjectIds[projectID] == true
             }
-            : allTasks
+            : personalTasks
         plannerTasks = planner
 
         let plannerPartition = Self.partitionOverdueToday(planner, today: today)
-        let waitingAll = Self.waitingTasks(from: planner, currentUser: currentUser)
+        // Review и блокировки относятся к агентскому контуру.
+        let waitingAll: [ApiTask] = []
         waitingTasksAll = waitingAll
         rawOverdueAll = plannerPartition.overdue
         rawTodayAll = plannerPartition.todayTasks
@@ -94,15 +99,15 @@ struct TodayComputation {
         overdueTasks = filteredOverdue.filter { !waitingIDs.contains($0.id) }
         todayTasks = filteredToday.filter { !waitingIDs.contains($0.id) }
 
-        projectOptions = TodayFilterEngine.projectOptions(allTasks)
-        labelOptions = TodayFilterEngine.labelOptions(allTasks)
-        assigneeOptions = TodayFilterEngine.assigneeOptions(allTasks)
+        projectOptions = TodayFilterEngine.projectOptions(personalTasks)
+        labelOptions = TodayFilterEngine.labelOptions(personalTasks)
+        assigneeOptions = TodayFilterEngine.assigneeOptions(personalTasks)
 
         let trueWaiting = hasConfiguredVisibleProjects
-            ? Self.waitingTasks(from: allTasks, currentUser: currentUser)
+            ? []
             : waitingAll
         let truePartition = hasConfiguredVisibleProjects
-            ? Self.partitionOverdueToday(allTasks, today: today)
+            ? Self.partitionOverdueToday(personalTasks, today: today)
             : plannerPartition
         let isTrulyEmpty = !isLoading && !isError
             && trueWaiting.isEmpty

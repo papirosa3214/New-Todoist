@@ -34,9 +34,21 @@ final class TaskDetailViewModel {
     }
 
     func load() async {
-        isLoading = true
+        await load(showLoading: true)
+    }
+
+    /// Карточка открыта поверх общего `TaskStore`: тот получает `task:updated`
+    /// по WebSocket, но у карточки свой полный снимок с журналом и файлами.
+    /// Обновляем этот снимок тихо, чтобы состояние подзадачи (`running`) сразу
+    /// дошло до `SubtaskFeedView`, не превращая экран в сплошную заглушку.
+    func refreshAfterRealtimeUpdate() async {
+        await load(showLoading: false)
+    }
+
+    private func load(showLoading: Bool) async {
+        if showLoading { isLoading = true }
         loadErrorMessage = nil
-        defer { isLoading = false }
+        defer { if showLoading { isLoading = false } }
         do {
             task = try await apiClient.task(id: taskID)
         } catch let error as APIError {

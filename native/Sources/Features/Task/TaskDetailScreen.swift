@@ -144,6 +144,19 @@ struct TaskDetailScreen: View {
             if case .success(let url) = result { Task { await viewModel.attachCommentFile(url: url) } }
         }
         .task { await viewModel.load() }
+        // Реалтайм кладёт свежую задачу (включая derived `subtask.state`) в
+        // TaskStore. Детальная карточка держит расширенный отдельный снимок,
+        // поэтому тихо перечитываем его только при изменении своей задачи.
+        // Так `running` немедленно включает уже существующий спиннер, а
+        // обычное кольцо ожидания (`pending`) остаётся без изменений.
+        .onChange(of: liveTask) { _, updated in
+            guard updated != nil else { return }
+            Task { await viewModel.refreshAfterRealtimeUpdate() }
+        }
+    }
+
+    private var liveTask: ApiTask? {
+        taskStore.tasks.first(where: { $0.id == taskID })
     }
 
     // MARK: - Шапка шторки: ручка, кнопка закрытия, кнопка меню
