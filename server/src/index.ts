@@ -57,7 +57,52 @@ export async function buildApp(): Promise<FastifyInstance> {
   // (кнопка микрофона, routes/transcribe.ts). Поднимаем до потолка самого
   // ASR-сервиса (25 МБ, см. local-asr-service.md) — выше смысла нет, он всё
   // равно откажет.
-  const app = Fastify({ logger: true, bodyLimit: 25 * 1024 * 1024 });
+  // Секреты в лог не пишем. `/ws?token=...` — вынужденная форма: WebSocket из
+  // браузера не умеет слать заголовок Authorization, и токен приходит строкой
+  // запроса. Сам протокол это не меняет — режется только то, что попадает в
+  // лог (08.09.2026: в dev-server.log лежало 2637 строк с живыми токенами).
+  const SENSITIVE_QUERY_KEYS = ["token", "access_token", "api_key", "secret", "password"];
+
+  const redactSensitiveQuery = (url: string): string => {
+    const cut = url.indexOf("?");
+    if (cut === -1) return url;
+    const params = new URLSearchParams(url.slice(cut + 1));
+    let touched = false;
+    for (const key of SENSITIVE_QUERY_KEYS) {
+      if (params.has(key)) {
+        params.set(key, "***");
+        touched = true;
+      }
+    }
+    return touched ? url.slice(0, cut) + "?" + params.toString() : url;
+  };
+
+  const app = Fastify({
+    logger: {
+      // Заголовки с секретами не пишем вовсе: они не нужны для разбора
+      // запроса, а утекают так же легко, как строка запроса.
+      redact: {
+        paths: [
+          "req.headers.authorization",
+          "req.headers.cookie",
+          "req.headers['x-taskflow-token']",
+        ],
+        remove: true,
+      },
+      serializers: {
+        req(request: any) {
+          return {
+            method: request.method,
+            url: redactSensitiveQuery(request.url || ""),
+            host: request.headers?.host,
+            remoteAddress: request.ip,
+            remotePort: request.socket?.remotePort,
+          };
+        },
+      },
+    },
+    bodyLimit: 25 * 1024 * 1024,
+  });
 
   // Сырые байты audio/* (запись из MediaRecorder на фронтенде) — не JSON,
   // парсим как Buffer и отдаём как есть в req.body. Без этого Fastify упадёт
