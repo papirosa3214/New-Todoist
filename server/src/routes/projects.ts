@@ -24,8 +24,40 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     // три (7 из них давно закрыты). Найдено Максимом 14.08.2026.
     // Экран проекта (ProjectTasksScreen) показывает именно активные —
     // счётчик обязан отвечать на тот же вопрос, что и экран под ним.
-    const countSql = `(SELECT COUNT(*) FROM tasks
-                        WHERE project_id = p.id AND status = 'active') as task_count`;
+    //
+    // Остальные числа добавлены 08.09.2026 под карточку проекта в нативном
+    // клиенте: там проект показывается не строкой, а карточкой с прогрессом
+    // («12 из 30»), просрочкой и датой последнего движения. Считать это на
+    // клиенте нельзя — пришлось бы тянуть задачи каждого проекта отдельным
+    // запросом. Одна группировка по tasks отдаёт всё сразу.
+    //
+    // `last_activity_at` — MAX(updated_at) по задачам, а не created_at
+    // проекта: вопрос владельца звучит как «сколько он уже висит без
+    // движения», а не «когда его завели».
+    const taskAggregates = `
+      LEFT JOIN (
+        SELECT project_id,
+               SUM(status = 'active')                      AS active_count,
+               SUM(status = 'completed')                   AS completed_count,
+               SUM(status = 'active'
+                   AND due_date IS NOT NULL
+                   AND due_date < date('now', 'localtime')) AS overdue_count,
+               MAX(updated_at)                             AS last_activity_at
+        FROM tasks
+        WHERE project_id IS NOT NULL
+        GROUP BY project_id
+      ) t ON t.project_id = p.id`;
+
+    // Документы проекта — записи в его папке заметок (`notes_folder_id`,
+    // заводится флагом with_docs при создании). Для карточки нужно только
+    // их число: «есть ли у проекта база знаний и насколько она набита».
+    const docsAggregate = `
+      LEFT JOIN (
+        SELECT folder_id, COUNT(*) AS docs_count
+        FROM journal_entries
+        WHERE folder_id IS NOT NULL
+        GROUP BY folder_id
+      ) d ON d.folder_id = p.notes_folder_id`;
 
     // Кому какие проекты видны — общее правило из access.ts (visibleScope):
     // владельцу все, агенту свои и людские, прочему человеку только свои.
@@ -43,7 +75,14 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     // тот же паттерн, что и сортировка задач внутри проекта ниже).
     return db
       .prepare(
-        `SELECT p.*, ${countSql} FROM projects p WHERE ${scope.sql}
+        `SELECT p.*,
+                COALESCE(t.active_count, 0)    AS task_count,
+                COALESCE(t.completed_count, 0) AS completed_count,
+                COALESCE(t.overdue_count, 0)   AS overdue_count,
+                t.last_activity_at             AS last_activity_at,
+                COALESCE(d.docs_count, 0)      AS docs_count
+         FROM projects p ${taskAggregates} ${docsAggregate}
+         WHERE ${scope.sql}
          ORDER BY p.pinned DESC, p.position IS NULL, p.position ASC, p.created_at ASC`,
       )
       .all(...scope.params);
