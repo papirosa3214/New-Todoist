@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 
 // База знаний — тонкий прокси к RAGFlow (:9380 на .110), где лежит датасет
@@ -102,15 +103,44 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
       const byDoc: Record<string, any> = {};
       for (const d of data?.data?.doc_aggs || []) byDoc[d.doc_id] = d;
 
+      const named = chunks.map((c: any) => {
+        const name = c.document_keyword || byDoc[c.document_id]?.doc_name || "";
+        return { chunk: c, name, docId: docIdFromName(name) };
+      });
+
+      // Заголовок и проект — из TaskFlow, одним запросом на всю выдачу:
+      // в индексе документ зовётся `taskflow-<uuid>.md`, и показывать это имя
+      // в результатах поиска бессмысленно.
+      const ids = named.map((n) => n.docId).filter(Boolean) as string[];
+      const titles = new Map<string, { title: string; project: string | null }>();
+      if (ids.length) {
+        const rows = db
+          .prepare(
+            `SELECT un.id, un.title,
+                    (SELECT p.name FROM projects p
+                      WHERE p.notes_folder_id = un.folder_id
+                      ORDER BY p.created_at LIMIT 1) AS project_name
+             FROM user_notes un
+             WHERE un.id IN (${ids.map(() => "?").join(",")})`,
+          )
+          .all(...ids) as any[];
+        for (const r of rows) titles.set(r.id, { title: r.title || "", project: r.project_name || null });
+      }
+
       return {
         query: question,
-        results: chunks.map((c: any) => ({
-          text: c.content || c.content_with_weight || "",
-          score: c.similarity ?? c.score ?? null,
-          document_name: c.document_keyword || byDoc[c.document_id]?.doc_name || "",
-          // `doc_id` заметки в TaskFlow — по нему открывается оригинал.
-          doc_id: docIdFromName(c.document_keyword || byDoc[c.document_id]?.doc_name || ""),
-        })),
+        results: named.map(({ chunk, name, docId }) => {
+          const known = docId ? titles.get(docId) : undefined;
+          return {
+            text: chunk.content || chunk.content_with_weight || "",
+            score: chunk.similarity ?? chunk.score ?? null,
+            document_name: name,
+            title: known?.title || "",
+            project: known?.project || null,
+            // `doc_id` заметки в TaskFlow — по нему открывается оригинал.
+            doc_id: docId,
+          };
+        }),
       };
     },
   );
@@ -134,18 +164,48 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
         return reply.code(502).send({ error: "База знаний недоступна", detail: String(e?.message || e) });
       }
       const docs = data?.data?.docs || [];
+
+      // Имя документа в индексе — `taskflow-<uuid>.md`, человеку показывать
+      // нечего. Заголовок и проект берём из самого TaskFlow по doc_id: одним
+      // запросом на страницу, без похода за каждым документом.
+      const ids = docs.map((d: any) => docIdFromName(d.name)).filter(Boolean) as string[];
+      const titles = new Map<string, { title: string; project: string | null }>();
+      if (ids.length) {
+        const rows = db
+          .prepare(
+            `SELECT un.id, un.title,
+                    (SELECT p.name FROM projects p
+                      WHERE p.notes_folder_id = un.folder_id
+                      ORDER BY p.created_at LIMIT 1) AS project_name
+             FROM user_notes un
+             WHERE un.id IN (${ids.map(() => "?").join(",")})`,
+          )
+          .all(...ids) as any[];
+        for (const r of rows) titles.set(r.id, { title: r.title || "", project: r.project_name || null });
+      }
+
       return {
         total: data?.data?.total ?? docs.length,
-        documents: docs.map((d: any) => ({
-          name: d.name,
-          doc_id: docIdFromName(d.name),
-          ragflow_id: d.id,
-          chunk_count: d.chunk_count,
-          size: d.size,
-          updated_at: d.update_date,
-          // «parsed» — документ уже в поиске; «running» — ещё индексируется.
-          indexed: d.run === "DONE",
-        })),
+        documents: docs.map((d: any) => {
+          const docId = docIdFromName(d.name);
+          const known = docId ? titles.get(docId) : undefined;
+          return {
+            name: d.name,
+            title: known?.title || "",
+            project: known?.project || null,
+            doc_id: docId,
+            ragflow_id: d.id,
+            chunk_count: d.chunk_count,
+            size: d.size,
+            updated_at: d.update_date,
+            // «parsed» — документ уже в поиске; «running» — ещё индексируется.
+            indexed: d.run === "DONE",
+            // Заметки в TaskFlow уже нет, а в индексе она осталась — это и
+            // есть архив закрытого проекта. Открывать её нужно из индекса
+            // (`/api/knowledge/documents/:ragflowId`), оригинала больше нет.
+            archived: docId != null && !titles.has(docId),
+          };
+        }),
       };
     },
   );
