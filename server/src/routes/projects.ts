@@ -51,10 +51,16 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     // Документы проекта — записи в его папке заметок (`notes_folder_id`,
     // заводится флагом with_docs при создании). Для карточки нужно только
     // их число: «есть ли у проекта база знаний и насколько она набита».
+    //
+    // Считается по `user_notes` — это и есть документация: туда пишут
+    // `/api/notes` и MCP-инструменты агентов (`taskflow_doc_write`). Первая
+    // версия этого агрегата (08.09.2026) считала `journal_entries` и давала
+    // ноль всем проектам: в той таблице лежит одна старая дневниковая запись,
+    // а 57 реальных документов — в `user_notes`.
     const docsAggregate = `
       LEFT JOIN (
         SELECT folder_id, COUNT(*) AS docs_count
-        FROM journal_entries
+        FROM user_notes
         WHERE folder_id IS NOT NULL
         GROUP BY folder_id
       ) d ON d.folder_id = p.notes_folder_id`;
