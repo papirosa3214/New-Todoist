@@ -855,6 +855,40 @@ def t_doc_write(args):
             "название": n.get("title"), "папка": folder.get("name")}
 
 
+def t_kb_search(args):
+    """Смысловой поиск по всей документации проектов.
+
+    Отличие от taskflow_docs: тот показывает СПИСОК заметок одного проекта, а
+    здесь ищется по СОДЕРЖАНИЮ всех сразу, включая проекты, которых уже нет.
+    Отвечает кусками текста; за целым документом — taskflow_doc_read по id.
+    """
+    q = (args.get("query") or args.get("q") or "").strip()
+    if not q:
+        return {"ошибка": "нужен текст запроса (query)"}
+    top_k = args.get("top_k") or 5
+    data = api("GET", "/api/knowledge/search?q=%s&top_k=%s"
+               % (urllib.parse.quote(q), int(top_k)))
+    results = data.get("results") or []
+    if not results:
+        return {"запрос": q, "найдено": 0,
+                "подсказка": "ничего похожего в документации нет — "
+                              "возможно, стоит записать это самому "
+                              "(taskflow_doc_write)"}
+    return {
+        "запрос": q,
+        "найдено": len(results),
+        "куски": [
+            {
+                "текст": (r.get("text") or "")[:1500],
+                "близость": round(r.get("score") or 0, 3),
+                "id_заметки": r.get("doc_id"),
+            }
+            for r in results
+        ],
+        "как читать целиком": "taskflow_doc_read(id=<id_заметки>)",
+    }
+
+
 def t_project_tasks(args):
     """Задачи проекта — чтобы агент брал работу по проекту, а не только ту,
     что уже назначена на его учётку.
@@ -1361,6 +1395,24 @@ TOOLS = [
             "required": ["markdown"],
         },
         "fn": t_doc_write,
+    },
+    {
+        "name": "taskflow_kb_search",
+        "description": (
+            "Найти в документации проектов по смыслу: похожее уже разбирали? "
+            "Ищет по содержанию ВСЕХ проектов сразу, включая закрытые. "
+            "Отвечает кусками текста с id заметки — целиком читать "
+            "через taskflow_doc_read."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "вопрос своими словами"},
+                "top_k": {"type": "integer", "description": "сколько кусков вернуть, по умолчанию 5"},
+            },
+            "required": ["query"],
+        },
+        "fn": t_kb_search,
     },
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
