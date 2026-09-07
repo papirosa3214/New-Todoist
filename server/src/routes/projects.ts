@@ -79,7 +79,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     // как первому ключу), внутри одной группы — created_at, чтобы порядок
     // был детерминирован и до первого ручного перетаскивания (20.08.2026,
     // тот же паттерн, что и сортировка задач внутри проекта ниже).
-    return db
+    const rows = db
       .prepare(
         `SELECT p.*,
                 COALESCE(t.active_count, 0)    AS task_count,
@@ -91,7 +91,32 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
          WHERE ${scope.sql}
          ORDER BY p.pinned DESC, p.position IS NULL, p.position ASC, p.created_at ASC`,
       )
-      .all(...scope.params);
+      .all(...scope.params) as any[];
+
+    // Кто из агентов сейчас занят в проекте. Отдельным запросом, а не пятым
+    // подзапросом в основном: строк здесь ровно столько, сколько живых пар
+    // «агент × проект» (единицы), и сшить их в JS дешевле, чем гонять
+    // group_concat и потом разбирать строку.
+    const agentRows = db
+      .prepare(
+        `SELECT t.project_id AS projectId, u.id AS id, u.name AS name,
+                COUNT(*) AS tasks
+           FROM tasks t
+           JOIN users u ON u.id = t.assignee_id AND u.type = 'ai'
+          WHERE t.status = 'active' AND t.project_id IS NOT NULL
+          GROUP BY t.project_id, u.id
+          ORDER BY tasks DESC, u.name`,
+      )
+      .all() as Array<{ projectId: string; id: string; name: string; tasks: number }>;
+
+    const agentsByProject = new Map<string, Array<{ id: string; name: string; tasks: number }>>();
+    for (const r of agentRows) {
+      const list = agentsByProject.get(r.projectId) ?? [];
+      list.push({ id: r.id, name: r.name, tasks: r.tasks });
+      agentsByProject.set(r.projectId, list);
+    }
+
+    return rows.map((p) => ({ ...p, agents: agentsByProject.get(p.id) ?? [] }));
   });
 
   app.post<{
