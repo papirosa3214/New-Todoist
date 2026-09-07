@@ -28,8 +28,10 @@ import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
 import { registerAgentServiceRoutes } from "./routes/agent-service.js";
 import { registerIntegrationRoutes } from "./routes/integrations.js";
 import { registerJournalFolderRoutes } from "./routes/journalFolders.js";
+import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 import { registerNoteRoutes } from "./routes/notes.js";
 import { registerChatRoutes } from "./routes/chat.js";
+import { registerAgentInboxRoutes } from "./routes/agent-inbox.js";
 import {
   registerActivityRoutes,
   startActivityObserver,
@@ -180,8 +182,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAgentServiceRoutes(app);
   registerIntegrationRoutes(app);
   registerJournalFolderRoutes(app);
+  registerKnowledgeRoutes(app);
   registerNoteRoutes(app);
   registerChatRoutes(app);
+  await registerAgentInboxRoutes(app);
   registerActivityRoutes(app);
   // Тикет ollama-observer: слой 3 живой строки — необязательное улучшение
   // поверх уже рабочих слоёв 1-2, включается/выключается на лету через
