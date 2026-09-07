@@ -45,6 +45,7 @@ export function migrate() {
       status TEXT DEFAULT 'offline',
       api_token TEXT,
       is_system_bot INTEGER DEFAULT 0,
+      reviewer INTEGER NOT NULL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -74,7 +75,8 @@ export function migrate() {
       creator_id TEXT REFERENCES users(id),
       status TEXT DEFAULT 'active' CHECK(status IN ('active','completed')),
       created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      updated_at TEXT DEFAULT (datetime('now')),
+      parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS task_labels (
@@ -168,6 +170,12 @@ export function migrate() {
   // "system bot" status.
   if (!userCols.some((c) => c.name === "is_system_bot")) {
     db.exec("ALTER TABLE users ADD COLUMN is_system_bot INTEGER DEFAULT 0");
+  }
+  // Reviewer — отдельное узкое полномочие, а не новая роль. Роль users.role
+  // намеренно остаётся совместимой со старыми значениями, а reviewer=1
+  // открывает только review -> in_progress через специальную проверку.
+  if (!userCols.some((c) => c.name === "reviewer")) {
+    db.exec("ALTER TABLE users ADD COLUMN reviewer INTEGER NOT NULL DEFAULT 0");
   }
   // Unconditional (idempotent) so u2/u3 get flagged even on a DB that
   // already had this column from an earlier partial migration.

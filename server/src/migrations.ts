@@ -34,6 +34,64 @@ export type Migration = {
   noTransaction?: boolean;
 };
 
+/**
+ * Пересборка agent_inbox так, чтобы у неё была колонка event_type с CHECK
+ * (12-шаговая процедура SQLite: новая таблица → копия → DROP → RENAME).
+ * Используется 021 (чистая БД, колонки ещё нет) и 024 (живая БД, где 021
+ * записана «применена», но колонку/CHECK так и не добавила). Идемпотентна:
+ * если колонка и CHECK уже на месте — ничего не делает.
+ */
+function ensureAgentInboxEventType(): void {
+  const ddl =
+    (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_inbox'")
+        .get() as { sql?: string } | undefined
+    )?.sql ?? "";
+  if (!ddl) {
+    throw new Error("ensureAgentInboxEventType: таблица agent_inbox не найдена");
+  }
+  const hasColumn = /event_type\s+TEXT/.test(ddl);
+  const hasCheck = /CHECK\s*\(\s*event_type\s+IN/.test(ddl);
+  if (hasColumn && hasCheck) return;
+
+  // Вставляем колонку event_type после статуса (если её ещё нет) и добиваем
+  // CHECK. Работаем с фактическим DDL из sqlite_master, а не с эталоном из
+  // 020 — живая БД могла собрать его иначе.
+  const statusDef =
+    /status TEXT NOT NULL DEFAULT 'sent' CHECK \(status IN \('sent','received','acting','done','blocked'\)\)/;
+  let newDdl = ddl;
+  if (!hasColumn) {
+    newDdl = newDdl.replace(
+      statusDef,
+      `status TEXT NOT NULL DEFAULT 'sent' CHECK (status IN ('sent','received','acting','done','blocked')),
+          event_type TEXT NOT NULL DEFAULT 'chat' CHECK (event_type IN ('chat','assignment','review_return'))`,
+    );
+  } else if (!hasCheck) {
+    // Колонка есть, CHECK нет — добавляем CHECK к строке event_type.
+    newDdl = newDdl.replace(
+      /event_type TEXT NOT NULL DEFAULT 'chat'/,
+      `event_type TEXT NOT NULL DEFAULT 'chat' CHECK (event_type IN ('chat','assignment','review_return'))`,
+    );
+  }
+  newDdl = newDdl.replace(/CREATE TABLE\s+"?agent_inbox"?/i, 'CREATE TABLE "agent_inbox_new"');
+  db.exec(newDdl);
+  db.exec(
+    "INSERT INTO agent_inbox_new (id, chat_message_id, to_user_id, body_text, task_id, task_version, kind, status, created_at, received_at, acting_at, done_at, blocked_reason, event_type) " +
+      "SELECT id, chat_message_id, to_user_id, body_text, task_id, task_version, kind, status, created_at, received_at, acting_at, done_at, blocked_reason" +
+      (hasColumn ? ", event_type" : ", 'chat'") +
+      " FROM agent_inbox",
+  );
+  db.exec("DROP TABLE agent_inbox");
+  db.exec("ALTER TABLE agent_inbox_new RENAME TO agent_inbox");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_agent_inbox_to_status
+      ON agent_inbox(to_user_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_inbox_task
+      ON agent_inbox(task_id);
+  `);
+}
+
 const migrations: Migration[] = [
   {
     id: "001_baseline",
@@ -494,7 +552,91 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "020_agent_inbox",
+    description:
+      "Карточка 5f292e87 (MVP надёжной доставки поручений). Agent inbox — единый механизм доставки поручений из чата агенту: message_id (uuid), task_id (FK на tasks), адресат (to_user_id), kind (text/voice/...), версия карточки на момент доставки, статусы sent/received/acting/done/blocked с таймстемпами, ключ дедупликации (chat_message_id UNIQUE). Без inbox'а повторное сообщение в чат создавало второе поручение; с inbox'ом — UNIQUE constraint на chat_message_id гарантирует один-to-один. Тесты: text, voice (тот же text), дедупликация, явный адресат, неясный запрос без запуска, обычный чат цел.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_inbox (
+          id TEXT PRIMARY KEY,
+          chat_message_id TEXT NOT NULL UNIQUE,
+          task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+          to_user_id TEXT NOT NULL REFERENCES users(id),
+          kind TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text','voice')),
+          task_version INTEGER,
+          status TEXT NOT NULL DEFAULT 'sent' CHECK (status IN ('sent','received','acting','done','blocked')),
+          blocked_reason TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          received_at TEXT,
+          acting_at TEXT,
+          done_at TEXT,
+          body_text TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_inbox_to_status
+          ON agent_inbox(to_user_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_agent_inbox_task
+          ON agent_inbox(task_id);
+      `);
+    },
+  },
+  {
+    id: "021_agent_inbox_event_type",
+    description:
+      "Карточка 5f292e87 (Reviewer 21:23): kind='text'/'voice' — это формат тела, а не источник события. Нужен event_type для различения chat/assignment/review-return, чтобы маршрутизация и журнал понимали, откуда пришёл inbox-элемент. Добавляется отдельной миграцией 021 (не правкой 020), потому что 020 уже применена на живой БД. Пересборка по 12-шаговой процедуре SQLite: колонка event_type добавляется вместе с CHECK (в прежней редакции CHECK вставлялся без колонки — фантомный CHECK, который не выживал и ломал чистую БД). Тип по умолчанию — 'chat' (обратная совместимость).",
+    noTransaction: true,
+    up: ensureAgentInboxEventType,
+  },
+  {
+    id: "022_agent_inbox_event_type_col",
+    description:
+      "Карточка 5f292e87: миграция 021 записана в schema_migrations как применённая, но таблицу так и не расширила — колонка event_type в agent_inbox отсутствует, а chat.ts вставляет её. Вдобавок tasks не имеет current_revision, на который опирается защита от устаревших событий (review→in_progress). 022 делает то, что 021 обещала: добавляет event_type в agent_inbox и current_revision в tasks. Идемпотентна — проверяет наличие колонки перед ALTER (ADD COLUMN в SQLite нельзя с CHECK, валидацию значения делает приложение).",
+    up: () => {
+      const inboxCols = (
+        db.prepare("SELECT name FROM pragma_table_info('agent_inbox')").all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      if (!inboxCols.includes("event_type")) {
+        db.exec("ALTER TABLE agent_inbox ADD COLUMN event_type TEXT NOT NULL DEFAULT 'chat'");
+      }
+      const taskCols = (
+        db.prepare("SELECT name FROM pragma_table_info('tasks')").all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      if (!taskCols.includes("current_revision")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN current_revision INTEGER NOT NULL DEFAULT 1");
+      }
+    },
+  },
+  {
+    id: "024_agent_inbox_event_type_check",
+    description:
+      "Карточка 5f292e87: на живой БД 021 записана в schema_migrations как применённая, но колонку/CHECK так и не добавила, а 022 добавила колонку без CHECK. 024 самолечится: пересобирает agent_inbox, если колонки event_type или CHECK(event_type IN ...) нет. Идемпотентна.",
+    noTransaction: true,
+    up: ensureAgentInboxEventType,
+  },
+  {
+    id: "023_dispatch_registry",
+    description:
+      "Карточка 5f292e87 (шаг «прозрачный журнал и реестр будильника»). Читаемый реестр диспетчеризации в режиме наблюдения: источник, условие/команда (trigger), адресат, переданные данные, исход и ошибка. Ничего в trigger.py/systemd/раннерах не меняет — только фиксирует события доставки поручений, чтобы владелец видел, какие сигналы ходят по каналу agent_inbox, без чтения кода.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS dispatch_registry (
+          id TEXT PRIMARY KEY,
+          source TEXT NOT NULL,
+          trigger TEXT NOT NULL,
+          to_user_id TEXT,
+          data TEXT,
+          result TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_dispatch_registry_created
+          ON dispatch_registry(created_at);
+      `);
+    },
+  },
 ];
+
+
 
 /** Применить все ещё не применённые миграции, по одной транзакции на каждую. */
 export function runMigrations() {

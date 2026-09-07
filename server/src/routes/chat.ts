@@ -32,6 +32,8 @@ import {
   saveUploadedFile,
   UploadRejected,
 } from "./attachments.js";
+import { routeAddressee, loadCatalog } from "./agent-inbox.js";
+import { registryRecord } from "../agentState.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -500,6 +502,9 @@ export function registerChatRoutes(app: FastifyInstance) {
       kind?: string;
       channel?: string;
       attachment_ids?: string[];
+      // Формат тела сообщения: text | voice (5f292e87 — голос из chat.ts
+      // записывался как text; источник нужен, чтобы inbox помечал voice).
+      source?: string;
     };
   }>("/api/chat", { preHandler: authPre }, async (req: any, reply) => {
     const text = (req.body?.text || "").trim();
@@ -600,6 +605,40 @@ export function registerChatRoutes(app: FastifyInstance) {
             SET agent_heartbeat_at = datetime('now')
           WHERE id = ? AND assignee_id = ? AND agent_state = 'in_progress'`,
       ).run(taskId, req.userId);
+    }
+    // Карточка 5f292e87: agent_inbox — единый механизм доставки. Сообщение
+    // по задаче с явным адресатом пишет в inbox; UNIQUE на chat_message_id
+    // обеспечивает дедупликацию (повтор — глотаем). Адресат берётся из
+    // каталога команды: явный адресат приоритетен, иначе fallback в
+    // Оркестратора. Обычный чат без task_id или без адресата — НЕ пишем
+    // (это не поручение).
+    if (taskId && toUserId) {
+      try {
+        const inboxTo = routeAddressee(toUserId, req.userId, loadCatalog());
+        const inboxId = uid();
+        const bodyKind = req.body?.source === "voice" ? "voice" : "text";
+        db.prepare(
+          `INSERT INTO agent_inbox
+             (id, chat_message_id, to_user_id, body_text, task_id,
+              task_version, kind, event_type, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'chat', 'sent', datetime('now'))`,
+        ).run(
+          inboxId, id, inboxTo, text, taskId,
+          (db.prepare("SELECT current_revision FROM tasks WHERE id=?").get(taskId) as any)?.current_revision ?? null,
+          bodyKind,
+        );
+        registryRecord({
+          source: "chat",
+          trigger: "POST /api/chat",
+          toUserId: inboxTo,
+          data: { chat_message_id: id, task_id: taskId, event_type: "chat", source: bodyKind },
+          result: "inbox_sent",
+        });
+      } catch (e: any) {
+        // Дедупликация — ТОЛЬКО по chat_message_id (Reviewer 5f292e87: чат
+        // ловил любой UNIQUE). Прочие конфликты пробрасываем.
+        if (!String(e?.message || "").includes("agent_inbox.chat_message_id")) throw e;
+      }
     }
 
     // Файлы залиты заранее и лежат «ничьими» (chat_message_id = NULL) —

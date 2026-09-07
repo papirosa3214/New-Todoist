@@ -11,7 +11,7 @@ import {
   getProjectForFiling,
   seesEveryTask,
 } from "../access.js";
-import { isStale, logEvent, releaseSubtaskWork } from "../agentState.js";
+import { isStale, logEvent, registryRecord, releaseSubtaskWork } from "../agentState.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -155,7 +155,7 @@ export function withSubtaskState(s: any) {
   };
 }
 
-export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
+export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.type as assignee_type, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
              p.name as project_name, p.color as project_color`;
 export const TASK_JOINS = `FROM tasks t
       LEFT JOIN users u ON t.assignee_id = u.id
@@ -605,6 +605,29 @@ export function registerTaskRoutes(app: FastifyInstance) {
           fromValue: null,
           toValue: String(assignee_id),
         });
+        // Назначение — тоже доставка (Reviewer 5f292e87: из реального потока
+        // не создаётся event_type=assignment). Кладём поручение в inbox
+        // исполнителю; chat_message_id синтетический (это не сообщение в чат).
+        db.prepare(
+          `INSERT INTO agent_inbox
+             (id, chat_message_id, to_user_id, body_text, task_id,
+              task_version, kind, event_type, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'text', 'assignment', 'sent', datetime('now'))`,
+        ).run(
+          uid(),
+          `asg-${uid()}`,
+          assignee_id,
+          trimmedTitle,
+          id,
+          (db.prepare("SELECT current_revision FROM tasks WHERE id=?").get(id) as any)?.current_revision ?? null,
+        );
+        registryRecord({
+          source: "assignment",
+          trigger: "POST /api/tasks",
+          toUserId: assignee_id,
+          data: { task_id: id },
+          result: "inbox_sent",
+        });
       }
       // Шаги, заведённые вместе с задачей, — одной строкой с их числом, а
       // не по строке на каждый: задача из десяти шагов иначе открывалась бы
@@ -966,6 +989,30 @@ export function registerTaskRoutes(app: FastifyInstance) {
           fromValue: before === null ? null : String(before),
           toValue: after === null ? null : String(after),
         });
+        // Смена исполнителя — тоже доставка (5f292e87): assignment в inbox
+        // новому исполнителю.
+        if (key === "assignee_id" && after) {
+          db.prepare(
+            `INSERT INTO agent_inbox
+               (id, chat_message_id, to_user_id, body_text, task_id,
+                task_version, kind, event_type, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'text', 'assignment', 'sent', datetime('now'))`,
+          ).run(
+            uid(),
+            `asg-${uid()}`,
+            String(after),
+            existing.title,
+            id,
+            (db.prepare("SELECT current_revision FROM tasks WHERE id=?").get(id) as any)?.current_revision ?? null,
+          );
+          registryRecord({
+            source: "assignment",
+            trigger: "PATCH /api/tasks/:id",
+            toUserId: String(after),
+            data: { task_id: id },
+            result: "inbox_sent",
+          });
+        }
       }
 
       // Описание — фактом, без текста: «изменил описание». Сам текст в

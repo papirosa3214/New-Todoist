@@ -22,6 +22,7 @@ import {
   isStale,
   leaseExpiresAt,
   logEvent,
+  registryRecord,
   releaseSubtaskWork,
 } from "../agentState.js";
 
@@ -265,8 +266,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/claim", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForWrite(req.params.id, req.userId) ??
-        getTaskForReview(req.params.id, req.userId);
+      const task = getTaskForWrite(req.params.id, req.userId);
       if (!task) {
         // Задача может быть чужой, а не отсутствующей, и для агента это
         // совсем разные новости. Голое «не найдено» сбивает с толку:
@@ -446,7 +446,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/api/tasks/:id/heartbeat", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForWrite(req.params.id, req.userId);
+      const task = getTaskForWrite(req.params.id, req.userId) ??
+        getTaskForReview(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       if (
@@ -499,7 +500,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/state", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForWrite(req.params.id, req.userId);
+      const task = getTaskForWrite(req.params.id, req.userId) ??
+        getTaskForReview(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       const { state } = req.body || {};
@@ -639,6 +641,41 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             state,
             task.id,
           );
+        }
+
+        // Возврат из review в in_progress — карточка меняется: поднимаем
+        // current_revision, чтобы устаревшие inbox-события (записанные до
+        // возврата) тихо отбрасывались триггером перед claim (5f292e87), и
+        // фиксируем событие в реестре диспетчеризации (режим наблюдения).
+        if (from === "review" && state === "in_progress") {
+          db.prepare(
+            "UPDATE tasks SET current_revision = current_revision + 1 WHERE id = ?",
+          ).run(task.id);
+          // Возврат из review — тоже доставка: кладём поручение в inbox
+          // исполнителю (Reviewer 5f292e87: review→in_progress не создаёт
+          // inbox). chat_message_id — синтетический (это не сообщение в чат,
+          // а сигнал возврата), поэтому для дедупа свой уникальный ключ.
+          const returnInboxId = uid();
+          db.prepare(
+            `INSERT INTO agent_inbox
+               (id, chat_message_id, to_user_id, body_text, task_id,
+                task_version, kind, event_type, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'text', 'review_return', 'sent', datetime('now'))`,
+          ).run(
+            returnInboxId,
+            `rvr-${uid()}`,
+            task.assignee_id,
+            comment || "задача возвращена на доработку",
+            task.id,
+            (db.prepare("SELECT current_revision FROM tasks WHERE id=?").get(task.id) as any)?.current_revision ?? null,
+          );
+          registryRecord({
+            source: "review_return",
+            trigger: "POST /api/tasks/:id/state",
+            toUserId: task.assignee_id,
+            data: { task_id: task.id, actor_id: req.userId, inbox_id: returnInboxId },
+            result: "review→in_progress",
+          });
         }
 
         // «Снять с агента» снимает работу и с ШАГОВ — иначе задача тут же
