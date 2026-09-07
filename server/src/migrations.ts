@@ -634,6 +634,19 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "025_project_knowledge_dataset",
+    description:
+      "Датасет базы знаний у проекта (08.09.2026, просьба владельца: «мало ли будет специфический бизнесовый проект — не хотелось бы замешивать документацию не туда, куда надо»). knowledge_dataset_id — идентификатор датасета RAGFlow, куда синк складывает документы ИМЕННО этого проекта. NULL = общий датасет TaskFlow (RAGFLOW_TASKFLOW_DATASET в server/.env), как было до появления выбора. Внешним ключом чужая система здесь намеренно не проверяется: датасет заводится и удаляется вне TaskFlow, и жёсткая связь ломала бы проект на ровном месте.",
+    up: () => {
+      const cols = db.prepare("PRAGMA table_info(projects)").all() as Array<{
+        name: string;
+      }>;
+      if (!cols.some((c) => c.name === "knowledge_dataset_id")) {
+        db.exec(`ALTER TABLE projects ADD COLUMN knowledge_dataset_id TEXT;`);
+      }
+    },
+  },
 ];
 
 

@@ -43,6 +43,26 @@ function docIdFromName(name: string): string | null {
   return m ? m[1] : null;
 }
 
+/** Все датасеты, куда TaskFlow складывает документы: общий плюс собственные
+ *  датасеты проектов (`projects.knowledge_dataset_id`).
+ *
+ *  Разделение по датасетам — про ЗАПИСЬ: документы бизнесового проекта не
+ *  подмешиваются к рабочим. Поиск же по умолчанию идёт по всем сразу, иначе
+ *  документ, лежащий в своём датасете, стал бы ненаходимым; сузить выдачу
+ *  можно параметром `dataset_id`. */
+function allDatasetIds(): string[] {
+  const ids = new Set<string>();
+  const fallback = ragflowDataset();
+  if (fallback) ids.add(fallback);
+  const rows = db
+    .prepare(
+      "SELECT DISTINCT knowledge_dataset_id AS id FROM projects WHERE knowledge_dataset_id IS NOT NULL AND knowledge_dataset_id <> ''",
+    )
+    .all() as Array<{ id: string }>;
+  for (const r of rows) ids.add(r.id);
+  return [...ids];
+}
+
 async function ragflow(path: string, init?: RequestInit): Promise<any> {
   const res = await fetch(ragflowApi() + path, {
     ...init,
@@ -70,9 +90,66 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
     });
   }
 
+  // Датасеты RAGFlow — витрине нужен выбор при заведении проекта: «складывать
+  // в общий или в свой». Владелец 08.09.2026: специфический бизнесовый проект
+  // не должен подмешивать документацию туда, где ищут рабочее.
+  app.get("/api/knowledge/datasets", { preHandler: authPre }, async (_req, reply) => {
+    if (!ragflowToken()) return unconfigured(reply);
+    let data: any;
+    try {
+      data = await ragflow("/api/v1/datasets?page=1&page_size=100");
+    } catch (e: any) {
+      return reply.code(502).send({ error: "База знаний недоступна", detail: String(e?.message || e) });
+    }
+    const list = data?.data || [];
+    return {
+      // Датасет по умолчанию: проект без своего выбора едет сюда.
+      default_dataset_id: ragflowDataset(),
+      datasets: list.map((d: any) => ({
+        id: d.id,
+        name: d.name,
+        document_count: d.document_count,
+        is_default: d.id === ragflowDataset(),
+      })),
+    };
+  });
+
+  // Новый датасет под проект. Настройки — как у соседних датасетов на этой
+  // машине (bge-m3 через Ollama, naive-разбиение): другой эмбеддинг означал бы
+  // другую модель в памяти и заметно более долгую индексацию на процессоре.
+  app.post<{ Body: { name?: string } }>(
+    "/api/knowledge/datasets",
+    { preHandler: authPre },
+    async (req, reply) => {
+      if (!ragflowToken()) return unconfigured(reply);
+      const name = (req.body?.name || "").trim();
+      if (!name) return reply.code(400).send({ error: "Укажите название датасета" });
+      let data: any;
+      try {
+        data = await ragflow("/api/v1/datasets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            embedding_model: process.env.RAGFLOW_EMBEDDING || "bge-m3-embed@Ollama",
+            chunk_method: "naive",
+          }),
+        });
+      } catch (e: any) {
+        return reply.code(502).send({ error: "Не удалось создать датасет", detail: String(e?.message || e) });
+      }
+      // RAGFlow отвечает 200 с code != 0, когда имя занято, — это не наша
+      // ошибка сети, а понятный отказ, и клиенту он нужен текстом.
+      if (data?.code && data.code !== 0) {
+        return reply.code(400).send({ error: data.message || "RAGFlow отказал" });
+      }
+      return { id: data?.data?.id, name: data?.data?.name };
+    },
+  );
+
   // Смысловой поиск по всей документации. Возвращает КУСКИ (так устроен
   // retrieval), у каждого — документ и проект, из которого он взят.
-  app.get<{ Querystring: { q?: string; top_k?: string; project?: string } }>(
+  app.get<{ Querystring: { q?: string; top_k?: string; dataset_id?: string } }>(
     "/api/knowledge/search",
     { preHandler: authPre },
     async (req, reply) => {
@@ -90,7 +167,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             question,
-            dataset_ids: [ragflowDataset()],
+            dataset_ids: req.query.dataset_id ? [req.query.dataset_id] : allDatasetIds(),
             page_size: topK,
             similarity_threshold: 0.15,
           }),
@@ -103,7 +180,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
       const byDoc: Record<string, any> = {};
       for (const d of data?.data?.doc_aggs || []) byDoc[d.doc_id] = d;
 
-      const named = chunks.map((c: any) => {
+      type NamedChunk = { chunk: any; name: string; docId: string | null };
+      const named: NamedChunk[] = chunks.map((c: any) => {
         const name = c.document_keyword || byDoc[c.document_id]?.doc_name || "";
         return { chunk: c, name, docId: docIdFromName(name) };
       });
@@ -111,7 +189,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
       // Заголовок и проект — из TaskFlow, одним запросом на всю выдачу:
       // в индексе документ зовётся `taskflow-<uuid>.md`, и показывать это имя
       // в результатах поиска бессмысленно.
-      const ids = named.map((n) => n.docId).filter(Boolean) as string[];
+      const ids = named.map((n: NamedChunk) => n.docId).filter(Boolean) as string[];
       const titles = new Map<string, { title: string; project: string | null }>();
       if (ids.length) {
         const rows = db
@@ -129,7 +207,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
 
       return {
         query: question,
-        results: named.map(({ chunk, name, docId }) => {
+        results: named.map(({ chunk, name, docId }: NamedChunk) => {
           const known = docId ? titles.get(docId) : undefined;
           return {
             text: chunk.content || chunk.content_with_weight || "",
@@ -148,7 +226,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
   // Список документов датасета. Нужен витрине «что вообще есть», в том числе
   // по закрытым проектам: удаление проекта в TaskFlow индекс не трогает,
   // документ остаётся с именем проекта в шапке — это и есть архив.
-  app.get<{ Querystring: { page?: string; page_size?: string } }>(
+  app.get<{ Querystring: { page?: string; page_size?: string; dataset_id?: string } }>(
     "/api/knowledge/documents",
     { preHandler: authPre },
     async (req, reply) => {
@@ -157,8 +235,11 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
       const pageSize = Math.min(Math.max(Number(req.query.page_size) || 50, 1), 200);
       let data: any;
       try {
+        // RAGFlow перечисляет документы одного датасета за раз; по умолчанию
+        // показываем общий, конкретный проектный — по dataset_id.
+        const dataset = req.query.dataset_id || ragflowDataset();
         data = await ragflow(
-          `/api/v1/datasets/${ragflowDataset()}/documents?page=${page}&page_size=${pageSize}`,
+          `/api/v1/datasets/${dataset}/documents?page=${page}&page_size=${pageSize}`,
         );
       } catch (e: any) {
         return reply.code(502).send({ error: "База знаний недоступна", detail: String(e?.message || e) });
@@ -213,7 +294,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
   // Документ целиком — оригинальный markdown с шапкой, как его залил синк.
   // Клиент может открыть и живую заметку (`/api/notes/:id`); эта ручка нужна
   // для того, чего в TaskFlow уже нет — документов закрытых проектов.
-  app.get<{ Params: { ragflowId: string } }>(
+  app.get<{ Params: { ragflowId: string }; Querystring: { dataset_id?: string } }>(
     "/api/knowledge/documents/:ragflowId",
     { preHandler: authPre },
     async (req, reply) => {
@@ -221,7 +302,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance) {
       let text: string;
       try {
         const res = await fetch(
-          `${ragflowApi()}/api/v1/datasets/${ragflowDataset()}/documents/${req.params.ragflowId}`,
+          `${ragflowApi()}/api/v1/datasets/${req.query.dataset_id || ragflowDataset()}/documents/${req.params.ragflowId}`,
           { headers: { Authorization: "Bearer " + ragflowToken() } },
         );
         if (!res.ok) return reply.code(res.status === 404 ? 404 : 502).send({ error: "Документ не отдан" });

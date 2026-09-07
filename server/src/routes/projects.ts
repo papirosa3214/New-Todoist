@@ -94,7 +94,18 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       .all(...scope.params);
   });
 
-  app.post<{ Body: { name: string; color?: string; with_docs?: boolean } }>(
+  app.post<{
+    Body: {
+      name: string;
+      color?: string;
+      with_docs?: boolean;
+      /** Датасет базы знаний под этот проект. Пусто — общий датасет
+       *  TaskFlow: так вело себя всё до 08.09.2026, когда владелец
+       *  попросил разделять («мало ли специфический бизнесовый проект —
+       *  не хотелось бы замешивать документацию не туда»). */
+      knowledge_dataset_id?: string | null;
+    };
+  }>(
     "/api/projects",
     {
       preHandler: authPre,
@@ -106,12 +117,17 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
         }
         const id = uid();
         const { color } = req.body;
+        const datasetId =
+          typeof req.body?.knowledge_dataset_id === "string" &&
+          req.body.knowledge_dataset_id.trim()
+            ? req.body.knowledge_dataset_id.trim()
+            : null;
         db.prepare(
-          "INSERT INTO projects (id, name, color, owner_id) VALUES (?,?,?,?)",
+          "INSERT INTO projects (id, name, color, owner_id, knowledge_dataset_id) VALUES (?,?,?,?,?)",
           // Проект — общий инструмент: агент заводит его для работы, а не
           // для себя. Записанный на агента, он не виден остальным (см.
           // ownerForNewShared).
-        ).run(id, name, color || "#4A9FD8", ownerForNewShared(req.userId));
+        ).run(id, name, color || "#4A9FD8", ownerForNewShared(req.userId), datasetId);
 
         // Папка документации — по запросу (26.08.2026, для агентов).
         // Не по умолчанию: человек заводит проекты из интерфейса и пустая
@@ -146,6 +162,10 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       pinned?: boolean;
       /** Папка заметок проекта; null — отвязать. */
       notes_folder_id?: number | null;
+      /** Датасет базы знаний; null — вернуть проект в общий. */
+      knowledge_dataset_id?: string | null;
+      /** Согласие на переиндексацию при смене датасета (см. 409 ниже). */
+      confirm_reindex?: boolean;
     };
   }>("/api/projects/:id", {
     preHandler: authPre,
@@ -216,6 +236,52 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       if (pinned !== undefined) {
         fields.push("pinned = ?");
         values.push(pinned ? 1 : 0);
+      }
+      // Датасет базы знаний. Существование датасета здесь НЕ проверяется: он
+      // живёт в RAGFlow, за пределами этой базы, и синхронный поход туда на
+      // каждом сохранении проекта — лишняя связность и лишний отказ.
+      // Пустая строка приравнена к null: «вернуть проект в общий датасет».
+      if (req.body?.knowledge_dataset_id !== undefined) {
+        const raw = req.body.knowledge_dataset_id;
+        const value =
+          typeof raw === "string" && raw.trim() ? raw.trim() : null;
+        const current = (project as any).knowledge_dataset_id ?? null;
+
+        if (value !== current) {
+          // Сколько документов поедет заново. Считается по папке проекта —
+          // ровно то, что синк складывает в датасет.
+          const docs = (
+            db
+              .prepare(
+                "SELECT COUNT(*) AS n FROM user_notes WHERE folder_id IS NOT NULL AND folder_id = ?",
+              )
+              .get((project as any).notes_folder_id ?? -1) as { n: number }
+          ).n;
+
+          // Смена датасета у проекта с документами — операция долгая и
+          // односторонняя (старые копии удаляются, новые считаются заново),
+          // поэтому требует явного confirm_reindex. Пустой проект переносить
+          // нечего: подтверждать нечего, пропускаем.
+          if (docs > 0 && req.body?.confirm_reindex !== true) {
+            // ~20 секунд на документ — наблюдаемая скорость bge-m3 на
+            // процессоре этой машины (56 документов индексировались около
+            // 18 минут, 08.09.2026). Оценка грубая и намеренно не занижена.
+            const minutes = Math.max(1, Math.round((docs * 20) / 60));
+            return reply.code(409).send({
+              error: "Нужно подтверждение: смена датасета вызовет переиндексацию",
+              documents: docs,
+              estimate_minutes: minutes,
+              detail:
+                `Документы проекта (${docs}) будут удалены из прежнего датасета ` +
+                `и заново проиндексированы в новом. Это примерно ${minutes} мин ` +
+                `на процессоре сервера; пока идёт индексация, эти документы ` +
+                `в поиске не находятся. Повторите запрос с confirm_reindex=true.`,
+            });
+          }
+        }
+
+        fields.push("knowledge_dataset_id = ?");
+        values.push(value);
       }
       // Папка заметок проекта. Ссылается на существующую папку Дневника
       // (journal_folders), своей иерархии у проекта нет — так папка
