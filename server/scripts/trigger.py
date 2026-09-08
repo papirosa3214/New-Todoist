@@ -72,6 +72,17 @@ SERVICE_AUTHORS = {ME}
 # У Гермеса, dsh и Antigravity продолжаемой сессии нет вовсе: каждый заход
 # самостоятельный, поэтому им хватает одной команды.
 EXTERNAL_AGENTS = {
+    # Основной Claude_Bot использует тот же единый запуск, что и остальные
+    # агенты. Раньше fallback в handle_task звал удалённую run_claude(), из-за
+    # чего назначенные ему карточки не подхватывались (NameError).
+    ME: {
+        "id": ME,
+        "name": "Claude_Bot",
+        "token_env": "TASKFLOW_TOKEN",
+        "vault_key": "TASKFLOW_TOKEN",
+        "cmd": [CLAUDE_BIN, "--permission-mode", "bypassPermissions", "-p"],
+        "claude_cli": True,
+    },
     "u3": {
         "name": "Гермес",
         "token_env": "TASKFLOW_HERMES_TOKEN",
@@ -826,7 +837,17 @@ def claude_session_args(resume_sid: str, new_sid: str, fork: bool) -> list[str]:
     return ["--session-id", new_sid]
 
 
-def build_resume_prompt(task: dict, reason: str) -> str:
+def _render_ctx(ctx) -> str:
+    """Шаг 4 ТЗ: единый сериализатор TaskContext v1 для prompt.
+    Делегирует task_context.serialize_context() — там же применяется лимит
+    MAX_TOTAL_CHARS=6000, обрезка excerpts/references/dirty_files и пр."""
+    if ctx is None:
+        return ""
+    from task_context import serialize_context
+    return serialize_context(ctx)
+
+
+def build_resume_prompt(task: dict, reason: str, ctx=None) -> str:
     """Промпт для ПРОДОЛЖЕНИЯ своей же сессии: она помнит и задачу, и что
     уже сделано, поэтому пересказывать карточку целиком не нужно — нужен
     только повод и свежая лента."""
@@ -846,10 +867,11 @@ def build_resume_prompt(task: dict, reason: str) -> str:
 закрывай шаги и саму задачу (completed) сам, с result; упёрся —
 blocked с объяснением, чего ждёшь от Максима (не от другого агента/сессии —
 на пира просто оставайся in_progress).
+    {_render_ctx(ctx)}
 """
 
 
-def build_reply_prompt(task: dict) -> str:
+def build_reply_prompt(task: dict, ctx=None) -> str:
     """Промпт, когда владелец написал по задаче, УЖЕ СДАННОЙ на проверку.
 
     Заход в этом режиме отвечает и уходит: карточку не забирает и состояние
@@ -875,10 +897,11 @@ def build_reply_prompt(task: dict) -> str:
 
 Состояние задачи НЕ меняй: она на проверке, и она должна там остаться.
 Шаги не трогай. Твоё дело здесь — ответить.
+    {_render_ctx(ctx)}
 """
 
 
-def build_orchestrator_prompt(task: dict, reason: str, is_claude: bool = False) -> str:
+def build_orchestrator_prompt(task: dict, reason: str, is_claude: bool = False, ctx=None) -> str:
     """Промпт для оркестратора — дробит и раздаёт, сам не исполняет.
 
     Заведено 26.08.2026: build_prompt() выше говорит любому агенту «сделай
@@ -896,20 +919,21 @@ def build_orchestrator_prompt(task: dict, reason: str, is_claude: bool = False) 
     if is_claude:
         return f"""Тебя разбудила доска TaskFlow: {reason}.
 
-Ты находишься в своей рабочей tmux-сессии. Напоминаю: ты не просто бот-распределитель, ты — старший разработчик с гигантской историей работы над этим проектом. У тебя есть твоя память (`memory.md`), системные правила (`CLAUDE.md`) и мощный семантический поиск по кодовой базе. Обязательно применяй этот опыт, не тащи его как мёртвый груз!
+    Ты находишься в своей рабочей tmux-сессии. Напоминаю: ты не просто бот-распределитель, ты — старший разработчик с гигантской историей работы над этим проектом. У тебя есть твоя память (`memory.md`), системные правила (`CLAUDE.md`) и мощный семантический поиск по кодовой базе. Обязательно применяй этот опыт, не тащи его как мёртвый груз!
 
-Сейчас от тебя требуется выступить в роли Оркестратора. Твоя задача — не писать код руками, а грамотно спроектировать решение на базе своего опыта и раздать куски работы команде агентов через MCP-инструменты.
+    Сейчас от тебя требуется выступить в роли Оркестратора. Твоя задача — не писать код руками, а грамотно спроектировать решение на базе своего опыта и раздать куски работы команде агентов через MCP-инструменты.
 
-ЗАДАЧА #{task.get('id')}
-Название: {task.get('title')}
-Описание:
-{task.get('description') or '(пусто)'}
+    ЗАДАЧА #{task.get('id')}
+    Название: {task.get('title')}
+    Описание:
+    {task.get('description') or '(пусто)'}
 
-Лента (последние комментарии):
-{comments or '  (пусто)'}
+    Лента (последние комментарии):
+    {comments or '  (пусто)'}
 
 ВАЖНО: Вся должностная инструкция о том, КАК именно работать с TaskFlow (как бить задачи, как использовать `parent_id`, кто есть кто в команде и как принимать работу), лежит в файле `docs/taskflow-orchestrator.md`. 
 Если ты забыл регламент — обязательно прочитай этот файл перед тем, как действовать!
+    {_render_ctx(ctx)}
 """
 
     return f"""Тебя разбудила доска TaskFlow: {reason}.
@@ -972,10 +996,11 @@ comment). Кто-то в blocked по причине, которую можеш�
 
 Стоп-линия: прод, удаление данных, деньги, действия наружу — не делай
 сам, опиши в комментарии и уйди в blocked.
+    {_render_ctx(ctx)}
 """
 
 
-def build_orchestrator_resume_prompt(task: dict, reason: str, is_claude: bool = False) -> str:
+def build_orchestrator_resume_prompt(task: dict, reason: str, is_claude: bool = False, ctx=None) -> str:
     """Продолжение СВОЕЙ ЖЕ сессии оркестратора.
 
     Отдельный текст, а не build_resume_prompt: тот исполнительский — он
@@ -1002,6 +1027,7 @@ def build_orchestrator_resume_prompt(task: dict, reason: str, is_claude: bool = 
 Напоминаю: регламент Оркестратора лежит в `docs/taskflow-orchestrator.md`.
 Проверь статусы дочерних задач. Используй свой сеньорский опыт, чтобы оценить сданный агентами результат. 
 Прими работу, помоги с блокером или заверни на доработку.
+    {_render_ctx(ctx)}
 """
 
     return f"""Доска TaskFlow снова зовёт по координационной задаче «{task.get('title')}»: {reason}.
@@ -1021,10 +1047,11 @@ def build_orchestrator_resume_prompt(task: dict, reason: str, is_claude: bool = 
 чего ждёшь.
 
 Сам работу не исполняй: ты по-прежнему оркестратор.
+    {_render_ctx(ctx)}
 """
 
 
-def build_prompt(task: dict, reason: str) -> str:
+def build_prompt(task: dict, reason: str, ctx=None) -> str:
     subtasks = task.get("subtasks") or []
     steps = "\n".join(
         f"  {'[x]' if s.get('done') else '[ ]'} {s.get('title')}" for s in subtasks
@@ -1113,6 +1140,7 @@ def build_prompt(task: dict, reason: str) -> str:
 - Инструментов taskflow_* нет в списке (MCP не переподключился) → не городи
   обход сырым curl, сразу уйди в blocked с этой же причиной — тебя спросить
   некому, ты один.
+    {_render_ctx(ctx)}
 """
 
 
@@ -1410,6 +1438,56 @@ def read_usage(path: str) -> str:
     return ", ".join(parts)
 
 
+# ── Единая доставка поручений (agent_inbox) ────────────────────────────────
+# Карточка 5f292e87, повторное ревью 07.09.2026: служба обязана свериться с
+# inbox ДО claim и запуска процесса. Устаревшее событие (версия карточки
+# уехала вперёд после возврата из review) должно тихо отбрасываться ЗДЕСЬ —
+# раньше оно отбрасывалось только при mark, когда процесс уже мог пойти.
+# Матрица переходов — одна на сервер и службу: agent_inbox.ALLOWED_NEXT.
+
+
+def inbox_consume(task_id: str, token: str) -> tuple[list[dict], bool]:
+    """Принять свои непринятые события по карточке (sent → received).
+
+    Возвращает (принятые события, ок). ок=False — запуск отменяется:
+    событие устарело (сервер сам пометил его blocked) либо уже разобрано
+    другим процессом (повторная доставка не должна давать второй запуск).
+    Событий по карточке нет вовсе — ок=True: комментарий владельца или
+    будильник по старым путям не обязаны иметь inbox-событие.
+    """
+    resp = api("GET", "/api/agent-inbox/pending", token=token)
+    if resp is None:
+        # Проверка доставки обязательна: без неё возможен запуск по
+        # устаревшему поручению. Отменяем заход — как и при недоступности
+        # основной карточки (Шаг 6 ТЗ taskflow-direct-dispatch-mvp).
+        log("  inbox: pending недоступен — запуск отменяю")
+        return [], False
+    events = [it for it in resp.get("items", []) if it.get("task_id") == task_id]
+    taken: list[dict] = []
+    for ev in events:
+        marked = api("POST", f"/api/agent-inbox/{ev['id']}/mark",
+                     {"status": "received"}, token=token)
+        if marked is None or marked.get("dropped"):
+            # None — 409 (событие уже разобрано соседним процессом) или
+            # сеть; dropped — устаревшая версия карточки, сервер сам
+            # пометил событие blocked и записал причину в журнал.
+            log(f"  inbox: событие {str(ev.get('id'))[:8]} не принято "
+                f"(устарело или уже разобрано) — запуск отменяю")
+            return taken, False
+        taken.append(ev)
+    return taken, True
+
+
+def inbox_mark(events: list[dict], status: str, token: str, reason: str = "") -> None:
+    """Мягкая пометка принятых событий (acting/done/blocked). Сбой записи в
+    журнал доставки не должен ронять запуск: это телеметрия, а не страж."""
+    for ev in events:
+        body: dict = {"status": status}
+        if reason:
+            body["blocked_reason"] = reason
+        api("POST", f"/api/agent-inbox/{ev['id']}/mark", body, token=token)
+
+
 def run_external(task: dict, reason: str, agent: dict) -> None:
     """Позвать не-Claude агента одним разовым запросом.
 
@@ -1442,11 +1520,68 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             RUNNING.pop(task_id, None)
         return
 
+    token = agent.get("token") or ""
+    reply_only = reason == REPLY_ONLY
+
+    # Единая доставка: свериться с inbox ДО контекста, claim и запуска
+    # процесса (см. inbox_consume). В режиме ответа карточка не забирается —
+    # там брать нечего, гейт не нужен.
+    inbox_events: list[dict] = []
+    if not reply_only:
+        inbox_events, gate_ok = inbox_consume(task_id, token)
+        if not gate_ok:
+            with LOCK:
+                RUNNING.pop(task_id, None)
+            return
+
+    # Шаг 4 ТЗ docs/taskflow-direct-dispatch-mvp.md — собрать TaskContext v1
+    # перед запуском. mode/parent_task_id различают прямого исполнителя и
+    # оркестратора. TaskEnricher обязателен — если он упал, запуск НЕ
+    # происходит (Шаг 6 ТЗ: «Недоступен основной API-запрос карточки —
+    # процесс не стартует; ошибка записана в лог»). Knowledge/Repository —
+    # мягкие, падают в status=unavailable.
+    is_orch = agent.get("role") == "orchestrator"
+    # Шаг 4 ТЗ: для оркестратора parent_id — id карточки, на которую он
+    # НАЗНАЧЕН (т.е. родительской для своих дочерних). task.parent_id у
+    # неё самой пустой (это корень), а нужен её собственный id.
+    parent_id = task.get("id") if is_orch else None
+    try:
+        from task_context import build_context as _bc, _load_projects_config
+        ctx = _bc(task, agent or {}, _load_projects_config(),
+                  mode="coordinated" if is_orch else "direct",
+                  parent_task_id=parent_id)
+        log(
+            f"  контекст подготовлен: schema={ctx.schema_version}, "
+            f"knowledge={ctx.knowledge['status']}, "
+            f"repository={ctx.repository['status']}, "
+            f"warnings={len(ctx.warnings)}"
+        )
+        # Шаг 6 ТЗ: «в журнал задачи краткий факт со статусами
+        # источников, не только в log()». Пишем через note() — это
+        # HTTP POST /api/tasks/{id}/comment, идёт в ленту. Мягко:
+        # ошибка записи в журнал не должна ронять запуск.
+        try:
+            note(
+                task_id,
+                f"контекст подготовлен: knowledge={ctx.knowledge['status']}, "
+                f"repository={ctx.repository['status']}, "
+                f"warnings={len(ctx.warnings)}",
+                token=agent.get("token") or "",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log(f"  ⚠️ не удалось записать факт в журнал задачи: {exc!r}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"  контекст не собран, запуск отменён: {exc!r}")
+        if inbox_events:
+            inbox_mark(inbox_events, "blocked", token,
+                       f"контекст не собран: {exc!r}")
+        with LOCK:
+            RUNNING.pop(task_id, None)
+        return
+
     # Взять карточку в работу ЗА него — его же ключом, иначе claim ляжет на
     # учётку службы. Без этого агент работал, а доска показывала «не взята»:
     # владелец смотрит на неё и видит, что ничего не происходит.
-    token = agent.get("token") or ""
-    reply_only = reason == REPLY_ONLY
 
     # Агент на Claude CLI (Оркестратор-Claude) возвращается в СВОЮ прошлую
     # сессию по этой задаче — ровно так же, как давно делает путь
@@ -1471,9 +1606,16 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
                       {"session_id": session_sid} if claude_cli else {}, token=token)
         if claimed is None and task.get("agent_state") != "in_progress":
             log(f"  не удалось взять задачу {task_id[:8]} за «{agent['name']}» — отменяю заход")
+            if inbox_events:
+                inbox_mark(inbox_events, "blocked", token,
+                           "не удалось взять задачу (claim)")
             with LOCK:
                 RUNNING.pop(task_id, None)
             return
+        # Событие принято и разобрано этим заходом — журнал доставки видит
+        # sent → received (в гейте) → acting (здесь, после claim).
+        if inbox_events:
+            inbox_mark(inbox_events, "acting", token)
         api("POST", f"/api/tasks/{task_id}/activity",
             {"kind": "run", "target": "анализирует задачу и координирует команду" if "оркестратор" in agent.get("name", "").lower() else "взял задачу в работу"}, token=token)
 
@@ -1564,17 +1706,17 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     def resume_text(fresh: dict) -> str:
         """Письмо на продолжение своей же сессии. У оркестратора своё: общее
         велит закрывать шаги и сдавать задачу, а он раздаёт, а не исполняет."""
-        return (build_orchestrator_resume_prompt(fresh, reason, claude_cli) if orchestrator
-                else build_resume_prompt(fresh, reason))
+        return (build_orchestrator_resume_prompt(fresh, reason, claude_cli, ctx=ctx) if orchestrator
+                else build_resume_prompt(fresh, reason, ctx=ctx))
 
     if reply_only:
-        first = build_reply_prompt(task)
+        first = build_reply_prompt(task, ctx=ctx)
     elif resume_sid:
         first = resume_text(task)
     elif orchestrator:
-        first = build_orchestrator_prompt(task, reason, claude_cli)
+        first = build_orchestrator_prompt(task, reason, claude_cli, ctx=ctx)
     else:
-        first = build_prompt(task, reason)
+        first = build_prompt(task, reason, ctx=ctx)
     cmd = make_cmd(first, claude_session_args(resume_sid, new_sid, fork)
                    if claude_cli else [])
     if resume_sid and not fork:
@@ -1651,6 +1793,16 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             if not cont:
                 log(f"  цепочку останавливаю: {why}")
                 break
+        # Итог доставки (Review 07.09.2026: сбой сразу оставляет видимую
+        # blocked-причину): цепочка отработала — done, последний заход упал
+        # с кодом — blocked с причиной. Мягко: сбой пометки не роняет выход.
+        if inbox_events:
+            rc = proc.returncode
+            if rc == 0:
+                inbox_mark(inbox_events, "done", token)
+            else:
+                inbox_mark(inbox_events, "blocked", token,
+                           f"заход завершился с кодом {rc}")
     finally:
         stop.set()
         with LOCK:

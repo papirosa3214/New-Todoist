@@ -93,6 +93,8 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (!task) return reply.code(404).send({ error: "Not found" });
       if (!req.body?.title)
         return reply.code(400).send({ error: "title required" });
+      if (req.body.title.length > 100)
+        return reply.code(400).send({ error: "title слишком длинный (max 100)" });
 
       const id = uid();
 

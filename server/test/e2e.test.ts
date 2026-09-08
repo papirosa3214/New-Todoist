@@ -29,6 +29,11 @@ describe("Сквозной сценарий: claim → heartbeat → blocked →
     });
     expect(ownerReg.statusCode).toBe(200);
     ownerToken = ownerReg.json().token;
+    // 29.08.2026 (задача be329d8e): закрыть/принять может только роль
+    // owner/orchestrator, регистрация её не выдаёт — ставим в базе.
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(
+      ownerReg.json().user.id,
+    );
 
     // Регистрация всегда пишет type='human' (auth.ts — намеренно, клиент
     // не может сам выдать себе type='ai'). Помечаем учётку агентом тем же
@@ -136,18 +141,17 @@ describe("Сквозной сценарий: claim → heartbeat → blocked →
     expect(res.json().task.agent_state).toBe("review");
   });
 
-  // 20.08.2026: обязательная приёмка владельцем отменена — агент закрывает
-  // свою задачу сам, недовольство результатом владелец выражает
-  // комментарием или новой задачей.
-  it("агент закрывает свою задачу сам", async () => {
+  // 29.08.2026 (задача be329d8e): приёмку владелец отдал оркестратору —
+  // агент сдаёт через review, сам закрыть не может. Недовольство
+  // результатом владелец выражает комментарием или возвратом на доработку.
+  it("агент не закрывает свою задачу сам (403)", async () => {
     const res = await app.inject({
       method: "PATCH",
       url: `/api/tasks/${taskId}`,
       headers: { authorization: `Bearer ${agentToken}` },
       payload: { status: "completed" },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().task.status).toBe("completed");
+    expect(res.statusCode).toBe(403);
   });
 
   it("владелец принимает", async () => {

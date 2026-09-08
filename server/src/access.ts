@@ -38,10 +38,10 @@
 // ─────────────────────────────────────────────────────────────────────────
 import db from "./db.js";
 
-type Caller = { role?: string; type?: string };
+type Caller = { role?: string; type?: string; reviewer?: number };
 
 function callerOf(userId: string): Caller | undefined {
-  return db.prepare("SELECT role, type FROM users WHERE id = ?").get(userId) as
+  return db.prepare("SELECT role, type, reviewer FROM users WHERE id = ?").get(userId) as
     Caller | undefined;
 }
 
@@ -64,7 +64,7 @@ export function isOrchestrator(userId: string): boolean {
 
 /** Reviewer читает всю доску, но возвращает только сданную задачу в работу. */
 export function isReviewer(userId: string): boolean {
-  return callerOf(userId)?.role === "reviewer";
+  return callerOf(userId)?.reviewer === 1;
 }
 
 /**
@@ -99,7 +99,7 @@ export function seesEveryTask(userId: string): boolean {
   const c = callerOf(userId);
   return c?.role === "owner" ||
     c?.role === "orchestrator" ||
-    c?.role === "reviewer" ||
+    c?.reviewer === 1 ||
     c?.type === "ai";
 }
 

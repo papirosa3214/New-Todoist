@@ -4,13 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "reset-password": "tsx scripts/reset-password.ts",
+    "pretest": "node -e \"if (parseInt(process.versions.node) < 22) { console.error('Нужен Node 22+ (nvm use 22, см. .nvmrc); текущий ' + process.versions.node); process.exit(1); }\"",
     "test": "vitest run"
   },
   "dependencies": {

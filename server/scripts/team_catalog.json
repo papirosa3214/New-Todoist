@@ -1,0 +1,79 @@
+{
+  "_comment": "Карточка 5f292e87 (MVP надёжной доставки поручений). Data-driven каталог команды: 6 профилей, 4 уровня. Уровень — подсказка для маршрутизации и видимости компетенций, НЕ право доступа и НЕ замена users.role. Явный адресат пользователя всегда приоритетнее автоматического выбора.",
+  "profiles": {
+    "maxim": {
+      "id": "u1",
+      "level": 5,
+      "title": "Владелец продукта",
+      "competence": "финальная приёмка, приоритеты, продуктовые требования",
+      "skills": ["product", "priority", "acceptance"],
+      "auto_route": false,
+      "comment": "L5 — владелец/финальная приёмка. Только явный адресат."
+    },
+    "reviewer": {
+      "id": "c2a5b269-dc15-400a-92bc-7988c97426eb",
+      "level": 4,
+      "title": "Независимый ревьюер",
+      "competence": "проверка качества, поиск граблей, тесты",
+      "skills": ["review", "qa", "tests"],
+      "auto_route": true
+    },
+    "orchestrator": {
+      "id": "6848a89b-04fe-4015-bb1c-61b03782c378",
+      "level": 4,
+      "title": "Технический диспетчер",
+      "competence": "декомпозиция, маршрутизация, наблюдение за ходом",
+      "skills": ["decomposition", "routing", "coordination"],
+      "auto_route": true,
+      "comment": "L4 — технический диспетчер. Получает все поручения, не требующие явного исполнителя, и распределяет."
+    },
+    "claude_bot": {
+      "id": "u2",
+      "level": 4,
+      "title": "Ведущий инженер-исполнитель",
+      "competence": "серверный код, базы данных, инфраструктура",
+      "skills": ["server", "sql", "python", "typescript"],
+      "auto_route": true,
+      "comment": "L4 — основной исполнитель серверной части."
+    },
+    "hermes": {
+      "id": "u3",
+      "level": 3,
+      "title": "Интеграции и эксплуатация",
+      "competence": "внешние сервисы, мониторинг, деплой",
+      "skills": ["integrations", "monitoring", "deploy"],
+      "auto_route": true
+    },
+    "deepseek": {
+      "id": "b85212d6-abab-4afb-a4c6-0d379b6537a4",
+      "level": 3,
+      "title": "Исследование и аналитика",
+      "competence": "разведка, анализ, поиск решений",
+      "skills": ["research", "analysis", "reasoning"],
+      "auto_route": true
+    },
+    "antigravity": {
+      "id": "5b9d47c1-25c7-4a7c-a276-70e21f7d7816",
+      "level": 3,
+      "title": "Интерфейс и клиент",
+      "competence": "iOS/SwiftUI, нативный клиент, дизайн-система",
+      "skills": ["ios", "swiftui", "design-system"],
+      "auto_route": true
+    },
+    "pi_agent": {
+      "id": "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2",
+      "level": 2,
+      "title": "Резервный исполнитель",
+      "competence": "эксперименты, вспомогательные задачи",
+      "skills": ["misc"],
+      "auto_route": false,
+      "comment": "L2 — резерв, не для автоматической маршрутизации."
+    }
+  },
+  "routing_rules": {
+    "explicit_addressee_wins": true,
+    "comment": "Явный адресат в сообщении (to=...) всегда побеждает автоподбор.",
+    "fallback_to_orchestrator": true,
+    "fallback_comment": "Если явного адресата нет и автоподбор не выбрал — fallback в Оркестратор."
+  }
+}

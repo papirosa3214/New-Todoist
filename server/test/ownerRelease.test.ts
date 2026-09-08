@@ -39,6 +39,11 @@ describe("Снятие задачи с агента расклинивает к�
       },
     });
     ownerToken = ownerReg.json().token;
+    // 29.08.2026 (задача be329d8e): закрыть/вернуть может только роль
+    // owner/orchestrator — регистрация её не выдаёт, ставим в базе.
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(
+      ownerReg.json().user.id,
+    );
 
     const agentReg = await app.inject({
       method: "POST",

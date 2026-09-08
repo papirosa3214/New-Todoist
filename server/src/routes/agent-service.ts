@@ -16,6 +16,7 @@ import type { FastifyInstance } from "fastify";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { authOrApiToken } from "../auth.js";
+import { isOwner } from "../access.js";
 
 const run = promisify(execFile);
 
@@ -50,7 +51,22 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
 
   app.post<{ Body: { on?: boolean } }>(
     "/api/agent-service",
-    { preHandler: authOrApiToken },
+    // Шаг 5 ТЗ docs/taskflow-direct-dispatch-mvp.md: только владелец
+    // может включать/выключать службу. Агентский API-token не должен
+    // иметь такой ручки.
+    //
+    // authOrApiToken на успехе возвращает undefined и ставит userId в req
+    // (см. auth.ts:172-201). reply.sent=true означает «уже ответили 401» —
+    // дальше идти некуда. Иначе — берём userId из req и проверяем
+    // isOwner() из access.ts.
+    { preHandler: async (req: any, reply) => {
+        await authOrApiToken(req, reply);
+        if (reply.sent) return;
+        const userId = (req as any).userId;
+        if (!userId || !isOwner(userId)) {
+          return reply.code(403).send({ error: "owner_only" });
+        }
+      } },
     async (req: any, reply) => {
       if (typeof req.body?.on !== "boolean") {
         return reply.code(400).send({ error: "Ожидается поле on: true|false" });

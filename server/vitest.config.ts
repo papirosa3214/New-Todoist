@@ -2,6 +2,10 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // macOS поверх SMB плодит рядом с исходниками AppleDouble-файлы
+    // (test/._agent-inbox.test.ts и т.п.) — vitest подбирает их как тесты
+    // и падает на «Invalid Character». Исключаем.
+    exclude: ["**/node_modules/**", "**/._*"],
     // setupFiles грузится и выполняется ПОЛНОСТЬЮ раньше, чем vitest
     // импортирует сам файл теста — это единственный надёжный момент,
     // чтобы выставить DB_PATH до того, как db.ts (модульный синглтон,
