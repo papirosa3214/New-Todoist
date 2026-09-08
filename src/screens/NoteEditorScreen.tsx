@@ -21,6 +21,7 @@ import TaskItem from "@tiptap/extension-task-item";
 import Highlight from "@tiptap/extension-highlight";
 import Placeholder from "@tiptap/extension-placeholder";
 import Link from "@tiptap/extension-link";
+import { TableKit } from "@tiptap/extension-table";
 import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import { ActionsMenu, type ActionsMenuItem } from "../components/ActionsMenu";
@@ -288,6 +289,45 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
         disabled={disabled}
         onClick={() => editor.chain().focus().setHorizontalRule().run()}
       />
+      <div className="w-px h-5 bg-stroke mx-1 shrink-0" />
+      <ToolbarButton
+        label="Таблица"
+        icon="table"
+        disabled={disabled}
+        active={editor.isActive("table")}
+        onClick={() =>
+          editor
+            .chain()
+            .focus()
+            .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+            .run()
+        }
+      />
+      {/* Управление строками и столбцами показывается, только когда
+          курсор внутри таблицы: в обычном тексте эти кнопки всё равно
+          неактивны и лишь удлиняют и без того прокручиваемый тулбар. */}
+      {editor.isActive("table") && (
+        <>
+          <ToolbarButton
+            label="Строка ниже"
+            icon="tableRow"
+            disabled={disabled}
+            onClick={() => editor.chain().focus().addRowAfter().run()}
+          />
+          <ToolbarButton
+            label="Столбец справа"
+            icon="tableColumn"
+            disabled={disabled}
+            onClick={() => editor.chain().focus().addColumnAfter().run()}
+          />
+          <ToolbarButton
+            label="Удалить таблицу"
+            icon="trash"
+            disabled={disabled}
+            onClick={() => editor.chain().focus().deleteTable().run()}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -383,6 +423,11 @@ export function NoteEditorScreen() {
       // редакторе — иначе тап по ней сразу открывал бы браузер, что
       // мешает выделению и редактированию.
       Link.configure({ openOnClick: false, autolink: true }),
+      // Таблицы (08.09.2026). До этого расширения не было вовсе: markdown
+      // с таблицей приходил от агентов строками «| a | b |», и каждая
+      // строка ложилась отдельным абзацем — в заметке были палки вместо
+      // сетки. resizable даёт тянуть колонки мышью.
+      TableKit.configure({ table: { resizable: true } }),
     ],
     content: "",
     editable: false,

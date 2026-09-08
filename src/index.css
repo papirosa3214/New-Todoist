@@ -1692,6 +1692,60 @@ body::-webkit-scrollbar {
   padding: 0.1em 0.35em;
   font-size: 0.9em;
 }
+
+/* Таблицы (08.09.2026). ProseMirror рисует голый <table> вообще без линий:
+   без этих правил сетка выглядит как слипшийся текст. Обёртка
+   .tableWrapper (её ставит TableKit) прокручивается вбок — широкая
+   таблица не должна растягивать экран на телефоне. */
+.tiptap-content .ProseMirror .tableWrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 0 0.8em;
+}
+.tiptap-content .ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  font-size: 14px;
+}
+.tiptap-content .ProseMirror th,
+.tiptap-content .ProseMirror td {
+  border: 1px solid var(--color-stroke);
+  padding: 0.4em 0.6em;
+  vertical-align: top;
+  min-width: 6em;
+  /* Якорь для ручки изменения ширины — она позиционируется по ячейке. */
+  position: relative;
+}
+.tiptap-content .ProseMirror th {
+  background: var(--color-card2);
+  font-weight: 600;
+  text-align: left;
+}
+/* Абзац внутри ячейки не должен добавлять свой нижний отступ: иначе
+   строка таблицы становится вдвое выше нужного. */
+.tiptap-content .ProseMirror th p,
+.tiptap-content .ProseMirror td p {
+  margin: 0;
+}
+.tiptap-content .ProseMirror .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 69, 58, 0.12);
+  pointer-events: none;
+}
+/* Полоса ресайза шириной 4px без заливки невидима — тянуть колонку было
+   бы некуда. */
+.tiptap-content .ProseMirror .column-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -2px;
+  width: 4px;
+  background: var(--color-red);
+  cursor: col-resize;
+}
 /* Чек-боксы (TaskList/TaskItem) — свой список, без маркера/номера, с
    реальным <input type="checkbox"> ProseMirror сам ставит на каждый li. */
 .tiptap-content .ProseMirror ul[data-type="taskList"] {

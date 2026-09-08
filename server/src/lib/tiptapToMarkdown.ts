@@ -27,6 +27,7 @@
 //   taskList           → «- [ ] » / «- [x] »
 //   blockquote         → «> »
 //   codeBlock          → ```язык … ```
+//   table              → таблица GFM (первая строка — шапка)
 //   horizontalRule     → «---»
 //   bold/italic/strike → **…**, *…*, ~~…~~
 //   code (инлайн)      → `…`
@@ -149,6 +150,40 @@ function listToMd(node: TiptapNode, indent: number): string[] {
   return lines;
 }
 
+/** Содержимое ячейки — одной строкой: переноса внутри ячейки в
+ *  markdown-таблице нет, поэтому блоки склеиваются пробелом. Палка
+ *  экранируется, иначе текст ячейки разорвёт строку на лишние колонки. */
+function cellToMd(cell: TiptapNode): string {
+  return (cell.content ?? [])
+    .flatMap(blockToMd)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .replace(/\|/g, "\\|")
+    .trim();
+}
+
+/** Разворачивает таблицу. Первая строка всегда становится шапкой, даже
+ *  если в документе она из обычных ячеек: markdown без строки-разделителя
+ *  под шапкой таблицей не считается, и блок развалился бы в текст. */
+function tableToMd(node: TiptapNode): string[] {
+  const rows = node.content ?? [];
+  if (rows.length === 0) return [];
+
+  const width = Math.max(...rows.map((r) => (r.content ?? []).length));
+  const line = (cells: string[]) => {
+    const full = cells.slice();
+    while (full.length < width) full.push("");
+    return `| ${full.join(" | ")} |`;
+  };
+
+  const out = [line((rows[0].content ?? []).map(cellToMd))];
+  out.push(`|${Array(width).fill("---").join("|")}|`);
+  for (const row of rows.slice(1)) {
+    out.push(line((row.content ?? []).map(cellToMd)));
+  }
+  return out;
+}
+
 /** Разворачивает блочный узел в строки markdown. */
 function blockToMd(node: TiptapNode): string[] {
   switch (node.type) {
@@ -173,6 +208,8 @@ function blockToMd(node: TiptapNode): string[] {
       const code = (node.content ?? []).map((c) => c.text ?? "").join("");
       return ["```" + lang, ...code.split("\n"), "```"];
     }
+    case "table":
+      return tableToMd(node);
     case "horizontalRule":
       return ["---"];
     case "hardBreak":

@@ -82,6 +82,12 @@ import {
   Zap,
   Users,
   ChartColumn,
+  Quote,
+  Code,
+  Minus,
+  Table,
+  Rows3,
+  Columns3,
   type LucideIcon,
 } from "lucide-react";
 import { useTasks } from "../api/tasks";
@@ -223,6 +229,16 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   users: Users,
   // Кнопка сводки чата — «кого озадачивают чаще всего».
   chart: ChartColumn,
+  // Тулбар Дневника. Три ключа (quote, codeBlock, hr) кнопки просили с
+  // самого начала, но в карте их не было — Icon отдавал null, и кнопки
+  // стояли пустыми квадратами. Найдено 08.09.2026 при добавлении таблиц.
+  quote: Quote,
+  codeBlock: Code,
+  hr: Minus,
+  // Таблицы в заметках (08.09.2026): вставка и правка строк/столбцов.
+  table: Table,
+  tableRow: Rows3,
+  tableColumn: Columns3,
 };
 
 // Аудит 20.08.2026, п.8: 7 разных числовых размеров без названия

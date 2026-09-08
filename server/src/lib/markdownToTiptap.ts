@@ -11,8 +11,11 @@
 // перевода в узлы TipTap. Здесь поддержано ровно то подмножество, которое
 // умеет обратный конвертер и рисует редактор: заголовки, списки (включая
 // нумерованные и чек-боксы), цитаты, блоки кода, горизонтальная черта,
-// инлайн-разметка. Всё, что сложнее, кладётся абзацем как есть — текст не
-// теряется, просто не размечается.
+// таблицы GFM, инлайн-разметка. Всё, что сложнее, кладётся абзацем как
+// есть — текст не теряется, просто не размечается.
+//
+// Таблицы добавлены 08.09.2026: до этого каждая строка «| a | b |» ложилась
+// отдельным абзацем, и в заметке вместо сетки были палки.
 //
 // ═══ Симметрия ═══
 //
@@ -176,6 +179,14 @@ export function markdownToTiptap(md: string): string {
       continue;
     }
 
+    // Таблица GFM: строка-шапка, следом строка-разделитель.
+    if (isTableRow(line) && isTableDivider(lines[i + 1] ?? "")) {
+      const [node, next] = parseTable(lines, i);
+      content.push(node);
+      i = next;
+      continue;
+    }
+
     // Списки (маркированный / нумерованный / чек-лист), с вложенностью
     if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
       const [node, next] = parseList(lines, i);
@@ -248,6 +259,92 @@ function parseList(lines: string[], start: number): [Node, number] {
     if (startNum !== 1) node.attrs = { start: startNum };
   }
   return [node, i];
+}
+
+/** Строка таблицы: «| a | b |». Обе крайние палки обязательны — так
+ *  строка отличается от абзаца, где палка встречается как обычный знак. */
+function isTableRow(line: string): boolean {
+  return /^\s*\|.*\|\s*$/.test(line);
+}
+
+/** Разделитель под шапкой: «|---|:--:|». Без него блок таблицей не
+ *  считается — это и есть признак, по которому GFM отличает её от текста. */
+function isTableDivider(line: string): boolean {
+  return /^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(line);
+}
+
+/** Ячейки строки. Палка внутри текста экранируется («\|») и здесь
+ *  возвращается обратно — иначе ячейка разъезжается на две. */
+function splitRow(line: string): string[] {
+  const body = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let cur = "";
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === "\\" && body[i + 1] === "|") {
+      cur += "|";
+      i++;
+      continue;
+    }
+    if (body[i] === "|") {
+      cells.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += body[i];
+  }
+  cells.push(cur);
+  return cells.map((c) => c.trim());
+}
+
+/** Ячейка таблицы. attrs — те же, что ставит редактор: без них ProseMirror
+ *  достраивает их сам, но документ из API и документ из редактора должны
+ *  выглядеть одинаково. */
+function tableCell(type: "tableHeader" | "tableCell", text: string): Node {
+  const inline = parseInline(text);
+  return {
+    type,
+    attrs: { colspan: 1, rowspan: 1, colwidth: null },
+    content: [
+      inline.length > 0
+        ? { type: "paragraph", content: inline }
+        : { type: "paragraph" },
+    ],
+  };
+}
+
+/**
+ * Разбирает таблицу, начиная со строки шапки `start`.
+ *
+ * Возвращает узел и номер первой строки ПОСЛЕ таблицы. Строки короче
+ * шапки дополняются пустыми ячейками: ProseMirror принимает только
+ * прямоугольную таблицу и на рваной падает.
+ */
+function parseTable(lines: string[], start: number): [Node, number] {
+  const header = splitRow(lines[start]);
+  const width = header.length;
+  const rows: Node[] = [
+    {
+      type: "tableRow",
+      content: header.map((c) => tableCell("tableHeader", c)),
+    },
+  ];
+
+  let i = start + 2; // пропускаем шапку и разделитель
+  while (
+    i < lines.length &&
+    isTableRow(lines[i]) &&
+    !isTableDivider(lines[i])
+  ) {
+    const cells = splitRow(lines[i]);
+    while (cells.length < width) cells.push("");
+    rows.push({
+      type: "tableRow",
+      content: cells.slice(0, width).map((c) => tableCell("tableCell", c)),
+    });
+    i++;
+  }
+
+  return [{ type: "table", content: rows }, i];
 }
 
 /** Первая значимая строка — ею подписывается заметка в списке. */

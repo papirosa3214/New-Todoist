@@ -200,6 +200,49 @@ describe("круговой прогон markdown → TipTap → markdown", () =>
   });
 });
 
+describe("markdownToTiptap: таблицы", () => {
+  const round = (md: string) => tiptapToMarkdown(markdownToTiptap(md)).trim();
+  const md = [
+    "| Роль | Что делает |",
+    "|---|---|",
+    "| Researcher | Ищет источники |",
+    "| Analyst | Считает выводы |",
+  ].join("\n");
+
+  it("собирает строки в один узел таблицы", () => {
+    const d = doc(md);
+    expect(d.content).toHaveLength(1);
+    const table = d.content[0];
+    expect(table.type).toBe("table");
+    expect(table.content).toHaveLength(3);
+    expect(table.content[0].content[0].type).toBe("tableHeader");
+    expect(table.content[1].content[0].type).toBe("tableCell");
+    expect(table.content[1].content[0].content[0].content[0].text).toBe(
+      "Researcher",
+    );
+  });
+
+  it("строка короче шапки дополняется пустыми ячейками", () => {
+    const d = doc("| a | b | c |\n|---|---|---|\n| 1 |");
+    expect(d.content[0].content[1].content).toHaveLength(3);
+  });
+
+  it("экранированная палка остаётся текстом ячейки", () => {
+    const d = doc("| выражение |\n|---|\n| a \\| b |");
+    expect(d.content[0].content[1].content[0].content[0].content[0].text).toBe(
+      "a | b",
+    );
+  });
+
+  it("палки без строки-разделителя таблицей не считаются", () => {
+    const d = doc("| просто текст с палками |");
+    expect(d.content[0].type).toBe("paragraph");
+  });
+
+  it("таблица переживает круг", () => {
+    expect(round(md)).toBe(md);
+  });
+});
 /** Весь текст документа подряд — для сравнения «по смыслу». */
 function plainText(json: string): string {
   const out: string[] = [];
