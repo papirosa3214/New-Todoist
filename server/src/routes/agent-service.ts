@@ -22,6 +22,13 @@ const run = promisify(execFile);
 
 const UNIT = "taskflow-trigger";
 
+// Сторож будильника ходит парой с самим будильником. Он раз в 10 минут
+// проверяет, жив ли UNIT, и сторожить выключенную службу бессмысленно:
+// 09.09.2026 владелец выключил автономку тумблером, а сторож остался
+// включённым и весь день сыпал ошибкой в журнал, из-за чего infra-панель
+// висела в «critical» — в таком шуме настоящую поломку не разглядеть.
+const WATCH_UNIT = "taskflow-trigger-watch.timer";
+
 /** Живое состояние юнита: работает ли сейчас и включён ли автозапуск. */
 async function unitState(): Promise<{ active: boolean; enabled: boolean }> {
   try {
@@ -59,14 +66,16 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
     // (см. auth.ts:172-201). reply.sent=true означает «уже ответили 401» —
     // дальше идти некуда. Иначе — берём userId из req и проверяем
     // isOwner() из access.ts.
-    { preHandler: async (req: any, reply) => {
+    {
+      preHandler: async (req: any, reply) => {
         await authOrApiToken(req, reply);
         if (reply.sent) return;
         const userId = (req as any).userId;
         if (!userId || !isOwner(userId)) {
           return reply.code(403).send({ error: "owner_only" });
         }
-      } },
+      },
+    },
     async (req: any, reply) => {
       if (typeof req.body?.on !== "boolean") {
         return reply.code(400).send({ error: "Ожидается поле on: true|false" });
@@ -75,17 +84,36 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
       // enable/disable вместе со start/stop — чтобы выбор пережил
       // перезагрузку машины. Иначе автономка молча выключалась бы после
       // каждого рестарта, а на доске это выглядит как «агент пропал».
-      const args = req.body.on
-        ? ["--user", "enable", "--now", UNIT]
-        : ["--user", "disable", "--now", UNIT];
+      const verb = req.body.on ? "enable" : "disable";
 
       try {
-        await run("systemctl", args);
+        await run("systemctl", ["--user", verb, "--now", UNIT]);
       } catch (e: any) {
         return reply.code(500).send({
           error: "Не удалось переключить службу",
           detail: String(e?.stderr || e?.message || e).slice(0, 300),
         });
+      }
+
+      // Сторож — следом за будильником, но его сбой тумблер не роняет:
+      // главное здесь автономка, а сторож лишь присматривает за ней.
+      // Гасим и накопленную отметку об ошибке, иначе выключенный сторож
+      // остаётся в журнале как failed и панель продолжает считать это
+      // поломкой.
+      try {
+        await run("systemctl", ["--user", verb, "--now", WATCH_UNIT]);
+        if (!req.body.on) {
+          await run("systemctl", [
+            "--user",
+            "reset-failed",
+            "taskflow-trigger-watch.service",
+          ]).catch(() => {});
+        }
+      } catch (e: any) {
+        req.log?.warn(
+          { err: String(e?.stderr || e?.message || e) },
+          `Не удалось ${verb} сторож ${WATCH_UNIT}`,
+        );
       }
 
       return await unitState();
