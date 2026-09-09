@@ -266,7 +266,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/claim", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForWrite(req.params.id, req.userId);
+      const task = getTaskForWrite(req.params.id, req.userId) ??
+        getTaskForReview(req.params.id, req.userId);
       if (!task) {
         // Задача может быть чужой, а не отсутствующей, и для агента это
         // совсем разные новости. Голое «не найдено» сбивает с толку:
