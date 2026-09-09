@@ -78,6 +78,41 @@ export function broadcast(userId: string | null | undefined, event: unknown) {
   }
 }
 
+// Владельцы кэшируются на минуту: событие по задаче прилетает часто (каждый
+// шаг агента), а роль в users меняется раз в полгода — гонять SELECT на
+// каждый чих незачем.
+let ownersCache: { ids: string[]; at: number } | null = null;
+
+/** id всех учёток с role='owner' — им видна работа на доске целиком. */
+function ownerIds(): string[] {
+  const now = Date.now();
+  if (ownersCache && now - ownersCache.at < 60_000) return ownersCache.ids;
+  const rows = db
+    .prepare("SELECT id FROM users WHERE role = 'owner'")
+    .all() as Array<{ id: string }>;
+  ownersCache = { ids: rows.map((r) => r.id), at: now };
+  return ownersCache.ids;
+}
+
+/**
+ * Событие ПО ЗАДАЧЕ: создателю, исполнителю и всегда — владельцу.
+ *
+ * Раньше слали только создателю и исполнителю, и у задачи, которую агент
+ * завёл сам на себя, оба поля — это он сам: владелец не получал ничего.
+ * Открытая на телефоне карточка молчала, пока её не закроешь и не откроешь
+ * заново, — со стороны выглядело как «анимация шага пропала», хотя данные на
+ * сервере были верные (09.09.2026, разбор с владельцем).
+ *
+ * Для адресных уведомлений («вас назначили») остаётся broadcastToUsers:
+ * там получатель именно один, и владелец в списке не нужен.
+ */
+export function broadcastTaskEvent(
+  userIds: Array<string | null | undefined>,
+  event: unknown,
+) {
+  broadcastToUsers([...userIds, ...ownerIds()], event);
+}
+
 /** Push an event to several users at once, deduplicated. */
 export function broadcastToUsers(
   userIds: Array<string | null | undefined>,

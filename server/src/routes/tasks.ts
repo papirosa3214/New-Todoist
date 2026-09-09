@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
-import { broadcastToUsers } from "../ws.js";
+import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import {
   getTaskForRead,
   getTaskForWrite,
@@ -1085,7 +1085,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const eventType =
         body.status === "completed" ? "task:completed" : "task:updated";
       // Notify old + new assignee, and the creator, so nobody's client goes stale.
-      broadcastToUsers(
+      broadcastTaskEvent(
         [existing.creator_id, existing.assignee_id, task.assignee_id],
         {
           type: eventType,
@@ -1121,7 +1121,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       );
       db.prepare("DELETE FROM tasks WHERE id = ?").run(req.params.id);
 
-      broadcastToUsers([task.creator_id, task.assignee_id], {
+      broadcastTaskEvent([task.creator_id, task.assignee_id], {
         type: "task:deleted",
         id: req.params.id,
       });

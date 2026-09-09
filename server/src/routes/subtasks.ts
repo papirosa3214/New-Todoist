@@ -3,7 +3,7 @@ import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
-import { broadcastToUsers } from "../ws.js";
+import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import {
   AGENT_RULES,
   logEvent,
@@ -145,7 +145,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       });
 
       const fullTask = getFullTask(req.params.taskId);
-      broadcastToUsers([task.creator_id, task.assignee_id], {
+      broadcastTaskEvent([task.creator_id, task.assignee_id], {
         type: "task:updated",
         task: fullTask,
       });
@@ -302,7 +302,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       }
 
       const fullTask = getFullTask(subtask.task_id);
-      broadcastToUsers([subtask.task_creator_id, subtask.task_assignee_id], {
+      broadcastTaskEvent([subtask.task_creator_id, subtask.task_assignee_id], {
         type: "task:updated",
         task: fullTask,
       });
@@ -454,7 +454,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       }
 
       const fullTask = getFullTask(subtask.task_id);
-      broadcastToUsers([subtask.task_creator_id, subtask.task_assignee_id], {
+      broadcastTaskEvent([subtask.task_creator_id, subtask.task_assignee_id], {
         type: "task:updated",
         task: fullTask,
       });
@@ -485,7 +485,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         fromValue: subtask.title,
       });
       const fullTask = getFullTask(subtask.task_id);
-      broadcastToUsers([subtask.task_creator_id, subtask.task_assignee_id], {
+      broadcastTaskEvent([subtask.task_creator_id, subtask.task_assignee_id], {
         type: "task:updated",
         task: fullTask,
       });

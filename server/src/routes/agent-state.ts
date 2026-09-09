@@ -11,7 +11,7 @@ import {
   isOwner as isTrackerOwner,
   isReviewer as isTaskReviewer,
 } from "../access.js";
-import { broadcastToUsers } from "../ws.js";
+import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
   AGENT_RULES,
@@ -426,7 +426,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // Same shape as task:created/task:updated (hydrateTask, with labels +
       // subtasks) — a client that merges task:state through the same store
       // path as the other task events must not lose labels/subtasks.
-      broadcastToUsers([updated.creator_id, updated.assignee_id], {
+      broadcastTaskEvent([updated.creator_id, updated.assignee_id], {
         type: "task:state",
         task: hydrated,
       });
@@ -765,7 +765,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         });
       }
 
-      broadcastToUsers([updated.creator_id, updated.assignee_id], {
+      broadcastTaskEvent([updated.creator_id, updated.assignee_id], {
         type: "task:state",
         task: hydrated,
       });
