@@ -145,6 +145,12 @@ def notifications_schema_ok(db):
 def main():
     dry = "--dry" in sys.argv
     db = sqlite3.connect(DB_PATH)
+    # Колонки ниже читаются по имени (notifications_schema_ok), а без
+    # row_factory sqlite отдаёт кортежи — сторож падал на первой же строке
+    # с TypeError и потому НИ РАЗУ ничего не проверил (09.09.2026, ошибка
+    # каждые 10 минут в журнале). Обращения по индексу (owner_id) с Row
+    # продолжают работать как раньше.
+    db.row_factory = sqlite3.Row
 
     schema_ok = notifications_schema_ok(db) if not dry else True
 
