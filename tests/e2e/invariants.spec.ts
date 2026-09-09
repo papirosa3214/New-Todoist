@@ -12,8 +12,13 @@ import { setupApp, openScreen, collectErrors } from "./helpers";
 //    за 420pt: у владельца телефон, и «уехало вбок» он видит сразу;
 //  • сохранённый вид (список/доска/часы) обязан пережить переход на другой
 //    экран и обратно — это то, ради чего вид вообще хранится.
+// 09.09.2026: был "/inbox" — экран заменён на «Обзор» ещё 30.08.2026
+// (коммит 0cc4d0f1), маршрута с таким адресом в приложении нет. Тест от
+// этого не краснел: страница «Не найдено» ошибок консоли не даёт и вбок
+// не уезжает, так что проверка молча шла по несуществующему экрану и
+// поймать на нём ничего не могла.
 const SCREENS = [
-  "/inbox",
+  "/overview",
   "/today",
   "/upcoming",
   "/projects",
@@ -30,6 +35,11 @@ test.describe("Общие инварианты экранов", () => {
     page,
     context,
   }) => {
+    // Свой таймаут вместо общих 45 секунд: обход десяти ЖИВЫХ экранов с
+    // ожиданием сети — это около полутора минут. В общий бюджет проверка
+    // укладывалась, только пока первым в списке стоял несуществующий
+    // адрес: страница «Не найдено» открывается мгновенно и данных не ждёт.
+    test.setTimeout(150_000);
     await setupApp(context);
     const errors = collectErrors(page);
     const wide: string[] = [];
@@ -54,14 +64,17 @@ test.describe("Общие инварианты экранов", () => {
     page,
     context,
   }) => {
-    await setupApp(context, { inbox: "board", upcoming: "month" });
+    // Вид доски проверяем на «Сегодня»: у «Входящих» с 30.08.2026 нет
+    // ни экрана, ни маршрута, а taskLayout.today читает TodayScreen и
+    // рисует ту же доску (TaskBoard).
+    await setupApp(context, { today: "board", upcoming: "month" });
 
-    await openScreen(page, "/inbox");
+    await openScreen(page, "/today");
     expect(await page.locator("[data-board-strip]").count()).toBe(1);
 
     await openScreen(page, "/settings");
     await page.waitForTimeout(300);
-    await openScreen(page, "/inbox");
+    await openScreen(page, "/today");
     await page.waitForTimeout(500);
     // Вид доски сохранён — а не сброшен на список при возврате.
     expect(await page.locator("[data-board-strip]").count()).toBe(1);
