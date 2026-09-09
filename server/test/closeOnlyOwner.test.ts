@@ -1,18 +1,21 @@
-// Закрывать и возвращать в работу задачу может только владелец и
-// оркестратор (29.08.2026, задача be329d8e). Решение владельца: приёмку
-// работы исполнителей он передал оркестратору, и сам исполнитель НЕ
-// должен иметь возможность закрыть карточку своим ключом — иначе
-// закроет с доски работу, которую владелец не видел.
+// Закрывать и возвращать в работу задачу может только владелец
+// (08.09.2026, задача b6b57092). Ни исполнитель, ни оркестратор: карточка
+// уходит с доски вместе со всей историей, и закрыть её «не глядя» не должен
+// никто, кроме человека. Ревьюер выносит вердикт, закрывает владелец.
+//
+// Прежний режим (29.08.2026, задача be329d8e) отдавал приёмку оркестратору —
+// решение отменено вместе со строкой «закрывать задачу — оркестратор»
+// в матрице прав: автономного оркестратора в системе нет.
 //
 // Проверка: PATCH /api/tasks/:id со status=completed|active.
-//  - role='owner' или role='orchestrator' → 200;
-//  - любой другой (назначенный исполнитель в том числе) → 403.
+//  - role='owner' → 200;
+//  - любой другой (оркестратор и назначенный исполнитель в том числе) → 403.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 
-describe("Закрытие и возврат в работу — только владелец и оркестратор", () => {
+describe("Закрытие и возврат в работу — только владелец", () => {
   let app: FastifyInstance;
   let ownerToken: string;
   let ownerId: string;
@@ -105,7 +108,7 @@ describe("Закрытие и возврат в работу — только в
     expect(body.task.status).toBe("completed");
   });
 
-  it("оркестратор закрывает задачу → 200", async () => {
+  it("оркестратор закрывает задачу → 403, status не меняется", async () => {
     const taskId = await makeAssignedTask("Орк закрывает");
 
     const res = await app.inject({
@@ -114,10 +117,15 @@ describe("Закрытие и возврат в работу — только в
       headers: { authorization: `Bearer ${orchToken}` },
       payload: { status: "completed" },
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toMatch(/только владелец/);
 
-    const body = res.json();
-    expect(body.task.status).toBe("completed");
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(after.json().status).toBe("active");
   });
 
   it("исполнитель закрывает свою задачу → 403, status не меняется", async () => {
@@ -130,7 +138,7 @@ describe("Закрытие и возврат в работу — только в
       payload: { status: "completed" },
     });
     expect(res.statusCode).toBe(403);
-    expect(res.json().error).toMatch(/владелец или оркестратор/);
+    expect(res.json().error).toMatch(/только владелец/);
 
     // И проверяем, что статус действительно остался active — запрет не
     // должен был пройти мимо побочным эффектом (он срабатывает ДО записи).
@@ -143,20 +151,44 @@ describe("Закрытие и возврат в работу — только в
     expect(after.json().status).toBe("active");
   });
 
-  it("оркестратор возвращает completed → active → 200", async () => {
+  it("оркестратор возвращает completed → active → 403", async () => {
     const taskId = await makeAssignedTask("Орк возвращает");
-    // Сначала закрываем.
+    // Сначала закрываем — владельцем, единственным, кому это можно.
     await app.inject({
       method: "PATCH",
       url: `/api/tasks/${taskId}`,
       headers: { authorization: `Bearer ${ownerToken}` },
       payload: { status: "completed" },
     });
-    // Теперь возвращаем.
+    // Возврат закрытой задачи — та же ручка и тот же запрет.
     const back = await app.inject({
       method: "PATCH",
       url: `/api/tasks/${taskId}`,
       headers: { authorization: `Bearer ${orchToken}` },
+      payload: { status: "active" },
+    });
+    expect(back.statusCode).toBe(403);
+
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(after.json().status).toBe("completed");
+  });
+
+  it("владелец возвращает completed → active → 200", async () => {
+    const taskId = await makeAssignedTask("Владелец возвращает");
+    await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { status: "completed" },
+    });
+    const back = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
       payload: { status: "active" },
     });
     expect(back.statusCode).toBe(200);
