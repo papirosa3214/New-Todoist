@@ -26,6 +26,7 @@ import {
   CalendarDays,
   Check,
   ChevronDown,
+  ChevronUp,
   ChevronLeft,
   ChevronRight,
   Circle,
@@ -95,6 +96,7 @@ import { API_BASE_URL } from "../api/client";
 import { todayStr, formatRelativeTime } from "../lib/date";
 import { getErrorMessage } from "../lib/errors";
 import { hapticTap } from "../lib/haptics";
+import { PRIORITIES, getPriorityColor } from "../lib/priority";
 import type { ApiTask } from "../api/types";
 import { AnimatedTabBar, type TabItem } from "./AnimatedTabBar";
 import { CreateMenu } from "./CreateMenu";
@@ -145,6 +147,7 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   chevron: ChevronRight,
   chevronLeft: ChevronLeft,
   chevronDown: ChevronDown,
+  chevronUp: ChevronUp,
   filter: Filter,
   close: X,
   x: X,
@@ -1615,5 +1618,52 @@ export function ErrorBanner({
     <p role="alert" className={`px-1 text-[13px] text-coral ${className}`}>
       {message}
     </p>
+  );
+}
+
+// ═══════════ ПРИОРИТЕТ И ФЛАГ ГОТОВНОСТИ ═══════════
+// Решение владельца 11.09.2026: приоритет перестал быть флажком и рисуется
+// стрелками-шевронами, а освободившийся флажок отдан под поднятый флаг
+// готовности — «мне не совсем понятно, по каким карточкам уже поднят флаг,
+// по каким нет, надо это визуализировать».
+//
+// Стопкой по вертикали, а не в ряд: в ряд четыре шеврона слипаются в
+// зигзаг и читаются как волна, а не как уровень («раз он высокий, чтобы
+// всё вылазило»). Та же раскладка, что в нативном клиенте — TFPriorityArrows.
+const PRIORITY_ARROW_COUNT: Record<number, number> = { 1: 4, 2: 3, 3: 2, 4: 1 };
+
+export function PriorityArrows({
+  priority,
+  size = 10,
+}: {
+  priority: number | null | undefined;
+  size?: number;
+}) {
+  const count = PRIORITY_ARROW_COUNT[priority ?? 4] ?? 1;
+  const name = PRIORITIES.find((p) => p.key === (priority ?? 4))?.name ?? "";
+  return (
+    <span
+      className="inline-flex flex-col items-center shrink-0"
+      style={{ color: getPriorityColor(priority), marginBottom: -2 }}
+      aria-label={`Приоритет: ${name}`}
+    >
+      {Array.from({ length: count }, (_, i) => (
+        <Icon key={i} name="chevronUp" size={size} style={{ marginBottom: -3 }} />
+      ))}
+    </span>
+  );
+}
+
+// Поднятый флаг готовности: владелец подтвердил карточку и её можно брать в
+// работу. Значка нет — значит не подтверждена, отдельной «пустой» иконки не
+// рисуем, чтобы не шуметь.
+export function ReadyFlag({ size = 12 }: { size?: number }) {
+  return (
+    <Icon
+      name="flag"
+      size={size}
+      className="text-green shrink-0"
+      aria-label="Готова к работе: флаг поднят"
+    />
   );
 }

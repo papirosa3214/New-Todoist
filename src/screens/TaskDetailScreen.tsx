@@ -21,6 +21,7 @@ import {
   ScreenHeader,
   ErrorBanner,
   Loading,
+  PriorityArrows,
 } from "../components/UI";
 import { PRIORITIES } from "../components/TaskFields";
 import {
@@ -257,9 +258,10 @@ export function TaskDetailScreen() {
   // потому что вызов не дожидались, а его ошибку глушили. Полгода функция была
   // мертва (плагин не зарегистрирован), а приложение рапортовало успехом.
   // Теперь тост несёт настоящий итог.
-  const [liveActivityToast, setLiveActivityToast] = useState<
-    { ok: boolean; text: string } | null
-  >(null);
+  const [liveActivityToast, setLiveActivityToast] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
 
   const handleSaveAsTemplate = () => {
     if (!task) return;
@@ -388,6 +390,13 @@ export function TaskDetailScreen() {
           pl-[30px] — как у описания ниже: 18px кружка приоритета плюс
           gap-3, чтобы бейдж встал по одной вертикали с текстом задачи, а
           не с отметкой. */}
+      {/* Номер карточки — тот самый короткий идентификатор, которым агенты
+          оперируют в чате («карточка bb728617»). Владелец 11.09.2026: «я-то
+          их не вижу, поэтому понятия не имею, о какой карточке ты говоришь».
+          Поэтому сносочка в самом начале и намеренно невыразительная:
+          caption + text-dim — подпись, которую можно не читать. */}
+      <div className="text-[11px] text-dim mb-1">{task.id.slice(0, 8)}</div>
+
       {taskProject && (
         <div className="mb-2">
           {/* Без заливки — просто решётка и цветной текст, как в строке
@@ -486,7 +495,9 @@ export function TaskDetailScreen() {
             плитка доски используют свой собственный флажок-точку рядом с
             заголовком, его не трогаю, он и так уже цветной. */}
         <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
-          <Icon name="flag" size={18} style={{ color: priority?.color }} />
+          {/* С 11.09.2026 приоритет — шевроны, а не флажок: флажок
+              теперь занят под поднятый флаг готовности. */}
+          <PriorityArrows priority={task.priority} size={13} />
           <span
             className="text-[14px] flex-1"
             style={{ color: priority?.color }}
@@ -529,87 +540,94 @@ export function TaskDetailScreen() {
       )}
 
       {/* Tabs navigation — only needed if BOTH subtasks and child tasks exist */}
-      {task.subtasks.length > 0 && task.children && task.children.length > 0 && (
-        <div className="flex gap-4 border-b border-sub/20 mb-4 px-1">
-          <button
-            className={`pb-2 text-[14px] font-medium transition-colors border-b-2 ${
-              activeTab === "details"
-                ? "border-red text-text"
-                : "border-transparent text-sub hover:text-text"
-            }`}
-            onClick={() => setActiveTab("details")}
-          >
-            Чек-лист ({task.subtasks.length})
-          </button>
-          <button
-            className={`pb-2 text-[14px] font-medium transition-colors border-b-2 ${
-              activeTab === "team"
-                ? "border-red text-text"
-                : "border-transparent text-sub hover:text-text"
-            }`}
-            onClick={() => setActiveTab("team")}
-          >
-            Команда ({task.children.length})
-          </button>
-        </div>
-      )}
+      {task.subtasks.length > 0 &&
+        task.children &&
+        task.children.length > 0 && (
+          <div className="flex gap-4 border-b border-sub/20 mb-4 px-1">
+            <button
+              className={`pb-2 text-[14px] font-medium transition-colors border-b-2 ${
+                activeTab === "details"
+                  ? "border-red text-text"
+                  : "border-transparent text-sub hover:text-text"
+              }`}
+              onClick={() => setActiveTab("details")}
+            >
+              Чек-лист ({task.subtasks.length})
+            </button>
+            <button
+              className={`pb-2 text-[14px] font-medium transition-colors border-b-2 ${
+                activeTab === "team"
+                  ? "border-red text-text"
+                  : "border-transparent text-sub hover:text-text"
+              }`}
+              onClick={() => setActiveTab("team")}
+            >
+              Команда ({task.children.length})
+            </button>
+          </div>
+        )}
 
       {/* Subtasks checklist */}
-      {task.subtasks.length > 0 && (!task.children?.length || activeTab === "details") && (
-        <>
-          <SubtaskFeed
-            subtasks={task.subtasks}
-            isOwner={isTaskOwner(currentUser, task)}
-            onToggle={(st) =>
-              updateSubtask.mutateAsync({ id: st.id, done: !st.done })
-            }
-            onReturn={async (st, comment, attachmentIds) => {
-              await subtaskWork.mutateAsync({
-                id: st.id,
-                state: null,
-                result: comment,
-              });
-              await addComment.mutateAsync({
-                text: `По шагу «${st.title}»: ${comment}`,
-                attachmentIds,
-              });
-            }}
-            onComment={async (st, comment, attachmentIds) => {
-              await subtaskWork.mutateAsync({ id: st.id, state: null });
-              await addComment.mutateAsync({
-                text: `По шагу «${st.title}»: ${comment}`,
-                attachmentIds,
-              });
-            }}
-            onUploadFile={async (file) => {
-              const res = await uploadAttachment.mutateAsync(file);
-              return res.attachment;
-            }}
-          />
-          <ErrorBanner
-            error={updateSubtask.error || addComment.error || subtaskWork.error}
-            fallback="Не удалось обновить подзадачу"
-            variant="block"
-            className="-mt-2 mb-4"
-          />
-        </>
-      )}
+      {task.subtasks.length > 0 &&
+        (!task.children?.length || activeTab === "details") && (
+          <>
+            <SubtaskFeed
+              subtasks={task.subtasks}
+              isOwner={isTaskOwner(currentUser, task)}
+              onToggle={(st) =>
+                updateSubtask.mutateAsync({ id: st.id, done: !st.done })
+              }
+              onReturn={async (st, comment, attachmentIds) => {
+                await subtaskWork.mutateAsync({
+                  id: st.id,
+                  state: null,
+                  result: comment,
+                });
+                await addComment.mutateAsync({
+                  text: `По шагу «${st.title}»: ${comment}`,
+                  attachmentIds,
+                });
+              }}
+              onComment={async (st, comment, attachmentIds) => {
+                await subtaskWork.mutateAsync({ id: st.id, state: null });
+                await addComment.mutateAsync({
+                  text: `По шагу «${st.title}»: ${comment}`,
+                  attachmentIds,
+                });
+              }}
+              onUploadFile={async (file) => {
+                const res = await uploadAttachment.mutateAsync(file);
+                return res.attachment;
+              }}
+            />
+            <ErrorBanner
+              error={
+                updateSubtask.error || addComment.error || subtaskWork.error
+              }
+              fallback="Не удалось обновить подзадачу"
+              variant="block"
+              className="-mt-2 mb-4"
+            />
+          </>
+        )}
 
       {/* Children tasks / Delegated tasks */}
-      {task.children && task.children.length > 0 && (!task.subtasks.length || activeTab === "team") && (
-        <div className="mb-4 space-y-1">
-          <div className="text-[11px] text-sub font-medium px-1 mb-2">
-            Дочерние задачи ({task.children.length})
+      {task.children &&
+        task.children.length > 0 &&
+        (!task.subtasks.length || activeTab === "team") && (
+          <div className="mb-4 space-y-1">
+            <div className="text-[11px] text-sub font-medium px-1 mb-2">
+              Дочерние задачи ({task.children.length})
+            </div>
+            {task.children.map((child: any) => (
+              <TaskRow
+                key={child.id}
+                task={child}
+                onClick={() => navigate(`/task/${child.id}`)}
+              />
+            ))}
           </div>
-          {task.children.map((child: any) => (
-            <TaskRow
-              key={child.id}
-              task={child}
-              onClick={() => navigate(`/task/${child.id}`)}
-            />
-          ))}
-        </div>
-      )}
+        )}
 
       {/* «Изменить» — единственный путь в форму редактирования, поэтому
           видна ВСЕГДА: там же правят, добавляют и переставляют шаги.
@@ -644,10 +662,7 @@ export function TaskDetailScreen() {
             variant={task.ready_for_pickup ? "secondary" : "primary"}
             onClick={handleToggleReady}
           >
-            <Icon
-              name={task.ready_for_pickup ? "check" : "flag"}
-              size={16}
-            />
+            <Icon name={task.ready_for_pickup ? "check" : "flag"} size={16} />
             {task.ready_for_pickup
               ? "Снять флаг готовности"
               : "Готово к работе"}

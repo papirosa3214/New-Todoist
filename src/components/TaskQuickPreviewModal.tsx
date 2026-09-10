@@ -115,7 +115,7 @@ export function TaskQuickPreviewModal({
                   className="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-bg border border-stroke/50 shrink-0"
                   style={{ color: prio.color }}
                 >
-                  <Icon name="flagSmall" size={10} />P{task.priority}
+                  <Icon name="chevronUp" size={10} />P{task.priority}
                 </span>
               )}
             </div>

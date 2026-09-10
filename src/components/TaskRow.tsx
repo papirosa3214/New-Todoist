@@ -80,8 +80,7 @@
 // out, before calling the gesture horizontal.
 import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Icon, Avatar, AgentStateTag } from "./UI";
-import { getPriorityColor, PRIORITIES } from "../lib/priority";
+import { Icon, Avatar, AgentStateTag, PriorityArrows, ReadyFlag } from "./UI";
 import { hapticCross, hapticDrop } from "../lib/haptics";
 import {
   formatDueLabel,
@@ -196,8 +195,10 @@ export function TaskRow({
   const hasAgentTag = showAgentState && !!task.agent_state;
   const hasDueBadge = showDueBadge && !overdue && !!task.due_date;
   const hasSubtasksBadge = showSubtasksBadge && progressTotal > 0;
-  // Флажок только для 1-3: четвёртый — «низкий», значение по умолчанию.
-  const hasPriorityFlag = !!task.priority && task.priority <= 3;
+  // Флажок теперь про поднятый флаг готовности, а не про приоритет
+  // (владелец 11.09.2026). Приоритет уехал вправо шевронами и в ряду
+  // бейджей больше не участвует.
+  const hasReadyFlag = !!task.ready_for_pickup;
   const hasLabels = visibleLabels.length > 0;
   // Проект — бейджем с названием, ровно как на доске (владелец
   // 19.08.2026: «нужно бы прописывать, к какому проекту относится
@@ -208,7 +209,7 @@ export function TaskRow({
   const hasProjectBadge = showProjectBadge && !!task.project_name;
   const hasMeta =
     hasProjectBadge ||
-    hasPriorityFlag ||
+    hasReadyFlag ||
     hasOverduePill ||
     hasDueBadge ||
     hasSubtasksBadge ||
@@ -549,15 +550,9 @@ export function TaskRow({
                     </span>
                   )}
 
-                  {/* 2. Приоритет флажком */}
-                  {hasPriorityFlag && (
-                    <Icon
-                      name="flag"
-                      size={12}
-                      style={{ color: getPriorityColor(task.priority) }}
-                      aria-label={`Приоритет: ${PRIORITIES.find((p) => p.key === task.priority)?.name ?? ""}`}
-                    />
-                  )}
+                  {/* 2. Поднятый флаг готовности — освободившийся флажок.
+                      Приоритет с 11.09.2026 рисуется шевронами справа. */}
+                  {task.ready_for_pickup ? <ReadyFlag /> : null}
 
                   {/* 3. Просрочено */}
                   {hasOverduePill && (
@@ -611,6 +606,13 @@ export function TaskRow({
               внутри кнопки-карточки, не вложенный <button>). content
               column выше — flex-1 min-w-0, поэтому уступает место сама,
               никакого abs-position и риска наехать на truncate-текст. */}
+            {/* Приоритет — стопкой шевронов у правого края (владелец
+                11.09.2026: «раз он высокий, чтобы всё вылазило»). В ряд по
+                горизонтали четыре стрелки слипались в зигзаг. Рисуются все
+                четыре уровня, включая низкий. */}
+            <div className="shrink-0 flex items-start pt-[3px]">
+              <PriorityArrows priority={task.priority} />
+            </div>
             {onTogglePin && (
               <div
                 onClick={(e) => {
