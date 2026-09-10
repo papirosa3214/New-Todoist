@@ -100,3 +100,6 @@ mockup-reference/nav-artifact/_shots/
 # каждый прогон trigger.py показывался как «изменения» (08.09.2026).
 server/scripts/__pycache__/
 server/agent-watch.state.json
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
