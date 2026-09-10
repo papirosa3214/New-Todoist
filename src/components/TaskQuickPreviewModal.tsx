@@ -63,8 +63,15 @@ export function TaskQuickPreviewModal({
 
   const prio = PRIORITIES.find((p) => p.key === task.priority);
   const statusInfo = getStatusBadge(task);
-  const totalSub = task.subtasks?.length || 0;
-  const doneSub = task.subtasks?.filter((s) => s.done).length || 0;
+  // Родитель считается по детям, а не по шагам — та же логика, что в
+  // TaskRow (10.09.2026, a195895d): разбиение родительской задачи это и
+  // есть дочерние карточки. Нет детей — считаем шаги, как раньше.
+  const kids = task.children ?? [];
+  const totalSub = kids.length > 0 ? kids.length : task.subtasks?.length || 0;
+  const doneSub =
+    kids.length > 0
+      ? kids.filter((c) => c.status === "completed").length
+      : task.subtasks?.filter((s) => s.done).length || 0;
 
   return (
     <>

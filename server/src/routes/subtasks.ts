@@ -91,6 +91,29 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     handler: async (req: any, reply) => {
       const task = getTaskForWrite(req.params.taskId, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
+
+      // У РОДИТЕЛЯ СВОИХ ШАГОВ НЕТ (10.09.2026, задача a195895d).
+      //
+      // Разбиение родительской задачи — это её дочерние карточки. Заводя
+      // ей ещё и чек-лист, мы получаем два списка одного и того же: по
+      // какому из них считать прогресс и что считать «последней закрытой
+      // единицей работы» — становится непонятно, а от этого зависит
+      // автопереход на приёмку.
+      //
+      // Запрет только на ДОБАВЛЕНИЕ: шаги, заведённые до появления детей,
+      // остаются и закрываются как раньше — иначе правка задним числом
+      // ломала бы уже идущую работу.
+      const hasChildren = db
+        .prepare("SELECT 1 FROM tasks WHERE parent_id = ? LIMIT 1")
+        .get(req.params.taskId);
+      if (hasChildren) {
+        return reply.code(400).send({
+          error:
+            "у задачи есть дочерние — её разбиение это они, отдельные шаги ей не заводятся. " +
+            "Нужен ещё пункт работы — заведите дочернюю задачу",
+        });
+      }
+
       if (!req.body?.title)
         return reply.code(400).send({ error: "title required" });
       if (req.body.title.length > 100)

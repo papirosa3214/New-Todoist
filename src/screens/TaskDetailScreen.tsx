@@ -78,6 +78,11 @@ export function TaskDetailScreen() {
   const uploadAttachment = useUploadAttachment(id || "");
   const deleteAttachment = useDeleteAttachment();
   const [pending, setPending] = useState<ApiAttachment[]>([]);
+  // У РОДИТЕЛЯ ПЕРВЫМ ПОКАЗЫВАЕМ ДЕТЕЙ, А НЕ ЧЕК-ЛИСТ (10.09.2026,
+  // a195895d). Разбиение родительской задачи — это и есть дочерние
+  // карточки; шаги у неё если и остались, то от прежней жизни. Открывая
+  // такую карточку, владелец хочет видеть, кто и что делает, а не свой
+  // старый список пунктов.
   const [activeTab, setActiveTab] = useState<"details" | "team">("details");
 
   // Микрофон в ленте — та же плавающая кнопка над клавиатурой, что и в
@@ -119,6 +124,14 @@ export function TaskDetailScreen() {
   // и опрос возобновится сам, потому что agent_stale снова станет false.
   // Просьба Максима 14.08.2026: «показал, что не работает — больше не
   // дёргает систему; вернулся — возобновился».
+  // Карточка с детьми открывается на них: дети — её разбиение, чек-лист
+  // у неё вторичен (10.09.2026, a195895d). Пересобирается по id задачи,
+  // а не один раз: переход между карточками не должен оставлять вкладку
+  // от предыдущей.
+  useEffect(() => {
+    setActiveTab(task?.children?.length ? "team" : "details");
+  }, [id, task?.children?.length]);
+
   useEffect(() => {
     if (!id || !task?.agent_state) return;
     if (task.agent_state === "in_progress" && task.agent_stale) return;

@@ -173,13 +173,26 @@ export function TaskRow({
 }: TaskRowProps) {
   const navigate = useNavigate();
   const isDone = task.status === "completed";
-  const doneSub = task.subtasks.filter((s) => s.done).length;
+  // РОДИТЕЛЬ СЧИТАЕТСЯ ПО ДЕТЯМ, А НЕ ПО ШАГАМ (10.09.2026, a195895d).
+  //
+  // У родительской задачи своей работы нет — её разбиение это и есть
+  // дочерние карточки. Пока счётчик смотрел только на subtasks, родитель с
+  // пятью детьми и без шагов показывал пустой прогресс, хотя работа шла.
+  //
+  // Отдельного признака «это родитель» не заводим: есть дети — считаем по
+  // ним, нет — по шагам, ровно как раньше.
+  const kids = task.children ?? [];
+  const countByChildren = kids.length > 0;
+  const progressTotal = countByChildren ? kids.length : task.subtasks.length;
+  const doneSub = countByChildren
+    ? kids.filter((c) => c.status === "completed").length
+    : task.subtasks.filter((s) => s.done).length;
   const visibleLabels = maxLabels > 0 ? task.labels.slice(0, maxLabels) : [];
 
   const hasOverduePill = overdue && !!task.due_date;
   const hasAgentTag = showAgentState && !!task.agent_state;
   const hasDueBadge = showDueBadge && !overdue && !!task.due_date;
-  const hasSubtasksBadge = showSubtasksBadge && task.subtasks.length > 0;
+  const hasSubtasksBadge = showSubtasksBadge && progressTotal > 0;
   // Флажок только для 1-3: четвёртый — «низкий», значение по умолчанию.
   const hasPriorityFlag = !!task.priority && task.priority <= 3;
   const hasLabels = visibleLabels.length > 0;
@@ -529,7 +542,7 @@ export function TaskRow({
                   {/* 1. Бейдж подзадач (всегда первый) */}
                   {hasSubtasksBadge && (
                     <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-card text-sub font-medium">
-                      {doneSub}/{task.subtasks.length}
+                      {doneSub}/{progressTotal}
                     </span>
                   )}
 

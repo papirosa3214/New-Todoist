@@ -264,3 +264,129 @@ describe("Плоская карточка: закрыт последний ша�
     expect(t.agent_state).toBeNull();
   });
 });
+
+// Прогресс родителя в списке считается по детям — а для этого список
+// обязан их отдавать. До 10.09.2026 дети в ответе /api/tasks не приходили
+// вовсе, хотя на сервере уже вычислялись.
+describe("Список задач отдаёт детей — иначе прогресс родителя не посчитать", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+  let ownerId: string;
+
+  beforeAll(async () => {
+    app = await buildApp();
+    const reg = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        name: "OwnerChildren",
+        email: "owner@children-list.test",
+        password: "password123",
+      },
+    });
+    ownerToken = reg.json().token;
+    ownerId = reg.json().user.id;
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(ownerId);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("родитель приходит со списком детей и их статусами", async () => {
+    const parentRes = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title: "Родитель для списка" },
+    });
+    const parentId = parentRes.json().task.id as string;
+
+    for (const title of ["Дитя 1", "Дитя 2"]) {
+      await app.inject({
+        method: "POST",
+        url: "/api/tasks",
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: { title, parent_id: parentId },
+      });
+    }
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const parent = list
+      .json()
+      .find((t: any) => t.id === parentId) as { children?: any[] };
+
+    expect(parent).toBeDefined();
+    expect(parent.children).toHaveLength(2);
+    expect(parent.children?.every((c: any) => c.status === "active")).toBe(
+      true,
+    );
+  });
+});
+
+// Два списка одного разбиения не держим: у задачи с детьми своих шагов
+// быть не должно (10.09.2026, a195895d).
+describe("Задаче с детьми шаги не заводятся", () => {
+  let app: FastifyInstance;
+  let ownerToken: string;
+  let ownerId: string;
+
+  beforeAll(async () => {
+    app = await buildApp();
+    const reg = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        name: "OwnerNoSteps",
+        email: "owner@no-steps.test",
+        password: "password123",
+      },
+    });
+    ownerToken = reg.json().token;
+    ownerId = reg.json().user.id;
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(ownerId);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  async function makeTask(title: string, parentId?: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: parentId ? { title, parent_id: parentId } : { title },
+    });
+    return res.json().task.id as string;
+  }
+
+  it("есть ребёнок — добавить шаг нельзя, ответ объясняет почему", async () => {
+    const parent = await makeTask("Родитель без шагов");
+    await makeTask("Его ребёнок", parent);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${parent}/subtasks`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title: "Лишний шаг" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain("дочерние");
+  });
+
+  it("детей нет — шаг заводится как раньше", async () => {
+    const plain = await makeTask("Обычная задача");
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${plain}/subtasks`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title: "Обычный шаг" },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
