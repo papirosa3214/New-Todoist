@@ -247,6 +247,12 @@ export interface ApiTask {
   // рядом с subtasks. TaskDetailScreen переключает таб по наличию.
   // Добавлено 30.08.2026 — старый код ссылался на .children, которого не было в типе.
   children?: ApiTask[];
+  // Счётчики детей в СПИСКЕ (`GET /api/tasks`): полные объекты возит только
+  // `GET /api/tasks/:id`. Списку нужен лишь прогресс «N из M», а обрезанный
+  // `children` в списке класть нельзя — на нём падает разбор ответа в
+  // нативном клиенте (10.09.2026).
+  children_total?: number;
+  children_done?: number;
   comments?: ApiComment[]; // only on GET /api/tasks/:id
   events?: ApiTaskEvent[]; // only on GET /api/tasks/:id
   // Файлы, приложенные к самой задаче (kind='task' на сервере), а не к

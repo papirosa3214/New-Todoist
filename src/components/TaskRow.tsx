@@ -181,11 +181,14 @@ export function TaskRow({
   //
   // Отдельного признака «это родитель» не заводим: есть дети — считаем по
   // ним, нет — по шагам, ровно как раньше.
-  const kids = task.children ?? [];
-  const countByChildren = kids.length > 0;
-  const progressTotal = countByChildren ? kids.length : task.subtasks.length;
+  // Список получает от сервера два числа (children_total/children_done), а
+  // не сами дочерние задачи: полные объекты возит только карточка.
+  const kidsTotal = task.children_total ?? task.children?.length ?? 0;
+  const countByChildren = kidsTotal > 0;
+  const progressTotal = countByChildren ? kidsTotal : task.subtasks.length;
   const doneSub = countByChildren
-    ? kids.filter((c) => c.status === "completed").length
+    ? (task.children_done ??
+      (task.children ?? []).filter((c) => c.status === "completed").length)
     : task.subtasks.filter((s) => s.done).length;
   const visibleLabels = maxLabels > 0 ? task.labels.slice(0, maxLabels) : [];
 

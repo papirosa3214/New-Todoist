@@ -66,11 +66,12 @@ export function TaskQuickPreviewModal({
   // Родитель считается по детям, а не по шагам — та же логика, что в
   // TaskRow (10.09.2026, a195895d): разбиение родительской задачи это и
   // есть дочерние карточки. Нет детей — считаем шаги, как раньше.
-  const kids = task.children ?? [];
-  const totalSub = kids.length > 0 ? kids.length : task.subtasks?.length || 0;
+  const kidsTotal = task.children_total ?? task.children?.length ?? 0;
+  const totalSub = kidsTotal > 0 ? kidsTotal : task.subtasks?.length || 0;
   const doneSub =
-    kids.length > 0
-      ? kids.filter((c) => c.status === "completed").length
+    kidsTotal > 0
+      ? (task.children_done ??
+        (task.children ?? []).filter((c) => c.status === "completed").length)
       : task.subtasks?.filter((s) => s.done).length || 0;
 
   return (

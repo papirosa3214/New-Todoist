@@ -318,13 +318,18 @@ describe("Список задач отдаёт детей — иначе про�
     });
     const parent = list
       .json()
-      .find((t: any) => t.id === parentId) as { children?: any[] };
+      .find((t: any) => t.id === parentId) as {
+      children_total?: number;
+      children_done?: number;
+      children?: unknown;
+    };
 
     expect(parent).toBeDefined();
-    expect(parent.children).toHaveLength(2);
-    expect(parent.children?.every((c: any) => c.status === "active")).toBe(
-      true,
-    );
+    expect(parent.children_total).toBe(2);
+    expect(parent.children_done).toBe(0);
+    // Массив детей в СПИСКЕ не отдаём вовсе: обрезанный объект под именем
+    // `children` кладёт разбор ответа в нативном клиенте (10.09.2026).
+    expect(parent.children).toBeUndefined();
   });
 });
 
