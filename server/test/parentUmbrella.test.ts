@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
+import { markReadyForPickup } from "./helpers.js";
 
 describe("Родитель-зонтик: последняя дочерняя закрыта — родитель на приёмку", () => {
   let app: FastifyInstance;
@@ -48,7 +49,9 @@ describe("Родитель-зонтик: последняя дочерняя з�
       payload: parentId ? { title, parent_id: parentId } : { title },
     });
     expect(res.statusCode).toBe(200);
-    return res.json().task.id as string;
+    const id = res.json().task.id as string;
+    markReadyForPickup(id);
+    return id;
   }
 
   async function close(taskId: string) {
@@ -187,6 +190,7 @@ describe("Плоская карточка: закрыт последний ша�
       payload: { title, assignee_id: agentId },
     });
     const taskId = created.json().task.id as string;
+    markReadyForPickup(taskId);
     const stepIds: string[] = [];
     for (const step of ["Шаг один", "Шаг два"]) {
       const s = await app.inject({
@@ -205,7 +209,23 @@ describe("Плоская карточка: закрыт последний ша�
     return { taskId, stepIds };
   }
 
-  async function closeStep(id: string) {
+  // Шаг закрывается ТОЛЬКО из работы (правило сервера от 10.09.2026), а
+  // закрытие предыдущего шага гасит аренду на самой задаче — поэтому перед
+  // каждым шагом задача берётся заново. Это ровно тот путь, которым идёт живой
+  // агент: claim → отметил шаг → закрыл.
+  async function closeStep(taskId: string, id: string) {
+    await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    const work = await app.inject({
+      method: "POST",
+      url: `/api/subtasks/${id}/work`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { state: "in_progress" },
+    });
+    expect(work.statusCode).toBe(200);
     return app.inject({
       method: "PATCH",
       url: `/api/subtasks/${id}`,
@@ -216,7 +236,7 @@ describe("Плоская карточка: закрыт последний ша�
 
   it("не последний шаг закрыт — задача остаётся в работе", async () => {
     const { taskId, stepIds } = await taskWithSteps("Плоская: один из двух");
-    await closeStep(stepIds[0]);
+    await closeStep(taskId, stepIds[0]);
 
     const t = db
       .prepare("SELECT agent_state FROM tasks WHERE id = ?")
@@ -226,8 +246,8 @@ describe("Плоская карточка: закрыт последний ша�
 
   it("закрыт последний шаг — задача сама в review", async () => {
     const { taskId, stepIds } = await taskWithSteps("Плоская: оба шага");
-    await closeStep(stepIds[0]);
-    await closeStep(stepIds[1]);
+    await closeStep(taskId, stepIds[0]);
+    await closeStep(taskId, stepIds[1]);
 
     const t = db
       .prepare("SELECT status, agent_state FROM tasks WHERE id = ?")
@@ -245,6 +265,7 @@ describe("Плоская карточка: закрыт последний ша�
       payload: { title: "Личная задача владельца" },
     });
     const taskId = created.json().task.id as string;
+    markReadyForPickup(taskId);
     const s = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/subtasks`,
@@ -301,6 +322,7 @@ describe("Список задач отдаёт детей — иначе про�
       payload: { title: "Родитель для списка" },
     });
     const parentId = parentRes.json().task.id as string;
+    markReadyForPickup(parentId);
 
     for (const title of ["Дитя 1", "Дитя 2"]) {
       await app.inject({
@@ -316,9 +338,7 @@ describe("Список задач отдаёт детей — иначе про�
       url: "/api/tasks",
       headers: { authorization: `Bearer ${ownerToken}` },
     });
-    const parent = list
-      .json()
-      .find((t: any) => t.id === parentId) as {
+    const parent = list.json().find((t: any) => t.id === parentId) as {
       children_total?: number;
       children_done?: number;
       children?: unknown;
@@ -367,7 +387,9 @@ describe("Задаче с детьми шаги не заводятся", () => 
       headers: { authorization: `Bearer ${ownerToken}` },
       payload: parentId ? { title, parent_id: parentId } : { title },
     });
-    return res.json().task.id as string;
+    const id = res.json().task.id as string;
+    markReadyForPickup(id);
+    return id;
   }
 
   it("есть ребёнок — добавить шаг нельзя, ответ объясняет почему", async () => {

@@ -73,6 +73,17 @@ describe("Сквозной сценарий: claim → heartbeat → blocked →
     });
     expect(res.statusCode).toBe(200);
     taskId = res.json().task.id;
+
+    // Флаг готовности — ступень, появившаяся после этого теста: агент не может
+    // взять задачу, пока владелец её не подтвердил. Здесь это часть «владелец
+    // завёл задачу», поэтому поднимаем тем же его токеном, через API.
+    const ready = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { ready_for_pickup: true },
+    });
+    expect(ready.statusCode).toBe(200);
   });
 
   it("агент берёт задачу в работу", async () => {

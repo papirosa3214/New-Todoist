@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
+import { markReadyForPickup } from "./helpers.js";
 
 describe("agent inbox: реальный поток (5f292e87)", () => {
   let app: FastifyInstance;
@@ -80,6 +81,7 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
     });
     expect(task.statusCode).toBe(200);
     taskId = task.json().task.id;
+    markReadyForPickup(taskId);
   });
 
   afterAll(async () => {

@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
+import { markReadyForPickup } from "./helpers.js";
 
 describe("Активность продлевает аренду", () => {
   let app: FastifyInstance;
@@ -55,6 +56,7 @@ describe("Активность продлевает аренду", () => {
       payload: { title, assignee_id: agentId },
     });
     const id = created.json().task.id;
+    markReadyForPickup(id);
     await app.inject({
       method: "POST",
       url: `/api/tasks/${id}/claim`,

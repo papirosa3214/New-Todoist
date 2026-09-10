@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
+import { markReadyForPickup } from "./helpers.js";
 
 describe("Доступ по роли: владелец, агенты, посторонний", () => {
   let app: FastifyInstance;
@@ -189,6 +190,9 @@ describe("Доступ по роли: владелец, агенты, посто
       payload: { title: "Своя задача агента А", assignee_id: agentAId },
     });
     const id = created.json().task.id;
+    // Задача здесь создаётся напрямую, минуя фабрику ownerTaskForAgent, —
+    // флаг готовности приходится поднимать отдельно.
+    markReadyForPickup(id);
 
     const claim = await app.inject({
       method: "POST",
@@ -433,7 +437,9 @@ describe("Оркестратор: правит всё, не удаляет ни�
       payload: { title, assignee_id: agentId },
     });
     expect(res.statusCode).toBe(200);
-    return res.json().task.id as string;
+    const id = res.json().task.id as string;
+    markReadyForPickup(id);
+    return id;
   }
 
   beforeAll(async () => {

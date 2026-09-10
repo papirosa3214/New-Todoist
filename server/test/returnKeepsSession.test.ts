@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
+import { markReadyForPickup } from "./helpers.js";
 
 describe("Возврат владельцем сохраняет сессию агента", () => {
   let app: FastifyInstance;
@@ -59,6 +60,7 @@ describe("Возврат владельцем сохраняет сессию а
       payload: { title: "Задача с живой сессией", assignee_id: agentId },
     });
     taskId = task.json().task.id;
+    markReadyForPickup(taskId);
 
     // Агент берёт задачу, представляясь своей сессией — как это делает
     // MCP-клиент (CLAUDE_CODE_SESSION_ID уходит заголовком).

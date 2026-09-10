@@ -19,6 +19,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
+import { markReadyForPickup } from "./helpers.js";
 
 describe("Снятие задачи с агента расклинивает карточку", () => {
   let app: FastifyInstance;
@@ -72,6 +73,7 @@ describe("Снятие задачи с агента расклинивает к�
       payload: { title, assignee_id: agentId },
     });
     const taskId = created.json().task.id;
+    markReadyForPickup(taskId);
     const sub = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/subtasks`,
