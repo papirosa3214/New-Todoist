@@ -19,6 +19,7 @@ describe("Закрытие шага снимает отметку работы",
   let agentToken: string;
   let taskId: string;
   let subtaskId: string;
+  let secondSubtaskId: string;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -33,6 +34,12 @@ describe("Закрытие шага снимает отметку работы",
       },
     });
     ownerToken = ownerReg.json().token;
+    // Флаг готовности поднимает только ВЛАДЕЛЕЦ ТРЕКЕРА (role='owner'), а не
+    // просто автор задачи — регистрация такой роли не даёт, ставим прямым
+    // UPDATE, как и type='ai' ниже.
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(
+      ownerReg.json().user.id,
+    );
 
     // Тот же приём, что в e2e.test.ts: регистрация всегда даёт type='human',
     // а правило «result обязателен» касается только агента — помечаем прямым
@@ -72,11 +79,37 @@ describe("Закрытие шага снимает отметку работы",
     });
     subtaskId = subtask.json().id;
 
-    await app.inject({
+    // Второй шаг создаём СРАЗУ, а не по ходу проверок: закрытие последнего
+    // незакрытого шага автоматически уводит всю задачу в review, а из review
+    // агент её обратно не возьмёт — дальше падало бы всё, что идёт после.
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/subtasks`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title: "Второй шаг" },
+    });
+    secondSubtaskId = second.json().id;
+
+    // Флаг готовности — обязательная ступень перед самозахватом: задачу,
+    // собранную не владельцем, агент взять не может, пока владелец её не
+    // подтвердил. Без этой строки claim молча отдавал 400, задача оставалась
+    // невзятой, и дальше падал уже /work с «сначала возьмите саму задачу».
+    const readyRes = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { ready_for_pickup: true },
+    });
+    expect(readyRes.statusCode).toBe(200);
+
+    // Результат claim проверяем: молчаливый отказ здесь уводил диагностику в
+    // сторону — падал не тот тест, который сломан.
+    const claim = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/claim`,
       headers: { authorization: `Bearer ${agentToken}` },
     });
+    expect(claim.statusCode).toBe(200);
   });
 
   afterAll(async () => {
@@ -125,10 +158,59 @@ describe("Закрытие шага снимает отметку работы",
     expect(res.json().error).toContain("на всю задачу");
   });
 
-  it("длинный итог отклоняется: владельцу нужны одно-два предложения", async () => {
+  // Дальше проверки идут по ВТОРОМУ шагу: первый уже закрыт, а закрытие
+  // гасит отметку работы — продолжать на нём значит проверять не то.
+  it("шаг нельзя закрыть, не взяв его в работу", async () => {
     const res = await app.inject({
       method: "PATCH",
-      url: `/api/subtasks/${subtaskId}`,
+      url: `/api/subtasks/${secondSubtaskId}`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { done: true, result: "сделал молча" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain("не взяв его в работу");
+
+    // И шаг действительно остался незакрытым — отказ не половинчатый.
+    const row = db
+      .prepare("SELECT done FROM subtasks WHERE id = ?")
+      .get(secondSubtaskId) as { done: number };
+    expect(row.done).toBe(0);
+  });
+
+  it("владелец закрывает шаг без отметки работы — правило только для агента", async () => {
+    const third = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/subtasks`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { title: "Шаг владельца" },
+    });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/subtasks/${third.json().id}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { done: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().done).toBe(true);
+  });
+
+  it("длинный итог отклоняется: владельцу нужны одно-два предложения", async () => {
+    // Закрытие предыдущего шага гасит аренду и на самой задаче — берём заново.
+    await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    const work = await app.inject({
+      method: "POST",
+      url: `/api/subtasks/${secondSubtaskId}/work`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { state: "in_progress" },
+    });
+    expect(work.statusCode).toBe(200);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/subtasks/${secondSubtaskId}`,
       headers: { authorization: `Bearer ${agentToken}` },
       payload: { done: true, result: "и".repeat(900) },
     });
