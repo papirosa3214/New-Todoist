@@ -8,20 +8,25 @@ import { setupApp, openScreen } from "./helpers";
 // точечной цели) — тот путь проверен вручную живым обменом с Гермесом, см.
 // комментарии задачи 76544f01.
 
-test("сообщение из канала владельца уходит оркестратору и чистит поле", async ({
+test("сообщение из окна постановки уходит и чистит поле", async ({
   page,
   context,
 }) => {
   // 28.08.2026, карточка 41ed0019: у владельца каналов два, и в своём он
-  // адресата НЕ выбирает — там всегда оркестратор, вместо кнопки выбора
-  // стоит его лицо. Поэтому прежний шаг «сначала нажать „Кому?“» из этого
-  // теста ушёл: нажимать больше нечего, и это не потеря проверки, а новое
-  // правило. Выбор адресата остался у исполнителей — он проверяется
-  // следующим тестом, под их учёткой.
+  // адресата НЕ выбирает — вместо кнопки выбора стоит лицо собеседника.
+  // Поэтому прежний шаг «сначала нажать „Кому?“» из этого теста ушёл:
+  // нажимать больше нечего, и это не потеря проверки, а новое правило.
+  // Выбор адресата остался у исполнителей — он проверяется следующим
+  // тестом, под их учёткой.
+  //
+  // 10.09.2026, карточка 4396f8c9: собеседником в этой ленте стал
+  // «Секретарь» вместо оркестратора — канал превратился в окно постановки
+  // задач. Строка ввода по-прежнему подставляет адресата сама, но сервер
+  // его в этом канале не слушает вовсе: у надиктовки адресата нет.
   const written = await setupApp(context);
   await openScreen(page, "/chat");
 
-  const input = page.getByPlaceholder(/Оркестратор/);
+  const input = page.getByPlaceholder(/Секретарь/);
   await input.fill("проверка из e2e");
   // Кнопка отправки — иконка без accessible name, надёжный путь тут —
   // submit самой формы через Enter в поле.
@@ -40,16 +45,23 @@ test("сообщение из канала владельца уходит ор�
   expect(chatPost).toBeTruthy();
   expect((chatPost?.body as any)?.text).toBe("проверка из e2e");
 
-  // Адресат проставлен сам, и это именно оркестратор.
-  const orchId = await page.evaluate(async () => {
+  // Адресат проставлен сам, и это «Секретарь» — учётка скрипта, который
+  // собирает карточку из надиктовки. Ищем его так же, как экран: машина
+  // (type=ai), но не исполнитель (role=viewer).
+  const secretaryId = await page.evaluate(async () => {
     const token = localStorage.getItem("taskflow_token");
     const res = await fetch("/api/chat/participants", {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    const people = (await res.json()) as Array<{ id: string; role: string }>;
-    return people.find((p) => p.role === "orchestrator")?.id;
+    const people = (await res.json()) as Array<{
+      id: string;
+      role: string;
+      type: string;
+    }>;
+    return people.find((p) => p.role === "viewer" && p.type === "ai")?.id;
   });
-  expect((chatPost?.body as any)?.to_user_id).toBe(orchId);
+  expect(secretaryId).toBeTruthy();
+  expect((chatPost?.body as any)?.to_user_id).toBe(secretaryId);
   await expect(input).toHaveValue("");
 });
 
