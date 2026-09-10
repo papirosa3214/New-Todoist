@@ -200,6 +200,18 @@ export function TaskDetailScreen() {
     await updateTask.mutateAsync({ id: task.id, status: newStatus });
   });
 
+  // Поднять/снять флаг готовности к самозахвату (d598de9f, миграция 026).
+  // Кнопка одна: переключает текущее значение на противоположное.
+  // Сервер примет PATCH только от владельца, иначе 403 — мы кнопку всё
+  // равно рисуем только владельцу, но двойная защита не мешает: если кто-то
+  // обошёл UI и шлёт напрямую, гейт в routes/tasks.ts его всё равно
+  // остановит.
+  const handleToggleReady = useGuardedCallback(async () => {
+    if (!task) return;
+    const next = !task.ready_for_pickup;
+    await updateTask.mutateAsync({ id: task.id, ready_for_pickup: next });
+  });
+
   const handleSubmitComment = useGuardedCallback(async (e: FormEvent) => {
     e.preventDefault();
     const trimmed = commentText.trim();
@@ -623,6 +635,31 @@ export function TaskDetailScreen() {
             Открыть задачу заново
           </Button>
         )}
+
+        {/* ГОТОВНОСТЬ К САМОЗАХВАТУ (d598de9f, миграция 026). Кнопку
+            видит только владелец; не-владельцу — бейдж с состоянием,
+            чтобы было ясно, можно ли задачу брать. */}
+        {isTaskOwner(currentUser, task) ? (
+          <Button
+            variant={task.ready_for_pickup ? "secondary" : "primary"}
+            onClick={handleToggleReady}
+          >
+            <Icon
+              name={task.ready_for_pickup ? "check" : "flag"}
+              size={16}
+            />
+            {task.ready_for_pickup
+              ? "Снять флаг готовности"
+              : "Готово к работе"}
+          </Button>
+        ) : (
+          <div className="text-[13px] text-sub">
+            {task.ready_for_pickup
+              ? "Готова к самозахвату"
+              : "Ждёт подтверждения владельца"}
+          </div>
+        )}
+
         <Button
           variant="outline"
           onClick={() => navigate(`/task/${task.id}/edit`)}

@@ -69,6 +69,9 @@ export interface UpdateTaskInput {
   label_ids?: string[];
   position?: number | null;
   pinned?: boolean;
+  // Готовность к самозахвату (миграция 026). На сервере поднимает только
+  // владелец, так что здесь тип широкий, а проверка прав — в routes/tasks.ts.
+  ready_for_pickup?: boolean;
 }
 
 export function useUpdateTask() {

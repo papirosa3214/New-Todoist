@@ -45,11 +45,15 @@ function ensureAgentInboxEventType(): void {
   const ddl =
     (
       db
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_inbox'")
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_inbox'",
+        )
         .get() as { sql?: string } | undefined
     )?.sql ?? "";
   if (!ddl) {
-    throw new Error("ensureAgentInboxEventType: таблица agent_inbox не найдена");
+    throw new Error(
+      "ensureAgentInboxEventType: таблица agent_inbox не найдена",
+    );
   }
   const hasColumn = /event_type\s+TEXT/.test(ddl);
   const hasCheck = /CHECK\s*\(\s*event_type\s+IN/.test(ddl);
@@ -74,7 +78,10 @@ function ensureAgentInboxEventType(): void {
       `event_type TEXT NOT NULL DEFAULT 'chat' CHECK (event_type IN ('chat','assignment','review_return'))`,
     );
   }
-  newDdl = newDdl.replace(/CREATE TABLE\s+"?agent_inbox"?/i, 'CREATE TABLE "agent_inbox_new"');
+  newDdl = newDdl.replace(
+    /CREATE TABLE\s+"?agent_inbox"?/i,
+    'CREATE TABLE "agent_inbox_new"',
+  );
   db.exec(newDdl);
   db.exec(
     "INSERT INTO agent_inbox_new (id, chat_message_id, to_user_id, body_text, task_id, task_version, kind, status, created_at, received_at, acting_at, done_at, blocked_reason, event_type) " +
@@ -427,14 +434,17 @@ const migrations: Migration[] = [
     noTransaction: true,
     up: () => {
       const current = db
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'",
+        )
         .get() as { sql?: string } | undefined;
       const ddl = current?.sql ?? "";
 
       // Свежая база уже создана с новым CHECK (db.ts) — пересобирать нечего.
       if (ddl && !ddl.includes("'orchestrator'")) {
         const oldCheck = "CHECK(role IN ('owner','agent','viewer'))";
-        const newCheck = "CHECK(role IN ('owner','agent','viewer','orchestrator'))";
+        const newCheck =
+          "CHECK(role IN ('owner','agent','viewer','orchestrator'))";
         if (!ddl.includes(oldCheck)) {
           throw new Error(
             "016_orchestrator_role: не нашёл ожидаемый CHECK у users, схема разошлась с ожиданием — миграция остановлена, чтобы не пересобрать таблицу вслепую",
@@ -548,7 +558,9 @@ const migrations: Migration[] = [
         .prepare("PRAGMA table_info(user_integrations)")
         .all() as Array<{ name: string }>;
       if (!cols.some((c) => c.name === "limits")) {
-        db.exec("ALTER TABLE user_integrations ADD COLUMN limits TEXT DEFAULT '{}'");
+        db.exec(
+          "ALTER TABLE user_integrations ADD COLUMN limits TEXT DEFAULT '{}'",
+        );
       }
     },
   },
@@ -593,16 +605,24 @@ const migrations: Migration[] = [
       "Карточка 5f292e87: миграция 021 записана в schema_migrations как применённая, но таблицу так и не расширила — колонка event_type в agent_inbox отсутствует, а chat.ts вставляет её. Вдобавок tasks не имеет current_revision, на который опирается защита от устаревших событий (review→in_progress). 022 делает то, что 021 обещала: добавляет event_type в agent_inbox и current_revision в tasks. Идемпотентна — проверяет наличие колонки перед ALTER (ADD COLUMN в SQLite нельзя с CHECK, валидацию значения делает приложение).",
     up: () => {
       const inboxCols = (
-        db.prepare("SELECT name FROM pragma_table_info('agent_inbox')").all() as Array<{ name: string }>
+        db
+          .prepare("SELECT name FROM pragma_table_info('agent_inbox')")
+          .all() as Array<{ name: string }>
       ).map((c) => c.name);
       if (!inboxCols.includes("event_type")) {
-        db.exec("ALTER TABLE agent_inbox ADD COLUMN event_type TEXT NOT NULL DEFAULT 'chat'");
+        db.exec(
+          "ALTER TABLE agent_inbox ADD COLUMN event_type TEXT NOT NULL DEFAULT 'chat'",
+        );
       }
       const taskCols = (
-        db.prepare("SELECT name FROM pragma_table_info('tasks')").all() as Array<{ name: string }>
+        db
+          .prepare("SELECT name FROM pragma_table_info('tasks')")
+          .all() as Array<{ name: string }>
       ).map((c) => c.name);
       if (!taskCols.includes("current_revision")) {
-        db.exec("ALTER TABLE tasks ADD COLUMN current_revision INTEGER NOT NULL DEFAULT 1");
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN current_revision INTEGER NOT NULL DEFAULT 1",
+        );
       }
     },
   },
@@ -647,9 +667,47 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "026_ready_flag",
+    description:
+      "Признак готовности задачи к самозахвату (10.09.2026, карточка d598de9f). Карточка, собранная машиной из чата, лежит без флага, пока владелец её не откроет и не поставит — никто её взять не может. ready_for_pickup=1 значит «можно брать», ready_set_at и ready_set_by фиксируют, кто и когда поднял, чтобы это было видно в истории. Дефолт 0: новая задача без флага недоступна для claim. Снимать флаг (false) тоже владелец — на случай, если передумал и хочет править дальше.",
+    up: () => {
+      const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+        name: string;
+      }>;
+      if (!cols.some((c) => c.name === "ready_for_pickup")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN ready_for_pickup INTEGER NOT NULL DEFAULT 0",
+        );
+        // Дефолт 0 — про БУДУЩИЕ карточки, которые машина соберёт из надиктовки:
+        // такая лежит без флага, пока владелец её не откроет. Но задачи, уже
+        // существовавшие на момент миграции, владелец завёл сам — они через
+        // его руки прошли, и запирать их нечего. Без этой строки ALTER TABLE
+        // проставляет 0 всем подряд и разом делает невзятой всю доску, а
+        // поднять флаг нечем: кнопки в интерфейсах — отдельные карточки.
+        db.exec("UPDATE tasks SET ready_for_pickup = 1");
+      }
+      if (!cols.some((c) => c.name === "ready_set_at")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN ready_set_at TEXT");
+      }
+      if (!cols.some((c) => c.name === "ready_set_by")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN ready_set_by TEXT REFERENCES users(id)",
+        );
+      }
+    },
+  },
+  {
+    id: "027_ready_flag_backfill",
+    description:
+      "Разблокировать доску после 026 (10.09.2026). Миграция 026 добавила ready_for_pickup с дефолтом 0 и тем самым разом сделала невзятыми все задачи, которые уже лежали на доске, — а поднять флаг было нечем: кнопки в вебе и на iOS ещё не сделаны, это отдельные карточки. Здесь признак проставляется всем, кто существовал до его введения: эти задачи владелец завёл сам, через его руки они уже прошли. Правка внутри 026 закрывает то же самое для чистой установки, а эта миграция нужна базам, где 026 успела примениться. Механики, создающей карточки без флага, на момент написания не существует — она делается в карточке про приём задачи из чата, поэтому проставить единицу всем текущим строкам безопасно.",
+    up: () => {
+      db.exec(
+        "UPDATE tasks SET ready_for_pickup = 1 WHERE ready_for_pickup = 0",
+      );
+    },
+  },
 ];
-
-
 
 /** Применить все ещё не применённые миграции, по одной транзакции на каждую. */
 export function runMigrations() {

@@ -9,6 +9,7 @@ import {
   getTaskForOwnerDelete,
   allLabelsOwnedByUser,
   getProjectForFiling,
+  isOwner,
   seesEveryTask,
 } from "../access.js";
 import {
@@ -770,6 +771,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Закрепить наверх списка внутри проекта (db.ts's additive migration,
       // 20.08.2026) — независимо от position, см. ProjectTasksScreen.
       pinned: boolean;
+      // Признак готовности к самозахвату (миграция 026, карточка d598de9f).
+      // Поднимает только владелец; пока false — claim отклоняется.
+      ready_for_pickup: boolean;
     }>;
   }>("/api/tasks/:id", {
     preHandler: authPre,
@@ -928,6 +932,70 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // normalization as subtasks.ts's `done` before it reaches ALLOWED_FIELDS.
       if (body.pinned !== undefined) {
         body.pinned = body.pinned ? 1 : 0;
+      }
+
+      // ФЛАГ ГОТОВНОСТИ К САМОЗАХВАТУ (миграция 026, карточка d598de9f):
+      // поднимает только владелец трекера. Если body.ready_for_pickup
+      // передано — обрабатываем здесь и НЕ пропускаем в общий UPDATE ниже
+      // (там это поле не в whitelist, и владельцу не нужно право «сменить
+      // чужое решение задним числом» через редактирование задачи как обычное
+      // поле). ready_for_pickup, ready_set_at и ready_set_by меняются
+      // синхронно — три поля одной транзакцией, чтобы лента не показала
+      // промежуточного состояния «флаг поднят, но без автора».
+      if (body.ready_for_pickup !== undefined) {
+        if (!isOwner(req.userId)) {
+          return reply.code(403).send({
+            error:
+              "поднять или снять флаг готовности может только владелец трекера",
+          });
+        }
+        if (typeof body.ready_for_pickup !== "boolean") {
+          return reply
+            .code(400)
+            .send({ error: "ready_for_pickup должно быть boolean" });
+        }
+        const newValue = body.ready_for_pickup ? 1 : 0;
+        const previous = existing.ready_for_pickup ?? 0;
+        if (previous === newValue) {
+          // идемпотентность: повтор того же значения не пишет лишнего события
+          // и не трогает ready_set_at/by — это не «подтверждение», это пустой
+          // PATCH.
+        } else {
+          const txn = db.transaction(() => {
+            if (newValue === 1) {
+              db.prepare(
+                `UPDATE tasks
+                    SET ready_for_pickup = 1,
+                        ready_set_at = datetime('now'),
+                        ready_set_by = ?,
+                        updated_at = datetime('now')
+                  WHERE id = ?`,
+              ).run(req.userId, id);
+            } else {
+              db.prepare(
+                `UPDATE tasks
+                    SET ready_for_pickup = 0,
+                        ready_set_at = NULL,
+                        ready_set_by = NULL,
+                        updated_at = datetime('now')
+                  WHERE id = ?`,
+              ).run(id);
+            }
+            logEvent({
+              taskId: id,
+              actorId: req.userId,
+              kind: "ready_flag_changed",
+              field: "ready_for_pickup",
+              fromValue: String(previous),
+              toValue: String(newValue),
+            });
+          });
+          txn();
+        }
+        // готово, остальные поля PATCH не трогают флаг — он своя ось.
+        // Но если в этом же запросе передали, скажем, title — общий UPDATE
+        // ниже всё равно отработает, и это нормально: это два независимых
+        // действия в одном HTTP-вызове, не «одна операция».
       }
 
       // Whitelisted columns only — request body keys never reach raw SQL.

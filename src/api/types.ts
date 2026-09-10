@@ -192,6 +192,11 @@ export interface ApiTask {
   assignee_id: string | null;
   creator_id: string;
   status: "active" | "completed";
+  // Готовность к самозахвату (серверная карточка d598de9f, миграция 026).
+  // Поднимает только владелец; пока false — claim отклоняется.
+  ready_for_pickup?: boolean;
+  ready_set_at?: string | null;
+  ready_set_by?: string | null;
   created_at: string;
   updated_at: string;
   // The moment status flipped active→completed — see server/src/db.ts's
