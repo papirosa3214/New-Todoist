@@ -707,6 +707,42 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: "028_owner_dictation",
+    description:
+      "Окно постановки задач: надиктовка владельца в чат → карточка-черновик (10.09.2026, карточка 4396f8c9). chat_task_drafts — по строке на разобранное сообщение, ключ chat_message_id: он же и защита от повторной доставки (второй заход по тому же сообщению вторую карточку не заведёт), он же место, где видно, чем разбор кончился — task_id при удаче, error при отказе модели. Плюс участник «Секретарь»: у сообщения чата автор обязателен (from_user_id NOT NULL), а ответ про собранную карточку пишет скрипт, не агент. Роль viewer и отсутствие api_token выбраны намеренно — это лицо в переписке, а не исполнитель: задачу на него не назначить и в API под ним не войти.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_task_drafts (
+          chat_message_id TEXT PRIMARY KEY
+            REFERENCES chat_messages(id) ON DELETE CASCADE,
+          task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+          status TEXT NOT NULL
+            CHECK (status IN ('pending', 'done', 'failed')),
+          error TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          finished_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_task_drafts_task
+          ON chat_task_drafts(task_id);
+      `);
+
+      // Пароль — заведомо не bcrypt-хэш: bcrypt.compare на такой строке
+      // всегда false, то есть войти под этой учёткой нельзя ничем. Это
+      // надёжнее случайного пароля, который где-то да всплывёт.
+      db.prepare(
+        `INSERT OR IGNORE INTO users
+           (id, name, email, password_hash, role, type, avatar_color,
+            initials, status, is_system_bot)
+         VALUES (?, ?, ?, ?, 'viewer', 'ai', '#8E8E93', 'СК', 'offline', 1)`,
+      ).run(
+        "u-secretary",
+        "Секретарь",
+        "secretary@taskflow.local",
+        "нет входа: это не учётка для входа",
+      );
+    },
+  },
 ];
 
 /** Применить все ещё не применённые миграции, по одной транзакции на каждую. */

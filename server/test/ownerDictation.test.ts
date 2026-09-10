@@ -1,0 +1,469 @@
+// Окно постановки задач: надиктовка владельца в чат → карточка-черновик
+// (карточка 4396f8c9, 10.09.2026). Проверяется приёмка владельца целиком:
+//
+//   1) наговорил в окно — получил карточку с шагами, дочерними и порядком;
+//   2) ни один агент на это сообщение не разбужен;
+//   3) карточка лежит БЕЗ флага готовности, и взять её нельзя;
+//   4) локальная модель недоступна — сообщение цело, причина видна;
+//   5) повторная доставка того же сообщения не плодит вторую карточку.
+//
+// Локальная модель здесь подменена: предмет проверки — сервер, а не Ollama.
+// Сам разбор проверяется живым прогоном на модели (см. заметку в
+// документации проекта), тут он был бы медленным и невоспроизводимым.
+import {
+  beforeAll,
+  afterAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import type { FastifyInstance } from "fastify";
+
+const model = vi.hoisted(() => ({
+  impl: null as null | ((...args: any[]) => Promise<any>),
+}));
+
+vi.mock("../src/routes/ai.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/routes/ai.js")>();
+  return {
+    ...actual,
+    structureDictationToCards: (...args: any[]) => {
+      if (!model.impl) throw new Error("тест не задал ответ модели");
+      return model.impl(...args);
+    },
+  };
+});
+
+const { buildApp } = await import("../src/index.js");
+const { default: db } = await import("../src/db.js");
+
+/** Разбор идёт в фоне: сообщение отправляется, не дожидаясь модели. Ждём,
+ *  пока строка разбора перестанет быть 'pending', а не фиксированную паузу —
+ *  иначе тест либо мигает, либо тратит время на пустом месте. */
+async function waitForDraft(chatMessageId: string, ms = 3000) {
+  const until = Date.now() + ms;
+  for (;;) {
+    const row = db
+      .prepare(
+        "SELECT status, task_id, error FROM chat_task_drafts WHERE chat_message_id = ?",
+      )
+      .get(chatMessageId) as
+      | { status: string; task_id: string | null; error: string | null }
+      | undefined;
+    if (row && row.status !== "pending") return row;
+    if (Date.now() > until) throw new Error(`разбор не завершился за ${ms}мс`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+describe("Окно постановки задач (карточка 4396f8c9)", () => {
+  let app: FastifyInstance;
+  let ownerAuth: string;
+  let orchId: string;
+  let agentId: string;
+  let agentAuth: string;
+  let projectId: string;
+
+  const register = async (name: string, email: string) => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name, email, password: "password123" },
+    });
+    return {
+      token: res.json().token as string,
+      id: res.json().user.id as string,
+    };
+  };
+
+  const dictate = (text: string) =>
+    app.inject({
+      method: "POST",
+      url: "/api/chat",
+      headers: { authorization: ownerAuth },
+      // Адресата строка ввода подставляет сама (fixedAddressee), но сервер
+      // его всё равно не слушает: в этом канале адресата нет.
+      payload: { text, to_user_id: "all" },
+    });
+
+  beforeAll(async () => {
+    app = await buildApp();
+
+    const owner = await register("Владелец", "owner@dictation.test");
+    ownerAuth = `Bearer ${owner.token}`;
+    const orch = await register("Оркестратор", "orch@dictation.test");
+    orchId = orch.id;
+    const agent = await register("Исполнитель", "agent@dictation.test");
+    agentId = agent.id;
+    agentAuth = `Bearer ${agent.token}`;
+
+    const setRole = db.prepare("UPDATE users SET role = ? WHERE id = ?");
+    setRole.run("owner", owner.id);
+    setRole.run("orchestrator", orchId);
+    db.prepare("UPDATE users SET type = 'ai' WHERE id = ?").run(agentId);
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { authorization: ownerAuth },
+      payload: { name: "Домашний сервер" },
+    });
+    projectId = project.json().project?.id ?? project.json().id;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => {
+    model.impl = null;
+  });
+
+  it("надиктовка становится карточкой с шагами, дочерними и порядком между ними", async () => {
+    model.impl = async (text: string, projects: Array<{ id: string }>) => {
+      // Модель получает и текст, и список проектов — выбирать ей есть из чего.
+      expect(text).toContain("почини");
+      expect(projects.some((p) => p.id === projectId)).toBe(true);
+      return {
+        title: "Порядок на домашнем сервере",
+        description: "Починить бэкап и обновить диск",
+        subtasks: ["Свести результат"],
+        dueDate: "2026-09-20",
+        priority: 2,
+        projectId,
+        children: [
+          {
+            title: "Починить бэкап",
+            description: "Разобраться, почему не едет",
+            subtasks: ["Посмотреть логи", "Перезапустить"],
+            after: null,
+          },
+          {
+            title: "Обновить диск",
+            description: "",
+            subtasks: ["Купить", "Поставить"],
+            after: 1,
+          },
+        ],
+      };
+    };
+
+    const sent = await dictate("почини бэкап и потом обнови диск");
+    expect(sent.statusCode).toBe(200);
+    const draft = await waitForDraft(sent.json().id);
+    expect(draft.status).toBe("done");
+
+    const parent = db
+      .prepare("SELECT * FROM tasks WHERE id = ?")
+      .get(draft.task_id) as any;
+    expect(parent.title).toBe("Порядок на домашнем сервере");
+    expect(parent.project_id).toBe(projectId);
+    expect(parent.due_date).toBe("2026-09-20");
+    expect(parent.priority).toBe(2);
+
+    const children = db
+      .prepare("SELECT * FROM tasks WHERE parent_id = ? ORDER BY position")
+      .all(draft.task_id) as any[];
+    expect(children.map((c) => c.title)).toEqual([
+      "Починить бэкап",
+      "Обновить диск",
+    ]);
+    // Порядок — строкой очереди в описании зависимой карточки, тем же
+    // приёмом, каким владелец пишет её руками.
+    expect(children[0].description).not.toContain("ОЧЕРЕДЬ");
+    expect(children[1].description).toContain("ОЧЕРЕДЬ");
+    expect(children[1].description).toContain("Починить бэкап");
+
+    // Шаги — и у родителя, и у каждого ребёнка.
+    const steps = (taskId: string) =>
+      (
+        db
+          .prepare(
+            "SELECT title FROM subtasks WHERE task_id = ? ORDER BY position",
+          )
+          .all(taskId) as Array<{ title: string }>
+      ).map((s) => s.title);
+    expect(steps(draft.task_id!)).toEqual(["Свести результат"]);
+    expect(steps(children[0].id)).toEqual(["Посмотреть логи", "Перезапустить"]);
+    expect(steps(children[1].id)).toEqual(["Купить", "Поставить"]);
+  });
+
+  it("карточка лежит без флага готовности — взять её нельзя, пока владелец не поднимет", async () => {
+    model.impl = async () => ({
+      title: "Черновик",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+    });
+    const sent = await dictate("надиктовка про черновик");
+    const draft = await waitForDraft(sent.json().id);
+
+    const row = db
+      .prepare("SELECT ready_for_pickup, assignee_id FROM tasks WHERE id = ?")
+      .get(draft.task_id) as {
+      ready_for_pickup: number;
+      assignee_id: string | null;
+    };
+    expect(row.ready_for_pickup).toBe(0);
+    // Исполнителя машина не назначает — кому делать, решает владелец.
+    expect(row.assignee_id).toBeNull();
+
+    // Назначаем исполнителя руками, как это сделал бы владелец, — чтобы в
+    // отказе на claim осталась ровно одна причина: флага нет. Без назначения
+    // агент упёрся бы раньше, в «карточка не твоя», и про флаг тест ничего
+    // бы не доказал.
+    const assigned = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${draft.task_id}`,
+      headers: { authorization: ownerAuth },
+      payload: { assignee_id: agentId },
+    });
+    expect(assigned.statusCode).toBe(200);
+
+    const claim = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${draft.task_id}/claim`,
+      headers: { authorization: agentAuth },
+    });
+    expect(claim.statusCode).toBe(400);
+    expect(claim.json().error).toMatch(/готова к самозахвату/);
+  });
+
+  it("ни один агент не разбужен: адресата нет, поручение не записано", async () => {
+    model.impl = async () => ({
+      title: "Тихая карточка",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+    });
+    const inboxBefore = (
+      db.prepare("SELECT COUNT(*) as n FROM agent_inbox").get() as { n: number }
+    ).n;
+
+    const sent = await dictate("сделай тихую карточку");
+    expect(sent.json().to_user_id).toBeNull();
+    expect(sent.json().channel).toBe("owner");
+    await waitForDraft(sent.json().id);
+
+    const inboxAfter = (
+      db.prepare("SELECT COUNT(*) as n FROM agent_inbox").get() as { n: number }
+    ).n;
+    expect(inboxAfter).toBe(inboxBefore);
+
+    // И в непрочитанное оркестратору надиктовка тоже не падает: счётчик —
+    // тот же зов агента, только через цифру на экране.
+    const unread = db
+      .prepare(
+        `SELECT COUNT(*) as n FROM chat_messages
+          WHERE channel = 'owner' AND to_user_id IS NULL`,
+      )
+      .get() as { n: number };
+    expect(unread.n).toBeGreaterThan(0); // надиктовки действительно без адресата
+  });
+
+  it("ответ приходит в ту же ленту, со ссылкой на карточку", async () => {
+    model.impl = async () => ({
+      title: "Карточка со ссылкой",
+      description: "",
+      subtasks: ["шаг"],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+    });
+    const sent = await dictate("надиктовка со ссылкой");
+    const draft = await waitForDraft(sent.json().id);
+
+    const reply = db
+      .prepare(
+        `SELECT m.*, u.name as from_name FROM chat_messages m
+           JOIN users u ON u.id = m.from_user_id
+          WHERE m.task_id = ? ORDER BY m.created_at DESC LIMIT 1`,
+      )
+      .get(draft.task_id) as any;
+    expect(reply).toBeTruthy();
+    expect(reply.channel).toBe("owner");
+    expect(reply.from_name).toBe("Секретарь");
+    expect(reply.text).toMatch(/флаг готовности/);
+  });
+
+  it("модель недоступна: надиктовка цела, причина видна, карточки нет", async () => {
+    model.impl = async () => {
+      throw new Error("Не удалось связаться с локальной моделью (Ollama).");
+    };
+    const tasksBefore = (
+      db.prepare("SELECT COUNT(*) as n FROM tasks").get() as { n: number }
+    ).n;
+
+    const sent = await dictate("надиктовка на мёртвой модели");
+    expect(sent.statusCode).toBe(200);
+    const draft = await waitForDraft(sent.json().id);
+    expect(draft.status).toBe("failed");
+    expect(draft.error).toMatch(/Ollama/);
+
+    // Ничего не создано.
+    const tasksAfter = (
+      db.prepare("SELECT COUNT(*) as n FROM tasks").get() as { n: number }
+    ).n;
+    expect(tasksAfter).toBe(tasksBefore);
+
+    // Сама надиктовка на месте.
+    const original = db
+      .prepare("SELECT text FROM chat_messages WHERE id = ?")
+      .get(sent.json().id) as { text: string };
+    expect(original.text).toBe("надиктовка на мёртвой модели");
+
+    // И причина написана владельцу в ту же ленту. Сортировка добавляет
+    // rowid: created_at пишется с точностью до секунды, и несколько ответов
+    // одной секунды иначе выстраиваются в произвольном порядке.
+    const excuse = db
+      .prepare(
+        `SELECT text FROM chat_messages
+          WHERE from_user_id = 'u-secretary'
+          ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get() as { text: string };
+    expect(excuse.text).toMatch(/Ollama/);
+    expect(excuse.text).toMatch(/цела/);
+  });
+
+  it("повторная доставка того же сообщения второй карточки не заводит", async () => {
+    let calls = 0;
+    model.impl = async () => {
+      calls += 1;
+      return {
+        title: "Один раз",
+        description: "",
+        subtasks: [],
+        dueDate: null,
+        priority: 4,
+        projectId: null,
+        children: [],
+      };
+    };
+    const sent = await dictate("надиктовка, доставленная дважды");
+    const draft = await waitForDraft(sent.json().id);
+    expect(calls).toBe(1);
+
+    // Повтор доставки того же сообщения — как если бы событие пришло дважды.
+    const { startDraftFromChat } = await import("../src/lib/ownerDraft.js");
+    startDraftFromChat({
+      id: sent.json().id,
+      from_user_id: sent.json().from_user_id,
+      text: "надиктовка, доставленная дважды",
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(calls).toBe(1);
+
+    const sameTitle = (
+      db
+        .prepare("SELECT COUNT(*) as n FROM tasks WHERE title = ?")
+        .get("Один раз") as { n: number }
+    ).n;
+    expect(sameTitle).toBe(1);
+    expect(draft.task_id).toBeTruthy();
+  });
+
+  it("голосовая надиктовка разбирается так же, как набранная руками", async () => {
+    // Голос доезжает сюда уже расшифрованным: тот же POST /api/chat, только
+    // с пометкой source='voice' (карточка 5f292e87). Разбору она безразлична
+    // — и проверяется тут именно это, чтобы «голос» не оказался вторым,
+    // отдельно ломающимся путём.
+    model.impl = async (text: string) => {
+      expect(text).toContain("голосом");
+      return {
+        title: "Задача, наговоренная голосом",
+        description: "",
+        subtasks: ["шаг"],
+        dueDate: null,
+        priority: 4,
+        projectId: null,
+        children: [],
+      };
+    };
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      headers: { authorization: ownerAuth },
+      payload: {
+        text: "это я надиктовал голосом, сделай карточку",
+        to_user_id: "all",
+        source: "voice",
+      },
+    });
+    expect(sent.statusCode).toBe(200);
+    const draft = await waitForDraft(sent.json().id);
+    expect(draft.status).toBe("done");
+
+    const task = db
+      .prepare("SELECT title FROM tasks WHERE id = ?")
+      .get(draft.task_id) as { title: string };
+    expect(task.title).toBe("Задача, наговоренная голосом");
+  });
+
+  it("сообщение владельца в служебной ленте карточку не заводит", async () => {
+    // Граница: окно постановки — не единственное место, где владелец пишет.
+    // В рабочей ленте он раздаёт работу живым исполнителям, и превращать это
+    // в черновики значило бы заводить карточку на каждое «глянь, пожалуйста».
+    model.impl = async () => {
+      throw new Error("модель не должна была вызываться");
+    };
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      headers: { authorization: ownerAuth },
+      payload: {
+        text: "глянь, почему сборка красная",
+        to_user_id: agentId,
+        channel: "agents",
+      },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().channel).toBe("agents");
+    await new Promise((r) => setTimeout(r, 150));
+
+    const drafted = db
+      .prepare("SELECT 1 FROM chat_task_drafts WHERE chat_message_id = ?")
+      .get(sent.json().id);
+    expect(drafted).toBeUndefined();
+  });
+
+  it("сообщение про существующую карточку разбором не считается", async () => {
+    model.impl = async () => {
+      throw new Error("модель не должна была вызываться");
+    };
+    const task = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: ownerAuth },
+      payload: { title: "Уже заведённая задача" },
+    });
+    const taskId = task.json().task.id;
+
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      headers: { authorization: ownerAuth },
+      payload: {
+        text: "тут я про уже существующую",
+        to_user_id: "all",
+        task_id: taskId,
+      },
+    });
+    expect(sent.statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 150));
+
+    const drafted = db
+      .prepare("SELECT 1 FROM chat_task_drafts WHERE chat_message_id = ?")
+      .get(sent.json().id);
+    expect(drafted).toBeUndefined();
+  });
+});

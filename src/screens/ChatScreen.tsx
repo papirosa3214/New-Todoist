@@ -44,7 +44,9 @@ function AddressLine({
 }) {
   const target = toMe ? "тебе" : msg.to_user_id ? msg.to_user_name : "всем";
   return (
-    <div className={`text-[12px] mb-0.5 px-1 ${mine ? "text-dim" : "text-sub"}`}>
+    <div
+      className={`text-[12px] mb-0.5 px-1 ${mine ? "text-dim" : "text-sub"}`}
+    >
       {!mine && <span>{msg.from_user_name || "—"} </span>}
       <span className={toMe ? "text-red font-semibold" : ""}>→ {target}</span>
     </div>
@@ -131,7 +133,8 @@ function ChatBubble({
           </button>
         )}
         <div className="text-[11px] text-dim mt-0.5 px-1">
-          {formatRelativeTime(msg.created_at)} · {formatAbsoluteTime(msg.created_at)}
+          {formatRelativeTime(msg.created_at)} ·{" "}
+          {formatAbsoluteTime(msg.created_at)}
         </div>
       </div>
     </div>
@@ -215,7 +218,6 @@ function ChannelTabs({
   );
 }
 
-
 export function ChatScreen() {
   // Живые обновления, пока экран открыт — не в Layout.tsx (общий сокет там
   // уже есть для notifications/tasks, но эта подписка нужна только тут).
@@ -232,11 +234,19 @@ export function ChatScreen() {
   const bothChannels = isOwner || isOrchestrator;
   const [channel, setChannel] = useState<ChatChannel>("owner");
   const activeChannel: ChatChannel = bothChannels ? channel : "agents";
-  // Собеседник в первом канале: у владельца оркестратор, у оркестратора —
+  // Собеседник в первом канале: у владельца «Секретарь», у оркестратора —
   // владелец. Выбирать его не из чего, поэтому он не адресат из списка, а
   // просто вторая сторона разговора.
-  const counterpart = participants.find(
-    (p) => p.role === (isOwner ? "orchestrator" : "owner"),
+  //
+  // 10.09.2026, карточка 4396f8c9: у владельца тут БЫЛ оркестратор, и первый
+  // канал читался как разговор с ним. Автономного оркестратора решением
+  // 08.09.2026 нет, а канал стал окном постановки задач: владелец наговаривает
+  // сюда работу, её разбирает локальная модель, и ответ про собранную карточку
+  // пишет «Секретарь» — учётка скрипта, не агент (миграция 028). Ищем его по
+  // признакам, а не по зашитому идентификатору: единственный участник, который
+  // машина (type=ai) и при этом не исполнитель (role=viewer).
+  const counterpart = participants.find((p) =>
+    isOwner ? p.role === "viewer" && p.type === "ai" : p.role === "owner",
   );
   // Служебная лента у владельца открыта и на запись. Первый заход прятал
   // здесь строку ввода — «смотришь для контроля» — и владелец сразу же это
@@ -356,7 +366,11 @@ export function ChatScreen() {
             <ChannelTabs
               value={activeChannel}
               onChange={setChannel}
-              counterpartName={(counterpart?.name || "Оркестратор").split(" ")[0]}
+              counterpartName={
+                (counterpart?.name || (isOwner ? "Секретарь" : "Максим")).split(
+                  " ",
+                )[0]
+              }
             />
           ) : undefined
         }
@@ -389,9 +403,14 @@ export function ChatScreen() {
         {isLoading && <Loading className="mt-3" />}
         {!isLoading && messages.length === 0 && (
           <p className="px-5 text-[13px] text-dim mt-3">
+            {/* У владельца первая вкладка — окно постановки задач, и пустой
+                экран это единственное место, где можно сказать, что оно
+                делает: дальше он сам увидит по ответам (карточка 4396f8c9). */}
             {activeChannel === "agents" && isOwner
               ? "Пока пусто — исполнители ещё не переписывались."
-              : "Пока пусто — первое сообщение здесь твоё."}
+              : activeChannel === "owner" && isOwner
+                ? "Пока пусто. Наговорите сюда задачу — разберу и соберу карточку-черновик, останется поставить флаг готовности."
+                : "Пока пусто — первое сообщение здесь твоё."}
           </p>
         )}
         <div className="flex flex-col gap-3 pt-3">

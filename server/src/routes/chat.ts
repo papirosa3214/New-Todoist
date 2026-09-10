@@ -7,9 +7,15 @@
 // один, и Максим оказывался диспетчером четырёх агентов сразу: любой из них
 // адресовался ему напрямую и ждал ответа.
 //
-//   channel='owner'  — разговор владельца с оркестратором. Больше в нём
-//                      никого нет; только оркестратор выносит сюда то, что
-//                      действительно требует слова владельца.
+//   channel='owner'  — ОКНО ПОСТАНОВКИ ЗАДАЧ (10.09.2026, карточка
+//                      4396f8c9). Раньше это был «разговор владельца с
+//                      оркестратором», и написанное сюда уходило поручением
+//                      живому агенту. Автономного оркестратора решением
+//                      08.09.2026 нет и не будет, так что адресовать было
+//                      некому: владелец наговаривает сюда задачу, её
+//                      разбирает локальная модель, и в ответ приходит
+//                      карточка-черновик. Думающего посредника в этом канале
+//                      нет — работает скрипт (lib/ownerDraft.ts).
 //   channel='agents' — рабочая переписка исполнителей и оркестратора.
 //                      Владелец её читает для контроля и может написать в неё
 //                      сам, если хочет озадачить кого-то лично. Адресатом он
@@ -34,6 +40,7 @@ import {
 } from "./attachments.js";
 import { routeAddressee, loadCatalog } from "./agent-inbox.js";
 import { registryRecord } from "../agentState.js";
+import { startDraftFromChat } from "../lib/ownerDraft.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -238,10 +245,14 @@ function ownerReplyWindow(
 /**
  * Куда ляжет сообщение и кому оно в итоге адресовано.
  *
- * Владелец пишет — в свой канал и оркестратору: адресата он там не
- * выбирает, в этом и смысл «вести диалог только с тобой». Обратно
- * оркестратор отвечает ему туда же. Любой другой отправитель, адресующийся
- * владельцу, получает отказ с подсказкой, куда нести вопрос.
+ * Владелец пишет — в своё окно постановки задач, и адресата у такого
+ * сообщения НЕТ (10.09.2026, карточка 4396f8c9). Раньше сервер молча
+ * подставлял сюда оркестратора, и надиктовка становилась поручением живому
+ * агенту; сейчас её разбирает локальная модель, а агента будить незачем и
+ * некого. Обратно оркестратор по-прежнему может ответить владельцу в тот же
+ * канал — учётка из чата не убрана, она просто больше не адресат поручений.
+ * Любой другой отправитель, адресующийся владельцу, получает отказ с
+ * подсказкой, куда нести вопрос.
  *
  * ⚠️ Запреты здесь — ИСПОЛНИТЕЛЯМ, но не хозяину (поправка оркестратора
  * 28.08.2026): «он владелец, а не участник схемы — если он всё же отправит
@@ -268,7 +279,7 @@ function routeMessage(
   if (fromUserId === owner)
     return wanted === "agents"
       ? { channel: "agents", toUserId }
-      : { channel: "owner", toUserId: orchestrator };
+      : { channel: "owner", toUserId: null };
 
   if (toUserId === owner) {
     if (fromUserId === orchestrator)
@@ -434,11 +445,9 @@ export function registerChatRoutes(app: FastifyInstance) {
     const allowed = visibleChannels(req.userId);
     const requested = req.query.channel || null;
     if (requested && !CHANNELS.includes(requested as Channel))
-      return reply
-        .code(400)
-        .send({
-          error: `channel должен быть одним из: ${CHANNELS.join(", ")}`,
-        });
+      return reply.code(400).send({
+        error: `channel должен быть одним из: ${CHANNELS.join(", ")}`,
+      });
     if (requested && !allowed.includes(requested as Channel))
       return reply.code(403).send({
         error:
@@ -562,11 +571,9 @@ export function registerChatRoutes(app: FastifyInstance) {
     // лишним полем в JSON.
     const wanted = req.body?.channel || null;
     if (wanted && !CHANNELS.includes(wanted as Channel))
-      return reply
-        .code(400)
-        .send({
-          error: `channel должен быть одним из: ${CHANNELS.join(", ")}`,
-        });
+      return reply.code(400).send({
+        error: `channel должен быть одним из: ${CHANNELS.join(", ")}`,
+      });
 
     const routed = routeMessage(req.userId, toUserId, wanted as Channel | null);
     // Отказ ВОЗВРАЩАЕТ написанное (поправка оркестратора 28.08.2026):
@@ -612,7 +619,13 @@ export function registerChatRoutes(app: FastifyInstance) {
     // каталога команды: явный адресат приоритетен, иначе fallback в
     // Оркестратора. Обычный чат без task_id или без адресата — НЕ пишем
     // (это не поручение).
-    if (taskId && toUserId) {
+    //
+    // Только СЛУЖЕБНАЯ лента (10.09.2026, карточка 4396f8c9): окно
+    // постановки задач поручений не порождает вовсе. Раньше владелец,
+    // написавший в своё окно по карточке, поднимал этим сессию агента —
+    // ровно то, от чего окно и отделяется. Раздать работу он по-прежнему
+    // может, но явно и в служебной ленте, где адресат виден.
+    if (taskId && toUserId && routed.channel === "agents") {
       try {
         const inboxTo = routeAddressee(toUserId, req.userId, loadCatalog());
         const inboxId = uid();
@@ -623,21 +636,35 @@ export function registerChatRoutes(app: FastifyInstance) {
               task_version, kind, event_type, status, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'chat', 'sent', datetime('now'))`,
         ).run(
-          inboxId, id, inboxTo, text, taskId,
-          (db.prepare("SELECT current_revision FROM tasks WHERE id=?").get(taskId) as any)?.current_revision ?? null,
+          inboxId,
+          id,
+          inboxTo,
+          text,
+          taskId,
+          (
+            db
+              .prepare("SELECT current_revision FROM tasks WHERE id=?")
+              .get(taskId) as any
+          )?.current_revision ?? null,
           bodyKind,
         );
         registryRecord({
           source: "chat",
           trigger: "POST /api/chat",
           toUserId: inboxTo,
-          data: { chat_message_id: id, task_id: taskId, event_type: "chat", source: bodyKind },
+          data: {
+            chat_message_id: id,
+            task_id: taskId,
+            event_type: "chat",
+            source: bodyKind,
+          },
           result: "inbox_sent",
         });
       } catch (e: any) {
         // Дедупликация — ТОЛЬКО по chat_message_id (Reviewer 5f292e87: чат
         // ловил любой UNIQUE). Прочие конфликты пробрасываем.
-        if (!String(e?.message || "").includes("agent_inbox.chat_message_id")) throw e;
+        if (!String(e?.message || "").includes("agent_inbox.chat_message_id"))
+          throw e;
       }
     }
 
@@ -675,9 +702,19 @@ export function registerChatRoutes(app: FastifyInstance) {
     // делает канал каналом, а не парой личных сообщений. Служебный канал
     // уходит и владельцу — он смотрит в него для контроля, и лента у него
     // должна обновляться живьём, как у всех.
+    //
+    // ⚠️ Окно постановки задач рассылается ТОЛЬКО владельцу и адресату, а не
+    // всем, кому канал виден (10.09.2026, карточка 4396f8c9). Резидент
+    // оркестратора просыпается на любое событие chat:new, которое до него
+    // долетело (~/.claude/skills/taskflow/server.ts), — то есть прежняя
+    // рассылка «владельцу и оркестратору» и БЫЛА тем самым поручением,
+    // независимо от того, что написано в поле адресата. Надиктовка теперь
+    // никого не будит: у неё адресата нет, и уходит она только на экраны
+    // самого владельца. Ответ оркестратора владельцу (адресат — владелец)
+    // по-прежнему доезжает обоим.
     const audience =
       routed.channel === "owner"
-        ? [...new Set([ownerId(), orchestratorId()].filter(Boolean))]
+        ? [...new Set([ownerId(), routed.toUserId, req.userId].filter(Boolean))]
         : (
             db.prepare("SELECT id FROM users").all() as Array<{ id: string }>
           ).map((r) => r.id);
@@ -691,6 +728,16 @@ export function registerChatRoutes(app: FastifyInstance) {
     notifyHermesWebhook(message);
     notifyOrchestratorOfDirect(req.userId, routed, taskId);
     maybeRaiseCeilingAlarm(req.userId);
+
+    // Надиктовка в окно постановки задач — на разбор локальной моделью
+    // (10.09.2026, карточка 4396f8c9). Не ждём: разбор идёт десятки секунд, а
+    // отправка сообщения должна вернуться сразу. Сообщение уже записано, так
+    // что даже мёртвая модель ничего не отнимает — она отнимет только
+    // карточку, и об этом владельцу ответят в ту же ленту.
+    //
+    // Сообщение С карточкой сюда не идёт: это не постановка новой задачи, а
+    // разговор про уже существующую.
+    if (routed.channel === "owner" && !taskId) startDraftFromChat(message);
 
     return message;
   });
@@ -772,6 +819,12 @@ export function registerChatRoutes(app: FastifyInstance) {
     // ОТВЕТ на его же вопрос лежит в служебной ленте (28.08.2026, карточка
     // 4caa266f), и без этой строчки он спросил бы и не узнал, что ответили.
     // Остальным она ничего не меняет: служебная лента у них и так в списке.
+    // Последнее условие — про надиктовку в окно постановки задач
+    // (10.09.2026, карточка 4396f8c9): у неё нет адресата, и «без адресата»
+    // в этом канале больше не значит «всем». Без этой строчки надиктовка
+    // владельца легла бы в непрочитанное оркестратору — тот же зов агента,
+    // только через счётчик. Самому владельцу она и так не считается: своё
+    // отсекает from_user_id.
     const { n } = db
       .prepare(
         `SELECT COUNT(*) as n FROM chat_messages
@@ -779,6 +832,7 @@ export function registerChatRoutes(app: FastifyInstance) {
                   OR (channel = 'agents' AND to_user_id = ?))
              AND from_user_id != ?
              AND (to_user_id IS NULL OR to_user_id = ?)
+             AND NOT (channel = 'owner' AND to_user_id IS NULL)
              AND created_at > ?`,
       )
       .get(...channels, req.userId, req.userId, req.userId, since) as {

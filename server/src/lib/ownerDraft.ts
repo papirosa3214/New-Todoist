@@ -1,0 +1,333 @@
+// Окно постановки задач: надиктовка владельца в чат → карточка-черновик.
+// Карточка 4396f8c9, 10.09.2026.
+//
+// ЗАМЫСЕЛ ВЛАДЕЛЬЦА, его словами: «я в чат просто наговорил — у меня сразу
+// подключилась локальная модель, тут же разобрала всё, и в чате появляется
+// карточка задачи, я открываю, читаю, и остаётся только флаг готовности
+// поставить». Расписывает МАШИНА, целиком: название, описание, шаги, срок,
+// приоритет, проект и разбиение на карточки — «самому сидеть и расписывать
+// это всё мне вообще не хочется».
+//
+// ЧЕГО ЗДЕСЬ НЕТ И НЕ ДОЛЖНО БЫТЬ. Думающего посредника: решением 08.09.2026
+// автономного оркестратора нет, и надиктовка не будит ни одного агента —
+// работает этот скрипт и локальная модель. Карточка при этом появляется БЕЗ
+// флага готовности (миграция 026): модель разберёт криво — не тот проект,
+// лишние шаги, — и до тех пор, пока владелец не откроет черновик и не поднимет
+// флаг, взять её нельзя никому.
+//
+// ПОЧЕМУ В ФОНЕ. Разбор идёт на локальной модели и занимает десятки секунд,
+// а иногда упирается в двухминутный таймаут. Держать на нём HTTP-ответ на
+// отправку сообщения нельзя: у владельца просто не отправлялось бы сообщение
+// в чат, пока модель думает. Поэтому запись сообщения и разбор разведены —
+// сообщение ложится сразу, разбор догоняет ответом в ту же ленту.
+import crypto from "crypto";
+import { spawn } from "child_process";
+import db from "../db.js";
+import { logEvent } from "../agentState.js";
+import { broadcastToUsers } from "../ws.js";
+import {
+  structureDictationToCards,
+  type DictationCards,
+} from "../routes/ai.js";
+
+const uid = () => crypto.randomUUID();
+
+/** Учётка, от чьего имени приходит ответ про собранную карточку. Заводится
+ *  миграцией 028; это лицо в переписке, а не исполнитель. */
+const SECRETARY_ID = "u-secretary";
+
+/** Общий отправщик тревог машины (~/infra-ops/alert_send.py): повтор, журнал
+ *  недоставленного и запасная дорога в Telegram мимо n8n. Он же — «пуш на
+ *  телефон»: приложение владельца APNs-алертов не получает (ключ настроен
+ *  только под островок, см. apns.ts), а Telegram доходит и на свёрнутом
+ *  приложении. Свой упрощённый POST в вебхук здесь был бы третьей дорогой
+ *  наружу без повтора и без учёта потерь — утренняя сводка считает их по
+ *  журналу этого скрипта. */
+const ALERT_SEND = `${process.env.HOME}/infra-ops/alert_send.py`;
+
+function ownerId(): string | null {
+  const row = db
+    .prepare(
+      "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+    )
+    .get() as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+/**
+ * Пуш на телефон — отдельным процессом, fire-and-forget.
+ *
+ * Ни ошибка запуска, ни отсутствие скрипта не должны ронять разбор: карточка
+ * к этому моменту уже создана, и потерять её из-за недоставленного
+ * уведомления было бы хуже самого молчания. Скрипт лежит вне репозитория,
+ * поэтому отношение к нему такое же мягкое, как у сторожей (см.
+ * chat_resident_watch.py).
+ *
+ * ⛔ В тестах не отправляем — и это не косметика. Прогон 10.09.2026 разбудил
+ * настоящий канал тревог, и владельцу прилетело в Telegram пять сообщений о
+ * несуществующих карточках. Отправщик тут настоящий, общий для всей машины:
+ * всё, что он умеет (повтор, запасная дорога), он проделает и с тестовыми
+ * данными.
+ */
+function pushToPhone(title: string, text: string) {
+  if (process.env.NODE_ENV === "test") return;
+  try {
+    const child = spawn(
+      "python3",
+      [
+        ALERT_SEND,
+        "--source",
+        "taskflow-dictation",
+        "--level",
+        "info",
+        "--title",
+        title,
+        "--text",
+        text,
+      ],
+      { stdio: "ignore", detached: true },
+    );
+    child.on("error", (err) =>
+      console.warn("окно постановки: пуш не ушёл:", err.message),
+    );
+    child.unref();
+  } catch (err: any) {
+    console.warn("окно постановки: пуш не запустился:", err?.message || err);
+  }
+}
+
+/**
+ * Ответ в ленту окна постановки — от «Секретаря», с привязкой к карточке.
+ *
+ * task_id у сообщения чата — уже готовый механизм (у сообщения есть поле,
+ * клиент рисует по нему название карточки ссылкой), отдельной «ссылки» тут
+ * изобретать не нужно.
+ *
+ * Рассылка — ТОЛЬКО владельцу: это его окно, и всякий, кому событие chat:new
+ * долетело, просыпается (см. chat.ts, аудитория канала owner).
+ */
+function replyInChat(text: string, taskId: string | null) {
+  const owner = ownerId();
+  if (!owner) return;
+  const id = uid();
+  db.prepare(
+    `INSERT INTO chat_messages (id, from_user_id, to_user_id, task_id, kind, text, channel)
+     VALUES (?, ?, ?, ?, NULL, ?, 'owner')`,
+  ).run(id, SECRETARY_ID, owner, taskId, text);
+
+  const message = db
+    .prepare(
+      `SELECT m.*,
+              f.name as from_user_name, f.avatar_color as from_user_color,
+              f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
+              d.name as to_user_name, d.avatar_color as to_user_color,
+              t.title as task_title
+         FROM chat_messages m
+         LEFT JOIN users f ON f.id = m.from_user_id
+         LEFT JOIN users d ON d.id = m.to_user_id
+         LEFT JOIN tasks t ON t.id = m.task_id
+        WHERE m.id = ?`,
+    )
+    .get(id);
+  broadcastToUsers([owner], { type: "chat:new", message });
+}
+
+/** Строка очереди в описании дочерней карточки — тем же приёмом, каким
+ *  владелец пишет её руками: «⛓ ОЧЕРЕДЬ: после карточки «…»». Отдельной
+ *  таблицы зависимостей в трекере нет, и заводить её здесь — далеко за
+ *  границами карточки; порядок между карточками живёт как договорённость в
+ *  тексте плюс position внутри проекта. */
+function queueLine(afterTitle: string): string {
+  return `⛓ ОЧЕРЕДЬ: после карточки «${afterTitle}»`;
+}
+
+/**
+ * Создать черновик: родительская карточка, её шаги и дочерние карточки.
+ *
+ * Всё одной транзакцией: пачка карточек, из которой половина доехала, а
+ * половина нет, — худший исход из возможных. Либо постановка есть целиком,
+ * либо её нет и надиктовка цела.
+ */
+function createDraftCards(cards: DictationCards, owner: string): string {
+  const parentId = uid();
+  const childIds: string[] = cards.children.map(() => uid());
+
+  const txn = db.transaction(() => {
+    // ready_for_pickup не указываем — колонка стоит с DEFAULT 0 (миграция
+    // 026), и это ровно то, что нужно: карточка машины лежит запертой, пока
+    // владелец не поднимет флаг сам. Исполнителя тоже не назначаем: кому
+    // делать — решает владелец, когда читает черновик.
+    const insTask = db.prepare(
+      `INSERT INTO tasks (id, title, description, due_date, project_id,
+                          priority, creator_id, parent_id, position)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insSub = db.prepare(
+      "INSERT INTO subtasks (id, task_id, title, position) VALUES (?, ?, ?, ?)",
+    );
+
+    insTask.run(
+      parentId,
+      cards.title,
+      cards.description || null,
+      cards.dueDate,
+      cards.projectId,
+      cards.priority,
+      owner,
+      null,
+      null,
+    );
+    cards.subtasks.forEach((t, i) => insSub.run(uid(), parentId, t, i + 1));
+
+    cards.children.forEach((child, i) => {
+      // Порядок между дочерними: position задаёт место в списке, а строка
+      // очереди в описании — от какой карточки эта зависит. Модель называет
+      // предшественницу номером в своём же списке (after), сверка на
+      // осмысленность уже сделана в разборе.
+      const parts: string[] = [];
+      if (child.after !== null) {
+        parts.push(queueLine(cards.children[child.after - 1].title));
+      }
+      if (child.description) parts.push(child.description);
+      insTask.run(
+        childIds[i],
+        child.title,
+        parts.length ? parts.join("\n\n") : null,
+        null,
+        cards.projectId,
+        cards.priority,
+        owner,
+        parentId,
+        i + 1,
+      );
+      child.subtasks.forEach((t, j) =>
+        insSub.run(uid(), childIds[i], t, j + 1),
+      );
+    });
+
+    logEvent({
+      taskId: parentId,
+      actorId: owner,
+      kind: "task_created",
+      field: "task",
+      toValue: cards.title,
+    });
+    if (cards.subtasks.length) {
+      logEvent({
+        taskId: parentId,
+        actorId: owner,
+        kind: "subtasks_seeded",
+        field: "subtask",
+        toValue: String(cards.subtasks.length),
+      });
+    }
+    childIds.forEach((cid, i) => {
+      logEvent({
+        taskId: cid,
+        actorId: owner,
+        kind: "task_created",
+        field: "task",
+        toValue: cards.children[i].title,
+      });
+    });
+  });
+  txn();
+
+  return parentId;
+}
+
+/** Человеческий пересказ того, что вышло, — им же уходит и в чат, и в пуш. */
+function summary(cards: DictationCards): string {
+  const bits = [`${cards.subtasks.length} шагов`];
+  if (cards.children.length) bits.push(`${cards.children.length} дочерних`);
+  const project = cards.projectId
+    ? (
+        db
+          .prepare("SELECT name FROM projects WHERE id = ?")
+          .get(cards.projectId) as { name: string } | undefined
+      )?.name
+    : null;
+  if (project) bits.push(`проект «${project}»`);
+  return bits.join(", ");
+}
+
+/**
+ * Разобрать надиктовку и завести черновик. Вызывается из chat.ts и НИЧЕГО не
+ * возвращает: отправку сообщения в чат разбор задерживать не должен.
+ *
+ * Повторная доставка того же сообщения второй карточки не заводит: строка в
+ * chat_task_drafts ставится ДО обращения к модели и ключом идёт
+ * chat_message_id, поэтому второй заход упирается в PRIMARY KEY и молча
+ * уходит.
+ */
+export function startDraftFromChat(message: {
+  id: string;
+  from_user_id: string;
+  text: string;
+}): void {
+  const owner = ownerId();
+  if (!owner || message.from_user_id !== owner) return;
+  const text = (message.text || "").trim();
+  if (!text) return;
+
+  try {
+    db.prepare(
+      "INSERT INTO chat_task_drafts (chat_message_id, status) VALUES (?, 'pending')",
+    ).run(message.id);
+  } catch {
+    // Уже разбирается или разобрано — повтор молча глотаем, как и остальная
+    // дедупликация доставки в проекте (agent_inbox по chat_message_id).
+    return;
+  }
+
+  void (async () => {
+    try {
+      const projects = db
+        .prepare("SELECT id, name FROM projects ORDER BY name")
+        .all() as Array<{ id: string; name: string }>;
+      const cards = await structureDictationToCards(text, projects);
+      const taskId = createDraftCards(cards, owner);
+
+      db.prepare(
+        `UPDATE chat_task_drafts
+            SET status = 'done', task_id = ?, finished_at = datetime('now')
+          WHERE chat_message_id = ?`,
+      ).run(taskId, message.id);
+
+      const what = summary(cards);
+      replyInChat(
+        `Собрал из надиктовки карточку-черновик: ${what}. ` +
+          `Откройте, поправьте что не так и поставьте флаг готовности — ` +
+          `до этого взять её никто не может.`,
+        taskId,
+      );
+      pushToPhone(
+        "TaskFlow: карточка из надиктовки",
+        `«${cards.title}» — ${what}. Ждёт вашего флага готовности.`,
+      );
+    } catch (err: any) {
+      // Отказ модели не должен стоить владельцу надиктовки: сообщение уже
+      // лежит в ленте целым, здесь остаётся объяснить, почему карточки нет.
+      // Причина пишется и в chat_task_drafts — по ней видно, что разбор
+      // вообще пытались сделать, даже если ответ в чат почему-то не дошёл.
+      const reason = String(err?.message || err || "неизвестная причина");
+      db.prepare(
+        `UPDATE chat_task_drafts
+            SET status = 'failed', error = ?, finished_at = datetime('now')
+          WHERE chat_message_id = ?`,
+      ).run(reason, message.id);
+      console.warn("окно постановки: разбор не удался:", reason);
+
+      replyInChat(
+        `Не смог собрать карточку: ${reason} ` +
+          `Надиктовка цела — она выше в этой ленте. ` +
+          `Можно попробовать ещё раз, отправив её повторно.`,
+        null,
+      );
+      pushToPhone(
+        "TaskFlow: карточка не собралась",
+        `Разбор надиктовки не удался: ${reason} Сама надиктовка цела, лежит в чате.`,
+      );
+    }
+  })();
+}

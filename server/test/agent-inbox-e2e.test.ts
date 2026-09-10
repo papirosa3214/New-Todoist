@@ -25,7 +25,11 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
     const owner = await app.inject({
       method: "POST",
       url: "/api/auth/register",
-      payload: { name: "Owner", email: "owner@e2e-flow.test", password: "password123" },
+      payload: {
+        name: "Owner",
+        email: "owner@e2e-flow.test",
+        password: "password123",
+      },
     });
     ownerToken = owner.json().token;
     ownerId = owner.json().user.id;
@@ -34,7 +38,11 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
     const a = await app.inject({
       method: "POST",
       url: "/api/auth/register",
-      payload: { name: "AgentA", email: "a@e2e-flow.test", password: "password123" },
+      payload: {
+        name: "AgentA",
+        email: "a@e2e-flow.test",
+        password: "password123",
+      },
     });
     agentAId = a.json().user.id;
     db.prepare("UPDATE users SET type = 'ai' WHERE id = ?").run(agentAId);
@@ -48,7 +56,11 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
     const b = await app.inject({
       method: "POST",
       url: "/api/auth/register",
-      payload: { name: "AgentB", email: "b@e2e-flow.test", password: "password123" },
+      payload: {
+        name: "AgentB",
+        email: "b@e2e-flow.test",
+        password: "password123",
+      },
     });
     agentBId = b.json().user.id;
     db.prepare("UPDATE users SET type = 'ai' WHERE id = ?").run(agentBId);
@@ -81,17 +93,31 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
       headers: auth(agentAToken),
     });
     const items = pending.json().items as any[];
-    const asg = items.find((i) => i.event_type === "assignment" && i.task_id === taskId);
+    const asg = items.find(
+      (i) => i.event_type === "assignment" && i.task_id === taskId,
+    );
     expect(asg).toBeTruthy();
     expect(asg.to_user_id).toBe(agentAId);
   });
 
   it("сообщение в чат по задаче с адресатом создаёт event_type=chat", async () => {
+    // channel: "agents" здесь ОБЯЗАТЕЛЕН с 10.09.2026 (карточка 4396f8c9):
+    // сообщение владельца без явной ленты ложится в его окно постановки
+    // задач, а оно поручений не порождает вовсе — там владелец наговаривает
+    // новую работу, а не раздаёт существующую. Озадачить исполнителя лично
+    // он по-прежнему может, но в рабочей ленте, где адресат это увидит: до
+    // правки поручение уходило агенту по сообщению, которое лежало в
+    // невидимом ему канале.
     const chat = await app.inject({
       method: "POST",
       url: "/api/chat",
       headers: auth(ownerToken),
-      payload: { text: "сделай это", task_id: taskId, to_user_id: agentAId },
+      payload: {
+        text: "сделай это",
+        task_id: taskId,
+        to_user_id: agentAId,
+        channel: "agents",
+      },
     });
     expect(chat.statusCode).toBe(200);
     const pending = await app.inject({
@@ -100,7 +126,9 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
       headers: auth(agentAToken),
     });
     const items = pending.json().items as any[];
-    const chatItem = items.find((i) => i.event_type === "chat" && i.chat_message_id === chat.json().id);
+    const chatItem = items.find(
+      (i) => i.event_type === "chat" && i.chat_message_id === chat.json().id,
+    );
     expect(chatItem).toBeTruthy();
   });
 
@@ -115,7 +143,14 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
       method: "POST",
       url: "/api/chat",
       headers: auth(ownerToken),
-      payload: { text: "повторная доставка", task_id: taskId, to_user_id: agentAId },
+      payload: {
+        text: "повторная доставка",
+        task_id: taskId,
+        to_user_id: agentAId,
+        // Та же причина, что абзацем выше: поручение родит только рабочая
+        // лента, окно постановки задач — нет.
+        channel: "agents",
+      },
     });
     expect(first.statusCode).toBe(200);
     const mid = first.json().id as string;
@@ -138,7 +173,9 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
     expect(again.json().inbox_id).toBeNull();
 
     const rows = db
-      .prepare("SELECT count(*) as c FROM agent_inbox WHERE chat_message_id = ?")
+      .prepare(
+        "SELECT count(*) as c FROM agent_inbox WHERE chat_message_id = ?",
+      )
       .get(mid) as any;
     expect(rows.c).toBe(1);
 
@@ -166,7 +203,9 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
 
     // Отметить чужое поручение — 403.
     const anAsg = db
-      .prepare("SELECT id FROM agent_inbox WHERE to_user_id = ? AND event_type = 'assignment' LIMIT 1")
+      .prepare(
+        "SELECT id FROM agent_inbox WHERE to_user_id = ? AND event_type = 'assignment' LIMIT 1",
+      )
       .get(agentAId) as any;
     const mark = await app.inject({
       method: "POST",
@@ -207,7 +246,9 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
       headers: auth(agentAToken),
     });
     const items = pending.json().items as any[];
-    const ret = items.find((i) => i.event_type === "review_return" && i.task_id === taskId);
+    const ret = items.find(
+      (i) => i.event_type === "review_return" && i.task_id === taskId,
+    );
     expect(ret).toBeTruthy();
     expect(ret.body_text).toBe("доделай X");
   });
@@ -232,7 +273,9 @@ describe("agent inbox: реальный поток (5f292e87)", () => {
       },
     });
     const inboxId = enq.json().inbox_id;
-    db.prepare("UPDATE tasks SET current_revision = current_revision + 2 WHERE id = ?").run(taskId);
+    db.prepare(
+      "UPDATE tasks SET current_revision = current_revision + 2 WHERE id = ?",
+    ).run(taskId);
 
     const mark = await app.inject({
       method: "POST",

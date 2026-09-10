@@ -41,6 +41,56 @@ const STRUCTURE_SYSTEM_PROMPT = `Ты умный персональный асс
   "priority": 4
 }`;
 
+// ═══════════ Надиктовка в чат → пачка карточек ═══════════
+//
+// 10.09.2026, карточка 4396f8c9. Мост выше (STRUCTURE_SYSTEM_PROMPT) собирает
+// ОДНУ карточку — название, описание, шаги, срок, приоритет — и этого хватало,
+// пока разбор жил в форме задачи: владелец сам решал, одна это карточка или
+// пять. В окне постановки задач решать некому, а замысел владельца — «самому
+// сидеть и расписывать это всё мне вообще не хочется». Поэтому здесь модель
+// отвечает и за разбиение: родительская карточка плюс дочерние, с порядком
+// между ними и предложенным проектом.
+//
+// Дочерние — не всегда: надиктовка про одно дело остаётся одной карточкой с
+// шагами, и пустой children в ответе это нормальный, а не бракованный разбор.
+// Дробить одно дело на карточки ради дробления хуже, чем не дробить: владелец
+// получит доску из огрызков и будет их склеивать руками.
+const DICTATION_SYSTEM_PROMPT = `Ты разбираешь надиктовку владельца трекера задач в готовую постановку.
+Текст надиктован голосом: в нём есть слова-паразиты, повторы и оговорки — их надо убрать, смысл сохранить.
+
+Верни ОДИН JSON-объект такой формы:
+{
+  "title": "короткое название главной задачи, 3-8 слов",
+  "description": "чистое описание: что надо сделать и зачем, без слов-паразитов",
+  "subtasks": ["шаг 1", "шаг 2"],
+  "due_date": null,
+  "priority": 4,
+  "project": null,
+  "children": [
+    {"title": "название дочерней карточки", "description": "что в ней сделать", "subtasks": ["шаг"], "after": null}
+  ]
+}
+
+ГЛАВНОЕ РЕШЕНИЕ — сколько в надиктовке ДЕЛ:
+- Одно дело — это один результат, который сдают целиком. Тогда "children" пустой, а вся конкретика идёт в "subtasks".
+- Несколько дел — это разные результаты: их можно сдать по отдельности, делать в разное время и поручить разным людям. Тогда КАЖДОЕ становится дочерней карточкой в "children", даже если названы они в одном предложении.
+- Признаки, что дел несколько: «а ещё», «отдельно», «потом», «заодно», «и не связанное с этим», перечисление через «во-первых/во-вторых», разные предметы работы (одно про интерфейс, другое про документацию).
+- Не превращай шаги ОДНОГО дела в дочерние карточки: «купить масло», «слить старое», «залить новое» — это шаги, а не отдельные дела.
+
+Пример надиктовки с несколькими делами: «почини кнопку в приложении, потом когда починишь добавь туда фильтр, и отдельно напиши инструкцию для новичков, это срочно».
+Правильный разбор: "children" из трёх карточек — «Починить кнопку» (after: null), «Добавить фильтр» (after: 1 — ждёт первую), «Написать инструкцию для новичков» (after: null — ни от чего не зависит).
+
+Остальные правила:
+- "subtasks" главной задачи — 2-6 конкретных шагов. Когда есть дочерние карточки, шаги главной не пересказывают их названия: там остаётся только общее (например, свести результат или проверить целиком). Нечего написать — пустой массив.
+- У КАЖДОЙ дочерней карточки — свои 2-5 шагов в её "subtasks". Карточка без шагов заставит владельца дописывать их руками, а расписывать всё должен ты.
+- "after" у дочерней карточки — номер той дочерней карточки из этого же списка (1 — первая), которую надо закончить ДО неё. Можно начинать сразу — null.
+- Дочерние карточки перечисляй в том порядке, в котором их разумно делать.
+- "due_date" — "ГГГГ-ММ-ДД" или "ГГГГ-ММ-ДД ЧЧ:ММ", если срок назван или ясен из слов вроде «до пятницы»; иначе null.
+- "priority" — 1 срочно, 2 высокий, 3 средний, 4 обычный. Не назван — 4.
+- "project" — название проекта РОВНО из предложенного списка, если работа явно про него; иначе null. Не выдумывай проектов, которых нет в списке.
+
+Ответь ТОЛЬКО этим JSON, без markdown и без пояснений.`;
+
 // ═══════════ Дневник: AI-действия над текстом + мост в задачи ═══════════
 // 25.08.2026, владелец: «дневник с ии мостом в проекты». Три действия над
 // выделением (или всей записью, если ничего не выделено) плюс отдельное
@@ -132,6 +182,11 @@ async function callUnifiedAi(opts: {
    *  60-76с). Максим 26.08.2026: для Дневника пусть думает — там качество
    *  текста важнее секунд. */
   think?: boolean;
+  /** Потолок ответа локальной модели. По умолчанию его хватает всем прежним
+   *  вызовам (замер: ~200 токенов на разбивку). Разбор надиктовки на пачку
+   *  карточек длиннее в разы, и обрезанный на середине JSON не парсится
+   *  вовсе — там потолок поднимается явно. */
+  predictTokens?: number;
 }): Promise<string> {
   const provider = (opts.provider || "local").toLowerCase();
   const requestedModel = opts.aiModel;
@@ -320,7 +375,7 @@ async function callUnifiedAi(opts: {
           // С выключенным think реальный ответ укладывается в ~200 токенов
           // (замер), 2048 — щедрый запас. С включённым (Дневник) бюджет
           // должен вместить и <think>, и сам текст — поэтому больше.
-          num_predict: opts.think ? 4096 : 2048,
+          num_predict: opts.predictTokens ?? (opts.think ? 4096 : 2048),
           temperature: opts.temperature ?? 0.2,
         },
       }),
@@ -580,6 +635,162 @@ async function structureTask(
       parsed.priority <= 4
         ? parsed.priority
         : 4,
+  };
+}
+
+// ── Разбор надиктовки в пачку карточек (карточка 4396f8c9) ──────────────
+
+export interface DictationChild {
+  title: string;
+  description: string;
+  subtasks: string[];
+  /** Номер дочерней карточки (1-based) в этом же списке, после которой можно
+   *  браться за эту. null — ни от чего не зависит. */
+  after: number | null;
+}
+
+export interface DictationCards {
+  title: string;
+  description: string;
+  subtasks: string[];
+  dueDate: string | null;
+  priority: number;
+  /** id проекта из переданного списка. null — модель не выбрала или назвала
+   *  несуществующий: класть карточку наугад хуже, чем оставить без проекта,
+   *  владелец поправит одним касанием. */
+  projectId: string | null;
+  children: DictationChild[];
+}
+
+/** Достаёт JSON-объект из сырого ответа модели — тем же способом, что и
+ *  соседние разборы: сначала как есть, потом по первой '{' и последней '}'. */
+function parseJsonObject(rawContent: string): any {
+  const cleaned = stripCodeFences(stripThinkTags(rawContent)).trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) {
+      throw new OllamaError("Не удалось разобрать ответ модели как JSON.");
+    }
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    } catch {
+      // Иначе наружу ушёл бы текст самого JSON.parse («Unexpected token …
+      // at position 143»), а его читает владелец в чате: причина отказа
+      // должна быть на человеческом языке, а не машинной строкой.
+      throw new OllamaError("Не удалось разобрать ответ модели как JSON.");
+    }
+  }
+}
+
+function cleanTitles(raw: unknown, limit: number): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((s) => (typeof s === "string" ? s.trim() : String(s ?? "").trim()))
+    .filter((s) => s.length > 0)
+    .slice(0, limit);
+}
+
+/**
+ * Надиктовка → родительская карточка, дочерние и порядок между ними.
+ *
+ * Кривой ответ модели НЕ роняет разбор целиком: не разобрались дети —
+ * остаётся одна карточка с шагами, не разобрался проект — карточка без
+ * проекта. Владелец увидит черновик и поправит; полный отказ на месте
+ * сомнительного поля означал бы, что надиктовка пропала зря.
+ */
+export async function structureDictationToCards(
+  rawText: string,
+  projects: Array<{ id: string; name: string }>,
+  opts?: { provider?: string; localModel?: string; aiModel?: string },
+): Promise<DictationCards> {
+  const today = new Date().toISOString().slice(0, 10);
+  const projectList = projects.length
+    ? projects.map((p) => `- ${p.name}`).join("\n")
+    : "(проектов нет)";
+  const content = await callUnifiedAi({
+    systemPrompt: DICTATION_SYSTEM_PROMPT,
+    userPrompt:
+      `Сегодня ${today}.\n\n` +
+      `Проекты, из которых можно выбрать:\n${projectList}\n\n` +
+      `Надиктовка:\n"${rawText.trim().slice(0, 6000)}"`,
+    provider: opts?.provider,
+    localModel: opts?.localModel,
+    aiModel: opts?.aiModel,
+    temperature: 0.2,
+    // Родитель с шагами плюс несколько детей со своими шагами в 2048 токенов
+    // не всегда влезают, а обрезанный JSON не парсится вовсе.
+    predictTokens: 4096,
+  });
+
+  const parsed = parseJsonObject(content);
+
+  const title =
+    typeof parsed?.title === "string" && parsed.title.trim()
+      ? parsed.title.trim()
+      : rawText.trim().slice(0, 60);
+
+  // Проект сверяем по имени: скопировать UUID маленькая модель промахивается
+  // куда чаще, чем повторить название, а сверка всё равно наша.
+  let projectId: string | null = null;
+  if (typeof parsed?.project === "string" && parsed.project.trim()) {
+    const wanted = parsed.project.trim().toLowerCase();
+    projectId =
+      projects.find((p) => p.name.toLowerCase() === wanted)?.id ??
+      projects.find((p) => p.name.toLowerCase().includes(wanted))?.id ??
+      null;
+  }
+
+  const children: DictationChild[] = Array.isArray(parsed?.children)
+    ? parsed.children
+        .map((c: any): DictationChild | null => {
+          const t = typeof c?.title === "string" ? c.title.trim() : "";
+          if (!t) return null;
+          const after =
+            typeof c?.after === "number" && Number.isInteger(c.after)
+              ? c.after
+              : null;
+          return {
+            title: t,
+            description:
+              typeof c?.description === "string" ? c.description.trim() : "",
+            subtasks: cleanTitles(c?.subtasks, 10),
+            after,
+          };
+        })
+        .filter((c: DictationChild | null): c is DictationChild => c !== null)
+        .slice(0, 10)
+    : [];
+
+  // Ссылка «после карточки N» проверяется здесь, а не на месте использования:
+  // модель охотно ставит after на саму себя или на карточку ниже по списку, и
+  // такой порядок нарисовал бы очередь, которую никто не пройдёт.
+  children.forEach((child, i) => {
+    if (child.after === null) return;
+    if (child.after < 1 || child.after > i) child.after = null;
+  });
+
+  return {
+    title,
+    description:
+      typeof parsed?.description === "string" && parsed.description.trim()
+        ? parsed.description.trim()
+        : rawText.trim(),
+    subtasks: cleanTitles(parsed?.subtasks, 10),
+    dueDate:
+      typeof parsed?.due_date === "string" && parsed.due_date.trim()
+        ? parsed.due_date.trim()
+        : null,
+    priority:
+      typeof parsed?.priority === "number" &&
+      parsed.priority >= 1 &&
+      parsed.priority <= 4
+        ? parsed.priority
+        : 4,
+    projectId,
+    children,
   };
 }
 
