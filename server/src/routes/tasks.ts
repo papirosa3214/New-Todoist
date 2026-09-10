@@ -11,7 +11,12 @@ import {
   getProjectForFiling,
   seesEveryTask,
 } from "../access.js";
-import { isStale, logEvent, registryRecord, releaseSubtaskWork } from "../agentState.js";
+import {
+  isStale,
+  logEvent,
+  registryRecord,
+  releaseSubtaskWork,
+} from "../agentState.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -115,13 +120,16 @@ export function withAgentStale(task: any, subtasks?: any[], children?: any[]) {
   }
 
   // Оркестратор не считается пропавшим, пока его дочерние задачи активны (в работе у других ботов)
-  const hasActiveChildren = children && children.some((c: any) => c.status === "active");
+  const hasActiveChildren =
+    children && children.some((c: any) => c.status === "active");
 
   return {
     ...task,
     agent_state,
     agent_heartbeat_at,
-    agent_stale: hasActiveChildren ? false : (agent_state === "in_progress" && isStale(agent_heartbeat_at)),
+    agent_stale: hasActiveChildren
+      ? false
+      : agent_state === "in_progress" && isStale(agent_heartbeat_at),
   };
 }
 
@@ -180,20 +188,26 @@ export function hydrateTask(task: any) {
     .all(task.id)
     .map(withSubtaskState);
   const children = db
-    .prepare(`SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`)
+    .prepare(
+      `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`,
+    )
     .all(task.id)
-    .map(t => {
-       const childLabels = db
+    .map((t) => {
+      const childLabels = db
         .prepare(
           `SELECT l.id, l.name, l.color FROM labels l
            JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?`,
         )
         .all((t as any).id);
-       const childSubtasks = db
+      const childSubtasks = db
         .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
         .all((t as any).id)
         .map(withSubtaskState);
-       return { ...withAgentStale(t, childSubtasks), labels: childLabels, subtasks: childSubtasks };
+      return {
+        ...withAgentStale(t, childSubtasks),
+        labels: childLabels,
+        subtasks: childSubtasks,
+      };
     });
 
   return {
@@ -248,7 +262,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const tasks = (
       seesEveryTask(userId)
         ? db
-            .prepare(`SELECT ${columns} ${joins} ${includeChildren ? "" : "WHERE (t.parent_id IS NULL OR t.project_id IS NOT NULL)"} ORDER BY t.created_at DESC`)
+            .prepare(
+              `SELECT ${columns} ${joins} ${includeChildren ? "" : "WHERE (t.parent_id IS NULL OR t.project_id IS NOT NULL)"} ORDER BY t.created_at DESC`,
+            )
             .all()
         : db
             .prepare(
@@ -318,20 +334,28 @@ export function registerTaskRoutes(app: FastifyInstance) {
         .all(task.id)
         .map(withSubtaskState);
       const children = db
-        .prepare(`SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`)
+        .prepare(
+          `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`,
+        )
         .all(task.id)
-        .map(t => {
-           const childLabels = db
+        .map((t) => {
+          const childLabels = db
             .prepare(
               `SELECT l.id, l.name, l.color FROM labels l
                JOIN task_labels tl ON tl.label_id = l.id WHERE tl.task_id = ?`,
             )
             .all((t as any).id);
-           const childSubtasks = db
-            .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
+          const childSubtasks = db
+            .prepare(
+              "SELECT * FROM subtasks WHERE task_id = ? ORDER BY position",
+            )
             .all((t as any).id)
             .map(withSubtaskState);
-           return { ...withAgentStale(t, childSubtasks), labels: childLabels, subtasks: childSubtasks };
+          return {
+            ...withAgentStale(t, childSubtasks),
+            labels: childLabels,
+            subtasks: childSubtasks,
+          };
         });
       const comments = db
         .prepare(
@@ -619,7 +643,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
           assignee_id,
           trimmedTitle,
           id,
-          (db.prepare("SELECT current_revision FROM tasks WHERE id=?").get(id) as any)?.current_revision ?? null,
+          (
+            db
+              .prepare("SELECT current_revision FROM tasks WHERE id=?")
+              .get(id) as any
+          )?.current_revision ?? null,
         );
         registryRecord({
           source: "assignment",
@@ -665,8 +693,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
 
       const task = getTaskRow(id);
       const hydrated = hydrateTask(task);
-      const ownerRow = db.prepare("SELECT id FROM users WHERE role = 'owner'").get() as any;
-      const notifyUsers = new Set<string>([req.userId, assignee_id, ownerRow?.id].filter(Boolean));
+      const ownerRow = db
+        .prepare("SELECT id FROM users WHERE role = 'owner'")
+        .get() as any;
+      const notifyUsers = new Set<string>(
+        [req.userId, assignee_id, ownerRow?.id].filter(Boolean),
+      );
       broadcastToUsers(Array.from(notifyUsers), {
         type: "task:created",
         task: hydrated,
@@ -676,7 +708,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
         const parentTask = getTaskRow(parent_id);
         if (parentTask) {
           const hydratedParent = hydrateTask(parentTask);
-          const parentNotifyUsers = new Set<string>([parentTask.creator_id, parentTask.assignee_id, ownerRow?.id].filter(Boolean));
+          const parentNotifyUsers = new Set<string>(
+            [
+              parentTask.creator_id,
+              parentTask.assignee_id,
+              ownerRow?.id,
+            ].filter(Boolean),
+          );
           broadcastToUsers(Array.from(parentNotifyUsers), {
             type: "task:updated",
             task: hydratedParent,
@@ -956,6 +994,63 @@ export function registerTaskRoutes(app: FastifyInstance) {
         });
       }
 
+      // Родитель — зонтик над дочерними, своей работы у него нет: он ждёт,
+      // пока закроются дети. Закрылась последняя — родитель сам уходит на
+      // приёмку к владельцу. Замысел владельца 10.09.2026, дословно: «как
+      // только все дочерние поставили галочки — что приходит на родителя?
+      // Ревью сразу же. А не какие-то ещё эфемерные шаги».
+      //
+      // Именно review, а НЕ completed: закрывает задачу только владелец
+      // (решение 08.09.2026, проверка выше по этому же файлу). Автомат
+      // доводит работу до его стола, но не принимает её за него.
+      //
+      // actor_id = NULL у события — это не действие того, кто закрыл
+      // ребёнка, а следствие, которое его закрытие вскрыло: тот же довод,
+      // что у lease_expired в agent-state.ts.
+      if (
+        body.status === "completed" &&
+        existing.status !== "completed" &&
+        existing.parent_id
+      ) {
+        const parent = getTaskRow(existing.parent_id) as any;
+        // Родителя трогаем, только пока он сам активен и ещё не на приёмке:
+        // повторное закрытие ребёнка (или закрытие уже закрытого родителя)
+        // не должно поднимать карточку обратно на доску.
+        if (
+          parent &&
+          parent.status === "active" &&
+          parent.agent_state !== "review"
+        ) {
+          const siblings = db
+            .prepare("SELECT status FROM tasks WHERE parent_id = ?")
+            .all(existing.parent_id) as Array<{ status: string }>;
+          const allDone =
+            siblings.length > 0 &&
+            siblings.every((s) => s.status === "completed");
+          if (allDone) {
+            db.prepare(
+              "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
+            ).run(parent.id);
+            logEvent({
+              taskId: parent.id,
+              actorId: null,
+              kind: "state_changed",
+              field: "agent_state",
+              fromValue: parent.agent_state ?? null,
+              toValue: "review",
+            });
+            db.prepare(
+              "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
+            ).run(
+              uid(),
+              parent.id,
+              null,
+              `Все дочерние задачи закрыты (${siblings.length}) — задача ушла на приёмку.`,
+            );
+          }
+        }
+      }
+
       // Остальные правки задачи — в тот же журнал. До этого писался ровно
       // один вид записи (смена status выше) плюс переходы agent_state в
       // agent-state.ts, поэтому назначение исполнителя не оставляло в ленте
@@ -1006,7 +1101,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
             String(after),
             existing.title,
             id,
-            (db.prepare("SELECT current_revision FROM tasks WHERE id=?").get(id) as any)?.current_revision ?? null,
+            (
+              db
+                .prepare("SELECT current_revision FROM tasks WHERE id=?")
+                .get(id) as any
+            )?.current_revision ?? null,
           );
           registryRecord({
             source: "assignment",

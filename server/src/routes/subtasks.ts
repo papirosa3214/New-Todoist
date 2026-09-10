@@ -94,7 +94,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (!req.body?.title)
         return reply.code(400).send({ error: "title required" });
       if (req.body.title.length > 100)
-        return reply.code(400).send({ error: "title слишком длинный (max 100)" });
+        return reply
+          .code(400)
+          .send({ error: "title слишком длинный (max 100)" });
 
       const id = uid();
 
@@ -272,6 +274,58 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             field: "subtask",
             toValue: title ?? subtask.title,
           });
+        }
+
+        // ЗАКРЫТ ПОСЛЕДНИЙ ШАГ — ЗАДАЧА САМА УХОДИТ НА ПРИЁМКУ.
+        //
+        // До 10.09.2026 (задача a195895d) этот переход был ручным: агент
+        // закрывал шаги, а потом отдельным действием переводил задачу в
+        // review. Забыл — карточка висела «в работе» с полностью закрытыми
+        // шагами, и владелец не понимал, ждать ему ещё или уже смотреть.
+        // В лентах такое встречалось не раз.
+        //
+        // Это тот же принцип, что у родителя-зонтика в tasks.ts: закрылась
+        // последняя единица работы — результат сам доезжает до стола
+        // владельца. Закрывает задачу по-прежнему только он.
+        //
+        // ТОЛЬКО ДЛЯ ЗАДАЧИ, КОТОРУЮ ВЕДЁТ АГЕНТ (agent_state =
+        // 'in_progress'). Свои задачи владелец ведёт без агента вовсе, и
+        // отправлять их «на приёмку» самому себе — ровно та канитель, от
+        // которой уходим: человек закрыл последний пункт списка покупок и
+        // получил карточку в состоянии «жду проверки».
+        if (done === true) {
+          const parentTask = db
+            .prepare("SELECT id, status, agent_state FROM tasks WHERE id = ?")
+            .get(subtask.task_id) as
+            | { id: string; status: string; agent_state: string | null }
+            | undefined;
+          if (
+            parentTask &&
+            parentTask.status === "active" &&
+            parentTask.agent_state === "in_progress"
+          ) {
+            const open = db
+              .prepare(
+                "SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ? AND done = 0",
+              )
+              .get(subtask.task_id) as { n: number };
+            if (open.n === 0) {
+              db.prepare(
+                "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
+              ).run(parentTask.id);
+              // actor_id = NULL: это не отдельное действие исполнителя, а
+              // следствие закрытия последнего шага — тот же довод, что у
+              // lease_expired и у родителя-зонтика.
+              logEvent({
+                taskId: parentTask.id,
+                actorId: null,
+                kind: "state_changed",
+                field: "agent_state",
+                fromValue: "in_progress",
+                toValue: "review",
+              });
+            }
+          }
         }
       }
       if (title) {
