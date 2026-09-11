@@ -431,6 +431,85 @@ export function migrate() {
     );
   }
 
+  // Попытка исполнения (attempt) — задача 8ca87c61, шаг 1. Отдельная
+  // сущность со своим жизненным циклом «создана → работает → завершена»,
+  // привязанная к задаче или подзадаче. Аренда и heartbeat переедут сюда
+  // в шаге 2, а пока таблица-скелет с минимальным набором полей, чтобы
+  // инвариант «не более одной действующей попытки» уже enforced на БД.
+  //
+  // outcome/reason/cost — текст, потому что SQLite не имеет JSON-типа
+  // (есть json1, но проект на него не подписан, расширение аддитивное и
+  // лёгкое). Сериализация в коде через JSON.stringify/parse. Проверка
+  // допустимых значений `outcome` — в коде (в CHECK не завернём, чтобы
+  // будущие значения не требовали пересборки таблицы, см. tasks.agent_state
+  // для того же приёма).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS attempts (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      subtask_id TEXT REFERENCES subtasks(id) ON DELETE CASCADE,
+      executor_id TEXT NOT NULL REFERENCES users(id),
+      runner TEXT,
+      model TEXT,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at TEXT,
+      outcome TEXT,
+      reason TEXT,
+      cost TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_attempts_task_started
+      ON attempts(task_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_attempts_subtask_started
+      ON attempts(subtask_id, started_at);
+    -- Инвариант C1: «на один исполняемый элемент работы — не более одной
+    -- действующей попытки». Для задачи целиком это «не более одной
+    -- попытки с ended_at IS NULL И subtask_id IS NULL»; параллельные
+    -- подзадачи живут на своих строках с тем же ограничением по
+    -- subtask_id. Partial index в SQLite поддерживает WHERE, и NULL-ы
+    -- трактуются как distinct — это то, что нужно (ended_at NULL = «в работе»).
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_attempts_one_active_per_task
+      ON attempts(task_id) WHERE ended_at IS NULL AND subtask_id IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_attempts_one_active_per_subtask
+      ON attempts(subtask_id) WHERE ended_at IS NULL AND subtask_id IS NOT NULL;
+  `);
+
+  // Привязка задачи к текущей действующей попытке (задача 8ca87c61, шаг 2).
+  // Аддитивная миграция: NULL у существующих строк (на момент 11.09.2026 у
+  // всех задач ещё нет attempt, ретроактивно создавать не нужно — старая
+  // модель с tasks.agent_state продолжает жить, attempts создаётся только
+  // для новых claim'ов).
+  const taskCols5 = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+    name: string;
+  }>;
+  if (!taskCols5.some((c) => c.name === "current_attempt_id")) {
+    db.exec(
+      "ALTER TABLE tasks ADD COLUMN current_attempt_id TEXT REFERENCES attempts(id) ON DELETE SET NULL",
+    );
+  }
+  // heartbeat попытки — отдельное поле, чтобы аренда переехала с tasks
+  // на attempts. Старое tasks.agent_heartbeat_at не трогаем в этой миграции
+  // (обратная совместимость с существующим кодом), обновляются оба.
+  const attCols1 = db.prepare("PRAGMA table_info(attempts)").all() as Array<{
+    name: string;
+  }>;
+  if (!attCols1.some((c) => c.name === "heartbeat_at")) {
+    db.exec("ALTER TABLE attempts ADD COLUMN heartbeat_at TEXT");
+  }
+
+  // Блокер 3 карточки 8ca87c61 (ревью 11.09.2026): подзадача получает
+  // собственную попытку, а не наследует current_attempt_id родительской
+  // задачи. Инвариант «не более одной действующей попытки на подзадачу»
+  // (partial unique index idx_attempts_one_active_per_subtask) уже enforced;
+  // current_subtask_attempt_id — это просто обратная ссылка, чтобы
+  // /subtasks/:id/work знал, какую попытку продлевать.
+  const subCols1 = db.prepare("PRAGMA table_info(subtasks)").all() as Array<{
+    name: string;
+  }>;
+  if (!subCols1.some((c) => c.name === "current_attempt_id")) {
+    db.exec(
+      "ALTER TABLE subtasks ADD COLUMN current_attempt_id TEXT REFERENCES attempts(id) ON DELETE SET NULL",
+    );
+  }
 }
 
 export default db;

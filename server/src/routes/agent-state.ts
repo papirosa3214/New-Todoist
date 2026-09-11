@@ -12,6 +12,7 @@ import {
   isReviewer as isTaskReviewer,
 } from "../access.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
+import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
   AGENT_RULES,
@@ -417,10 +418,30 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         // (assignee_id/Claude_Bot), поэтому это единственное поле, по
         // которому свой Stop-хук отличает «мою» незавершённую работу от
         // чужой под тем же ботом (миграция 004_agent_session_id).
+        //
+        // Задача 8ca87c61, шаг 2: claim создаёт запись в `attempts` и
+        // проставляет tasks.current_attempt_id. Старые tasks.agent_state /
+        // tasks.agent_heartbeat_at обновляются по-прежнему — переезд
+        // аренды на attempt идёт в этой же правке ниже (heartbeat/state)
+        // и закрывается в шагах 3–4, не здесь. tasks.current_attempt_id
+        // пока nullable — у уже существующих задач его нет, и это не
+        // мешает текущему claim'у: он просто не находит attempt при чтении.
+        const attemptId = crypto.randomUUID();
+        db.prepare(
+          `INSERT INTO attempts (id, task_id, executor_id, runner, model, started_at, heartbeat_at)
+             VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        ).run(
+          attemptId,
+          task.id,
+          req.userId,
+          (req.body && (req.body as any).runner) ?? null,
+          (req.body && (req.body as any).model) ?? null,
+        );
         db.prepare(
           `UPDATE tasks SET agent_state = 'in_progress', agent_heartbeat_at = datetime('now'),
-             assignee_id = COALESCE(assignee_id, ?), agent_session_id = ? WHERE id = ?`,
-        ).run(req.userId, sessionOf(req), task.id);
+             assignee_id = COALESCE(assignee_id, ?), agent_session_id = ?,
+             current_attempt_id = ? WHERE id = ?`,
+        ).run(req.userId, sessionOf(req), attemptId, task.id);
 
         logEvent({
           taskId: task.id,
@@ -478,9 +499,36 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         });
       }
 
+      // Шаг 3 карточки 8ca87c61: прислал attempt_id — должен совпасть с
+      // текущей действующей попыткой задачи. Старые клиенты без заголовка
+      // пропускаются (мягкий enforcement), жёсткий — в следующих шагах.
+      const claimedAttempt = readAttemptId(req);
+      const mismatch = attemptMismatchReason(
+        claimedAttempt,
+        (task as any).current_attempt_id ?? null,
+      );
+      if (mismatch) {
+        return reply.code(400).send({
+          error: `attempt_id: ${mismatch}`,
+        });
+      }
+
       db.prepare(
         "UPDATE tasks SET agent_heartbeat_at = datetime('now') WHERE id = ?",
       ).run(task.id);
+
+      // Блокер 2 карточки 8ca87c61 (ревью 11.09.2026): аренда фактически
+      // не переехала на attempt, пока heartbeat продлевал только старую
+      // tasks.agent_heartbeat_at. Сторож читает tasks.agent_heartbeat_at,
+      // и lease_expired там вроде как срабатывает — но attempts.heartbeat_at
+      // остаётся замороженным, и попытка, для которой это единственный
+      // источник правды в шаге 4–5, выглядит «протухшей» навсегда.
+      // Продлеваем оба, пока полный переезд аренды (taskflow на attempts
+      // как primary signal) не сделан в работе последующих шагов.
+      db.prepare(
+        `UPDATE attempts SET heartbeat_at = datetime('now')
+          WHERE id = ? AND ended_at IS NULL`,
+      ).run((task as any).current_attempt_id);
 
       // Вместе с задачей продлевается и ШАГ, который этот же агент отметил
       // как «в работе».
@@ -521,6 +569,17 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       const task = getTaskForWrite(req.params.id, req.userId) ??
         getTaskForReview(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
+
+      // Шаг 3 карточки 8ca87c61: тот же мягкий enforcement attempt_id,
+      // что и в heartbeat (см. комментарий там).
+      const claimedAttempt = readAttemptId(req);
+      const mismatch = attemptMismatchReason(
+        claimedAttempt,
+        (task as any).current_attempt_id ?? null,
+      );
+      if (mismatch) {
+        return reply.code(400).send({ error: `attempt_id: ${mismatch}` });
+      }
 
       const { state } = req.body || {};
       if (state !== null && !AGENT_STATES.includes(state)) {
@@ -703,6 +762,26 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         // 24.08.2026 не мог расклинить карточку с пропавшим агентом.
         if (state === null) {
           releaseSubtaskWork(task.id);
+        }
+
+        // Шаг 4 карточки 8ca87c61: при завершении попытки (state=null или
+        // state='review') записываем исход и причину в текущую попытку.
+        // Шаг 5 (сторож) закроет попытку при истечении аренды отдельным
+        // сценарием — здесь только успешный release / сдача на проверку.
+        if (state === null || state === 'review') {
+          const outcome = state === 'review' ? 'review' : 'released';
+          db.prepare(
+            `UPDATE attempts
+                SET ended_at = datetime('now'), outcome = ?, reason = ?
+              WHERE id = ? AND ended_at IS NULL`,
+          ).run(outcome, comment || null, (task as any).current_attempt_id);
+          // Блокер 4 карточки 8ca87c61 (ревью 11.09.2026): сбрасываем
+          // current_attempt_id сразу, чтобы старый attempt_id стал
+          // устаревшим для attemptCheck, и сообщения с ним не проходили
+          // до следующего claim.
+          db.prepare(
+            "UPDATE tasks SET current_attempt_id = NULL WHERE id = ? AND current_attempt_id = ?",
+          ).run(task.id, (task as any).current_attempt_id);
         }
 
         logEvent({

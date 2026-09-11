@@ -208,6 +208,26 @@ def release_abandoned(db):
             " updated_at = datetime('now') WHERE id = ?",
             (r["id"],),
         )
+        # Шаг 5 карточки 8ca87c61: вместе со снятием задачи закрываем
+        # текущую попытку — отдельной записью с outcome='lease_expired' и
+        # структурированной причиной. Так в ленте попыток останется след
+        # неуспешной работы, и сторож, снявший зависшего исполнителя,
+        # больше не оставляет задачу с безымянным «списал».
+        mins_text = f"lease expired after {mins} minutes"
+        # Блокер 5 карточки 8ca87c61 (ревью 11.09.2026): WHERE task_id=?
+        # задевал попытки подзадач — закрывал ВСЕ незавершённые, не только
+        # текущую попытку задачи. Закрываем строго attempts.id =
+        # tasks.current_attempt_id; параллельные попытки подзадач (если
+        # есть) остаются живыми — у них своя аренда и свой сторож.
+        db.execute(
+            """UPDATE attempts
+                  SET ended_at = datetime('now'), outcome = 'lease_expired',
+                      reason = ?
+                WHERE id = (SELECT current_attempt_id FROM tasks
+                              WHERE id = ?)
+                  AND ended_at IS NULL""",
+            (mins_text, r["id"]),
+        )
         db.execute(
             "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,NULL,?)",
             (

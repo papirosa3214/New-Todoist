@@ -194,6 +194,16 @@ export function hydrateTask(task: any) {
     .prepare("SELECT * FROM subtasks WHERE task_id = ? ORDER BY position")
     .all(task.id)
     .map(withSubtaskState);
+  // Шаг 6 карточки 8ca87c61: лента попыток идёт вместе с задачей.
+  // Сортировка по started_at DESC — новые сверху, как в TaskFlow
+  // (см. ленту событий).
+  const attempts = db
+    .prepare(
+      `SELECT id, task_id, subtask_id, executor_id, runner, model,
+              started_at, ended_at, heartbeat_at, outcome, reason
+         FROM attempts WHERE task_id = ? ORDER BY started_at DESC`,
+    )
+    .all(task.id);
   const children = db
     .prepare(
       `SELECT ${TASK_COLUMNS} ${TASK_JOINS} WHERE t.parent_id = ? ORDER BY t.created_at DESC`,
@@ -222,6 +232,7 @@ export function hydrateTask(task: any) {
     labels,
     subtasks,
     children,
+    attempts: attempts,
     agent_started_at: agentStartedAt(task),
   };
 }
@@ -424,6 +435,17 @@ export function registerTaskRoutes(app: FastifyInstance) {
         )
         .all(task.id);
 
+      // Шаг 6 карточки 8ca87c61, ревью 11.09.2026: GET /api/tasks/:id
+      // собирает карточку вручную мимо hydrateTask, и без явного запроса
+      // attempts лента попыток на этом пути молча пропадала.
+      const attempts = db
+        .prepare(
+          `SELECT id, task_id, subtask_id, executor_id, runner, model,
+                  started_at, ended_at, heartbeat_at, outcome, reason
+             FROM attempts WHERE task_id = ? ORDER BY started_at DESC`,
+        )
+        .all(task.id);
+
       return {
         ...withAgentStale(full, subtasks, children),
         labels,
@@ -432,6 +454,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         comments,
         attachments: taskAttachments,
         events,
+        attempts,
         // Тот же расчёт, что в hydrateTask: карточка задачи собирается здесь
         // вручную и мимо него, и поле, добавленное только туда, на этом пути
         // молча пропало бы (ровно так уже терялось имя проекта).

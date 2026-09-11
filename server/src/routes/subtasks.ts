@@ -16,6 +16,7 @@ import {
 // отдают сырой agent_state вместо вычисленного state, и два места отдачи
 // задачи расходятся в контракте. Максим 18.08.2026: «почини».
 import { withSubtaskState, getTaskRow } from "./tasks.js";
+import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -58,7 +59,7 @@ function getSubtaskWithTaskForUser(
   const subtask = db
     .prepare(
       `SELECT s.*, t.creator_id as task_creator_id, t.assignee_id as task_assignee_id,
-              t.agent_state as task_agent_state
+              t.agent_state as task_agent_state, t.current_attempt_id as task_current_attempt_id
        FROM subtasks s JOIN tasks t ON t.id = s.task_id
        WHERE s.id = ?`,
     )
@@ -443,6 +444,19 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
       if (!subtask) return reply.code(404).send({ error: "Not found" });
 
+      // Блокер 3 карточки 8ca87c61 (ревью 11.09.2026): подзадача имеет
+      // собственную попытку (subtasks.current_attempt_id), а не наследует
+      // attempts задачи. attempt_id у шага — отдельный, и сообщения с
+      // чужим/устаревшим attempt_id должны отбиваться по нему.
+      const claimedAttempt = readAttemptId(req);
+      const mismatch = attemptMismatchReason(
+        claimedAttempt,
+        (subtask as any).current_attempt_id ?? null,
+      );
+      if (mismatch) {
+        return reply.code(400).send({ error: `attempt_id: ${mismatch}` });
+      }
+
       const { state, result } = req.body || {};
       const known =
         state === undefined ||
@@ -513,6 +527,43 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
                     agent_heartbeat_at = datetime('now')
               WHERE id = ?`,
           ).run(state, req.userId, sessionOf(req), req.params.id);
+
+          // Блокер 3 карточки 8ca87c61: при взятии подзадачи в работу
+          // создаём отдельный attempt (subtask_id) и проставляем
+          // subtasks.current_attempt_id. Так шаг имеет свою попытку,
+          // отдельную от попытки родительской задачи — инвариант C1
+          // (не более одной действующей попытки на subtask_id) enforced
+          // partial unique index'ом.
+          if (state === 'in_progress' && (subtask as any).agent_state !== 'in_progress') {
+            const subAttemptId = crypto.randomUUID();
+            db.prepare(
+              `INSERT INTO attempts
+                 (id, task_id, subtask_id, executor_id, runner, model,
+                  started_at, heartbeat_at)
+                 VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+            ).run(
+              subAttemptId,
+              subtask.task_id,
+              req.params.id,
+              req.userId,
+              (req.body && (req.body as any).runner) ?? null,
+              (req.body && (req.body as any).model) ?? null,
+            );
+            db.prepare(
+              `UPDATE subtasks SET current_attempt_id = ? WHERE id = ?`,
+            ).run(subAttemptId, req.params.id);
+          }
+          // При выходе из in_progress (release) закрываем свою попытку.
+          if (state !== 'in_progress' && (subtask as any).current_attempt_id) {
+            db.prepare(
+              `UPDATE attempts
+                  SET ended_at = datetime('now'), outcome = ?, reason = ?
+                WHERE id = ? AND ended_at IS NULL`,
+            ).run(state === 'review' ? 'review' : 'released', result ?? null, (subtask as any).current_attempt_id);
+            db.prepare(
+              `UPDATE subtasks SET current_attempt_id = NULL WHERE id = ?`,
+            ).run(req.params.id);
+          }
           // Сессию поднимаем и на саму задачу, если та её ещё не знает:
           // работа по шагам идёт без claim, и иначе задача остаётся ничьей.
           db.prepare(
@@ -625,6 +676,18 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     handler: async (req: any, reply) => {
       const task = getTaskForWrite(req.params.taskId, req.userId) as any;
       if (!task) return reply.code(404).send({ error: "Not found" });
+
+      // Шаг 3 карточки 8ca87c61: проверка attempt_id для комментария
+      // агента — комментарий это тоже «сообщение от попытки».
+      const claimedAttempt = readAttemptId(req);
+      const mismatch = attemptMismatchReason(
+        claimedAttempt,
+        task.current_attempt_id ?? null,
+      );
+      if (mismatch) {
+        return reply.code(400).send({ error: `attempt_id: ${mismatch}` });
+      }
+
       const attachmentIds: string[] = Array.isArray(req.body?.attachment_ids)
         ? req.body.attachment_ids
         : [];
