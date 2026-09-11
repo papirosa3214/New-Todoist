@@ -6,11 +6,16 @@ import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import {
+  getTaskForRead,
   getTaskForReview,
   getTaskForWrite,
   isOwner as isTrackerOwner,
   isReviewer as isTaskReviewer,
 } from "../access.js";
+import {
+  isTaskInSelfClaimPool,
+  selfClaimEligibilityError,
+} from "../enricher.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
@@ -267,8 +272,16 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/claim", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForWrite(req.params.id, req.userId) ??
+      let task = getTaskForWrite(req.params.id, req.userId) ??
         getTaskForReview(req.params.id, req.userId);
+      if (!task) {
+        // An unassigned task created by the owner is readable by an agent,
+        // but not writable yet. The self-claim gate below decides whether
+        // this read access is enough to claim it. A task already assigned to
+        // another agent must keep the old 403 access response.
+        const readableTask = getTaskForRead(req.params.id, req.userId);
+        if (readableTask?.assignee_id === null) task = readableTask;
+      }
       if (!task) {
         // Задача может быть чужой, а не отсутствующей, и для агента это
         // совсем разные новости. Голое «не найдено» сбивает с толку:
@@ -340,6 +353,17 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         });
       }
 
+      if (
+        task.assignee_id === null &&
+        !isTaskInSelfClaimPool(task.id, req.userId)
+      ) {
+        return reply.code(403).send({
+          error:
+            selfClaimEligibilityError(task.id, req.userId) ??
+            "задача сейчас не опубликована в пуле самозахвата",
+        });
+      }
+
       const from = (task.agent_state ?? null) as AgentState | null;
       const leaseAlive =
         from === "in_progress" && !isStale(task.agent_heartbeat_at);
@@ -385,7 +409,76 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "invalid transition" });
       }
 
+      let claimRejection: { code: number; error: string } | null = null;
       const claimTxn = db.transaction(() => {
+        // Re-read inside the transaction. Two agents may have passed all
+        // checks above before either request reached SQLite; only the first
+        // request may turn the still-free row into an active claim.
+        const latest = db
+          .prepare("SELECT * FROM tasks WHERE id = ?")
+          .get(task.id) as any;
+        if (!latest) {
+          claimRejection = { code: 404, error: "Not found" };
+          return;
+        }
+        if (latest.status !== "active") {
+          claimRejection = {
+            code: 400,
+            error: "задачу можно взять в работу, только пока она активна",
+          };
+          return;
+        }
+        if ((latest.ready_for_pickup ?? 0) !== 1) {
+          claimRejection = {
+            code: 400,
+            error: "задача больше не готова к самозахвату",
+          };
+          return;
+        }
+        const latestFrom = (latest.agent_state ?? null) as AgentState | null;
+        const latestLeaseExpired =
+          latestFrom === "in_progress" && isStale(latest.agent_heartbeat_at);
+        const latestLeaseAlive =
+          latestFrom === "in_progress" && !latestLeaseExpired;
+        if (
+          latestLeaseAlive &&
+          latest.assignee_id &&
+          latest.assignee_id !== req.userId
+        ) {
+          claimRejection = {
+            code: 409,
+            error: "задачу уже держит другой исполнитель — гонка за claim проиграна",
+          };
+          return;
+        }
+        if (
+          latest.assignee_id === null &&
+          !isTaskInSelfClaimPool(latest.id, req.userId)
+        ) {
+          claimRejection = {
+            code: 403,
+            error:
+              selfClaimEligibilityError(latest.id, req.userId) ??
+              "задача сейчас не опубликована в пуле самозахвата",
+          };
+          return;
+        }
+        const latestWho = {
+          isOwner: isTrackerOwner(req.userId) || latest.creator_id === req.userId,
+          isExecutor:
+            latest.assignee_id === req.userId || latest.assignee_id === null,
+          leaseExpired: latestLeaseExpired,
+        };
+        if (!canTransition(latestFrom, "in_progress", latestWho, "claim")) {
+          claimRejection = {
+            code: 400,
+            error:
+              latestFrom === "review"
+                ? "задача на проверке у владельца, вернуть её в работу может только он"
+                : "invalid transition",
+          };
+          return;
+        }
         // Перезахват после истёкшей аренды (from === 'in_progress', to ===
         // 'in_progress') — тот самый момент, когда система «замечает»
         // молчание агента: до сих пор это было только вычисляемым полем
@@ -400,13 +493,13 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         // actor_id = NULL — это не действие req.userId, а факт, который
         // вскрыл его вызов: молчание случилось раньше и независимо от
         // текущего запроса (см. комментарий у CREATE TABLE task_events).
-        if (who.leaseExpired) {
+        if (latestWho.leaseExpired) {
           logEvent({
             taskId: task.id,
             actorId: null,
             kind: "lease_expired",
             field: "agent_heartbeat_at",
-            fromValue: task.agent_heartbeat_at ?? null,
+            fromValue: latest.agent_heartbeat_at ?? null,
           });
         }
 
@@ -453,11 +546,18 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           actorId: req.userId,
           kind: "state_changed",
           field: "agent_state",
-          fromValue: task.agent_state ?? null,
+          fromValue: latest.agent_state ?? null,
           toValue: "in_progress",
         });
       });
       claimTxn();
+      // The rejection is assigned inside the transaction callback, so make
+      // the post-transaction value explicit for TypeScript's control-flow
+      // analysis.
+      const rejection = claimRejection as { code: number; error: string } | null;
+      if (rejection) {
+        return reply.code(rejection.code).send({ error: rejection.error });
+      }
 
       const updated = getTaskRow(task.id);
       const hydrated = hydrateTask(updated);

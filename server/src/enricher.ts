@@ -147,3 +147,35 @@ export function poolTasksForUser(userId: string): any[] {
     )
     .all(profileLabelName(profile));
 }
+/**
+ * Why an unassigned task is or is not available to a self-claiming agent.
+ * The pool and the claim endpoint must use the same gate: an empty
+ * assignee_id is not itself an invitation to take arbitrary work.
+ */
+export function selfClaimEligibilityError(
+  taskId: string,
+  userId: string,
+): string | null {
+  const profile = profileOfUser(userId);
+  if (!profile || !hasProfileLabel(taskId, profile)) {
+    return "задача не опубликована в пуле для профиля этого агента";
+  }
+  if (unmetDependencyIds(taskId).length > 0) {
+    return "задача ждёт завершения зависимостей — взять её можно после их приёмки";
+  }
+  return null;
+}
+
+export function isTaskInSelfClaimPool(taskId: string, userId: string): boolean {
+  if (selfClaimEligibilityError(taskId, userId)) return false;
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 FROM tasks
+          WHERE id = ? AND status = 'active' AND assignee_id IS NULL
+            AND ready_for_pickup = 1
+            AND (agent_state IS NULL OR agent_state = 'blocked')`,
+      )
+      .get(taskId),
+  );
+}

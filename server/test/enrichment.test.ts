@@ -7,6 +7,8 @@ describe("enricher: профильный пул, эскалации и зави�
   let app: FastifyInstance;
   let ownerAuth = "";
   let agentAuth = "";
+  let agentTwoAuth = "";
+  let agentId = "";
 
   async function register(name: string, email: string) {
     const response = await app.inject({ method: "POST", url: "/api/auth/register", payload: { name, email, password: "password123" } });
@@ -21,7 +23,11 @@ describe("enricher: профильный пул, эскалации и зави�
     ownerAuth = `Bearer ${owner.token}`;
     const agent = await register("Enrich agent", "enrich-agent@test");
     db.prepare("UPDATE users SET type = 'ai', profile = 'claude_bot' WHERE id = ?").run(agent.user.id);
+    agentId = agent.user.id;
     agentAuth = `Bearer ${agent.token}`;
+    const secondAgent = await register("Second enrich agent", "enrich-agent-2@test");
+    db.prepare("UPDATE users SET type = 'ai', profile = 'claude_bot' WHERE id = ?").run(secondAgent.user.id);
+    agentTwoAuth = `Bearer ${secondAgent.token}`;
   });
 
   it("публикует уверенную задачу в пул по профильной метке", async () => {
@@ -43,6 +49,83 @@ describe("enricher: профильный пул, эскалации и зави�
     expect(second.json().enrichment.escalation.status).toBe("pending");
     expect(second.json().enrichment.escalation.run_count).toBe(2);
     expect((db.prepare("SELECT COUNT(*) AS count FROM enrichment_escalations WHERE task_id = ?").get(taskId) as any).count).toBe(1);
+  });
+
+  it("не даёт агенту забрать свободную задачу без профильной публикации", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: ownerAuth },
+      payload: { title: "задача без тега профиля" },
+    });
+    const taskId = created.json().task.id;
+    await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: ownerAuth },
+      payload: { ready_for_pickup: true },
+    });
+    const claim = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/claim`,
+      headers: { authorization: agentAuth },
+      payload: {},
+    });
+    expect(claim.statusCode).toBe(403);
+    expect(claim.json().error).toContain("не опубликована в пуле");
+  });
+
+  it("оставляет ручное назначение рабочим без профильного тега", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: ownerAuth },
+      payload: { title: "ручное назначение" },
+    });
+    const taskId = created.json().task.id;
+    await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: ownerAuth },
+      payload: { assignee_id: agentId, ready_for_pickup: true },
+    });
+    const claim = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/claim`,
+      headers: { authorization: agentAuth },
+      payload: {},
+    });
+    expect(claim.statusCode).toBe(200);
+    expect(claim.json().task.assignee_id).toBe(agentId);
+  });
+
+  it("в гонке двух self-claim только один агент получает задачу", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: ownerAuth },
+      payload: { title: "server api migration race" },
+    });
+    const taskId = created.json().task.id;
+    await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: ownerAuth },
+      payload: { ready_for_pickup: true },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/enrich`,
+      headers: { authorization: agentAuth },
+    });
+    const claims = await Promise.all([
+      app.inject({ method: "POST", url: `/api/tasks/${taskId}/claim`, headers: { authorization: agentAuth }, payload: {} }),
+      app.inject({ method: "POST", url: `/api/tasks/${taskId}/claim`, headers: { authorization: agentTwoAuth }, payload: {} }),
+    ]);
+    expect(claims.filter((response) => response.statusCode === 200)).toHaveLength(1);
+    const refusal = claims.find((response) => response.statusCode !== 200);
+    expect(refusal).toBeDefined();
+    expect(refusal!.json().error).toMatch(/гонка|исполнитель|transition/);
   });
 
   it("не показывает в пуле задачу с незавершённой зависимостью", async () => {
