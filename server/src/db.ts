@@ -510,6 +510,37 @@ export function migrate() {
       "ALTER TABLE subtasks ADD COLUMN current_attempt_id TEXT REFERENCES attempts(id) ON DELETE SET NULL",
     );
   }
+
+  // Enricher/пул задач: зависимости и отдельный журнал эскалаций.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_dependencies (
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      depends_on_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (task_id, depends_on_task_id),
+      CHECK (task_id <> depends_on_task_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_dependencies_task
+      ON task_dependencies(task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent
+      ON task_dependencies(depends_on_task_id);
+
+    CREATE TABLE IF NOT EXISTS enrichment_escalations (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+      input_text TEXT NOT NULL,
+      candidates_json TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      final_label_ids_json TEXT,
+      run_count INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_enrichment_escalations_status
+      ON enrichment_escalations(status);
+  `);
 }
 
 export default db;
