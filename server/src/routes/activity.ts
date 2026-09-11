@@ -238,19 +238,22 @@ export function taskStopMetrics(taskId: string) {
     )
     .get(taskId) as { created_at?: string } | undefined;
   const attempts = db
-    .prepare("SELECT COUNT(*) AS n FROM attempts WHERE task_id = ?")
+    .prepare(
+      "SELECT COUNT(*) AS n FROM attempts WHERE task_id = ? AND subtask_id IS NULL",
+    )
     .get(taskId) as { n: number };
   const retries = db
     .prepare(
       `SELECT COUNT(*) AS n FROM attempt_retries r
          JOIN attempts a ON a.id = r.attempt_id
-        WHERE a.task_id = ?`,
+        WHERE a.task_id = ? AND a.subtask_id IS NULL`,
     )
     .get(taskId) as { n: number };
   const leaseLosses = db
     .prepare(
       `SELECT COUNT(*) AS n FROM attempts
-        WHERE task_id = ? AND (reason_code = 'lease_expired' OR outcome = 'lease_expired')`,
+        WHERE task_id = ? AND subtask_id IS NULL
+          AND (reason_code = 'lease_expired' OR outcome = 'lease_expired')`,
     )
     .get(taskId) as { n: number };
   const versionReturns = db

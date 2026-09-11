@@ -374,6 +374,26 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
               db.prepare(
                 "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
               ).run(parentTask.id);
+              // Последний закрытый шаг автоматически сдаёт родителя в
+              // review. Завершаем именно его содержательную попытку здесь,
+              // иначе у задачи остаётся живая аренда после сдачи и метрики
+              // принимают её за брошенную работу.
+              const parentAttempt = db
+                .prepare("SELECT current_attempt_id FROM tasks WHERE id = ?")
+                .get(parentTask.id) as
+                | { current_attempt_id?: string | null }
+                | undefined;
+              if (parentAttempt?.current_attempt_id) {
+                db.prepare(
+                  `UPDATE attempts
+                      SET ended_at = datetime('now'), outcome = 'review',
+                          reason = 'все подзадачи закрыты'
+                    WHERE id = ? AND ended_at IS NULL`,
+                ).run(parentAttempt.current_attempt_id);
+                db.prepare(
+                  "UPDATE tasks SET current_attempt_id = NULL WHERE id = ? AND current_attempt_id = ?",
+                ).run(parentTask.id, parentAttempt.current_attempt_id);
+              }
               if (!beforeVersion) {
                 logEvent({
                   taskId: parentTask.id,
