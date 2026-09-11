@@ -16,7 +16,7 @@ import type { FastifyInstance } from "fastify";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { authOrApiToken } from "../auth.js";
-import { isOwner } from "../access.js";
+import { isOwner, isOrchestrator } from "../access.js";
 
 const run = promisify(execFile);
 
@@ -58,21 +58,30 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
 
   app.post<{ Body: { on?: boolean } }>(
     "/api/agent-service",
-    // Шаг 5 ТЗ docs/taskflow-direct-dispatch-mvp.md: только владелец
-    // может включать/выключать службу. Агентский API-token не должен
-    // иметь такой ручки.
+    // Шаг 5 ТЗ docs/taskflow-direct-dispatch-mvp.md: владелец может
+    // включать/выключать службу. Агентский API-token не должен иметь такой
+    // ручки.
+    //
+    // Расширение 11.09.2026 (карточка b6b57092, согласовано с владельцем):
+    // тумблер автономки также доступен учётке с role='orchestrator' — это
+    // узкая строка матрицы прав, а не пересмотр решения 08.09.2026 об
+    // оркестраторе (закрытие/возврат задачи остаются только за владельцем).
+    // Сторож по-прежнему не имеет права — учётки типа 'ai' сюда не пройдут
+    // уже на authOrApiToken (там стоит проверка на DELETE для всех ИИ, а
+    // /api/agent-service — не DELETE, но agent-токен всё равно отбивается
+    // дальше isOwner/isOrchestrator).
     //
     // authOrApiToken на успехе возвращает undefined и ставит userId в req
     // (см. auth.ts:172-201). reply.sent=true означает «уже ответили 401» —
     // дальше идти некуда. Иначе — берём userId из req и проверяем
-    // isOwner() из access.ts.
+    // isOwner() / isOrchestrator() из access.ts.
     {
       preHandler: async (req: any, reply) => {
         await authOrApiToken(req, reply);
         if (reply.sent) return;
         const userId = (req as any).userId;
-        if (!userId || !isOwner(userId)) {
-          return reply.code(403).send({ error: "owner_only" });
+        if (!userId || (!isOwner(userId) && !isOrchestrator(userId))) {
+          return reply.code(403).send({ error: "owner_or_orchestrator_only" });
         }
       },
     },

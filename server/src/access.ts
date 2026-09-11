@@ -38,11 +38,52 @@
 // ─────────────────────────────────────────────────────────────────────────
 import db from "./db.js";
 
-type Caller = { role?: string; type?: string; reviewer?: number };
+type Caller = { role?: string; type?: string; reviewer?: number; profile?: string | null };
 
 function callerOf(userId: string): Caller | undefined {
-  return db.prepare("SELECT role, type, reviewer FROM users WHERE id = ?").get(userId) as
+  return db.prepare("SELECT role, type, reviewer, profile FROM users WHERE id = ?").get(userId) as
     Caller | undefined;
+}
+
+/**
+ * Маппинг профиль исполнителя (users.profile, заполняется из
+ * server/scripts/team_catalog.json по id) → роль из семи ролей матрицы
+ * прав карточки b6b57092 (Architect / Builder / QA / Researcher / Analyst
+ * / Synthesizer / Critic-Verifier). Договоренность с владельцем 11.09.2026:
+ * маппинг может быть любой чёткий, источник истины — здесь, потому что
+ * team_catalog.json описывает компетенции исполнителей, а не роли для
+ * проверки прав; править здесь дешевле, чем плодить ещё одно поле.
+ *
+ * Не покрыто:
+ *   maxim         → role='owner' (отдельная ветка, не из семи).
+ *   u-secretary   → profile=NULL (нет в team_catalog.json; роль не
+ *                   назначается, проверки идут по role/type).
+ *
+ * QA и Critic/Verifier совмещены (решение владельца 11.09.2026): профиль
+ * reviewer закрывает обе функции — узкая роль Critic/Verifier покрывает и
+ * вынесение вердикта, и QA-проверку.
+ */
+const PROFILE_ROLE: Record<string, string> = {
+  claude_bot: "Builder",
+  hermes: "Builder",
+  antigravity: "Builder",
+  pi_agent: "Builder",
+  deepseek: "Researcher",
+  reviewer: "Critic/Verifier",
+  orchestrator: "Architect",
+};
+
+/**
+ * Роль из семи ролей для учётки. Берёт users.profile, лезет в маппинг.
+ * Возвращает null если профиль пуст или в маппинге не описан — это
+ * текущее поведение «профиль ещё не проставлен», ничего не ломает, как
+ * требует граница карточки «до заполнения профиля поведение остаётся
+ * прежним».
+ */
+export function getRole(userId: string): string | null {
+  const profile = callerOf(userId)?.profile ?? null;
+  if (!profile) return null;
+  return PROFILE_ROLE[profile] ?? null;
 }
 
 /** Владелец трекера — карт-бланш на чтение и на правку. */
@@ -62,9 +103,26 @@ export function isOrchestrator(userId: string): boolean {
   return callerOf(userId)?.role === "orchestrator";
 }
 
-/** Reviewer читает всю доску, но возвращает только сданную задачу в работу. */
+/**
+ * Reviewer выносит вердикт по сданной задаче и возвращает её в работу.
+ *
+ * Два пути попасть в ревьюеры:
+ *   1. users.reviewer = 1 — узкий флаг, ставится владельцем вручную
+ *      (auth.ts / seed.ts). Учётка Reviewer в живой базе имеет этот флаг.
+ *   2. users.profile = 'reviewer' → роль Critic/Verifier по маппингу
+ *      b6b57092. Альтернативный путь, завязанный на team_catalog.json;
+ *      полезен, когда учётка заводится мимо seed.ts.
+ *
+ * Два пути нужны как страховка друг друга: если флаг потерян (а такое
+ * бывало — миграция is_system_re reviewer в db.ts аддитивная, но флаг
+ * ревьюера пришёл из ручной правки), profile-путь всё равно даст право.
+ * Обратной проблемы нет: profile='reviewer' есть только у настоящей
+ * учётки Reviewer, потому что маппинг закрыт именно этой строкой.
+ */
 export function isReviewer(userId: string): boolean {
-  return callerOf(userId)?.reviewer === 1;
+  const c = callerOf(userId);
+  if (c?.reviewer === 1) return true;
+  return getRole(userId) === "Critic/Verifier";
 }
 
 /**

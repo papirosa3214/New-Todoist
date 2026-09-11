@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import crypto from "crypto";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -246,6 +247,21 @@ export function migrate() {
     );
   }
 
+  // Additive migration: users.profile — профиль исполнителя для матрицы прав
+  // (задача b6b57092, 1-й шаг). Ортогональное users.role поле: role остаётся
+  // глобальной ролью в системе (owner | agent | viewer | orchestrator), а
+  // profile хранит имя профиля из server/scripts/team_catalog.json и
+  // используется серверной проверкой прав (шаг 3 той же карточки).
+  //
+  // Без CHECK — те же причины, что и у tasks.agent_state: расширять CHECK
+  // у users.role нельзя без пересборки таблицы (SQLite, миграция
+  // 016_orchestrator_role — это и есть дорогая пересборка); вместо этого
+  // новая колонка и валидация значений в коде. NULL — значение ещё не
+  // проставлено (старые учётки без соответствия, в т.ч. «Секретарь»).
+  if (!userCols.some((c) => c.name === "profile")) {
+    db.exec("ALTER TABLE users ADD COLUMN profile TEXT");
+  }
+
   // Additive migration: tasks.completed_at may be missing on a DB created
   // before this column was added. Unlike updated_at (touched on every
   // PATCH), completed_at is set only on the active→completed transition and
@@ -380,6 +396,41 @@ export function migrate() {
   if (!latCols.some((c) => c.name === "started_at")) {
     db.exec("ALTER TABLE live_activity_tokens ADD COLUMN started_at TEXT");
   }
+
+  // Заполнение users.profile из server/scripts/team_catalog.json (задача
+  // b6b57092, шаг 1). Идемпотентно: при перезапуске UPDATE проставит те же
+  // значения, ничего не задвоится. Файл читается по id профиля: profiles.*.id
+  // совпадает с users.id (проверено 11.09.2026 на живой базе), а в profile
+  // пишется ключ профиля (claude_bot / hermes / reviewer / ...), чтобы по
+  // нему доставать свойства из team_catalog.json в шаге 3.
+  //
+  // Файл может не найтись (dev-сборка без scripts/), JSON может быть
+  // повреждён — миграция не падает, profile остаётся NULL. Предупреждение в
+  // лог достаточно: это не та ошибка, из-за которой нужно ронять старт.
+  try {
+    const catalogPath = path.join(
+      __dirname,
+      "..",
+      "scripts",
+      "team_catalog.json",
+    );
+    const catalogRaw = fs.readFileSync(catalogPath, "utf-8");
+    const catalog = JSON.parse(catalogRaw) as {
+      profiles?: Record<string, { id?: string }>;
+    };
+    const upd = db.prepare("UPDATE users SET profile = ? WHERE id = ?");
+    for (const [name, profile] of Object.entries(catalog.profiles ?? {})) {
+      if (!profile?.id) continue;
+      upd.run(name, profile.id);
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(
+      "users.profile: не удалось заполнить из team_catalog.json —",
+      msg,
+    );
+  }
+
 }
 
 export default db;
