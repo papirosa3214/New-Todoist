@@ -743,9 +743,49 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: "029_result_versions_reviews",
+    description:
+      "Версии результата и вердикты ревью (карточка 6623ec55): каждое сдаваемое состояние привязано к artifact version, а одобрение старой версии не принимает новую.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS artifact_versions (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          version_no INTEGER NOT NULL,
+          task_revision INTEGER NOT NULL,
+          result TEXT NOT NULL,
+          evidence_json TEXT NOT NULL DEFAULT '[]',
+          artifact_hash TEXT NOT NULL,
+          created_by TEXT NOT NULL REFERENCES users(id),
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(task_id, version_no)
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifact_versions_task
+          ON artifact_versions(task_id, version_no);
+        CREATE TABLE IF NOT EXISTS reviews (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          version_id TEXT NOT NULL REFERENCES artifact_versions(id) ON DELETE CASCADE,
+          task_revision INTEGER NOT NULL,
+          reviewer_id TEXT NOT NULL REFERENCES users(id),
+          artifact_hash TEXT NOT NULL,
+          criteria_version TEXT NOT NULL,
+          verdict TEXT NOT NULL
+            CHECK (verdict IN ('approved', 'changes_requested', 'blocked')),
+          findings TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_reviews_task_created
+          ON reviews(task_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_reviews_version_created
+          ON reviews(version_id, created_at);
+      `);
+    },
+  },
 ];
 
-/** Применить все ещё не применённые миграции, по одной транзакции на каждую. */
+/** Apply all still-unapplied migrations, one transaction per migration. */
 export function runMigrations() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (

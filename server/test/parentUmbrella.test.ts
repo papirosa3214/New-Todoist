@@ -122,6 +122,28 @@ describe("Родитель-зонтик: последняя дочерняя з�
     const child = await makeTask("Единственный ребёнок 2", parent);
     await close(child);
 
+    // Сначала владелец одобряет актуальную версию результата родителя.
+    const versions = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${parent}/versions`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const version = versions.json().versions[0];
+    const review = await app.inject({
+      method: "POST",
+      url: "/api/reviews",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        task_id: parent,
+        version_id: version.id,
+        artifact_hash: version.artifact_hash,
+        criteria_version: "taskflow/review-v1",
+        task_revision: version.task_revision,
+        verdict: "approved",
+      },
+    });
+    expect(review.statusCode).toBe(201);
+
     // Владелец принял родителя — карточка ушла с доски.
     await app.inject({
       method: "PATCH",

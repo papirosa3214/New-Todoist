@@ -18,6 +18,7 @@ import {
 } from "../enricher.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
+import { currentResultVersion, ensureResultVersionForReview } from "../resultVersions.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
   AGENT_RULES,
@@ -789,6 +790,29 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           db.prepare(
             "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
           ).run(uid(), task.id, req.userId, comment);
+        }
+
+        // A review round is immutable evidence, not just a state flag. If an
+        // explicit result version was created before this transition, keep
+        // it; otherwise materialize the submitted comment as the version for
+        // this revision. Returning from review increments current_revision,
+        // so the next submission cannot reuse the old approval.
+        if (state === "review") {
+          const beforeVersion = currentResultVersion(task.id);
+          const version = ensureResultVersionForReview(
+            task.id,
+            req.userId,
+            comment,
+          );
+          if (!beforeVersion) {
+            logEvent({
+              taskId: task.id,
+              actorId: req.userId,
+              kind: "result_version_created",
+              field: "result_version",
+              toValue: String(version.version_no),
+            });
+          }
         }
 
         // Re-entering in_progress (from blocked, or owner sending it back

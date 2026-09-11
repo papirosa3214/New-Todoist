@@ -166,6 +166,28 @@ describe("Сквозной сценарий: claim → heartbeat → blocked →
   });
 
   it("владелец принимает", async () => {
+    const versions = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}/versions`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(versions.statusCode).toBe(200);
+    const version = versions.json().versions[0];
+    const review = await app.inject({
+      method: "POST",
+      url: "/api/reviews",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        task_id: taskId,
+        version_id: version.id,
+        artifact_hash: version.artifact_hash,
+        criteria_version: "taskflow/review-v1",
+        task_revision: version.task_revision,
+        verdict: "approved",
+      },
+    });
+    expect(review.statusCode).toBe(201);
+
     const res = await app.inject({
       method: "PATCH",
       url: `/api/tasks/${taskId}`,

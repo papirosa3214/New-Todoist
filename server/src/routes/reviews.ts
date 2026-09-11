@@ -1,125 +1,136 @@
-// Локальная заготовка для заливки на .110:/home/maksim/Проекты/New-Todoist/server/src/routes/reviews.ts
-// НЕ применена — ждём явного разрешения Максима.
-//
-// Что: POST /api/reviews — запись вердикта приёмки по F04 (01-requirements.md)
-// и ADR-04 (05-decisions.md). Минимальный кусок первого практического
-// результата из README проекта v0.1 («одна задача проходит от запроса до
-// принятого артефакта, переживает потерю связи и не создаёт повторного
-// внешнего действия»). Полный review job / acceptance flow / evidence —
-// отдельные задачи, здесь только таблица `reviews` и endpoint, пишущий
-// вердикт на закреплённые artifact_hash и criteria_version (I07 из
-// 03-execution-contract.md: «Одобрение связано с artifact manifest hash,
-// task revision и policy version»).
-//
-// Поведение:
-//   - Принимает {task_id, artifact_hash, criteria_version, task_revision,
-//     verdict, findings?}.
-//   - verdict ∈ {approved, changes_requested, blocked}.
-//   - Без artifact_hash/criteria_version/task_revision — 400 (I07).
-//   - 404 если task не виден вызывающему (getTaskForRead).
-//   - Пишет строку в `reviews`, эмитит событие review_recorded через logEvent.
-//   - Возвращает 201 + созданный review_id.
-//
-// Что НЕ здесь (по дизайну, чтобы не раздувать):
-//   - Evidence, Acceptance, Action — отдельные таблицы/endpoint'ы.
-//   - Атомарный claim с attempt_id/lease_epoch — другой lock (шаг 4
-//     протокола claim из 03-execution-contract.md).
-//   - Миграция для `artifact_versions` — пока пустая (поля хеша нет
-//     нигде в существующем API, добавлять некуда).
-//
-// После одобрения — раскладывается в два файла на .110:
-//   1. server/src/routes/reviews.ts (этот код)
-//   2. server/src/migrations.ts — добавить одну запись `020_reviews`
-//      с таблицей `reviews` (см. reviews_migration.ts)
-//   3. server/src/index.ts — добавить `import { registerReviewRoutes } from "./routes/reviews.js"`
-//      и `await registerReviewRoutes(app)` рядом с другими registerXxxRoutes.
-//
-// Сервер НЕ перезапускаю — до явной команды (см. taskflow-speech-state.md,
-// запрет «сейчас вообще нельзя его перезапускать» от 18.08.2026).
-
-import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
+import type { FastifyInstance } from "fastify";
 import db from "../db.js";
-import { authOrApiToken, sessionOf } from "../auth.js";
-import { getTaskForRead } from "../access.js";
+import { authOrApiToken } from "../auth.js";
+import {
+  getTaskForRead,
+  getTaskForWrite,
+  isOwner,
+  isReviewer,
+} from "../access.js";
 import { logEvent } from "../agentState.js";
+import {
+  createResultVersion,
+  currentResultVersion,
+  getResultVersion,
+  listResultVersions,
+  type EvidenceItem,
+} from "../resultVersions.js";
 
-const uid = () => crypto.randomUUID();
+const VERDICTS = ["approved", "changes_requested", "blocked"] as const;
+type Verdict = (typeof VERDICTS)[number];
 
-type Verdict = "approved" | "changes_requested" | "blocked";
-const ALLOWED: ReadonlyArray<Verdict> = ["approved", "changes_requested", "blocked"];
+function evidenceOf(value: unknown): EvidenceItem[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 20) return null;
+  return value as EvidenceItem[];
+}
 
 export async function registerReviewRoutes(app: FastifyInstance): Promise<void> {
-  app.post("/api/reviews", async (req, reply) => {
-    const me = await authOrApiToken(req);
-    if (!me) return reply.code(401).send({ error: "unauthorized" });
+  app.post<{
+    Params: { id: string };
+    Body: { result?: string; evidence?: EvidenceItem[]; artifact_hash?: string };
+  }>("/api/tasks/:id/versions", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const task = getTaskForWrite(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    if (typeof req.body?.result !== "string" || !req.body.result.trim()) {
+      return reply.code(400).send({ error: "result обязателен" });
+    }
+    const evidence = evidenceOf(req.body?.evidence);
+    if (!evidence) return reply.code(400).send({ error: "evidence должен быть массивом максимум из 20 ссылок" });
+    if (req.body?.artifact_hash !== undefined && typeof req.body.artifact_hash !== "string") {
+      return reply.code(400).send({ error: "artifact_hash должен быть строкой" });
+    }
+    const version = createResultVersion({
+      taskId: task.id,
+      createdBy: req.userId,
+      result: req.body.result,
+      evidence,
+      artifactHash: req.body.artifact_hash ?? null,
+    });
+    logEvent({ taskId: task.id, actorId: req.userId, kind: "result_version_created", field: "result_version", toValue: String(version.version_no) });
+    return reply.code(201).send({ version });
+  });
 
-    const body = (req.body ?? {}) as Record<string, unknown>;
+  app.get<{ Params: { id: string } }>("/api/tasks/:id/versions", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const current = currentResultVersion(task.id);
+    const reviews = db.prepare(
+      `SELECT id, task_id, version_id, task_revision, reviewer_id,
+              artifact_hash, criteria_version, verdict, findings, created_at
+         FROM reviews WHERE task_id = ? ORDER BY created_at ASC, rowid ASC`,
+    ).all(task.id) as Array<Record<string, unknown>>;
+    const byVersion = new Map<string, Array<Record<string, unknown>>>();
+    for (const review of reviews) {
+      const list = byVersion.get(String(review.version_id)) ?? [];
+      list.push(review);
+      byVersion.set(String(review.version_id), list);
+    }
+    return {
+      current_version_id: current?.id ?? null,
+      versions: listResultVersions(task.id).map((version) => ({
+        ...version,
+        is_current: version.id === current?.id,
+        reviews: byVersion.get(version.id) ?? [],
+      })),
+    };
+  });
+
+  app.post<{
+    Body: {
+      task_id?: string;
+      version_id?: string;
+      artifact_hash?: string;
+      criteria_version?: string;
+      task_revision?: number;
+      verdict?: string;
+      findings?: string;
+    };
+  }>("/api/reviews", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const body = req.body ?? {};
     const taskId = typeof body.task_id === "string" ? body.task_id : null;
+    const versionId = typeof body.version_id === "string" ? body.version_id : null;
     const artifactHash = typeof body.artifact_hash === "string" ? body.artifact_hash : null;
     const criteriaVersion = typeof body.criteria_version === "string" ? body.criteria_version : null;
     const taskRevision = Number.isInteger(body.task_revision) ? Number(body.task_revision) : null;
-    const verdictRaw = typeof body.verdict === "string" ? body.verdict : null;
-    const findings = typeof body.findings === "string" ? body.findings : null;
+    const verdict = typeof body.verdict === "string" ? body.verdict : null;
+    const findings = body.findings === undefined ? null : String(body.findings);
 
-    if (!taskId || !artifactHash || !criteriaVersion || !verdictRaw) {
-      return reply.code(400).send({
-        error: "bad_request",
-        message: "task_id, artifact_hash, criteria_version, verdict — обязательны",
-      });
+    if (!taskId || !versionId || !artifactHash || !criteriaVersion || taskRevision === null || !verdict) {
+      return reply.code(400).send({ error: "task_id, version_id, artifact_hash, criteria_version, task_revision, verdict — обязательны" });
     }
-    const verdict = verdictRaw as Verdict;
-    if (!ALLOWED.includes(verdict)) {
-      return reply.code(400).send({
-        error: "bad_request",
-        message: `verdict должен быть одним из: ${ALLOWED.join(", ")}`,
-      });
+    if (!VERDICTS.includes(verdict as Verdict)) {
+      return reply.code(400).send({ error: `verdict должен быть одним из: ${VERDICTS.join(", ")}` });
     }
-    if (taskRevision === null) {
-      return reply.code(400).send({
-        error: "bad_request",
-        message: "task_revision обязательна (I07: вердикт привязан к revision)",
-      });
+    if (!isOwner(req.userId) && !isReviewer(req.userId)) {
+      return reply.code(403).send({ error: "вердикт может вынести только владелец или Reviewer" });
+    }
+    const task = getTaskForRead(taskId, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const version = getResultVersion(versionId);
+    const current = currentResultVersion(taskId);
+    if (!version || version.task_id !== taskId || !current || current.id !== version.id) {
+      return reply.code(409).send({ error: "вердикт можно вынести только по актуальной версии результата" });
+    }
+    if (version.task_revision !== taskRevision || version.artifact_hash !== artifactHash) {
+      return reply.code(409).send({ error: "версия или artifact_hash устарели" });
     }
 
-    const task = getTaskForRead(taskId, sessionOf(me).userId);
-    if (!task) return reply.code(404).send({ error: "not_found" });
-
-    const reviewerId = sessionOf(me).userId;
-    const reviewId = uid();
-    const tx = db.transaction(() => {
-      db.prepare(
-        `INSERT INTO reviews
-           (id, task_id, task_revision, reviewer_id, artifact_hash,
-            criteria_version, verdict, findings, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
-      ).run(
-        reviewId, taskId, taskRevision, reviewerId, artifactHash,
-        criteriaVersion, verdict, findings,
-      );
-      logEvent({
-        kind: "review_recorded",
-        aggregateId: taskId,
-        actorId: reviewerId,
-        payload: {
-          review_id: reviewId,
-          verdict,
-          artifact_hash: artifactHash,
-          criteria_version: criteriaVersion,
-        },
-      });
-    });
-    tx();
-
+    const reviewId = crypto.randomUUID();
+    db.prepare(
+      `INSERT INTO reviews
+         (id, task_id, version_id, task_revision, reviewer_id, artifact_hash,
+          criteria_version, verdict, findings, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    ).run(reviewId, taskId, version.id, version.task_revision, req.userId,
+      version.artifact_hash, criteriaVersion, verdict, findings);
+    logEvent({ taskId, actorId: req.userId, kind: "review_recorded", field: "result_version", toValue: `${version.version_no}:${verdict}` });
     return reply.code(201).send({
-      review_id: reviewId,
-      task_id: taskId,
-      task_revision: taskRevision,
-      reviewer_id: reviewerId,
-      artifact_hash: artifactHash,
-      criteria_version: criteriaVersion,
-      verdict,
-      findings,
+      review_id: reviewId, task_id: taskId, version_id: version.id,
+      task_revision: version.task_revision, reviewer_id: req.userId,
+      artifact_hash: version.artifact_hash, criteria_version: criteriaVersion,
+      verdict, findings,
     });
   });
 }

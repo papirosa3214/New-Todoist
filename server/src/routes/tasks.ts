@@ -18,6 +18,13 @@ import {
   registryRecord,
   releaseSubtaskWork,
 } from "../agentState.js";
+import {
+  currentResultVersion,
+  ensureResultVersionForReview,
+  hasAnyResultVersion,
+  hasApprovedCurrentVersion,
+  resultFromSubtasks,
+} from "../resultVersions.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -905,6 +912,19 @@ export function registerTaskRoutes(app: FastifyInstance) {
           });
         }
       }
+
+      if (
+        body.status === "completed" &&
+        existing.status !== "completed" &&
+        (existing.agent_state === "review" || hasAnyResultVersion(id)) &&
+        !hasApprovedCurrentVersion(id)
+      ) {
+        return reply.code(409).send({
+          error:
+            "нельзя принять задачу: у актуальной версии результата нет одобрения Reviewer/владельца",
+        });
+      }
+
       if (
         body.priority !== undefined &&
         !(body.priority >= 1 && body.priority <= 4)
@@ -1142,9 +1162,24 @@ export function registerTaskRoutes(app: FastifyInstance) {
             siblings.length > 0 &&
             siblings.every((s) => s.status === "completed");
           if (allDone) {
+            const beforeVersion = currentResultVersion(parent.id);
+            const version = ensureResultVersionForReview(
+              parent.id,
+              req.userId,
+              resultFromSubtasks(parent.id),
+            );
             db.prepare(
               "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
             ).run(parent.id);
+            if (!beforeVersion) {
+              logEvent({
+                taskId: parent.id,
+                actorId: req.userId,
+                kind: "result_version_created",
+                field: "result_version",
+                toValue: String(version.version_no),
+              });
+            }
             logEvent({
               taskId: parent.id,
               actorId: null,

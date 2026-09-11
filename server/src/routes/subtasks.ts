@@ -17,6 +17,7 @@ import {
 // задачи расходятся в контракте. Максим 18.08.2026: «почини».
 import { withSubtaskState, getTaskRow } from "./tasks.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
+import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks } from "../resultVersions.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -364,9 +365,24 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
               )
               .get(subtask.task_id) as { n: number };
             if (open.n === 0) {
+              const beforeVersion = currentResultVersion(parentTask.id);
+              const version = ensureResultVersionForReview(
+                parentTask.id,
+                req.userId,
+                resultFromSubtasks(parentTask.id),
+              );
               db.prepare(
                 "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
               ).run(parentTask.id);
+              if (!beforeVersion) {
+                logEvent({
+                  taskId: parentTask.id,
+                  actorId: req.userId,
+                  kind: "result_version_created",
+                  field: "result_version",
+                  toValue: String(version.version_no),
+                });
+              }
               // actor_id = NULL: это не отдельное действие исполнителя, а
               // следствие закрытия последнего шага — тот же довод, что у
               // lease_expired и у родителя-зонтика.
