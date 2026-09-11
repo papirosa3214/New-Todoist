@@ -202,8 +202,9 @@ export function describeAction(a: Action): string {
 
 /** Последние действия задачи — для раскрывающегося списка в карточке. */
 export function recentActivity(taskId: string) {
+  const metrics = taskStopMetrics(taskId);
   const e = buffers.get(taskId);
-  if (!e) return { text: null, actions: [] as Action[] };
+  if (!e) return { text: null, actions: [] as Action[], metrics };
   // Каждому действию — ГОТОВАЯ формулировка, а не голый путь. Владелец
   // 25.08.2026, увидев раскрытый список на телефоне: «нахуя мне вот эта
   // сырая хуета». Он прав: наверху строка шла с глаголом, а внутри сыпались
@@ -214,6 +215,68 @@ export function recentActivity(taskId: string) {
     actions: e.actions
       .slice(-20)
       .map((a) => ({ ...a, text: describeAction(a) })),
+    metrics,
+  };
+}
+
+/**
+ * Сводка контура для владельца. Это агрегаты по задаче, а не телеметрия
+ * каждого shell-вызова: очередь считается от создания до первого claim,
+ * содержательные попытки — строками attempts, технические повторы — своей
+ * таблицей, потери аренды — структурированным исходом, возвраты — review с
+ * verdict=changes_requested.
+ */
+export function taskStopMetrics(taskId: string) {
+  const task = db
+    .prepare("SELECT created_at FROM tasks WHERE id = ?")
+    .get(taskId) as { created_at?: string } | undefined;
+  const firstClaim = db
+    .prepare(
+      `SELECT created_at FROM task_events
+        WHERE task_id = ? AND kind = 'claimed'
+        ORDER BY created_at, rowid LIMIT 1`,
+    )
+    .get(taskId) as { created_at?: string } | undefined;
+  const attempts = db
+    .prepare("SELECT COUNT(*) AS n FROM attempts WHERE task_id = ?")
+    .get(taskId) as { n: number };
+  const retries = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM attempt_retries r
+         JOIN attempts a ON a.id = r.attempt_id
+        WHERE a.task_id = ?`,
+    )
+    .get(taskId) as { n: number };
+  const leaseLosses = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM attempts
+        WHERE task_id = ? AND (reason_code = 'lease_expired' OR outcome = 'lease_expired')`,
+    )
+    .get(taskId) as { n: number };
+  const versionReturns = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM reviews
+        WHERE task_id = ? AND verdict = 'changes_requested'`,
+    )
+    .get(taskId) as { n: number };
+  const queueDelta =
+    task?.created_at && firstClaim?.created_at
+      ? (db
+          .prepare("SELECT strftime('%s', ?) - strftime('%s', ?) AS n")
+          .get(firstClaim.created_at, task.created_at) as { n: number })
+      : undefined;
+  const queueSeconds = queueDelta ? Math.max(0, Number(queueDelta.n)) : null;
+  const substantiveAttempts = Number(attempts.n || 0);
+  const repeatedAttempts = Math.max(0, substantiveAttempts - 1);
+  return {
+    queue_time_seconds: queueSeconds,
+    substantive_attempts: substantiveAttempts,
+    repeated_substantive_attempts: repeatedAttempts,
+    repeated_attempt_rate:
+      substantiveAttempts > 0 ? repeatedAttempts / substantiveAttempts : 0,
+    technical_retries: Number(retries.n || 0),
+    lease_losses: Number(leaseLosses.n || 0),
+    result_version_returns: Number(versionReturns.n || 0),
   };
 }
 
@@ -390,6 +453,15 @@ export function startActivityObserver(): void {
 
 export function registerActivityRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
+
+  app.get<{ Params: { id: string } }>("/api/tasks/:id/activity/metrics", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const row = getTaskForWrite(req.params.id, req.userId);
+      if (!row) return reply.code(404).send({ error: "Задача не найдена" });
+      return { metrics: taskStopMetrics(row.id) };
+    },
+  });
 
   app.post<{
     Params: { id: string };

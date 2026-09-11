@@ -222,7 +222,7 @@ def release_abandoned(db):
         db.execute(
             """UPDATE attempts
                   SET ended_at = datetime('now'), outcome = 'lease_expired',
-                      reason = ?
+                      reason_code = 'lease_expired', reason = ?
                 WHERE id = (SELECT current_attempt_id FROM tasks
                               WHERE id = ?)
                   AND ended_at IS NULL""",

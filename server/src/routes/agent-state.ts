@@ -19,6 +19,11 @@ import {
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { currentResultVersion, ensureResultVersionForReview } from "../resultVersions.js";
+import {
+  isStopReasonCode,
+  stopReasonError,
+  stopReasonPolicy,
+} from "../stopReasons.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
   AGENT_RULES,
@@ -663,7 +668,12 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   // can never end up in blocked/review without its explanation attached.
   app.post<{
     Params: { id: string };
-    Body: { state: AgentState | null; comment?: string; session_id?: string };
+    Body: {
+      state: AgentState | null;
+      comment?: string;
+      session_id?: string;
+      reason_code?: string;
+    };
   }>("/api/tasks/:id/state", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
@@ -688,6 +698,11 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           error:
             "state должно быть одним из: in_progress, blocked, review, null",
         });
+      }
+
+      const reasonCode = req.body?.reason_code;
+      if (reasonCode !== undefined && !isStopReasonCode(reasonCode)) {
+        return reply.code(400).send({ error: stopReasonError() });
       }
 
       const from = (task.agent_state ?? null) as AgentState | null;
@@ -790,6 +805,53 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           db.prepare(
             "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
           ).run(uid(), task.id, req.userId, comment);
+        }
+
+        // The old comment-only contract remains accepted for old clients.
+        // When a structured code is supplied, it becomes the machine-readable
+        // source of truth and is copied to the active attempt. Technical
+        // retries live in their own table and therefore do not inflate the
+        // number of substantive attempts.
+        if (state === "blocked" && reasonCode) {
+          const policy = stopReasonPolicy(reasonCode)!;
+          const attemptId = (task as any).current_attempt_id as string | null;
+          if (attemptId) {
+            db.prepare(
+              "UPDATE attempts SET reason_code = ? WHERE id = ? AND ended_at IS NULL",
+            ).run(reasonCode, attemptId);
+            if (policy.automaticRetry) {
+              const retryNo = (
+                db
+                  .prepare(
+                    "SELECT COALESCE(MAX(retry_no), 0) AS n FROM attempt_retries WHERE attempt_id = ?",
+                  )
+                  .get(attemptId) as { n: number }
+              ).n + 1;
+              if (retryNo <= policy.maxAutomaticRetries) {
+                db.prepare(
+                  `INSERT INTO attempt_retries
+                     (id, attempt_id, reason_code, retry_no, delay_seconds,
+                      scheduled_at, detail)
+                   VALUES (?, ?, ?, ?, ?, datetime('now', ?), ?)`,
+                ).run(
+                  uid(),
+                  attemptId,
+                  reasonCode,
+                  retryNo,
+                  policy.delaySeconds ?? 0,
+                  `+${policy.delaySeconds ?? 0} seconds`,
+                  comment || null,
+                );
+              }
+            }
+          }
+          logEvent({
+            taskId: task.id,
+            actorId: req.userId,
+            kind: "stop_reason",
+            field: "reason_code",
+            toValue: reasonCode,
+          });
         }
 
         // A review round is immutable evidence, not just a state flag. If an
@@ -991,6 +1053,134 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       });
 
       return { task: hydrated };
+    },
+  });
+
+  // ═══════ STRUCTURED STOP ═══════
+  // A stop is different from the legacy state endpoint: the caller names the
+  // reason explicitly, and the server returns the policy action. Technical
+  // failures are recorded as retry rows while the substantive attempt stays
+  // alive; all other reasons close the current attempt and wait in blocked.
+  app.post<{
+    Params: { id: string };
+    Body: { reason_code?: string; comment?: string };
+  }>("/api/tasks/:id/stop", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const task = getTaskForWrite(req.params.id, req.userId);
+      if (!task) return reply.code(404).send({ error: "Not found" });
+
+      const reasonCode = req.body?.reason_code;
+      const policy = stopReasonPolicy(reasonCode);
+      if (!policy) return reply.code(400).send({ error: stopReasonError() });
+
+      const claimedAttempt = readAttemptId(req);
+      const mismatch = attemptMismatchReason(
+        claimedAttempt,
+        (task as any).current_attempt_id ?? null,
+      );
+      if (mismatch) {
+        return reply.code(400).send({ error: `attempt_id: ${mismatch}` });
+      }
+
+      const comment =
+        typeof req.body?.comment === "string" ? req.body.comment.trim() : "";
+      const attemptId = (task as any).current_attempt_id as string | null;
+      if (!attemptId) {
+        return reply.code(400).send({ error: "у задачи нет действующей попытки" });
+      }
+
+      const retry = db
+        .prepare(
+          "SELECT COALESCE(MAX(retry_no), 0) AS n FROM attempt_retries WHERE attempt_id = ?",
+        )
+        .get(attemptId) as { n: number };
+      if (
+        policy.automaticRetry &&
+        retry.n >= policy.maxAutomaticRetries
+      ) {
+        return reply.code(409).send({
+          error: "лимит технических повторов исчерпан — нужно решение владельца",
+          reason_code: reasonCode,
+          action: "wait_owner",
+          retry_count: retry.n,
+        });
+      }
+
+      const stopTxn = db.transaction(() => {
+        if (comment) {
+          db.prepare(
+            "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
+          ).run(uid(), task.id, req.userId, comment);
+        }
+
+        if (policy.automaticRetry) {
+          const retryNo = retry.n + 1;
+          db.prepare(
+            `INSERT INTO attempt_retries
+               (id, attempt_id, reason_code, retry_no, delay_seconds,
+                scheduled_at, detail)
+             VALUES (?, ?, ?, ?, ?, datetime('now', ?), ?)`,
+          ).run(
+            uid(),
+            attemptId,
+            reasonCode,
+            retryNo,
+            policy.delaySeconds ?? 0,
+            `+${policy.delaySeconds ?? 0} seconds`,
+            comment || null,
+          );
+          db.prepare(
+            "UPDATE attempts SET reason_code = ? WHERE id = ? AND ended_at IS NULL",
+          ).run(reasonCode, attemptId);
+        } else {
+          db.prepare(
+            `UPDATE attempts
+                SET ended_at = datetime('now'), outcome = ?,
+                    reason_code = ?, reason = ?
+              WHERE id = ? AND ended_at IS NULL`,
+          ).run(policy.action, reasonCode, comment || null, attemptId);
+          db.prepare(
+            "UPDATE tasks SET current_attempt_id = NULL WHERE id = ? AND current_attempt_id = ?",
+          ).run(task.id, attemptId);
+          db.prepare(
+            "UPDATE tasks SET agent_state = 'blocked', updated_at = datetime('now') WHERE id = ?",
+          ).run(task.id);
+          logEvent({
+            taskId: task.id,
+            actorId: req.userId,
+            kind: "state_changed",
+            field: "agent_state",
+            fromValue: task.agent_state ?? null,
+            toValue: "blocked",
+          });
+        }
+
+        logEvent({
+          taskId: task.id,
+          actorId: req.userId,
+          kind: "stop_reason",
+          field: "reason_code",
+          toValue: reasonCode,
+        });
+      });
+      stopTxn();
+
+      const updated = getTaskRow(task.id);
+      const hydrated = hydrateTask(updated);
+      broadcastTaskEvent([updated.creator_id, updated.assignee_id], {
+        type: "task:state",
+        task: hydrated,
+      });
+
+      return {
+        task: hydrated,
+        reason_code: reasonCode,
+        action: policy.action,
+        retry_count: policy.automaticRetry ? retry.n + 1 : retry.n,
+        retry_delay_seconds: policy.delaySeconds,
+        substantive_attempts: (hydrated.attempts || []).length,
+      };
     },
   });
 }

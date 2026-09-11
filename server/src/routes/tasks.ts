@@ -207,7 +207,7 @@ export function hydrateTask(task: any) {
   const attempts = db
     .prepare(
       `SELECT id, task_id, subtask_id, executor_id, runner, model,
-              started_at, ended_at, heartbeat_at, outcome, reason
+              started_at, ended_at, heartbeat_at, outcome, reason, reason_code
          FROM attempts WHERE task_id = ? ORDER BY started_at DESC`,
     )
     .all(task.id);
@@ -448,7 +448,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const attempts = db
         .prepare(
           `SELECT id, task_id, subtask_id, executor_id, runner, model,
-                  started_at, ended_at, heartbeat_at, outcome, reason
+                  started_at, ended_at, heartbeat_at, outcome, reason, reason_code
              FROM attempts WHERE task_id = ? ORDER BY started_at DESC`,
         )
         .all(task.id);

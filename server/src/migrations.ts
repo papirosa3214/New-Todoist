@@ -783,6 +783,36 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "030_stop_reasons_and_retry_metrics",
+    description:
+      "Структурированные причины остановки, отдельный журнал технических повторов и метрики контура (карточка 7e615669).",
+    up: () => {
+      const attemptColumns = db
+        .prepare("PRAGMA table_info(attempts)")
+        .all() as Array<{ name: string }>;
+      if (!attemptColumns.some((column) => column.name === "reason_code")) {
+        db.exec("ALTER TABLE attempts ADD COLUMN reason_code TEXT");
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS attempt_retries (
+          id TEXT PRIMARY KEY,
+          attempt_id TEXT NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
+          reason_code TEXT NOT NULL,
+          retry_no INTEGER NOT NULL,
+          delay_seconds INTEGER NOT NULL,
+          scheduled_at TEXT NOT NULL,
+          detail TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(attempt_id, retry_no)
+        );
+        CREATE INDEX IF NOT EXISTS idx_attempt_retries_attempt
+          ON attempt_retries(attempt_id, retry_no);
+        CREATE INDEX IF NOT EXISTS idx_attempt_retries_reason
+          ON attempt_retries(reason_code, created_at);
+      `);
+    },
+  },
 ];
 
 /** Apply all still-unapplied migrations, one transaction per migration. */
