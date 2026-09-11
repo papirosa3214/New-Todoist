@@ -134,7 +134,14 @@ export function ChatComposer({
     return `${m}:${String(sec).padStart(2, "0")}`;
   })();
 
-  const others = participants.filter((p) => p.id !== meId);
+  // «Секретарь» (role=viewer, type=ai) в выбор адресата не попадает: это
+  // учётка скрипта окна постановки, а не исполнитель — писать ему адресно
+  // некому и незачем, отвечает он только на надиктовку в своём канале
+  // (миграция 028, карточка 4396f8c9). Мёртвых пунктов в списке быть не
+  // должно по той же причине, по какой в интерфейсе нет мёртвых кнопок.
+  const others = participants.filter(
+    (p) => p.id !== meId && !(p.role === "viewer" && p.type === "ai"),
+  );
   const addressee = fixedAddressee ?? others.find((p) => p.id === toUserId);
   const toEveryone = !fixedAddressee && toUserId === TO_ALL;
   const chosen = toEveryone || !!addressee;
@@ -273,54 +280,54 @@ export function ChatComposer({
           </div>
         ) : (
           <>
-        {/* Адресат. Был выпадающий список «Всем / имена» — владелец попросил
+            {/* Адресат. Был выпадающий список «Всем / имена» — владелец попросил
             иконку: «надо какого-нибудь робота своего стандартного, я нажимаю,
             всплывает окошечко, и я выбираю уже все / не все». Робот, а не
             звёздочки: звёздочки в этом интерфейсе уже значат «AI-действие», а
             здесь выбирается получатель. */}
-        <button
-          ref={pickerAnchorRef}
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setPickerOpen((v) => !v)}
-          aria-label={
-            addressee
-              ? `Кому: ${addressee.name}`
-              : toEveryone
-                ? "Кому: всем"
-                : "Кому? адресат не выбран"
-          }
-          style={{ width: H, height: H }}
-          // Три состояния, и «не выбрано» отличается от «всем» видом, а не
-          // только подписью: пунктир — поле ждёт заполнения, сплошной
-          // акцент — адресат назван, спокойная карточка — выбраны все.
-          className={`rounded-xl flex items-center justify-center shrink-0 tap-scale ${
-            addressee
-              ? "bg-red text-white"
-              : toEveryone
-                ? "bg-card2 text-text"
-                : "bg-card text-red border border-dashed border-red"
-          }`}
-        >
-          <Icon name={toEveryone ? "users" : "bot"} size={18} />
-        </button>
-        <ActionsMenu
-          open={pickerOpen}
-          onClose={() => setPickerOpen(false)}
-          anchorRef={pickerAnchorRef}
-          items={[
-            {
-              icon: toEveryone ? "check" : "users",
-              label: "Всем",
-              onClick: () => setToUserId(TO_ALL),
-            },
-            ...others.map((p) => ({
-              icon: toUserId === p.id ? "check" : ("bot" as const),
-              label: p.name,
-              onClick: () => setToUserId(p.id),
-            })),
-          ]}
-        />
+            <button
+              ref={pickerAnchorRef}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setPickerOpen((v) => !v)}
+              aria-label={
+                addressee
+                  ? `Кому: ${addressee.name}`
+                  : toEveryone
+                    ? "Кому: всем"
+                    : "Кому? адресат не выбран"
+              }
+              style={{ width: H, height: H }}
+              // Три состояния, и «не выбрано» отличается от «всем» видом, а не
+              // только подписью: пунктир — поле ждёт заполнения, сплошной
+              // акцент — адресат назван, спокойная карточка — выбраны все.
+              className={`rounded-xl flex items-center justify-center shrink-0 tap-scale ${
+                addressee
+                  ? "bg-red text-white"
+                  : toEveryone
+                    ? "bg-card2 text-text"
+                    : "bg-card text-red border border-dashed border-red"
+              }`}
+            >
+              <Icon name={toEveryone ? "users" : "bot"} size={18} />
+            </button>
+            <ActionsMenu
+              open={pickerOpen}
+              onClose={() => setPickerOpen(false)}
+              anchorRef={pickerAnchorRef}
+              items={[
+                {
+                  icon: toEveryone ? "check" : "users",
+                  label: "Всем",
+                  onClick: () => setToUserId(TO_ALL),
+                },
+                ...others.map((p) => ({
+                  icon: toUserId === p.id ? "check" : ("bot" as const),
+                  label: p.name,
+                  onClick: () => setToUserId(p.id),
+                })),
+              ]}
+            />
           </>
         )}
 
