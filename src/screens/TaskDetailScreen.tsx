@@ -22,6 +22,7 @@ import {
   ErrorBanner,
   Loading,
   PriorityArrows,
+  ReadyFlag,
 } from "../components/UI";
 import { PRIORITIES } from "../components/TaskFields";
 import {
@@ -305,7 +306,6 @@ export function TaskDetailScreen() {
 
   const priority = PRIORITIES.find((p) => p.key === task.priority);
   const taskProject = projects.find((p) => p.id === task.project_id);
-  const showPriorityFlag = !!task.priority && task.priority <= 3;
   // Квадратик завершения убран из шапки карточки (Максим, 24.08.2026) — тем
   // же решением, что раньше вычистило чекбоксы из списка и с доски: задачу он
   // закрывает кнопками внизу, а квадратик только съедал место слева и тянул
@@ -419,18 +419,17 @@ export function TaskDetailScreen() {
         >
           {task.title}
         </h1>
-        {/* Флажок приоритета — справа от заголовка, там же, где в строке
-            списка он стоит в метаданных. Низкий (P4) не показываем: это
-            значение по умолчанию. */}
-        {showPriorityFlag && (
-          <Icon
-            name="flag"
-            size={16}
-            className="mt-1 shrink-0"
-            style={{ color: priority?.color }}
-            aria-label={`Приоритет: ${priority?.name ?? ""}`}
-          />
-        )}
+        {/* Справа от заголовка — ПОДНЯТЫЙ ФЛАГ ГОТОВНОСТИ, а не приоритет.
+            До 11.09.2026 здесь стоял флажок приоритета, и он же сбил
+            владельца с толку: «точно знаю, что была задача, где флаг
+            поднят, но где он в карточке высвечивался — не увидел». Пока
+            флажок означал две разные вещи, отличить их было нельзя.
+            Приоритет теперь читается шевронами в строке ниже. */}
+        {task.ready_for_pickup ? (
+          <span className="mt-1 shrink-0">
+            <ReadyFlag size={16} />
+          </span>
+        ) : null}
       </div>
 
       <ErrorBanner
@@ -505,6 +504,20 @@ export function TaskDetailScreen() {
             Приоритет
           </span>
         </div>
+        {/* Поднятый флаг готовности — отдельной строкой рядом с приоритетом.
+            Владелец 11.09.2026: «точно знаю, что была задача, где флаг
+            поднят, но где он в карточке высвечивался — не увидел». Кнопка
+            управления флагом живёт ниже, среди владельческих действий, но
+            СОСТОЯНИЕ должно читаться сразу, а не выводиться из подписи
+            кнопки. Строки нет — значит флаг не поднят. */}
+        {task.ready_for_pickup ? (
+          <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
+            <ReadyFlag size={16} />
+            <span className="text-[14px] flex-1 text-green">
+              Флаг поднят — можно брать в работу
+            </span>
+          </div>
+        ) : null}
         {task.assignee_id && task.assignee_name && (
           <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
             <Avatar
