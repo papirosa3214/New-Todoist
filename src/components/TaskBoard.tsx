@@ -88,7 +88,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useQueryClient } from "@tanstack/react-query";
-import { Icon, Avatar, AgentStateTag } from "./UI";
+import { Icon, Avatar, AgentStateTag, PriorityArrows, ReadyFlag } from "./UI";
 import { MONTHS_SHORT } from "../lib/date";
 import { useTapGuard } from "../lib/useTapGuard";
 import { hapticCross, hapticDrop, hapticGrab } from "../lib/haptics";
@@ -290,6 +290,11 @@ function BoardCard({
                 {doneSub}/{task.subtasks.length}
               </span>
             )}
+            {/* Поднятый флаг готовности и приоритет — прямо на карточке
+                доски: владелец 11.09.2026 не должен проваливаться в каждую
+                задачу, чтобы понять, подтверждена она или нет. */}
+            {task.ready_for_pickup ? <ReadyFlag size={10} /> : null}
+            <PriorityArrows priority={task.priority} size={8} />
             {task.due_date && (
               <span
                 className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 ${
