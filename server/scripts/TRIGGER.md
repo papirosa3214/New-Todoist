@@ -9,8 +9,16 @@
 > Служба: `~/.config/systemd/user/taskflow-trigger.service`
 > (`systemctl --user status|restart taskflow-trigger`).
 
-Доска TaskFlow сама зовёт Клода в работу — то же назначение, что у
+Доска TaskFlow может позвать Pi Agent в работу — то же назначение, что у
 `kaneo-trigger`, но без вебхуков.
+
+Сейчас служба намеренно выключена. Это ручной рубильник: пока схема не
+настроена и не проверена, задачи сами никого не будят.
+
+Для ролевого запуска Pi будильник передаёт явный флаг
+`--mcp-config ~/.pi/agent/taskflow-profiles/<role>.json`. Поэтому профиль
+роли действует только внутри запуска по карточке. Обычный `pi` без этого
+флага использует стандартную конфигурацию и не получает случайную роль.
 
 ## Почему не вебхуки
 
@@ -79,14 +87,13 @@
 Служба пользовательская, без sudo:
 
 ```bash
-systemctl --user daemon-reload
-systemctl --user enable --now taskflow-trigger
 systemctl --user status taskflow-trigger
 ```
 
 Токен не лежит на диске и не печатается: юнит запускает скрипт через
-`vault-run.py`, ключ `TASKFLOW_AGENT_TOKEN` попадает только в окружение
-процесса.
+`vault-run.py`, ключ `TASKFLOW_PI_AGENT_TOKEN` попадает только в окружение
+процесса. Старые ключи отдельных оболочек сохранены, но этим запуском не
+используются.
 
 Журнал: `~/.local/state/taskflow-trigger/trigger.log`, вывод самих заходов —
 `task-<id>.log` там же.
@@ -94,11 +101,11 @@ systemctl --user status taskflow-trigger
 ## Сухой прогон
 
 Проверить, что служба видит события и правильно решает, кого будить, не
-запуская настоящего Клода и ничего не меняя в задачах:
+запуская Pi и ничего не меняя в задачах:
 
 ```bash
 TASKFLOW_TRIGGER_DRY=1 python3 ~/.claude/vault-run.py \
-  --secret TASKFLOW_TOKEN=TASKFLOW_AGENT_TOKEN -- python3 trigger.py
+  --secret TASKFLOW_TOKEN=TASKFLOW_PI_AGENT_TOKEN -- python3 trigger.py
 ```
 
 Нужен, когда над той же задачей уже идёт живая сессия: два агента на одной

@@ -99,6 +99,55 @@ function ensureAgentInboxEventType(): void {
   `);
 }
 
+/**
+ * Remove the closed users.role CHECK without losing columns added after the
+ * original users table was created. SQLite cannot alter a CHECK in place, so
+ * this uses the live table definition and the same no-transaction rebuild
+ * pattern as the earlier orchestrator migration.
+ */
+function removeUsersRoleCheck(): void {
+  const ddl =
+    (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
+        .get() as { sql?: string } | undefined
+    )?.sql ?? "";
+  if (!ddl || !/CHECK\s*\(\s*role\s+IN\s*\([^)]*\)\s*\)/i.test(ddl)) {
+    return;
+  }
+
+  const newDdl = ddl
+    .replace(/\s+CHECK\s*\(\s*role\s+IN\s*\([^)]*\)\s*\)/i, "")
+    .replace(/CREATE TABLE\s+"?users"?/i, 'CREATE TABLE "users_new"');
+  if (newDdl === ddl || !newDdl.includes('CREATE TABLE "users_new"')) {
+    throw new Error(
+      "031_role_skills: не удалось безопасно подготовить users без role CHECK",
+    );
+  }
+
+  db.pragma("foreign_keys = OFF");
+  try {
+    const rebuild = db.transaction(() => {
+      db.exec(newDdl);
+      db.exec('INSERT INTO "users_new" SELECT * FROM users');
+      db.exec("DROP TABLE users");
+      db.exec('ALTER TABLE "users_new" RENAME TO users');
+    });
+    rebuild();
+
+    const broken = (
+      db.pragma("foreign_key_check") as Array<{ parent?: string }>
+    ).filter((row) => row.parent === "users");
+    if (broken.length > 0) {
+      throw new Error(
+        `031_role_skills: после пересборки users осталось ${broken.length} битых ссылок на users`,
+      );
+    }
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
 const migrations: Migration[] = [
   {
     id: "001_baseline",
@@ -810,6 +859,26 @@ const migrations: Migration[] = [
           ON attempt_retries(attempt_id, retry_no);
         CREATE INDEX IF NOT EXISTS idx_attempt_retries_reason
           ON attempt_retries(reason_code, created_at);
+      `);
+    },
+  },
+  {
+    id: "031_role_skills",
+    description:
+      "Семь ролей спека 1.1: users.role больше не заперт закрытым CHECK, а role_skills хранит компетенции роли и поддерживает поиск по роли и навыку.",
+    noTransaction: true,
+    up: () => {
+      removeUsersRoleCheck();
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS role_skills (
+          role TEXT NOT NULL,
+          skill_name TEXT NOT NULL,
+          description TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          PRIMARY KEY (role, skill_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_role_skills_skill
+          ON role_skills(skill_name);
       `);
     },
   },

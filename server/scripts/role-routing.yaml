@@ -1,0 +1,35 @@
+# Роль → исполнитель. Роли сохраняются как смысловые обязанности, но
+# фактически все они сейчас выполняются одним Pi Agent.
+defaults:
+  researcher: agent_pi
+  analyst: agent_pi
+  synthesizer: agent_pi
+  critic_verifier: agent_pi
+  architect: agent_pi
+  builder: agent_pi
+  qa: agent_pi
+  designer: agent_pi
+
+# Запасных исполнителей нет: при исчерпании лимита задача останавливается,
+# пока владелец не решит, что подключать дальше.
+fallbacks:
+  researcher: []
+  analyst: []
+  synthesizer: []
+  critic_verifier: []
+  architect: []
+  builder: []
+  qa: []
+  designer: []
+
+# Одна модель Pi по умолчанию. Настройки подключения и ключ модели живут в
+# ~/.pi/agent, а не в старых профилях отдельных оболочек.
+models:
+  researcher: MiniMax-M3
+  analyst: MiniMax-M3
+  synthesizer: MiniMax-M3
+  critic_verifier: MiniMax-M3
+  architect: MiniMax-M3
+  builder: MiniMax-M3
+  qa: MiniMax-M3
+  designer: MiniMax-M3

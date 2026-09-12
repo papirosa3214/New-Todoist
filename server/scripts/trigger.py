@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Будильник TaskFlow: доска сама зовёт Клода в работу.
+"""Будильник TaskFlow: доска может позвать Pi Agent в работу.
 
 Тот же смысл, что у kaneo-trigger, но без вебхуков — TaskFlow уже отдаёт
 живой поток событий по WebSocket, а уведомления вдобавок хранятся в базе.
@@ -7,11 +7,11 @@
 она добирает непрочитанные уведомления и разбирает их.
 
 Что делает:
-  1. Держит WebSocket агентским токеном. Пока сокет открыт, Клод показан
+  1. Держит WebSocket агентским токеном. Пока сокет открыт, Pi Agent показан
      «онлайн» на экране агентов (server/src/ws.ts) — отдельного пинга не надо.
   2. Ловит notification:new (назначение задачи, комментарий).
-  3. Решает, повод ли это (см. decide) и запускает `claude -p` по задаче.
-  4. Пока Клод работает, задача живёт по AGENT-PROTOCOL.md: claim →
+  3. Решает, повод ли это (см. decide) и запускает Pi по задаче.
+  4. Пока Pi работает, задача живёт по AGENT-PROTOCOL.md: claim →
      heartbeat → review. Аренду продлевает эта же служба, чтобы работа не
      помечалась брошенной, пока процесс жив.
 
@@ -46,16 +46,32 @@ TOKEN = os.environ.get("TASKFLOW_TOKEN", "").strip()
 HERMES_TOKEN = os.environ.get("TASKFLOW_HERMES_TOKEN", "").strip()
 HOME = Path.home()
 CLAUDE_BIN = str(HOME / ".npm-global/bin/claude")
+PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2"
+PI_BIN = str(HOME / ".local/bin/pi")
 STATE_DIR = HOME / ".local/state/taskflow-trigger"
 ALIVE_FILE = STATE_DIR / "alive"
 ALIVE_BEAT_SEC = 30
 LOG_FILE = STATE_DIR / "trigger.log"
 
-ME = "u2"        # Claude_Bot
+ME = PI_AGENT_ID
 
 # Учётки, чьи комментарии в карточке пишет САМА служба, а не исполнитель:
 # по ним нельзя судить, было ли движение в заходе (см. activity_mark).
 SERVICE_AUTHORS = {ME}
+
+ROLE_NAMES = frozenset({
+    "researcher",
+    "analyst",
+    "synthesizer",
+    "critic_verifier",
+    "architect",
+    "builder",
+    "qa",
+    "designer",
+})
+ROLE_ROUTING_FILE = Path(__file__).with_name("role-routing.yaml")
+ROLE_PROMPTS_DIR = Path(__file__).with_name("role-prompts")
+PI_MCP_PROFILES_DIR = HOME / ".pi/agent/taskflow-profiles"
 
 # Кого будить под какую учётку.
 #
@@ -71,7 +87,7 @@ SERVICE_AUTHORS = {ME}
 # СВОЮ сессию по задаче между заходами (resume/форк, см. resume_target).
 # У Гермеса, dsh и Antigravity продолжаемой сессии нет вовсе: каждый заход
 # самостоятельный, поэтому им хватает одной команды.
-EXTERNAL_AGENTS = {
+LEGACY_EXTERNAL_AGENTS = {
     # Основной Claude_Bot использует тот же единый запуск, что и остальные
     # агенты. Раньше fallback в handle_task звал удалённую run_claude(), из-за
     # чего назначенные ему карточки не подхватывались (NameError).
@@ -82,6 +98,7 @@ EXTERNAL_AGENTS = {
         "vault_key": "TASKFLOW_TOKEN",
         "cmd": [CLAUDE_BIN, "--permission-mode", "bypassPermissions", "-p"],
         "claude_cli": True,
+        "roles": ["researcher", "analyst", "synthesizer", "critic_verifier", "architect", "builder", "qa"],
     },
     "u3": {
         "name": "Гермес",
@@ -115,6 +132,7 @@ EXTERNAL_AGENTS = {
         # разовом заходе. Нужна другая модель осознанно — снимать резидента
         # с этой карточки, а не ждать, что метка подействует.
         "resident": True,
+        "roles": ["researcher", "analyst", "synthesizer", "architect", "qa"],
     },
     # Оркестратор-Hermes СНЯТ 27.08.2026 по решению владельца: оркестратор
     # раскладывает работу и принимает её — это самая думающая роль, и слабая
@@ -145,6 +163,7 @@ EXTERNAL_AGENTS = {
         "role": "orchestrator",
         "vault_key": "TASKFLOW_ORCHESTRATOR_CLAUDE_TOKEN",
         "claude_cli": False,
+        "roles": ["synthesizer", "critic_verifier", "architect"],
     },
     # DeepSeek Harness. Запускается из кеша npx — путь там меняется при
     # обновлении, поэтому ищем, а не зашиваем; PATH подменяем на Node 22,
@@ -155,6 +174,7 @@ EXTERNAL_AGENTS = {
         "cmd": None,          # соберётся при старте, см. find_dsh()
         "env": {"PATH": "/home/maksim/.nvm/versions/node/v22.23.1/bin:"
                         + os.environ.get("PATH", "")},
+        "roles": ["researcher", "qa"],
     },
     # Antigravity — его родной CLI `agy`, как Гермес и dsh: свой агентский
     # цикл, доска через MCP. Самописный antigravity_agent.py больше не зовём —
@@ -184,8 +204,218 @@ EXTERNAL_AGENTS = {
             "ALL_PROXY": "socks5://127.0.0.1:10815",
             "all_proxy": "socks5://127.0.0.1:10815",
         },
+        "roles": ["analyst", "critic_verifier", "builder"],
     },
 }
+
+# Единая рабочая схема: старые записи выше оставлены как историческая
+# документация, но в работу они больше не попадают и их ключи не читаются.
+# Pi запускается своим CLI и получает единственный активный ключ TaskFlow.
+EXTERNAL_AGENTS = {
+    PI_AGENT_ID: {
+        "id": PI_AGENT_ID,
+        "name": "Pi Agent",
+        "token_env": "TASKFLOW_TOKEN",
+        "cmd": [PI_BIN, "-p"],
+        "roles": sorted(ROLE_NAMES),
+    },
+}
+
+
+# Заполняется один раз при старте и используется следующими этапами
+# маршрутизации. Здесь пока только читаем и проверяем конфигурацию: выбор
+# оболочки по роли подключается отдельной задачей, но невалидный файл уже
+# сейчас должен остановить службу, а не дать ей работать с частичной картой.
+def load_role_routing(path: Path = ROLE_ROUTING_FILE) -> dict[str, dict]:
+    """Load and validate the role routing matrix from YAML."""
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError("для role-routing.yaml нужен пакет PyYAML") from exc
+
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(f"не прочитать {path}: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise RuntimeError(f"невалидный YAML в {path}: {exc}") from exc
+
+    if not isinstance(document, dict):
+        raise ValueError("role-routing.yaml должен содержать mapping верхнего уровня")
+    required = {"defaults", "fallbacks", "models"}
+    if set(document) != required:
+        missing = sorted(required - set(document))
+        extra = sorted(set(document) - required)
+        raise ValueError(
+            "role-routing.yaml должен содержать ровно defaults, fallbacks и models; "
+            f"пропущены: {missing}; лишние: {extra}"
+        )
+
+    sections: dict[str, dict] = {}
+    for section_name in required:
+        section = document[section_name]
+        if not isinstance(section, dict):
+            raise ValueError(f"{section_name} должен быть mapping")
+        if set(section) != set(ROLE_NAMES):
+            missing = sorted(ROLE_NAMES - set(section))
+            extra = sorted(set(section) - ROLE_NAMES)
+            raise ValueError(
+                f"{section_name}: нужны все роли; "
+                f"пропущены: {missing}; лишние: {extra}"
+            )
+        sections[section_name] = section
+
+    for role in sorted(ROLE_NAMES):
+        default = sections["defaults"][role]
+        if not isinstance(default, str) or not default.strip():
+            raise ValueError(f"defaults.{role} должен быть непустой строкой")
+
+        fallbacks = sections["fallbacks"][role]
+        if not isinstance(fallbacks, list):
+            raise ValueError(f"fallbacks.{role} должен быть списком")
+        if any(not isinstance(item, str) or not item.strip() for item in fallbacks):
+            raise ValueError(f"fallbacks.{role} должен содержать только непустые строки")
+        if len(fallbacks) != len(set(fallbacks)):
+            raise ValueError(f"fallbacks.{role} не должен содержать дубликаты")
+
+        model = sections["models"][role]
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError(f"models.{role} должен быть непустой строкой")
+
+    return sections
+
+
+SHELL_AGENT_IDS = {
+    # Исторические имена сохраняем для старых карточек и отображения.
+    "agent_claude_bot": "u2",
+    "agent_hermes": "u3",
+    "agent_orchestrator": "6848a89b-04fe-4015-bb1c-61b03782c378",
+    "agent_deepseek": "b85212d6-abab-4afb-a4c6-0d379b6537a4",
+    "agent_antigravity": "5b9d47c1-25c7-4a7c-a276-70e21f7d7816",
+    "agent_pi": PI_AGENT_ID,
+}
+ROLE_ROUTING = load_role_routing()
+
+
+def task_role(task: dict) -> str:
+    """Return the seven-role name carried by a task or its assignee."""
+    for key in ("role", "assignee_role"):
+        value = str(task.get(key) or "").strip().lower()
+        if value in ROLE_NAMES:
+            return value
+    return ""
+
+
+def role_prompt_for_task(task: dict) -> str:
+    """Read the role prompt for a task, failing loudly when it is missing."""
+    role = task_role(task)
+    if not role:
+        return ""
+    path = ROLE_PROMPTS_DIR / f"{role}.md"
+    try:
+        prompt = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError(f"не прочитать системный prompt роли {role}: {path}: {exc}") from exc
+    if not prompt:
+        raise RuntimeError(f"пустой системный prompt роли {role}: {path}")
+    return prompt
+
+
+def pi_mcp_profile_for_role(role: str) -> Path | None:
+    """Return the explicit Pi MCP profile for a routed role.
+
+    A task without a role deliberately returns ``None``: a normal Pi launch
+    must keep using ``~/.pi/agent/mcp.json`` and must not inherit a role by
+    accident.
+    """
+    role_name = str(role or "").strip().lower()
+    if not role_name:
+        return None
+    if role_name not in ROLE_NAMES:
+        raise ValueError(f"неизвестная роль для MCP-профиля Pi: {role}")
+    path = PI_MCP_PROFILES_DIR / f"{role_name}.json"
+    if not path.is_file():
+        raise RuntimeError(f"не найден MCP-профиль Pi для роли {role_name}: {path}")
+    return path
+
+
+def pi_skill_paths_for_role(role: str) -> list[Path]:
+    """Return the explicit skills declared by a role's Pi profile."""
+    profile = pi_mcp_profile_for_role(role)
+    try:
+        document = json.loads(profile.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"не прочитать MCP-профиль Pi {profile}: {exc}") from exc
+    raw_skills = document.get("skills", [])
+    if raw_skills is None:
+        return []
+    if not isinstance(raw_skills, list) or any(
+        not isinstance(skill, str) or not skill.strip() for skill in raw_skills
+    ):
+        raise ValueError(f"{profile}: skills должен быть списком непустых путей")
+    skills = [Path(os.path.expanduser(skill)).resolve() for skill in raw_skills]
+    missing = [str(skill) for skill in skills if not skill.exists()]
+    if missing:
+        raise RuntimeError(f"{profile}: не найдены skills: {', '.join(missing)}")
+    return skills
+
+
+def validate_pi_mcp_profiles() -> None:
+    """Validate role profiles before the trigger accepts work."""
+    for role in sorted(ROLE_NAMES):
+        path = pi_mcp_profile_for_role(role)
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"не прочитать MCP-профиль Pi {path}: {exc}") from exc
+        try:
+            env = document["mcpServers"]["taskflow"]["env"]
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"в MCP-профиле Pi {path} нет mcpServers.taskflow.env") from exc
+        if env.get("TASKFLOW_VAULT_KEY") != "TASKFLOW_PI_AGENT_TOKEN":
+            raise ValueError(f"{path}: нужен TASKFLOW_PI_AGENT_TOKEN")
+        if env.get("TASKFLOW_MCP_ROLE") != role:
+            raise ValueError(f"{path}: TASKFLOW_MCP_ROLE не совпадает с именем роли")
+        if not str(env.get("TASKFLOW_MCP_TOOLS") or "").strip():
+            raise ValueError(f"{path}: пустой TASKFLOW_MCP_TOOLS")
+        pi_skill_paths_for_role(role)
+
+
+def resolve_agent_for_role(role: str) -> dict | None:
+    """Select the configured shell for a role, preferring its default."""
+    role_name = str(role or "").strip().lower()
+    if role_name not in ROLE_NAMES:
+        raise ValueError(f"неизвестная роль: {role}")
+
+    candidates = [("дефолт", ROLE_ROUTING["defaults"][role_name])]
+    candidates.extend(("фолбэк", shell) for shell in ROLE_ROUTING["fallbacks"][role_name])
+    for reason, shell in candidates:
+        agent_id = SHELL_AGENT_IDS.get(shell)
+        agent = EXTERNAL_AGENTS.get(agent_id or "")
+        if agent is None or role_name not in agent.get("roles", []):
+            continue
+        selected = dict(agent)
+        selected["id"] = agent_id
+        selected["routing_shell"] = shell
+        selected["routing_reason"] = reason
+        log(f"роль {role_name}: оболочка {shell} ({reason})")
+        return selected
+
+    log(f"роль {role_name}: доступной оболочки нет")
+    return None
+
+
+def validate_role_agents(routing: dict[str, dict]) -> None:
+    """Ensure every routing reference names a shell allowed for that role."""
+    for role in sorted(ROLE_NAMES):
+        shells = [routing["defaults"][role], *routing["fallbacks"][role]]
+        for shell in shells:
+            agent_id = SHELL_AGENT_IDS.get(shell)
+            agent = EXTERNAL_AGENTS.get(agent_id or "")
+            if agent is None:
+                raise ValueError(f"{role}: оболочка {shell} не зарегистрирована")
+            if role not in agent.get("roles", []):
+                raise ValueError(f"{role}: оболочка {shell} не разрешена полем roles")
 
 
 # Модель задаётся МЕТКОЙ НА ЗАДАЧЕ. Решение владельца 21.08.2026: «меткой
@@ -313,6 +543,9 @@ def model_of(task: dict) -> str:
                     found.append(value)
                 break
     if not found:
+        role = task_role(task)
+        if role:
+            return ROLE_ROUTING["models"][role]
         return ""
     # Две метки моделей сразу — не ошибка владельца, а недосмотр: скорее
     # всего забыл снять прежнюю. Берём первую и ГОВОРИМ об этом в журнале,
@@ -1051,7 +1284,7 @@ def build_orchestrator_resume_prompt(task: dict, reason: str, is_claude: bool = 
 """
 
 
-def build_prompt(task: dict, reason: str, ctx=None) -> str:
+def build_prompt(task: dict, reason: str, ctx=None, include_role_prompt: bool = True) -> str:
     subtasks = task.get("subtasks") or []
     steps = "\n".join(
         f"  {'[x]' if s.get('done') else '[ ]'} {s.get('title')}" for s in subtasks
@@ -1059,12 +1292,15 @@ def build_prompt(task: dict, reason: str, ctx=None) -> str:
     comments = "\n".join(
         f"  {c.get('user_name')}: {c.get('text')}" for c in (task.get("comments") or [])[-8:]
     )
+    role_prompt = role_prompt_for_task(task) if include_role_prompt else ""
     return f"""Тебя разбудила доска TaskFlow: {reason}.
 
 ЗАДАЧА #{task.get('id')}
 Название: {task.get('title')}
 Описание:
 {task.get('description') or '(пусто)'}
+
+{f'СИСТЕМНЫЙ ПРОМПТ РОЛИ {task_role(task)}:\n{role_prompt}\nКОНЕЦ СИСТЕМНОГО ПРОМПТА РОЛИ' if role_prompt else ''}
 
 Шаги:
 {steps or '  (нет)'}
@@ -1671,14 +1907,37 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     vault_name = agent.get("vault_key") or agent.get("token_env", "")
     vault_value = os.environ.get(vault_name, "") if vault_name else ""
     if vault_value:
-        run_env["TASKFLOW_VAULT_KEY"] = vault_value
-        run_env["TASKFLOW_TOKEN"] = ""
+        # Дочерний Pi и его MCP получают тот же единственный ключ напрямую.
+        # Раньше сюда ошибочно записывалось значение ключа как имя записи
+        # хранилища, после чего MCP пытался найти в vault сам токен.
+        run_env["TASKFLOW_VAULT_KEY"] = vault_name
+        run_env["TASKFLOW_TOKEN"] = vault_value
     dsh_home = ""
     if model and agent.get("name") == "DeepSeek Harness":
         dsh_home = dsh_home_for(model)
         if dsh_home:
             run_env["DSH_HOME"] = dsh_home
     prefix = list(agent["cmd"])
+    role = task_role(task)
+    if agent.get("name") == "Pi Agent" and role:
+        profile = pi_mcp_profile_for_role(role)
+        # Pi receives the role profile only through this explicit flag. A
+        # regular `pi` command without --mcp-config keeps the normal setup.
+        skills = pi_skill_paths_for_role(role)
+        prefix = [PI_BIN, "--mcp-config", str(profile)]
+        for skill in skills:
+            prefix.extend(["--skill", str(skill)])
+        prefix.append("-p")
+        log(
+            f"  Pi: роль {role} → MCP-профиль {profile.name}; "
+            f"skills={len(skills)}"
+        )
+    role_prompt = role_prompt_for_task(task)
+    if claude_cli and role_prompt:
+        # Claude Code умеет отделить роль от поручения настоящим системным
+        # параметром. Для остальных оболочек этот же текст добавляется в
+        # стартовый prompt ниже: их CLI не имеет общего system-prompt flag.
+        prefix = prefix[:-1] + ["--append-system-prompt", role_prompt, prefix[-1]]
     # Отчёт о расходе: агент сам пишет JSON с оценкой стоимости, числом
     # токенов, моделью и количеством обращений к провайдеру — и пишет даже
     # когда заход упал. Владелец 27.08.2026: «токены расход показывать
@@ -1716,7 +1975,12 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     elif orchestrator:
         first = build_orchestrator_prompt(task, reason, claude_cli, ctx=ctx)
     else:
-        first = build_prompt(task, reason, ctx=ctx)
+        first = build_prompt(task, reason, ctx=ctx, include_role_prompt=False)
+    if role_prompt and not claude_cli:
+        first = (
+            f"{first}\n\nСИСТЕМНЫЙ ПРОМПТ РОЛИ {task_role(task)}:\n"
+            f"{role_prompt}\nКОНЕЦ СИСТЕМНОГО ПРОМПТА РОЛИ"
+        )
     cmd = make_cmd(first, claude_session_args(resume_sid, new_sid, fork)
                    if claude_cli else [])
     if resume_sid and not fork:
@@ -1821,6 +2085,8 @@ def run_orchestrator(task: dict, reason: str, agent: dict) -> None:
 
 def agent_id_of(agent: dict) -> str:
     """id учётки агента в TaskFlow по его записи в карте."""
+    if agent.get("id"):
+        return str(agent["id"])
     for uid, spec in EXTERNAL_AGENTS.items():
         if spec is agent:
             return uid
@@ -1852,7 +2118,7 @@ def wake_parent(child: dict, owner_id: str) -> bool:
         return False
     parent_assignee = parent.get("assignee_id")
     parent_agent = EXTERNAL_AGENTS.get(parent_assignee or "")
-    if not parent_agent or parent_agent.get("role") != "orchestrator":
+    if parent_agent is None:
         return False
 
     what = "сдал работу на проверку" if state == "review" else "упёрся и ждёт решения"
@@ -1879,20 +2145,21 @@ def handle_task(task_id: str, why: str, kind: str = "", actor_id: str = "",
         return
 
     agent = EXTERNAL_AGENTS.get(task.get("assignee_id") or "")
-    if agent and agent.get("role") == "orchestrator" and reason != REPLY_ONLY:
-        threading.Thread(
-            target=run_orchestrator, args=(task, reason, agent), daemon=True
-        ).start()
-    elif agent and agent.get("resident") and reason != REPLY_ONLY:
-        threading.Thread(
-            target=run_hermes, args=(task, reason, agent), daemon=True
-        ).start()
-    elif agent:
+    role = task.get("role")
+    if not role and task.get("assignee_role") in ROLE_NAMES:
+        role = task.get("assignee_role")
+    if role:
+        routed = resolve_agent_for_role(str(role))
+        if routed is not None:
+            agent = routed
+        else:
+            log(f"роль {role}: оставляю текущее назначение, оболочка недоступна")
+    if agent:
         threading.Thread(
             target=run_external, args=(task, reason, agent), daemon=True
         ).start()
     else:
-        threading.Thread(target=run_claude, args=(task, reason), daemon=True).start()
+        log(f"{why}: активного исполнителя нет — не запускаю старую оболочку")
 
 
 def wake_creator(task: dict, owner_id: str, agent: dict) -> bool:
@@ -2020,8 +2287,8 @@ def _on_message(raw: str, owner_id: str = ME, token: str = "") -> None:
         task_id = message.get("task_id")
         if task_id and to_user_id:
             agent = EXTERNAL_AGENTS.get(to_user_id)
-            if agent and agent.get("role") == "orchestrator":
-                log(f"  чат: новое сообщение для оркестратора по задаче {task_id[:8]} → бужу оркестратора")
+            if agent and to_user_id == PI_AGENT_ID:
+                log(f"  чат: новое сообщение для Pi Agent по задаче {task_id[:8]} → будю Pi")
                 handle_task(task_id, f"чат от {message.get('from_user_name', 'агента')}", kind="chat", owner_id=to_user_id)
         return
     if kind != "notification:new":
@@ -2086,8 +2353,19 @@ def alive_beat_loop() -> None:
 
 
 def main() -> None:
-    # Ключи соседей — в карту: ими служба берёт задачу за них и читает их
-    # уведомления. Своего ключа нет — агент просто не обслуживается.
+    global ROLE_ROUTING
+    try:
+        routing = load_role_routing()
+        validate_role_agents(routing)
+        validate_pi_mcp_profiles()
+    except (RuntimeError, ValueError) as exc:
+        log(f"матрица role-routing.yaml не прошла проверку: {exc}")
+        sys.exit(1)
+    ROLE_ROUTING = routing
+    log(f"матрица маршрутизации ролей загружена: {len(routing['defaults'])} ролей")
+
+    # В рабочем режиме есть только ключ Pi Agent. Старые ключи намеренно не
+    # перечисляются и не читаются.
     for uid, agent in list(EXTERNAL_AGENTS.items()):
         token = os.environ.get(agent.get("token_env", ""), "").strip()
         if not token and "token_static" in agent:
@@ -2105,11 +2383,8 @@ def main() -> None:
         sys.exit(1)
     log("будильник TaskFlow запущен")
 
-    # Соседние агенты — отдельными потоками. Нет токена — молча работаем
-    # как раньше, только за себя: отсутствие ключа не повод не запускаться.
-    # Поток на КАЖДОГО обслуживаемого агента, а не на одного жёстко: список
-    # растёт (Гермес, DeepSeek Harness, дальше — кто появится), и второе
-    # место, где перечислены агенты, разошлось бы с картой в первый же день.
+    # Поднимаем одно соединение Pi Agent. Никаких дополнительных соединений
+    # под старыми учётками больше нет.
     for uid, agent in EXTERNAL_AGENTS.items():
         threading.Thread(
             target=listen, args=(uid, agent["token"], agent["name"]), daemon=True
@@ -2128,7 +2403,7 @@ def main() -> None:
     log("обход доски включён — каждые "
         f"{BOARD_SCAN_SEC // 60} мин проверяю назначенных без исполнителя")
 
-    listen(ME, TOKEN, "Claude")
+    listen(ME, TOKEN, "Pi Agent")
 
 
 if __name__ == "__main__":

@@ -215,6 +215,22 @@ curl -sS -X DELETE http://localhost:3001/api/tasks/<id> \
 | DELETE | `/api/labels/:id`   | Удалить свою метку.                                                                         |
 | GET    | `/api/agents`       | Доступные агенты (вы + те, кого вы уже видите в своих задачах). Не отдаёт email.            |
 
+### Roles
+
+Все четыре маршрута требуют `Authorization: Bearer <token>`. Читать каталог
+может любая аутентифицированная роль; операции управления каталогом, если они
+появятся позже, остаются за владельцем.
+
+| Метод | Путь | Описание |
+| --- | --- | --- |
+| GET | `/api/roles` | Список семи ролей со скиллами, MCP-инструментами, моделью по умолчанию и fallback-цепочкой. |
+| GET | `/api/roles/:role` | Детали одной роли: `skills`, `tools`, `model`, `default_shell`, `fallbacks`. |
+| POST | `/api/roles/:role/prompt` | Прочитать `server/scripts/role-prompts/<role>.md`; пока файл не создан, ответ `404`. |
+| GET | `/api/agents/:id/role` | Роль учётки. Для shell-аккаунта (`agent`) поле `role` равно `null`. |
+
+Имена ролей: `researcher`, `analyst`, `synthesizer`, `critic_verifier`,
+`architect`, `builder`, `qa`. Неизвестная роль и неизвестная учётка дают `404`.
+
 ### Subtasks / Comments
 
 Работают только внутри задачи, к которой у вас есть доступ.

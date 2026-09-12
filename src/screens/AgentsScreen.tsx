@@ -9,6 +9,7 @@ import {
 import { useCurrentUser } from "../api/auth";
 import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
 import {
+  FieldGroup,
   Icon,
   Avatar,
   ScreenHeader,
@@ -21,6 +22,69 @@ import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { getErrorMessage } from "../lib/errors";
 import { roleLabel } from "../lib/taskOwner";
 import type { ApiUser } from "../api/types";
+
+type PiRoleMeta = {
+  label: string;
+  invocation: string;
+  purpose: string;
+  specialization: string;
+};
+
+const PI_ROLE_META: Record<string, PiRoleMeta> = {
+  researcher: {
+    label: "Исследователь",
+    invocation: "--mcp-config ~/.pi/agent/taskflow-profiles/researcher.json",
+    purpose: "Ищет источники, собирает факты и проверяет их.",
+    specialization: "Веб-поиск · источники · проверка цитат",
+  },
+  analyst: {
+    label: "Аналитик",
+    invocation: "--mcp-config ~/.pi/agent/taskflow-profiles/analyst.json",
+    purpose: "Сравнивает данные, находит закономерности и риски.",
+    specialization: "Расчёты · таблицы · структурирование данных",
+  },
+  synthesizer: {
+    label: "Синтезатор",
+    invocation: "--mcp-config ~/.pi/agent/taskflow-profiles/synthesizer.json",
+    purpose: "Собирает выводы из нескольких материалов в понятный план.",
+    specialization: "Сводки · требования · варианты решений",
+  },
+  critic_verifier: {
+    label: "Критик-проверяющий",
+    invocation:
+      "--mcp-config ~/.pi/agent/taskflow-profiles/critic_verifier.json",
+    purpose: "Ищет ошибки, противоречия и пропуски.",
+    specialization: "Ревью · проверки · контроль рисков",
+  },
+  architect: {
+    label: "Архитектор",
+    invocation: "--mcp-config ~/.pi/agent/taskflow-profiles/architect.json",
+    purpose: "Проектирует структуру решения и границы компонентов.",
+    specialization: "Архитектура · API · технические решения",
+  },
+  builder: {
+    label: "Разработчик",
+    invocation: "--mcp-config ~/.pi/agent/taskflow-profiles/builder.json",
+    purpose: "Реализует изменения в коде и конфигурации.",
+    specialization: "Bash · Git · тесты · отладка",
+  },
+  qa: {
+    label: "QA",
+    invocation: "--mcp-config ~/.pi/agent/taskflow-profiles/qa.json",
+    purpose: "Проверяет готовый результат и регрессии.",
+    specialization: "Тест-планы · логи · воспроизведение ошибок",
+  },
+  designer: {
+    label: "Дизайнер интерфейсов",
+    invocation: "--mcp-config ~/.pi/agent/taskflow-profiles/designer.json",
+    purpose: "Проектирует веб- и мобильный интерфейс.",
+    specialization: "Frontend design · mobile design · accessibility",
+  },
+};
+
+function piRoleMeta(agent: ApiUser) {
+  return agent.type === "ai" ? PI_ROLE_META[String(agent.role)] : undefined;
+}
 
 // Живая аватарка (27.08.2026, просьба владельца): агент с записанными
 // avatar_url_working/avatar_url_blocked ведёт себя по activity, которую
@@ -146,6 +210,7 @@ function AgentRow({
   onRequestDelete: (agent: ApiUser) => void;
 }) {
   const renameAgent = useRenameAgent();
+  const roleMeta = piRoleMeta(agent);
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState(agent.name);
   // Слева «Удалить», справа «Изменить» — как в строке задачи/проекта.
@@ -247,7 +312,22 @@ function AgentRow({
       >
         <AgentAvatar agent={agent} />
         <div className="flex-1 min-w-0">
-          <div className="text-[15px] text-text truncate">{agent.name}</div>
+          <div className="text-[15px] text-text truncate">
+            {roleMeta?.label ?? agent.name}
+          </div>
+          {roleMeta && (
+            <>
+              <div className="text-[12px] text-sub leading-4 mt-0.5">
+                {roleMeta.purpose}
+              </div>
+              <div className="text-[11px] text-dim leading-4 break-words">
+                Pi-агент · {roleMeta.invocation}
+              </div>
+              <div className="text-[11px] text-dim leading-4 break-words">
+                TaskFlow: полный доступ · {roleMeta.specialization}
+              </div>
+            </>
+          )}
           {/* Чем агент занят прямо сейчас (29.08.2026, 31f2759e).
               Показываем только если онлайн: иначе «работает» означало бы
               последнее действие, которое могло быть вчера. last_action +
@@ -359,7 +439,8 @@ export function AgentsScreen() {
         variant="block"
         className="mb-2"
       />
-      <div className="bg-card rounded-2xl overflow-hidden mb-4">
+      <div className="mb-4">
+        <FieldGroup>
         {agents.map((u) => (
           <AgentRow
             key={u.id}
@@ -369,10 +450,9 @@ export function AgentsScreen() {
           />
         ))}
         {!isLoading && agents.length === 0 && (
-          <div className="px-4 py-3 text-[13px] text-dim">
-            Нет пользователей
-          </div>
+            <div className="px-4 py-3 text-[13px] text-dim">Нет пользователей</div>
         )}
+        </FieldGroup>
       </div>
 
       {/* Новый агент — учётка + ключ доступа. Почты на машине нет, и
@@ -479,9 +559,29 @@ export function AgentsScreen() {
         )}
       </div>
 
-      {/* Roles */}
+      {/* Passport */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2">
-        Роль агента
+        Роли Pi-агента
+      </div>
+      <div className="bg-card rounded-2xl overflow-hidden mb-4">
+        {Object.entries(PI_ROLE_META).map(([role, meta]) => (
+          <div
+            key={role}
+            className="flex items-start gap-3 px-4 py-3 border-b border-stroke last:border-b-0"
+          >
+            <Icon name="bot" size={18} className="text-purple mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <div className="text-[14px] text-text font-medium">{meta.label}</div>
+              <div className="text-[12px] text-sub leading-4 mt-0.5">{meta.purpose}</div>
+              <div className="text-[11px] text-dim leading-4 mt-0.5">{meta.specialization}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Access levels */}
+      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
+        Уровни доступа в TaskFlow
       </div>
       <div className="bg-card rounded-2xl p-4 space-y-3">
         <div className="flex items-start gap-2">

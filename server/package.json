@@ -22,7 +22,8 @@
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.3",
     "fastify": "^5.11.3",
-    "ws": "^8.21.3"
+    "ws": "^8.21.3",
+    "yaml": "^2.8.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

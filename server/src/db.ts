@@ -451,6 +451,7 @@ export function migrate() {
       executor_id TEXT NOT NULL REFERENCES users(id),
       runner TEXT,
       model TEXT,
+      routing_role TEXT,
       started_at TEXT NOT NULL DEFAULT (datetime('now')),
       ended_at TEXT,
       outcome TEXT,
@@ -494,6 +495,9 @@ export function migrate() {
   }>;
   if (!attCols1.some((c) => c.name === "heartbeat_at")) {
     db.exec("ALTER TABLE attempts ADD COLUMN heartbeat_at TEXT");
+  }
+  if (!attCols1.some((c) => c.name === "routing_role")) {
+    db.exec("ALTER TABLE attempts ADD COLUMN routing_role TEXT");
   }
 
   // Блокер 3 карточки 8ca87c61 (ревью 11.09.2026): подзадача получает

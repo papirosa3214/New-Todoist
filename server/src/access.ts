@@ -47,7 +47,7 @@ function callerOf(userId: string): Caller | undefined {
 
 /**
  * Маппинг профиль исполнителя (users.profile, заполняется из
- * server/scripts/team_catalog.json по id) → роль из семи ролей матрицы
+ * server/scripts/team_catalog.json по id) → роль из восьми ролей матрицы
  * прав карточки b6b57092 (Architect / Builder / QA / Researcher / Analyst
  * / Synthesizer / Critic-Verifier). Договоренность с владельцем 11.09.2026:
  * маппинг может быть любой чёткий, источник истины — здесь, потому что
@@ -55,7 +55,7 @@ function callerOf(userId: string): Caller | undefined {
  * проверки прав; править здесь дешевле, чем плодить ещё одно поле.
  *
  * Не покрыто:
- *   maxim         → role='owner' (отдельная ветка, не из семи).
+ *   maxim         → role='owner' (отдельная ветка, не из восьми).
  *   u-secretary   → profile=NULL (нет в team_catalog.json; роль не
  *                   назначается, проверки идут по role/type).
  *
@@ -74,7 +74,7 @@ const PROFILE_ROLE: Record<string, string> = {
 };
 
 /**
- * Роль из семи ролей для учётки. Берёт users.profile, лезет в маппинг.
+ * Роль из восьми ролей для учётки. Берёт users.profile, лезет в маппинг.
  * Возвращает null если профиль пуст или в маппинге не описан — это
  * текущее поведение «профиль ещё не проставлен», ничего не ломает, как
  * требует граница карточки «до заполнения профиля поведение остаётся
