@@ -10,6 +10,7 @@ import {
   allLabelsOwnedByUser,
   getProjectForFiling,
   isOwner,
+  isOrchestrator,
   seesEveryTask,
 } from "../access.js";
 import {
@@ -177,7 +178,7 @@ export function withSubtaskState(s: any) {
   };
 }
 
-export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.type as assignee_type, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
+export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.type as assignee_type, u.role as assignee_role, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
              p.name as project_name, p.color as project_color`;
 export const TASK_JOINS = `FROM tasks t
       LEFT JOIN users u ON t.assignee_id = u.id
@@ -919,10 +920,60 @@ export function registerTaskRoutes(app: FastifyInstance) {
         (existing.agent_state === "review" || hasAnyResultVersion(id)) &&
         !hasApprovedCurrentVersion(id)
       ) {
-        return reply.code(409).send({
-          error:
-            "нельзя принять задачу: у актуальной версии результата нет одобрения Reviewer/владельца",
-        });
+        // Если close пришёл от владельца (это уже доказано веткой выше —
+        // status менять может только owner), и есть актуальная версия
+        // результата, но она ещё не одобрена — автоодобряем от его же
+        // имени, а не возвращаем 409. Раньше клиенту приходилось слать
+        // POST /reviews отдельным запросом; на iPhone это терялось в
+        // гонке с локально устаревшим task.agentState, и карточка не
+        // закрывалась. Логика совпадает с тем, что свайп «Принять и
+        // закрыть» на iOS выражает одним действием: владелец закрыл =
+        // владелец одобрил. Для переходов из review — это уже сделано в
+        // routes/agent-state.ts через setState(review → null); здесь
+        // покрываем кейс, когда agent_state уже null (например, после
+        // явного «Принять сдачу» из чата/UI), а close приходит отдельно.
+        const owner = db
+          .prepare("SELECT role FROM users WHERE id = ?")
+          .get(req.userId) as { role?: string } | undefined;
+        if (owner?.role === "owner" && !existing.completed_at) {
+          const current = currentResultVersion(id);
+          if (current) {
+            db.prepare(
+              `INSERT INTO reviews
+                 (id, task_id, version_id, task_revision, reviewer_id,
+                  artifact_hash, criteria_version, verdict, findings,
+                  created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))`,
+            ).run(
+              uid(),
+              id,
+              current.id,
+              current.task_revision,
+              req.userId,
+              current.artifact_hash,
+              "1",
+              "approved",
+            );
+            logEvent({
+              taskId: id,
+              actorId: req.userId,
+              kind: "review_recorded",
+              field: "result_version",
+              toValue: `${current.version_no}:approved`,
+            });
+          } else {
+            // Нет версии — закрывать нельзя, оставляем 409 с понятным текстом.
+            return reply.code(409).send({
+              error:
+                "нельзя закрыть задачу: у неё нет актуальной версии результата, которую можно одобрить",
+            });
+          }
+        } else {
+          return reply.code(409).send({
+            error:
+              "нельзя принять задачу: у актуальной версии результата нет одобрения Reviewer/владельца",
+          });
+        }
       }
 
       if (
@@ -1039,6 +1090,26 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // Но если в этом же запросе передали, скажем, title — общий UPDATE
         // ниже всё равно отработает, и это нормально: это два независимых
         // действия в одном HTTP-вызове, не «одна операция».
+      }
+
+      // СМЕНА ИСПОЛНИТЕЛЯ — владелец или оркестратор трекера. Правило
+      // AGENT-PROTOCOL.md «assignee_id не переписываем» защищает агента от
+      // самоснятия, но заодно блокировало и владельца: он не мог
+      // переназначить зависшую задачу (например, карточка ушла на Claude_Bot
+      // по шаблону, а реально работает Pi Agent). Владелец системы и
+      // оркестратор должны менять assignee_id в любой момент — это их
+      // ручка, не агентская. Валидация «такой user существует» уже сделана выше
+      // (вернёт 400 invalid assignee_id), здесь — только право на смену.
+      if (
+        body.assignee_id !== undefined &&
+        body.assignee_id !== existing.assignee_id
+      ) {
+        if (!isOwner(req.userId) && !isOrchestrator(req.userId)) {
+          return reply.code(403).send({
+            error:
+              "сменить исполнителя задачи может только владелец или оркестратор трекера",
+          });
+        }
       }
 
       // Whitelisted columns only — request body keys never reach raw SQL.

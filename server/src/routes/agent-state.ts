@@ -18,12 +18,13 @@ import {
 } from "../enricher.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
-import { currentResultVersion, ensureResultVersionForReview } from "../resultVersions.js";
+import { currentResultVersion, ensureResultVersionForReview, hasApprovedCurrentVersion } from "../resultVersions.js";
 import {
   isStopReasonCode,
   stopReasonError,
   stopReasonPolicy,
 } from "../stopReasons.js";
+import { loadRoleRouting, nextShellForRole } from "../roleRouting.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
   AGENT_RULES,
@@ -906,6 +907,45 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           );
         }
 
+        // Принятие ревью владельцем (review → null) синхронизируется с
+        // одобрением актуальной версии результата, чтобы последующий
+        // PATCH status=completed прошёл проверку hasApprovedCurrentVersion
+        // в tasks.ts. Раньше это были две разные сущности: свайп «Принять»
+        // на iOS слал только setState(null), без POST /reviews — сервер 409
+        // на close (см. лог 1789211958918, PATCH → 409).
+        // Аналогия с approve POST /reviews в routes/reviews.ts: пишем
+        // запись в reviews с verdict=approved, чтобы hasApprovedCurrentVersion
+        // вернула true. criteria_version — строка-маркер схемы, у нас нет
+        // версионирования критериев, "1" стабильна.
+        if (from === "review" && state === null) {
+          const current = currentResultVersion(task.id);
+          if (current && !hasApprovedCurrentVersion(task.id)) {
+            db.prepare(
+              `INSERT INTO reviews
+                 (id, task_id, version_id, task_revision, reviewer_id,
+                  artifact_hash, criteria_version, verdict, findings,
+                  created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'))`,
+            ).run(
+              crypto.randomUUID(),
+              task.id,
+              current.id,
+              current.task_revision,
+              req.userId,
+              current.artifact_hash,
+              "1",
+              "approved",
+            );
+            logEvent({
+              taskId: task.id,
+              actorId: req.userId,
+              kind: "review_recorded",
+              field: "result_version",
+              toValue: `${current.version_no}:approved`,
+            });
+          }
+        }
+
         // Возврат из review в in_progress — карточка меняется: поднимаем
         // current_revision, чтобы устаревшие inbox-события (записанные до
         // возврата) тихо отбрасывались триггером перед claim (5f292e87), и
@@ -1090,6 +1130,34 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "у задачи нет действующей попытки" });
       }
 
+      const currentAttempt = db
+        .prepare(
+          "SELECT executor_id, runner, model, routing_role FROM attempts WHERE id = ?",
+        )
+        .get(attemptId) as
+        | {
+            executor_id: string;
+            runner: string | null;
+            model: string | null;
+            routing_role: string | null;
+          }
+        | undefined;
+      const assigneeRole = currentAttempt?.routing_role ?? (task.assignee_id
+        ? (
+            db
+              .prepare("SELECT role FROM users WHERE id = ?")
+              .get(task.assignee_id) as { role?: string | null } | undefined
+          )?.role
+        : null);
+      const fallback =
+        reasonCode === "provider_limit" && assigneeRole
+          ? nextShellForRole(
+              loadRoleRouting(),
+              assigneeRole,
+              currentAttempt?.executor_id ?? "",
+            )
+          : null;
+
       const retry = db
         .prepare(
           "SELECT COALESCE(MAX(retry_no), 0) AS n FROM attempt_retries WHERE attempt_id = ?",
@@ -1114,7 +1182,43 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           ).run(uid(), task.id, req.userId, comment);
         }
 
-        if (policy.automaticRetry) {
+        if (fallback) {
+          db.prepare(
+            `UPDATE attempts
+                SET ended_at = datetime('now'), outcome = ?,
+                    reason_code = ?, reason = ?
+              WHERE id = ? AND ended_at IS NULL`,
+          ).run(policy.action, reasonCode, comment || null, attemptId);
+          const fallbackAttemptId = uid();
+          db.prepare(
+            `INSERT INTO attempts
+               (id, task_id, executor_id, runner, model, routing_role,
+                started_at, heartbeat_at)
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+          ).run(
+            fallbackAttemptId,
+            task.id,
+            fallback.userId,
+            fallback.shell,
+            currentAttempt?.model ?? null,
+            assigneeRole,
+          );
+          db.prepare(
+            `UPDATE tasks
+                SET assignee_id = ?, agent_state = 'in_progress',
+                    agent_heartbeat_at = datetime('now'), agent_session_id = NULL,
+                    current_attempt_id = ?, updated_at = datetime('now')
+              WHERE id = ? AND current_attempt_id = ?`,
+          ).run(fallback.userId, fallbackAttemptId, task.id, attemptId);
+          logEvent({
+            taskId: task.id,
+            actorId: req.userId,
+            kind: "field_changed",
+            field: "assignee_id",
+            fromValue: task.assignee_id ?? null,
+            toValue: fallback.userId,
+          });
+        } else if (policy.automaticRetry) {
           const retryNo = retry.n + 1;
           db.prepare(
             `INSERT INTO attempt_retries
@@ -1168,6 +1272,23 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
       const updated = getTaskRow(task.id);
       const hydrated = hydrateTask(updated);
+      if (fallback) {
+        const notificationId = uid();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
+        ).run(
+          notificationId,
+          fallback.userId,
+          task.id,
+          `Лимит провайдера: задача «${task.title}» переключена на ${fallback.shell}`,
+          req.userId,
+        );
+        broadcastToUsers([fallback.userId], {
+          type: "notification:new",
+          notificationId,
+          taskId: task.id,
+        });
+      }
       broadcastTaskEvent([updated.creator_id, updated.assignee_id], {
         type: "task:state",
         task: hydrated,
@@ -1179,6 +1300,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         action: policy.action,
         retry_count: policy.automaticRetry ? retry.n + 1 : retry.n,
         retry_delay_seconds: policy.delaySeconds,
+        fallback: fallback
+          ? { shell: fallback.shell, user_id: fallback.userId }
+          : null,
         substantive_attempts: (hydrated.attempts || []).length,
       };
     },
