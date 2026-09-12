@@ -518,6 +518,66 @@ DSH_SETTINGS = HOME / ".dsh/settings.yaml"
 DSH_HOME_LINKS = ("profiles", "sessions", "storages", ".credentials.yaml", "AGENTS.md")
 
 
+def load_model_ladder(reason_code: str = "insufficient_capability") -> list[str]:
+    """Читает `attempt_policies` через серверный API и возвращает упорядоченный
+    список моделей лесенки для данного reason_code.
+
+    Источник истины — таблица `attempt_policies` на сервере. Триггер
+    дёргает `/api/agent/attempt-policies` (как и `/api/agent/rules`) вместо
+    прямого sqlite — к серверу у триггера уже есть токен, и так единая
+    правда для всех консьюмеров.
+
+    Спек 1.2, раздел 3.1: «Ступени лесенки задаются парой
+    `(provider, model)» — здесь намерено упрощено до плоского списка моделей,
+    потому что `to_model`/`from_model` в `attempt_policies` уже плоские, а
+    провайдер берётся из текущей попытки (см. `run_external`). Возвращаем
+    ровно `from_model`-ы в порядке, в котором сервер их отдаёт.
+    """
+    payload = api("GET", "/api/agent/attempt-policies")
+    rows = payload.get("policies", []) if isinstance(payload, dict) else []
+    # Стабильный порядок: сортируем по возрастанию id (ap_insuff_haiku_sonnet,
+    # ap_insuff_sonnet_opus, ap_insuff_opus_null) → лесенка [haiku, sonnet, opus].
+    models = [
+        r.get("from_model")
+        for r in rows
+        if r.get("reason_code") == reason_code and r.get("from_model")
+    ]
+    return models
+
+
+def next_step_for(
+    reason_code: str, current_model: str, attempts_count: int,
+    ladder: list[str] | None = None,
+) -> str | None:
+    """Следующая ступень лесенки для текущей попытки.
+
+    Возвращает имя модели или None. None — если лесенка не применима
+    (другой reason_code), исчерпана (потолок attempts_count или уже на
+    верхней ступени), или current_model не найден в лесенке.
+
+    `ladder` опционально: если передан, не делает HTTP-запрос. Используется
+    в тестах и в случаях, когда лесенка уже получена ранее в этом же цикле.
+
+    Спек 1.2, раздел 3.1 (R1/R4): на `insufficient_capability` поднимаем
+    ступень; на `lease_expired` и остальных — None, в блок.
+    """
+    if reason_code != "insufficient_capability":
+        return None
+    if attempts_count >= 3:
+        return None
+    if ladder is None:
+        ladder = load_model_ladder(reason_code)
+    if not ladder:
+        return None
+    try:
+        idx = ladder.index(current_model)
+    except ValueError:
+        return None
+    if idx + 1 >= len(ladder):
+        return None
+    return ladder[idx + 1]
+
+
 def model_of(task: dict) -> str:
     """Модель из меток задачи или пустая строка.
 

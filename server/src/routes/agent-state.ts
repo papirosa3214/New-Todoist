@@ -82,6 +82,22 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
     rules: AGENT_RULES,
   }));
 
+  // ═══════ ЛЕСЕНКА МОДЕЛИ (спек 1.2, 1.2.2) ═══════
+  // GET /api/agent/attempt-policies — для trigger.py, чтобы он мог построить
+  // лесенку Haiku→Sonnet→Opus при reason_code=insufficient_capability.
+  // Триггер дёргает этот endpoint вместо прямого sqlite (как и для правил).
+  app.get("/api/agent/attempt-policies", { preHandler: authPre }, async () => {
+    const rows = db
+      .prepare(
+        `SELECT id, reason_code, from_model, to_model, max_attempts,
+                cooldown_seconds, created_at
+           FROM attempt_policies
+          ORDER BY reason_code, max_attempts DESC, from_model`,
+      )
+      .all();
+    return { policies: rows };
+  });
+
   // ═══════ МОЖНО ЛИ ЗАКОНЧИТЬ ХОД ═══════
   // GET /api/agent/can-stop — «у меня остались незакрытые шаги?»
   //
@@ -1272,6 +1288,34 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
       const updated = getTaskRow(task.id);
       const hydrated = hydrateTask(updated);
+      // Лесенка модели (спек 1.2, 1.2.2): при insufficient_capability — следующая
+      // ступень из attempt_policies; на остальных reason_code — null. Ступени
+      // упорядочены по id (ap_insuff_haiku_sonnet < ap_insuff_sonnet_opus <
+      // ap_insuff_opus_null), так что from_model-ы в SELECT DISTINCT дают
+      // [haiku, sonnet, opus].
+      const nextAttemptTemplate =
+        reasonCode === "insufficient_capability"
+          ? (() => {
+              const attemptsCount = (
+                db
+                  .prepare("SELECT COUNT(*) AS n FROM attempts WHERE task_id = ?")
+                  .get(task.id) as { n: number } | undefined
+              )?.n ?? 0;
+              const ladder = db
+                .prepare(
+                  `SELECT DISTINCT from_model FROM attempt_policies
+                    WHERE reason_code = ? AND from_model IS NOT NULL
+                    ORDER BY id`,
+                )
+                .all(reasonCode) as Array<{ from_model: string }>;
+              const models = ladder.map((r) => r.from_model);
+              const idx = currentAttempt?.model
+                ? models.indexOf(currentAttempt.model)
+                : -1;
+              if (idx === -1 || idx + 1 >= models.length) return null;
+              return { model: models[idx + 1], runner: currentAttempt?.runner ?? null };
+            })()
+          : null;
       if (fallback) {
         const notificationId = uid();
         db.prepare(
@@ -1303,6 +1347,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         fallback: fallback
           ? { shell: fallback.shell, user_id: fallback.userId }
           : null,
+        next_attempt_template: nextAttemptTemplate,
         substantive_attempts: (hydrated.attempts || []).length,
       };
     },
