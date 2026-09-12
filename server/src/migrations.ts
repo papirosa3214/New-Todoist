@@ -882,6 +882,64 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "032_attempt_policies_consultation_embeddings",
+    description:
+      "Спек 1.2 (1.2.1): лесенка модели attempt_policies, журнал консультаций consultation_log, расширение attempts.consultation_count, эмбеддинги ролей/задач для семантического матчинга.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS attempt_policies (
+          id TEXT PRIMARY KEY,
+          reason_code TEXT NOT NULL,
+          from_model TEXT NOT NULL,
+          to_model TEXT,
+          max_attempts INTEGER DEFAULT 3,
+          cooldown_seconds INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_attempt_policies_reason
+          ON attempt_policies(reason_code);
+
+        INSERT OR IGNORE INTO attempt_policies (id, reason_code, from_model, to_model, max_attempts) VALUES
+          ('ap_insuff_haiku_sonnet', 'insufficient_capability', 'haiku', 'sonnet', 3),
+          ('ap_insuff_sonnet_opus', 'insufficient_capability', 'sonnet', 'opus', 3),
+          ('ap_insuff_opus_null', 'insufficient_capability', 'opus', NULL, 3);
+
+        CREATE TABLE IF NOT EXISTS consultation_log (
+          id TEXT PRIMARY KEY,
+          attempt_id TEXT NOT NULL REFERENCES attempts(id),
+          task_id TEXT NOT NULL REFERENCES tasks(id),
+          consultant_model TEXT NOT NULL,
+          question TEXT NOT NULL,
+          context_json TEXT,
+          answer TEXT,
+          duration_ms INTEGER,
+          triggered_by TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_consultation_log_attempt
+          ON consultation_log(attempt_id);
+        CREATE INDEX IF NOT EXISTS idx_consultation_log_task
+          ON consultation_log(task_id);
+
+        ALTER TABLE attempts ADD COLUMN consultation_count INTEGER DEFAULT 0;
+
+        CREATE TABLE IF NOT EXISTS role_embeddings (
+          role TEXT PRIMARY KEY,
+          embedding BLOB NOT NULL,
+          tags TEXT,
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS task_embeddings (
+          task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+          query_embedding BLOB NOT NULL,
+          query_tags TEXT,
+          computed_at TEXT DEFAULT (datetime('now'))
+        );
+      `);
+    },
+  },
 ];
 
 /** Apply all still-unapplied migrations, one transaction per migration. */
