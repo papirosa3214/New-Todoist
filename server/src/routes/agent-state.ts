@@ -18,6 +18,9 @@ import {
 } from "../enricher.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
+import {
+  nextAttemptTemplate as computeNextAttemptTemplate,
+} from "../lib/attemptLadder.js";
 import { currentResultVersion, ensureResultVersionForReview, hasApprovedCurrentVersion } from "../resultVersions.js";
 import {
   isStopReasonCode,
@@ -1288,34 +1291,15 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
       const updated = getTaskRow(task.id);
       const hydrated = hydrateTask(updated);
-      // Лесенка модели (спек 1.2, 1.2.2): при insufficient_capability — следующая
-      // ступень из attempt_policies; на остальных reason_code — null. Ступени
-      // упорядочены по id (ap_insuff_haiku_sonnet < ap_insuff_sonnet_opus <
-      // ap_insuff_opus_null), так что from_model-ы в SELECT DISTINCT дают
-      // [haiku, sonnet, opus].
-      const nextAttemptTemplate =
-        reasonCode === "insufficient_capability"
-          ? (() => {
-              const attemptsCount = (
-                db
-                  .prepare("SELECT COUNT(*) AS n FROM attempts WHERE task_id = ?")
-                  .get(task.id) as { n: number } | undefined
-              )?.n ?? 0;
-              const ladder = db
-                .prepare(
-                  `SELECT DISTINCT from_model FROM attempt_policies
-                    WHERE reason_code = ? AND from_model IS NOT NULL
-                    ORDER BY id`,
-                )
-                .all(reasonCode) as Array<{ from_model: string }>;
-              const models = ladder.map((r) => r.from_model);
-              const idx = currentAttempt?.model
-                ? models.indexOf(currentAttempt.model)
-                : -1;
-              if (idx === -1 || idx + 1 >= models.length) return null;
-              return { model: models[idx + 1], runner: currentAttempt?.runner ?? null };
-            })()
-          : null;
+      // Лесенка модели (спек 1.2, 1.2.2): при insufficient_capability —
+      // следующая ступень из attempt_policies через общий
+      // attemptLadder.ts (порядок ступеней — рекурсивный CTE, не сортировка
+      // по id: id строк — это порядок вставки миграции, а не лесенка).
+      const nextAttemptTemplate = computeNextAttemptTemplate({
+        reasonCode,
+        currentModel: currentAttempt?.model ?? null,
+        runner: currentAttempt?.runner ?? null,
+      });
       if (fallback) {
         const notificationId = uid();
         db.prepare(

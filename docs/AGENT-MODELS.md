@@ -192,3 +192,65 @@ journalctl --user -u ollama --since "-5min" --no-pager | grep chat/completions
 - `AGENT-PROTOCOL.md` — правила работы агента с доской.
 - База знаний: `2026-08-27-dsh-minimax-subscription` (подписка MiniMax для dsh),
   `2026-08-27-agent-models-by-label` (этот же материал рецептом).
+
+## 8. Эмбеддинги: bge-m3 через /api/embeddings
+
+Спек 1.2 (1.2.5). В TaskFlow-сервере есть `POST /api/embeddings` —
+обёртка над Ollama `/api/embeddings` для семантического матчинга
+(спек 1.2 §3.3: role_embeddings, task_embeddings, enrichment_semantic).
+
+**Где модель.** Ollama на `.110:11434`, тег `bge-m3-embed:latest`
+(1.2 GB, 1024-dim, мультиязычная, включая русский). До 04.08.2026
+тег назывался `bge-m3-gpu`; имя `bge-m3-gpu@Ollama` осталось в конфиге
+датасетов RAGFlow — намеренно не трогаем, чтобы не сломать то, что
+висит на старом имени.
+
+**Эндпоинт TaskFlow.**
+
+```bash
+curl -sS -X POST http://localhost:3001/api/embeddings \
+  -H "Authorization: Bearer tf_xxxxxxxx..." \
+  -H 'Content-Type: application/json' \
+  -d '{"input": "произвольный текст для векторизации"}'
+```
+
+Параметры:
+
+- **`input`** (обязательно): строка или массив строк (до 16 в одном запросе).
+- **`model`** (опционально): имя тега Ollama. Дефолт `bge-m3-embed:latest`.
+
+Ответ:
+
+```json
+{
+  "embedding": [-1.068, -0.605, -0.250, "..."],   // number[] или number[][]
+  "model": "bge-m3-embed:latest",
+  "dim": 1024,
+  "duration_ms": 47
+}
+```
+
+**Переменные окружения:**
+
+| Переменная              | Дефолт                          | Смысл                                       |
+| ----------------------- | ------------------------------- | ------------------------------------------- |
+| `OLLAMA_BASE_URL`       | `http://192.168.1.110:11434`    | Адрес Ollama (тот же, что и для chat)       |
+| `EMBEDDING_MODEL`       | `bge-m3-embed:latest`           | Тег модели по умолчанию                    |
+| `EMBEDDING_TIMEOUT_MS`  | `30000`                         | Таймаут на один fetch                       |
+| `EMBEDDING_MAX_BATCH`   | `16`                            | Максимум текстов в одном POST               |
+
+**Ошибки:**
+
+| Код | Когда                                              |
+| --- | -------------------------------------------------- |
+| 400 | input не строка/массив, пустой, батч > лимита       |
+| 502 | Ollama вернула ошибку / неожиданный формат         |
+| 504 | Таймаут                                           |
+
+**Грабля, которую стоит знать.** Размерность привязана к модели:
+bge-m3 = 1024, nomic-embed-text = 768. Если поменять `EMBEDDING_MODEL`
+на модель с другой размерностью — старые векторы в `role_embeddings`/
+`task_embeddings` станут несовместимы и recall упадёт с ошибкой
+`Dimension mismatch`. Менять модель = переиндексировать хранилище.
+
+Код: `src/lib/embeddingClient.ts`, `src/routes/embeddings.ts`.

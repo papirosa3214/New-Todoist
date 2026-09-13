@@ -448,7 +448,7 @@ ws.onmessage = (ev) => {
 Задача **не возвращается в очередь автоматически** — решение принимает владелец. Но она сразу
 помечается как брошенная и требует внимания.
 
-### 8.3. Три эндпоинта: claim, heartbeat, state
+### 8.3. Шесть эндпоинтов работы агента: claim, heartbeat, state, stop, retry, consultation
 
 #### 8.3.1. Взять задачу в работу — `POST /api/tasks/:id/claim`
 
@@ -611,6 +611,208 @@ curl -sS -X POST http://localhost:3001/api/tasks/<task_id>/state \
 | 400 | Требуется комментарий при переводе в `review`.                                        | `нужен комментарий: что сделано`                                    |
 | 400 | Требуется комментарий при переводе из `review` в `in_progress` (вернул на доработку). | `нужен комментарий: что не так и что нужно доработать`              |
 | 400 | Переход не разрешён матрицей или вы не имеете прав (не владелец/исполнитель).         | `invalid transition`                                                |
+
+#### 8.3.4. Структурированная остановка — `POST /api/tasks/:id/stop`
+
+Агент сообщает причину, по которой закрывает текущую попытку, и сервер возвращает
+политику восстановления. Спек 1.2 (1.2.2) добавил `next_attempt_template` —
+следующую ступень лесенки моделей, которую агент может подтвердить через
+`/retry` (см. 8.3.5).
+
+```bash
+curl -sS -X POST http://localhost:3001/api/tasks/<task_id>/stop \
+  -H "Authorization: Bearer tf_xxxxxxxx..." \
+  -H 'Content-Type: application/json' \
+  -d '{ "reason_code": "insufficient_capability", "comment": "модель не тянет" }'
+```
+
+Поля тела:
+
+- **`reason_code`** (обязательно): один из закрытого списка —
+  `insufficient_capability`, `different_competence`, `result_feedback`,
+  `technical_failure`, `provider_limit`, `permission_or_owner`, `lease_expired`,
+  `budget_exhausted`. Каждый reason_code сопоставлен с действием сервера
+  (`escalate_capability`, `retry_technical`, `wait_owner` и т.п.; см.
+  `src/stopReasons.ts`).
+- **`comment`** (опционально): объяснение для владельца. Обязателен для reason_code,
+  которые переводят задачу в `blocked` (`permission_or_owner`, `different_competence`,
+  `result_feedback`, `lease_expired`, `budget_exhausted`) — на стороне сервера это
+  требование матрицы переходов.
+
+**Что происходит (по reason_code):**
+
+- `insufficient_capability` — попытка закрывается, задача уходит в `blocked`,
+  `current_attempt_id` обнуляется. В ответе приходит `next_attempt_template`
+  с моделью следующей ступени (`haiku → sonnet → opus`). Если лесенка исчерпана
+  (потолок или attempts_count ≥ 3) — `next_attempt_template: null`, агент не
+  может retry, задача остаётся в `blocked` владельцу.
+- `technical_failure` — попытка не закрывается, пишется строка в
+  `attempt_retries` со счётчиком. До 3 автоматических retry с задержкой
+  `delay_seconds`; после — `409` «лимит технических повторов исчерпан».
+- `provider_limit` — попытка закрывается, открывается новая на фолбэк-провайдере
+  роли (спек 1.1).
+- остальные reason_code — попытка закрывается, задача в `blocked`.
+
+Заголовок `X-Agent-Attempt-Id` обязателен для агентского клиента: сервер
+сверяет его с `tasks.current_attempt_id` и отвечает `400 attempt_id_mismatch`,
+если попытка уже сменилась.
+
+**Ответ при успехе (200):**
+
+```json
+{
+  "task": { "id": "t123", "agent_state": "blocked", ... },
+  "reason_code": "insufficient_capability",
+  "action": "escalate_capability",
+  "retry_count": 0,
+  "retry_delay_seconds": null,
+  "fallback": null,
+  "next_attempt_template": { "model": "opus", "runner": "claude" },
+  "substantive_attempts": 1
+}
+```
+
+**Ошибки:**
+
+| Код | Когда                                                            | Текст ошибки                                                       |
+| --- | ---------------------------------------------------------------- | ------------------------------------------------------------------ |
+| 404 | Задача не найдена.                                               |                                                                    |
+| 400 | Невалидный `reason_code`.                                        | `reason_code должен быть одним из: ...`                           |
+| 400 | `attempt_id` в `X-Agent-Attempt-Id` не совпал с текущим.         | `attempt_id: attempt_id_mismatch`                                  |
+| 409 | Исчерпаны автоматические retry для `technical_failure`.          | `лимит технических повторов исчерпан — нужно решение владельца`    |
+
+#### 8.3.5. Подтвердить retry на следующей ступени — `POST /api/tasks/:id/retry`
+
+Спек 1.2 (1.2.3). После `/stop` с `reason_code='insufficient_capability'`,
+который вернул `next_attempt_template`, агент вызывает `/retry` чтобы открыть
+новую попытку на предложенной модели. Если агент не согласен с лесенкой или
+не хочет продолжать — задача остаётся в `blocked`, владелец решает.
+
+```bash
+curl -sS -X POST http://localhost:3001/api/tasks/<task_id>/retry \
+  -H "Authorization: Bearer tf_xxxxxxxx..." \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "attempt_id": "att-uuid-from-prior-attempt",
+    "template": { "model": "opus", "runner": "claude" }
+  }'
+```
+
+Поля тела:
+
+- **`attempt_id`** (обязательно): id попытки, которую агент только что закрыл
+  через `/stop`. Сервер сверяет с последней попыткой задачи.
+- **`template.model`** (обязательно): имя модели, на которой агент просит
+  открыть новую попытку.
+- **`template.runner`** (опционально): runner провайдера; если не указан,
+  используется runner предыдущей попытки.
+
+**Что происходит (атомарно, в одной транзакции):**
+
+1. Старый attempt переводится в `outcome='needs_escalation'` (перезаписывая
+   `escalate_capability` от `/stop` — финальное состояние с точки зрения retry).
+2. Открывается новый attempt с присланной моделью и runner'ом.
+3. Задача возвращается в `in_progress`, `current_attempt_id` указывает на новый
+   attempt, `agent_heartbeat_at` обновляется.
+
+**Ответ при успехе (200):**
+
+```json
+{
+  "task": { "id": "t123", "agent_state": "in_progress", ... },
+  "attempt_id": "new-attempt-uuid",
+  "model": "opus",
+  "runner": "claude"
+}
+```
+
+**Ошибки:**
+
+| Код | Когда                                                                                  | Текст ошибки                                                       |
+| --- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| 404 | Задача не найдена или недоступна.                                                      |                                                                    |
+| 400 | Не переданы `attempt_id` или `template.model`.                                         | `body должен содержать attempt_id и template.model`               |
+| 400 | `attempt_id` не совпадает с последней попыткой задачи (чужой или replay старого).     | `attempt_id_mismatch: ожидается …, прислан …`                      |
+| 400 | Последняя попытка ещё активна (`ended_at IS NULL`).                                    | `попытка … ещё активна — retry применим только к закрытой попытке` |
+| 400 | Последняя попытка закрыта не с `insufficient_capability`.                              | `… retry применим только после reason_code='insufficient_capability'` |
+| 400 | Лесенка исчерпана (`attempts_count ≥ 3` или модель не в лесенке).                      | `потолок лесенки: … попыток …`                                     |
+| 400 | Присланный `template` не совпадает с серверным `next_attempt_template`.                 | `template_mismatch: сервер предлагает …, прислан …`                |
+
+#### 8.3.6. Консультация B+ — `POST /api/tasks/:id/consultation`
+
+Спек 1.2 (1.2.4). В рамках одной попытки агент чувствует неуверенность
+и хочет второе мнение от более думающей модели. Сервер собирает
+контекст (задача + attempts.history + текущее состояние), вызывает
+консультанта через общий `callUnifiedAi`, логирует в
+`consultation_log` и возвращает ответ агенту.
+
+```bash
+curl -sS -X POST http://localhost:3001/api/tasks/<task_id>/consultation \
+  -H "Authorization: Bearer tf_xxxxxxxx..." \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "attempt_id": "att-uuid",
+    "consultant_model": "opus",
+    "question": "Не уверен в выборе между X и Y, на что опереться?",
+    "context": { "git_diff_lines": 312 },
+    "triggered_by": "auto:diff_size"
+  }'
+```
+
+Поля тела:
+
+- **`attempt_id`** (обязательно): id текущей активной попытки.
+- **`consultant_model`** (обязательно): короткий алиас (`opus`/`sonnet`/`haiku`)
+  или явное имя модели. Алиасы маршрутизируются на:
+  - `opus` → `claude-opus-4-6-thinking`
+  - `sonnet` → `claude-sonnet-4-6`
+  - `haiku` → `qwen3.6-27b-iq4-16k:latest` (локальная Ollama)
+  Любое другое имя уходит в провайдер `claude` как есть.
+- **`question`** (обязательно): конкретный вопрос ассистенту, предел 4000 символов.
+- **`context`** (опционально): свободный JSON, до 64 КБ. Кладётся в
+  `consultation_log.context_json` и в system prompt не идёт — модель видит
+  его как `agent_context` внутри `contextPayload`.
+- **`triggered_by`** (опционально): метка причины обращения — `manual` по умолчанию,
+  или `auto:diff_size`/`auto:test_failures` если сработал триггер R7 спеки 1.2.
+
+**Что происходит (атомарно с точки зрения лимита):**
+
+1. Сервер читает текущую попытку (`attempts WHERE id = ? AND task_id = ?`).
+2. Если `attempts.consultation_count >= 1` — `400 limit_exceeded`. Лимит
+   R6 спеки 1.2 §3.2: одна консультация на попытку.
+3. Собирается `contextPayload`: задача + история попыток + текущая попытка +
+   `agent_context` + `question`.
+4. Вызов `callUnifiedAi(provider, aiModel/localModel, temperature=0.2,
+   predictTokens=1500)`.
+5. В `consultation_log` пишется строка со всеми 9 полями (включая
+   `duration_ms`, `triggered_by`, `answer`). При ошибке провайдера `answer=NULL`,
+   `triggered_by` префиксуется `error:` — чтобы видно было в логе.
+6. `attempts.consultation_count` инкрементируется **только при успешном
+   вызове**. Если провайдер упал, счётчик не растёт — повторная попытка
+   после восстановления сети пройдёт без 400.
+
+**Ответ при успехе (200):**
+
+```json
+{
+  "consultation_id": "clg-uuid",
+  "answer": "Ответ консультанта (свободный текст)...",
+  "duration_ms": 1340,
+  "model": "opus",
+  "consultation_count": 1
+}
+```
+
+**Ошибки:**
+
+| Код | Когда                                                          | Текст ошибки                                       |
+| --- | -------------------------------------------------------------- | -------------------------------------------------- |
+| 404 | Задача не найдена.                                             |                                                    |
+| 400 | Не переданы `attempt_id`/`consultant_model`/`question`.        | `attempt_id, consultant_model и question обязательны` |
+| 400 | `attempt_id` не принадлежит этой задаче.                       | `attempt_id_mismatch: у задачи ... нет попытки ...` |
+| 400 | На этой попытке уже была консультация.                         | `limit_exceeded: на попытке ... уже N консультаций; лимит 1` |
+| 400 | `question` длиннее 4000 символов или `context` больше 64 КБ.   | `вопрос слишком длинный (N символов, предел ...)`  |
+| 502 | Провайдер модели упал; счётчик не инкрементирован.             | `consultant model error: ...`                      |
 
 ### 8.4. Жёсткие правила, на которых можно споткнуться
 

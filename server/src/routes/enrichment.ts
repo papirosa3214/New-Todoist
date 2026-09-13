@@ -15,6 +15,7 @@ import { getTaskForRead, getTaskForWrite, isOwner, isOrchestrator } from "../acc
 import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent } from "../ws.js";
 import { getTaskRow, hydrateTask } from "./tasks.js";
+import { semanticEnrich } from "../lib/semanticEnrich.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -50,6 +51,15 @@ export function registerEnrichmentRoutes(app: FastifyInstance) {
     const task = getTaskForWrite(req.params.id, req.userId) ?? getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
     const result = analyzeTask(task.title, task.description);
+    // Спек 1.2.6: если детерминированный enricher не уверен, запускаем
+    // семантический матчинг как второй уровень (по гейту "доля эскалаций
+    // > threshold"). Этот шаг НЕ идёт в общую транзакцию — сетевой
+    // вызов bge-m3 может занять секунды, держать SQLite write-lock
+    // всё это время нельзя.
+    const semantic =
+      result.selected_profile === null
+        ? await semanticEnrich(task.id)
+        : null;
     const apply = db.transaction(() => {
       const current = db.prepare("SELECT * FROM enrichment_escalations WHERE task_id = ?").get(task.id) as any;
       if (result.selected_profile) {
@@ -72,7 +82,7 @@ export function registerEnrichmentRoutes(app: FastifyInstance) {
     apply();
     const updated = getTaskRow(task.id);
     broadcastTaskEvent([updated.creator_id, updated.assignee_id], { type: "task:updated", task: hydrateTask(updated) });
-    return { task: hydrateTask(updated), enrichment: { ...result, escalation: escalation(task.id) } };
+    return { task: hydrateTask(updated), enrichment: { ...result, escalation: escalation(task.id), semantic } };
   });
 
   app.get<{ Params: { id: string } }>("/api/tasks/:id/enrichment", { preHandler: authPre }, async (req: any, reply) => {

@@ -170,7 +170,7 @@ class OllamaError extends Error {
   }
 }
 
-async function callUnifiedAi(opts: {
+export async function callUnifiedAi(opts: {
   systemPrompt: string;
   userPrompt: string;
   provider?: string;
