@@ -800,9 +800,16 @@ async function journalAssist(
   provider?: string,
   localModel?: string,
   aiModel?: string,
+  /** Опциональное per-user дополнение к дефолтному системному промпту
+   *  (подмешивается через "\n\n# Дополнение от пользователя:\n"). Карточка
+   *  04c916c8: пусто или undefined = вызов без дополнения. */
+  userSystemPrompt?: string,
 ): Promise<string> {
   const raw = await callUnifiedAi({
-    systemPrompt: JOURNAL_ASSIST_PROMPTS[action],
+    systemPrompt: composeSystemPrompt(
+      JOURNAL_ASSIST_PROMPTS[action],
+      userSystemPrompt,
+    ),
     userPrompt: text.trim().slice(0, 6000),
     provider,
     localModel,
@@ -876,9 +883,16 @@ async function extractTasksFromText(
   provider?: string,
   localModel?: string,
   aiModel?: string,
+  /** Опциональное per-user дополнение к дефолтному системному промпту
+   *  (подмешивается через "\n\n# Дополнение от пользователя:\n"). Карточка
+   *  04c916c8: пусто или undefined = вызов без дополнения. */
+  userSystemPrompt?: string,
 ): Promise<ExtractedTaskResult[]> {
   const content = await callUnifiedAi({
-    systemPrompt: EXTRACT_TASKS_SYSTEM_PROMPT,
+    systemPrompt: composeSystemPrompt(
+      EXTRACT_TASKS_SYSTEM_PROMPT,
+      userSystemPrompt,
+    ),
     userPrompt: text.trim().slice(0, 6000),
     provider,
     localModel,
@@ -893,6 +907,39 @@ async function extractTasksFromText(
       "Не удалось разобрать ответ модели как список задач. Попробуйте ещё раз.",
     );
   }
+}
+
+/**
+ * Склеивает дефолтный серверный промпт и пользовательское дополнение.
+ * Подмешивание, а не замена — пользователь указывает «что ещё важно
+ * учитывать», а дефолт остаётся контрактным форматом ответа. Пустое
+ * дополнение = чистый дефолт.
+ */
+function composeSystemPrompt(
+  defaultPrompt: string,
+  userPrompt: string | null | undefined,
+): string {
+  const trimmed = userPrompt?.trim();
+  if (!trimmed) return defaultPrompt;
+  return `${defaultPrompt}\n\n# Дополнение от пользователя:\n${trimmed}`;
+}
+
+/**
+ * Достаёт per-user промпт из `user_ai_prompts`. Возвращает "" для не-
+ * существующей строки (не null), чтобы вызывающий мог просто склеивать.
+ * Миграция таблицы — `db.ts`, см. CREATE TABLE IF NOT EXISTS user_ai_prompts.
+ */
+async function getUserPrompt(
+  userId: string,
+  scope: string,
+): Promise<string> {
+  const db = (await import("../db.js")).default;
+  const row = db
+    .prepare(
+      "SELECT prompt FROM user_ai_prompts WHERE user_id = ? AND scope = ?",
+    )
+    .get(userId, scope) as { prompt: string } | undefined;
+  return row?.prompt ?? "";
 }
 
 export function registerAiRoutes(app: FastifyInstance) {
@@ -1212,6 +1259,17 @@ export function registerAiRoutes(app: FastifyInstance) {
         req.headers["x-ai-model"] || req.body?.aiModel || "",
       );
 
+      // Per-user системный промпт подмешивается СЕРВЕРОМ, а не передаётся
+      // клиентом — иначе это дыра: любой мог бы подсунуть свой промпт и
+      // заставить чужой запрос следовать чужим инструкциям. Карточка
+      // 04c916c8: scope = 'journal_assist_<action>', общий дефолт один и
+      // тот же для всех трёх действий (continue/shorten/expand делят
+      // стилистические правила владельца).
+      const userPrompt = await getUserPrompt(
+        req.userId,
+        "journal_assist",
+      );
+
       try {
         const result = await journalAssist(
           text,
@@ -1219,6 +1277,7 @@ export function registerAiRoutes(app: FastifyInstance) {
           provider,
           localModel,
           aiModel,
+          userPrompt,
         );
         return { result };
       } catch (err: any) {
@@ -1257,12 +1316,17 @@ export function registerAiRoutes(app: FastifyInstance) {
         req.headers["x-ai-model"] || req.body?.aiModel || "",
       );
 
+      // Per-user промпт читается сервером по req.userId; клиент system_prompt
+      // НЕ передаёт — см. карточку 04c916c8 и контракт безопасности.
+      const userPrompt = await getUserPrompt(req.userId, "extract_tasks");
+
       try {
         const tasks = await extractTasksFromText(
           text,
           provider,
           localModel,
           aiModel,
+          userPrompt,
         );
         return { tasks };
       } catch (err: any) {
@@ -1270,6 +1334,110 @@ export function registerAiRoutes(app: FastifyInstance) {
           .code(502)
           .send({ error: err?.message || "Не удалось извлечь задачи" });
       }
+    },
+  });
+
+  // Per-user системные промпты — настройки владельца, попадают в модель
+  // автоматически при вызовах /extract-tasks и /journal-assist. Контракт:
+  //   GET  /api/ai/prompts                  → { prompts: [{scope, prompt, updated_at}] }
+  //   PUT  /api/ai/prompts/:scope           → { prompt: string } (upsert)
+  //   DELETE /api/ai/prompts/:scope         → сброс на дефолт (row удаляется)
+  // Скоупы: 'extract_tasks', 'journal_assist'. Любая строка валидна —
+  // сервер не валидирует whitelist, чтобы не ломать обратную совместимость
+  // при добавлении новых применений.
+  app.get("/api/ai/prompts", {
+    preHandler: authPre,
+    handler: async (req: any) => {
+      const db = (await import("../db.js")).default;
+      const rows = db
+        .prepare(
+          "SELECT scope, prompt, updated_at FROM user_ai_prompts WHERE user_id = ? ORDER BY scope",
+        )
+        .all(req.userId) as Array<{
+          scope: string;
+          prompt: string;
+          updated_at: string;
+        }>;
+      return {
+        prompts: rows.map((r) => ({
+          scope: r.scope,
+          prompt: r.prompt,
+          updated_at: r.updated_at,
+        })),
+      };
+    },
+  });
+
+  app.put<{
+    Params: { scope: string };
+    Body: { prompt: string };
+  }>("/api/ai/prompts/:scope", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const scope = String(req.params.scope || "").trim();
+      if (!scope) {
+        return reply.code(400).send({ error: "scope обязателен" });
+      }
+      // Разрешаем только разумные scope'ы: латиница/цифры/подчёркивание/дефис.
+      // Без этого — open door для произвольных строк в БД (и для sql-smuggle
+      // в path-segment, если такая дыра есть в sqlite-драйвере).
+      if (!/^[a-z0-9_-]{1,64}$/i.test(scope)) {
+        return reply
+          .code(400)
+          .send({ error: "scope: только латиница/цифры/_/- длиной 1..64" });
+      }
+      const raw = req.body?.prompt;
+      if (typeof raw !== "string") {
+        return reply
+          .code(400)
+          .send({ error: "prompt обязателен и должен быть строкой" });
+      }
+      // Лимит на размер промпта: 16 КБ — заведомо больше того, что человек
+      // напишет руками, и обрезает попытки залить байтовую кашу.
+      const prompt = raw.slice(0, 16_384);
+      const db = (await import("../db.js")).default;
+      db.prepare(
+        `INSERT INTO user_ai_prompts (user_id, scope, prompt, updated_at)
+         VALUES (?, ?, ?, datetime('now'))
+         ON CONFLICT(user_id, scope) DO UPDATE SET
+           prompt = excluded.prompt,
+           updated_at = datetime('now')`,
+      ).run(req.userId, scope, prompt);
+      const row = db
+        .prepare(
+          "SELECT scope, prompt, updated_at FROM user_ai_prompts WHERE user_id = ? AND scope = ?",
+        )
+        .get(req.userId, scope) as
+        | { scope: string; prompt: string; updated_at: string }
+        | undefined;
+      return {
+        ok: true,
+        scope: row?.scope ?? scope,
+        prompt: row?.prompt ?? prompt,
+        updated_at: row?.updated_at ?? new Date().toISOString(),
+      };
+    },
+  });
+
+  app.delete<{
+    Params: { scope: string };
+  }>("/api/ai/prompts/:scope", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const scope = String(req.params.scope || "").trim();
+      if (!scope) {
+        return reply.code(400).send({ error: "scope обязателен" });
+      }
+      if (!/^[a-z0-9_-]{1,64}$/i.test(scope)) {
+        return reply
+          .code(400)
+          .send({ error: "scope: только латиница/цифры/_/- длиной 1..64" });
+      }
+      const db = (await import("../db.js")).default;
+      db.prepare(
+        "DELETE FROM user_ai_prompts WHERE user_id = ? AND scope = ?",
+      ).run(req.userId, scope);
+      return { ok: true, scope };
     },
   });
 }
