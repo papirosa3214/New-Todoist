@@ -42,6 +42,7 @@ import { combineDictatedText } from "../lib/dictationParser";
 import { useUploadAttachment, useDeleteAttachment } from "../api/attachments";
 import { TemplateStore } from "../lib/templates";
 import { AttachmentView } from "../components/AttachmentView";
+import { AttemptLadderBadge } from "../components/AttemptLadderBadge";
 import type { ApiAttachment } from "../api/types";
 import { SubtaskFeed } from "../components/SubtaskFeed";
 import {
@@ -530,6 +531,7 @@ export function TaskDetailScreen() {
           </div>
         )}
         <AgentStatusRow task={task} />
+        <AttemptLadderBadge task={task} />
       </div>
 
       {/* Owner actions — agent-work protocol (AGENT-PROTOCOL.md): visible

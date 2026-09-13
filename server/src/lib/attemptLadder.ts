@@ -83,3 +83,41 @@ export function ladderModels(reasonCode: string): string[] {
     .all({ rc: reasonCode }) as Array<{ from_model: string }>;
   return rows.map((r) => r.from_model);
 }
+
+export interface AttemptLadderHistoryItem {
+  id: string;
+  model: string | null;
+  outcome: string | null;
+  reason_code: string | null;
+  started_at: string;
+  ended_at: string | null;
+}
+
+export interface AttemptLadderState {
+  current_step: number;
+  total_steps: number;
+  current_model: string | null;
+  history: AttemptLadderHistoryItem[];
+}
+
+/** Read model-attempt progress for the task detail contract. */
+export function attemptLadderForTask(taskId: string): AttemptLadderState {
+  const models = ladderModels("insufficient_capability");
+  const history = db
+    .prepare(
+      `SELECT id, model, outcome, reason_code, started_at, ended_at
+         FROM attempts
+        WHERE task_id = ? AND subtask_id IS NULL
+        ORDER BY started_at ASC, rowid ASC`,
+    )
+    .all(taskId) as AttemptLadderHistoryItem[];
+  const current = history.findLast((attempt) => attempt.ended_at === null) ??
+    history.at(-1) ?? null;
+  const modelStep = current?.model ? models.indexOf(current.model) + 1 : 0;
+  return {
+    current_step: modelStep > 0 ? modelStep : Math.min(history.length, models.length),
+    total_steps: models.length,
+    current_model: current?.model ?? null,
+    history,
+  };
+}

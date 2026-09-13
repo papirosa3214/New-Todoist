@@ -266,6 +266,19 @@ export interface ApiTask {
   // комментарию в ленте — то, что прикладывается в форме под «Заметкой».
   // Тоже только на GET /api/tasks/:id.
   attachments?: ApiAttachment[];
+  attempt_ladder?: {
+    current_step: number;
+    total_steps: number;
+    current_model: string | null;
+    history: Array<{
+      id: string;
+      model: string | null;
+      outcome: string | null;
+      reason_code: string | null;
+      started_at: string;
+      ended_at: string | null;
+    }>;
+  };
 }
 
 export interface ApiProject {

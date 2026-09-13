@@ -535,14 +535,30 @@ def load_model_ladder(reason_code: str = "insufficient_capability") -> list[str]
     """
     payload = api("GET", "/api/agent/attempt-policies")
     rows = payload.get("policies", []) if isinstance(payload, dict) else []
-    # Стабильный порядок: сортируем по возрастанию id (ap_insuff_haiku_sonnet,
-    # ap_insuff_sonnet_opus, ap_insuff_opus_null) → лесенка [haiku, sonnet, opus].
-    models = [
-        r.get("from_model")
-        for r in rows
-        if r.get("reason_code") == reason_code and r.get("from_model")
-    ]
-    return models
+    edges = {
+        str(row["from_model"]): row.get("to_model")
+        for row in rows
+        if row.get("reason_code") == reason_code and row.get("from_model")
+    }
+    if not edges:
+        return []
+    incoming = {str(value) for value in edges.values() if value}
+    roots = [model for model in edges if model not in incoming]
+    if len(roots) != 1:
+        log(f"  ⚠️ некорректная лесенка {reason_code}: roots={roots}")
+        return []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    current: str | None = roots[0]
+    while current:
+        if current in seen or current not in edges:
+            log(f"  ⚠️ разорванная или циклическая лесенка {reason_code}")
+            return []
+        ordered.append(current)
+        seen.add(current)
+        next_model = edges[current]
+        current = str(next_model) if next_model else None
+    return ordered if len(seen) == len(edges) else []
 
 
 def next_step_for(
@@ -1818,6 +1834,9 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
 
     token = agent.get("token") or ""
     reply_only = reason == REPLY_ONLY
+    # Выбор должен состояться ДО claim: claim создаёт строку attempts и
+    # сохраняет в ней фактические runner/model этого запуска.
+    model = model_of(task)
 
     # Единая доставка: свериться с inbox ДО контекста, claim и запуска
     # процесса (см. inbox_consume). В режиме ответа карточка не забирается —
@@ -1898,8 +1917,13 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     session_sid = new_sid if (not resume_sid or fork) else resume_sid
 
     if not reply_only:
-        claimed = api("POST", f"/api/tasks/{task_id}/claim",
-                      {"session_id": session_sid} if claude_cli else {}, token=token)
+        claim_body = {
+            "model": model or None,
+            "runner": agent.get("name") or None,
+        }
+        if claude_cli:
+            claim_body["session_id"] = session_sid
+        claimed = api("POST", f"/api/tasks/{task_id}/claim", claim_body, token=token)
         if claimed is None and task.get("agent_state") != "in_progress":
             log(f"  не удалось взять задачу {task_id[:8]} за «{agent['name']}» — отменяю заход")
             if inbox_events:
@@ -1920,7 +1944,6 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     # лежат его настройки (см. dsh_home_for). Окружение собираем ЗДЕСЬ, на
     # заход: общий agent["env"] один на всех, и правка его на месте увела бы
     # соседнюю задачу на чужую модель.
-    model = model_of(task)
     if agent.get("name") == "Antigravity":
         # 29.08.2026: у Antigravity РАБОТАЮТ НЕ ВСЕ его модели. Проверено
         # прогоном по каждой: claude-sonnet-4-6, claude-opus-4-6-thinking и

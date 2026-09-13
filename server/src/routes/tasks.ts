@@ -26,6 +26,7 @@ import {
   hasApprovedCurrentVersion,
   resultFromSubtasks,
 } from "../resultVersions.js";
+import { attemptLadderForTask } from "../lib/attemptLadder.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -463,6 +464,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         attachments: taskAttachments,
         events,
         attempts,
+        attempt_ladder: attemptLadderForTask(task.id),
         // Тот же расчёт, что в hydrateTask: карточка задачи собирается здесь
         // вручную и мимо него, и поле, добавленное только туда, на этом пути
         // молча пропало бы (ровно так уже терялось имя проекта).
