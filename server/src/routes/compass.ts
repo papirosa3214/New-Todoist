@@ -57,6 +57,13 @@ interface RawEvent {
   created_at: string;
 }
 
+interface RawReview {
+  id: string;
+  task_id: string;
+  verdict: string;
+  created_at: string;
+}
+
 interface EnrichedTask {
   id: string;
   title: string;
@@ -171,11 +178,17 @@ function chooseStageKey(
     for (const lbl of projectLabels) {
       if (taskNumPrefix) {
         // Совпадение: задача "1.1.5" → подходит метка "1.1"
-        if (taskNumPrefix === lbl.num) return { key: lbl.num };
+        if (taskNumPrefix === lbl.num) {
+          return { key: lbl.num, labelHint: null, fullLabel: null };
+        }
         // "2" — точное равенство
-        if (lbl.num === taskNumPrefix) return { key: lbl.num };
+        if (lbl.num === taskNumPrefix) {
+          return { key: lbl.num, labelHint: null, fullLabel: null };
+        }
         // "1.1.10" → начинается с "1.1."
-        if (taskNumPrefix.startsWith(lbl.num + ".")) return { key: lbl.num };
+        if (taskNumPrefix.startsWith(lbl.num + ".")) {
+          return { key: lbl.num, labelHint: null, fullLabel: null };
+        }
       }
     }
     // Метки есть, но ни одна не подошла — отдельный misc.
@@ -499,7 +512,7 @@ export function registerCompassRoutes(app: FastifyInstance): void {
         `SELECT id, task_id, verdict, created_at
            FROM reviews
           WHERE task_id IN (${placeholders})`,
-      ) as RawEvent[];
+      ) as RawReview[];
       const reviewsChangesByTask = new Set<string>();
       for (const r of reviews) {
         if (r.verdict === "changes_requested" || r.verdict === "blocked") {

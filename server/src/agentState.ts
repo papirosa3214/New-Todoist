@@ -102,7 +102,7 @@ export function canTransition(
     return via === "claim" && who.isExecutor && !!who.leaseExpired;
   }
   if (from === "review" && to === "in_progress") {
-    return via === "state" && (who.isOwner || who.isExecutor || who.isReviewer);
+    return via === "state" && (who.isOwner || who.isExecutor || !!who.isReviewer);
   }
   // "любое → NULL, владелец, снять с агента"
   if (to === null) return who.isOwner;

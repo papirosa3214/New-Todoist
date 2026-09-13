@@ -940,6 +940,195 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // LOCK-146, серверная половина: под раздел «Команда» в iOS-карточке
+    // нужны модель агента, MCP-серверы (Composio), скиллы и per-action права.
+    // Сервер их раньше не отдавал и не принимал — добавляем миграцию и
+    // эндпоинты под это. Все таблицы идемпотентны (CREATE IF NOT EXISTS +
+    // проверка колонок перед ALTER TABLE), старые агенты появятся в iOS с
+    // пустыми значениями («не настроено» в каркасе клиента).
+    id: "033_agent_model_mcp_skills_permissions",
+    description:
+      "LOCK-146 серверная половина: model/permissions на users + mcp_server_catalog/agent_mcp_servers + skill_catalog/agent_skills.",
+    up: () => {
+      // users.model — строка-идентификатор модели (например 'claude-sonnet-4-5').
+      // NULL = «не настроено», клиент покажет заглушку. Идемпотентно:
+      // проверяем наличие колонки перед ALTER.
+      const usersCols = (
+        db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      if (!usersCols.includes("model")) {
+        db.exec("ALTER TABLE users ADD COLUMN model TEXT");
+      }
+      // users.permissions — JSON-строка per-action bool, ключи
+      // фиксированные: can_create_tasks / can_delete_tasks /
+      // can_manage_projects / can_invite_agents / can_change_settings.
+      // NULL = дефолт по роли (owner=всё, orchestrator=всё кроме удаления,
+      // agent=своё, viewer=только чтение); пустая '{}' = явно пусто.
+      if (!usersCols.includes("permissions")) {
+        db.exec("ALTER TABLE users ADD COLUMN permissions TEXT");
+      }
+
+      // Каталог доступных MCP-серверов (Composio/Smithery и т. п.) —
+      // общий для всех агентов, пополняется вручную или сидом ниже.
+      // id — стабильный строковый ключ ('composio/github', 'composio/slack'…).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mcp_server_catalog (
+          id          TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          provider    TEXT NOT NULL,
+          description TEXT,
+          url         TEXT,
+          default_config_json TEXT,
+          created_at  TEXT DEFAULT (datetime('now'))
+        );
+
+        -- Подключённые к конкретному агенту MCP-серверы.
+        -- PRIMARY KEY (agent_id, server_id) — один и тот же сервер нельзя
+        -- подключить дважды. config_json — пользовательские правки поверх
+        -- дефолта каталога (токены, ветки, фильтры и т. п.).
+        CREATE TABLE IF NOT EXISTS agent_mcp_servers (
+          agent_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          server_id    TEXT NOT NULL REFERENCES mcp_server_catalog(id) ON DELETE CASCADE,
+          enabled      INTEGER NOT NULL DEFAULT 1,
+          config_json  TEXT,
+          added_at     TEXT DEFAULT (datetime('now')),
+          PRIMARY KEY (agent_id, server_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_mcp_agent
+          ON agent_mcp_servers(agent_id);
+
+        -- Каталог скиллов — установочные пакеты под конкретного агента
+        -- (например, 'composio/email_summarizer', 'taskflow/daily_digest').
+        -- id стабильный, install_url — где брать пакет, default_config_json —
+        -- дефолтные параметры.
+        CREATE TABLE IF NOT EXISTS skill_catalog (
+          id          TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          description TEXT,
+          install_url TEXT,
+          default_config_json TEXT,
+          created_at  TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_skills (
+          agent_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          skill_id   TEXT NOT NULL REFERENCES skill_catalog(id) ON DELETE CASCADE,
+          config_json TEXT,
+          added_at   TEXT DEFAULT (datetime('now')),
+          PRIMARY KEY (agent_id, skill_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_skills_agent
+          ON agent_skills(agent_id);
+
+        -- Seed каталога MCP: минимальный набор Composio-коннекторов,
+        -- чтобы в iOS карточке был непустой список выбора. Сервер сам по
+        -- себе к этим серверам не подключается — это просто справочник,
+        -- что агент может себе подключить (конфиг хранится на стороне
+        -- агента при работе).
+        INSERT OR IGNORE INTO mcp_server_catalog
+          (id, name, provider, description, url, default_config_json) VALUES
+          ('composio/github',  'GitHub',           'composio',
+           'Репозитории, issues, pull requests', 'https://composio.dev',
+           '{"scopes":["repo","read:user"]}'),
+          ('composio/slack',   'Slack',            'composio',
+           'Каналы, сообщения, треды', 'https://composio.dev',
+           '{"scopes":["chat:write","channels:read"]}'),
+          ('composio/gmail',   'Gmail',            'composio',
+           'Письма, ярлыки, черновики', 'https://composio.dev',
+           '{"scopes":["gmail.modify","gmail.readonly"]}'),
+          ('composio/google_calendar', 'Google Calendar', 'composio',
+           'События и календари', 'https://composio.dev',
+           '{"scopes":["https://www.googleapis.com/auth/calendar"]}'),
+          ('composio/notion',  'Notion',           'composio',
+           'Страницы и базы Notion', 'https://composio.dev',
+           '{"scopes":["read_content","update_content"]}'),
+          ('composio/jira',    'Jira',             'composio',
+           'Задачи и проекты Jira', 'https://composio.dev',
+           '{"scopes":["read:jira-work","write:jira-work"]}'),
+          ('composio/linear',  'Linear',           'composio',
+           'Issues и проекты Linear', 'https://composio.dev',
+           '{"scopes":["read","write"]}'),
+          ('smithery/filesystem','Filesystem',     'smithery',
+           'Чтение/запись локальных файлов агента', 'https://smithery.ai',
+           '{"root":"/tmp"}'),
+          ('smithery/brave_search','Brave Search', 'smithery',
+           'Поиск через Brave API', 'https://smithery.ai',
+           '{"max_results":10}');
+
+        INSERT OR IGNORE INTO skill_catalog
+          (id, name, description, install_url, default_config_json) VALUES
+          ('composio/email_summarizer','Email Summarizer','Сжимает цепочку писем в один абзац',
+           'https://composio.dev/skills/email_summarizer',
+           '{"max_words":120}'),
+          ('composio/code_reviewer','Code Reviewer','Делает ревью PR по описанию и диффу',
+           'https://composio.dev/skills/code_reviewer',
+           '{"langs":["swift","typescript"]}'),
+          ('taskflow/daily_digest','Daily Digest','Утренняя сводка по задачам на сегодня',
+           NULL,
+           '{"include_overdue":true}'),
+          ('taskflow/quick_recap','Quick Recap','Краткий пересказ последних событий по задаче',
+           NULL,
+           '{"max_events":5}'),
+          ('composio/meeting_notes','Meeting Notes','Структурирует заметки встречи в действия',
+           'https://composio.dev/skills/meeting_notes',
+           '{"format":"bullets"}');
+      `);
+    },
+  },
+  {
+    // 033 уже завела колонку для хеша токена `api_token` (она же использовалась
+    // и раньше под legacy-формат). Для UI «когда последний раз меняли ключ»
+    // добавляем отдельный timestamp — рядом с api_token, чтобы роуты могли
+    // показать «обновлён N дней назад» без перерасчёта хеша.
+    id: "034_api_token_set_at",
+    description:
+      "LOCK-146, довесок к 033: users.api_token_set_at — когда последний раз меняли токен (rotate или ручной PUT).",
+    up: () => {
+      const cols = (
+        db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      if (!cols.includes("api_token_set_at")) {
+        db.exec("ALTER TABLE users ADD COLUMN api_token_set_at TEXT");
+      }
+    },
+  },
+  {
+    id: "035_agent_prompt",
+    description:
+      "LOCK-146: users.prompt — индивидуальный системный промпт агента из карточки Команда.",
+    up: () => {
+      const cols = (
+        db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      if (!cols.includes("prompt")) {
+        db.exec("ALTER TABLE users ADD COLUMN prompt TEXT");
+      }
+    },
+  },
+  {
+    id: "036_agent_execution_connection",
+    description:
+      "LOCK-146: режим исполнения агента — внешний runtime или прямой API; provider/base URL/credential ref.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>)
+          .map((c) => c.name),
+      );
+      if (!cols.has("execution_mode")) {
+        db.exec("ALTER TABLE users ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'agent_runtime'");
+      }
+      if (!cols.has("model_provider")) {
+        db.exec("ALTER TABLE users ADD COLUMN model_provider TEXT");
+      }
+      if (!cols.has("model_base_url")) {
+        db.exec("ALTER TABLE users ADD COLUMN model_base_url TEXT");
+      }
+      if (!cols.has("model_credential_ref")) {
+        db.exec("ALTER TABLE users ADD COLUMN model_credential_ref TEXT");
+      }
+    },
+  },
 ];
 
 /** Apply all still-unapplied migrations, one transaction per migration. */

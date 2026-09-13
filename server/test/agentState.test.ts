@@ -103,6 +103,14 @@ describe("canTransition — матрица переходов (AGENT-PROTOCOL.md
     expect(canTransition("blocked", "review", executor, "state")).toBe(false);
     expect(canTransition("review", "blocked", executor, "state")).toBe(false);
     expect(canTransition("review", "review", owner, "state")).toBe(false);
+    expect(
+      canTransition(
+        "review",
+        "in_progress",
+        { isOwner: false, isExecutor: false },
+        "state",
+      ),
+    ).toBe(false);
   });
 });
 

@@ -7,6 +7,7 @@ import db from "../src/db.js";
 describe("Версии результата и review", () => {
   let app: FastifyInstance;
   let ownerToken: string;
+  let ownerId: string;
   let agentToken: string;
   let agentId: string;
 
@@ -87,6 +88,7 @@ describe("Версии результата и review", () => {
   beforeAll(async () => {
     app = await buildApp();
     const owner = await makeUser("Version Owner", "version-owner@test.local", { role: "owner" });
+    ownerId = owner.user.id;
     ownerToken = owner.token;
     const agent = await makeUser("Version Agent", "version-agent@test.local", { type: "ai" });
     agentId = agent.user.id;
@@ -97,7 +99,7 @@ describe("Версии результата и review", () => {
     await app.close();
   });
 
-  it("создаёт версию при сдаче задачи и принимает только после её одобрения", async () => {
+  it("создаёт версию при сдаче и автоодобряет её при закрытии владельцем", async () => {
     const taskId = await makeTask("versioned result approval");
     await submit(taskId, "V1 готова: добавлен проверяемый результат");
 
@@ -112,15 +114,6 @@ describe("Версии результата и review", () => {
     expect(version.result).toContain("V1");
     expect(version.is_current).toBe(true);
 
-    const beforeApproval = await app.inject({
-      method: "PATCH",
-      url: `/api/tasks/${taskId}`,
-      headers: { authorization: `Bearer ${ownerToken}` },
-      payload: { status: "completed" },
-    });
-    expect(beforeApproval.statusCode).toBe(409);
-
-    expect((await approve(taskId, version)).statusCode).toBe(201);
     const completed = await app.inject({
       method: "PATCH",
       url: `/api/tasks/${taskId}`,
@@ -128,6 +121,12 @@ describe("Версии результата и review", () => {
       payload: { status: "completed" },
     });
     expect(completed.statusCode).toBe(200);
+
+    const review = db.prepare(
+      `SELECT reviewer_id, verdict FROM reviews
+       WHERE version_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    ).get(version.id) as { reviewer_id: string; verdict: string } | undefined;
+    expect(review).toEqual({ reviewer_id: ownerId, verdict: "approved" });
   });
 
   it("делает старое одобрение непригодным после V2", async () => {

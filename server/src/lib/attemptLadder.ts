@@ -111,8 +111,16 @@ export function attemptLadderForTask(taskId: string): AttemptLadderState {
         ORDER BY started_at ASC, rowid ASC`,
     )
     .all(taskId) as AttemptLadderHistoryItem[];
-  const current = history.findLast((attempt) => attempt.ended_at === null) ??
-    history.at(-1) ?? null;
+  // Проект компилируется с target ES2022, где Array.findLast ещё нет.
+  // Идём с конца вручную: последний незавершённый attempt приоритетнее,
+  // иначе берём последний элемент истории, как и раньше.
+  let current = history.at(-1) ?? null;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index].ended_at === null) {
+      current = history[index];
+      break;
+    }
+  }
   const modelStep = current?.model ? models.indexOf(current.model) + 1 : 0;
   return {
     current_step: modelStep > 0 ? modelStep : Math.min(history.length, models.length),

@@ -26,6 +26,7 @@ import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerAvatarRoutes } from "./routes/avatars.js";
+import { registerAgentDetailsRoutes } from "./routes/agent-details.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerCompassRoutes } from "./routes/compass.js";
@@ -235,6 +236,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerSearchRoutes(app);
   registerAttachmentRoutes(app);
   registerAvatarRoutes(app);
+  registerAgentDetailsRoutes(app);
   registerAiRoutes(app);
   registerTranscribeRoutes(app);
   // Архив диктовок (18.08.2026): аудио выгружается с телефона и хранится

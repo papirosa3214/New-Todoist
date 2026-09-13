@@ -75,14 +75,16 @@ export function registerRetryRoutes(app: FastifyInstance) {
         });
       }
 
-      // Текущее состояние попыток задачи: последняя попытка, она же
-      // ожидаемый attempt_id в запросе; и счётчик для лимита лесенки.
+      // После /stop current_attempt_id уже сброшен, поэтому берём последнюю
+      // начатую попытку. SQLite datetime имеет точность до секунды: два быстрых
+      // retry получают одинаковый started_at, и UUID нельзя применять как
+      // временной tie-breaker. rowid сохраняет порядок вставки при равных датах.
       const lastAttempt = db
         .prepare(
           `SELECT id, model, runner, reason_code, ended_at, outcome
              FROM attempts
             WHERE task_id = ?
-            ORDER BY started_at DESC, id DESC
+            ORDER BY started_at DESC, rowid DESC
             LIMIT 1`,
         )
         .get(task.id) as
