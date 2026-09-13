@@ -28,6 +28,7 @@ import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerAvatarRoutes } from "./routes/avatars.js";
 import { registerAiRoutes } from "./routes/ai.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
+import { registerCompassRoutes } from "./routes/compass.js";
 import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
 import { registerAgentServiceRoutes } from "./routes/agent-service.js";
 import { registerIntegrationRoutes } from "./routes/integrations.js";
@@ -227,6 +228,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerReviewRoutes(app);
   registerRoleRoutes(app);
   registerProjectLabelRoutes(app);
+  registerCompassRoutes(app);
   registerSubtaskCommentRoutes(app);
   registerNotificationRoutes(app);
   registerLiveActivityRoutes(app);
