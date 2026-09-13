@@ -23,6 +23,11 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForWrite } from "../access.js";
 import { callUnifiedAi } from "./ai.js";
+import {
+  CONSULTATION_REASONS,
+  recordConsultationSuggestion,
+  getConsultationSuggestionReasons,
+} from "../lib/consultationTriggers.js";
 
 const MAX_QUESTION_LENGTH = 4000;
 const MAX_CONTEXT_BYTES = 64 * 1024;
@@ -241,6 +246,79 @@ export function registerConsultationRoutes(app: FastifyInstance) {
         model: consultantModel,
         consultation_count: used + 1,
       };
+    },
+  });
+
+  // POST /api/tasks/:id/attempts/:attempt_id/suggest-consultation — спек
+  // 1.2, 1.2.7 (R7). trigger.py зовёт это после каждого действия агента,
+  // если сработал авто-триггер («>2 правок в файле без тестов» или
+  // «diff > 300 строк»). Сервер записывает причины в попытку и в ленту
+  // задачи; агент видит их в context через GET /api/tasks/:id.
+  //
+  // Тело: { reasons: ["diff_size", "edits_no_tests"] } — допустимы только
+  // коды из CONSULTATION_REASONS. Пустой массив = no-op (защита).
+  app.post<{
+    Params: { id: string; attempt_id: string };
+    Body: { reasons?: unknown };
+  }>("/api/tasks/:id/attempts/:attempt_id/suggest-consultation", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const task = getTaskForWrite(req.params.id, req.userId);
+      if (!task) return reply.code(404).send({ error: "Not found" });
+
+      const body = req.body ?? {};
+      const raw = body.reasons;
+      if (raw !== undefined && !Array.isArray(raw)) {
+        return reply.code(400).send({
+          error: "reasons: ожидается массив строк",
+        });
+      }
+      const incoming = (raw as unknown[] | undefined ?? []).filter(
+        (v): v is string => typeof v === "string",
+      );
+
+      const result = recordConsultationSuggestion({
+        taskId: req.params.id,
+        attemptId: req.params.attempt_id,
+        reasons: incoming,
+        actorId: req.userId,
+      });
+
+      if (!result.attemptFound) {
+        return reply.code(404).send({
+          error: "попытка не найдена для этой задачи",
+        });
+      }
+
+      return {
+        reasons: result.reasons,
+        added: result.added,
+      };
+    },
+  });
+
+  // GET /api/tasks/:id/attempts/:attempt_id/consultation-suggestion —
+  // снимок пометки (для UI и тестов). Возвращает пустой массив, если
+  // пометки нет. Это часть спек 1.2.7: агент может опросить состояние
+  // пометки отдельно, не перечитывая всю задачу.
+  app.get<{
+    Params: { id: string; attempt_id: string };
+  }>("/api/tasks/:id/attempts/:attempt_id/consultation-suggestion", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const task = getTaskForWrite(req.params.id, req.userId);
+      if (!task) return reply.code(404).send({ error: "Not found" });
+
+      const reasons = getConsultationSuggestionReasons(
+        req.params.id,
+        req.params.attempt_id,
+      );
+      // Пустой массив — нормальный ответ (пометки нет). Отличать «попытки
+      // нет» от «попытка есть, пометки нет» клиенту незачем: и так и так
+      // список причин пуст, и для UI и тестов этого достаточно. 404
+      // возвращаем только на POST — там операция записи и подмена
+      // attempt_id имеет смысл как ошибка.
+      return { reasons };
     },
   });
 }

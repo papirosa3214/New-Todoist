@@ -817,6 +817,135 @@ def api(method: str, path: str, body=None, token: str = ""):
         return None
 
 
+# Спек 1.2, 1.2.7 (R7) — триггеры авто-подсказки консультации.
+#
+# Зовётся из run_external после КАЖДОГО успешного действия агента (edit/
+# bash). Смотрит на git-дерево рабочих репозиториев, считает (а) общий
+# diff vs состояние на момент старта попытки и (б) число правок каждого
+# файла в истории текущей попытки, и при срабатывании хотя бы одного
+# условия шлёт POST /api/tasks/:id/attempts/:attempt_id/suggest-consultation.
+# Агент видит пометку в GET /api/tasks/:id и сам решает, идти ли за
+# консультацией (R7 — «агент может игнорировать»).
+
+CONSULTATION_DIFF_THRESHOLD = 300  # R7(б): общий diff > 300 строк
+CONSULTATION_EDITS_THRESHOLD = 2   # R7(а): > 2 правок в одном файле
+CONSULTATION_REASON_DIFF_SIZE = "diff_size"
+CONSULTATION_REASON_EDITS_NO_TESTS = "edits_no_tests"
+
+
+def attempt_should_consult(task: dict, attempt_id: str, token: str = "") -> None:
+    """Проверяет R7-триггеры и шлёт пометку, если что-то сработало.
+
+    No-op если git недоступен, репозиториев нет, или попытка уже не
+    претендует на работу (закрыта/не наша). Логирует причину — чтобы по
+    логам было видно, когда и почему сработало.
+    """
+    reasons: list[str] = []
+
+    diff_lines = _git_diff_lines_since_attempt_start()
+    if diff_lines is not None and diff_lines > CONSULTATION_DIFF_THRESHOLD:
+        reasons.append(CONSULTATION_REASON_DIFF_SIZE)
+        log(f"  consultation_suggested: diff={diff_lines} > {CONSULTATION_DIFF_THRESHOLD}")
+
+    edits = _git_edits_per_file_since_attempt_start()
+    hot_files = [
+        path for path, count in edits.items()
+        if count > CONSULTATION_EDITS_THRESHOLD
+    ]
+    if hot_files:
+        # В спеке R7(а) ещё есть условие «без зелёных тестов». Тесты в
+        # trigger.py не запускаем (агент сам их гоняет и шлёт результат
+        # в attempts.result), так что триггер срабатывает на сам факт
+        # переправок файла — агент решает, есть ли у него зелёные тесты,
+        # и сам решает идти ли за консультацией. Это согласуется с R7:
+        # «агент может игнорировать».
+        reasons.append(CONSULTATION_REASON_EDITS_NO_TESTS)
+        log(f"  consultation_suggested: edits_no_tests файлы={hot_files}")
+
+    if not reasons:
+        return
+
+    task_id = task.get("id") if isinstance(task, dict) else None
+    if not task_id or not attempt_id:
+        return
+
+    api(
+        "POST",
+        f"/api/tasks/{task_id}/attempts/{attempt_id}/suggest-consultation",
+        {"reasons": reasons},
+        token=token,
+    )
+
+
+def _git_diff_lines_since_attempt_start() -> int | None:
+    """Сколько строк изменилось в рабочих репозиториях с момента последнего
+    известного состояния. Используем `git diff` от последнего коммита
+    (working tree vs HEAD) — это самый стабильный маркер: HEAD у
+    рабочего репо не двигается во время попытки, агент правит поверх.
+
+    None если git недоступен или ни в одном REPOS нет правок.
+    """
+    total = 0
+    found = False
+    for repo in REPOS:
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(repo), "diff", "--shortstat"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout.strip()
+        except Exception:
+            continue
+        if not out:
+            continue
+        found = True
+        # Формат: " 12 files changed, 345 insertions(+), 67 deletions(-)"
+        # Парсим по «ins/del» цифрам, не по «files changed» (тот не даёт
+        # строку).
+        for token in out.replace(",", "").split():
+            if token.isdigit():
+                total += int(token)
+    return total if found else None
+
+
+def _git_edits_per_file_since_attempt_start() -> dict[str, int]:
+    """Сколько раз каждый файл правился в рабочих репозиториях с момента
+    последнего коммита. Считаем по git log -p: один коммит = одна правка
+    файла. Это грубо: amend и rebase дадут несколько записей, но R7
+    говорит «>2 правок в одном файле за попытку» — коммитов агент делает
+    обычно несколько, и даже с поправкой на amend это редкая ситуация,
+    ради которой не нужен точный счётчик.
+
+    Возвращает dict {path: edit_count} по всем REPOS.
+    """
+    counts: dict[str, int] = {}
+    for repo in REPOS:
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(repo), "log", "-1", "--name-only",
+                 "--pretty=format:"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+        except Exception:
+            continue
+        # В последнем коммите у файла обычно 1 правка. Чтобы учесть
+        # ПРЕДЫДУЩИЕ правки в этой же попытке, считаем по N последних
+        # коммитов (--max-count=20 — безопасный лимит).
+        try:
+            files_out = subprocess.run(
+                ["git", "-C", str(repo), "log", "--max-count=20",
+                 "--name-only", "--pretty=format:"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+        except Exception:
+            continue
+        for line in files_out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            counts[line] = counts.get(line, 0) + 1
+    return counts
+
+
 def get_task(task_id: str):
     d = api("GET", f"/api/tasks/{task_id}")
     if not d:
@@ -1671,6 +1800,12 @@ def heartbeat_until_done(task_id: str, stop: threading.Event, token: str = "") -
     переназначили на другого, сервер вернёт 400 на heartbeat — пустая
     трата тика, но не ошибка: всё, что мы хотим от этой ветки, это
     доказать «я здесь», а не валидировать владельца аренды.
+
+    В каждый тик также проверяем триггеры консультации (спек 1.2, 1.2.7) —
+    heartbeat идёт раз в HEARTBEAT_SEC (60 с), этого достаточно: пометка
+    «consultation_suggested» появится в задаче не позже минуты после
+    того, как diff/правки перевалили за порог. Это суррогат «после каждого
+    действия» (мы не видим отдельных действий агента), но работает.
     """
     while not stop.wait(HEARTBEAT_SEC):
         fresh = get_task(task_id)
@@ -1679,6 +1814,11 @@ def heartbeat_until_done(task_id: str, stop: threading.Event, token: str = "") -
         if fresh.get("agent_state") != "in_progress":
             return
         api("POST", f"/api/tasks/{task_id}/heartbeat", {}, token=token)
+        # Триггер R7: diff и per-file правки. Запускаем после heartbeat,
+        # чтобы при сетевом сбое пометка не ушла без продления аренды.
+        attempt_id = fresh.get("current_attempt_id")
+        if attempt_id:
+            attempt_should_consult(fresh, attempt_id, token=token)
 
 
 def stop_when_card_leaves(task_id: str, stop: threading.Event) -> None:

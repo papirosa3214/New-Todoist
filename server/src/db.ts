@@ -139,6 +139,19 @@ export function migrate() {
       read INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- Per-user системные промпты для AI (extract-tasks, journal-assist и т.п.).
+    -- Карточка 04c916c8, владелец 13.09.2026: «хочу в настройках править
+    -- системный промпт, чтобы разбор диктовки был по моим правилам». Один
+    -- пользователь — много scope'ов; PRIMARY KEY (user_id, scope) исключает
+    -- дубль и упрощает upsert в обработчике PUT.
+    CREATE TABLE IF NOT EXISTS user_ai_prompts (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL,
+      prompt TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, scope)
+    );
   `);
 
   // Additive migration: users.api_token may be missing on a DB created
@@ -498,6 +511,14 @@ export function migrate() {
   }
   if (!attCols1.some((c) => c.name === "routing_role")) {
     db.exec("ALTER TABLE attempts ADD COLUMN routing_role TEXT");
+  }
+  // Спек 1.2, 1.2.7 — пометка «consultation_suggested» (R7). Храним JSON-
+  // массив причин: 'diff_size' (>300 строк) и/или 'edits_no_tests' (>2
+  // правок в одном файле без зелёных тестов). Множество, не счётчик:
+  // один раз зашли — и до конца попытки причина остаётся (агент сам
+  // решает, идти ли за консультацией).
+  if (!attCols1.some((c) => c.name === "consultation_suggested_reasons")) {
+    db.exec("ALTER TABLE attempts ADD COLUMN consultation_suggested_reasons TEXT");
   }
 
   // Блокер 3 карточки 8ca87c61 (ревью 11.09.2026): подзадача получает
