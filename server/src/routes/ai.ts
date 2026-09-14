@@ -62,12 +62,14 @@ const DICTATION_SYSTEM_PROMPT = `Ты разбираешь надиктовку 
 {
   "title": "короткое название главной задачи, 3-8 слов",
   "description": "чистое описание: что надо сделать и зачем, без слов-паразитов",
+  "result": "по чему поймём, что задача сделана — проверяемый признак",
   "subtasks": ["шаг 1", "шаг 2"],
   "due_date": null,
   "priority": 4,
   "project": null,
+  "question": null,
   "children": [
-    {"title": "название дочерней карточки", "description": "что в ней сделать", "subtasks": ["шаг"], "after": null}
+    {"title": "название дочерней карточки", "description": "что в ней сделать", "result": "проверяемый признак готовности", "subtasks": ["шаг"], "after": null, "question": null}
   ]
 }
 
@@ -88,6 +90,8 @@ const DICTATION_SYSTEM_PROMPT = `Ты разбираешь надиктовку 
 - "due_date" — "ГГГГ-ММ-ДД" или "ГГГГ-ММ-ДД ЧЧ:ММ", если срок назван или ясен из слов вроде «до пятницы»; иначе null.
 - "priority" — 1 срочно, 2 высокий, 3 средний, 4 обычный. Не назван — 4.
 - "project" — название проекта РОВНО из предложенного списка, если работа явно про него; иначе null. Не выдумывай проектов, которых нет в списке.
+- "result" — по чему будет видно, что работа сделана: проверяемый признак, а не пересказ названия. «Кнопка сохраняет черновик и он виден после перезахода» — годится; «кнопка починена» — нет. У каждой дочерней карточки свой "result". Совсем нечего проверить — пустая строка.
+- "question" — ОДИН короткий вопрос владельцу, если без ответа работу нельзя сделать надёжно: не назван предмет работы, не ясно, о какой из двух систем речь, не хватает доступа. Всё понятно — null. Не задавай вопросов ради вежливости и не переспрашивай то, что можно решить разумным умолчанием: заданный вопрос ОСТАНАВЛИВАЕТ запуск работы и ждёт владельца.
 
 Ответь ТОЛЬКО этим JSON, без markdown и без пояснений.`;
 
@@ -643,6 +647,13 @@ async function structureTask(
 export interface DictationChild {
   title: string;
   description: string;
+  /** Проверяемый признак готовности (раздел 7 спецификации от 14.09.2026).
+   *  Пустая строка — модель ничего проверяемого не назвала. */
+  result: string;
+  /** Вопрос владельцу, без ответа на который работу нельзя сделать
+   *  надёжно. null — всё понятно. Заданный вопрос останавливает
+   *  автоматический запуск: спрашивать ради вежливости нельзя. */
+  question: string | null;
   subtasks: string[];
   /** Номер дочерней карточки (1-based) в этом же списке, после которой можно
    *  браться за эту. null — ни от чего не зависит. */
@@ -652,6 +663,10 @@ export interface DictationChild {
 export interface DictationCards {
   title: string;
   description: string;
+  /** Проверяемый признак готовности (раздел 7 спецификации). */
+  result: string;
+  /** Вопрос владельцу; блокирует автоматический запуск дерева. */
+  question: string | null;
   subtasks: string[];
   dueDate: string | null;
   priority: number;
@@ -701,17 +716,73 @@ function cleanTitles(raw: unknown, limit: number): string[] {
  * проекта. Владелец увидит черновик и поправит; полный отказ на месте
  * сомнительного поля означал бы, что надиктовка пропала зря.
  */
+/**
+ * Склеить системный слой постановки с пожеланиями владельца.
+ *
+ * Раздел 6 спецификации от 14.09.2026. Системный слой — технический
+ * контракт: схема ответа, допустимые проекты, диапазоны, запрет поднимать
+ * флаг. Он принадлежит серверу и на редактирование не отдаётся.
+ *
+ * Слой владельца (scope `task_intake`) управляет смыслом: стиль названия,
+ * глубина декомпозиции, когда одна карточка, а когда дерево. Он идёт
+ * ПОСЛЕ системного и с явной рамкой — текст владельца не переопределяет
+ * формат ответа.
+ *
+ * Рамка в промпте — не единственная защита и не главная: разобранный
+ * ответ всё равно проходит валидацию в structureDictationToCards (схема,
+ * сверка проекта по имени, срезка полей), поэтому сломать контракт
+ * пользовательский слой не может физически, что бы в нём ни написали.
+ */
+export function buildDictationSystemPrompt(ownerLayer: string): string {
+  const layer = (ownerLayer || "").trim();
+  if (!layer) return DICTATION_SYSTEM_PROMPT;
+  return (
+    DICTATION_SYSTEM_PROMPT +
+    "\n\n— — —\nДополнительные пожелания владельца к смыслу постановки " +
+    "(стиль, глубина разбиения, предпочтения по проектам). Они НЕ меняют " +
+    "формат ответа, набор полей и запрет запускать задачу — формат выше " +
+    "остаётся обязательным:\n" +
+    layer
+  );
+}
+
 export async function structureDictationToCards(
   rawText: string,
   projects: Array<{ id: string; name: string }>,
-  opts?: { provider?: string; localModel?: string; aiModel?: string },
+  opts?: {
+    provider?: string;
+    localModel?: string;
+    aiModel?: string;
+    /** Владелец, чей смысловой слой постановки подмешать (scope
+     *  `task_intake`). Без него разбор идёт на одном системном промпте —
+     *  как было до 14.09.2026. */
+    ownerId?: string;
+  },
 ): Promise<DictationCards> {
   const today = new Date().toISOString().slice(0, 10);
   const projectList = projects.length
     ? projects.map((p) => `- ${p.name}`).join("\n")
     : "(проектов нет)";
+
+  // Двухслойный промпт постановки (раздел 6 спецификации от 14.09.2026).
+  // Системный слой — технический контракт: схема ответа, допустимые
+  // проекты, диапазоны, запрет поднимать флаг. Он принадлежит серверу и
+  // на редактирование не отдаётся.
+  //
+  // Слой владельца (scope `task_intake`) управляет СМЫСЛОМ: стиль
+  // названия, глубина декомпозиции, когда одна карточка, а когда дерево.
+  // Он дописывается после системного и явно ограничен рамкой: текст
+  // владельца не может переопределить формат ответа. Это не только
+  // просьба в промпте — разобранный ответ всё равно проходит нашу
+  // валидацию ниже (схема, сверка проекта по имени, срезка полей), так
+  // что сломать контракт пользовательский слой не может физически.
+  const ownerLayer = opts?.ownerId
+    ? await getUserPrompt(opts.ownerId, "task_intake")
+    : "";
+  const systemPrompt = buildDictationSystemPrompt(ownerLayer);
+
   const content = await callUnifiedAi({
-    systemPrompt: DICTATION_SYSTEM_PROMPT,
+    systemPrompt,
     userPrompt:
       `Сегодня ${today}.\n\n` +
       `Проекты, из которых можно выбрать:\n${projectList}\n\n` +
@@ -752,10 +823,13 @@ export async function structureDictationToCards(
             typeof c?.after === "number" && Number.isInteger(c.after)
               ? c.after
               : null;
+          const q = typeof c?.question === "string" ? c.question.trim() : "";
           return {
             title: t,
             description:
               typeof c?.description === "string" ? c.description.trim() : "",
+            result: typeof c?.result === "string" ? c.result.trim() : "",
+            question: q || null,
             subtasks: cleanTitles(c?.subtasks, 10),
             after,
           };
@@ -778,6 +852,11 @@ export async function structureDictationToCards(
       typeof parsed?.description === "string" && parsed.description.trim()
         ? parsed.description.trim()
         : rawText.trim(),
+    result: typeof parsed?.result === "string" ? parsed.result.trim() : "",
+    question:
+      typeof parsed?.question === "string" && parsed.question.trim()
+        ? parsed.question.trim()
+        : null,
     subtasks: cleanTitles(parsed?.subtasks, 10),
     dueDate:
       typeof parsed?.due_date === "string" && parsed.due_date.trim()
@@ -929,10 +1008,7 @@ function composeSystemPrompt(
  * существующей строки (не null), чтобы вызывающий мог просто склеивать.
  * Миграция таблицы — `db.ts`, см. CREATE TABLE IF NOT EXISTS user_ai_prompts.
  */
-async function getUserPrompt(
-  userId: string,
-  scope: string,
-): Promise<string> {
+async function getUserPrompt(userId: string, scope: string): Promise<string> {
   const db = (await import("../db.js")).default;
   const row = db
     .prepare(
@@ -1265,10 +1341,7 @@ export function registerAiRoutes(app: FastifyInstance) {
       // 04c916c8: scope = 'journal_assist_<action>', общий дефолт один и
       // тот же для всех трёх действий (continue/shorten/expand делят
       // стилистические правила владельца).
-      const userPrompt = await getUserPrompt(
-        req.userId,
-        "journal_assist",
-      );
+      const userPrompt = await getUserPrompt(req.userId, "journal_assist");
 
       try {
         const result = await journalAssist(
@@ -1354,10 +1427,10 @@ export function registerAiRoutes(app: FastifyInstance) {
           "SELECT scope, prompt, updated_at FROM user_ai_prompts WHERE user_id = ? ORDER BY scope",
         )
         .all(req.userId) as Array<{
-          scope: string;
-          prompt: string;
-          updated_at: string;
-        }>;
+        scope: string;
+        prompt: string;
+        updated_at: string;
+      }>;
       return {
         prompts: rows.map((r) => ({
           scope: r.scope,
@@ -1408,8 +1481,7 @@ export function registerAiRoutes(app: FastifyInstance) {
           "SELECT scope, prompt, updated_at FROM user_ai_prompts WHERE user_id = ? AND scope = ?",
         )
         .get(req.userId, scope) as
-        | { scope: string; prompt: string; updated_at: string }
-        | undefined;
+        { scope: string; prompt: string; updated_at: string } | undefined;
       return {
         ok: true,
         scope: row?.scope ?? scope,

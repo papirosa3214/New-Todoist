@@ -641,4 +641,81 @@ describe("Окно постановки задач (карточка 4396f8c9)",
 
     await setMode("manual");
   });
+
+  it("критерий результата попадает в описание карточки", async () => {
+    await setMode("manual");
+    model.impl = async () => ({
+      title: "Задача с критерием",
+      description: "что сделать",
+      result: "кнопка сохраняет черновик и он виден после перезахода",
+      question: null,
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+    });
+
+    const sent = await dictate("сделай кнопку сохранения");
+    const draft = await waitForDraft(sent.json().id);
+
+    const row = db
+      .prepare("SELECT description FROM tasks WHERE id = ?")
+      .get(draft.task_id) as { description: string | null };
+    // Отдельной колонки под критерий в схеме нет — он идёт строкой в
+    // описании, тем же приёмом, что и очередь. Раздел 7 спецификации.
+    expect(row.description).toContain("✅ РЕЗУЛЬТАТ:");
+    expect(row.description).toContain("виден после перезахода");
+  });
+
+  it("вопрос владельцу останавливает автомат: дерево целиком без флага", async () => {
+    await setMode("automatic");
+    model.impl = async () => ({
+      title: "Непонятная задача",
+      description: "",
+      result: "",
+      question: "О какой из двух баз речь — рабочей или тестовой?",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [
+        { title: "Первый кусок", description: "", result: "", question: null, subtasks: [], after: null },
+        { title: "Второй кусок", description: "", result: "", question: null, subtasks: [], after: null },
+      ],
+    });
+
+    const sent = await dictate("почини там базу");
+    const draft = await waitForDraft(sent.json().id);
+
+    // Частичный запуск запрещён: ни одна карточка дерева не поднята и не
+    // отдана, хотя вопрос был только к родителю (раздел 8.1).
+    const все = db
+      .prepare(
+        "SELECT ready_for_pickup, assignee_id FROM tasks WHERE id = ? OR parent_id = ?",
+      )
+      .all(draft.task_id, draft.task_id) as Array<{
+      ready_for_pickup: number;
+      assignee_id: string | null;
+    }>;
+    expect(все).toHaveLength(3);
+    for (const карточка of все) {
+      expect(карточка.ready_for_pickup).toBe(0);
+      expect(карточка.assignee_id).toBeNull();
+    }
+
+    // И сам вопрос сохранён на карточке, а не потерян в чате.
+    const родитель = db
+      .prepare(
+        "SELECT needs_clarification, clarification_question FROM tasks WHERE id = ?",
+      )
+      .get(draft.task_id) as {
+      needs_clarification: number;
+      clarification_question: string | null;
+    };
+    expect(родитель.needs_clarification).toBe(1);
+    expect(родитель.clarification_question).toContain("рабочей или тестовой");
+
+    await setMode("manual");
+  });
 });

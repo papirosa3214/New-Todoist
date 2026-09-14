@@ -146,6 +146,17 @@ function queueLine(afterTitle: string): string {
   return `⛓ ОЧЕРЕДЬ: после карточки «${afterTitle}»`;
 }
 
+/** Критерий результата строкой в описании — тем же приёмом, что и очередь
+ *  выше. Отдельной колонки под него в схеме нет, а заводить её значит
+ *  править ещё и оба клиента, чтобы они её показали. Строка в описании
+ *  видна везде сразу и переживает любой клиент.
+ *
+ *  Раздел 7 спецификации от 14.09.2026: критерий результата обязателен для
+ *  каждой исполняемой карточки — по нему видно, сделана работа или нет. */
+function resultLine(result: string): string {
+  return `✅ РЕЗУЛЬТАТ: ${result}`;
+}
+
 /** Русское склонение при числе: 1 карточка, 2 карточки, 5 карточек.
  *  Эти строки владелец читает в чате с телефона, и «2 карточка(и)» там
  *  выглядит как недоделка, а не как отчёт. */
@@ -177,25 +188,38 @@ function createDraftCards(
     // 026), и это ровно то, что нужно: карточка машины лежит запертой, пока
     // владелец не поднимет флаг сам. Исполнителя тоже не назначаем: кому
     // делать — решает владелец, когда читает черновик.
+    // needs_clarification/clarification_question — колонки уже есть в схеме
+    // (миграция 030). Раздел 7 спецификации: карточка, по которой остался
+    // вопрос, должна нести и признак, и сам вопрос, иначе автоматический
+    // режим не поймёт, что дерево запускать нельзя.
     const insTask = db.prepare(
       `INSERT INTO tasks (id, title, description, due_date, project_id,
-                          priority, creator_id, parent_id, position)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                          priority, creator_id, parent_id, position,
+                          needs_clarification, clarification_question)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const insSub = db.prepare(
       "INSERT INTO subtasks (id, task_id, title, position) VALUES (?, ?, ?, ?)",
     );
 
+    // Критерий результата идёт в описание отдельной строкой — см.
+    // resultLine. Для родителя он описывает общий результат дерева.
+    const parentParts: string[] = [];
+    if (cards.description) parentParts.push(cards.description);
+    if (cards.result) parentParts.push(resultLine(cards.result));
+
     insTask.run(
       parentId,
       cards.title,
-      cards.description || null,
+      parentParts.length ? parentParts.join("\n\n") : null,
       cards.dueDate,
       cards.projectId,
       cards.priority,
       owner,
       null,
       null,
+      cards.question ? 1 : 0,
+      cards.question,
     );
     cards.subtasks.forEach((t, i) => insSub.run(uid(), parentId, t, i + 1));
 
@@ -209,6 +233,7 @@ function createDraftCards(
         parts.push(queueLine(cards.children[child.after - 1].title));
       }
       if (child.description) parts.push(child.description);
+      if (child.result) parts.push(resultLine(child.result));
       insTask.run(
         childIds[i],
         child.title,
@@ -219,6 +244,8 @@ function createDraftCards(
         owner,
         parentId,
         i + 1,
+        child.question ? 1 : 0,
+        child.question,
       );
       child.subtasks.forEach((t, j) =>
         insSub.run(uid(), childIds[i], t, j + 1),
@@ -389,7 +416,12 @@ export function startDraftFromChat(message: {
       const projects = db
         .prepare("SELECT id, name FROM projects ORDER BY name")
         .all() as Array<{ id: string; name: string }>;
-      const cards = await structureDictationToCards(text, projects);
+      // ownerId включает смысловой слой владельца (scope `task_intake`):
+      // его пожелания к стилю названий и глубине разбиения. Формат ответа
+      // при этом остаётся за сервером — см. structureDictationToCards.
+      const cards = await structureDictationToCards(text, projects, {
+        ownerId: owner,
+      });
       const { parentId: taskId, childIds } = createDraftCards(cards, owner);
 
       db.prepare(
@@ -399,6 +431,32 @@ export function startDraftFromChat(message: {
       ).run(taskId, message.id);
 
       const what = summary(cards);
+
+      // Остался вопрос — дерево целиком остаётся черновиком, ни одна
+      // карточка не запускается (раздел 8.1: «Если автоматический режим
+      // обнаружил уточнение… всё дерево остаётся черновиком без флага.
+      // Частичный запуск запрещён»). Запустить половину работы, пока
+      // вторая половина непонятна, хуже, чем не запустить ничего: сделанное
+      // придётся переделывать под ответ владельца.
+      const вопросы = [
+        cards.question,
+        ...cards.children.map((c) => c.question),
+      ].filter((q): q is string => !!q);
+
+      if (mode === "automatic" && вопросы.length) {
+        const списком = вопросы.map((q) => `• ${q}`).join("\n");
+        replyInChat(
+          `Собрал постановку (${what}), но без ответа запускать не стал:\n` +
+            `${списком}\n` +
+            `Ответьте — и поднимите флаг, дальше пойдёт само.`,
+          taskId,
+        );
+        pushToPhone(
+          "TaskFlow: нужен ваш ответ",
+          `«${cards.title}» — ${вопросы.length === 1 ? "остался вопрос" : "остались вопросы"}, работа не запущена.`,
+        );
+        return;
+      }
 
       if (mode === "automatic") {
         // Автоматический режим: черновик владельцу не показывается и
