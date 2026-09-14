@@ -3,77 +3,88 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "/home/maksim/Проекты/New-Todoist/server/src/index.js";
 import db from "/home/maksim/Проекты/New-Todoist/server/src/db.js";
 
-describe("enricher: профильный пул, эскалации и зависимости", () => {
+// Порядок работ: задача ждёт завершения тех, от которых зависит.
+//
+// Отсюда 14.09.2026 убраны проверки старой доски объявлений — свободная
+// задача с ярлыком профиля, которую агент забирал сам, и вопрос владельцу,
+// когда словарный подбор не справился. Исполнитель теперь подбирается по
+// смыслу и назначается сразу при создании, поэтому ни доски, ни вопроса
+// больше нет. Зависимости к той схеме отношения не имели и остались.
+describe("зависимости задач: порядок работ", () => {
   let app: FastifyInstance;
   let ownerAuth = "";
   let agentAuth = "";
-  let agentTwoAuth = "";
   let agentId = "";
 
   async function register(name: string, email: string) {
-    const response = await app.inject({ method: "POST", url: "/api/auth/register", payload: { name, email, password: "password123" } });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name, email, password: "password123" },
+    });
     expect(response.statusCode).toBe(200);
     return response.json();
   }
 
-  beforeAll(async () => {
-    app = await buildApp();
-    const owner = await register("Enrich owner", "enrich-owner@test");
-    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(owner.user.id);
-    ownerAuth = `Bearer ${owner.token}`;
-    const agent = await register("Enrich agent", "enrich-agent@test");
-    db.prepare("UPDATE users SET type = 'ai', profile = 'claude_bot' WHERE id = ?").run(agent.user.id);
-    agentId = agent.user.id;
-    agentAuth = `Bearer ${agent.token}`;
-    const secondAgent = await register("Second enrich agent", "enrich-agent-2@test");
-    db.prepare("UPDATE users SET type = 'ai', profile = 'claude_bot' WHERE id = ?").run(secondAgent.user.id);
-    agentTwoAuth = `Bearer ${secondAgent.token}`;
-  });
-
-  /**
-   * Поднять флаг готовности, НЕ отдавая задачу исполнителю.
-   *
-   * С 14.09.2026 флаг, поднятый владельцем через API, сам отдаёт задачу Pi
-   * (владелец: «регулятором выступает флаг»). Здесь проверяется другая
-   * ветка — пул самозахвата, куда задача попадает только пока свободна,
-   * поэтому флаг ставится прямо в базу.
-   */
-  function setReadyWithoutDispatch(taskId: string) {
-    db.prepare(
-      "UPDATE tasks SET ready_for_pickup = 1, ready_set_at = datetime('now') WHERE id = ?",
-    ).run(taskId);
-  }
-
-  it("публикует уверенную задачу в пул по профильной метке", async () => {
-    const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "server api migration", description: "sql database" } });
-    const taskId = created.json().task.id;
-    setReadyWithoutDispatch(taskId);
-    const enriched = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/enrich`, headers: { authorization: agentAuth } });
-    expect(enriched.statusCode).toBe(200);
-    const pool = await app.inject({ method: "GET", url: "/api/tasks/pool", headers: { authorization: agentAuth } });
-    expect(pool.json().tasks.map((task: any) => task.id)).toContain(taskId);
-  });
-
-  it("эскалирует неоднозначную задачу идемпотентно", async () => {
-    const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "сделать что-нибудь" } });
-    const taskId = created.json().task.id;
-    const first = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/enrich`, headers: { authorization: agentAuth } });
-    const second = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/enrich`, headers: { authorization: agentAuth } });
-    expect(first.json().enrichment.escalation.status).toBe("pending");
-    expect(second.json().enrichment.escalation.status).toBe("pending");
-    expect(second.json().enrichment.escalation.run_count).toBe(2);
-    expect((db.prepare("SELECT COUNT(*) AS count FROM enrichment_escalations WHERE task_id = ?").get(taskId) as any).count).toBe(1);
-  });
-
-  it("не даёт агенту забрать свободную задачу без профильной публикации", async () => {
+  async function createTask(title: string): Promise<string> {
     const created = await app.inject({
       method: "POST",
       url: "/api/tasks",
       headers: { authorization: ownerAuth },
-      payload: { title: "задача без тега профиля" },
+      payload: { title },
     });
-    const taskId = created.json().task.id;
-    setReadyWithoutDispatch(taskId);
+    expect(created.statusCode).toBe(200);
+    return created.json().task.id as string;
+  }
+
+  beforeAll(async () => {
+    app = await buildApp();
+    const owner = await register("Deps owner", "deps-owner@test");
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(owner.user.id);
+    ownerAuth = `Bearer ${owner.token}`;
+    const agent = await register("Deps agent", "deps-agent@test");
+    db.prepare("UPDATE users SET type = 'ai' WHERE id = ?").run(agent.user.id);
+    agentId = agent.user.id;
+    agentAuth = `Bearer ${agent.token}`;
+  });
+
+  it("зависимость видна в карточке и считается незакрытой, пока блокер активен", async () => {
+    const blockerId = await createTask("сначала это");
+    const taskId = await createTask("потом это");
+    const put = await app.inject({
+      method: "PUT",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+      payload: { depends_on_task_ids: [blockerId] },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().unmet_dependency_ids).toContain(blockerId);
+
+    db.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(blockerId);
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+    });
+    expect(after.json().unmet_dependency_ids).toHaveLength(0);
+  });
+
+  it("задачу с незакрытой зависимостью исполнитель взять не может", async () => {
+    const blockerId = await createTask("блокер для захвата");
+    const taskId = await createTask("ждёт блокера");
+    await app.inject({
+      method: "PUT",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+      payload: { depends_on_task_ids: [blockerId] },
+    });
+    await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: ownerAuth },
+      payload: { assignee_id: agentId, ready_for_pickup: true },
+    });
+
     const claim = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/claim`,
@@ -81,69 +92,24 @@ describe("enricher: профильный пул, эскалации и зави�
       payload: {},
     });
     expect(claim.statusCode).toBe(403);
-    expect(claim.json().error).toContain("не опубликована в пуле");
+    expect(claim.json().error).toContain("зависимост");
   });
 
-  it("оставляет ручное назначение рабочим без профильного тега", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/tasks",
-      headers: { authorization: ownerAuth },
-      payload: { title: "ручное назначение" },
-    });
-    const taskId = created.json().task.id;
+  it("циклическая зависимость отклоняется", async () => {
+    const a = await createTask("A");
+    const b = await createTask("B");
     await app.inject({
-      method: "PATCH",
-      url: `/api/tasks/${taskId}`,
+      method: "PUT",
+      url: `/api/tasks/${b}/dependencies`,
       headers: { authorization: ownerAuth },
-      payload: { assignee_id: agentId, ready_for_pickup: true },
+      payload: { depends_on_task_ids: [a] },
     });
-    const claim = await app.inject({
-      method: "POST",
-      url: `/api/tasks/${taskId}/claim`,
-      headers: { authorization: agentAuth },
-      payload: {},
-    });
-    expect(claim.statusCode).toBe(200);
-    expect(claim.json().task.assignee_id).toBe(agentId);
-  });
-
-  it("в гонке двух self-claim только один агент получает задачу", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/tasks",
+    const cycle = await app.inject({
+      method: "PUT",
+      url: `/api/tasks/${a}/dependencies`,
       headers: { authorization: ownerAuth },
-      payload: { title: "server api migration race" },
+      payload: { depends_on_task_ids: [b] },
     });
-    const taskId = created.json().task.id;
-    setReadyWithoutDispatch(taskId);
-    await app.inject({
-      method: "POST",
-      url: `/api/tasks/${taskId}/enrich`,
-      headers: { authorization: agentAuth },
-    });
-    const claims = await Promise.all([
-      app.inject({ method: "POST", url: `/api/tasks/${taskId}/claim`, headers: { authorization: agentAuth }, payload: {} }),
-      app.inject({ method: "POST", url: `/api/tasks/${taskId}/claim`, headers: { authorization: agentTwoAuth }, payload: {} }),
-    ]);
-    expect(claims.filter((response) => response.statusCode === 200)).toHaveLength(1);
-    const refusal = claims.find((response) => response.statusCode !== 200);
-    expect(refusal).toBeDefined();
-    expect(refusal!.json().error).toMatch(/гонка|исполнитель|transition/);
-  });
-
-  it("не показывает в пуле задачу с незавершённой зависимостью", async () => {
-    const blocker = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "blocker" } });
-    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "server api task" } });
-    const blockerId = blocker.json().task.id;
-    const taskId = task.json().task.id;
-    setReadyWithoutDispatch(taskId);
-    await app.inject({ method: "POST", url: `/api/tasks/${taskId}/enrich`, headers: { authorization: agentAuth } });
-    await app.inject({ method: "PUT", url: `/api/tasks/${taskId}/dependencies`, headers: { authorization: ownerAuth }, payload: { depends_on_task_ids: [blockerId] } });
-    const pool = await app.inject({ method: "GET", url: "/api/tasks/pool", headers: { authorization: agentAuth } });
-    expect(pool.json().tasks.map((row: any) => row.id)).not.toContain(taskId);
-    db.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(blockerId);
-    const readyPool = await app.inject({ method: "GET", url: "/api/tasks/pool", headers: { authorization: agentAuth } });
-    expect(readyPool.json().tasks.map((row: any) => row.id)).toContain(taskId);
+    expect(cycle.statusCode).toBe(400);
   });
 });

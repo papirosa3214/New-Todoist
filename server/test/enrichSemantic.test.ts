@@ -161,13 +161,11 @@ describe("enrichSemantic: интеграция (bge-m3 на .110:11434)", () => 
     const maxScore = Math.max(...result.matched.map((m) => m.score));
     expect(maxScore).toBeLessThan(0.4);
 
-    const enriched = await app.inject({
-      method: "POST",
-      url: `/api/tasks/${taskId}/enrich`,
-      headers: { authorization: `Bearer ${ownerToken}` },
-    });
-    expect(enriched.statusCode).toBe(200);
-    expect(enriched.json().enrichment.escalation.status).toBe("pending");
+    // Раньше здесь проверялось, что словарный подбор не справился и
+    // спросил владельца. И подбор, и этот вопрос убраны 14.09.2026 вместе
+    // со старой доской объявлений: смысловой подбор всегда даёт ответ, а
+    // владелец правит его одним движением. Проверять осталось само
+    // главное — что далёкая от работы задача не липнет ни к какой роли.
   }, 30_000);
 
   it("если gate закрыт — semantic возвращается быстро, без вызова модели", async () => {

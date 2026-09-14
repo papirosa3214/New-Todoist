@@ -12,10 +12,7 @@ import {
   isOwner as isTrackerOwner,
   isReviewer as isTaskReviewer,
 } from "../access.js";
-import {
-  isTaskInSelfClaimPool,
-  selfClaimEligibilityError,
-} from "../enricher.js";
+import { unmetDependencyIds } from "../enricher.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { nextAttemptTemplate as computeNextAttemptTemplate } from "../lib/attemptLadder.js";
@@ -412,14 +409,20 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         });
       }
 
-      if (
-        task.assignee_id === null &&
-        !isTaskInSelfClaimPool(task.id, req.userId)
-      ) {
+      // Свободную задачу агент себе больше не берёт: исполнителя назначает
+      // подбор по смыслу при создании (14.09.2026, вместе с удалением
+      // старой доски объявлений). Осталась проверка порядка работ.
+      if (task.assignee_id === null) {
         return reply.code(403).send({
           error:
-            selfClaimEligibilityError(task.id, req.userId) ??
-            "задача сейчас не опубликована в пуле самозахвата",
+            "задача ещё никому не назначена — исполнителя подбирает система " +
+            "при создании, а брать чужую работу самому нельзя",
+        });
+      }
+      if (unmetDependencyIds(task.id).length > 0) {
+        return reply.code(403).send({
+          error:
+            "задача ждёт завершения зависимостей — взять её можно после их приёмки",
         });
       }
 
@@ -511,57 +514,16 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           };
           return;
         }
-        if (
-          latest.assignee_id === null &&
-          !isTaskInSelfClaimPool(latest.id, req.userId)
-        ) {
+        // Внутри транзакции отвечать нельзя — отказ копится и отдаётся
+        // после неё, как и соседние проверки гонки.
+        if (latest.assignee_id === null) {
           claimRejection = {
             code: 403,
             error:
-              selfClaimEligibilityError(latest.id, req.userId) ??
-              "задача сейчас не опубликована в пуле самозахвата",
+              "задача ещё никому не назначена — исполнителя подбирает система " +
+              "при создании, а брать чужую работу самому нельзя",
           };
           return;
-        }
-        const latestWho = {
-          isOwner:
-            isTrackerOwner(req.userId) || latest.creator_id === req.userId,
-          isExecutor:
-            latest.assignee_id === req.userId || latest.assignee_id === null,
-          leaseExpired: latestLeaseExpired,
-        };
-        if (!canTransition(latestFrom, "in_progress", latestWho, "claim")) {
-          claimRejection = {
-            code: 400,
-            error:
-              latestFrom === "review"
-                ? "задача на проверке у владельца, вернуть её в работу может только он"
-                : "invalid transition",
-          };
-          return;
-        }
-        // Перезахват после истёкшей аренды (from === 'in_progress', to ===
-        // 'in_progress') — тот самый момент, когда система «замечает»
-        // молчание агента: до сих пор это было только вычисляемым полем
-        // agent_stale, нигде не оставлявшим следа. Пишем один раз именно
-        // здесь — не по крону (AGENT-PROTOCOL.md: «никакого фонового
-        // процесса»), а на первом же действии, которое трогает эту аренду.
-        // Дважды на один и тот же период не запишется: следующий раз
-        // agent_heartbeat_at уже будет свежим (обновлён строкой ниже), и
-        // isStale(task.agent_heartbeat_at) — значение ДО этого UPDATE —
-        // войдёт в лог ровно один раз за цикл claim → ... → claim.
-        //
-        // actor_id = NULL — это не действие req.userId, а факт, который
-        // вскрыл его вызов: молчание случилось раньше и независимо от
-        // текущего запроса (см. комментарий у CREATE TABLE task_events).
-        if (latestWho.leaseExpired) {
-          logEvent({
-            taskId: task.id,
-            actorId: null,
-            kind: "lease_expired",
-            field: "agent_heartbeat_at",
-            fromValue: latest.agent_heartbeat_at ?? null,
-          });
         }
 
         // session_id — необязательный: приходит от MCP-клиента как
