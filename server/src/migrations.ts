@@ -1232,8 +1232,28 @@ const migrations: Migration[] = [
   },
 ];
 
+/**
+ * Опции прогона миграций.
+ *
+ * Нужны ровно для одного сценария: тест хочет поднять БД до определённой
+ * точки (например, «как есть сразу после 036, но ДО 037»), посеять
+ * pre-037 строки и проверить, как обычный runMigrations() потом дотягивает
+ * БД с этой точки. Без опции (или без поля `through`) поведение
+ * byte-for-byte идентично старому — прогоняется всё подряд.
+ */
+export interface RunMigrationsOptions {
+  /**
+   * Реальный id миграции (как в `Migration.id`, например
+   * "036_agent_execution_connection"). Прогон останавливается после
+   * применения этой миграции включительно. Последующие миграции не
+   * выполняются. Если id не найден в списке — бросаем Error, чтобы
+   * опечатка не прошла как «прогнали всё».
+   */
+  through?: string;
+}
+
 /** Apply all still-unapplied migrations, one transaction per migration. */
-export function runMigrations() {
+export function runMigrations(options?: RunMigrationsOptions): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
@@ -1255,7 +1275,26 @@ export function runMigrations() {
       .prepare("INSERT INTO schema_migrations (id, description) VALUES (?, ?)")
       .run(m.id, m.description);
 
-  for (const m of migrations) {
+  // Если задан `through` — находим индекс этой миграции в массиве. После
+  // её применения (включительно) цикл прерывается. -1 означает «не
+  // задан» и цикл идёт до конца, как раньше.
+  const throughId = options?.through;
+  const stopIndex =
+    throughId === undefined
+      ? -1
+      : (() => {
+          const idx = migrations.findIndex((m) => m.id === throughId);
+          if (idx === -1) {
+            throw new Error(
+              `runMigrations: через through="${throughId}" — такой миграции нет в списке`,
+            );
+          }
+          return idx;
+        })();
+
+  for (let i = 0; i < migrations.length; i++) {
+    if (stopIndex >= 0 && i > stopIndex) break;
+    const m = migrations[i];
     if (applied.has(m.id)) continue;
     if (m.noTransaction) {
       // Транзакцию такая миграция держит внутри себя — см. Migration.noTransaction.

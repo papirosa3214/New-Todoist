@@ -315,185 +315,10 @@ describe("миграция 037_task_intake_pipeline", () => {
     ).not.toThrow();
   });
 
-  it("на pre-037 БД (реалистичная схема через runner): defaults применены к существующим строкам, schema_migrations пополняется, идемпотентна", () => {
-    fresh = openFreshDb();
-
-    // Симулируем реалистичную pre-037 БД: migrate() + миграции 001-036
-    // уже применены, осталась только 037. Полный runner в этом тесте
-    // не подходит (он завязан на singleton db и сразу же применил бы 037
-    // вместе с остальными), поэтому собираем фикстуру руками:
-    //   - базовая схема из db.ts:migrate();
-    //   - таблицы, которые добавляют миграции до 037 включительно —
-    //     только те, к которым 037 потом обращается (chat_messages,
-    //     chat_task_drafts);
-    //   - schema_migrations с пометкой 001-036 как применённых.
-    // Хелпер runIntakePipelineMigration подключается ровно на 037.
-    applyBaseSchema(fresh.db);
-    // tasks.project_id — FK на projects, без неё INSERT INTO tasks
-    // не пройдёт. На реалистичной БД projects создаются в db.ts:migrate()
-    // вместе с остальной базой; в этой минимальной фикстуре добавляем
-    // проекты руками — ровно столько, сколько нужно, чтобы 037 смог
-    // работать со своим INSERT-путём и применять DEFAULT'ы.
-    fresh.db.exec(`
-      CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        color TEXT DEFAULT '#4A9FD8',
-        owner_id TEXT REFERENCES users(id),
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-    `);
-    fresh.db.exec(`
-      CREATE TABLE IF NOT EXISTS chat_messages (
-        id TEXT PRIMARY KEY,
-        from_user_id TEXT NOT NULL REFERENCES users(id),
-        to_user_id TEXT REFERENCES users(id),
-        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
-        kind TEXT CHECK (kind IS NULL OR kind IN ('совещание','делегирование','находка')),
-        text TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-    `);
-    // 028: chat_task_drafts в её исходном виде (без intake_mode, который
-    // добавит 037). CHECK на status — ровно тот, что в миграции 028.
-    fresh.db.exec(`
-      CREATE TABLE IF NOT EXISTS chat_task_drafts (
-        chat_message_id TEXT PRIMARY KEY
-          REFERENCES chat_messages(id) ON DELETE CASCADE,
-        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
-        status TEXT NOT NULL
-          CHECK (status IN ('pending', 'done', 'failed')),
-        error TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        finished_at TEXT
-      );
-    `);
-    // schema_migrations — таблица, которую ведёт runMigrations().
-    fresh.db.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        id TEXT PRIMARY KEY,
-        description TEXT,
-        applied_at TEXT DEFAULT (datetime('now'))
-      );
-    `);
-    // Помечаем 001-036 как применённые. Без этого раннер при следующем
-    // запуске решил бы, что их ещё нет, и попытался бы выполнить —
-    // а их up() завязаны на singleton db.
-    const markApplied = fresh.db.prepare(
-      "INSERT INTO schema_migrations (id, description) VALUES (?, ?)",
-    );
-    for (let i = 1; i <= 36; i++) {
-      markApplied.run(
-        `${String(i).padStart(3, "0")}_pre037_fixture`,
-        "смоделировано в тесте pre-037 фикстуры",
-      );
-    }
-
-    // Вставляем живые строки ДО 037, чтобы убедиться, что DEFAULT'ы
-    // применяются и к ним.
-    fresh.db
-      .prepare(
-        "INSERT INTO users (id, name, email, password_hash) VALUES ('u-pre-1', 'Pre1', 'pre1@x', 'h')",
-      )
-      .run();
-    fresh.db
-      .prepare(
-        "INSERT INTO tasks (id, title, creator_id) VALUES ('t-pre-1', 'PreTask1', 'u-pre-1')",
-      )
-      .run();
-    fresh.db
-      .prepare(
-        "INSERT INTO chat_messages (id, from_user_id, text) VALUES ('m-pre-1', 'u-pre-1', 'pre')",
-      )
-      .run();
-    fresh.db
-      .prepare(
-        "INSERT INTO chat_task_drafts (chat_message_id, status) VALUES ('m-pre-1', 'pending')",
-      )
-      .run();
-
-    // До прогона 037 — ни одной из новых колонок в схеме быть не должно.
-    expect(columnInfo(fresh.db, "users", "task_intake_mode")).toBeUndefined();
-    expect(columnInfo(fresh.db, "chat_task_drafts", "intake_mode")).toBeUndefined();
-    expect(columnInfo(fresh.db, "tasks", "needs_clarification")).toBeUndefined();
-    expect(columnInfo(fresh.db, "tasks", "clarification_question")).toBeUndefined();
-    // И запись 037 в schema_migrations ещё не появилась.
-    expect(
-      fresh.db
-        .prepare(
-          "SELECT 1 FROM schema_migrations WHERE id = '037_task_intake_pipeline'",
-        )
-        .get(),
-    ).toBeUndefined();
-
-    // Прогон 037 (тело — то же, что у одноимённой миграции) и запись
-    // в schema_migrations тем же приёмом, что и runMigrations(). Это
-    // проверяет не только схему, но и контракт runner'а: 037 реально
-    // записывается в журнал.
-    fresh.db.transaction(() => {
-      migrationsModule.runIntakePipelineMigration(fresh.db);
-      fresh.db
-        .prepare(
-          "INSERT INTO schema_migrations (id, description) VALUES (?, ?)",
-        )
-        .run(
-          "037_task_intake_pipeline",
-          "Owner intake mode и снимок режима на сообщение",
-        );
-    })();
-
-    // Колонки добавлены и DEFAULT'ы применены к УЖЕ существующим строкам.
-    const u = columnInfo(fresh.db, "users", "task_intake_mode");
-    expect(u).toBeDefined();
-    expect(u!.dflt_value).toBe("'manual'");
-    const preUser = fresh.db
-      .prepare("SELECT task_intake_mode FROM users WHERE id = 'u-pre-1'")
-      .get() as { task_intake_mode: string };
-    expect(preUser.task_intake_mode).toBe("manual");
-
-    const t = columnInfo(fresh.db, "tasks", "needs_clarification");
-    expect(t).toBeDefined();
-    expect(t!.dflt_value).toBe("0");
-    const preTask = fresh.db
-      .prepare(
-        "SELECT needs_clarification, clarification_question FROM tasks WHERE id = 't-pre-1'",
-      )
-      .get() as { needs_clarification: number; clarification_question: string | null };
-    expect(preTask.needs_clarification).toBe(0);
-    expect(preTask.clarification_question).toBeNull();
-
-    const d = columnInfo(fresh.db, "chat_task_drafts", "intake_mode");
-    expect(d).toBeDefined();
-    expect(d!.dflt_value).toBe("'manual'");
-    const preDraft = fresh.db
-      .prepare(
-        "SELECT intake_mode FROM chat_task_drafts WHERE chat_message_id = 'm-pre-1'",
-      )
-      .get() as { intake_mode: string };
-    expect(preDraft.intake_mode).toBe("manual");
-
-    // 037 записана в schema_migrations.
-    const recorded = fresh.db
-      .prepare(
-        "SELECT id FROM schema_migrations WHERE id = '037_task_intake_pipeline'",
-      )
-      .get() as { id: string };
-    expect(recorded.id).toBe("037_task_intake_pipeline");
-
-    // Идемпотентность: повторный прогон 037 (как сделал бы runMigrations
-    // при следующем старте сервера) не падает и не дублирует запись.
-    fresh.db.transaction(() => {
-      migrationsModule.runIntakePipelineMigration(fresh.db);
-    })();
-    const recordedCount = (
-      fresh.db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM schema_migrations WHERE id = '037_task_intake_pipeline'",
-        )
-        .get() as { n: number }
-    ).n;
-    expect(recordedCount).toBe(1);
-  });
+  // Проверка через реальный runner идёт в describe'е «real migration
+  // runner on a temporary file DB» ниже — там поднимаются два отдельных
+  // процесса, которые используют НАСТОЯЩИЙ runMigrations() с настоящими
+  // id миграций. Подробности — в шапке того describe'а.
 });
 
 describe("owner /api/task-intake/settings", () => {
@@ -720,5 +545,384 @@ describe("snapshotIntakeMode: режим фиксируется в строке 
     dbModule.default
       .prepare("UPDATE users SET task_intake_mode = 'manual' WHERE id = ?")
       .run(ownerIdValue);
+  });
+});
+
+// ── Round 2: реальные границы — настоящий runner и настоящий процесс ──────
+//
+// Всё, что выше, работает на синглтоне db.ts текущего vitest-процесса и
+// через in-memory helper (если бы он ещё был). Этого недостаточно:
+// реальный сценарий — сервер стартует, миграции применяются настоящим
+// runner'ом, настройка переключается между процессами, и конвейер должен
+// остаться стабильным. Два теста ниже запускают дочерние процессы под
+// `tsx` против свежего временного DB_PATH каждый раз, чтобы:
+//
+//   - миграция 037 реально прошла через runMigrations (тот самый, что
+//     стартует в buildApp) — а не через ручной INSERT в schema_migrations;
+//   - хелпер snapshotIntakeMode реально вызвался в ДРУГОМ процессе с
+//     чистым импортом модуля, без in-memory Set, без общего кеша.
+// Если кто-то откатит helper на старый Set+UPDATE, оба теста упадут
+// именно из-за этого.
+import { spawnSync } from "node:child_process";
+
+// Путь к tsx внутри локального node_modules. Используем абсолютный путь,
+// чтобы spawn не зависел от PATH, который в CI может быть урезан.
+const TSX_BIN = "/home/maksim/Проекты/New-Todoist/server/node_modules/.bin/tsx";
+// Серверный корень, относительно которого tsx загружает .ts/.mjs.
+const SERVER_CWD = "/home/maksim/Проекты/New-Todoist/server";
+
+interface ChildResult {
+  stdout: string;
+  stderr: string;
+  status: number;
+}
+
+/** Запустить inline-скрипт в отдельном Node-процессе под tsx, в отдельной
+ *  БД (через DB_PATH). Тонкая обёртка над spawnSync — возвращает код
+ *  выхода и stdout/stderr, чтобы тест мог сказать, почему упало.
+ *  Скрипт пишется как top-level async (ESM), результаты пишут в stdout. */
+function runInChild(script: string, dbPath: string): ChildResult {
+  // Каждый скрипт уходит в уникальный временный файл — параллельные
+  // запуски не подерутся за путь, и после выполнения файл снимается.
+  const scriptPath = path.join(
+    os.tmpdir(),
+    `taskflow-intake-child-${process.pid}-${crypto.randomBytes(6).toString("hex")}.mjs`,
+  );
+  fs.writeFileSync(scriptPath, script, { encoding: "utf8" });
+  try {
+    const result = spawnSync(TSX_BIN, [scriptPath], {
+      cwd: SERVER_CWD,
+      env: { ...process.env, DB_PATH: dbPath },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    if (result.error) throw result.error;
+    return {
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+      status: result.status ?? -1,
+    };
+  } finally {
+    try {
+      fs.unlinkSync(scriptPath);
+    } catch {
+      // файл мог быть уже снят вирусом или нами — не критично
+    }
+  }
+}
+
+/** Создать свежую временную папку под DB_PATH и вернуть путь к базе.
+ *  Каталог снимается в afterEach родительского describe — здесь чисто
+ *  путь. */
+function freshRunnerDbPath(): { dir: string; path: string } {
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), `taskflow-intake-runner-${process.pid}-${crypto.randomBytes(4).toString("hex")}`),
+  );
+  return { dir, path: path.join(dir, "taskflow.db") };
+}
+
+describe("real migration runner on a temporary file DB", () => {
+  let dir: string | null = null;
+  let dbPath: string | null = null;
+
+  afterEach(() => {
+    if (dir) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // уже снято
+      }
+      dir = null;
+      dbPath = null;
+    }
+  });
+
+  it("child1 поднимает БД до 036 включительно через runMigrations({through: '036_agent_execution_connection'}), child2 дотягивает её обычным runMigrations() — defaults применены, 037 в schema_migrations, идемпотентна при повторном прогоне", () => {
+    const setup = freshRunnerDbPath();
+    dir = setup.dir;
+    dbPath = setup.path;
+
+    // Дочерний процесс №1: открывает СВОЮ БД по DB_PATH (она свежая и
+    // пустая), прогоняет migrate() + runMigrations({through: <реальный
+    // id 036>}), затем сеет pre-037 строки. Никаких INSERT'ов в
+    // schema_migrations руками — ровно столько, сколько сделал бы
+    // buildApp() в проде до точки «до 037».
+    const child1 = `
+      const { migrate } = await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts");
+      const { runMigrations } = await import("/home/maksim/Проекты/New-Todoist/server/src/migrations.ts");
+      const db = (await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts")).default;
+
+      migrate();
+      runMigrations({ through: "036_agent_execution_connection" });
+
+      // После 036 миграции 037 ещё не было, а 028 уже отработала —
+      // таблица chat_task_drafts существует, без intake_mode.
+      db.prepare(
+        "INSERT INTO users (id, name, email, password_hash, role, type) VALUES (?, ?, ?, ?, 'owner', 'human')",
+      ).run("u-real-runner", "RealRunner", "real-runner@x", "h");
+      db.prepare(
+        "INSERT INTO tasks (id, title, creator_id) VALUES (?, ?, ?)",
+      ).run("t-real-runner", "RealRunnerTask", "u-real-runner");
+      db.prepare(
+        "INSERT INTO chat_messages (id, from_user_id, text) VALUES (?, ?, ?)",
+      ).run("m-real-runner", "u-real-runner", "real runner msg");
+      db.prepare(
+        "INSERT INTO chat_task_drafts (chat_message_id, status) VALUES (?, 'pending')",
+      ).run("m-real-runner");
+
+      // Контроль: 037 в schema_migrations быть не должно — мы её ещё
+      // не применяли. Если она тут уже есть, тест не сможет проверить,
+      // что child2 ЕЁ добавил.
+      const before = db
+        .prepare(
+          "SELECT id FROM schema_migrations WHERE id = '037_task_intake_pipeline'",
+        )
+        .get();
+      if (before) {
+        console.error("PREFAIL: 037 already in schema_migrations before child2");
+        process.exit(1);
+      }
+      console.log("child1 done");
+    `;
+    const r1 = runInChild(child1, dbPath);
+    expect(
+      r1.status,
+      `child1 должен выйти с 0, иначе нечем тестировать. stderr:\n${r1.stderr}\nstdout:\n${r1.stdout}`,
+    ).toBe(0);
+
+    // Дочерний процесс №2: тот же DB_PATH. Вызывает обычный
+    // runMigrations() (без through). Ожидаем, что runner увидит
+    // незакрытую 037 и применит её через настоящий up(), а потом
+    // запишет в schema_migrations.
+    const child2 = `
+      const { runMigrations } = await import("/home/maksim/Проекты/New-Todoist/server/src/migrations.ts");
+      const db = (await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts")).default;
+
+      runMigrations();
+
+      // Колонки добавлены с настоящими DEFAULT'ами.
+      const userCol = db
+        .prepare("PRAGMA table_info(users)")
+        .all()
+        .find((c) => c.name === "task_intake_mode");
+      if (!userCol || userCol.dflt_value !== "'manual'") {
+        console.error("FAIL: users.task_intake_mode не добавлена с DEFAULT 'manual'");
+        process.exit(1);
+      }
+      const draftCol = db
+        .prepare("PRAGMA table_info(chat_task_drafts)")
+        .all()
+        .find((c) => c.name === "intake_mode");
+      if (!draftCol || draftCol.dflt_value !== "'manual'") {
+        console.error("FAIL: chat_task_drafts.intake_mode не добавлена с DEFAULT 'manual'");
+        process.exit(1);
+      }
+      const taskCols = db
+        .prepare("PRAGMA table_info(tasks)")
+        .all()
+        .map((c) => c.name);
+      if (!taskCols.includes("needs_clarification") || !taskCols.includes("clarification_question")) {
+        console.error("FAIL: tasks.needs_clarification / tasks.clarification_question не добавлены");
+        process.exit(1);
+      }
+
+      // Defaults применены к существующим строкам, которые child1 посеял.
+      const userRow = db
+        .prepare("SELECT task_intake_mode FROM users WHERE id = ?")
+        .get("u-real-runner");
+      if (!userRow || userRow.task_intake_mode !== "manual") {
+        console.error("FAIL: существующий пользователь не получил task_intake_mode='manual'");
+        process.exit(1);
+      }
+      const draftRow = db
+        .prepare(
+          "SELECT intake_mode FROM chat_task_drafts WHERE chat_message_id = ?",
+        )
+        .get("m-real-runner");
+      if (!draftRow || draftRow.intake_mode !== "manual") {
+        console.error("FAIL: существующий черновик не получил intake_mode='manual'");
+        process.exit(1);
+      }
+      const taskRow = db
+        .prepare(
+          "SELECT needs_clarification, clarification_question FROM tasks WHERE id = ?",
+        )
+        .get("t-real-runner");
+      if (!taskRow || taskRow.needs_clarification !== 0 || taskRow.clarification_question !== null) {
+        console.error("FAIL: существующая задача не получила defaults по needs_clarification/clarification_question");
+        process.exit(1);
+      }
+
+      // 037 реально записана runner'ом — РЕАЛЬНЫМ id, не синтетикой.
+      const recorded = db
+        .prepare(
+          "SELECT id, description, applied_at FROM schema_migrations WHERE id = ?",
+        )
+        .get("037_task_intake_pipeline");
+      if (!recorded) {
+        console.error("FAIL: 037_task_intake_pipeline не появилась в schema_migrations");
+        process.exit(1);
+      }
+      if (recorded.id !== "037_task_intake_pipeline") {
+        console.error("FAIL: id в schema_migrations не тот, что ожидался: " + recorded.id);
+        process.exit(1);
+      }
+
+      // Идемпотентность при повторном прогоне.
+      runMigrations();
+      const count = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM schema_migrations WHERE id = '037_task_intake_pipeline'",
+        )
+        .get();
+      if (count.n !== 1) {
+        console.error("FAIL: после второго runMigrations() запись 037 не уникальна: n=" + count.n);
+        process.exit(1);
+      }
+
+      console.log("child2 done");
+    `;
+    const r2 = runInChild(child2, dbPath);
+    expect(
+      r2.status,
+      `child2 упал. stderr:\n${r2.stderr}\nstdout:\n${r2.stdout}`,
+    ).toBe(0);
+  });
+});
+
+describe("process boundary: snapshot stability survives restart", () => {
+  let dir: string | null = null;
+  let dbPath: string | null = null;
+
+  afterEach(() => {
+    if (dir) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {}
+      dir = null;
+      dbPath = null;
+    }
+  });
+
+  it("child1 делает снапшот 'manual' и переключает настройку на 'automatic'; child2 со свежим импортом модуля возвращает 'manual' и не перетирает строку", () => {
+    const setup = freshRunnerDbPath();
+    dir = setup.dir;
+    dbPath = setup.path;
+
+    // Процесс A: поднимает БД через migrate() + runMigrations(),
+    // создаёт владельца, сообщение И строку chat_task_drafts (через
+    // тот же INSERT, что раньше делал lib/ownerDraft.ts). Затем
+    // делает снапшот 'manual' и переключает пользовательскую настройку
+    // на 'automatic'.
+    //
+    // Почему строка черновика сеется РУКАМИ, а не через хелпер. Нам
+    // нужно одно и то же поведение и для старого (Set+UPDATE), и для
+    // нового (ON CONFLICT DO NOTHING) хелпера: оба должны иметь
+    // возможность вызваться на существующей строке, чтобы проверить,
+    // что они делают дальше. Если строки нет, старый хелпер падает
+    // с "не найдена" ДО того, как мы успеваем проверить его
+    // кросс-процессное поведение — а это уже не та причина падения,
+    // которую мы хотим зафиксировать в тесте. С явной строкой оба
+    // хелпера проходят первый вызов и дальше ведут себя по-разному.
+    const child1 = `
+      const { migrate } = await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts");
+      const { runMigrations } = await import("/home/maksim/Проекты/New-Todoist/server/src/migrations.ts");
+      const { snapshotIntakeMode } = await import("/home/maksim/Проекты/New-Todoist/server/src/routes/task-intake.ts");
+      const db = (await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts")).default;
+
+      migrate();
+      runMigrations();
+
+      db.prepare(
+        "INSERT INTO users (id, name, email, password_hash, role, type) VALUES (?, ?, ?, ?, 'owner', 'human')",
+      ).run("u-process", "ProcessUser", "process@x", "h");
+      db.prepare(
+        "INSERT INTO chat_messages (id, from_user_id, text) VALUES (?, ?, ?)",
+      ).run("m-process", "u-process", "process boundary msg");
+      // Строка черновика уже на месте — DEFAULT 'manual' ставит
+      // миграция 037 в task_intake_mode на этот момент, или миграция
+      // 028 (если 037 ещё не было). В обоих случаях мы получаем
+      // строку с intake_mode='manual', которую оба варианта хелпера
+      // способны обработать.
+      db.prepare(
+        "INSERT INTO chat_task_drafts (chat_message_id, status) VALUES (?, 'pending')",
+      ).run("m-process");
+
+      const first = snapshotIntakeMode("u-process", "m-process");
+      if (first !== "manual") {
+        console.error("FAIL: child1 первый снапшот ожидался 'manual', получен '" + first + "'");
+        process.exit(1);
+      }
+
+      // Владелец переключает общую настройку на 'automatic' ДО второго
+      // вызова. Если бы хелпер полагался на in-memory Set и процесс
+      // бы перезапустился между вызовами — следующий вызов перечитал
+      // бы users.task_intake_mode и перезаписал строку.
+      db.prepare(
+        "UPDATE users SET task_intake_mode = 'automatic' WHERE id = ?",
+      ).run("u-process");
+
+      console.log("child1 done");
+    `;
+    const r1 = runInChild(child1, dbPath);
+    expect(
+      r1.status,
+      `child1 упал. stderr:\n${r1.stderr}\nstdout:\n${r1.stdout}`,
+    ).toBe(0);
+
+    // Процесс B: тот же DB_PATH, но это НОВЫЙ процесс — никакого
+    // module-level состояния из child1 в нём нет. Свежий import
+    // snapshotIntakeMode, вызов для того же сообщения.
+    const child2 = `
+      const { runMigrations } = await import("/home/maksim/Проекты/New-Todoist/server/src/migrations.ts");
+      const { snapshotIntakeMode } = await import("/home/maksim/Проекты/New-Todoist/server/src/routes/task-intake.ts");
+      const db = (await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts")).default;
+
+      // На случай, если бы child1 не оставил БД в консистентном
+      // состоянии — обычный прогон миграций; на реальной БД после
+      // child1 это no-op.
+      runMigrations();
+
+      const second = snapshotIntakeMode("u-process", "m-process");
+      if (second !== "manual") {
+        console.error(
+          "FAIL: child2 ожидал 'manual' (снимок из child1), получил '" + second + "'. " +
+          "Если здесь 'automatic' — хелпер перечитал users.task_intake_mode " +
+          "вместо того, чтобы опираться на БД-снимок (in-memory Set или UPDATE).",
+        );
+        process.exit(1);
+      }
+
+      const stored = db
+        .prepare(
+          "SELECT intake_mode FROM chat_task_drafts WHERE chat_message_id = ?",
+        )
+        .get("m-process");
+      if (!stored || stored.intake_mode !== "manual") {
+        console.error(
+          "FAIL: в строке chat_task_drafts ожидалось intake_mode='manual', " +
+          "получено '" + (stored ? stored.intake_mode : "null") + "'",
+        );
+        process.exit(1);
+      }
+
+      // И живая настройка действительно 'automatic' — иначе тест был
+      // бы «зелёным по совпадению», а не по существу.
+      const live = db
+        .prepare("SELECT task_intake_mode FROM users WHERE id = ?")
+        .get("u-process");
+      if (!live || live.task_intake_mode !== "automatic") {
+        console.error("FAIL: живая настройка пользователя не 'automatic' — тест не валиден");
+        process.exit(1);
+      }
+
+      console.log("child2 done");
+    `;
+    const r2 = runInChild(child2, dbPath);
+    expect(
+      r2.status,
+      `child2 упал — хелпер НЕ пережил настоящий рестарт процесса. ` +
+      `stderr:\n${r2.stderr}\nstdout:\n${r2.stdout}`,
+    ).toBe(0);
   });
 });
