@@ -24,7 +24,10 @@ export type IntakeMode = "manual" | "automatic";
 const INTAKE_MODES: readonly IntakeMode[] = ["manual", "automatic"] as const;
 
 function isIntakeMode(value: unknown): value is IntakeMode {
-  return typeof value === "string" && (INTAKE_MODES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (INTAKE_MODES as readonly string[]).includes(value)
+  );
 }
 
 /** Текущая роль — единственный способ проверить, что перед нами владелец.
@@ -63,6 +66,25 @@ export function snapshotIntakeMode(
   ownerId: string,
   chatMessageId: string,
 ): IntakeMode {
+  return claimDraftForParsing(ownerId, chatMessageId).mode;
+}
+
+/**
+ * То же, что snapshotIntakeMode, плюс ответ на вопрос «эту строку черновика
+ * создали мы или она уже была».
+ *
+ * Нужно конвейеру надиктовки: раньше защитой от повторного разбора служило
+ * падение INSERT на PRIMARY KEY, но снимок режима вставляет строку через
+ * ON CONFLICT DO NOTHING и не падает. Без признака claimed повторная
+ * доставка того же сообщения запустила бы второй разбор параллельно первому
+ * и завела бы вторую пачку карточек.
+ *
+ * claimed=true означает «строку создал этот вызов, разбирать твоя очередь».
+ */
+export function claimDraftForParsing(
+  ownerId: string,
+  chatMessageId: string,
+): { mode: IntakeMode; claimed: boolean } {
   const apply = db.transaction(() => {
     // Атомарный upsert: при первом вызове — вставляем строку черновика
     // со снимком режима из users, при повторном — ON CONFLICT оставляет
@@ -70,13 +92,19 @@ export function snapshotIntakeMode(
     // SELECT перед INSERT: гонки «выбрали режим → владелец переключил →
     // вставили старое» тут нет, потому что и SELECT, и INSERT — одна
     // statement на одной и той же БД.
-    db.prepare(
-      `INSERT INTO chat_task_drafts (chat_message_id, status, intake_mode)
+    // changes=1 значит строку создал именно этот вызов. Для конвейера
+    // надиктовки это и есть право начать разбор: тот, кто пришёл вторым,
+    // получит 0 и уйдёт, вместо того чтобы завести вторую пачку карточек
+    // по тому же сообщению.
+    const inserted = db
+      .prepare(
+        `INSERT INTO chat_task_drafts (chat_message_id, status, intake_mode)
        SELECT ?, 'pending', task_intake_mode
          FROM users
         WHERE id = ?
        ON CONFLICT(chat_message_id) DO NOTHING`,
-    ).run(chatMessageId, ownerId);
+      )
+      .run(chatMessageId, ownerId);
 
     const row = db
       .prepare(
@@ -91,14 +119,17 @@ export function snapshotIntakeMode(
       // В обоих случаях хелпер должен явно об этом сказать — молчаливое
       // «manual» смазало бы ошибку в конвейере.
       throw new Error(
-        `snapshotIntakeMode: строка chat_task_drafts ${chatMessageId} не появилась ` +
+        `claimDraftForParsing: строка chat_task_drafts ${chatMessageId} не появилась ` +
           `(проверьте, что владелец ${ownerId} существует и сообщение ${chatMessageId} ` +
           `уже в chat_messages)`,
       );
     }
     // На случай, если в строке оказалось значение вне enum (например,
     // БД правили руками) — отдать дефолт, не пускать чужой режим.
-    return isIntakeMode(row.intake_mode) ? row.intake_mode : "manual";
+    const mode: IntakeMode = isIntakeMode(row.intake_mode)
+      ? row.intake_mode
+      : "manual";
+    return { mode, claimed: inserted.changes === 1 };
   });
 
   return apply();
@@ -122,9 +153,7 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
         return reply.code(403).send({ error: "только владелец" });
       }
       const row = db
-        .prepare(
-          "SELECT task_intake_mode FROM users WHERE id = ?",
-        )
+        .prepare("SELECT task_intake_mode FROM users WHERE id = ?")
         .get(owner) as { task_intake_mode: IntakeMode } | undefined;
       // Колонка заведена миграцией 037 с NOT NULL DEFAULT 'manual', так
       // что row всегда есть. Страховка для рассинхрона схемы.
@@ -150,13 +179,14 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
       }
       const raw = req.body?.mode;
       if (!isIntakeMode(raw)) {
-        return reply
-          .code(400)
-          .send({ error: `mode должен быть одним из: ${INTAKE_MODES.join(", ")}` });
+        return reply.code(400).send({
+          error: `mode должен быть одним из: ${INTAKE_MODES.join(", ")}`,
+        });
       }
-      db.prepare(
-        "UPDATE users SET task_intake_mode = ? WHERE id = ?",
-      ).run(raw, owner);
+      db.prepare("UPDATE users SET task_intake_mode = ? WHERE id = ?").run(
+        raw,
+        owner,
+      );
       return { mode: raw };
     },
   );

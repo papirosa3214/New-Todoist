@@ -44,6 +44,7 @@ import {
 } from "./routes/activity.js";
 import { registerSeedRoutes } from "./seed.js";
 import { registerEnrichmentRoutes } from "./routes/enrichment.js";
+import { registerDispatchRoutes } from "./routes/dispatch.js";
 import { registerReviewRoutes } from "./routes/reviews.js";
 import { registerRoleRoutes } from "./routes/roles.js";
 import { registerTaskIntakeRoutes } from "./routes/task-intake.js";
@@ -227,6 +228,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerEmbeddingsRoutes(app);
   registerEnrichSemanticRoutes(app);
   registerEnrichmentRoutes(app);
+  registerDispatchRoutes(app);
   await registerReviewRoutes(app);
   registerRoleRoutes(app);
   registerTaskIntakeRoutes(app);

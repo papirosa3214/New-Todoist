@@ -26,6 +26,11 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { broadcastToUsers } from "../ws.js";
 import {
+  claimDraftForParsing,
+  type IntakeMode,
+} from "../routes/task-intake.js";
+import { dispatchTaskToPi } from "../routes/dispatch.js";
+import {
   structureDictationToCards,
   type DictationCards,
 } from "../routes/ai.js";
@@ -141,6 +146,18 @@ function queueLine(afterTitle: string): string {
   return `⛓ ОЧЕРЕДЬ: после карточки «${afterTitle}»`;
 }
 
+/** Русское склонение при числе: 1 карточка, 2 карточки, 5 карточек.
+ *  Эти строки владелец читает в чате с телефона, и «2 карточка(и)» там
+ *  выглядит как недоделка, а не как отчёт. */
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod100 = Math.abs(n) % 100;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  const last = mod100 % 10;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
+
 /**
  * Создать черновик: родительская карточка, её шаги и дочерние карточки.
  *
@@ -148,7 +165,10 @@ function queueLine(afterTitle: string): string {
  * половина нет, — худший исход из возможных. Либо постановка есть целиком,
  * либо её нет и надиктовка цела.
  */
-function createDraftCards(cards: DictationCards, owner: string): string {
+function createDraftCards(
+  cards: DictationCards,
+  owner: string,
+): { parentId: string; childIds: string[] } {
   const parentId = uid();
   const childIds: string[] = cards.children.map(() => uid());
 
@@ -233,7 +253,85 @@ function createDraftCards(cards: DictationCards, owner: string): string {
   });
   txn();
 
-  return parentId;
+  return { parentId, childIds };
+}
+
+/**
+ * Автоматический режим: поднять флаг готовности исполняемым карточкам и
+ * отдать их Pi — без владельца (раздел 8.1 спецификации от 14.09.2026).
+ *
+ * Что считается исполняемой карточкой: если у постановки есть дети, то
+ * работают именно они, а родитель остаётся контейнером общего результата
+ * (раздел 6.3 — «родитель не исполняется одновременно с детьми»). Детей
+ * нет — исполняется сама карточка.
+ *
+ * Флаг поднимается ВСЕМ исполняемым карточкам одной транзакцией: частичная
+ * готовность дерева запрещена (раздел 12). А вот отдаются исполнителю
+ * только карточки без незакрытой предшественницы — те, у которых в
+ * постановке нет строки очереди. Остальные остаются готовыми и ждут своей
+ * очереди: отдать их сразу означало бы запустить третий шаг раньше первого.
+ */
+function admitTreeAutomatically(
+  parentId: string,
+  childIds: string[],
+  cards: DictationCards,
+  owner: string,
+): { dispatched: number; queued: number } {
+  // Исполняемые карточки и признак «есть предшественница».
+  const executable: Array<{ id: string; waits: boolean }> = childIds.length
+    ? childIds.map((id, i) => ({ id, waits: cards.children[i].after !== null }))
+    : [{ id: parentId, waits: false }];
+
+  // Флаг — одной транзакцией на всё дерево.
+  const raise = db.transaction(() => {
+    const upd = db.prepare(
+      `UPDATE tasks
+          SET ready_for_pickup = 1,
+              ready_set_at = datetime('now'),
+              ready_set_by = ?,
+              updated_at = datetime('now')
+        WHERE id = ?`,
+    );
+    for (const card of executable) {
+      upd.run(owner, card.id);
+      logEvent({
+        taskId: card.id,
+        actorId: owner,
+        kind: "ready_flag_changed",
+        field: "ready_for_pickup",
+        fromValue: "0",
+        toValue: "1",
+      });
+    }
+  });
+  raise();
+
+  let dispatched = 0;
+  let queued = 0;
+  for (const card of executable) {
+    if (card.waits) {
+      queued += 1;
+      continue;
+    }
+    // Тот же путь, которым карточку отдаёт владелец руками: гейты и швы
+    // доставки общие, иначе автомат начал бы запускать то, что вручную
+    // запустить нельзя.
+    const outcome = dispatchTaskToPi(card.id, owner);
+    if (outcome.ok) {
+      dispatched += 1;
+    } else {
+      // Карточка осталась готовой, но неотданной. Это не молчаливая
+      // потеря: флаг поднят, владелец увидит её на доске как готовую без
+      // исполнителя, а причина уходит в журнал сервера.
+      queued += 1;
+      console.warn(
+        `автоматический режим: карточку ${card.id} не удалось отдать исполнителю:`,
+        outcome.error,
+      );
+    }
+  }
+
+  return { dispatched, queued };
 }
 
 /** Человеческий пересказ того, что вышло, — им же уходит и в чат, и в пуш. */
@@ -270,13 +368,19 @@ export function startDraftFromChat(message: {
   const text = (message.text || "").trim();
   if (!text) return;
 
+  // Снимок режима берётся ДО обращения к модели и в той же строке
+  // черновика, что и раньше служила защитой от повторной доставки. Если
+  // владелец переключит тумблер, пока модель разбирает эту надиктовку,
+  // судьба уже принятого сообщения не изменится (раздел 8.1 спецификации).
+  let mode: IntakeMode;
   try {
-    db.prepare(
-      "INSERT INTO chat_task_drafts (chat_message_id, status) VALUES (?, 'pending')",
-    ).run(message.id);
+    const claim = claimDraftForParsing(owner, message.id);
+    // Строку создал не этот вызов — значит сообщение уже разбирается или
+    // разобрано. Повтор молча глотаем, как и остальная дедупликация
+    // доставки в проекте (agent_inbox по chat_message_id).
+    if (!claim.claimed) return;
+    mode = claim.mode;
   } catch {
-    // Уже разбирается или разобрано — повтор молча глотаем, как и остальная
-    // дедупликация доставки в проекте (agent_inbox по chat_message_id).
     return;
   }
 
@@ -286,7 +390,7 @@ export function startDraftFromChat(message: {
         .prepare("SELECT id, name FROM projects ORDER BY name")
         .all() as Array<{ id: string; name: string }>;
       const cards = await structureDictationToCards(text, projects);
-      const taskId = createDraftCards(cards, owner);
+      const { parentId: taskId, childIds } = createDraftCards(cards, owner);
 
       db.prepare(
         `UPDATE chat_task_drafts
@@ -295,6 +399,32 @@ export function startDraftFromChat(message: {
       ).run(taskId, message.id);
 
       const what = summary(cards);
+
+      if (mode === "automatic") {
+        // Автоматический режим: черновик владельцу не показывается и
+        // подтверждения не ждёт (раздел 8.1 спецификации). Сервер сам
+        // поднимает флаг и отдаёт работу — владелец узнаёт постфактум.
+        const { dispatched, queued } = admitTreeAutomatically(
+          taskId,
+          childIds,
+          cards,
+          owner,
+        );
+        const очередь = queued
+          ? ` Ещё ${queued} ${plural(queued, "карточка ждёт", "карточки ждут", "карточек ждут")} своей очереди.`
+          : "";
+        replyInChat(
+          `Принял в работу: ${what}. ` +
+            `${dispatched} ${plural(dispatched, "карточка отдана", "карточки отданы", "карточек отдано")} исполнителю.${очередь}`,
+          taskId,
+        );
+        pushToPhone(
+          "TaskFlow: задача принята в работу",
+          `«${cards.title}» — ${what}. Запущена автоматически, ваш флаг не нужен.`,
+        );
+        return;
+      }
+
       replyInChat(
         `Собрал из надиктовки карточку-черновик: ${what}. ` +
           `Откройте, поправьте что не так и поставьте флаг готовности — ` +

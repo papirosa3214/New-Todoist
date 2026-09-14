@@ -466,4 +466,125 @@ describe("Окно постановки задач (карточка 4396f8c9)",
       .get(sent.json().id);
     expect(drafted).toBeUndefined();
   });
+  // ─────────────────────────────────────────────────────────────────────
+  // Автоматический режим (раздел 8.1 спецификации от 14.09.2026).
+  // Смысл проверок: тумблер владельца должен НА САМОМ ДЕЛЕ менять судьбу
+  // надиктовки. До 14.09.2026 режим хранился в базе и фиксировался на
+  // сообщении, но конвейер его не спрашивал — любая надиктовка молча
+  // останавливалась черновиком, как в ручном режиме.
+  const PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2";
+
+  const setMode = async (mode: "manual" | "automatic") => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/task-intake/settings",
+      headers: { authorization: ownerAuth },
+      payload: { mode },
+    });
+    expect(res.statusCode).toBe(200);
+  };
+
+  it("автоматический режим: карточка сама получает флаг и уходит исполнителю", async () => {
+    await setMode("automatic");
+    model.impl = async () => ({
+      title: "Автоматическая",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+    });
+
+    const sent = await dictate("сделай это сам, без меня");
+    const draft = await waitForDraft(sent.json().id);
+
+    const row = db
+      .prepare(
+        "SELECT ready_for_pickup, assignee_id, dispatched_role FROM tasks WHERE id = ?",
+      )
+      .get(draft.task_id) as {
+      ready_for_pickup: number;
+      assignee_id: string | null;
+      dispatched_role: string | null;
+    };
+    // Владелец флаг не поднимал — его поднял сервер.
+    expect(row.ready_for_pickup).toBe(1);
+    // И тем же путём, что руками: карточка у единственного runtime.
+    expect(row.assignee_id).toBe(PI_AGENT_ID);
+    expect(row.dispatched_role).toBeTruthy();
+
+    await setMode("manual");
+  });
+
+  it("автоматический режим: работают дети, родитель остаётся контейнером", async () => {
+    await setMode("automatic");
+    model.impl = async () => ({
+      title: "Родитель-контейнер",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [
+        { title: "Первый шаг", description: "", subtasks: [], after: null },
+        { title: "Второй шаг", description: "", subtasks: [], after: 1 },
+      ],
+    });
+
+    const sent = await dictate("сделай большое дело в два приёма");
+    const draft = await waitForDraft(sent.json().id);
+
+    const parent = db
+      .prepare("SELECT ready_for_pickup, assignee_id FROM tasks WHERE id = ?")
+      .get(draft.task_id) as { ready_for_pickup: number; assignee_id: string | null };
+    // Родитель не исполняется одновременно с детьми (раздел 6.3).
+    expect(parent.ready_for_pickup).toBe(0);
+    expect(parent.assignee_id).toBeNull();
+
+    const children = db
+      .prepare(
+        "SELECT title, ready_for_pickup, assignee_id FROM tasks WHERE parent_id = ? ORDER BY position",
+      )
+      .all(draft.task_id) as Array<{
+      title: string;
+      ready_for_pickup: number;
+      assignee_id: string | null;
+    }>;
+    expect(children).toHaveLength(2);
+    // Флаг поднят обоим: частичная готовность дерева запрещена (раздел 12).
+    expect(children[0].ready_for_pickup).toBe(1);
+    expect(children[1].ready_for_pickup).toBe(1);
+    // А отдан исполнителю только первый: второй ждёт своей очереди, иначе
+    // второй шаг поехал бы раньше первого.
+    expect(children[0].assignee_id).toBe(PI_AGENT_ID);
+    expect(children[1].assignee_id).toBeNull();
+
+    await setMode("manual");
+  });
+
+  it("ручной режим по-прежнему останавливается на черновике", async () => {
+    await setMode("manual");
+    model.impl = async () => ({
+      title: "Ручная",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+    });
+
+    const sent = await dictate("а это я посмотрю сам");
+    const draft = await waitForDraft(sent.json().id);
+
+    const row = db
+      .prepare("SELECT ready_for_pickup, assignee_id FROM tasks WHERE id = ?")
+      .get(draft.task_id) as {
+      ready_for_pickup: number;
+      assignee_id: string | null;
+    };
+    expect(row.ready_for_pickup).toBe(0);
+    expect(row.assignee_id).toBeNull();
+  });
 });
