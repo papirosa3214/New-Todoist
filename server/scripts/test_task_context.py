@@ -92,13 +92,13 @@ class TestEnrichersSoft(unittest.TestCase):
         оригинал = tc._run_external
         tc._run_external = lambda cmd, stdin=None, timeout_sec=None: (0, ответ_базы, "")
         try:
-            block = tc.enrich_knowledge({"title": "т", "description": "о"})
+            status, excerpts = tc._knowledge_from_kb("запрос")
         finally:
             tc._run_external = оригинал
 
-        self.assertEqual(block["status"], "ok")
-        self.assertEqual(len(block["excerpts"]), 1)
-        фрагмент = block["excerpts"][0]
+        self.assertEqual(status, "ok")
+        self.assertEqual(len(excerpts), 1)
+        фрагмент = excerpts[0]
         self.assertEqual(фрагмент["excerpt"], "тело урока")
         self.assertEqual(фрагмент["title"], "2026-08-29-пример-урока.md")
         # Дата последней проверки важнее даты написания.
@@ -108,8 +108,146 @@ class TestEnrichersSoft(unittest.TestCase):
         self.assertTrue(фрагмент["origin"])
         self.assertIn("--get", фрагмент["reference"])
 
+    def test_kb_keeps_one_excerpt_per_lesson(self):
+        """Куски одного урока не занимают весь лимит.
+
+        Поиск отдаёт фрагменты, и один урок легко идёт несколько раз
+        подряд. Для исполнителя это один источник: если не свернуть, два
+        урока съедают все слоты и остальное не доезжает.
+        """
+        ответ_базы = json.dumps({
+            "results": [
+                {"source": "урок-А.md", "text": "кусок 1", "date": "2026-09-01"},
+                {"source": "урок-А.md", "text": "кусок 2", "date": "2026-09-01"},
+                {"source": "урок-Б.md", "text": "другой", "date": "2026-09-02"},
+            ],
+        })
+        оригинал = tc._run_external
+        tc._run_external = lambda cmd, stdin=None, timeout_sec=None: (0, ответ_базы, "")
+        try:
+            _, excerpts = tc._knowledge_from_kb("запрос")
+        finally:
+            tc._run_external = оригинал
+
+        self.assertEqual([e["title"] for e in excerpts], ["урок-А.md", "урок-Б.md"])
+        # Берётся первый (лучший по релевантности) кусок урока.
+        self.assertEqual(excerpts[0]["excerpt"], "кусок 1")
+
+    def test_mnemosyne_parses_real_contract(self):
+        """Ответ `mnemosyne recall --json` разбирается в фрагменты.
+
+        До 14.09.2026 память была заявлена в комментарии обогатителя, но
+        не вызывалась ни разу.
+        """
+        ответ_памяти = json.dumps({
+            "query": "q",
+            "results": [{
+                "id": "f361306f103b0399",
+                "content": "владелец держит обои в ~/Movies/Wallpapers",
+                "source": "fact",
+                "timestamp": "2026-09-14T02:20:31.062964",
+                "score": 0.53,
+            }],
+        })
+        перехват: dict = {}
+        оригинал = tc._run_external
+
+        def подмена(cmd, stdin=None, timeout_sec=None):
+            перехват["cmd"] = cmd
+            return (0, ответ_памяти, "")
+
+        tc._run_external = подмена
+        try:
+            status, excerpts = tc._knowledge_from_mnemosyne("запрос")
+        finally:
+            tc._run_external = оригинал
+
+        self.assertEqual(status, "ok")
+        self.assertEqual(len(excerpts), 1)
+        # --json у recall не описан в help, но поддержан. Без него CLI
+        # печатает текст для человека и обрезает содержимое многоточием.
+        self.assertIn("--json", перехват["cmd"])
+        фрагмент = excerpts[0]
+        self.assertEqual(фрагмент["source"], "mnemosyne")
+        self.assertIn("обои", фрагмент["excerpt"])
+        # Только дата, без времени суток.
+        self.assertEqual(фрагмент["date"], "2026-09-14")
+        self.assertEqual(фрагмент["knowledge_type"], "changeable")
+
+    def test_knowledge_survives_one_dead_source(self):
+        """Отказ одного источника не отменяет другой.
+
+        Иначе временная поломка памяти лишала бы исполнителя и уроков.
+        """
+        ответ_базы = json.dumps({
+            "results": [{"source": "урок.md", "text": "тело", "date": "2026-09-01"}],
+        })
+        оригинал = tc._run_external
+
+        def подмена(cmd, stdin=None, timeout_sec=None):
+            # Память недоступна, база знаний отвечает.
+            if cmd and cmd[0] == "mnemosyne":
+                return (127, "", "not_found")
+            return (0, ответ_базы, "")
+
+        tc._run_external = подмена
+        try:
+            block = tc.enrich_knowledge({"title": "т", "description": "о"})
+        finally:
+            tc._run_external = оригинал
+
+        self.assertEqual(block["status"], "ok")
+        self.assertEqual(len(block["excerpts"]), 1)
+        self.assertEqual(block["excerpts"][0]["source"], "kb")
+
+    def test_knowledge_unavailable_only_when_both_sources_dead(self):
+        """«Недоступно» — только когда молчат оба источника."""
+        оригинал = tc._run_external
+        tc._run_external = lambda cmd, stdin=None, timeout_sec=None: (127, "", "нет")
+        try:
+            block = tc.enrich_knowledge({"title": "т", "description": "о"})
+        finally:
+            tc._run_external = оригинал
+        self.assertEqual(block["status"], "unavailable")
+
+    def test_both_sources_get_their_share(self):
+        """Память не вытесняется базой знаний.
+
+        Без квоты база забирает весь лимит первой, и записи памяти не
+        доходят до исполнителя вообще.
+        """
+        ответ_базы = json.dumps({
+            "results": [
+                {"source": f"урок-{i}.md", "text": f"тело {i}", "date": "2026-09-01"}
+                for i in range(10)
+            ],
+        })
+        ответ_памяти = json.dumps({
+            "results": [
+                {"id": f"m{i}", "content": f"запись {i}", "source": "fact",
+                 "timestamp": "2026-09-14T00:00:00"}
+                for i in range(10)
+            ],
+        })
+        оригинал = tc._run_external
+
+        def подмена(cmd, stdin=None, timeout_sec=None):
+            if cmd and cmd[0] == "mnemosyne":
+                return (0, ответ_памяти, "")
+            return (0, ответ_базы, "")
+
+        tc._run_external = подмена
+        try:
+            block = tc.enrich_knowledge({"title": "т", "description": "о"})
+        finally:
+            tc._run_external = оригинал
+
+        источники = {e["source"] for e in block["excerpts"]}
+        self.assertEqual(источники, {"kb", "mnemosyne"})
+        self.assertLessEqual(len(block["excerpts"]), tc.MAX_KNOWLEDGE_EXCERPTS)
+
     def test_knowledge_requests_json_output(self):
-        """Вызов идёт с --json.
+        """Вызов базы знаний идёт с --json.
 
         Без флага kb_query.py печатает текст для человека, json.loads на
         нём падает, и блок снова станет мёртвым — молча.
@@ -124,7 +262,7 @@ class TestEnrichersSoft(unittest.TestCase):
 
         tc._run_external = подмена
         try:
-            tc.enrich_knowledge({"title": "т", "description": "о"})
+            tc._knowledge_from_kb("запрос")
         finally:
             tc._run_external = оригинал
 

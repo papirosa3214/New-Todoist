@@ -255,15 +255,16 @@ def enrich_task(
 # ───── KnowledgeEnricher — необязательный, внешний вызов ─────
 
 def enrich_knowledge(task: dict) -> KnowledgeBlock:
-    """Шаг 3 ТЗ: «вызывает уже используемые локальные источники `mnemosyne`
-    и `~/kb/kb_query.py` ... Поиск строится из title + description, не из
-    непроверенного текста комментариев. Результат: короткие фрагменты,
-    источник и ссылка/путь к первоисточнику».
+    """Справочный материал из двух источников: база знаний и Mnemosyne.
 
-    На первом запуске — упрощённо: один subprocess к kb_query.py с
-    query=title+description. Если в системе нет kb_query.py — пустой
-    результат со status=unavailable (Шаг 3: «не теряет задачу»).
-    Проверка реальных CLI-контрактов остаётся на приёмке владельца.
+    Шаг 3 ТЗ и раздел 8.5 спецификации от 14.09.2026: «Справочный контекст
+    поступает из разрешённых достоверных источников: базы знаний,
+    Мнемозины, проектной документации…». Поиск строится из title +
+    description, не из непроверенного текста комментариев.
+
+    Источники независимы: отказ одного не отменяет другой. Блок
+    становится «недоступен», только если молчат оба — иначе временная
+    поломка памяти лишала бы исполнителя и уроков тоже.
     """
     title = (task or {}).get("title", "") or ""
     desc = (task or {}).get("description", "") or ""
@@ -271,6 +272,33 @@ def enrich_knowledge(task: dict) -> KnowledgeBlock:
     if not query:
         return {"status": "empty", "excerpts": []}
 
+    kb_status, kb_excerpts = _knowledge_from_kb(query)
+    mem_status, mem_excerpts = _knowledge_from_mnemosyne(query)
+
+    # Квоты, а не «сколько влезет по порядку». Без них база знаний
+    # забирает весь лимит первой, и память не доходит до исполнителя
+    # вообще — ровно тот же молчаливый обрыв, который мы тут и чиним,
+    # только на уровень выше. Половина слотов закреплена за каждым
+    # источником; если один дал меньше своей доли, второй добирает
+    # остаток, и лимит не простаивает.
+    half = MAX_KNOWLEDGE_EXCERPTS // 2
+    kb_quota = kb_excerpts[:half] if mem_excerpts else kb_excerpts
+    mem_quota = (
+        mem_excerpts[: MAX_KNOWLEDGE_EXCERPTS - len(kb_quota)]
+        if kb_quota
+        else mem_excerpts
+    )
+    excerpts = (kb_quota + mem_quota)[:MAX_KNOWLEDGE_EXCERPTS]
+    if excerpts:
+        return {"status": "ok", "excerpts": excerpts}
+    # Оба молчат — различаем «нечего сказать» и «не смогли спросить».
+    if kb_status == "unavailable" and mem_status == "unavailable":
+        return {"status": "unavailable", "excerpts": []}
+    return {"status": "empty", "excerpts": []}
+
+
+def _knowledge_from_kb(query: str) -> tuple[BlockStatus, list[KnowledgeExcerpt]]:
+    """Уроки базы знаний."""
     kb_query = "/home/maksim/kb/kb_query.py"
     # --json обязателен: без него kb_query.py печатает человекочитаемую
     # выдачу со скобками и переносами, json.loads на ней падает, и блок
@@ -280,11 +308,11 @@ def enrich_knowledge(task: dict) -> KnowledgeBlock:
     code, out, err = _run_external(cmd, timeout_sec=KNOWLEDGE_TIMEOUT_SEC)
     if code != 0:
         # FileNotFoundError -> code=127; timeout -> code=-1
-        return {"status": "unavailable", "excerpts": []}
+        return "unavailable", []
     try:
         parsed = json.loads(out or "{}")
     except json.JSONDecodeError:
-        return {"status": "unavailable", "excerpts": []}
+        return "unavailable", []
 
     # Фактический контракт kb_query.py --json (проверен на живой базе
     # 14.09.2026): {"results": [{source, score, text, date, verified}],
@@ -292,13 +320,23 @@ def enrich_knowledge(task: dict) -> KnowledgeBlock:
     # читал ключ, которого база не отдаёт.
     raw_results = parsed.get("results") or []
     if not raw_results:
-        return {"status": "empty", "excerpts": []}
+        return "empty", []
 
     excerpts: list[KnowledgeExcerpt] = []
-    for item in raw_results[:MAX_KNOWLEDGE_EXCERPTS]:
+    seen_documents: set[str] = set()
+    for item in raw_results:
+        if len(excerpts) >= MAX_KNOWLEDGE_EXCERPTS:
+            break
         # source у kb_query — имя документа урока, а не система-источник.
         # Системой-источником здесь выступает сама база знаний.
         document = str(item.get("source") or "")
+        # Поиск возвращает КУСКИ уроков, и один урок легко занимает
+        # несколько мест подряд. Для исполнителя это один и тот же
+        # источник, поэтому берём лучший кусок каждого документа: иначе
+        # два урока съедают весь лимит, а остальные не доезжают.
+        if document in seen_documents:
+            continue
+        seen_documents.add(document)
         excerpts.append({
             "source": "kb",
             "title": document[:MAX_EXCERPT_CHARS],
@@ -320,7 +358,60 @@ def enrich_knowledge(task: dict) -> KnowledgeBlock:
             "knowledge_type": "changeable",
             "origin": "база знаний (уроки)",
         })
-    return {"status": "ok", "excerpts": excerpts}
+    return "ok", excerpts
+
+
+def _knowledge_from_mnemosyne(
+    query: str,
+) -> tuple[BlockStatus, list[KnowledgeExcerpt]]:
+    """Рабочая память Mnemosyne.
+
+    До 14.09.2026 память была заявлена в комментарии обогатителя, но не
+    вызывалась ни разу — исполнитель не видел ни предпочтений владельца,
+    ни фактов о машинах, которые мы же туда и складываем.
+
+    Флаг --json в `mnemosyne recall --help` не описан, но поддержан
+    (проверено на живой базе 14.09.2026). Без него CLI печатает выдачу
+    для человека и, что хуже, обрезает содержимое многоточием — то есть
+    даже успешный разбор дал бы исполнителю огрызок записи.
+    """
+    cmd = ["mnemosyne", "recall", query, str(MAX_KNOWLEDGE_EXCERPTS), "--json"]
+    code, out, err = _run_external(cmd, timeout_sec=KNOWLEDGE_TIMEOUT_SEC)
+    if code != 0:
+        return "unavailable", []
+    try:
+        parsed = json.loads(out or "{}")
+    except json.JSONDecodeError:
+        return "unavailable", []
+
+    raw_results = parsed.get("results") or []
+    if not raw_results:
+        return "empty", []
+
+    excerpts: list[KnowledgeExcerpt] = []
+    for item in raw_results[:MAX_KNOWLEDGE_EXCERPTS]:
+        memory_id = str(item.get("id") or "")
+        # source в записи памяти — её род (fact, session, preference…),
+        # он же самое человечное, что можно поставить заголовком.
+        kind = str(item.get("source") or "запись")
+        # timestamp — когда запись сделана или последний раз обновлена.
+        # Берём только дату: время суток исполнителю ничего не даёт, а
+        # строку раздувает.
+        stamp = str(item.get("timestamp") or "")[:10]
+        excerpts.append({
+            "source": "mnemosyne",
+            "title": f"{kind} {memory_id}".strip(),
+            "excerpt": truncate(item.get("content") or ""),
+            "reference": f"mnemosyne recall «{query[:60]}»",
+            "date": stamp,
+            # Память хранит состояние наших машин, договорённости и
+            # предпочтения — всё это меняется. Отдельное поле valid_until
+            # в записи прямо говорит о сроке годности; если оно есть,
+            # сомнений тем более нет.
+            "knowledge_type": "changeable",
+            "origin": "рабочая память (Mnemosyne)",
+        })
+    return "ok", excerpts
 
 
 # ───── RepositoryEnricher — необязательный, только по явной конфигурации ─────
