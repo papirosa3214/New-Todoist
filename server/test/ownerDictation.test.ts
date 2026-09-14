@@ -587,4 +587,58 @@ describe("Окно постановки задач (карточка 4396f8c9)",
     expect(row.ready_for_pickup).toBe(0);
     expect(row.assignee_id).toBeNull();
   });
+
+  it("очередь едет дальше: закрыли первый шаг — второй уходит исполнителю сам", async () => {
+    await setMode("automatic");
+    model.impl = async () => ({
+      title: "Дело в два приёма",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [
+        { title: "Сначала это", description: "", subtasks: [], after: null },
+        { title: "Потом то", description: "", subtasks: [], after: 1 },
+      ],
+    });
+
+    const sent = await dictate("два шага по очереди");
+    const draft = await waitForDraft(sent.json().id);
+
+    const children = db
+      .prepare(
+        "SELECT id, title, assignee_id FROM tasks WHERE parent_id = ? ORDER BY position",
+      )
+      .all(draft.task_id) as Array<{
+      id: string;
+      title: string;
+      assignee_id: string | null;
+    }>;
+    // Исходное состояние: первый у исполнителя, второй ждёт.
+    expect(children[0].assignee_id).toBe(PI_AGENT_ID);
+    expect(children[1].assignee_id).toBeNull();
+
+    // Закрываем первый — так же, как это сделает исполнитель или владелец.
+    const closed = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${children[0].id}`,
+      headers: { authorization: ownerAuth },
+      payload: { status: "completed" },
+    });
+    expect(closed.statusCode).toBe(200);
+
+    // Второй должен уехать сам, без участия владельца. Без этого автомат
+    // делал ровно один шаг дерева и вставал.
+    const second = db
+      .prepare("SELECT assignee_id, dispatched_role FROM tasks WHERE id = ?")
+      .get(children[1].id) as {
+      assignee_id: string | null;
+      dispatched_role: string | null;
+    };
+    expect(second.assignee_id).toBe(PI_AGENT_ID);
+    expect(second.dispatched_role).toBeTruthy();
+
+    await setMode("manual");
+  });
 });

@@ -1117,16 +1117,17 @@ export function registerTaskRoutes(app: FastifyInstance) {
       if (body.owner_selected_role !== undefined) {
         if (!isOwner(req.userId)) {
           return reply.code(403).send({
-            error:
-              "выбрать роль задачи может только владелец трекера",
+            error: "выбрать роль задачи может только владелец трекера",
           });
         }
         const raw = body.owner_selected_role;
         if (raw !== null) {
-          if (typeof raw !== "string" || !ROLE_NAMES.includes(raw as RoleName)) {
+          if (
+            typeof raw !== "string" ||
+            !ROLE_NAMES.includes(raw as RoleName)
+          ) {
             return reply.code(400).send({
-              error:
-                `owner_selected_role должен быть одной из ролей: ${ROLE_NAMES.join(", ")}`,
+              error: `owner_selected_role должен быть одной из ролей: ${ROLE_NAMES.join(", ")}`,
             });
           }
         }
@@ -1245,6 +1246,31 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // заново открытая задача сразу выглядела занятой.
       if (releasesAgentWork) {
         releaseSubtaskWork(id);
+      }
+
+      // Карточку закрыли — значит следующая в очереди дождалась своей
+      // предшественницы и может ехать. Без этого автоматический режим
+      // делал ровно один шаг дерева и вставал: остальные карточки висели
+      // готовыми, но никто их не брал.
+      //
+      // Только на active→completed: возврат задачи в работу очередь не
+      // двигает, иначе «вернуть в работу» запускало бы следующий шаг.
+      if (body.status === "completed" && existing.status !== "completed") {
+        try {
+          // Импорт отложенный: dispatch.ts уже зависит от этого модуля
+          // (getTaskRow, hydrateTask), и статический импорт в обратную
+          // сторону замкнул бы круг.
+          const { releaseQueuedSuccessors } = await import("./dispatch.js");
+          releaseQueuedSuccessors(id);
+        } catch (err) {
+          // Очередь — надстройка над закрытием задачи, а не его часть.
+          // Если она упала, закрытие всё равно должно состояться: иначе
+          // владелец не сможет закрыть карточку из-за проблемы в соседней.
+          req.log?.warn(
+            { err: String(err) },
+            `не удалось продвинуть очередь после закрытия ${id}`,
+          );
+        }
       }
 
       // Status changes go in the journal too — the "смена состояния"

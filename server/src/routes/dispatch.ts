@@ -232,6 +232,74 @@ export function dispatchTaskToPi(
   return { ok: true, role: chosen };
 }
 
+/**
+ * Отпустить следующие карточки очереди после закрытия предшественницы.
+ *
+ * Зачем: автоматический режим поднимает флаг всему дереву, но отдаёт
+ * исполнителю только карточки без незакрытой предшественницы — иначе
+ * второй шаг поехал бы раньше первого. Без этой функции такие карточки
+ * висели бы готовыми навсегда: автомат делал ровно один шаг дерева и
+ * вставал, а владелец видел «готово, но никто не берёт».
+ *
+ * Зависимость между дочерними карточками живёт строкой в описании
+ * («⛓ ОЧЕРЕДЬ: после карточки «…»») — отдельной таблицы зависимостей в
+ * трекере нет (см. queueLine в lib/ownerDraft.ts). Поэтому и ищем по ней,
+ * а не по несуществующему графу.
+ *
+ * Карточку, которой владелец не поднимал флаг, функция не трогает: гейт
+ * готовности проверяет dispatchTaskToPi. В ручном режиме это значит, что
+ * очередь не поедет сама, и так и задумано — там запускает владелец.
+ */
+export function releaseQueuedSuccessors(completedTaskId: string): number {
+  const completed = db
+    .prepare("SELECT id, title, parent_id FROM tasks WHERE id = ?")
+    .get(completedTaskId) as
+    { id: string; title: string | null; parent_id: string | null } | undefined;
+  // Очередь существует только между дочерними карточками одного дерева.
+  if (!completed?.parent_id || !completed.title) return 0;
+
+  const marker = `⛓ ОЧЕРЕДЬ: после карточки «${completed.title}»`;
+
+  const siblings = db
+    .prepare(
+      `SELECT id, description, ready_for_pickup, assignee_id, status
+         FROM tasks
+        WHERE parent_id = ? AND id <> ?`,
+    )
+    .all(completed.parent_id, completed.id) as Array<{
+    id: string;
+    description: string | null;
+    ready_for_pickup: number | null;
+    assignee_id: string | null;
+    status: string;
+  }>;
+
+  let released = 0;
+  for (const sibling of siblings) {
+    // Сверяем подстроку в JS, а не через LIKE: название карточки пишет
+    // модель, в нём легко встретится и кавычка, и процент, и подчёркивание
+    // — экранировать их в SQL дороже и ошибочнее, чем сравнить здесь.
+    if (!sibling.description?.includes(marker)) continue;
+    if (sibling.status !== "active") continue;
+    if ((sibling.ready_for_pickup ?? 0) !== 1) continue;
+    if (sibling.assignee_id) continue;
+
+    const outcome = dispatchTaskToPi(sibling.id, PI_AGENT_ID);
+    if (outcome.ok) {
+      released += 1;
+    } else {
+      // Не молчим: карточка осталась готовой и видимой на доске, но
+      // причина, по которой её не удалось отдать, должна быть в журнале.
+      console.warn(
+        `очередь: карточку ${sibling.id} не удалось отдать после закрытия ${completedTaskId}:`,
+        outcome.error,
+      );
+    }
+  }
+
+  return released;
+}
+
 export function registerDispatchRoutes(app: FastifyInstance): void {
   const authPre = authOrApiToken;
 
