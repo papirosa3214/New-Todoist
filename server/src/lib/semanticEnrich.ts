@@ -78,7 +78,8 @@ export function getEscalationRate(windowDays = 30): number {
        FROM enrichment_escalations
        WHERE created_at >= datetime('now', ?)`,
     )
-    .get(`-${windowDays} days`) as { total: number; pending: number | null } | undefined;
+    .get(`-${windowDays} days`) as
+    { total: number; pending: number | null } | undefined;
   const total = Number(row?.total ?? 0);
   if (total === 0) return 0;
   const pending = Number(row?.pending ?? 0);
@@ -94,7 +95,23 @@ export function getEscalationRate(windowDays = 30): number {
  */
 export async function semanticEnrich(
   taskId: string,
-  opts: { topK?: number; windowDays?: number } = {},
+  opts: {
+    topK?: number;
+    windowDays?: number;
+    /**
+     * Пропустить гейт эскалаций и считать матчинг всегда.
+     *
+     * Гейт задумывался для обогащения по кнопке: там сначала отвечает
+     * детерминированный enricher, и тратиться на эмбеддинги имеет смысл,
+     * только когда он часто промахивается. Для выбора РОЛИ у диспетчера
+     * такой развилки нет: enricher подбирает старые личности
+     * (claude_bot, hermes, …), а не восемь канонических ролей, и другого
+     * источника роли, кроме этого матчинга, не существует. С закрытым
+     * гейтом — а он закрыт, пока эскалаций нет вовсе — диспетчер получал
+     * бы пустой ответ и вечно ставил дефолт.
+     */
+    ignoreGate?: boolean;
+  } = {},
 ): Promise<SemanticEnrichResult> {
   const startedAt = Date.now();
   const task = db
@@ -113,7 +130,7 @@ export async function semanticEnrich(
   }
 
   const escalationRate = getEscalationRate(opts.windowDays ?? 30);
-  const gateOpen = escalationRate > SEMANTIC_GATE_THRESHOLD;
+  const gateOpen = opts.ignoreGate || escalationRate > SEMANTIC_GATE_THRESHOLD;
   if (!gateOpen) {
     return {
       matched: [],

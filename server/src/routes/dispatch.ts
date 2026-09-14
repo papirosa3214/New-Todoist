@@ -46,14 +46,42 @@ const uid = () => crypto.randomUUID();
 // подбираются по выбранной роли уже внутри Pi.
 const PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2";
 
-// Дефолтная роль диспетчера. Та же, что отдаёт /enrich «архитектором
-// первым» — фиксируем явно, чтобы при изменении /enrich контракт
-// диспетчера не сдвигался: задача, до которой владелец не добрался
-// выбором роли, уходит архитектору, и это документировано здесь, а не
-// в наследуемом поведении enricher'а.
-const DEFAULT_DISPATCH_ROLE: RoleName = "architect";
+// Запасная роль — на случай, когда подобрать не удалось: семантика не
+// ответила (Ollama недоступна) или вернула пусто. Не «роль по умолчанию
+// для всех», а именно запасной вариант: до 14.09.2026 сюда попадало ВСЁ,
+// и любая надиктовка уходила архитектору независимо от содержания.
+const FALLBACK_DISPATCH_ROLE: RoleName = "architect";
 
-function pickRole(ownerSelected: string | null | undefined): RoleName {
+/** Насколько уверенно подобрана роль — идёт в журнал карточки. */
+export type RoleChoice = {
+  role: RoleName;
+  /** owner — выбрал владелец; semantic — подобрано по смыслу задачи;
+   *  fallback — подобрать не удалось, взят запасной вариант. */
+  how: "owner" | "semantic" | "fallback";
+  /** Близость к роли (0..1) для semantic; для остальных — null. */
+  score: number | null;
+  /** Отрыв от второй по близости роли: маленький отрыв означает, что
+   *  выбор спорный, и владельцу стоит взглянуть. */
+  margin: number | null;
+};
+
+/**
+ * Выбрать роль для карточки.
+ *
+ * Порядок из раздела 8.3 спецификации от 14.09.2026: ручное назначение
+ * владельца имеет приоритет и повторной семантической замене не
+ * подлежит; иначе работает подбор по смыслу.
+ *
+ * Второго алгоритма выбора здесь не заводится (раздел 7): используется
+ * тот же семантический матчинг по role_embeddings, что и в обогащении.
+ * Детерминированный enricher сюда не подходит — он подбирает СТАРЫЕ
+ * личности (claude_bot, hermes, …), а не восемь канонических ролей, и
+ * его ответ диспетчеру не на что положить.
+ */
+export async function pickRole(
+  taskId: string,
+  ownerSelected: string | null | undefined,
+): Promise<RoleChoice> {
   // owner_selected_role валидируется на PATCH (миграция 038), здесь
   // проверка двойная — диспетчер не должен доверять колонке, если её
   // мог заполнить путь в обход роута (например, прямая правка БД).
@@ -61,9 +89,74 @@ function pickRole(ownerSelected: string | null | undefined): RoleName {
     typeof ownerSelected === "string" &&
     (ROLE_NAMES as readonly string[]).includes(ownerSelected)
   ) {
-    return ownerSelected as RoleName;
+    return {
+      role: ownerSelected as RoleName,
+      how: "owner",
+      score: null,
+      margin: null,
+    };
   }
-  return DEFAULT_DISPATCH_ROLE;
+
+  try {
+    // ignoreGate: гейт эскалаций закрыт, пока эскалаций нет вовсе, а
+    // другого источника роли у диспетчера не существует — с закрытым
+    // гейтом он вечно ставил бы запасной вариант.
+    const { semanticEnrich } = await import("../lib/semanticEnrich.js");
+    const result = await semanticEnrich(taskId, { topK: 2, ignoreGate: true });
+    const [top, second] = result.matched;
+    if (top && (ROLE_NAMES as readonly string[]).includes(top.role)) {
+      return {
+        role: top.role as RoleName,
+        how: "semantic",
+        score: top.score,
+        margin: second ? top.score - second.score : null,
+      };
+    }
+  } catch (err) {
+    // Подбор — улучшение, а не условие запуска. Модель эмбеддингов
+    // недоступна — работа всё равно должна уехать исполнителю, пусть и
+    // с запасной ролью.
+    console.warn(`подбор роли для ${taskId} не удался:`, err);
+  }
+
+  return {
+    role: FALLBACK_DISPATCH_ROLE,
+    how: "fallback",
+    score: null,
+    margin: null,
+  };
+}
+
+/** Человеческие имена ролей — владелец читает ленту, а не наши
+ *  идентификаторы. Порядок и состав — раздел 4.2 спецификации. */
+const ROLE_TITLES_RU: Record<string, string> = {
+  researcher: "Исследователь",
+  analyst: "Аналитик",
+  synthesizer: "Синтезатор",
+  critic_verifier: "Критик-проверяющий",
+  architect: "Архитектор",
+  builder: "Разработчик",
+  qa: "QA",
+  designer: "Дизайнер",
+};
+
+/** Строка для ленты: какая роль и почему именно она. */
+export function roleChoiceNoteRu(choice: RoleChoice): string {
+  const имя = ROLE_TITLES_RU[choice.role] || choice.role;
+  if (choice.how === "owner") {
+    return `Роль «${имя}» — выбрана вами.`;
+  }
+  if (choice.how === "fallback") {
+    return `Роль «${имя}» — подобрать по смыслу не вышло, взял запасной вариант.`;
+  }
+  // Маленький отрыв от второй роли означает, что выбор спорный: две роли
+  // подошли почти одинаково. Владельцу стоит взглянуть, поэтому говорим
+  // об этом прямо, а не прячем за числом.
+  const спорно =
+    choice.margin !== null && choice.margin < 0.03
+      ? " Выбор неочевидный — рядом стояла другая роль, посмотрите, если важно."
+      : "";
+  return `Роль «${имя}» — подобрана по смыслу задачи.${спорно}`;
 }
 
 /** Чем кончилась попытка отдать карточку Pi. */
@@ -84,10 +177,10 @@ export type DispatchOutcome =
  * Гейт «только владелец» сюда НЕ входит: он про того, кто нажимает, и
  * живёт в маршруте. Здесь — про состояние карточки.
  */
-export function dispatchTaskToPi(
+export async function dispatchTaskToPi(
   taskId: string,
   actorId: string,
-): DispatchOutcome {
+): Promise<DispatchOutcome> {
   const task = db
     .prepare("SELECT * FROM tasks WHERE id = ?")
     .get(taskId) as any;
@@ -118,7 +211,10 @@ export function dispatchTaskToPi(
     };
   }
 
-  const chosen = pickRole(task.owner_selected_role);
+  // Подбор роли — ДО транзакции: он ходит за эмбеддингами по сети, а
+  // держать на этом write-лок SQLite нельзя.
+  const choice = await pickRole(taskId, task.owner_selected_role);
+  const chosen = choice.role;
 
   const rejectionRef: { current: { code: number; error: string } | null } = {
     current: null,
@@ -176,6 +272,21 @@ export function dispatchTaskToPi(
       field: "dispatched_role",
       fromValue: previousRole,
       toValue: chosen,
+    });
+
+    // Как именно выбрана роль — в ленту карточки, человеческими словами
+    // (раздел 13 спецификации: «причины выбора каждой роли и confidence,
+    // источник назначения suggested или manual»). Владелец должен видеть
+    // разницу между «я сам выбрал», «подобралось по смыслу» и «подобрать
+    // не вышло, взяли запасной вариант» — иначе непонятно, почему работа
+    // ушла именно туда, и спорный выбор нечем заметить.
+    logEvent({
+      taskId,
+      actorId,
+      kind: "role_choice",
+      field: "dispatched_role",
+      fromValue: null,
+      toValue: roleChoiceNoteRu(choice),
     });
 
     // Notification — основной шов, через него будильник ловит назначение.
@@ -250,7 +361,9 @@ export function dispatchTaskToPi(
  * готовности проверяет dispatchTaskToPi. В ручном режиме это значит, что
  * очередь не поедет сама, и так и задумано — там запускает владелец.
  */
-export function releaseQueuedSuccessors(completedTaskId: string): number {
+export async function releaseQueuedSuccessors(
+  completedTaskId: string,
+): Promise<number> {
   const completed = db
     .prepare("SELECT id, title, parent_id FROM tasks WHERE id = ?")
     .get(completedTaskId) as
@@ -284,7 +397,7 @@ export function releaseQueuedSuccessors(completedTaskId: string): number {
     if ((sibling.ready_for_pickup ?? 0) !== 1) continue;
     if (sibling.assignee_id) continue;
 
-    const outcome = dispatchTaskToPi(sibling.id, PI_AGENT_ID);
+    const outcome = await dispatchTaskToPi(sibling.id, PI_AGENT_ID);
     if (outcome.ok) {
       released += 1;
     } else {
@@ -324,7 +437,7 @@ export function registerDispatchRoutes(app: FastifyInstance): void {
         });
       }
 
-      const outcome = dispatchTaskToPi(id, req.userId);
+      const outcome = await dispatchTaskToPi(id, req.userId);
       if (!outcome.ok) {
         return reply.code(outcome.code).send({ error: outcome.error });
       }

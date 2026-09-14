@@ -1261,7 +1261,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
           // (getTaskRow, hydrateTask), и статический импорт в обратную
           // сторону замкнул бы круг.
           const { releaseQueuedSuccessors } = await import("./dispatch.js");
-          releaseQueuedSuccessors(id);
+          await releaseQueuedSuccessors(id);
         } catch (err) {
           // Очередь — надстройка над закрытием задачи, а не его часть.
           // Если она упала, закрытие всё равно должно состояться: иначе

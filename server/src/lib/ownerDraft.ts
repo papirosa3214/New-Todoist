@@ -298,12 +298,12 @@ function createDraftCards(
  * постановке нет строки очереди. Остальные остаются готовыми и ждут своей
  * очереди: отдать их сразу означало бы запустить третий шаг раньше первого.
  */
-function admitTreeAutomatically(
+async function admitTreeAutomatically(
   parentId: string,
   childIds: string[],
   cards: DictationCards,
   owner: string,
-): { dispatched: number; queued: number } {
+): Promise<{ dispatched: number; queued: number }> {
   // Исполняемые карточки и признак «есть предшественница».
   const executable: Array<{ id: string; waits: boolean }> = childIds.length
     ? childIds.map((id, i) => ({ id, waits: cards.children[i].after !== null }))
@@ -343,7 +343,7 @@ function admitTreeAutomatically(
     // Тот же путь, которым карточку отдаёт владелец руками: гейты и швы
     // доставки общие, иначе автомат начал бы запускать то, что вручную
     // запустить нельзя.
-    const outcome = dispatchTaskToPi(card.id, owner);
+    const outcome = await dispatchTaskToPi(card.id, owner);
     if (outcome.ok) {
       dispatched += 1;
     } else {
@@ -462,7 +462,7 @@ export function startDraftFromChat(message: {
         // Автоматический режим: черновик владельцу не показывается и
         // подтверждения не ждёт (раздел 8.1 спецификации). Сервер сам
         // поднимает флаг и отдаёт работу — владелец узнаёт постфактум.
-        const { dispatched, queued } = admitTreeAutomatically(
+        const { dispatched, queued } = await admitTreeAutomatically(
           taskId,
           childIds,
           cards,
