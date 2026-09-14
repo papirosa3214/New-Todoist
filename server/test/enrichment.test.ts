@@ -30,10 +30,24 @@ describe("enricher: профильный пул, эскалации и зави�
     agentTwoAuth = `Bearer ${secondAgent.token}`;
   });
 
+  /**
+   * Поднять флаг готовности, НЕ отдавая задачу исполнителю.
+   *
+   * С 14.09.2026 флаг, поднятый владельцем через API, сам отдаёт задачу Pi
+   * (владелец: «регулятором выступает флаг»). Здесь проверяется другая
+   * ветка — пул самозахвата, куда задача попадает только пока свободна,
+   * поэтому флаг ставится прямо в базу.
+   */
+  function setReadyWithoutDispatch(taskId: string) {
+    db.prepare(
+      "UPDATE tasks SET ready_for_pickup = 1, ready_set_at = datetime('now') WHERE id = ?",
+    ).run(taskId);
+  }
+
   it("публикует уверенную задачу в пул по профильной метке", async () => {
     const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "server api migration", description: "sql database" } });
     const taskId = created.json().task.id;
-    await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}`, headers: { authorization: ownerAuth }, payload: { ready_for_pickup: true } });
+    setReadyWithoutDispatch(taskId);
     const enriched = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/enrich`, headers: { authorization: agentAuth } });
     expect(enriched.statusCode).toBe(200);
     const pool = await app.inject({ method: "GET", url: "/api/tasks/pool", headers: { authorization: agentAuth } });
@@ -59,12 +73,7 @@ describe("enricher: профильный пул, эскалации и зави�
       payload: { title: "задача без тега профиля" },
     });
     const taskId = created.json().task.id;
-    await app.inject({
-      method: "PATCH",
-      url: `/api/tasks/${taskId}`,
-      headers: { authorization: ownerAuth },
-      payload: { ready_for_pickup: true },
-    });
+    setReadyWithoutDispatch(taskId);
     const claim = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/claim`,
@@ -107,12 +116,7 @@ describe("enricher: профильный пул, эскалации и зави�
       payload: { title: "server api migration race" },
     });
     const taskId = created.json().task.id;
-    await app.inject({
-      method: "PATCH",
-      url: `/api/tasks/${taskId}`,
-      headers: { authorization: ownerAuth },
-      payload: { ready_for_pickup: true },
-    });
+    setReadyWithoutDispatch(taskId);
     await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/enrich`,
@@ -133,7 +137,7 @@ describe("enricher: профильный пул, эскалации и зави�
     const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "server api task" } });
     const blockerId = blocker.json().task.id;
     const taskId = task.json().task.id;
-    await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}`, headers: { authorization: ownerAuth }, payload: { ready_for_pickup: true } });
+    setReadyWithoutDispatch(taskId);
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/enrich`, headers: { authorization: agentAuth } });
     await app.inject({ method: "PUT", url: `/api/tasks/${taskId}/dependencies`, headers: { authorization: ownerAuth }, payload: { depends_on_task_ids: [blockerId] } });
     const pool = await app.inject({ method: "GET", url: "/api/tasks/pool", headers: { authorization: agentAuth } });

@@ -116,13 +116,18 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
     });
     expect(created.statusCode).toBe(200);
     const taskId = created.json().task.id as string;
-    const flag = await app.inject({
-      method: "PATCH",
-      url: `/api/tasks/${taskId}`,
-      headers: ownerAuth,
-      payload: { ready_for_pickup: true },
-    });
-    expect(flag.statusCode).toBe(200);
+    // Флаг ставится прямо в базу, а не через PATCH: с 14.09.2026 поднятие
+    // флага владельцем САМО отдаёт задачу исполнителю (владелец: «регулятором
+    // выступает флаг»). Тестам ниже нужна карточка готовая, но ещё не
+    // отданная, — иначе проверять гейты ручного маршрута не на чем.
+    // Автоматический путь проверяется отдельно, в конце файла.
+    db.prepare(
+      `UPDATE tasks
+          SET ready_for_pickup = 1,
+              ready_set_at = datetime('now'),
+              ready_set_by = ?
+        WHERE id = ?`,
+    ).run(ownerId, taskId);
     return taskId;
   }
 
@@ -359,11 +364,16 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error).toMatch(/рол/i);
 
-    // Колонка не записана.
+    // Мусор в колонку не попал. Пустой она уже не бывает: с 14.09.2026
+    // исполнитель подбирается сразу при создании любой задачи, поэтому
+    // проверяем не «null», а «осталась допустимой ролью».
     const row = db
       .prepare("SELECT owner_selected_role FROM tasks WHERE id = ?")
       .get(taskId) as { owner_selected_role: string | null };
-    expect(row.owner_selected_role).toBeNull();
+    expect(row.owner_selected_role).not.toBe("wizard");
+    if (row.owner_selected_role !== null) {
+      expect(ROLE_NAMES).toContain(row.owner_selected_role);
+    }
   });
 
   it("не-владелец не может задать owner_selected_role → 403", async () => {
@@ -492,5 +502,77 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
       .prepare("SELECT ready_for_pickup FROM tasks WHERE id = ?")
       .get(taskId) as { ready_for_pickup: number };
     expect(after.ready_for_pickup).toBe(1);
+  });
+
+  // ───────────────────────────────────────────────────────────────────
+  // Флаг владельца сам отдаёт задачу (14.09.2026). Раньше карточка после
+  // флага стояла, пока владелец не нажимал «отдать в работу» отдельно.
+  // ───────────────────────────────────────────────────────────────────
+
+  it("владелец поднял флаг через API → задача уже у Pi, без отдельной отдачи", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title: "Флаг сам отдаёт задачу" },
+    });
+    const taskId = created.json().task.id as string;
+
+    const flag = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: ownerAuth,
+      payload: { ready_for_pickup: true },
+    });
+    expect(flag.statusCode).toBe(200);
+
+    const row = db
+      .prepare("SELECT assignee_id, dispatched_role, ready_for_pickup FROM tasks WHERE id = ?")
+      .get(taskId) as {
+      assignee_id: string | null;
+      dispatched_role: string | null;
+      ready_for_pickup: number;
+    };
+    expect(row.assignee_id).toBe(PI_AGENT_ID);
+    expect(row.dispatched_role).toBeTruthy();
+    expect(row.ready_for_pickup).toBe(1);
+  });
+
+  it("снятие флага задачу не отдаёт", async () => {
+    const taskId = await createReadyUnassigned("Флаг снимается");
+    const flag = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: ownerAuth,
+      payload: { ready_for_pickup: false },
+    });
+    expect(flag.statusCode).toBe(200);
+
+    const row = db
+      .prepare("SELECT assignee_id FROM tasks WHERE id = ?")
+      .get(taskId) as { assignee_id: string | null };
+    expect(row.assignee_id).toBeNull();
+  });
+
+  it("флаг на задаче с чужим исполнителем его не сбивает", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title: "Чужой исполнитель и флаг", assignee_id: ownerId },
+    });
+    const taskId = created.json().task.id as string;
+
+    await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: ownerAuth,
+      payload: { ready_for_pickup: true },
+    });
+
+    const row = db
+      .prepare("SELECT assignee_id FROM tasks WHERE id = ?")
+      .get(taskId) as { assignee_id: string | null };
+    expect(row.assignee_id).toBe(ownerId);
   });
 });

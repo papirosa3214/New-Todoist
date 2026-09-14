@@ -361,6 +361,75 @@ export async function dispatchTaskToPi(
  * готовности проверяет dispatchTaskToPi. В ручном режиме это значит, что
  * очередь не поедет сама, и так и задумано — там запускает владелец.
  */
+/**
+ * Приём любой новой задачи — не только надиктованной.
+ *
+ * Владелец 14.09.2026: «исполнитель подбирается сразу при создании ЛЮБОЙ
+ * задачи ЛЮБЫМ способом; в ручном режиме она показывается мне, в
+ * автоматическом — улетает в работу; регулятором выступает флаг».
+ *
+ * До этого подбор и отдача висели ТОЛЬКО на конвейере надиктовки: задача,
+ * заведённая руками, исполнителя не получала вовсе, а после поднятия флага
+ * всё равно стояла, пока владелец не нажимал «отдать в работу» отдельно.
+ * Тумблер режима на неё не влиял никак. Разделение было случайным —
+ * автоматику писали внутри голосового конвейера, и она осталась его частью.
+ *
+ * Здесь подбор пишется в owner_selected_role: это же поле владелец правит
+ * руками, и оно уже имеет приоритет в pickRole. То есть предложение видно
+ * до флага, заменяется одним движением, а согласие ничего делать не
+ * требует. Ленту это не обманывает — там пишется, что роль подобрана по
+ * смыслу, а не выбрана владельцем.
+ *
+ * Роль НЕ трогается, если владелец уже выбрал её сам или если исполнитель
+ * уже назначен: чужое решение диспетчер не переписывает.
+ */
+export async function applyIntakeToNewTask(
+  taskId: string,
+  ownerId: string,
+): Promise<void> {
+  const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as any;
+  if (!task || task.status !== "active") return;
+  // Родитель-контейнер сам не исполняется (раздел 6.3): работу делают дети.
+  const hasChildren = (
+    db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE parent_id = ?").get(taskId) as any
+  )?.n;
+  if (hasChildren) return;
+  if (task.assignee_id) return;
+
+  if (!task.owner_selected_role) {
+    const choice = await pickRole(taskId, null);
+    db.prepare(
+      `UPDATE tasks SET owner_selected_role = ?, updated_at = datetime('now')
+        WHERE id = ? AND owner_selected_role IS NULL AND assignee_id IS NULL`,
+    ).run(choice.role, taskId);
+    logEvent({
+      taskId,
+      actorId: ownerId,
+      kind: "field_changed",
+      field: "owner_selected_role",
+      toValue: roleChoiceNoteRu(choice),
+    });
+  }
+
+  const mode = (
+    db.prepare("SELECT task_intake_mode FROM users WHERE id = ?").get(ownerId) as any
+  )?.task_intake_mode;
+  // Ручной режим на этом и останавливается: задача с предложенным
+  // исполнителем ждёт владельца. Взять её всё равно нельзя — claim
+  // требует флага.
+  if (mode !== "automatic") return;
+
+  db.prepare(
+    `UPDATE tasks
+        SET ready_for_pickup = 1,
+            ready_set_at = datetime('now'),
+            ready_set_by = ?,
+            updated_at = datetime('now')
+      WHERE id = ? AND ready_for_pickup = 0`,
+  ).run(ownerId, taskId);
+  await dispatchTaskToPi(taskId, ownerId);
+}
+
 export async function releaseQueuedSuccessors(
   completedTaskId: string,
 ): Promise<number> {
