@@ -110,7 +110,9 @@ function removeUsersRoleCheck(): void {
   const ddl =
     (
       db
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'",
+        )
         .get() as { sql?: string } | undefined
     )?.sql ?? "";
   if (!ddl || !/CHECK\s*\(\s*role\s+IN\s*\([^)]*\)\s*\)/i.test(ddl)) {
@@ -165,16 +167,16 @@ function removeUsersRoleCheck(): void {
 export function runIntakePipelineMigration(target: Database = db): void {
   const colNames = (table: string): Set<string> =>
     new Set(
-      (target.prepare(`PRAGMA table_info(${table})`).all() as Array<{
-        name: string;
-      }>).map((c) => c.name),
+      (
+        target.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+          name: string;
+        }>
+      ).map((c) => c.name),
     );
 
   const tableExists = (table: string): boolean => {
     const row = target
-      .prepare(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-      )
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
       .get(table);
     return !!row;
   };
@@ -1199,11 +1201,16 @@ const migrations: Migration[] = [
       "LOCK-146: режим исполнения агента — внешний runtime или прямой API; provider/base URL/credential ref.",
     up: () => {
       const cols = new Set(
-        (db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>)
-          .map((c) => c.name),
+        (
+          db.prepare("PRAGMA table_info(users)").all() as Array<{
+            name: string;
+          }>
+        ).map((c) => c.name),
       );
       if (!cols.has("execution_mode")) {
-        db.exec("ALTER TABLE users ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'agent_runtime'");
+        db.exec(
+          "ALTER TABLE users ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'agent_runtime'",
+        );
       }
       if (!cols.has("model_provider")) {
         db.exec("ALTER TABLE users ADD COLUMN model_provider TEXT");
@@ -1229,6 +1236,118 @@ const migrations: Migration[] = [
       "tasks.needs_clarification/tasks.clarification_question — следующие шаги " +
       "конвейера будут уточнять у владельца через эти колонки.",
     up: () => runIntakePipelineMigration(db),
+  },
+  {
+    // Карточка 5ceda583: мост «owner поднял ready_for_pickup на задаче без
+    // исполнителя» → «канонический 8-ролевой выбор → запуск через Pi».
+    //
+    // Колонки четыре, все nullable, без CHECK (валидация значений живёт
+    // в коде маршрута — отдельная ось от владельца, отдельный гейт).
+    //   owner_selected_role — выбор владельца; побеждает над дефолтом
+    //     диспетчера. Ставится тем же PATCH /api/tasks/:id, что и
+    //     ready_for_pickup, но это независимая ось: можно поднять роль
+    //     заранее, а готовность — позже (или наоборот).
+    //   dispatched_role — зафиксированный диспетчером выбор. Хранится
+    //     отдельно от owner_selected_role, потому что после dispatch
+    //     owner_selected_role может быть снят без потери уже сделанного
+    //     запуска; logical role остаётся видимой именно через
+    //     dispatched_role. Так Pi runtime и будильник читают одну и ту же
+    //     колонку, а не разбираются, кто из двух её заполнил.
+    //   dispatched_at / dispatched_by — момент и автор фиксации. Нужны
+    //     ленте задачи и для повторного запуска (повторный dispatch
+    //     запрещён, пока assignee_id != NULL — а на карточке должно быть
+    //     видно, когда именно её отдали Pi).
+    //
+    // Плюс — строка учётки «Pi Agent» (1fa09a0a-...) в users. Без неё
+    // маршрут диспетчера упрётся во FOREIGN KEY при попытке поставить
+    // её assignee_id и записать notifications/agent_inbox. Живая база
+    // заводит её через vault-run (tasks/credentials.py), но в тестах
+    // (свежая БД через миграции) и в минимальной боевой раскрутке этого
+    // шага нет — диспетчер обязан работать на любой чистой раскрутке.
+    // Строка идемпотентна: если учётка с таким id уже есть, ничего не
+    // делаем; password_hash ставим пустой (заход всё равно через API
+    // token), email — локальный, чтобы не пересечься с чужими.
+    id: "038_ready_dispatch_bridge",
+    description:
+      "Мост ready→роль→Pi для задач без исполнителя (карточка 5ceda583): " +
+      "owner_selected_role, dispatched_role, dispatched_at, dispatched_by; " +
+      "плюс системная учётка Pi Agent, чтобы диспетчеру было кого назначать.",
+    up: () => {
+      const cols = new Set(
+        (
+          db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+            name: string;
+          }>
+        ).map((c) => c.name),
+      );
+      if (!cols.has("owner_selected_role")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN owner_selected_role TEXT");
+      }
+      if (!cols.has("dispatched_role")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN dispatched_role TEXT");
+      }
+      if (!cols.has("dispatched_at")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN dispatched_at TEXT");
+      }
+      if (!cols.has("dispatched_by")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN dispatched_by TEXT REFERENCES users(id)",
+        );
+      }
+      const PI_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2";
+      const exists = db.prepare("SELECT 1 FROM users WHERE id = ?").get(PI_ID);
+      if (!exists) {
+        db.prepare(
+          `INSERT INTO users (id, name, email, password_hash, role, type,
+             avatar_color, initials, status, is_system_bot)
+           VALUES (?, 'Pi Agent', 'pi-agent@taskflow.local', '',
+                   'agent', 'ai', '#10B981', 'P', 'offline', 1)`,
+        ).run(PI_ID);
+      }
+    },
+  },
+  {
+    id: "039_parent_id_and_last_seen_at",
+    description:
+      "Догоняющая миграция: tasks.parent_id и users.last_seen_at. Обе " +
+      "колонки годами живут в рабочей базе на .110, но ни одна миграция " +
+      "их не создавала — их когда-то добавили руками. На любой свежей " +
+      "раскрутке (тесты, новая машина, восстановление из схемы) их не " +
+      "было, и дерево задач с присутствием агентов там просто не " +
+      "работали. Аудит 13.09.2026, пункт про parent_id и last_seen_at.",
+    up: () => {
+      const taskCols = new Set(
+        (
+          db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+            name: string;
+          }>
+        ).map((c) => c.name),
+      );
+      if (!taskCols.has("parent_id")) {
+        // REFERENCES tasks(id) — дерево задач: родитель и дочерние карточки.
+        // ON DELETE SET NULL, а не CASCADE: удаление родителя не должно
+        // тихо уносить с собой дочернюю работу, которая может быть уже
+        // выполнена. Осиротевшая карточка видна на доске, удалённая — нет.
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN parent_id TEXT REFERENCES tasks(id) ON DELETE SET NULL",
+        );
+      }
+
+      const userCols = new Set(
+        (
+          db.prepare("PRAGMA table_info(users)").all() as Array<{
+            name: string;
+          }>
+        ).map((c) => c.name),
+      );
+      if (!userCols.has("last_seen_at")) {
+        // Момент последней активности: по нему доска показывает, кто из
+        // исполнителей на связи. NULL значит «не видели ни разу» — это
+        // честнее, чем поставить дату раскрутки базы и показать всех
+        // только что активными.
+        db.exec("ALTER TABLE users ADD COLUMN last_seen_at TEXT");
+      }
+    },
   },
 ];
 
