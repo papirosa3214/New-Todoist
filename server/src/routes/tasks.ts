@@ -180,10 +180,18 @@ export function withSubtaskState(s: any) {
   };
 }
 
+// Создатель отдаётся рядом с исполнителем: владелец 14.09.2026 —
+// «почему я не вижу в карточке, кто создаёт карточки». Раньше наружу шёл
+// только creator_id, по которому на экране ничего не покажешь; теперь с
+// карточкой едет имя и аватар, как у исполнителя. Особенно это нужно с
+// тех пор, как карточки заводит не только владелец: их создают агенты и
+// разбор надиктовки.
 export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.type as assignee_type, u.role as assignee_role, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
+             c.name as creator_name, c.type as creator_type, c.role as creator_role, c.avatar_color as creator_color, c.avatar_url as creator_avatar_url, c.initials as creator_initials,
              p.name as project_name, p.color as project_color`;
 export const TASK_JOINS = `FROM tasks t
       LEFT JOIN users u ON t.assignee_id = u.id
+      LEFT JOIN users c ON t.creator_id = c.id
       LEFT JOIN projects p ON t.project_id = p.id`;
 
 export function getTaskRow(id: string) {

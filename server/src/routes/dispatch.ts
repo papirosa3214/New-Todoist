@@ -385,8 +385,21 @@ export async function dispatchTaskToPi(
  */
 export async function applyIntakeToNewTask(
   taskId: string,
-  ownerId: string,
+  actorId: string,
 ): Promise<void> {
+  // Режим — настройка ВЛАДЕЛЬЦА, а не того, кто завёл карточку. Читать его
+  // у создателя было ошибкой: задачу может завести агент или внешний вызов,
+  // и у них всегда стоит ручной режим по умолчанию. Владелец включил
+  // автоматический — значит система работает автоматически, кто бы задачу
+  // ни создал (поймано на живом прогоне 14.09.2026: у владельца стоял
+  // «Автомат», а заведённая мной карточка осталась ждать флага).
+  const ownerRow = db
+    .prepare(
+      "SELECT id, task_intake_mode FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+    )
+    .get() as { id: string; task_intake_mode?: string } | undefined;
+  if (!ownerRow) return;
+  const ownerId = ownerRow.id;
   const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId) as any;
   if (!task || task.status !== "active") return;
   // Родитель-контейнер сам не исполняется (раздел 6.3): работу делают дети.
@@ -404,16 +417,14 @@ export async function applyIntakeToNewTask(
     ).run(choice.role, taskId);
     logEvent({
       taskId,
-      actorId: ownerId,
+      actorId,
       kind: "field_changed",
       field: "owner_selected_role",
       toValue: roleChoiceNoteRu(choice),
     });
   }
 
-  const mode = (
-    db.prepare("SELECT task_intake_mode FROM users WHERE id = ?").get(ownerId) as any
-  )?.task_intake_mode;
+  const mode = ownerRow.task_intake_mode;
   // Ручной режим на этом и останавливается: задача с предложенным
   // исполнителем ждёт владельца. Взять её всё равно нельзя — claim
   // требует флага.
