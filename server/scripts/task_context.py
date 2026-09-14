@@ -26,6 +26,12 @@ MAX_KNOWLEDGE_EXCERPTS = 5
 MAX_EXCERPT_CHARS = 800
 MAX_TOTAL_CHARS = 6000
 ADAPTER_TIMEOUT_SEC = 3
+# База знаний — единственный адаптер, который ходит в векторный поиск, а не
+# читает локальный файл. Прогретая она отвечает за ~1,3 с, но первый запрос
+# после простоя грузит модель эмбеддингов и в три секунды не укладывается.
+# С общим лимитом это выглядело как «база недоступна» ровно на первой задаче
+# после паузы — то есть почти всегда, когда работа только начинается.
+KNOWLEDGE_TIMEOUT_SEC = 15
 
 # status каждого необязательного блока (knowledge, repository):
 #   ok          — данные получены
@@ -73,7 +79,23 @@ class KnowledgeExcerpt(TypedDict, total=False):
     source: str  # "mnemosyne" | "kb" | ...
     title: str
     excerpt: str  # строго ≤ MAX_EXCERPT_CHARS после truncate
-    reference: str  # путь к первоисточнику
+    reference: str  # как достать первоисточник целиком
+    # Происхождение и актуальность (раздел 8.5 спецификации от 14.09.2026).
+    # Без этих трёх полей исполнитель не может отличить устойчивое знание от
+    # сведения о состоянии машины, которое могло протухнуть за месяц.
+    date: str  # когда фрагмент написан или последний раз проверен
+    knowledge_type: KnowledgeType
+    origin: str  # кто владелец знания: имя базы, автор урока
+
+
+# stable     — прикладное/научное знание, которое не протухает: свойства
+#              SQLite, поведение языка, устройство протокола. Переподтверждать
+#              искусственно не нужно.
+# changeable — сведения о конкретных сервисах, конфигурации и текущем
+#              состоянии: адреса, версии, «что где запущено». Для них
+#              исполнитель обязан посмотреть на дату и при необходимости
+#              сверить с живой машиной.
+KnowledgeType = Literal["stable", "changeable"]
 
 
 class KnowledgeBlock(TypedDict, total=False):
@@ -151,7 +173,11 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _run_external(cmd: list[str], stdin: str | None = None) -> tuple[int, str, str]:
+def _run_external(
+    cmd: list[str],
+    stdin: str | None = None,
+    timeout_sec: int = ADAPTER_TIMEOUT_SEC,
+) -> tuple[int, str, str]:
     """Запуск внешнего адаптера с жёстким таймаутом.
 
     Возвращает (returncode, stdout, stderr). При таймауте — returncode=-1,
@@ -164,7 +190,7 @@ def _run_external(cmd: list[str], stdin: str | None = None) -> tuple[int, str, s
             input=stdin,
             capture_output=True,
             text=True,
-            timeout=ADAPTER_TIMEOUT_SEC,
+            timeout=timeout_sec,
         )
         return proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired:
@@ -246,8 +272,12 @@ def enrich_knowledge(task: dict) -> KnowledgeBlock:
         return {"status": "empty", "excerpts": []}
 
     kb_query = "/home/maksim/kb/kb_query.py"
-    cmd = ["python3", kb_query, query]
-    code, out, err = _run_external(cmd)
+    # --json обязателен: без него kb_query.py печатает человекочитаемую
+    # выдачу со скобками и переносами, json.loads на ней падает, и блок
+    # молча уходил в «недоступно» на КАЖДОМ запуске. Так справочный
+    # контекст не доходил до исполнителя ни разу, хотя база отвечала.
+    cmd = ["python3", kb_query, "--json", query]
+    code, out, err = _run_external(cmd, timeout_sec=KNOWLEDGE_TIMEOUT_SEC)
     if code != 0:
         # FileNotFoundError -> code=127; timeout -> code=-1
         return {"status": "unavailable", "excerpts": []}
@@ -256,17 +286,39 @@ def enrich_knowledge(task: dict) -> KnowledgeBlock:
     except json.JSONDecodeError:
         return {"status": "unavailable", "excerpts": []}
 
-    raw_excerpts = parsed.get("excerpts") or []
-    if not raw_excerpts:
+    # Фактический контракт kb_query.py --json (проверен на живой базе
+    # 14.09.2026): {"results": [{source, score, text, date, verified}],
+    # "context": "..."}. Поля excerpts в нём нет и не было — прежний код
+    # читал ключ, которого база не отдаёт.
+    raw_results = parsed.get("results") or []
+    if not raw_results:
         return {"status": "empty", "excerpts": []}
 
     excerpts: list[KnowledgeExcerpt] = []
-    for item in raw_excerpts[:MAX_KNOWLEDGE_EXCERPTS]:
+    for item in raw_results[:MAX_KNOWLEDGE_EXCERPTS]:
+        # source у kb_query — имя документа урока, а не система-источник.
+        # Системой-источником здесь выступает сама база знаний.
+        document = str(item.get("source") or "")
         excerpts.append({
-            "source": item.get("source", "kb"),
-            "title": item.get("title", "")[:MAX_EXCERPT_CHARS],
-            "excerpt": truncate(item.get("excerpt") or item.get("text") or ""),
-            "reference": item.get("reference") or item.get("path") or "",
+            "source": "kb",
+            "title": document[:MAX_EXCERPT_CHARS],
+            "excerpt": truncate(item.get("text") or ""),
+            # Урок лежит в векторной базе, а не файлом на диске, поэтому
+            # честная ссылка на первоисточник — команда, которой его
+            # достают целиком. Путь в lessons/ дал бы битую ссылку: часть
+            # документов туда не попадает.
+            "reference": f'python3 ~/kb/kb_query.py --get "{document}"',
+            # verified — дата последней проверки урока, date — дата
+            # написания. Для исполнителя важнее «когда это последний раз
+            # подтверждали», поэтому verified имеет приоритет.
+            "date": str(item.get("verified") or item.get("date") or ""),
+            # Уроки базы знаний описывают наши живые сервисы, адреса и
+            # конфигурации — они устаревают, и агент обязан сверить их с
+            # машиной, прежде чем опираться. Устойчивое знание сюда тоже
+            # попадает, но безопаснее пометить лишнее как изменяемое, чем
+            # выдать протухший адрес за неизменную истину.
+            "knowledge_type": "changeable",
+            "origin": "база знаний (уроки)",
         })
     return {"status": "ok", "excerpts": excerpts}
 
@@ -400,9 +452,27 @@ def serialize_context(ctx, max_total_chars: int = MAX_TOTAL_CHARS) -> str:
                 excerpt = truncate(e.get("excerpt", ""), MAX_EXCERPT_CHARS)
                 if excerpt:
                     parts.append(f"      {excerpt}")
+                # Происхождение и срок годности фрагмента (раздел 8.5
+                # спецификации). Без них исполнитель не отличит устойчивое
+                # знание от адреса сервиса, записанного полгода назад, и
+                # будет одинаково доверять обоим.
+                тип = e.get("knowledge_type") or ""
+                дата = e.get("date") or ""
+                если_протухает = (
+                    "сведения такого рода устаревают — сверь с живой системой"
+                    if тип == "changeable"
+                    else "устойчивое знание, переподтверждать не нужно"
+                )
+                if тип or дата:
+                    подпись = f"      (актуальность: {дата or 'дата неизвестна'}"
+                    подпись += f"; {если_протухает})"
+                    parts.append(подпись)
+                origin = e.get("origin", "")
+                if origin:
+                    parts.append(f"      (источник: {origin})")
                 ref = e.get("reference", "")
                 if ref:
-                    parts.append(f"      (reference: {truncate(ref, 200)})")
+                    parts.append(f"      (полностью: {truncate(ref, 200)})")
     repository = getattr(ctx, "repository", {}) or {}
     if repository.get("status") or repository.get("branch"):
         dirty = repository.get("dirty_files") or []

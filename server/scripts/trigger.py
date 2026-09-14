@@ -298,8 +298,25 @@ ROLE_ROUTING = load_role_routing()
 
 
 def task_role(task: dict) -> str:
-    """Return the seven-role name carried by a task or its assignee."""
-    for key in ("role", "assignee_role"):
+    """Return the canonical 8-role name carried by a task.
+
+    Приоритет источников:
+      1. dispatched_role — зафиксирован диспетчером (миграция 038,
+         карточка 5ceda583). Это официальный ответ «вот роль, на которой
+         задача уехала в работу», и именно её ждёт handle_task / claim.
+      2. owner_selected_role — выбор владельца, ещё не зафиксированный
+         диспетчером. Полезно для предпросмотра карточки до dispatch.
+      3. role / assignee_role — старая пара ключей (миграция 005),
+         оставлена для совместимости с записями, заведёнными до появления
+         моста. Не источник правды, только запасной путь.
+
+    Валидация против ROLE_NAMES двойная: колонка owner_selected_role
+    проверяется и на сервере (PATCH /api/tasks/:id, routes/tasks.ts),
+    но прямые UPDATE в БД могли записать что угодно — здесь не доверяем,
+    а перепроверяем по списку ролей.
+    """
+    keys = ("dispatched_role", "owner_selected_role", "role", "assignee_role")
+    for key in keys:
         value = str(task.get(key) or "").strip().lower()
         if value in ROLE_NAMES:
             return value
@@ -1748,6 +1765,77 @@ def note(task_id: str, text: str, token: str = "") -> None:
     api("POST", f"/api/tasks/{task_id}/comments", {"text": text}, token=token)
 
 
+def _plural_ru(n: int, one: str, few: str, many: str) -> str:
+    """Русское склонение числительного: 1 урок, 2 урока, 5 уроков.
+
+    Нужно потому, что строка идёт владельцу в ленту, а «4 фрагмент(ов)» —
+    это не русский язык, а отписка.
+    """
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return many
+    last = n % 10
+    if last == 1:
+        return one
+    if 2 <= last <= 4:
+        return few
+    return many
+
+
+def context_summary_ru(ctx) -> str:
+    """Человеческая строка о собранном справочном материале — для ленты.
+
+    Владелец читает ленту карточки с телефона. Машинное
+    «knowledge=unavailable, repository=empty, warnings=0» ему ничего не
+    говорит и раздражает: непонятно, это поломка или норма. Поэтому здесь
+    — обычные русские слова и, главное, ЧТО ИМЕННО получилось, а не код
+    состояния.
+    """
+    parts: list[str] = []
+
+    knowledge = getattr(ctx, "knowledge", None) or {}
+    excerpts = knowledge.get("excerpts") or []
+    status = knowledge.get("status")
+    if status == "ok" and excerpts:
+        # Даты фрагментов важнее их числа: по ним видно, свежий материал
+        # подняли или позапрошлогодний.
+        dates = sorted({(e.get("date") or "").strip() for e in excerpts if e.get("date")})
+        когда = f", самый свежий от {dates[-1]}" if dates else ""
+        слово = _plural_ru(len(excerpts), "фрагмент", "фрагмента", "фрагментов")
+        нашлось = _plural_ru(len(excerpts), "нашёлся", "нашлось", "нашлось")
+        parts.append(f"База знаний: {нашлось} {len(excerpts)} {слово}{когда}")
+    elif status == "empty":
+        parts.append("База знаний: похожих уроков нет")
+    elif status == "denied":
+        parts.append("База знаний: доступ закрыт")
+    else:
+        parts.append("База знаний: не ответила, работаю без неё")
+
+    repository = getattr(ctx, "repository", None) or {}
+    repo_status = repository.get("status")
+    if repo_status == "ok":
+        ветка = repository.get("branch") or "неизвестная ветка"
+        грязных = len(repository.get("dirty_files") or [])
+        хвост = (
+            f", {грязных} "
+            + _plural_ru(грязных, "несохранённый файл", "несохранённых файла", "несохранённых файлов")
+            if грязных
+            else ", всё сохранено"
+        )
+        parts.append(f"Репозиторий: ветка {ветка}{хвост}")
+    elif repo_status == "empty":
+        parts.append("Репозиторий: к проекту не привязан")
+    else:
+        parts.append("Репозиторий: прочитать не удалось")
+
+    warnings = getattr(ctx, "warnings", None) or []
+    if warnings:
+        слово = _plural_ru(len(warnings), "замечание", "замечания", "замечаний")
+        parts.append(f"При сборке {len(warnings)} {слово}")
+
+    return "Материал для работы собран. " + ". ".join(parts) + "."
+
+
 def should_continue(task_id: str, before: tuple) -> tuple[bool, str]:
     """Звать ли агента снова после того, как он завершил заход.
 
@@ -2018,9 +2106,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         try:
             note(
                 task_id,
-                f"контекст подготовлен: knowledge={ctx.knowledge['status']}, "
-                f"repository={ctx.repository['status']}, "
-                f"warnings={len(ctx.warnings)}",
+                context_summary_ru(ctx),
                 token=agent.get("token") or "",
             )
         except Exception as exc:  # noqa: BLE001

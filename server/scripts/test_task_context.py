@@ -71,6 +71,69 @@ class TestEnrichersSoft(unittest.TestCase):
             ctx.knowledge["status"], ("ok", "empty", "unavailable")
         )
 
+    def test_knowledge_parses_real_kb_contract(self):
+        """Фактический ответ kb_query.py --json разбирается в фрагменты.
+
+        Раньше код читал ключ 'excerpts', которого база не отдаёт, и блок
+        уходил в 'unavailable' на каждом запуске — то есть исполнитель
+        никогда не видел базу знаний. Тест держит именно контракт:
+        {'results': [{source, score, text, date, verified}]}.
+        """
+        ответ_базы = json.dumps({
+            "results": [{
+                "source": "2026-08-29-пример-урока.md",
+                "score": 0.56,
+                "text": "тело урока",
+                "date": "2026-08-29",
+                "verified": "2026-09-01",
+            }],
+            "context": "…",
+        })
+        оригинал = tc._run_external
+        tc._run_external = lambda cmd, stdin=None, timeout_sec=None: (0, ответ_базы, "")
+        try:
+            block = tc.enrich_knowledge({"title": "т", "description": "о"})
+        finally:
+            tc._run_external = оригинал
+
+        self.assertEqual(block["status"], "ok")
+        self.assertEqual(len(block["excerpts"]), 1)
+        фрагмент = block["excerpts"][0]
+        self.assertEqual(фрагмент["excerpt"], "тело урока")
+        self.assertEqual(фрагмент["title"], "2026-08-29-пример-урока.md")
+        # Дата последней проверки важнее даты написания.
+        self.assertEqual(фрагмент["date"], "2026-09-01")
+        # Поля происхождения (раздел 8.5 спецификации) обязаны быть.
+        self.assertEqual(фрагмент["knowledge_type"], "changeable")
+        self.assertTrue(фрагмент["origin"])
+        self.assertIn("--get", фрагмент["reference"])
+
+    def test_knowledge_requests_json_output(self):
+        """Вызов идёт с --json.
+
+        Без флага kb_query.py печатает текст для человека, json.loads на
+        нём падает, и блок снова станет мёртвым — молча.
+        """
+        перехват: dict = {}
+        оригинал = tc._run_external
+
+        def подмена(cmd, stdin=None, timeout_sec=None):
+            перехват["cmd"] = cmd
+            перехват["timeout"] = timeout_sec
+            return (0, json.dumps({"results": []}), "")
+
+        tc._run_external = подмена
+        try:
+            tc.enrich_knowledge({"title": "т", "description": "о"})
+        finally:
+            tc._run_external = оригинал
+
+        self.assertIn("--json", перехват["cmd"])
+        # И отдельный лимит: на холодную база грузит модель эмбеддингов и
+        # в общие 3 секунды не укладывается.
+        self.assertEqual(перехват["timeout"], tc.KNOWLEDGE_TIMEOUT_SEC)
+        self.assertGreater(tc.KNOWLEDGE_TIMEOUT_SEC, tc.ADAPTER_TIMEOUT_SEC)
+
     def test_repository_empty_without_config(self):
         """Без конфига проекта → status='empty'."""
         ctx = tc.build_context(

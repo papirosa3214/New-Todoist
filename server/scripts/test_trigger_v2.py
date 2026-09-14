@@ -60,7 +60,12 @@ class TestTrigger(unittest.TestCase):
     def test_2_review_state_not_picked_up_by_decide(self):
         """Задача в `review`: decide возвращает (False, ...) — процесс не стартует."""
         task = make_task(agent_state="review")
-        ok, reason = trigger.decide(task, kind="comment")
+        # Исполнителем должны быть «мы», иначе decide отобьёт задачу раньше
+        # — на гейте «исполнитель не я», так и не дойдя до проверки
+        # состояния. Тест тогда проходил бы мимо того, что проверяет:
+        # зелёный результат по совершенно другой причине.
+        with patch.object(trigger, "ME", task["assignee_id"]):
+            ok, reason = trigger.decide(task, kind="comment")
         self.assertFalse(ok)
         # Причина содержит «проверк» (review) или «активна» — главное, что
         # process не запускается из review-состояния.
