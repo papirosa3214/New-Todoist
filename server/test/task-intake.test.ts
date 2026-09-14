@@ -35,6 +35,17 @@ const { buildApp } = await import("../src/index.js");
 const dbModule = await import("../src/db.js");
 const migrationsModule = await import("../src/migrations.js");
 
+// Импортируем хелпер заранее, на уровне файла — vitest кеширует модуль,
+// и нам нужен один и тот же экспорт во всех snapshot-тестах.
+const { snapshotIntakeMode: snapshotIntakeModeMod } = (await import(
+  "../src/routes/task-intake.js"
+)) as {
+  snapshotIntakeMode: (
+    ownerId: string,
+    chatMessageId: string,
+  ) => "manual" | "automatic";
+};
+
 // ── Локальные помощники ────────────────────────────────────────────────────
 
 function freshDbPath(): string {
@@ -303,6 +314,186 @@ describe("миграция 037_task_intake_pipeline", () => {
       migrationsModule.runIntakePipelineMigration(fresh.db),
     ).not.toThrow();
   });
+
+  it("на pre-037 БД (реалистичная схема через runner): defaults применены к существующим строкам, schema_migrations пополняется, идемпотентна", () => {
+    fresh = openFreshDb();
+
+    // Симулируем реалистичную pre-037 БД: migrate() + миграции 001-036
+    // уже применены, осталась только 037. Полный runner в этом тесте
+    // не подходит (он завязан на singleton db и сразу же применил бы 037
+    // вместе с остальными), поэтому собираем фикстуру руками:
+    //   - базовая схема из db.ts:migrate();
+    //   - таблицы, которые добавляют миграции до 037 включительно —
+    //     только те, к которым 037 потом обращается (chat_messages,
+    //     chat_task_drafts);
+    //   - schema_migrations с пометкой 001-036 как применённых.
+    // Хелпер runIntakePipelineMigration подключается ровно на 037.
+    applyBaseSchema(fresh.db);
+    // tasks.project_id — FK на projects, без неё INSERT INTO tasks
+    // не пройдёт. На реалистичной БД projects создаются в db.ts:migrate()
+    // вместе с остальной базой; в этой минимальной фикстуре добавляем
+    // проекты руками — ровно столько, сколько нужно, чтобы 037 смог
+    // работать со своим INSERT-путём и применять DEFAULT'ы.
+    fresh.db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT DEFAULT '#4A9FD8',
+        owner_id TEXT REFERENCES users(id),
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+    `);
+    fresh.db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY,
+        from_user_id TEXT NOT NULL REFERENCES users(id),
+        to_user_id TEXT REFERENCES users(id),
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        kind TEXT CHECK (kind IS NULL OR kind IN ('совещание','делегирование','находка')),
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    // 028: chat_task_drafts в её исходном виде (без intake_mode, который
+    // добавит 037). CHECK на status — ровно тот, что в миграции 028.
+    fresh.db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_task_drafts (
+        chat_message_id TEXT PRIMARY KEY
+          REFERENCES chat_messages(id) ON DELETE CASCADE,
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        status TEXT NOT NULL
+          CHECK (status IN ('pending', 'done', 'failed')),
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT
+      );
+    `);
+    // schema_migrations — таблица, которую ведёт runMigrations().
+    fresh.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        id TEXT PRIMARY KEY,
+        description TEXT,
+        applied_at TEXT DEFAULT (datetime('now'))
+      );
+    `);
+    // Помечаем 001-036 как применённые. Без этого раннер при следующем
+    // запуске решил бы, что их ещё нет, и попытался бы выполнить —
+    // а их up() завязаны на singleton db.
+    const markApplied = fresh.db.prepare(
+      "INSERT INTO schema_migrations (id, description) VALUES (?, ?)",
+    );
+    for (let i = 1; i <= 36; i++) {
+      markApplied.run(
+        `${String(i).padStart(3, "0")}_pre037_fixture`,
+        "смоделировано в тесте pre-037 фикстуры",
+      );
+    }
+
+    // Вставляем живые строки ДО 037, чтобы убедиться, что DEFAULT'ы
+    // применяются и к ним.
+    fresh.db
+      .prepare(
+        "INSERT INTO users (id, name, email, password_hash) VALUES ('u-pre-1', 'Pre1', 'pre1@x', 'h')",
+      )
+      .run();
+    fresh.db
+      .prepare(
+        "INSERT INTO tasks (id, title, creator_id) VALUES ('t-pre-1', 'PreTask1', 'u-pre-1')",
+      )
+      .run();
+    fresh.db
+      .prepare(
+        "INSERT INTO chat_messages (id, from_user_id, text) VALUES ('m-pre-1', 'u-pre-1', 'pre')",
+      )
+      .run();
+    fresh.db
+      .prepare(
+        "INSERT INTO chat_task_drafts (chat_message_id, status) VALUES ('m-pre-1', 'pending')",
+      )
+      .run();
+
+    // До прогона 037 — ни одной из новых колонок в схеме быть не должно.
+    expect(columnInfo(fresh.db, "users", "task_intake_mode")).toBeUndefined();
+    expect(columnInfo(fresh.db, "chat_task_drafts", "intake_mode")).toBeUndefined();
+    expect(columnInfo(fresh.db, "tasks", "needs_clarification")).toBeUndefined();
+    expect(columnInfo(fresh.db, "tasks", "clarification_question")).toBeUndefined();
+    // И запись 037 в schema_migrations ещё не появилась.
+    expect(
+      fresh.db
+        .prepare(
+          "SELECT 1 FROM schema_migrations WHERE id = '037_task_intake_pipeline'",
+        )
+        .get(),
+    ).toBeUndefined();
+
+    // Прогон 037 (тело — то же, что у одноимённой миграции) и запись
+    // в schema_migrations тем же приёмом, что и runMigrations(). Это
+    // проверяет не только схему, но и контракт runner'а: 037 реально
+    // записывается в журнал.
+    fresh.db.transaction(() => {
+      migrationsModule.runIntakePipelineMigration(fresh.db);
+      fresh.db
+        .prepare(
+          "INSERT INTO schema_migrations (id, description) VALUES (?, ?)",
+        )
+        .run(
+          "037_task_intake_pipeline",
+          "Owner intake mode и снимок режима на сообщение",
+        );
+    })();
+
+    // Колонки добавлены и DEFAULT'ы применены к УЖЕ существующим строкам.
+    const u = columnInfo(fresh.db, "users", "task_intake_mode");
+    expect(u).toBeDefined();
+    expect(u!.dflt_value).toBe("'manual'");
+    const preUser = fresh.db
+      .prepare("SELECT task_intake_mode FROM users WHERE id = 'u-pre-1'")
+      .get() as { task_intake_mode: string };
+    expect(preUser.task_intake_mode).toBe("manual");
+
+    const t = columnInfo(fresh.db, "tasks", "needs_clarification");
+    expect(t).toBeDefined();
+    expect(t!.dflt_value).toBe("0");
+    const preTask = fresh.db
+      .prepare(
+        "SELECT needs_clarification, clarification_question FROM tasks WHERE id = 't-pre-1'",
+      )
+      .get() as { needs_clarification: number; clarification_question: string | null };
+    expect(preTask.needs_clarification).toBe(0);
+    expect(preTask.clarification_question).toBeNull();
+
+    const d = columnInfo(fresh.db, "chat_task_drafts", "intake_mode");
+    expect(d).toBeDefined();
+    expect(d!.dflt_value).toBe("'manual'");
+    const preDraft = fresh.db
+      .prepare(
+        "SELECT intake_mode FROM chat_task_drafts WHERE chat_message_id = 'm-pre-1'",
+      )
+      .get() as { intake_mode: string };
+    expect(preDraft.intake_mode).toBe("manual");
+
+    // 037 записана в schema_migrations.
+    const recorded = fresh.db
+      .prepare(
+        "SELECT id FROM schema_migrations WHERE id = '037_task_intake_pipeline'",
+      )
+      .get() as { id: string };
+    expect(recorded.id).toBe("037_task_intake_pipeline");
+
+    // Идемпотентность: повторный прогон 037 (как сделал бы runMigrations
+    // при следующем старте сервера) не падает и не дублирует запись.
+    fresh.db.transaction(() => {
+      migrationsModule.runIntakePipelineMigration(fresh.db);
+    })();
+    const recordedCount = (
+      fresh.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM schema_migrations WHERE id = '037_task_intake_pipeline'",
+        )
+        .get() as { n: number }
+    ).n;
+    expect(recordedCount).toBe(1);
+  });
 });
 
 describe("owner /api/task-intake/settings", () => {
@@ -462,56 +653,52 @@ describe("snapshotIntakeMode: режим фиксируется в строке 
       .run(id, ownerIdValue, "test message");
   }
 
-  function makeDraftRow(chatMessageId: string): void {
-    // Без intake_mode — колонка получена миграцией 037, DEFAULT 'manual'
-    // заполнит её автоматически. Здесь имитируем строку ДО вызова
-    // snapshotIntakeMode, чтобы хелпер обновил её явно.
-    dbModule.default
-      .prepare(
-        "INSERT INTO chat_task_drafts (chat_message_id, status) VALUES (?, 'pending')",
-      )
-      .run(chatMessageId);
-  }
-
   it("записывает режим владельца в intake_mode и возвращает его", async () => {
     makeChatMessage("m-snap-1");
-    makeDraftRow("m-snap-1");
+    // Без makeDraftRow — хелпер сам заводит строку черновика и кладёт
+    // в неё снимок из users.task_intake_mode. До этого хелпера никаких
+    // INSERT в chat_task_drafts быть не должно.
 
-    const { snapshotIntakeMode } = await import("../src/routes/task-intake.js");
-    const mode = snapshotIntakeMode(ownerIdValue, "m-snap-1");
+    const mode = snapshotIntakeModeMod(ownerIdValue, "m-snap-1");
     expect(mode).toBe("manual");
 
     const row = dbModule.default
       .prepare(
-        "SELECT intake_mode FROM chat_task_drafts WHERE chat_message_id = ?",
+        "SELECT intake_mode, status FROM chat_task_drafts WHERE chat_message_id = ?",
       )
-      .get("m-snap-1") as { intake_mode: string };
+      .get("m-snap-1") as { intake_mode: string; status: string };
     expect(row.intake_mode).toBe("manual");
+    // Хелпер сам ставит status='pending' (то же поведение, что у
+    // прежнего INSERT в lib/ownerDraft.ts — Task 6 его заменит на этот
+    // helper).
+    expect(row.status).toBe("pending");
   });
 
   it("не перечитывает users.task_intake_mode для уже снапшотнутой строки", async () => {
-    // Шаг 1: владелец в 'manual' (по умолчанию), снимаем снапшот.
+    // Шаг 1: владелец в 'manual', делаем снимок для сообщения.
     dbModule.default
       .prepare("UPDATE users SET task_intake_mode = 'manual' WHERE id = ?")
       .run(ownerIdValue);
     makeChatMessage("m-snap-2");
-    makeDraftRow("m-snap-2");
-    const { snapshotIntakeMode } = await import("../src/routes/task-intake.js");
-    const first = snapshotIntakeMode(ownerIdValue, "m-snap-2");
+
+    const first = snapshotIntakeModeMod(ownerIdValue, "m-snap-2");
     expect(first).toBe("manual");
 
-    // Шаг 2: владелец переключает общий режим на 'automatic' ДО разбора
-    // (модель ещё не вызвана, потому что это юнит-тест хелпера — а в
-    // живой цепочке именно так и будет: снимок снимается ДО модели).
+    // Шаг 2: владелец переключает общий режим на 'automatic'. В живой
+    // цепочке этот момент и есть «поздние стадии»: модель ещё не
+    // вызвана, снимок уже сделан, и переключение пользовательской
+    // настройки НЕ должно затереть то, что лежит в строке.
     dbModule.default
       .prepare("UPDATE users SET task_intake_mode = 'automatic' WHERE id = ?")
       .run(ownerIdValue);
 
-    // Шаг 3: хранимое значение в строке НЕ изменилось от того, что
-    // владелец поменял настройку. Это и есть «поздние стадии не
-    // перечитывают пользовательскую настройку»: модель и конвейер
-    // читают chat_task_drafts.intake_mode и видят зафиксированное
-    // значение, а не текущее users.task_intake_mode.
+    // Шаг 3: повторный вызов хелпера для того же сообщения. Идемпотентность
+    // держится БД-уровневой метой (ON CONFLICT DO NOTHING), а не модульным
+    // состоянием — поэтому тест работает даже если процесс/модуль были
+    // перезапущены между вызовами.
+    const second = snapshotIntakeModeMod(ownerIdValue, "m-snap-2");
+    expect(second).toBe("manual");
+
     const row = dbModule.default
       .prepare(
         "SELECT intake_mode FROM chat_task_drafts WHERE chat_message_id = ?",
@@ -525,9 +712,8 @@ describe("snapshotIntakeMode: режим фиксируется в строке 
       .prepare("UPDATE users SET task_intake_mode = 'automatic' WHERE id = ?")
       .run(ownerIdValue);
     makeChatMessage("m-snap-3");
-    makeDraftRow("m-snap-3");
-    const { snapshotIntakeMode } = await import("../src/routes/task-intake.js");
-    const mode = snapshotIntakeMode(ownerIdValue, "m-snap-3");
+
+    const mode = snapshotIntakeModeMod(ownerIdValue, "m-snap-3");
     expect(mode).toBe("automatic");
 
     // Возвращаем к 'manual', чтобы тесты ниже друг друга не задевали.

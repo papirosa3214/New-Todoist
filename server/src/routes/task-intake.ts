@@ -40,94 +40,68 @@ function ownerIdOrNull(): string | null {
 }
 
 /**
- * chat_message_id, для которых снимок режима уже сделан в этой сессии.
- *
- * Колонка chat_task_drafts.intake_mode — NOT NULL DEFAULT 'manual', так
- * что по самому значению в строке нельзя отличить «записано хелпером» от
- * «дефолт миграции» (оба выглядят как 'manual'). Без отдельного маркера
- * повторный вызов хелпера для того же сообщения перечитывал бы
- * users.task_intake_mode — и перезаписывал бы снимок, если владелец
- * успел переключить режим. Эта карта — наш маркер.
- *
- * Живёт только в памяти процесса: помощь нужна ровно на время обработки
- * одного сообщения, после чего хелпер уже не дёргают. При перезапуске
- * сервера снимок не нужен — следующее сообщение создаст новую строку, и
- * хелпер для неё сработает с чистого листа.
- */
-const snapshotted = new Set<string>();
-
-/**
  * Зафиксировать режим владельца в строке черновика. Одна транзакция:
- *   1) прочитать текущий users.task_intake_mode;
- *   2) если для этого chat_message_id снимок ещё не делался — записать
- *      прочитанное значение в chat_task_drafts.intake_mode и запомнить
- *      chat_message_id в snapshotted. Если уже делался — не перечитывать
- *      пользовательскую настройку и не перезаписывать строку;
- *   3) вернуть значение, которое лежит в строке.
+ *   1) INSERT INTO chat_task_drafts (chat_message_id, status, intake_mode)
+ *      SELECT ?, 'pending', task_intake_mode FROM users WHERE id = ?
+ *      ON CONFLICT(chat_message_id) DO NOTHING;
+ *      при первом вызове — атомарно создаём строку черновика со статусом
+ *      'pending' и снимком режима из users.task_intake_mode. При повторном
+ *      вызове для того же chat_message_id — ON CONFLICT DO NOTHING молча
+ *      пропускает вставку, и существующий снимок остаётся как есть (даже
+ *      если владелец успел переключить users.task_intake_mode);
+ *   2) читаем строку и возвращаем значение, которое в ней лежит.
  *
- * Логика «один снимок на сообщение» держит его стабильным, даже если
- * владелец переключит режим между попытками. Хелпер детерминирован для
- * одного chat_message_id: первый вызов фиксирует режим, все последующие
- * возвращают то же значение.
+ * Никакого модульного состояния: повторный вызов в другом процессе, после
+ * рестарта или в параллельной Node-сессии ведёт себя так же — берёт то,
+ * что лежит в БД. Это и есть «поздние стадии не перечитывают настройку».
+ *
+ * Запись через INSERT ... SELECT из той же базы гарантирует, что режим
+ * снимка — это users.task_intake_mode на момент вызова (а не статичный
+ * DEFAULT 'manual'). На существующей строке SELECT пропускается целиком.
  */
 export function snapshotIntakeMode(
   ownerId: string,
   chatMessageId: string,
 ): IntakeMode {
-  if (snapshotted.has(chatMessageId)) {
+  const apply = db.transaction(() => {
+    // Атомарный upsert: при первом вызове — вставляем строку черновика
+    // со снимком режима из users, при повторном — ON CONFLICT оставляет
+    // уже зафиксированное значение нетронутым. Никаких промежуточных
+    // SELECT перед INSERT: гонки «выбрали режим → владелец переключил →
+    // вставили старое» тут нет, потому что и SELECT, и INSERT — одна
+    // statement на одной и той же БД.
+    db.prepare(
+      `INSERT INTO chat_task_drafts (chat_message_id, status, intake_mode)
+       SELECT ?, 'pending', task_intake_mode
+         FROM users
+        WHERE id = ?
+       ON CONFLICT(chat_message_id) DO NOTHING`,
+    ).run(chatMessageId, ownerId);
+
     const row = db
       .prepare(
         "SELECT intake_mode FROM chat_task_drafts WHERE chat_message_id = ?",
       )
       .get(chatMessageId) as { intake_mode: IntakeMode } | undefined;
     if (!row) {
+      // Сюда попадаем, только если у userId нет строки в users (тогда
+      // INSERT ... SELECT дал 0 строк и ничего не вставил) или если
+      // chat_message_id вовсе не существует в chat_messages (FK на
+      // chat_messages сработает на INSERT, и в БД ничего не появится).
+      // В обоих случаях хелпер должен явно об этом сказать — молчаливое
+      // «manual» смазало бы ошибку в конвейере.
       throw new Error(
-        `snapshotIntakeMode: строка chat_task_drafts ${chatMessageId} не найдена`,
+        `snapshotIntakeMode: строка chat_task_drafts ${chatMessageId} не появилась ` +
+          `(проверьте, что владелец ${ownerId} существует и сообщение ${chatMessageId} ` +
+          `уже в chat_messages)`,
       );
     }
     // На случай, если в строке оказалось значение вне enum (например,
     // БД правили руками) — отдать дефолт, не пускать чужой режим.
     return isIntakeMode(row.intake_mode) ? row.intake_mode : "manual";
-  }
-
-  const apply = db.transaction(() => {
-    const userRow = db
-      .prepare(
-        "SELECT task_intake_mode FROM users WHERE id = ?",
-      )
-      .get(ownerId) as { task_intake_mode: IntakeMode } | undefined;
-    // Без владельца работать не с чем — пусть это видно сразу, на этапе
-    // хелпера. Не в роуте — там владелец уже проверен, а вот следующие
-    // этапы конвейера могут звать хелпер из фонового пути.
-    if (!userRow) {
-      throw new Error(
-        `snapshotIntakeMode: владелец ${ownerId} не найден в users`,
-      );
-    }
-    const fromUser = userRow.task_intake_mode;
-
-    const draftRow = db
-      .prepare(
-        "SELECT 1 FROM chat_task_drafts WHERE chat_message_id = ?",
-      )
-      .get(chatMessageId);
-    if (!draftRow) {
-      throw new Error(
-        `snapshotIntakeMode: строка chat_task_drafts ${chatMessageId} не найдена`,
-      );
-    }
-
-    db.prepare(
-      "UPDATE chat_task_drafts SET intake_mode = ? WHERE chat_message_id = ?",
-    ).run(fromUser, chatMessageId);
-    return fromUser;
   });
 
-  const result = apply();
-  snapshotted.add(chatMessageId);
-  // Валидация на случай расхождения схемы: если в БД оказалось значение
-  // вне нашего enum, дать дефолт, а не пускать чужой режим в конвейер.
-  return isIntakeMode(result) ? result : "manual";
+  return apply();
 }
 
 export function registerTaskIntakeRoutes(app: FastifyInstance): void {
