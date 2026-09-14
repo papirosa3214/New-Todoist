@@ -125,7 +125,12 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
         );
       }
 
-      return await unitState();
+      // ok: true — подтверждение того, что переключение действительно
+      // выполнено, а не просто «вот текущее состояние». GET возвращает
+      // те же active/enabled без ok, и без этого флага клиент не отличал
+      // успешную мутацию от обычного чтения: тумблер в интерфейсе мог
+      // отрисовать старое положение как подтверждённое.
+      return { ok: true, ...(await unitState()) };
     },
   );
 }
