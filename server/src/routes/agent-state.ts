@@ -18,10 +18,12 @@ import {
 } from "../enricher.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
+import { nextAttemptTemplate as computeNextAttemptTemplate } from "../lib/attemptLadder.js";
 import {
-  nextAttemptTemplate as computeNextAttemptTemplate,
-} from "../lib/attemptLadder.js";
-import { currentResultVersion, ensureResultVersionForReview, hasApprovedCurrentVersion } from "../resultVersions.js";
+  currentResultVersion,
+  ensureResultVersionForReview,
+  hasApprovedCurrentVersion,
+} from "../resultVersions.js";
 import {
   isStopReasonCode,
   stopReasonError,
@@ -182,6 +184,31 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // Упёрся и сказал об этом — незакрытые шаги там законны.
       if (state === "blocked") continue;
 
+      // НАЗНАЧЕНА — ЕЩЁ НЕ ЗНАЧИТ «ВЕДЁШЬ» (14.09.2026).
+      //
+      // Отбор выше берёт все активные задачи с этим assignee_id, а дальше
+      // фильтруются только «упёрся» и «чужая сессия». Карточка, которую
+      // владелец заранее назначил, но никто не брал, проходила оба фильтра
+      // (agent_state NULL, сессии нет) и попадала в выдачу как «задача,
+      // которую ты ведёшь». Формулировка гейта переставала быть правдой, а
+      // главное — выйти из него было нельзя: claim такую задачу не трогал,
+      // а перевести её в blocked сервер не даёт («invalid transition» из
+      // состояния «не взята»). Сессия запиралась насмерть на работе, к
+      // которой никто не притрагивался.
+      //
+      // Прецедент: 12 карточек спека 2, назначенных на Claude_Bot заранее,
+      // держали чужую сессию, занятую совершенно другой работой.
+      //
+      // «Ведёшь» — это след работы: задача взята (есть agent_state или
+      // сессия) либо тронут хоть один шаг. Нетронутое назначение гейт
+      // отпускает: напоминать о нём — дело доски и будильника, а не
+      // Stop-хука.
+      const neverStarted =
+        !state &&
+        !t.agent_session_id &&
+        steps.every((s) => !s.done && !s.agent_state && !s.agent_heartbeat_at);
+      if (neverStarted) continue;
+
       // Задачу, которую прямо сейчас ведёт другой процесс под тем же ботом,
       // доделать нельзя: не зная, что там сделано, честного result не
       // напишешь. Но СДАННУЮ работу проверяем всегда, чья бы сессия ни
@@ -221,14 +248,17 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       }
     }
 
-    if (!unfinished.length && !awaiting.length) return { can_stop: true, tasks: [] };
+    if (!unfinished.length && !awaiting.length)
+      return { can_stop: true, tasks: [] };
 
     rememberWarned(
       mySession,
       unfinished.filter((u) => u.foreign).map((u) => u.id),
     );
 
-    const lines: string[] = ["⛔ ЖЁСТКИЙ ГЕЙТ: ход пытается закончиться, а работа не отпущена."];
+    const lines: string[] = [
+      "⛔ ЖЁСТКИЙ ГЕЙТ: ход пытается закончиться, а работа не отпущена.",
+    ];
 
     if (awaiting.length) {
       lines.push(
@@ -239,7 +269,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         lines.push(`  • «${a.title}» (${a.id.slice(0, 8)}…):`);
         for (const k of a.children) {
           const what =
-            k.agent_state === "review" ? "сдал на проверку" : "упёрся и ждёт решения";
+            k.agent_state === "review"
+              ? "сдал на проверку"
+              : "упёрся и ждёт решения";
           lines.push(`      — «${k.title}» (${k.id.slice(0, 8)}…) ${what}`);
         }
       }
@@ -298,7 +330,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/claim", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      let task = getTaskForWrite(req.params.id, req.userId) ??
+      let task =
+        getTaskForWrite(req.params.id, req.userId) ??
         getTaskForReview(req.params.id, req.userId);
       if (!task) {
         // An unassigned task created by the owner is readable by an agent,
@@ -473,7 +506,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         ) {
           claimRejection = {
             code: 409,
-            error: "задачу уже держит другой исполнитель — гонка за claim проиграна",
+            error:
+              "задачу уже держит другой исполнитель — гонка за claim проиграна",
           };
           return;
         }
@@ -490,7 +524,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           return;
         }
         const latestWho = {
-          isOwner: isTrackerOwner(req.userId) || latest.creator_id === req.userId,
+          isOwner:
+            isTrackerOwner(req.userId) || latest.creator_id === req.userId,
           isExecutor:
             latest.assignee_id === req.userId || latest.assignee_id === null,
           leaseExpired: latestLeaseExpired,
@@ -580,7 +615,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // The rejection is assigned inside the transaction callback, so make
       // the post-transaction value explicit for TypeScript's control-flow
       // analysis.
-      const rejection = claimRejection as { code: number; error: string } | null;
+      const rejection = claimRejection as {
+        code: number;
+        error: string;
+      } | null;
       if (rejection) {
         return reply.code(rejection.code).send({ error: rejection.error });
       }
@@ -611,7 +649,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/api/tasks/:id/heartbeat", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForWrite(req.params.id, req.userId) ??
+      const task =
+        getTaskForWrite(req.params.id, req.userId) ??
         getTaskForReview(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
@@ -697,7 +736,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/state", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForWrite(req.params.id, req.userId) ??
+      const task =
+        getTaskForWrite(req.params.id, req.userId) ??
         getTaskForReview(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
@@ -840,13 +880,14 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
               "UPDATE attempts SET reason_code = ? WHERE id = ? AND ended_at IS NULL",
             ).run(reasonCode, attemptId);
             if (policy.automaticRetry) {
-              const retryNo = (
-                db
-                  .prepare(
-                    "SELECT COALESCE(MAX(retry_no), 0) AS n FROM attempt_retries WHERE attempt_id = ?",
-                  )
-                  .get(attemptId) as { n: number }
-              ).n + 1;
+              const retryNo =
+                (
+                  db
+                    .prepare(
+                      "SELECT COALESCE(MAX(retry_no), 0) AS n FROM attempt_retries WHERE attempt_id = ?",
+                    )
+                    .get(attemptId) as { n: number }
+                ).n + 1;
               if (retryNo <= policy.maxAutomaticRetries) {
                 db.prepare(
                   `INSERT INTO attempt_retries
@@ -989,13 +1030,21 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             task.assignee_id,
             comment || "задача возвращена на доработку",
             task.id,
-            (db.prepare("SELECT current_revision FROM tasks WHERE id=?").get(task.id) as any)?.current_revision ?? null,
+            (
+              db
+                .prepare("SELECT current_revision FROM tasks WHERE id=?")
+                .get(task.id) as any
+            )?.current_revision ?? null,
           );
           registryRecord({
             source: "review_return",
             trigger: "POST /api/tasks/:id/state",
             toUserId: task.assignee_id,
-            data: { task_id: task.id, actor_id: req.userId, inbox_id: returnInboxId },
+            data: {
+              task_id: task.id,
+              actor_id: req.userId,
+              inbox_id: returnInboxId,
+            },
             result: "review→in_progress",
           });
         }
@@ -1013,8 +1062,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         // state='review') записываем исход и причину в текущую попытку.
         // Шаг 5 (сторож) закроет попытку при истечении аренды отдельным
         // сценарием — здесь только успешный release / сдача на проверку.
-        if (state === null || state === 'review') {
-          const outcome = state === 'review' ? 'review' : 'released';
+        if (state === null || state === "review") {
+          const outcome = state === "review" ? "review" : "released";
           db.prepare(
             `UPDATE attempts
                 SET ended_at = datetime('now'), outcome = ?, reason = ?
@@ -1146,7 +1195,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         typeof req.body?.comment === "string" ? req.body.comment.trim() : "";
       const attemptId = (task as any).current_attempt_id as string | null;
       if (!attemptId) {
-        return reply.code(400).send({ error: "у задачи нет действующей попытки" });
+        return reply
+          .code(400)
+          .send({ error: "у задачи нет действующей попытки" });
       }
 
       const currentAttempt = db
@@ -1161,13 +1212,15 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             routing_role: string | null;
           }
         | undefined;
-      const assigneeRole = currentAttempt?.routing_role ?? (task.assignee_id
-        ? (
-            db
-              .prepare("SELECT role FROM users WHERE id = ?")
-              .get(task.assignee_id) as { role?: string | null } | undefined
-          )?.role
-        : null);
+      const assigneeRole =
+        currentAttempt?.routing_role ??
+        (task.assignee_id
+          ? (
+              db
+                .prepare("SELECT role FROM users WHERE id = ?")
+                .get(task.assignee_id) as { role?: string | null } | undefined
+            )?.role
+          : null);
       const fallback =
         reasonCode === "provider_limit" && assigneeRole
           ? nextShellForRole(
@@ -1182,12 +1235,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           "SELECT COALESCE(MAX(retry_no), 0) AS n FROM attempt_retries WHERE attempt_id = ?",
         )
         .get(attemptId) as { n: number };
-      if (
-        policy.automaticRetry &&
-        retry.n >= policy.maxAutomaticRetries
-      ) {
+      if (policy.automaticRetry && retry.n >= policy.maxAutomaticRetries) {
         return reply.code(409).send({
-          error: "лимит технических повторов исчерпан — нужно решение владельца",
+          error:
+            "лимит технических повторов исчерпан — нужно решение владельца",
           reason_code: reasonCode,
           action: "wait_owner",
           retry_count: retry.n,
