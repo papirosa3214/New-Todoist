@@ -6,6 +6,7 @@ import {
   useRenameAgent,
   useDeleteAgent,
 } from "../api/agents";
+import { useRoles, type RoleDetails } from "../api/roles";
 import { useCurrentUser } from "../api/auth";
 import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
 import {
@@ -273,7 +274,11 @@ function AgentRow({
   }
 
   return (
-    <div data-hswipe className="relative overflow-hidden" onPointerDown={swipe.onPointerDown}>
+    <div
+      data-hswipe
+      className="relative overflow-hidden"
+      onPointerDown={swipe.onPointerDown}
+    >
       {/* Удалить — слева, открывается свайпом вправо */}
       <button
         onClick={() => {
@@ -380,8 +385,118 @@ function AgentRow({
   );
 }
 
+// ── Роли: живые профили из GET /api/roles ──────────────────────────────
+//
+// Показывает не учётки-личности (это список «Команда» ниже), а восемь
+// компетенций с их фактической конфигурацией: тем самым промптом,
+// набором инструментов и моделью, с которыми реально стартует
+// исполнитель. Своей копии настроек здесь нет — иначе экран показывал бы
+// одно, а запускалось бы другое.
+
+/** Точка состояния. Красный — только там, где нужно внимание владельца:
+ *  сломана сама роль или она упёрлась. «Работает» — нормальный ход дел,
+ *  он не тревога; «Готова» — покой, и подсвечивать его нечем.
+ *
+ *  Остановленный исполнитель точку НЕ красит: причина общая для всех
+ *  восьми, она сказана один раз строкой над списком. Иначе экран
+ *  показывал бы восемь тревог там, где поломка одна и чинится в другом
+ *  месте. */
+function roleDotClass(role: RoleDetails): string {
+  if (role.problems.length > 0 || role.status === "blocked") return "bg-red";
+  if (role.status === "working") return "bg-text";
+  return "bg-dim";
+}
+
+function RoleRow({ role }: { role: RoleDetails }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left tap-row"
+      >
+        <span
+          className={`shrink-0 w-2 h-2 rounded-full ${roleDotClass(role)}`}
+          aria-hidden
+        />
+        <span className="flex-1 min-w-0">
+          <span className="block text-[15px] text-text truncate">
+            {role.title}
+          </span>
+          <span className="block text-[12px] text-sub truncate">
+            {role.status_title}
+            {role.current_task ? ` · ${role.current_task.title}` : ""}
+          </span>
+        </span>
+        <Icon
+          name={open ? "chevronUp" : "chevronDown"}
+          size={16}
+          className="shrink-0 text-dim"
+        />
+      </button>
+
+      {open && (
+        <div className="px-4 pb-3 -mt-1">
+          {role.problems.length > 0 && (
+            <p className="text-[12px] text-red mb-2">
+              {role.problems.join(". ")}
+            </p>
+          )}
+
+          <dl className="text-[12px] mb-2">
+            <div className="flex gap-2">
+              <dt className="text-dim shrink-0">Модель</dt>
+              <dd className="text-sub truncate">{role.model || "не задана"}</dd>
+            </div>
+            {role.default_shell && (
+              <div className="flex gap-2">
+                <dt className="text-dim shrink-0">Оболочка</dt>
+                <dd className="text-sub truncate">
+                  {role.default_shell}
+                  {role.fallbacks?.length
+                    ? ` → ${role.fallbacks.join(" → ")}`
+                    : ""}
+                </dd>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <dt className="text-dim shrink-0">Инструментов</dt>
+              <dd className="text-sub">{role.tools.length}</dd>
+            </div>
+          </dl>
+
+          {role.skills.length > 0 && (
+            <p className="text-[12px] text-sub mb-2">
+              {role.skills.map((s) => s.skill_name).join(", ")}
+            </p>
+          )}
+
+          {/* Промпт — то, с чем роль реально стартует. Показываем начало:
+              целиком это несколько экранов текста, а убедиться нужно, что
+              он вообще есть и тот самый. */}
+          {role.prompt ? (
+            <p className="text-[12px] text-dim whitespace-pre-wrap line-clamp-4">
+              {role.prompt}
+            </p>
+          ) : (
+            <p className="text-[12px] text-red">Системный промпт не найден</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AgentsScreen() {
   const { data: agents = [], isLoading, error, isError } = useAgents();
+  const {
+    data: roles = [],
+    isLoading: rolesLoading,
+    error: rolesError,
+    isError: rolesIsError,
+  } = useRoles();
   const { data: me } = useCurrentUser();
   const createAgent = useCreateAgent();
   const deleteAgent = useDeleteAgent();
@@ -428,6 +543,40 @@ export function AgentsScreen() {
         className="mt-3"
       />
 
+      {/* Роли — компетенции и их живая конфигурация. Отдельно от списка
+          учёток ниже: там «кто заведён в системе», здесь «что умеет и чем
+          занята» — это разные вопросы, и мешать их в один список значит не
+          ответить ни на один. */}
+      <div className="text-[13px] text-sub font-semibold px-1 mb-2 mt-2">
+        Роли
+      </div>
+      <ErrorBanner
+        error={rolesIsError ? rolesError : null}
+        fallback="Не удалось загрузить профили ролей"
+        variant="block"
+        className="mb-2"
+      />
+      {rolesLoading && <Loading className="mb-4" />}
+      {/* Общая причина — одной строкой. Исполнитель один на все роли:
+          пока он стоит, работать некому, какой бы исправной ни была
+          конфигурация. Тумблер автономки — в настройках. */}
+      {!rolesLoading && roles.length > 0 && !roles[0].runtime_ready && (
+        <p className="text-[12px] text-sub px-1 mb-2">
+          Исполнитель не запущен — роли настроены, но работать некому.
+          Включите автономный режим в настройках.
+        </p>
+      )}
+      <div className="mb-4">
+        <FieldGroup>
+          {roles.map((r) => (
+            <RoleRow key={r.role} role={r} />
+          ))}
+          {!rolesLoading && roles.length === 0 && (
+            <div className="px-4 py-3 text-[13px] text-dim">Ролей нет</div>
+          )}
+        </FieldGroup>
+      </div>
+
       {/* Team */}
       <div className="text-[13px] text-sub font-semibold px-1 mb-2 mt-2">
         Команда
@@ -441,17 +590,19 @@ export function AgentsScreen() {
       />
       <div className="mb-4">
         <FieldGroup>
-        {agents.map((u) => (
-          <AgentRow
-            key={u.id}
-            agent={u}
-            editable={isOwner && u.type === "ai"}
-            onRequestDelete={handleDeleteAgent}
-          />
-        ))}
-        {!isLoading && agents.length === 0 && (
-            <div className="px-4 py-3 text-[13px] text-dim">Нет пользователей</div>
-        )}
+          {agents.map((u) => (
+            <AgentRow
+              key={u.id}
+              agent={u}
+              editable={isOwner && u.type === "ai"}
+              onRequestDelete={handleDeleteAgent}
+            />
+          ))}
+          {!isLoading && agents.length === 0 && (
+            <div className="px-4 py-3 text-[13px] text-dim">
+              Нет пользователей
+            </div>
+          )}
         </FieldGroup>
       </div>
 
@@ -569,11 +720,21 @@ export function AgentsScreen() {
             key={role}
             className="flex items-start gap-3 px-4 py-3 border-b border-stroke last:border-b-0"
           >
-            <Icon name="bot" size={18} className="text-purple mt-0.5 shrink-0" />
+            <Icon
+              name="bot"
+              size={18}
+              className="text-purple mt-0.5 shrink-0"
+            />
             <div className="min-w-0">
-              <div className="text-[14px] text-text font-medium">{meta.label}</div>
-              <div className="text-[12px] text-sub leading-4 mt-0.5">{meta.purpose}</div>
-              <div className="text-[11px] text-dim leading-4 mt-0.5">{meta.specialization}</div>
+              <div className="text-[14px] text-text font-medium">
+                {meta.label}
+              </div>
+              <div className="text-[12px] text-sub leading-4 mt-0.5">
+                {meta.purpose}
+              </div>
+              <div className="text-[11px] text-dim leading-4 mt-0.5">
+                {meta.specialization}
+              </div>
             </div>
           </div>
         ))}

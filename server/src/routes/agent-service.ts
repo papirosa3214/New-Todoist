@@ -29,8 +29,15 @@ const UNIT = "taskflow-trigger";
 // висела в «critical» — в таком шуме настоящую поломку не разглядеть.
 const WATCH_UNIT = "taskflow-trigger-watch.timer";
 
-/** Живое состояние юнита: работает ли сейчас и включён ли автозапуск. */
-async function unitState(): Promise<{ active: boolean; enabled: boolean }> {
+/** Живое состояние юнита: работает ли сейчас и включён ли автозапуск.
+ *
+ *  Экспортируется для /api/roles: статус роли зависит от того, жив ли
+ *  вообще исполнитель, и спрашивать об этом надо в одном месте — иначе
+ *  два экрана начнут по-разному считать, работает ли автономка. */
+export async function unitState(): Promise<{
+  active: boolean;
+  enabled: boolean;
+}> {
   try {
     const { stdout } = await run("systemctl", [
       "--user",
