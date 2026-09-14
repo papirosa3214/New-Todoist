@@ -15,6 +15,7 @@
 // миграция — новый прирост схемы, который раньше пришлось бы дописывать в
 // migrate() тем же наращиваемым стилем; теперь это отдельная, поимённая,
 // один раз применяемая запись.
+import type { Database } from "better-sqlite3";
 import db from "./db.js";
 
 export type Migration = {
@@ -145,6 +146,92 @@ function removeUsersRoleCheck(): void {
     }
   } finally {
     db.pragma("foreign_keys = ON");
+  }
+}
+
+/**
+ * Тело миграции 037_task_intake_pipeline. Экспортируется отдельно, чтобы
+ * тесты могли прогнать его на отдельном свежем better-sqlite3-инстансе
+ * (модульный db.ts-синглтон к этому моменту уже занят). Идемпотентна:
+ * проверяет наличие колонки перед ALTER, повторный прогон не падает.
+ *
+ * На «свежей» БД (только users/tasks/chat_messages, без chat_task_drafts)
+ * таблица черновиков заводится прямо здесь — с уже включённой колонкой
+ * intake_mode и её CHECK. Так 037 остаётся самодостаточной и в тестах
+ * (минимальная схема), и на свежей установке (где 028 ещё не отработала,
+ * потому что 037 теперь идёт позже). На «живой» БД таблица уже есть
+ * из 028 — добавляем колонку через ALTER TABLE.
+ */
+export function runIntakePipelineMigration(target: Database = db): void {
+  const colNames = (table: string): Set<string> =>
+    new Set(
+      (target.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+        name: string;
+      }>).map((c) => c.name),
+    );
+
+  const tableExists = (table: string): boolean => {
+    const row = target
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+      )
+      .get(table);
+    return !!row;
+  };
+
+  // users.task_intake_mode — текущий режим приёма задач владельцем.
+  const userCols = colNames("users");
+  if (!userCols.has("task_intake_mode")) {
+    target.exec(
+      `ALTER TABLE users ADD COLUMN task_intake_mode TEXT NOT NULL DEFAULT 'manual' ` +
+        `CHECK (task_intake_mode IN ('manual', 'automatic'))`,
+    );
+  }
+
+  // chat_task_drafts.intake_mode — снимок режима на момент разбора.
+  if (!tableExists("chat_task_drafts")) {
+    // Свежая БД (или прогон в тесте с минимальной схемой) — таблицы
+    // ещё нет. Создаём её с полной формой из 028 ПЛЮС intake_mode + CHECK,
+    // чтобы 037 оставалась самодостаточной и не требовала 028 раньше
+    // себя для теста с урезанной схемой.
+    target.exec(`
+      CREATE TABLE chat_task_drafts (
+        chat_message_id TEXT PRIMARY KEY
+          REFERENCES chat_messages(id) ON DELETE CASCADE,
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        status TEXT NOT NULL
+          CHECK (status IN ('pending', 'done', 'failed')),
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT,
+        intake_mode TEXT NOT NULL DEFAULT 'manual'
+          CHECK (intake_mode IN ('manual', 'automatic'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_task_drafts_task
+        ON chat_task_drafts(task_id);
+    `);
+  } else if (!colNames("chat_task_drafts").has("intake_mode")) {
+    // Живая БД (028 уже отработала) — добавляем колонку через ALTER.
+    // CHECK в ADD COLUMN поддержан SQLite давно (валидация значений ещё
+    // дублируется хелпером snapshotIntakeMode в routes/task-intake.ts).
+    target.exec(
+      `ALTER TABLE chat_task_drafts ADD COLUMN intake_mode TEXT NOT NULL DEFAULT 'manual' ` +
+        `CHECK (intake_mode IN ('manual', 'automatic'))`,
+    );
+  }
+
+  // tasks.needs_clarification — следующие шаги конвейера попросят
+  // владельца уточнить задачу; флаг поднимается, пока уточнения нет.
+  const taskCols = colNames("tasks");
+  if (!taskCols.has("needs_clarification")) {
+    target.exec(
+      `ALTER TABLE tasks ADD COLUMN needs_clarification INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
+  // tasks.clarification_question — текст вопроса к владельцу (NULL,
+  // пока уточнения нет).
+  if (!taskCols.has("clarification_question")) {
+    target.exec(`ALTER TABLE tasks ADD COLUMN clarification_question TEXT`);
   }
 }
 
@@ -1128,6 +1215,20 @@ const migrations: Migration[] = [
         db.exec("ALTER TABLE users ADD COLUMN model_credential_ref TEXT");
       }
     },
+  },
+  {
+    id: "037_task_intake_pipeline",
+    description:
+      "Owner intake mode и снимок режима на сообщение (карточка 5f292e87, " +
+      "серверная половина, шаг 1). users.task_intake_mode — текущий режим " +
+      "приёма задач ('manual'|'automatic'), это источник правды (НЕ " +
+      "user_defaults). chat_task_drafts.intake_mode — снимок на момент " +
+      "разбора надиктовки: фиксируется ДО обращения к модели и больше не " +
+      "перечитывается, даже если владелец переключит режим в процессе " +
+      "(карточка из старого режима не должна неожиданно стать «автоматической»). " +
+      "tasks.needs_clarification/tasks.clarification_question — следующие шаги " +
+      "конвейера будут уточнять у владельца через эти колонки.",
+    up: () => runIntakePipelineMigration(db),
   },
 ];
 

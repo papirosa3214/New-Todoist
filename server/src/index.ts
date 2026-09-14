@@ -46,6 +46,7 @@ import { registerSeedRoutes } from "./seed.js";
 import { registerEnrichmentRoutes } from "./routes/enrichment.js";
 import { registerReviewRoutes } from "./routes/reviews.js";
 import { registerRoleRoutes } from "./routes/roles.js";
+import { registerTaskIntakeRoutes } from "./routes/task-intake.js";
 
 /**
  * Собирает и возвращает готовый Fastify-инстанс — регистрирует плагины,
@@ -228,6 +229,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerEnrichmentRoutes(app);
   await registerReviewRoutes(app);
   registerRoleRoutes(app);
+  registerTaskIntakeRoutes(app);
   registerProjectLabelRoutes(app);
   registerCompassRoutes(app);
   registerSubtaskCommentRoutes(app);
