@@ -73,7 +73,13 @@ async function getFreshGoogleToken(userId: string): Promise<string | null> {
       }),
     });
 
-    if (!res.ok) return row.access_token;
+    // Раньше тут возвращался `row.access_token` (протухший) — и тогда
+    // ручка ниже шла в Google за списками с битым токеном, Google отдавал
+    // 401, ручка пробрасывала его клиенту, а APIClient на любой 401 чистил
+    // токен сессии и разлогинивал. Сейчас на неуспешный refresh и на сетевую
+    // ошибку возвращаем null — ручка уйдёт в ветку «Google не подключён»,
+    // а та теперь отвечает пустым массивом/200 или 412, не 401.
+    if (!res.ok) return null;
     const data = (await res.json()) as GoogleTokenResponse;
     const expiresAt = Date.now() + (data.expires_in || 3600) * 1000;
 
@@ -83,7 +89,7 @@ async function getFreshGoogleToken(userId: string): Promise<string | null> {
 
     return data.access_token;
   } catch {
-    return row.access_token;
+    return null;
   }
 }
 
@@ -233,7 +239,10 @@ export function registerIntegrationRoutes(app: FastifyInstance) {
     const userId = getUserId(req);
     const token = await getFreshGoogleToken(userId);
     if (!token) {
-      return reply.code(401).send({ error: "Google аккаунт не подключён" });
+      // Не 401: APIClient на любой 401 чистит токен сессии и разлогинивает,
+      // а здесь состояние «Google не подключён» (или протух, см. комментарий
+      // в `getFreshGoogleToken`) — это не про сессию.
+      return { lists: [] };
     }
 
     try {
@@ -255,7 +264,7 @@ export function registerIntegrationRoutes(app: FastifyInstance) {
     const userId = getUserId(req);
     const token = await getFreshGoogleToken(userId);
     if (!token) {
-      return reply.code(401).send({ error: "Google аккаунт не подключён" });
+      return { calendars: [] };
     }
 
     try {
@@ -283,7 +292,7 @@ export function registerIntegrationRoutes(app: FastifyInstance) {
     const userId = getUserId(req);
     const token = await getFreshGoogleToken(userId);
     if (!token) {
-      return reply.code(401).send({ error: "Google аккаунт не подключён" });
+      return { events: [] };
     }
 
     const { date, calendarIds } = req.query as { date?: string; calendarIds?: string };
@@ -354,8 +363,11 @@ export function registerIntegrationRoutes(app: FastifyInstance) {
   app.post("/api/integrations/google/sync", { preHandler: authOrApiToken }, async (req, reply) => {
     const userId = getUserId(req);
     const token = await getFreshGoogleToken(userId);
+    // 412, а не 401: см. длинный комментарий в `getFreshGoogleToken` и в
+    // `/google/lists`. Это экшен, не чтение — пользователь должен явно
+    // увидеть, что Google надо переподключить.
     if (!token) {
-      return reply.code(401).send({ error: "Google аккаунт не подключён" });
+      return reply.code(412).send({ error: "Google аккаунт не подключён или токен требует повторного входа" });
     }
 
     const { listId = "@default" } = (req.body as any) || {};
