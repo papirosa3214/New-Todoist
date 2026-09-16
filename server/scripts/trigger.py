@@ -44,18 +44,11 @@ TOKEN = os.environ.get("TASKFLOW_TOKEN", "").strip()
 # карточку и ничего не произошло — «не берёт в работу, будильник не зовёт».
 # Одно соединение на агента, чьи задачи мы обслуживаем.
 HERMES_TOKEN = os.environ.get("TASKFLOW_HERMES_TOKEN", "").strip()
-# Служебный ключ триггера — для фиксации технических падений
-# claim/launch_agent через POST /api/tasks/:id/state {state: "blocked",
-# block_type: "technical", ...}. Отдельный от ролевого ключа: ролевой
-# мог и быть причиной падения, и блокировку обязательно писать
-# служебной учёткой (taskflow-pipeline-head-plan.md, шаг 2).
-#
-# Если переменная не задана — fallback на TOKEN (Pi Agent). Серверная
-# сторона уже умеет пускать Pi Agent по сервисной двери (см.
-# agent-state.ts: SERVICE_USER_IDS, isServiceUser). Если владелец
-# заведёт отдельного trigger-service пользователя, его api_token
-# пойдёт в TASKFLOW_TRIGGER_SERVICE_TOKEN и этот fallback выключится.
-SERVICE_TOKEN = os.environ.get("TASKFLOW_TRIGGER_SERVICE_TOKEN", TOKEN).strip()
+# Служебный ключ триггера для записи state=blocked при технических
+# падениях (план: taskflow-pipeline-head-plan.md, шаг 2). Отдельный
+# от ролевого — ролевой мог сам быть причиной падения.
+# Подаётся systemd drop-in'ом рядом с восемью ролевыми --secret.
+SERVICE_TOKEN = os.environ["TASKFLOW_SERVICE_TOKEN"].strip()
 HOME = Path.home()
 CLAUDE_BIN = str(HOME / ".npm-global/bin/claude")
 PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2"
@@ -1797,28 +1790,52 @@ def set_state(task_id: str, state: str, comment: str, token: str = "") -> None:
         {"state": state, "comment": comment}, token=token)
 
 
-def _mark_technical_blocked(task_id: str, exc: BaseException) -> None:
-    """Шаг 2 шапки конвейера: пометить задачу state=blocked,
-    block_type='technical' через СЛУЖЕБНЫЙ ключ триггера. Ролевой мог
-    быть причиной падения, поэтому повторять с ним же — нельзя.
+def _human_block_reason(exc: BaseException, role: str | None = None) -> str:
+    """Шаг 2: превратить техническое исключение в человеческую фразу.
+    Не traceback — план требует «для человека, не для грепа»."""
+    name = type(exc).__name__
+    msg = str(exc)
+    role_part = role or "?"
+    if "HTTPError" in name and "403" in msg:
+        return f"Заход не состоялся: claim вернул 403, ключ роли {role_part} не принят сервером"
+    if "HTTPError" in name and "404" in msg:
+        return "Заход не состоялся: карточка не найдена на сервере (404)"
+    if "HTTPError" in name and "409" in msg:
+        return f"Заход не состоялся: гонка за claim проиграна (409)"
+    if "Timeout" in name or "timeout" in msg.lower() or "таймаут" in msg.lower():
+        return "Заход не состоялся: таймаут сети при claim/launch"
+    if "ConnectionError" in name or "ConnectionReset" in name:
+        return "Заход не состоялся: сеть упала при claim/launch"
+    if "KeyError" in name and "TOKEN" in msg:
+        return f"Заход не состоялся: нет ключа роли {role_part} в окружении триггера"
+    if "FileNotFoundError" in name and ("pi" in msg.lower() or "PI_BIN" in msg):
+        return "Заход не состоялся: исполнимый файл Pi не найден в PATH"
+    return f"Заход не состоялся: {name}: {msg}"
 
-    Помечает мягко: если сам PATCH упал, не роняем выход — лучше карточка
-    останется в полу-видимом состоянии, чем служба упадёт и замолчит.
+
+def block_card(card_id: str, block_type: str, reason: str,
+               token: str = "") -> None:
+    """Шаги 2/3/4: одна функция перевода карточки в blocked.
+
+    Пишет: state=blocked, block_type, blocked_reason, blocked_at=now(),
+    block_notified=false. retry_count НЕ трогает — его ведёт планировщик.
+    Мягко: если PATCH упал, не роняем выход.
+    token по умолчанию — SERVICE_TOKEN (служебный ключ триггера).
     """
-    reason = f"{type(exc).__name__}: {exc}"
+    target = token or SERVICE_TOKEN
     try:
         api(
             "POST",
-            f"/api/tasks/{task_id}/state",
+            f"/api/tasks/{card_id}/state",
             {
                 "state": "blocked",
-                "block_type": "technical",
+                "block_type": block_type,
                 "blocked_reason": reason,
                 "comment": reason,
             },
-            token=SERVICE_TOKEN,
+            token=target,
         )
-        log(f"  ⚑ задача {task_id[:8]} помечена blocked/technical: {reason}")
+        log(f"  ⚑ задача {card_id[:8]} помечена blocked/{block_type}: {reason}")
     except Exception as mark_exc:  # noqa: BLE001
         log(f"  ⚠️ не удалось пометить задачу как blocked: "
             f"{type(mark_exc).__name__}: {mark_exc}")
@@ -2261,11 +2278,11 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         except Exception as exc:  # noqa: BLE001 — задача 16.09.2026 (шаг 2)
             # claim упал с HTTP/timeout — НЕЛЬЗЯ слать повторно с тем же
             # ролевым ключом (он мог и быть причиной). Помечаем карточку
-            # blocked служебным ключом, чтобы планировщик (шаг 4) мог
-            # ретраить.
+            # blocked служебным ключом, чтобы планировщик (шаг 4) мог ретраить.
+            role = task_role(task) if task else None
             log(f"  ❌ claim упал на {task_id[:8]} для «{agent_label(agent)}»: "
                 f"{type(exc).__name__}: {exc}")
-            _mark_technical_blocked(task_id, exc)
+            block_card(task_id, "technical", _human_block_reason(exc, role), token=token)
             with LOCK:
                 RUNNING.pop(task_id, None)
             return
@@ -2505,9 +2522,10 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         # неожиданное, или note/heartbeat сорвал соединение). Карточка
         # взята — её нужно снять с in_progress и пометить как технический
         # сбой СЛУЖЕБНЫМ ключом, иначе планировщик (шаг 4) её не увидит.
+        role = task_role(task) if task else None
         log(f"  ❌ техническое падение в заходе «{agent_label(agent)}»: "
             f"{type(exc).__name__}: {exc}")
-        _mark_technical_blocked(task_id, exc)
+        block_card(task_id, "technical", _human_block_reason(exc, role), token=token)
         raise
         # Итог доставки (Review 07.09.2026: сбой сразу оставляет видимую
         # blocked-причину): цепочка отработала — done, последний заход упал
