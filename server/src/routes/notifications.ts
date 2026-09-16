@@ -1,9 +1,59 @@
 import type { FastifyInstance } from "fastify";
+import crypto from "node:crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { isServiceUser } from "./agent-state.js";
+
+const uid = () => crypto.randomUUID();
 
 export function registerNotificationRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
+
+  // POST /api/notifications — служебная дверь для планировщика (шаг 5).
+  // Только service user. Создаёт уведомление для указанного user_id
+  // (как правило, владельца) с типом task_dead и текстом причины.
+  app.post<{
+    Body: {
+      user_id: string;
+      type: string;
+      task_id?: string;
+      text: string;
+      actor_id?: string;
+    };
+  }>("/api/notifications", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      if (!isServiceUser(req.userId)) {
+        return reply.code(403).send({
+          error:
+            "создавать уведомления через API может только служебный ключ",
+        });
+      }
+      const { user_id, type, task_id, text, actor_id } = req.body || {};
+      if (typeof user_id !== "string" || !user_id) {
+        return reply.code(400).send({ error: "user_id обязателен" });
+      }
+      if (typeof type !== "string" || !type) {
+        return reply.code(400).send({ error: "type обязателен" });
+      }
+      if (typeof text !== "string" || !text.trim()) {
+        return reply.code(400).send({ error: "text обязателен" });
+      }
+      const id = uid();
+      db.prepare(
+        `INSERT INTO notifications (id, user_id, type, task_id, text, actor_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        user_id,
+        type,
+        task_id ?? null,
+        text.trim(),
+        actor_id ?? null,
+      );
+      return reply.code(201).send({ id });
+    },
+  });
 
   app.get("/api/notifications", { preHandler: authPre }, async (req: any) => {
     return db

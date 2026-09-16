@@ -186,11 +186,83 @@ def branch_repick_wrong_role() -> int:
     return handled
 
 
+def branch_notify_dead() -> int:
+    """Ветка 3: уведомление владельцу о карточках в dead.
+
+    Идём только по карточкам с agent_state='blocked', block_type='dead',
+    block_notified=false. По каждой:
+      - шлём notification через POST /api/notifications (служебный ключ)
+      - помечаем block_notified=true через POST /state
+
+    Канал доставки — то, что уже подключено к notifications в стеке
+    (через n8n webhook в Telegram, см. trigger_watch.py:alert_send).
+    Никаких новых внешних каналов не добавляем.
+    """
+    tasks = api(
+        "GET",
+        "/api/tasks?agent_state=blocked&block_type=dead",
+    )
+    if not isinstance(tasks, list):
+        log(f"  ⚠️ ветка 3: ответ не список — {tasks!r}")
+        return 0
+    handled = 0
+    for t in tasks:
+        task_id = t.get("id")
+        title = t.get("title") or "(без названия)"
+        blocked_reason = t.get("blocked_reason") or ""
+        role_exclusions = t.get("role_exclusions") or "[]"
+        retry_count = t.get("retry_count", 0) or 0
+        block_notified = t.get("block_notified", False)
+        if not task_id or block_notified:
+            continue
+        # Владелец — единственный user с role='owner' (см. AGENT-PROTOCOL.md).
+        owner = api("GET", "/api/users?role=owner")
+        owner_id = None
+        if isinstance(owner, list) and owner:
+            owner_id = owner[0].get("id")
+        if not owner_id:
+            log(f"  ⚠️ {task_id[:8]}: владелец не найден, пропускаю")
+            continue
+
+        text = (
+            f"⛔ Карточка в тупике (dead):\n"
+            f"  id: {task_id}\n"
+            f"  заголовок: {title}\n"
+            f"  причина: {blocked_reason}\n"
+            f"  отказались (role_exclusions): {role_exclusions}\n"
+            f"  попыток (retry_count): {retry_count}"
+        )
+        notif = api(
+            "POST",
+            "/api/notifications",
+            {
+                "user_id": owner_id,
+                "type": "task_dead",
+                "task_id": task_id,
+                "text": text,
+                "actor_id": None,
+            },
+        )
+        if not notif.get("id"):
+            log(f"  ⚠️ {task_id[:8]}: notification не создан — {notif!r}")
+            continue
+        # Помечаем notified=true, чтобы следующий проход не слал повторно.
+        api(
+            "POST",
+            f"/api/tasks/{task_id}/state",
+            {"state": "blocked", "block_notified": True},
+        )
+        log(f"  ✉ {task_id[:8]} → владельцу {owner_id[:8]} (dead)")
+        handled += 1
+    return handled
+
+
 def main() -> int:
     log("обход доски")
     n1 = branch_retry_technical()
     n2 = branch_repick_wrong_role()
-    log(f"итого: ветка 1={n1}, ветка 2={n2}")
+    n3 = branch_notify_dead()
+    log(f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}")
     return 0
 
 
