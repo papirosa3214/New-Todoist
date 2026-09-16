@@ -1480,6 +1480,98 @@ const migrations: Migration[] = [
       ).run(...deletingProjects);
     },
   },
+  {
+    id: "042_pipeline_head",
+    description:
+      "Шапка конвейера (см. taskflow-pipeline-head-plan.md, шаг 0). " +
+      "Разделить ручной и машинный выбор роли: добавить machine_selected_role, " +
+      "role_exclusions (JSON-массив строк в TEXT-поле — SQLite массивов " +
+      "не имеет), пометки blocked-задач (blocked_reason, block_type) и " +
+      "счётчик ретраев (retry_count). Бэкфилл owner_selected_role → " +
+      "machine_selected_role: для задач с непустым owner_selected_role " +
+      "проверяем task_events — есть запись с field='owner_selected_role'? " +
+      "Если да — оставляем как ручное назначение владельца. Если нет " +
+      "(значение попало туда машинным путём) — переносим в " +
+      "machine_selected_role и обнуляем owner_selected_role. Если у задачи " +
+      "вообще нет событий — owner_selected_role обнуляется без переноса, " +
+      "роутер переподберёт.",
+    up: () => {
+      const cols = new Set(
+        (
+          db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+            name: string;
+          }>
+        ).map((c) => c.name),
+      );
+
+      if (!cols.has("machine_selected_role")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN machine_selected_role text");
+      }
+      if (!cols.has("role_exclusions")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN role_exclusions text NOT NULL DEFAULT '[]'",
+        );
+      }
+      if (!cols.has("blocked_reason")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN blocked_reason text");
+      }
+      if (!cols.has("block_type")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN block_type text");
+      }
+      if (!cols.has("retry_count")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN retry_count integer NOT NULL DEFAULT 0",
+        );
+      }
+
+      // Бэкфилл owner_selected_role → machine_selected_role.
+      const rows = db
+        .prepare(
+          `SELECT id, owner_selected_role
+             FROM tasks
+            WHERE owner_selected_role IS NOT NULL`,
+        )
+        .all() as Array<{ id: string; owner_selected_role: string }>;
+
+      const hasManual = db.prepare(
+        `SELECT 1 FROM task_events
+           WHERE task_id = ? AND field = 'owner_selected_role'
+           LIMIT 1`,
+      );
+      const hasAnyEvent = db.prepare(
+        `SELECT 1 FROM task_events WHERE task_id = ? LIMIT 1`,
+      );
+      const moveStmt = db.prepare(
+        `UPDATE tasks
+            SET machine_selected_role = ?, owner_selected_role = NULL
+          WHERE id = ?`,
+      );
+      const clearStmt = db.prepare(
+        `UPDATE tasks SET owner_selected_role = NULL WHERE id = ?`,
+      );
+
+      let kept = 0,
+        moved = 0,
+        cleared = 0;
+      for (const row of rows) {
+        if (hasManual.get(row.id)) {
+          kept++;
+          continue;
+        }
+        if (hasAnyEvent.get(row.id)) {
+          moveStmt.run(row.owner_selected_role, row.id);
+          moved++;
+        } else {
+          clearStmt.run(row.id);
+          cleared++;
+        }
+      }
+
+      console.log(
+        `[042_pipeline_head] backfill: kept=${kept} moved=${moved} cleared=${cleared}`,
+      );
+    },
+  },
 ];
 
 /**
