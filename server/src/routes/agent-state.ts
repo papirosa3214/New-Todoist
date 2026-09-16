@@ -718,6 +718,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // техническое падение от ручного «не моя роль».
       block_type?: string;
       blocked_reason?: string;
+      blocked_at?: string;
+      block_notified?: boolean;
     };
   }>("/api/tasks/:id/state", {
     preHandler: authPre,
@@ -975,16 +977,26 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
                agent_session_id = COALESCE(?, agent_session_id) WHERE id = ?`,
           ).run(state, sessionOf(req), task.id);
         } else if (state === "blocked" && (blockType || blockedReason)) {
-          // Шаг 2: вместе с переходом в blocked записываем тип причины
-          // и её текст, чтобы планировщик (шаг 4) мог различать
-          // технические ретраи и переподбор роли. Если оба пустые —
-          // пишем только agent_state (поведение не меняется).
+          // Шаг 2: вместе с переходом в blocked записываем тип причины,
+          // её текст, время ухода в blocked и сбрасываем notified (шаг 5).
+          // Если оба пустые — пишем только agent_state (поведение не меняется).
           db.prepare(
             `UPDATE tasks SET agent_state = ?,
                               block_type = COALESCE(?, block_type),
-                              blocked_reason = COALESCE(?, blocked_reason)
+                              blocked_reason = COALESCE(?, blocked_reason),
+                              blocked_at = COALESCE(?, blocked_at),
+                              block_notified = COALESCE(?, block_notified)
               WHERE id = ?`,
-          ).run(state, blockType ?? null, blockedReason || null, task.id);
+          ).run(
+            state,
+            blockType ?? null,
+            blockedReason || null,
+            req.body?.blocked_at ?? null,
+            typeof req.body?.block_notified === "boolean"
+              ? (req.body.block_notified ? 1 : 0)
+              : null,
+            task.id,
+          );
         } else {
           db.prepare("UPDATE tasks SET agent_state = ? WHERE id = ?").run(
             state,
