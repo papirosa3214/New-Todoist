@@ -67,16 +67,32 @@ const FALLBACK_DISPATCH_ROLE: RoleName = "architect";
 
 /** Насколько уверенно подобрана роль — идёт в журнал карточки. */
 export type RoleChoice = {
-  role: RoleName;
-  /** owner — выбрал владелец; semantic — подобрано по смыслу задачи;
-   *  fallback — подобрать не удалось, взят запасной вариант. */
-  how: "owner" | "semantic" | "fallback";
+  role: RoleName | null;
+  /** owner — выбрал владелец (owner_selected_role); machine — взяли
+   *  ранее записанный machine_selected_role; semantic — подобрано по
+   *  смыслу задачи после фильтра role_exclusions; fallback — подобрать
+   *  не удалось, взят запасной вариант; dead — после фильтра
+   *  role_exclusions кандидатов не осталось, role при этом null. */
+  how: "owner" | "machine" | "semantic" | "fallback" | "dead";
   /** Близость к роли (0..1) для semantic; для остальных — null. */
   score: number | null;
   /** Отрыв от второй по близости роли: маленький отрыв означает, что
    *  выбор спорный, и владельцу стоит взглянуть. */
   margin: number | null;
 };
+
+/** Распарсить role_exclusions (TEXT, JSON-массив строк) из задачи. */
+function parseRoleExclusions(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr)
+      ? arr.filter((x): x is string => typeof x === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Выбрать роль для карточки.
@@ -94,6 +110,8 @@ export type RoleChoice = {
 export async function pickRole(
   taskId: string,
   ownerSelected: string | null | undefined,
+  machineSelected: string | null | undefined,
+  roleExclusions: readonly string[] = [],
 ): Promise<RoleChoice> {
   // owner_selected_role валидируется на PATCH (миграция 038), здесь
   // проверка двойная — диспетчер не должен доверять колонке, если её
@@ -110,19 +128,52 @@ export async function pickRole(
     };
   }
 
+  // machine_selected_role — состоявшийся машинный выбор. Если он есть и
+  // валиден, повторно гонять семантику не нужно: либо подбор сделан
+  // раньше, либо его ещё не было и сейчас сделаем ниже.
+  if (
+    typeof machineSelected === "string" &&
+    (ROLE_NAMES as readonly string[]).includes(machineSelected)
+  ) {
+    return {
+      role: machineSelected as RoleName,
+      how: "machine",
+      score: null,
+      margin: null,
+    };
+  }
+
   try {
     // ignoreGate: гейт эскалаций закрыт, пока эскалаций нет вовсе, а
     // другого источника роли у диспетчера не существует — с закрытым
     // гейтом он вечно ставил бы запасной вариант.
+    // topK=8: просим все роли разом, чтобы потом отфильтровать exclusions
+    // и взять первого подходящего.
     const { semanticEnrich } = await import("../lib/semanticEnrich.js");
-    const result = await semanticEnrich(taskId, { topK: 2, ignoreGate: true });
-    const [top, second] = result.matched;
-    if (top && (ROLE_NAMES as readonly string[]).includes(top.role)) {
+    const result = await semanticEnrich(taskId, { topK: 8, ignoreGate: true });
+    const exclusionSet = new Set(roleExclusions);
+    const candidates = result.matched.filter(
+      (m) =>
+        (ROLE_NAMES as readonly string[]).includes(m.role) &&
+        !exclusionSet.has(m.role),
+    );
+    if (candidates.length > 0) {
+      const [top, second] = candidates;
       return {
         role: top.role as RoleName,
         how: "semantic",
         score: top.score,
         margin: second ? top.score - second.score : null,
+      };
+    }
+    // Кандидаты кончились после фильтра — все роли либо не вернулись
+    // семантикой, либо в exclusions. Это тупик, не fallback.
+    if (exclusionSet.size > 0 && result.matched.length > 0) {
+      return {
+        role: null,
+        how: "dead",
+        score: null,
+        margin: null,
       };
     }
   } catch (err) {
@@ -155,12 +206,23 @@ const ROLE_TITLES_RU: Record<string, string> = {
 
 /** Строка для ленты: какая роль и почему именно она. */
 export function roleChoiceNoteRu(choice: RoleChoice): string {
+  if (choice.how === "dead" || choice.role === null) {
+    // Достижимо только при how="dead". Возвращаем осмысленный текст для
+    // ленты — отдельная ветка нужна, чтобы «имя» не упало на null.
+    return "Подобрать роль не удалось — все кандидаты исключены.";
+  }
   const имя = ROLE_TITLES_RU[choice.role] || choice.role;
   if (choice.how === "owner") {
     return `Роль «${имя}» — выбрана вами.`;
   }
   if (choice.how === "fallback") {
     return `Роль «${имя}» — подобрать по смыслу не вышло, взял запасной вариант.`;
+  }
+  // machine / semantic — один текст: «подобрана автоматически». Для
+  // machine дополнительно отметим, что подбор был сделан раньше
+  // диспетчером (а не здесь и сейчас).
+  if (choice.how === "machine") {
+    return `Роль «${имя}» — подобрана автоматически.`;
   }
   // Маленький отрыв от второй роли означает, что выбор спорный: две роли
   // подошли почти одинаково. Владельцу стоит взглянуть, поэтому говорим
@@ -169,7 +231,7 @@ export function roleChoiceNoteRu(choice: RoleChoice): string {
     choice.margin !== null && choice.margin < 0.03
       ? " Выбор неочевидный — рядом стояла другая роль, посмотрите, если важно."
       : "";
-  return `Роль «${имя}» — подобрана по смыслу задачи.${спорно}`;
+  return `Роль «${имя}» — подобрана автоматически.${спорно}`;
 }
 
 /** Чем кончилась попытка отдать карточку Pi. */
@@ -226,7 +288,22 @@ export async function dispatchTaskToPi(
 
   // Подбор роли — ДО транзакции: он ходит за эмбеддингами по сети, а
   // держать на этом write-лок SQLite нельзя.
-  const choice = await pickRole(taskId, task.owner_selected_role);
+  // Приоритет: owner_selected_role → machine_selected_role → семантика.
+  // Кандидаты фильтруются по role_exclusions; если после фильтра ничего
+  // не осталось — how="dead", и отдавать задачу нельзя.
+  const choice = await pickRole(
+    taskId,
+    task.owner_selected_role,
+    task.machine_selected_role,
+    parseRoleExclusions(task.role_exclusions),
+  );
+  if (choice.how === "dead" || choice.role === null) {
+    return {
+      ok: false,
+      code: 400,
+      error: "нет кандидатов: все роли либо не подошли, либо исключены",
+    };
+  }
   const chosen = choice.role;
 
   const rejectionRef: { current: { code: number; error: string } | null } = {
@@ -423,18 +500,48 @@ export async function applyIntakeToNewTask(
   if (task.assignee_id) return;
 
   if (!task.owner_selected_role) {
-    const choice = await pickRole(taskId, null);
-    db.prepare(
-      `UPDATE tasks SET owner_selected_role = ?, updated_at = datetime('now')
-        WHERE id = ? AND owner_selected_role IS NULL AND assignee_id IS NULL`,
-    ).run(choice.role, taskId);
-    logEvent({
+    // Подбираем роль и пишем в machine_selected_role. Роутер НИКОГДА не
+    // пишет в owner_selected_role — это поле только владельца
+    // (см. taskflow-pipeline-head-plan.md, шаг 1).
+    const choice = await pickRole(
       taskId,
-      actorId,
-      kind: "field_changed",
-      field: "owner_selected_role",
-      toValue: roleChoiceNoteRu(choice),
-    });
+      task.owner_selected_role,
+      task.machine_selected_role,
+      parseRoleExclusions(task.role_exclusions),
+    );
+    if (choice.how === "dead" || choice.role === null) {
+      // Кандидатов нет — задача в тупике. Планировщик (шаг 4) увидит
+      // block_type='dead' и пришлёт владельцу уведомление.
+      db.prepare(
+        `UPDATE tasks
+            SET block_type = 'dead',
+                blocked_reason = ?,
+                updated_at = datetime('now')
+          WHERE id = ? AND assignee_id IS NULL`,
+      ).run(
+        "при создании: нет кандидатов — все роли либо не подошли, либо исключены",
+        taskId,
+      );
+      logEvent({
+        taskId,
+        actorId,
+        kind: "field_changed",
+        field: "block_type",
+        toValue: "dead",
+      });
+    } else {
+      db.prepare(
+        `UPDATE tasks SET machine_selected_role = ?, updated_at = datetime('now')
+          WHERE id = ? AND assignee_id IS NULL`,
+      ).run(choice.role, taskId);
+      logEvent({
+        taskId,
+        actorId,
+        kind: "field_changed",
+        field: "machine_selected_role",
+        toValue: roleChoiceNoteRu(choice),
+      });
+    }
   }
 
   const mode = ownerRow.task_intake_mode;
