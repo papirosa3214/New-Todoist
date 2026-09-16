@@ -416,7 +416,9 @@ export function registerChatRoutes(app: FastifyInstance) {
     return db
       .prepare(
         `SELECT id, name, type, role, avatar_color, avatar_url, initials
-           FROM users ORDER BY name`,
+           FROM users
+          WHERE archived = 0 OR archived IS NULL
+          ORDER BY name`,
       )
       .all();
   });

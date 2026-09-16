@@ -1,5 +1,5 @@
 {
-  "_comment": "Карточка 5f292e87 (MVP надёжной доставки поручений). Data-driven каталог команды: 6 профилей, 4 уровня. Уровень — подсказка для маршрутизации и видимости компетенций, НЕ право доступа и НЕ замена users.role. Явный адресат пользователя всегда приоритетнее автоматического выбора.",
+  "_comment": "Карточка 5f292e87 (MVP надёжной доставки поручений) + миграция на 8 ролей (14.09.2026). Текущие активные исполнители: u1 (владелец), 6848a89b-… (Оркестратор), u2 (Claude_Bot — общая инженерная учётка для параллельных сессий Claude Code), и восемь ролей. Архивные (6 шт.) убраны из каталога: маршрутизация и заполнение users.profile больше не должны смотреть в несуществующие профили.",
   "profiles": {
     "maxim": {
       "id": "u1",
@@ -8,15 +8,7 @@
       "competence": "финальная приёмка, приоритеты, продуктовые требования",
       "skills": ["product", "priority", "acceptance"],
       "auto_route": false,
-      "comment": "L5 — владелец/финальная приёмка. Только явный адресат."
-    },
-    "reviewer": {
-      "id": "c2a5b269-dc15-400a-92bc-7988c97426eb",
-      "level": 4,
-      "title": "Независимый ревьюер",
-      "competence": "проверка качества, поиск граблей, тесты",
-      "skills": ["review", "qa", "tests"],
-      "auto_route": true
+      "comment": "L5 — владелец. Только явный адресат."
     },
     "orchestrator": {
       "id": "6848a89b-04fe-4015-bb1c-61b03782c378",
@@ -25,55 +17,87 @@
       "competence": "декомпозиция, маршрутизация, наблюдение за ходом",
       "skills": ["decomposition", "routing", "coordination"],
       "auto_route": true,
-      "comment": "L4 — технический диспетчер. Получает все поручения, не требующие явного исполнителя, и распределяет."
+      "comment": "L4 — диспетчер. Получает все поручения без явного исполнителя."
     },
     "claude_bot": {
       "id": "u2",
       "level": 4,
       "title": "Ведущий инженер-исполнитель",
-      "competence": "серверный код, базы данных, инфраструктура",
-      "skills": ["server", "sql", "python", "typescript"],
+      "competence": "серверный код, базы данных, инфраструктура, оркестрация шины",
+      "skills": ["server", "sql", "python", "typescript", "ops"],
       "auto_route": true,
-      "comment": "L4 — основной исполнитель серверной части."
+      "comment": "L4 — основной исполнитель серверной части. Общая инженерная запись для параллельных Claude Code сессий (server/src/migrations.ts:295)."
     },
-    "hermes": {
-      "id": "u3",
+    "researcher": {
+      "id": "role_researcher",
       "level": 3,
-      "title": "Интеграции и эксплуатация",
-      "competence": "внешние сервисы, мониторинг, деплой",
-      "skills": ["integrations", "monitoring", "deploy"],
+      "title": "Исследователь",
+      "competence": "разведка незнакомой области, поиск источников, ресёрч фактов",
+      "skills": ["research", "web-search", "graft", "kb-search"],
       "auto_route": true
     },
-    "deepseek": {
-      "id": "b85212d6-abab-4afb-a4c6-0d379b6537a4",
+    "analyst": {
+      "id": "role_analyst",
       "level": 3,
-      "title": "Исследование и аналитика",
-      "competence": "разведка, анализ, поиск решений",
-      "skills": ["research", "analysis", "reasoning"],
+      "title": "Аналитик",
+      "competence": "анализ данных, сравнение вариантов, расчёты",
+      "skills": ["analysis", "data", "comparison"],
       "auto_route": true
     },
-    "antigravity": {
-      "id": "5b9d47c1-25c7-4a7c-a276-70e21f7d7816",
+    "synthesizer": {
+      "id": "role_synthesizer",
       "level": 3,
-      "title": "Интерфейс и клиент",
-      "competence": "iOS/SwiftUI, нативный клиент, дизайн-система",
-      "skills": ["ios", "swiftui", "design-system"],
+      "title": "Синтезатор",
+      "competence": "сборка разрозненных фактов в один связный документ",
+      "skills": ["synthesis", "writing", "structuring"],
       "auto_route": true
     },
-    "pi_agent": {
-      "id": "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2",
-      "level": 2,
-      "title": "Резервный исполнитель",
-      "competence": "эксперименты, вспомогательные задачи",
-      "skills": ["misc"],
-      "auto_route": false,
-      "comment": "L2 — резерв, не для автоматической маршрутизации."
+    "critic_verifier": {
+      "id": "role_critic_verifier",
+      "level": 3,
+      "title": "Критик-проверяющий",
+      "competence": "проверка аргументов, поиск противоречий, приёмочный анализ",
+      "skills": ["critique", "review", "fact-checking"],
+      "auto_route": true
+    },
+    "architect": {
+      "id": "role_architect",
+      "level": 4,
+      "title": "Архитектор",
+      "competence": "структура системы, контракты модулей, миграции",
+      "skills": ["architecture", "schema", "interfaces"],
+      "auto_route": true
+    },
+    "builder": {
+      "id": "role_builder",
+      "level": 4,
+      "title": "Разработчик",
+      "competence": "написание и правка кода, тесты, рефакторинг",
+      "skills": ["code", "tests", "refactor", "debug"],
+      "auto_route": true
+    },
+    "qa": {
+      "id": "role_qa",
+      "level": 3,
+      "title": "QA",
+      "competence": "функциональные и регрессионные прогоны, воспроизводимость",
+      "skills": ["testing", "verification", "regression"],
+      "auto_route": true
+    },
+    "designer": {
+      "id": "role_designer",
+      "level": 3,
+      "title": "Дизайнер интерфейсов",
+      "competence": "визуальная и UX-архитектура, проектная система",
+      "skills": ["ui", "ux", "design-system", "prototyping"],
+      "auto_route": true
     }
   },
   "routing_rules": {
     "explicit_addressee_wins": true,
     "comment": "Явный адресат в сообщении (to=...) всегда побеждает автоподбор.",
     "fallback_to_orchestrator": true,
-    "fallback_comment": "Если явного адресата нет и автоподбор не выбрал — fallback в Оркестратор."
+    "fallback_comment": "Если явного адресата нет и автоподбор не выбрал — fallback в Оркестратор. Маршрутизация больше не идёт в шесть архивных профилей.",
+    "comment_for_040": "Запись pi_agent и шесть архивных профилей (reviewer, hermes, deepseek, antigravity) удалены — миграция 040 пометила их users.archived=1. Сюда входят только живые исполнители."
   }
 }

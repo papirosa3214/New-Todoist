@@ -103,3 +103,9 @@ server/agent-watch.state.json
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Локальная БД разработки (SQLite, регенерируется миграциями)
+server/dev.db
+
+# Кэш инкрементальной компиляции TypeScript — регенерируется tsc
+*.tsbuildinfo

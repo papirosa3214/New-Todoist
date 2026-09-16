@@ -1349,6 +1349,137 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "040_archive_old_agents",
+    description:
+      "Подчистка исторических учёток агентов по решению владельца 15.09.2026. " +
+      "В БД остаются шесть legacy-аккаунтов (Antigravity, Claude_Bot, " +
+      "DeepSeek-Agent, Hermes, Pi Agent, Reviewer) — но в текущей матрице ролей " +
+      "(паспорт восьми ролей Pi-агента от 12.09.2026) они не участвуют. " +
+      "Ставим им archived=1 и переводим все 332 их задачи в проект «Архив» " +
+      "с обнулением активного состояния (аренда, попытка, диспетчер). " +
+      "assignee_id сохраняем, чтобы не рвать ссылки в комментариях и ленте. " +
+      "Проект «Архив» создаётся при отсутствии; в живую базу он уже внесён " +
+      "через API как d529ccf2-cf5a-4c40-954b-44e62571d944.",
+    up: () => {
+      // Проект «Архив»: создаём, если его ещё нет.
+      const archProject = (
+        db
+          .prepare("SELECT id FROM projects WHERE name = ?")
+          .get("Архив") as { id: string } | undefined
+      )?.id;
+      let archiveId = archProject;
+      if (!archiveId) {
+        archiveId = "archive-" + Date.now().toString(36);
+        db.prepare(
+          "INSERT INTO projects (id, name, color, owner_id, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
+        ).run(archiveId, "Архив", "#6B6B6B", "u1");
+      }
+
+      // Колонка archived в users: идемпотентно.
+      const userCols = new Set(
+        (
+          db.prepare("PRAGMA table_info(users)").all() as Array<{
+            name: string;
+          }>
+        ).map((c) => c.name),
+      );
+      if (!userCols.has("archived")) {
+        db.exec(
+          "ALTER TABLE users ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+
+      // Шесть исторических учёток.
+      const legacyIds = [
+        "5b9d47c1-25c7-4a7c-a276-70e21f7d7816", // Antigravity
+        "u2", // Claude_Bot
+        "b85212d6-abab-4afb-a4c6-0d379b6537a4", // DeepSeek-Agent
+        "u3", // Hermes
+        "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2", // Pi Agent
+        "c2a5b269-dc15-400a-92bc-7988c97426eb", // Reviewer
+      ];
+      const placeholders = legacyIds.map(() => "?").join(",");
+
+      // archived=1 на самих учётках.
+      db
+        .prepare(
+          `UPDATE users SET archived = 1 WHERE id IN (${placeholders})`,
+        )
+        .run(...legacyIds);
+
+      // Задачи этих учёток → проект «Архив», активное состояние снято.
+      db.prepare(
+        `UPDATE tasks
+         SET project_id = ?,
+             agent_state = NULL,
+             agent_heartbeat_at = NULL,
+             current_attempt_id = NULL,
+             dispatched_role = NULL,
+             dispatched_at = NULL,
+             dispatched_by = NULL
+         WHERE assignee_id IN (${placeholders})`,
+      ).run(archiveId, ...legacyIds);
+    },
+  },
+  {
+    id: "041_archive_remaining_projects",
+    description:
+      "Решение владельца 15.09.2026: оставить в живых только два проекта — " +
+      "«TaskFlow - NewTodoist» (c2fcbcdb-951f-449f-a1bd-123ea2a46a58) и " +
+      "«Архив» (d529ccf2-cf5a-4c40-954b-44e62571d944). Остальные одиннадцать " +
+      "(AI Control Center, CRM, TaskFlow Native Build, TaskFlow Native iOS, " +
+      "Домашний сервер, Личные дела, Переговорка, Прогон автомата, Работа, " +
+      "Работа после аудита, Спецификации архитектуры TaskFlow) — удалить. " +
+      "Все их задачи (61 штука) → в проект «Архив». Корневые папки " +
+      "документации (id 4, 6, 14, 17, 18, 19) переезжают под корневой " +
+      "каталог проекта TaskFlow (id 3), чтобы заметки не пропали. Сами " +
+      "проекты удаляются; их notes_folder_id больше не на что ссылаться.",
+    up: () => {
+      // 11 удаляемых проектов
+      const deletingProjects = [
+        "568a6fa0-027a-4c88-b193-cb7a0bc24db4", // AI Control Center
+        "51637d67-6312-4682-90f9-21651a8739d9", // CRM — Бизнес Опора
+        "35f0eb02-66cb-401c-8aa7-2e5d11a31e90", // TaskFlow Native Build
+        "d678fc7b-0cb2-4e99-9aa1-22b3170660fc", // TaskFlow Native iOS
+        "561868e7-02a8-40d2-8691-a117024d9b38", // Домашний сервер
+        "p1", // Личные дела
+        "d4b32d69-28f7-4089-957f-0b810fbca238", // Переговорка
+        "2053b6e2-60ca-49dd-ad4e-4fa7945e1909", // Прогон автомата
+        "c76bb47b-1d22-426e-bb7b-7d6177d0f23e", // Работа
+        "1a03c127-9f68-40ff-81a9-103dcecde646", // Работа после аудита
+        "b07e45d4-18c7-48a5-b8b0-b986f459afac", // Спецификации архитектуры TaskFlow
+      ];
+      const placeholders = deletingProjects.map(() => "?").join(",");
+
+      // Задачи удаляемых проектов → Архив
+      const archiveRow = (
+        db
+          .prepare("SELECT id FROM projects WHERE name = ?")
+          .get("Архив") as { id: string } | undefined
+      );
+      if (!archiveRow) {
+        throw new Error(
+          "041: проект «Архив» не найден — должен быть создан 040",
+        );
+      }
+      db.prepare(
+        `UPDATE tasks SET project_id = ? WHERE project_id IN (${placeholders})`,
+      ).run(archiveRow.id, ...deletingProjects);
+
+      // Корневые папки документации → под корнем TaskFlow (id=3).
+      // Делается ДО удаления проектов, чтобы потерянная папка не схлопнулась.
+      const orphanFolders = [4, 6, 14, 17, 18, 19];
+      db.prepare(
+        `UPDATE journal_folders SET parent_id = 3 WHERE id IN (${orphanFolders.map(() => "?").join(",")})`,
+      ).run(...orphanFolders);
+
+      // Удалить проекты.
+      db.prepare(
+        `DELETE FROM projects WHERE id IN (${placeholders})`,
+      ).run(...deletingProjects);
+    },
+  },
 ];
 
 /**

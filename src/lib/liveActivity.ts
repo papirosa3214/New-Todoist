@@ -156,6 +156,16 @@ const AVATAR_SLUGS: Record<string, string> = {
   Hermes: "hermes",
   "DeepSeek-Agent": "deepseek",
   Antigravity: "antigravity",
+  // Восемь канонических ролей (14.09.2026).
+  // Изображения добавятся на стороне мака (Assets.xcassets).
+  Исследователь: "researcher",
+  Аналитик: "analyst",
+  Синтезатор: "synthesizer",
+  "Критик-проверяющий": "critic_verifier",
+  Архитектор: "architect",
+  Разработчик: "builder",
+  QA: "qa",
+  "Дизайнер интерфейсов": "designer",
 };
 
 function getAssigneeSlug(task: ApiTask): string | undefined {

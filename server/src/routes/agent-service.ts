@@ -15,6 +15,9 @@
 import type { FastifyInstance } from "fastify";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { readFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import { authOrApiToken } from "../auth.js";
 import { isOwner, isOrchestrator } from "../access.js";
 
@@ -34,9 +37,51 @@ const WATCH_UNIT = "taskflow-trigger-watch.timer";
  *  Экспортируется для /api/roles: статус роли зависит от того, жив ли
  *  вообще исполнитель, и спрашивать об этом надо в одном месте — иначе
  *  два экрана начнут по-разному считать, работает ли автономка. */
+// Период обхода доски будильником. Зашит в scripts/trigger.py
+// (BOARD_SCAN_SEC, строка ~809) — здесь повторён только чтобы показать
+// владельцу обратный отсчёт. Меняешь там — поменяй и тут, иначе таймер на
+// экране разойдётся с настоящим обходом.
+const BOARD_SCAN_SEC = 3 * 60;
+
+/** Момент, когда будильник в последний раз отметился живым.
+ *
+ *  Пишется самим триггером раз в 30 секунд в файл состояния. Читаем его, а
+ *  не только systemd: служба может числиться active, уже не подавая
+ *  признаков жизни, и владельцу важнее второе. */
+function lastAliveAt(): string | null {
+  try {
+    const raw = readFileSync(
+      join(homedir(), ".local/state/taskflow-trigger/alive"),
+      "utf8",
+    ).trim();
+    const at = new Date(raw);
+    return Number.isNaN(at.getTime()) ? null : at.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/** Ближайший обход доски, считая от момента запуска службы.
+ *
+ *  Триггер обходит доску ровно раз в BOARD_SCAN_SEC, начиная спустя тот же
+ *  интервал после старта (board_scan_loop: sleep, обход, sleep). Поэтому
+ *  точку отсчёта берём у systemd, а не гадаем. */
+function nextScanAt(activeEnter: string): string | null {
+  const started = new Date(activeEnter);
+  if (Number.isNaN(started.getTime())) return null;
+  const elapsed = (Date.now() - started.getTime()) / 1000;
+  const passed = Math.floor(elapsed / BOARD_SCAN_SEC) + 1;
+  return new Date(
+    started.getTime() + passed * BOARD_SCAN_SEC * 1000,
+  ).toISOString();
+}
+
 export async function unitState(): Promise<{
   active: boolean;
   enabled: boolean;
+  last_alive_at: string | null;
+  next_scan_at: string | null;
+  scan_interval_sec: number;
 }> {
   try {
     const { stdout } = await run("systemctl", [
@@ -44,15 +89,34 @@ export async function unitState(): Promise<{
       "show",
       UNIT,
       "-p",
-      "ActiveState,UnitFileState",
+      "ActiveState,UnitFileState,ActiveEnterTimestamp",
     ]);
     const active = /ActiveState=active/.test(stdout);
     const enabled = /UnitFileState=enabled/.test(stdout);
-    return { active, enabled };
+    // systemd отдаёт «Tue 2026-09-16 05:40:43 MSK» — Date такое разбирает
+    // только с оговорками, поэтому вытаскиваем дату и время явно и считаем
+    // их локальными: юнит и сервер живут в одном часовом поясе.
+    const m = stdout.match(
+      /ActiveEnterTimestamp=\w{3} (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/,
+    );
+    const startedLocal = m ? m[1].replace(" ", "T") : "";
+    return {
+      active,
+      enabled,
+      last_alive_at: lastAliveAt(),
+      next_scan_at: active && startedLocal ? nextScanAt(startedLocal) : null,
+      scan_interval_sec: BOARD_SCAN_SEC,
+    };
   } catch {
     // Юнита нет вовсе или systemd недоступен — для интерфейса это
     // «выключено», а не ошибка: тумблер просто останется в левом положении.
-    return { active: false, enabled: false };
+    return {
+      active: false,
+      enabled: false,
+      last_alive_at: null,
+      next_scan_at: null,
+      scan_interval_sec: BOARD_SCAN_SEC,
+    };
   }
 }
 

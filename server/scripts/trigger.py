@@ -214,12 +214,60 @@ LEGACY_EXTERNAL_AGENTS = {
 EXTERNAL_AGENTS = {
     PI_AGENT_ID: {
         "id": PI_AGENT_ID,
-        "name": "Pi Agent",
+        # 16.09.2026: у этого словаря нет поля «name» — единственный
+        # рантайм «Pi» остаётся внутренней механикой и не должен
+        # всплывать в журналах и нотификациях. Директива от 14.09:
+        # «Pi = внутренняя механика, наружу имя процесса не выходит».
+        # Для логов используется agent_label() ниже: shell, роль или «—».
         "token_env": "TASKFLOW_TOKEN",
         "cmd": [PI_BIN, "-p"],
         "roles": sorted(ROLE_NAMES),
     },
+    # 16.09.2026: восемь ролевых учёток — по записи на роль, ровно как раньше
+    # были заведены Гермес, DeepSeek и Antigravity, у каждого свой token_env.
+    #
+    # Зачем именно так. Сервер узнаёт запросившего ТОЛЬКО по токену. Пока у
+    # ролей не было своих записей, триггер ходил за них общим ключом Pi и
+    # получал 403 на claim («эта задача назначена на «QA»») и 404 на
+    # комментарии и heartbeat — карточка роли под чужим ключом просто не
+    # видна. Механизм «у каждого исполнителя свой ключ» в коде был всегда
+    # (token = os.environ[agent["token_env"]]), его снесли вместе с шестёркой
+    # legacy-агентов, и роли остались без него.
+    #
+    # Ключи лежат в хранилище под TASKFLOW_AGENT_TOKEN_<РОЛЬ> и прокинуты в
+    # окружение службы через vault-run (--secret можно указывать несколько раз).
+    **{
+        f"role_{role}": {
+            "id": f"role_{role}",
+            "token_env": f"TASKFLOW_AGENT_TOKEN_{role.upper()}",
+            "cmd": [PI_BIN, "-p"],
+            "roles": [role],
+        }
+        for role in ROLE_NAMES
+    },
 }
+
+
+def agent_label(agent: dict | None) -> str:
+    """Человеческое имя исполнителя для логов без утечки «Pi» наружу.
+
+    Приоритет: routing_shell (если задано через resolve_agent_for_role);
+    shell из cmd (если первый аргумент содержит «pi» — заменяем на «worker»);
+    короткий id (role_qa / u1 / 1fa09a0a-…); или «—», если ничего нет.
+    Pi нигде не пишется прямо; в журналах теперь только роли, оболочки и id.
+    """
+    if not agent:
+        return "—"
+    shell = agent.get("routing_shell") or agent.get("shell")
+    if shell:
+        return shell
+    role = agent.get("role")
+    if role and isinstance(role, str):
+        return role
+    aid = agent.get("id")
+    if isinstance(aid, str) and aid:
+        return aid
+    return "—"
 
 
 # Заполняется один раз при старте и используется следующими этапами
@@ -284,6 +332,12 @@ def load_role_routing(path: Path = ROLE_ROUTING_FILE) -> dict[str, dict]:
 
     return sections
 
+
+# Восемь ролевых учёток, на которые dispatch.ts назначает задачи с 16.09.2026.
+# Триггер обязан считать их своими: он и есть исполнитель всех восьми ролей.
+# Без этого обход доски видит карточку и отказывается («исполнитель не я»),
+# потому что своим считался только Pi Agent.
+ROLE_USER_IDS = {f"role_{r}" for r in ROLE_NAMES}
 
 SHELL_AGENT_IDS = {
     # Исторические имена сохраняем для старых карточек и отображения.
@@ -389,8 +443,16 @@ def validate_pi_mcp_profiles() -> None:
             env = document["mcpServers"]["taskflow"]["env"]
         except (KeyError, TypeError) as exc:
             raise ValueError(f"в MCP-профиле Pi {path} нет mcpServers.taskflow.env") from exc
-        if env.get("TASKFLOW_VAULT_KEY") != "TASKFLOW_PI_AGENT_TOKEN":
-            raise ValueError(f"{path}: нужен TASKFLOW_PI_AGENT_TOKEN")
+        # 16.09.2026: 8 ролей, каждая ходит под своим ключом в хранилище
+        # (TASKFLOW_AGENT_TOKEN_<ROLE>). Старый общий Pi-ключ больше не
+        # используется — он остался только для не-ролевых заходов (оркестратор,
+        # секретарь) на уровне systemd/vault-run. Валидатор должен требовать
+        # ролевой ключ, иначе после сегодняшней миграции профилей любой
+        # восьмёрки валится на первом же файле и сервис уходит в crash loop
+        # («правка профилей уронила триггер», 16.09.2026).
+        expected_vault = f"TASKFLOW_AGENT_TOKEN_{role.upper()}"
+        if env.get("TASKFLOW_VAULT_KEY") != expected_vault:
+            raise ValueError(f"{path}: нужен {expected_vault}")
         if env.get("TASKFLOW_MCP_ROLE") != role:
             raise ValueError(f"{path}: TASKFLOW_MCP_ROLE не совпадает с именем роли")
         if not str(env.get("TASKFLOW_MCP_TOOLS") or "").strip():
@@ -1061,8 +1123,14 @@ def _orphans_for_assignees() -> dict[str, list[dict]]:
         assignee = t.get("assignee_id")
         if not assignee:
             continue                          # «без исполнителя» — не наш сигнал
-        if assignee != ME and assignee not in EXTERNAL_AGENTS:
-            continue                          # исполнитель — не наш агент
+        # 16.09.2026: наши исполнители теперь не один Pi Agent, а восемь
+        # role_* пользователей плюс сам Pi Agent. Роль, под которую
+        # задача назначена, доступна через task.dispatched_role и
+        # resolve_agent_for_role() — после relaxa фильтра board_scan
+        # отдаёт задачу правильной оболочке, а не теряет её молча.
+        if assignee != ME and assignee not in EXTERNAL_AGENTS and assignee not in ROLE_USER_IDS:
+            if not (isinstance(assignee, str) and assignee.startswith("role_")):
+                continue                  # исполнитель — не наш агент
         created = t.get("created_at")
         if not created:
             continue
@@ -1151,7 +1219,7 @@ def decide(task: dict, kind: str = "", actor_id: str = "") -> tuple[bool, str]:
         return False, "задачи нет"
     task_id = task.get("id")
     assignee = task.get("assignee_id")
-    if assignee != ME and assignee not in EXTERNAL_AGENTS:
+    if assignee != ME and assignee not in EXTERNAL_AGENTS and assignee not in ROLE_USER_IDS:
         return False, "исполнитель не я"
     if task.get("status") != "active":
         return False, "задача не активна"
@@ -2055,7 +2123,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         RUNNING[task_id] = (None, assignee_id)
 
     if os.environ.get("TASKFLOW_TRIGGER_DRY") == "1":
-        log(f"[сухой прогон] позвал бы «{agent['name']}» на «{task.get('title')}» ({reason})")
+        log(f"[сухой прогон] позвал бы «{agent_label(agent)}» на «{task.get('title')}» ({reason})")
         with LOCK:
             RUNNING.pop(task_id, None)
         return
@@ -2145,13 +2213,13 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     if not reply_only:
         claim_body = {
             "model": model or None,
-            "runner": agent.get("name") or None,
+            "runner": agent_label(agent) or None,
         }
         if claude_cli:
             claim_body["session_id"] = session_sid
         claimed = api("POST", f"/api/tasks/{task_id}/claim", claim_body, token=token)
         if claimed is None and task.get("agent_state") != "in_progress":
-            log(f"  не удалось взять задачу {task_id[:8]} за «{agent['name']}» — отменяю заход")
+            log(f"  не удалось взять задачу {task_id[:8]} за «{agent_label(agent)}» — отменяю заход")
             if inbox_events:
                 inbox_mark(inbox_events, "blocked", token,
                            "не удалось взять задачу (claim)")
@@ -2170,7 +2238,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     # лежат его настройки (см. dsh_home_for). Окружение собираем ЗДЕСЬ, на
     # заход: общий agent["env"] один на всех, и правка его на месте увела бы
     # соседнюю задачу на чужую модель.
-    if agent.get("name") == "Antigravity":
+    if agent_label(agent) == "Antigravity":
         # 29.08.2026: у Antigravity РАБОТАЮТ НЕ ВСЕ его модели. Проверено
         # прогоном по каждой: claude-sonnet-4-6, claude-opus-4-6-thinking и
         # gpt-oss-120b-medium отвечают, а ВСЁ семейство gemini падает с
@@ -2213,22 +2281,36 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     # Берём ИМЯ переменной (vault_key/token_env), потом через os.environ
     # получаем её ЗНАЧЕНИЕ — именно значение systemd через vault-run уже
     # подставил в ENV процесса trigger.py.
+    #
+    # 16.09.2026: для запусков С РОЛЬЮ (Pi Agent + role != None) обе переменные
+    # в run_env не передаём. Иначе systemd-проставленный TASKFLOW_TOKEN=Pi
+    # затеняет профильный TASKFLOW_VAULT_KEY и роль в ленте снова идёт под
+    # actor_id=1fa09a0a (тот же корень, что урок 30.08.2026 «наследование
+    # переменных окружения перекрывает явный поиск ключей», verified). Их
+    # собственный MCP-профиль доносит ключ сам через `load_token()` — оттуда
+    # он дойдёт до vault по правильному имени `TASKFLOW_AGENT_TOKEN_<ROLE>`.
+    role = task_role(task)
     vault_name = agent.get("vault_key") or agent.get("token_env", "")
     vault_value = os.environ.get(vault_name, "") if vault_name else ""
-    if vault_value:
+    is_role_run = bool(role) and agent_label(agent) == "Pi Agent"
+    if is_role_run:
+        # Роль достанет токен через свой MCP-профиль, а systemd-унаследованный
+        # Pi-токен ровно в этом случае и ломает actor_id. Чистим обе.
+        run_env.pop("TASKFLOW_TOKEN", None)
+        run_env.pop("TASKFLOW_VAULT_KEY", None)
+    elif vault_value:
         # Дочерний Pi и его MCP получают тот же единственный ключ напрямую.
         # Раньше сюда ошибочно записывалось значение ключа как имя записи
         # хранилища, после чего MCP пытался найти в vault сам токен.
         run_env["TASKFLOW_VAULT_KEY"] = vault_name
         run_env["TASKFLOW_TOKEN"] = vault_value
     dsh_home = ""
-    if model and agent.get("name") == "DeepSeek Harness":
+    if model and agent_label(agent) == "DeepSeek Harness":
         dsh_home = dsh_home_for(model)
         if dsh_home:
             run_env["DSH_HOME"] = dsh_home
     prefix = list(agent["cmd"])
-    role = task_role(task)
-    if agent.get("name") == "Pi Agent" and role:
+    if agent_label(agent) == "Pi Agent" and role:
         profile = pi_mcp_profile_for_role(role)
         # Pi receives the role profile only through this explicit flag. A
         # regular `pi` command without --mcp-config keeps the normal setup.
@@ -2294,7 +2376,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
                    if claude_cli else [])
     if resume_sid and not fork:
         log(f"  продолжаю сессию {resume_sid[:8]} — контекст на месте")
-    log(f"  зову «{agent['name']}» на задачу {task_id[:8]}"
+    log(f"  зову «{agent_label(agent)}» на задачу {task_id[:8]}"
         + (f", модель {model}" if model and (flag or dsh_home) else ""))
     stop = threading.Event()
     # Аренду держим только когда карточка реально взята. В режиме ответа
@@ -2321,7 +2403,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         for run in range(1, max_runs + 1):
             before = activity_mark(task_id)
             if run > 1:
-                log(f"  зову «{agent['name']}» снова (заход {run} из {max_runs})")
+                log(f"  зову «{agent_label(agent)}» снова (заход {run} из {max_runs})")
                 if claude_cli:
                     cmd = make_cmd(resume_text(get_task(task_id) or task),
                                    ["--resume", session_sid])
@@ -2336,7 +2418,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             hush = threading.Event()
             threading.Thread(
                 target=silence_watch,
-                args=(task_id, box, hush, agent["name"]),
+                args=(task_id, box, hush, agent_label(agent)),
                 daemon=True,
             ).start()
             try:
@@ -2344,7 +2426,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             finally:
                 hush.set()
             tail = (out or "").strip()[-400:]
-            log(f"  «{agent['name']}» закончил заход {run} (код {proc.returncode}): {tail}")
+            log(f"  «{agent_label(agent)}» закончил заход {run} (код {proc.returncode}): {tail}")
             spent = read_usage(usage_path)
             if spent:
                 log(f"  расход захода: {spent}")
@@ -2360,7 +2442,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             if reply_only:
                 break
             if proc.returncode != 0:
-                log(f"  «{agent['name']}» завершился с ошибкой (код {proc.returncode}) — цепочку останавливаю")
+                log(f"  «{agent_label(agent)}» завершился с ошибкой (код {proc.returncode}) — цепочку останавливаю")
                 break
             cont, why = should_continue(task_id, before)
             if not cont:
@@ -2457,7 +2539,19 @@ def handle_task(task_id: str, why: str, kind: str = "", actor_id: str = "",
     role = task.get("role")
     if not role and task.get("assignee_role") in ROLE_NAMES:
         role = task.get("assignee_role")
-    if role:
+    # 16.09.2026: задача, назначенная РОЛЕВОЙ учётке, исполняется её же
+    # записью — у неё свой token_env (TASKFLOW_AGENT_TOKEN_<РОЛЬ>).
+    #
+    # Раньше здесь безусловно срабатывал resolve_agent_for_role(), который по
+    # role-routing.yaml отдаёт для всех восьми ролей оболочку agent_pi, то есть
+    # запись с ключом Pi. Оболочка от этого верная (Pi и исполняет все роли),
+    # но КЛЮЧ подменялся на общий — и сервер отвечал 403 «эта задача назначена
+    # на «QA»» на claim и 404 на комментарии, потому что узнаёт запросившего
+    # только по токену. Маршрутизация нужна там, где исполнитель ещё не выбран;
+    # когда карточка уже адресована роли, выбирать нечего.
+    assignee_is_role = (task.get("assignee_id") or "") in ROLE_USER_IDS
+
+    if role and not assignee_is_role:
         routed = resolve_agent_for_role(str(role))
         if routed is not None:
             agent = routed
@@ -2544,7 +2638,7 @@ def wake_creator(task: dict, owner_id: str, agent: dict) -> bool:
         with LOCK:
             CREATOR_WAKED.pop(task_id, None)
         return False
-    log(f"  «{task_id[:8]}» {what} → сообщил создателю «{agent['name']}» в чат")
+    log(f"  «{task_id[:8]}» {what} → сообщил создателю «{agent_label(agent)}» в чат")
     return True
 
 
@@ -2684,7 +2778,7 @@ def main() -> None:
             agent["cmd"] = find_dsh()
         if not agent["token"] or not agent["cmd"]:
             why = "нет ключа" if not agent["token"] else "не установлен"
-            log(f"«{agent['name']}»: {why} — его задачи не обслуживаю")
+            log(f"«{agent_label(agent)}»: {why} — его задачи не обслуживаю")
             EXTERNAL_AGENTS.pop(uid)
 
     if not TOKEN:
@@ -2696,9 +2790,9 @@ def main() -> None:
     # под старыми учётками больше нет.
     for uid, agent in EXTERNAL_AGENTS.items():
         threading.Thread(
-            target=listen, args=(uid, agent["token"], agent["name"]), daemon=True
+            target=listen, args=(uid, agent["token"], agent_label(agent)), daemon=True
         ).start()
-        log(f"слушаю задачи «{agent['name']}»")
+        log(f"слушаю задачи «{agent_label(agent)}»")
 
     # ⚠️ Всё, что должно крутиться параллельно, поднимается ДО listen(ME):
     # он внутри себя держит вечный цикл и управление из него не возвращается.

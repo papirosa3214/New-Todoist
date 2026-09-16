@@ -296,6 +296,27 @@ function ServerSection() {
   const { data: service } = useAgentService();
   const toggleService = useToggleAgentService();
   const serviceOn = service?.active ?? false;
+  // Состояние службы опрашивается раз в 15 секунд, а обратный отсчёт должен
+  // идти ровно — поэтому тикаем сами, не дёргая сервер чаще.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!serviceOn || !service?.next_scan_at) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [serviceOn, service?.next_scan_at]);
+  // «через 2:14» до ближайшего обхода доски. Пока отсчёт ушёл в минус —
+  // обход уже идёт, но состояние ещё не переспросили: показываем «сейчас»,
+  // а не отрицательное время.
+  const nextScanLabel = (() => {
+    if (!serviceOn || !service?.next_scan_at) return null;
+    const left = Math.round(
+      (new Date(service.next_scan_at).getTime() - now) / 1000,
+    );
+    if (left <= 0) return "обход сейчас";
+    const mm = Math.floor(left / 60);
+    const ss = String(left % 60).padStart(2, "0");
+    return `обход через ${mm}:${ss}`;
+  })();
   const [pingResult, setPingResult] = useState<string | null>(null);
   const [isPinging, setIsPinging] = useState(false);
 
@@ -389,7 +410,13 @@ function ServerSection() {
         icon="bell"
         iconColor="#FF6B6B"
         label="Будильник (служба)"
-        valueLabel={serviceOn ? "Включён" : "Выключен"}
+        valueLabel={
+          serviceOn
+            ? nextScanLabel
+              ? `Включён · ${nextScanLabel}`
+              : "Включён"
+            : "Выключен"
+        }
         checked={serviceOn}
         onChange={() => toggleService.mutate(!serviceOn)}
       />

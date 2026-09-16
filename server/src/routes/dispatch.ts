@@ -40,11 +40,24 @@ import { getTaskRow, hydrateTask } from "./tasks.js";
 
 const uid = () => crypto.randomUUID();
 
-// Единственный Pi runtime (миграция 005, role-routing.yaml). Все 8 ролей
-// выполняет один и тот же Pi — отсюда и единственная точка выдачи: это
-// не fan-out, а fan-in. Расходится только ролью: prompt/profile/model
-// подбираются по выбранной роли уже внутри Pi.
-const PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2";
+// 8 исполнителей — по одному аккаунту на роль. Записи в users с
+// role=researcher/.../designer и type=ai создаются миграцией 005; сюда
+// попадает только их `id` (он же используется в assignee_id и user_id
+// нотификаций/inbox/WS). Pi, который исполняет все 8 ролей одним
+// рантаймом (миграция 005, role-routing.yaml → defaults: agent_pi),
+// остаётся чисто внутренней механикой: наружу имя процесса не выходит,
+// `assignee_id` всегда идёт на конкретного role-юзера. Это закрывает
+// 14.09.2026: «В системе нет никакого „Pi“».
+const ROLE_USER_IDS: Record<RoleName, string> = {
+  researcher: "role_researcher",
+  analyst: "role_analyst",
+  synthesizer: "role_synthesizer",
+  critic_verifier: "role_critic_verifier",
+  architect: "role_architect",
+  builder: "role_builder",
+  qa: "role_qa",
+  designer: "role_designer",
+};
 
 // Запасная роль — на случай, когда подобрать не удалось: семантика не
 // ответила (Ollama недоступна) или вернула пусто. Не «роль по умолчанию
@@ -263,7 +276,7 @@ export async function dispatchTaskToPi(
               dispatched_by = ?,
               updated_at = datetime('now')
         WHERE id = ?`,
-    ).run(PI_AGENT_ID, chosen, actorId, taskId);
+    ).run(ROLE_USER_IDS[chosen], chosen, actorId, taskId);
 
     logEvent({
       taskId,
@@ -296,7 +309,7 @@ export async function dispatchTaskToPi(
        VALUES (?, ?, 'assigned', ?, ?, ?)`,
     ).run(
       notifId,
-      PI_AGENT_ID,
+      ROLE_USER_IDS[chosen],
       taskId,
       `Новая задача назначена: ${(latest.title || taskId).slice(0, 200)}`,
       actorId,
@@ -312,13 +325,13 @@ export async function dispatchTaskToPi(
     ).run(
       inboxId,
       `dispatch-${inboxId}`,
-      PI_AGENT_ID,
+      ROLE_USER_IDS[chosen],
       `Вам назначена задача «${(latest.title || taskId).slice(0, 120)}» (роль ${chosen}).`,
       taskId,
       Number(latest.current_revision ?? 1),
     );
 
-    broadcastToUsers([PI_AGENT_ID], {
+    broadcastToUsers([ROLE_USER_IDS[chosen]], {
       type: "notification:new",
       notificationId: notifId,
       taskId,
@@ -443,6 +456,7 @@ export async function applyIntakeToNewTask(
 
 export async function releaseQueuedSuccessors(
   completedTaskId: string,
+  actorId: string,
 ): Promise<number> {
   const completed = db
     .prepare("SELECT id, title, parent_id FROM tasks WHERE id = ?")
@@ -477,7 +491,7 @@ export async function releaseQueuedSuccessors(
     if ((sibling.ready_for_pickup ?? 0) !== 1) continue;
     if (sibling.assignee_id) continue;
 
-    const outcome = await dispatchTaskToPi(sibling.id, PI_AGENT_ID);
+    const outcome = await dispatchTaskToPi(sibling.id, actorId);
     if (outcome.ok) {
       released += 1;
     } else {

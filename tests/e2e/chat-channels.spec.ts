@@ -89,16 +89,18 @@ test("служебная лента открыта владельцу и на ч
   await expect(picker).toBeVisible();
   await picker.click();
 
-  // В списке адресатов и «Всем», и поимённо исполнители — выбираем одного
-  // конкретного, ровно тот случай, ради которого владелец просил доступ
-  // вернуть: «мало ли мне приспичит кого-то конкретно озадачить».
+  // В списке адресатов и «Всем», и поимённо роли (15.09.2026 скрыли
+  // шесть исторических учёток — Hermes/DeepSeek/Claude_Bot и др., теперь
+  // видны только 8 смысловых ролей через Pi-agent harness) — выбираем
+  // одну конкретную роль, ровно тот случай, ради которого владелец просил
+  // доступ вернуть: «мало ли мне приспичит кого-то конкретно озадачить».
   // Пункты меню объявлены как menuitem (ActionsMenu), роль button их не ловит.
   await expect(
     page.getByRole("menuitem", { name: "Всем", exact: true }),
   ).toBeVisible();
   const someone = page
     .getByRole("menuitem")
-    .filter({ hasText: /Hermes|DeepSeek|Claude_Bot/ })
+    .filter({ hasText: /Разработчик|Архитектор/ })
     .first();
   await expect(someone).toBeVisible();
   // force: меню всплывает с анимацией масштаба, и webkit считает его

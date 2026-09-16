@@ -458,14 +458,15 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
                    ELSE NULL
                  END) AS activity
          FROM users
-         WHERE is_system_bot = 1
+         WHERE (archived = 0 OR archived IS NULL)
+           AND (is_system_bot = 1
             OR id = ?
             OR created_by = ?
             OR id IN (
               SELECT assignee_id FROM tasks WHERE creator_id = ? AND assignee_id IS NOT NULL
               UNION
               SELECT creator_id FROM tasks WHERE assignee_id = ? AND creator_id IS NOT NULL
-            )`,
+            ))`,
       )
       .all(req.userId, req.userId, req.userId, req.userId) as Array<{
         id: string;

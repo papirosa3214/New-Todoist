@@ -174,6 +174,17 @@ const AVATAR_SLUGS: Record<string, string> = {
   Hermes: "hermes",
   "DeepSeek-Agent": "deepseek",
   Antigravity: "antigravity",
+  // Восемь канонических ролей (14.09.2026). Картинки лежат в ассетах
+  // расширения на маке (ios/App/TaskFlowWidgets/Assets.xcassets) — отсюда
+  // только имена; пока нет файла — iOS отрисует букву, без поломки.
+  Исследователь: "researcher",
+  Аналитик: "analyst",
+  Синтезатор: "synthesizer",
+  "Критик-проверяющий": "critic_verifier",
+  Архитектор: "architect",
+  Разработчик: "builder",
+  QA: "qa",
+  "Дизайнер интерфейсов": "designer",
 };
 
 /** Строка content-state ровно по полям TaskActivityAttributes.ContentState:

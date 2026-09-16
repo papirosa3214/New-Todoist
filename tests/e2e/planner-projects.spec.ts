@@ -54,6 +54,37 @@ test.describe("«Сегодня»: [+] в PlannerProjectChips раскрывае
         ]),
       });
     });
+    // Безхозная задача (project_id=null) — нужна для чипа «Входящие» в
+    // PlannerProjectChips. После миграции 041 все живые задачи имеют
+    // проект, поэтому без мока чип не отрисуется.
+    await context.route("**/api/tasks**", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "t-inbox",
+            title: "Входящая задача",
+            description: null,
+            due_date: null,
+            project_id: null,
+            priority: 4,
+            assignee_id: null,
+            creator_id: "e2e-fixture-owner",
+            status: "active",
+            created_at: "2026-08-20T00:00:00.000Z",
+            updated_at: "2026-08-20T00:00:00.000Z",
+            completed_at: null,
+            labels: [],
+            subtasks: [],
+            comments: [],
+            events: [],
+            attachments: [],
+          },
+        ]),
+      });
+    });
 
     await setupApp(context, { today: "list" });
     const errors = collectErrors(page);
@@ -117,6 +148,35 @@ test.describe("«Сегодня»: [+] в PlannerProjectChips раскрывае
             color: "#3B82F6",
             owner_id: "e2e-fixture-owner",
             task_count: 0,
+          },
+        ]),
+      });
+    });
+    // Безхозная задача для чипа «Входящие» (см. причину в первом тесте).
+    await context.route("**/api/tasks**", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "t-inbox",
+            title: "Входящая задача",
+            description: null,
+            due_date: null,
+            project_id: null,
+            priority: 4,
+            assignee_id: null,
+            creator_id: "e2e-fixture-owner",
+            status: "active",
+            created_at: "2026-08-20T00:00:00.000Z",
+            updated_at: "2026-08-20T00:00:00.000Z",
+            completed_at: null,
+            labels: [],
+            subtasks: [],
+            comments: [],
+            events: [],
+            attachments: [],
           },
         ]),
       });
