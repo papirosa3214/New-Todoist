@@ -43,6 +43,25 @@ import {
 
 const uid = () => crypto.randomUUID();
 
+/**
+ * Сервисные учётки, которым разрешено ставить state='blocked' на ЛЮБУЮ
+ * задачу через этот endpoint — для фиксации технических падений
+ * claim/launch_agent из trigger.py (см. taskflow-pipeline-head-plan.md,
+ * шаг 2). Ролевой ключ мог и быть причиной падения, поэтому блокировку
+ * обязательно писать служебной учёткой.
+ *
+ * Сейчас сюда попадает Pi Agent (TASKFLOW_TOKEN) — он исторически
+ * держит служебную дверь. Если владелец заведёт отдельного
+ * trigger-service пользователя с ролью orchestrator, его id добавится
+ * сюда без правок в триггере.
+ */
+const SERVICE_USER_IDS = new Set<string>([
+  "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2", // Pi Agent
+]);
+function isServiceUser(userId: string): boolean {
+  return SERVICE_USER_IDS.has(userId);
+}
+
 // О ЧУЖОЙ сданной задаче предупреждаем один раз на сессию: свою работу
 // исполнитель доделает сам, а чужую — нет, и держать ход закрытым намертво
 // незачем. Раньше эта отметка лежала файлом рядом с хуком, поэтому у каждой
@@ -694,13 +713,26 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       comment?: string;
       session_id?: string;
       reason_code?: string;
+      // Служебные поля триггера (шаг 2 шапки конвейера): записываются
+      // вместе с state=blocked, чтобы планировщик (шаг 4) мог отличить
+      // техническое падение от ручного «не моя роль».
+      block_type?: string;
+      blocked_reason?: string;
     };
   }>("/api/tasks/:id/state", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task =
+      const { state } = req.body || {};
+      // Сервисная дверь для trigger.py: при state=blocked сервисный
+      // юзер (Pi Agent) может пометить любую задачу, даже если он не
+      // assignee/creator. Это нужно, чтобы зафиксировать техническое
+      // падение claim/launch_agent, когда ролевой ключ не сработал.
+      let task =
         getTaskForWrite(req.params.id, req.userId) ??
         getTaskForReview(req.params.id, req.userId);
+      if (!task && state === "blocked" && isServiceUser(req.userId)) {
+        task = getTaskForRead(req.params.id, req.userId);
+      }
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       // Шаг 3 карточки 8ca87c61: тот же мягкий enforcement attempt_id,
@@ -714,7 +746,6 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: `attempt_id: ${mismatch}` });
       }
 
-      const { state } = req.body || {};
       if (state !== null && !AGENT_STATES.includes(state)) {
         return reply.code(400).send({
           error:
@@ -726,6 +757,27 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       if (reasonCode !== undefined && !isStopReasonCode(reasonCode)) {
         return reply.code(400).send({ error: stopReasonError() });
       }
+
+      // block_type / blocked_reason — служебные поля шага 2. Имеет смысл
+      // только при state=blocked; иначе это мусор, который потом придётся
+      // вычищать. Три допустимых значения — согласно плану
+      // taskflow-pipeline-head-plan.md, шаг 1: technical | wrong_role | dead.
+      const blockType = req.body?.block_type;
+      if (blockType !== undefined) {
+        if (
+          state !== "blocked" ||
+          !["technical", "wrong_role", "dead"].includes(blockType)
+        ) {
+          return reply.code(400).send({
+            error:
+              "block_type допустим только при state='blocked' и должен быть одним из: technical, wrong_role, dead",
+          });
+        }
+      }
+      const blockedReason =
+        typeof req.body?.blocked_reason === "string"
+          ? req.body.blocked_reason.trim()
+          : "";
 
       const from = (task.agent_state ?? null) as AgentState | null;
 
@@ -922,6 +974,17 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             `UPDATE tasks SET agent_state = ?, agent_heartbeat_at = datetime('now'),
                agent_session_id = COALESCE(?, agent_session_id) WHERE id = ?`,
           ).run(state, sessionOf(req), task.id);
+        } else if (state === "blocked" && (blockType || blockedReason)) {
+          // Шаг 2: вместе с переходом в blocked записываем тип причины
+          // и её текст, чтобы планировщик (шаг 4) мог различать
+          // технические ретраи и переподбор роли. Если оба пустые —
+          // пишем только agent_state (поведение не меняется).
+          db.prepare(
+            `UPDATE tasks SET agent_state = ?,
+                              block_type = COALESCE(?, block_type),
+                              blocked_reason = COALESCE(?, blocked_reason)
+              WHERE id = ?`,
+          ).run(state, blockType ?? null, blockedReason || null, task.id);
         } else {
           db.prepare("UPDATE tasks SET agent_state = ? WHERE id = ?").run(
             state,

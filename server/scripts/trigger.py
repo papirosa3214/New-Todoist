@@ -44,6 +44,18 @@ TOKEN = os.environ.get("TASKFLOW_TOKEN", "").strip()
 # карточку и ничего не произошло — «не берёт в работу, будильник не зовёт».
 # Одно соединение на агента, чьи задачи мы обслуживаем.
 HERMES_TOKEN = os.environ.get("TASKFLOW_HERMES_TOKEN", "").strip()
+# Служебный ключ триггера — для фиксации технических падений
+# claim/launch_agent через POST /api/tasks/:id/state {state: "blocked",
+# block_type: "technical", ...}. Отдельный от ролевого ключа: ролевой
+# мог и быть причиной падения, и блокировку обязательно писать
+# служебной учёткой (taskflow-pipeline-head-plan.md, шаг 2).
+#
+# Если переменная не задана — fallback на TOKEN (Pi Agent). Серверная
+# сторона уже умеет пускать Pi Agent по сервисной двери (см.
+# agent-state.ts: SERVICE_USER_IDS, isServiceUser). Если владелец
+# заведёт отдельного trigger-service пользователя, его api_token
+# пойдёт в TASKFLOW_TRIGGER_SERVICE_TOKEN и этот fallback выключится.
+SERVICE_TOKEN = os.environ.get("TASKFLOW_TRIGGER_SERVICE_TOKEN", TOKEN).strip()
 HOME = Path.home()
 CLAUDE_BIN = str(HOME / ".npm-global/bin/claude")
 PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2"
@@ -1785,6 +1797,33 @@ def set_state(task_id: str, state: str, comment: str, token: str = "") -> None:
         {"state": state, "comment": comment}, token=token)
 
 
+def _mark_technical_blocked(task_id: str, exc: BaseException) -> None:
+    """Шаг 2 шапки конвейера: пометить задачу state=blocked,
+    block_type='technical' через СЛУЖЕБНЫЙ ключ триггера. Ролевой мог
+    быть причиной падения, поэтому повторять с ним же — нельзя.
+
+    Помечает мягко: если сам PATCH упал, не роняем выход — лучше карточка
+    останется в полу-видимом состоянии, чем служба упадёт и замолчит.
+    """
+    reason = f"{type(exc).__name__}: {exc}"
+    try:
+        api(
+            "POST",
+            f"/api/tasks/{task_id}/state",
+            {
+                "state": "blocked",
+                "block_type": "technical",
+                "blocked_reason": reason,
+                "comment": reason,
+            },
+            token=SERVICE_TOKEN,
+        )
+        log(f"  ⚑ задача {task_id[:8]} помечена blocked/technical: {reason}")
+    except Exception as mark_exc:  # noqa: BLE001
+        log(f"  ⚠️ не удалось пометить задачу как blocked: "
+            f"{type(mark_exc).__name__}: {mark_exc}")
+
+
 def silence_watch(task_id: str, proc_box: dict, stop: threading.Event,
                   agent_name: str) -> None:
     """Смотрит, движется ли работа, пока идёт ход, и вмешивается по порогам.
@@ -2217,7 +2256,19 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         }
         if claude_cli:
             claim_body["session_id"] = session_sid
-        claimed = api("POST", f"/api/tasks/{task_id}/claim", claim_body, token=token)
+        try:
+            claimed = api("POST", f"/api/tasks/{task_id}/claim", claim_body, token=token)
+        except Exception as exc:  # noqa: BLE001 — задача 16.09.2026 (шаг 2)
+            # claim упал с HTTP/timeout — НЕЛЬЗЯ слать повторно с тем же
+            # ролевым ключом (он мог и быть причиной). Помечаем карточку
+            # blocked служебным ключом, чтобы планировщик (шаг 4) мог
+            # ретраить.
+            log(f"  ❌ claim упал на {task_id[:8]} для «{agent_label(agent)}»: "
+                f"{type(exc).__name__}: {exc}")
+            _mark_technical_blocked(task_id, exc)
+            with LOCK:
+                RUNNING.pop(task_id, None)
+            return
         if claimed is None and task.get("agent_state") != "in_progress":
             log(f"  не удалось взять задачу {task_id[:8]} за «{agent_label(agent)}» — отменяю заход")
             if inbox_events:
@@ -2448,6 +2499,16 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             if not cont:
                 log(f"  цепочку останавливаю: {why}")
                 break
+    except Exception as exc:  # noqa: BLE001 — задача 16.09.2026 (шаг 2)
+        # Запуск/цепочка заходов упали с НЕ-возвратом (subprocess поднялся,
+        # но proc.communicate упал по таймауту, или should_continue вернул
+        # неожиданное, или note/heartbeat сорвал соединение). Карточка
+        # взята — её нужно снять с in_progress и пометить как технический
+        # сбой СЛУЖЕБНЫМ ключом, иначе планировщик (шаг 4) её не увидит.
+        log(f"  ❌ техническое падение в заходе «{agent_label(agent)}»: "
+            f"{type(exc).__name__}: {exc}")
+        _mark_technical_blocked(task_id, exc)
+        raise
         # Итог доставки (Review 07.09.2026: сбой сразу оставляет видимую
         # blocked-причину): цепочка отработала — done, последний заход упал
         # с кодом — blocked с причиной. Мягко: сбой пометки не роняет выход.
