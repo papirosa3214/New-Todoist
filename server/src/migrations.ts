@@ -1594,7 +1594,7 @@ const migrations: Migration[] = [
       }
       db.exec(
         "CREATE INDEX IF NOT EXISTS idx_tasks_block_type_blocked " +
-          "ON tasks (block_type) WHERE state = 'blocked'",
+          "ON tasks (block_type) WHERE agent_state = 'blocked'",
       );
     },
   },
