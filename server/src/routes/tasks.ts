@@ -303,21 +303,58 @@ export function registerTaskRoutes(app: FastifyInstance) {
     const columns = TASK_COLUMNS;
     const joins = TASK_JOINS;
 
+    // Опциональные фильтры для планировщика (шаг 4): agent_state,
+    // block_type, retry_count < N, blocked_at старше N минут.
+    const filterAgentState =
+      typeof req.query.agent_state === "string" ? req.query.agent_state : "";
+    const filterBlockType =
+      typeof req.query.block_type === "string" ? req.query.block_type : "";
+    const filterRetryLt = Number(req.query.retry_count_lt);
+    const filterBlockedOlderMin = Number(req.query.blocked_older_min);
+
+    const extraFilters: string[] = [];
+    const extraParams: unknown[] = [];
+    if (filterAgentState) {
+      extraFilters.push("t.agent_state = ?");
+      extraParams.push(filterAgentState);
+    }
+    if (filterBlockType) {
+      extraFilters.push("t.block_type = ?");
+      extraParams.push(filterBlockType);
+    }
+    if (Number.isFinite(filterRetryLt) && filterRetryLt > 0) {
+      extraFilters.push("t.retry_count < ?");
+      extraParams.push(filterRetryLt);
+    }
+    if (
+      Number.isFinite(filterBlockedOlderMin) &&
+      filterBlockedOlderMin > 0
+    ) {
+      extraFilters.push(
+        "t.blocked_at IS NOT NULL AND t.blocked_at < datetime('now', ?)",
+      );
+      extraParams.push(`-${filterBlockedOlderMin} minutes`);
+    }
+    const extraWhere = extraFilters.length
+      ? " AND " + extraFilters.join(" AND ")
+      : "";
+
     const tasks = (
       seesEveryTask(userId)
         ? db
             .prepare(
-              `SELECT ${columns} ${joins} ${includeChildren ? "" : "WHERE (t.parent_id IS NULL OR t.project_id IS NOT NULL)"} ORDER BY t.created_at DESC`,
+              `SELECT ${columns} ${joins} ${includeChildren ? "" : "WHERE (t.parent_id IS NULL OR t.project_id IS NOT NULL)"} ${extraWhere} ORDER BY t.created_at DESC`,
             )
-            .all()
+            .all(...extraParams)
         : db
             .prepare(
               `SELECT ${columns} ${joins}
       WHERE ${includeChildren ? "" : "(t.parent_id IS NULL OR t.project_id IS NOT NULL) AND "}(t.creator_id = ? OR t.assignee_id = ?
          OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))
+      ${extraWhere}
       ORDER BY t.created_at DESC`,
             )
-            .all(userId, userId, userId)
+            .all(userId, userId, userId, ...extraParams)
     ) as any[];
 
     const stmtLabels = db.prepare(`

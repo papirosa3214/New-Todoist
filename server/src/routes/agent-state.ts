@@ -723,6 +723,11 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       blocked_reason?: string;
       blocked_at?: string;
       block_notified?: boolean;
+      // Поля планировщика (шаг 4): он переводит карточку из blocked
+      // обратно в todo и инкрементирует retry_count, либо ставит
+      // новую machine_selected_role при переподборе.
+      retry_count?: number;
+      machine_selected_role?: string | null;
     };
   }>("/api/tasks/:id/state", {
     preHandler: authPre,
@@ -998,6 +1003,41 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             typeof req.body?.block_notified === "boolean"
               ? (req.body.block_notified ? 1 : 0)
               : null,
+            task.id,
+          );
+        } else if (state === "todo" || state === null) {
+          // Шаг 4: планировщик переводит карточку обратно в todo
+          // (state='todo' из blocked) или снимает блокировку (state=null).
+          // Сбрасывает block_type (если не передан), и при желании —
+          // инкрементирует retry_count и/или ставит новую
+          // machine_selected_role.
+          const retryCountRaw = req.body?.retry_count;
+          const newRetryCount =
+            typeof retryCountRaw === "number" && Number.isFinite(retryCountRaw)
+              ? Math.max(0, Math.floor(retryCountRaw))
+              : null;
+          const msrRaw = req.body?.machine_selected_role;
+          const newMsr =
+            msrRaw === null
+              ? null
+              : typeof msrRaw === "string" && msrRaw.length > 0
+                ? msrRaw
+                : undefined;
+          db.prepare(
+            `UPDATE tasks SET agent_state = ?,
+                              block_type = ?,
+                              retry_count = COALESCE(?, retry_count),
+                              machine_selected_role = COALESCE(?, machine_selected_role),
+                              blocked_at = NULL,
+                              block_notified = false,
+                              assignee_id = NULL,
+                              updated_at = datetime('now')
+              WHERE id = ?`,
+          ).run(
+            state,
+            null, // block_type снимаем при выходе из blocked
+            newRetryCount,
+            newMsr === undefined ? null : newMsr,
             task.id,
           );
         } else {

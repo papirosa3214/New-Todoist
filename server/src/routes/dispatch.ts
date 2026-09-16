@@ -35,6 +35,7 @@ import { authOrApiToken } from "../auth.js";
 import { isOwner } from "../access.js";
 import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
+import { isServiceUser } from "./agent-state.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
 import { getTaskRow, hydrateTask } from "./tasks.js";
 
@@ -644,6 +645,33 @@ export function registerDispatchRoutes(app: FastifyInstance): void {
       }
 
       return { task: hydrateTask(getTaskRow(id)) };
+    },
+  );
+
+  // POST /api/tasks/:id/repick-role — планировщик (шаг 4) просит
+  // переподобрать роль для blocked/wrong_role карточки. Только service user.
+  // Возвращает { role, how } или { role: null, how: "dead" } если кандидатов
+  // нет после role_exclusions.
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/repick-role",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isServiceUser(req.userId)) {
+        return reply.code(403).send({
+          error: "repick-role доступен только служебному ключу (планировщик)",
+        });
+      }
+      const task = db
+        .prepare("SELECT * FROM tasks WHERE id = ?")
+        .get(req.params.id) as any;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      const choice = await pickRole(
+        req.params.id,
+        task.owner_selected_role,
+        task.machine_selected_role,
+        parseRoleExclusions(task.role_exclusions),
+      );
+      return choice;
     },
   );
 }
