@@ -22,6 +22,7 @@ import { registerEnrichSemanticRoutes } from "./routes/enrichSemantic.js";
 import { registerProjectLabelRoutes } from "./routes/projects.js";
 import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
+import { registerReleaseRoutes } from "./routes/release.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
@@ -247,6 +248,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // бессрочно — прямое решение владельца.
   registerDictationArchiveRoutes(app);
   registerAgentServiceRoutes(app);
+  registerReleaseRoutes(app);
   registerIntegrationRoutes(app);
   registerJournalFolderRoutes(app);
   registerKnowledgeRoutes(app);
