@@ -1572,6 +1572,32 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: "043_block_metadata",
+    description:
+      "Pipeline head plan step 0: add blocked_at timestamptz, " +
+      "block_notified boolean NOT NULL DEFAULT false, and partial index " +
+      "on tasks(block_type) WHERE state='blocked' for the scheduler.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((c) => c.name),
+      );
+      if (!cols.has("blocked_at")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN blocked_at timestamptz");
+      }
+      if (!cols.has("block_notified")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN block_notified boolean NOT NULL DEFAULT false",
+        );
+      }
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_block_type_blocked " +
+          "ON tasks (block_type) WHERE state = 'blocked'",
+      );
+    },
+  },
 ];
 
 /**
