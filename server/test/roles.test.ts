@@ -97,7 +97,10 @@ describe("role catalog API", () => {
     expect(details.json()).toMatchObject({
       role: "architect",
       model: "MiniMax-M3",
-      default_shell: "agent_pi",
+      // 18.09.2026 (карточка f3108dcc): новое runtime_id — фасадное поле,
+      // всегда 'runtime:pi'. default_shell сохранён как legacy-alias для UI.
+      runtime_id: "runtime:pi",
+      default_shell: "pi_runtime",
       fallbacks: [],
     });
     expect(details.json().skills).toEqual([

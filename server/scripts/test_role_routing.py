@@ -19,7 +19,8 @@ class TestRoleRouting(unittest.TestCase):
 
     def test_missing_role_fails_at_load(self):
         valid = trigger.ROLE_ROUTING_FILE.read_text(encoding="utf-8")
-        invalid = valid.replace("  qa: agent_pi\n", "", 1)
+        # 18.09.2026 (карточка f3108dcc): qa → pi_runtime в role-routing.yaml.
+        invalid = valid.replace("  qa: pi_runtime\n", "", 1)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "role-routing.yaml"
             path.write_text(invalid, encoding="utf-8")
