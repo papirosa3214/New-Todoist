@@ -216,6 +216,11 @@ function roleDetails(role: RoleName, piAlive: boolean) {
     permissions: account?.permissions ?? null,
     model,
     default_shell: routing.defaults[role],
+    // 18.09.2026 (карточка f3108dcc): добавляем runtime_id — фасадное
+    // поле, указывающее на рантайм. Сейчас всегда "runtime:pi". UI
+    // продолжает читать default_shell (legacy-alias), новое поле — для
+    // новых потребителей (/api/runtime/*).
+    runtime_id: "runtime:pi",
     fallbacks: routing.fallbacks[role],
     attempt_policy: attemptPolicyFor(model),
     current_task: work

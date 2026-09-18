@@ -21,26 +21,32 @@ export type RoleRouting = {
   models: Record<RoleName, string>;
 };
 
+/** Новый алиас типа. Содержит модель и провайдера, к которому она относится —
+ *  используется в новой семантике nextModelForProfile() (см. ниже). Старый
+ *  ShellRoute оставлен как deprecated для существующих вызовов. */
+export type ModelRoute = { model: string; provider: string };
+
+/** Deprecated с 18.09.2026 (карточка f3108dcc). Новые вызовы должны
+ *  использовать ModelRoute. Оставлен для обратной совместимости с
+ *  nextShellForRole() ниже (deprecated обёртка). */
 export type ShellRoute = { shell: string; userId: string };
 
-export const SHELL_USER_IDS: Record<string, string> = {
-  agent_claude_bot: "u2",
-  agent_hermes: "u3",
-  agent_orchestrator: "6848a89b-04fe-4015-bb1c-61b03782c378",
-  agent_deepseek: "b85212d6-abab-4afb-a4c6-0d379b6537a4",
-  agent_antigravity: "5b9d47c1-25c7-4a7c-a276-70e21f7d7816",
-  // Каноническое имя shell'а — pi_runtime. agent_pi оставлен legacy-alias
-  // ниже (SHELL_AGENT_ALIASES) для старых карточек и UI-строк, которые
-  // его ещё содержат.
+/** Канонические имена shell'ов → userId. agent_pi → pi_runtime через
+ *  SHELL_AGENT_ALIASES. Старые legacy-shells (claude_bot, hermes и т.д.)
+ *  удалены 18.09.2026: Pi — единый runtime, остальные оболочки выведены. */
+export const SHELL_AGENT_IDS: Record<string, string> = {
   pi_runtime: "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2",
 };
 
-/** Legacy-aliases shell-имён: карточки до 18.09.2026 содержат "agent_pi".
- *  trigger.py и roleRouting трактуют оба имени одинаково. См. карточку
- *  f3108dcc (Pi = единый runtime, фасад). */
+/** Legacy-aliases shell-имён. Карточки до 18.09.2026 содержат "agent_pi",
+ *  trigger.py и roleRouting трактуют оба имени одинаково. */
 export const SHELL_AGENT_ALIASES: Record<string, string> = {
   agent_pi: "pi_runtime",
 };
+
+/** Deprecated с 18.09.2026. Новый код должен использовать SHELL_AGENT_IDS.
+ *  Оставлен как алиас для существующих импортов в UI/legacy-коде. */
+export const SHELL_USER_IDS = SHELL_AGENT_IDS;
 
 const ROLE_ROUTING_FILE = path.resolve(
   process.env.TASKFLOW_ROLE_ROUTING_FILE ??
@@ -65,8 +71,10 @@ function roleSection(
   return value as Record<RoleName, unknown>;
 }
 
-/** Load and validate the shared role-to-shell routing matrix. */
-export function loadRoleRouting(fileName = ROLE_ROUTING_FILE): RoleRouting {
+/** Каноническое имя новой функции. 18.09.2026: маршрутизация переехала
+ *  с shell-имён на модели — Pi единственный runtime, и при provider limit
+ *  лесенка идёт по моделям, а не по оболочкам. */
+export function loadRuntimeConfig(fileName = ROLE_ROUTING_FILE): RoleRouting {
   let document: unknown;
   try {
     document = parse(fs.readFileSync(fileName, "utf8"));
@@ -107,7 +115,48 @@ export function loadRoleRouting(fileName = ROLE_ROUTING_FILE): RoleRouting {
   return { defaults, fallbacks, models };
 }
 
-/** Return the next shell after the executor that hit a provider limit. */
+/** Deprecated алиас для loadRuntimeConfig. Оставлен потому, что
+ *  server/scripts/trigger.py, server/test/roles.test.ts и server/src/routes/roles.ts
+ *  импортируют loadRoleRouting. Будет удалён, когда переведём их на новое имя. */
+export function loadRoleRouting(fileName = ROLE_ROUTING_FILE): RoleRouting {
+  return loadRuntimeConfig(fileName);
+}
+
+/** Эвристика: какая провайдерская семья соответствует модели. Используется
+ *  в nextModelForProfile() для построения ModelRoute. На первом этапе
+ *  (Pi = единый runtime, провайдеров минимум три: anthropic/openai/minimax) —
+ *  простое сопоставление по префиксу. Расширяется через task 7 (API
+ *  /api/runtime/providers). */
+export function providerOfModel(model: string): string {
+  const m = model.toLowerCase();
+  if (m.startsWith("claude")) return "anthropic";
+  if (m.startsWith("gpt") || m.startsWith("o1") || m.startsWith("o3")) return "openai";
+  return "minimax";
+}
+
+/** Следующая модель в лесенке для роли после исчерпания текущей.
+ *  Семантика «следующая модель», а не «следующий shell» — Pi один,
+ *  shell-имён больше нет (см. карточку f3108dcc). */
+export function nextModelForProfile(
+  config: RoleRouting,
+  role: string,
+  currentModel: string,
+): ModelRoute | null {
+  if (!ROLE_NAMES.includes(role as RoleName)) return null;
+  const typedRole = role as RoleName;
+  const chain = [config.models[typedRole], ...config.fallbacks[typedRole]];
+  const idx = chain.indexOf(currentModel);
+  for (const candidate of chain.slice(idx + 1)) {
+    return { model: candidate, provider: providerOfModel(candidate) };
+  }
+  return null;
+}
+
+/** Deprecated обёртка для nextModelForProfile. Использует старую shell-семантику:
+ *  currentExecutorId → shells[i]. Новый код должен использовать nextModelForProfile.
+ *  Карточка 16.09.2026, 5f292e87 уже выпила из этого формата, но в
+ *  agent-state.ts есть вызовы — перевод на новую семантику в этой же
+ *  задаче (см. agent-state.ts изменения). */
 export function nextShellForRole(
   routing: RoleRouting,
   role: string,
@@ -117,11 +166,13 @@ export function nextShellForRole(
   const typedRole = role as RoleName;
   const shells = [routing.defaults[typedRole], ...routing.fallbacks[typedRole]];
   const currentIndex = shells.findIndex(
-    (shell) => SHELL_USER_IDS[shell] === currentExecutorId,
+    (shell) => SHELL_AGENT_IDS[shell] === currentExecutorId
+      || (SHELL_AGENT_ALIASES[shell] && SHELL_AGENT_IDS[SHELL_AGENT_ALIASES[shell]] === currentExecutorId),
   );
   const firstCandidate = currentIndex >= 0 ? currentIndex + 1 : 1;
   for (const shell of shells.slice(firstCandidate)) {
-    const userId = SHELL_USER_IDS[shell];
+    const userId = SHELL_AGENT_IDS[shell]
+      ?? SHELL_AGENT_IDS[SHELL_AGENT_ALIASES[shell]];
     if (userId) return { shell, userId };
   }
   return null;
