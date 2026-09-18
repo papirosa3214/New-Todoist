@@ -9,12 +9,16 @@ import {
 import db from "../db.js";
 import {
   ROLE_NAMES,
-  type RoleName,
+  SHELL_AGENT_IDS,
   loadRoleRouting,
+  providerOfModel,
+  type RoleName,
 } from "../roleRouting.js";
 import type {
+  AgentAttempt,
   AgentProfile,
   AgentRun,
+  AuthMethod,
   Model,
   ProviderConnection,
   Runtime,
@@ -22,14 +26,16 @@ import type {
 import { RUNTIME_ID_PI } from "./types.js";
 import {
   UnsupportedInFacadeError,
-  type AuthInteractive,
-  type AuthInteractiveEvent,
-  type AuthInstruction,
   type ConnectProviderInput,
   type RuntimeAdapter,
   type StartRunInput,
   type StartRunResult,
 } from "./RuntimeAdapter.js";
+import { authSessionManager, type AuthSessionView } from "./AuthSession.js";
+import {
+  ModelNotAvailableError,
+  RuntimeUnavailableError,
+} from "./errors.js";
 
 const ROLE_PROMPTS_DIR = process.env.TASKFLOW_ROLE_PROMPTS_DIR
   ?? path.join(process.cwd(), "scripts", "role-prompts");
@@ -39,258 +45,77 @@ const ROLE_PROFILES_DIR = process.env.TASKFLOW_ROLE_PROFILES_DIR
 
 // 18.09.2026 (правка SDK): вся самописная обвязка вокруг `pi auth check`
 // / `pi --list-models` / `~/.pi/agent/auth.json` удалена. Источник
-// правды — ModelRuntime из @earendil-works/pi-coding-agent. Кэш моделей
-// и credentials тоже на стороне SDK: он сам инвалидирует снимок при
-// записи credentials (см. setRuntimeApiKey). TaskFlow просто мапит
-// ответы SDK в фасадные типы.
+// правды — ModelRuntime из @earendil-works/pi-coding-agent.
 //
-// SDK API (из dist/core/model-runtime.d.ts):
-//   checkAuth(id)              → { source?: string, type: "api_key"|"oauth" } | undefined
-//   getProviderAuthStatus(id)  → { configured: boolean, source?: ..., label?: string }
-//   getAvailable(id?)          → readonly Model<Api>[] (полный снимок авторизованных моделей)
-//   setRuntimeApiKey(id, key)  → пишет в ~/.pi/agent/auth.json сам SDK
-//   getProviders()             → readonly Provider[] (зарегистрированные провайдеры)
-//
-// Реальные типы AuthCheck/AuthStatus/Model живут в peer-dep
-// @earendil-works/pi-ai, который вложен в pi-coding-agent и не
-// доступен как top-level зависимость. Описываем нужные поля
-// структурно через Awaited<ReturnType<...>>, чтобы не тянуть ещё одну
-// зависимость ради одного типа.
+// 18.09.2026 (доработка после ревью владельца): переписаны lifecycle
+// AgentRun, sessionId, providers/models, OAuth. См. комментарии по месту.
 
-type AuthCheck = NonNullable<Awaited<ReturnType<ModelRuntime["checkAuth"]>>>;
 type AuthStatus = Awaited<ReturnType<ModelRuntime["getProviderAuthStatus"]>>;
-type SdkModel = Awaited<ReturnType<ModelRuntime["getAvailable"]>>[number];
+type SdkModel = ReturnType<ModelRuntime["getModels"]>[number];
+type SdkProvider = ReturnType<ModelRuntime["getProviders"]>[number];
 
 /** Singleton ModelRuntime. ModelRuntime.create() — асинхронный (поднимает
  *  каталог провайдеров, читает credentials, проверяет доступность
  *  моделей), поэтому держим его в lazy-переменной. */
 let modelRuntime: ModelRuntime | null = null;
+
 async function getModelRuntime(): Promise<ModelRuntime> {
   if (!modelRuntime) {
-    modelRuntime = await ModelRuntime.create();
+    try {
+      modelRuntime = await ModelRuntime.create();
+    } catch (error) {
+      throw new RuntimeUnavailableError(
+        `ModelRuntime.create() failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   return modelRuntime;
 }
 
-/** Маппит AuthStatus.configured в фасадный статус провайдера.
- *  SDK разделяет «есть ли credentials» (configured) и «какой именно
- *  тип credentials есть» (checkAuth().type). Старое CLI `pi auth
- *  check --json` совмещало это в один объект со status="ready"; в
- *  новой модели это два независимых запроса, и configured=true
- *  → connected. */
-function mapAuthStatus(s: AuthStatus): "connected" | "disconnected" | "expired" {
-  if (s.configured) return "connected";
-  // SDK не различает «не сконфигурирован» и «expired» через
-  // getProviderAuthStatus — это решает checkAuth() в listProviders()
-  // по признаку source. Здесь просто «не подключён».
-  return "disconnected";
+/** Сбрасывает singleton — нужно тестам и после смены credentials, если
+ *  SDK не увидел запись. */
+export function resetModelRuntime(): void {
+  modelRuntime = null;
 }
 
-/** Маппит AuthEvent (из SDK AuthInteraction) в фасадный AuthInteractiveEvent.
- *  SDK типы не реэкспортируются из pi-coding-agent (живут в peer-dep
- *  pi-ai), и без них — структурный маппинг через поля. Поле `type`
- *  определяет, какие дополнительные поля присутствуют. */
-function mapAuthEvent(
-  provider: string,
-  raw: unknown,
-): AuthInteractiveEvent | null {
-  if (!raw || typeof raw !== "object") return null;
-  const ev = raw as {
-    type?: unknown;
-    url?: unknown;
-    instructions?: unknown;
-    userCode?: unknown;
-    verificationUri?: unknown;
-    intervalSeconds?: unknown;
-    expiresInSeconds?: unknown;
-    message?: unknown;
-  };
-  switch (ev.type) {
-    case "auth_url":
-      if (typeof ev.url !== "string") return null;
-      return {
-        kind: "auth_url",
-        provider,
-        url: ev.url,
-        instructions: typeof ev.instructions === "string"
-          ? ev.instructions
-          : undefined,
-      };
-    case "device_code":
-      if (
-        typeof ev.userCode !== "string" ||
-        typeof ev.verificationUri !== "string"
-      ) {
-        return null;
-      }
-      return {
-        kind: "device_code",
-        provider,
-        userCode: ev.userCode,
-        verificationUri: ev.verificationUri,
-        intervalSeconds: typeof ev.intervalSeconds === "number"
-          ? ev.intervalSeconds
-          : undefined,
-        expiresInSeconds: typeof ev.expiresInSeconds === "number"
-          ? ev.expiresInSeconds
-          : undefined,
-      };
-    case "progress":
-      if (typeof ev.message !== "string") return null;
-      return { kind: "progress", provider, message: ev.message };
-    case "info":
-      if (typeof ev.message !== "string") return null;
-      return { kind: "info", provider, message: ev.message };
-    default:
-      return null;
-  }
-}
-
-/** Запускает OAuth login через ModelRuntime.login + AuthInteraction.
- *  Возвращает AuthInteractive — UI подписывается на events и ждёт
- *  completed. SDK login() пишет credentials в ~/.pi/agent/auth.json
- *  сам (через свой CredentialStore), TaskFlow ничего не пишет на диск.
- *
- *  manual_code/select/text prompt'ы не поддержаны в TaskFlow UI:
- *  prompt() reject'ит их сразу. Это упрощает flow — TaskFlow UI
- *  рассчитан на browser-callback (auth_url) и device-code, без
- *  ручного ввода. Если провайдер требует manual_code — login() упадёт,
- *  и completed реджектится с ошибкой.
- */
-async function startProviderLogin(
-  rt: ModelRuntime,
-  provider: string,
-): Promise<AuthInteractive> {
-  // Очередь с backpressure. notify() пушит событие; если есть
-  // ожидающий next() — резолвит его сразу. Если notify() приходит
-  // до next() — кладёт в буфер, next() заберёт при вызове.
-  let resolveNext: ((value: IteratorResult<AuthInteractiveEvent>) => void) | null = null;
-  const queue: AuthInteractiveEvent[] = [];
-  let closed = false;
-
-  function push(item: AuthInteractiveEvent) {
-    if (closed) return;
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: item, done: false });
-    } else {
-      queue.push(item);
-    }
-  }
-  function finish() {
-    if (closed) return;
-    closed = true;
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: undefined, done: true });
-    }
-  }
-
-  let resolveCompleted!: () => void;
-  let rejectCompleted!: (e: Error) => void;
-  const completed = new Promise<void>((res, rej) => {
-    resolveCompleted = res;
-    rejectCompleted = rej;
-  });
-  let cancelled = false;
-  const abort = new AbortController();
-
-  const interaction = {
-    signal: abort.signal,
-    notify: (event: unknown) => {
-      if (cancelled) return;
-      const mapped = mapAuthEvent(provider, event);
-      if (mapped) push(mapped);
-    },
-    prompt: (p: unknown) => {
-      if (cancelled) {
-        return Promise.reject(new Error("Login cancelled"));
-      }
-      // TaskFlow UI пока поддерживает только manual_code: проксируем
-      // событие в events, чтобы UI мог показать юзеру (auth_url /
-      // device_code flow). Сам submit кода пока не реализован — login()
-      // упадёт без правильного ввода, completed реджектится в .catch
-      // ниже, UI видит ошибку. Полный двусторонний канал (SSE или
-      // POST /submit) — отдельный этап.
-      //
-      // text/secret/select SDK на наших провайдерах не вызывает —
-      // Anthropic OAuth присылает только auth_url (notify) или
-      // manual_code (prompt), если callback server не сработал.
-      const pp = p as { type?: string; message?: string; placeholder?: string };
-      const kind = pp.type ?? "unknown";
-      if (kind === "manual_code") {
-        push({
-          kind: "manual_code",
-          provider,
-          message: pp.message ?? "",
-          placeholder: pp.placeholder,
-        });
-        return Promise.resolve("");
-      }
-      console.warn(
-        `[startProviderLogin:${provider}] prompt(${kind}) не поддержан в TaskFlow UI; возвращаем пустой ввод`,
+/** Полный каталог моделей Pi (все модели, независимо от того,
+ *  авторизован провайдер или нет). Именно каталог — источник правды для
+ *  «модель существует» (спека §10, §14). Если каталог недоступен —
+ *  RuntimeUnavailableError (503), а не пустой список. */
+async function loadModelCatalog(): Promise<SdkModel[]> {
+  const rt = await getModelRuntime();
+  let all = rt.getModels() as readonly SdkModel[];
+  if (all.length === 0) {
+    try {
+      await rt.refresh();
+    } catch (error) {
+      throw new RuntimeUnavailableError(
+        `Pi model catalog refresh failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return Promise.resolve("");
-    },
-  };
+    }
+    all = rt.getModels() as readonly SdkModel[];
+  }
+  if (all.length === 0) {
+    const err = rt.getError();
+    // Пустой каталог без ошибки SDK — это легитимное «провайдеров/моделей
+    // нет». Пустой каталог с ошибкой — Pi недоступен (503).
+    if (err) throw new RuntimeUnavailableError(err);
+  }
+  return [...all];
+}
 
-  // Запускаем SDK login() в фоне. resolved → completed; rejected → completed
-  // реджектится с тем же reason. В обоих случаях закрываем очередь.
-  rt.login(provider, "oauth", interaction as never)
-    .then(() => {
-      if (cancelled) return;
-      resolveCompleted();
-      finish();
-    })
-    .catch((err: unknown) => {
-      if (cancelled) return;
-      rejectCompleted(err instanceof Error ? err : new Error(String(err)));
-      finish();
-    });
+function providerAuthMethods(provider: SdkProvider): AuthMethod[] {
+  const methods: AuthMethod[] = [];
+  const auth = (provider as unknown as {
+    auth?: { apiKey?: unknown; oauth?: unknown };
+  }).auth;
+  if (auth?.apiKey) methods.push("api_key");
+  if (auth?.oauth) methods.push("oauth");
+  return methods;
+}
 
-  // AsyncIterable: UI делает `for await (const ev of authInteractive.events)`
-  // и получает события по мере прихода. Семантика:
-  //   - пока есть элементы в буфере — выдаём по одному;
-  //   - иначе ждём push() или finish() (или cancelled/closed);
-  //   - cancelled/closed завершают итератор вне зависимости от буфера.
-  const iterable: AsyncIterable<AuthInteractiveEvent> = {
-    [Symbol.asyncIterator]() {
-      return {
-        async next(): Promise<IteratorResult<AuthInteractiveEvent>> {
-          if (cancelled || closed) {
-            // Может остаться буфер — выдаём, потом закрываемся.
-            if (queue.length > 0 && !cancelled) {
-              return { value: queue.shift() as AuthInteractiveEvent, done: false };
-            }
-            return { value: undefined, done: true };
-          }
-          if (queue.length > 0) {
-            return { value: queue.shift() as AuthInteractiveEvent, done: false };
-          }
-          // Ждём нового события или завершения.
-          return new Promise<IteratorResult<AuthInteractiveEvent>>((resolve) => {
-            resolveNext = (v) => resolve(v);
-          });
-        },
-      };
-    },
-  };
-
-  return {
-    status: "auth_required",
-    provider,
-    events: iterable,
-    completed,
-    cancel: () => {
-      if (cancelled) return;
-      cancelled = true;
-      abort.abort();
-      rejectCompleted(new Error("Login cancelled by user"));
-      finish();
-    },
-  };
+function mapProviderStatus(status: AuthStatus): ProviderConnection["status"] {
+  return status.configured ? "connected" : "disconnected";
 }
 
 interface ProfileConfig {
@@ -348,6 +173,30 @@ function readRoleAccount(role: RoleName) {
       | undefined;
 }
 
+/** userId, которого попытка будет записана как executor. По возможности —
+ *  ролевая учётка; иначе shell-учётка pi_runtime; иначе любой ai-пользователь.
+ *  null = записать attempt нельзя (нет пользователя), run всё равно идёт. */
+function resolveExecutorId(role: string | null, agentId: string): string | null {
+  if (role && (ROLE_NAMES as readonly string[]).includes(role)) {
+    const account = readRoleAccount(role as RoleName);
+    if (account) return account.id;
+  }
+  const shell = SHELL_AGENT_IDS[agentId] ?? SHELL_AGENT_IDS.pi_runtime;
+  if (shell) {
+    const exists = db.prepare("SELECT id FROM users WHERE id = ?").get(shell) as
+      | { id: string }
+      | undefined;
+    if (exists) return exists.id;
+  }
+  const anyAi = db
+    .prepare(
+      `SELECT id FROM users WHERE role IS NOT NULL OR type = 'ai'
+        ORDER BY created_at LIMIT 1`,
+    )
+    .get() as { id: string } | undefined;
+  return anyAi?.id ?? null;
+}
+
 async function piAlive(): Promise<boolean> {
   try {
     const { unitState } = await import("../routes/agent-service.js");
@@ -400,11 +249,204 @@ async function buildProfile(
   };
 }
 
-/** Список известных провайдеров. Имена совпадают с тем, как Pi их знает
- *  внутри (см. ~/.pi/agent/auth.json: anthropic, openai-codex, minimax).
- *  Имя "openai-codex" — каноническое для OpenAI через Codex OAuth; "openai"
- *  Pi не знает и вернёт provider_not_found. */
-const KNOWN_PROVIDERS = ["anthropic", "openai-codex", "minimax"] as const;
+// ===== Активные запуски (in-memory) =====
+
+interface ActiveRun {
+  runId: string;
+  taskId: string;
+  agentId: string;
+  provider: string | null;
+  model: string | null;
+  sessionId: string | null;
+  client: RpcClient;
+  startedAt: string;
+  retrying: boolean;
+  cancelled: boolean;
+  stopReason: string | null;
+  settled: boolean;
+  finish: Promise<void>;
+}
+
+const activeRuns = new Map<string, ActiveRun>();
+
+/** Обновляет lastActivityAt/retry-маркеры из события. НЕ завершает run. */
+function recordRunActivity(run: ActiveRun, event: { type: string; [k: string]: unknown }): void {
+  switch (event.type) {
+    case "agent_end": {
+      // agent_end — промежуточное событие: Pi после него может сделать
+      // retry, продолжить или уйти в compaction. run НЕ завершаем.
+      const willRetry = event.willRetry === true;
+      if (willRetry) {
+        // Pi сам продолжит (retry). Ошибку/stopReason фиксировать рано:
+        // retry может завершиться успешно, и run нельзя пометить failed.
+        run.retrying = true;
+        break;
+      }
+      const messages = event.messages;
+      if (Array.isArray(messages)) {
+        const lastAssistant = [...messages]
+          .reverse()
+          .find((m) => m && typeof m === "object" && (m as { role?: string }).role === "assistant") as
+          | { stopReason?: string; errorMessage?: string }
+          | undefined;
+        if (lastAssistant?.stopReason === "error") {
+          run.stopReason = lastAssistant.errorMessage ?? "error";
+        } else if (lastAssistant?.stopReason === "aborted") {
+          run.cancelled = true;
+        }
+      }
+      break;
+    }
+    case "auto_retry_start":
+      run.retrying = true;
+      break;
+    case "auto_retry_end":
+      run.retrying = false;
+      if (event.success === false) {
+        run.stopReason = typeof event.finalError === "string"
+          ? event.finalError
+          : "retry_failed";
+      }
+      break;
+    case "compaction_start":
+    case "compaction_end":
+    case "session_info_changed":
+    case "message_update":
+    case "message_end":
+      // просто активность
+      break;
+    default:
+      break;
+  }
+}
+
+interface AttemptRow {
+  id: string;
+  model: string | null;
+  provider: string | null;
+  started_at: string;
+  ended_at: string | null;
+  outcome: string | null;
+  reason: string | null;
+  session_id: string | null;
+}
+
+function mapAttemptStatus(row: AttemptRow): AgentAttempt["status"] {
+  if (!row.ended_at) return "running";
+  if (row.outcome === "cancelled") return "cancelled";
+  if (row.outcome === "failed") return "failed";
+  return "completed";
+}
+
+function attemptsForTask(taskId: string): AgentAttempt[] {
+  const rows = db
+    .prepare(
+      `SELECT id, model, provider, started_at, ended_at, outcome, reason, session_id
+         FROM attempts
+        WHERE task_id = ? AND subtask_id IS NULL
+        ORDER BY started_at ASC, rowid ASC`,
+    )
+    .all(taskId) as AttemptRow[];
+  return rows.map((row) => ({
+    id: row.id,
+    model: row.model,
+    provider: row.provider,
+    status: mapAttemptStatus(row),
+    outcome: row.outcome,
+    started_at: row.started_at,
+    finished_at: row.ended_at,
+    reason: row.reason,
+  }));
+}
+
+/** Закрывает ранее активную попытку задачи, чтобы partial unique index
+ *  «одна активная попытка на задачу» не падал при повторном запуске. */
+function closeActiveAttempts(taskId: string): void {
+  db.prepare(
+    `UPDATE attempts
+        SET ended_at = datetime('now'),
+            outcome = COALESCE(outcome, 'superseded')
+      WHERE task_id = ? AND subtask_id IS NULL AND ended_at IS NULL`,
+  ).run(taskId);
+}
+
+function createAttempt(input: {
+  runId: string;
+  taskId: string;
+  executorId: string;
+  model: string;
+  provider: string | null;
+  routingRole: string | null;
+}): void {
+  db.prepare(
+    `INSERT INTO attempts
+       (id, task_id, subtask_id, executor_id, runner, model, provider,
+        routing_role, started_at)
+     VALUES
+       (@id, @taskId, NULL, @executorId, 'pi', @model, @provider,
+        @routingRole, datetime('now'))`,
+  ).run({
+    id: input.runId,
+    taskId: input.taskId,
+    executorId: input.executorId,
+    model: input.model,
+    provider: input.provider,
+    routingRole: input.routingRole,
+  });
+}
+
+/** Итог run определяется НЕ boolean `success` (его в Pi нет), а
+ *  stopReason / cancel / ошибкой. Pi event type не равен TaskFlow status. */
+async function finalizeRun(run: ActiveRun, outcome: AgentRun["status"], stopReason: string | null): Promise<void> {
+  if (run.settled) return;
+  run.settled = true;
+
+  const attemptOutcome = outcome === "completed"
+    ? "completed"
+    : outcome === "cancelled"
+    ? "cancelled"
+    : "failed";
+  const nextState = outcome === "completed" ? "review" : "blocked";
+
+  try {
+    db.prepare(
+      `UPDATE attempts
+          SET ended_at = datetime('now'),
+              outcome = ?,
+              reason = ?,
+              stop_reason = ?,
+              session_id = COALESCE(?, session_id)
+        WHERE id = ?`,
+    ).run(attemptOutcome, stopReason, stopReason, run.sessionId, run.runId);
+  } catch { /* задача/попытка могла быть удалена */ }
+
+  try {
+    db.prepare(
+      `UPDATE tasks
+          SET agent_state = ?,
+              agent_finished_at = datetime('now'),
+              stop_reason = ?,
+              agent_session_id = COALESCE(agent_session_id, ?),
+              updated_at = datetime('now')
+        WHERE id = ?`,
+    ).run(nextState, stopReason, run.sessionId, run.taskId);
+  } catch { /* ignore */ }
+
+  // client.stop() вызывается ТОЛЬКО здесь — не на agent_end. На agent_end
+  // Pi может ещё продолжать (retry/compaction), гасить процесс нельзя.
+  try {
+    await run.client.stop();
+  } catch { /* процесс уже умер — окей */ }
+
+  activeRuns.delete(run.runId);
+}
+
+/** Определяет итоговый статус по наблюдаемым фактам (не по success). */
+function resultStatus(run: ActiveRun): { outcome: AgentRun["status"]; reason: string | null } {
+  if (run.cancelled) return { outcome: "cancelled", reason: "cancelled" };
+  if (run.stopReason) return { outcome: "failed", reason: run.stopReason };
+  return { outcome: "completed", reason: null };
+}
 
 export const piRuntime: RuntimeAdapter = {
   id: RUNTIME_ID_PI,
@@ -415,8 +457,6 @@ export const piRuntime: RuntimeAdapter = {
       id: RUNTIME_ID_PI,
       kind: "pi",
       status: alive ? "ready" : "down",
-      // Версия — из npm bin или из version-файла Pi. На первом этапе —
-      // строка-маркер; реальная версия появится, когда Pi её отдаст.
       version: process.env.PI_VERSION ?? "unknown",
       endpoint: process.env.PI_ENDPOINT ?? "cli",
     };
@@ -428,238 +468,307 @@ export const piRuntime: RuntimeAdapter = {
   },
 
   async listModels(): Promise<Model[]> {
+    // Каталог Pi — источник правды. Если Pi недоступен — 503, не [].
+    const catalog = await loadModelCatalog();
+    const rt = await getModelRuntime();
+
+    const availableKeys = new Set<string>();
     try {
-      const rt = await getModelRuntime();
       const available = await rt.getAvailable();
-      // SDK возвращает {id, provider, ...} — мапим в фасадный Model.
-      // Дедупликация не нужна: SDK уже отдаёт уникальные (provider, id).
-      const seen = new Set<string>();
-      const models: Model[] = [];
       for (const m of available) {
         const sm = m as SdkModel;
-        const key = `${sm.provider}:${sm.id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        models.push({
-          id: sm.id,
-          provider: sm.provider,
-          runtime_id: RUNTIME_ID_PI,
-          available: true,
-        });
+        availableKeys.add(`${sm.provider}:${sm.id}`);
       }
-      return models;
     } catch {
-      // Pi недоступен / упал — отдаём пустой массив. UI покажет «нет
-      // моделей», не 500. Кэшем здесь не управляем — это на стороне
-      // ModelRuntime (см. getAvailableSnapshot + refresh()).
-      return [];
+      // Авторизационный снимок не собрался — каталог всё равно отдаём,
+      // просто помечаем всё как недоступное. Это не «Pi недоступен».
     }
+
+    const seen = new Set<string>();
+    const models: Model[] = [];
+    for (const m of catalog) {
+      const sm = m as SdkModel;
+      const key = `${sm.provider}:${sm.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      models.push({
+        id: sm.id,
+        provider: sm.provider,
+        runtime_id: RUNTIME_ID_PI,
+        available: availableKeys.has(key),
+        name: sm.name,
+        contextWindow: sm.contextWindow,
+        maxTokens: sm.maxTokens,
+        thinking: sm.reasoning,
+        images: Array.isArray(sm.input) ? sm.input.includes("image") : undefined,
+      });
+    }
+    return models;
   },
 
   async listProviders(): Promise<ProviderConnection[]> {
-    const rt = await getModelRuntime();
-    const results = await Promise.all(
-      KNOWN_PROVIDERS.map(async (id) => {
-        try {
-          const [check, status] = await Promise.all([
-            rt.checkAuth(id),
-            Promise.resolve(rt.getProviderAuthStatus(id)),
-          ]);
-          if (!check) return null; // SDK не знает этот провайдер
-          const c = check as AuthCheck;
-          const s = status as AuthStatus;
-          return {
-            id,
-            runtime_id: RUNTIME_ID_PI,
-            status: mapAuthStatus(s),
-            authType: c.type,
-            managedBy: "pi" as const,
-            lastCheckedAt: new Date().toISOString(),
-          };
-        } catch {
-          // checkAuth упал — отдаём как expired, чтобы UI мог хотя бы
-          // показать «не отвечает» и попробовать позже.
-          return {
-            id,
-            runtime_id: RUNTIME_ID_PI,
-            status: "expired" as const,
-            authType: null,
-            managedBy: "pi" as const,
-            lastCheckedAt: new Date().toISOString(),
-          };
-        }
-      }),
-    );
-    return results.filter((p): p is NonNullable<typeof p> => p !== null);
+    let rt: ModelRuntime;
+    try {
+      rt = await getModelRuntime();
+    } catch (error) {
+      throw error instanceof RuntimeUnavailableError
+        ? error
+        : new RuntimeUnavailableError(String(error));
+    }
+    // Источник списка провайдеров — ModelRuntime.getProviders(), НЕ
+    // checkAuth(). checkAuth отвечает «есть ли рабочая авторизация», а не
+    // «существует ли провайдер». Неподключённые провайдеры обязаны
+    // оставаться в UI (спека §9).
+    let providers: readonly SdkProvider[];
+    try {
+      providers = rt.getProviders();
+    } catch (error) {
+      throw new RuntimeUnavailableError(
+        `Pi providers unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const now = new Date().toISOString();
+    return providers.map((p) => {
+      let status: ProviderConnection["status"] = "disconnected";
+      try {
+        status = mapProviderStatus(rt.getProviderAuthStatus(p.id) as AuthStatus);
+      } catch {
+        status = "expired";
+      }
+      let authType: "api_key" | "oauth" | null = null;
+      try {
+        authType = (rt.checkAuth(p.id) as unknown as { type?: "api_key" | "oauth" })
+          ?.type ?? null;
+      } catch {
+        authType = null;
+      }
+      return {
+        id: p.id,
+        name: p.name,
+        runtime_id: RUNTIME_ID_PI,
+        status,
+        authType,
+        authMethods: providerAuthMethods(p),
+        managedBy: "pi" as const,
+        lastCheckedAt: now,
+      };
+    });
   },
 
   async connectProvider(
     provider: string,
     body: ConnectProviderInput,
-  ): Promise<ProviderConnection | AuthInteractive> {
-    const rt = await getModelRuntime();
-    // Определяем тип провайдера через SDK. checkAuth() возвращает
-    // { type: "api_key"|"oauth" } если credentials уже есть; для
-    // НЕ-сконфигурированного api_key провайдера (то, что мы хотим
-    // подключить) — undefined. Опираемся на белый список для OAuth.
-    const check = await rt.checkAuth(provider);
-    const c = check as AuthCheck | undefined;
-    const knownOauth: ReadonlySet<string> = new Set(["anthropic", "openai-codex"]);
-    const isOauth = c?.type === "oauth" || (c === undefined && knownOauth.has(provider));
-
-    if (isOauth) {
-      // OAuth провайдер: вместо записи ключей запускаем
-      // ModelRuntime.login() с AuthInteraction. UI получает
-      // AuthInteractive — стрим событий (auth_url/device_code/...)
-      // + Promise completed. SDK сам пишет credentials после успешного
-      // flow в свой CredentialStore.
-      return startProviderLogin(rt, provider);
-    }
-
+  ): Promise<ProviderConnection> {
     const apiKey = body.apiKey?.trim();
     if (!apiKey) {
       throw new Error(`apiKey required for ${provider}`);
     }
-    // credential НЕ логируем — ни здесь, ни дальше. Длина — единственное,
-    // что можно показать в случае диагностики.
-    const keyLen = apiKey.length;
+    const rt = await getModelRuntime();
 
-    // SDK сам пишет в ~/.pi/agent/auth.json (через свой
-    // CredentialStore), сам инвалидирует кэш моделей и credentials,
-    // и не требует от нас lock-файла. Возвращаемый Promise<void>
-    // резолвится после успешной записи и обновления снимка.
-    await rt.setRuntimeApiKey(provider, apiKey);
+    // Штатный persistent credential mechanism Pi: ModelRuntime.login с
+    // типом api_key. Провайдер сам запрашивает ключ через interaction.prompt
+    // (нам ключ уже известен — отдаём его), а SDK пишет credential в свой
+    // CredentialStore (auth.json) через modify(). Runtime setRuntimeApiKey
+    // для этого НЕ годится: он in-memory и умирает с процессом (спека §8).
+    await rt.login(provider, "api_key", {
+      signal: new AbortController().signal,
+      notify: () => { /* api_key flow не эмитит событий */ },
+      prompt: () => Promise.resolve(apiKey),
+    } as never);
 
-    // Проверяем через SDK, что Pi действительно увидел ключ: после
-    // записи getProviderAuthStatus должен показать configured=true.
     const status = rt.getProviderAuthStatus(provider) as AuthStatus;
     if (!status.configured) {
       throw new Error(
-        `api_key for ${provider} written (${keyLen} chars), but getProviderAuthStatus ` +
-        `still returns configured=false${status.source ? ` (source=${status.source})` : ""}`,
+        `api_key for ${provider} не сохранился: getProviderAuthStatus.configured=false`,
       );
     }
+    const providerInfo = rt.getProvider(provider) as SdkProvider | undefined;
     return {
       id: provider,
+      name: providerInfo?.name,
       runtime_id: RUNTIME_ID_PI,
       status: "connected",
-      managedBy: "pi",
       authType: "api_key",
+      authMethods: providerInfo ? providerAuthMethods(providerInfo) : ["api_key"],
+      managedBy: "pi",
       lastCheckedAt: new Date().toISOString(),
     };
   },
 
-  async authInstruction(
-    provider: string,
-  ): Promise<AuthInstruction | AuthInteractive> {
-    // 18.09.2026 (правка AuthInteraction): старая текстовая команда
-    // для интерактивного TUI больше не нужна — TaskFlow UI получает
-    // тот же AuthInteractive, что и connectProvider(OAuth).
-    // authInstruction оставлен в RuntimeAdapter ради обратной
-    // совместимости с уже-собранным UI, который знает про этот метод.
+  async startAuthSession(provider: string): Promise<AuthSessionView> {
     const rt = await getModelRuntime();
-    return startProviderLogin(rt, provider);
+    const session = authSessionManager.startOAuth(provider, rt);
+    return session.toView();
+  },
+
+  getAuthSession(id: string): AuthSessionView | null {
+    return authSessionManager.get(id)?.toView() ?? null;
+  },
+
+  submitAuthInput(id: string, value: string): void {
+    authSessionManager.submitInput(id, value);
+  },
+
+  cancelAuthSession(id: string): void {
+    authSessionManager.cancel(id);
   },
 
   async startRun(input: StartRunInput): Promise<StartRunResult> {
-    // 18.09.2026 (правка SDK): startRun идёт через официальный
-    // RpcClient из @earendil-works/pi-coding-agent, который спавнит
-    // `pi --mode rpc` под капотом. Никакого Python/JSON RPC поверх
-    // CLI: SDK берёт на себя протокол, мы только подписываемся на
-    // события (session_start → agent_session_id, agent_end →
-    // agent_state review/blocked).
-    //
-    // Поведение сохраняется: возвращаем сразу {runId, status: queued}
-    // — реальное обновление БД идёт в background через onEvent.
+    // 18.09.2026: startRun честно запускает выбранную model/provider через
+    // официальный RpcClient. Возвращает реальный sessionId из
+    // client.getState(). AgentRun завершается ТОЛЬКО по agent_settled.
     const task = db
       .prepare(
         `SELECT id, assignee_id, dispatched_role, role FROM tasks WHERE id = ?`,
       )
       .get(input.taskId) as
-      | { id: string; assignee_id: string | null; dispatched_role: string | null; role: string | null }
+      | {
+          id: string;
+          assignee_id: string | null;
+          dispatched_role: string | null;
+          role: string | null;
+        }
       | undefined;
     if (!task) {
       throw new Error(`task ${input.taskId} not found`);
     }
-    // Намеренно НЕ вычисляем `const model = input.model?.trim() || undefined` —
-    // раньше это была впустую, сейчас поля напрямую идут в RpcClient.
-    const trimmedProvider = input.provider?.trim();
-    const trimmedModel = input.model?.trim();
 
-    const runId = crypto.randomUUID();
+    const routing = loadRoleRouting();
+    const role = task.dispatched_role ?? task.role ?? input.agentId;
+    let provider = input.provider?.trim() || undefined;
+    let model = input.model?.trim() || undefined;
+    if (!model && role && (ROLE_NAMES as readonly string[]).includes(role)) {
+      model = routing.models[role as RoleName];
+    }
+    if (!provider && model) {
+      provider = providerOfModel(model);
+    }
+
+    // Модель обязана существовать в каталоге Pi. Различаем «Pi недоступен»
+    // (RuntimeUnavailableError → 503) и «модели нет» (ModelNotAvailableError
+    // → 422).
+    const catalog = await loadModelCatalog();
+    const match = catalog.find(
+      (m) => m.id === model && (!provider || m.provider === provider),
+    ) ?? catalog.find((m) => m.id === model);
+    if (!match) {
+      throw new ModelNotAvailableError(model ?? "(default)", provider ?? null);
+    }
+    provider = match.provider;
+    model = match.id;
+
+    const runId = `run_${crypto.randomUUID()}`;
     const client = new RpcClient({
-      cliPath: "/home/maksim/.local/bin/pi",
+      cliPath: process.env.PI_BIN_PATH ?? "/home/maksim/.local/bin/pi",
       cwd: process.cwd(),
-      provider: trimmedProvider,
-      model: trimmedModel,
+      provider,
+      model,
       // NODE_USE_ENV_PROXY=1 — без него Pi встроенный fetch игнорирует
-      // HTTPS_PROXY и провайдеры отвечают 403 (гео-блок). Остальной env
-      // пробрасываем, потому что Pi читает VAULT/TOKEN/... из окружения.
+      // HTTPS_PROXY и провайдеры отвечают 403 (гео-блок).
       env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
     });
 
-    // Подписываемся на события ДО client.start() — к этому моменту
-    // события ещё не идут, но onEvent сохранит listener, и первый
-    // session_start мы поймаем.
+    const executorId = resolveExecutorId(role, input.agentId);
+    closeActiveAttempts(input.taskId);
+    if (executorId) {
+      try {
+        createAttempt({
+          runId,
+          taskId: input.taskId,
+          executorId,
+          model,
+          provider: provider ?? null,
+          routingRole: (ROLE_NAMES as readonly string[]).includes(role) ? role : null,
+        });
+      } catch { /* attempt — не критично для запуска */ }
+    }
+    try {
+      db.prepare(
+        `UPDATE tasks
+            SET current_attempt_id = ?, agent_state = 'in_progress',
+                agent_started_at = datetime('now'), updated_at = datetime('now')
+          WHERE id = ?`,
+      ).run(runId, input.taskId);
+    } catch { /* ignore */ }
+
+    const run: ActiveRun = {
+      runId,
+      taskId: input.taskId,
+      agentId: input.agentId,
+      provider: provider ?? null,
+      model,
+      sessionId: null,
+      client,
+      startedAt: new Date().toISOString(),
+      retrying: false,
+      cancelled: false,
+      stopReason: null,
+      settled: false,
+      finish: Promise.resolve(),
+    };
+    activeRuns.set(runId, run);
+
     client.onEvent((event: JsonAgentSessionEvent) => {
-      const e = event as { type: string; [k: string]: unknown };
+      const e = event as unknown as { type: string; [k: string]: unknown };
       if (e.type === "session_start") {
-        // SDK шлёт session id; кладём в tasks.agent_session_id для
-        // последующих getRun() и для UI.
+        // Резервный источник sessionId, если getState() недоступен.
         const sid = (e as { sessionId?: string }).sessionId;
-        if (typeof sid === "string" && sid) {
-          try {
-            db.prepare(
-              `UPDATE tasks SET agent_session_id = ?, agent_started_at = datetime('now'),
-                       updated_at = datetime('now')
-                 WHERE id = ?`,
-            ).run(sid, input.taskId);
-          } catch { /* задача могла быть удалена */ }
+        if (typeof sid === "string" && sid && !run.sessionId) {
+          run.sessionId = sid;
         }
         return;
       }
-      if (e.type === "agent_end") {
-        // success — флаг в AgentSessionEvent, который JsonAgentSessionEvent
-        // наследует. Если не пришёл — считаем попытку неуспешной
-        // (безопасный default: blocked, планировщик может ретраить).
-        const ok = (e as { success?: boolean }).success ?? false;
-        const next: "review" | "blocked" = ok ? "review" : "blocked";
-        try {
-          db.prepare(
-            `UPDATE tasks SET agent_state = ?, agent_finished_at = datetime('now'),
-                     updated_at = datetime('now')
-               WHERE id = ?`,
-          ).run(next, input.taskId);
-        } catch { /* ignore */ }
-        // Гасим RPC процесс — он сам себя не закрывает после agent_end.
-        client.stop().catch(() => { /* процесс уже умер — окей */ });
+      if (e.type === "agent_settled") {
+        const { outcome, reason } = resultStatus(run);
+        void finalizeRun(run, outcome, reason);
+        return;
       }
+      // Всё остальное — активность, run не завершаем.
+      recordRunActivity(run, e);
     });
 
-    // Стартуем процесс и отправляем prompt. start() спавнит `pi --mode
-    // rpc`, дожидается handshake'а. prompt() шлёт первое сообщение
-    // агенту; далее стрим событий идёт через onEvent.
     try {
       await client.start();
-      await client.prompt(input.prompt);
-    } catch (err) {
-      // Process не поднялся (ENOENT, провайдер не настроен и т.п.) —
-      // пишем blocked, чтобы планировщик мог ретраить.
+      // sessionId берём через getState(), а не ждём session_start.
       try {
-        db.prepare(
-          `UPDATE tasks SET agent_state = 'blocked', updated_at = datetime('now')
-             WHERE id = ?`,
-        ).run(input.taskId);
-      } catch { /* ignore — задача могла быть удалена */ }
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[startRun] RpcClient failed for ${input.taskId}: ${msg}`);
-      throw err;
+        const state = await client.getState();
+        if (state?.sessionId) run.sessionId = state.sessionId;
+        // Проверяем, что Pi реально поднял запрошенную модель.
+        const actual = state?.model as { provider?: string; id?: string } | undefined;
+        if (actual?.id) {
+          run.model = actual.id;
+          run.provider = actual.provider ?? run.provider;
+          db.prepare(
+            `UPDATE attempts SET model = ?, provider = ? WHERE id = ?`,
+          ).run(run.model, run.provider, runId);
+        }
+      } catch {
+        // getState упал — sessionId останется из session_start (если был).
+      }
+      if (run.sessionId) {
+        try {
+          db.prepare(
+            `UPDATE attempts SET session_id = ? WHERE id = ?`,
+          ).run(run.sessionId, runId);
+          db.prepare(
+            `UPDATE tasks SET agent_session_id = ?, updated_at = datetime('now') WHERE id = ?`,
+          ).run(run.sessionId, input.taskId);
+        } catch { /* ignore */ }
+      }
+      await client.prompt(input.prompt);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await finalizeRun(run, "failed", reason);
+      throw new RuntimeUnavailableError(
+        `Pi startRun failed for ${input.taskId}: ${reason}`,
+      );
     }
 
     return {
       runId,
-      sessionId: "",
-      status: "queued",
+      sessionId: run.sessionId,
+      status: "running",
     };
   },
 
@@ -670,14 +779,75 @@ export const piRuntime: RuntimeAdapter = {
     );
   },
 
-  async cancelRun(_runId: string): Promise<void> {
-    throw new UnsupportedInFacadeError(
-      "PiRuntimeAdapter.cancelRun() недоступен: отмена — через cancel " +
-        "на карточке, см. /api/tasks/:id/cancel.",
-    );
+  async cancelRun(runId: string): Promise<void> {
+    const run = activeRuns.get(runId);
+    if (!run) {
+      throw new UnsupportedInFacadeError(
+        `PiRuntimeAdapter.cancelRun(${runId}): активный заход не найден. ` +
+          "Отмена задачи — через /api/tasks/:id/cancel.",
+      );
+    }
+    run.cancelled = true;
+    try {
+      await run.client.abort();
+    } catch { /* процесс мог уже завершиться */ }
+    await finalizeRun(run, "cancelled", "cancelled");
   },
 
   async getRun(runId: string): Promise<AgentRun> {
+    // runId — это id попытки (attempts.id), уникальный на каждый запуск.
+    const attempt = db
+      .prepare(
+        `SELECT a.id, a.task_id, a.executor_id, a.model, a.provider,
+                a.session_id, a.started_at, a.ended_at, a.outcome, a.reason,
+                t.dispatched_role, t.assignee_id, t.agent_session_id AS task_session
+           FROM attempts a
+           JOIN tasks t ON t.id = a.task_id
+          WHERE a.id = ?`,
+      )
+      .get(runId) as
+      | {
+          id: string;
+          task_id: string;
+          executor_id: string;
+          model: string | null;
+          provider: string | null;
+          session_id: string | null;
+          started_at: string;
+          ended_at: string | null;
+          outcome: string | null;
+          reason: string | null;
+          dispatched_role: string | null;
+          assignee_id: string | null;
+          task_session: string | null;
+        }
+      | undefined;
+
+    if (attempt) {
+      return {
+        id: attempt.id,
+        task_id: attempt.task_id,
+        agent_id: attempt.dispatched_role ?? attempt.assignee_id ?? "",
+        runtime_id: RUNTIME_ID_PI,
+        provider: attempt.provider,
+        model: attempt.model,
+        session_id: attempt.session_id ?? attempt.task_session,
+        status: mapAttemptStatus(attempt as AttemptRow) === "running"
+          ? "running"
+          : mapAttemptStatus(attempt as AttemptRow) === "cancelled"
+          ? "cancelled"
+          : mapAttemptStatus(attempt as AttemptRow) === "failed"
+          ? "failed"
+          : "completed",
+        started_at: attempt.started_at,
+        finished_at: attempt.ended_at,
+        stop_reason: attempt.reason,
+        attempts: attemptsForTask(attempt.task_id),
+      };
+    }
+
+    // Обратная совместимость: раньше runId был taskId. Планировщик/UI могли
+    // звать getRun(taskId).
     const task = db
       .prepare(
         `SELECT id, assignee_id, dispatched_role, agent_session_id,
@@ -697,10 +867,10 @@ export const piRuntime: RuntimeAdapter = {
         }
       | undefined;
     if (!task) {
-      throw new Error(`AgentRun ${runId}: задача не найдена`);
+      throw new Error(`AgentRun ${runId}: не найдена ни попытка, ни задача`);
     }
     return {
-      id: `run-${task.id.slice(0, 8)}`,
+      id: `run_${task.id}`,
       task_id: task.id,
       agent_id: task.dispatched_role ?? task.assignee_id ?? "",
       runtime_id: RUNTIME_ID_PI,
@@ -718,29 +888,19 @@ export const piRuntime: RuntimeAdapter = {
       started_at: task.agent_started_at ?? new Date().toISOString(),
       finished_at: task.agent_finished_at,
       stop_reason: task.stop_reason,
+      attempts: attemptsForTask(task.id),
     };
   },
 };
 
-/** Множество id моделей, реально доступных в Pi (без провайдера — модель
- *  уникальна по id, не по (provider, id): Pi использует то же имя для
- *  одной и той же модели в разных провайдерах редко). Используется
- *  PUT /api/runtime/routing для валидации — owner не может назначить
- *  роль на модель, которой Pi не знает (422 model_not_available).
- *
- * 18.09.2026 (правка SDK): идём через ModelRuntime.getAvailable() —
- *  SDK сам держит снимок и не дёргает сеть на каждый вызов.
- *  Самописный listModelsCache удалён, invalidateListModelsCache
- *  больше не нужен: SDK сам инвалидирует снимок при setRuntimeApiKey.
- */
+/** Множество id моделей из полного каталога Pi. Используется для валидации
+ *  routing: несуществующая модель → 422, недоступный Pi → 503 (ловит роут). */
 export async function getAvailableModelIds(): Promise<Set<string>> {
-  const rt = await getModelRuntime();
-  const available = await rt.getAvailable();
-  return new Set(available.map((m) => (m as SdkModel).id));
+  const catalog = await loadModelCatalog();
+  return new Set(catalog.map((m) => m.id));
 }
 
-/** Проверяет, что модель существует в ModelRuntime (по id, без
- *  провайдера). Используется PUT /api/runtime/routing. */
+/** Проверяет, что модель есть в каталоге Pi. */
 export async function modelExists(id: string): Promise<boolean> {
   const ids = await getAvailableModelIds();
   return ids.has(id);

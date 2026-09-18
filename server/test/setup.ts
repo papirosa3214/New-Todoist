@@ -31,6 +31,24 @@ process.env.JWT_SECRET =
 const uploadDir = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-uploads");
 process.env.UPLOAD_DIR = uploadDir;
 
+// PUT /api/runtime/routing/:role пишет role-routing.yaml. Тесты не должны
+// трогать боевой файл — работаем с копией в tmp. Копия делается ДО импорта
+// roleRouting.ts (setupFiles выполняется раньше файлов тестов), иначе
+// модуль зафиксирует боевой путь.
+const routingTmp = path.join(
+  os.tmpdir(),
+  path.basename(dbPath, ".db") + "-role-routing.yaml",
+);
+try {
+  fs.copyFileSync(
+    path.join(process.cwd(), "scripts", "role-routing.yaml"),
+    routingTmp,
+  );
+  process.env.TASKFLOW_ROLE_ROUTING_FILE = routingTmp;
+} catch {
+  // Нет исходного файла — роль-роутинг в этом прогоне просто недоступен.
+}
+
 // 18.09.2026: владелец 'u1' заводится миграцией 039_seed_owner. Раньше
 // тесты падали на FOREIGN KEY в 040_archive_old_agents, потому что на
 // свежей БД u1 не было. Теперь миграция закрывает это, setup.ts
@@ -48,5 +66,10 @@ afterAll(() => {
     fs.rmSync(uploadDir, { recursive: true, force: true });
   } catch {
     // каталога нет — тест вложений в этом прогоне не участвовал
+  }
+  try {
+    fs.unlinkSync(routingTmp);
+  } catch {
+    // копии не было — и не надо
   }
 });

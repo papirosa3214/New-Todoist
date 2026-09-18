@@ -1,44 +1,91 @@
-import { afterAll, beforeAll, describe, it, expect, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { buildApp } from "../../src/index.js";
 import db from "../../src/db.js";
+import { resetModelRuntime } from "../../src/runtime/PiRuntimeAdapter.js";
 
+// 18.09.2026 (доработка после ревью владельца): авторизация идёт через
+// AuthSession (§3-6), а не одним синхронным запросом. Проверяем:
+//  - disconnected провайдер остаётся в GET /providers (§9);
+//  - POST /auth отвечает сразу authSessionId, не дожидаясь OAuth (§3);
+//  - auth_url доходит до клиента до завершения login;
+//  - manual_code из POST /input реально возвращается в prompt() (§6);
+//  - DELETE останавливает login (§17);
+//  - api_key пишется persistent-механизмом login(), не setRuntimeApiKey (§8);
+//  - GET /providers не отдаёт credentials (§17).
 
-// 18.09.2026 (manual_code fix): подменяем SDK, чтобы login() не дёргал
-// реальный anthropic OAuth flow — иначе SDK бросает «Missing authorization
-// code» после пустого manual_code ввода, vitest ловит unhandled rejection.
-// Мок notify-ит auth_url, чтобы тест AuthInteractive видел event.
+const PROVIDERS = [
+  { id: "anthropic", name: "Anthropic", auth: { oauth: {}, apiKey: {} } },
+  { id: "openai-codex", name: "OpenAI (Codex)", auth: { oauth: {} } },
+  { id: "minimax", name: "MiniMax", auth: { apiKey: {} } },
+];
+
+const CATALOG = [
+  { id: "claude-sonnet-5", provider: "anthropic", name: "Sonnet 5" },
+  { id: "gpt-5", provider: "openai-codex", name: "GPT-5" },
+  { id: "minimax-m3", provider: "minimax", name: "MiniMax M3" },
+];
+
+const mockState = vi.hoisted(() => ({
+  connected: new Set<string>(),
+  lastManualCode: null as string | null,
+  createShouldFail: false,
+  loginBehavior: null as
+    | null
+    | ((args: { provider: string; type: string; interaction: any }) => Promise<any>),
+}));
+
+const mockRuntime = {
+  getProviders: vi.fn(() => PROVIDERS),
+  getProvider: vi.fn((id: string) => PROVIDERS.find((p) => p.id === id)),
+  getProviderAuthStatus: vi.fn((id: string) => ({
+    configured: mockState.connected.has(id),
+  })),
+  checkAuth: vi.fn(async (id: string) =>
+    mockState.connected.has(id)
+      ? { type: id === "minimax" ? "api_key" : "oauth" }
+      : undefined,
+  ),
+  login: vi.fn(async (provider: string, type: string, interaction: any) => {
+    if (mockState.loginBehavior) {
+      return mockState.loginBehavior({ provider, type, interaction });
+    }
+    if (type === "api_key") {
+      const key = await interaction.prompt({ type: "secret", message: "key" });
+      mockState.connected.add(provider);
+      return { type: "api_key", key };
+    }
+    interaction.notify({ type: "auth_url", url: "https://example.com/oauth" });
+    await new Promise<never>((_r, reject) => {
+      interaction.signal.addEventListener("abort", () => reject(new Error("aborted")));
+    });
+    mockState.connected.add(provider);
+    return { type: "oauth" };
+  }),
+  setRuntimeApiKey: vi.fn(async () => {}),
+  getModels: vi.fn(() => CATALOG),
+  getAvailable: vi.fn(async () => []),
+  refresh: vi.fn(async () => ({})),
+  getError: vi.fn(() => undefined),
+};
+
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   ModelRuntime: {
-    create: vi.fn(async () => ({
-      getAvailable: vi.fn(async () => []),
-      // listProviders фильтрует провайдеров, для которых checkAuth
-      // вернул undefined — поэтому объявляем все три KNOWN_PROVIDERS.
-      checkAuth: vi.fn(async (provider: string) => {
-        if (provider === "anthropic" || provider === "openai-codex")
-          return { type: "oauth" };
-        if (provider === "minimax") return { type: "api_key" };
-        return undefined;
-      }),
-      getProviderAuthStatus: vi.fn(() => ({ configured: false })),
-      setRuntimeApiKey: vi.fn(async () => undefined),
-      // login() имитирует OAuth flow: notify auth_url и зависает
-      // (completed не резолвится), чтобы тест видел событие в events.
-      // Никакого реального anthropic.js — иначе он бросит unhandled
-      // «Missing authorization code» при manual_code prompt.
-      login: vi.fn(async (_p: string, _t: string, interaction: {
-        notify: (e: unknown) => void;
-        prompt: (p: unknown) => Promise<string>;
-      }) => {
-        interaction.notify({ type: "auth_url", url: "https://example.com/oauth" });
-        await new Promise((r) => setTimeout(r, 5));
-      }),
-    })),
+    create: vi.fn(async () => {
+      if (mockState.createShouldFail) throw new Error("pi offline");
+      return mockRuntime;
+    }),
   },
+  RpcClient: vi.fn(),
 }));
+
+async function tick(ms = 25): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
+}
 
 describe("runtime providers API", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
-  let token: string;
+  let ownerToken: string;
+  let userToken: string;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -47,79 +94,310 @@ describe("runtime providers API", () => {
       url: "/api/auth/register",
       payload: {
         name: `ProvOwner${Date.now()}`,
-        email: `prov-${Date.now()}@test`,
+        email: `prov-owner-${Date.now()}@test`,
         password: "password123",
       },
     });
-    const ownerId = owner.json().user.id as string;
-    db.prepare("UPDATE users SET role='owner' WHERE id=?").run(ownerId);
-    token = owner.json().token as string;
+    db.prepare("UPDATE users SET role='owner' WHERE id=?").run(owner.json().user.id);
+    ownerToken = owner.json().token as string;
+
+    const user = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        name: `ProvUser${Date.now()}`,
+        email: `prov-user-${Date.now()}@test`,
+        password: "password123",
+      },
+    });
+    userToken = user.json().token as string;
   });
 
   afterAll(async () => {
     if (app) await app.close();
   });
 
-  it("GET /api/runtime/providers returns >=3 providers", async () => {
+  beforeEach(() => {
+    mockState.loginBehavior = null;
+    mockState.lastManualCode = null;
+    mockState.createShouldFail = false;
+    resetModelRuntime();
+    mockRuntime.login.mockClear();
+    mockRuntime.setRuntimeApiKey.mockClear();
+  });
+
+  it("GET /providers returns all providers incl. disconnected, without credentials", async () => {
     const res = await app.inject({
       method: "GET",
       url: "/api/runtime/providers",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${ownerToken}` },
     });
     expect(res.statusCode).toBe(200);
-    // 18.09.2026 (правка AuthInteraction): роут фильтрует HTTP-ответ до
-    // {provider, status, authType} — внутренние поля runtime_id и
-    // managedBy владельцу не нужны (см. routes/runtime.ts:47-55).
-    const body = res.json() as { providers: Array<{
-      provider: string; status: string; authType: "oauth" | "api_key" | null;
-    }> };
-    expect(body.providers.length).toBeGreaterThanOrEqual(3);
-    const ids = new Set(body.providers.map((p) => p.provider));
-    expect(ids.has("anthropic")).toBe(true);
-    expect(ids.has("openai-codex")).toBe(true);
-    expect(ids.has("minimax")).toBe(true);
-    for (const p of body.providers) {
-      expect(["connected", "disconnected", "expired"]).toContain(p.status);
-    }
+    const body = res.json() as {
+      providers: Array<{
+        provider: string;
+        name: string;
+        status: string;
+        authType: string | null;
+        authMethods: string[];
+      }>;
+    };
+    const ids = body.providers.map((p) => p.provider);
+    expect(ids).toContain("anthropic");
+    expect(ids).toContain("openai-codex");
+    expect(ids).toContain("minimax");
+    // Неподключённые остаются в списке (спека §9).
+    expect(body.providers.every((p) => p.status === "disconnected")).toBe(true);
+    // Никаких credential details (спека §17).
+    const raw = res.body.toLowerCase();
+    expect(raw).not.toContain("apikey");
+    expect(raw).not.toContain("access_token");
+    expect(raw).not.toContain("refresh");
+    expect(raw).not.toContain("secret");
   });
 
-  it("POST /api/runtime/providers/anthropic/auth returns AuthInteractive for OAuth", async () => {
+  it("POST /auth (OAuth) отвечает сразу authSessionId, не дожидаясь login", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/runtime/providers/anthropic/auth",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${ownerToken}` },
     });
-    expect(res.statusCode).toBe(200);
-    // 18.09.2026 (правка AuthInteraction): для OAuth провайдера роут
-    // возвращает AuthInteractive (status="auth_required" + events), а не
-    // старую AuthInstruction с командой для TUI. Раньше тест ждал
-    // {provider, status, note} под старый заглушечный контракт.
-    const body = res.json() as {
-      provider: string;
-      status: string;
-      events: Array<{ kind: string }>;
-    };
+    expect(res.statusCode).toBe(202);
+    const body = res.json() as { authSessionId: string; provider: string; status: string };
     expect(body.provider).toBe("anthropic");
-    expect(body.status).toBe("auth_required");
-    expect(Array.isArray(body.events)).toBe(true);
-    // Минимум одно событие (auth_url или device_code) пришло из SDK.
-    expect(body.events.length).toBeGreaterThan(0);
+    expect(body.authSessionId).toMatch(/^auth_/);
+    // login() запущен в фоне; к моменту ответа он уже мог отдать auth_url,
+    // поэтому статус — starting или waiting_user (но не терминальный).
+    expect(["starting", "waiting_user"]).toContain(body.status);
+
+    // auth_url уже в сессии — клиент получит его, не дожидаясь OAuth.
+    await tick();
+    const session = await app.inject({
+      method: "GET",
+      url: `/api/runtime/auth/${body.authSessionId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(session.statusCode).toBe(200);
+    const view = session.json() as {
+      status: string;
+      events: Array<{ type: string; data: { url?: string } }>;
+    };
+    const authUrl = view.events.find((e) => e.type === "auth_url");
+    expect(authUrl?.data.url).toBe("https://example.com/oauth");
+    expect(view.status).toBe("waiting_user");
   });
 
-  it("POST /api/runtime/providers/unknown/auth returns 404", async () => {
+  it("manual_code из POST /input реально возвращается в prompt()", async () => {
+    mockState.loginBehavior = async ({ provider, interaction }) => {
+      const code = await interaction.prompt({
+        type: "manual_code",
+        message: "Enter code from browser",
+      });
+      mockState.lastManualCode = code;
+      mockState.connected.add(provider);
+      return { type: "oauth" };
+    };
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/runtime/providers/anthropic/auth",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const { authSessionId } = start.json() as { authSessionId: string };
+    await tick();
+
+    const waiting = await app.inject({
+      method: "GET",
+      url: `/api/runtime/auth/${authSessionId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const view = waiting.json() as { currentPrompt: { type: string } | null };
+    expect(view.currentPrompt?.type).toBe("manual_code");
+
+    const input = await app.inject({
+      method: "POST",
+      url: `/api/runtime/auth/${authSessionId}/input`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { type: "manual_code", value: "ABC-123" },
+    });
+    expect(input.statusCode).toBe(202);
+    await tick();
+
+    expect(mockState.lastManualCode).toBe("ABC-123");
+    const done = await app.inject({
+      method: "GET",
+      url: `/api/runtime/auth/${authSessionId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect((done.json() as { status: string }).status).toBe("connected");
+  });
+
+  it("DELETE /auth/:id останавливает login", async () => {
+    mockState.loginBehavior = async ({ interaction }) => {
+      await new Promise<never>((_r, reject) => {
+        interaction.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+      return { type: "oauth" };
+    };
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/runtime/providers/anthropic/auth",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const { authSessionId } = start.json() as { authSessionId: string };
+    await tick();
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/api/runtime/auth/${authSessionId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(del.statusCode).toBe(204);
+    await tick();
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/runtime/auth/${authSessionId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect((after.json() as { status: string }).status).toBe("cancelled");
+  });
+
+  it("api_key пишется через persistent login(), не setRuntimeApiKey", async () => {
     const res = await app.inject({
       method: "POST",
-      url: "/api/runtime/providers/unknown-provider/auth",
-      headers: { authorization: `Bearer ${token}` },
+      url: "/api/runtime/providers/minimax/auth",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { apiKey: "sk-test-key" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { provider: string; status: string; authType: string };
+    expect(body.status).toBe("connected");
+    expect(body.authType).toBe("api_key");
+    expect(mockRuntime.login).toHaveBeenCalledWith(
+      "minimax",
+      "api_key",
+      expect.anything(),
+    );
+    expect(mockRuntime.setRuntimeApiKey).not.toHaveBeenCalled();
+    // После подключения провайдер виден как connected.
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/runtime/providers",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const minimax = (list.json() as {
+      providers: Array<{ provider: string; status: string }>;
+    }).providers.find((p) => p.provider === "minimax");
+    expect(minimax?.status).toBe("connected");
+  });
+
+  it("обычный пользователь не может менять auth (403)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/runtime/providers/anthropic/auth",
+      headers: { authorization: `Bearer ${userToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("POST /auth без токена → 401", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/runtime/providers/anthropic/auth",
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("POST /auth unknown provider → 404", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/runtime/providers/nope/auth",
+      headers: { authorization: `Bearer ${ownerToken}` },
     });
     expect(res.statusCode).toBe(404);
   });
 
-  it("providers endpoint requires auth", async () => {
+  it("Pi offline → GET /models 503 runtime_unavailable", async () => {
+    mockState.createShouldFail = true;
+    resetModelRuntime();
     const res = await app.inject({
       method: "GET",
-      url: "/api/runtime/providers",
+      url: "/api/runtime/models",
+      headers: { authorization: `Bearer ${ownerToken}` },
     });
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(503);
+    expect((res.json() as { error: string }).error).toBe("runtime_unavailable");
+  });
+
+  it("неизвестная модель в routing → 422 model_not_available", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing/architect",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { primary: "no-such-model", fallbacks: [] },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error).toContain("model_not_available");
+  });
+
+  it("Pi offline на routing → 503 runtime_unavailable", async () => {
+    mockState.createShouldFail = true;
+    resetModelRuntime();
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing/architect",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { primary: "minimax-m3", fallbacks: [] },
+    });
+    expect(res.statusCode).toBe(503);
+    expect((res.json() as { error: string }).error).toBe("runtime_unavailable");
+  });
+
+  it("13. порядок fallbacks сохраняется как задан (без sort)", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing/architect",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        primary: "minimax-m3",
+        fallbacks: ["gpt-5", "claude-sonnet-5"],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { fallbacks: string[] };
+    expect(body.fallbacks).toEqual(["gpt-5", "claude-sonnet-5"]);
+
+    const read = await app.inject({
+      method: "GET",
+      url: "/api/runtime/routing",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const routing = read.json() as { routing: { fallbacks: Record<string, string[]> } };
+    expect(routing.routing.fallbacks.architect).toEqual([
+      "gpt-5",
+      "claude-sonnet-5",
+    ]);
+  });
+
+  it("18. api_key переживает пересоздание ModelRuntime", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/runtime/providers/minimax/auth",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { apiKey: "sk-persist" },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Симулируем рестарт TaskFlow: singleton ModelRuntime создаётся заново,
+    // а credential (его пишет SDK login) остаётся в хранилище.
+    resetModelRuntime();
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/runtime/providers",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const minimax = (list.json() as {
+      providers: Array<{ provider: string; status: string }>;
+    }).providers.find((p) => p.provider === "minimax");
+    expect(minimax?.status).toBe("connected");
   });
 });

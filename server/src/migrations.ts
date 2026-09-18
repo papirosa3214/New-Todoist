@@ -1652,6 +1652,30 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "045_attempts_provider_session_stop_reason",
+    description:
+      "18.09.2026 (доработка Pi runtime): AgentRun/attempt должен хранить " +
+      "фактического провайдера, sessionId Pi и stop_reason, а история " +
+      "попыток не должна перетираться при fallback. Добавляет в attempts " +
+      "колонки provider, session_id, stop_reason. Идемпотентна (PRAGMA).",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(attempts)").all() as Array<{
+          name: string;
+        }>).map((c) => c.name),
+      );
+      if (!cols.has("provider")) {
+        db.exec("ALTER TABLE attempts ADD COLUMN provider TEXT");
+      }
+      if (!cols.has("session_id")) {
+        db.exec("ALTER TABLE attempts ADD COLUMN session_id TEXT");
+      }
+      if (!cols.has("stop_reason")) {
+        db.exec("ALTER TABLE attempts ADD COLUMN stop_reason TEXT");
+      }
+    },
+  },
 ];
 
 /**

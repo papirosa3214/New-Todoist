@@ -39,7 +39,19 @@ export interface Model {
   provider: string;
   runtime_id: RuntimeId;
   available: boolean;
+  /** Человекочитаемое имя из каталога Pi (Model.name). */
+  name?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  /** Умеет ли модель thinking (Model.reasoning). */
+  thinking?: boolean;
+  /** Принимает ли модель изображения (Model.input includes "image"). */
+  images?: boolean;
 }
+
+/** Способы авторизации, которые провайдер объявляет в Pi. UI показывает
+ *  обе кнопки, если доступны оба: OAuth и ввод api key. */
+export type AuthMethod = "api_key" | "oauth";
 
 export interface ProviderConnection {
   id: string;
@@ -47,11 +59,26 @@ export interface ProviderConnection {
   status: "connected" | "disconnected" | "expired";
   managedBy: "pi";
   lastCheckedAt: string | null;
-  /** Тип credentials: api_key (через setRuntimeApiKey) или oauth
-   *  (через ModelRuntime.login + AuthInteraction). 18.09.2026:
-   *  добавлено в фасад, чтобы UI мог сразу отличить, нужен ли
-   *  OAuth-flow. null = неизвестно (например, expired). */
+  /** Человекочитаемое имя провайдера из Pi (Provider.name). */
+  name?: string;
+  /** Тип ТЕКУЩИХ credentials: api_key или oauth. null = credentials нет. */
   authType?: "api_key" | "oauth" | null;
+  /** Какие способы авторизации вообще поддерживает провайдер в Pi. */
+  authMethods?: AuthMethod[];
+}
+
+/** Один attempt (попытка) внутри AgentRun/задачи. История unknown →
+ *  completed не переписывается: при fallback создаётся новый attempt с
+ *  своей моделью, старый навсегда сохраняет первоначальную (спека §12). */
+export interface AgentAttempt {
+  id: string;
+  model: string | null;
+  provider: string | null;
+  status: "running" | "completed" | "failed" | "cancelled";
+  outcome: string | null;
+  started_at: string;
+  finished_at: string | null;
+  reason: string | null;
 }
 
 export interface AgentRun {
@@ -66,6 +93,8 @@ export interface AgentRun {
   started_at: string;
   finished_at: string | null;
   stop_reason: string | null;
+  /** История попыток задачи в порядке старта (attempt #1, #2, …). */
+  attempts?: AgentAttempt[];
 }
 
 export function isRuntimeId(value: unknown): value is RuntimeId {
