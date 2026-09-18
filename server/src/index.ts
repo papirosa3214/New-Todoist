@@ -48,6 +48,7 @@ import { registerEnrichmentRoutes } from "./routes/enrichment.js";
 import { registerDispatchRoutes } from "./routes/dispatch.js";
 import { registerReviewRoutes } from "./routes/reviews.js";
 import { registerRoleRoutes } from "./routes/roles.js";
+import { registerRuntimeRoutes } from "./routes/runtime.js";
 import { registerTaskIntakeRoutes } from "./routes/task-intake.js";
 
 /**
@@ -232,6 +233,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerDispatchRoutes(app);
   await registerReviewRoutes(app);
   registerRoleRoutes(app);
+  registerRuntimeRoutes(app);
   registerTaskIntakeRoutes(app);
   registerProjectLabelRoutes(app);
   registerCompassRoutes(app);
