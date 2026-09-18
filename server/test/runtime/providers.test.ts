@@ -28,6 +28,8 @@ const CATALOG = [
 const mockState = vi.hoisted(() => ({
   connected: new Set<string>(),
   lastManualCode: null as string | null,
+  lastSelect: null as string | null,
+  abortPrompt: null as null | (() => void),
   createShouldFail: false,
   loginBehavior: null as
     | null
@@ -121,6 +123,8 @@ describe("runtime providers API", () => {
   beforeEach(() => {
     mockState.loginBehavior = null;
     mockState.lastManualCode = null;
+    mockState.lastSelect = null;
+    mockState.abortPrompt = null;
     mockState.createShouldFail = false;
     resetModelRuntime();
     mockRuntime.login.mockClear();
@@ -396,6 +400,107 @@ describe("runtime providers API", () => {
       "gpt-5",
       "claude-sonnet-5",
     ]);
+  });
+
+  it("2. AuthPrompt.signal: abort чистит currentPrompt, после успеха — null", async () => {
+    mockState.loginBehavior = async ({ provider, interaction }) => {
+      const ac = new AbortController();
+      mockState.abortPrompt = () => ac.abort();
+      const pending = interaction.prompt({
+        type: "manual_code",
+        message: "code",
+        signal: ac.signal,
+      });
+      try {
+        await pending;
+      } catch {
+        // ожидаемо: prompt отклонён по abort сигнала конкретного промпта
+      }
+      mockState.connected.add(provider);
+      return { type: "oauth" };
+    };
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/runtime/providers/anthropic/auth",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const { authSessionId } = start.json() as { authSessionId: string };
+
+    await tick();
+    const waiting = await app.inject({
+      method: "GET",
+      url: `/api/runtime/auth/${authSessionId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(
+      (waiting.json() as { currentPrompt: { type: string } | null }).currentPrompt?.type,
+    ).toBe("manual_code");
+
+    // Callback-сервер победил: Pi гасит manual_code через signal промпта.
+    mockState.abortPrompt?.();
+    await tick();
+    const done = await app.inject({
+      method: "GET",
+      url: `/api/runtime/auth/${authSessionId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const view = done.json() as {
+      status: string;
+      currentPrompt: unknown;
+    };
+    expect(view.status).toBe("connected");
+    // После успешного OAuth currentPrompt обязан стать null.
+    expect(view.currentPrompt).toBeNull();
+  });
+
+  it("4. select: options уходят в currentPrompt, option.id — в login", async () => {
+    mockState.lastSelect = null;
+    mockState.loginBehavior = async ({ provider, interaction }) => {
+      const chosen = await interaction.prompt({
+        type: "select",
+        message: "Choose auth method",
+        options: [
+          { id: "opt-a", label: "Option A" },
+          { id: "opt-b", label: "Option B" },
+        ],
+      });
+      mockState.lastSelect = chosen;
+      mockState.connected.add(provider);
+      return { type: "oauth" };
+    };
+
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/runtime/providers/anthropic/auth",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const { authSessionId } = start.json() as { authSessionId: string };
+    await tick();
+
+    const waiting = await app.inject({
+      method: "GET",
+      url: `/api/runtime/auth/${authSessionId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const view = waiting.json() as {
+      currentPrompt: {
+        type: string;
+        options: Array<{ id: string; label: string }>;
+      } | null;
+    };
+    expect(view.currentPrompt?.type).toBe("select");
+    expect(view.currentPrompt?.options.map((o) => o.id)).toEqual(["opt-a", "opt-b"]);
+
+    const input = await app.inject({
+      method: "POST",
+      url: `/api/runtime/auth/${authSessionId}/input`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { type: "select", value: "opt-b" },
+    });
+    expect(input.statusCode).toBe(202);
+    await tick();
+    expect(mockState.lastSelect).toBe("opt-b");
   });
 
   it("18. api_key переживает пересоздание ModelRuntime", async () => {

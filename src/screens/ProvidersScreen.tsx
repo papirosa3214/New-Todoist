@@ -162,7 +162,33 @@ function AuthSessionPanel({
         Статус: {view.status}
       </div>
 
-      {view.currentPrompt && (
+      {view.currentPrompt?.type === "select" && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 13, marginBottom: 6 }}>
+            {view.currentPrompt.message}
+          </div>
+          {(view.currentPrompt.options ?? []).map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              style={{ ...secondaryButton, display: "block", width: "100%", textAlign: "left", marginBottom: 4 }}
+              disabled={submit.isPending}
+              onClick={() =>
+                submit.mutate({ id: sessionId, value: option.id, type: "select" })
+              }
+            >
+              {option.label}
+              {option.description && (
+                <span style={{ display: "block", fontSize: 11, color: "#6B7280" }}>
+                  {option.description}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {view.currentPrompt && view.currentPrompt.type !== "select" && (
         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
           <input
             type={view.currentPrompt.type === "secret" ? "password" : "text"}

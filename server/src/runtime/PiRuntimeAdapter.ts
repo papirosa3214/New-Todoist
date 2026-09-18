@@ -264,6 +264,14 @@ async function buildProfile(
 
 // ===== Активные запуски (in-memory) =====
 
+/** Последний фактический результат хода (turn). НЕтерминальный: нужен
+ *  только чтобы отличить финальный провал от успеха в момент
+ *  agent_settled. Успешная continuation/compaction перезаписывает его. */
+interface TurnResult {
+  stopReason: string | null;
+  errorMessage: string | null;
+}
+
 interface ActiveRun {
   runId: string;
   taskId: string;
@@ -275,39 +283,44 @@ interface ActiveRun {
   startedAt: string;
   retrying: boolean;
   cancelled: boolean;
-  stopReason: string | null;
+  /** Последний ход. На agent_settled решает failed/completed. */
+  lastTurn: TurnResult | null;
   settled: boolean;
   finish: Promise<void>;
 }
 
 const activeRuns = new Map<string, ActiveRun>();
 
-/** Обновляет lastActivityAt/retry-маркеры из события. НЕ завершает run. */
+/** Достаёт результат последнего assistant-хода из agent_end.messages.
+ *  Возвращает null, если ход не несёт терминального stopReason. */
+function parseTurnResult(messages: unknown): TurnResult | null {
+  if (!Array.isArray(messages)) return null;
+  const lastAssistant = [...messages]
+    .reverse()
+    .find(
+      (m) => m && typeof m === "object" && (m as { role?: string }).role === "assistant",
+    ) as { stopReason?: string; errorMessage?: string } | undefined;
+  if (!lastAssistant?.stopReason) return null;
+  return {
+    stopReason: lastAssistant.stopReason,
+    errorMessage: lastAssistant.errorMessage ?? null,
+  };
+}
+
+/** Обновляет активность/последний ход. НЕ завершает run и НЕ пишет
+ *  терминальный итог: результат вычисляется только на agent_settled. */
 function recordRunActivity(run: ActiveRun, event: { type: string; [k: string]: unknown }): void {
   switch (event.type) {
     case "agent_end": {
       // agent_end — промежуточное событие: Pi после него может сделать
-      // retry, продолжить или уйти в compaction. run НЕ завершаем.
+      // retry, продолжить, выполнить compaction и снова запустить loop.
+      // Никакого терминального stopReason/blocked/stop здесь быть не может.
       const willRetry = event.willRetry === true;
-      if (willRetry) {
-        // Pi сам продолжит (retry). Ошибку/stopReason фиксировать рано:
-        // retry может завершиться успешно, и run нельзя пометить failed.
-        run.retrying = true;
-        break;
-      }
-      const messages = event.messages;
-      if (Array.isArray(messages)) {
-        const lastAssistant = [...messages]
-          .reverse()
-          .find((m) => m && typeof m === "object" && (m as { role?: string }).role === "assistant") as
-          | { stopReason?: string; errorMessage?: string }
-          | undefined;
-        if (lastAssistant?.stopReason === "error") {
-          run.stopReason = lastAssistant.errorMessage ?? "error";
-        } else if (lastAssistant?.stopReason === "aborted") {
-          run.cancelled = true;
-        }
-      }
+      if (willRetry) run.retrying = true;
+      // Запоминаем фактический итог хода как НЕтерминальный — следующий
+      // успешный ход (например, после compaction) перезапишет эту ошибку.
+      const turn = parseTurnResult(event.messages);
+      if (turn) run.lastTurn = turn;
       break;
     }
     case "auto_retry_start":
@@ -316,9 +329,15 @@ function recordRunActivity(run: ActiveRun, event: { type: string; [k: string]: u
     case "auto_retry_end":
       run.retrying = false;
       if (event.success === false) {
-        run.stopReason = typeof event.finalError === "string"
-          ? event.finalError
-          : "retry_failed";
+        run.lastTurn = {
+          stopReason: "error",
+          errorMessage: typeof event.finalError === "string"
+            ? event.finalError
+            : "retry_failed",
+        };
+      } else {
+        // Успешный retry снимает промежуточную ошибку.
+        run.lastTurn = null;
       }
       break;
     case "compaction_start":
@@ -454,10 +473,37 @@ async function finalizeRun(run: ActiveRun, outcome: AgentRun["status"], stopReas
   activeRuns.delete(run.runId);
 }
 
-/** Определяет итоговый статус по наблюдаемым фактам (не по success). */
+/** Гарантия «один task = максимум один active Pi run». Проверяем именно
+ *  in-memory activeRuns (по taskId), а не только БД: closeActiveAttempts()
+ *  закрывает запись, но оставшийся процесс Pi продолжал бы работать и
+ *  позже перезаписал состояние задачи. Предыдущий run штатно отменяем
+ *  (это безопаснее 409 для сценариев retry/fallback). */
+async function cancelActiveRunsForTask(taskId: string): Promise<void> {
+  const running = [...activeRuns.values()].filter(
+    (run) => run.taskId === taskId && !run.settled,
+  );
+  for (const run of running) {
+    run.cancelled = true;
+    try {
+      await run.client.abort();
+    } catch { /* процесс мог уже завершиться */ }
+    await finalizeRun(run, "cancelled", "cancelled");
+  }
+}
+
+/** Итог вычисляется ТОЛЬКО на agent_settled. Единственный источник
+ *  «плохого» исхода — явная отмена (cancelRun) или последний фактический
+ *  ход с stopReason error/aborted. Промежуточные agent_end эту функцию не
+ *  зовут. */
 function resultStatus(run: ActiveRun): { outcome: AgentRun["status"]; reason: string | null } {
   if (run.cancelled) return { outcome: "cancelled", reason: "cancelled" };
-  if (run.stopReason) return { outcome: "failed", reason: run.stopReason };
+  const turn = run.lastTurn;
+  if (turn?.stopReason === "error") {
+    return { outcome: "failed", reason: turn.errorMessage ?? "error" };
+  }
+  if (turn?.stopReason === "aborted") {
+    return { outcome: "cancelled", reason: "aborted" };
+  }
   return { outcome: "completed", reason: null };
 }
 
@@ -682,6 +728,9 @@ export const piRuntime: RuntimeAdapter = {
       env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
     });
 
+    // Один task = максимум один active Pi run: гасим предыдущий процесс.
+    await cancelActiveRunsForTask(input.taskId);
+
     const executorId = resolveExecutorId(role, input.agentId);
     closeActiveAttempts(input.taskId);
     if (executorId) {
@@ -716,7 +765,7 @@ export const piRuntime: RuntimeAdapter = {
       startedAt: new Date().toISOString(),
       retrying: false,
       cancelled: false,
-      stopReason: null,
+      lastTurn: null,
       settled: false,
       finish: Promise.resolve(),
     };

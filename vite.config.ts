@@ -1,3 +1,4 @@
+import path from "node:path";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -19,6 +20,17 @@ export default defineConfig({
   // нужно (и с этой версией vite даже не типизируется как `true`, только
   // как объект TLS-опций).
   plugins: [react(), tailwindcss(), basicSsl()],
+  // @capacitor/local-notifications не установлен (нужен только нативной
+  // оболочке), но useTaskActivity.ts импортирует его. Направляем и vite, и
+  // vitest на локальную заглушку — иначе `npm test` падает на резолве.
+  resolve: {
+    alias: {
+      "@capacitor/local-notifications": path.resolve(
+        process.cwd(),
+        "src/lib/localNotifications.stub.ts",
+      ),
+    },
+  },
   server: {
     proxy: {
       "/api": "http://192.168.1.110:3001",
@@ -41,6 +53,9 @@ export default defineConfig({
       "**/dist/**",
       "tests/e2e/**",
       "server/**",
+      // macOS поверх SMB плодит AppleDouble-файлы (src/lib/._x.test.ts) —
+      // vitest подбирает их как тесты и падает на бинарном содержимом.
+      "**/._*",
     ],
   },
 });

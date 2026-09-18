@@ -351,6 +351,96 @@ describe("PiRuntimeAdapter", () => {
     expect(client.stop).not.toHaveBeenCalled();
   });
 
+  it("1b. успешная continuation затирает промежуточную ошибку, run completed", async () => {
+    seedTask("task-lastturn");
+    const { runId } = await piRuntime.startRun({
+      taskId: "task-lastturn",
+      agentId: "architect",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      prompt: "hi",
+    });
+    const client = lastClient();
+    // Ход с ошибкой (например, provider_limit) — agent_end НЕ терминален:
+    // run продолжается, term-полей нет.
+    client.emit({
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "error", errorMessage: "provider_limit" }],
+      willRetry: false,
+    });
+    await tick();
+    expect(client.stop).not.toHaveBeenCalled();
+    expect(attemptRow(runId)?.ended_at).toBeNull();
+    const mid = db
+      .prepare("SELECT agent_state FROM tasks WHERE id = ?")
+      .get("task-lastturn") as { agent_state: string };
+    expect(mid.agent_state).toBe("in_progress");
+
+    // Успешная continuation после compaction перезаписывает промежуточную
+    // ошибку; итог считается только на agent_settled.
+    client.emit({
+      type: "compaction_end",
+      reason: "threshold",
+      result: undefined,
+      aborted: false,
+      willRetry: false,
+    });
+    client.emit({
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "stop" }],
+      willRetry: false,
+    });
+    client.emit({ type: "agent_settled" });
+    await tick();
+
+    const run = await piRuntime.getRun(runId);
+    expect(run.status).toBe("completed");
+    expect(attemptRow(runId)?.outcome).toBe("completed");
+    const task = db
+      .prepare("SELECT agent_state FROM tasks WHERE id = ?")
+      .get("task-lastturn") as { agent_state: string };
+    expect(task.agent_state).toBe("review");
+  });
+
+  it("3. второй startRun на тот же task штатно отменяет первый run", async () => {
+    seedTask("task-single-run");
+    const first = await piRuntime.startRun({
+      taskId: "task-single-run",
+      agentId: "architect",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      prompt: "one",
+    });
+    const client1 = lastClient();
+    const second = await piRuntime.startRun({
+      taskId: "task-single-run",
+      agentId: "architect",
+      provider: "openai-codex",
+      model: "gpt-5",
+      prompt: "two",
+    });
+    const client2 = lastClient();
+    expect(client1).not.toBe(client2);
+    expect(client1.abort).toHaveBeenCalledTimes(1);
+
+    expect((await piRuntime.getRun(first.runId)).status).toBe("cancelled");
+    expect((await piRuntime.getRun(second.runId)).status).toBe("running");
+
+    // На задачу остаётся ровно одна активная попытка, и указывает она на
+    // новый run.
+    const active = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM attempts
+          WHERE task_id = ? AND subtask_id IS NULL AND ended_at IS NULL`,
+      )
+      .get("task-single-run") as { n: number };
+    expect(active.n).toBe(1);
+    const task = db
+      .prepare("SELECT current_attempt_id FROM tasks WHERE id = ?")
+      .get("task-single-run") as { current_attempt_id: string };
+    expect(task.current_attempt_id).toBe(second.runId);
+  });
+
   // === SESSION ===
 
   it("5. sessionId после start берётся через getState()", async () => {
