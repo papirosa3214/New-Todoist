@@ -22,14 +22,11 @@ export type RoleRouting = {
 };
 
 /** Новый алиас типа. Содержит модель и провайдера, к которому она относится —
- *  используется в новой семантике nextModelForProfile() (см. ниже). Старый
- *  ShellRoute оставлен как deprecated для существующих вызовов. */
+ *  используется в новой семантике nextModelForProfile() (см. ниже). */
 export type ModelRoute = { model: string; provider: string };
 
-/** Deprecated с 18.09.2026 (карточка f3108dcc). Новые вызовы должны
- *  использовать ModelRoute. Оставлен для обратной совместимости с
- *  nextShellForRole() ниже (deprecated обёртка). */
-export type ShellRoute = { shell: string; userId: string };
+/** 18.09.2026 (карточка be9cf712, фаза 2): ShellRoute удалён вместе с
+ *  nextShellForRole. Семантика «следующая оболочка» больше не применима. */
 
 /** Канонические имена shell'ов → userId. agent_pi → pi_runtime через
  *  SHELL_AGENT_ALIASES. Старые legacy-shells (claude_bot, hermes и т.д.)
@@ -152,28 +149,8 @@ export function nextModelForProfile(
   return null;
 }
 
-/** Deprecated обёртка для nextModelForProfile. Использует старую shell-семантику:
- *  currentExecutorId → shells[i]. Новый код должен использовать nextModelForProfile.
- *  Карточка 16.09.2026, 5f292e87 уже выпила из этого формата, но в
- *  agent-state.ts есть вызовы — перевод на новую семантику в этой же
- *  задаче (см. agent-state.ts изменения). */
-export function nextShellForRole(
-  routing: RoleRouting,
-  role: string,
-  currentExecutorId: string,
-): ShellRoute | null {
-  if (!ROLE_NAMES.includes(role as RoleName)) return null;
-  const typedRole = role as RoleName;
-  const shells = [routing.defaults[typedRole], ...routing.fallbacks[typedRole]];
-  const currentIndex = shells.findIndex(
-    (shell) => SHELL_AGENT_IDS[shell] === currentExecutorId
-      || (SHELL_AGENT_ALIASES[shell] && SHELL_AGENT_IDS[SHELL_AGENT_ALIASES[shell]] === currentExecutorId),
-  );
-  const firstCandidate = currentIndex >= 0 ? currentIndex + 1 : 1;
-  for (const shell of shells.slice(firstCandidate)) {
-    const userId = SHELL_AGENT_IDS[shell]
-      ?? SHELL_AGENT_IDS[SHELL_AGENT_ALIASES[shell]];
-    if (userId) return { shell, userId };
-  }
-  return null;
-}
+/** 18.09.2026 (карточка be9cf712, фаза 2): nextShellForRole удалён.
+ *  Семантика «следующая оболочка» больше не применима — Pi единственный
+ *  runtime. Используйте nextModelForProfile() для fallback по моделям
+ *  внутри одной роли. Если код ссылается на nextShellForRole — это
+ *  ошибка миграции, надо править. */

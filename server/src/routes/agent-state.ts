@@ -26,7 +26,7 @@ import {
   stopReasonError,
   stopReasonPolicy,
 } from "../stopReasons.js";
-import { loadRoleRouting, nextShellForRole } from "../roleRouting.js";
+import { loadRoleRouting, nextModelForProfile } from "../roleRouting.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
   AGENT_RULES,
@@ -1303,10 +1303,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           : null);
       const fallback =
         reasonCode === "provider_limit" && assigneeRole
-          ? nextShellForRole(
+          ? nextModelForProfile(
               loadRoleRouting(),
               assigneeRole,
-              currentAttempt?.executor_id ?? "",
+              currentAttempt?.model ?? "",
             )
           : null;
 
@@ -1333,12 +1333,17 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         }
 
         if (fallback) {
+          // 18.09.2026: Pi — единый runtime. Fallback по provider_limit
+          // больше не переключает «следующую оболочку» (их нет) — только
+          // следующую модель в лесенке роли. Executor остаётся той же
+          // ролевой учёткой, runner остаётся Pi.
           db.prepare(
             `UPDATE attempts
-                SET ended_at = datetime('now'), outcome = ?,
+                SET model = ?,
+                    ended_at = datetime('now'), outcome = ?,
                     reason_code = ?, reason = ?
               WHERE id = ? AND ended_at IS NULL`,
-          ).run(policy.action, reasonCode, comment || null, attemptId);
+          ).run(fallback.model, policy.action, reasonCode, comment || null, attemptId);
           const fallbackAttemptId = uid();
           db.prepare(
             `INSERT INTO attempts
@@ -1348,25 +1353,25 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           ).run(
             fallbackAttemptId,
             task.id,
-            fallback.userId,
-            fallback.shell,
-            currentAttempt?.model ?? null,
+            task.assignee_id ?? "",
+            "pi",
+            fallback.model,
             assigneeRole,
           );
           db.prepare(
             `UPDATE tasks
-                SET assignee_id = ?, agent_state = 'in_progress',
+                SET agent_state = 'in_progress',
                     agent_heartbeat_at = datetime('now'), agent_session_id = NULL,
                     current_attempt_id = ?, updated_at = datetime('now')
               WHERE id = ? AND current_attempt_id = ?`,
-          ).run(fallback.userId, fallbackAttemptId, task.id, attemptId);
+          ).run(fallbackAttemptId, task.id, attemptId);
           logEvent({
             taskId: task.id,
             actorId: req.userId,
             kind: "field_changed",
-            field: "assignee_id",
-            fromValue: task.assignee_id ?? null,
-            toValue: fallback.userId,
+            field: "model",
+            fromValue: currentAttempt?.model ?? null,
+            toValue: fallback.model,
           });
         } else if (policy.automaticRetry) {
           const retryNo = retry.n + 1;
@@ -1433,20 +1438,26 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       });
       if (fallback) {
         const notificationId = uid();
-        db.prepare(
-          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
-        ).run(
-          notificationId,
-          fallback.userId,
-          task.id,
-          `Лимит провайдера: задача «${task.title}» переключена на ${fallback.shell}`,
-          req.userId,
-        );
-        broadcastToUsers([fallback.userId], {
-          type: "notification:new",
-          notificationId,
-          taskId: task.id,
-        });
+        // 18.09.2026: notify ролевую учётку (task.assignee_id), а не
+        // несуществующего «следующего исполнителя» — fallback теперь
+        // только про смену модели в лесенке роли.
+        const notifyUserId = task.assignee_id ?? "";
+        if (notifyUserId) {
+          db.prepare(
+            "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
+          ).run(
+            notificationId,
+            notifyUserId,
+            task.id,
+            `Лимит провайдера: задача «${task.title}» переключена на ${fallback.model}`,
+            req.userId,
+          );
+          broadcastToUsers([notifyUserId], {
+            type: "notification:new",
+            notificationId,
+            taskId: task.id,
+          });
+        }
       }
       broadcastTaskEvent([updated.creator_id, updated.assignee_id], {
         type: "task:state",
@@ -1459,8 +1470,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         action: policy.action,
         retry_count: policy.automaticRetry ? retry.n + 1 : retry.n,
         retry_delay_seconds: policy.delaySeconds,
+        // 18.09.2026: возвращаем только model/provider, без shell/userId
+        // (Pi единственный runtime, executor не меняется).
         fallback: fallback
-          ? { shell: fallback.shell, user_id: fallback.userId }
+          ? { model: fallback.model, provider: fallback.provider }
           : null,
         next_attempt_template: nextAttemptTemplate,
         substantive_attempts: (hydrated.attempts || []).length,
