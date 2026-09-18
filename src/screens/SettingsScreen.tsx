@@ -572,6 +572,12 @@ export function SettingsScreen() {
             label="Интеграции (Google, Apple)"
             onClick={() => navigate("/settings/integrations")}
           />
+          <Row
+            icon="key"
+            iconColor="#8B5CF6"
+            label="Провайдеры LLM"
+            onClick={() => navigate("/settings/providers")}
+          />
         </FieldGroup>
       </div>
 
