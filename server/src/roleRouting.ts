@@ -29,7 +29,17 @@ export const SHELL_USER_IDS: Record<string, string> = {
   agent_orchestrator: "6848a89b-04fe-4015-bb1c-61b03782c378",
   agent_deepseek: "b85212d6-abab-4afb-a4c6-0d379b6537a4",
   agent_antigravity: "5b9d47c1-25c7-4a7c-a276-70e21f7d7816",
-  agent_pi: "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2",
+  // Каноническое имя shell'а — pi_runtime. agent_pi оставлен legacy-alias
+  // ниже (SHELL_AGENT_ALIASES) для старых карточек и UI-строк, которые
+  // его ещё содержат.
+  pi_runtime: "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2",
+};
+
+/** Legacy-aliases shell-имён: карточки до 18.09.2026 содержат "agent_pi".
+ *  trigger.py и roleRouting трактуют оба имени одинаково. См. карточку
+ *  f3108dcc (Pi = единый runtime, фасад). */
+export const SHELL_AGENT_ALIASES: Record<string, string> = {
+  agent_pi: "pi_runtime",
 };
 
 const ROLE_ROUTING_FILE = path.resolve(

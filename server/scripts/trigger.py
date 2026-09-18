@@ -351,8 +351,29 @@ SHELL_AGENT_IDS = {
     "agent_orchestrator": "6848a89b-04fe-4015-bb1c-61b03782c378",
     "agent_deepseek": "b85212d6-abab-4afb-a4c6-0d379b6537a4",
     "agent_antigravity": "5b9d47c1-25c7-4a7c-a276-70e21f7d7816",
-    "agent_pi": PI_AGENT_ID,
+    # Каноническое имя — pi_runtime. agent_pi оставлен ниже как legacy-alias
+    # для старых карточек (см. SHELL_AGENT_ALIASES). 18.09.2026, карточка
+    # f3108dcc (Pi = единый runtime, фасад).
+    "pi_runtime": PI_AGENT_ID,
+    "agent_pi": PI_AGENT_ID,  # legacy-alias, см. SHELL_AGENT_ALIASES
 }
+
+# Legacy-aliases shell-имён. Карточки до 18.09.2026 могут содержать
+# "agent_pi" в role-routing.yaml или в EXTERNAL_AGENTS — триггер должен
+# понимать и каноническое имя ("pi_runtime"), и legacy. Используется
+# resolve_shell_id() ниже.
+SHELL_AGENT_ALIASES = {
+    "agent_pi": "pi_runtime",
+}
+
+def resolve_shell_id(name: str) -> str:
+    """Канонизировать имя shell'а, разворачивая legacy-aliases.
+
+    "agent_pi" → "pi_runtime"; неизвестные имена проходят как есть
+    (SHELL_AGENT_IDS.get(name) вернёт None, и это будет ошибкой наверху).
+    """
+    canonical = SHELL_AGENT_ALIASES.get(name, name)
+    return SHELL_AGENT_IDS.get(canonical) or SHELL_AGENT_IDS.get(name) or ""
 ROLE_ROUTING = load_role_routing()
 
 

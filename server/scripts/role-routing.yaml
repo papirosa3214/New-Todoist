@@ -1,14 +1,18 @@
-# Роль → исполнитель. Роли сохраняются как смысловые обязанности, но
-# фактически все они сейчас выполняются одним Pi Agent.
+# Роль → исполнитель. С 18.09.2026 Pi — единый runtime (см. карточка
+# f3108dcc, спец docs/superpowers/specs/2026-09-18-pi-runtime-facade.md).
+# Все восемь ролей исполняются одной машиной, различаясь mcp-профилем
+# и ролью в задаче. Имя "pi_runtime" — каноническое; "agent_pi"
+# сохранён как legacy-alias для старых карточек (см. SHELL_AGENT_ALIASES
+# в server/src/roleRouting.ts и trigger.py:SHELL_AGENT_IDS).
 defaults:
-  researcher: agent_pi
-  analyst: agent_pi
-  synthesizer: agent_pi
-  critic_verifier: agent_pi
-  architect: agent_pi
-  builder: agent_pi
-  qa: agent_pi
-  designer: agent_pi
+  researcher: pi_runtime
+  analyst: pi_runtime
+  synthesizer: pi_runtime
+  critic_verifier: pi_runtime
+  architect: pi_runtime
+  builder: pi_runtime
+  qa: pi_runtime
+  designer: pi_runtime
 
 # Запасных исполнителей нет: при исчерпании лимита задача останавливается,
 # пока владелец не решит, что подключать дальше.
