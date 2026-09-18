@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  getPackageDir,
   ModelRuntime,
   RpcClient,
   type JsonAgentSessionEvent,
@@ -53,6 +54,18 @@ const ROLE_PROFILES_DIR = process.env.TASKFLOW_ROLE_PROFILES_DIR
 type AuthStatus = Awaited<ReturnType<ModelRuntime["getProviderAuthStatus"]>>;
 type SdkModel = ReturnType<ModelRuntime["getModels"]>[number];
 type SdkProvider = ReturnType<ModelRuntime["getProviders"]>[number];
+
+/** Путь к JS-энтрипоинту Pi для RpcClient. Важно: RpcClient спавнит
+ *  `node <cliPath> --mode rpc`, поэтому это должен быть именно JS-файл
+ *  (`dist/cli.js` из установленного SDK), а НЕ shell-обёртка
+ *  `~/.local/bin/pi` — она для человека в терминале. Берём CLI из того же
+ *  пакета, что и SDK, чтобы версии клиента и агента совпадали.
+ *  PI_BIN_PATH — аварийный override. */
+function resolvePiCliPath(): string {
+  const override = process.env.PI_BIN_PATH?.trim();
+  if (override) return override;
+  return path.join(getPackageDir(), "dist", "cli.js");
+}
 
 /** Singleton ModelRuntime. ModelRuntime.create() — асинхронный (поднимает
  *  каталог провайдеров, читает credentials, проверяет доступность
@@ -660,7 +673,7 @@ export const piRuntime: RuntimeAdapter = {
 
     const runId = `run_${crypto.randomUUID()}`;
     const client = new RpcClient({
-      cliPath: process.env.PI_BIN_PATH ?? "/home/maksim/.local/bin/pi",
+      cliPath: resolvePiCliPath(),
       cwd: process.cwd(),
       provider,
       model,

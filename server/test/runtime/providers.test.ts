@@ -69,6 +69,7 @@ const mockRuntime = {
 };
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
+  getPackageDir: () => "/mock/pi-pkg",
   ModelRuntime: {
     create: vi.fn(async () => {
       if (mockState.createShouldFail) throw new Error("pi offline");

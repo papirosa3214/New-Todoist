@@ -118,6 +118,7 @@ const mockRuntime = {
 };
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
+  getPackageDir: () => "/mock/pi-pkg",
   ModelRuntime: {
     create: vi.fn(async () => {
       if (mockState.createShouldFail) throw new Error("pi offline");
@@ -397,6 +398,8 @@ describe("PiRuntimeAdapter", () => {
     });
     expect(lastClient().options.model).toBe("claude-sonnet-5");
     expect(lastClient().options.provider).toBe("anthropic");
+    // cliPath — JS-энтрипоинт SDK, не shell-обёртка (RpcClient спавнит node).
+    expect(String(lastClient().options.cliPath)).toMatch(/dist[/\\]cli\.js$/);
     expect(attemptRow(runId)?.model).toBe("claude-sonnet-5");
     expect(attemptRow(runId)?.provider).toBe("anthropic");
   });
