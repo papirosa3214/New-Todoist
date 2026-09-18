@@ -574,3 +574,20 @@ export const piRuntime: RuntimeAdapter = {
 export function invalidateListModelsCache(): void {
   listModelsCache = null;
 }
+
+/** Множество id моделей, реально доступных в Pi (без провайдера — модель
+ *  уникальна по id, не по (provider, id): Pi использует то же имя для
+ *  одной и той же модели в разных провайдерах редко). Используется
+ *  PUT /api/runtime/routing для валидации — owner не может назначить
+ *  роль на модель, которой Pi не знает (422 model_not_available). */
+export async function getAvailableModelIds(): Promise<Set<string>> {
+  const models = await piRuntime.listModels();
+  return new Set(models.map((m) => m.id));
+}
+
+/** Проверяет, что модель существует в pi --list-models (по id, без
+ *  провайдера). Используется PUT /api/runtime/routing. */
+export async function modelExists(id: string): Promise<boolean> {
+  const ids = await getAvailableModelIds();
+  return ids.has(id);
+}

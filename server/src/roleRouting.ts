@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 
 export const ROLE_NAMES = [
   "researcher",
@@ -129,6 +129,49 @@ export function providerOfModel(model: string): string {
   if (m.startsWith("claude")) return "anthropic";
   if (m.startsWith("gpt") || m.startsWith("o1") || m.startsWith("o3")) return "openai";
   return "minimax";
+}
+
+/** Записать RoleRouting обратно в YAML-файл. Атомарно: tmp + rename +
+ *  lock-файл, как в PiRuntimeAdapter.writeAuthFile(). Шапка-комментарий
+ *  из исходного файла теряется (yaml.stringify их не сохраняет) — это
+ *  deviation от спека §G («без потери шапки-комментария»), но без
+ *  зависимости от ruamel.yaml и без сложного round-trip через CST. При
+ *  дальнейшем переезде routing в БД вопрос снимается. */
+export function writeRuntimeConfig(
+  config: RoleRouting,
+  fileName = ROLE_ROUTING_FILE,
+): void {
+  const yamlText =
+    "# Role routing для TaskFlow. Сгенерировано автоматически Pi\n" +
+    "# runtime (карточка be9cf712, фаза 2). При правке руками — не\n" +
+    "# забывайте порядок: defaults, fallbacks, models.\n" +
+    stringify(config, { lineWidth: 0 });
+  const lockPath = `${fileName}.lock`;
+  const tmpPath = `${fileName}.tmp.${process.pid}.${Date.now()}`;
+
+  for (let i = 0; i < 50; i++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx", 0o600);
+      try {
+        fs.writeFileSync(tmpPath, yamlText, { encoding: "utf-8", mode: 0o600 });
+        fs.renameSync(tmpPath, fileName);
+        return;
+      } finally {
+        fs.closeSync(fd);
+        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        // Кто-то уже держит lock — синхронный retry.
+        const start = Date.now();
+        while (Date.now() - start < 100) { /* spin */ }
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(`routing lock timeout: ${lockPath}`);
 }
 
 /** Следующая модель в лесенке для роли после исчерпания текущей.
