@@ -1,6 +1,40 @@
-import { afterAll, beforeAll, describe, it, expect } from "vitest";
+import { afterAll, beforeAll, describe, it, expect, vi } from "vitest";
 import { buildApp } from "../../src/index.js";
 import db from "../../src/db.js";
+
+
+// 18.09.2026 (manual_code fix): подменяем SDK, чтобы login() не дёргал
+// реальный anthropic OAuth flow — иначе SDK бросает «Missing authorization
+// code» после пустого manual_code ввода, vitest ловит unhandled rejection.
+// Мок notify-ит auth_url, чтобы тест AuthInteractive видел event.
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+  ModelRuntime: {
+    create: vi.fn(async () => ({
+      getAvailable: vi.fn(async () => []),
+      // listProviders фильтрует провайдеров, для которых checkAuth
+      // вернул undefined — поэтому объявляем все три KNOWN_PROVIDERS.
+      checkAuth: vi.fn(async (provider: string) => {
+        if (provider === "anthropic" || provider === "openai-codex")
+          return { type: "oauth" };
+        if (provider === "minimax") return { type: "api_key" };
+        return undefined;
+      }),
+      getProviderAuthStatus: vi.fn(() => ({ configured: false })),
+      setRuntimeApiKey: vi.fn(async () => undefined),
+      // login() имитирует OAuth flow: notify auth_url и зависает
+      // (completed не резолвится), чтобы тест видел событие в events.
+      // Никакого реального anthropic.js — иначе он бросит unhandled
+      // «Missing authorization code» при manual_code prompt.
+      login: vi.fn(async (_p: string, _t: string, interaction: {
+        notify: (e: unknown) => void;
+        prompt: (p: unknown) => Promise<string>;
+      }) => {
+        interaction.notify({ type: "auth_url", url: "https://example.com/oauth" });
+        await new Promise((r) => setTimeout(r, 5));
+      }),
+    })),
+  },
+}));
 
 describe("runtime providers API", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;

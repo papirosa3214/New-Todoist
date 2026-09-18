@@ -208,21 +208,31 @@ async function startProviderLogin(
       if (cancelled) {
         return Promise.reject(new Error("Login cancelled"));
       }
-      // TaskFlow UI не поддерживает text/secret/select/manual_code:
-      // показываем информацию о причине в логе и reject'им prompt, чтобы
-      // SDK прервал flow с понятной ошибкой. На auth_url/device_code Pi
-      // этот код не вызывается.
-      const pp = p as { type?: string; message?: string };
+      // TaskFlow UI пока поддерживает только manual_code: проксируем
+      // событие в events, чтобы UI мог показать юзеру (auth_url /
+      // device_code flow). Сам submit кода пока не реализован — login()
+      // упадёт без правильного ввода, completed реджектится в .catch
+      // ниже, UI видит ошибку. Полный двусторонний канал (SSE или
+      // POST /submit) — отдельный этап.
+      //
+      // text/secret/select SDK на наших провайдерах не вызывает —
+      // Anthropic OAuth присылает только auth_url (notify) или
+      // manual_code (prompt), если callback server не сработал.
+      const pp = p as { type?: string; message?: string; placeholder?: string };
       const kind = pp.type ?? "unknown";
+      if (kind === "manual_code") {
+        push({
+          kind: "manual_code",
+          provider,
+          message: pp.message ?? "",
+          placeholder: pp.placeholder,
+        });
+        return Promise.resolve("");
+      }
       console.warn(
-        `[startProviderLogin:${provider}] prompt(${kind}) не поддержан в TaskFlow UI; реджектим`,
+        `[startProviderLogin:${provider}] prompt(${kind}) не поддержан в TaskFlow UI; возвращаем пустой ввод`,
       );
-      return Promise.reject(
-        new Error(
-          `prompt type=${kind} не поддержан в TaskFlow UI ` +
-            `(provider ${provider})`,
-        ),
-      );
+      return Promise.resolve("");
     },
   };
 
