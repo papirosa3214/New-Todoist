@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import db from "../db.js";
 import {
   ROLE_NAMES,
@@ -26,6 +28,57 @@ const ROLE_PROMPTS_DIR = process.env.TASKFLOW_ROLE_PROMPTS_DIR
 
 const ROLE_PROFILES_DIR = process.env.TASKFLOW_ROLE_PROFILES_DIR
   ?? path.join(process.env.HOME ?? ".", ".pi", "agent", "taskflow-profiles");
+
+const execFileAsync = promisify(execFile);
+
+/** TTL кэша listModels: 10 с. Достаточно, чтобы UI не дёргал `pi`
+ *  на каждый рендер, и при этом изменения в каталоге моделей Pi
+ *  подхватываются почти мгновенно. */
+const LIST_MODELS_CACHE_TTL_MS = 10_000;
+
+interface PiListModelsCache {
+  at: number;
+  models: Model[];
+}
+
+let listModelsCache: PiListModelsCache | null = null;
+
+/** Парсит TSV-вывод `pi --list-models`. Шапка пропускается. Колонки:
+ *  provider / model / context / max-out / thinking / images. Формат
+ *  задокументирован в @earendil-works/pi-coding-agent/dist/cli/list-models.js.
+ *  Устойчив к разному числу колонок — лишнее игнорируем, недостающее
+ *  становится undefined и пропускается при формировании Model. */
+export function parsePiListModels(
+  output: string,
+): Array<{ provider: string; id: string }> {
+  const lines = output.split(/\r?\n/);
+  const result: Array<{ provider: string; id: string }> = [];
+  let sawHeader = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!sawHeader) {
+      sawHeader = true;
+      continue;
+    }
+    const cols = line.split(/\s+/);
+    const [provider, id] = cols;
+    if (!provider || !id) continue;
+    result.push({ provider, id });
+  }
+  return result;
+}
+
+/** Прогон `pi --list-models` с таймаутом 15 c. Возвращает сырой stdout.
+ *  Если Pi падает — кидает ошибку, вызывающий решает, что делать. */
+async function runPiListModels(): Promise<string> {
+  const { stdout } = await execFileAsync(
+    "pi",
+    ["--list-models"],
+    { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 },
+  );
+  return stdout;
+}
 
 interface ProfileConfig {
   mcpServers?: {
@@ -170,20 +223,35 @@ export const piRuntime: RuntimeAdapter = {
   },
 
   async listModels(): Promise<Model[]> {
-    const routing = loadRoleRouting();
+    const now = Date.now();
+    if (listModelsCache && now - listModelsCache.at < LIST_MODELS_CACHE_TTL_MS) {
+      return listModelsCache.models;
+    }
+    let stdout: string;
+    try {
+      stdout = await runPiListModels();
+    } catch {
+      // Pi недоступен / упал — кэш не трогаем, отдаём пустой массив.
+      // UI покажет «нет моделей», не 500.
+      return [];
+    }
+    const parsed = parsePiListModels(stdout);
     const seen = new Set<string>();
     const models: Model[] = [];
-    for (const role of ROLE_NAMES) {
-      const id = routing.models[role];
-      if (seen.has(id)) continue;
-      seen.add(id);
+    for (const { provider, id } of parsed) {
+      const key = `${provider}:${id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       models.push({
         id,
-        provider: "minimax", // Первый этап: провайдер один, MiniMax. Расширение — позже.
+        provider,
         runtime_id: RUNTIME_ID_PI,
+        // available уточняется отдельным вызовом listProviders(); здесь
+        // отдаём true по умолчанию, чтобы UI не блокировал выбор.
         available: true,
       });
     }
+    listModelsCache = { at: now, models };
     return models;
   },
 
@@ -263,3 +331,11 @@ export const piRuntime: RuntimeAdapter = {
     };
   },
 };
+
+/** Сбрасывает кэш listModels. Экспортируется отдельно от RuntimeAdapter,
+ *  потому что это внутренний хук реализации, а не часть публичного
+ *  контракта. Вызывается из connectProvider() после записи credentials,
+ *  чтобы новый провайдер сразу появился в списке моделей. */
+export function invalidateListModelsCache(): void {
+  listModelsCache = null;
+}
