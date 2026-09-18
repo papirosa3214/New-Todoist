@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { authOrApiToken } from "../auth.js";
+import { authOrApiToken, ownerOrApiToken } from "../auth.js";
 import { piRuntime } from "../runtime/index.js";
 
 /** Список известных провайдеров — синхронизирован с PiRuntimeAdapter.KNOWN_PROVIDERS.
- *  Здесь дублируется намеренно: роут-слой не зависит от внутреннего адаптера. */
-const KNOWN_PROVIDERS = ["anthropic", "openai", "minimax"] as const;
+ *  Здесь дублируется намеренно: роут-слой не зависит от внутреннего адаптера.
+ *  Имя "openai-codex" — каноническое для OpenAI через Codex OAuth. */
+const KNOWN_PROVIDERS = ["anthropic", "openai-codex", "minimax"] as const;
 
 export function registerRuntimeRoutes(app: FastifyInstance): void {
   const authPre = authOrApiToken;
@@ -36,28 +37,54 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
   });
 
   app.get("/api/runtime/providers", { preHandler: authPre }, async () => {
+    // В HTTP-ответе — только три публичных поля. runtime_id, managedBy,
+    // lastCheckedAt остаются в TypeScript-фасаде, но НЕ утекают наружу:
+    // это внутренняя механика, владельцу она не нужна, а credential
+    // details (refresh/access/expires) тут и так не было — они в
+    // ~/.pi/agent/auth.json и сюда не попадают.
     const providers = await piRuntime.listProviders();
-    return { providers };
+    return {
+      providers: providers.map((p) => ({
+        provider: p.id,
+        status: p.status,
+        authType: (p as { authType?: "oauth" | "api_key" | null }).authType ?? null,
+      })),
+    };
   });
 
-  app.post<{ Params: { provider: string } }>(
+  // POST /auth — это ЗАПИСЬ credentials. Жёстче authOrApiToken: только
+  // owner/service или api-token со scope runtime:auth (через ownerOrApiToken).
+  // Обычный api_token не пройдёт (403 owner_or_service_required).
+  app.post<{
+    Params: { provider: string };
+    Body: { apiKey?: string };
+  }>(
     "/api/runtime/providers/:provider/auth",
-    { preHandler: authPre },
+    { preHandler: ownerOrApiToken },
     async (req, reply) => {
       const name = req.params.provider;
       if (!(KNOWN_PROVIDERS as readonly string[]).includes(name)) {
         return reply.code(404).send({ error: "unknown provider" });
       }
-      // Заглушка до появления реального OAuth в Pi.
-      // Возвращаем текущий статус из окружения, не инициируем OAuth.
-      const providers = await piRuntime.listProviders();
-      const provider = providers.find((p) => p.id === name);
-      if (!provider) return reply.code(404).send({ error: "provider not found" });
-      return {
-        provider: provider.id,
-        status: provider.status,
-        note: "Реальный connectProvider появится в Pi; пока возвращается текущий статус.",
-      };
+      const body = req.body ?? {};
+      try {
+        const result = await piRuntime.connectProvider(name, body);
+        return {
+          provider: result.id,
+          status: result.status,
+          authType: (result as { authType?: "oauth" | "api_key" | null })
+            .authType ?? null,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // OAuth провайдер: вместо записи возвращаем инструкцию с командой,
+        // которую owner/service выполняет в интерактивном Pi.
+        if (msg.includes("uses OAuth") || msg.includes("use authInstruction")) {
+          const instr = await piRuntime.authInstruction(name);
+          return reply.code(200).send(instr);
+        }
+        return reply.code(400).send({ error: msg });
+      }
     },
   );
 }
