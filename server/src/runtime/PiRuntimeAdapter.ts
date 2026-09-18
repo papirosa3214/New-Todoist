@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -500,12 +500,105 @@ export const piRuntime: RuntimeAdapter = {
     };
   },
 
-  async startRun(_input: StartRunInput): Promise<StartRunResult> {
-    throw new UnsupportedInFacadeError(
-      "PiRuntimeAdapter.startRun() недоступен в этой версии фасада: " +
-        "запуск процесса делает server/scripts/trigger.py. " +
-        "См. карточку f3108dcc — Task 9.",
+  async startRun(input: StartRunInput): Promise<StartRunResult> {
+    // Формируем spec для launcher'а. Задача загружается из БД; роль,
+    // модель, prompt берутся из input. cmd собирается здесь, потому что
+    // это бизнес-логика (какие флаги Pi получает для роли), а не
+    // механика запуска (которая в launcher).
+    const task = db
+      .prepare(
+        `SELECT id, assignee_id, dispatched_role, role FROM tasks WHERE id = ?`,
+      )
+      .get(input.taskId) as
+      | { id: string; assignee_id: string | null; dispatched_role: string | null; role: string | null }
+      | undefined;
+    if (!task) {
+      throw new Error(`task ${input.taskId} not found`);
+    }
+    const role: string | undefined = task.dispatched_role ?? task.role ?? input.agentId;
+    const model = input.model?.trim() || undefined;
+
+    // cmd для Pi. Подмножество того, что собирает trigger.py — тут
+    // минимально, потому что RuntimeAdapter.startRun — это в первую
+    // очередь «просто запустить Pi на этой задаче», а не полный
+    // конвейер claim/heartbeat/usage, который живёт в trigger.py.
+    const piBin = "/home/maksim/.local/bin/pi";
+    const cmd: string[] = [piBin, "-p", input.prompt];
+
+    const spec = {
+      cmd,
+      env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
+      cwd: process.cwd(),
+      timeout: 3600,
+      agent_label: `runtime:${role ?? "unknown"}`,
+      usage_path: undefined as string | undefined,
+      kill_event: undefined as unknown, // Node EventEmitter для kill не пробрасываем (см. ниже)
+    };
+
+    // spawn python3 с start_agent_run.py, JSON stdin → JSON stdout.
+    // Возвращаем сразу {runId, status: 'queued'} — реальный результат
+    // придёт через getRun(runId), когда launcher закончит (см. ниже
+    // фоновый обработчик stdout).
+    const proc = spawn(
+      "python3",
+      [path.join(process.cwd(), "server", "scripts", "start_agent_run.py")],
+      { stdio: ["pipe", "pipe", "pipe"] },
     );
+    proc.stdin.end(JSON.stringify(spec));
+
+    let stdout = "";
+    proc.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    proc.on("error", (err) => {
+      // spawn не смог стартовать (ENOENT и т.п.) — пишем в agent_state,
+      // чтобы планировщик мог ретраить.
+      try {
+        db.prepare(
+          `UPDATE tasks SET agent_state = 'blocked', updated_at = datetime('now')
+             WHERE id = ?`,
+        ).run(input.taskId);
+      } catch { /* ignore — задача могла быть удалена */ }
+      console.error(`[startRun] spawn error for ${input.taskId}: ${err.message}`);
+    });
+    proc.on("close", () => {
+      // Парсим stdout как JSON. credential/log НЕ логируем. stderr
+      // пишем только если там что-то есть (диагностика для разработчика).
+      let result: { status: string; returncode: number | null; output_tail: string;
+        usage: unknown; error: string | null } | null = null;
+      try {
+        if (stdout.trim()) result = JSON.parse(stdout);
+      } catch (e) {
+        console.error(`[startRun] bad JSON from launcher for ${input.taskId}: ${(e as Error).message}`);
+        console.error(`[startRun] stderr: ${stderr.slice(0, 500)}`);
+      }
+      if (!result) return;
+
+      // Обновляем agent_state по результату.
+      let nextState: "review" | "blocked" | "in_progress" = "in_progress";
+      if (result.status === "ok" && result.returncode === 0) nextState = "review";
+      else if (result.status !== "ok") nextState = "blocked";
+      try {
+        db.prepare(
+          `UPDATE tasks SET agent_state = ?, agent_finished_at = datetime('now'),
+                   updated_at = datetime('now')
+             WHERE id = ?`,
+        ).run(nextState, input.taskId);
+      } catch { /* ignore */ }
+      if (stderr.trim()) {
+        console.log(`[startRun:${input.taskId.slice(0, 8)}] ${stderr.slice(0, 500)}`);
+      }
+    });
+
+    return {
+      runId: `run-${input.taskId.slice(0, 8)}`,
+      sessionId: "",
+      status: "queued",
+    };
   },
 
   async sendMessage(_runId: string, _text: string): Promise<void> {
