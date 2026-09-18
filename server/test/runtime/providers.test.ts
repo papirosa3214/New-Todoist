@@ -89,6 +89,7 @@ describe("runtime providers API", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let ownerToken: string;
   let userToken: string;
+  let userId: string;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -114,6 +115,7 @@ describe("runtime providers API", () => {
       },
     });
     userToken = user.json().token as string;
+    userId = user.json().user.id as string;
   });
 
   afterAll(async () => {
@@ -306,12 +308,9 @@ describe("runtime providers API", () => {
 
   it("обычный api_token без runtime:auth не может менять auth (403)", async () => {
     const raw = `agent-token-${Date.now()}`;
-    const row = db
-      .prepare("SELECT id FROM users ORDER BY created_at DESC LIMIT 1")
-      .get() as { id: string };
     db.prepare("UPDATE users SET api_token = ? WHERE id = ?").run(
       hashApiToken(raw),
-      row.id,
+      userId,
     );
     const res = await app.inject({
       method: "POST",
