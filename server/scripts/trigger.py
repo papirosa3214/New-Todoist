@@ -363,27 +363,32 @@ def validate_pi_mcp_profiles() -> None:
 
 
 def resolve_agent_for_role(role: str) -> dict | None:
-    """Select the configured shell for a role, preferring its default."""
+    """Select the configured executor for a role.
+
+    18.09.2026, карточка f3108dcc: Pi — единый runtime, все 8 ролей
+    исполняются одной машиной (role_* учётка в EXTERNAL_AGENTS). Старая
+    семантика «обойти shell'ы и выбрать дефолт/фолбэк» не работает —
+    shell один (pi_runtime). Возвращаем запись role_<role_name>.
+
+    Если карточка уже на ролевой учётке (handle_task → assignee_is_role),
+    эта функция не вызывается — agent приходит напрямую из EXTERNAL_AGENTS.
+    Здесь — safety net для случая, когда карточка почему-то не на ролевой
+    учётке (например, прямая правка БД или старая карточка).
+    """
     role_name = str(role or "").strip().lower()
     if role_name not in ROLE_NAMES:
         raise ValueError(f"неизвестная роль: {role}")
-
-    candidates = [("дефолт", ROLE_ROUTING["defaults"][role_name])]
-    candidates.extend(("фолбэк", shell) for shell in ROLE_ROUTING["fallbacks"][role_name])
-    for reason, shell in candidates:
-        agent_id = SHELL_AGENT_IDS.get(shell)
-        agent = EXTERNAL_AGENTS.get(agent_id or "")
-        if agent is None or role_name not in agent.get("roles", []):
-            continue
-        selected = dict(agent)
-        selected["id"] = agent_id
-        selected["routing_shell"] = shell
-        selected["routing_reason"] = reason
-        log(f"роль {role_name}: оболочка {shell} ({reason})")
-        return selected
-
-    log(f"роль {role_name}: доступной оболочки нет")
-    return None
+    role_user_id = f"role_{role_name}"
+    agent = EXTERNAL_AGENTS.get(role_user_id)
+    if agent is None:
+        log(f"роль {role_name}: ролевой записи role_{role_name} нет в EXTERNAL_AGENTS")
+        return None
+    selected = dict(agent)
+    selected["id"] = role_user_id
+    selected["routing_shell"] = "pi_runtime"
+    selected["routing_reason"] = "единый Pi runtime"
+    log(f"роль {role_name}: Pi runtime (role_{role_name})")
+    return selected
 
 
 def validate_role_agents(routing: dict[str, dict]) -> None:
