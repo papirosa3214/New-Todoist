@@ -32,6 +32,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import websocket  # websocket-client
 
@@ -740,7 +741,7 @@ HEARTBEAT_SEC = 90    # аренда живёт 5 минут — сигнал в
 BUSY_WAIT_SEC = 8 * 60
 BUSY_POLL_SEC = 15
 PROJECTS_DIR = HOME / ".claude/projects"
-RUNNING: dict[str, tuple[subprocess.Popen | None, str]] = {}
+RUNNING: dict[str, tuple[Any, str]] = {}
 # Значение — (proc, assignee_id). assignee_id нужен обходу доски: проверить,
 # занят ли конкретный агент, не сделав N запросов в API, чтобы свериться с
 # сервером по каждой карточке в RUNNING.
@@ -2004,6 +2005,38 @@ def read_usage(path: str) -> str:
     return ", ".join(parts)
 
 
+def _format_usage_dict(d: dict | None) -> str:
+    """Человеческая строка о расходе из сырого dict (от popen_agent).
+
+    С 18.09.2026 launcher (start_agent_run.py) сам читает usage.json
+    и возвращает сырой dict. Триггеру остаётся только отформатировать.
+    Логика формата — та же, что в read_usage(): деньги показываем
+    только когда cost_status != unknown/none.
+    """
+    if not isinstance(d, dict):
+        return ""
+    parts = []
+    total = d.get("total_tokens")
+    if isinstance(total, (int, float)) and total:
+        inp, out = d.get("input_tokens"), d.get("output_tokens")
+        if isinstance(inp, (int, float)) and isinstance(out, (int, float)):
+            parts.append(f"{int(total)} токенов ({int(inp)} на вход, {int(out)} на ответ)")
+        else:
+            parts.append(f"{int(total)} токенов")
+    cost, status = d.get("estimated_cost_usd"), (d.get("cost_status") or "")
+    if isinstance(cost, (int, float)) and cost > 0 and status not in ("unknown", "none"):
+        parts.append(f"≈ ${cost:.4f}".rstrip("0").rstrip("."))
+    elif status in ("unknown", "none"):
+        parts.append("по подписке, поштучно не тарифицируется")
+    calls = d.get("api_calls")
+    if isinstance(calls, (int, float)) and calls:
+        parts.append(f"обращений к модели: {int(calls)}")
+    model, provider = d.get("model"), d.get("provider")
+    if model:
+        parts.append(f"модель {model}" + (f" ({provider})" if provider else ""))
+    return ", ".join(parts)
+
+
 # ── Единая доставка поручений (agent_inbox) ────────────────────────────────
 # Карточка 5f292e87, повторное ревью 07.09.2026: служба обязана свериться с
 # inbox ДО claim и запуска процесса. Устаревшее событие (версия карточки
@@ -2377,14 +2410,37 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
                 if claude_cli:
                     cmd = make_cmd(resume_text(get_task(task_id) or task),
                                    ["--resume", session_sid])
-            proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                env=run_env,
-                cwd=str(HOME) if claude_cli else str(HOME / "Проекты/New-Todoist"),
-            )
+            # С 18.09.2026 (карточка be9cf712, Pi = единый runtime) запуск
+            # Pi вынесен в server/scripts/start_agent_run.py::popen_agent.
+            # Один Popen — одно место для bugfix'ов. Здесь остаётся только
+            # бизнес-логика (цепочка, should_continue, note); механика
+            # запуска — в launcher'е.
+            #
+            # silence_watch (выше) ожидает «proc» с .terminate() и
+            # .returncode. Реального proc у нас больше нет — есть kill_event,
+            # который launcher слушает. Подсовываем stub: silence_watch
+            # вызывает stub.terminate() — тот ставит kill_event, launcher
+            # шлёт SIGTERM реальному процессу и помечает result.status=killed.
+            kill_event = threading.Event()
+
+            class _ProcStub:
+                """Заместитель proc для silence_watch. terminate() ставит
+                kill_event, который launcher наблюдает в отдельном потоке."""
+
+                def __init__(self, ev: threading.Event) -> None:
+                    self._ev = ev
+
+                def terminate(self) -> None:
+                    self._ev.set()
+
+                @property
+                def returncode(self):  # noqa: D401 — silence_watch проверяет
+                    return None
+
+            proc_stub = _ProcStub(kill_event)
             with LOCK:
-                RUNNING[task_id] = (proc, assignee_id)
-            box = {"proc": proc}
+                RUNNING[task_id] = (proc_stub, assignee_id)
+            box = {"proc": proc_stub}
             hush = threading.Event()
             threading.Thread(
                 target=silence_watch,
@@ -2392,12 +2448,23 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
                 daemon=True,
             ).start()
             try:
-                out, _ = proc.communicate(timeout=3600)
+                from start_agent_run import popen_agent as _popen_agent
+                spec = {
+                    "cmd": cmd,
+                    "env": run_env,
+                    "cwd": str(HOME / "Проекты/New-Todoist"),
+                    "timeout": 3600,
+                    "agent_label": agent_label(agent),
+                    "usage_path": usage_path,
+                    "kill_event": kill_event,
+                }
+                result = _popen_agent(spec)
             finally:
                 hush.set()
-            tail = (out or "").strip()[-400:]
-            log(f"  «{agent_label(agent)}» закончил заход {run} (код {proc.returncode}): {tail}")
-            spent = read_usage(usage_path)
+            tail = result["output_tail"]
+            log(f"  «{agent_label(agent)}» закончил заход {run} "
+                f"(код {result['returncode']}, статус {result['status']}): {tail}")
+            spent = _format_usage_dict(result.get("usage"))
             if spent:
                 log(f"  расход захода: {spent}")
                 note(task_id, f"Расход захода: {spent}", token=token)
@@ -2411,8 +2478,13 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
                     note(task_id, f"Модель: {shown}", token=token)
             if reply_only:
                 break
-            if proc.returncode != 0:
-                log(f"  «{agent_label(agent)}» завершился с ошибкой (код {proc.returncode}) — цепочку останавливаю")
+            if result["status"] in ("timeout", "killed"):
+                log(f"  ⛔ «{agent_label(agent)}»: {result['status']}"
+                    + (f" — {result['error']}" if result.get("error") else ""))
+                break
+            if result["returncode"] not in (0, None):
+                log(f"  «{agent_label(agent)}» завершился с ошибкой "
+                    f"(код {result['returncode']}) — цепочку останавливаю")
                 break
             cont, why = should_continue(task_id, before)
             if not cont:
