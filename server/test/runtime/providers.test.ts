@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { buildApp } from "../../src/index.js";
-import db from "../../src/db.js";
+import db, { hashApiToken } from "../../src/db.js";
 import { resetModelRuntime } from "../../src/runtime/PiRuntimeAdapter.js";
 
 // 18.09.2026 (доработка после ревью владельца): авторизация идёт через
@@ -297,6 +297,25 @@ describe("runtime providers API", () => {
       url: "/api/runtime/providers/anthropic/auth",
       headers: { authorization: `Bearer ${userToken}` },
     });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("обычный api_token без runtime:auth не может менять auth (403)", async () => {
+    const raw = `agent-token-${Date.now()}`;
+    const row = db
+      .prepare("SELECT id FROM users ORDER BY created_at DESC LIMIT 1")
+      .get() as { id: string };
+    db.prepare("UPDATE users SET api_token = ? WHERE id = ?").run(
+      hashApiToken(raw),
+      row.id,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/runtime/providers/anthropic/auth",
+      headers: { authorization: `Bearer ${raw}` },
+    });
+    // Токен валиден (пользователь существует), но роль не owner/service →
+    // ownerOrApiToken отказывает. Именно этого требует спека §17.
     expect(res.statusCode).toBe(403);
   });
 
