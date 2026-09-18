@@ -31,6 +31,11 @@ process.env.JWT_SECRET =
 const uploadDir = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-uploads");
 process.env.UPLOAD_DIR = uploadDir;
 
+// 18.09.2026: владелец 'u1' заводится миграцией 039_seed_owner. Раньше
+// тесты падали на FOREIGN KEY в 040_archive_old_agents, потому что на
+// свежей БД u1 не было. Теперь миграция закрывает это, setup.ts
+// открывать БД вручную не нужно.
+
 afterAll(() => {
   for (const suffix of ["", "-wal", "-shm"]) {
     try {

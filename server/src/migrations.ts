@@ -1350,6 +1350,23 @@ const migrations: Migration[] = [
     },
   },
   {
+    id: "039_seed_owner",
+    description:
+      "18.09.2026: владелец системы ('u1', Максим) — owner-аккаунт, от " +
+      "имени которого идут первые задачи и проекты. В живой БД он уже " +
+      "есть (заведён до миграций), но миграция 040_archive_old_agents " +
+      "создаёт проект «Архив» с owner_id='u1' без проверки, что u1 " +
+      "существует — на свежей тестовой БД миграция падает на FOREIGN KEY. " +
+      "Эта миграция идемпотентно создаёт u1 (INSERT OR IGNORE), чтобы " +
+      "040 могла отработать в любой среде. В живой БД она no-op.",
+    up: () => {
+      db.prepare(
+        `INSERT OR IGNORE INTO users (id, name, email, password_hash, role, type)
+         VALUES ('u1', 'Максим', 'owner@test.local', 'x', 'owner', 'human')`,
+      ).run();
+    },
+  },
+  {
     id: "040_archive_old_agents",
     description:
       "Подчистка исторических учёток агентов по решению владельца 15.09.2026. " +
