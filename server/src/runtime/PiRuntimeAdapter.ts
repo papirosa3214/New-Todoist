@@ -1,7 +1,8 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { promisify } from "node:util";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import db from "../db.js";
 import {
   ROLE_NAMES,
@@ -31,166 +32,53 @@ const ROLE_PROMPTS_DIR = process.env.TASKFLOW_ROLE_PROMPTS_DIR
 const ROLE_PROFILES_DIR = process.env.TASKFLOW_ROLE_PROFILES_DIR
   ?? path.join(process.env.HOME ?? ".", ".pi", "agent", "taskflow-profiles");
 
-const execFileAsync = promisify(execFile);
+// 18.09.2026 (правка SDK): вся самописная обвязка вокруг `pi auth check`
+// / `pi --list-models` / `~/.pi/agent/auth.json` удалена. Источник
+// правды — ModelRuntime из @earendil-works/pi-coding-agent. Кэш моделей
+// и credentials тоже на стороне SDK: он сам инвалидирует снимок при
+// записи credentials (см. setRuntimeApiKey). TaskFlow просто мапит
+// ответы SDK в фасадные типы.
+//
+// SDK API (из dist/core/model-runtime.d.ts):
+//   checkAuth(id)              → { source?: string, type: "api_key"|"oauth" } | undefined
+//   getProviderAuthStatus(id)  → { configured: boolean, source?: ..., label?: string }
+//   getAvailable(id?)          → readonly Model<Api>[] (полный снимок авторизованных моделей)
+//   setRuntimeApiKey(id, key)  → пишет в ~/.pi/agent/auth.json сам SDK
+//   getProviders()             → readonly Provider[] (зарегистрированные провайдеры)
+//
+// Реальные типы AuthCheck/AuthStatus/Model живут в peer-dep
+// @earendil-works/pi-ai, который вложен в pi-coding-agent и не
+// доступен как top-level зависимость. Описываем нужные поля
+// структурно через Awaited<ReturnType<...>>, чтобы не тянуть ещё одну
+// зависимость ради одного типа.
 
-/** TTL кэша listModels: 10 с. Достаточно, чтобы UI не дёргал `pi`
- *  на каждый рендер, и при этом изменения в каталоге моделей Pi
- *  подхватываются почти мгновенно. */
-const LIST_MODELS_CACHE_TTL_MS = 10_000;
+type AuthCheck = NonNullable<Awaited<ReturnType<ModelRuntime["checkAuth"]>>>;
+type AuthStatus = Awaited<ReturnType<ModelRuntime["getProviderAuthStatus"]>>;
+type SdkModel = Awaited<ReturnType<ModelRuntime["getAvailable"]>>[number];
 
-interface PiListModelsCache {
-  at: number;
-  models: Model[];
-}
-
-let listModelsCache: PiListModelsCache | null = null;
-
-/** Парсит TSV-вывод `pi --list-models`. Шапка пропускается. Колонки:
- *  provider / model / context / max-out / thinking / images. Формат
- *  задокументирован в @earendil-works/pi-coding-agent/dist/cli/list-models.js.
- *  Устойчив к разному числу колонок — лишнее игнорируем, недостающее
- *  становится undefined и пропускается при формировании Model. */
-export function parsePiListModels(
-  output: string,
-): Array<{ provider: string; id: string }> {
-  const lines = output.split(/\r?\n/);
-  const result: Array<{ provider: string; id: string }> = [];
-  let sawHeader = false;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-    if (!sawHeader) {
-      sawHeader = true;
-      continue;
-    }
-    const cols = line.split(/\s+/);
-    const [provider, id] = cols;
-    if (!provider || !id) continue;
-    result.push({ provider, id });
+/** Singleton ModelRuntime. ModelRuntime.create() — асинхронный (поднимает
+ *  каталог провайдеров, читает credentials, проверяет доступность
+ *  моделей), поэтому держим его в lazy-переменной. */
+let modelRuntime: ModelRuntime | null = null;
+async function getModelRuntime(): Promise<ModelRuntime> {
+  if (!modelRuntime) {
+    modelRuntime = await ModelRuntime.create();
   }
-  return result;
+  return modelRuntime;
 }
 
-/** ENV для execFile pi. Обёртка /home/maksim/.local/bin/pi выставляет
- *  NODE_USE_ENV_PROXY=1 — без него встроенный fetch игнорирует HTTPS_PROXY
- *  и Anthropic/OpenAI отвечают 403 (гео-блок). При execFile из Node эта
- *  переменная не наследуется автоматически. Плюс прокидываем остальной env,
- *  потому что pi читает VAULT/TOKEN/... из окружения. */
-function piExecEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, NODE_USE_ENV_PROXY: "1" };
-}
-
-/** Прогон `pi --list-models` с таймаутом 15 c. Возвращает сырой stdout.
- *  Если Pi падает — кидает ошибку, вызывающий решает, что делать. */
-async function runPiListModels(): Promise<string> {
-  const { stdout } = await execFileAsync(
-    "pi",
-    ["--list-models"],
-    { timeout: 15_000, maxBuffer: 4 * 1024 * 1024, env: piExecEnv() },
-  );
-  return stdout;
-}
-
-/** Сырое состояние провайдера по `pi auth check --json`. */
-type PiAuthCheckStatus =
-  | "ready"
-  | "not_ready"
-  | "invalid";
-
-interface PiAuthCheck {
-  status: PiAuthCheckStatus;
-  provider: string;
-  authType?: "oauth" | "api_key";
-  reason?: string;
-}
-
-async function checkProviderStatus(provider: string): Promise<PiAuthCheck> {
-  const args = ["auth", "check", "--provider", provider, "--json", "--no-refresh"];
-  const { stdout } = await execFileAsync("pi", args, {
-    timeout: 10_000,
-    maxBuffer: 256 * 1024,
-    env: piExecEnv(),
-  });
-  const parsed = JSON.parse(stdout) as PiAuthCheck;
-  return parsed;
-}
-
-/** Путь к auth.json — единый для Pi и для TaskFlow. Совпадает с
- *  FileAuthStorageBackend в @earendil-works/pi-coding-agent. */
-function getAuthPath(): string {
-  return path.join(process.env.HOME ?? ".", ".pi", "agent", "auth.json");
-}
-
-interface AuthFile {
-  [provider: string]: { type: "api_key" | "oauth"; key?: string; [k: string]: unknown };
-}
-
-/** Прочитать auth.json, защищённый lock-файлом. Возвращает {} если файла нет. */
-async function readAuthFile(): Promise<AuthFile> {
-  const authPath = getAuthPath();
-  const lockPath = `${authPath}.lock`;
-  for (let i = 0; i < 50; i++) {
-    try {
-      const fd = fs.openSync(lockPath, "wx", 0o600);
-      try {
-        // lock взят
-        try {
-          const raw = fs.readFileSync(authPath, "utf8");
-          return JSON.parse(raw) as AuthFile;
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
-          throw err;
-        }
-      } finally {
-        fs.closeSync(fd);
-        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        // Кто-то уже держит lock (Pi пишет) — подождём и ретрай.
-        await new Promise((r) => setTimeout(r, 100));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new Error(`auth.json lock timeout: ${lockPath}`);
-}
-
-/** Записать auth.json атомарно (tmp + rename) под lock-файлом. chmod 0o600. */
-async function writeAuthFile(content: AuthFile): Promise<void> {
-  const authPath = getAuthPath();
-  const lockPath = `${authPath}.lock`;
-  const tmpPath = `${authPath}.tmp.${process.pid}.${Date.now()}`;
-
-  for (let i = 0; i < 50; i++) {
-    try {
-      const fd = fs.openSync(lockPath, "wx", 0o600);
-      try {
-        // Запись во временный файл + atomic rename — POSIX rename.
-        fs.writeFileSync(tmpPath, JSON.stringify(content, null, 2), {
-          encoding: "utf-8",
-          mode: 0o600,
-        });
-        fs.chmodSync(tmpPath, 0o600);
-        fs.renameSync(tmpPath, authPath);
-        // ВАЖНО: credential не логируется ни в одном слое. Здесь —
-        // ни в переменных, ни в console, ни в error.
-        return;
-      } finally {
-        fs.closeSync(fd);
-        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
-        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        await new Promise((r) => setTimeout(r, 100));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new Error(`auth.json lock timeout: ${lockPath}`);
+/** Маппит AuthStatus.configured в фасадный статус провайдера.
+ *  SDK разделяет «есть ли credentials» (configured) и «какой именно
+ *  тип credentials есть» (checkAuth().type). Старое CLI `pi auth
+ *  check --json` совмещало это в один объект со status="ready"; в
+ *  новой модели это два независимых запроса, и configured=true
+ *  → connected. */
+function mapAuthStatus(s: AuthStatus): "connected" | "disconnected" | "expired" {
+  if (s.configured) return "connected";
+  // SDK не различает «не сконфигурирован» и «expired» через
+  // getProviderAuthStatus — это решает checkAuth() в listProviders()
+  // по признаку source. Здесь просто «не подключён».
+  return "disconnected";
 }
 
 interface ProfileConfig {
@@ -306,24 +194,6 @@ async function buildProfile(
  *  Pi не знает и вернёт provider_not_found. */
 const KNOWN_PROVIDERS = ["anthropic", "openai-codex", "minimax"] as const;
 
-/** Маппит статус из `pi auth check --json` в фасадные значения.
- *  ready → connected, not_ready → disconnected,
- *  invalid (Pi не смог прочитать auth.json) → expired. */
-function mapPiStatus(
-  pi: PiAuthCheck,
-): { status: "connected" | "disconnected" | "expired"; authType: "oauth" | "api_key" | null } {
-  if (pi.status === "ready") {
-    return { status: "connected", authType: pi.authType ?? null };
-  }
-  if (pi.status === "invalid") {
-    return { status: "expired", authType: pi.authType ?? null };
-  }
-  // not_ready — credentials не сконфигурированы / неизвестный провайдер.
-  // Причина `provider_not_found` означает, что Pi про этот провайдер не
-  // знает — listProviders() такой записи отбрасывает.
-  return { status: "disconnected", authType: pi.authType ?? null };
-}
-
 export const piRuntime: RuntimeAdapter = {
   id: RUNTIME_ID_PI,
 
@@ -346,55 +216,56 @@ export const piRuntime: RuntimeAdapter = {
   },
 
   async listModels(): Promise<Model[]> {
-    const now = Date.now();
-    if (listModelsCache && now - listModelsCache.at < LIST_MODELS_CACHE_TTL_MS) {
-      return listModelsCache.models;
-    }
-    let stdout: string;
     try {
-      stdout = await runPiListModels();
+      const rt = await getModelRuntime();
+      const available = await rt.getAvailable();
+      // SDK возвращает {id, provider, ...} — мапим в фасадный Model.
+      // Дедупликация не нужна: SDK уже отдаёт уникальные (provider, id).
+      const seen = new Set<string>();
+      const models: Model[] = [];
+      for (const m of available) {
+        const sm = m as SdkModel;
+        const key = `${sm.provider}:${sm.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        models.push({
+          id: sm.id,
+          provider: sm.provider,
+          runtime_id: RUNTIME_ID_PI,
+          available: true,
+        });
+      }
+      return models;
     } catch {
-      // Pi недоступен / упал — кэш не трогаем, отдаём пустой массив.
-      // UI покажет «нет моделей», не 500.
+      // Pi недоступен / упал — отдаём пустой массив. UI покажет «нет
+      // моделей», не 500. Кэшем здесь не управляем — это на стороне
+      // ModelRuntime (см. getAvailableSnapshot + refresh()).
       return [];
     }
-    const parsed = parsePiListModels(stdout);
-    const seen = new Set<string>();
-    const models: Model[] = [];
-    for (const { provider, id } of parsed) {
-      const key = `${provider}:${id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      models.push({
-        id,
-        provider,
-        runtime_id: RUNTIME_ID_PI,
-        // available уточняется отдельным вызовом listProviders(); здесь
-        // отдаём true по умолчанию, чтобы UI не блокировал выбор.
-        available: true,
-      });
-    }
-    listModelsCache = { at: now, models };
-    return models;
   },
 
   async listProviders(): Promise<ProviderConnection[]> {
+    const rt = await getModelRuntime();
     const results = await Promise.all(
       KNOWN_PROVIDERS.map(async (id) => {
         try {
-          const pi = await checkProviderStatus(id);
-          if (pi.reason === "provider_not_found") return null;
-          const mapped = mapPiStatus(pi);
+          const [check, status] = await Promise.all([
+            rt.checkAuth(id),
+            Promise.resolve(rt.getProviderAuthStatus(id)),
+          ]);
+          if (!check) return null; // SDK не знает этот провайдер
+          const c = check as AuthCheck;
+          const s = status as AuthStatus;
           return {
             id,
             runtime_id: RUNTIME_ID_PI,
-            status: mapped.status,
-            authType: mapped.authType,
+            status: mapAuthStatus(s),
+            authType: c.type,
             managedBy: "pi" as const,
             lastCheckedAt: new Date().toISOString(),
           };
         } catch {
-          // pi auth check упал — отдаём как expired, чтобы UI мог хотя бы
+          // checkAuth упал — отдаём как expired, чтобы UI мог хотя бы
           // показать «не отвечает» и попробовать позже.
           return {
             id,
@@ -414,21 +285,17 @@ export const piRuntime: RuntimeAdapter = {
     provider: string,
     body: ConnectProviderInput,
   ): Promise<ProviderConnection> {
-    // Сначала узнаём тип провайдера. Pi auth check возвращает authType
-    // только когда провайдер уже сконфигурирован; для НЕ-сконфигурированных
-    // api_key провайдеров (то, что мы хотим подключить) authType не виден.
-    // Поэтому если pi не знает authType — определяем по белому списку.
-    let pi: PiAuthCheck;
-    try {
-      pi = await checkProviderStatus(provider);
-    } catch {
-      throw new Error(`pi auth check failed for ${provider}`);
-    }
-    const knownApiKey: ReadonlySet<string> = new Set(["minimax"]);
-    const isApiKey = pi.authType === "api_key"
-      || (!pi.authType && knownApiKey.has(provider));
+    const rt = await getModelRuntime();
+    // Определяем тип провайдера через SDK. checkAuth() возвращает
+    // { type: "api_key"|"oauth" } если credentials уже есть; для
+    // НЕ-сконфигурированного api_key провайдера (то, что мы хотим
+    // подключить) — undefined. Опираемся на белый список для OAuth.
+    const check = await rt.checkAuth(provider);
+    const c = check as AuthCheck | undefined;
+    const knownOauth: ReadonlySet<string> = new Set(["anthropic", "openai-codex"]);
+    const isOauth = c?.type === "oauth" || (c === undefined && knownOauth.has(provider));
 
-    if (!isApiKey) {
+    if (isOauth) {
       // OAuth провайдер: через UI ключи НЕ принимаем. Маршрут /auth
       // должен сначала вызвать authInstruction() и вернуть готовую
       // команду. Эта ветка — safety net на случай прямого вызова.
@@ -438,32 +305,27 @@ export const piRuntime: RuntimeAdapter = {
       );
     }
 
-    const apiKey = body.apiKey;
-    if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+    const apiKey = body.apiKey?.trim();
+    if (!apiKey) {
       throw new Error(`apiKey required for ${provider}`);
     }
     // credential НЕ логируем — ни здесь, ни дальше. Длина — единственное,
     // что можно показать в случае диагностики.
     const keyLen = apiKey.length;
 
-    const current = await readAuthFile();
-    current[provider] = { type: "api_key", key: apiKey };
-    await writeAuthFile(current);
+    // SDK сам пишет в ~/.pi/agent/auth.json (через свой
+    // CredentialStore), сам инвалидирует кэш моделей и credentials,
+    // и не требует от нас lock-файла. Возвращаемый Promise<void>
+    // резолвится после успешной записи и обновления снимка.
+    await rt.setRuntimeApiKey(provider, apiKey);
 
-    // Инвалидируем кэш моделей: новый провайдер должен сразу появиться.
-    invalidateListModelsCache();
-
-    // Проверяем через pi auth check, что Pi действительно увидел ключ.
-    let after: PiAuthCheck;
-    try {
-      after = await checkProviderStatus(provider);
-    } catch {
-      throw new Error(`pi auth check after write failed for ${provider}`);
-    }
-    if (after.status !== "ready") {
+    // Проверяем через SDK, что Pi действительно увидел ключ: после
+    // записи getProviderAuthStatus должен показать configured=true.
+    const status = rt.getProviderAuthStatus(provider) as AuthStatus;
+    if (!status.configured) {
       throw new Error(
-        `api_key for ${provider} written (${keyLen} chars), but pi auth check ` +
-        `still returns ${after.status}${after.reason ? ` (${after.reason})` : ""}`,
+        `api_key for ${provider} written (${keyLen} chars), but getProviderAuthStatus ` +
+        `still returns configured=false${status.source ? ` (source=${status.source})` : ""}`,
       );
     }
     return {
@@ -516,14 +378,22 @@ export const piRuntime: RuntimeAdapter = {
       throw new Error(`task ${input.taskId} not found`);
     }
     const role: string | undefined = task.dispatched_role ?? task.role ?? input.agentId;
-    const model = input.model?.trim() || undefined;
+    // 18.09.2026 (правка startRun): input.model и input.provider
+    // передаются в Pi явно, без промежуточного `const model = ...`,
+    // который раньше вычислялся, но в cmd не попадал. Если поля не
+    // заданы — соответствующий флаг не добавляется.
+    const trimmedProvider = input.provider?.trim();
+    const trimmedModel = input.model?.trim();
 
     // cmd для Pi. Подмножество того, что собирает trigger.py — тут
     // минимально, потому что RuntimeAdapter.startRun — это в первую
     // очередь «просто запустить Pi на этой задаче», а не полный
     // конвейер claim/heartbeat/usage, который живёт в trigger.py.
     const piBin = "/home/maksim/.local/bin/pi";
-    const cmd: string[] = [piBin, "-p", input.prompt];
+    const cmd: string[] = [piBin];
+    if (trimmedProvider) cmd.push("--provider", trimmedProvider);
+    if (trimmedModel) cmd.push("--model", trimmedModel);
+    cmd.push("-p", input.prompt);
 
     const spec = {
       cmd,
@@ -595,7 +465,7 @@ export const piRuntime: RuntimeAdapter = {
     });
 
     return {
-      runId: `run-${input.taskId.slice(0, 8)}`,
+      runId: crypto.randomUUID(),
       sessionId: "",
       status: "queued",
     };
@@ -660,25 +530,24 @@ export const piRuntime: RuntimeAdapter = {
   },
 };
 
-/** Сбрасывает кэш listModels. Экспортируется отдельно от RuntimeAdapter,
- *  потому что это внутренний хук реализации, а не часть публичного
- *  контракта. Вызывается из connectProvider() после записи credentials,
- *  чтобы новый провайдер сразу появился в списке моделей. */
-export function invalidateListModelsCache(): void {
-  listModelsCache = null;
-}
-
 /** Множество id моделей, реально доступных в Pi (без провайдера — модель
  *  уникальна по id, не по (provider, id): Pi использует то же имя для
  *  одной и той же модели в разных провайдерах редко). Используется
  *  PUT /api/runtime/routing для валидации — owner не может назначить
- *  роль на модель, которой Pi не знает (422 model_not_available). */
+ *  роль на модель, которой Pi не знает (422 model_not_available).
+ *
+ * 18.09.2026 (правка SDK): идём через ModelRuntime.getAvailable() —
+ *  SDK сам держит снимок и не дёргает сеть на каждый вызов.
+ *  Самописный listModelsCache удалён, invalidateListModelsCache
+ *  больше не нужен: SDK сам инвалидирует снимок при setRuntimeApiKey.
+ */
 export async function getAvailableModelIds(): Promise<Set<string>> {
-  const models = await piRuntime.listModels();
-  return new Set(models.map((m) => m.id));
+  const rt = await getModelRuntime();
+  const available = await rt.getAvailable();
+  return new Set(available.map((m) => (m as SdkModel).id));
 }
 
-/** Проверяет, что модель существует в pi --list-models (по id, без
+/** Проверяет, что модель существует в ModelRuntime (по id, без
  *  провайдера). Используется PUT /api/runtime/routing. */
 export async function modelExists(id: string): Promise<boolean> {
   const ids = await getAvailableModelIds();

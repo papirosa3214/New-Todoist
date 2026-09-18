@@ -10,6 +10,9 @@ import type {
 export interface StartRunInput {
   taskId: string;
   agentId: string;
+  /** Провайдер, на котором запускается Pi. Если не задан — Pi выберет по
+   *  модели. 18.09.2026: провайдер обязателен, чтобы Pi не угадывал. */
+  provider?: string;
   model?: string;
   prompt: string;
   tools?: string[];

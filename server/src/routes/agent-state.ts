@@ -1337,13 +1337,19 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           // больше не переключает «следующую оболочку» (их нет) — только
           // следующую модель в лесенке роли. Executor остаётся той же
           // ролевой учёткой, runner остаётся Pi.
+          //
+          // 18.09.2026 (правка fallback): старый attempt НЕ трогаем —
+          // он сохраняет свою исходную модель как часть истории. Только
+          // закрываем его (ended_at, outcome, reason_code, reason).
+          // fallback.model идёт исключительно в INSERT нового attempt
+          // ниже, чтобы листа попыток честно показывала, на какой
+          // модели каждый из них жил.
           db.prepare(
             `UPDATE attempts
-                SET model = ?,
-                    ended_at = datetime('now'), outcome = ?,
+                SET ended_at = datetime('now'), outcome = ?,
                     reason_code = ?, reason = ?
               WHERE id = ? AND ended_at IS NULL`,
-          ).run(fallback.model, policy.action, reasonCode, comment || null, attemptId);
+          ).run(policy.action, reasonCode, comment || null, attemptId);
           const fallbackAttemptId = uid();
           db.prepare(
             `INSERT INTO attempts
