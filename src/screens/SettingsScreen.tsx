@@ -578,6 +578,12 @@ export function SettingsScreen() {
             label="Провайдеры LLM"
             onClick={() => navigate("/settings/providers")}
           />
+          <Row
+            icon="cpu"
+            iconColor="#0EA5E9"
+            label="Модели ролей"
+            onClick={() => navigate("/settings/roles-models")}
+          />
         </FieldGroup>
       </div>
 

@@ -35,6 +35,7 @@ import { SearchScreen } from "./screens/SearchScreen";
 import { VoiceModelsScreen } from "./screens/VoiceModelsScreen";
 import { IntegrationsScreen } from "./screens/IntegrationsScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
+import { RolesModelsScreen } from "./screens/RolesModelsScreen";
 import { TemplatesScreen } from "./screens/TemplatesScreen";
 import { NotesScreen } from "./screens/NotesScreen";
 import { NoteEditorScreen } from "./screens/NoteEditorScreen";
@@ -179,6 +180,10 @@ export default function App() {
             <Route
               path="/settings/providers"
               element={<ProvidersScreen />}
+            />
+            <Route
+              path="/settings/roles-models"
+              element={<RolesModelsScreen />}
             />
             <Route path="/settings/templates" element={<TemplatesScreen />} />
           </Route>
