@@ -69,15 +69,48 @@ export function parsePiListModels(
   return result;
 }
 
+/** ENV для execFile pi. Обёртка /home/maksim/.local/bin/pi выставляет
+ *  NODE_USE_ENV_PROXY=1 — без него встроенный fetch игнорирует HTTPS_PROXY
+ *  и Anthropic/OpenAI отвечают 403 (гео-блок). При execFile из Node эта
+ *  переменная не наследуется автоматически. Плюс прокидываем остальной env,
+ *  потому что pi читает VAULT/TOKEN/... из окружения. */
+function piExecEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, NODE_USE_ENV_PROXY: "1" };
+}
+
 /** Прогон `pi --list-models` с таймаутом 15 c. Возвращает сырой stdout.
  *  Если Pi падает — кидает ошибку, вызывающий решает, что делать. */
 async function runPiListModels(): Promise<string> {
   const { stdout } = await execFileAsync(
     "pi",
     ["--list-models"],
-    { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 },
+    { timeout: 15_000, maxBuffer: 4 * 1024 * 1024, env: piExecEnv() },
   );
   return stdout;
+}
+
+/** Сырое состояние провайдера по `pi auth check --json`. */
+type PiAuthCheckStatus =
+  | "ready"
+  | "not_ready"
+  | "invalid";
+
+interface PiAuthCheck {
+  status: PiAuthCheckStatus;
+  provider: string;
+  authType?: "oauth" | "api_key";
+  reason?: string;
+}
+
+async function checkProviderStatus(provider: string): Promise<PiAuthCheck> {
+  const args = ["auth", "check", "--provider", provider, "--json", "--no-refresh"];
+  const { stdout } = await execFileAsync("pi", args, {
+    timeout: 10_000,
+    maxBuffer: 256 * 1024,
+    env: piExecEnv(),
+  });
+  const parsed = JSON.parse(stdout) as PiAuthCheck;
+  return parsed;
 }
 
 interface ProfileConfig {
@@ -187,18 +220,28 @@ async function buildProfile(
   };
 }
 
-/** Список известных провайдеров. Реальный auth живёт в Pi/vault; здесь
- *  это просто имена для /api/runtime/providers и connectProvider() (заглушка). */
-const KNOWN_PROVIDERS = ["anthropic", "openai", "minimax"] as const;
+/** Список известных провайдеров. Имена совпадают с тем, как Pi их знает
+ *  внутри (см. ~/.pi/agent/auth.json: anthropic, openai-codex, minimax).
+ *  Имя "openai-codex" — каноническое для OpenAI через Codex OAuth; "openai"
+ *  Pi не знает и вернёт provider_not_found. */
+const KNOWN_PROVIDERS = ["anthropic", "openai-codex", "minimax"] as const;
 
-function providerStatusFromEnv(
-  provider: string,
-): "connected" | "disconnected" | "expired" {
-  // Heuristic: реальный статус приходит из Pi/vault. Здесь — фолбэк
-  // для сухого прогона и тестов. Реальная проверка — в connectProvider().
-  const envKey = `TASKFLOW_${provider.toUpperCase()}_TOKEN`;
-  if (process.env[envKey]) return "connected";
-  return "disconnected";
+/** Маппит статус из `pi auth check --json` в фасадные значения.
+ *  ready → connected, not_ready → disconnected,
+ *  invalid (Pi не смог прочитать auth.json) → expired. */
+function mapPiStatus(
+  pi: PiAuthCheck,
+): { status: "connected" | "disconnected" | "expired"; authType: "oauth" | "api_key" | null } {
+  if (pi.status === "ready") {
+    return { status: "connected", authType: pi.authType ?? null };
+  }
+  if (pi.status === "invalid") {
+    return { status: "expired", authType: pi.authType ?? null };
+  }
+  // not_ready — credentials не сконфигурированы / неизвестный провайдер.
+  // Причина `provider_not_found` означает, что Pi про этот провайдер не
+  // знает — listProviders() такой записи отбрасывает.
+  return { status: "disconnected", authType: pi.authType ?? null };
 }
 
 export const piRuntime: RuntimeAdapter = {
@@ -256,13 +299,35 @@ export const piRuntime: RuntimeAdapter = {
   },
 
   async listProviders(): Promise<ProviderConnection[]> {
-    return KNOWN_PROVIDERS.map((p) => ({
-      id: p,
-      runtime_id: RUNTIME_ID_PI,
-      status: providerStatusFromEnv(p),
-      managedBy: "pi" as const,
-      lastCheckedAt: null,
-    }));
+    const results = await Promise.all(
+      KNOWN_PROVIDERS.map(async (id) => {
+        try {
+          const pi = await checkProviderStatus(id);
+          if (pi.reason === "provider_not_found") return null;
+          const mapped = mapPiStatus(pi);
+          return {
+            id,
+            runtime_id: RUNTIME_ID_PI,
+            status: mapped.status,
+            authType: mapped.authType,
+            managedBy: "pi" as const,
+            lastCheckedAt: new Date().toISOString(),
+          };
+        } catch {
+          // pi auth check упал — отдаём как expired, чтобы UI мог хотя бы
+          // показать «не отвечает» и попробовать позже.
+          return {
+            id,
+            runtime_id: RUNTIME_ID_PI,
+            status: "expired" as const,
+            authType: null,
+            managedBy: "pi" as const,
+            lastCheckedAt: new Date().toISOString(),
+          };
+        }
+      }),
+    );
+    return results.filter((p): p is NonNullable<typeof p> => p !== null);
   },
 
   async startRun(_input: StartRunInput): Promise<StartRunResult> {
