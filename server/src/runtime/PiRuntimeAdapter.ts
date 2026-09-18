@@ -18,6 +18,8 @@ import type {
 import { RUNTIME_ID_PI } from "./types.js";
 import {
   UnsupportedInFacadeError,
+  type AuthInstruction,
+  type ConnectProviderInput,
   type RuntimeAdapter,
   type StartRunInput,
   type StartRunResult,
@@ -111,6 +113,84 @@ async function checkProviderStatus(provider: string): Promise<PiAuthCheck> {
   });
   const parsed = JSON.parse(stdout) as PiAuthCheck;
   return parsed;
+}
+
+/** Путь к auth.json — единый для Pi и для TaskFlow. Совпадает с
+ *  FileAuthStorageBackend в @earendil-works/pi-coding-agent. */
+function getAuthPath(): string {
+  return path.join(process.env.HOME ?? ".", ".pi", "agent", "auth.json");
+}
+
+interface AuthFile {
+  [provider: string]: { type: "api_key" | "oauth"; key?: string; [k: string]: unknown };
+}
+
+/** Прочитать auth.json, защищённый lock-файлом. Возвращает {} если файла нет. */
+async function readAuthFile(): Promise<AuthFile> {
+  const authPath = getAuthPath();
+  const lockPath = `${authPath}.lock`;
+  for (let i = 0; i < 50; i++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx", 0o600);
+      try {
+        // lock взят
+        try {
+          const raw = fs.readFileSync(authPath, "utf8");
+          return JSON.parse(raw) as AuthFile;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+          throw err;
+        }
+      } finally {
+        fs.closeSync(fd);
+        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        // Кто-то уже держит lock (Pi пишет) — подождём и ретрай.
+        await new Promise((r) => setTimeout(r, 100));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(`auth.json lock timeout: ${lockPath}`);
+}
+
+/** Записать auth.json атомарно (tmp + rename) под lock-файлом. chmod 0o600. */
+async function writeAuthFile(content: AuthFile): Promise<void> {
+  const authPath = getAuthPath();
+  const lockPath = `${authPath}.lock`;
+  const tmpPath = `${authPath}.tmp.${process.pid}.${Date.now()}`;
+
+  for (let i = 0; i < 50; i++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx", 0o600);
+      try {
+        // Запись во временный файл + atomic rename — POSIX rename.
+        fs.writeFileSync(tmpPath, JSON.stringify(content, null, 2), {
+          encoding: "utf-8",
+          mode: 0o600,
+        });
+        fs.chmodSync(tmpPath, 0o600);
+        fs.renameSync(tmpPath, authPath);
+        // ВАЖНО: credential не логируется ни в одном слое. Здесь —
+        // ни в переменных, ни в console, ни в error.
+        return;
+      } finally {
+        fs.closeSync(fd);
+        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        await new Promise((r) => setTimeout(r, 100));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(`auth.json lock timeout: ${lockPath}`);
 }
 
 interface ProfileConfig {
@@ -328,6 +408,96 @@ export const piRuntime: RuntimeAdapter = {
       }),
     );
     return results.filter((p): p is NonNullable<typeof p> => p !== null);
+  },
+
+  async connectProvider(
+    provider: string,
+    body: ConnectProviderInput,
+  ): Promise<ProviderConnection> {
+    // Сначала узнаём тип провайдера. Pi auth check возвращает authType
+    // только когда провайдер уже сконфигурирован; для НЕ-сконфигурированных
+    // api_key провайдеров (то, что мы хотим подключить) authType не виден.
+    // Поэтому если pi не знает authType — определяем по белому списку.
+    let pi: PiAuthCheck;
+    try {
+      pi = await checkProviderStatus(provider);
+    } catch {
+      throw new Error(`pi auth check failed for ${provider}`);
+    }
+    const knownApiKey: ReadonlySet<string> = new Set(["minimax"]);
+    const isApiKey = pi.authType === "api_key"
+      || (!pi.authType && knownApiKey.has(provider));
+
+    if (!isApiKey) {
+      // OAuth провайдер: через UI ключи НЕ принимаем. Маршрут /auth
+      // должен сначала вызвать authInstruction() и вернуть готовую
+      // команду. Эта ветка — safety net на случай прямого вызова.
+      throw new Error(
+        `provider ${provider} uses OAuth; use authInstruction() and run ` +
+        `the command on the owner's interactive Pi session`,
+      );
+    }
+
+    const apiKey = body.apiKey;
+    if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+      throw new Error(`apiKey required for ${provider}`);
+    }
+    // credential НЕ логируем — ни здесь, ни дальше. Длина — единственное,
+    // что можно показать в случае диагностики.
+    const keyLen = apiKey.length;
+
+    const current = await readAuthFile();
+    current[provider] = { type: "api_key", key: apiKey };
+    await writeAuthFile(current);
+
+    // Инвалидируем кэш моделей: новый провайдер должен сразу появиться.
+    invalidateListModelsCache();
+
+    // Проверяем через pi auth check, что Pi действительно увидел ключ.
+    let after: PiAuthCheck;
+    try {
+      after = await checkProviderStatus(provider);
+    } catch {
+      throw new Error(`pi auth check after write failed for ${provider}`);
+    }
+    if (after.status !== "ready") {
+      throw new Error(
+        `api_key for ${provider} written (${keyLen} chars), but pi auth check ` +
+        `still returns ${after.status}${after.reason ? ` (${after.reason})` : ""}`,
+      );
+    }
+    return {
+      id: provider,
+      runtime_id: RUNTIME_ID_PI,
+      status: "connected",
+      managedBy: "pi",
+      lastCheckedAt: new Date().toISOString(),
+    };
+  },
+
+  async authInstruction(provider: string): Promise<AuthInstruction> {
+    // Любая модель этого провайдера подойдёт — Pi сам откроет OAuth-браузер
+    // и проведёт flow. Берём первую попавшуюся через listModels(); если
+    // моделей нет (провайдер не сконфигурирован), даём универсальную
+    // команду — Pi по `--provider` всё равно поднимет flow.
+    let modelPattern = "<model>";
+    try {
+      const models = await piRuntime.listModels();
+      const candidate = models.find((m) => m.provider === provider);
+      if (candidate) modelPattern = candidate.id;
+    } catch {
+      /* listModels может упасть — окей, отдаём общую команду */
+    }
+    return {
+      status: "auth_required",
+      provider,
+      command:
+        `pi --provider ${provider} --model ${modelPattern} "ping"`,
+      note:
+        "Запустите команду на машине с интерактивным Pi. Pi откроет " +
+        "OAuth-браузер, после успешного входа вернитесь сюда и нажмите " +
+        "«Переподключить».",
+    };
   },
 
   async startRun(_input: StartRunInput): Promise<StartRunResult> {

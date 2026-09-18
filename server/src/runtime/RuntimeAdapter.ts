@@ -21,6 +21,21 @@ export interface StartRunResult {
   status: AgentRun["status"];
 }
 
+/** Тело запроса на connectProvider. Сейчас принимает только apiKey для
+ *  api_key провайдеров. OAuth в UI не принимается (см. спек §D). */
+export interface ConnectProviderInput {
+  apiKey?: string;
+}
+
+/** Инструкция для случаев, когда Pi сам управляет авторизацией
+ *  (OAuth): готовую команду пользователь запускает у себя в TUI. */
+export interface AuthInstruction {
+  status: "auth_required";
+  provider: string;
+  command: string;
+  note: string;
+}
+
 /** Абстракция над runtime: TaskFlow говорит с рантаймом через этот
  *  интерфейс. На первом этапе единственная реализация — PiRuntimeAdapter,
  *  потому что единственный runtime — Pi. ClaudeCodeRuntime и CodexRuntime
@@ -31,6 +46,11 @@ export interface RuntimeAdapter {
   listProfiles(): Promise<AgentProfile[]>;
   listModels(): Promise<Model[]>;
   listProviders(): Promise<ProviderConnection[]>;
+  connectProvider(
+    provider: string,
+    body: ConnectProviderInput,
+  ): Promise<ProviderConnection>;
+  authInstruction(provider: string): Promise<AuthInstruction>;
   startRun(input: StartRunInput): Promise<StartRunResult>;
   sendMessage(runId: string, text: string): Promise<void>;
   cancelRun(runId: string): Promise<void>;
