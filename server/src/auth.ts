@@ -210,6 +210,74 @@ export async function optionalAuth(req: FastifyRequest, _reply: FastifyReply) {
   }
 }
 
+/** Скоупы, которые есть у токена, проходящего через preHandler. Сейчас
+ *  поддерживается только один — runtime:auth (см. ownerOrApiToken). При
+ *  появлении новых скоупов — расширять enum и проверки. */
+export type ApiScope = "runtime:auth";
+
+/** Токен с областью runtime:auth — единственный способ через API-ключ
+ *  вызвать connectProvider / putRouting. Задаётся ENV
+ *  TASKFLOW_RUNTIME_AUTH_TOKEN. Миграция БД не нужна (18.09.2026, спек:
+ *  «Что не входит — миграция БД»). Если ENV не задан — ни один
+ *  api_token не имеет runtime:auth, и доступ к connect остаётся только
+ *  у owner/service. */
+const RUNTIME_AUTH_TOKEN: string | undefined =
+  process.env.TASKFLOW_RUNTIME_AUTH_TOKEN?.trim() || undefined;
+
+/** Доступ к runtime-операциям (connectProvider, putRouting). Принимает:
+ *  1) api_token из ENV TASKFLOW_RUNTIME_AUTH_TOKEN (scope runtime:auth);
+ *  2) user с role ∈ (owner, service).
+ *  Обычный api_token (из users.api_token) НЕ проходит. */
+export async function ownerOrApiToken(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const token = extractBearer(req);
+
+  // (1) Специальный api-token со scope runtime:auth
+  if (RUNTIME_AUTH_TOKEN && token && token === RUNTIME_AUTH_TOKEN) {
+    (req as any).apiTokenScopes = ["runtime:auth"] as ApiScope[];
+    return;
+  }
+
+  // (2) User с ролью owner/service
+  const userId = token
+    ? resolveUserIdFromToken(req.server as FastifyInstance, token)
+    : null;
+  if (userId) {
+    if (deleteForbidden(req, reply, userId)) return reply as unknown as void;
+    const row = db
+      .prepare("SELECT role FROM users WHERE id = ?")
+      .get(userId) as { role: string | null } | undefined;
+    const role = row?.role ?? "";
+    if (role === "owner" || role === "service") {
+      (req as any).userId = userId;
+      touchActive(userId, req.method, req.url);
+      return;
+    }
+    return reply.code(403).send({ error: "owner_or_service_required" });
+  }
+
+  // Из LAN owner тоже пускаем (как authOrApiToken), но только если
+  // это браузер — скрипту эта дверь закрыта.
+  const owner = lanOwnerId(req);
+  if (owner) {
+    const row = db
+      .prepare("SELECT role FROM users WHERE id = ?")
+      .get(owner) as { role: string | null } | undefined;
+    if (row?.role === "owner") {
+      if (deleteForbidden(req, reply, owner)) return reply as unknown as void;
+      (req as any).userId = owner;
+      return;
+    }
+  }
+  return reply.code(401).send({
+    error: token
+      ? "Invalid token or missing runtime:auth scope"
+      : "нужен ключ: owner/service или api_token со scope runtime:auth",
+  });
+}
+
 /**
  * Метка сессии, которая физически делает запрос.
  *
