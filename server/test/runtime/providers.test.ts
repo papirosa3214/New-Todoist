@@ -26,32 +26,50 @@ describe("runtime providers API", () => {
     if (app) await app.close();
   });
 
-  it("GET /api/runtime/providers returns >=3 providers, all managedBy=pi", async () => {
+  it("GET /api/runtime/providers returns >=3 providers", async () => {
     const res = await app.inject({
       method: "GET",
       url: "/api/runtime/providers",
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { providers: Array<{ id: string; runtime_id: string; managedBy: string }> };
+    // 18.09.2026 (правка AuthInteraction): роут фильтрует HTTP-ответ до
+    // {provider, status, authType} — внутренние поля runtime_id и
+    // managedBy владельцу не нужны (см. routes/runtime.ts:47-55).
+    const body = res.json() as { providers: Array<{
+      provider: string; status: string; authType: "oauth" | "api_key" | null;
+    }> };
     expect(body.providers.length).toBeGreaterThanOrEqual(3);
+    const ids = new Set(body.providers.map((p) => p.provider));
+    expect(ids.has("anthropic")).toBe(true);
+    expect(ids.has("openai-codex")).toBe(true);
+    expect(ids.has("minimax")).toBe(true);
     for (const p of body.providers) {
-      expect(p.runtime_id).toBe("runtime:pi");
-      expect(p.managedBy).toBe("pi");
+      expect(["connected", "disconnected", "expired"]).toContain(p.status);
     }
   });
 
-  it("POST /api/runtime/providers/anthropic/auth returns current status (заглушка)", async () => {
+  it("POST /api/runtime/providers/anthropic/auth returns AuthInteractive for OAuth", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/runtime/providers/anthropic/auth",
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { provider: string; status: string; note: string };
+    // 18.09.2026 (правка AuthInteraction): для OAuth провайдера роут
+    // возвращает AuthInteractive (status="auth_required" + events), а не
+    // старую AuthInstruction с командой для TUI. Раньше тест ждал
+    // {provider, status, note} под старый заглушечный контракт.
+    const body = res.json() as {
+      provider: string;
+      status: string;
+      events: Array<{ kind: string }>;
+    };
     expect(body.provider).toBe("anthropic");
-    expect(["connected", "disconnected", "expired"]).toContain(body.status);
-    expect(body.note).toMatch(/connectProvider/i);
+    expect(body.status).toBe("auth_required");
+    expect(Array.isArray(body.events)).toBe(true);
+    // Минимум одно событие (auth_url или device_code) пришло из SDK.
+    expect(body.events.length).toBeGreaterThan(0);
   });
 
   it("POST /api/runtime/providers/unknown/auth returns 404", async () => {

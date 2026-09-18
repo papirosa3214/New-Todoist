@@ -161,9 +161,33 @@ async function startProviderLogin(
   rt: ModelRuntime,
   provider: string,
 ): Promise<AuthInteractive> {
-  // Очередь событий. Каждое событие из interaction.notify становится
-  // элементом массива; AsyncIterator ниже раздаёт их по одному.
-  const events: AuthInteractiveEvent[] = [];
+  // Очередь с backpressure. notify() пушит событие; если есть
+  // ожидающий next() — резолвит его сразу. Если notify() приходит
+  // до next() — кладёт в буфер, next() заберёт при вызове.
+  let resolveNext: ((value: IteratorResult<AuthInteractiveEvent>) => void) | null = null;
+  const queue: AuthInteractiveEvent[] = [];
+  let closed = false;
+
+  function push(item: AuthInteractiveEvent) {
+    if (closed) return;
+    if (resolveNext) {
+      const r = resolveNext;
+      resolveNext = null;
+      r({ value: item, done: false });
+    } else {
+      queue.push(item);
+    }
+  }
+  function finish() {
+    if (closed) return;
+    closed = true;
+    if (resolveNext) {
+      const r = resolveNext;
+      resolveNext = null;
+      r({ value: undefined, done: true });
+    }
+  }
+
   let resolveCompleted!: () => void;
   let rejectCompleted!: (e: Error) => void;
   const completed = new Promise<void>((res, rej) => {
@@ -178,7 +202,7 @@ async function startProviderLogin(
     notify: (event: unknown) => {
       if (cancelled) return;
       const mapped = mapAuthEvent(provider, event);
-      if (mapped) events.push(mapped);
+      if (mapped) push(mapped);
     },
     prompt: (p: unknown) => {
       if (cancelled) {
@@ -203,39 +227,42 @@ async function startProviderLogin(
   };
 
   // Запускаем SDK login() в фоне. resolved → completed; rejected → completed
-  // реджектится с тем же reason.
+  // реджектится с тем же reason. В обоих случаях закрываем очередь.
   rt.login(provider, "oauth", interaction as never)
     .then(() => {
       if (cancelled) return;
       resolveCompleted();
+      finish();
     })
     .catch((err: unknown) => {
       if (cancelled) return;
       rejectCompleted(err instanceof Error ? err : new Error(String(err)));
+      finish();
     });
 
   // AsyncIterable: UI делает `for await (const ev of authInteractive.events)`
-  // и получает события по мере прихода.
+  // и получает события по мере прихода. Семантика:
+  //   - пока есть элементы в буфере — выдаём по одному;
+  //   - иначе ждём push() или finish() (или cancelled/closed);
+  //   - cancelled/closed завершают итератор вне зависимости от буфера.
   const iterable: AsyncIterable<AuthInteractiveEvent> = {
     [Symbol.asyncIterator]() {
-      let i = 0;
       return {
         async next(): Promise<IteratorResult<AuthInteractiveEvent>> {
-          // Ждём нового события или отмены/завершения.
-          // Простой polling (50 мс) — SDK notify() приходит нечасто.
-          while (i >= events.length) {
-            if (cancelled) return { value: undefined, done: true };
-            // Если completed уже завершён и новых событий нет — закрываем поток.
-            const done = await Promise.race([
-              completed.then(() => true, () => true),
-              new Promise<false>((r) => setTimeout(() => r(false), 30)),
-            ]);
-            if (done && i >= events.length) {
-              return { value: undefined, done: true };
+          if (cancelled || closed) {
+            // Может остаться буфер — выдаём, потом закрываемся.
+            if (queue.length > 0 && !cancelled) {
+              return { value: queue.shift() as AuthInteractiveEvent, done: false };
             }
-            await new Promise((r) => setTimeout(r, 20));
+            return { value: undefined, done: true };
           }
-          return { value: events[i++], done: false };
+          if (queue.length > 0) {
+            return { value: queue.shift() as AuthInteractiveEvent, done: false };
+          }
+          // Ждём нового события или завершения.
+          return new Promise<IteratorResult<AuthInteractiveEvent>>((resolve) => {
+            resolveNext = (v) => resolve(v);
+          });
         },
       };
     },
@@ -251,6 +278,7 @@ async function startProviderLogin(
       cancelled = true;
       abort.abort();
       rejectCompleted(new Error("Login cancelled by user"));
+      finish();
     },
   };
 }
@@ -607,16 +635,12 @@ export const piRuntime: RuntimeAdapter = {
     } catch (err) {
       // Process не поднялся (ENOENT, провайдер не настроен и т.п.) —
       // пишем blocked, чтобы планировщик мог ретраить.
-      console.error(`[startRun:debug] catch entered for ${input.taskId}, err=${err instanceof Error ? err.message : String(err)}`);
       try {
-        const upd = db.prepare(
+        db.prepare(
           `UPDATE tasks SET agent_state = 'blocked', updated_at = datetime('now')
              WHERE id = ?`,
         ).run(input.taskId);
-        console.error(`[startRun:debug] UPDATE changes=${upd.changes} for ${input.taskId}`);
-      } catch (dbErr) {
-        console.error(`[startRun:debug] UPDATE error: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`);
-      }
+      } catch { /* ignore — задача могла быть удалена */ }
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[startRun] RpcClient failed for ${input.taskId}: ${msg}`);
       throw err;
