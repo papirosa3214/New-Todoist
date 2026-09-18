@@ -62,6 +62,12 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
   // POST /auth — это ЗАПИСЬ credentials. Жёстче authOrApiToken: только
   // owner/service или api-token со scope runtime:auth (через ownerOrApiToken).
   // Обычный api_token не пройдёт (403 owner_or_service_required).
+  //
+  // 18.09.2026 (правка AuthInteraction): SDK ModelRuntime.login
+  // возвращает AuthInteractive для OAuth провайдеров. Для api_key
+  // возвращается ProviderConnection. UI должен обработать оба
+  // случая: на api_key — обычный success-ответ, на OAuth —
+  // status:"auth_required" + поток событий.
   app.post<{
     Params: { provider: string };
     Body: { apiKey?: string };
@@ -76,20 +82,31 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
       const body = req.body ?? {};
       try {
         const result = await piRuntime.connectProvider(name, body);
+        // Проверяем, OAuth это или api_key. AuthInteractive содержит
+        // status="auth_required" и events/completed.
+        if ("events" in result) {
+          const ai = result;
+          // Превращаем AsyncIterable<AuthInteractiveEvent> в массив,
+          // потому что текущий UI ожидает синхронный список events.
+          // TODO (Этап 2 финал): перевести UI на SSE для стриминга.
+          const eventList: unknown[] = [];
+          for await (const ev of ai.events) eventList.push(ev);
+          return reply.code(200).send({
+            status: ai.status,
+            provider: ai.provider,
+            events: eventList,
+            // completed Promise не сериализуется в JSON; UI ждёт
+            // финального auth_required события и делает «Переподключить».
+          });
+        }
+        // api_key ветка: обычный success.
         return {
           provider: result.id,
           status: result.status,
-          authType: (result as { authType?: "oauth" | "api_key" | null })
-            .authType ?? null,
+          authType: result.authType ?? null,
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        // OAuth провайдер: вместо записи возвращаем инструкцию с командой,
-        // которую owner/service выполняет в интерактивном Pi.
-        if (msg.includes("uses OAuth") || msg.includes("use authInstruction")) {
-          const instr = await piRuntime.authInstruction(name);
-          return reply.code(200).send(instr);
-        }
         return reply.code(400).send({ error: msg });
       }
     },

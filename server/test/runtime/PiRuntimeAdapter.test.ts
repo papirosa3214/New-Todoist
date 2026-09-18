@@ -1,64 +1,158 @@
 import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { buildApp } from "../../src/index.js";
 import db from "../../src/db.js";
 import { piRuntime } from "../../src/runtime/index.js";
 import { UnsupportedInFacadeError } from "../../src/runtime/RuntimeAdapter.js";
+import * as piCodingAgent from "@earendil-works/pi-coding-agent";
 
-// 18.09.2026 (правка startRun): startRun больше не бросает
-// UnsupportedInFacadeError — он реально спавнит start_agent_run.py
-// через spawn(python3, ...). Чтобы cmd проверить, мокаем child_process
-// .spawn через vi.mock: возвращаем "мёртвый" процесс, который сразу
-// закрывается, не падает, не пишет в БД. vi.spyOn для namespace-
-// экспортов ESM не работает (Cannot redefine property), поэтому
-// мокаем через vi.mock на верхнем уровне файла.
+// 18.09.2026 (Этап 2, правки 5+6+7): startRun теперь идёт через
+// RpcClient (официальный SDK-клиент из @earendil-works/pi-coding-agent),
+// connectProvider/authInstruction — через ModelRuntime.login с
+// AuthInteraction. Оба не мокаются на уровне child_process.spawn (RpcClient
+// ждёт реальный RPC-handshake), и не мокаются на уровне ModelRuntime
+// (SDK сам читает ~/.pi/agent/auth.json). Подход:
 //
-// Спека (включая cmd с флагами --provider / --model) уходит в
-// python через proc.stdin.end(JSON.stringify(spec)). Чтобы её
-// прочитать — собираем данные из fakeChild.stdin через PassThrough
-// + listener'ы 'data' + 'end'.
-let lastStdinSpec: Record<string, unknown> | undefined;
-let lastSpawnCmd: unknown;
-let lastSpawnArgs: unknown;
+// 1. vi.mock("@earendil-works/pi-coding-agent", ...) подменяет модуль
+//    целиком. Реальный ModelRuntime.create() и RpcClient.new() не
+//    выполняются — мы отдаём свои моки, у которых есть нужные нам
+//    методы (getAvailable, checkAuth, getProviderAuthStatus, setRuntimeApiKey,
+//    login, create).
+//
+// 2. Для каждого теста задаём поведение моков (mockResolvedValue,
+//    mockRejectedValue) и проверяем, что piRuntime.startRun вернул
+//    правильный shape, а connectProvider вернул правильный union-тип.
+//
+// 3. RpcClient мокается как EventEmitter с методами start/prompt/stop/
+//    onEvent. При вызове start() сразу резолвится и эмитирует session_start
+//    через onEvent-listener'ов. agent_end эмитируется вручную.
 
-const fakeChild = new EventEmitter() as EventEmitter & {
-  stdin: PassThrough; stdout: PassThrough; stderr: PassThrough;
+// === ModelRuntime мок ===
+const mockRuntime = {
+  getAvailable: vi.fn(async () => [
+    { id: "claude-3-5-sonnet-latest", provider: "anthropic" },
+    { id: "gpt-4.1", provider: "openai-codex" },
+    { id: "minimax-text-01", provider: "minimax" },
+  ]),
+  checkAuth: vi.fn(async (provider: string) => {
+    if (provider === "anthropic") return { type: "oauth" } as const;
+    if (provider === "openai-codex") return { type: "oauth" } as const;
+    if (provider === "minimax") return { type: "api_key" } as const;
+    return undefined;
+  }),
+  getProviderAuthStatus: vi.fn((provider: string) => {
+    if (provider === "minimax") return { configured: false };
+    return { configured: false };
+  }),
+  setRuntimeApiKey: vi.fn(async (_provider: string, _key: string) => {
+    // помечаем провайдер сконфигурированным
+    mockRuntime.getProviderAuthStatus.mockImplementation((p: string) =>
+      p === "minimax" ? { configured: true } : { configured: false },
+    );
+  }),
+  login: vi.fn(async () => {
+    // По умолчанию login успешно завершается через 10 мс — тесты,
+    // которым нужно другое поведение, переопределяют.
+    await new Promise((r) => setTimeout(r, 10));
+  }),
 };
-fakeChild.stdin = new PassThrough();
-fakeChild.stdout = new PassThrough();
-fakeChild.stderr = new PassThrough();
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+  ModelRuntime: {
+    create: vi.fn(async () => mockRuntime),
+  },
+  RpcClient: vi.fn().mockImplementation(makeFakeRpcClient),
+}));
 
-const stdinChunks: Buffer[] = [];
-fakeChild.stdin.on("data", (chunk) => stdinChunks.push(chunk));
-fakeChild.stdin.on("end", () => {
-  const raw = Buffer.concat(stdinChunks).toString("utf8");
-  try {
-    lastStdinSpec = JSON.parse(raw);
-  } catch {
-    // не JSON — оставим undefined
-  }
-});
-
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>(
-    "node:child_process",
-  );
+// === RpcClient мок ===
+function makeFakeRpcClient(_options: unknown) {
+  const emitter = new EventEmitter();
+  const start = vi.fn(async () => {
+    // Эмитим session_start сразу после start, как это делает реальный
+    // Pi в RPC-режиме.
+    queueMicrotask(() => {
+      emitter.emit("event", {
+        type: "session_start",
+        sessionId: "fake-session-uuid",
+      } as unknown);
+    });
+  });
+  const prompt = vi.fn(async () => {
+    // Ничего — эмитим agent_end вручную через helper `complete`.
+    return;
+  });
+  const stop = vi.fn(async () => {});
+  const onEvent = vi.fn((listener: (ev: unknown) => void) => {
+    emitter.on("event", listener);
+    return () => emitter.off("event", listener);
+  });
   return {
-    ...actual,
-    spawn: (cmd: unknown, args: unknown, opts: unknown) => {
-      lastSpawnCmd = cmd;
-      lastSpawnArgs = args;
-      return fakeChild;
+    start,
+    prompt,
+    stop,
+    onEvent,
+    /** Хелпер: ручной trigger agent_end с указанным success. */
+    complete: (success: boolean) => {
+      queueMicrotask(() => {
+        emitter.emit("event", {
+          type: "agent_end",
+          success,
+        } as unknown);
+      });
+    },
+    /** Хелпер: ошибка запуска RPC (process exited). */
+    failStart: (msg: string) => {
+      start.mockRejectedValueOnce(new Error(msg));
     },
   };
-});
+}
+
+/** Возвращает options, переданные в RpcClient-конструктор. */
+function lastRpcOptions(): unknown {
+  const calls = (piCodingAgent.RpcClient as unknown as {
+    mock: { calls: Array<unknown[]> };
+  }).mock.calls;
+  return calls[calls.length - 1]?.[0];
+}
 
 beforeEach(() => {
-  lastStdinSpec = undefined;
-  lastSpawnCmd = undefined;
-  lastSpawnArgs = undefined;
-  stdinChunks.length = 0;
+  vi.clearAllMocks();
+  // Переустанавливаем моки после clearAllMocks. clearAllMocks стирает
+  // calls/instances/mockImplementationOnce, но mockImplementation (без
+  // Once), заданный внутри vi.mock factory, остаётся — он был
+  // присвоен через .mockImplementation в самой фабрике. Поэтому
+  // дефолтный makeFakeRpcClient работает, пока тест не переопределит
+  // через mockImplementationOnce.
+  mockRuntime.getAvailable.mockResolvedValue([
+    { id: "claude-3-5-sonnet-latest", provider: "anthropic" },
+    { id: "gpt-4.1", provider: "openai-codex" },
+    { id: "minimax-text-01", provider: "minimax" },
+  ]);
+  mockRuntime.checkAuth.mockImplementation(async (provider: string) => {
+    if (provider === "anthropic") return { type: "oauth" } as const;
+    if (provider === "openai-codex") return { type: "oauth" } as const;
+    if (provider === "minimax") return { type: "api_key" } as const;
+    return undefined;
+  });
+  mockRuntime.getProviderAuthStatus.mockImplementation(
+    (provider: string) => (provider === "minimax"
+      ? { configured: false }
+      : { configured: false }),
+  );
+  mockRuntime.setRuntimeApiKey.mockImplementation(
+    async (_provider: string, _key: string) => {
+      mockRuntime.getProviderAuthStatus.mockImplementation((p: string) =>
+        p === "minimax" ? { configured: true } : { configured: false },
+      );
+    },
+  );
+  mockRuntime.login.mockImplementation(async () => {
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  // Возвращаем дефолтную реализацию RpcClient (clearAllMocks её стирает).
+  (piCodingAgent.RpcClient as unknown as {
+    mockImplementation: (impl: unknown) => unknown;
+  }).mockImplementation(makeFakeRpcClient);
 });
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -125,23 +219,12 @@ describe("PiRuntimeAdapter", () => {
     }
   });
 
-  // 18.09.2026 (TODO про тестовую БД): следующие три теста проверяют
-  // startRun без mock-а ENOENT и без лишних side-effect'ов. Они
-  // требуют, чтобы тестовая БД имела колонки `tasks.role` и
-  // `tasks.agent_started_at`, на которые ссылается startRun (role)
-  // и getRun (agent_started_at). В живой БД они есть, в миграциях
-  // их создание не оформлено (это известная старая проблема — тесты
-  // падают ещё до моих правок). Чтобы не блокировать Этап 1 на чужой
-  // инфраструктуре, пометим тесты как it.skip и оставим комментарий:
-  // их можно вернуть, когда 044_tasks_role_and_agent_started_at
-  // (или аналог) появится в миграциях.
-  it.skip("startRun returns UUID-format runId", async () => {
+  // === startRun через RpcClient ===
+
+  it("startRun returns UUID-format runId", async () => {
     db.prepare(
       `INSERT OR IGNORE INTO tasks (id, title, status) VALUES (?, ?, 'active')`,
     ).run("task-startrun-uuid", "test startRun");
-    db.prepare(
-      `INSERT OR IGNORE INTO attempts (id, task_id, executor_id, runner) VALUES (?, ?, ?, ?)`,
-    ).run("attempt-startrun-uuid", "task-startrun-uuid", "u1", "pi");
 
     const result = await piRuntime.startRun({
       taskId: "task-startrun-uuid",
@@ -151,11 +234,9 @@ describe("PiRuntimeAdapter", () => {
     expect(result.runId).toMatch(UUID_RE);
     expect(result.sessionId).toBe("");
     expect(result.status).toBe("queued");
-    expect(lastSpawnCmd).toBe("python3");
-    fakeChild.emit("close", 0);
   });
 
-  it.skip("startRun propagates provider and model into the launcher cmd", async () => {
+  it("startRun propagates provider and model into RpcClient options", async () => {
     db.prepare(
       `INSERT OR IGNORE INTO tasks (id, title, status) VALUES (?, ?, 'active')`,
     ).run("task-startrun-flags", "test startRun flags");
@@ -167,19 +248,20 @@ describe("PiRuntimeAdapter", () => {
       model: "claude-3-5-sonnet-latest",
       prompt: "check flags",
     });
-    fakeChild.emit("close", 0);
 
-    expect(lastStdinSpec).toBeDefined();
-    const cmd = (lastStdinSpec as { cmd: string[] }).cmd;
-    expect(cmd).toContain("--provider");
-    expect(cmd).toContain("anthropic");
-    expect(cmd).toContain("--model");
-    expect(cmd).toContain("claude-3-5-sonnet-latest");
-    expect(cmd).toContain("-p");
-    expect(cmd).toContain("check flags");
+    const opts = lastRpcOptions() as {
+      cliPath?: string;
+      provider?: string;
+      model?: string;
+      env?: Record<string, string>;
+    };
+    expect(opts.cliPath).toBe("/home/maksim/.local/bin/pi");
+    expect(opts.provider).toBe("anthropic");
+    expect(opts.model).toBe("claude-3-5-sonnet-latest");
+    expect(opts.env?.NODE_USE_ENV_PROXY).toBe("1");
   });
 
-  it.skip("startRun omits provider/model flags when not supplied", async () => {
+  it("startRun omits provider/model when not supplied", async () => {
     db.prepare(
       `INSERT OR IGNORE INTO tasks (id, title, status) VALUES (?, ?, 'active')`,
     ).run("task-startrun-noflag", "test startRun noflag");
@@ -189,14 +271,57 @@ describe("PiRuntimeAdapter", () => {
       agentId: "architect",
       prompt: "no flags here",
     });
-    fakeChild.emit("close", 0);
 
-    expect(lastStdinSpec).toBeDefined();
-    const cmd = (lastStdinSpec as { cmd: string[] }).cmd;
-    expect(cmd).not.toContain("--provider");
-    expect(cmd).not.toContain("--model");
-    expect(cmd).toContain("-p");
-    expect(cmd).toContain("no flags here");
+    const opts = lastRpcOptions() as {
+      provider?: string;
+      model?: string;
+    };
+    expect(opts.provider).toBeUndefined();
+    expect(opts.model).toBeUndefined();
+  });
+
+  // === connectProvider ===
+
+  it("connectProvider for api_key returns ProviderConnection with authType=api_key", async () => {
+    const result = await piRuntime.connectProvider("minimax", {
+      apiKey: "sk-test-key",
+    });
+    // Узкий union — проверяем, что НЕ AuthInteractive.
+    expect("events" in result).toBe(false);
+    if ("events" in result) throw new Error("expected ProviderConnection");
+    expect(result.id).toBe("minimax");
+    expect(result.status).toBe("connected");
+    expect(result.authType).toBe("api_key");
+    expect(mockRuntime.setRuntimeApiKey).toHaveBeenCalledWith(
+      "minimax",
+      "sk-test-key",
+    );
+  });
+
+  it("connectProvider for OAuth returns AuthInteractive with events stream", async () => {
+    // Настроим login так, чтобы он сразу эмитил auth_url и завершался.
+    const events: Array<{ kind?: string }> = [];
+    mockRuntime.login.mockImplementation(async (provider, _type, interaction) => {
+      const notify = (interaction as { notify: (ev: unknown) => void }).notify;
+      notify({ type: "auth_url", url: "https://example.com/oauth" });
+      notify({ type: "progress", message: "Opening browser…" });
+      // Не вызываем никаких prompt — text/secret/select/manual_code не
+      // поддержаны и должны реджектить login (см. реализацию).
+    });
+
+    const result = await piRuntime.connectProvider("anthropic", {});
+    expect("events" in result).toBe(true);
+    if (!("events" in result)) throw new Error("expected AuthInteractive");
+    const ai = result;
+    expect(ai.status).toBe("auth_required");
+    expect(ai.provider).toBe("anthropic");
+
+    // AsyncIterable → push в массив
+    for await (const ev of ai.events) events.push(ev);
+
+    expect(events.length).toBeGreaterThanOrEqual(2);
+    expect(events[0].kind).toBe("auth_url");
+    expect(events[1].kind).toBe("progress");
   });
 
   it("sendMessage and cancelRun throw UnsupportedInFacadeError", async () => {
@@ -208,10 +333,9 @@ describe("PiRuntimeAdapter", () => {
     );
   });
 
-  // TODO: getRun читает tasks.agent_started_at, на тестовой БД колонки
-  // нет. Возвращаем, когда 044 (или аналог) появится в миграциях.
-  it.skip("getRun returns AgentRun facade for an existing task", async () => {
-    // Создать задачу для теста — assignor_id может быть любым.
+  // === getRun (после миграции 044) ===
+
+  it("getRun returns AgentRun facade for an existing task", async () => {
     db.prepare(
       `INSERT OR IGNORE INTO tasks (id, title, status) VALUES (?, ?, 'active')`,
     ).run("task-facade-test", "test");
@@ -220,7 +344,7 @@ describe("PiRuntimeAdapter", () => {
     expect(run.runtime_id).toBe("runtime:pi");
   });
 
-  it.skip("getRun throws for missing task", async () => {
+  it("getRun throws for missing task", async () => {
     await expect(piRuntime.getRun("nonexistent-task-id")).rejects.toThrow(
       /не найдена/,
     );

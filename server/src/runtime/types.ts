@@ -47,6 +47,11 @@ export interface ProviderConnection {
   status: "connected" | "disconnected" | "expired";
   managedBy: "pi";
   lastCheckedAt: string | null;
+  /** Тип credentials: api_key (через setRuntimeApiKey) или oauth
+   *  (через ModelRuntime.login + AuthInteraction). 18.09.2026:
+   *  добавлено в фасад, чтобы UI мог сразу отличить, нужен ли
+   *  OAuth-flow. null = неизвестно (например, expired). */
+  authType?: "api_key" | "oauth" | null;
 }
 
 export interface AgentRun {

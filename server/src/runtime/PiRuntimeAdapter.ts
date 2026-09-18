@@ -1,8 +1,11 @@
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  ModelRuntime,
+  RpcClient,
+  type JsonAgentSessionEvent,
+} from "@earendil-works/pi-coding-agent";
 import db from "../db.js";
 import {
   ROLE_NAMES,
@@ -19,6 +22,8 @@ import type {
 import { RUNTIME_ID_PI } from "./types.js";
 import {
   UnsupportedInFacadeError,
+  type AuthInteractive,
+  type AuthInteractiveEvent,
   type AuthInstruction,
   type ConnectProviderInput,
   type RuntimeAdapter,
@@ -79,6 +84,175 @@ function mapAuthStatus(s: AuthStatus): "connected" | "disconnected" | "expired" 
   // getProviderAuthStatus — это решает checkAuth() в listProviders()
   // по признаку source. Здесь просто «не подключён».
   return "disconnected";
+}
+
+/** Маппит AuthEvent (из SDK AuthInteraction) в фасадный AuthInteractiveEvent.
+ *  SDK типы не реэкспортируются из pi-coding-agent (живут в peer-dep
+ *  pi-ai), и без них — структурный маппинг через поля. Поле `type`
+ *  определяет, какие дополнительные поля присутствуют. */
+function mapAuthEvent(
+  provider: string,
+  raw: unknown,
+): AuthInteractiveEvent | null {
+  if (!raw || typeof raw !== "object") return null;
+  const ev = raw as {
+    type?: unknown;
+    url?: unknown;
+    instructions?: unknown;
+    userCode?: unknown;
+    verificationUri?: unknown;
+    intervalSeconds?: unknown;
+    expiresInSeconds?: unknown;
+    message?: unknown;
+  };
+  switch (ev.type) {
+    case "auth_url":
+      if (typeof ev.url !== "string") return null;
+      return {
+        kind: "auth_url",
+        provider,
+        url: ev.url,
+        instructions: typeof ev.instructions === "string"
+          ? ev.instructions
+          : undefined,
+      };
+    case "device_code":
+      if (
+        typeof ev.userCode !== "string" ||
+        typeof ev.verificationUri !== "string"
+      ) {
+        return null;
+      }
+      return {
+        kind: "device_code",
+        provider,
+        userCode: ev.userCode,
+        verificationUri: ev.verificationUri,
+        intervalSeconds: typeof ev.intervalSeconds === "number"
+          ? ev.intervalSeconds
+          : undefined,
+        expiresInSeconds: typeof ev.expiresInSeconds === "number"
+          ? ev.expiresInSeconds
+          : undefined,
+      };
+    case "progress":
+      if (typeof ev.message !== "string") return null;
+      return { kind: "progress", provider, message: ev.message };
+    case "info":
+      if (typeof ev.message !== "string") return null;
+      return { kind: "info", provider, message: ev.message };
+    default:
+      return null;
+  }
+}
+
+/** Запускает OAuth login через ModelRuntime.login + AuthInteraction.
+ *  Возвращает AuthInteractive — UI подписывается на events и ждёт
+ *  completed. SDK login() пишет credentials в ~/.pi/agent/auth.json
+ *  сам (через свой CredentialStore), TaskFlow ничего не пишет на диск.
+ *
+ *  manual_code/select/text prompt'ы не поддержаны в TaskFlow UI:
+ *  prompt() reject'ит их сразу. Это упрощает flow — TaskFlow UI
+ *  рассчитан на browser-callback (auth_url) и device-code, без
+ *  ручного ввода. Если провайдер требует manual_code — login() упадёт,
+ *  и completed реджектится с ошибкой.
+ */
+async function startProviderLogin(
+  rt: ModelRuntime,
+  provider: string,
+): Promise<AuthInteractive> {
+  // Очередь событий. Каждое событие из interaction.notify становится
+  // элементом массива; AsyncIterator ниже раздаёт их по одному.
+  const events: AuthInteractiveEvent[] = [];
+  let resolveCompleted!: () => void;
+  let rejectCompleted!: (e: Error) => void;
+  const completed = new Promise<void>((res, rej) => {
+    resolveCompleted = res;
+    rejectCompleted = rej;
+  });
+  let cancelled = false;
+  const abort = new AbortController();
+
+  const interaction = {
+    signal: abort.signal,
+    notify: (event: unknown) => {
+      if (cancelled) return;
+      const mapped = mapAuthEvent(provider, event);
+      if (mapped) events.push(mapped);
+    },
+    prompt: (p: unknown) => {
+      if (cancelled) {
+        return Promise.reject(new Error("Login cancelled"));
+      }
+      // TaskFlow UI не поддерживает text/secret/select/manual_code:
+      // показываем информацию о причине в логе и reject'им prompt, чтобы
+      // SDK прервал flow с понятной ошибкой. На auth_url/device_code Pi
+      // этот код не вызывается.
+      const pp = p as { type?: string; message?: string };
+      const kind = pp.type ?? "unknown";
+      console.warn(
+        `[startProviderLogin:${provider}] prompt(${kind}) не поддержан в TaskFlow UI; реджектим`,
+      );
+      return Promise.reject(
+        new Error(
+          `prompt type=${kind} не поддержан в TaskFlow UI ` +
+            `(provider ${provider})`,
+        ),
+      );
+    },
+  };
+
+  // Запускаем SDK login() в фоне. resolved → completed; rejected → completed
+  // реджектится с тем же reason.
+  rt.login(provider, "oauth", interaction as never)
+    .then(() => {
+      if (cancelled) return;
+      resolveCompleted();
+    })
+    .catch((err: unknown) => {
+      if (cancelled) return;
+      rejectCompleted(err instanceof Error ? err : new Error(String(err)));
+    });
+
+  // AsyncIterable: UI делает `for await (const ev of authInteractive.events)`
+  // и получает события по мере прихода.
+  const iterable: AsyncIterable<AuthInteractiveEvent> = {
+    [Symbol.asyncIterator]() {
+      let i = 0;
+      return {
+        async next(): Promise<IteratorResult<AuthInteractiveEvent>> {
+          // Ждём нового события или отмены/завершения.
+          // Простой polling (50 мс) — SDK notify() приходит нечасто.
+          while (i >= events.length) {
+            if (cancelled) return { value: undefined, done: true };
+            // Если completed уже завершён и новых событий нет — закрываем поток.
+            const done = await Promise.race([
+              completed.then(() => true, () => true),
+              new Promise<false>((r) => setTimeout(() => r(false), 30)),
+            ]);
+            if (done && i >= events.length) {
+              return { value: undefined, done: true };
+            }
+            await new Promise((r) => setTimeout(r, 20));
+          }
+          return { value: events[i++], done: false };
+        },
+      };
+    },
+  };
+
+  return {
+    status: "auth_required",
+    provider,
+    events: iterable,
+    completed,
+    cancel: () => {
+      if (cancelled) return;
+      cancelled = true;
+      abort.abort();
+      rejectCompleted(new Error("Login cancelled by user"));
+    },
+  };
 }
 
 interface ProfileConfig {
@@ -284,7 +458,7 @@ export const piRuntime: RuntimeAdapter = {
   async connectProvider(
     provider: string,
     body: ConnectProviderInput,
-  ): Promise<ProviderConnection> {
+  ): Promise<ProviderConnection | AuthInteractive> {
     const rt = await getModelRuntime();
     // Определяем тип провайдера через SDK. checkAuth() возвращает
     // { type: "api_key"|"oauth" } если credentials уже есть; для
@@ -296,13 +470,12 @@ export const piRuntime: RuntimeAdapter = {
     const isOauth = c?.type === "oauth" || (c === undefined && knownOauth.has(provider));
 
     if (isOauth) {
-      // OAuth провайдер: через UI ключи НЕ принимаем. Маршрут /auth
-      // должен сначала вызвать authInstruction() и вернуть готовую
-      // команду. Эта ветка — safety net на случай прямого вызова.
-      throw new Error(
-        `provider ${provider} uses OAuth; use authInstruction() and run ` +
-        `the command on the owner's interactive Pi session`,
-      );
+      // OAuth провайдер: вместо записи ключей запускаем
+      // ModelRuntime.login() с AuthInteraction. UI получает
+      // AuthInteractive — стрим событий (auth_url/device_code/...)
+      // + Promise completed. SDK сам пишет credentials после успешного
+      // flow в свой CredentialStore.
+      return startProviderLogin(rt, provider);
     }
 
     const apiKey = body.apiKey?.trim();
@@ -333,40 +506,33 @@ export const piRuntime: RuntimeAdapter = {
       runtime_id: RUNTIME_ID_PI,
       status: "connected",
       managedBy: "pi",
+      authType: "api_key",
       lastCheckedAt: new Date().toISOString(),
     };
   },
 
-  async authInstruction(provider: string): Promise<AuthInstruction> {
-    // Любая модель этого провайдера подойдёт — Pi сам откроет OAuth-браузер
-    // и проведёт flow. Берём первую попавшуюся через listModels(); если
-    // моделей нет (провайдер не сконфигурирован), даём универсальную
-    // команду — Pi по `--provider` всё равно поднимет flow.
-    let modelPattern = "<model>";
-    try {
-      const models = await piRuntime.listModels();
-      const candidate = models.find((m) => m.provider === provider);
-      if (candidate) modelPattern = candidate.id;
-    } catch {
-      /* listModels может упасть — окей, отдаём общую команду */
-    }
-    return {
-      status: "auth_required",
-      provider,
-      command:
-        `pi --provider ${provider} --model ${modelPattern} "ping"`,
-      note:
-        "Запустите команду на машине с интерактивным Pi. Pi откроет " +
-        "OAuth-браузер, после успешного входа вернитесь сюда и нажмите " +
-        "«Переподключить».",
-    };
+  async authInstruction(
+    provider: string,
+  ): Promise<AuthInstruction | AuthInteractive> {
+    // 18.09.2026 (правка AuthInteraction): старая текстовая команда
+    // для интерактивного TUI больше не нужна — TaskFlow UI получает
+    // тот же AuthInteractive, что и connectProvider(OAuth).
+    // authInstruction оставлен в RuntimeAdapter ради обратной
+    // совместимости с уже-собранным UI, который знает про этот метод.
+    const rt = await getModelRuntime();
+    return startProviderLogin(rt, provider);
   },
 
   async startRun(input: StartRunInput): Promise<StartRunResult> {
-    // Формируем spec для launcher'а. Задача загружается из БД; роль,
-    // модель, prompt берутся из input. cmd собирается здесь, потому что
-    // это бизнес-логика (какие флаги Pi получает для роли), а не
-    // механика запуска (которая в launcher).
+    // 18.09.2026 (правка SDK): startRun идёт через официальный
+    // RpcClient из @earendil-works/pi-coding-agent, который спавнит
+    // `pi --mode rpc` под капотом. Никакого Python/JSON RPC поверх
+    // CLI: SDK берёт на себя протокол, мы только подписываемся на
+    // события (session_start → agent_session_id, agent_end →
+    // agent_state review/blocked).
+    //
+    // Поведение сохраняется: возвращаем сразу {runId, status: queued}
+    // — реальное обновление БД идёт в background через onEvent.
     const task = db
       .prepare(
         `SELECT id, assignee_id, dispatched_role, role FROM tasks WHERE id = ?`,
@@ -377,95 +543,87 @@ export const piRuntime: RuntimeAdapter = {
     if (!task) {
       throw new Error(`task ${input.taskId} not found`);
     }
-    const role: string | undefined = task.dispatched_role ?? task.role ?? input.agentId;
-    // 18.09.2026 (правка startRun): input.model и input.provider
-    // передаются в Pi явно, без промежуточного `const model = ...`,
-    // который раньше вычислялся, но в cmd не попадал. Если поля не
-    // заданы — соответствующий флаг не добавляется.
+    // Намеренно НЕ вычисляем `const model = input.model?.trim() || undefined` —
+    // раньше это была впустую, сейчас поля напрямую идут в RpcClient.
     const trimmedProvider = input.provider?.trim();
     const trimmedModel = input.model?.trim();
 
-    // cmd для Pi. Подмножество того, что собирает trigger.py — тут
-    // минимально, потому что RuntimeAdapter.startRun — это в первую
-    // очередь «просто запустить Pi на этой задаче», а не полный
-    // конвейер claim/heartbeat/usage, который живёт в trigger.py.
-    const piBin = "/home/maksim/.local/bin/pi";
-    const cmd: string[] = [piBin];
-    if (trimmedProvider) cmd.push("--provider", trimmedProvider);
-    if (trimmedModel) cmd.push("--model", trimmedModel);
-    cmd.push("-p", input.prompt);
-
-    const spec = {
-      cmd,
-      env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
+    const runId = crypto.randomUUID();
+    const client = new RpcClient({
+      cliPath: "/home/maksim/.local/bin/pi",
       cwd: process.cwd(),
-      timeout: 3600,
-      agent_label: `runtime:${role ?? "unknown"}`,
-      usage_path: undefined as string | undefined,
-      kill_event: undefined as unknown, // Node EventEmitter для kill не пробрасываем (см. ниже)
-    };
-
-    // spawn python3 с start_agent_run.py, JSON stdin → JSON stdout.
-    // Возвращаем сразу {runId, status: 'queued'} — реальный результат
-    // придёт через getRun(runId), когда launcher закончит (см. ниже
-    // фоновый обработчик stdout).
-    const proc = spawn(
-      "python3",
-      [path.join(process.cwd(), "server", "scripts", "start_agent_run.py")],
-      { stdio: ["pipe", "pipe", "pipe"] },
-    );
-    proc.stdin.end(JSON.stringify(spec));
-
-    let stdout = "";
-    proc.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+      provider: trimmedProvider,
+      model: trimmedModel,
+      // NODE_USE_ENV_PROXY=1 — без него Pi встроенный fetch игнорирует
+      // HTTPS_PROXY и провайдеры отвечают 403 (гео-блок). Остальной env
+      // пробрасываем, потому что Pi читает VAULT/TOKEN/... из окружения.
+      env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
     });
-    let stderr = "";
-    proc.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+
+    // Подписываемся на события ДО client.start() — к этому моменту
+    // события ещё не идут, но onEvent сохранит listener, и первый
+    // session_start мы поймаем.
+    client.onEvent((event: JsonAgentSessionEvent) => {
+      const e = event as { type: string; [k: string]: unknown };
+      if (e.type === "session_start") {
+        // SDK шлёт session id; кладём в tasks.agent_session_id для
+        // последующих getRun() и для UI.
+        const sid = (e as { sessionId?: string }).sessionId;
+        if (typeof sid === "string" && sid) {
+          try {
+            db.prepare(
+              `UPDATE tasks SET agent_session_id = ?, agent_started_at = datetime('now'),
+                       updated_at = datetime('now')
+                 WHERE id = ?`,
+            ).run(sid, input.taskId);
+          } catch { /* задача могла быть удалена */ }
+        }
+        return;
+      }
+      if (e.type === "agent_end") {
+        // success — флаг в AgentSessionEvent, который JsonAgentSessionEvent
+        // наследует. Если не пришёл — считаем попытку неуспешной
+        // (безопасный default: blocked, планировщик может ретраить).
+        const ok = (e as { success?: boolean }).success ?? false;
+        const next: "review" | "blocked" = ok ? "review" : "blocked";
+        try {
+          db.prepare(
+            `UPDATE tasks SET agent_state = ?, agent_finished_at = datetime('now'),
+                     updated_at = datetime('now')
+               WHERE id = ?`,
+          ).run(next, input.taskId);
+        } catch { /* ignore */ }
+        // Гасим RPC процесс — он сам себя не закрывает после agent_end.
+        client.stop().catch(() => { /* процесс уже умер — окей */ });
+      }
     });
-    proc.on("error", (err) => {
-      // spawn не смог стартовать (ENOENT и т.п.) — пишем в agent_state,
-      // чтобы планировщик мог ретраить.
+
+    // Стартуем процесс и отправляем prompt. start() спавнит `pi --mode
+    // rpc`, дожидается handshake'а. prompt() шлёт первое сообщение
+    // агенту; далее стрим событий идёт через onEvent.
+    try {
+      await client.start();
+      await client.prompt(input.prompt);
+    } catch (err) {
+      // Process не поднялся (ENOENT, провайдер не настроен и т.п.) —
+      // пишем blocked, чтобы планировщик мог ретраить.
+      console.error(`[startRun:debug] catch entered for ${input.taskId}, err=${err instanceof Error ? err.message : String(err)}`);
       try {
-        db.prepare(
+        const upd = db.prepare(
           `UPDATE tasks SET agent_state = 'blocked', updated_at = datetime('now')
              WHERE id = ?`,
         ).run(input.taskId);
-      } catch { /* ignore — задача могла быть удалена */ }
-      console.error(`[startRun] spawn error for ${input.taskId}: ${err.message}`);
-    });
-    proc.on("close", () => {
-      // Парсим stdout как JSON. credential/log НЕ логируем. stderr
-      // пишем только если там что-то есть (диагностика для разработчика).
-      let result: { status: string; returncode: number | null; output_tail: string;
-        usage: unknown; error: string | null } | null = null;
-      try {
-        if (stdout.trim()) result = JSON.parse(stdout);
-      } catch (e) {
-        console.error(`[startRun] bad JSON from launcher for ${input.taskId}: ${(e as Error).message}`);
-        console.error(`[startRun] stderr: ${stderr.slice(0, 500)}`);
+        console.error(`[startRun:debug] UPDATE changes=${upd.changes} for ${input.taskId}`);
+      } catch (dbErr) {
+        console.error(`[startRun:debug] UPDATE error: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`);
       }
-      if (!result) return;
-
-      // Обновляем agent_state по результату.
-      let nextState: "review" | "blocked" | "in_progress" = "in_progress";
-      if (result.status === "ok" && result.returncode === 0) nextState = "review";
-      else if (result.status !== "ok") nextState = "blocked";
-      try {
-        db.prepare(
-          `UPDATE tasks SET agent_state = ?, agent_finished_at = datetime('now'),
-                   updated_at = datetime('now')
-             WHERE id = ?`,
-        ).run(nextState, input.taskId);
-      } catch { /* ignore */ }
-      if (stderr.trim()) {
-        console.log(`[startRun:${input.taskId.slice(0, 8)}] ${stderr.slice(0, 500)}`);
-      }
-    });
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[startRun] RpcClient failed for ${input.taskId}: ${msg}`);
+      throw err;
+    }
 
     return {
-      runId: crypto.randomUUID(),
+      runId,
       sessionId: "",
       status: "queued",
     };

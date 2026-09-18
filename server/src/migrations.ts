@@ -1615,6 +1615,43 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: "044_tasks_role_and_agent_started_at",
+    description:
+      "18.09.2026: PiRuntimeAdapter.startRun и getRun читают tasks.role, " +
+      "tasks.agent_started_at и tasks.agent_finished_at. routes/agent-state.ts " +
+      "использует tasks.current_attempt_id (ссылка на текущий attempt). " +
+      "В миграциях эти колонки не оформлены — есть только в живой БД. " +
+      "Без них тестовая БД падает на SqliteError: no such column. " +
+      "Эта миграция идемпотентно добавляет все четыре колонки: " +
+      "role (legacy-поле роли, fallback для dispatched_role), " +
+      "agent_started_at / agent_finished_at (когда Pi поднял/закрыл " +
+      "сессию), current_attempt_id (id активного attempt). В живой БД " +
+      "все колонки уже есть — ALTER через SQLite вернёт ошибку, поэтому " +
+      "миграция проверяет PRAGMA и добавляет только если колонки нет.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((c) => c.name),
+      );
+      if (!cols.has("role")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN role TEXT");
+      }
+      if (!cols.has("agent_started_at")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN agent_started_at TEXT");
+      }
+      if (!cols.has("agent_finished_at")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN agent_finished_at TEXT");
+      }
+      if (!cols.has("current_attempt_id")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN current_attempt_id TEXT");
+      }
+      if (!cols.has("stop_reason")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN stop_reason TEXT");
+      }
+    },
+  },
 ];
 
 /**

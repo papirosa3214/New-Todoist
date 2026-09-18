@@ -24,14 +24,66 @@ export interface StartRunResult {
   status: AgentRun["status"];
 }
 
-/** Тело запроса на connectProvider. Сейчас принимает только apiKey для
- *  api_key провайдеров. OAuth в UI не принимается (см. спек §D). */
+/** Тело запроса на connectProvider. apiKey — для api_key провайдеров;
+ *  для OAuth ничего не передаём, провайдер начинает flow сам. */
 export interface ConnectProviderInput {
   apiKey?: string;
 }
 
-/** Инструкция для случаев, когда Pi сам управляет авторизацией
- *  (OAuth): готовую команду пользователь запускает у себя в TUI. */
+/** OAuth-flow события, которые адаптер пробрасывает в UI через AuthInteractive.
+ *  AuthInteraction в Pi SDK делится на две ветки: device-code flow и
+ *  browser-callback flow. Поле kind определяет, какие поля обязательны.
+ *  ManualCode — для случая, когда у пользователя нет браузера на той же
+ *  машине, и он вставляет код / URL вручную. */
+export type AuthInteractiveEvent =
+  | {
+      kind: "auth_url";
+      provider: string;
+      url: string;
+      instructions?: string;
+    }
+  | {
+      kind: "device_code";
+      provider: string;
+      userCode: string;
+      verificationUri: string;
+      intervalSeconds?: number;
+      expiresInSeconds?: number;
+    }
+  | {
+      kind: "manual_code";
+      provider: string;
+      message: string;
+      placeholder?: string;
+    }
+  | {
+      kind: "progress";
+      provider: string;
+      message: string;
+    }
+  | {
+      kind: "info";
+      provider: string;
+      message: string;
+    };
+
+/** Результат connectProvider/authInstruction для OAuth провайдера:
+ *  нужен интерактивный flow. UI подписывается на events и показывает их
+ *  пользователю (открыть URL, показать device_code, принять manual_code).
+ *  Promised completed резолвится, когда SDK login() завершается (credentials
+ *  записаны) или реджектится при отмене. */
+export interface AuthInteractive {
+  status: "auth_required";
+  provider: string;
+  events: AsyncIterable<AuthInteractiveEvent>;
+  completed: Promise<void>;
+  cancel(): void;
+}
+
+/** Старая AuthInstruction оставлена для совместимости с прежним контрактом
+ *  роута /api/runtime/providers/:id/auth (раньше возвращалась команда для
+ *  интерактивного TUI; теперь — AuthInteractive). В новом коде
+ *  используйте AuthInteractive. */
 export interface AuthInstruction {
   status: "auth_required";
   provider: string;
@@ -52,8 +104,8 @@ export interface RuntimeAdapter {
   connectProvider(
     provider: string,
     body: ConnectProviderInput,
-  ): Promise<ProviderConnection>;
-  authInstruction(provider: string): Promise<AuthInstruction>;
+  ): Promise<ProviderConnection | AuthInteractive>;
+  authInstruction(provider: string): Promise<AuthInstruction | AuthInteractive>;
   startRun(input: StartRunInput): Promise<StartRunResult>;
   sendMessage(runId: string, text: string): Promise<void>;
   cancelRun(runId: string): Promise<void>;
