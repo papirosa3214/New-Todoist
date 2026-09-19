@@ -66,6 +66,13 @@ export interface AgentServiceState {
   next_scan_at: string | null;
   /** Период обхода доски в секундах — чтобы экран не зашивал своё число. */
   scan_interval_sec: number;
+  /** Планировщик расписания (taskflow-scheduler) — независимая лампа:
+   *  живёт вне будильника, делает запуск по времени и отложенные повторы. */
+  scheduler?: {
+    active: boolean;
+    last_run_at: string | null;
+    handled?: Record<string, number>;
+  };
 }
 
 // Автономный режим = служба-будильник. Включена — назначенную задачу

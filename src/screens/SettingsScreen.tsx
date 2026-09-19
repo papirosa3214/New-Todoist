@@ -303,6 +303,22 @@ function ServerSection() {
   const { data: intake } = useTaskIntakeSettings();
   const setReviewer = useSetReviewerFirstDefault();
   const serviceOn = service?.active ?? false;
+  // Лампа планировщика расписания: отдельно от будильника.
+  const sched = service?.scheduler;
+  const schedLabel = (() => {
+    if (!sched) return "нет данных";
+    if (!sched.active) return "не работает";
+    if (!sched.last_run_at) return "работает";
+    const mins = Math.round(
+      (Date.now() - new Date(sched.last_run_at).getTime()) / 60000,
+    );
+    if (mins > 15) return `молчит ${mins} мин`;
+    const t = new Date(sched.last_run_at).toLocaleTimeString("ru-RU", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `работает · обход ${t}`;
+  })();
   // Состояние службы опрашивается раз в 15 секунд, а обратный отсчёт должен
   // идти ровно — поэтому тикаем сами, не дёргая сервер чаще.
   const [now, setNow] = useState(() => Date.now());
@@ -438,6 +454,12 @@ function ServerSection() {
         }
         checked={intake?.reviewer_first_default ?? true}
         onChange={() => setReviewer.mutate(!(intake?.reviewer_first_default ?? true))}
+      />
+      <InfoRow
+        icon="clock"
+        iconColor="#4a9fd8"
+        label="Расписание"
+        value={schedLabel}
       />
       <InfoRow
         icon="list"

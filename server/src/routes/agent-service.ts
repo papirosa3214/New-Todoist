@@ -120,11 +120,51 @@ export async function unitState(): Promise<{
   }
 }
 
+const SCHEDULER_HEARTBEAT = join(
+  homedir(),
+  ".local/state/taskflow-scheduler/last-run.json",
+);
+
+/** Состояние планировщика (taskflow-scheduler.timer) — отдельная лампа:
+ *  воркер живёт независимо от будильника и делает расписание и повторы. */
+async function schedulerState(): Promise<{
+  active: boolean;
+  last_run_at: string | null;
+  handled: Record<string, unknown>;
+}> {
+  let active = false;
+  try {
+    const { stdout } = await run("systemctl", [
+      "--user",
+      "show",
+      "taskflow-scheduler.timer",
+      "-p",
+      "ActiveState",
+    ]);
+    active = /ActiveState=active/.test(stdout);
+  } catch {
+    active = false;
+  }
+  let lastRunAt: string | null = null;
+  let handled: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(readFileSync(SCHEDULER_HEARTBEAT, "utf8"));
+    lastRunAt =
+      typeof parsed?.at_epoch === "number"
+        ? new Date(parsed.at_epoch).toISOString()
+        : null;
+    handled = parsed ?? {};
+  } catch {
+    lastRunAt = null;
+  }
+  return { active, last_run_at: lastRunAt, handled };
+}
+
 export function registerAgentServiceRoutes(app: FastifyInstance) {
   app.get(
     "/api/agent-service",
     { preHandler: authOrApiToken },
-    async () => await unitState(),
+    async () => ({ ...(await unitState()), scheduler: await schedulerState() }),
   );
 
   app.post<{ Body: { on?: boolean } }>(

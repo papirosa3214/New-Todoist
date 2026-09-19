@@ -44,6 +44,10 @@ RUN_SCRIPT = str(Path.home() / "Проекты/New-Todoist/server/scripts/manual
 # Окно догона: не поднимаем карточки, чьё время прошло давно, иначе
 # расписание воскрешало бы все старые карточки с прошедшей датой.
 RUN_CATCH_HOURS = 24
+# Отпечаток живости: воркер пишет его каждый обход, по нему владелец
+# видит лампу «Расписание» (и сторож ловит тихий отказ).
+STATE_DIR = Path.home() / ".local/state/taskflow-scheduler"
+HEARTBEAT = STATE_DIR / "last-run.json"
 LOG_PREFIX = "[scheduler]"
 
 
@@ -265,6 +269,26 @@ def branch_notify_dead() -> int:
     return handled
 
 
+def write_heartbeat(counts: dict) -> None:
+    """Отметить обход: время и что сделано. Тихо, если не удалось — воркер
+    не должен падать из-за отсутствия каталога."""
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        HEARTBEAT.write_text(
+            json.dumps(
+                {
+                    "at": dt.datetime.now().isoformat(timespec="seconds"),
+                    "at_epoch": int(dt.datetime.now().timestamp() * 1000),
+                    **counts,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        log(f"  ⚠️ отпечаток живости не записан: {e}")
+
+
 def branch_launch_scheduled() -> int:
     """Ветка 4: запуск по времени.
 
@@ -312,6 +336,7 @@ def main() -> int:
     n2 = branch_repick_wrong_role()
     n3 = branch_notify_dead()
     n4 = branch_launch_scheduled()
+    write_heartbeat({"retry": n1, "repick": n2, "dead": n3, "scheduled": n4})
     log(f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}, ветка 4(расписание)={n4}")
     return 0
 
