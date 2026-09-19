@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
+import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import {
@@ -248,7 +249,9 @@ export function hydrateTask(task: any) {
 
   return {
     ...withAgentStale(task, subtasks, children),
-    requires_reviewer_review: Boolean(task.requires_reviewer_review),
+    // Живое значение общего рубильника, а не сохранённый в карточке флаг:
+    // решает в моменте, включён он сейчас или нет (см. reviewerPolicy.ts).
+    requires_reviewer_review: reviewerFirstEnabled(),
     labels,
     subtasks,
     children,

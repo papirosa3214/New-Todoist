@@ -4,6 +4,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
+import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import {
   getTaskForRead,
@@ -856,9 +857,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         isOwner: isTrackerOwner(req.userId) || task.creator_id === req.userId,
         isExecutor: task.assignee_id === req.userId,
         isReviewer: isTaskReviewer(req.userId),
-        // Reviewer-first: исполнителю запрещён возврат из review (гейт
-        // только для агентов; владельца он не касается).
-        requiresReviewerReview: !!(task as any).requires_reviewer_review,
+        // Reviewer-first — общий рубильник владельца, читается в момент
+        // перехода. Гейт только для агентов; владельца он не касается.
+        requiresReviewerReview: reviewerFirstEnabled(),
       };
       if (!canTransition(from, state, who, "state")) {
         return reply.code(400).send({ error: "invalid transition" });
