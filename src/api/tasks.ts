@@ -188,3 +188,14 @@ export function useSetAgentState() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
   });
 }
+
+// POST /api/tasks/:id/run — ручной разовый запуск агента на карточке по
+// команде владельца: executor — поднять исполнителя, reviewer — верификатора.
+// Служба-будильник при этом может быть выключена: это одиночный заход, а не
+// автоматика. Ничего в авторежиме не включает.
+export function useRunTaskAgent() {
+  return useMutation({
+    mutationFn: ({ id, mode }: { id: string; mode: "executor" | "reviewer" }) =>
+      api.post<{ ok: boolean; mode: string }>(`/api/tasks/${id}/run`, { mode }),
+  });
+}
