@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useTasks } from "../api/tasks";
 import {
   useProjects,
   useCreateProject,
@@ -26,6 +27,10 @@ function ProjectRow({
   onRequestDelete: (project: ApiProject) => void;
 }) {
   const navigate = useNavigate();
+  const { data: allTasks = [] } = useTasks();
+  const noProjectCount = allTasks.filter(
+    (t) => t.project_id == null && t.status === "active",
+  ).length;
   const updateProject = useUpdateProject();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(project.name);
@@ -325,6 +330,18 @@ export function ProjectsScreen() {
       )}
 
       <div className="space-y-[2px]">
+        {/* Синтетический раздел рядом с проектами: все задачи без проекта
+            в одном списке (владелец 19.09.2026). */}
+        <button
+          onClick={() => navigate("/projects/no-project")}
+          className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-card text-left tap-row"
+        >
+          <Icon name="list" size={18} className="text-sub" />
+          <span className="text-[15px] text-text">Без проекта</span>
+          <span className="ml-auto text-[12px] text-sub">
+            {noProjectCount === 0 ? "" : noProjectCount}
+          </span>
+        </button>
         {projects.map((p) => (
           <ProjectRow key={p.id} project={p} onRequestDelete={handleDelete} />
         ))}
