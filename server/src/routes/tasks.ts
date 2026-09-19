@@ -679,7 +679,15 @@ export function registerTaskRoutes(app: FastifyInstance) {
       }
 
       const id = uid();
-      const requiresReviewerReview = requires_reviewer_review ?? true;
+      // По умолчанию — общая настройка владельца «Сначала проверка
+      // Reviewer» (Обзор → Система). Клиент флаг больше не шлёт, поэтому
+      // решение тут, а не в форме карточки. Явное значение всё ещё
+      // уважается (серверный контракт не ломаем).
+      const ownerSetting = db
+        .prepare("SELECT reviewer_first_default FROM users WHERE id = ?")
+        .get(req.userId) as { reviewer_first_default?: number } | undefined;
+      const requiresReviewerReview =
+        requires_reviewer_review ?? ((ownerSetting?.reviewer_first_default ?? 1) === 1);
 
       // Task + labels + subtasks all land in one transaction — the frontend
       // used to POST the task, then POST each subtask separately (see

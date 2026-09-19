@@ -1692,6 +1692,22 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "047_reviewer_first_default",
+    description:
+      "Общая настройка владельца: новые карточки по умолчанию проходят " +
+      "Reviewer (Обзор → Система). Раньше это был флаг на каждой карточке.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(users)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("reviewer_first_default")) {
+        db.exec("ALTER TABLE users ADD COLUMN reviewer_first_default INTEGER NOT NULL DEFAULT 1");
+      }
+    },
+  },
 ];
 
 /**

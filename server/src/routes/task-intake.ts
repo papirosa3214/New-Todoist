@@ -153,12 +153,12 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
         return reply.code(403).send({ error: "только владелец" });
       }
       const row = db
-        .prepare("SELECT task_intake_mode FROM users WHERE id = ?")
-        .get(owner) as { task_intake_mode: IntakeMode } | undefined;
+        .prepare("SELECT task_intake_mode, reviewer_first_default FROM users WHERE id = ?")
+        .get(owner) as { task_intake_mode: IntakeMode; reviewer_first_default?: number } | undefined;
       // Колонка заведена миграцией 037 с NOT NULL DEFAULT 'manual', так
       // что row всегда есть. Страховка для рассинхрона схемы.
       const mode: IntakeMode = row?.task_intake_mode ?? "manual";
-      return { mode };
+      return { mode, reviewer_first_default: (row?.reviewer_first_default ?? 1) === 1 };
     },
   );
 
@@ -166,7 +166,7 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
   // не трогается. CHECK в схеме страхует от гонки и от того, чтобы в БД
   // когда-либо лежало значение вне enum — хелпер snapshotIntakeMode
   // дальше по конвейеру считывает только эти два.
-  app.patch<{ Body: { mode?: unknown } }>(
+  app.patch<{ Body: { mode?: unknown; reviewer_first_default?: unknown } }>(
     "/api/task-intake/settings",
     { preHandler: authOrApiToken },
     async (req: any, reply) => {
@@ -177,17 +177,44 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
       if (req.userId !== owner) {
         return reply.code(403).send({ error: "только владелец" });
       }
-      const raw = req.body?.mode;
-      if (!isIntakeMode(raw)) {
-        return reply.code(400).send({
-          error: `mode должен быть одним из: ${INTAKE_MODES.join(", ")}`,
-        });
+      const hasMode = req.body?.mode !== undefined;
+      const hasReviewer = req.body?.reviewer_first_default !== undefined;
+      if (!hasMode && !hasReviewer) {
+        return reply
+          .code(400)
+          .send({ error: "нужно поле mode или reviewer_first_default" });
       }
-      db.prepare("UPDATE users SET task_intake_mode = ? WHERE id = ?").run(
-        raw,
-        owner,
-      );
-      return { mode: raw };
+      if (hasMode) {
+        const raw = req.body?.mode;
+        if (!isIntakeMode(raw)) {
+          return reply.code(400).send({
+            error: `mode должен быть одним из: ${INTAKE_MODES.join(", ")}`,
+          });
+        }
+        db.prepare("UPDATE users SET task_intake_mode = ? WHERE id = ?").run(
+          raw,
+          owner,
+        );
+      }
+      if (hasReviewer) {
+        const raw = req.body?.reviewer_first_default;
+        if (typeof raw !== "boolean") {
+          return reply
+            .code(400)
+            .send({ error: "reviewer_first_default должен быть boolean" });
+        }
+        db.prepare("UPDATE users SET reviewer_first_default = ? WHERE id = ?").run(
+          raw ? 1 : 0,
+          owner,
+        );
+      }
+      const row = db
+        .prepare("SELECT task_intake_mode, reviewer_first_default FROM users WHERE id = ?")
+        .get(owner) as { task_intake_mode: IntakeMode; reviewer_first_default?: number } | undefined;
+      return {
+        mode: row?.task_intake_mode ?? "manual",
+        reviewer_first_default: (row?.reviewer_first_default ?? 1) === 1,
+      };
     },
   );
 }
