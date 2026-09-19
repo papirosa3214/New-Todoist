@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import db from "./db.js";
+import { isReviewer } from "./access.js";
 
 export type EvidenceItem = Record<string, unknown> | string;
 
@@ -169,6 +170,25 @@ export function hasApprovedCurrentVersion(taskId: string): boolean {
     )
     .get(version.id) as { verdict?: string } | undefined;
   return latest?.verdict === "approved";
+}
+
+/**
+ * Есть ли одобрение Reviewer для АКТУАЛЬНОЙ версии результата.
+ *
+ * Сигнал для UI и маршрута, что карточку посмотрел ревьюер. НЕ гейт для
+ * владельца: владелец закрывает и без него (AGENT-PROTOCOL.md, «Владелец
+ * вне процесса»).
+ */
+export function hasReviewerApprovedCurrentVersion(taskId: string): boolean {
+  const version = currentResultVersion(taskId);
+  if (!version) return false;
+  const rows = db
+    .prepare(
+      `SELECT reviewer_id FROM reviews
+        WHERE version_id = ? AND verdict = 'approved'`,
+    )
+    .all(version.id) as { reviewer_id: string }[];
+  return rows.some((row) => isReviewer(row.reviewer_id));
 }
 
 export function hasAnyResultVersion(taskId: string): boolean {

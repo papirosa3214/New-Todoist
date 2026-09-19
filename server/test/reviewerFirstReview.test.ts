@@ -58,4 +58,62 @@ describe("Reviewer-first review", () => {
     expect(afterApproval.json().agent_state).toBe("review");
     expect((await app.inject({ method: "PATCH", url: `/api/tasks/${task.id}`, headers: { authorization: `Bearer ${ownerToken}` }, payload: { status: "completed" } })).statusCode).toBe(200);
   });
+  it("исполнитель не может вернуть reviewer-first задачу из review", async () => {
+    const { task } = await createSubmittedTask();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${task.id}/state`,
+      headers: { authorization: `Bearer ${agentToken}` },
+      payload: { state: "in_progress", comment: "сам верну" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("Reviewer возвращает reviewer-first задачу с комментарием", async () => {
+    const { task } = await createSubmittedTask();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${task.id}/state`,
+      headers: { authorization: `Bearer ${reviewerToken}` },
+      payload: { state: "in_progress", comment: "Доработайте обработку ошибок" },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("владелец возвращает reviewer-first задачу без ограничений", async () => {
+    const { task } = await createSubmittedTask();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${task.id}/state`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { state: "in_progress", comment: "Верну сам" },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("сигнал hasReviewerApprovedCurrentVersion: false до одобрения, true после", async () => {
+    const { task, version } = await createSubmittedTask();
+    const { hasReviewerApprovedCurrentVersion } = await import("../src/resultVersions.js");
+    expect(hasReviewerApprovedCurrentVersion(task.id)).toBe(false);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/reviews",
+          headers: { authorization: `Bearer ${reviewerToken}` },
+          payload: {
+            task_id: task.id,
+            version_id: version.id,
+            artifact_hash: version.artifact_hash,
+            criteria_version: "1",
+            task_revision: version.task_revision,
+            verdict: "approved",
+            findings: "Проверено",
+          },
+        })
+      ).statusCode,
+    ).toBe(201);
+    expect(hasReviewerApprovedCurrentVersion(task.id)).toBe(true);
+  });
+
 });

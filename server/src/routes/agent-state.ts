@@ -856,6 +856,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         isOwner: isTrackerOwner(req.userId) || task.creator_id === req.userId,
         isExecutor: task.assignee_id === req.userId,
         isReviewer: isTaskReviewer(req.userId),
+        // Reviewer-first: исполнителю запрещён возврат из review (гейт
+        // только для агентов; владельца он не касается).
+        requiresReviewerReview: !!(task as any).requires_reviewer_review,
       };
       if (!canTransition(from, state, who, "state")) {
         return reply.code(400).send({ error: "invalid transition" });

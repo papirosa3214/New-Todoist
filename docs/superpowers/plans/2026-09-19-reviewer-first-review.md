@@ -118,7 +118,7 @@ it("владелец закрывает reviewer-first задачу в любо�
 
 it("исполнитель не может вернуть reviewer-first задачу; Reviewer может — с комментарием", async () => {
   await submitToReview(taskId);
-  expect((await agent.post(`/api/tasks/${taskId}/state`, { state: "in_progress", comment: "x" })).statusCode).toBe(403);
+  expect((await agent.post(`/api/tasks/${taskId}/state`, { state: "in_progress", comment: "x" })).statusCode).toBe(400);
   expect((await reviewer.post("/api/reviews", approval(taskId, ""))).statusCode).toBe(400);
   expect((await reviewer.post("/api/reviews", approval(taskId, "Проверил сценарии и результат"))).statusCode).toBe(201);
   expect((await reviewer.post(`/api/tasks/${taskId}/state`, { state: "in_progress", comment: "Доработайте обработку ошибок" })).statusCode).toBe(200);
@@ -147,7 +147,7 @@ Reviewer-одобрение требует непустого `findings`. Вла
 - [ ] **Step 4: Загейтить только агентский возврат.**
 
 В `review → in_progress` для `requires_reviewer_review=1` запрещать переход
-исполнителю (`403`); Reviewer и владелец — разрешены. В `PATCH
+исполнителю (`400`, как прочие недопустимые переходы); Reviewer и владелец — разрешены. В `PATCH
 status=completed` владельцу не ставить требований Reviewer — закрытие
 проходит всегда. Владельца не ограничивать ни на одном переходе.
 

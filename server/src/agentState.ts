@@ -52,6 +52,10 @@ type Caller = {
   isOwner: boolean;
   isExecutor: boolean;
   isReviewer?: boolean;
+  // Reviewer-first: карточку после сдачи смотрит Reviewer, и исполнитель не
+  // может сам снять её из review — только Reviewer или владелец. См.
+  // canTransition, строка review -> in_progress.
+  requiresReviewerReview?: boolean;
   // Only meaningful for the from==='in_progress' rows: whether the lease
   // has expired. Drives the in_progress -> in_progress self-reclaim row —
   // see canTransition below.
@@ -81,9 +85,8 @@ export type TransitionVia = "claim" | "state";
  *  - `in_progress -> in_progress` (self-reclaim of an expired lease) only
  *    claim() can take — state() has no reason to request a no-op transition.
  *  - `review -> in_progress` only state() can take, with a mandatory comment
- *    (see commentRequiredFor). Since 20.08.2026 the executor may take it too:
- *    mandatory owner acceptance was dropped, so there is no acceptance left to
- *    skip — `review` became a voluntary way to show work, not a one-way door.
+ *    (see commentRequiredFor). Владелец и Reviewer снимают карточку из `review`; исполнитель — только
+ *    если у карточки НЕ включён reviewer-first (`who.requiresReviewerReview`).
  *    claim() still cannot reach into `review`: silently resuming a task the
  *    owner is looking at would hide the transition from the feed, and the
  *    mandatory comment is the point.
@@ -102,7 +105,14 @@ export function canTransition(
     return via === "claim" && who.isExecutor && !!who.leaseExpired;
   }
   if (from === "review" && to === "in_progress") {
-    return via === "state" && (who.isOwner || who.isExecutor || !!who.isReviewer);
+    if (via !== "state") return false;
+    // Владелец — вне процесса: снимает карточку из review всегда.
+    if (who.isOwner) return true;
+    // Reviewer снимает сданную работу на доработку.
+    if (who.isReviewer) return true;
+    // Исполнитель возвращает сам только не-reviewer-first карточку; у
+    // reviewer-first снять работу может лишь Reviewer/владелец.
+    return !!who.isExecutor && !who.requiresReviewerReview;
   }
   // "любое → NULL, владелец, снять с агента"
   if (to === null) return who.isOwner;
