@@ -34,6 +34,7 @@ export interface CreateTaskInput {
   project_id?: string;
   priority?: number;
   assignee_id?: string;
+  requires_reviewer_review?: boolean;
   label_ids?: string[];
   // Created atomically with the task in one transaction (server-side —
   // see AGENT-API.md §Tasks) — either a plain title or `{ title }`.
@@ -69,6 +70,7 @@ export interface UpdateTaskInput {
   label_ids?: string[];
   position?: number | null;
   pinned?: boolean;
+  requires_reviewer_review?: boolean;
   // Готовность к самозахвату (миграция 026). На сервере поднимает только
   // владелец, так что здесь тип широкий, а проверка прав — в routes/tasks.ts.
   ready_for_pickup?: boolean;

@@ -1676,6 +1676,22 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "046_reviewer_first_review",
+    description:
+      "Reviewer-first review: старые карточки сохраняют прямую приёмку " +
+      "владельцем, а новые по умолчанию проходят через Reviewer.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("requires_reviewer_review")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN requires_reviewer_review INTEGER NOT NULL DEFAULT 0");
+      }
+    },
+  },
 ];
 
 /**

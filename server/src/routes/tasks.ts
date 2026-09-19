@@ -248,6 +248,7 @@ export function hydrateTask(task: any) {
 
   return {
     ...withAgentStale(task, subtasks, children),
+    requires_reviewer_review: Boolean(task.requires_reviewer_review),
     labels,
     subtasks,
     children,
@@ -544,6 +545,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       assignee_id?: string;
       label_ids?: string[];
       parent_id?: string;
+      requires_reviewer_review?: boolean;
       // Optional bulk-create for subtasks, created in the same transaction
       // as the task (see below). Accepts either plain titles or objects
       // shaped like { title } — TaskFormScreen currently sends plain
@@ -565,6 +567,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         assignee_id,
         label_ids,
         parent_id,
+        requires_reviewer_review,
         subtasks,
       } = req.body;
 
@@ -646,6 +649,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
           return reply.code(400).send({ error: "invalid assignee_id" });
       }
 
+      if (requires_reviewer_review !== undefined && typeof requires_reviewer_review !== "boolean") {
+        return reply.code(400).send({ error: "requires_reviewer_review должен быть boolean" });
+      }
+
       // Normalize+validate subtasks up front, before touching the DB, so a
       // bad entry 400s cleanly instead of failing mid-transaction.
       const subtaskTitles: string[] = [];
@@ -672,6 +679,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       }
 
       const id = uid();
+      const requiresReviewerReview = requires_reviewer_review ?? true;
 
       // Task + labels + subtasks all land in one transaction — the frontend
       // used to POST the task, then POST each subtask separately (see
@@ -682,8 +690,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const createTaskTxn = db.transaction(() => {
         db.prepare(
           `
-          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id, requires_reviewer_review)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         ).run(
           id,
@@ -700,6 +708,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
           assignee_id || null,
           req.userId,
           parent_id || null,
+          requiresReviewerReview ? 1 : 0,
         );
 
         if (label_ids?.length) {
@@ -1117,6 +1126,16 @@ export function registerTaskRoutes(app: FastifyInstance) {
         body.pinned = body.pinned ? 1 : 0;
       }
 
+      if (body.requires_reviewer_review !== undefined) {
+        if (!isOwner(req.userId)) {
+          return reply.code(403).send({ error: "маршрут ревью может менять только владелец трекера" });
+        }
+        if (typeof body.requires_reviewer_review !== "boolean") {
+          return reply.code(400).send({ error: "requires_reviewer_review должен быть boolean" });
+        }
+        body.requires_reviewer_review = body.requires_reviewer_review ? 1 : 0;
+      }
+
       // ФЛАГ ГОТОВНОСТИ К САМОЗАХВАТУ (миграция 026, карточка d598de9f):
       // поднимает только владелец трекера. Если body.ready_for_pickup
       // передано — обрабатываем здесь и НЕ пропускаем в общий UPDATE ниже
@@ -1283,6 +1302,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         "status",
         "position",
         "pinned",
+        "requires_reviewer_review",
       ] as const;
       const fields: string[] = [];
       const values: any[] = [];

@@ -103,8 +103,12 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     if (!VERDICTS.includes(verdict as Verdict)) {
       return reply.code(400).send({ error: `verdict должен быть одним из: ${VERDICTS.join(", ")}` });
     }
-    if (!isOwner(req.userId) && !isReviewer(req.userId)) {
+    const reviewer = isReviewer(req.userId);
+    if (!isOwner(req.userId) && !reviewer) {
       return reply.code(403).send({ error: "вердикт может вынести только владелец или Reviewer" });
+    }
+    if (reviewer && verdict === "approved" && !findings?.trim()) {
+      return reply.code(400).send({ error: "Reviewer обязан оставить комментарий при одобрении" });
     }
     const task = getTaskForRead(taskId, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });

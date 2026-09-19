@@ -194,6 +194,8 @@ export interface ApiTask {
   assignee_id: string | null;
   creator_id: string;
   status: "active" | "completed";
+  /** Новая карточка по умолчанию сначала проходит Reviewer. */
+  requires_reviewer_review?: boolean;
   // Готовность к самозахвату (серверная карточка d598de9f, миграция 026).
   // Поднимает только владелец; пока false — claim отклоняется.
   ready_for_pickup?: boolean;
