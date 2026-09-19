@@ -19,6 +19,7 @@ import { readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { authOrApiToken } from "../auth.js";
+import db from "../db.js";
 import { isOwner, isOrchestrator } from "../access.js";
 
 const run = promisify(execFile);
@@ -165,6 +166,24 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
     "/api/agent-service",
     { preHandler: authOrApiToken },
     async () => ({ ...(await unitState()), scheduler: await schedulerState() }),
+  );
+
+  // Завершённые повторяющиеся карточки, по которым ещё не создано
+  // следующее вхождение — их добирает планировщик («одна за раз»).
+  app.get(
+    "/api/scheduler/recurring",
+    { preHandler: authOrApiToken },
+    async () =>
+      db
+        .prepare(
+          `SELECT id, title, description, due_date, start_time, project_id,
+                  assignee_id, run_repeat, repeat_until
+             FROM tasks
+            WHERE status = 'completed'
+              AND run_repeat IS NOT NULL AND run_repeat != 'none'
+              AND COALESCE(recurrence_spawned, 0) = 0`,
+        )
+        .all(),
   );
 
   app.post<{ Body: { on?: boolean } }>(

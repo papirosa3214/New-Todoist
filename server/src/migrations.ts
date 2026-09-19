@@ -1778,6 +1778,24 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "050_recurrence_spawned",
+    description:
+      "Повтор «одна за раз»: признак, что по завершённой карточке уже " +
+      "создано следующее вхождение (иначе воркер плодил бы дубли).",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("recurrence_spawned")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN recurrence_spawned INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+    },
+  },
 ];
 
 /**

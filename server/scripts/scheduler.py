@@ -26,6 +26,7 @@ Auth: TASKFLOW_SERVICE_TOKEN — служебный ключ из systemd drop-i
 Без fallback. Если переменной нет — KeyError на старте, fail loudly.
 """
 
+import calendar
 import datetime as dt
 import json
 import os
@@ -330,14 +331,85 @@ def branch_launch_scheduled() -> int:
     return handled
 
 
+def _next_due(due: str, repeat: str) -> str | None:
+    """Следующая дата по интервалу повторения."""
+    try:
+        d = dt.datetime.strptime(due[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    if repeat == "daily":
+        n = d + dt.timedelta(days=1)
+    elif repeat == "weekdays":
+        n = d + dt.timedelta(days=1)
+        while n.weekday() >= 5:
+            n += dt.timedelta(days=1)
+    elif repeat == "weekly":
+        n = d + dt.timedelta(days=7)
+    elif repeat == "monthly":
+        month = d.month + 1
+        year = d.year + (month - 1) // 12
+        month = (month - 1) % 12 + 1
+        day = min(d.day, calendar.monthrange(year, month)[1])
+        n = dt.date(year, month, day)
+    else:
+        return None
+    return n.isoformat()
+
+
+def branch_clone_recurring() -> int:
+    """Ветка 5: повтор «одна за раз». По завершённой карточке создаём
+    СЛЕДУЮЩЕЕ вхождение (с новой датой), только если серия не кончилась.
+    Никаких пачек вперёд — максимум одна будущая карточка."""
+    items = api("GET", "/api/scheduler/recurring")
+    if not isinstance(items, list):
+        log(f"  ⚠️ ветка 5: ответ не список — {items!r}")
+        return 0
+    handled = 0
+    for t in items:
+        tid = t.get("id")
+        due = t.get("due_date")
+        repeat = t.get("run_repeat")
+        if not tid or not due or not repeat:
+            continue
+        nxt = _next_due(due, repeat)
+        if not nxt:
+            continue
+        until = t.get("repeat_until")
+        if until and nxt > str(until)[:10]:
+            api("PATCH", f"/api/tasks/{tid}", {"recurrence_spawned": 1})
+            log(f"  ⏹ {tid[:8]} серия завершена (до {until})")
+            continue
+        body = {
+            "title": t.get("title"),
+            "description": t.get("description"),
+            "due_date": nxt,
+            "start_time": t.get("start_time"),
+            "project_id": t.get("project_id"),
+            "assignee_id": t.get("assignee_id"),
+            "run_repeat": repeat,
+            "repeat_until": until,
+        }
+        res = api("POST", "/api/tasks", body)
+        if isinstance(res, dict) and (res.get("task") or res.get("id")):
+            api("PATCH", f"/api/tasks/{tid}", {"recurrence_spawned": 1})
+            log(f"  ↻ {tid[:8]} → следующая на {nxt}")
+            handled += 1
+        else:
+            log(f"  ⚠️ {tid[:8]} следующая не создалась: {res!r}")
+    return handled
+
+
 def main() -> int:
     log("обход доски")
     n1 = branch_retry_technical()
     n2 = branch_repick_wrong_role()
     n3 = branch_notify_dead()
     n4 = branch_launch_scheduled()
-    write_heartbeat({"retry": n1, "repick": n2, "dead": n3, "scheduled": n4})
-    log(f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}, ветка 4(расписание)={n4}")
+    n5 = branch_clone_recurring()
+    write_heartbeat(
+        {"retry": n1, "repick": n2, "dead": n3, "scheduled": n4, "repeat": n5}
+    )
+    log(f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}, ветка 4(расписание)={n4}, ветка 5(повтор)={n5}")
     return 0
 
 

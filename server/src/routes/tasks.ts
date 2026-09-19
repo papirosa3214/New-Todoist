@@ -258,6 +258,7 @@ export function hydrateTask(task: any) {
       ? `${task.due_date} ${task.start_time || "09:00"}`
       : null,
     run_repeat: task.run_repeat ?? "none",
+    recurrence_spawned: task.recurrence_spawned ?? 0,
     repeat_until: task.repeat_until ?? null,
     labels,
     subtasks,
@@ -1335,6 +1336,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         "requires_reviewer_review",
         "run_repeat",
         "repeat_until",
+        "recurrence_spawned",
       ] as const;
       const fields: string[] = [];
       const values: any[] = [];
