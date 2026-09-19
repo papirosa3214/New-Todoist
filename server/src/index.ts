@@ -15,6 +15,7 @@ import { addClient, removeClient, resetAllOffline } from "./ws.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
+import { registerManualRunRoutes } from "./routes/manual-run.js";
 import { registerRetryRoutes } from "./routes/retry.js";
 import { registerConsultationRoutes } from "./routes/consultation.js";
 import { registerEmbeddingsRoutes } from "./routes/embeddings.js";
@@ -225,6 +226,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAuthRoutes(app);
   registerTaskRoutes(app);
   registerAgentStateRoutes(app);
+  await registerManualRunRoutes(app);
   registerRetryRoutes(app);
   registerConsultationRoutes(app);
   registerEmbeddingsRoutes(app);

@@ -2948,7 +2948,9 @@ def alive_beat_loop() -> None:
         time.sleep(ALIVE_BEAT_SEC)
 
 
-def main() -> None:
+def prepare() -> None:
+    """Общая инициализация службы и разового запуска: матрица ролей, токены
+    агентов, проверка TASKFLOW_TOKEN. Ничего не запускает."""
     global ROLE_ROUTING
     try:
         routing = load_role_routing()
@@ -2958,10 +2960,7 @@ def main() -> None:
         log(f"матрица role-routing.yaml не прошла проверку: {exc}")
         sys.exit(1)
     ROLE_ROUTING = routing
-    log(f"матрица маршрутизации ролей загружена: {len(routing['defaults'])} ролей")
 
-    # В рабочем режиме есть только ключ Pi Agent. Старые ключи намеренно не
-    # перечисляются и не читаются.
     for uid, agent in list(EXTERNAL_AGENTS.items()):
         token = os.environ.get(agent.get("token_env", ""), "").strip()
         if not token and "token_static" in agent:
@@ -2975,8 +2974,47 @@ def main() -> None:
             EXTERNAL_AGENTS.pop(uid)
 
     if not TOKEN:
-        print("Нет TASKFLOW_TOKEN в окружении — служба запускается через vault-run.py", file=sys.stderr)
+        print("Нет TASKFLOW_TOKEN в окружении — запускается через vault-run.py", file=sys.stderr)
         sys.exit(1)
+
+
+def run_once(task_id: str, review: bool = False) -> None:
+    """Разовый запуск ОДНОГО агента на ОДНОЙ карточке — по команде владельца.
+
+    Служба-будильник при этом может быть выключена: это отдельный заход, он
+    поднимает агента и выходит. Автоматику не трогает, ничего не крутит.
+    """
+    prepare()
+    task = get_task(task_id)
+    if not task:
+        print(f"нет задачи {task_id}", file=sys.stderr)
+        sys.exit(2)
+    if review:
+        agent = EXTERNAL_AGENTS.get(REVIEWER_AGENT_ID)
+        if not agent:
+            print("нет активной учётки верификатора (TASKFLOW_AGENT_TOKEN_CRITIC_VERIFIER)", file=sys.stderr)
+            sys.exit(3)
+        log(f"разовый запуск: верификатор на карточке {task_id[:8]}")
+        run_external(
+            task, REVIEW_RUN, agent,
+            role_override=REVIEWER_ROLE, review_mode=True,
+            model_override=_reviewer_model(),
+        )
+        return
+    agent = EXTERNAL_AGENTS.get(task.get("assignee_id") or "")
+    role = task_role(task)
+    if agent is None and role:
+        agent = resolve_agent_for_role(role)
+    if agent is None:
+        print("на карточке нет исполнителя — назначьте исполнителя", file=sys.stderr)
+        sys.exit(4)
+    log(f"разовый запуск: «{agent_label(agent)}» на карточке {task_id[:8]}")
+    run_external(task, "ручной запуск владельца", agent)
+
+
+def main() -> None:
+    prepare()
+    log(f"матрица маршрутизации ролей загружена: {len(ROLE_ROUTING['defaults'])} ролей")
     log("будильник TaskFlow запущен")
 
     # Поднимаем одно соединение Pi Agent. Никаких дополнительных соединений
@@ -3003,4 +3041,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _argv = sys.argv[1:]
+    if "--once" in _argv:
+        _i = _argv.index("--once")
+        if _i + 1 >= len(_argv):
+            print("нужен id задачи: --once <id> [--review]", file=sys.stderr)
+            sys.exit(64)
+        run_once(_argv[_i + 1], review="--review" in _argv)
+    else:
+        main()
