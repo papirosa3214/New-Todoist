@@ -1708,6 +1708,49 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "048_model_ladder",
+    description:
+      "Ступени эскалации моделей (5 ступеней, по две учётки на ступень) и " +
+      "состояние лимитов по УЧЁТКЕ (provider_limits). Проект владельца " +
+      "16.09.2026: не потянул — вверх по ступени; лимит — вбок, в другую " +
+      "учётку той же ступени.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS model_ladder (
+          step INTEGER NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          priority INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (step, model)
+        );
+      `);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS provider_limits (
+          provider TEXT PRIMARY KEY,
+          unavailable_until TEXT,
+          window_kind TEXT,
+          reason TEXT,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      const seed: Array<[number, string, string, number]> = [
+        [0, "minimax", "MiniMax-M3", 0],
+        [1, "anthropic", "claude-haiku-4-5", 0],
+        [1, "openai-codex", "gpt-5.6-luna", 1],
+        [2, "anthropic", "claude-sonnet-5", 0],
+        [2, "openai-codex", "gpt-5.6-terra", 1],
+        [3, "anthropic", "claude-opus-5", 0],
+        [3, "openai-codex", "gpt-5.6-sol", 1],
+        [4, "anthropic", "claude-fable-5-1", 0],
+        [4, "openai-codex", "gpt-6-astra", 1],
+      ];
+      const ins = db.prepare(
+        "INSERT OR IGNORE INTO model_ladder (step, provider, model, priority) VALUES (?, ?, ?, ?)",
+      );
+      for (const row of seed) ins.run(row[0], row[1], row[2], row[3]);
+    },
+  },
 ];
 
 /**
