@@ -308,6 +308,68 @@ export function registerTaskRoutes(app: FastifyInstance) {
   // зарегистрированному человеку — только свои. Раньше правило было одно
   // для всех, и задача, заведённая агентом без проекта и без исполнителя,
   // не показывалась владельцу вообще.
+  // Серия повтора дошла до конца календарного года — помечаем завершённой
+  // и спрашиваем владельца (карточка f8e8a055, решение 20.09.2026).
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/repeat-ended",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const task = db
+        .prepare("SELECT id, title FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id: string; title: string } | undefined;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      db.prepare(
+        "UPDATE tasks SET recurrence_spawned = 1, updated_at = datetime('now') WHERE id = ?",
+      ).run(task.id);
+      const owner = db
+        .prepare(
+          "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+        )
+        .get() as { id?: string } | undefined;
+      if (owner?.id && owner.id !== req.userId) {
+        const notifId = uid();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'repeat_ended', ?, ?, ?)",
+        ).run(
+          notifId,
+          owner.id,
+          task.id,
+          `Серия «${task.title}» дошла до конца года. Продлить на следующий год?`,
+          req.userId,
+        );
+        broadcastToUsers([owner.id], {
+          type: "notification:new",
+          notificationId: notifId,
+          taskId: task.id,
+        });
+      }
+      return { ok: true };
+    },
+  );
+
+  // Продлить серию на следующий год: «до 31 декабря следующего» и снова
+  // разрешаем воркеру создавать следующее вхождение (владелец).
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/repeat-extend",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply
+          .code(403)
+          .send({ error: "продлевать серию может только владелец" });
+      }
+      const task = db
+        .prepare("SELECT id FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id?: string } | undefined;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      const until = `${new Date().getFullYear() + 1}-12-31`;
+      db.prepare(
+        "UPDATE tasks SET repeat_until = ?, recurrence_spawned = 0, updated_at = datetime('now') WHERE id = ?",
+      ).run(until, task.id);
+      return { ok: true, repeat_until: until };
+    },
+  );
+
   app.get("/api/tasks", { preHandler: authPre }, async (req: any) => {
     const userId = req.userId;
     const includeChildren = req.query.include_children === "true";

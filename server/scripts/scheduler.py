@@ -374,10 +374,20 @@ def branch_clone_recurring() -> int:
         nxt = _next_due(due, repeat)
         if not nxt:
             continue
+        # Владелец 20.09.2026: повтор в любом случае ограничен КАЛЕНДАРНЫМ
+        # ГОДОМ — дальше 31 декабря текущего года серия не идёт.
+        year_end = dt.date(dt.datetime.now().year, 12, 31).isoformat()
         until = t.get("repeat_until")
-        if until and nxt > str(until)[:10]:
-            api("PATCH", f"/api/tasks/{tid}", {"recurrence_spawned": 1})
-            log(f"  ⏹ {tid[:8]} серия завершена (до {until})")
+        cap = min(str(until)[:10], year_end) if until else year_end
+        if nxt > cap:
+            # Уперлись в предел. Если это календарный год (а не явный выбор
+            # владельца) — спрашиваем его и даём продлить, а не обрываем молча.
+            if until and str(until)[:10] <= year_end:
+                api("PATCH", f"/api/tasks/{tid}", {"recurrence_spawned": 1})
+                log(f"  ⏹ {tid[:8]} серия завершена (до {until})")
+            else:
+                api("POST", f"/api/tasks/{tid}/repeat-ended", {})
+                log(f"  ❓ {tid[:8]} конец года — спросил владельца о продлении")
             continue
         body = {
             "title": t.get("title"),
