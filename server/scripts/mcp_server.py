@@ -555,6 +555,29 @@ def t_rules(_args):
     return {"правила": api("GET", "/api/agent/rules").get("rules", [])}
 
 
+def t_runtime(_args):
+    """Что РЕАЛЬНО доступно сейчас в runtime Pi: только ПОДКЛЮЧЁННЫЕ
+    провайдеры и их доступные модели. Никакого «теоретического» каталога и
+    секретов — агенту нужен факт, а не список всего, что в принципе бывает.
+
+    Выбираешь, чем работать задаче, или думаешь про параллель — сперва глянь
+    сюда, чтобы не звать модель, которой нет.
+    """
+    providers = api("GET", "/api/runtime/providers").get("providers", []) or []
+    connected = {
+        str(p.get("provider"))
+        for p in providers
+        if p.get("status") == "connected"
+    }
+    models = api("GET", "/api/runtime/models").get("models", []) or []
+    by_provider: dict = {}
+    for m in models:
+        prov = str(m.get("provider"))
+        if m.get("available") and prov in connected:
+            by_provider.setdefault(prov, []).append(m.get("id"))
+    return {"подключены": by_provider}
+
+
 def t_status(_args):
     """Одним вызовом: работает ли служба и чем заняты агенты прямо сейчас.
 
@@ -1195,6 +1218,12 @@ TOOLS = [
         "description": "Правила ведения учёта задач — как их требует сервер TaskFlow. Те же, что приходят при взятии задачи и шага; здесь их можно спросить, ничего не занимая.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": t_rules,
+    },
+    {
+        "name": "taskflow_runtime",
+        "description": "Что реально доступно сейчас в runtime Pi: подключённые провайдеры и их доступные модели. Только факт, без всего каталога.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": t_runtime,
     },
     {
         "name": "taskflow_status",
