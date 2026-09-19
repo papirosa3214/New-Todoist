@@ -295,6 +295,21 @@ def role_prompt_for_task(task: dict) -> str:
     return prompt
 
 
+def role_prompt_for_role(role: str) -> str:
+    """Read the role prompt by explicit role name (для запуска ревьюера)."""
+    role_name = str(role or "").strip().lower()
+    if not role_name:
+        return ""
+    path = ROLE_PROMPTS_DIR / f"{role_name}.md"
+    try:
+        prompt = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError(f"не прочитать системный prompt роли {role_name}: {path}: {exc}") from exc
+    if not prompt:
+        raise RuntimeError(f"пустой системный prompt роли {role_name}: {path}")
+    return prompt
+
+
 def pi_mcp_profile_for_role(role: str) -> Path | None:
     """Return the explicit Pi MCP profile for a routed role.
 
@@ -420,6 +435,7 @@ def validate_role_agents(routing: dict[str, dict]) -> None:
 # уходим, не трогая ни карточку, ни шаги. Строкой, потому что повод и так
 # едет через все запуски параметром reason — второй канал не нужен.
 REPLY_ONLY = "владелец написал по задаче на проверке — отвечаю, не забирая её"
+REVIEW_RUN = "карточка сдана на проверку — выношу вердикт ревьюера"
 
 MODEL_LABELS = {"opus", "sonnet", "haiku", "fable"}
 
@@ -1332,6 +1348,51 @@ def build_reply_prompt(task: dict, ctx=None) -> str:
 """
 
 
+def build_review_prompt(task: dict, role: str = "critic_verifier") -> str:
+    """Промпт ревьюеру: проверить сданную работу и вынести вердикт.
+
+    Карточку НЕ забираем — она остаётся у исполнителя; ревьюер работает
+    поверх сданной версии результата и выносит вердикт инструментом
+    taskflow_review. claim/аренду не трогаем.
+    """
+    subtasks = task.get("subtasks") or []
+    steps = "\n".join(
+        f"  {'[x]' if s.get('done') else '[ ]'} {s.get('title')}: {s.get('result') or '—'}"
+        for s in subtasks
+    )
+    comments = "\n".join(
+        f"  {c.get('user_name')}: {c.get('text')}" for c in (task.get("comments") or [])[-8:]
+    )
+    return f"""Тебя разбудила доска TaskFlow: карточка сдана на проверку — вынеси вердикт.
+
+ЗАДАЧА #{task.get('id')}
+Название: {task.get('title')}
+Описание:
+{task.get('description') or '(пусто)'}
+
+Шаги и их результат:
+{steps or '  (нет)'}
+
+Лента (последние комментарии):
+{comments or '  (пусто)'}
+
+ТЫ — ПРОВЕРЯЮЩИЙ, А НЕ ИСПОЛНИТЕЛЬ. Карточку не забирай и исполнителя не
+меняй; файлы и код не правь. Сверь результат с задачей и её критерием,
+убедись, что шаги закрыты по делу и доказательства настоящие.
+
+Вердикт вынеси инструментом taskflow_review(id="{task.get('id')}",
+verdict="…", findings="…"):
+  • verdict="approved" — работа принята; комментарий обязателен (что проверил);
+  • verdict="changes_requested" — на доработку; комментарий обязателен (что
+    именно доработать), карточка вернётся исполнителю.
+Владельца ты не ограничиваешь: он решает сам в любой момент, твой вердикт —
+сигнал, а не пропуск.
+
+Не раскрывай внутреннюю цепочку рассуждений — формулируй проверяемые замечания
+и вердикт.
+"""
+
+
 def build_orchestrator_prompt(task: dict, reason: str, is_claude: bool = False, ctx=None) -> str:
     """Промпт для оркестратора — дробит и раздаёт, сам не исполняет.
 
@@ -2087,7 +2148,8 @@ def inbox_mark(events: list[dict], status: str, token: str, reason: str = "") ->
         api("POST", f"/api/agent-inbox/{ev['id']}/mark", body, token=token)
 
 
-def run_external(task: dict, reason: str, agent: dict) -> None:
+def run_external(task: dict, reason: str, agent: dict, role_override: str = "",
+                 review_mode: bool = False, model_override: str = "") -> None:
     """Позвать не-Claude агента одним разовым запросом.
 
     У Гермеса и dsh нет продолжаемой сессии: каждый заход самостоятелен,
@@ -2120,10 +2182,10 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         return
 
     token = agent.get("token") or ""
-    reply_only = reason == REPLY_ONLY
+    reply_only = reason == REPLY_ONLY or review_mode
     # Выбор должен состояться ДО claim: claim создаёт строку attempts и
     # сохраняет в ней фактические runner/model этого запуска.
-    model = model_of(task)
+    model = model_override or model_of(task)
 
     # Единая доставка: свериться с inbox ДО контекста, claim и запуска
     # процесса (см. inbox_consume). В режиме ответа карточка не забирается —
@@ -2292,7 +2354,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     # переменных окружения перекрывает явный поиск ключей», verified). Их
     # собственный MCP-профиль доносит ключ сам через `load_token()` — оттуда
     # он дойдёт до vault по правильному имени `TASKFLOW_AGENT_TOKEN_<ROLE>`.
-    role = task_role(task)
+    role = role_override or task_role(task)
     vault_name = agent.get("vault_key") or agent.get("token_env", "")
     vault_value = os.environ.get(vault_name, "") if vault_name else ""
     is_role_run = bool(role) and agent_label(agent) == "Pi Agent"
@@ -2326,7 +2388,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             f"  Pi: роль {role} → MCP-профиль {profile.name}; "
             f"skills={len(skills)}"
         )
-    role_prompt = role_prompt_for_task(task)
+    role_prompt = role_prompt_for_role(role) if review_mode else role_prompt_for_task(task)
     if claude_cli and role_prompt:
         # Claude Code умеет отделить роль от поручения настоящим системным
         # параметром. Для остальных оболочек этот же текст добавляется в
@@ -2362,7 +2424,9 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         return (build_orchestrator_resume_prompt(fresh, reason, claude_cli, ctx=ctx) if orchestrator
                 else build_resume_prompt(fresh, reason, ctx=ctx))
 
-    if reply_only:
+    if review_mode:
+        first = build_review_prompt(task, role)
+    elif reply_only:
         first = build_reply_prompt(task, ctx=ctx)
     elif resume_sid:
         first = resume_text(task)
@@ -2578,6 +2642,12 @@ def handle_task(task_id: str, why: str, kind: str = "", actor_id: str = "",
     if not task:
         return
 
+    # Reviewer-first: карточка сдана — будим верификатора. Карточка остаётся
+    # у исполнителя, вердикт он выносит по токену (см. wake_reviewer). Не
+    # выходим: владелец мог ещё и написать по этой же карточке.
+    if task.get("agent_state") == "review" and task.get("requires_reviewer_review"):
+        wake_reviewer(task)
+
     # Если сдан ребёнок — будим Оркестратора на родительской карточке!
     if task.get("agent_state") in ("review", "blocked") and parent_task_id(task):
         if wake_parent(task, owner_id):
@@ -2692,6 +2762,76 @@ def wake_creator(task: dict, owner_id: str, agent: dict) -> bool:
             CREATOR_WAKED.pop(task_id, None)
         return False
     log(f"  «{task_id[:8]}» {what} → сообщил создателю «{agent_label(agent)}» в чат")
+    return True
+
+
+REVIEWER_AGENT_ID = "role_critic_verifier"
+REVIEWER_ROLE = "critic_verifier"
+REVIEWER_WAKED: dict = {}
+REVIEWER_WAKED_TTL_SEC = 600
+
+
+def _reviewer_model() -> str:
+    """Модель роли верификатора из role-routing; пусто — на усмотрение Pi."""
+    try:
+        routing = load_role_routing()
+        return str((routing.get("models") or {}).get(REVIEWER_ROLE, "") or "")
+    except Exception:
+        return ""
+
+
+def reviewer_pending(task: dict) -> bool:
+    """Нужен ли верификатору ещё заход: флаг включён, вердикта по текущей
+    версии нет."""
+    if not task.get("requires_reviewer_review"):
+        return False
+    if task.get("agent_state") != "review":
+        return False
+    try:
+        versions = api("GET", f"/api/tasks/{task['id']}/versions")
+    except Exception:
+        return False
+    current = next(
+        (v for v in (versions.get("versions") or []) if v.get("is_current")), None
+    )
+    if not current:
+        return False
+    if any(r.get("verdict") == "approved" for r in (current.get("reviews") or [])):
+        return False
+    return True
+
+
+def wake_reviewer(task: dict) -> bool:
+    """Сдана reviewer-first карточка — поднять верификатора на проверку.
+
+    Исполнителя не трогаем: карточка остаётся за ним, верификатор работает
+    БЕЗ claim и выносит вердикт инструментом taskflow_review. Дубль гасим
+    окном TTL на задачу — тем же приёмом, что wake_parent/wake_creator.
+    """
+    if not reviewer_pending(task):
+        return False
+    task_id = task["id"]
+    now = time.time()
+    with LOCK:
+        last = REVIEWER_WAKED.get(task_id, 0.0)
+        if now - last < REVIEWER_WAKED_TTL_SEC:
+            return True
+        REVIEWER_WAKED[task_id] = now
+    agent = EXTERNAL_AGENTS.get(REVIEWER_AGENT_ID)
+    if not agent:
+        log(f"  верификатор {REVIEWER_AGENT_ID} не найден — не бужу")
+        return False
+    log(f"  карточка {task_id[:8]} сдана reviewer-first → бужу верификатора")
+    threading.Thread(
+        target=run_external,
+        args=(task, REVIEW_RUN, agent),
+        kwargs={
+            "role_override": REVIEWER_ROLE,
+            "review_mode": True,
+            "model_override": _reviewer_model(),
+        },
+        daemon=True,
+    ).start()
     return True
 
 
