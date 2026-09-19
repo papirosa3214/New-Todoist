@@ -500,7 +500,14 @@ export async function applyIntakeToNewTask(
   if (hasChildren) return;
   if (task.assignee_id) return;
 
-  if (!task.owner_selected_role) {
+  // Владелец 19.09.2026: автоназначение роли привязано к БУДИЛЬНИКУ.
+  // Выключен — назначать некому и незачем (никого не разбудят); тогда
+  // карточка не получает ни подбора роли, ни раздачи, только флаг
+  // (если режим автоматический), чтобы её взяли руками.
+  const { unitState } = await import("./agent-service.js");
+  const alarmOn = (await unitState()).active;
+
+  if (alarmOn && !task.owner_selected_role) {
     // Подбираем роль и пишем в machine_selected_role. Роутер НИКОГДА не
     // пишет в owner_selected_role — это поле только владельца
     // (см. taskflow-pipeline-head-plan.md, шаг 1).
@@ -559,7 +566,9 @@ export async function applyIntakeToNewTask(
             updated_at = datetime('now')
       WHERE id = ? AND ready_for_pickup = 0`,
   ).run(ownerId, taskId);
-  await dispatchTaskToPi(taskId, ownerId);
+  // Раздача (проставление исполнителя) — только когда будильник жив:
+  // назначить агента, которого некому разбудить, смысла нет.
+  if (alarmOn) await dispatchTaskToPi(taskId, ownerId);
 }
 
 export async function releaseQueuedSuccessors(

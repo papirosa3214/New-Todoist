@@ -12,7 +12,6 @@ import { useTask, useUpdateTask, useDeleteTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { useUpdateSubtask, useSubtaskWork } from "../api/subtasks";
-import { useAgentService } from "../api/agents";
 import { useAddComment } from "../api/comments";
 import { ApiError } from "../api/client";
 import {
@@ -65,11 +64,6 @@ export function TaskDetailScreen() {
   const { data: projects = [] } = useProjects();
   const { data: currentUser } = useCurrentUser();
   const updateTask = useUpdateTask();
-  // Флаги раздачи (готовность к самозахвату) показываем только когда
-  // служба-будильник работает: при выключенной автоматике они всё равно
-  // ничего не делают. Состояние неизвестно — показываем (не пугаем зря).
-  const agentService = useAgentService();
-  const showReadyFlags = agentService.data ? agentService.data.active : true;
   const deleteTask = useDeleteTask();
   const updateSubtask = useUpdateSubtask();
   const subtaskWork = useSubtaskWork();
@@ -679,7 +673,7 @@ export function TaskDetailScreen() {
             видит только владелец; не-владельцу — бейдж с состоянием,
             чтобы было ясно, можно ли задачу брать. При выключенной службе
             (showReadyFlags === false) скрываем — флаг тогда ничего не делает. */}
-        {showReadyFlags && (isTaskOwner(currentUser, task) ? (
+        {isTaskOwner(currentUser, task) ? (
           <Button
             variant={task.ready_for_pickup ? "secondary" : "primary"}
             onClick={handleToggleReady}
@@ -695,7 +689,7 @@ export function TaskDetailScreen() {
               ? "Готова к самозахвату"
               : "Ждёт подтверждения владельца"}
           </div>
-        ))}
+        )}
 
         <Button
           variant="outline"
