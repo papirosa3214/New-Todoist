@@ -116,4 +116,38 @@ describe("Reviewer-first review", () => {
     expect(hasReviewerApprovedCurrentVersion(task.id)).toBe(true);
   });
 
+  it("вердикт ревьюера виден в ленте карточки и уведомляет владельца", async () => {
+    const { task, version } = await createSubmittedTask();
+    const approve = await app.inject({
+      method: "POST",
+      url: "/api/reviews",
+      headers: { authorization: `Bearer ${reviewerToken}` },
+      payload: {
+        task_id: task.id,
+        version_id: version.id,
+        artifact_hash: version.artifact_hash,
+        criteria_version: "1",
+        task_revision: version.task_revision,
+        verdict: "approved",
+        findings: "Проверил сценарии и результат",
+      },
+    });
+    expect(approve.statusCode).toBe(201);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${task.id}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const texts = (detail.json().comments || []).map((c: any) => c.text).join(" | ");
+    expect(texts).toContain("Проверил сценарии и результат");
+
+    const notifs = await app.inject({
+      method: "GET",
+      url: "/api/notifications",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(JSON.stringify(notifs.json())).toContain("одобрил");
+  });
+
 });

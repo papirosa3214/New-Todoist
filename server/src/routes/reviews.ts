@@ -9,6 +9,7 @@ import {
   isReviewer,
 } from "../access.js";
 import { logEvent } from "../agentState.js";
+import { broadcastToUsers } from "../ws.js";
 import {
   createResultVersion,
   currentResultVersion,
@@ -130,6 +131,54 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     ).run(reviewId, taskId, version.id, version.task_revision, req.userId,
       version.artifact_hash, criteriaVersion, verdict, findings);
     logEvent({ taskId, actorId: req.userId, kind: "review_recorded", field: "result_version", toValue: `${version.version_no}:${verdict}` });
+
+    // Вердикт виден в карточке: комментарий от ревьюера в ленту + уведомление
+    // владельцу. Раньше записывалась только строка reviews и событие
+    // review_recorded — ни вердикта, ни комментария, ни сигнала владелец не
+    // видел (владелец 19.09.2026).
+    {
+      const verdictWord =
+        verdict === "approved"
+          ? "одобрил"
+          : verdict === "changes_requested"
+            ? "вернул на доработку"
+            : "остановил";
+      const reviewerName =
+        (db.prepare("SELECT name FROM users WHERE id = ?").get(req.userId) as
+          | { name?: string }
+          | undefined)?.name || "Reviewer";
+
+      const note = (findings || "").trim();
+      if (note) {
+        db.prepare(
+          "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
+        ).run(
+          crypto.randomUUID(),
+          taskId,
+          req.userId,
+          `Ревьюер ${verdictWord === "одобрил" ? "проверил и одобрил" : verdictWord === "вернул на доработку" ? "вернул на доработку" : "остановил работу"}: ${note}`,
+        );
+      }
+      // Владельцу — только если он не сам вынес вердикт (свой вердикт не шлём).
+      if (task.creator_id && task.creator_id !== req.userId) {
+        const notifId = crypto.randomUUID();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'reviewed', ?, ?, ?)",
+        ).run(
+          notifId,
+          task.creator_id,
+          taskId,
+          `${reviewerName}: «${task.title}» — ${verdictWord}`,
+          req.userId,
+        );
+        broadcastToUsers([task.creator_id], {
+          type: "notification:new",
+          notificationId: notifId,
+          taskId,
+        });
+      }
+    }
+
     return reply.code(201).send({
       review_id: reviewId, task_id: taskId, version_id: version.id,
       task_revision: version.task_revision, reviewer_id: req.userId,
