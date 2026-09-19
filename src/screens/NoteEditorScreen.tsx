@@ -545,8 +545,13 @@ export function NoteEditorScreen() {
     setAiBusy(true);
     try {
       const res = await extractTasks.mutateAsync(text);
-      setExtractedTasks(res.tasks);
-      if (res.tasks.length === 0) {
+      // На странный ответ сервера (200 + пустое тело, не-JSON, { tasks: null })
+      // клиентский api.post вернёт null/undefined. Без этой проверки
+      // `res.tasks` падает с TypeError прямо в render-phase, и пользователь
+      // видит белый экран (карточка 70697681). Теперь — понятный баннер.
+      const extracted = Array.isArray(res?.tasks) ? res.tasks : [];
+      setExtractedTasks(extracted);
+      if (extracted.length === 0) {
         setAiError(new Error("AI не нашёл в тексте конкретных задач"));
         return;
       }
