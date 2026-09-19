@@ -92,36 +92,41 @@ git add server/src/db.ts server/src/migrations.ts server/src/routes/tasks.ts ser
 git commit -m "feat(tasks): add reviewer-first routing flag"
 ```
 
-### Task 2: Enforce the Reviewer verdict and review-return gate
+### Task 2: Запретить агентский обход ревьюера (владелец вне процесса)
 
 **Files:**
 - Modify: `server/src/resultVersions.ts`, `server/src/routes/reviews.ts`, `server/src/routes/agent-state.ts`, `server/src/routes/tasks.ts`
 - Test: `server/test/reviewerFirstReview.test.ts`
 
+**Граница:** все ограничения этой задачи — ТОЛЬКО для агентов. Владелец вне
+процесса: закрывает, возвращает и удаляет карточку в любой момент без
+одобрения Reviewer. `hasReviewerApprovedCurrentVersion` — сигнал для UI и
+маршрута, не гейт для владельца.
+
 **Interfaces:**
 - Produces `hasReviewerApprovedCurrentVersion(taskId): boolean`.
-- `POST /api/reviews` requires non-empty `findings` from Reviewer for a reviewer-first card.
+- `POST /api/reviews` requires non-empty `findings` from Reviewer.
 
 - [ ] **Step 1: Add failing lifecycle tests.**
 
 ```ts
-it("does not close a reviewer-first task before Reviewer approves", async () => {
+it("владелец закрывает reviewer-first задачу в любой момент, без одобрения Reviewer", async () => {
   await submitToReview(taskId);
   expect((await owner.patch(`/api/tasks/${taskId}`, { status: "completed" })).statusCode)
-    .toBe(409);
+    .toBe(200);
 });
 
-it("requires Reviewer text, then lets the owner close without auto-closing", async () => {
+it("исполнитель не может вернуть reviewer-first задачу; Reviewer может — с комментарием", async () => {
+  await submitToReview(taskId);
+  expect((await agent.post(`/api/tasks/${taskId}/state`, { state: "in_progress", comment: "x" })).statusCode).toBe(403);
   expect((await reviewer.post("/api/reviews", approval(taskId, ""))).statusCode).toBe(400);
   expect((await reviewer.post("/api/reviews", approval(taskId, "Проверил сценарии и результат"))).statusCode).toBe(201);
-  expect((await owner.get(`/api/tasks/${taskId}`)).json().status).toBe("active");
-  expect((await owner.patch(`/api/tasks/${taskId}`, { status: "completed" })).statusCode).toBe(200);
+  expect((await reviewer.post(`/api/tasks/${taskId}/state`, { state: "in_progress", comment: "Доработайте обработку ошибок" })).statusCode).toBe(200);
 });
 
-it("allows only Reviewer to return a reviewer-first task with a comment", async () => {
-  expect((await owner.post(`/api/tasks/${taskId}/state`, { state: "in_progress", comment: "x" })).statusCode).toBe(403);
-  expect((await reviewer.post(`/api/tasks/${taskId}/state`, { state: "in_progress", comment: "Доработайте обработку ошибок" })).statusCode).toBe(200);
-  expect(await inboxContains(taskId, "Доработайте обработку ошибок")).toBe(true);
+it("владелец возвращает reviewer-first задачу без ограничений", async () => {
+  await submitToReview(taskId);
+  expect((await owner.post(`/api/tasks/${taskId}/state`, { state: "in_progress", comment: "Верну сам" })).statusCode).toBe(200);
 });
 ```
 
@@ -131,13 +136,20 @@ it("allows only Reviewer to return a reviewer-first task with a comment", async 
 cd server && npm test -- --run test/reviewerFirstReview.test.ts
 ```
 
-- [ ] **Step 3: Implement version-scoped Reviewer approval.**
+- [ ] **Step 3: Implement version-scoped Reviewer approval (сигнал).**
 
-Add `hasReviewerApprovedCurrentVersion`: it must require an `approved` row for the current result version whose `reviewer_id` passes `isReviewer`. For reviewer-first cards, reject empty approval findings and owner-created approvals. Keep legacy owner approval for opted-out cards.
+Add `hasReviewerApprovedCurrentVersion`: true, если для текущей версии
+результата есть `approved`-запись, автор которой проходит `isReviewer`.
+Reviewer-одобрение требует непустого `findings`. Владельческие записи
+одобрения этот helper не удовлетворяют, но владельца это ни к чему не
+обязывает — он не гейтится.
 
-- [ ] **Step 4: Gate close and return transitions server-side.**
+- [ ] **Step 4: Загейтить только агентский возврат.**
 
-For reviewer-first cards, `PATCH status=completed` returns 409 until the helper is true and bypasses the current auto-owner-approval branch. In `review → in_progress`, allow only Reviewer for reviewer-first cards, but retain the legacy owner route for flag `0`. Preserve comment validation, revision bump, inbox delivery, notification and websocket updates.
+В `review → in_progress` для `requires_reviewer_review=1` запрещать переход
+исполнителю (`403`); Reviewer и владелец — разрешены. В `PATCH
+status=completed` владельцу не ставить требований Reviewer — закрытие
+проходит всегда. Владельца не ограничивать ни на одном переходе.
 
 - [ ] **Step 5: Add the stale-approval test and run the whole server suite.**
 
@@ -146,7 +158,7 @@ it("does not reuse Reviewer approval after a return and resubmission", async () 
   await reviewerApprove(taskId, "Версия 1 проверена");
   await reviewerReturn(taskId, "Нужна правка");
   await submitToReview(taskId);
-  expect((await owner.patch(`/api/tasks/${taskId}`, { status: "completed" })).statusCode).toBe(409);
+  expect(await hasReviewerApprovedCurrentVersion(taskId)).toBe(false);
 });
 ```
 
@@ -158,7 +170,7 @@ cd server && npm test -- --reporter=dot
 
 ```bash
 git add server/src/resultVersions.ts server/src/routes/reviews.ts server/src/routes/agent-state.ts server/src/routes/tasks.ts server/test/reviewerFirstReview.test.ts
-git commit -m "feat(review): require commented Reviewer approval"
+git commit -m "feat(review): запретить агентский обход ревьюера (владелец вне процесса)"
 ```
 
 ### Task 3: Render and submit the web review workflow
