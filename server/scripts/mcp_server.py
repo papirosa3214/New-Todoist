@@ -384,6 +384,50 @@ def t_state(args):
     return out
 
 
+def t_review(args):
+    """Вердикт Reviewer по сданной задаче: одобрить или вернуть на доработку.
+
+    Обёртка над POST /api/reviews: сама достаёт актуальную версию результата
+    (её id/hash/revision нужны серверу), поэтому агенту не надо знать про
+    версии. «changes_requested» дополнительно возвращает карточку в работу
+    через /state — Reviewer это разрешено, владельца гейт не касается.
+    """
+    task_id = args["id"]
+    verdict = args["verdict"]
+    findings = (args.get("findings") or "").strip()
+
+    versions = api("GET", f"/api/tasks/{task_id}/versions")
+    current = next(
+        (v for v in (versions.get("versions") or []) if v.get("is_current")), None
+    )
+    if not current:
+        raise TaskFlowError(
+            "у задачи нет актуальной версии результата — проверять нечего"
+        )
+
+    body = {
+        "task_id": task_id,
+        "version_id": current["id"],
+        "artifact_hash": current["artifact_hash"],
+        "criteria_version": "1",
+        "task_revision": current["task_revision"],
+        "verdict": verdict,
+    }
+    if findings:
+        body["findings"] = findings
+
+    if verdict == "changes_requested":
+        if not findings:
+            raise TaskFlowError("для возврата нужен комментарий: что доработать")
+        api("POST", "/api/reviews", body)
+        api("POST", f"/api/tasks/{task_id}/state",
+            {"state": "in_progress", "comment": findings})
+        return {"вердикт": "возвращено на доработку", "комментарий": findings}
+
+    resp = api("POST", "/api/reviews", body)
+    return {"вердикт": resp.get("verdict"), "комментарий": resp.get("findings")}
+
+
 def upload_file(task_id: str, path: str) -> dict:
     """Заливает файл к задаче и возвращает запись вложения.
 
@@ -1075,6 +1119,20 @@ TOOLS = [
             "required": ["id", "state"],
         },
         "fn": t_state,
+    },
+    {
+        "name": "taskflow_review",
+        "description": "Вердикт Reviewer по сданной задаче. verdict=approved одобряет результат (комментарий обязателен); verdict=changes_requested возвращает карточку в работу (комментарий обязателен). Только для роли Critic/Verifier.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "verdict": {"type": "string", "description": "approved | changes_requested"},
+                "findings": {"type": "string", "description": "комментарий к вердикту (обязателен)"},
+            },
+            "required": ["id", "verdict"],
+        },
+        "fn": t_review,
     },
     {
         "name": "taskflow_comment",
