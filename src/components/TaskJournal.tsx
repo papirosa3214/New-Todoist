@@ -432,7 +432,7 @@ export function AgentOwnerActions({
         {task.agent_state === "review" && (
           <Button variant="primary" onClick={handleAccept}>
             <Icon name="check" size={16} />
-            Принять
+            Принять и закрыть задачу
           </Button>
         )}
         {task.agent_state === "review" && (
