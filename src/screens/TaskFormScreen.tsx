@@ -36,6 +36,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useProjects } from "../api/projects";
 import { useLabels } from "../api/labels";
 import { useAgents } from "../api/agents";
+import { useCurrentUser } from "../api/auth";
 import { useCreateTask, useTask, useUpdateTask } from "../api/tasks";
 import {
   useCreateSubtask,
@@ -143,6 +144,13 @@ export function TaskFormScreen() {
   const qc = useQueryClient();
 
   const { data: agents = [], isError: agentsError } = useAgents();
+  const { data: currentUser } = useCurrentUser();
+  // Владелец — тоже исполнитель: карточка на нём неприкосновенна для
+  // агентов. В /api/agents его нет, поэтому добавляем себя первым.
+  const assigneeOptions =
+    currentUser && !agents.some((a) => a.id === currentUser.id)
+      ? [currentUser, ...agents]
+      : agents;
   const { data: projects = [], isError: projectsError } = useProjects();
   const { data: labels = [], isError: labelsError } = useLabels();
   const createTask = useCreateTask();
@@ -1120,7 +1128,7 @@ export function TaskFormScreen() {
       <div className="bg-card rounded-[14px] overflow-hidden mb-4">
         {showAssigneePicker ? (
           <>
-            {agents.map((u) => (
+            {assigneeOptions.map((u) => (
               <button
                 key={u.id}
                 onClick={() => {
@@ -1180,7 +1188,7 @@ export function TaskFormScreen() {
           <>
             {assignee ? (
               (() => {
-                const u = agents.find((us) => us.id === assignee);
+                const u = assigneeOptions.find((us) => us.id === assignee);
                 if (!u) return null;
                 return (
                   <button
