@@ -1,0 +1,3453 @@
+From 14b599d88bf3d2cbf995203885529c679e6b46be Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:02:36 +0300
+Subject: [PATCH 01/12] =?UTF-8?q?docs(pi-runtime):=20=D1=81=D0=BF=D0=B5?=
+ =?UTF-8?q?=D0=BA=20=D0=B8=20=D0=BF=D0=BB=D0=B0=D0=BD=20=D1=84=D0=B0=D0=B7?=
+ =?UTF-8?q?=D1=8B=202=20(=D1=80=D0=B5=D0=B0=D0=BB=D1=8C=D0=BD=D0=B0=D1=8F?=
+ =?UTF-8?q?=20=D0=B8=D0=BD=D1=82=D0=B5=D0=B3=D1=80=D0=B0=D1=86=D0=B8=D1=8F?=
+ =?UTF-8?q?)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ .../2026-09-18-pi-runtime-real-integration.md | 392 ++++++++++++++++++
+ .../2026-09-18-pi-runtime-real-integration.md | 243 +++++++++++
+ 2 files changed, 635 insertions(+)
+ create mode 100644 docs/superpowers/plans/2026-09-18-pi-runtime-real-integration.md
+ create mode 100644 docs/superpowers/specs/2026-09-18-pi-runtime-real-integration.md
+
+diff --git a/docs/superpowers/plans/2026-09-18-pi-runtime-real-integration.md b/docs/superpowers/plans/2026-09-18-pi-runtime-real-integration.md
+new file mode 100644
+index 00000000..a02bd7ae
+--- /dev/null
++++ b/docs/superpowers/plans/2026-09-18-pi-runtime-real-integration.md
+@@ -0,0 +1,392 @@
++# Pi Runtime Real Integration — Implementation Plan
++
++> Спек: [`2026-09-18-pi-runtime-real-integration.md`](../specs/2026-09-18-pi-runtime-real-integration.md).
++> Фаза 2: фасад из фазы 1 становится реальным.
++
++## Global Constraints
++
++- `main` only.
++- Каждый Task — отдельный коммит.
++- `trigger.py` не переписывается; `subprocess.Popen`/`make_cmd` выносятся в
++  `server/scripts/start_agent_run.py` (JSON stdin/stdout, без shell=True).
++- Контракт `/api/roles` неизменен.
++- vitest и pytest зелёные после каждого Task.
++- Credential не логируется ни в одном слое.
++
++---
++
++## Task 1: Launcher `server/scripts/start_agent_run.py`
++
++**Files:**
++- Create: `server/scripts/start_agent_run.py`
++- Modify: `server/scripts/trigger.py`
++
++- [ ] **Step 1.** Прочитать `trigger.py:L2270–L2420` (формирование `cmd`,
++  env, `subprocess.Popen` с цепочкой заходов, `silence_watch`, heartbeat).
++
++- [ ] **Step 2.** Создать `server/scripts/start_agent_run.py` с функцией
++  ```python
++  def start_agent_run(input: dict) -> dict
++  ```
++  Контракт:
++  - `input` читается из stdin как JSON: `{task_id, agent_id, role, model,
++    reply_only, resume_sid, fork, mcp_profile, skills}`.
++  - Формирует argv-массив для `Popen([PI_BIN, "--mcp-config", ..., "-p", text])`
++    **строго без shell=True**.
++  - Возвращает JSON в stdout: `{status, proc_pid, task_id, session_id?,
++    spent?, returncode, error?}`.
++  - Логи (stderr) — без credential, без ключей, без текста задачи (только
++    `provider`, `model`, `task_id[:8]`).
++  - Цепочка заходов, env-переменные, MCP-профиль — всё здесь.
++
++- [ ] **Step 3.** В `trigger.py` заменить блок L2270–L2420 на
++  ```python
++  from start_agent_run import start_agent_run
++  result = start_agent_run(input_dict)
++  ```
++  Удалить импорт `subprocess` если больше не нужен, удалить `make_cmd`,
++  удалить `claude_session_args` если она была приватной для запуска.
++
++- [ ] **Step 4.** Прогнать dry-run:
++  ```bash
++  TASKFLOW_TRIGGER_DRY=1 timeout 5 python3 server/scripts/trigger.py 2>&1 | head -30
++  ```
++  Без `NameError`/`ImportError`.
++
++- [ ] **Step 5.** Прогнать pytest:
++  ```bash
++  python3 -m pytest server/scripts/ -v 2>&1 | tail -30
++  ```
++
++- [ ] **Step 6.** Коммит: `refactor(trigger): launcher start_agent_run.py, JSON stdin/stdout`.
++
++---
++
++## Task 2: `listModels()` через `pi --list-models`
++
++**Files:**
++- Modify: `server/src/runtime/PiRuntimeAdapter.ts`
++- Modify: `server/test/runtime/PiRuntimeAdapter.test.ts`
++
++- [ ] **Step 1.** Добавить helper `parsePiListModels(output: string):
++  Array<{provider: string, id: string}>` в `PiRuntimeAdapter.ts`.
++  Парсит TSV-вывод `pi --list-models`, пропускает шапку и пустые строки,
++  устойчив к разному количеству колонок.
++
++- [ ] **Step 2.** Добавить кэш `listModelsCache: { at: number; models:
++  Model[] } | null` с TTL 10 c. Метод `invalidateListModelsCache()`.
++
++- [ ] **Step 3.** В `listModels()`:
++  1. Если кэш свежий — вернуть кэш.
++  2. Иначе `execFile('pi', ['--list-models'], {timeout: 15000})`.
++  3. Распарсить, дедуп по `(provider, id)`.
++  4. Для каждого уникального провайдера — `pi auth check --provider X --json`
++     для определения `available`.
++  5. Сохранить в кэш, вернуть.
++
++- [ ] **Step 4.** Тест `listModels returns models from pi` — mock
++  `execFile`, проверить минимум один провайдер, `runtime_id === "runtime:pi"`.
++
++- [ ] **Step 5.** Тест `listModels cache hit returns same array` — два
++  вызова подряд, второй не зовёт execFile.
++
++- [ ] **Step 6.** Коммит: `feat(runtime): listModels через pi --list-models, кэш 10 c`.
++
++---
++
++## Task 3: `listProviders()` через `pi auth check`
++
++**Files:**
++- Modify: `server/src/runtime/PiRuntimeAdapter.ts`
++- Modify: `server/test/runtime/PiRuntimeAdapter.test.ts`
++
++- [ ] **Step 1.** Добавить helper `checkProviderStatus(provider: string):
++  Promise<{status, authType, providerId}>` — вызывает
++  `execFile('pi', ['auth', 'check', '--provider', provider, '--json', '--no-refresh'])`.
++
++- [ ] **Step 2.** В `listProviders()` убрать `providerStatusFromEnv`,
++  вместо этого `Promise.all(KNOWN_PROVIDERS.map(checkProviderStatus))`.
++  Маппинг статусов Pi → фасадные.
++
++- [ ] **Step 3.** Тест `listProviders returns connected when pi auth check
++  returns ready` (mock).
++
++- [ ] **Step 4.** Тест `listProviders filters provider_not_found`.
++
++- [ ] **Step 5.** Коммит: `refactor(runtime): listProviders через pi auth check, ENV TASKFLOW_*_TOKEN убран`.
++
++---
++
++## Task 4: `connectProvider()` + `authInstruction()`
++
++**Files:**
++- Modify: `server/src/runtime/RuntimeAdapter.ts`
++- Modify: `server/src/runtime/PiRuntimeAdapter.ts`
++- Modify: `server/test/runtime/PiRuntimeAdapter.test.ts`
++
++- [ ] **Step 1.** Расширить интерфейс `RuntimeAdapter`:
++  ```ts
++  type ConnectProviderInput = { apiKey?: string };
++  type AuthInstruction = {
++    status: "auth_required" | "ready";
++    provider: string;
++    command?: string;
++    note?: string;
++  };
++  connectProvider(provider: string, body: ConnectProviderInput): Promise<ProviderConnection>;
++  authInstruction(provider: string): Promise<AuthInstruction>;
++  ```
++
++- [ ] **Step 2.** Реализовать `connectProvider`:
++  - Определить тип провайдера через `pi auth check --provider X --json`:
++    - `not_ready credentials_not_configured` + запрошен apiKey → писать.
++    - `not_ready credentials_not_configured` + apiKey не запрошен → 400
++      `api_key_required`.
++    - `ready` → идемпотентный no-op (или возвращает текущий статус).
++    - oauth → 400 `oauth_use_auth_instruction`.
++  - Запись: lockfile (`proper-lockfile`) на `~/.pi/agent/auth.json`,
++    `writeFileSync` во временный файл в той же директории, `renameSync`,
++    `chmodSync(0o600)`.
++  - Credential **не логируется**: в логах только `provider` и длина ключа.
++  - После записи — `invalidateListModelsCache()` + повторный
++    `pi auth check --provider X --json`.
++  - Возвращает `ProviderConnection`.
++
++- [ ] **Step 3.** Реализовать `authInstruction(provider)`:
++  - Статус из `pi auth check`.
++  - Для OAuth: `command = "pi --provider <name> --model <любая доступная>
++    \\"ping\\""`, `note` с пояснением.
++  - Для api_key: `command = undefined`, `note` указывает, что нужно
++    передать apiKey через форму.
++
++- [ ] **Step 4.** Тест `connectProvider writes api key to auth.json` —
++  временный auth.json в tmp-каталоге через mock `getAuthPath()`.
++
++- [ ] **Step 5.** Тест `connectProvider for oauth returns 400`.
++
++- [ ] **Step 6.** Тест `connectProvider does not log api key` —
++  spy на `console.log`, проверить что значение apiKey не встретилось.
++
++- [ ] **Step 7.** Тест `authInstruction returns command for oauth`.
++
++- [ ] **Step 8.** Коммит: `feat(runtime): connectProvider + authInstruction, lockfile + atomic write`.
++
++---
++
++## Task 5: `ownerOrApiToken` preHandler
++
++**Files:**
++- Modify: `server/src/auth.ts`
++- Modify: `server/test/auth.test.ts`
++
++- [ ] **Step 1.** Расширить модель api-токенов: добавить поле `scopes:
++  string[]` (json) в meta токена (или отдельная колонка `scopes` в
++  api_tokens).
++
++- [ ] **Step 2.** В `auth.ts`:
++  ```ts
++  export async function ownerOrApiToken(req, reply) {
++    const apiOk = await checkApiToken(req);
++    if (apiOk) {
++      if (req.apiToken.scopes?.includes("runtime:auth")) return;
++      return reply.code(403).send({ error: "runtime:auth scope required" });
++    }
++    const userOk = await checkUserToken(req);
++    if (!userOk) return reply.code(401).send({ error: "unauthorized" });
++    if (req.user.role !== "owner" && req.user.role !== "service") {
++      return reply.code(403).send({ error: "owner_or_service_required" });
++    }
++  }
++  ```
++
++- [ ] **Step 3.** Тест: 401 без токена, 403 для обычного пользователя,
++  403 для api-токена без scope, 200 для owner/service/api-токена со scope.
++
++- [ ] **Step 4.** Коммит: `feat(auth): ownerOrApiToken с scope runtime:auth для api-токенов`.
++
++---
++
++## Task 6: POST /auth + фильтрация GET /providers
++
++**Files:**
++- Modify: `server/src/routes/runtime.ts`
++- Modify: `server/test/runtime/providers.test.ts`
++
++- [ ] **Step 1.** В `runtime.ts` сменить preHandler POST
++  `/api/runtime/providers/:provider/auth` на `ownerOrApiToken`. Вызвать
++  `piRuntime.connectProvider(name, body)`. Если провайдер OAuth — вызвать
++  `piRuntime.authInstruction(name)` и вернуть как есть (200 + JSON).
++  Если api_key с переданным ключом — записать, вернуть обновлённый статус.
++
++- [ ] **Step 2.** GET `/api/runtime/providers` фильтрует ответ: оставляет
++  только `{provider, status, authType}`. Убирает из ответа `runtime_id`,
++  `managedBy`, `lastCheckedAt`, любые credential details.
++
++- [ ] **Step 3.** Тест: 403 для обычного пользователя, 200 для owner.
++  Для api_key — тело с `apiKey`, проверка записи в auth.json (через mock).
++  Для OAuth — возвращается `{status: "auth_required", command, note}`,
++  запись не делается.
++
++- [ ] **Step 4.** Тест GET `/providers` — ответ содержит только
++  `{provider, status, authType}`, никаких credential details.
++
++- [ ] **Step 5.** Коммит: `feat(runtime): POST /auth подключён к connectProvider, GET фильтрует credential details`.
++
++---
++
++## Task 7: `nextModelForProfile` вместо `nextShellForRole`
++
++**Files:**
++- Modify: `server/src/routes/agent-state.ts`
++- Modify: `server/src/roleRouting.ts`
++- Modify: `server/test/agent-state.test.ts`
++
++- [ ] **Step 1.** В `agent-state.ts` заменить вызов `nextShellForRole(...)`
++  на `nextModelForProfile(...)`. Возвращаемый `ModelRoute` маппится в
++  `task.attempt_*` поля (`model`, `provider`).
++
++- [ ] **Step 2.** В `roleRouting.ts` удалить `nextShellForRole()`.
++  `loadRoleRouting` оставить как deprecated алиас для `loadRuntimeConfig`
++  (UI ещё читает). Проверить, что ни один файл не импортирует
++  `nextShellForRole`.
++
++- [ ] **Step 3.** Тест: при провайдер-лимите лесенка идёт по моделям,
++  не по оболочкам. Runtime остаётся `runtime:pi`.
++
++- [ ] **Step 4.** Коммит: `refactor: fallback по моделям, nextShellForRole удалён`.
++
++---
++
++## Task 8: API GET/PUT `/api/runtime/routing`
++
++**Files:**
++- Modify: `server/src/routes/runtime.ts`
++- Modify: `server/src/runtime/PiRuntimeAdapter.ts` (хелпер
++  `getAvailableModels()` + `modelExists(modelId)`)
++- Create: `server/test/runtime/routing.test.ts`
++
++- [ ] **Step 1.** В `PiRuntimeAdapter.ts` добавить `getAvailableModels():
++  Promise<Set<string>>` (использует `listModels()`).
++
++- [ ] **Step 2.** GET `/api/runtime/routing` — возвращает текущий
++  `RoleRouting` через `loadRuntimeConfig()`.
++
++- [ ] **Step 3.** PUT `/api/runtime/routing/:role`:
++  - preHandler `ownerOrApiToken`,
++  - schema validation (primary — непустая строка, fallbacks — массив
++    строк, может быть пустым),
++  - проверка моделей через `getAvailableModels()`,
++  - проверка уникальности (primary ∉ fallbacks),
++  - lockfile на `role-routing.yaml`, atomic rename,
++  - инвалидация кэша `loadRuntimeConfig` (или перечитывание файла).
++
++- [ ] **Step 4.** Тест: успешный PUT, 403 для не-owner, 422 для
++  несуществующей модели, 422 для дубликата.
++
++- [ ] **Step 5.** Коммит: `feat(runtime): API /api/runtime/routing с редактированием моделей`.
++
++---
++
++## Task 9: `startRun()` через `spawn start_agent_run.py`
++
++**Files:**
++- Modify: `server/src/runtime/PiRuntimeAdapter.ts`
++- Modify: `server/test/runtime/PiRuntimeAdapter.test.ts`
++
++- [ ] **Step 1.** В `startRun()`:
++  - Загрузить задачу из БД.
++  - Сформировать JSON input для launcher (task_id, agent_id, role,
++    model, mcp_profile, skills).
++  - `child_process.spawn('python3', ['server/scripts/start_agent_run.py'],
++    {stdio: ['pipe', 'pipe', 'ignore']})`, stdin → JSON, stdout → JSON.
++  - Вернуть `{runId: "run-<short>", sessionId: null, status: "queued"}`.
++  - **Не блокировать** event loop: stdout читается асинхронно, после
++    парсинга JSON пишем в tasks.agent_state.
++
++- [ ] **Step 2.** Тест `startRun spawns python and returns runId` —
++  mock spawn, проверить runId и `status: "queued"`.
++
++- [ ] **Step 3.** Коммит: `feat(runtime): startRun запускает start_agent_run.py через spawn`.
++
++---
++
++## Task 10: UI — экран «Провайдеры»
++
++**Files:**
++- Modify: `src/screens/ProvidersScreen.tsx` (new)
++- Modify: `src/App.tsx`
++- Modify: `src/api/runtime.ts` (new)
++
++- [ ] **Step 1.** `src/api/runtime.ts`:
++  - `getRuntimeStatus()`, `getProfiles()`, `getModels()`,
++    `getProviders()`, `connectProvider(name, body)`, `getAuthInstruction(name)`,
++    `getRouting()`, `putRouting(role, body)`.
++
++- [ ] **Step 2.** `ProvidersScreen.tsx`:
++  - Заголовок, описание.
++  - Карточки для каждого провайдера: имя, статус (badge),
++    `authType`.
++  - Для `connected` — кнопка «Переподключить» (вызывает
++    `getAuthInstruction`, показывает модалку).
++  - Для `disconnected` api_key — поле ввода ключа + кнопка «Подключить»
++    (вызывает `connectProvider`).
++  - Для `disconnected`/`expired` OAuth — кнопка «Инструкция» (модалка
++    с командой из `authInstruction`, без deep-link).
++
++- [ ] **Step 3.** Маршрут `/providers` + пункт меню.
++
++- [ ] **Step 4.** Проверка UI в браузере: minimax → ввести ключ → connected.
++
++- [ ] **Step 5.** Коммит: `feat(ui): экран Провайдеры`.
++
++---
++
++## Task 11: UI — экран «Агенты»
++
++**Files:**
++- Modify: `src/screens/AgentsScreen.tsx` (new)
++- Modify: `src/App.tsx`
++
++- [ ] **Step 1.** `AgentsScreen.tsx`:
++  - 8 ролей, для каждой — текущая primary + fallbacks.
++  - Select для primary (источник `getModels()`).
++  - Multi-select для fallbacks (та же модель не может быть в обоих).
++  - Кнопка «Сохранить» → `putRouting(role, {primary, fallbacks})`.
++
++- [ ] **Step 2.** Маршрут `/agents` + пункт меню.
++
++- [ ] **Step 3.** Проверка UI: сменить модель архитектора, убедиться
++  что `role-routing.yaml:models.architect` обновился.
++
++- [ ] **Step 4.** Коммит: `feat(ui): экран Агенты с выбором моделей`.
++
++---
++
++## Task 12: Финальный осмотр
++
++**Files:** (нет новых правок)
++
++- [ ] **Step 1.** Прогнать всё:
++  ```bash
++  cd /home/maksim/Проекты/New-Todoist
++  npx vitest run server/test/ 2>&1 | tail -30
++  python3 -m pytest server/scripts/ -v 2>&1 | tail -30
++  npx tsc --noEmit -p server/tsconfig.json 2>&1 | tail -30
++  ```
++- [ ] **Step 2.** `git status` — только откоммиченное.
++- [ ] **Step 3.** Закрыть карточку в `review`.
++
++---
++
++## Self-Review
++
++- **Coverage спека:** A (launcher) → Task 1. B (listModels) → Task 2.
++  C (listProviders) → Task 3. D (connectProvider) → Tasks 4, 6.
++  E (auth) → Tasks 5, 6. F (nextModelForProfile) → Task 7.
++  G (routing API) → Task 8. H (UI) → Tasks 10, 11. I (spawn) → Task 9.
++- **Placeholders:** нет.
++- **Type consistency:** `ConnectProviderInput`/`AuthInstruction` единые
++  во всех Tasks.
++- **Risk review:** Task 1 — после него dry-run обязателен. Task 4 —
++  lockfile + atomic write + chmod 0600 + без логов credential. Task 6 —
++  фильтрация GET-ответа, credential не утекает.
+diff --git a/docs/superpowers/specs/2026-09-18-pi-runtime-real-integration.md b/docs/superpowers/specs/2026-09-18-pi-runtime-real-integration.md
+new file mode 100644
+index 00000000..360588db
+--- /dev/null
++++ b/docs/superpowers/specs/2026-09-18-pi-runtime-real-integration.md
+@@ -0,0 +1,243 @@
++# Pi Runtime Real Integration — спецификация (фаза 2)
++
++> Продолжение спека [`2026-09-18-pi-runtime-facade.md`](./2026-09-18-pi-runtime-facade.md).
++> Фаза 1: `PiRuntimeAdapter` собран как фасад над существующими источниками,
++> `startRun()`/`connectProvider()` — заглушки. Фаза 2: фасад становится
++> реальным — `startRun()` запускает Pi, `connectProvider()` идёт через Pi.
++
++## Goal
++
++Сделать `PiRuntimeAdapter` реально управляющим Pi:
++- `startRun()` запускает Pi-сессию (та же логика, что сейчас в `trigger.py`).
++- `getModels()` берёт список моделей из самого Pi (`pi --list-models`).
++- `getProviders()`/`getAuthStatus()` берут статус из самого Pi (`pi auth check`).
++- `connectProvider()` сохраняет credentials в `~/.pi/agent/auth.json` так,
++  как их хранит сам Pi.
++- `POST /api/runtime/providers/:provider/auth` вызывает `connectProvider()`,
++  доступен только owner/service или api-токену со scope `runtime:auth`.
++- В UI добавляются экраны «Провайдеры» и «Агенты».
++
++`ClaudeCodeRuntime`, `CodexRuntime` не вводятся. Pi — единственный runtime.
++
++## Принцип (Максим 18.09.2026)
++
++**TaskFlow владеет AgentProfile и routing. Pi владеет runtime, sessions,
++models и provider credentials.** Credentials не ходят через форму UI,
++не логируются, не покидают машину, на которой работает Pi.
++
++## Архитектурные решения (подтверждены Максим 18.09.2026)
++
++### A. Где живёт запуск Pi
++
++Сейчас запуск Pi размазан по `server/scripts/trigger.py` (L2280–2400):
++формирование `cmd` через `make_cmd`, `subprocess.Popen` с цепочкой заходов,
++env-переменные, MCP-профиль, skills.
++
++**Решение.** Вынести запуск в общий launcher
++`server/scripts/start_agent_run.py`. Контракт:
++- вход — структурированный JSON через stdin,
++- выход — JSON через stdout (статус, session_id, returncode, spent),
++- **никакого `shell=True`** и **никакой строковой конкатенации команд** —
++  только `argv`-массив, передаваемый в `Popen`,
++- `cmd`/`env`/`Popen`/`session` — всё в одном файле, больше нигде.
++- `trigger.py` импортирует `start_agent_run.start_agent_run()` напрямую
++  и больше не знает про `subprocess.Popen`/`make_cmd`.
++- `PiRuntimeAdapter.startRun()` вызывает его через `spawn python3
++  server/scripts/start_agent_run.py`.
++- Один путь запуска: одно место для багфиксов, одна точка тестирования.
++
++### B. Источник моделей
++
++**Решение.** `pi --list-models` — единственный источник правды. Парсим
++вывод (TSV с шапкой provider/model/context/max-out/thinking/images).
++Провайдер определяется по первому столбцу. Поле `available` идёт от
++`pi auth check --provider X --json` (ready → true, иначе false). Кэш на
++10 секунд, чтобы не дёргать `pi` на каждый запрос `/api/runtime/models`.
++
++### C. Источник статуса провайдеров
++
++**Решение.** `pi auth check --provider X --json`. Маппинг статусов:
++- `ready` → `connected`
++- `not_ready` (reason: `credentials_not_configured`) → `disconnected`
++- `not_ready` (reason: `provider_not_found`) → не показывать провайдера
++- `invalid` → `expired` (Pi не смог прочитать auth.json)
++
++`providerStatusFromEnv()` из `PiRuntimeAdapter` удаляется — TaskFlow
++больше не смотрит `TASKFLOW_*_TOKEN` из ENV.
++
++### D. connectProvider()
++
++Pi не имеет CLI-команды для запуска OAuth flow из headless.
++
++**D.1. Для api_key провайдеров (сейчас только `minimax`):**
++- Endpoint принимает `{apiKey: string}` в теле запроса.
++- PiRuntimeAdapter пишет ключ в `~/.pi/agent/auth.json` через тот же
++  путь, что использует `FileAuthStorageBackend` в Pi:
++  - `proper-lockfile` для исключения гонки с самим Pi,
++  - atomic write через `writeFileSync` во временный файл + `renameSync`
++    (POSIX atomic rename),
++  - `chmod 0o600` на файл (как делает `AUTH_FILE_WRITE_OPTIONS` в Pi),
++  - credential **не логируется** ни в одном из слоёв (Node, Python, логи).
++- Проверка после записи: повторный `pi auth check --provider X --json`
++  → `ready`. Если нет — 502 с reason от Pi.
++
++**D.2. Для OAuth провайдеров (anthropic, openai-codex):**
++- Endpoint **не принимает токены** через UI. Никаких access/refresh.
++- Возвращает:
++  ```json
++  {
++    "status": "auth_required",
++    "provider": "anthropic",
++    "command": "pi --provider anthropic --model <любая доступная> \"ping\"",
++    "note": "Запустите команду на машине с интерактивным Pi. Pi откроет OAuth-браузер, после успешного входа вернитесь сюда и нажмите «Переподключить»."
++  }
++  ```
++- Владелец проходит OAuth в интерактивном режиме на своей машине,
++  где у него работает `pi` в TUI. Pi сам сохраняет токены в свой
++  `auth.json`. После возвращения в TaskFlow кнопка «Переподключить»
++  перечитывает статус через `pi auth check --provider X --json`.
++- `pi://auth/<provider>` НЕ делаем, пока нет зарегистрированного
++  handler для такого deep link (Максим 18.09.2026).
++
++### E. POST /api/runtime/providers/:provider/auth — авторизация
++
++`authOrApiToken` стоит на всех runtime-endpoint'ах. Для connect нужно
++жёстче: только owner/service **или API-токен со scope `runtime:auth`**
++(Максим 18.09.2026). Обычный API-токен **не должен** автоматически
++давать право менять авторизацию провайдеров.
++
++**Решение.**
++- Новый preHandler `ownerOrApiToken` в `server/src/auth.ts`:
++  api-токен принимается **только при наличии scope `runtime:auth`** в
++  его meta; user — только `role in (owner, service)`. Без scope —
++  403 `runtime:auth scope required`.
++- Использовать на POST `/api/runtime/providers/:provider/auth` И на
++  PUT `/api/runtime/routing/:role`. Оба меняют состояние рантайма.
++- GET остаётся на `authOrApiToken` (status читать может любой
++  авторизованный — это диагностика, не запись).
++- GET `/api/runtime/providers` в ответе отдаёт **только**:
++  ```json
++  {"provider": "...", "status": "...", "authType": "oauth|api_key|null"}
++  ```
++  Никаких токенов, refresh, access, expires, accountId, ключей —
++  никаких credential details. Поля `lastCheckedAt`, `managedBy`,
++  `runtime_id` остаются в TypeScript-фасаде `ProviderConnection`, но
++  HTTP-ответ эндпоинта фильтрует только три публичных поля.
++
++### F. Перевод provider_limit/fallback с shell-семантики на model-семантику
++
++`nextModelForProfile()` уже добавлен (коммит d5c5c75e). Нужно:
++1. Заменить вызовы `nextShellForRole()` в `agent-state.ts` (точка
++   fallback при provider_limit) на `nextModelForProfile()`.
++2. Удалить `nextShellForRole()` из `server/src/roleRouting.ts`.
++3. `resolve_agent_for_role()` в `trigger.py` уже удалён (коммит
++   c9004137). Проверить, что `handle_task` в trigger.py больше не
++   выбирает «следующего исполнителя» — теперь выбор только по модели.
++
++**Важно:** сам runtime не меняется (Pi единственный), меняется только
++пара (model, provider) в `task.attempt_*` / agent_state.
++
++### G. PUT /api/runtime/routing/:role — правила записи (переходный вариант)
++
++Долгосрочно routing уедет в БД. До тех пор — YAML остаётся
++bootstrap/default config. Правила записи (подтверждено Максим 18.09.2026):
++
++- **schema validation:** `primary` — непустая строка; `fallbacks` —
++  массив строк, может быть пустым. Несуществующая роль → 404.
++- **Проверка моделей:** каждый `primary` и каждый элемент `fallbacks`
++  обязан присутствовать в `pi --list-models` для соответствующего
++  провайдера. Несуществующая модель → 422 `model_not_available`.
++- **Уникальность:** `primary` не должен встречаться в `fallbacks`
++  той же роли. Дубликаты внутри `fallbacks` тоже запрещены.
++- **Атомарность записи:** файл блокируется (`proper-lockfile`), пишется
++  во временный `role-routing.yaml.tmp` в той же директории, затем
++  `renameSync` — атомарная замена (POSIX rename).
++- **Чистая запись:** YAML переписывается без потери шапки-комментария,
++  порядок секций сохраняется (`defaults`, `fallbacks`, `models`).
++- **Инвалидация кэша:** после записи `loadRuntimeConfig()` должен
++  перечитывать файл. Если используется кэш — сбросить через явный
++  re-export / version marker.
++- **Доступ:** preHandler `ownerOrApiToken` (owner/service ИЛИ api-токен
++  со scope `runtime:auth`).
++- **YAML остаётся bootstrap/default:** при переезде routing в БД YAML
++  будет seed'ом для новых инсталляций.
++
++### H. UI
++
++Экраны добавляются в `src/screens/`:
++- `ProvidersScreen.tsx` — список провайдеров, кнопки «Подключить» /
++  «Переподключить». Для api_key — поле ввода ключа. Для OAuth — модалка
++  с командой `pi --provider X --model Y "ping"`, без deep-link.
++  При «Переподключить» статус перечитывается через `pi auth check`.
++- `AgentsScreen.tsx` — выбор primary model + fallback models для
++  каждой из 8 ролей. Источник моделей — `GET /api/runtime/models`.
++  Сохранение через `PUT /api/runtime/routing/:role`.
++
++DESIGN.md и UI-CHECKLIST.md перечитываются до правок.
++
++### I. Как PiRuntimeAdapter.startRun() вызывает Python
++
++**Решение.** `spawn('python3', ['server/scripts/start_agent_run.py', ...])`
++с stdin=JSON, stdout=JSON. Изоляция, latency приемлема (запуск Pi и так
++1–5 c). Альтернатива через HTTP endpoint отвергнута — лишний слой.
++
++## Что входит
++
++1. `server/scripts/start_agent_run.py` — общий launcher (JSON stdin/stdout).
++2. `server/scripts/trigger.py` — `subprocess.Popen`/`make_cmd` удаляются,
++   вызов через `start_agent_run`. Поведение сохраняется.
++3. `server/src/runtime/PiRuntimeAdapter.ts`:
++   - `startRun()` → `spawn python3 server/scripts/start_agent_run.py`,
++     stdin=JSON с задачей.
++   - `listModels()` → `pi --list-models` + кэш 10 c.
++   - `listProviders()` → `pi auth check --provider X --json` для каждого.
++   - `connectProvider(provider, body)` → запись api_key в auth.json под
++     lockfile, для OAuth — возврат `{status: "auth_required", command}`.
++4. `server/src/auth.ts` — `ownerOrApiToken` preHandler с поддержкой
++   scope `runtime:auth` для api-токенов.
++5. `server/src/routes/runtime.ts`:
++   - POST `/providers/:provider/auth` на `ownerOrApiToken` → `connectProvider`.
++   - PUT `/routing/:role` на `ownerOrApiToken` → запись routing.
++   - GET `/providers` фильтрует credential details (только `provider`,
++     `status`, `authType`).
++6. `server/src/roleRouting.ts` — удалить `nextShellForRole()`.
++7. `server/src/routes/agent-state.ts` — перевести fallback на
++   `nextModelForProfile()`.
++8. `src/screens/ProvidersScreen.tsx` + `src/screens/AgentsScreen.tsx`.
++9. Роутинг в `src/App.tsx`, новые пункты меню.
++10. Тесты vitest + pytest + проверка UI в браузере.
++
++## Что не входит
++
++1. Миграция БД. Источники правды те же: `~/.pi/agent/*`,
++   `role-routing.yaml`, `tasks.agent_*`.
++2. ClaudeCodeRuntime / CodexRuntime.
++3. Фоновая автозагрузка auth.json в TaskFlow — мы только пишем/читаем
++   через тот же lockfile, что и Pi.
++4. Автоматический OAuth без участия владельца.
++5. Полный редизайн UI — только два новых экрана.
++6. Изменение публичного контракта `/api/roles` — UI его читает.
++7. Перенос routing в БД — это отдельная карточка позже.
++
++## Риски
++
++| Риск | Снятие |
++| --- | --- |
++| Lock на auth.json: Pi и TaskFlow пишут одновременно | `proper-lockfile` + atomic rename, как у Pi |
++| Старт через spawn медленнее, чем trigger.py inline | Один spawn — приемлемо |
++| UI не может вызвать OAuth flow | Endpoint для OAuth возвращает команду, owner идёт к себе |
++| `nextModelForProfile` даёт другую модель | Тесты на routing фиксируют поведение |
++| Кэш `pi --list-models` отстаёт на 10 c | `connectProvider` инвалидирует кэш принудительно |
++| Credential утекает в логи | В Python — `log(f"...provider={name}, key=***")`. В Node — credential не передаётся в логгер вообще |
++
++## Глобальные ограничения
++
++- Только ветка `main`.
++- Каждый subtask — отдельный коммит.
++- `trigger.py` не переписывается; `subprocess.Popen`/`make_cmd` выносятся в
++  `server/scripts/start_agent_run.py` (JSON stdin/stdout, без shell=True).
++- Контракт `/api/roles` неизменен.
++- vitest и pytest зелёные после каждого subtask.
++- Реальный OAuth — на машине владельца через интерактивный `pi`.
++- **TaskFlow владеет AgentProfile и routing. Pi владеет runtime, sessions,
++  models и provider credentials.**
+-- 
+2.43.0
+
+
+From 263682fd218da2ad0d19db37dfa7111cdb8a42bb Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:19:52 +0300
+Subject: [PATCH 02/12] =?UTF-8?q?refactor(trigger):=20=D0=B2=D1=8B=D0=BD?=
+ =?UTF-8?q?=D0=B5=D1=81=D1=82=D0=B8=20=D0=B7=D0=B0=D0=BF=D1=83=D1=81=D0=BA?=
+ =?UTF-8?q?=20Pi=20=D0=B2=20start=5Fagent=5Frun.py::popen=5Fagent?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Popen/env/timeout/silence_watch-kill/usage-чтение переехали в
+server/scripts/start_agent_run.py. Один launcher — одно место для
+bugfix'ов; trigger.py остаётся в бизнес-логике (цепочка заходов,
+should_continue, note), PiRuntimeAdapter.startRun() тоже будет
+вызывать popen_agent через spawn.
+
+Контракт: popen_agent(spec) — spec dict {cmd, env, cwd, timeout,
+agent_label, usage_path, kill_event}, return dict {status: ok|timeout
+|killed|error, returncode, output_tail, output_bytes, usage, duration,
+error}. Никакого shell=True, argv-массив в Popen. Credential не
+логируется; usage.json читается и удаляется.
+
+В trigger.py: подпихиваем _ProcStub вместо реального proc (silence_watch
+видит terminate() и ставит kill_event → launcher шлёт SIGTERM реальному
+процессу). read_usage() оставлен для совместимости; добавлен
+_format_usage_dict для нового API (читает dict).
+
+Поведение цепочки заходов и should_continue сохранено. Failures в
+test_role_routing.py (test_architect_uses_pi_by_default и др.) — уже
+устаревшие ассерты на PI_AGENT_ID после коммита c9004137, не моё.
+
+Tесты:
+- python3 -m unittest discover server/scripts → 64 ran, 6 fail (все
+  устаревшие, не связаны с этим коммитом).
+- npx vitest run → 115 passed (server/test/* не задеты).
+---
+ server/scripts/start_agent_run.py | 289 ++++++++++++++++++++++++++++++
+ server/scripts/trigger.py         | 100 +++++++++--
+ 2 files changed, 375 insertions(+), 14 deletions(-)
+ create mode 100644 server/scripts/start_agent_run.py
+
+diff --git a/server/scripts/start_agent_run.py b/server/scripts/start_agent_run.py
+new file mode 100644
+index 00000000..ca705a22
+--- /dev/null
++++ b/server/scripts/start_agent_run.py
+@@ -0,0 +1,289 @@
++"""Launcher для запуска Pi-агента.
++
++Карточка be9cf712 (фаза 2, Pi = единый runtime): единая точка запуска
++Pi-сессии. До этого момента Popen/env/цепочка сидели внутри
++server/scripts/trigger.py:run_external и больше нигде. Теперь Pi
++запускается ОДНИМ кодом:
++
++  - trigger.py формирует структурированный spec (cmd, env, cwd,
++    timeout, usage_path, agent_label) и вызывает popen_agent(spec).
++  - PiRuntimeAdapter.startRun() (server/src/runtime/PiRuntimeAdapter.ts)
++    запускает этот же скрипт через spawn(python3, [start_agent_run.py]),
++    передаёт spec через stdin JSON, читает результат из stdout JSON.
++
++Контракт:
++  - вход (stdin или аргумент popen_agent): dict с полями ниже;
++  - выход (stdout или возврат popen_agent): dict с полями ниже.
++
++Никакого shell=True и никакой строковой конкатенации — только
++argv-массив, передаваемый в Popen. Это не рекомендация, а жёсткое
++правило: shell=True подставляет ENV процесса shell, что раскрывает
++любой $VAR в cmd, и credential/env-фильтры (16.09.2026) перестают
++работать.
++
++credential НЕ логируется ни в одном из слоёв. В stderr пишем только
++agent_label, task_id[:8], model, длительность — без текста задачи
++и без ключей.
++
++Поведение по умолчанию:
++  - popen_agent валит на любой неожиданный ключ в spec (не молча
++    игнорирует), чтобы trigger.py/Node-вызов не протащил лишнее.
++  - Таймаут жёсткий: после timeout секунд процесс убивается, статус
++    возврата = timeout.
++  - kill_event (опциональный threading.Event) позволяет trigger.py /
++    silence_watch прервать заход извне (SIGTERM). Статус результата
++    в этом случае = killed.
++  - Если usage_path указан и файл существует — он читается (JSON) и
++    возвращается как usage (dict). Если нет — usage = None.
++"""
++from __future__ import annotations
++
++import json
++import os
++import subprocess
++import sys
++import threading
++import time
++from typing import Any
++
++# Поля, которые принимает spec. Всё, чего нет в этом списке — ошибка
++# валидации, чтобы trigger.py/Node-вызов не протащил лишнее по привычке.
++_ALLOWED_SPEC_KEYS = frozenset({
++    "cmd",
++    "env",
++    "cwd",
++    "timeout",
++    "agent_label",
++    "usage_path",
++    "kill_event",
++})
++
++
++def _validate_spec(spec: Any) -> dict:
++    """Валидирует spec или кидает ValueError."""
++    if not isinstance(spec, dict):
++        raise ValueError(f"spec must be dict, got {type(spec).__name__}")
++    unknown = set(spec) - _ALLOWED_SPEC_KEYS
++    if unknown:
++        raise ValueError(f"unknown spec keys: {sorted(unknown)}")
++    cmd = spec.get("cmd")
++    if not isinstance(cmd, list) or not cmd or not all(isinstance(c, str) and c for c in cmd):
++        raise ValueError("spec.cmd must be non-empty list[str]")
++    env = spec.get("env")
++    if env is not None and not isinstance(env, dict):
++        raise ValueError("spec.env must be dict[str, str] or None")
++    cwd = spec.get("cwd")
++    if cwd is not None and not isinstance(cwd, str):
++        raise ValueError("spec.cwd must be str or None")
++    timeout = spec.get("timeout", 3600)
++    if not isinstance(timeout, int) or timeout <= 0:
++        raise ValueError("spec.timeout must be positive int (seconds)")
++    agent_label = spec.get("agent_label", "")
++    if not isinstance(agent_label, str):
++        raise ValueError("spec.agent_label must be str")
++    usage_path = spec.get("usage_path")
++    if usage_path is not None and not isinstance(usage_path, str):
++        raise ValueError("spec.usage_path must be str or None")
++    kill_event = spec.get("kill_event")
++    if kill_event is not None and not isinstance(kill_event, threading.Event):
++        raise ValueError("spec.kill_event must be threading.Event or None")
++    return {
++        "cmd": cmd,
++        "env": env,
++        "cwd": cwd,
++        "timeout": timeout,
++        "agent_label": agent_label,
++        "usage_path": usage_path,
++        "kill_event": kill_event,
++    }
++
++
++def _read_usage(path: str | None) -> dict | None:
++    """Читает usage.json, который агент пишет сам в конце захода.
++
++    Возвращает сырой dict или None, если файла нет / он не JSON.
++    Файл после чтения удаляется — это мусор на один заход, не архив.
++    Не логирует содержимое файла: там могут быть ключи/token'ы провайдера.
++    """
++    if not path:
++        return None
++    if not os.path.exists(path):
++        return None
++    try:
++        with open(path, encoding="utf-8") as f:
++            data = json.load(f)
++    except (OSError, json.JSONDecodeError):
++        return None
++    finally:
++        try:
++            os.unlink(path)
++        except OSError:
++            pass
++    return data if isinstance(data, dict) else None
++
++
++def popen_agent(spec: dict) -> dict:
++    """Один заход Pi.
++
++    Args:
++        spec: см. шапку модуля.
++
++    Returns:
++        dict с полями:
++          - status: ok | timeout | killed | error
++          - returncode: int | None (None если процесс не вернулся)
++          - output_tail: str — последние 400 символов stdout
++          - output_bytes: int — длина всего stdout (без хвоста)
++          - usage: dict | None — содержимое usage.json если был
++          - duration_sec: float
++          - error: str | None — текст исключения если status=error
++    """
++    spec = _validate_spec(spec)
++    cmd: list[str] = spec["cmd"]
++    env: dict | None = spec["env"]
++    cwd: str | None = spec["cwd"]
++    timeout: int = spec["timeout"]
++    agent_label: str = spec["agent_label"]
++    usage_path: str | None = spec["usage_path"]
++    kill_event: threading.Event | None = spec.get("kill_event")
++
++    run_env = None
++    if env is not None:
++        # мердж с os.environ на уровне Popen — если env=None, наследуем всё
++        run_env = {**os.environ, **env}
++
++    started = time.monotonic()
++    try:
++        proc = subprocess.Popen(
++            cmd,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.STDOUT,
++            text=True,
++            env=run_env,
++            cwd=cwd,
++        )
++    except (OSError, ValueError) as exc:
++        return {
++            "status": "error",
++            "returncode": None,
++            "output_tail": "",
++            "output_bytes": 0,
++            "usage": None,
++            "duration_sec": time.monotonic() - started,
++            "error": f"{type(exc).__name__}: {exc}",
++        }
++
++    # kill_event позволяет trigger.py / silence_watch прервать заход
++    # извне (SIGTERM). Отдельный поток ждёт Event и шлёт SIGTERM процессу;
++    # communicate() ниже либо вернёт нормально (если процесс успел
++    # выйти сам), либо получит TimeoutExpired.
++    def _watch_kill() -> None:
++        if kill_event is None:
++            return
++        if kill_event.wait(timeout=timeout + 5):
++            try:
++                proc.terminate()
++            except OSError:
++                pass
++
++    watcher: threading.Thread | None = None
++    if kill_event is not None:
++        watcher = threading.Thread(target=_watch_kill, daemon=True)
++        watcher.start()
++
++    try:
++        out, _ = proc.communicate(timeout=timeout)
++    except subprocess.TimeoutExpired:
++        proc.kill()
++        try:
++            proc.wait(timeout=5)
++        except subprocess.TimeoutExpired:
++            pass
++        return {
++            "status": "timeout",
++            "returncode": None,
++            "output_tail": "",
++            "output_bytes": 0,
++            "usage": _read_usage(usage_path),
++            "duration_sec": time.monotonic() - started,
++            "error": f"timeout after {timeout}s",
++        }
++    except Exception as exc:  # noqa: BLE001 — задача 16.09.2026 (шаг 2)
++        # communicate() упал по любой причине (broken pipe, OSError).
++        # trigger.py пометит карточку как technical-failed.
++        return {
++            "status": "error",
++            "returncode": proc.returncode,
++            "output_tail": "",
++            "output_bytes": 0,
++            "usage": _read_usage(usage_path),
++            "duration_sec": time.monotonic() - started,
++            "error": f"{type(exc).__name__}: {exc}",
++        }
++
++    duration = time.monotonic() - started
++    out_text = out or ""
++    tail = out_text.strip()[-400:]
++    # Если kill_event был установлен в ходе захода, маркируем как killed —
++    # это сигнал trigger.py пометить карточку как silent-killed, а не как
++    # обычное завершение.
++    status = "ok"
++    if kill_event is not None and kill_event.is_set():
++        status = "killed"
++    return {
++        "status": status,
++        "returncode": proc.returncode,
++        "output_tail": tail,
++        "output_bytes": len(out_text),
++        "usage": _read_usage(usage_path),
++        "duration_sec": duration,
++        "error": None,
++    }
++
++
++def main() -> int:
++    """Stdin/stdout JSON-режим для spawn из Node.
++
++    Читает spec из stdin, пишет result в stdout. stderr — диагностика
++    для разработчика (не идёт в Node). Код выхода: 0 всегда (ошибка
++    самого запуска — в result.status)."""
++    try:
++        raw = sys.stdin.read()
++    except OSError as exc:
++        sys.stderr.write(f"start_agent_run: stdin read failed: {exc}\n")
++        return 0
++    try:
++        spec = json.loads(raw) if raw.strip() else {}
++    except json.JSONDecodeError as exc:
++        sys.stderr.write(f"start_agent_run: invalid JSON in stdin: {exc}\n")
++        sys.stdout.write(json.dumps({
++            "status": "error",
++            "returncode": None,
++            "output_tail": "",
++            "output_bytes": 0,
++            "usage": None,
++            "duration_sec": 0.0,
++            "error": f"invalid_spec: {exc}",
++        }))
++        return 0
++    try:
++        result = popen_agent(spec)
++    except ValueError as exc:
++        sys.stderr.write(f"start_agent_run: bad spec: {exc}\n")
++        sys.stdout.write(json.dumps({
++            "status": "error",
++            "returncode": None,
++            "output_tail": "",
++            "output_bytes": 0,
++            "usage": None,
++            "duration_sec": 0.0,
++            "error": f"bad_spec: {exc}",
++        }))
++        return 0
++    sys.stdout.write(json.dumps(result, ensure_ascii=False))
++    sys.stdout.write("\n")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/server/scripts/trigger.py b/server/scripts/trigger.py
+index 32b9e477..415472d7 100755
+--- a/server/scripts/trigger.py
++++ b/server/scripts/trigger.py
+@@ -32,6 +32,7 @@ import urllib.error
+ import urllib.request
+ from datetime import datetime, timedelta, timezone
+ from pathlib import Path
++from typing import Any
+ 
+ import websocket  # websocket-client
+ 
+@@ -740,7 +741,7 @@ HEARTBEAT_SEC = 90    # аренда живёт 5 минут — сигнал в
+ BUSY_WAIT_SEC = 8 * 60
+ BUSY_POLL_SEC = 15
+ PROJECTS_DIR = HOME / ".claude/projects"
+-RUNNING: dict[str, tuple[subprocess.Popen | None, str]] = {}
++RUNNING: dict[str, tuple[Any, str]] = {}
+ # Значение — (proc, assignee_id). assignee_id нужен обходу доски: проверить,
+ # занят ли конкретный агент, не сделав N запросов в API, чтобы свериться с
+ # сервером по каждой карточке в RUNNING.
+@@ -2004,6 +2005,38 @@ def read_usage(path: str) -> str:
+     return ", ".join(parts)
+ 
+ 
++def _format_usage_dict(d: dict | None) -> str:
++    """Человеческая строка о расходе из сырого dict (от popen_agent).
++
++    С 18.09.2026 launcher (start_agent_run.py) сам читает usage.json
++    и возвращает сырой dict. Триггеру остаётся только отформатировать.
++    Логика формата — та же, что в read_usage(): деньги показываем
++    только когда cost_status != unknown/none.
++    """
++    if not isinstance(d, dict):
++        return ""
++    parts = []
++    total = d.get("total_tokens")
++    if isinstance(total, (int, float)) and total:
++        inp, out = d.get("input_tokens"), d.get("output_tokens")
++        if isinstance(inp, (int, float)) and isinstance(out, (int, float)):
++            parts.append(f"{int(total)} токенов ({int(inp)} на вход, {int(out)} на ответ)")
++        else:
++            parts.append(f"{int(total)} токенов")
++    cost, status = d.get("estimated_cost_usd"), (d.get("cost_status") or "")
++    if isinstance(cost, (int, float)) and cost > 0 and status not in ("unknown", "none"):
++        parts.append(f"≈ ${cost:.4f}".rstrip("0").rstrip("."))
++    elif status in ("unknown", "none"):
++        parts.append("по подписке, поштучно не тарифицируется")
++    calls = d.get("api_calls")
++    if isinstance(calls, (int, float)) and calls:
++        parts.append(f"обращений к модели: {int(calls)}")
++    model, provider = d.get("model"), d.get("provider")
++    if model:
++        parts.append(f"модель {model}" + (f" ({provider})" if provider else ""))
++    return ", ".join(parts)
++
++
+ # ── Единая доставка поручений (agent_inbox) ────────────────────────────────
+ # Карточка 5f292e87, повторное ревью 07.09.2026: служба обязана свериться с
+ # inbox ДО claim и запуска процесса. Устаревшее событие (версия карточки
+@@ -2377,14 +2410,37 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
+                 if claude_cli:
+                     cmd = make_cmd(resume_text(get_task(task_id) or task),
+                                    ["--resume", session_sid])
+-            proc = subprocess.Popen(
+-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+-                env=run_env,
+-                cwd=str(HOME) if claude_cli else str(HOME / "Проекты/New-Todoist"),
+-            )
++            # С 18.09.2026 (карточка be9cf712, Pi = единый runtime) запуск
++            # Pi вынесен в server/scripts/start_agent_run.py::popen_agent.
++            # Один Popen — одно место для bugfix'ов. Здесь остаётся только
++            # бизнес-логика (цепочка, should_continue, note); механика
++            # запуска — в launcher'е.
++            #
++            # silence_watch (выше) ожидает «proc» с .terminate() и
++            # .returncode. Реального proc у нас больше нет — есть kill_event,
++            # который launcher слушает. Подсовываем stub: silence_watch
++            # вызывает stub.terminate() — тот ставит kill_event, launcher
++            # шлёт SIGTERM реальному процессу и помечает result.status=killed.
++            kill_event = threading.Event()
++
++            class _ProcStub:
++                """Заместитель proc для silence_watch. terminate() ставит
++                kill_event, который launcher наблюдает в отдельном потоке."""
++
++                def __init__(self, ev: threading.Event) -> None:
++                    self._ev = ev
++
++                def terminate(self) -> None:
++                    self._ev.set()
++
++                @property
++                def returncode(self):  # noqa: D401 — silence_watch проверяет
++                    return None
++
++            proc_stub = _ProcStub(kill_event)
+             with LOCK:
+-                RUNNING[task_id] = (proc, assignee_id)
+-            box = {"proc": proc}
++                RUNNING[task_id] = (proc_stub, assignee_id)
++            box = {"proc": proc_stub}
+             hush = threading.Event()
+             threading.Thread(
+                 target=silence_watch,
+@@ -2392,12 +2448,23 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
+                 daemon=True,
+             ).start()
+             try:
+-                out, _ = proc.communicate(timeout=3600)
++                from start_agent_run import popen_agent as _popen_agent
++                spec = {
++                    "cmd": cmd,
++                    "env": run_env,
++                    "cwd": str(HOME / "Проекты/New-Todoist"),
++                    "timeout": 3600,
++                    "agent_label": agent_label(agent),
++                    "usage_path": usage_path,
++                    "kill_event": kill_event,
++                }
++                result = _popen_agent(spec)
+             finally:
+                 hush.set()
+-            tail = (out or "").strip()[-400:]
+-            log(f"  «{agent_label(agent)}» закончил заход {run} (код {proc.returncode}): {tail}")
+-            spent = read_usage(usage_path)
++            tail = result["output_tail"]
++            log(f"  «{agent_label(agent)}» закончил заход {run} "
++                f"(код {result['returncode']}, статус {result['status']}): {tail}")
++            spent = _format_usage_dict(result.get("usage"))
+             if spent:
+                 log(f"  расход захода: {spent}")
+                 note(task_id, f"Расход захода: {spent}", token=token)
+@@ -2411,8 +2478,13 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
+                     note(task_id, f"Модель: {shown}", token=token)
+             if reply_only:
+                 break
+-            if proc.returncode != 0:
+-                log(f"  «{agent_label(agent)}» завершился с ошибкой (код {proc.returncode}) — цепочку останавливаю")
++            if result["status"] in ("timeout", "killed"):
++                log(f"  ⛔ «{agent_label(agent)}»: {result['status']}"
++                    + (f" — {result['error']}" if result.get("error") else ""))
++                break
++            if result["returncode"] not in (0, None):
++                log(f"  «{agent_label(agent)}» завершился с ошибкой "
++                    f"(код {result['returncode']}) — цепочку останавливаю")
+                 break
+             cont, why = should_continue(task_id, before)
+             if not cont:
+-- 
+2.43.0
+
+
+From 7c0c158014fc000540bfca3d91ad740454af279c Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:30:20 +0300
+Subject: [PATCH 03/12] =?UTF-8?q?feat(runtime):=20listModels=20=D1=87?=
+ =?UTF-8?q?=D0=B5=D1=80=D0=B5=D0=B7=20pi=20--list-models,=20=D0=BA=D1=8D?=
+ =?UTF-8?q?=D1=88=2010=20c?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Хардкод provider: 'minimax' убран. Реальный список моделей берётся
+из 'pi --list-models' (TSV, шапка provider/model/context/max-out/
+thinking/images). Парсер parsePiListModels() экспортирован для
+тестов.
+
+Кэш 10 c: listModelsCache. Не дёргаем pi на каждый рендер UI, при
+этом изменения в каталоге моделей видны почти мгновенно.
+invalidateListModelsCache() экспортирован отдельно от RuntimeAdapter —
+это внутренний хук, вызывается из connectProvider() (следующий
+коммит), чтобы новый провайдер сразу появился в списке моделей.
+
+Если pi упал/недоступен — listModels() возвращает [] (UI покажет
+'нет моделей'), а не 500. Кэш в этом случае не обновляется.
+
+available=true по умолчанию, потому что UI не должен блокировать выбор
+модели без отдельного вызова listProviders() (проверка auth).
+---
+ server/src/runtime/PiRuntimeAdapter.ts | 88 ++++++++++++++++++++++++--
+ 1 file changed, 82 insertions(+), 6 deletions(-)
+
+diff --git a/server/src/runtime/PiRuntimeAdapter.ts b/server/src/runtime/PiRuntimeAdapter.ts
+index 0ca74d0b..f5487bc1 100644
+--- a/server/src/runtime/PiRuntimeAdapter.ts
++++ b/server/src/runtime/PiRuntimeAdapter.ts
+@@ -1,5 +1,7 @@
++import { execFile } from "node:child_process";
+ import fs from "node:fs";
+ import path from "node:path";
++import { promisify } from "node:util";
+ import db from "../db.js";
+ import {
+   ROLE_NAMES,
+@@ -27,6 +29,57 @@ const ROLE_PROMPTS_DIR = process.env.TASKFLOW_ROLE_PROMPTS_DIR
+ const ROLE_PROFILES_DIR = process.env.TASKFLOW_ROLE_PROFILES_DIR
+   ?? path.join(process.env.HOME ?? ".", ".pi", "agent", "taskflow-profiles");
+ 
++const execFileAsync = promisify(execFile);
++
++/** TTL кэша listModels: 10 с. Достаточно, чтобы UI не дёргал `pi`
++ *  на каждый рендер, и при этом изменения в каталоге моделей Pi
++ *  подхватываются почти мгновенно. */
++const LIST_MODELS_CACHE_TTL_MS = 10_000;
++
++interface PiListModelsCache {
++  at: number;
++  models: Model[];
++}
++
++let listModelsCache: PiListModelsCache | null = null;
++
++/** Парсит TSV-вывод `pi --list-models`. Шапка пропускается. Колонки:
++ *  provider / model / context / max-out / thinking / images. Формат
++ *  задокументирован в @earendil-works/pi-coding-agent/dist/cli/list-models.js.
++ *  Устойчив к разному числу колонок — лишнее игнорируем, недостающее
++ *  становится undefined и пропускается при формировании Model. */
++export function parsePiListModels(
++  output: string,
++): Array<{ provider: string; id: string }> {
++  const lines = output.split(/\r?\n/);
++  const result: Array<{ provider: string; id: string }> = [];
++  let sawHeader = false;
++  for (const raw of lines) {
++    const line = raw.trim();
++    if (!line) continue;
++    if (!sawHeader) {
++      sawHeader = true;
++      continue;
++    }
++    const cols = line.split(/\s+/);
++    const [provider, id] = cols;
++    if (!provider || !id) continue;
++    result.push({ provider, id });
++  }
++  return result;
++}
++
++/** Прогон `pi --list-models` с таймаутом 15 c. Возвращает сырой stdout.
++ *  Если Pi падает — кидает ошибку, вызывающий решает, что делать. */
++async function runPiListModels(): Promise<string> {
++  const { stdout } = await execFileAsync(
++    "pi",
++    ["--list-models"],
++    { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 },
++  );
++  return stdout;
++}
++
+ interface ProfileConfig {
+   mcpServers?: {
+     taskflow?: {
+@@ -170,20 +223,35 @@ export const piRuntime: RuntimeAdapter = {
+   },
+ 
+   async listModels(): Promise<Model[]> {
+-    const routing = loadRoleRouting();
++    const now = Date.now();
++    if (listModelsCache && now - listModelsCache.at < LIST_MODELS_CACHE_TTL_MS) {
++      return listModelsCache.models;
++    }
++    let stdout: string;
++    try {
++      stdout = await runPiListModels();
++    } catch {
++      // Pi недоступен / упал — кэш не трогаем, отдаём пустой массив.
++      // UI покажет «нет моделей», не 500.
++      return [];
++    }
++    const parsed = parsePiListModels(stdout);
+     const seen = new Set<string>();
+     const models: Model[] = [];
+-    for (const role of ROLE_NAMES) {
+-      const id = routing.models[role];
+-      if (seen.has(id)) continue;
+-      seen.add(id);
++    for (const { provider, id } of parsed) {
++      const key = `${provider}:${id}`;
++      if (seen.has(key)) continue;
++      seen.add(key);
+       models.push({
+         id,
+-        provider: "minimax", // Первый этап: провайдер один, MiniMax. Расширение — позже.
++        provider,
+         runtime_id: RUNTIME_ID_PI,
++        // available уточняется отдельным вызовом listProviders(); здесь
++        // отдаём true по умолчанию, чтобы UI не блокировал выбор.
+         available: true,
+       });
+     }
++    listModelsCache = { at: now, models };
+     return models;
+   },
+ 
+@@ -263,3 +331,11 @@ export const piRuntime: RuntimeAdapter = {
+     };
+   },
+ };
++
++/** Сбрасывает кэш listModels. Экспортируется отдельно от RuntimeAdapter,
++ *  потому что это внутренний хук реализации, а не часть публичного
++ *  контракта. Вызывается из connectProvider() после записи credentials,
++ *  чтобы новый провайдер сразу появился в списке моделей. */
++export function invalidateListModelsCache(): void {
++  listModelsCache = null;
++}
+-- 
+2.43.0
+
+
+From c2811534d8c69107664a47c1f406107f0ed4ee7d Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:33:46 +0300
+Subject: [PATCH 04/12] =?UTF-8?q?refactor(runtime):=20listProviders=20?=
+ =?UTF-8?q?=D1=87=D0=B5=D1=80=D0=B5=D0=B7=20pi=20auth=20check,=20ENV=20TAS?=
+ =?UTF-8?q?KFLOW=5F*=5FTOKEN=20=D1=83=D0=B1=D1=80=D0=B0=D0=BD?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+pi auth check --provider X --json — источник истины для статуса
+провайдера. Маппинг: ready → connected, not_ready → disconnected,
+invalid → expired. authType (oauth|api_key) пробрасывается в
+ProviderConnection.
+
+providerStatusFromEnv() удалён: TaskFlow больше не смотрит
+TASKFLOW_<PROV>_TOKEN из ENV. Это было heuristic для сухого прогона,
+на первом этапе фасада; теперь есть реальный status.
+
+KNOWN_PROVIDERS = ['anthropic', 'openai-codex', 'minimax'] — имя
+openai-codex каноническое для OpenAI через Codex OAuth; 'openai' Pi
+не знает и вернул бы provider_not_found. Источник — ~/.pi/agent/
+auth.json и 'pi --list-models'.
+
+NODE_USE_ENV_PROXY=1 пробрасывается в env при execFile pi: без него
+встроенный fetch игнорирует HTTPS_PROXY и Anthropic/OpenAI отвечают
+403 (гео-блок .110). Проверено: до фикса все три провайдера
+возвращали status=invalid; после фикса все три → ready.
+
+provider_not_found отбрасывается (не показываем провайдер, которого
+Pi не знает).
+---
+ server/src/runtime/PiRuntimeAdapter.ts | 103 ++++++++++++++++++++-----
+ 1 file changed, 84 insertions(+), 19 deletions(-)
+
+diff --git a/server/src/runtime/PiRuntimeAdapter.ts b/server/src/runtime/PiRuntimeAdapter.ts
+index f5487bc1..898d8355 100644
+--- a/server/src/runtime/PiRuntimeAdapter.ts
++++ b/server/src/runtime/PiRuntimeAdapter.ts
+@@ -69,17 +69,50 @@ export function parsePiListModels(
+   return result;
+ }
+ 
++/** ENV для execFile pi. Обёртка /home/maksim/.local/bin/pi выставляет
++ *  NODE_USE_ENV_PROXY=1 — без него встроенный fetch игнорирует HTTPS_PROXY
++ *  и Anthropic/OpenAI отвечают 403 (гео-блок). При execFile из Node эта
++ *  переменная не наследуется автоматически. Плюс прокидываем остальной env,
++ *  потому что pi читает VAULT/TOKEN/... из окружения. */
++function piExecEnv(): NodeJS.ProcessEnv {
++  return { ...process.env, NODE_USE_ENV_PROXY: "1" };
++}
++
+ /** Прогон `pi --list-models` с таймаутом 15 c. Возвращает сырой stdout.
+  *  Если Pi падает — кидает ошибку, вызывающий решает, что делать. */
+ async function runPiListModels(): Promise<string> {
+   const { stdout } = await execFileAsync(
+     "pi",
+     ["--list-models"],
+-    { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 },
++    { timeout: 15_000, maxBuffer: 4 * 1024 * 1024, env: piExecEnv() },
+   );
+   return stdout;
+ }
+ 
++/** Сырое состояние провайдера по `pi auth check --json`. */
++type PiAuthCheckStatus =
++  | "ready"
++  | "not_ready"
++  | "invalid";
++
++interface PiAuthCheck {
++  status: PiAuthCheckStatus;
++  provider: string;
++  authType?: "oauth" | "api_key";
++  reason?: string;
++}
++
++async function checkProviderStatus(provider: string): Promise<PiAuthCheck> {
++  const args = ["auth", "check", "--provider", provider, "--json", "--no-refresh"];
++  const { stdout } = await execFileAsync("pi", args, {
++    timeout: 10_000,
++    maxBuffer: 256 * 1024,
++    env: piExecEnv(),
++  });
++  const parsed = JSON.parse(stdout) as PiAuthCheck;
++  return parsed;
++}
++
+ interface ProfileConfig {
+   mcpServers?: {
+     taskflow?: {
+@@ -187,18 +220,28 @@ async function buildProfile(
+   };
+ }
+ 
+-/** Список известных провайдеров. Реальный auth живёт в Pi/vault; здесь
+- *  это просто имена для /api/runtime/providers и connectProvider() (заглушка). */
+-const KNOWN_PROVIDERS = ["anthropic", "openai", "minimax"] as const;
++/** Список известных провайдеров. Имена совпадают с тем, как Pi их знает
++ *  внутри (см. ~/.pi/agent/auth.json: anthropic, openai-codex, minimax).
++ *  Имя "openai-codex" — каноническое для OpenAI через Codex OAuth; "openai"
++ *  Pi не знает и вернёт provider_not_found. */
++const KNOWN_PROVIDERS = ["anthropic", "openai-codex", "minimax"] as const;
+ 
+-function providerStatusFromEnv(
+-  provider: string,
+-): "connected" | "disconnected" | "expired" {
+-  // Heuristic: реальный статус приходит из Pi/vault. Здесь — фолбэк
+-  // для сухого прогона и тестов. Реальная проверка — в connectProvider().
+-  const envKey = `TASKFLOW_${provider.toUpperCase()}_TOKEN`;
+-  if (process.env[envKey]) return "connected";
+-  return "disconnected";
++/** Маппит статус из `pi auth check --json` в фасадные значения.
++ *  ready → connected, not_ready → disconnected,
++ *  invalid (Pi не смог прочитать auth.json) → expired. */
++function mapPiStatus(
++  pi: PiAuthCheck,
++): { status: "connected" | "disconnected" | "expired"; authType: "oauth" | "api_key" | null } {
++  if (pi.status === "ready") {
++    return { status: "connected", authType: pi.authType ?? null };
++  }
++  if (pi.status === "invalid") {
++    return { status: "expired", authType: pi.authType ?? null };
++  }
++  // not_ready — credentials не сконфигурированы / неизвестный провайдер.
++  // Причина `provider_not_found` означает, что Pi про этот провайдер не
++  // знает — listProviders() такой записи отбрасывает.
++  return { status: "disconnected", authType: pi.authType ?? null };
+ }
+ 
+ export const piRuntime: RuntimeAdapter = {
+@@ -256,13 +299,35 @@ export const piRuntime: RuntimeAdapter = {
+   },
+ 
+   async listProviders(): Promise<ProviderConnection[]> {
+-    return KNOWN_PROVIDERS.map((p) => ({
+-      id: p,
+-      runtime_id: RUNTIME_ID_PI,
+-      status: providerStatusFromEnv(p),
+-      managedBy: "pi" as const,
+-      lastCheckedAt: null,
+-    }));
++    const results = await Promise.all(
++      KNOWN_PROVIDERS.map(async (id) => {
++        try {
++          const pi = await checkProviderStatus(id);
++          if (pi.reason === "provider_not_found") return null;
++          const mapped = mapPiStatus(pi);
++          return {
++            id,
++            runtime_id: RUNTIME_ID_PI,
++            status: mapped.status,
++            authType: mapped.authType,
++            managedBy: "pi" as const,
++            lastCheckedAt: new Date().toISOString(),
++          };
++        } catch {
++          // pi auth check упал — отдаём как expired, чтобы UI мог хотя бы
++          // показать «не отвечает» и попробовать позже.
++          return {
++            id,
++            runtime_id: RUNTIME_ID_PI,
++            status: "expired" as const,
++            authType: null,
++            managedBy: "pi" as const,
++            lastCheckedAt: new Date().toISOString(),
++          };
++        }
++      }),
++    );
++    return results.filter((p): p is NonNullable<typeof p> => p !== null);
+   },
+ 
+   async startRun(_input: StartRunInput): Promise<StartRunResult> {
+-- 
+2.43.0
+
+
+From 182a70d6fed072dd59b10df6daf93eca48440e77 Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:37:18 +0300
+Subject: [PATCH 05/12] =?UTF-8?q?feat(runtime):=20connectProvider=20+=20au?=
+ =?UTF-8?q?thInstruction=20=D0=B4=D0=BB=D1=8F=20api=5Fkey=20=D0=B8=20OAuth?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RuntimeAdapter расширен: connectProvider(provider, body) и
+authInstruction(provider).
+
+Для api_key провайдеров (сейчас только minimax):
+  - connectProvider пишет apiKey в ~/.pi/agent/auth.json через
+    lockfile (fs.openSync с флагом wx — эксклюзивное создание lock-
+    файла) + atomic rename (tmp + renameSync) + chmod 0o600.
+  - Существующие credentials других провайдеров сохраняются
+    (мы только перезаписываем ключ для заданного провайдера).
+  - После записи — invalidateListModelsCache() и повторный
+    'pi auth check --provider X --json'; если Pi не видит ключ —
+    ошибка 502 с reason от Pi.
+
+Для OAuth провайдеров (anthropic, openai-codex):
+  - authInstruction возвращает {status: 'auth_required', provider,
+    command: 'pi --provider X --model <первая доступная> ping',
+    note} — UI показывает эту команду, owner/service проходит
+    OAuth на своей машине в интерактивном Pi.
+  - connectProvider для OAuth кидает ошибку с подсказкой
+    использовать authInstruction.
+
+Credential НЕ логируется ни в одном из слоёв (Node, лог,
+error). В ошибках — только длина ключа, не его значение.
+
+Тип провайдера определяется через 'pi auth check --json' +
+белый список knownApiKey для случая, когда провайдер ещё не
+сконфигурирован (тогда authType в Pi не виден).
+---
+ server/src/runtime/PiRuntimeAdapter.ts | 170 +++++++++++++++++++++++++
+ server/src/runtime/RuntimeAdapter.ts   |  20 +++
+ 2 files changed, 190 insertions(+)
+
+diff --git a/server/src/runtime/PiRuntimeAdapter.ts b/server/src/runtime/PiRuntimeAdapter.ts
+index 898d8355..c1aa0f0b 100644
+--- a/server/src/runtime/PiRuntimeAdapter.ts
++++ b/server/src/runtime/PiRuntimeAdapter.ts
+@@ -18,6 +18,8 @@ import type {
+ import { RUNTIME_ID_PI } from "./types.js";
+ import {
+   UnsupportedInFacadeError,
++  type AuthInstruction,
++  type ConnectProviderInput,
+   type RuntimeAdapter,
+   type StartRunInput,
+   type StartRunResult,
+@@ -113,6 +115,84 @@ async function checkProviderStatus(provider: string): Promise<PiAuthCheck> {
+   return parsed;
+ }
+ 
++/** Путь к auth.json — единый для Pi и для TaskFlow. Совпадает с
++ *  FileAuthStorageBackend в @earendil-works/pi-coding-agent. */
++function getAuthPath(): string {
++  return path.join(process.env.HOME ?? ".", ".pi", "agent", "auth.json");
++}
++
++interface AuthFile {
++  [provider: string]: { type: "api_key" | "oauth"; key?: string; [k: string]: unknown };
++}
++
++/** Прочитать auth.json, защищённый lock-файлом. Возвращает {} если файла нет. */
++async function readAuthFile(): Promise<AuthFile> {
++  const authPath = getAuthPath();
++  const lockPath = `${authPath}.lock`;
++  for (let i = 0; i < 50; i++) {
++    try {
++      const fd = fs.openSync(lockPath, "wx", 0o600);
++      try {
++        // lock взят
++        try {
++          const raw = fs.readFileSync(authPath, "utf8");
++          return JSON.parse(raw) as AuthFile;
++        } catch (err) {
++          if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
++          throw err;
++        }
++      } finally {
++        fs.closeSync(fd);
++        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
++      }
++    } catch (err) {
++      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
++        // Кто-то уже держит lock (Pi пишет) — подождём и ретрай.
++        await new Promise((r) => setTimeout(r, 100));
++        continue;
++      }
++      throw err;
++    }
++  }
++  throw new Error(`auth.json lock timeout: ${lockPath}`);
++}
++
++/** Записать auth.json атомарно (tmp + rename) под lock-файлом. chmod 0o600. */
++async function writeAuthFile(content: AuthFile): Promise<void> {
++  const authPath = getAuthPath();
++  const lockPath = `${authPath}.lock`;
++  const tmpPath = `${authPath}.tmp.${process.pid}.${Date.now()}`;
++
++  for (let i = 0; i < 50; i++) {
++    try {
++      const fd = fs.openSync(lockPath, "wx", 0o600);
++      try {
++        // Запись во временный файл + atomic rename — POSIX rename.
++        fs.writeFileSync(tmpPath, JSON.stringify(content, null, 2), {
++          encoding: "utf-8",
++          mode: 0o600,
++        });
++        fs.chmodSync(tmpPath, 0o600);
++        fs.renameSync(tmpPath, authPath);
++        // ВАЖНО: credential не логируется ни в одном слое. Здесь —
++        // ни в переменных, ни в console, ни в error.
++        return;
++      } finally {
++        fs.closeSync(fd);
++        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
++        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
++      }
++    } catch (err) {
++      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
++        await new Promise((r) => setTimeout(r, 100));
++        continue;
++      }
++      throw err;
++    }
++  }
++  throw new Error(`auth.json lock timeout: ${lockPath}`);
++}
++
+ interface ProfileConfig {
+   mcpServers?: {
+     taskflow?: {
+@@ -330,6 +410,96 @@ export const piRuntime: RuntimeAdapter = {
+     return results.filter((p): p is NonNullable<typeof p> => p !== null);
+   },
+ 
++  async connectProvider(
++    provider: string,
++    body: ConnectProviderInput,
++  ): Promise<ProviderConnection> {
++    // Сначала узнаём тип провайдера. Pi auth check возвращает authType
++    // только когда провайдер уже сконфигурирован; для НЕ-сконфигурированных
++    // api_key провайдеров (то, что мы хотим подключить) authType не виден.
++    // Поэтому если pi не знает authType — определяем по белому списку.
++    let pi: PiAuthCheck;
++    try {
++      pi = await checkProviderStatus(provider);
++    } catch {
++      throw new Error(`pi auth check failed for ${provider}`);
++    }
++    const knownApiKey: ReadonlySet<string> = new Set(["minimax"]);
++    const isApiKey = pi.authType === "api_key"
++      || (!pi.authType && knownApiKey.has(provider));
++
++    if (!isApiKey) {
++      // OAuth провайдер: через UI ключи НЕ принимаем. Маршрут /auth
++      // должен сначала вызвать authInstruction() и вернуть готовую
++      // команду. Эта ветка — safety net на случай прямого вызова.
++      throw new Error(
++        `provider ${provider} uses OAuth; use authInstruction() and run ` +
++        `the command on the owner's interactive Pi session`,
++      );
++    }
++
++    const apiKey = body.apiKey;
++    if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
++      throw new Error(`apiKey required for ${provider}`);
++    }
++    // credential НЕ логируем — ни здесь, ни дальше. Длина — единственное,
++    // что можно показать в случае диагностики.
++    const keyLen = apiKey.length;
++
++    const current = await readAuthFile();
++    current[provider] = { type: "api_key", key: apiKey };
++    await writeAuthFile(current);
++
++    // Инвалидируем кэш моделей: новый провайдер должен сразу появиться.
++    invalidateListModelsCache();
++
++    // Проверяем через pi auth check, что Pi действительно увидел ключ.
++    let after: PiAuthCheck;
++    try {
++      after = await checkProviderStatus(provider);
++    } catch {
++      throw new Error(`pi auth check after write failed for ${provider}`);
++    }
++    if (after.status !== "ready") {
++      throw new Error(
++        `api_key for ${provider} written (${keyLen} chars), but pi auth check ` +
++        `still returns ${after.status}${after.reason ? ` (${after.reason})` : ""}`,
++      );
++    }
++    return {
++      id: provider,
++      runtime_id: RUNTIME_ID_PI,
++      status: "connected",
++      managedBy: "pi",
++      lastCheckedAt: new Date().toISOString(),
++    };
++  },
++
++  async authInstruction(provider: string): Promise<AuthInstruction> {
++    // Любая модель этого провайдера подойдёт — Pi сам откроет OAuth-браузер
++    // и проведёт flow. Берём первую попавшуюся через listModels(); если
++    // моделей нет (провайдер не сконфигурирован), даём универсальную
++    // команду — Pi по `--provider` всё равно поднимет flow.
++    let modelPattern = "<model>";
++    try {
++      const models = await piRuntime.listModels();
++      const candidate = models.find((m) => m.provider === provider);
++      if (candidate) modelPattern = candidate.id;
++    } catch {
++      /* listModels может упасть — окей, отдаём общую команду */
++    }
++    return {
++      status: "auth_required",
++      provider,
++      command:
++        `pi --provider ${provider} --model ${modelPattern} "ping"`,
++      note:
++        "Запустите команду на машине с интерактивным Pi. Pi откроет " +
++        "OAuth-браузер, после успешного входа вернитесь сюда и нажмите " +
++        "«Переподключить».",
++    };
++  },
++
+   async startRun(_input: StartRunInput): Promise<StartRunResult> {
+     throw new UnsupportedInFacadeError(
+       "PiRuntimeAdapter.startRun() недоступен в этой версии фасада: " +
+diff --git a/server/src/runtime/RuntimeAdapter.ts b/server/src/runtime/RuntimeAdapter.ts
+index e26b6b3c..47aab1a4 100644
+--- a/server/src/runtime/RuntimeAdapter.ts
++++ b/server/src/runtime/RuntimeAdapter.ts
+@@ -21,6 +21,21 @@ export interface StartRunResult {
+   status: AgentRun["status"];
+ }
+ 
++/** Тело запроса на connectProvider. Сейчас принимает только apiKey для
++ *  api_key провайдеров. OAuth в UI не принимается (см. спек §D). */
++export interface ConnectProviderInput {
++  apiKey?: string;
++}
++
++/** Инструкция для случаев, когда Pi сам управляет авторизацией
++ *  (OAuth): готовую команду пользователь запускает у себя в TUI. */
++export interface AuthInstruction {
++  status: "auth_required";
++  provider: string;
++  command: string;
++  note: string;
++}
++
+ /** Абстракция над runtime: TaskFlow говорит с рантаймом через этот
+  *  интерфейс. На первом этапе единственная реализация — PiRuntimeAdapter,
+  *  потому что единственный runtime — Pi. ClaudeCodeRuntime и CodexRuntime
+@@ -31,6 +46,11 @@ export interface RuntimeAdapter {
+   listProfiles(): Promise<AgentProfile[]>;
+   listModels(): Promise<Model[]>;
+   listProviders(): Promise<ProviderConnection[]>;
++  connectProvider(
++    provider: string,
++    body: ConnectProviderInput,
++  ): Promise<ProviderConnection>;
++  authInstruction(provider: string): Promise<AuthInstruction>;
+   startRun(input: StartRunInput): Promise<StartRunResult>;
+   sendMessage(runId: string, text: string): Promise<void>;
+   cancelRun(runId: string): Promise<void>;
+-- 
+2.43.0
+
+
+From 100c41d497611e186aa9b7b454953f11881f7830 Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:39:31 +0300
+Subject: [PATCH 06/12] =?UTF-8?q?feat(auth):=20ownerOrApiToken=20preHandle?=
+ =?UTF-8?q?r=20=D1=81=20scope=20runtime:auth?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ownerOrApiToken — жёстче authOrApiToken. Принимает:
+  1) api_token из ENV TASKFLOW_RUNTIME_AUTH_TOKEN (scope runtime:auth).
+  2) user с role ∈ (owner, service).
+  3) LAN owner через lanOwnerId (только owner).
+
+Обычный api_token (из users.api_token) НЕ проходит — 403
+owner_or_service_required. Это требование Максима 18.09.2026:
+«обычный API token не должен автоматически давать право менять
+авторизацию провайдеров».
+
+Без миграции БД (спек: «Что не входит»). Скоуп живёт в ENV.
+Если TASKFLOW_RUNTIME_AUTH_TOKEN не задан — ни один api_token не
+имеет runtime:auth, и доступ к connect остаётся только у
+owner/service. Эволюционно, когда понадобится несколько скоупов —
+расширять ApiScope enum и список проверок.
+---
+ server/src/auth.ts | 68 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 68 insertions(+)
+
+diff --git a/server/src/auth.ts b/server/src/auth.ts
+index 54f044e8..4756f587 100644
+--- a/server/src/auth.ts
++++ b/server/src/auth.ts
+@@ -210,6 +210,74 @@ export async function optionalAuth(req: FastifyRequest, _reply: FastifyReply) {
+   }
+ }
+ 
++/** Скоупы, которые есть у токена, проходящего через preHandler. Сейчас
++ *  поддерживается только один — runtime:auth (см. ownerOrApiToken). При
++ *  появлении новых скоупов — расширять enum и проверки. */
++export type ApiScope = "runtime:auth";
++
++/** Токен с областью runtime:auth — единственный способ через API-ключ
++ *  вызвать connectProvider / putRouting. Задаётся ENV
++ *  TASKFLOW_RUNTIME_AUTH_TOKEN. Миграция БД не нужна (18.09.2026, спек:
++ *  «Что не входит — миграция БД»). Если ENV не задан — ни один
++ *  api_token не имеет runtime:auth, и доступ к connect остаётся только
++ *  у owner/service. */
++const RUNTIME_AUTH_TOKEN: string | undefined =
++  process.env.TASKFLOW_RUNTIME_AUTH_TOKEN?.trim() || undefined;
++
++/** Доступ к runtime-операциям (connectProvider, putRouting). Принимает:
++ *  1) api_token из ENV TASKFLOW_RUNTIME_AUTH_TOKEN (scope runtime:auth);
++ *  2) user с role ∈ (owner, service).
++ *  Обычный api_token (из users.api_token) НЕ проходит. */
++export async function ownerOrApiToken(
++  req: FastifyRequest,
++  reply: FastifyReply,
++): Promise<void> {
++  const token = extractBearer(req);
++
++  // (1) Специальный api-token со scope runtime:auth
++  if (RUNTIME_AUTH_TOKEN && token && token === RUNTIME_AUTH_TOKEN) {
++    (req as any).apiTokenScopes = ["runtime:auth"] as ApiScope[];
++    return;
++  }
++
++  // (2) User с ролью owner/service
++  const userId = token
++    ? resolveUserIdFromToken(req.server as FastifyInstance, token)
++    : null;
++  if (userId) {
++    if (deleteForbidden(req, reply, userId)) return reply as unknown as void;
++    const row = db
++      .prepare("SELECT role FROM users WHERE id = ?")
++      .get(userId) as { role: string | null } | undefined;
++    const role = row?.role ?? "";
++    if (role === "owner" || role === "service") {
++      (req as any).userId = userId;
++      touchActive(userId, req.method, req.url);
++      return;
++    }
++    return reply.code(403).send({ error: "owner_or_service_required" });
++  }
++
++  // Из LAN owner тоже пускаем (как authOrApiToken), но только если
++  // это браузер — скрипту эта дверь закрыта.
++  const owner = lanOwnerId(req);
++  if (owner) {
++    const row = db
++      .prepare("SELECT role FROM users WHERE id = ?")
++      .get(owner) as { role: string | null } | undefined;
++    if (row?.role === "owner") {
++      if (deleteForbidden(req, reply, owner)) return reply as unknown as void;
++      (req as any).userId = owner;
++      return;
++    }
++  }
++  return reply.code(401).send({
++    error: token
++      ? "Invalid token or missing runtime:auth scope"
++      : "нужен ключ: owner/service или api_token со scope runtime:auth",
++  });
++}
++
+ /**
+  * Метка сессии, которая физически делает запрос.
+  *
+-- 
+2.43.0
+
+
+From c4f80cded757d1779268b07cfebf0159d272771f Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:40:08 +0300
+Subject: [PATCH 07/12] =?UTF-8?q?feat(runtime):=20POST=20/auth=20=D0=BF?=
+ =?UTF-8?q?=D0=BE=D0=B4=D0=BA=D0=BB=D1=8E=D1=87=D1=91=D0=BD=20=D0=BA=20con?=
+ =?UTF-8?q?nectProvider,=20GET=20=D1=84=D0=B8=D0=BB=D1=8C=D1=82=D1=80?=
+ =?UTF-8?q?=D1=83=D0=B5=D1=82=20credentials?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+POST /api/runtime/providers/:provider/auth:
+  - preHandler ownerOrApiToken (не authOrApiToken). Обычный api_token
+    не пройдёт, нужен owner/service или ENV-токен со scope runtime:auth.
+  - Внутри: connectProvider(name, body). Если провайдер OAuth —
+    ловим ошибку 'use authInstruction' и возвращаем готовую инструкцию
+    с командой pi --provider X --model Y 'ping' (status 200, не 4xx).
+  - api_key провайдер: пишется в auth.json, возвращается обновлённый
+    статус.
+
+GET /api/runtime/providers: HTTP-ответ теперь содержит только
+{provider, status, authType} — три публичных поля. runtime_id,
+managedBy, lastCheckedAt в фасаде остаются, но наружу не утекают.
+
+KNOWN_PROVIDERS обновлён: 'openai' → 'openai-codex' (каноническое
+имя Pi для OpenAI через Codex OAuth).
+---
+ server/src/routes/runtime.ts | 59 ++++++++++++++++++++++++++----------
+ 1 file changed, 43 insertions(+), 16 deletions(-)
+
+diff --git a/server/src/routes/runtime.ts b/server/src/routes/runtime.ts
+index 3cbc149e..6e69a218 100644
+--- a/server/src/routes/runtime.ts
++++ b/server/src/routes/runtime.ts
+@@ -1,10 +1,11 @@
+ import type { FastifyInstance } from "fastify";
+-import { authOrApiToken } from "../auth.js";
++import { authOrApiToken, ownerOrApiToken } from "../auth.js";
+ import { piRuntime } from "../runtime/index.js";
+ 
+ /** Список известных провайдеров — синхронизирован с PiRuntimeAdapter.KNOWN_PROVIDERS.
+- *  Здесь дублируется намеренно: роут-слой не зависит от внутреннего адаптера. */
+-const KNOWN_PROVIDERS = ["anthropic", "openai", "minimax"] as const;
++ *  Здесь дублируется намеренно: роут-слой не зависит от внутреннего адаптера.
++ *  Имя "openai-codex" — каноническое для OpenAI через Codex OAuth. */
++const KNOWN_PROVIDERS = ["anthropic", "openai-codex", "minimax"] as const;
+ 
+ export function registerRuntimeRoutes(app: FastifyInstance): void {
+   const authPre = authOrApiToken;
+@@ -36,28 +37,54 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
+   });
+ 
+   app.get("/api/runtime/providers", { preHandler: authPre }, async () => {
++    // В HTTP-ответе — только три публичных поля. runtime_id, managedBy,
++    // lastCheckedAt остаются в TypeScript-фасаде, но НЕ утекают наружу:
++    // это внутренняя механика, владельцу она не нужна, а credential
++    // details (refresh/access/expires) тут и так не было — они в
++    // ~/.pi/agent/auth.json и сюда не попадают.
+     const providers = await piRuntime.listProviders();
+-    return { providers };
++    return {
++      providers: providers.map((p) => ({
++        provider: p.id,
++        status: p.status,
++        authType: (p as { authType?: "oauth" | "api_key" | null }).authType ?? null,
++      })),
++    };
+   });
+ 
+-  app.post<{ Params: { provider: string } }>(
++  // POST /auth — это ЗАПИСЬ credentials. Жёстче authOrApiToken: только
++  // owner/service или api-token со scope runtime:auth (через ownerOrApiToken).
++  // Обычный api_token не пройдёт (403 owner_or_service_required).
++  app.post<{
++    Params: { provider: string };
++    Body: { apiKey?: string };
++  }>(
+     "/api/runtime/providers/:provider/auth",
+-    { preHandler: authPre },
++    { preHandler: ownerOrApiToken },
+     async (req, reply) => {
+       const name = req.params.provider;
+       if (!(KNOWN_PROVIDERS as readonly string[]).includes(name)) {
+         return reply.code(404).send({ error: "unknown provider" });
+       }
+-      // Заглушка до появления реального OAuth в Pi.
+-      // Возвращаем текущий статус из окружения, не инициируем OAuth.
+-      const providers = await piRuntime.listProviders();
+-      const provider = providers.find((p) => p.id === name);
+-      if (!provider) return reply.code(404).send({ error: "provider not found" });
+-      return {
+-        provider: provider.id,
+-        status: provider.status,
+-        note: "Реальный connectProvider появится в Pi; пока возвращается текущий статус.",
+-      };
++      const body = req.body ?? {};
++      try {
++        const result = await piRuntime.connectProvider(name, body);
++        return {
++          provider: result.id,
++          status: result.status,
++          authType: (result as { authType?: "oauth" | "api_key" | null })
++            .authType ?? null,
++        };
++      } catch (err) {
++        const msg = err instanceof Error ? err.message : String(err);
++        // OAuth провайдер: вместо записи возвращаем инструкцию с командой,
++        // которую owner/service выполняет в интерактивном Pi.
++        if (msg.includes("uses OAuth") || msg.includes("use authInstruction")) {
++          const instr = await piRuntime.authInstruction(name);
++          return reply.code(200).send(instr);
++        }
++        return reply.code(400).send({ error: msg });
++      }
+     },
+   );
+ }
+-- 
+2.43.0
+
+
+From b6ee4d68ace32acad7ca093d123fb36c2af5cc02 Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:42:47 +0300
+Subject: [PATCH 08/12] =?UTF-8?q?refactor:=20fallback=20=D0=B8=D0=B4=D1=91?=
+ =?UTF-8?q?=D1=82=20=D0=BF=D0=BE=20=D0=BC=D0=BE=D0=B4=D0=B5=D0=BB=D1=8F?=
+ =?UTF-8?q?=D0=BC,=20shell-=D1=81=D0=B5=D0=BC=D0=B0=D0=BD=D1=82=D0=B8?=
+ =?UTF-8?q?=D0=BA=D0=B0=20=D1=83=D0=B4=D0=B0=D0=BB=D0=B5=D0=BD=D0=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+С 18.09.2026 (карточка be9cf712, фаза 2) Pi — единственный runtime,
+поэтому fallback при provider_limit больше не переключает «следующего
+исполнителя» — он переключает только модель в лесенке роли.
+Executor остаётся той же ролевой учёткой (task.assignee_id),
+runner остаётся 'pi'.
+
+agent-state.ts:
+  - импорт nextShellForRole → nextModelForProfile
+  - fallback возвращает ModelRoute ({model, provider}) вместо
+    ShellRoute ({shell, userId})
+  - в БД: новый attempt с model=fallback.model, executor_id=
+    task.assignee_id (ролевая учётка), runner='pi'
+  - notification шлётся ролевой учётке (task.assignee_id),
+    текст упоминает модель, не shell
+  - HTTP-ответ: fallback: {model, provider} (без shell/user_id)
+
+roleRouting.ts:
+  - удалены nextShellForRole() и тип ShellRoute
+  - SHELL_AGENT_IDS/SHELL_AGENT_ALIASES остаются — trigger.py
+    импортирует их для resolve_agent_for_role, и aliases
+    ('agent_pi' → 'pi_runtime') ещё живут для legacy-карточек
+---
+ server/src/roleRouting.ts        | 39 ++++--------------
+ server/src/routes/agent-state.ts | 69 +++++++++++++++++++-------------
+ 2 files changed, 49 insertions(+), 59 deletions(-)
+
+diff --git a/server/src/roleRouting.ts b/server/src/roleRouting.ts
+index 1f82f7e2..f36d3631 100644
+--- a/server/src/roleRouting.ts
++++ b/server/src/roleRouting.ts
+@@ -22,14 +22,11 @@ export type RoleRouting = {
+ };
+ 
+ /** Новый алиас типа. Содержит модель и провайдера, к которому она относится —
+- *  используется в новой семантике nextModelForProfile() (см. ниже). Старый
+- *  ShellRoute оставлен как deprecated для существующих вызовов. */
++ *  используется в новой семантике nextModelForProfile() (см. ниже). */
+ export type ModelRoute = { model: string; provider: string };
+ 
+-/** Deprecated с 18.09.2026 (карточка f3108dcc). Новые вызовы должны
+- *  использовать ModelRoute. Оставлен для обратной совместимости с
+- *  nextShellForRole() ниже (deprecated обёртка). */
+-export type ShellRoute = { shell: string; userId: string };
++/** 18.09.2026 (карточка be9cf712, фаза 2): ShellRoute удалён вместе с
++ *  nextShellForRole. Семантика «следующая оболочка» больше не применима. */
+ 
+ /** Канонические имена shell'ов → userId. agent_pi → pi_runtime через
+  *  SHELL_AGENT_ALIASES. Старые legacy-shells (claude_bot, hermes и т.д.)
+@@ -152,28 +149,8 @@ export function nextModelForProfile(
+   return null;
+ }
+ 
+-/** Deprecated обёртка для nextModelForProfile. Использует старую shell-семантику:
+- *  currentExecutorId → shells[i]. Новый код должен использовать nextModelForProfile.
+- *  Карточка 16.09.2026, 5f292e87 уже выпила из этого формата, но в
+- *  agent-state.ts есть вызовы — перевод на новую семантику в этой же
+- *  задаче (см. agent-state.ts изменения). */
+-export function nextShellForRole(
+-  routing: RoleRouting,
+-  role: string,
+-  currentExecutorId: string,
+-): ShellRoute | null {
+-  if (!ROLE_NAMES.includes(role as RoleName)) return null;
+-  const typedRole = role as RoleName;
+-  const shells = [routing.defaults[typedRole], ...routing.fallbacks[typedRole]];
+-  const currentIndex = shells.findIndex(
+-    (shell) => SHELL_AGENT_IDS[shell] === currentExecutorId
+-      || (SHELL_AGENT_ALIASES[shell] && SHELL_AGENT_IDS[SHELL_AGENT_ALIASES[shell]] === currentExecutorId),
+-  );
+-  const firstCandidate = currentIndex >= 0 ? currentIndex + 1 : 1;
+-  for (const shell of shells.slice(firstCandidate)) {
+-    const userId = SHELL_AGENT_IDS[shell]
+-      ?? SHELL_AGENT_IDS[SHELL_AGENT_ALIASES[shell]];
+-    if (userId) return { shell, userId };
+-  }
+-  return null;
+-}
++/** 18.09.2026 (карточка be9cf712, фаза 2): nextShellForRole удалён.
++ *  Семантика «следующая оболочка» больше не применима — Pi единственный
++ *  runtime. Используйте nextModelForProfile() для fallback по моделям
++ *  внутри одной роли. Если код ссылается на nextShellForRole — это
++ *  ошибка миграции, надо править. */
+diff --git a/server/src/routes/agent-state.ts b/server/src/routes/agent-state.ts
+index 6ae59249..0f4606f1 100644
+--- a/server/src/routes/agent-state.ts
++++ b/server/src/routes/agent-state.ts
+@@ -26,7 +26,7 @@ import {
+   stopReasonError,
+   stopReasonPolicy,
+ } from "../stopReasons.js";
+-import { loadRoleRouting, nextShellForRole } from "../roleRouting.js";
++import { loadRoleRouting, nextModelForProfile } from "../roleRouting.js";
+ import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
+ import {
+   AGENT_RULES,
+@@ -1303,10 +1303,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
+           : null);
+       const fallback =
+         reasonCode === "provider_limit" && assigneeRole
+-          ? nextShellForRole(
++          ? nextModelForProfile(
+               loadRoleRouting(),
+               assigneeRole,
+-              currentAttempt?.executor_id ?? "",
++              currentAttempt?.model ?? "",
+             )
+           : null;
+ 
+@@ -1333,12 +1333,17 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
+         }
+ 
+         if (fallback) {
++          // 18.09.2026: Pi — единый runtime. Fallback по provider_limit
++          // больше не переключает «следующую оболочку» (их нет) — только
++          // следующую модель в лесенке роли. Executor остаётся той же
++          // ролевой учёткой, runner остаётся Pi.
+           db.prepare(
+             `UPDATE attempts
+-                SET ended_at = datetime('now'), outcome = ?,
++                SET model = ?,
++                    ended_at = datetime('now'), outcome = ?,
+                     reason_code = ?, reason = ?
+               WHERE id = ? AND ended_at IS NULL`,
+-          ).run(policy.action, reasonCode, comment || null, attemptId);
++          ).run(fallback.model, policy.action, reasonCode, comment || null, attemptId);
+           const fallbackAttemptId = uid();
+           db.prepare(
+             `INSERT INTO attempts
+@@ -1348,25 +1353,25 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
+           ).run(
+             fallbackAttemptId,
+             task.id,
+-            fallback.userId,
+-            fallback.shell,
+-            currentAttempt?.model ?? null,
++            task.assignee_id ?? "",
++            "pi",
++            fallback.model,
+             assigneeRole,
+           );
+           db.prepare(
+             `UPDATE tasks
+-                SET assignee_id = ?, agent_state = 'in_progress',
++                SET agent_state = 'in_progress',
+                     agent_heartbeat_at = datetime('now'), agent_session_id = NULL,
+                     current_attempt_id = ?, updated_at = datetime('now')
+               WHERE id = ? AND current_attempt_id = ?`,
+-          ).run(fallback.userId, fallbackAttemptId, task.id, attemptId);
++          ).run(fallbackAttemptId, task.id, attemptId);
+           logEvent({
+             taskId: task.id,
+             actorId: req.userId,
+             kind: "field_changed",
+-            field: "assignee_id",
+-            fromValue: task.assignee_id ?? null,
+-            toValue: fallback.userId,
++            field: "model",
++            fromValue: currentAttempt?.model ?? null,
++            toValue: fallback.model,
+           });
+         } else if (policy.automaticRetry) {
+           const retryNo = retry.n + 1;
+@@ -1433,20 +1438,26 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
+       });
+       if (fallback) {
+         const notificationId = uid();
+-        db.prepare(
+-          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
+-        ).run(
+-          notificationId,
+-          fallback.userId,
+-          task.id,
+-          `Лимит провайдера: задача «${task.title}» переключена на ${fallback.shell}`,
+-          req.userId,
+-        );
+-        broadcastToUsers([fallback.userId], {
+-          type: "notification:new",
+-          notificationId,
+-          taskId: task.id,
+-        });
++        // 18.09.2026: notify ролевую учётку (task.assignee_id), а не
++        // несуществующего «следующего исполнителя» — fallback теперь
++        // только про смену модели в лесенке роли.
++        const notifyUserId = task.assignee_id ?? "";
++        if (notifyUserId) {
++          db.prepare(
++            "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'assigned', ?, ?, ?)",
++          ).run(
++            notificationId,
++            notifyUserId,
++            task.id,
++            `Лимит провайдера: задача «${task.title}» переключена на ${fallback.model}`,
++            req.userId,
++          );
++          broadcastToUsers([notifyUserId], {
++            type: "notification:new",
++            notificationId,
++            taskId: task.id,
++          });
++        }
+       }
+       broadcastTaskEvent([updated.creator_id, updated.assignee_id], {
+         type: "task:state",
+@@ -1459,8 +1470,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
+         action: policy.action,
+         retry_count: policy.automaticRetry ? retry.n + 1 : retry.n,
+         retry_delay_seconds: policy.delaySeconds,
++        // 18.09.2026: возвращаем только model/provider, без shell/userId
++        // (Pi единственный runtime, executor не меняется).
+         fallback: fallback
+-          ? { shell: fallback.shell, user_id: fallback.userId }
++          ? { model: fallback.model, provider: fallback.provider }
+           : null,
+         next_attempt_template: nextAttemptTemplate,
+         substantive_attempts: (hydrated.attempts || []).length,
+-- 
+2.43.0
+
+
+From 060aa042f41ef659d1cfe132b4a34606012ecff2 Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:44:55 +0300
+Subject: [PATCH 09/12] =?UTF-8?q?feat(runtime):=20API=20/api/runtime/routi?=
+ =?UTF-8?q?ng=20=D1=81=20=D1=80=D0=B5=D0=B4=D0=B0=D0=BA=D1=82=D0=B8=D1=80?=
+ =?UTF-8?q?=D0=BE=D0=B2=D0=B0=D0=BD=D0=B8=D0=B5=D0=BC=20=D0=BC=D0=BE=D0=B4?=
+ =?UTF-8?q?=D0=B5=D0=BB=D0=B5=D0=B9?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+GET /api/runtime/routing:
+  - preHandler authOrApiToken (диагностика, не запись)
+  - возвращает loadRuntimeConfig() — текущий RoleRouting
+
+PUT /api/runtime/routing/:role:
+  - preHandler ownerOrApiToken (только owner/service или ENV-токен)
+  - body: {primary: string, fallbacks: string[]}
+  - валидация:
+    * role ∈ ROLE_NAMES, иначе 404
+    * primary — непустая строка
+    * fallbacks — массив непустых строк
+    * primary не встречается в fallbacks (дедуп)
+    * primary и каждый fallback существуют в 'pi --list-models'
+      (кэш 10 c), иначе 422 model_not_available
+  - запись: writeRuntimeConfig(config) — атомарно через tmp+rename,
+    lockfile рядом с файлом, chmod 0600
+  - при ошибке pi (недоступен) — 503 pi unreachable
+  - возвращает {role, primary, fallbacks}
+
+modelExists(id) в PiRuntimeAdapter экспортирован отдельно —
+используется PUT /api/runtime/routing для валидации.
+
+writeRuntimeConfig в roleRouting.ts: yaml.stringify + lockfile +
+tmp+rename + chmod 0600. Шапка-комментарий из исходного YAML
+теряется (yaml.stringify их не сохраняет) — это deviation от спека
+§G, помечено в комментарии. При переезде routing в БД вопрос
+снимается.
+---
+ server/src/roleRouting.ts              | 45 ++++++++++++++-
+ server/src/routes/runtime.ts           | 77 ++++++++++++++++++++++++++
+ server/src/runtime/PiRuntimeAdapter.ts | 17 ++++++
+ 3 files changed, 138 insertions(+), 1 deletion(-)
+
+diff --git a/server/src/roleRouting.ts b/server/src/roleRouting.ts
+index f36d3631..90a29525 100644
+--- a/server/src/roleRouting.ts
++++ b/server/src/roleRouting.ts
+@@ -1,6 +1,6 @@
+ import fs from "node:fs";
+ import path from "node:path";
+-import { parse } from "yaml";
++import { parse, stringify } from "yaml";
+ 
+ export const ROLE_NAMES = [
+   "researcher",
+@@ -131,6 +131,49 @@ export function providerOfModel(model: string): string {
+   return "minimax";
+ }
+ 
++/** Записать RoleRouting обратно в YAML-файл. Атомарно: tmp + rename +
++ *  lock-файл, как в PiRuntimeAdapter.writeAuthFile(). Шапка-комментарий
++ *  из исходного файла теряется (yaml.stringify их не сохраняет) — это
++ *  deviation от спека §G («без потери шапки-комментария»), но без
++ *  зависимости от ruamel.yaml и без сложного round-trip через CST. При
++ *  дальнейшем переезде routing в БД вопрос снимается. */
++export function writeRuntimeConfig(
++  config: RoleRouting,
++  fileName = ROLE_ROUTING_FILE,
++): void {
++  const yamlText =
++    "# Role routing для TaskFlow. Сгенерировано автоматически Pi\n" +
++    "# runtime (карточка be9cf712, фаза 2). При правке руками — не\n" +
++    "# забывайте порядок: defaults, fallbacks, models.\n" +
++    stringify(config, { lineWidth: 0 });
++  const lockPath = `${fileName}.lock`;
++  const tmpPath = `${fileName}.tmp.${process.pid}.${Date.now()}`;
++
++  for (let i = 0; i < 50; i++) {
++    try {
++      const fd = fs.openSync(lockPath, "wx", 0o600);
++      try {
++        fs.writeFileSync(tmpPath, yamlText, { encoding: "utf-8", mode: 0o600 });
++        fs.renameSync(tmpPath, fileName);
++        return;
++      } finally {
++        fs.closeSync(fd);
++        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
++        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
++      }
++    } catch (err) {
++      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
++        // Кто-то уже держит lock — синхронный retry.
++        const start = Date.now();
++        while (Date.now() - start < 100) { /* spin */ }
++        continue;
++      }
++      throw err;
++    }
++  }
++  throw new Error(`routing lock timeout: ${lockPath}`);
++}
++
+ /** Следующая модель в лесенке для роли после исчерпания текущей.
+  *  Семантика «следующая модель», а не «следующий shell» — Pi один,
+  *  shell-имён больше нет (см. карточку f3108dcc). */
+diff --git a/server/src/routes/runtime.ts b/server/src/routes/runtime.ts
+index 6e69a218..6f5dbfda 100644
+--- a/server/src/routes/runtime.ts
++++ b/server/src/routes/runtime.ts
+@@ -1,6 +1,13 @@
+ import type { FastifyInstance } from "fastify";
+ import { authOrApiToken, ownerOrApiToken } from "../auth.js";
+ import { piRuntime } from "../runtime/index.js";
++import {
++  ROLE_NAMES,
++  loadRoleRouting,
++  writeRuntimeConfig,
++  type RoleName,
++} from "../roleRouting.js";
++import { modelExists } from "../runtime/PiRuntimeAdapter.js";
+ 
+ /** Список известных провайдеров — синхронизирован с PiRuntimeAdapter.KNOWN_PROVIDERS.
+  *  Здесь дублируется намеренно: роут-слой не зависит от внутреннего адаптера.
+@@ -87,4 +94,74 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
+       }
+     },
+   );
++
++  // GET /api/runtime/routing — текущий role-routing. Без авторизации
++  // owner (только authOrApiToken): это диагностика, не запись.
++  app.get("/api/runtime/routing", { preHandler: authPre }, async () => {
++    const routing = loadRoleRouting();
++    return { routing };
++  });
++
++  // PUT /api/runtime/routing/:role — запись primary + fallbacks для роли.
++  // Валидация:
++  //   - primary непустая строка;
++  //   - fallbacks — массив строк (может быть пустым);
++  //   - primary и каждый fallback существуют в pi --list-models;
++  //   - primary не встречается в fallbacks.
++  // Доступ: owner/service или api-token со scope runtime:auth.
++  app.put<{
++    Params: { role: string };
++    Body: { primary?: unknown; fallbacks?: unknown };
++  }>(
++    "/api/runtime/routing/:role",
++    { preHandler: ownerOrApiToken },
++    async (req, reply) => {
++      const role = req.params.role as RoleName;
++      if (!ROLE_NAMES.includes(role)) {
++        return reply.code(404).send({ error: "unknown role" });
++      }
++      const body = req.body ?? {};
++      const primary = body.primary;
++      const fallbacks = body.fallbacks;
++      if (typeof primary !== "string" || !primary.trim()) {
++        return reply.code(422).send({ error: "primary must be non-empty string" });
++      }
++      if (!Array.isArray(fallbacks) ||
++          fallbacks.some((m) => typeof m !== "string" || !m.trim())) {
++        return reply.code(422).send({ error: "fallbacks must be array of non-empty strings" });
++      }
++      const uniqueFallbacks = Array.from(new Set(fallbacks as string[]));
++      if (uniqueFallbacks.includes(primary)) {
++        return reply.code(422).send({ error: "primary must not appear in fallbacks" });
++      }
++
++      // Проверка моделей через pi --list-models (кэш 10 c).
++      try {
++        if (!(await modelExists(primary.trim()))) {
++          return reply.code(422).send({ error: `model_not_available: ${primary}` });
++        }
++        for (const fb of uniqueFallbacks) {
++          if (!(await modelExists(fb))) {
++            return reply.code(422).send({ error: `model_not_available: ${fb}` });
++          }
++        }
++      } catch (err) {
++        const msg = err instanceof Error ? err.message : String(err);
++        return reply.code(503).send({ error: `pi unreachable: ${msg}` });
++      }
++
++      const config = loadRoleRouting();
++      config.models[role] = primary.trim();
++      config.fallbacks[role] = uniqueFallbacks;
++      // defaults трогать не нужно: для всех 8 ролей это pi_runtime, и
++      // сейчас shell-семантика не используется.
++      try {
++        writeRuntimeConfig(config);
++      } catch (err) {
++        const msg = err instanceof Error ? err.message : String(err);
++        return reply.code(500).send({ error: `write failed: ${msg}` });
++      }
++      return { role, primary: primary.trim(), fallbacks: uniqueFallbacks };
++    },
++  );
+ }
+diff --git a/server/src/runtime/PiRuntimeAdapter.ts b/server/src/runtime/PiRuntimeAdapter.ts
+index c1aa0f0b..23cdb6b0 100644
+--- a/server/src/runtime/PiRuntimeAdapter.ts
++++ b/server/src/runtime/PiRuntimeAdapter.ts
+@@ -574,3 +574,20 @@ export const piRuntime: RuntimeAdapter = {
+ export function invalidateListModelsCache(): void {
+   listModelsCache = null;
+ }
++
++/** Множество id моделей, реально доступных в Pi (без провайдера — модель
++ *  уникальна по id, не по (provider, id): Pi использует то же имя для
++ *  одной и той же модели в разных провайдерах редко). Используется
++ *  PUT /api/runtime/routing для валидации — owner не может назначить
++ *  роль на модель, которой Pi не знает (422 model_not_available). */
++export async function getAvailableModelIds(): Promise<Set<string>> {
++  const models = await piRuntime.listModels();
++  return new Set(models.map((m) => m.id));
++}
++
++/** Проверяет, что модель существует в pi --list-models (по id, без
++ *  провайдера). Используется PUT /api/runtime/routing. */
++export async function modelExists(id: string): Promise<boolean> {
++  const ids = await getAvailableModelIds();
++  return ids.has(id);
++}
+-- 
+2.43.0
+
+
+From d240ce76900fb27a4a466d2d428848081d6a9cfc Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:46:13 +0300
+Subject: [PATCH 10/12] =?UTF-8?q?feat(runtime):=20startRun=20=D0=B7=D0=B0?=
+ =?UTF-8?q?=D0=BF=D1=83=D1=81=D0=BA=D0=B0=D0=B5=D1=82=20start=5Fagent=5Fru?=
+ =?UTF-8?q?n.py=20=D1=87=D0=B5=D1=80=D0=B5=D0=B7=20spawn?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+startRun(input) — реальная реализация. Шаги:
+  1. Загрузить задачу из БД (id, role, dispatched_role, assignee_id).
+  2. Сформировать spec для launcher (server/scripts/start_agent_run.py):
+     cmd = [piBin, -p, prompt], env с NODE_USE_ENV_PROXY=1, cwd,
+     timeout=3600, agent_label=runtime:<role>.
+  3. spawn('python3', [start_agent_run.py], stdio pipe). JSON spec
+     в stdin, JSON result из stdout.
+  4. Вернуть сразу {runId, sessionId: '', status: 'queued'} —
+     реальный результат придёт через getRun(runId), когда
+     launcher закончит.
+  5. На 'close' event: парсим stdout как JSON, обновляем
+     tasks.agent_state: ok+returncode=0 → review; timeout/killed/
+     error → blocked.
+  6. stderr пишем в console только если непустой (диагностика
+     для разработчика, credential не утекает).
+
+Не блокирует event loop Node: spawn + I/O async. Клиент
+HTTP-запроса startRun не ждёт завершения Pi.
+
+НЕ покрывает бизнес-логику trigger.py (claim, heartbeat, usage,
+цепочка заходов) — это работа trigger.py. startRun через
+RuntimeAdapter — это «запустить Pi на этой задаче» для сценариев
+вне trigger.py (например, из UI, или из будущих автоматизаций).
+---
+ server/src/runtime/PiRuntimeAdapter.ts | 105 +++++++++++++++++++++++--
+ 1 file changed, 99 insertions(+), 6 deletions(-)
+
+diff --git a/server/src/runtime/PiRuntimeAdapter.ts b/server/src/runtime/PiRuntimeAdapter.ts
+index 23cdb6b0..c4d2d40f 100644
+--- a/server/src/runtime/PiRuntimeAdapter.ts
++++ b/server/src/runtime/PiRuntimeAdapter.ts
+@@ -1,4 +1,4 @@
+-import { execFile } from "node:child_process";
++import { execFile, spawn } from "node:child_process";
+ import fs from "node:fs";
+ import path from "node:path";
+ import { promisify } from "node:util";
+@@ -500,12 +500,105 @@ export const piRuntime: RuntimeAdapter = {
+     };
+   },
+ 
+-  async startRun(_input: StartRunInput): Promise<StartRunResult> {
+-    throw new UnsupportedInFacadeError(
+-      "PiRuntimeAdapter.startRun() недоступен в этой версии фасада: " +
+-        "запуск процесса делает server/scripts/trigger.py. " +
+-        "См. карточку f3108dcc — Task 9.",
++  async startRun(input: StartRunInput): Promise<StartRunResult> {
++    // Формируем spec для launcher'а. Задача загружается из БД; роль,
++    // модель, prompt берутся из input. cmd собирается здесь, потому что
++    // это бизнес-логика (какие флаги Pi получает для роли), а не
++    // механика запуска (которая в launcher).
++    const task = db
++      .prepare(
++        `SELECT id, assignee_id, dispatched_role, role FROM tasks WHERE id = ?`,
++      )
++      .get(input.taskId) as
++      | { id: string; assignee_id: string | null; dispatched_role: string | null; role: string | null }
++      | undefined;
++    if (!task) {
++      throw new Error(`task ${input.taskId} not found`);
++    }
++    const role: string | undefined = task.dispatched_role ?? task.role ?? input.agentId;
++    const model = input.model?.trim() || undefined;
++
++    // cmd для Pi. Подмножество того, что собирает trigger.py — тут
++    // минимально, потому что RuntimeAdapter.startRun — это в первую
++    // очередь «просто запустить Pi на этой задаче», а не полный
++    // конвейер claim/heartbeat/usage, который живёт в trigger.py.
++    const piBin = "/home/maksim/.local/bin/pi";
++    const cmd: string[] = [piBin, "-p", input.prompt];
++
++    const spec = {
++      cmd,
++      env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
++      cwd: process.cwd(),
++      timeout: 3600,
++      agent_label: `runtime:${role ?? "unknown"}`,
++      usage_path: undefined as string | undefined,
++      kill_event: undefined as unknown, // Node EventEmitter для kill не пробрасываем (см. ниже)
++    };
++
++    // spawn python3 с start_agent_run.py, JSON stdin → JSON stdout.
++    // Возвращаем сразу {runId, status: 'queued'} — реальный результат
++    // придёт через getRun(runId), когда launcher закончит (см. ниже
++    // фоновый обработчик stdout).
++    const proc = spawn(
++      "python3",
++      [path.join(process.cwd(), "server", "scripts", "start_agent_run.py")],
++      { stdio: ["pipe", "pipe", "pipe"] },
+     );
++    proc.stdin.end(JSON.stringify(spec));
++
++    let stdout = "";
++    proc.stdout.on("data", (chunk) => {
++      stdout += chunk.toString("utf8");
++    });
++    let stderr = "";
++    proc.stderr.on("data", (chunk) => {
++      stderr += chunk.toString("utf8");
++    });
++    proc.on("error", (err) => {
++      // spawn не смог стартовать (ENOENT и т.п.) — пишем в agent_state,
++      // чтобы планировщик мог ретраить.
++      try {
++        db.prepare(
++          `UPDATE tasks SET agent_state = 'blocked', updated_at = datetime('now')
++             WHERE id = ?`,
++        ).run(input.taskId);
++      } catch { /* ignore — задача могла быть удалена */ }
++      console.error(`[startRun] spawn error for ${input.taskId}: ${err.message}`);
++    });
++    proc.on("close", () => {
++      // Парсим stdout как JSON. credential/log НЕ логируем. stderr
++      // пишем только если там что-то есть (диагностика для разработчика).
++      let result: { status: string; returncode: number | null; output_tail: string;
++        usage: unknown; error: string | null } | null = null;
++      try {
++        if (stdout.trim()) result = JSON.parse(stdout);
++      } catch (e) {
++        console.error(`[startRun] bad JSON from launcher for ${input.taskId}: ${(e as Error).message}`);
++        console.error(`[startRun] stderr: ${stderr.slice(0, 500)}`);
++      }
++      if (!result) return;
++
++      // Обновляем agent_state по результату.
++      let nextState: "review" | "blocked" | "in_progress" = "in_progress";
++      if (result.status === "ok" && result.returncode === 0) nextState = "review";
++      else if (result.status !== "ok") nextState = "blocked";
++      try {
++        db.prepare(
++          `UPDATE tasks SET agent_state = ?, agent_finished_at = datetime('now'),
++                   updated_at = datetime('now')
++             WHERE id = ?`,
++        ).run(nextState, input.taskId);
++      } catch { /* ignore */ }
++      if (stderr.trim()) {
++        console.log(`[startRun:${input.taskId.slice(0, 8)}] ${stderr.slice(0, 500)}`);
++      }
++    });
++
++    return {
++      runId: `run-${input.taskId.slice(0, 8)}`,
++      sessionId: "",
++      status: "queued",
++    };
+   },
+ 
+   async sendMessage(_runId: string, _text: string): Promise<void> {
+-- 
+2.43.0
+
+
+From e2564c9fb6e598afe298544a8dbb124ac4dee7ba Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:48:21 +0300
+Subject: [PATCH 11/12] =?UTF-8?q?feat(ui):=20=D1=8D=D0=BA=D1=80=D0=B0?=
+ =?UTF-8?q?=D0=BD=20=D0=9F=D1=80=D0=BE=D0=B2=D0=B0=D0=B9=D0=B4=D0=B5=D1=80?=
+ =?UTF-8?q?=D1=8B=20(Anthropic/OpenAI/MiniMax)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+src/api/runtime.ts: useRuntimeProviders/Models/Routing,
+useConnectProvider (POST /providers/:id/auth), usePutRouting (PUT
+/routing/:role).
+
+src/screens/ProvidersScreen.tsx:
+  - Карточки для каждого провайдера: имя, описание, статус-badge
+    (connected/disconnected/expired), authType.
+  - Для api_key провайдера (статус disconnected/expired) — поле ввода
+    ключа + кнопка «Подключить» (вызывает connectProvider).
+  - Для OAuth провайдера — кнопка «Инструкция по OAuth» / «Переподключить»
+    (вызывает authInstruction, модалка показывает готовую команду
+    pi --provider X --model Y 'ping').
+  - Для connected — кнопка «Обновить ключ» / «Переподключить» (та же
+    логика).
+  - Источник правды — useRuntimeProviders() через 'pi auth check'.
+
+Маршрут /settings/providers + пункт «Провайдеры LLM» в SettingsScreen.
+
+credential НЕ логируется и НЕ показывается в UI — только факт отправки.
+Поле ввода type=password с autoComplete=off.
+---
+ src/App.tsx                     |   5 +
+ src/api/runtime.ts              | 109 ++++++++++++
+ src/screens/ProvidersScreen.tsx | 283 ++++++++++++++++++++++++++++++++
+ src/screens/SettingsScreen.tsx  |   6 +
+ 4 files changed, 403 insertions(+)
+ create mode 100644 src/api/runtime.ts
+ create mode 100644 src/screens/ProvidersScreen.tsx
+
+diff --git a/src/App.tsx b/src/App.tsx
+index 93804482..eac65daf 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -34,6 +34,7 @@ import { LabelTasksScreen } from "./screens/LabelTasksScreen";
+ import { SearchScreen } from "./screens/SearchScreen";
+ import { VoiceModelsScreen } from "./screens/VoiceModelsScreen";
+ import { IntegrationsScreen } from "./screens/IntegrationsScreen";
++import { ProvidersScreen } from "./screens/ProvidersScreen";
+ import { TemplatesScreen } from "./screens/TemplatesScreen";
+ import { NotesScreen } from "./screens/NotesScreen";
+ import { NoteEditorScreen } from "./screens/NoteEditorScreen";
+@@ -175,6 +176,10 @@ export default function App() {
+               path="/settings/integrations"
+               element={<IntegrationsScreen />}
+             />
++            <Route
++              path="/settings/providers"
++              element={<ProvidersScreen />}
++            />
+             <Route path="/settings/templates" element={<TemplatesScreen />} />
+           </Route>
+         </Route>
+diff --git a/src/api/runtime.ts b/src/api/runtime.ts
+new file mode 100644
+index 00000000..b0c5a2c7
+--- /dev/null
++++ b/src/api/runtime.ts
+@@ -0,0 +1,109 @@
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import { api } from "./client";
++
++// Карточка be9cf712 (Pi = единый runtime, фаза 2). Источник истины —
++// Pi: listProviders() идёт через 'pi auth check --json', listModels() —
++// через 'pi --list-models'. Подключение провайдеров и редактирование
++// routing делаются через POST /providers/:id/auth и PUT /routing/:role
++// (owner/service или api-token со scope runtime:auth).
++
++export type ProviderStatus = "connected" | "disconnected" | "expired";
++export type AuthType = "oauth" | "api_key" | null;
++
++export interface RuntimeProvider {
++  provider: string;
++  status: ProviderStatus;
++  authType: AuthType;
++}
++
++export interface RuntimeModel {
++  id: string;
++  provider: string;
++  runtime_id: string;
++  available: boolean;
++}
++
++export interface AuthInstruction {
++  status: "auth_required";
++  provider: string;
++  command: string;
++  note: string;
++}
++
++export interface RoleRoutingView {
++  defaults: Record<string, string>;
++  fallbacks: Record<string, string[]>;
++  models: Record<string, string>;
++}
++
++export interface PutRoutingBody {
++  primary: string;
++  fallbacks: string[];
++}
++
++export function useRuntimeProviders() {
++  return useQuery({
++    queryKey: ["runtime", "providers"],
++    queryFn: () => api.get<{ providers: RuntimeProvider[] }>(
++      "/api/runtime/providers",
++    ),
++  });
++}
++
++export function useRuntimeModels() {
++  return useQuery({
++    queryKey: ["runtime", "models"],
++    queryFn: () => api.get<{ models: RuntimeModel[] }>(
++      "/api/runtime/models",
++    ),
++  });
++}
++
++export function useRuntimeRouting() {
++  return useQuery({
++    queryKey: ["runtime", "routing"],
++    queryFn: () => api.get<{ routing: RoleRoutingView }>(
++      "/api/runtime/routing",
++    ),
++  });
++}
++
++export function useConnectProvider() {
++  const qc = useQueryClient();
++  return useMutation({
++    mutationFn: async (input: { provider: string; apiKey?: string }) =>
++      api.post<RuntimeProvider | AuthInstruction>(
++        `/api/runtime/providers/${input.provider}/auth`,
++        { apiKey: input.apiKey },
++      ),
++    onSuccess: () => {
++      qc.invalidateQueries({ queryKey: ["runtime"] });
++    },
++  });
++}
++
++export function usePutRouting() {
++  const qc = useQueryClient();
++  return useMutation({
++    mutationFn: async (input: { role: string; body: PutRoutingBody }) =>
++      api.put<{ role: string; primary: string; fallbacks: string[] }>(
++        `/api/runtime/routing/${input.role}`,
++        input.body,
++      ),
++    onSuccess: () => {
++      qc.invalidateQueries({ queryKey: ["runtime", "routing"] });
++    },
++  });
++}
++
++export const RUNTIME_PROVIDER_LABEL: Record<string, string> = {
++  anthropic: "Anthropic",
++  "openai-codex": "OpenAI (Codex OAuth)",
++  minimax: "MiniMax",
++};
++
++export const RUNTIME_PROVIDER_DESCRIPTION: Record<string, string> = {
++  anthropic: "Claude Sonnet, Opus, Haiku",
++  "openai-codex": "GPT-5.x через Codex OAuth",
++  minimax: "MiniMax-M3 (default)",
++};
+diff --git a/src/screens/ProvidersScreen.tsx b/src/screens/ProvidersScreen.tsx
+new file mode 100644
+index 00000000..8ec20dcd
+--- /dev/null
++++ b/src/screens/ProvidersScreen.tsx
+@@ -0,0 +1,283 @@
++import { useRef, useState } from "react";
++import {
++  useRuntimeProviders,
++  useConnectProvider,
++  RUNTIME_PROVIDER_LABEL,
++  RUNTIME_PROVIDER_DESCRIPTION,
++  type AuthInstruction,
++  type ProviderStatus,
++} from "../api/runtime";
++import {
++  ErrorBanner,
++  Loading,
++  ScreenHeader,
++} from "../components/UI";
++import { useDialog } from "../components/Dialog";
++import { getErrorMessage } from "../lib/errors";
++
++const STATUS_LABEL: Record<ProviderStatus, string> = {
++  connected: "Подключён",
++  disconnected: "Не подключён",
++  expired: "Не отвечает",
++};
++
++const STATUS_COLOR: Record<ProviderStatus, string> = {
++  connected: "#22C55E",
++  disconnected: "#F59E0B",
++  expired: "#EF4444",
++};
++
++function StatusBadge({ status }: { status: ProviderStatus }) {
++  return (
++    <span
++      style={{
++        display: "inline-block",
++        padding: "2px 8px",
++        borderRadius: 12,
++        fontSize: 12,
++        fontWeight: 600,
++        color: "#fff",
++        background: STATUS_COLOR[status],
++      }}
++    >
++      {STATUS_LABEL[status]}
++    </span>
++  );
++}
++
++function ProviderCard({ id }: { id: string }) {
++  const providers = useRuntimeProviders();
++  const connect = useConnectProvider();
++  const dialog = useDialog();
++  const provider = providers.data?.providers.find((p) => p.provider === id);
++  const status = provider?.status ?? "expired";
++  const authType = provider?.authType ?? null;
++  const isApiKey = authType === "api_key";
++  const isOAuth = authType === "oauth";
++  const [apiKey, setApiKey] = useState("");
++  const [showInput, setShowInput] = useState(false);
++  const submittingRef = useRef(false);
++
++  // OAuth: показать модалку с командой и инструкцией
++  const handleInstruction = async () => {
++    if (submittingRef.current) return;
++    submittingRef.current = true;
++    try {
++      const result = await connect.mutateAsync({ provider: id });
++      if ("status" in result && result.status === "auth_required") {
++        const instr = result as AuthInstruction;
++        await dialog.alert(
++          `${RUNTIME_PROVIDER_LABEL[id]}: авторизация OAuth`,
++          `${instr.note}\n\nКоманда:\n${instr.command}`,
++        );
++      }
++    } catch (e) {
++      await dialog.alert("Ошибка", getErrorMessage(e));
++    } finally {
++      submittingRef.current = false;
++    }
++  };
++
++  const handleSubmitKey = async () => {
++    if (!apiKey.trim()) {
++      await dialog.alert("Пустой ключ", "Введите api key.");
++      return;
++    }
++    if (submittingRef.current) return;
++    submittingRef.current = true;
++    try {
++      await connect.mutateAsync({ provider: id, apiKey: apiKey.trim() });
++      setApiKey("");
++      setShowInput(false);
++      await dialog.alert(
++        "Готово",
++        `${RUNTIME_PROVIDER_LABEL[id]} подключён.`,
++      );
++    } catch (e) {
++      await dialog.alert("Ошибка", getErrorMessage(e));
++    } finally {
++      submittingRef.current = false;
++    }
++  };
++
++  return (
++    <div
++      style={{
++        background: "#fff",
++        borderRadius: 12,
++        padding: 16,
++        marginBottom: 12,
++        border: "1px solid #E5E7EB",
++      }}
++    >
++      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
++        <div>
++          <div style={{ fontWeight: 600, fontSize: 16 }}>
++            {RUNTIME_PROVIDER_LABEL[id] ?? id}
++          </div>
++          <div style={{ fontSize: 12, color: "#6B7280", marginTop: 2 }}>
++            {RUNTIME_PROVIDER_DESCRIPTION[id] ?? ""}
++          </div>
++        </div>
++        <StatusBadge status={status} />
++      </div>
++
++      {authType && (
++        <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 8 }}>
++          auth: {authType}
++        </div>
++      )}
++
++      {/* Disconnected + api_key: ввод ключа */}
++      {(status === "disconnected" || status === "expired") && isApiKey && (
++        <div>
++          {showInput ? (
++            <div style={{ display: "flex", gap: 8 }}>
++              <input
++                type="password"
++                value={apiKey}
++                onChange={(e) => setApiKey(e.target.value)}
++                placeholder="api key"
++                autoComplete="off"
++                style={{
++                  flex: 1,
++                  padding: "8px 10px",
++                  border: "1px solid #D1D5DB",
++                  borderRadius: 6,
++                  fontSize: 14,
++                }}
++              />
++              <button
++                type="button"
++                onClick={handleSubmitKey}
++                disabled={connect.isPending}
++                style={{
++                  padding: "8px 14px",
++                  borderRadius: 6,
++                  background: "#2563EB",
++                  color: "#fff",
++                  fontSize: 14,
++                  fontWeight: 600,
++                  border: 0,
++                  cursor: connect.isPending ? "wait" : "pointer",
++                }}
++              >
++                Подключить
++              </button>
++              <button
++                type="button"
++                onClick={() => { setShowInput(false); setApiKey(""); }}
++                style={{
++                  padding: "8px 12px",
++                  borderRadius: 6,
++                  background: "#F3F4F6",
++                  color: "#374151",
++                  fontSize: 14,
++                  border: 0,
++                  cursor: "pointer",
++                }}
++              >
++                Отмена
++              </button>
++            </div>
++          ) : (
++            <button
++              type="button"
++              onClick={() => setShowInput(true)}
++              style={{
++                padding: "8px 14px",
++                borderRadius: 6,
++                background: "#2563EB",
++                color: "#fff",
++                fontSize: 14,
++                fontWeight: 600,
++                border: 0,
++                cursor: "pointer",
++              }}
++            >
++              Ввести api key
++            </button>
++          )}
++        </div>
++      )}
++
++      {/* Disconnected + OAuth: инструкция */}
++      {(status === "disconnected" || status === "expired") && isOAuth && (
++        <button
++          type="button"
++          onClick={handleInstruction}
++          disabled={connect.isPending}
++          style={{
++            padding: "8px 14px",
++            borderRadius: 6,
++            background: "#2563EB",
++            color: "#fff",
++            fontSize: 14,
++            fontWeight: 600,
++            border: 0,
++            cursor: connect.isPending ? "wait" : "pointer",
++          }}
++        >
++          Инструкция по OAuth
++        </button>
++      )}
++
++      {/* Connected: переподключить (то же, что инструкция для OAuth или
++          повторная запись для api_key — простой способ проверить, что
++          всё ещё работает). */}
++      {status === "connected" && (
++        <button
++          type="button"
++          onClick={isOAuth ? handleInstruction : () => setShowInput(true)}
++          disabled={connect.isPending}
++          style={{
++            padding: "8px 14px",
++            borderRadius: 6,
++            background: "#F3F4F6",
++            color: "#374151",
++            fontSize: 14,
++            fontWeight: 600,
++            border: 0,
++            cursor: connect.isPending ? "wait" : "pointer",
++          }}
++        >
++          {isOAuth ? "Переподключить (OAuth)" : "Обновить ключ"}
++        </button>
++      )}
++    </div>
++  );
++}
++
++export function ProvidersScreen() {
++  const providers = useRuntimeProviders();
++  const knownOrder = ["anthropic", "openai-codex", "minimax"];
++
++  return (
++    <div className="screen" style={{ padding: "16px 16px 80px" }}>
++      <ScreenHeader title="Провайдеры" />
++      <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>
++        Источник истины — Pi. Ключи и токены лежат в&nbsp;
++        <code>~/.pi/agent/auth.json</code>. TaskFlow читает статус через&nbsp;
++        <code>pi auth check --json</code>.
++      </div>
++
++      {providers.isLoading && <Loading />}
++      {providers.error && (
++        <ErrorBanner error={providers.error} />
++      )}
++
++      {providers.data?.providers
++        .slice()
++        .sort((a, b) => knownOrder.indexOf(a.provider) - knownOrder.indexOf(b.provider))
++        .map((p) => (
++          <ProviderCard key={p.provider} id={p.provider} />
++        ))}
++
++      {providers.data?.providers.length === 0 && (
++        <div style={{ textAlign: "center", padding: 32, color: "#6B7280" }}>
++          Провайдеры не сконфигурированы. Pi не знает ни одного провайдера.
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/src/screens/SettingsScreen.tsx b/src/screens/SettingsScreen.tsx
+index 984e5d95..cb5ec90b 100644
+--- a/src/screens/SettingsScreen.tsx
++++ b/src/screens/SettingsScreen.tsx
+@@ -572,6 +572,12 @@ export function SettingsScreen() {
+             label="Интеграции (Google, Apple)"
+             onClick={() => navigate("/settings/integrations")}
+           />
++          <Row
++            icon="key"
++            iconColor="#8B5CF6"
++            label="Провайдеры LLM"
++            onClick={() => navigate("/settings/providers")}
++          />
+         </FieldGroup>
+       </div>
+ 
+-- 
+2.43.0
+
+
+From e9f3d408dfeeaaf6b59d8a722a24749840ca8350 Mon Sep 17 00:00:00 2001
+From: Maksim <m89818052377@gmail.com>
+Date: Fri, 18 Sep 2026 08:49:17 +0300
+Subject: [PATCH 12/12] =?UTF-8?q?feat(ui):=20=D1=8D=D0=BA=D1=80=D0=B0?=
+ =?UTF-8?q?=D0=BD=20=D0=9C=D0=BE=D0=B4=D0=B5=D0=BB=D0=B8=20=D1=80=D0=BE?=
+ =?UTF-8?q?=D0=BB=D0=B5=D0=B9=20(primary=20+=20fallbacks)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+src/screens/RolesModelsScreen.tsx:
+  - Список 8 ролей, для каждой — RoleRow с текущей primary и
+    fallbacks.
+  - ModelSelect — <select> с id моделей из useRuntimeModels().
+  - FallbackPicker — кнопки-переключатели (модель не может быть
+    одновременно primary и fallback).
+  - Кнопка «Сохранить» появляется только когда есть локальные
+    изменения; вызывает usePutRouting → PUT /api/runtime/routing/:role.
+  - Источник моделей — useRuntimeModels() через 'pi --list-models'
+    (кэш 10 c на стороне сервера).
+
+Маршрут /settings/roles-models + пункт «Модели ролей» в SettingsScreen.
+
+Шапка объясняет owner'у: «меняется через PUT /api/runtime/routing/
+:role (owner/service)» — то есть редактирование защищено тем же
+preHandler ownerOrApiToken, что и connectProvider.
+---
+ src/App.tsx                       |   5 +
+ src/screens/RolesModelsScreen.tsx | 259 ++++++++++++++++++++++++++++++
+ src/screens/SettingsScreen.tsx    |   6 +
+ 3 files changed, 270 insertions(+)
+ create mode 100644 src/screens/RolesModelsScreen.tsx
+
+diff --git a/src/App.tsx b/src/App.tsx
+index eac65daf..65c27942 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -35,6 +35,7 @@ import { SearchScreen } from "./screens/SearchScreen";
+ import { VoiceModelsScreen } from "./screens/VoiceModelsScreen";
+ import { IntegrationsScreen } from "./screens/IntegrationsScreen";
+ import { ProvidersScreen } from "./screens/ProvidersScreen";
++import { RolesModelsScreen } from "./screens/RolesModelsScreen";
+ import { TemplatesScreen } from "./screens/TemplatesScreen";
+ import { NotesScreen } from "./screens/NotesScreen";
+ import { NoteEditorScreen } from "./screens/NoteEditorScreen";
+@@ -180,6 +181,10 @@ export default function App() {
+               path="/settings/providers"
+               element={<ProvidersScreen />}
+             />
++            <Route
++              path="/settings/roles-models"
++              element={<RolesModelsScreen />}
++            />
+             <Route path="/settings/templates" element={<TemplatesScreen />} />
+           </Route>
+         </Route>
+diff --git a/src/screens/RolesModelsScreen.tsx b/src/screens/RolesModelsScreen.tsx
+new file mode 100644
+index 00000000..c66fc781
+--- /dev/null
++++ b/src/screens/RolesModelsScreen.tsx
+@@ -0,0 +1,259 @@
++import { useState } from "react";
++import {
++  useRuntimeModels,
++  useRuntimeRouting,
++  usePutRouting,
++} from "../api/runtime";
++import {
++  ErrorBanner,
++  Loading,
++  ScreenHeader,
++} from "../components/UI";
++import { useDialog } from "../components/Dialog";
++import { getErrorMessage } from "../lib/errors";
++
++const ROLE_LABEL: Record<string, string> = {
++  researcher: "Исследователь",
++  analyst: "Аналитик",
++  synthesizer: "Синтезатор",
++  critic_verifier: "Критик-проверяющий",
++  architect: "Архитектор",
++  builder: "Разработчик",
++  qa: "QA",
++  designer: "Дизайнер интерфейсов",
++};
++
++const ROLES = [
++  "researcher",
++  "analyst",
++  "synthesizer",
++  "critic_verifier",
++  "architect",
++  "builder",
++  "qa",
++  "designer",
++];
++
++function ModelSelect({
++  role,
++  model,
++  onChange,
++  options,
++}: {
++  role: string;
++  model: string;
++  onChange: (m: string) => void;
++  options: string[];
++}) {
++  return (
++    <div style={{ marginBottom: 12 }}>
++      <label
++        htmlFor={`primary-${role}`}
++        style={{ display: "block", fontSize: 12, color: "#6B7280", marginBottom: 4 }}
++      >
++        Primary
++      </label>
++      <select
++        id={`primary-${role}`}
++        value={model}
++        onChange={(e) => onChange(e.target.value)}
++        style={{
++          width: "100%",
++          padding: "8px 10px",
++          border: "1px solid #D1D5DB",
++          borderRadius: 6,
++          fontSize: 14,
++          background: "#fff",
++        }}
++      >
++        <option value="">— выберите —</option>
++        {options.map((m) => (
++          <option key={m} value={m}>{m}</option>
++        ))}
++      </select>
++    </div>
++  );
++}
++
++function FallbackPicker({
++  role,
++  fallbacks,
++  primary,
++  onChange,
++  options,
++}: {
++  role: string;
++  fallbacks: string[];
++  primary: string;
++  onChange: (f: string[]) => void;
++  options: string[];
++}) {
++  const toggle = (m: string) => {
++    if (m === primary) return;
++    if (fallbacks.includes(m)) onChange(fallbacks.filter((x) => x !== m));
++    else onChange([...fallbacks, m]);
++  };
++  return (
++    <div style={{ marginBottom: 12 }}>
++      <label
++        style={{ display: "block", fontSize: 12, color: "#6B7280", marginBottom: 4 }}
++      >
++        Fallbacks (по убыванию приоритета)
++      </label>
++      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
++        {options
++          .filter((m) => m !== primary)
++          .map((m) => {
++            const selected = fallbacks.includes(m);
++            return (
++              <button
++                key={m}
++                type="button"
++                onClick={() => toggle(m)}
++                style={{
++                  padding: "6px 10px",
++                  borderRadius: 16,
++                  fontSize: 12,
++                  border: selected ? "1px solid #2563EB" : "1px solid #D1D5DB",
++                  background: selected ? "#EFF6FF" : "#fff",
++                  color: selected ? "#1E40AF" : "#374151",
++                  cursor: "pointer",
++                }}
++              >
++                {m}
++              </button>
++            );
++          })}
++      </div>
++    </div>
++  );
++}
++
++function RoleRow({
++  role,
++  currentPrimary,
++  currentFallbacks,
++  options,
++}: {
++  role: string;
++  currentPrimary: string;
++  currentFallbacks: string[];
++  options: string[];
++}) {
++  const put = usePutRouting();
++  const dialog = useDialog();
++  const [primary, setPrimary] = useState(currentPrimary);
++  const [fallbacks, setFallbacks] = useState(currentFallbacks);
++
++  // Если из кэша пришли новые значения (другой пользователь поменял) —
++  // подтягиваем. Локальный ввод пользователя важнее — но при первом
++  // монтировании берём с сервера.
++  if (primary === "" && currentPrimary !== "") setPrimary(currentPrimary);
++  if (fallbacks.length === 0 && currentFallbacks.length > 0) {
++    setFallbacks(currentFallbacks);
++  }
++
++  const dirty =
++    primary !== currentPrimary ||
++    JSON.stringify(fallbacks.slice().sort()) !==
++      JSON.stringify(currentFallbacks.slice().sort());
++
++  const handleSave = async () => {
++    try {
++      await put.mutateAsync({
++        role,
++        body: { primary, fallbacks },
++      });
++    } catch (e) {
++      await dialog.alert("Ошибка", getErrorMessage(e));
++    }
++  };
++
++  return (
++    <div
++      style={{
++        background: "#fff",
++        borderRadius: 12,
++        padding: 16,
++        marginBottom: 12,
++        border: "1px solid #E5E7EB",
++      }}
++    >
++      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
++        <div style={{ fontWeight: 600, fontSize: 16 }}>
++          {ROLE_LABEL[role] ?? role}
++        </div>
++        {dirty && (
++          <button
++            type="button"
++            onClick={handleSave}
++            disabled={put.isPending}
++            style={{
++              padding: "8px 14px",
++              borderRadius: 6,
++              background: "#2563EB",
++              color: "#fff",
++              fontSize: 14,
++              fontWeight: 600,
++              border: 0,
++              cursor: put.isPending ? "wait" : "pointer",
++            }}
++          >
++            Сохранить
++          </button>
++        )}
++      </div>
++      <ModelSelect role={role} model={primary} onChange={setPrimary} options={options} />
++      <FallbackPicker
++        role={role}
++        fallbacks={fallbacks}
++        primary={primary}
++        onChange={setFallbacks}
++        options={options}
++      />
++    </div>
++  );
++}
++
++export function RolesModelsScreen() {
++  const models = useRuntimeModels();
++  const routing = useRuntimeRouting();
++
++  // Опции для select — список id моделей, доступных в Pi.
++  const options = (models.data?.models ?? []).map((m) => m.id).sort();
++
++  return (
++    <div className="screen" style={{ padding: "16px 16px 80px" }}>
++      <ScreenHeader title="Агенты: модели ролей" />
++      <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>
++        Для каждой из 8 ролей выберите primary и fallbacks. Источник правды —&nbsp;
++        <code>server/scripts/role-routing.yaml</code>; меняется через&nbsp;
++        <code>PUT /api/runtime/routing/:role</code> (owner/service).
++      </div>
++
++      {(models.isLoading || routing.isLoading) && <Loading />}
++      {models.error && <ErrorBanner error={models.error} />}
++      {routing.error && <ErrorBanner error={routing.error} />}
++      {models.data?.models.length === 0 && (
++        <div style={{ textAlign: "center", padding: 24, color: "#6B7280" }}>
++          Pi не отдаёт ни одной модели. Проверьте&nbsp;
++          <code>pi --list-models</code> на хосте .110.
++        </div>
++      )}
++
++      {routing.data?.routing && (
++        <>
++          {ROLES.map((role) => (
++            <RoleRow
++              key={role}
++              role={role}
++              currentPrimary={routing.data!.routing.models[role] ?? ""}
++              currentFallbacks={routing.data!.routing.fallbacks[role] ?? []}
++              options={options}
++            />
++          ))}
++        </>
++      )}
++    </div>
++  );
++}
+diff --git a/src/screens/SettingsScreen.tsx b/src/screens/SettingsScreen.tsx
+index cb5ec90b..7ea785eb 100644
+--- a/src/screens/SettingsScreen.tsx
++++ b/src/screens/SettingsScreen.tsx
+@@ -578,6 +578,12 @@ export function SettingsScreen() {
+             label="Провайдеры LLM"
+             onClick={() => navigate("/settings/providers")}
+           />
++          <Row
++            icon="cpu"
++            iconColor="#0EA5E9"
++            label="Модели ролей"
++            onClick={() => navigate("/settings/roles-models")}
++          />
+         </FieldGroup>
+       </div>
+ 
+-- 
+2.43.0
+

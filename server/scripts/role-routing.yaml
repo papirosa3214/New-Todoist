@@ -1,9 +1,6 @@
-# Роль → исполнитель. С 18.09.2026 Pi — единый runtime (см. карточка
-# f3108dcc, спец docs/superpowers/specs/2026-09-18-pi-runtime-facade.md).
-# Все восемь ролей исполняются одной машиной, различаясь mcp-профилем
-# и ролью в задаче. Имя "pi_runtime" — каноническое; "agent_pi"
-# сохранён как legacy-alias для старых карточек (см. SHELL_AGENT_ALIASES
-# в server/src/roleRouting.ts и trigger.py:SHELL_AGENT_IDS).
+# Role routing для TaskFlow. Сгенерировано автоматически Pi
+# runtime (карточка be9cf712, фаза 2). При правке руками — не
+# забывайте порядок: defaults, fallbacks, models.
 defaults:
   researcher: pi_runtime
   analyst: pi_runtime
@@ -13,9 +10,6 @@ defaults:
   builder: pi_runtime
   qa: pi_runtime
   designer: pi_runtime
-
-# Запасных исполнителей нет: при исчерпании лимита задача останавливается,
-# пока владелец не решит, что подключать дальше.
 fallbacks:
   researcher: []
   analyst: []
@@ -25,9 +19,6 @@ fallbacks:
   builder: []
   qa: []
   designer: []
-
-# Одна модель Pi по умолчанию. Настройки подключения и ключ модели живут в
-# ~/.pi/agent, а не в старых профилях отдельных оболочек.
 models:
   researcher: MiniMax-M3
   analyst: MiniMax-M3
