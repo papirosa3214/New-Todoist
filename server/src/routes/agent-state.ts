@@ -18,6 +18,11 @@ import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { nextAttemptTemplate as computeNextAttemptTemplate } from "../lib/attemptLadder.js";
 import {
+  nextModelForFailure,
+  markProviderLimited,
+  ladderEntryForModel,
+} from "../lib/modelLadder.js";
+import {
   currentResultVersion,
   ensureResultVersionForReview,
   hasApprovedCurrentVersion,
@@ -27,7 +32,6 @@ import {
   stopReasonError,
   stopReasonPolicy,
 } from "../stopReasons.js";
-import { loadRoleRouting, nextModelForProfile } from "../roleRouting.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
   AGENT_RULES,
@@ -1305,14 +1309,18 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
                 .get(task.assignee_id) as { role?: string | null } | undefined
             )?.role
           : null);
+      // Эскалация по ступеням (карточка f8e8a055): лимит — ВБОК, в другую
+      // учётку той же ступени; нехватка способностей — ВВЕРХ на ступень.
+      // Выбор — по model_ladder и состоянию provider_limits.
       const fallback =
-        reasonCode === "provider_limit" && assigneeRole
-          ? nextModelForProfile(
-              loadRoleRouting(),
-              assigneeRole,
-              currentAttempt?.model ?? "",
-            )
+        reasonCode === "provider_limit" ||
+        reasonCode === "insufficient_capability"
+          ? nextModelForFailure(currentAttempt?.model ?? null, reasonCode)
           : null;
+      if (reasonCode === "provider_limit" && currentAttempt?.model) {
+        const cur = ladderEntryForModel(currentAttempt.model);
+        if (cur) markProviderLimited(cur.provider, null, comment || null);
+      }
 
       const retry = db
         .prepare(
@@ -1459,7 +1467,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             notificationId,
             notifyUserId,
             task.id,
-            `Лимит провайдера: задача «${task.title}» переключена на ${fallback.model}`,
+            `${reasonCode === "provider_limit" ? "Лимит провайдера" : "Повышение ступени"}: задача «${task.title}» переключена на ${fallback.model}`,
             req.userId,
           );
           broadcastToUsers([notifyUserId], {
