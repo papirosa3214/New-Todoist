@@ -26,16 +26,24 @@ Auth: TASKFLOW_SERVICE_TOKEN — служебный ключ из systemd drop-i
 Без fallback. Если переменной нет — KeyError на старте, fail loudly.
 """
 
+import datetime as dt
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 API = os.environ.get("TASKFLOW_API", "http://localhost:3001")
 TOKEN = os.environ["TASKFLOW_SERVICE_TOKEN"].strip()
 RETRY_DELAY_MIN = 5
 RETRY_LIMIT = 3
+# Разовый запуск исполнителя тем же путём, что и ручной (все ключи внутри).
+RUN_SCRIPT = str(Path.home() / "Проекты/New-Todoist/server/scripts/manual_run.sh")
+# Окно догона: не поднимаем карточки, чьё время прошло давно, иначе
+# расписание воскрешало бы все старые карточки с прошедшей датой.
+RUN_CATCH_HOURS = 24
 LOG_PREFIX = "[scheduler]"
 
 
@@ -257,12 +265,54 @@ def branch_notify_dead() -> int:
     return handled
 
 
+def branch_launch_scheduled() -> int:
+    """Ветка 4: запуск по времени.
+
+    Карточка, у которой run_at наступил, статус active, ещё не начата и
+    исполнитель — агент-роль, поднимается одиночным заходом. Работает
+    НЕЗАВИСИМО от будильника (решение владельца 19.09.2026: расписание —
+    явное действие владельца, службой не гейтится). Себя и свободные
+    карточки не трогаем.
+    """
+    tasks = api("GET", "/api/tasks")
+    if not isinstance(tasks, list):
+        log(f"  ⚠️ ветка 4: ответ не список — {tasks!r}")
+        return 0
+    now = dt.datetime.now()
+    floor = now - dt.timedelta(hours=RUN_CATCH_HOURS)
+    handled = 0
+    for t in tasks:
+        if t.get("status") != "active" or t.get("agent_state") is not None:
+            continue
+        assignee = t.get("assignee_id") or ""
+        if not assignee.startswith("role_"):
+            continue
+        run_at = t.get("run_at")
+        if not run_at:
+            continue
+        try:
+            when = dt.datetime.strptime(str(run_at)[:16], "%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+        if when > now or when < floor:
+            continue
+        subprocess.Popen(
+            ["bash", RUN_SCRIPT, "--once", t["id"]],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log(f"  ⏰ {t['id'][:8]} по времени {run_at} — поднимаю исполнителя")
+        handled += 1
+    return handled
+
+
 def main() -> int:
     log("обход доски")
     n1 = branch_retry_technical()
     n2 = branch_repick_wrong_role()
     n3 = branch_notify_dead()
-    log(f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}")
+    n4 = branch_launch_scheduled()
+    log(f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}, ветка 4(расписание)={n4}")
     return 0
 
 

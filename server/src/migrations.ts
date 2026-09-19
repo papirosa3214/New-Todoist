@@ -1751,6 +1751,33 @@ const migrations: Migration[] = [
       for (const row of seed) ins.run(row[0], row[1], row[2], row[3]);
     },
   },
+  {
+    id: "049_run_schedule",
+    description:
+      "Расписание запуска карточки: run_at (когда поднимать исполнителя; " +
+      "собирается из даты+времени, по умолчанию 09:00), run_repeat " +
+      "(none|daily|weekdays|weekly|monthly) и repeat_until (до когда, " +
+      "пусто — постоянно). Одна карточка за раз: следующая создаётся, " +
+      "когда текущая закрыта.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("run_at")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN run_at TEXT");
+      }
+      if (!cols.has("run_repeat")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN run_repeat TEXT NOT NULL DEFAULT 'none'",
+        );
+      }
+      if (!cols.has("repeat_until")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN repeat_until TEXT");
+      }
+    },
+  },
 ];
 
 /**

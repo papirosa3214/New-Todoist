@@ -252,6 +252,13 @@ export function hydrateTask(task: any) {
     // Живое значение общего рубильника, а не сохранённый в карточке флаг:
     // решает в моменте, включён он сейчас или нет (см. reviewerPolicy.ts).
     requires_reviewer_review: reviewerFirstEnabled(),
+    // Время запуска: собирается из даты+времени карточки; время не
+    // задано — 09:00 (владелец 19.09.2026). Отдельного поля в UI нет.
+    run_at: task.due_date
+      ? `${task.due_date} ${task.start_time || "09:00"}`
+      : null,
+    run_repeat: task.run_repeat ?? "none",
+    repeat_until: task.repeat_until ?? null,
     labels,
     subtasks,
     children,
@@ -549,6 +556,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       label_ids?: string[];
       parent_id?: string;
       requires_reviewer_review?: boolean;
+      run_repeat?: string;
+      repeat_until?: string | null;
       // Optional bulk-create for subtasks, created in the same transaction
       // as the task (see below). Accepts either plain titles or objects
       // shaped like { title } — TaskFormScreen currently sends plain
@@ -571,6 +580,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
         label_ids,
         parent_id,
         requires_reviewer_review,
+        run_repeat,
+        repeat_until,
         subtasks,
       } = req.body;
 
@@ -691,6 +702,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
         .get(req.userId) as { reviewer_first_default?: number } | undefined;
       const requiresReviewerReview =
         requires_reviewer_review ?? ((ownerSetting?.reviewer_first_default ?? 1) === 1);
+      // Расписание повторения карточки (карточка f8e8a055).
+      const runRepeat =
+        ["daily", "weekdays", "weekly", "monthly"].includes(String(run_repeat))
+          ? String(run_repeat)
+          : "none";
+      const repeatUntil = repeat_until || null;
 
       // Task + labels + subtasks all land in one transaction — the frontend
       // used to POST the task, then POST each subtask separately (see
@@ -701,8 +718,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const createTaskTxn = db.transaction(() => {
         db.prepare(
           `
-          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id, requires_reviewer_review)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id, requires_reviewer_review, run_repeat, repeat_until)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         ).run(
           id,
@@ -720,6 +737,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
           req.userId,
           parent_id || null,
           requiresReviewerReview ? 1 : 0,
+          runRepeat,
+          repeatUntil,
         );
 
         if (label_ids?.length) {
@@ -1314,6 +1333,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
         "position",
         "pinned",
         "requires_reviewer_review",
+        "run_repeat",
+        "repeat_until",
       ] as const;
       const fields: string[] = [];
       const values: any[] = [];
