@@ -1675,6 +1675,33 @@ FAILURE_MARKS = ("agent failed", "no llm provider", "rate limit",
                  "quota exceeded", "insufficient", "unauthorized")
 
 
+# Причины провала захода. Разводим ДВА случая (карточка f8e8a055):
+#   • упёрлись в лимит провайдера — уходим ВБОК, в другую учётку;
+#   • модель не потянула — поднимаемся ВВЕРХ по ступеням.
+# До этого всё валилось в одну кучу и вело в блок.
+_LIMIT_MARKS = ("rate limit", "quota exceeded", "usage limit", "too many requests",
+                "429", "limit reached", "resets", "limit")
+_CAP_MARKS = ("no llm provider", "insufficient", "unauthorized", "agent failed",
+              "model not", "not available")
+
+
+def classify_failure(text: str) -> tuple:
+    """(reason_code, window_kind) по хвосту вывода агента. (None, None) —
+    ничего узнаваемого.
+
+    window_kind: "5h" | "weekly" | None. Время сброса пока не парсим —
+    форматы провайдеров разные, а без живых образцов это гадание; берём
+    консервативное окно (5ч) из markProviderLimited. Уточнить фазой позже.
+    """
+    low = (text or "").lower()
+    if any(m in low for m in _LIMIT_MARKS):
+        window = "weekly" if ("week" in low or "7 day" in low or "weekly" in low) else "5h"
+        return ("provider_limit", window)
+    if any(m in low for m in _CAP_MARKS):
+        return ("insufficient_capability", None)
+    return (None, None)
+
+
 def closed_steps(task_id: str) -> int:
     """Сколько шагов задачи закрыто — мерка продвижения между заходами."""
     task = api("GET", f"/api/tasks/{task_id}") or {}
@@ -2528,6 +2555,21 @@ def run_external(task: dict, reason: str, agent: dict, role_override: str = "",
             tail = result["output_tail"]
             log(f"  «{agent_label(agent)}» закончил заход {run} "
                 f"(код {result['returncode']}, статус {result['status']}): {tail}")
+            # Разбор провала: лимит — вбок, нехватка — вверх (f8e8a055).
+            if not reply_only:
+                reason, window = classify_failure(tail)
+                if reason:
+                    body = {"reason_code": reason,
+                            "comment": f"авто-разбор захода: {reason}"}
+                    if window:
+                        body["window_kind"] = window
+                    try:
+                        api("POST", f"/api/tasks/{task_id}/stop", body, token=token)
+                        log(f"  разбор провала: {reason}"
+                            + (f" ({window})" if window else "") + " → /stop")
+                    except Exception as exc:  # noqa: BLE001
+                        log(f"  разбор провала: /stop не принял — {exc}")
+                    break
             spent = _format_usage_dict(result.get("usage"))
             if spent:
                 log(f"  расход захода: {spent}")

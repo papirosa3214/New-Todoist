@@ -1259,7 +1259,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   // alive; all other reasons close the current attempt and wait in blocked.
   app.post<{
     Params: { id: string };
-    Body: { reason_code?: string; comment?: string };
+    Body: { reason_code?: string; comment?: string; window_kind?: string };
   }>("/api/tasks/:id/stop", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
@@ -1319,7 +1319,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           : null;
       if (reasonCode === "provider_limit" && currentAttempt?.model) {
         const cur = ladderEntryForModel(currentAttempt.model);
-        if (cur) markProviderLimited(cur.provider, null, comment || null);
+        const windowKind =
+          typeof req.body?.window_kind === "string" ? req.body.window_kind : null;
+        if (cur) markProviderLimited(cur.provider, windowKind, comment || null);
       }
 
       const retry = db
