@@ -9,7 +9,12 @@ import {
 } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
 import { useServerStatus } from "../api/server";
-import { useAgentService, useToggleAgentService } from "../api/agents";
+import {
+  useAgentService,
+  useSetReviewerFirstDefault,
+  useTaskIntakeSettings,
+  useToggleAgentService,
+} from "../api/agents";
 import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
 import { getErrorMessage } from "../lib/errors";
 import { useAppStore } from "../store";
@@ -295,6 +300,8 @@ function ServerSection() {
   const localOllamaModel = useAppStore((s) => s.localOllamaModel);
   const { data: service } = useAgentService();
   const toggleService = useToggleAgentService();
+  const { data: intake } = useTaskIntakeSettings();
+  const setReviewer = useSetReviewerFirstDefault();
   const serviceOn = service?.active ?? false;
   // Состояние службы опрашивается раз в 15 секунд, а обратный отсчёт должен
   // идти ровно — поэтому тикаем сами, не дёргая сервер чаще.
@@ -419,6 +426,18 @@ function ServerSection() {
         }
         checked={serviceOn}
         onChange={() => toggleService.mutate(!serviceOn)}
+      />
+      <ToggleRow
+        icon="check"
+        iconColor="#4a9fd8"
+        label="Сначала проверка Reviewer"
+        valueLabel={
+          intake?.reviewer_first_default
+            ? "Новые задачи проверяет Reviewer"
+            : "Новые задачи сразу к вам"
+        }
+        checked={intake?.reviewer_first_default ?? true}
+        onChange={() => setReviewer.mutate(!(intake?.reviewer_first_default ?? true))}
       />
       <InfoRow
         icon="list"

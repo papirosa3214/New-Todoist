@@ -196,7 +196,6 @@ export function TaskFormScreen() {
   }, [desc]);
   const [assignee, setAssignee] = useState<string | undefined>();
   const [priority, setPriority] = useState(1);
-  const [requiresReviewerReview, setRequiresReviewerReview] = useState(true);
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
   // Create mode only — subtasks of a not-yet-created task have no id to
   // CRUD against, so they're held locally and sent as part of the atomic
@@ -318,7 +317,6 @@ export function TaskFormScreen() {
       setDesc(existingTask.description || "");
       setAssignee(existingTask.assignee_id || undefined);
       setPriority(existingTask.priority);
-      setRequiresReviewerReview(existingTask.requires_reviewer_review ?? false);
       setSelectedLabelIds(existingTask.labels.map((l) => l.id));
       setDueDate(existingTask.due_date);
       setStartTime(existingTask.start_time ?? null);
@@ -374,7 +372,6 @@ export function TaskFormScreen() {
         project_id: effectiveProjectId ?? undefined,
         priority,
         assignee_id: assignee,
-        requires_reviewer_review: requiresReviewerReview,
         label_ids: selectedLabelIds,
         subtasks: localSubtasks.length > 0 ? localSubtasks : undefined,
       });
@@ -684,7 +681,6 @@ export function TaskFormScreen() {
     if (effectiveProjectId !== (existingTask.project_id ?? null))
       patch.project_id = effectiveProjectId;
     if (priority !== existingTask.priority) patch.priority = priority;
-    if (requiresReviewerReview !== (existingTask.requires_reviewer_review ?? false)) patch.requires_reviewer_review = requiresReviewerReview;
     if (nextAssignee !== (existingTask.assignee_id ?? null))
       patch.assignee_id = nextAssignee;
     if (JSON.stringify(origLabelIds) !== JSON.stringify(nextLabelIds))
@@ -1111,10 +1107,6 @@ export function TaskFormScreen() {
             )}
           </div>
           <PriorityField value={priority} onChange={setPriority} />
-          <label className="flex items-center justify-between px-4 py-3 text-[14px] text-text">
-            <span>Сначала проверка Reviewer</span>
-            <input type="checkbox" checked={requiresReviewerReview} onChange={(e) => setRequiresReviewerReview(e.target.checked)} />
-          </label>
           <LabelsField
             labels={labels}
             selectedIds={selectedLabelIds}

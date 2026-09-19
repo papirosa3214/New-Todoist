@@ -95,3 +95,29 @@ export function useToggleAgentService() {
     },
   });
 }
+
+export interface TaskIntakeSettings {
+  mode: "manual" | "automatic";
+  reviewer_first_default: boolean;
+}
+
+// GET /api/task-intake/settings — режим постановки и общий маршрут ревью.
+export function useTaskIntakeSettings() {
+  return useQuery({
+    queryKey: ["task-intake-settings"],
+    queryFn: () => api.get<TaskIntakeSettings>("/api/task-intake/settings"),
+  });
+}
+
+// PATCH /api/task-intake/settings — переключить «Сначала проверка Reviewer»
+// (общий маршрут новых карточек; раньше был флагом на каждой карточке).
+export function useSetReviewerFirstDefault() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (on: boolean) =>
+      api.patch<TaskIntakeSettings>("/api/task-intake/settings", {
+        reviewer_first_default: on,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["task-intake-settings"] }),
+  });
+}
