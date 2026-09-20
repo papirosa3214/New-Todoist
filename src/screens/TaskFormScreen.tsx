@@ -37,7 +37,12 @@ import { useProjects } from "../api/projects";
 import { useLabels } from "../api/labels";
 import { useAgents } from "../api/agents";
 import { useCurrentUser } from "../api/auth";
-import { useCreateTask, useTask, useUpdateTask } from "../api/tasks";
+import {
+  useCreateTask,
+  useExtendRepeat,
+  useTask,
+  useUpdateTask,
+} from "../api/tasks";
 import {
   useCreateSubtask,
   useDeleteSubtask,
@@ -78,7 +83,7 @@ import { todayStr } from "../lib/date";
 import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import type { UpdateTaskInput } from "../api/tasks";
-import { roleLabel } from "../lib/taskOwner";
+import { isTrackerOwner, roleLabel } from "../lib/taskOwner";
 
 // Тот же приём, что SortableBoardCard у TaskBoard.tsx: dnd-kit даёт
 // transform/transition/listeners — и с 26.08.2026 слушатели идут на ВСЮ
@@ -155,6 +160,8 @@ export function TaskFormScreen() {
   const { data: labels = [], isError: labelsError } = useLabels();
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
+  const extendRepeat = useExtendRepeat();
+  const isOwner = isTrackerOwner(currentUser);
   const {
     data: existingTask,
     isLoading: taskLoading,
@@ -296,6 +303,10 @@ export function TaskFormScreen() {
   // времени сломало бы эти сравнения (см. lib/date.ts).
   const [startTime, setStartTime] = useState<string | null>(null);
   const [durationMin, setDurationMin] = useState<number | null>(null);
+  // Повтор задачи (миграция 049) — живёт только вместе со сроком, как
+  // время: без даты серию не построить.
+  const [runRepeat, setRunRepeat] = useState<string>("none");
+  const [repeatUntil, setRepeatUntil] = useState<string | null>(null);
   // undefined = "not touched yet" (create mode falls back to the user's
   // first project); null = "explicitly no project" — reachable in edit
   // mode for a task that lives in Inbox, AND now in create mode too: the
@@ -329,6 +340,8 @@ export function TaskFormScreen() {
       setDueDate(existingTask.due_date);
       setStartTime(existingTask.start_time ?? null);
       setDurationMin(existingTask.duration_min ?? null);
+      setRunRepeat(existingTask.run_repeat ?? "none");
+      setRepeatUntil(existingTask.repeat_until ?? null);
       setProjectId(existingTask.project_id);
       setHydrated(true);
     }
@@ -377,6 +390,12 @@ export function TaskFormScreen() {
         start_time: dueDate ? (startTime ?? undefined) : undefined,
         duration_min:
           dueDate && startTime ? (durationMin ?? undefined) : undefined,
+        // Повтор — только вместе со сроком.
+        run_repeat: dueDate ? runRepeat || "none" : undefined,
+        repeat_until:
+          dueDate && runRepeat && runRepeat !== "none"
+            ? (repeatUntil ?? undefined)
+            : undefined,
         project_id: effectiveProjectId ?? undefined,
         priority,
         assignee_id: assignee,
@@ -686,6 +705,13 @@ export function TaskFormScreen() {
       patch.start_time = nextStart;
     if (nextDuration !== (existingTask.duration_min ?? null))
       patch.duration_min = nextDuration;
+    // Повтор — тоже только со сроком: без даты серии нет.
+    const nextRepeat = dueDate ? runRepeat || "none" : "none";
+    if (nextRepeat !== (existingTask.run_repeat ?? "none"))
+      patch.run_repeat = nextRepeat;
+    const nextUntil = dueDate && nextRepeat !== "none" ? repeatUntil : null;
+    if (nextUntil !== (existingTask.repeat_until ?? null))
+      patch.repeat_until = nextUntil;
     if (effectiveProjectId !== (existingTask.project_id ?? null))
       patch.project_id = effectiveProjectId;
     if (priority !== existingTask.priority) patch.priority = priority;
@@ -1067,14 +1093,26 @@ export function TaskFormScreen() {
               setDurationMin(d);
             }}
             value={dueDate}
+            runRepeat={runRepeat}
+            onRunRepeatChange={setRunRepeat}
+            repeatUntil={repeatUntil}
+            onRepeatUntilChange={setRepeatUntil}
+            seriesEnded={isEdit && (existingTask?.recurrence_spawned ?? 0) === 1}
+            onExtendRepeat={
+              isEdit && isOwner ? () => extendRepeat.mutate(id!) : undefined
+            }
+            extendingRepeat={extendRepeat.isPending}
             onChange={(v) => {
               setDueDate(v);
               // Дату сняли — время осиротело, убираем сразу, а не при
               // сохранении: иначе строка «Время» исчезнет, а значение
-              // останется висеть в состоянии формы.
+              // останется висеть в состоянии формы. Повтор тоже: серия
+              // без даты не строится.
               if (!v) {
                 setStartTime(null);
                 setDurationMin(null);
+                setRunRepeat("none");
+                setRepeatUntil(null);
               }
             }}
           />
