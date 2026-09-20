@@ -384,6 +384,23 @@ async function interpretOnce(): Promise<void> {
 
     const recent = entry.actions.slice(-8);
     const step = runningStepTitle(task);
+
+    // Пользовательский промпт владельца для расшифровки (scope 'activity').
+    // Пусто/нет строки — работаем штатным серверным, как раньше. Смысл
+    // промпта — стиль и акцент фразы; решение «что делать» он не меняет.
+    let observerSystem = OBSERVER_SYSTEM_PROMPT;
+    try {
+      const row = db
+        .prepare(
+          "SELECT prompt FROM user_ai_prompts WHERE user_id = ? AND scope = 'activity'",
+        )
+        .get(task.creator_id) as { prompt?: string } | undefined;
+      const custom = (row?.prompt || "").trim();
+      if (custom) observerSystem = custom;
+    } catch {
+      // нет таблицы/строки — не повод терять расшифровку, остаёмся на штатном
+    }
+
     const userPrompt =
       `Задача: ${task.title}\n` +
       (step ? `Текущий шаг: ${step}\n` : "") +
@@ -395,7 +412,7 @@ async function interpretOnce(): Promise<void> {
       body: JSON.stringify({
         model: OBSERVER_MODEL,
         messages: [
-          { role: "system", content: OBSERVER_SYSTEM_PROMPT },
+          { role: "system", content: observerSystem },
           { role: "user", content: userPrompt },
         ],
         stream: false,
