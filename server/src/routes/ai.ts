@@ -1059,18 +1059,45 @@ export function registerAiRoutes(app: FastifyInstance) {
     preHandler: authPre,
     handler: async () => {
       try {
-        const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
-          signal: AbortSignal.timeout(3000),
-        });
-        if (!res.ok) return { models: [] };
-        const data = (await res.json()) as any;
+        // tags — что вообще лежит на диске; ps — что реально загружено в
+        // память прямо сейчас и какая доля весов попала в VRAM. Второй запрос
+        // необязателен: Ollama может не ответить, тогда отдаём только размеры.
+        const [tagsRes, psRes] = await Promise.all([
+          fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+            signal: AbortSignal.timeout(3000),
+          }),
+          fetch(`${OLLAMA_BASE_URL}/api/ps`, {
+            signal: AbortSignal.timeout(3000),
+          }).catch(() => null),
+        ]);
+        if (!tagsRes.ok) return { models: [] };
+        const data = (await tagsRes.json()) as any;
+        const running = new Map<string, { size: number; size_vram: number }>();
+        if (psRes && psRes.ok) {
+          const ps = (await psRes.json()) as any;
+          for (const m of ps.models || []) {
+            if (m?.name) {
+              running.set(m.name, {
+                size: m.size ?? 0,
+                size_vram: m.size_vram ?? 0,
+              });
+            }
+          }
+        }
         const models = (data.models || [])
           .filter((m: any) => m.name && !m.name.includes("embed"))
-          .map((m: any) => ({
-            name: m.name,
-            size: m.size,
-            details: m.details,
-          }));
+          .map((m: any) => {
+            const live = running.get(m.name);
+            return {
+              name: m.name,
+              // Загруженная модель отдаёт фактический размер в памяти, а не
+              // размер файла; size_vram — сколько из него на GPU.
+              size: live?.size ?? m.size,
+              details: m.details,
+              loaded: !!live,
+              size_vram: live?.size_vram ?? null,
+            };
+          });
         return { models };
       } catch {
         return { models: [] };
