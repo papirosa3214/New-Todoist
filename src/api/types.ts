@@ -189,6 +189,14 @@ export interface ApiTask {
   // Оба необязательные: задача без них — обычная задача списка.
   start_time?: string | null;
   duration_min?: number | null;
+  // Повтор задачи (миграция 049): none|daily|weekdays|weekly|monthly и дата
+  // «повторять до». Серия идёт до конца календарного года, дальше воркер
+  // останавливается и ждёт «Продлить на год» (POST /repeat-extend).
+  run_repeat?: string | null;
+  repeat_until?: string | null;
+  // 1 — серия дошла до конца календарного года и ждёт продления (миграция
+  // 050). Владельцу по нему показывается кнопка «Продлить на год».
+  recurrence_spawned?: number | null;
   project_id: string | null;
   priority: 1 | 2 | 3 | 4;
   assignee_id: string | null;

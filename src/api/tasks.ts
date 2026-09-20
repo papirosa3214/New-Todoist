@@ -31,6 +31,10 @@ export interface CreateTaskInput {
   // сервер отвергает время без даты (миграция 005_task_time_of_day).
   start_time?: string | null;
   duration_min?: number | null;
+  // Повтор (миграция 049): сервер принимает только
+  // none|daily|weekdays|weekly|monthly, дата — «ГГГГ-ММ-ДД».
+  run_repeat?: string;
+  repeat_until?: string | null;
   project_id?: string;
   priority?: number;
   assignee_id?: string;
@@ -63,6 +67,9 @@ export interface UpdateTaskInput {
   due_date?: string | null;
   start_time?: string | null;
   duration_min?: number | null;
+  // Повтор (миграция 049): «none» снимает серию, repeat_until — до когда.
+  run_repeat?: string;
+  repeat_until?: string | null;
   project_id?: string | null;
   priority?: number;
   assignee_id?: string | null;
@@ -185,6 +192,21 @@ export function useSetAgentState() {
       comment?: string;
     }) =>
       api.post<{ task: ApiTask }>(`/api/tasks/${id}/state`, { state, comment }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+  });
+}
+
+// POST /api/tasks/:id/repeat-extend — владелец продлевает завершённую серию
+// повтора на следующий календарный год: сервер ставит repeat_until =
+// «31 декабря следующего года» и сбрасывает recurrence_spawned, после чего
+// воркер снова может создавать вхождения. Доступно только владельцу (403).
+export function useExtendRepeat() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ ok: boolean; repeat_until: string }>(
+        `/api/tasks/${id}/repeat-extend`,
+      ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
   });
 }
