@@ -108,7 +108,8 @@ export interface TaskIntakeSettings {
   reviewer_first_default: boolean;
 }
 
-// GET /api/task-intake/settings — режим постановки и общий маршрут ревью.
+// GET /api/task-intake/settings — режим «автоодобрения задачи» (идёт ли
+// карточка дальше сама) и общий маршрут ревью («Авторевьюер»).
 export function useTaskIntakeSettings() {
   return useQuery({
     queryKey: ["task-intake-settings"],
@@ -116,8 +117,19 @@ export function useTaskIntakeSettings() {
   });
 }
 
-// PATCH /api/task-intake/settings — переключить «Сначала проверка Reviewer»
-// (общий маршрут новых карточек; раньше был флагом на каждой карточке).
+// PATCH /api/task-intake/settings — переключить «Автоодобрение задачи»:
+// automatic — карточка уходит дальше без флага владельца, manual — ждёт его.
+export function useSetTaskIntakeMode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mode: TaskIntakeSettings["mode"]) =>
+      api.patch<TaskIntakeSettings>("/api/task-intake/settings", { mode }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["task-intake-settings"] }),
+  });
+}
+
+// PATCH /api/task-intake/settings — переключить «Авторевьюер» (общий
+// маршрут новых карточек; раньше был флагом на каждой карточке).
 export function useSetReviewerFirstDefault() {
   const qc = useQueryClient();
   return useMutation({

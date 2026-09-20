@@ -12,6 +12,7 @@ import { useServerStatus } from "../api/server";
 import {
   useAgentService,
   useSetReviewerFirstDefault,
+  useSetTaskIntakeMode,
   useTaskIntakeSettings,
   useToggleAgentService,
 } from "../api/agents";
@@ -131,7 +132,7 @@ interface ToggleRowProps {
   icon: string;
   iconColor?: string;
   label: string;
-  valueLabel: string;
+  valueLabel?: string;
   checked: boolean;
   onChange: () => void;
 }
@@ -156,7 +157,7 @@ function ToggleRow({
         <Icon name={icon} size={16} className="text-text" />
       </div>
       <span className="text-[15px] flex-1 text-text">{label}</span>
-      <span className="text-[13px] text-sub">{valueLabel}</span>
+      {valueLabel && <span className="text-[13px] text-sub">{valueLabel}</span>}
       <Switch checked={checked} onChange={onChange} ariaLabel={label} />
     </div>
   );
@@ -302,22 +303,26 @@ function ServerSection() {
   const toggleService = useToggleAgentService();
   const { data: intake } = useTaskIntakeSettings();
   const setReviewer = useSetReviewerFirstDefault();
+  const setMode = useSetTaskIntakeMode();
   const serviceOn = service?.active ?? false;
-  // Лампа планировщика расписания: отдельно от будильника.
+  // Расписание — отдельная лампа: планировщик живёт независимо от службы и
+  // делает запуск по времени и отложенные повторы. Словами «работает /
+  // не работает» не пишем — это показывает цвет иконки, как лампа; в подписи
+  // остаётся только последний обход.
   const sched = service?.scheduler;
-  const schedLabel = (() => {
-    if (!sched) return "нет данных";
-    if (!sched.active) return "не работает";
-    if (!sched.last_run_at) return "работает";
+  const schedLastRun = sched?.last_run_at
+    ? new Date(sched.last_run_at).toLocaleTimeString("ru-RU", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+  const schedLamp = (() => {
+    if (!sched || !sched.active) return "#8E8E93";
+    if (!sched.last_run_at) return "#34C759";
     const mins = Math.round(
       (Date.now() - new Date(sched.last_run_at).getTime()) / 60000,
     );
-    if (mins > 15) return `молчит ${mins} мин`;
-    const t = new Date(sched.last_run_at).toLocaleTimeString("ru-RU", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-    return `работает · обход ${t}`;
+    return mins > 15 ? "#FF6B6B" : "#34C759";
   })();
   // Состояние службы опрашивается раз в 15 секунд, а обратный отсчёт должен
   // идти ровно — поэтому тикаем сами, не дёргая сервер чаще.
@@ -413,7 +418,7 @@ function ServerSection() {
       <Row
         icon="zap"
         iconColor="#0A84FF"
-        label="Проверить связь (Пинг)"
+        label="Пинг"
         value={pingResult || (isPinging ? "Замеряю…" : "Проверить")}
         onClick={handlePing}
       />
@@ -430,36 +435,34 @@ function ServerSection() {
         />
       )}
       <ToggleRow
-        icon="bell"
+        icon="power"
         iconColor="#FF6B6B"
-        label="Будильник (служба)"
-        valueLabel={
-          serviceOn
-            ? nextScanLabel
-              ? `Включён · ${nextScanLabel}`
-              : "Включён"
-            : "Выключен"
-        }
+        label="Система"
+        valueLabel={serviceOn ? (nextScanLabel ?? undefined) : undefined}
         checked={serviceOn}
         onChange={() => toggleService.mutate(!serviceOn)}
       />
       <ToggleRow
+        icon="sliders"
+        iconColor="#FF9500"
+        label="Автоодобрение задачи"
+        checked={intake?.mode === "automatic"}
+        onChange={() =>
+          setMode.mutate(intake?.mode === "automatic" ? "manual" : "automatic")
+        }
+      />
+      <ToggleRow
         icon="check"
         iconColor="#4a9fd8"
-        label="Сначала проверка Reviewer"
-        valueLabel={
-          intake?.reviewer_first_default
-            ? "Новые задачи проверяет Reviewer"
-            : "Новые задачи сразу к вам"
-        }
+        label="Авторевьюер"
         checked={intake?.reviewer_first_default ?? true}
         onChange={() => setReviewer.mutate(!(intake?.reviewer_first_default ?? true))}
       />
       <InfoRow
         icon="clock"
-        iconColor="#4a9fd8"
+        iconColor={schedLamp}
         label="Расписание"
-        value={schedLabel}
+        value={schedLastRun ? `Последний обход ${schedLastRun}` : "—"}
       />
       <InfoRow
         icon="list"

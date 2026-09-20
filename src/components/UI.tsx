@@ -89,6 +89,8 @@ import {
   Table,
   Rows3,
   Columns3,
+  Power,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 import { useTasks } from "../api/tasks";
@@ -184,6 +186,11 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   arrowDown: ArrowDown,
   pin: MapPin,
   sparkles: Sparkles,
+  // Управление системой в «Настройки → Сервер» (20.09.2026): питание —
+  // «Система», ползунки — «Автоодобрение задачи». Те же смыслы, что у
+  // нативных иконок на iPhone.
+  power: Power,
+  sliders: SlidersHorizontal,
   // AI-действия в редакторе заметки (26.08.2026) — по иконке на
   // действие вместо одинаковых красных пилюль со звёздочкой.
   penLine: PenLine,
