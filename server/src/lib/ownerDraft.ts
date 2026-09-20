@@ -50,7 +50,7 @@ const SECRETARY_ID = "u-secretary";
  *  журналу этого скрипта. */
 const ALERT_SEND = `${process.env.HOME}/infra-ops/alert_send.py`;
 
-function ownerId(): string | null {
+export function ownerId(): string | null {
   const row = db
     .prepare(
       "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
@@ -281,6 +281,31 @@ function createDraftCards(
   txn();
 
   return { parentId, childIds };
+}
+
+/**
+ * Собрать постановку из ПРОИЗВОЛЬНОГО текста — заметка или файл, а не чат.
+ * Тем же контуром, что и надиктовка (`structureDictationToCards`): локальная
+ * модель → родитель + шаги + дочерние карточки со связью `parent_id`.
+ *
+ * НИЧЕГО не запускаем и в чат не пишем: карточки ложатся черновиком без флага
+ * готовности (миграция 026) — владелец откроет и поднимет флаг сам. В этом и
+ * смысл: большой текст (диалог, план) не влезает в чат, но структуру собирает
+ * та же машина, что и надиктовку, с владельческим слоем `task_intake`.
+ */
+export async function createDraftFromText(
+  rawText: string,
+  owner: string,
+): Promise<{ parentId: string; childIds: string[]; title: string }> {
+  const projects = db
+    .prepare("SELECT id, name FROM projects ORDER BY name")
+    .all() as Array<{ id: string; name: string }>;
+  const cards = await structureDictationToCards(rawText, projects, {
+    ownerId: owner,
+    maxChars: 12_000,
+  });
+  const { parentId, childIds } = createDraftCards(cards, owner);
+  return { parentId, childIds, title: cards.title };
 }
 
 /**

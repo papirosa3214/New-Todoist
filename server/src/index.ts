@@ -30,6 +30,7 @@ import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerAvatarRoutes } from "./routes/avatars.js";
 import { registerAgentDetailsRoutes } from "./routes/agent-details.js";
 import { registerAiRoutes } from "./routes/ai.js";
+import { registerStructureRoutes } from "./routes/structure.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerCompassRoutes } from "./routes/compass.js";
 import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
@@ -247,6 +248,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAvatarRoutes(app);
   registerAgentDetailsRoutes(app);
   registerAiRoutes(app);
+  registerStructureRoutes(app);
   registerTranscribeRoutes(app);
   // Архив диктовок (18.08.2026): аудио выгружается с телефона и хранится
   // бессрочно — прямое решение владельца.

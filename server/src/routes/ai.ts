@@ -758,6 +758,9 @@ export async function structureDictationToCards(
      *  `task_intake`). Без него разбор идёт на одном системном промпте —
      *  как было до 14.09.2026. */
     ownerId?: string;
+    /** Потолок входного текста. Дефолт 6000 — надиктовка; заметке/файлу
+     *  нужно больше, вызывающий поднимает явно. */
+    maxChars?: number;
   },
 ): Promise<DictationCards> {
   const today = new Date().toISOString().slice(0, 10);
@@ -787,7 +790,7 @@ export async function structureDictationToCards(
     userPrompt:
       `Сегодня ${today}.\n\n` +
       `Проекты, из которых можно выбрать:\n${projectList}\n\n` +
-      `Надиктовка:\n"${rawText.trim().slice(0, 6000)}"`,
+      `Надиктовка:\n"${rawText.trim().slice(0, opts?.maxChars ?? 6000)}"`,
     provider: opts?.provider,
     localModel: opts?.localModel,
     aiModel: opts?.aiModel,
