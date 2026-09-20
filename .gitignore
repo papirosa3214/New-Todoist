@@ -109,3 +109,6 @@ server/dev.db
 
 # Кэш инкрементальной компиляции TypeScript — регенерируется tsc
 *.tsbuildinfo
+
+# Сторож планировщика расписания — состояние между прогонами (не в репо, как agent-watch).
+server/scheduler-watch.state.json
