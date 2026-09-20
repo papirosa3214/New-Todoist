@@ -13,7 +13,19 @@ export interface TaskActivityEvent {
    *  (lib/localLLM.ts). Едут вместе со строкой, чтобы не ходить за ними
    *  отдельным запросом на каждое действие агента. */
   diff?: string;
-  kind?: "read" | "edit" | "search" | "run";
+  kind?:
+    | "read"
+    | "edit"
+    | "write"
+    | "search"
+    | "run"
+    | "think"
+    | "web"
+    | "image"
+    | "test"
+    | "build"
+    | "git"
+    | "attach";
   target?: string;
 }
 

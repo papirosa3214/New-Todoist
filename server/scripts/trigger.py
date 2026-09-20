@@ -2390,6 +2390,15 @@ def run_external(task: dict, reason: str, agent: dict, role_override: str = "",
         # Pi-токен ровно в этом случае и ломает actor_id. Чистим обе.
         run_env.pop("TASKFLOW_TOKEN", None)
         run_env.pop("TASKFLOW_VAULT_KEY", None)
+        # Pi-расширение activity (taskflow-activity.ts) шлёт действия
+        # инструментов (Read/Edit/Bash/Grep/WebFetch…). Ему нужны id задачи
+        # и имя ключа роли; сам токен расширение достанет из vault.
+        if task_id:
+            run_env["TASKFLOW_ACTIVITY_TASK_ID"] = str(task_id)
+        run_env["TASKFLOW_ACTIVITY_ROLE"] = role
+        run_env["TASKFLOW_ACTIVITY_VAULT_KEY"] = (
+            f"TASKFLOW_AGENT_TOKEN_{role.upper()}"
+        )
     elif vault_value:
         # Дочерний Pi и его MCP получают тот же единственный ключ напрямую.
         # Раньше сюда ошибочно записывалось значение ключа как имя записи

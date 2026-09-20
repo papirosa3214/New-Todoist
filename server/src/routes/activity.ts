@@ -26,9 +26,34 @@ import { getTaskForWrite } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { hydrateTask, getTaskRow } from "./tasks.js";
 
-export type ActivityKind = "read" | "edit" | "search" | "run";
+export type ActivityKind =
+  | "read"
+  | "edit"
+  | "write"
+  | "search"
+  | "run"
+  | "think"
+  | "web"
+  | "image"
+  | "test"
+  | "build"
+  | "git"
+  | "attach";
 
-const KINDS: ActivityKind[] = ["read", "edit", "search", "run"];
+const KINDS: ActivityKind[] = [
+  "read",
+  "edit",
+  "write",
+  "search",
+  "run",
+  "think",
+  "web",
+  "image",
+  "test",
+  "build",
+  "git",
+  "attach",
+];
 
 /** Сколько действий помним на задачу — хватает на раскрывающийся список. */
 const RING = 50;
@@ -124,14 +149,36 @@ function shortPath(p: string): string {
  */
 function verbFor(a: Action): string {
   const t = a.target.toLowerCase();
-  if (a.kind === "search") return "ищет";
-  if (a.kind === "edit") return "правит";
-  if (a.kind === "run") {
-    const c = (a.detail || a.target).toLowerCase();
-    if (/\b(test|vitest|jest|pytest)\b/.test(c)) return "проверяет";
-    if (/^git\b/.test(c)) return "сверяет историю";
-    if (/\b(build|tsc|vite)\b/.test(c)) return "собирает";
-    return "запускает";
+  switch (a.kind) {
+    case "search":
+      return "ищет";
+    case "edit":
+      return "правит";
+    case "write":
+      return "создаёт";
+    case "think":
+      return "обдумывает";
+    case "web":
+      return "смотрит в сети";
+    case "image":
+      return "разглядывает картинку";
+    case "test":
+      return "прогоняет тесты";
+    case "build":
+      return "собирает";
+    case "git":
+      return "работает с историей";
+    case "attach":
+      return "прикладывает";
+    case "run": {
+      const c = (a.detail || a.target).toLowerCase();
+      if (/\b(test|vitest|jest|pytest)\b/.test(c)) return "проверяет";
+      if (/^git\b/.test(c)) return "сверяет историю";
+      if (/\b(build|tsc|vite)\b/.test(c)) return "собирает";
+      return "запускает";
+    }
+    default:
+      break;
   }
   if (/\.test\.[tj]sx?$/.test(t)) return "проверяет поведение";
   if (/\.md$/.test(t)) return "сверяется с документацией";
@@ -496,7 +543,7 @@ export function registerActivityRoutes(app: FastifyInstance) {
 
       const kind = String(req.body?.kind || "") as ActivityKind;
       if (!KINDS.includes(kind)) {
-        return reply.code(400).send({ error: "kind: read|edit|search|run" });
+        return reply.code(400).send({ error: `kind: ${KINDS.join("|")}` });
       }
       const rawTarget = String(req.body?.target || "").trim();
       if (!rawTarget)
