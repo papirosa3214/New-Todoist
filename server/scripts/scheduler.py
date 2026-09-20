@@ -409,6 +409,39 @@ def branch_clone_recurring() -> int:
     return handled
 
 
+def branch_deferred_retries() -> int:
+    """Ветка 6: отложенный технический повтор.
+
+    /api/tasks/:id/stop с reason_code='technical_failure' пишет строку в
+    attempt_retries с scheduled_at = now() + задержка. До этой ветки её
+    никто не читал. Сервер атомарно отдаёт назревшие повторы (сравнение
+    scheduled_at <= now, отметка fired_at — см.
+    POST /api/scheduler/deferred-retries/claim), а мы поднимаем по каждому
+    одиночный заход тем же путём, что расписание: manual_run.sh --once.
+    """
+    res = api("POST", "/api/scheduler/deferred-retries/claim", {})
+    retries = res.get("retries") if isinstance(res, dict) else None
+    if not isinstance(retries, list):
+        log(f"  ⚠️ ветка 6: ответ не список — {res!r}")
+        return 0
+    handled = 0
+    for r in retries:
+        task_id = r.get("task_id")
+        if not task_id:
+            continue
+        subprocess.Popen(
+            ["bash", RUN_SCRIPT, "--once", task_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log(
+            f"  ♻ {task_id[:8]} отложенный повтор"
+            f" ({r.get('reason_code')}, scheduled_at={r.get('scheduled_at')})"
+        )
+        handled += 1
+    return handled
+
+
 def main() -> int:
     log("обход доски")
     n1 = branch_retry_technical()
@@ -416,10 +449,22 @@ def main() -> int:
     n3 = branch_notify_dead()
     n4 = branch_launch_scheduled()
     n5 = branch_clone_recurring()
+    n6 = branch_deferred_retries()
     write_heartbeat(
-        {"retry": n1, "repick": n2, "dead": n3, "scheduled": n4, "repeat": n5}
+        {
+            "retry": n1,
+            "repick": n2,
+            "dead": n3,
+            "scheduled": n4,
+            "repeat": n5,
+            "deferred": n6,
+        }
     )
-    log(f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}, ветка 4(расписание)={n4}, ветка 5(повтор)={n5}")
+    log(
+        f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}, "
+        f"ветка 4(расписание)={n4}, ветка 5(повтор)={n5}, "
+        f"ветка 6(отложенный повтор)={n6}"
+    )
     return 0
 
 
