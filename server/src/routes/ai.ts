@@ -1476,6 +1476,10 @@ export function registerAiRoutes(app: FastifyInstance) {
         // чего состоит системный промпт. Пустое поле = применяется этот.
         defaults: {
           extract_tasks: EXTRACT_TASKS_SYSTEM_PROMPT,
+          // Слой владельца «как собирать постановку» (scope task_intake):
+          // стиль названия, глубина разбиения, когда одна карточка, а когда
+          // дерево. Подмешивается в structureDictationToCards.
+          task_intake: DICTATION_SYSTEM_PROMPT,
           journal_assist: (
             Object.entries(JOURNAL_ASSIST_PROMPTS) as [
               string,
