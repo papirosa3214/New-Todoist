@@ -25,6 +25,8 @@ import path from "path";
 import db, { DB_PATH } from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
+import { extractAttachmentText, AttachmentTextError } from "../lib/attachmentText.js";
+import { extractTasksFromText, getUserPrompt } from "./ai.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -135,7 +137,7 @@ export function saveUploadedFile(
 // видит каждый»), поэтому виден любому участнику. Ещё не подобранный файл
 // (обе ссылки NULL) виден только тому, кто его залил: он существует ровно
 // между выбором файла и отправкой сообщения.
-function canRead(att: any, userId: string): boolean {
+export function canRead(att: any, userId: string): boolean {
   if (att.task_id) return Boolean(getTaskForRead(att.task_id, userId));
   if (att.chat_message_id) return true;
   return att.user_id === userId;
@@ -262,6 +264,59 @@ export function registerAttachmentRoutes(app: FastifyInstance) {
       }
       db.prepare("DELETE FROM attachments WHERE id = ?").run(req.params.id);
       return { ok: true };
+    },
+  );
+  // Задачи из вложения (просьба владельца 20.09.2026): вытаскиваем из файла
+  // ТЕКСТ (pdf — pdftotext, doc/docx/odt — libreoffice, txt/md — как есть) и
+  // отдаём ЛОКАЛЬНОЙ модели, которая предлагает список задач. Ничего не
+  // создаём: клиент показывает список и создаёт по подтверждению (как у
+  // заметок в NoteExtractedTasksSheet).
+  app.post<{ Params: { id: string } }>(
+    "/api/attachments/:id/tasks",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const att = db
+        .prepare("SELECT * FROM attachments WHERE id = ?")
+        .get(req.params.id) as any;
+      if (!att || !canRead(att, req.userId)) {
+        return reply.code(404).send({ error: "Вложение не найдено" });
+      }
+
+      const full = path.join(UPLOAD_DIR, att.stored_name);
+      if (!fs.existsSync(full)) {
+        return reply.code(410).send({ error: "файл потерян на диске" });
+      }
+
+      let text: string;
+      try {
+        text = await extractAttachmentText(full, att.mime);
+      } catch (e) {
+        const message =
+          e instanceof AttachmentTextError ? e.message : (e as Error).message;
+        return reply
+          .code(422)
+          .send({ error: `Не удалось прочитать файл: ${message}` });
+      }
+      if (text.trim().length < 3) {
+        return reply.code(422).send({ error: "В файле не нашлось текста" });
+      }
+
+      try {
+        const userPrompt = await getUserPrompt(req.userId, "extract_tasks");
+        const tasks = await extractTasksFromText(
+          text,
+          undefined,
+          undefined,
+          undefined,
+          userPrompt,
+          16_000,
+        );
+        return { tasks, chars: text.length };
+      } catch (e) {
+        return reply
+          .code(502)
+          .send({ error: `Модель не справилась: ${(e as Error).message}` });
+      }
     },
   );
 }

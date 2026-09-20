@@ -890,7 +890,7 @@ async function journalAssist(
       JOURNAL_ASSIST_PROMPTS[action],
       userSystemPrompt,
     ),
-    userPrompt: text.trim().slice(0, 6000),
+    userPrompt: text.trim().slice(0, maxChars),
     provider,
     localModel,
     aiModel,
@@ -958,7 +958,7 @@ function parseExtractedTasks(rawContent: string): ExtractedTaskResult[] {
   return items.slice(0, 10);
 }
 
-async function extractTasksFromText(
+export async function extractTasksFromText(
   text: string,
   provider?: string,
   localModel?: string,
@@ -967,6 +967,9 @@ async function extractTasksFromText(
    *  (подмешивается через "\n\n# Дополнение от пользователя:\n"). Карточка
    *  04c916c8: пусто или undefined = вызов без дополнения. */
   userSystemPrompt?: string,
+  /** Потолок входного текста. Дефолт 6000 — для диктовки; вложениям надо
+   *  больше, вызывающий поднимает явно. */
+  maxChars = 6000,
 ): Promise<ExtractedTaskResult[]> {
   const content = await callUnifiedAi({
     systemPrompt: composeSystemPrompt(
@@ -1009,7 +1012,7 @@ function composeSystemPrompt(
  * существующей строки (не null), чтобы вызывающий мог просто склеивать.
  * Миграция таблицы — `db.ts`, см. CREATE TABLE IF NOT EXISTS user_ai_prompts.
  */
-async function getUserPrompt(userId: string, scope: string): Promise<string> {
+export async function getUserPrompt(userId: string, scope: string): Promise<string> {
   const db = (await import("../db.js")).default;
   const row = db
     .prepare(
