@@ -1796,6 +1796,23 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "051_attempt_retries_fired_at",
+    description:
+      "Отложенный технический повтор: отметка, что воркер уже поднял " +
+      "заход по attempt_retries.scheduled_at (иначе один и тот же повтор " +
+      "поднимался бы на каждом обходе планировщика).",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(attempt_retries)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("fired_at")) {
+        db.exec("ALTER TABLE attempt_retries ADD COLUMN fired_at TEXT");
+      }
+    },
+  },
 ];
 
 /**

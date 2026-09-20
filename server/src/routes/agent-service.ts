@@ -186,6 +186,50 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
         .all(),
   );
 
+  // Отложенные технические повторы. attempt_retries.scheduled_at пишется
+  // в /api/tasks/:id/stop (reason_code='technical_failure'), но раньше его
+  // никто не читал — повтор не поднимался. Планировщик забирает назревшие
+  // повторы ЗДЕСЬ, атомарно и с отметкой fired_at, и по каждому поднимает
+  // заход (scripts/scheduler.py, ветка 6). Отметка делает выборку
+  // идемпотентной: следующий обход доски тот же повтор уже не отдаст.
+  app.post(
+    "/api/scheduler/deferred-retries/claim",
+    { preHandler: authOrApiToken },
+    async () => {
+      const claim = db.transaction(() => {
+        const rows = db
+          .prepare(
+            `SELECT r.id AS retry_id, r.attempt_id, r.reason_code,
+                    r.retry_no, r.scheduled_at, t.id AS task_id
+               FROM attempt_retries r
+               JOIN attempts a ON a.id = r.attempt_id
+               JOIN tasks t ON t.id = a.task_id
+              WHERE r.fired_at IS NULL
+                AND r.scheduled_at <= datetime('now')
+                AND a.ended_at IS NULL
+                AND t.current_attempt_id = a.id
+                AND t.status = 'active'
+                AND t.agent_state = 'in_progress'
+              ORDER BY r.scheduled_at ASC`,
+          )
+          .all() as Array<{
+          retry_id: string;
+          attempt_id: string;
+          reason_code: string;
+          retry_no: number;
+          scheduled_at: string;
+          task_id: string;
+        }>;
+        const mark = db.prepare(
+          "UPDATE attempt_retries SET fired_at = datetime('now') " +
+            "WHERE id = ? AND fired_at IS NULL",
+        );
+        return rows.filter((row) => mark.run(row.retry_id).changes > 0);
+      });
+      return { retries: claim() };
+    },
+  );
+
   app.post<{ Body: { on?: boolean } }>(
     "/api/agent-service",
     // Шаг 5 ТЗ docs/taskflow-direct-dispatch-mvp.md: владелец может
