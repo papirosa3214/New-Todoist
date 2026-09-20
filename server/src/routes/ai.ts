@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead } from "../access.js";
+import { OBSERVER_SYSTEM_PROMPT } from "./activity.js";
 
 // ═══════════ AI-разбивка задачи на подзадачи (локальная модель) ═══════════
 // Дёргает Ollama (OpenAI-совместимый /v1/chat/completions) на домашнем
@@ -1464,6 +1465,21 @@ export function registerAiRoutes(app: FastifyInstance) {
           prompt: r.prompt,
           updated_at: r.updated_at,
         })),
+        // Штатные серверные промпты по скоупам — приложение показывает их
+        // полупрозрачным placeholder'ом в окошке, чтобы владелец видел, из
+        // чего состоит системный промпт. Пустое поле = применяется этот.
+        defaults: {
+          extract_tasks: EXTRACT_TASKS_SYSTEM_PROMPT,
+          journal_assist: (
+            Object.entries(JOURNAL_ASSIST_PROMPTS) as [
+              string,
+              string,
+            ][]
+          )
+            .map(([action, text]) => `# ${action}\n${text}`)
+            .join("\n\n"),
+          activity: OBSERVER_SYSTEM_PROMPT,
+        },
       };
     },
   });
