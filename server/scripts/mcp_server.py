@@ -1365,13 +1365,16 @@ def t_youtube(args):
     work = tempfile.mkdtemp(prefix="tf-yt-")
     try:
         meta = subprocess.run(
-            ["yt-dlp", "--skip-download", "--print", "%(title)s", url],
+            ["yt-dlp", "--skip-download", "--extractor-args",
+             "youtube:player_client=web,mweb", "--print", "%(title)s", url],
             capture_output=True, text=True, timeout=60,
         )
         title = (meta.stdout or "").strip().splitlines()[0] if meta.stdout.strip() else ""
 
         subprocess.run(
-            ["yt-dlp", "--skip-download", "--write-subs", "--write-auto-subs",
+            ["yt-dlp", "--skip-download", "--extractor-args",
+             "youtube:player_client=web,mweb",
+             "--write-subs", "--write-auto-subs",
              "--sub-langs", langs, "--sub-format", "vtt", "--convert-subs", "vtt",
              "-o", os.path.join(work, "s.%(ext)s"), url],
             capture_output=True, text=True, timeout=240,
