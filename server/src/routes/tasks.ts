@@ -619,6 +619,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
       label_ids?: string[];
       parent_id?: string;
       requires_reviewer_review?: boolean;
+      // «Нужно глубокое исследование» (миграция 052): отметка при
+      // постановке — владелец или Секретарь. По ней владелец запускает
+      // серверный конвейер исследования (POST /api/tasks/:id/research).
+      needs_research?: boolean;
       run_repeat?: string;
       repeat_until?: string | null;
       // Optional bulk-create for subtasks, created in the same transaction
@@ -643,6 +647,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         label_ids,
         parent_id,
         requires_reviewer_review,
+        needs_research,
         run_repeat,
         repeat_until,
         subtasks,
@@ -729,6 +734,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
       if (requires_reviewer_review !== undefined && typeof requires_reviewer_review !== "boolean") {
         return reply.code(400).send({ error: "requires_reviewer_review должен быть boolean" });
       }
+      // Отметка «нужно глубокое исследование» при постановке. Раньше
+      // принималась только PATCH'ем, поэтому созданная Секретарём/владельцем
+      // карточка с флагом теряла его молча (найдено 21.09.2026 на живом
+      // прогоне в симуляторе).
+      if (needs_research !== undefined && typeof needs_research !== "boolean") {
+        return reply.code(400).send({ error: "needs_research должен быть boolean" });
+      }
 
       // Normalize+validate subtasks up front, before touching the DB, so a
       // bad entry 400s cleanly instead of failing mid-transaction.
@@ -781,8 +793,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const createTaskTxn = db.transaction(() => {
         db.prepare(
           `
-          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id, requires_reviewer_review, run_repeat, repeat_until)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id, requires_reviewer_review, needs_research, run_repeat, repeat_until)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         ).run(
           id,
@@ -800,6 +812,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
           req.userId,
           parent_id || null,
           requiresReviewerReview ? 1 : 0,
+          needs_research ? 1 : 0,
           runRepeat,
           repeatUntil,
         );

@@ -86,6 +86,23 @@ describe("Флаг глубокого исследования и запуск �
     expect(got.json().needs_research ? 1 : 0).toBe(0);
   });
 
+  it("создание задачи с флагом сохраняет его", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title: "создана с флагом", needs_research: true },
+    });
+    expect(created.statusCode).toBe(200);
+    const id = created.json().task.id as string;
+    const got = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${id}`,
+      headers: ownerAuth,
+    });
+    expect(got.json().needs_research ? 1 : 0).toBe(1);
+  });
+
   it("PATCH поднимает и снимает флаг", async () => {
     const id = await createTask("исследование с флагом");
     const on = await app.inject({
