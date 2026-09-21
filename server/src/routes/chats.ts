@@ -76,8 +76,15 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     // Все участники должны существовать. Создателя тоже включаем в состав.
     const all = [...new Set([req.userId, ...requested])];
     const placeholders = all.map(() => "?").join(",");
+    // B3 (проверка Гермеса 21.09.2026): архивную учётку (миграция 040)
+    // в участники не берём — она уже выведена из работы и ответить не сможет,
+    // а список и состав только засоряет.
     const found = (
-      db.prepare(`SELECT id FROM users WHERE id IN (${placeholders})`).all(...all) as Array<{ id: string }>
+      db
+        .prepare(
+          `SELECT id FROM users WHERE id IN (${placeholders}) AND COALESCE(archived, 0) = 0`,
+        )
+        .all(...all) as Array<{ id: string }>
     ).map((r) => r.id);
     const missing = all.filter((id) => !found.includes(id));
     if (missing.length)
@@ -211,7 +218,13 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(403).send({ error: "менять участников может создатель чата" });
       const memberId = String(req.body?.member_id || "").trim();
       if (!memberId) return reply.code(400).send({ error: "нужен member_id" });
-      if (!db.prepare("SELECT id FROM users WHERE id = ?").get(memberId))
+      if (
+        !db
+          .prepare(
+            "SELECT id FROM users WHERE id = ? AND COALESCE(archived, 0) = 0",
+          )
+          .get(memberId)
+      )
         return reply.code(400).send({ error: "нет такого участника" });
       db.prepare(
         "INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES (?, ?)",

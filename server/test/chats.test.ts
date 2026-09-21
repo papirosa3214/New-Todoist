@@ -114,6 +114,41 @@ describe("Чаты (этап 1, миграция 053)", () => {
     expect(hist.json().messages.map((m: { text: string }) => m.text)).toEqual(["привет"]);
   });
 
+  it("пустое сообщение → 400", async () => {
+    const created = await createChat({ member_ids: [otherId] });
+    const id = created.json().chat.id;
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${id}/messages`,
+      headers: ownerAuth,
+      payload: { text: "   " },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("себя из чата убрать нельзя → 400; чужой не удаляет чат → 403; создатель удаляет → 200", async () => {
+    const created = await createChat({ member_ids: [otherId] });
+    const id = created.json().chat.id;
+    const selfRemove = await app.inject({
+      method: "DELETE",
+      url: `/api/chats/${id}/members/${ownerId}`,
+      headers: ownerAuth,
+    });
+    expect(selfRemove.statusCode).toBe(400);
+    const foreignDelete = await app.inject({
+      method: "DELETE",
+      url: `/api/chats/${id}`,
+      headers: otherAuth,
+    });
+    expect(foreignDelete.statusCode).toBe(403);
+    const ownDelete = await app.inject({
+      method: "DELETE",
+      url: `/api/chats/${id}`,
+      headers: ownerAuth,
+    });
+    expect(ownDelete.statusCode).toBe(200);
+  });
+
   it("участников меняет только создатель", async () => {
     const created = await createChat({ title: "Состав", member_ids: [otherId] });
     const id = created.json().chat.id;

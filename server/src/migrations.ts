@@ -1876,6 +1876,14 @@ const migrations: Migration[] = [
 
       const fkBefore = (db.prepare("PRAGMA foreign_key_check").all() as unknown[])
         .length;
+      // B2 (проверка Гермеса 21.09.2026): сверяем и ЧИСЛО строк. FK-чек ловит
+      // только сироты, а ошибка в INSERT ... SELECT могла бы тихо потерять
+      // строки. Считаем до и после и падаем, если разошлось.
+      const rowsBefore = (
+        db.prepare("SELECT COUNT(*) AS n FROM chat_messages").get() as {
+          n: number;
+        }
+      ).n;
       db.pragma("foreign_keys = OFF");
       db.exec(`
         BEGIN;
@@ -1909,6 +1917,16 @@ const migrations: Migration[] = [
       `);
       db.pragma("foreign_keys = ON");
 
+      const rowsAfter = (
+        db.prepare("SELECT COUNT(*) AS n FROM chat_messages").get() as {
+          n: number;
+        }
+      ).n;
+      if (rowsAfter !== rowsBefore) {
+        throw new Error(
+          `053: пересборка chat_messages потеряла строки (было ${rowsBefore}, стало ${rowsAfter})`,
+        );
+      }
       const fkAfter = (db.prepare("PRAGMA foreign_key_check").all() as unknown[])
         .length;
       if (fkAfter > fkBefore) {
