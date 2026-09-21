@@ -34,6 +34,7 @@ import {
   structureDictationToCards,
   type DictationCards,
 } from "../routes/ai.js";
+import { saveUploadedFile } from "../routes/attachments.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -305,7 +306,41 @@ export async function createDraftFromText(
     maxChars: 12_000,
   });
   const { parentId, childIds } = createDraftCards(cards, owner);
+  attachSourceText(rawText, parentId, owner, cards.title);
   return { parentId, childIds, title: cards.title };
+}
+
+/**
+ * Прикрепить ИСХОДНЫЙ текст постановки к родительской карточке файлом .md.
+ * Иначе задачи ссылаются на «предоставленный текст», которого в карточке нет
+ * (жалоба владельца 20.09.2026): структура собрана, а контекст потерян.
+ * Мягкая деградация: не смогли приложить — постановку не рушим.
+ */
+function attachSourceText(
+  text: string,
+  taskId: string,
+  owner: string,
+  title: string,
+): void {
+  try {
+    const safeName = (title || "Исходный текст").slice(0, 80) + ".md";
+    saveUploadedFile(
+      {
+        body: Buffer.from(text, "utf8"),
+        name: encodeURIComponent(safeName),
+        mime: "text/markdown",
+      },
+      (f) =>
+        db
+          .prepare(
+            `INSERT INTO attachments (id, task_id, comment_id, kind, user_id, file_name, mime, size, stored_name)
+             VALUES (?, ?, NULL, 'task', ?, ?, ?, ?, ?)`,
+          )
+          .run(f.id, taskId, owner, f.fileName, f.mime, f.size, f.storedName),
+    );
+  } catch {
+    // контекст не приложился — это не повод терять постановку
+  }
 }
 
 /**
