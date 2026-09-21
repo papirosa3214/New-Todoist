@@ -473,3 +473,194 @@ describe("Чаты: непрочитанные и превью списка (м�
     expect(res.statusCode).toBe(404);
   });
 });
+
+
+// Удаление сообщений (LOCK-195, 21.09.2026): в комнате чата не было способа
+// убрать сообщения — ни в UI, ни на сервере. Владелец: «нажать троеточие и
+// либо удалить все, либо выбрать отдельные сообщения и потом удалить их».
+// Ключ `ids` — выборка, без него очистка всего чата (только создатель).
+describe("Чаты: удаление сообщений", () => {
+  let app: FastifyInstance;
+  let ownerAuth: string;
+  let otherAuth: string;
+  let otherId: string;
+
+  const bearer = (jwt: string) => ({ authorization: `Bearer ${jwt}` });
+
+  async function reg(name: string, role?: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name, email: `${name}-${Date.now()}@test`, password: "password123" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    if (role) db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, body.user.id);
+    return { id: body.user.id as string, jwt: body.token as string };
+  }
+
+  beforeAll(async () => {
+    app = await buildApp();
+    const owner = await reg("DelOwner", "owner");
+    ownerAuth = bearer(owner.jwt);
+    const other = await reg("DelOther");
+    otherId = other.id;
+    otherAuth = bearer(other.jwt);
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  async function chat() {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/chats",
+      headers: ownerAuth,
+      payload: { title: "Удаление", member_ids: [otherId] },
+    });
+    return res.json().chat.id as string;
+  }
+
+  async function send(auth: Record<string, string>, chatId: string, text: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: auth,
+      payload: { text },
+    });
+    return res.json().message.id as string;
+  }
+
+  async function history(auth: Record<string, string>, chatId: string) {
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/messages`,
+      headers: auth,
+    });
+    return res.json().messages as Array<{ id: string; text: string }>;
+  }
+
+  function del(auth: Record<string, string>, chatId: string, ids?: string[]) {
+    const url = ids?.length
+      ? `/api/chats/${chatId}/messages?ids=${ids.join(",")}`
+      : `/api/chats/${chatId}/messages`;
+    return app.inject({ method: "DELETE", url, headers: auth });
+  }
+
+  it("выборка: выбранные удаляются, остальные остаются", async () => {
+    const id = await chat();
+    await send(ownerAuth, id, "первое");
+    const a = await send(ownerAuth, id, "второе");
+    const b = await send(ownerAuth, id, "третье");
+    await send(otherAuth, id, "четвёртое");
+
+    const res = await del(ownerAuth, id, [a, b]);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deleted).toBe(2);
+    expect((await history(ownerAuth, id)).map((m) => m.text)).toEqual([
+      "первое",
+      "четвёртое",
+    ]);
+  });
+
+  it("участник не может удалить чужое: 403 и ничего не удалено", async () => {
+    const id = await chat();
+    const foreign = await send(ownerAuth, id, "владельца");
+    const mine = await send(otherAuth, id, "моё");
+
+    const res = await del(otherAuth, id, [foreign, mine]);
+    expect(res.statusCode).toBe(403);
+    // Отказ атомарный: даже своё сообщение из той же выборки остаётся.
+    expect((await history(ownerAuth, id)).map((m) => m.text)).toEqual([
+      "владельца",
+      "моё",
+    ]);
+  });
+
+  it("создатель удаляет по выборке и чужие сообщения", async () => {
+    const id = await chat();
+    const foreign = await send(otherAuth, id, "уйдёт");
+    await send(otherAuth, id, "останется");
+
+    const res = await del(ownerAuth, id, [foreign]);
+    expect(res.statusCode).toBe(200);
+    expect((await history(ownerAuth, id)).map((m) => m.text)).toEqual(["останется"]);
+  });
+
+  it("очистка чата без ids — только создатель", async () => {
+    const id = await chat();
+    await send(ownerAuth, id, "раз");
+    await send(otherAuth, id, "два");
+
+    const refused = await del(otherAuth, id);
+    expect(refused.statusCode).toBe(403);
+    expect((await history(ownerAuth, id)).length).toBe(2);
+
+    const cleared = await del(ownerAuth, id);
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().deleted).toBe(2);
+    expect(await history(ownerAuth, id)).toEqual([]);
+  });
+
+  it("несуществующее сообщение и чужой чат → 404", async () => {
+    const id = await chat();
+    const missing = await del(ownerAuth, id, ["no-such-message"]);
+    expect(missing.statusCode).toBe(404);
+
+    const guest = await reg("DelGuest");
+    const stranger = await del(bearer(guest.jwt), id);
+    expect(stranger.statusCode).toBe(404);
+  });
+
+  it("удаление последнего сообщения обновляет превью в списке", async () => {
+    const id = await chat();
+    await send(ownerAuth, id, "останется");
+    const last = await send(ownerAuth, id, "исчезнет");
+
+    await del(ownerAuth, id, [last]);
+
+    const list = await app.inject({ method: "GET", url: "/api/chats", headers: ownerAuth });
+    const row = list.json().chats.find((c: { id: string }) => c.id === id);
+    expect(row.last_message.text).toBe("останется");
+  });
+
+  it("после очистки чата превью пустое, а не призрак удалённого", async () => {
+    const id = await chat();
+    await send(ownerAuth, id, "было");
+
+    await del(ownerAuth, id);
+
+    const list = await app.inject({ method: "GET", url: "/api/chats", headers: ownerAuth });
+    const row = list.json().chats.find((c: { id: string }) => c.id === id);
+    expect(row.last_message).toBeNull();
+  });
+
+  it("вложения удалённых сообщений отвязываются, файлы на месте", async () => {
+    const id = await chat();
+    const up = await app.inject({
+      method: "POST",
+      url: `/api/chats/attachments?name=${encodeURIComponent("файл.txt")}`,
+      headers: { ...ownerAuth, "content-type": "text/plain" },
+      payload: Buffer.from("привет"),
+    });
+    expect(up.statusCode).toBe(201);
+    const attId = up.json().attachment.id as string;
+
+    const sent = await app.inject({
+      method: "POST",
+      url: `/api/chats/${id}/messages`,
+      headers: ownerAuth,
+      payload: { text: "", attachment_ids: [attId] },
+    });
+    const messageId = sent.json().message.id as string;
+    expect(sent.json().message.attachments).toHaveLength(1);
+
+    await del(ownerAuth, id, [messageId]);
+
+    const row = db
+      .prepare("SELECT chat_message_id FROM attachments WHERE id = ?")
+      .get(attId) as { chat_message_id: string | null };
+    expect(row.chat_message_id).toBeNull();
+  });
+});

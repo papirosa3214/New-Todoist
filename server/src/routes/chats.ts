@@ -437,6 +437,86 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Удалить сообщения чата. Два режима, оба входят из меню «…» комнаты
+  // (владелец 21.09.2026: «нажать троеточие и либо удалить все, либо выбрать
+  // отдельные сообщения и потом удалить их»):
+  //   • без `ids` — очистить чат целиком, только создатель;
+  //   • с `ids` — удалить выбранные. Создателю можно любые, остальным — только
+  //     свои. Если в выборке есть чужое, не удаляем НИЧЕГО и отвечаем 403:
+  //     молчаливое частичное удаление хуже отказа — человек не поймёт, почему
+  //     часть выбранного осталась.
+  //
+  // Вложения отвязываются, чтобы не висели на удалённых строках; сами файлы на
+  // диске не трогаем — чистка осиротевших файлов отдельная и общая для всех
+  // вложений.
+  //
+  // `updated_at` чата пересчитывается по самому свежему из ОСТАВШИХСЯ
+  // сообщений: список чатов сортируется и показывает превью по нему, и без
+  // пересчёта удаление последнего сообщения оставляло бы в строке списка то,
+  // чего в чате уже нет.
+  app.delete<{ Params: { id: string }; Querystring: { ids?: string } }>(
+    "/api/chats/:id/messages",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isMember(req.params.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+
+      const ids = String(req.query?.ids ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const chat = db
+        .prepare("SELECT created_by FROM chats WHERE id = ?")
+        .get(req.params.id) as { created_by: string } | undefined;
+      const isCreator = chat?.created_by === req.userId;
+
+      let targets: Array<{ id: string; from_user_id: string }>;
+      if (ids.length === 0) {
+        if (!isCreator)
+          return reply.code(403).send({ error: "очистить чат может создатель" });
+        targets = db
+          .prepare("SELECT id, from_user_id FROM chat_messages WHERE chat_id = ?")
+          .all(req.params.id) as Array<{ id: string; from_user_id: string }>;
+      } else {
+        const placeholders = ids.map(() => "?").join(",");
+        targets = db
+          .prepare(
+            `SELECT id, from_user_id FROM chat_messages
+              WHERE chat_id = ? AND id IN (${placeholders})`,
+          )
+          .all(req.params.id, ...ids) as Array<{
+          id: string;
+          from_user_id: string;
+        }>;
+        if (targets.length !== ids.length)
+          return reply.code(404).send({ error: "часть сообщений не найдена" });
+        if (!isCreator && targets.some((m) => m.from_user_id !== req.userId))
+          return reply.code(403).send({ error: "удалить можно свои сообщения" });
+      }
+
+      const remove = db.prepare("DELETE FROM chat_messages WHERE id = ?");
+      const detach = db.prepare(
+        "UPDATE attachments SET chat_message_id = NULL WHERE chat_message_id = ?",
+      );
+      const txn = db.transaction(() => {
+        for (const message of targets) {
+          detach.run(message.id);
+          remove.run(message.id);
+        }
+        db.prepare(
+          `UPDATE chats SET updated_at = COALESCE(
+             (SELECT created_at FROM chat_messages
+               WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1),
+             updated_at)
+            WHERE id = ?`,
+        ).run(req.params.id, req.params.id);
+      });
+      txn();
+
+      return { deleted: targets.length };
+    },
+  );
+
   // Добавить участника (создатель чата).
   app.post<{ Params: { id: string }; Body: { member_id?: string } }>(
     "/api/chats/:id/members",
