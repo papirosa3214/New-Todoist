@@ -37,8 +37,28 @@ import {
 import {
   startChatRun,
 } from "../runtime/PiRuntimeAdapter.js";
+import {
+  attachmentRow,
+  saveUploadedFile,
+  UploadRejected,
+} from "./attachments.js";
 
 const uid = () => crypto.randomUUID();
+
+// Вложения сообщения — тем же приёмом, что в routes/chat.ts: ленивая
+// подготовка SELECT, чтобы db.prepare с колонкой chat_message_id не
+// падал на импорте, если миграция 053 ещё не прошла (тот же риск, та же
+// причина — index.ts импортирует маршруты раньше, чем прогоняет миграции).
+let attachmentsOf: import("better-sqlite3").Statement | null = null;
+
+function withAttachments(message: any) {
+  if (!message) return message;
+  attachmentsOf ??= db.prepare(
+    `SELECT id, file_name, mime, size FROM attachments
+      WHERE chat_message_id = ? ORDER BY created_at`,
+  );
+  return { ...message, attachments: attachmentsOf.all(message.id) };
+}
 
 type ChatKind = "direct" | "group";
 const KINDS: ChatKind[] = ["direct", "group"];
@@ -170,6 +190,54 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Залить файл ДО отправки сообщения в чат с ролями. Никакой
+  // привязки к конкретному чату на этом шаге нет — точно как у
+  // /api/chat/attachments: файл ложится «ничьим» (task_id NULL,
+  // comment_id NULL, chat_message_id NULL) и ждёт POST
+  // /api/chats/:id/messages с attachment_ids, который его подберёт.
+  //
+  // Маршрут свой, а не алиас старого: у новых чатов свой префикс
+  // /api/chats/*, и тащить веб-клиент к чужому единственному числу
+  // ради одного шага — лишняя сущность. Логика — байт-в-байт та же,
+  // что у /api/chat/attachments (server/src/routes/chat.ts:850):
+  // saveUploadedFile сам проверяет mime, размер и имя; сюда мы
+  // передаём только INSERT, чтобы не дублировать валидации.
+  app.post<{ Querystring: { name?: string } }>(
+    "/api/chats/attachments",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      try {
+        const id = saveUploadedFile(
+          {
+            body: req.body,
+            name: req.query?.name,
+            mime: req.headers["content-type"],
+          },
+          (fields) =>
+            db
+              .prepare(
+                `INSERT INTO attachments
+                 (id, task_id, comment_id, chat_message_id, kind, user_id, file_name, mime, size, stored_name)
+               VALUES (?, NULL, NULL, NULL, 'comment', ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                fields.id,
+                req.userId,
+                fields.fileName,
+                fields.mime,
+                fields.size,
+                fields.storedName,
+              ),
+        );
+        return reply.code(201).send({ attachment: attachmentRow(id) });
+      } catch (e) {
+        if (e instanceof UploadRejected)
+          return reply.code(e.status).send({ error: e.message });
+        throw e;
+      }
+    },
+  );
+
   // История сообщений чата (по возрастанию времени).
   app.get<{ Params: { id: string } }>(
     "/api/chats/:id/messages",
@@ -186,7 +254,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
             WHERE m.chat_id = ? ORDER BY m.created_at ASC`,
         )
         .all(req.params.id);
-      return { messages };
+      return { messages: messages.map(withAttachments) };
     },
   );
 
@@ -204,14 +272,26 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // сообщение сразу, а ответ роли придёт отдельным событием chat:new
   // (broadcast внутри try/catch не роняет запрос, даже если Пи упал —
   // пользовательский текст уже в ленте и не потеряется).
-  app.post<{ Params: { id: string }; Body: { text?: string } }>(
+  app.post<{
+    Params: { id: string };
+    Body: { text?: string; attachment_ids?: string[] };
+  }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
     async (req: any, reply) => {
       if (!isMember(req.params.id, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
       const text = String(req.body?.text || "").trim();
-      if (!text) return reply.code(400).send({ error: "пустое сообщение" });
+      // Вложения без подписи — то же правило, что в /api/chat: пустой
+      // текст ок, когда есть файлы («вот голосовое» без комментария),
+      // а пустое совсем, без файлов — 400.
+      const attachmentIds: string[] = Array.isArray(req.body?.attachment_ids)
+        ? req.body.attachment_ids.filter(
+            (id: unknown) => typeof id === "string" && id,
+          )
+        : [];
+      if (!text && attachmentIds.length === 0)
+        return reply.code(400).send({ error: "пустое сообщение" });
 
       const chatId = req.params.id;
       const id = uid();
@@ -223,15 +303,33 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         chatId,
       );
 
-      const message = db
-        .prepare(
-          `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
-                  f.avatar_url as from_user_avatar_url, f.initials as from_user_initials
-             FROM chat_messages m
-             LEFT JOIN users f ON f.id = m.from_user_id
-            WHERE m.id = ?`,
-        )
-        .get(id);
+      // Файлы залиты заранее и лежат «ничьими» (chat_message_id = NULL,
+      // task_id = NULL) — здесь их подбирает отправленное сообщение.
+      // Берём только свои и только ещё не подобранные: чужое вложение к
+      // своему сообщению не привяжется, даже если знать его
+      // идентификатор. UPDATE, а не проверка через SELECT — ник заранее
+      // не знает, какие из переданных id реально «ничейные», а лишний
+      // SELECT ради этого был бы лишним раундом в БД.
+      if (attachmentIds.length) {
+        const attach = db.prepare(
+          `UPDATE attachments SET chat_message_id = ?
+             WHERE id = ? AND user_id = ?
+               AND chat_message_id IS NULL AND task_id IS NULL`,
+        );
+        for (const attId of attachmentIds) attach.run(id, attId, req.userId);
+      }
+
+      const message = withAttachments(
+        db
+          .prepare(
+            `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
+                    f.avatar_url as from_user_avatar_url, f.initials as from_user_initials
+               FROM chat_messages m
+               LEFT JOIN users f ON f.id = m.from_user_id
+              WHERE m.id = ?`,
+          )
+          .get(id),
+      );
 
       const audience = memberIds(chatId).filter((m) => m !== req.userId);
       broadcastToUsers([...audience, req.userId], {
