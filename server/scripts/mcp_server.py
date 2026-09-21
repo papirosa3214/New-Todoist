@@ -1222,6 +1222,84 @@ def t_ocr(args):
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
+# ---------------------------------------------------------------- поиск в интернете
+#
+# Владелец 20.09.2026: «возьми ключ из хранилища и организуй, чтобы агент искал».
+# Основной провайдер — Tavily; но с .110 он отдаёт 403 (блок по IP), поэтому
+# при отказе молча уходим на Brave (ключ тоже в хранилище). Один раз убедились,
+# что Tavily недоступен — больше к нему не ходим в этом процессе.
+
+_TAVILY_USABLE = True
+
+
+def _vault_read(name: str) -> str:
+    r = subprocess.run([sys.executable, VAULT_GET, "--raw", name],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0 or not r.stdout.strip():
+        raise TaskFlowError(f"ключ {name} не выдан хранилищем")
+    return r.stdout.strip()
+
+
+def _tavily_search(query: str, n: int, key: str):
+    import requests
+    resp = requests.post(
+        "https://api.tavily.com/search",
+        json={"query": query, "max_results": n},
+        headers={"Authorization": f"Bearer {key}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return [
+        {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("content")}
+        for r in (resp.json().get("results") or [])
+    ]
+
+
+def _brave_search(query: str, n: int, key: str):
+    import requests
+    resp = requests.get(
+        "https://api.search.brave.com/res/v1/web/search",
+        params={"q": query, "count": n},
+        headers={"X-Subscription-Token": key, "Accept": "application/json"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    out = []
+    for r in ((resp.json().get("web") or {}).get("results") or []):
+        out.append({"title": r.get("title"), "url": r.get("url"), "snippet": r.get("description")})
+    return out
+
+
+def t_web_search(args):
+    """Найти в интернете: Tavily, при недоступности — Brave. Возвращает список
+    результатов со ссылками; текст страницы потом бери через taskflow_web_get."""
+    global _TAVILY_USABLE
+    query = str(args.get("query") or "").strip()
+    if not query:
+        raise TaskFlowError("нужен query")
+    n = max(1, min(int(args.get("max_results") or 5), 10))
+    errors = []
+
+    if _TAVILY_USABLE:
+        try:
+            key = _vault_read("TAVILY_API_KEY")
+            results = _tavily_search(query, n, key)
+            return {"query": query, "provider": "tavily", "results": results}
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"tavily: {e}")
+            # 403 = блок по IP, дальше смысла нет в этом процессе
+            if "403" in str(e):
+                _TAVILY_USABLE = False
+
+    try:
+        key = _vault_read("BRAVE_API_KEY")
+        results = _brave_search(query, n, key)
+        return {"query": query, "provider": "brave", "results": results}
+    except Exception as e:  # noqa: BLE001
+        errors.append(f"brave: {e}")
+
+    raise TaskFlowError("поиск не удался: " + "; ".join(errors))
+
 TOOLS = [
     {
         "name": "taskflow_my_tasks",
@@ -1667,6 +1745,23 @@ TOOLS = [
             },
         },
         "fn": t_ocr,
+    },
+    {
+        "name": "taskflow_web_search",
+        "description": (
+            "Найти в интернете по запросу. Возвращает заголовки, ссылки и краткие "
+            "выжимки. Дальше нужные страницы открывай через taskflow_web_get — "
+            "он отдаёт ЧИСТЫЙ markdown."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "поисковый запрос"},
+                "max_results": {"type": "integer", "description": "сколько результатов, по умолчанию 5"},
+            },
+            "required": ["query"],
+        },
+        "fn": t_web_search,
     },
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
