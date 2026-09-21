@@ -382,6 +382,23 @@ export function migrate() {
     );
     CREATE INDEX IF NOT EXISTS idx_task_events_task_created
       ON task_events(task_id, created_at);
+
+    -- Отчёты по задаче. Сам артефакт живёт документом в доках проекта
+    -- (note_id), а карточка показывает его «зеркалом» — секцией «Отчёты».
+    -- html_path/pdf_path — собранные файлы на диске (uploads/reports).
+    CREATE TABLE IF NOT EXISTS task_reports (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      note_id TEXT,
+      title TEXT NOT NULL,
+      author_id TEXT REFERENCES users(id),
+      author_name TEXT,
+      html_path TEXT,
+      pdf_path TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_reports_task
+      ON task_reports(task_id, created_at DESC);
   `);
 
   // Токены Live Activity (Dynamic Island). Один живой островок = одна строка:

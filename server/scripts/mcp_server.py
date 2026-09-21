@@ -1300,6 +1300,26 @@ def t_web_search(args):
 
     raise TaskFlowError("поиск не удался: " + "; ".join(errors))
 
+def t_report(args):
+    """Собрать отчёт по задаче: markdown → светлый HTML + PDF, зеркало-заметка
+    в документации проекта. Титул несёт «когда, кем, по какой задаче»."""
+    task_id = str(args.get("task_id") or args.get("id") or "").strip()
+    title = str(args.get("title") or "Отчёт").strip()
+    markdown = str(args.get("markdown") or "").strip()
+    if not task_id:
+        raise TaskFlowError("нужен task_id")
+    if len(markdown) < 20:
+        raise TaskFlowError("markdown слишком короткий")
+    r = api("POST", f"/api/tasks/{task_id}/reports",
+            {"title": title, "markdown": markdown})
+    return {
+        "отчёт": r.get("title"),
+        "report_id": r.get("id"),
+        "заметка_в_доках": r.get("note_id"),
+        "автор": r.get("author"),
+        "составлен": r.get("date"),
+    }
+
 TOOLS = [
     {
         "name": "taskflow_my_tasks",
@@ -1762,6 +1782,26 @@ TOOLS = [
             "required": ["query"],
         },
         "fn": t_web_search,
+    },
+    {
+        "name": "taskflow_report",
+        "description": (
+            "Собрать ОТЧЁТ по задаче из markdown: светлый печатный HTML + PDF, "
+            "с отметкой когда/кем/по какой задаче. Физически ложится заметкой в "
+            "документацию проекта, в карточке задачи виден в секции «Отчёты». "
+            "Пиши разделы сам (введение, анализ данных, академический контекст, "
+            "заключение) — инструмент только верстает и кладёт."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "id задачи"},
+                "title": {"type": "string", "description": "название отчёта"},
+                "markdown": {"type": "string", "description": "текст отчёта в markdown"},
+            },
+            "required": ["task_id", "title", "markdown"],
+        },
+        "fn": t_report,
     },
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
