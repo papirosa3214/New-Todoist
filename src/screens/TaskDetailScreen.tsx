@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { TaskRow } from "../components/TaskRow";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { useTask, useUpdateTask, useDeleteTask } from "../api/tasks";
+import { useTask, useUpdateTask, useDeleteTask, useStartResearch } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { useUpdateSubtask, useSubtaskWork } from "../api/subtasks";
@@ -213,6 +213,39 @@ export function TaskDetailScreen() {
     if (!task) return;
     const next = !task.ready_for_pickup;
     await updateTask.mutateAsync({ id: task.id, ready_for_pickup: next });
+  });
+
+  // «Нужно глубокое исследование» (миграция 052). Галочка — обычное поле
+  // карточки; кнопка запуска поднимает флаг, если он ещё не стоит, и дергает
+  // серверный конвейер (POST /research). Сам обход идёт в фоне, отчёт
+  // появляется в секции «Отчёты».
+  const startResearch = useStartResearch();
+
+  const handleToggleResearch = useGuardedCallback(async () => {
+    if (!task) return;
+    await updateTask.mutateAsync({
+      id: task.id,
+      needs_research: !task.needs_research,
+    });
+  });
+
+  const handleStartResearch = useGuardedCallback(async () => {
+    if (!task) return;
+    if (!task.needs_research) {
+      await updateTask.mutateAsync({ id: task.id, needs_research: true });
+    }
+    try {
+      await startResearch.mutateAsync(task.id);
+      alert(
+        "Исследование запущено. Сервер сам соберёт источники, сверит их и положит отчёт в секцию «Отчёты» этой карточки — это занимает несколько минут.",
+      );
+    } catch (e) {
+      alert(
+        e instanceof ApiError
+          ? `Не удалось запустить исследование: ${e.message}`
+          : `Не удалось запустить исследование: ${String(e)}`,
+      );
+    }
   });
 
   const handleSubmitComment = useGuardedCallback(async (e: FormEvent) => {
@@ -689,6 +722,34 @@ export function TaskDetailScreen() {
               ? "Готова к самозахвату"
               : "Ждёт подтверждения владельца"}
           </div>
+        )}
+
+        {/* ГЛУБОКОЕ ИССЛЕДОВАНИЕ (миграция 052). Тумблер-галочка — обычное
+            поле карточки, кнопка запуска — только когда флаг поднят. Конвейер
+            серверный, поэтому владелец видит его в «Отчётах», а не в ленте
+            агента. */}
+        {isTaskOwner(currentUser, task) && (
+          <Button
+            variant={task.needs_research ? "secondary" : "outline"}
+            onClick={handleToggleResearch}
+          >
+            <Icon name="search" size={16} />
+            {task.needs_research
+              ? "Глубокое исследование: включено"
+              : "Нужно глубокое исследование"}
+          </Button>
+        )}
+        {isTaskOwner(currentUser, task) && task.needs_research && (
+          <Button
+            variant="primary"
+            onClick={handleStartResearch}
+            disabled={startResearch.isPending}
+          >
+            <Icon name="sparkles" size={16} />
+            {startResearch.isPending
+              ? "Запускаю…"
+              : "Запустить исследование"}
+          </Button>
         )}
 
         <Button

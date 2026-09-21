@@ -81,6 +81,8 @@ export interface UpdateTaskInput {
   // Готовность к самозахвату (миграция 026). На сервере поднимает только
   // владелец, так что здесь тип широкий, а проверка прав — в routes/tasks.ts.
   ready_for_pickup?: boolean;
+  // «Нужно глубокое исследование» (миграция 052) — обычное поле карточки.
+  needs_research?: boolean;
 }
 
 export function useUpdateTask() {
@@ -219,5 +221,19 @@ export function useRunTaskAgent() {
   return useMutation({
     mutationFn: ({ id, mode }: { id: string; mode: "executor" | "reviewer" }) =>
       api.post<{ ok: boolean; mode: string }>(`/api/tasks/${id}/run`, { mode }),
+  });
+}
+
+// POST /api/tasks/:id/research — ручной запуск серверного конвейера глубокого
+// исследования (владелец, задача помечена needs_research). Сервер поднимает
+// отдельный процесс и сразу отвечает: план → сбор → проверка → синтез →
+// отчёт в секции «Отчёты» карточки.
+export function useStartResearch() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ ok: boolean; started: boolean }>(
+        `/api/tasks/${id}/research`,
+        {},
+      ),
   });
 }

@@ -209,6 +209,9 @@ export interface ApiTask {
   ready_for_pickup?: boolean;
   ready_set_at?: string | null;
   ready_set_by?: string | null;
+  // «Нужно глубокое исследование» (миграция 052). Галочка в карточке: по ней
+  // владелец запускает серверный конвейер исследования (POST /research).
+  needs_research?: boolean;
   created_at: string;
   updated_at: string;
   // The moment status flipped active→completed — see server/src/db.ts's
