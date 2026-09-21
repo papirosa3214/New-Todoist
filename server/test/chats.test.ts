@@ -167,4 +167,163 @@ describe("Чаты (этап 1, миграция 053)", () => {
     });
     expect(added.statusCode).toBe(200);
   });
+
+  // ── Вложения в чат (этап 3, голосовые .m4a) ───────────────────────
+  //
+  // Голосовое — это будущий клиентский сценарий: человек пишет «» с
+  // единственным вложением. Поэтому здесь три независимых проверки:
+  // (1) загрузка создаёт «ничье» вложение, (2) сообщение с
+  // attachment_ids подбирает его и возвращает в ответе и в истории,
+  // (3) чужое вложение к своему сообщению не привязывается.
+
+  const PNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
+  /** Загрузить файл в новый чат тем же способом, что сделает клиент
+   *  голосового сообщения перед отправкой. */
+  async function uploadChatAttachment(name = "файл.png") {
+    return app.inject({
+      method: "POST",
+      url: `/api/chats/attachments?name=${encodeURIComponent(name)}`,
+      headers: { ...ownerAuth, "content-type": "image/png" },
+      payload: PNG,
+    });
+  }
+
+  it("загрузка создаёт «ничье» вложение (task/comment/chat_message — все NULL)", async () => {
+    const res = await uploadChatAttachment("голос.png");
+    expect(res.statusCode).toBe(201);
+    const a = res.json().attachment;
+    expect(a.file_name).toBe("голос.png");
+    expect(a.mime).toBe("image/png");
+    expect(a.size).toBe(PNG.length);
+    // Это не файл задачи и не файл комментария: висит в ожидании
+    // сообщения, которое его подберёт. attachmentRow не выдаёт task_id
+    // / comment_id / chat_message_id, но они NULL — проверим по базе.
+    const row = db
+      .prepare(
+        "SELECT task_id, comment_id, chat_message_id FROM attachments WHERE id = ?",
+      )
+      .get(a.id) as { task_id: string | null; comment_id: string | null; chat_message_id: string | null };
+    expect(row.task_id).toBeNull();
+    expect(row.comment_id).toBeNull();
+    expect(row.chat_message_id).toBeNull();
+  });
+
+  it("сообщение с attachment_ids подбирает вложение и возвращает его в ответе и в истории", async () => {
+    const chat = await createChat({ title: "Скрепка", member_ids: [otherId] });
+    const chatId = chat.json().chat.id;
+    const up = await uploadChatAttachment("скрин.png");
+    const attId = up.json().attachment.id as string;
+
+    const sent = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+      payload: { text: "смотри", attachment_ids: [attId] },
+    });
+    expect(sent.statusCode).toBe(200);
+    const sentMessage = sent.json().message;
+    expect(sentMessage.text).toBe("смотри");
+    expect(sentMessage.attachments).toHaveLength(1);
+    expect(sentMessage.attachments[0].id).toBe(attId);
+    expect(sentMessage.attachments[0].file_name).toBe("скрин.png");
+
+    // В базе вложение больше не висит «ничьим».
+    const row = db
+      .prepare("SELECT chat_message_id FROM attachments WHERE id = ?")
+      .get(attId) as { chat_message_id: string | null };
+    expect(row.chat_message_id).toBe(sentMessage.id);
+
+    // История тоже возвращает вложение.
+    const hist = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+    });
+    const msgs = hist.json().messages;
+    const last = msgs[msgs.length - 1];
+    expect(last.attachments).toHaveLength(1);
+    expect(last.attachments[0].id).toBe(attId);
+
+    // У сообщения без вложений поле тоже есть, просто пустое — клиенту
+    // удобнее не делать «attachments ? ... : []» на каждое чтение.
+    const otherMsg = msgs.find((m: { text: string }) => m.text !== "смотри");
+    if (otherMsg) expect(otherMsg.attachments).toEqual([]);
+  });
+
+  it("голосовое без текста: только attachment_ids — это валидное сообщение", async () => {
+    const chat = await createChat({ member_ids: [otherId] });
+    const chatId = chat.json().chat.id;
+    const up = await uploadChatAttachment("голос.m4a");
+    const attId = up.json().attachment.id as string;
+
+    const sent = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+      payload: { attachment_ids: [attId] },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().message.text).toBe("");
+    expect(sent.json().message.attachments).toHaveLength(1);
+  });
+
+  it("пустое сообщение без текста и без вложений → 400", async () => {
+    const chat = await createChat({ member_ids: [otherId] });
+    const chatId = chat.json().chat.id;
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("чужое вложение к своему сообщению не привязывается", async () => {
+    // Создаём чат, в котором оба участника. Друг заливает файл, владелец
+    // пытается подобрать его в СВОЁ сообщение — не должен сработать.
+    const chat = await createChat({ title: "Чужие руки", member_ids: [otherId] });
+    const chatId = chat.json().chat.id;
+
+    const up = await app.inject({
+      method: "POST",
+      url: `/api/chats/attachments?name=${encodeURIComponent("чужой.png")}`,
+      headers: { ...otherAuth, "content-type": "image/png" },
+      payload: PNG,
+    });
+    expect(up.statusCode).toBe(201);
+    const foreignAttId = up.json().attachment.id as string;
+
+    const sent = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+      payload: { text: "пытаюсь утащить", attachment_ids: [foreignAttId] },
+    });
+    expect(sent.statusCode).toBe(200);
+    // Сообщение ушло, но без вложения — UPDATE не нашёл ни одной строки
+    // с подходящими условиями (user_id чужой).
+    expect(sent.json().message.attachments).toEqual([]);
+
+    // Вложение по-прежнему «ничье».
+    const row = db
+      .prepare("SELECT chat_message_id FROM attachments WHERE id = ?")
+      .get(foreignAttId) as { chat_message_id: string | null };
+    expect(row.chat_message_id).toBeNull();
+
+    // Зато сам владелец файла в своём же чате своё вложение подбирает.
+    const ownUp = await uploadChatAttachment("свой.png");
+    const ownAttId = ownUp.json().attachment.id as string;
+    const ownSent = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+      payload: { text: "своё", attachment_ids: [ownAttId] },
+    });
+    expect(ownSent.json().message.attachments).toHaveLength(1);
+  });
 });
