@@ -498,7 +498,13 @@ export async function applyIntakeToNewTask(
     db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE parent_id = ?").get(taskId) as any
   )?.n;
   if (hasChildren) return;
-  if (task.assignee_id) return;
+  // Назначенный исполнитель раньше означал полный выход — и карточка,
+  // заведённая сразу с исполнителем, проходила мимо приёма целиком: без
+  // флага, а значит и без возможности взять её в работу. Чужое назначение
+  // мы по-прежнему не трогаем, но это про подбор роли и раздачу; режим
+  // владельца должен действовать одинаково, кем бы карточка ни была
+  // заведена и с исполнителем она или без.
+  const assigneeAlreadySet = Boolean(task.assignee_id);
 
   // Владелец 19.09.2026: автоназначение роли привязано к БУДИЛЬНИКУ.
   // Выключен — назначать некому и незачем (никого не разбудят); тогда
@@ -507,7 +513,7 @@ export async function applyIntakeToNewTask(
   const { unitState } = await import("./agent-service.js");
   const alarmOn = (await unitState()).active;
 
-  if (alarmOn && !task.owner_selected_role) {
+  if (alarmOn && !assigneeAlreadySet && !task.owner_selected_role) {
     // Подбираем роль и пишем в machine_selected_role. Роутер НИКОГДА не
     // пишет в owner_selected_role — это поле только владельца
     // (см. taskflow-pipeline-head-plan.md, шаг 1).
@@ -568,7 +574,9 @@ export async function applyIntakeToNewTask(
   ).run(ownerId, taskId);
   // Раздача (проставление исполнителя) — только когда будильник жив:
   // назначить агента, которого некому разбудить, смысла нет.
-  if (alarmOn) await dispatchTaskToPi(taskId, ownerId);
+  // Раздача — только для карточки без исполнителя: dispatchTaskToPi и сам
+  // откажется отдавать чужую работу, но звать его впустую незачем.
+  if (alarmOn && !assigneeAlreadySet) await dispatchTaskToPi(taskId, ownerId);
 }
 
 export async function releaseQueuedSuccessors(
