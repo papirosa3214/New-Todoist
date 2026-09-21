@@ -243,16 +243,23 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Привязать чат к задаче или отвязать (создатель). Привязка — то, что
-  // выводит переписку в ленту задачи: `routes/tasks.ts` подмешивает сообщения
-  // привязанных чатов в `comments` (владелец 21.09.2026, LOCK-195).
+  // Изменить чат (создатель): название и/или привязку к задаче.
   //
-  // Перепривязка переносит и УЖЕ написанные сообщения чата: иначе после
-  // привязки лента задачи показала бы только новую переписку, а весь разговор
-  // до неё остался бы невидимым — человек ждёт обратного. Сообщения, которые
-  // привязаны к другой задаче явно (через task_id в теле отправки), не
-  // трогаем: их привязка сильнее чатовой.
-  app.patch<{ Params: { id: string }; Body: { task_id?: string | null } }>(
+  // Про привязку. Привязка — то, что выводит переписку в ленту задачи:
+  // `routes/tasks.ts` подмешивает сообщения привязанных чатов в `comments`
+  // (владелец 21.09.2026, LOCK-195). Перепривязка переносит и УЖЕ написанные
+  // сообщения чата: иначе после привязки лента задачи показала бы только новую
+  // переписку, а весь разговор до неё остался бы невидимым — человек ждёт
+  // обратного. Сообщения, привязанные к другой задаче явно (через task_id в
+  // теле отправки), не трогаем: их привязка сильнее чатовой.
+  //
+  // Про название (владелец 21.09.2026: «переименовывать почему-то я не умею
+  // этот чат»). Пустое или пробельное название — это `NULL`: тогда список и
+  // шапка показывают состав участников, как у группы без названия.
+  app.patch<{
+    Params: { id: string };
+    Body: { task_id?: string | null; title?: string | null };
+  }>(
     "/api/chats/:id",
     { preHandler: authPre },
     async (req: any, reply) => {
@@ -264,24 +271,38 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         | { created_by: string; task_id: string | null }
         | undefined;
       if (chat?.created_by !== req.userId)
-        return reply.code(403).send({ error: "привязать чат может создатель" });
+        return reply.code(403).send({ error: "менять чат может создатель" });
 
-      const raw = req.body?.task_id;
-      const taskId = typeof raw === "string" && raw ? raw : null;
-      if (taskId && !db.prepare("SELECT id FROM tasks WHERE id = ?").get(taskId))
+      const hasTask = Object.prototype.hasOwnProperty.call(req.body ?? {}, "task_id");
+      const hasTitle = Object.prototype.hasOwnProperty.call(req.body ?? {}, "title");
+      if (!hasTask && !hasTitle)
+        return reply.code(400).send({ error: "нечего менять" });
+
+      const rawTask = req.body?.task_id;
+      const taskId = typeof rawTask === "string" && rawTask ? rawTask : null;
+      if (hasTask && taskId && !db.prepare("SELECT id FROM tasks WHERE id = ?").get(taskId))
         return reply.code(400).send({ error: "нет такой задачи" });
+
+      const title = hasTitle
+        ? (typeof req.body?.title === "string" ? req.body.title.trim().slice(0, 200) : "") || null
+        : null;
 
       const previous = chat.task_id;
       const txn = db.transaction(() => {
-        db.prepare("UPDATE chats SET task_id = ? WHERE id = ?").run(taskId, req.params.id);
-        const scope = previous
-          ? "task_id IS NULL OR task_id = ?"
-          : "task_id IS NULL";
-        const params = previous ? [taskId, req.params.id, previous] : [taskId, req.params.id];
-        db.prepare(
-          `UPDATE chat_messages SET task_id = ?
-            WHERE chat_id = ? AND channel = 'chat' AND (${scope})`,
-        ).run(...params);
+        if (hasTitle) {
+          db.prepare("UPDATE chats SET title = ? WHERE id = ?").run(title, req.params.id);
+        }
+        if (hasTask) {
+          db.prepare("UPDATE chats SET task_id = ? WHERE id = ?").run(taskId, req.params.id);
+          const scope = previous ? "task_id IS NULL OR task_id = ?" : "task_id IS NULL";
+          const params = previous
+            ? [taskId, req.params.id, previous]
+            : [taskId, req.params.id];
+          db.prepare(
+            `UPDATE chat_messages SET task_id = ?
+              WHERE chat_id = ? AND channel = 'chat' AND (${scope})`,
+          ).run(...params);
+        }
       });
       txn();
 

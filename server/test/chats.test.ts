@@ -827,6 +827,96 @@ describe("Чаты: привязка к задаче", () => {
 // Перепривязка и отвязка чата (PATCH /api/chats/:id, LOCK-195): привязать чат
 // к задаче можно и ПОСЛЕ переписки — тогда лента задачи должна показать и уже
 // написанное, иначе разговор до привязки остаётся невидимым.
+// Переименование чата (владелец 21.09.2026: «переименовывать почему-то я не
+// умею этот чат»). Меняет создатель; пустое название — это NULL, тогда список
+// и шапка показывают состав участников, как у группы без названия.
+describe("Чаты: переименование", () => {
+  let app: FastifyInstance;
+  let ownerAuth: string;
+  let otherAuth: string;
+  let otherId: string;
+
+  beforeAll(async () => {
+    app = await buildApp();
+    const owner = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name: "RenameOwner", email: `rn-${Date.now()}@test`, password: "password123" },
+    });
+    const body = owner.json();
+    db.prepare("UPDATE users SET role = ? WHERE id = ?").run("owner", body.user.id);
+    ownerAuth = { authorization: `Bearer ${body.token}` };
+    const other = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name: "RenameOther", email: `rno-${Date.now()}@test`, password: "password123" },
+    });
+    otherId = other.json().user.id;
+    otherAuth = { authorization: `Bearer ${other.json().token}` };
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  function create(title?: string) {
+    return app.inject({
+      method: "POST",
+      url: "/api/chats",
+      headers: ownerAuth,
+      payload: { member_ids: [otherId], ...(title ? { title } : {}) },
+    });
+  }
+
+  function rename(auth: Record<string, string>, id: string, title: unknown) {
+    return app.inject({
+      method: "PATCH",
+      url: `/api/chats/${id}`,
+      headers: auth,
+      payload: { title },
+    });
+  }
+
+  it("создатель переименовывает чат", async () => {
+    const id = (await create("Старое имя")).json().chat.id;
+    const res = await rename(ownerAuth, id, "Новое имя");
+    expect(res.statusCode).toBe(200);
+    expect(res.json().chat.title).toBe("Новое имя");
+  });
+
+  it("пустое название снимает его: остаётся состав участников", async () => {
+    const id = (await create("Снимем имя")).json().chat.id;
+    expect((await rename(ownerAuth, id, "   ")).json().chat.title).toBeNull();
+  });
+
+  it("переименование не трогает привязку к задаче", async () => {
+    const task = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title: "Задача при переименовании" },
+    });
+    const taskId = task.json().task.id;
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/chats",
+      headers: ownerAuth,
+      payload: { title: "С задачей", member_ids: [otherId], task_id: taskId },
+    });
+    const id = created.json().chat.id;
+
+    const res = await rename(ownerAuth, id, "Переименован с задачей");
+    expect(res.json().chat.title).toBe("Переименован с задачей");
+    expect(res.json().chat.task_id).toBe(taskId);
+  });
+
+  it("чужой участник переименовать не может → 403, пустой запрос → 400", async () => {
+    const id = (await create("Не твоё")).json().chat.id;
+    expect((await rename(otherAuth, id, "Взлом")).statusCode).toBe(403);
+    expect((await rename(ownerAuth, id, undefined)).statusCode).toBe(400);
+  });
+});
+
 describe("Чаты: пометка задачи в списке", () => {
   let app: FastifyInstance;
   let ownerAuth: string;
