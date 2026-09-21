@@ -137,17 +137,21 @@ export async function buildApp(): Promise<FastifyInstance> {
   // он отвечает понятным текстом вместо сырого FST_ERR_CTP_INVALID_MEDIA_TYPE.
   const ATTACHMENT_CONTENT_TYPES = [
     /^image\//,
-    /^text\/plain/,
-    // markdown принимаем наравне с обычным текстом: в нём приходят отчёты и
-    // описи агентов. 26.08.2026 такой файл отлетал с сырым 415 ещё ДО маршрута —
-    // разборщика тела на этот тип не было, и понятный ответ маршрута не успевал
-    // сработать. Список разрешённого для самого вложения — в routes/attachments.ts.
-    /^text\/markdown/,
+    // Любой текст: раньше перечисляли text/plain и text/markdown поимённо, и
+    // .py/.sh/.js отлетали с сырым 415 ЕЩЁ ДО маршрута — разборщика тела на
+    // их тип не было, и понятный ответ маршрута не успевал сработать (владелец
+    // 20.09.2026: «хочу приложить питоновский скрипт»). Список разрешённого
+    // для самого вложения — в routes/attachments.ts.
+    /^text\//,
     "application/pdf",
     "application/octet-stream",
     "application/msword",
     /^application\/vnd\.openxmlformats-officedocument\./,
     /^application\/vnd\.oasis\.opendocument\./,
+    // Кодовые/конфиговые типы, которые система отдаёт НЕ как text/*.
+    // ВАЖНО: без application/json — на нём держится весь остальной API, и
+    // перехватив его разборщиком буфера, мы сломали бы все JSON-запросы.
+    /^application\/(xml|yaml|x-yaml|javascript|x-javascript|x-sh|x-shellscript|x-python|x-ruby|x-perl|x-httpd-php|sql|graphql|toml|x-ndjson)$/,
   ];
   // У Fastify два разборщика тела ИЗ КОРОБКИ: application/json и text/plain.
   // Встроенный text/plain отдаёт тело СТРОКОЙ, и он выигрывает у нашего

@@ -42,22 +42,22 @@ export const UPLOAD_DIR =
 // первым, с понятным текстом вместо сырой ошибки Fastify.
 const MAX_SIZE = 15 * 1024 * 1024;
 
-// Что принимаем. Не «всё подряд»: файл потом отдаётся браузеру, и список
-// держит его в предсказуемых рамках. Исполняемое и архивы сюда не входят
-// сознательно — для задач это не вложения, а способ занести на машину что
-// угодно.
+// Что принимаем. Владелец 20.09.2026: «почему только текстовые документы —
+// приложить вообще всё, это же контекст задачи: код, скрипт, ссылка».
+// Поэтому принимаем любой текст (`text/*` покрывает .py/.js/.sh/.md и т.п.),
+// частые кодовые/конфиговые типы и всё неопознанное (`application/octet-stream`)
+// — расширение .py система часто не опознаёт и отдаёт именно им. Файл
+// по-прежнему отдаётся как есть, но с `Content-Disposition: inline` и
+// неизвестным типом браузер его не исполняет. Предел размера 15 МБ остаётся.
 const ALLOWED_MIME = [
   /^image\//,
+  /^text\//,
   /^application\/pdf$/,
-  /^text\/plain$/,
-  // markdown — тот же простой текст, и именно им агенты отдают отчёты и описи.
-  // 26.08.2026 попытка приложить к задаче отчёт .md отлетела с 415: клиент
-  // проставляет `text/markdown`, а в списке был только `text/plain`. Браузеру
-  // такой файл отдаётся как текст, исполняемым он не становится.
-  /^text\/markdown$/,
   /^application\/msword$/,
   /^application\/vnd\.openxmlformats-officedocument\./,
   /^application\/vnd\.oasis\.opendocument\./,
+  /^application\/(json|xml|yaml|x-yaml|javascript|x-javascript|x-sh|x-shellscript|x-python|x-ruby|x-perl|x-httpd-php|sql|graphql|toml|x-ndjson)$/,
+  /^application\/octet-stream$/,
 ];
 
 function mimeAllowed(mime: string): boolean {
