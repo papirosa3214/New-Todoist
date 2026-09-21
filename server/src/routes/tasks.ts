@@ -635,6 +635,16 @@ export function registerTaskRoutes(app: FastifyInstance) {
         subtasks,
         children,
         comments,
+        // Чаты, привязанные к этой задаче. Нужны карточке, чтобы дать переход
+        // в переписку («Чат по задаче»); сам чат в карточке не заводится и не
+        // рисуется — для этого есть свой экран (владелец 21.09.2026, LOCK-195).
+        chats: db
+          .prepare(
+            `SELECT c.id, c.title, c.kind, c.updated_at,
+                    (SELECT COUNT(*) FROM chat_members cm WHERE cm.chat_id = c.id) AS members_count
+               FROM chats c WHERE c.task_id = ? ORDER BY c.updated_at DESC`,
+          )
+          .all(task.id),
         attachments: taskAttachments,
         events,
         attempts,

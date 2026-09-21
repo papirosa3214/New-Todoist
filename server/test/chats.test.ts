@@ -827,6 +827,103 @@ describe("Чаты: привязка к задаче", () => {
 // Перепривязка и отвязка чата (PATCH /api/chats/:id, LOCK-195): привязать чат
 // к задаче можно и ПОСЛЕ переписки — тогда лента задачи должна показать и уже
 // написанное, иначе разговор до привязки остаётся невидимым.
+describe("Чаты: пометка задачи в списке", () => {
+  let app: FastifyInstance;
+  let ownerAuth: string;
+  let otherId: string;
+
+  beforeAll(async () => {
+    app = await buildApp();
+    const owner = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name: "MarkOwner", email: `mark-${Date.now()}@test`, password: "password123" },
+    });
+    const body = owner.json();
+    db.prepare("UPDATE users SET role = ? WHERE id = ?").run("owner", body.user.id);
+    ownerAuth = { authorization: `Bearer ${body.token}` };
+    const other = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name: "MarkOther", email: `marko-${Date.now()}@test`, password: "password123" },
+    });
+    otherId = other.json().user.id;
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  it("список отдаёт название задачи у привязанного чата и null у свободного", async () => {
+    const task = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title: "Задача с чатом" },
+    });
+    const taskId = task.json().task.id;
+
+    const bound = await app.inject({
+      method: "POST",
+      url: "/api/chats",
+      headers: ownerAuth,
+      payload: { member_ids: [otherId], task_id: taskId },
+    });
+    const free = await app.inject({
+      method: "POST",
+      url: "/api/chats",
+      headers: ownerAuth,
+      payload: { member_ids: [otherId] },
+    });
+
+    const list = await app.inject({ method: "GET", url: "/api/chats", headers: ownerAuth });
+    const rows = list.json().chats as Array<{ id: string; task_id: string | null; task_title: string | null }>;
+    expect(rows.find((c) => c.id === bound.json().chat.id)?.task_title).toBe("Задача с чатом");
+    expect(rows.find((c) => c.id === free.json().chat.id)?.task_title).toBeNull();
+  });
+
+  it("карточка задачи отдаёт привязанные чаты", async () => {
+    const task = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title: "Задача с двумя чатами" },
+    });
+    const taskId = task.json().task.id;
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/chats",
+      headers: ownerAuth,
+      payload: { title: "Первый", member_ids: [otherId], task_id: taskId },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/chats",
+      headers: ownerAuth,
+      payload: { title: "Второй", member_ids: [otherId], task_id: taskId },
+    });
+
+    const card = await app.inject({ method: "GET", url: `/api/tasks/${taskId}`, headers: ownerAuth });
+    const chats = card.json().chats as Array<{ id: string; title: string | null; members_count: number }>;
+    expect(chats.map((c) => c.title).sort()).toEqual(["Второй", "Первый"]);
+    expect(chats.every((c) => c.members_count >= 2)).toBe(true);
+
+    // Свободная задача — пустой список, а не отсутствие поля.
+    const clean = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title: "Без чатов" },
+    });
+    const cleanCard = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${clean.json().task.id}`,
+      headers: ownerAuth,
+    });
+    expect(cleanCard.json().chats).toEqual([]);
+  });
+});
+
 describe("Чаты: перепривязка к задаче", () => {
   let app: FastifyInstance;
   let ownerAuth: string;

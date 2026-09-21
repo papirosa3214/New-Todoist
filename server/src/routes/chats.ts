@@ -169,7 +169,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           WHERE cm.member_id = ?
           ORDER BY c.updated_at DESC`,
       )
-      .all(req.userId) as Array<{ id: string }>;
+      .all(req.userId) as Array<{ id: string; task_id: string | null }>;
     return {
       chats: rows.map((c) => {
         // Имя отправителя — превью группы идёт с ним («QA: проверка
@@ -218,6 +218,15 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           ...chatRow(c.id),
           last_message: last ?? null,
           unread_count: unread,
+          // Название задачи для пометки в строке списка: по ней видно, какой
+          // чат за какой задачей (владелец 21.09.2026, LOCK-195).
+          task_title: c.task_id
+            ? ((
+                db.prepare("SELECT title FROM tasks WHERE id = ?").get(c.task_id) as
+                  | { title: string }
+                  | undefined
+              )?.title ?? null)
+            : null,
         };
       }),
     };
