@@ -996,6 +996,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Признак готовности к самозахвату (миграция 026, карточка d598de9f).
       // Поднимает только владелец; пока false — claim отклоняется.
       ready_for_pickup: boolean;
+      // «Нужно глубокое исследование» (миграция 052). Галочка в карточке;
+      // по ней запускается серверный конвейер исследования. Ставит владелец
+      // или Секретарь при постановке — см. POST /api/tasks/:id/research.
+      needs_research: boolean;
     }>;
   }>("/api/tasks/:id", {
     preHandler: authPre,
@@ -1219,6 +1223,15 @@ export function registerTaskRoutes(app: FastifyInstance) {
         body.pinned = body.pinned ? 1 : 0;
       }
 
+      // Тот же приём, что у pinned: JS-булево better-sqlite3 не примет
+      // параметром. Флаг глубокого исследования — обычное поле карточки,
+      // менять его может тот, кому доступна запись задачи (владелец либо
+      // исполнитель), отдельного owner-guard'а здесь нет: это не рубильник
+      // сервиса, а отметка на карточке.
+      if (body.needs_research !== undefined) {
+        body.needs_research = body.needs_research ? 1 : 0;
+      }
+
       if (body.requires_reviewer_review !== undefined) {
         if (!isOwner(req.userId)) {
           return reply.code(403).send({ error: "маршрут ревью может менять только владелец трекера" });
@@ -1396,6 +1409,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         "position",
         "pinned",
         "requires_reviewer_review",
+        "needs_research",
         "run_repeat",
         "repeat_until",
         "recurrence_spawned",

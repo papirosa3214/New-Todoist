@@ -1813,6 +1813,26 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "052_needs_research",
+    description:
+      "Флаг «нужно глубокое исследование» на карточке (владелец 21.09.2026): " +
+      "серверный конвейер исследования запускается вручную только по этой " +
+      "отметке, чтобы не гоняться за источниками по рабочим пустякам. " +
+      "Идемпотентна (PRAGMA): в уже прогретой БД колонки может не быть.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("needs_research")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN needs_research INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+    },
+  },
 ];
 
 /**
