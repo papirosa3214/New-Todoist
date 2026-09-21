@@ -1833,6 +1833,91 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "053_chats",
+    description:
+      "Чаты с ролями-агентами (владелец 21.09.2026): персональные (одна роль) и " +
+      "групповые (несколько). Таблицы chats/chat_members + chat_messages.chat_id; " +
+      "канал сообщения теперь допускает 'chat'. chat_messages ПЕРЕСОБИРАЕТСЯ — " +
+      "CHECK канала расширяется, а SQLite не умеет менять CHECK на месте. Поэтому " +
+      "миграция без общей транзакции: своей транзакцией подменяет таблицу при " +
+      "foreign_keys=OFF. FK-нарушения сравниваются до/после — в живой базе есть " +
+      "давняя сирота agent_inbox→tasks, из-за неё падать нельзя.",
+    noTransaction: true,
+    up: () => {
+      // Справочники чатов — обычные аддитивные таблицы, их можно создавать
+      // всегда (idempotent), и ДО пересборки: chat_messages_new ссылается на chats.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chats (
+          id TEXT PRIMARY KEY,
+          title TEXT,
+          kind TEXT NOT NULL DEFAULT 'group' CHECK (kind IN ('direct', 'group')),
+          created_by TEXT REFERENCES users(id),
+          task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS chat_members (
+          chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          member_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          added_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (chat_id, member_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_members_member
+          ON chat_members(member_id);
+      `);
+
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (cols.has("chat_id")) return; // уже пересобрана
+
+      const fkBefore = (db.prepare("PRAGMA foreign_key_check").all() as unknown[])
+        .length;
+      db.pragma("foreign_keys = OFF");
+      db.exec(`
+        BEGIN;
+        CREATE TABLE chat_messages_new (
+          id TEXT PRIMARY KEY,
+          from_user_id TEXT NOT NULL REFERENCES users(id),
+          to_user_id TEXT REFERENCES users(id),
+          task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+          kind TEXT CHECK (kind IS NULL OR kind IN ('совещание', 'делегирование', 'находка')),
+          text TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          channel TEXT NOT NULL DEFAULT 'agents'
+            CHECK (channel IN ('owner', 'agents', 'chat')),
+          chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE
+        );
+        INSERT INTO chat_messages_new
+          (id, from_user_id, to_user_id, task_id, kind, text, created_at, channel)
+          SELECT id, from_user_id, to_user_id, task_id, kind, text, created_at, channel
+            FROM chat_messages;
+        DROP TABLE chat_messages;
+        ALTER TABLE chat_messages_new RENAME TO chat_messages;
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_to
+          ON chat_messages(to_user_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_task
+          ON chat_messages(task_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_channel
+          ON chat_messages(channel, created_at);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_chat
+          ON chat_messages(chat_id, created_at);
+        COMMIT;
+      `);
+      db.pragma("foreign_keys = ON");
+
+      const fkAfter = (db.prepare("PRAGMA foreign_key_check").all() as unknown[])
+        .length;
+      if (fkAfter > fkBefore) {
+        throw new Error(
+          `053: после пересборки chat_messages появились FK-нарушения (было ${fkBefore}, стало ${fkAfter})`,
+        );
+      }
+    },
+  },
 ];
 
 /**
