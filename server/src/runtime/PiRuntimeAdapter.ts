@@ -32,6 +32,12 @@ import {
   type StartRunInput,
   type StartRunResult,
 } from "./RuntimeAdapter.js";
+import {
+  acquireChatRoleLock,
+  releaseChatRoleLock,
+  upsertChatSession,
+  makeChatRunId,
+} from "./chatSession.js";
 import { authSessionManager, type AuthSessionView } from "./AuthSession.js";
 import {
   ModelNotAvailableError,
@@ -966,4 +972,251 @@ export async function getAvailableModelIds(): Promise<Set<string>> {
 export async function modelExists(id: string): Promise<boolean> {
   const ids = await getAvailableModelIds();
   return ids.has(id);
+}
+
+// ===== Живая онлайн-сессия Пи для чата (Этап 2 плана от 21.09.2026) =====
+//
+// Та же машинерия, что у startRun (RpcClient, провайдер/модель из routing,
+// валидация каталога), но БЕЗ taskId/attempt/claim/agent_state. Никаких
+// попыток в attempts, никаких правок tasks.agent_state, никакой аренды.
+// Онлайн-сессия Пи живёт параллельно карточкам: карточка про свой путь
+// (claim→heartbeat→review), чат про свой (чат→чат→чат). Это и есть
+// «изоляция» из требований плана.
+//
+// Состояние сессии — в chat_sessions (chat_id, role_id) → pi_session_id,
+// одна строка на пару. In-memory `activeChatRuns` — только рантайм-лок,
+// чтобы не словить гонку «два сообщения подряд на одну пару». После
+// рестарта процесса карта пуста, но sessionId в таблице сохраняется и
+// следующее сообщение продолжает контекст.
+
+/** Аргументы старта живой сессии Пи в чате. Никакого taskId — чат живёт
+ *  отдельной осью, карточки и аренда остаются нетронутыми. */
+export interface StartChatRunInput {
+  chatId: string;
+  role: RoleName;
+  /** id ролевой учётки (role_<role>) — будет автором сообщения-ответа. */
+  roleId: string;
+  prompt: string;
+  /** Сохранённый ранее pi_session_id — продолжит ту же сессию. Если
+   *  null/undefined — стартует новую. */
+  sessionId?: string | null;
+  /** Максимум времени на один ответ. По умолчанию 60 секунд — больше,
+   *  чем типичный онлайн-ответ, но без зависания, если модель ушла в
+   *  retry-loop. */
+  timeoutMs?: number;
+}
+
+/** Результат одного захода онлайн-сессии: runId живёт в логах, sessionId
+ *  сохраняется в chat_sessions, text — ответ ассистента для укладки в
+ *  chat_messages (может быть пустой строкой — это легитимный ответ). */
+export interface StartChatRunResult {
+  runId: string;
+  sessionId: string | null;
+  text: string;
+}
+
+/** Активная онлайн-сессия чата. Только рантайм-лок; источник правды
+ *  по sessionId — таблица chat_sessions. */
+interface ActiveChatRun {
+  runId: string;
+  chatId: string;
+  role: RoleName;
+  roleId: string;
+  client: RpcClient;
+  startedAt: string;
+  cancelled: boolean;
+}
+
+const activeChatRuns = new Map<string, ActiveChatRun>();
+
+/** Стандартные лимиты на одну онлайн-сессию. Документированы как константы,
+ *  чтобы тесты могли на них опереться, а продакшен подменить через
+ *  переменные окружения при росте нагрузки. */
+const CHAT_RUN_DEFAULT_TIMEOUT_MS = 60_000;
+const CHAT_RUN_MAX_TIMEOUT_MS = 5 * 60_000; // 5 минут — жёсткий потолок
+
+function resolveChatRunTimeout(override?: number): number {
+  const raw =
+    override && override > 0
+      ? override
+      : Number(process.env.TASKFLOW_CHAT_RUN_TIMEOUT_MS) ||
+        CHAT_RUN_DEFAULT_TIMEOUT_MS;
+  return Math.min(raw, CHAT_RUN_MAX_TIMEOUT_MS);
+}
+
+/** Снять все активные онлайн-сессии Пи — единственная «глобальная» кнопка.
+ *  Нужна для тестов и для аварийной остановки; в проде процесс один и
+ *  сервис не перезапускают ради одного чата. */
+export async function stopAllChatRuns(): Promise<void> {
+  const runs = [...activeChatRuns.values()];
+  for (const run of runs) {
+    run.cancelled = true;
+    try {
+      await run.client.abort();
+    } catch { /* процесс мог уже завершиться */ }
+    releaseChatRoleLock(run.chatId, run.roleId);
+  }
+  activeChatRuns.clear();
+}
+
+/** Живая онлайн-сессия Пи в чате. Не трогает attempts/tasks/agent_state;
+ *  ответ сохраняется в chat_messages отдельно (вызывающей стороной —
+ *  routes/chats.ts), здесь только RpcClient, валидация и сохранение
+ *  pi_session_id в chat_sessions.
+ *
+ *  Жизненный цикл:
+ *    1. Захватываем слот (chat, role) — если уже занят, ошибка «живая
+ *       сессия уже идёт», без ожидания: параллельный ход для одной роли в
+ *       одном чате не нужен и будет просто дороже по токенам.
+ *    2. Валидируем роль и модель в каталоге (тот же путь, что у startRun).
+ *    3. Поднимаем RpcClient: если есть сохранённый sessionId — передаём
+ *       `--session-id` через args, иначе Pi создаст сессию сам и отдаст
+ *       id через getState().
+ *    4. Шлём promptAndWait(prompt, timeoutMs): один ответ на одно
+ *       сообщение. timeoutMs ограничивает общий wall-time; Pi сам
+ *       следит за retry/compaction, наш потолок — сверху.
+ *    5. Достаём финальный текст через getLastAssistantText (Pi хранит
+ *       свою историю сообщений и возвращает последний assistant turn).
+ *    6. Апсёртим sessionId в chat_sessions, отдаём результат.
+ *    7. Освобождаем слот в любом исходе (finally) — чтобы ошибка одного
+ *       хода не подвешивала дальнейшие. */
+export async function startChatRun(
+  input: StartChatRunInput,
+): Promise<StartChatRunResult> {
+  const role: RoleName = input.role;
+  if (!(ROLE_NAMES as readonly string[]).includes(role)) {
+    throw new Error(`startChatRun: неизвестная роль «${role}»`);
+  }
+  if (!acquireChatRoleLock(input.chatId, input.roleId)) {
+    throw new Error(
+      `startChatRun: для пары (chat=${input.chatId}, role=${input.roleId}) ` +
+        `уже идёт живая сессия — дождитесь ответа или отмените её`,
+    );
+  }
+
+  const runId = makeChatRunId();
+  const client: RpcClient | null = null;
+  // Инициализируем фиктивной ссылкой — реальный client создаётся после
+  // успешной валидации модели; в блоке finally смотрим на activeChatRuns.
+  void client;
+
+  try {
+    // Модель/провайдер берём из routing роли — ровно как в startRun.
+    // Различие: input.provider/model не предусмотрены, чат ходит всегда
+    // на «своей» для роли модели (маркировка роли и есть намерение).
+    const routing = loadRoleRouting();
+    const model = routing.models[role];
+    const provider = providerOfModel(model);
+
+    const catalog = await loadModelCatalog();
+    const match =
+      catalog.find(
+        (m) => m.id === model && m.provider === provider,
+      ) ?? catalog.find((m) => m.id === model);
+    if (!match) {
+      throw new ModelNotAvailableError(model, provider);
+    }
+    const resolvedProvider = match.provider;
+    const resolvedModel = match.id;
+
+    const args: string[] = [];
+    if (input.sessionId) {
+      // --session-id продолжает РОВНО ту сессию, что у нас в таблице.
+      // Если по какой-то причине сессия была удалена из Pi — Pi создаст
+      // новую с тем же id (по спецификации CLI), и мы её же и запишем
+      // обратно в chat_sessions. Это поведение совпадает с
+      // ожиданием «следующее сообщение продолжает тот же контекст».
+      args.push("--session-id", input.sessionId);
+    }
+
+    const newClient = new RpcClient({
+      cliPath: resolvePiCliPath(),
+      cwd: process.cwd(),
+      provider: resolvedProvider,
+      model: resolvedModel,
+      // NODE_USE_ENV_PROXY=1 — без него встроенный fetch Pi игнорирует
+      // HTTPS_PROXY и провайдеры отвечают 403 (гео-блок).
+      env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
+      args,
+    });
+
+    const run: ActiveChatRun = {
+      runId,
+      chatId: input.chatId,
+      role,
+      roleId: input.roleId,
+      client: newClient,
+      startedAt: new Date().toISOString(),
+      cancelled: false,
+    };
+    activeChatRuns.set(runId, run);
+
+    let finalText = "";
+    let finalSessionId: string | null = input.sessionId ?? null;
+    const timeoutMs = resolveChatRunTimeout(input.timeoutMs);
+
+    try {
+      await newClient.start();
+      // Сессия могла стартовать с нашим sessionId (resume) или с новым
+      // (Pi создал сам). Реальный id берём через getState(), а не
+      // session_start — тот же путь, что в startRun: getState()
+      // надёжнее.
+      try {
+        const state = await newClient.getState();
+        const sid = (state as { sessionId?: string } | null)?.sessionId;
+        if (sid) finalSessionId = sid;
+      } catch { /* getState() упал — оставим то, что было */ }
+      // Один user message = один ответ. promptAndWait блокирует до
+      // agent_settled и прибит к timeoutMs сверху.
+      await newClient.promptAndWait(input.prompt, undefined, timeoutMs);
+      try {
+        const text = await newClient.getLastAssistantText();
+        finalText = (text ?? "").trim();
+      } catch { /* нет ассистентского хода — оставим пустую строку */ }
+    } finally {
+      // Останавливать процесс ОБЯЗАТЕЛЬНО, иначе каждый user-message
+      // оставит висеть по zombie-RpcClient. На повторное использование
+      // не рассчитываем — на следующее сообщение поднимем свежий client.
+      try {
+        await newClient.stop();
+      } catch { /* процесс уже умер — окей */ }
+      activeChatRuns.delete(runId);
+    }
+
+    if (finalSessionId) {
+      // Сохраняем pi_session_id ДЛЯ СЛЕДУЮЩЕГО СООБЩЕНИЯ. Это
+      // единственная запись в БД, которую делает онлайн-сессия —
+      // tasks/attempts/agent_state остаются нетронутыми.
+      upsertChatSession(input.chatId, input.roleId, finalSessionId);
+    }
+
+    return { runId, sessionId: finalSessionId, text: finalText };
+  } finally {
+    releaseChatRoleLock(input.chatId, input.roleId);
+  }
+}
+
+/** Отменить активную онлайн-сессию. Используется, когда владелец явно
+ *  прервал разговор (например, через «Стоп» в UI). Неизвестный runId —
+ *  no-op (тихий отказ), а не 404: вызывающая сторона могла опоздать
+ *  с отменой, и упасть на чужой гонке — хуже, чем промолчать. */
+export async function cancelChatRun(runId: string): Promise<boolean> {
+  const run = activeChatRuns.get(runId);
+  if (!run) return false;
+  run.cancelled = true;
+  try {
+    await run.client.abort();
+  } catch { /* процесс мог уже завершиться */ }
+  // activeChatRuns сам себя почистит в finally startChatRun, но
+  // освободим слот сразу — чтобы следующее сообщение могло стартовать
+  // новую сессию, не дожидаясь финала cleanup.
+  activeChatRuns.delete(runId);
+  releaseChatRoleLock(run.chatId, run.roleId);
+  return true;
+}
+
+/** Тестовая утилита: сбросить in-memory карту активных чат-сессий и
+ *  локи. В проде не нужна — после рестарта процесса всё и так пусто. */
+export function _resetActiveChatRunsForTests(): void {
+  activeChatRuns.clear();
 }

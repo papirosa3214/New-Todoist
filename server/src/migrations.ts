@@ -1936,6 +1936,47 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    // 21.09.2026 (этап 2 плана по чатам с ролями-агентами,
+    // docs/superpowers/plans/2026-09-21-chat-online-pi-runtime.md).
+    //
+    // На каждый чат и каждую роль-участницу держим ровно одну строку: под
+    // какой именно pi_session_id сейчас «живёт» агент в этом чате. Онлайн-
+    // сессии Пи поднимаются без задачи (startChatRun), и единственное, что
+    // у них есть устойчивого — sessionId, который Pi отдаёт через
+    // client.getState() и который мы передаём обратно, чтобы следующее
+    // сообщение продолжало тот же контекст, а не начинало разговор заново.
+    //
+    // PK(chat_id, role_id) — естественное ограничение «на пару один сеанс»;
+    // апсёрт по составному ключу делается INSERT … ON CONFLICT DO UPDATE.
+    //
+    // Никаких FK на tasks здесь быть не может: чат живёт без задачи и без
+    // прецедента связи с attempt/agent_state. Это и есть «изоляция» —
+    // аддитивная таблица, в которую карточки не пишут и которая на них не
+    // ссылается. FK на chats держим, чтобы удаление чата автоматически
+    // убирало и его сессии (как и messages в миграции 053).
+    id: "054_chat_sessions",
+    description:
+      "Живая онлайн-сессия Пи на (чат, роль): chat_sessions(chat_id, role_id, " +
+      "pi_session_id, updated_at) — одна строка на пару, FK на chats, без " +
+      "привязки к задаче или попытке. Аддитивно; на tasks/attempts/agent_state " +
+      "не влияет.",
+    up: () => {
+      // Идемпотентно: пересборка стартует миграцию с уже возможной
+      // таблицей, и CREATE IF NOT EXISTS проходит как no-op.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+          chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          pi_session_id TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (chat_id, role_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_chat
+          ON chat_sessions(chat_id);
+      `);
+    },
+  },
 ];
 
 /**

@@ -1,18 +1,42 @@
 // Чаты с ролями-агентами (владелец 21.09.2026, план
-// docs/superpowers/plans/2026-09-21-chat-online-pi-runtime.md, этап 1).
+// docs/superpowers/plans/2026-09-21-chat-online-pi-runtime.md, этапы 1–2).
 //
 // Чат — отдельная сущность, которую создаёт пользователь: персональный (одна
 // роль) или групповой (несколько ролей). Это НЕ старые каналы owner/agents —
-// те живут как были; чаты аддитивны (миграция 053).
+// те живут как были; чаты аддитивны (миграции 053/054).
 //
-// Здесь только «скелет»: создание чата, участники, история, отправка сообщения
-// в ленту чата. Живой ответ рантайма Пи (онлайн-сессия) — следующий этап; пока
-// сообщение просто ложится в чат и рассылается участникам по WS.
+// Этап 2: при отправке сообщения в чат в дело вступает живая онлайн-сессия
+// Пи (без задачи). Роль-адресат определяется так:
+//   1) явная адресация в тексте (@architect, @qa, …) — приоритет;
+//   2) «Авто» — семантический подбор pickRoleForChat по тексту сообщения
+//      против ролевых эмбеддингов; ограничиваемся участниками чата.
+// Если адресат не определился — просто ложим сообщение в ленту, авто-ответа
+// нет: молчание корректнее, чем ответ «не той» роли.
+//
+// Сериализация (B5, замечание Гермеса): deliverAgentReply всегда ставится в
+// очередь на пару (chat_id, role_id), а не стартует параллельно. Два
+// быстрых сообщения подряд на одну роль в одном чате получат ответы в том
+// же порядке, в каком были присланы.
+//
+// Изоляция: онлайн-сессия НЕ трогает tasks/attempts/agent_state/аренду.
+// Сессия живёт в chat_sessions и в памяти адаптера, и снять или сломать
+// карточку через чат физически невозможно.
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { broadcastToUsers } from "../ws.js";
+import {
+  ROLE_NAMES,
+  type RoleName,
+} from "../roleRouting.js";
+import {
+  enqueueChatReply,
+  getChatSessionId,
+} from "../runtime/chatSession.js";
+import {
+  startChatRun,
+} from "../runtime/PiRuntimeAdapter.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -166,8 +190,20 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Сообщение в чат. Пока просто ложится в ленту и рассылается участникам;
-  // живой ответ роли — следующий этап.
+  // Сообщение в чат. Логика:
+  //   1. Сохранить сообщение от пользователя.
+  //   2. Определить роль-адресата (@role в тексте, иначе «Авто» через
+  //      pickRoleForChat; null = никому, просто кладём сообщение в ленту).
+  //   3. Если роль определена: проверить, что участник role_<role> есть в
+  //      чате; поставить в очередь на (chat_id, role_id) задачу
+  //      deliverAgentReply — она поднимет/продолжит живую сессию Пи через
+  //      startChatRun, ответ положит в chat_messages от имени role_<role>
+  //      и разошлёт chat:new.
+  //
+  // Шаг 2 и шаг 3 НЕ блокируют ответ пользователю: мы возвращаем исходное
+  // сообщение сразу, а ответ роли придёт отдельным событием chat:new
+  // (broadcast внутри try/catch не роняет запрос, даже если Пи упал —
+  // пользовательский текст уже в ленте и не потеряется).
   app.post<{ Params: { id: string }; Body: { text?: string } }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
@@ -177,13 +213,14 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const text = String(req.body?.text || "").trim();
       if (!text) return reply.code(400).send({ error: "пустое сообщение" });
 
+      const chatId = req.params.id;
       const id = uid();
       db.prepare(
         `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id)
          VALUES (?, ?, ?, 'chat', ?)`,
-      ).run(id, req.userId, text, req.params.id);
+      ).run(id, req.userId, text, chatId);
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
-        req.params.id,
+        chatId,
       );
 
       const message = db
@@ -196,11 +233,46 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         )
         .get(id);
 
-      const audience = memberIds(req.params.id).filter((m) => m !== req.userId);
+      const audience = memberIds(chatId).filter((m) => m !== req.userId);
       broadcastToUsers([...audience, req.userId], {
         type: "chat:new",
         message,
       });
+
+      // Этап 2: попытка авто-ответа. Делается «best effort»: ошибки НЕ
+      // должны откатывать уже сохранённое сообщение и не должны ронять
+      // запрос — пользователь уже видит своё сообщение в ленте. Поэтому
+      // вокруг — try/catch с логированием.
+      try {
+        const memberRoles = chatMemberRoles(chatId);
+        const targetRole = await pickRoleForChat({
+          messageText: text,
+          memberRoles,
+        });
+        if (targetRole) {
+          // Ставим ход в очередь на (chat_id, role_id). Без неё два
+          // быстрых сообщения подряд на одну роль начнут startChatRun
+          // параллельно, и порядок ответов в ленте окажется случайным
+          // — хуже того, контекст (pi_session_id) мог бы перемешаться.
+          // Очередь сериализует ходы; другие роли и чаты продолжают
+          // работать параллельно.
+          void enqueueChatReply(chatId, ROLE_USER_IDS[targetRole], () =>
+            deliverAgentReply({
+              chatId,
+              role: targetRole,
+              userText: text,
+            }),
+          );
+        }
+      } catch (error) {
+        // Логируем, но не возвращаем 5xx — текст уже в ленте, а ошибку
+        // подбора/постановки в очередь разберём отдельно.
+        console.warn(
+          `[chats] постановка авто-ответа не удалась для chat=${chatId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+
       return { message };
     },
   );
@@ -269,4 +341,335 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       return { ok: true };
     },
   );
+}
+
+// ===== Помощники онлайн-сессии (этап 2) =====
+
+const ROLE_USER_IDS: Record<RoleName, string> = {
+  researcher: "role_researcher",
+  analyst: "role_analyst",
+  synthesizer: "role_synthesizer",
+  critic_verifier: "role_critic_verifier",
+  architect: "role_architect",
+  builder: "role_builder",
+  qa: "role_qa",
+  designer: "role_designer",
+};
+
+const ROLE_TITLES_RU: Record<RoleName, string> = {
+  researcher: "Исследователь",
+  analyst: "Аналитик",
+  synthesizer: "Синтезатор",
+  critic_verifier: "Критик-проверяющий",
+  architect: "Архитектор",
+  builder: "Разработчик",
+  qa: "QA",
+  designer: "Дизайнер",
+};
+
+const VALID_ROLES = new Set<RoleName>(ROLE_NAMES);
+
+/** Роли, которые реально есть среди участников чата. id вроде role_*
+ *  считаются ролевыми, остальные id (владелец, гость) — нет. */
+function chatMemberRoles(chatId: string): RoleName[] {
+  const memberList = memberIds(chatId);
+  const result: RoleName[] = [];
+  for (const id of memberList) {
+    const role = roleFromUserId(id);
+    if (role) result.push(role);
+  }
+  return result;
+}
+
+function roleFromUserId(userId: string): RoleName | null {
+  const row = db
+    .prepare("SELECT role, type FROM users WHERE id = ?")
+    .get(userId) as { role: string | null; type: string | null } | undefined;
+  if (!row) return null;
+  if (row.type !== "ai") return null;
+  if (!row.role || !VALID_ROLES.has(row.role as RoleName)) return null;
+  return row.role as RoleName;
+}
+
+/** Распарсить явное @упоминание роли в тексте. Возвращает первую
+ *  валидную роль в нижнем регистре, игнорируя прочие токены.
+ *
+ *  B4 (замечание Гермеса 21.09.2026): ранний разбор /\B@(\w+)/g ловил
+ *  «ложные» упоминания в e-mail и URL — например, в тексте
+ *  «напиши на support@acme.com» роль @acme считалась упомянутой.
+ *  Теперь матчинг требует ГРАНИЦЫ СЛОВА слева: перед @ должна быть
+ *  либо пустая строка, либо знак препинания/пробел. Это убирает
+ *  матчи внутри e-mail/URL и оставляет чистую разметку
+ *  «... @роль ...» в любой точке текста. */
+function parseRoleMention(text: string): RoleName | null {
+  // (?<![\p{L}\p{N}_]) — «перед @ не должно быть буквы/цифры/_».
+  // Используем Unicode-классы, чтобы ловить кириллицу тоже — на случай,
+  // если в будущем имена ролей на русском; сейчас они латиницей, но
+  // правило не зависит от языка исходного текста.
+  const matches = text.toLowerCase().matchAll(
+    /(?<![\p{L}\p{N}_])@([a-z_][a-z0-9_]*)/gu,
+  );
+  for (const m of matches) {
+    const candidate = m[1];
+    if (VALID_ROLES.has(candidate as RoleName)) {
+      return candidate as RoleName;
+    }
+  }
+  return null;
+}
+
+/** Эмбеддинги ролей (role_embeddings). Хранится как BLOB Float32. Читаем
+ *  ленивым загрузчиком: таблица небольшая (8 ролей), но дёргать её на
+ *  каждое сообщение вхолостую тоже незачем, поэтому оборачиваем в Map. */
+const roleEmbeddingCache = new Map<
+  RoleName,
+  { vec: Float32Array | null; tags: string[] }
+>();
+
+function loadRoleEmbeddings(): Map<RoleName, { vec: Float32Array | null; tags: string[] }> {
+  if (roleEmbeddingCache.size > 0) return roleEmbeddingCache;
+  const rows = db
+    .prepare("SELECT role, embedding, tags FROM role_embeddings")
+    .all() as Array<{ role: string; embedding: Buffer; tags: string | null }>;
+  for (const row of rows) {
+    if (!VALID_ROLES.has(row.role as RoleName)) continue;
+    let vec: Float32Array | null = null;
+    if (row.embedding && row.embedding.byteLength > 0) {
+      vec = new Float32Array(
+        row.embedding.buffer,
+        row.embedding.byteOffset,
+        row.embedding.byteLength / 4,
+      );
+    }
+    let tags: string[] = [];
+    if (row.tags) {
+      try {
+        const parsed = JSON.parse(row.tags);
+        if (Array.isArray(parsed)) tags = parsed.filter((t) => typeof t === "string");
+      } catch { /* тихо: битый tags = пустой список */ }
+    }
+    roleEmbeddingCache.set(row.role as RoleName, { vec, tags });
+  }
+  return roleEmbeddingCache;
+}
+
+function cosine(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom > 0 ? dot / denom : 0;
+}
+
+/** Определить роль-адресата сообщения в чате.
+ *
+ *  Приоритет:
+ *    1) явное @упоминание роли в тексте — валидируется по составу участников.
+ *       R1 (замечание Гермеса 21.09.2026): проверка поднята НАД веткой
+ *       memberRoles.length === 1. Иначе в direct-чате @роль проверяется
+ *       в коде, но в груповом при одной роли мы раньше отдавали её без
+ *       проверки mention — @роль всё равно мог существовать, но
+ *       упоминание было бы проигнорировано в пользу дефолта «единственная
+ *       роль в чате». Это не ошибка, но это «тихая подмена»: пользователь
+ *       написал @qa, а в коде было «раз в чате одна роль, отвечает она».
+ *       Теперь @упоминание всегда побеждает, даже в прямом чате с одной
+ *       ролью.
+ *    2) «Авто» — семантический подбор против role_embeddings (как делает
+ *       dispatch.pickRole, но без taskId: текстом сообщения напрямую);
+ *    3) null — никому не отвечаем, молчание корректнее чужой роли.
+ *
+ *  Семантический шаг может вернуть null (нет эмбеддингов, модель ушла в
+ *  ошибку, ни одна роль не похожа) — это нормальный исход, не ошибка. */
+export async function pickRoleForChat(args: {
+  messageText: string;
+  memberRoles: RoleName[];
+}): Promise<RoleName | null> {
+  const { messageText, memberRoles } = args;
+  if (memberRoles.length === 0) return null;
+
+  // 1) явное @упоминание — самый сильный сигнал (R1: побеждает даже
+  //    в direct-чате с одной ролью). Если @роль указана явно, но её нет
+  //    среди участников, мы НЕ подменяем её «единственной ролью чата»:
+  //    это тихая подмена намерения пользователя. Возвращаем null, и
+  //    вызывающая сторона решает, что делать (в нашем случае —
+  //    просто не отвечать).
+  const mention = parseRoleMention(messageText);
+  if (mention) {
+    if (memberRoles.includes(mention)) return mention;
+    return null;
+  }
+
+  // 2) «Авто»: семантический подбор. Только если в чате больше одной
+  //    роли — иначе выбор очевиден и тратить токены на эмбеддинг
+  //    незачем.
+  if (memberRoles.length < 2) return memberRoles[0];
+
+  try {
+    const { getEmbeddings } = await import("../lib/embeddingClient.js");
+    const text = messageText.trim();
+    if (!text) return null;
+    const result = await getEmbeddings(text);
+    const query = new Float32Array(result.embeddings as number[]);
+    if (query.length === 0) return null;
+
+    const roles = loadRoleEmbeddings();
+    let bestRole: RoleName | null = null;
+    let bestScore = -Infinity;
+    for (const role of memberRoles) {
+      const entry = roles.get(role);
+      if (!entry?.vec) continue;
+      const score = cosine(query, entry.vec);
+      if (score > bestScore) {
+        bestScore = score;
+        bestRole = role;
+      }
+    }
+    return bestRole;
+  } catch (error) {
+    // Эмбеддинги — улучшение, а не условие запуска. Сетевая ошибка или
+    // пустой каталог — молча возвращаем null, как если бы роль не
+    // определилась. Никаких пробросов наверх.
+    console.warn(
+      `[chats] семантический подбор роли не удался:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+}
+
+/** Максимум сообщений, которые кладём в контекст агенту. Больше — дороже
+ *  по токенам, меньше — агент теряет нить разговора. 20 — типичный
+ *  «последний экран» чата; при необходимости владелец подкрутит. */
+const CHAT_AGENT_CONTEXT_MESSAGES = 20;
+
+/** Поднять/продолжить онлайн-сессию Пи для роли, дождаться ответа и
+ *  положить его как сообщение от имени role_<role>. Никаких правок
+ *  tasks/attempts/agent_state — изоляция по требованию плана.
+ *
+ *  Вызывающая сторона (POST /api/chats/:id/messages) ставит эту функцию
+ *  В ОЧЕРЕДЬ через enqueueChatReply (B5) — иначе два быстрых сообщения
+ *  подряд на одну роль стартанут параллельно, и порядок ответов в
+ *  ленте станет случайным.
+ *
+ *  Возвращает id сохранённого сообщения-ответа либо null, если ответ
+ *  пуст (агент не счёл нужным ответить — легитимный исход, в ленту
+ *  ничего не идёт). */
+async function deliverAgentReply(args: {
+  chatId: string;
+  role: RoleName;
+  userText: string;
+}): Promise<string | null> {
+  const { chatId, role } = args;
+  const roleUserId = ROLE_USER_IDS[role];
+  if (!db.prepare("SELECT id FROM users WHERE id = ?").get(roleUserId)) {
+    // Роль-учётка не заведена — пропускаем, без сообщения. Владелец увидит
+    // проблему в логах, чат продолжит работать.
+    console.warn(
+      `[chats] deliverAgentReply: ролевая учётка ${roleUserId} не найдена`,
+    );
+    return null;
+  }
+
+  // Сборка контекста: последние N сообщений + новый user turn.
+  const history = db
+    .prepare(
+      `SELECT m.from_user_id, m.text, m.created_at, f.name as from_name,
+              f.role as from_role
+         FROM chat_messages m
+         LEFT JOIN users f ON f.id = m.from_user_id
+        WHERE m.chat_id = ?
+        ORDER BY m.created_at DESC LIMIT ?`,
+    )
+    .all(chatId, CHAT_AGENT_CONTEXT_MESSAGES) as Array<{
+      from_user_id: string;
+      text: string;
+      created_at: string;
+      from_name: string | null;
+      from_role: string | null;
+    }>;
+  // Переворачиваем обратно в хронологический порядок (от старых к новым).
+  history.reverse();
+
+  const historyLines = history
+    .map((row) => {
+      const who = row.from_name || row.from_user_id;
+      return `- [${row.created_at}] ${who}: ${row.text}`;
+    })
+    .join("\n");
+
+  const roleTitle = ROLE_TITLES_RU[role] || role;
+  const prompt = [
+    `Ты — ${roleTitle} (${role}). Это онлайн-сессия внутри чата TaskFlow.`,
+    "Перед тобой история чата (от старых к новым) и только что пришедшее",
+    "сообщение от пользователя. Ответь как этот собеседник — кратко и по",
+    "существу; если вопрос вне твоей компетенции, скажи об этом прямо.",
+    "",
+    "История чата:",
+    historyLines || "(пусто)",
+    "",
+    "Последнее сообщение пользователя:",
+    args.userText,
+  ].join("\n");
+
+  // Достаём ранее сохранённый sessionId, чтобы продолжить ту же сессию.
+  const previousSessionId = getChatSessionId(chatId, roleUserId);
+
+  let reply: { sessionId: string | null; text: string };
+  try {
+    reply = await startChatRun({
+      chatId,
+      role,
+      roleId: roleUserId,
+      prompt,
+      sessionId: previousSessionId,
+    });
+  } catch (error) {
+    // Онлайн-сессия не должна ронять HTTP-запрос — пользовательский
+    // текст уже в ленте. Пишем в журнал и идём дальше.
+    console.warn(
+      `[chats] startChatRun не удался для chat=${chatId} role=${role}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+
+  const replyText = (reply.text || "").trim();
+  if (!replyText) return null;
+
+  const replyId = uid();
+  db.prepare(
+    `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id)
+     VALUES (?, ?, ?, 'chat', ?)`,
+  ).run(replyId, roleUserId, replyText, chatId);
+  db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
+    chatId,
+  );
+
+  const replyRow = db
+    .prepare(
+      `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
+              f.avatar_url as from_user_avatar_url, f.initials as from_user_initials
+         FROM chat_messages m
+         LEFT JOIN users f ON f.id = m.from_user_id
+        WHERE m.id = ?`,
+    )
+    .get(replyId);
+
+  const audience = memberIds(chatId);
+  broadcastToUsers(audience, { type: "chat:new", message: replyRow });
+
+  return replyId;
+}
+
+/** Тестовая утилита: сбросить кэш эмбеддингов ролей. Используется в
+ *  тестах после подмены role_embeddings в БД. В проде не нужна —
+ *  таблица меняется только руками через seed-скрипт. */
+export function _resetChatRolePickerForTests(): void {
+  roleEmbeddingCache.clear();
 }
