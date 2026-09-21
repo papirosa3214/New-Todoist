@@ -1320,6 +1320,78 @@ def t_report(args):
         "составлен": r.get("date"),
     }
 
+# ---------------------------------------------------------------- YouTube
+
+def _vtt_to_text(vtt: str) -> str:
+    """VTT-субтитры → читаемый текст: без таймкодов, тегов и повторов
+    (авто-субтитры идут «катящейся» строкой и дублируют соседние куски)."""
+    import re
+    lines = []
+    recent = []
+    for raw in vtt.splitlines():
+        s = raw.strip()
+        if not s or s == "WEBVTT" or "-->" in s or s.startswith(("NOTE", "STYLE")):
+            continue
+        if s.isdigit():
+            continue
+        s = re.sub(r"<[^>]+>", "", s)
+        s = s.replace("&amp;", "&").replace("&nbsp;", " ").strip()
+        if not s:
+            continue
+        if s in recent:
+            continue
+        lines.append(s)
+        recent.append(s)
+        if len(recent) > 24:
+            recent.pop(0)
+    text = " ".join(lines)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def t_youtube(args):
+    """Транскрипт видео YouTube в текст (ручные субтитры, иначе авто)."""
+    url = str(args.get("url") or "").strip()
+    if not url:
+        raise TaskFlowError("нужен url")
+    langs = str(args.get("langs") or "ru,en")
+    cap = int(args.get("max_chars") or 24000)
+
+    import glob
+    import shutil
+    import subprocess
+    import tempfile
+
+    work = tempfile.mkdtemp(prefix="tf-yt-")
+    try:
+        meta = subprocess.run(
+            ["yt-dlp", "--skip-download", "--print", "%(title)s", url],
+            capture_output=True, text=True, timeout=60,
+        )
+        title = (meta.stdout or "").strip().splitlines()[0] if meta.stdout.strip() else ""
+
+        subprocess.run(
+            ["yt-dlp", "--skip-download", "--write-subs", "--write-auto-subs",
+             "--sub-langs", langs, "--sub-format", "vtt", "--convert-subs", "vtt",
+             "-o", os.path.join(work, "s.%(ext)s"), url],
+            capture_output=True, text=True, timeout=240,
+        )
+        files = sorted(glob.glob(os.path.join(work, "*.vtt")))
+        if not files:
+            raise TaskFlowError("у видео нет субтитров (ни ручных, ни авто)")
+        with open(files[0], encoding="utf-8", errors="ignore") as f:
+            text = _vtt_to_text(f.read())
+        return {
+            "title": title,
+            "url": url,
+            "transcript": text[:cap],
+            "chars": len(text),
+            "truncated": len(text) > cap,
+            "sub_file": os.path.basename(files[0]),
+        }
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
 TOOLS = [
     {
         "name": "taskflow_my_tasks",
@@ -1802,6 +1874,24 @@ TOOLS = [
             "required": ["task_id", "title", "markdown"],
         },
         "fn": t_report,
+    },
+    {
+        "name": "taskflow_youtube",
+        "description": (
+            "Транскрипт видео YouTube в текст (сначала ручные субтитры, иначе "
+            "авто; русский/английский). Источник-видео для исследования: получил "
+            "текст — и работай с ним как с обычным материалом."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "ссылка на видео YouTube"},
+                "langs": {"type": "string", "description": "языки субтитров, по умолчанию ru,en"},
+                "max_chars": {"type": "integer", "description": "потолок символов, по умолчанию 24000"},
+            },
+            "required": ["url"],
+        },
+        "fn": t_youtube,
     },
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
