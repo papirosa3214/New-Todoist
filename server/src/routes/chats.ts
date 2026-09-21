@@ -65,6 +65,11 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       : [];
     if (kind === "direct" && requested.length !== 1)
       return reply.code(400).send({ error: "персональный чат — ровно один участник" });
+    // B1 (проверка Гермеса 21.09.2026): персональный чат с самим собой —
+    // бессмысленный дефект. Создатель и так добавляется участником, поэтому
+    // «direct» с единственным member_id = собственный id надо отклонить.
+    if (kind === "direct" && requested[0] === req.userId)
+      return reply.code(400).send({ error: "персональный чат с самим собой не нужен" });
     if (requested.length === 0)
       return reply.code(400).send({ error: "нужен хотя бы один участник" });
 

@@ -63,6 +63,11 @@ describe("Чаты (этап 1, миграция 053)", () => {
     expect(ok.json().chat.members).toHaveLength(2);
   });
 
+  it("персональный чат с самим собой → 400 (B1)", async () => {
+    const res = await createChat({ kind: "direct", member_ids: [ownerId] });
+    expect(res.statusCode).toBe(400);
+  });
+
   it("несуществующий участник → 400", async () => {
     const res = await createChat({ member_ids: ["no-such-user"] });
     expect(res.statusCode).toBe(400);
