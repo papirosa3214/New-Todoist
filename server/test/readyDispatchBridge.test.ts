@@ -31,11 +31,46 @@
 // интересует контракт наружу, и тот же контракт потребляет iOS-клиент и
 // веб. Любая короткая дорога через UPDATE — это обход проверок и нарушение
 // ровно того инварианта, который мы чиним.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type { FastifyInstance } from "fastify";
+
+// applyIntakeToNewTask в dispatch.ts вызывает unitState() из agent-service
+// по динамическому импорту — на живом сервере это честный systemctl, в
+// тестовой среде unit не запущен, и unitState() возвращает active=false.
+// Без активного будильника конвейер «автомат + создал не владелец» не
+// отдаёт задачу исполнителю (только поднимает флаг) — тест на
+// «владелец включил автомат — задача агента тоже уезжает сама» увидит
+// null в assignee_id и упадёт по неинформативной причине. Мокаем
+// unitState: «будильник работает», чтобы проверить именно конвейер
+// подбора роли и диспатча, а не наличие systemctl.
+vi.mock("../src/routes/agent-service.js", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../src/routes/agent-service.js")
+  >();
+  return {
+    ...actual,
+    unitState: async () => ({
+      active: true,
+      enabled: true,
+      last_alive_at: null,
+      next_scan_at: null,
+      scan_interval_sec: 180,
+    }),
+  };
+});
+
 import { buildApp } from "../src/index.js";
+import { PI_AGENT_ID, ROLE_NAMES, ROLE_USER_IDS } from "./helpers/dispatch.js";
+import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 import db from "../src/db.js";
-import { PI_AGENT_ID, ROLE_NAMES } from "./helpers/dispatch.js";
 
 const PI = PI_AGENT_ID;
 
@@ -74,6 +109,16 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
 
   beforeAll(async () => {
     app = await buildApp();
+    // Миграция 039_seed_owner заводит 'u1' как владельца; без этого
+    // isOwner() в /api/tasks/:id/dispatch видит u1, а не нашего
+    // DispatchOwner, и dispatch отбивает 403. Понижаем u1 до agent.
+    demoteSeededOwner(db);
+    // dispatch.ts пишет assignee_id = ROLE_USER_IDS[chosen] и туда же
+    // уведомление/inbox. В тестах нет миграции, которая заводит эти
+    // учётки; без сида FOREIGN KEY в диспетчере валится и весь мост
+    // отдаёт 500.
+    seedRoleAccounts(db);
+
     const owner = await regAndPatch(
       "DispatchOwner",
       `dispatch-owner-${Date.now()}@test`,
@@ -243,7 +288,12 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
     expect(dispatch.statusCode).toBe(200);
     const body = dispatch.json();
     expect(body.task.dispatched_role).toBe("architect");
-    expect(body.task.assignee_id).toBe(PI);
+    // Диспетчер пишет assignee_id = ROLE_USER_IDS[chosen] — для architect
+    // это учётка role_architect (та же учётка получает notifications/inbox
+    // и существует в живом трекере через /api/agents). Если вернётся дизайн
+    // «единый Pi runtime», константа заменится на PI_AGENT_ID — форма
+    // «кто-то конкретный получатель» останется.
+    expect(body.task.assignee_id).toBe(ROLE_USER_IDS.architect);
     expect(body.task.dispatched_at).toBeTruthy();
     expect(body.task.dispatched_by).toBe(ownerId);
     // Логическая роль остаётся видимой — это не service-only поле.
@@ -264,11 +314,13 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
       dispatched_by: string;
     };
     expect(row.ready_for_pickup).toBe(1);
-    expect(row.assignee_id).toBe(PI);
+    expect(row.assignee_id).toBe(ROLE_USER_IDS.architect);
     expect(row.dispatched_role).toBe("architect");
     expect(row.dispatched_by).toBe(ownerId);
 
-    // Уведомление для Pi (assigned) — иначе будильник задачу не увидит.
+    // Уведомление для ролевой учётки (assigned) — иначе будильник задачу
+    // не увидит. Тот же получатель, что и assignee_id, чтобы inbox и
+    // notifications сходились с одной стороны.
     const notif = db
       .prepare(
         `SELECT user_id, type, task_id FROM notifications
@@ -278,9 +330,9 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
       | { user_id: string; type: string; task_id: string }
       | undefined;
     expect(notif).toBeTruthy();
-    expect(notif?.user_id).toBe(PI);
+    expect(notif?.user_id).toBe(ROLE_USER_IDS.architect);
 
-    // inbox-событие event_type=assignment для Pi — второй шов доставки.
+    // inbox-событие event_type=assignment — второй шов доставки.
     const inbox = db
       .prepare(
         `SELECT to_user_id, task_id, event_type, status FROM agent_inbox
@@ -295,7 +347,7 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
         }
       | undefined;
     expect(inbox).toBeTruthy();
-    expect(inbox?.to_user_id).toBe(PI);
+    expect(inbox?.to_user_id).toBe(ROLE_USER_IDS.architect);
     expect(inbox?.event_type).toBe("assignment");
     expect(inbox?.status).toBe("sent");
   });
@@ -474,7 +526,7 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
       dispatched_role: string;
       ready_for_pickup: number;
     };
-    expect(row.assignee_id).toBe(PI);
+    expect(row.assignee_id).toBe(ROLE_USER_IDS.architect);
     expect(row.dispatched_role).toBe("architect");
     expect(row.ready_for_pickup).toBe(1);
   });
@@ -533,7 +585,12 @@ describe("Мост dispatch: ready → 8-роль → Pi (5ceda583)", () => {
       dispatched_role: string | null;
       ready_for_pickup: number;
     };
-    expect(row.assignee_id).toBe(PI_AGENT_ID);
+    // PATCH ready_for_pickup=true в tasks.ts вызывает dispatchTaskToPi
+    // после установки флага — путь и получатель те же, что и у
+    // POST /api/tasks/:id/dispatch. Здесь без owner_selected_role
+    // диспетчер берёт запасную роль «architect», и assignee_id уходит
+    // на учётку role_architect.
+    expect(row.assignee_id).toBe(ROLE_USER_IDS.architect);
     expect(row.dispatched_role).toBeTruthy();
     expect(row.ready_for_pickup).toBe(1);
   });
@@ -584,6 +641,11 @@ describe("Режим постановки — настройка владель�
 
   beforeAll(async () => {
     app = await buildApp();
+    // Тот же набор: понизить u1, посеять role_* — иначе 403 на dispatch
+    // и FOREIGN KEY constraint failed внутри диспетчера.
+    demoteSeededOwner(db);
+    seedRoleAccounts(db);
+
     const reg = async (name: string, email: string) =>
       (
         await app.inject({
@@ -631,7 +693,10 @@ describe("Режим постановки — настройка владель�
       .prepare("SELECT assignee_id, ready_for_pickup FROM tasks WHERE id = ?")
       .get(taskId) as { assignee_id: string | null; ready_for_pickup: number };
     expect(row.ready_for_pickup).toBe(1);
-    expect(row.assignee_id).toBe(PI_AGENT_ID);
+    // Конвейер «автомат → диспетчер» отдаёт задачу на учётку роли
+    // (role_architect для дефолтного пути), а не на Pi Agent —
+    // см. комментарий у диспетчера в routes/dispatch.ts.
+    expect(row.assignee_id).toBe(ROLE_USER_IDS.architect);
   }, 20_000);
 
   it("владелец вернул ручной — задача ждёт его флага", async () => {

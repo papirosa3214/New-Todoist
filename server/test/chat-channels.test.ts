@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
+import { demoteSeededOwner } from "./helpers/seedOwner.js";
 
 describe("Два канала чата", () => {
   let app: FastifyInstance;
@@ -47,6 +48,12 @@ describe("Два канала чата", () => {
 
   beforeAll(async () => {
     app = await buildApp();
+    // Миграция 039_seed_owner заводит 'u1' как владельца. Без этого шага
+    // ownerId() (SELECT ... ORDER BY created_at LIMIT 1) возвращает u1,
+    // а не нашего Хозяина — routeMessage не видит fromUserId === owner,
+    // и сообщения уходят не в те каналы. Понижаем u1 до agent, чтобы
+    // единственным владельцем остался тот, кого заводит сам тест.
+    demoteSeededOwner(db);
 
     // Роль раздаётся напрямую в базе: регистрация её выдать не может
     // (routes/auth.ts, любой зарегистрировавшийся — 'agent'), а роли здесь
