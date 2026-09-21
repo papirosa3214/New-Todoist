@@ -24,6 +24,8 @@ import { TaskDetailScreen } from "./screens/TaskDetailScreen";
 import { TaskFormScreen } from "./screens/TaskFormScreen";
 import { NotificationsScreen } from "./screens/NotificationsScreen";
 import { ChatScreen } from "./screens/ChatScreen";
+import { ChatsScreen } from "./screens/ChatsScreen";
+import { ChatRoomScreen } from "./screens/ChatRoomScreen";
 import { ActivityScreen } from "./screens/ActivityScreen";
 import { AgentsScreen } from "./screens/AgentsScreen";
 import { AgentWorkScreen } from "./screens/AgentWorkScreen";
@@ -148,6 +150,14 @@ export default function App() {
             <Route path="/task/:id/edit" element={<TaskFormScreen />} />
             <Route path="/notifications" element={<NotificationsScreen />} />
             <Route path="/chat" element={<ChatScreen />} />
+            {/* Чаты с ролями-агентами (этап 8 клиент, этап 1 сервера):
+                /chats — список моих чатов, /chats/:id — комната.
+                Маршрут НЕ путать с /chat выше: там — служебная
+                переписка поверх задачи, здесь — отдельные сущности
+                «чат с ролью/ролями», своя лента, свой кэш, своя
+                точка входа (OverviewScreen → пункт «Чаты»). */}
+            <Route path="/chats" element={<ChatsScreen />} />
+            <Route path="/chats/:id" element={<ChatRoomScreen />} />
             {/* Drill-down, not a tab — see Layout.tsx's TAB_ROUTES allowlist.
               Deliberately absent from it, so no bottom nav / FAB here. */}
             <Route path="/activity" element={<ActivityScreen />} />
