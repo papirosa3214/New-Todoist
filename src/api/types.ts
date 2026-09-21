@@ -337,3 +337,71 @@ export interface ApiNotification {
   user_initials?: string | null;
   task_title?: string | null;
 }
+
+// ═══════════ ЧАТЫ С РОЛЯМИ-АГЕНТАМИ (этап 8 клиент, этап 1 сервера) ═══════════
+//
+// Это НЕ те же чаты, что ApiChatMessage/ChatChannel выше: те — служебная
+// переписка оркестратора/владельца/исполнителей поверх карточки задачи.
+// Здесь — отдельные сущности «чат с ролями-агентами»: владелец создаёт
+// персональный (одна роль) или групповой (несколько) разговор, история
+// хранится в chat_messages.chat_id, ответы приходят от role_<role>.
+//
+// Названия отдельные, чтобы типы не пересекались: если бы звали и тех,
+// и этих ApiChatMessage, экран не отличил бы одно от другого без
+// смотрения в channel/chat_id. Здесь — отдельный префикс «Room».
+
+/** Участник чата. Сервер (server/src/routes/chats.ts:chatRow) тянет поля
+ *  из users LEFT JOIN; для роли-агента id будет вроде role_architect,
+ *  для владельца — обычный user.id. */
+export interface ApiChatMember {
+  id: string;
+  name: string;
+  role?: string | null;
+  type?: string | null;
+  avatar_color?: string | null;
+  avatar_url?: string | null;
+  initials?: string | null;
+}
+
+/** Превью последнего сообщения в списке чатов (GET /api/chats). Сервер
+ *  кладёт {text, created_at, from_user_id} одной строкой без JOIN'а —
+ *  минимально, чтобы карточка в списке показала «от кого и что». */
+export interface ApiChatLastMessage {
+  text: string;
+  created_at: string;
+  from_user_id: string;
+}
+
+/** Чат — отдельная сущность (POST /api/chats, GET /api/chats/:id).
+ *  kind:direct — ровно один не-владелец участник, kind:group — больше
+ *  одного. created_by — id создателя; только он может менять состав и
+ *  удалить чат (сервер это проверяет). */
+export interface ApiChat {
+  id: string;
+  title: string | null;
+  kind: "direct" | "group";
+  created_by: string;
+  task_id: string | null;
+  created_at: string;
+  updated_at: string;
+  members: ApiChatMember[];
+  /** Только в ответе GET /api/chats (списка). На детальном GET /api/chats/:id
+   *  превью нет — там подтягивается полная история отдельным запросом. */
+  last_message?: ApiChatLastMessage | null;
+}
+
+/** Сообщение в чате с ролями (GET /api/chats/:id/messages). channel всегда
+ *  'chat' — это не та же лента, что 'owner'/'agents' из ApiChatMessage. */
+export interface ApiChatRoomMessage {
+  id: string;
+  chat_id: string;
+  from_user_id: string;
+  text: string;
+  channel: "chat";
+  created_at: string;
+  // Сервер LEFT JOIN'ит users и кладёт под полями from_user_*.
+  from_user_name?: string | null;
+  from_user_color?: string | null;
+  from_user_avatar_url?: string | null;
+  from_user_initials?: string | null;
+}
