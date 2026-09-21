@@ -1014,26 +1014,31 @@ export function registerTaskRoutes(app: FastifyInstance) {
       //
       // Импорт отложенный: dispatch.ts уже зависит от этого модуля,
       // статический импорт в обратную сторону замкнул бы круг.
-      if (!assignee_id) {
-        void (async () => {
-          try {
-            const { applyIntakeToNewTask } = await import("./dispatch.js");
-            await applyIntakeToNewTask(id, req.userId);
-            const after = getTaskRow(id);
-            if (after) {
-              broadcastToUsers(Array.from(notifyUsers), {
-                type: "task:updated",
-                task: hydrateTask(after),
-              });
-            }
-          } catch (err) {
-            // Приём — улучшение, а не условие создания: задача уже
-            // заведена и видна. Молча ронять её из-за недоступной модели
-            // подбора нельзя.
-            console.warn(`приём задачи ${id} не удался:`, err);
+      // Приём зовём ВСЕГДА, даже когда исполнитель указан при создании:
+      // режим постановки — настройка владельца, и она должна действовать
+      // одинаково для любой карточки. Раньше здесь стояло
+      // `if (!assignee_id)`, и карточка с указанной ролью не получала ни
+      // флага, ни приёма — её нельзя было взять в работу вообще.
+      // Что подбор роли и раздачу чужому исполнителю делать не надо —
+      // знает сам applyIntakeToNewTask.
+      void (async () => {
+        try {
+          const { applyIntakeToNewTask } = await import("./dispatch.js");
+          await applyIntakeToNewTask(id, req.userId);
+          const after = getTaskRow(id);
+          if (after) {
+            broadcastToUsers(Array.from(notifyUsers), {
+              type: "task:updated",
+              task: hydrateTask(after),
+            });
           }
-        })();
-      }
+        } catch (err) {
+          // Приём — улучшение, а не условие создания: задача уже
+          // заведена и видна. Молча ронять её из-за недоступной модели
+          // подбора нельзя.
+          console.warn(`приём задачи ${id} не удался:`, err);
+        }
+      })();
 
       return { task: hydrated };
     },

@@ -699,6 +699,64 @@ describe("Режим постановки — настройка владель�
     expect(row.assignee_id).toBe(ROLE_USER_IDS.architect);
   }, 20_000);
 
+  // Карточка с исполнителем, указанным ПРИ СОЗДАНИИ, раньше проходила мимо
+  // приёма целиком: вызов гейта стоял под `if (!assignee_id)`, а сам гейт
+  // выходил на `if (task.assignee_id) return`. Итог — ни флага, ни
+  // возможности взять работу: claim требует флага, а поднять его может
+  // только владелец. Режим постановки — настройка владельца и обязан
+  // действовать одинаково, с исполнителем карточка или без.
+  it("автомат: карточка агента с исполнителем получает флаг, исполнитель не переписан", async () => {
+    db.prepare("UPDATE users SET task_intake_mode = 'automatic' WHERE role = 'owner'").run();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: agentAuth },
+      payload: {
+        title: "Заведена агентом сразу с исполнителем",
+        assignee_id: ROLE_USER_IDS.builder,
+      },
+    });
+    const taskId = created.json().task.id as string;
+
+    // Приём идёт фоном: ждём, пока он доедет.
+    for (let i = 0; i < 40; i++) {
+      const row = db
+        .prepare("SELECT ready_for_pickup FROM tasks WHERE id = ?")
+        .get(taskId) as { ready_for_pickup: number };
+      if (row.ready_for_pickup === 1) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    const row = db
+      .prepare("SELECT assignee_id, ready_for_pickup FROM tasks WHERE id = ?")
+      .get(taskId) as { assignee_id: string | null; ready_for_pickup: number };
+    expect(row.ready_for_pickup).toBe(1);
+    // Чужое назначение диспетчер не переписывает — это и была причина
+    // раннего выхода, её мы сохранили.
+    expect(row.assignee_id).toBe(ROLE_USER_IDS.builder);
+  }, 20_000);
+
+  it("ручной режим: карточка с исполнителем ждёт флага владельца", async () => {
+    db.prepare("UPDATE users SET task_intake_mode = 'manual' WHERE role = 'owner'").run();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: { authorization: agentAuth },
+      payload: {
+        title: "Ручной режим, исполнитель указан",
+        assignee_id: ROLE_USER_IDS.builder,
+      },
+    });
+    const taskId = created.json().task.id as string;
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const row = db
+      .prepare("SELECT assignee_id, ready_for_pickup FROM tasks WHERE id = ?")
+      .get(taskId) as { assignee_id: string | null; ready_for_pickup: number };
+    expect(row.ready_for_pickup).toBe(0);
+    expect(row.assignee_id).toBe(ROLE_USER_IDS.builder);
+  }, 20_000);
+
   it("владелец вернул ручной — задача ждёт его флага", async () => {
     db.prepare("UPDATE users SET task_intake_mode = 'manual' WHERE role = 'owner'").run();
     const created = await app.inject({
