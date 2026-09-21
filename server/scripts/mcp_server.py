@@ -1395,6 +1395,57 @@ def t_youtube(args):
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
+# ---------------------------------------------------------------- локальная модель
+#
+# Владелец 21.09.2026: у роли researcher должен быть ЯВНЫЙ этап «синтез локальной
+# моделью» — как в серверном конвейере. Даём агенту инструмент: он присылает
+# собранный материал, локальная Ollama на .110 возвращает связный текст. Ничего
+# наружу не ходит, деньги не тратятся.
+OLLAMA_BASE = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6-27b-iq4-16k:latest")
+
+
+def t_local_model(args):
+    """Прогнать текст через ЛОКАЛЬНУЮ модель (Ollama на .110). Для этапа
+    «синтез»: собранные факты → связный черновик/сводка."""
+    prompt = str(args.get("prompt") or args.get("text") or "").strip()
+    if not prompt:
+        raise TaskFlowError("нужен prompt (задание локальной модели)")
+    system = str(args.get("system") or "").strip()
+    model = str(args.get("model") or OLLAMA_MODEL)
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    body = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "think": False,
+        "options": {
+            "num_ctx": int(args.get("num_ctx") or 16384),
+            "num_predict": int(args.get("max_tokens") or 4096),
+            "temperature": 0.2,
+        },
+    }
+    req = urllib.request.Request(
+        OLLAMA_BASE + "/api/chat",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            data = json.loads(r.read().decode())
+    except Exception as e:  # noqa: BLE001
+        raise TaskFlowError(f"локальная модель недоступна: {e}")
+    msg = data.get("message") or {}
+    text = (msg.get("content") or msg.get("thinking") or "").strip()
+    if not text:
+        raise TaskFlowError("локальная модель вернула пустой ответ")
+    return {"model": model, "text": text}
+
+
 TOOLS = [
     {
         "name": "taskflow_my_tasks",
@@ -1806,59 +1857,6 @@ TOOLS = [
         "fn": t_kb_search,
     },
     {
-        "name": "taskflow_web_get",
-        "description": (
-            "Скачать веб-страницу и вернуть её ОСНОВНОЕ содержимое ЧИСТЫМ "
-            "markdown — без меню, рекламы, скриптов и подвалов. Ими пользуйся "
-            "вместо сырого HTML: в модель должен заходить готовый текст. Для "
-            "PDF и сканов — taskflow_ocr."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "http(s)-адрес страницы"},
-                "max_chars": {"type": "integer", "description": "потолок символов, по умолчанию 24000"},
-            },
-            "required": ["url"],
-        },
-        "fn": t_web_get,
-    },
-    {
-        "name": "taskflow_ocr",
-        "description": (
-            "Распознать текст из документа: изображение или PDF, в том числе "
-            "СКАН без текстового слоя (русский+английский, tesseract). "
-            "Источник — вложение задачи (attachment_id) или файл на машине (path)."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "attachment_id": {"type": "string", "description": "id вложения задачи"},
-                "path": {"type": "string", "description": "путь к файлу на машине"},
-                "langs": {"type": "string", "description": "языки tesseract, по умолчанию rus+eng"},
-                "max_chars": {"type": "integer", "description": "потолок символов, по умолчанию 24000"},
-            },
-        },
-        "fn": t_ocr,
-    },
-    {
-        "name": "taskflow_web_search",
-        "description": (
-            "Найти в интернете по запросу. Возвращает заголовки, ссылки и краткие "
-            "выжимки. Дальше нужные страницы открывай через taskflow_web_get — "
-            "он отдаёт ЧИСТЫЙ markdown."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "поисковый запрос"},
-                "max_results": {"type": "integer", "description": "сколько результатов, по умолчанию 5"},
-            },
-            "required": ["query"],
-        },
-        "fn": t_web_search,
-    },
-    {
         "name": "taskflow_report",
         "description": (
             "Собрать ОТЧЁТ по задаче из markdown: светлый печатный HTML + PDF, "
@@ -1877,24 +1875,6 @@ TOOLS = [
             "required": ["task_id", "title", "markdown"],
         },
         "fn": t_report,
-    },
-    {
-        "name": "taskflow_youtube",
-        "description": (
-            "Транскрипт видео YouTube в текст (сначала ручные субтитры, иначе "
-            "авто; русский/английский). Источник-видео для исследования: получил "
-            "текст — и работай с ним как с обычным материалом."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "ссылка на видео YouTube"},
-                "langs": {"type": "string", "description": "языки субтитров, по умолчанию ru,en"},
-                "max_chars": {"type": "integer", "description": "потолок символов, по умолчанию 24000"},
-            },
-            "required": ["url"],
-        },
-        "fn": t_youtube,
     },
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
