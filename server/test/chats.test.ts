@@ -327,3 +327,149 @@ describe("Чаты (этап 1, миграция 053)", () => {
     expect(ownSent.json().message.attachments).toHaveLength(1);
   });
 });
+
+// Миграция 055 + поля списка чатов (LOCK-195, 21.09.2026): превью строки
+// списка несёт имя отправителя, а бейдж непрочитанных считается по отметке
+// прочтения НА УЧАСТНИКЕ чата (а не на пользователе, как chat_reads у
+// старых каналов).
+describe("Чаты: непрочитанные и превью списка (миграция 055)", () => {
+  let app: FastifyInstance;
+  let ownerAuth: string;
+  let otherAuth: string;
+  let otherId: string;
+
+  const bearer = (jwt: string) => ({ authorization: `Bearer ${jwt}` });
+
+  async function reg(name: string, role?: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name, email: `${name}-${Date.now()}@test`, password: "password123" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    if (role) db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, body.user.id);
+    return { id: body.user.id as string, jwt: body.token as string };
+  }
+
+  beforeAll(async () => {
+    app = await buildApp();
+    const owner = await reg("UnreadOwner", "owner");
+    ownerAuth = bearer(owner.jwt);
+    const other = await reg("UnreadOther");
+    otherId = other.id;
+    otherAuth = bearer(other.jwt);
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  async function createChat(payload: Record<string, unknown>) {
+    return app.inject({ method: "POST", url: "/api/chats", headers: ownerAuth, payload });
+  }
+
+  async function send(auth: Record<string, string>, chatId: string, text: string) {
+    return app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: auth,
+      payload: { text },
+    });
+  }
+
+  async function listFor(auth: Record<string, string>) {
+    const res = await app.inject({ method: "GET", url: "/api/chats", headers: auth });
+    expect(res.statusCode).toBe(200);
+    return res.json().chats as Array<{
+      id: string;
+      unread_count: number;
+      last_message: { text: string; from_user_name: string | null; from_user_id: string } | null;
+    }>;
+  }
+
+  it("колонка last_read_at появилась на chat_members", () => {
+    const cols = (
+      db.prepare("PRAGMA table_info(chat_members)").all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(cols).toContain("last_read_at");
+  });
+
+  it("в новом чате непрочитанных нет, у отправителя — тоже", async () => {
+    const chat = await createChat({ title: "Тишина", member_ids: [otherId] });
+    const id = chat.json().chat.id;
+    expect((await listFor(ownerAuth)).find((c) => c.id === id)?.unread_count).toBe(0);
+    await send(ownerAuth, id, "первое слово");
+    expect((await listFor(ownerAuth)).find((c) => c.id === id)?.unread_count).toBe(0);
+    expect((await listFor(otherAuth)).find((c) => c.id === id)?.unread_count).toBe(1);
+  });
+
+  it("превью последнего сообщения несёт имя отправителя", async () => {
+    const chat = await createChat({ title: "Превью", member_ids: [otherId] });
+    const id = chat.json().chat.id;
+    await send(ownerAuth, id, "старое");
+    await send(otherAuth, id, "свежее");
+    const mine = (await listFor(ownerAuth)).find((c) => c.id === id);
+    expect(mine?.last_message?.text).toBe("свежее");
+    expect(mine?.last_message?.from_user_id).toBe(otherId);
+    expect(mine?.last_message?.from_user_name).toBe("UnreadOther");
+  });
+
+  it("отметка прочтения сбрасывает бейдж только у того, кто прочитал", async () => {
+    const chat = await createChat({ title: "Прочитано", member_ids: [otherId] });
+    const id = chat.json().chat.id;
+    await send(otherAuth, id, "тебе сообщение");
+    expect((await listFor(ownerAuth)).find((c) => c.id === id)?.unread_count).toBe(1);
+
+    const read = await app.inject({
+      method: "POST",
+      url: `/api/chats/${id}/read`,
+      headers: ownerAuth,
+    });
+    expect(read.statusCode).toBe(200);
+    expect((await listFor(ownerAuth)).find((c) => c.id === id)?.unread_count).toBe(0);
+    // У второго участника своя отметка — его бейдж не изменился.
+    expect((await listFor(otherAuth)).find((c) => c.id === id)?.unread_count).toBe(0);
+
+    // Новое сообщение снова поднимает бейдж. Пауза нужна из-за точности
+    // колонки `chat_messages.created_at` — это `datetime('now')`, то есть
+    // ЦЕЛЫЕ секунды: сообщение, созданное в ту же секунду, что и отметка
+    // прочтения, от неё неотличимо. В живом разговоре ход Пи занимает
+    // секунды, так что окно в одну секунду практического значения не имеет;
+    // расширять `created_at` до миллисекунд пришлось бы пересборкой
+    // chat_messages (миграция 053) — не стоит того ради бейджа.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await send(otherAuth, id, "и ещё одно");
+    expect((await listFor(ownerAuth)).find((c) => c.id === id)?.unread_count).toBe(1);
+  });
+
+  it("добавленному участнику не отдают историю как непрочитанное", async () => {
+    const guest = await reg("UnreadGuest");
+    const guestAuth = bearer(guest.jwt);
+    const chat = await createChat({ title: "Новичок", member_ids: [otherId] });
+    const id = chat.json().chat.id;
+    await send(ownerAuth, id, "это было до тебя");
+    await send(otherAuth, id, "и это тоже");
+
+    const added = await app.inject({
+      method: "POST",
+      url: `/api/chats/${id}/members`,
+      headers: ownerAuth,
+      payload: { member_id: guest.id },
+    });
+    expect(added.statusCode).toBe(200);
+    expect((await listFor(guestAuth)).find((c) => c.id === id)?.unread_count).toBe(0);
+  });
+
+  it("отметка прочтения чужого чата → 404", async () => {
+    const chat = await createChat({ title: "Не твоё", member_ids: [otherId] });
+    const id = chat.json().chat.id;
+    const guest = await reg("UnreadStranger");
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${id}/read`,
+      headers: bearer(guest.jwt),
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});

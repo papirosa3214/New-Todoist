@@ -156,7 +156,11 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     return { chat: chatRow(id) };
   });
 
-  // Мои чаты: где я участник. С превью последнего сообщения.
+  // Мои чаты: где я участник. С превью последнего сообщения и числом
+  // непрочитанных (владелец 21.09.2026: бейдж в строке списка чатов,
+  // LOCK-195). Сортировка — по `updated_at`: он обновляется на каждое
+  // сообщение (см. POST /:id/messages), то есть чат с свежей перепиской
+  // всегда наверху.
   app.get("/api/chats", { preHandler: authPre }, async (req: any) => {
     const rows = db
       .prepare(
@@ -168,13 +172,53 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       .all(req.userId) as Array<{ id: string }>;
     return {
       chats: rows.map((c) => {
+        // Имя отправителя — превью группы идёт с ним («QA: проверка
+        // прошла»), счётчики вложений — чтобы клиент мог показать
+        // «Голосовое»/«Файл» вместо пустой строки (у голосового текста нет).
         const last = db
           .prepare(
-            `SELECT text, created_at, from_user_id FROM chat_messages
-              WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1`,
+            `SELECT m.text, m.created_at, m.from_user_id,
+                    f.name AS from_user_name,
+                    (SELECT COUNT(*) FROM attachments a
+                      WHERE a.chat_message_id = m.id) AS attachment_count,
+                    (SELECT COUNT(*) FROM attachments a
+                      WHERE a.chat_message_id = m.id
+                        AND (a.mime LIKE 'audio/%' OR a.file_name LIKE '%.m4a')) AS audio_count
+               FROM chat_messages m
+               LEFT JOIN users f ON f.id = m.from_user_id
+              WHERE m.chat_id = ?
+              ORDER BY m.created_at DESC LIMIT 1`,
           )
-          .get(c.id);
-        return { ...chatRow(c.id), last_message: last ?? null };
+          .get(c.id) as
+          | {
+              text: string;
+              created_at: string;
+              from_user_id: string;
+              from_user_name: string | null;
+              attachment_count: number;
+              audio_count: number;
+            }
+          | undefined;
+        // Отметка прочтения — на участнике (миграция 055). Нет строки —
+        // значит чат новее миграции и участник ещё не открывал его.
+        const read = db
+          .prepare(
+            "SELECT last_read_at FROM chat_members WHERE chat_id = ? AND member_id = ?",
+          )
+          .get(c.id, req.userId) as { last_read_at: string } | undefined;
+        const { n: unread } = db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM chat_messages
+              WHERE chat_id = ? AND from_user_id != ? AND created_at > ?`,
+          )
+          .get(c.id, req.userId, read?.last_read_at ?? "1970-01-01 00:00:00") as {
+          n: number;
+        };
+        return {
+          ...chatRow(c.id),
+          last_message: last ?? null,
+          unread_count: unread,
+        };
       }),
     };
   });
@@ -187,6 +231,24 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!isMember(req.params.id, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
       return { chat: chatRow(req.params.id) };
+    },
+  );
+
+  // Отметить чат прочитанным (участник). По этой отметке список считает
+  // бейдж непрочитанных; экран комнаты зовёт её при открытии и когда в
+  // открытом чате появляется чужое сообщение (владелец 21.09.2026,
+  // LOCK-195). Идемпотентно.
+  app.post<{ Params: { id: string } }>(
+    "/api/chats/:id/read",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isMember(req.params.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      db.prepare(
+        `UPDATE chat_members SET last_read_at = datetime('now')
+          WHERE chat_id = ? AND member_id = ?`,
+      ).run(req.params.id, req.userId);
+      return { ok: true };
     },
   );
 
@@ -396,8 +458,11 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           .get(memberId)
       )
         return reply.code(400).send({ error: "нет такого участника" });
+      // Новичок не должен получить бейдж на всю историю до его появления:
+      // отметка прочтения ставится на момент добавления (миграция 055).
       db.prepare(
-        "INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES (?, ?)",
+        `INSERT OR IGNORE INTO chat_members (chat_id, member_id, last_read_at)
+         VALUES (?, ?, datetime('now'))`,
       ).run(req.params.id, memberId);
       return { chat: chatRow(req.params.id) };
     },
