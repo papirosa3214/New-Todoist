@@ -664,3 +664,292 @@ describe("Чаты: удаление сообщений", () => {
     expect(row.chat_message_id).toBeNull();
   });
 });
+
+// Привязка чата и сообщений к задаче (владелец 21.09.2026): «чтобы не
+// комментарии они там писать в самой задаче, а в чате переписываться». Чат
+// привязывается к задаче при создании, его сообщения наследуют эту задачу;
+// явный `task_id` в теле сообщения перекрывает её (привязка отдельного
+// сообщения). Лента задачи отдаёт такие сообщения в общем списке `comments`
+// с пометкой `source: "chat"`.
+describe("Чаты: привязка к задаче", () => {
+  let app: FastifyInstance;
+  let ownerAuth: string;
+  let ownerId: string;
+  let otherAuth: string;
+  let otherId: string;
+
+  const bearer = (jwt: string) => ({ authorization: `Bearer ${jwt}` });
+
+  async function reg(name: string, role?: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name, email: `${name}-${Date.now()}@test`, password: "password123" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    if (role) db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, body.user.id);
+    return { id: body.user.id as string, jwt: body.token as string };
+  }
+
+  beforeAll(async () => {
+    app = await buildApp();
+    const owner = await reg("BindOwner", "owner");
+    ownerId = owner.id;
+    ownerAuth = bearer(owner.jwt);
+    const other = await reg("BindOther");
+    otherId = other.id;
+    otherAuth = bearer(other.jwt);
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  async function task(title: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().task.id as string;
+  }
+
+  async function chat(taskId?: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/chats",
+      headers: ownerAuth,
+      payload: {
+        title: "Чат по задаче",
+        member_ids: [otherId],
+        ...(taskId ? { task_id: taskId } : {}),
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().chat.id as string;
+  }
+
+  async function send(
+    auth: Record<string, string>,
+    chatId: string,
+    text: string,
+    taskId?: string,
+  ) {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: auth,
+      payload: { text, ...(taskId ? { task_id: taskId } : {}) },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().message.id as string;
+  }
+
+  function messageTaskId(messageId: string) {
+    return (
+      db.prepare("SELECT task_id FROM chat_messages WHERE id = ?").get(messageId) as {
+        task_id: string | null;
+      }
+    ).task_id;
+  }
+
+  it("сообщение наследует задачу своего чата", async () => {
+    const taskId = await task("Наследование задачи");
+    const chatId = await chat(taskId);
+    const messageId = await send(ownerAuth, chatId, "по задаче");
+    expect(messageTaskId(messageId)).toBe(taskId);
+  });
+
+  it("сообщение чата без привязки задачи не имеет", async () => {
+    const chatId = await chat();
+    const messageId = await send(ownerAuth, chatId, "просто разговор");
+    expect(messageTaskId(messageId)).toBeNull();
+  });
+
+  it("явный task_id в теле перекрывает задачу чата", async () => {
+    const chatTask = await task("Задача чата");
+    const otherTask = await task("Другая задача");
+    const chatId = await chat(chatTask);
+    const messageId = await send(ownerAuth, chatId, "в другую задачу", otherTask);
+    expect(messageTaskId(messageId)).toBe(otherTask);
+  });
+
+  it("лента задачи отдаёт сообщения чата с пометкой source=chat", async () => {
+    const taskId = await task("Лента показывает чат");
+    await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/comments`,
+      headers: ownerAuth,
+      payload: { text: "обычный комментарий" },
+    });
+    const chatId = await chat(taskId);
+    await send(otherAuth, chatId, "сообщение из чата");
+
+    const card = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}`,
+      headers: ownerAuth,
+    });
+    expect(card.statusCode).toBe(200);
+    const comments = card.json().comments as Array<{
+      text: string;
+      source?: string;
+      chat_id?: string;
+      user_name?: string;
+    }>;
+    const fromChat = comments.find((c) => c.text === "сообщение из чата");
+    expect(fromChat?.source).toBe("chat");
+    expect(fromChat?.chat_id).toBe(chatId);
+    expect(fromChat?.user_name).toBe("BindOther");
+    // Обычный комментарий остался и не помечен как чатовый.
+    const plain = comments.find((c) => c.text === "обычный комментарий");
+    expect(plain?.source).toBeUndefined();
+  });
+
+  it("чат без привязки в ленту задачи не подмешивается", async () => {
+    const taskId = await task("Чистая лента");
+    const chatId = await chat();
+    await send(ownerAuth, chatId, "не должно попасть");
+
+    const card = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}`,
+      headers: ownerAuth,
+    });
+    const comments = card.json().comments as Array<{ text: string }>;
+    expect(comments.map((c) => c.text)).not.toContain("не должно попасть");
+  });
+});
+
+// Перепривязка и отвязка чата (PATCH /api/chats/:id, LOCK-195): привязать чат
+// к задаче можно и ПОСЛЕ переписки — тогда лента задачи должна показать и уже
+// написанное, иначе разговор до привязки остаётся невидимым.
+describe("Чаты: перепривязка к задаче", () => {
+  let app: FastifyInstance;
+  let ownerAuth: string;
+  let otherAuth: string;
+  let otherId: string;
+
+  const bearer = (jwt: string) => ({ authorization: `Bearer ${jwt}` });
+
+  async function reg(name: string, role?: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name, email: `${name}-${Date.now()}@test`, password: "password123" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    if (role) db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, body.user.id);
+    return { id: body.user.id as string, jwt: body.token as string };
+  }
+
+  beforeAll(async () => {
+    app = await buildApp();
+    const owner = await reg("PatchOwner", "owner");
+    ownerAuth = bearer(owner.jwt);
+    const other = await reg("PatchOther");
+    otherId = other.id;
+    otherAuth = bearer(other.jwt);
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  async function task(title: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: ownerAuth,
+      payload: { title },
+    });
+    return res.json().task.id as string;
+  }
+
+  async function chat(taskId?: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/chats",
+      headers: ownerAuth,
+      payload: { member_ids: [otherId], ...(taskId ? { task_id: taskId } : {}) },
+    });
+    return res.json().chat.id as string;
+  }
+
+  async function send(auth: Record<string, string>, chatId: string, text: string, taskId?: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: auth,
+      payload: { text, ...(taskId ? { task_id: taskId } : {}) },
+    });
+    return res.json().message.id as string;
+  }
+
+  function bind(auth: Record<string, string>, chatId: string, taskId: string | null) {
+    return app.inject({
+      method: "PATCH",
+      url: `/api/chats/${chatId}`,
+      headers: auth,
+      payload: { task_id: taskId },
+    });
+  }
+
+  async function journal(taskId: string) {
+    const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}`, headers: ownerAuth });
+    return (res.json().comments as Array<{ text: string; source?: string }>);
+  }
+
+  it("перепривязка переносит уже написанные сообщения в ленту задачи", async () => {
+    const taskId = await task("Привязка после переписки");
+    const chatId = await chat();
+    await send(ownerAuth, chatId, "письмо до привязки");
+
+    const res = await bind(ownerAuth, chatId, taskId);
+    expect(res.statusCode).toBe(200);
+
+    const texts = (await journal(taskId)).map((c) => c.text);
+    expect(texts).toContain("письмо до привязки");
+  });
+
+  it("отвязка убирает сообщения из ленты задачи", async () => {
+    const taskId = await task("Отвязка");
+    const chatId = await chat(taskId);
+    await send(ownerAuth, chatId, "было привязано");
+
+    const res = await bind(ownerAuth, chatId, null);
+    expect(res.statusCode).toBe(200);
+    expect((await journal(taskId)).map((c) => c.text)).not.toContain("было привязано");
+  });
+
+  it("сообщение, привязанное к другой задаче явно, перепривязкой не перебивается", async () => {
+    const chatTask = await task("Задача чата 2");
+    const explicit = await task("Явная задача");
+    const chatId = await chat(chatTask);
+    const messageId = await send(ownerAuth, chatId, "строго в явную", explicit);
+
+    // Перепривязываем чат на третью задачу.
+    const third = await task("Третья задача");
+    await bind(ownerAuth, chatId, third);
+
+    const row = db
+      .prepare("SELECT task_id FROM chat_messages WHERE id = ?")
+      .get(messageId) as { task_id: string | null };
+    expect(row.task_id).toBe(explicit);
+  });
+
+  it("привязать чужой чат или несуществующую задачу нельзя", async () => {
+    const taskId = await task("Права");
+    const chatId = await chat();
+
+    const foreign = await bind(otherAuth, chatId, taskId);
+    expect(foreign.statusCode).toBe(403);
+
+    const bad = await bind(ownerAuth, chatId, "no-such-task");
+    expect(bad.statusCode).toBe(400);
+  });
+});

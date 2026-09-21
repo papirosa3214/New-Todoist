@@ -234,6 +234,52 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Привязать чат к задаче или отвязать (создатель). Привязка — то, что
+  // выводит переписку в ленту задачи: `routes/tasks.ts` подмешивает сообщения
+  // привязанных чатов в `comments` (владелец 21.09.2026, LOCK-195).
+  //
+  // Перепривязка переносит и УЖЕ написанные сообщения чата: иначе после
+  // привязки лента задачи показала бы только новую переписку, а весь разговор
+  // до неё остался бы невидимым — человек ждёт обратного. Сообщения, которые
+  // привязаны к другой задаче явно (через task_id в теле отправки), не
+  // трогаем: их привязка сильнее чатовой.
+  app.patch<{ Params: { id: string }; Body: { task_id?: string | null } }>(
+    "/api/chats/:id",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isMember(req.params.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const chat = db
+        .prepare("SELECT created_by, task_id FROM chats WHERE id = ?")
+        .get(req.params.id) as
+        | { created_by: string; task_id: string | null }
+        | undefined;
+      if (chat?.created_by !== req.userId)
+        return reply.code(403).send({ error: "привязать чат может создатель" });
+
+      const raw = req.body?.task_id;
+      const taskId = typeof raw === "string" && raw ? raw : null;
+      if (taskId && !db.prepare("SELECT id FROM tasks WHERE id = ?").get(taskId))
+        return reply.code(400).send({ error: "нет такой задачи" });
+
+      const previous = chat.task_id;
+      const txn = db.transaction(() => {
+        db.prepare("UPDATE chats SET task_id = ? WHERE id = ?").run(taskId, req.params.id);
+        const scope = previous
+          ? "task_id IS NULL OR task_id = ?"
+          : "task_id IS NULL";
+        const params = previous ? [taskId, req.params.id, previous] : [taskId, req.params.id];
+        db.prepare(
+          `UPDATE chat_messages SET task_id = ?
+            WHERE chat_id = ? AND channel = 'chat' AND (${scope})`,
+        ).run(...params);
+      });
+      txn();
+
+      return { chat: chatRow(req.params.id) };
+    },
+  );
+
   // Отметить чат прочитанным (участник). По этой отметке список считает
   // бейдж непрочитанных; экран комнаты зовёт её при открытии и когда в
   // открытом чате появляется чужое сообщение (владелец 21.09.2026,
@@ -336,7 +382,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // пользовательский текст уже в ленте и не потеряется).
   app.post<{
     Params: { id: string };
-    Body: { text?: string; attachment_ids?: string[] };
+    Body: { text?: string; attachment_ids?: string[]; task_id?: string };
   }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
@@ -356,11 +402,25 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: "пустое сообщение" });
 
       const chatId = req.params.id;
+      // Привязка к задаче (владелец 21.09.2026: «чтобы не комментарии они там
+      // писать в самой задаче, а в чате переписываться»). Сообщение берёт
+      // задачу у СВОЕГО чата; явный task_id в теле перекрывает её — этим
+      // привязывается отдельное сообщение, когда чат живёт сам по себе.
+      const chatTaskId =
+        (
+          db.prepare("SELECT task_id FROM chats WHERE id = ?").get(chatId) as
+            | { task_id: string | null }
+            | undefined
+        )?.task_id ?? null;
+      const taskId =
+        typeof req.body?.task_id === "string" && req.body.task_id
+          ? req.body.task_id
+          : chatTaskId;
       const id = uid();
       db.prepare(
-        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id)
-         VALUES (?, ?, ?, 'chat', ?)`,
-      ).run(id, req.userId, text, chatId);
+        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id)
+         VALUES (?, ?, ?, 'chat', ?, ?)`,
+      ).run(id, req.userId, text, chatId, taskId);
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
         chatId,
       );

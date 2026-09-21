@@ -551,6 +551,51 @@ export function registerTaskRoutes(app: FastifyInstance) {
       for (const c of comments) {
         c.attachments = attachments.filter((a) => a.comment_id === c.id);
       }
+
+      // Сообщения чатов, привязанных к этой задаче (владелец 21.09.2026:
+      // «чтобы не комментарии они там писать в самой задаче, а в чате
+      // переписываться»). Отдаются в ОБЩЕМ списке comments — той же формой,
+      // что обычные комментарии, плюс пометка source='chat' и id чата: лента
+      // задачи и веб рисуют их наравне с комментариями, а отличать могут по
+      // пометке. Только канал 'chat' — старые owner/agents живут своей
+      // жизнью и в ленту задачи не подмешиваются (их для этого никто и не
+      // привязывал).
+      const chatComments = db
+        .prepare(
+          `SELECT m.id, m.task_id, m.from_user_id AS user_id, m.text, m.created_at,
+                  m.chat_id,
+                  u.name AS user_name, u.avatar_color AS user_color,
+                  u.avatar_url AS user_avatar_url, u.initials AS user_initials
+             FROM chat_messages m
+             LEFT JOIN users u ON u.id = m.from_user_id
+            WHERE m.task_id = ? AND m.channel = 'chat'
+            ORDER BY m.created_at`,
+        )
+        .all(task.id) as any[];
+      if (chatComments.length) {
+        // Вложения сообщений чата лежат не на задаче, а на самом сообщении
+        // (`chat_message_id`), поэтому в общий `attachments` выше они не
+        // попали — тянем их отдельным запросом.
+        const chatFiles = db
+          .prepare(
+            `SELECT id, chat_message_id, kind, file_name, mime, size, created_at
+               FROM attachments
+              WHERE chat_message_id IN (${chatComments.map(() => "?").join(",")})
+              ORDER BY created_at`,
+          )
+          .all(...chatComments.map((c) => c.id)) as any[];
+        for (const c of chatComments) {
+          c.source = "chat";
+          c.attachments = chatFiles.filter((a) => a.chat_message_id === c.id);
+        }
+        comments.push(...chatComments);
+        // Сортировка устойчивая (ES2019): при равных секундах комментарии
+        // задачи сохраняют свой прежний порядок, а сообщения чата встают
+        // после них — не перемешиваем две ленты внутри одной секунды.
+        comments.sort((a, b) =>
+          String(a.created_at).localeCompare(String(b.created_at)),
+        );
+      }
       // Файлы самой задачи — то, что приложено к её заметке (19.08.2026).
       // Разделение идёт по kind, а НЕ по «comment_id пустой»: пустой он и у
       // комментарийного файла, пока комментарий не отправлен, и брошенный
