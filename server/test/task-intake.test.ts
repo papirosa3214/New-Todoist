@@ -34,6 +34,7 @@ import Database from "better-sqlite3";
 const { buildApp } = await import("../src/index.js");
 const dbModule = await import("../src/db.js");
 const migrationsModule = await import("../src/migrations.js");
+const { demoteSeededOwner } = await import("./helpers/seedOwner.js");
 
 // Импортируем хелпер заранее, на уровне файла — vitest кеширует модуль,
 // и нам нужен один и тот же экспорт во всех snapshot-тестах.
@@ -329,6 +330,10 @@ describe("owner /api/task-intake/settings", () => {
 
   beforeAll(async () => {
     app = await buildApp();
+    // Миграция 039_seed_owner заводит 'u1' как владельца; без этого
+    // `isOwner(req.userId)` в /api/task-intake/settings видит u1, а не
+    // нашего Owner, и отдаёт 403 вместо 200. Понижаем u1 до agent.
+    demoteSeededOwner(dbModule.default);
 
     const ownerReg = await app.inject({
       method: "POST",
@@ -363,7 +368,11 @@ describe("owner /api/task-intake/settings", () => {
       headers: { authorization: ownerAuth },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ mode: "manual" });
+    // GET /api/task-intake/settings теперь отдаёт и reviewer_first_default
+    // (миграция с флагом ревью по умолчанию); здесь проверяем именно режим
+    // приёма, без точной формы всего ответа — toMatchObject устойчив к
+    // будущим дополнительным полям.
+    expect(res.json()).toMatchObject({ mode: "manual" });
   });
 
   it("PATCH меняет режим, GET отдаёт новое значение", async () => {
@@ -374,14 +383,14 @@ describe("owner /api/task-intake/settings", () => {
       payload: { mode: "automatic" },
     });
     expect(patch.statusCode).toBe(200);
-    expect(patch.json()).toEqual({ mode: "automatic" });
+    expect(patch.json()).toMatchObject({ mode: "automatic" });
 
     const get = await app.inject({
       method: "GET",
       url: "/api/task-intake/settings",
       headers: { authorization: ownerAuth },
     });
-    expect(get.json()).toEqual({ mode: "automatic" });
+    expect(get.json()).toMatchObject({ mode: "automatic" });
   });
 
   it("режим сохраняется после перезапуска приложения", async () => {
@@ -390,6 +399,10 @@ describe("owner /api/task-intake/settings", () => {
     // /api/task-intake/settings читает из БД, не из in-memory.
     await app.close();
     app = await buildApp();
+    // После перезапуска app надо снова понизить u1: buildApp() не
+    // пересоздаёт БД, но мы перестраховываемся от того, чтобы тест
+    // упал, если setup.ts или миграции поменяются.
+    demoteSeededOwner(dbModule.default);
 
     const res = await app.inject({
       method: "GET",
@@ -397,7 +410,7 @@ describe("owner /api/task-intake/settings", () => {
       headers: { authorization: ownerAuth },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ mode: "automatic" });
+    expect(res.json()).toMatchObject({ mode: "automatic" });
 
     // Возвращаем к 'manual', чтобы следующие тесты не зависели от того,
     // в каком порядке vitest их запустил.
@@ -454,6 +467,11 @@ describe("snapshotIntakeMode: режим фиксируется в строке 
 
   beforeAll(async () => {
     app = await buildApp();
+    // Миграция 039_seed_owner сидит 'u1' как владельца — иначе
+    // snapshotIntakeMode (через ownerId() в lib/ownerDraft.ts) работает
+    // не с тем владельцем и режимы снимка расходятся с users.task_intake_mode.
+    demoteSeededOwner(dbModule.default);
+
     const reg = await app.inject({
       method: "POST",
       url: "/api/auth/register",
