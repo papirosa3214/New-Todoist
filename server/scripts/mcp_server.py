@@ -1098,6 +1098,130 @@ def t_structure_dictation(args):
     }
 
 
+# ---------------------------------------------------------------- инструменты исследователя
+#
+# Владелец 20.09.2026: «в модель должен заходить готовый markdown без лишнего
+# мусора» и «добавить распознавание документов и сканов». Первое — _html_to_markdown
+# (убираем меню/рекламу/скрипты, берём статью), второе — t_ocr (tesseract rus+eng,
+# PDF со сканом рендерим через pdftoppm).
+
+def _html_to_markdown(html: str) -> str:
+    """HTML → чистый markdown: выбрасываем скрипты, стили, навигацию, подвалы
+    и формы; берём основную статью (article/main, иначе самый текстовый div)."""
+    from bs4 import BeautifulSoup
+    import html2text
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "iframe", "template",
+                     "nav", "footer", "header", "aside", "form", "button", "figure"]):
+        tag.decompose()
+    node = soup.find("article") or soup.find("main") or soup.find(attrs={"role": "main"})
+    if node is None:
+        best, best_len = None, 0
+        for div in soup.find_all("div"):
+            n = len(div.get_text(strip=True))
+            if n > best_len:
+                best, best_len = div, n
+        node = best or soup.body or soup
+    conv = html2text.HTML2Text()
+    conv.body_width = 0
+    conv.ignore_images = True
+    return conv.handle(str(node)).strip()
+
+
+def t_web_get(args):
+    """Скачать страницу и вернуть её основное содержимое чистым markdown."""
+    url = str(args.get("url") or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise TaskFlowError("нужен http(s)-адрес")
+    import requests
+    try:
+        resp = requests.get(url, timeout=40, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; TaskFlow-Research/1.0)",
+            "Accept-Language": "ru,en;q=0.8",
+        })
+        resp.raise_for_status()
+    except Exception as e:  # noqa: BLE001 — наружу понятный текст
+        raise TaskFlowError(f"не удалось скачать {url}: {e}")
+    ctype = (resp.headers.get("content-type") or "").lower()
+    if "html" in ctype or "xml" in ctype or not ctype:
+        text = _html_to_markdown(resp.text)
+    else:
+        text = resp.text
+    cap = int(args.get("max_chars") or 24000)
+    return {
+        "url": url,
+        "markdown": text[:cap],
+        "chars": len(text),
+        "truncated": len(text) > cap,
+    }
+
+
+def t_ocr(args):
+    """Распознать текст из документа или скана (изображение/PDF)."""
+    att_id = str(args.get("attachment_id") or "").strip()
+    path = str(args.get("path") or "").strip()
+    langs = str(args.get("langs") or "rus+eng")
+    cap = int(args.get("max_chars") or 24000)
+    if not att_id and not path:
+        raise TaskFlowError("нужен attachment_id или path")
+
+    import glob
+    import mimetypes
+    import shutil
+    import subprocess
+    import tempfile
+
+    work = tempfile.mkdtemp(prefix="tf-ocr-")
+    try:
+        if att_id:
+            req = urllib.request.Request(
+                f"{BASE}/api/attachments/{att_id}",
+                headers={"Authorization": f"Bearer {TOKEN}"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = r.read()
+                ctype = (r.headers.get("Content-Type") or "").split(";")[0]
+            ext = mimetypes.guess_extension(ctype) or ".bin"
+            path = os.path.join(work, "src" + ext)
+            with open(path, "wb") as f:
+                f.write(data)
+
+        ext = os.path.splitext(path)[1].lower()
+        text = ""
+        pages = 0
+        if ext == ".pdf":
+            txt = subprocess.run(["pdftotext", "-layout", path, "-"],
+                                 capture_output=True, text=True, timeout=120)
+            text = (txt.stdout or "").strip()
+            if len(text) < 40:
+                subprocess.run(
+                    ["pdftoppm", "-r", "200", "-png", path, os.path.join(work, "p")],
+                    capture_output=True, text=True, timeout=300,
+                )
+                chunks = []
+                for img in sorted(glob.glob(os.path.join(work, "p*.png"))):
+                    pages += 1
+                    out = subprocess.run(["tesseract", img, "stdout", "-l", langs],
+                                         capture_output=True, text=True, timeout=180)
+                    chunks.append((out.stdout or "").strip())
+                text = "\n\n".join(chunks)
+        elif ext in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"):
+            out = subprocess.run(["tesseract", path, "stdout", "-l", langs],
+                                 capture_output=True, text=True, timeout=180)
+            text = (out.stdout or "").strip()
+            pages = 1
+        else:
+            raise TaskFlowError(f"распознавание для {ext or 'без расширения'} не поддержано")
+
+        return {
+            "text": text[:cap],
+            "chars": len(text),
+            "pages": pages,
+            "truncated": len(text) > cap,
+        }
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
 TOOLS = [
     {
         "name": "taskflow_my_tasks",
@@ -1507,6 +1631,42 @@ TOOLS = [
             "required": ["query"],
         },
         "fn": t_kb_search,
+    },
+    {
+        "name": "taskflow_web_get",
+        "description": (
+            "Скачать веб-страницу и вернуть её ОСНОВНОЕ содержимое ЧИСТЫМ "
+            "markdown — без меню, рекламы, скриптов и подвалов. Ими пользуйся "
+            "вместо сырого HTML: в модель должен заходить готовый текст. Для "
+            "PDF и сканов — taskflow_ocr."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "http(s)-адрес страницы"},
+                "max_chars": {"type": "integer", "description": "потолок символов, по умолчанию 24000"},
+            },
+            "required": ["url"],
+        },
+        "fn": t_web_get,
+    },
+    {
+        "name": "taskflow_ocr",
+        "description": (
+            "Распознать текст из документа: изображение или PDF, в том числе "
+            "СКАН без текстового слоя (русский+английский, tesseract). "
+            "Источник — вложение задачи (attachment_id) или файл на машине (path)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "attachment_id": {"type": "string", "description": "id вложения задачи"},
+                "path": {"type": "string", "description": "путь к файлу на машине"},
+                "langs": {"type": "string", "description": "языки tesseract, по умолчанию rus+eng"},
+                "max_chars": {"type": "integer", "description": "потолок символов, по умолчанию 24000"},
+            },
+        },
+        "fn": t_ocr,
     },
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}
