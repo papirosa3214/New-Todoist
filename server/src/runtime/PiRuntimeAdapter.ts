@@ -39,6 +39,7 @@ import {
   makeChatRunId,
 } from "./chatSession.js";
 import { authSessionManager, type AuthSessionView } from "./AuthSession.js";
+import { prepareRoleRunAccess, releaseRoleRunAccess } from "./roleRunAccess.js";
 import {
   ModelNotAvailableError,
   RuntimeUnavailableError,
@@ -293,6 +294,8 @@ interface ActiveRun {
   lastTurn: TurnResult | null;
   settled: boolean;
   finish: Promise<void>;
+  /** Временный файл подключения роли к трекеру — удаляется при завершении. */
+  mcpConfigPath: string | null;
 }
 
 const activeRuns = new Map<string, ActiveRun>();
@@ -438,6 +441,7 @@ function createAttempt(input: {
 async function finalizeRun(run: ActiveRun, outcome: AgentRun["status"], stopReason: string | null): Promise<void> {
   if (run.settled) return;
   run.settled = true;
+  releaseRoleRunAccess(run.mcpConfigPath);
 
   const attemptOutcome = outcome === "completed"
     ? "completed"
@@ -730,9 +734,13 @@ export const piRuntime: RuntimeAdapter = {
     model = match.id;
 
     const runId = `run_${crypto.randomUUID()}`;
+    // Доступ роли к трекеру — пропуск, подписанный сервером, во временном
+    // файле подключения (см. roleRunAccess.ts): ключи из хранилища не нужны.
+    const mcpConfigPath = prepareRoleRunAccess(runId, role);
     const client = new RpcClient({
       cliPath: resolvePiCliPath(),
-      cwd: process.cwd(),
+      cwd: input.cwd ?? process.cwd(),
+      ...(mcpConfigPath ? { args: ["--mcp-config", mcpConfigPath] } : {}),
       provider,
       model,
       // NODE_USE_ENV_PROXY=1 — без него Pi встроенный fetch игнорирует
@@ -780,6 +788,7 @@ export const piRuntime: RuntimeAdapter = {
       lastTurn: null,
       settled: false,
       finish: Promise.resolve(),
+      mcpConfigPath,
     };
     activeRuns.set(runId, run);
 

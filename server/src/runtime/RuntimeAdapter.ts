@@ -17,6 +17,8 @@ export interface StartRunInput {
   model?: string;
   prompt: string;
   tools?: string[];
+  /** Рабочая папка запуска (репозиторий проекта). По умолчанию — папка сервера. */
+  cwd?: string;
 }
 
 export interface StartRunResult {

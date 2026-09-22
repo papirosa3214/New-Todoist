@@ -31,6 +31,10 @@ process.env.JWT_SECRET =
 const uploadDir = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-uploads");
 process.env.UPLOAD_DIR = uploadDir;
 
+// Временные файлы подключения ролей (runtime/roleRunAccess.ts) — в папку
+// прогона, а не в общую /tmp/taskflow-runs живого сервера.
+process.env.TASKFLOW_RUNS_DIR = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-runs");
+
 // PUT /api/runtime/routing/:role пишет role-routing.yaml. Тесты не должны
 // трогать боевой файл — работаем с копией в tmp. Копия делается ДО импорта
 // roleRouting.ts (setupFiles выполняется раньше файлов тестов), иначе

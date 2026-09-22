@@ -336,6 +336,36 @@ describe("PiRuntimeAdapter", () => {
     expect(run.status).toBe("completed");
   });
 
+  // Роль ходит в трекер пропуском, который подписал сам сервер, — без
+  // ключей из хранилища (23.09.2026). Файл подключения живёт только на
+  // время запуска.
+  it("5. запуск роли получает временный доступ к трекеру и теряет его по завершении", async () => {
+    const fs = await import("node:fs");
+    const { resolveUserIdFromToken } = await import("../../src/auth.js");
+    seedTask("task-access-5");
+    await piRuntime.startRun({
+      taskId: "task-access-5",
+      agentId: "architect",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      prompt: "hi",
+    });
+    const client = lastClient();
+    const args: string[] = client.options.args ?? [];
+    expect(args[0]).toBe("--mcp-config");
+    const file = args[1];
+    const config = JSON.parse(fs.readFileSync(file, "utf8"));
+    const env = config.mcpServers.taskflow.env;
+    expect(env.TASKFLOW_MCP_ROLE).toBe("architect");
+    expect(env.TASKFLOW_MCP_TOOLS).toContain("taskflow_claim");
+    expect(resolveUserIdFromToken(app, env.TASKFLOW_TOKEN)).toBe("role_architect");
+    expect(fs.statSync(file).mode & 0o077).toBe(0);
+
+    client.emit({ type: "agent_settled" });
+    await tick();
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
   it("4. client.stop() не вызывается автоматически на agent_end", async () => {
     seedTask("task-lifecycle-4");
     await piRuntime.startRun({
