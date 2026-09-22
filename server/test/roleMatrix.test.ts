@@ -185,6 +185,28 @@ describe("Матрица прав: роли и профили (b6b57092)", () =>
   }
 
   describe("POST /api/agent-service: owner + orchestrator", () => {
+    // Хендлер зовёт настоящий systemctl. На .110 он доступен, и тест с
+    // {on:false} выключал ЖИВОЙ будильник при каждом прогоне (найдено
+    // 23.09.2026). Подставляем пустышку, как в agentServiceResponse.test.ts.
+    let fakeBin = "";
+    let originalPath: string | undefined;
+    beforeAll(async () => {
+      const fs = await import("node:fs");
+      const os = await import("node:os");
+      const path = await import("node:path");
+      fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-systemctl-"));
+      const stub = path.join(fakeBin, "systemctl");
+      fs.writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+      fs.chmodSync(stub, 0o755);
+      originalPath = process.env.PATH;
+      process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
+    });
+    afterAll(async () => {
+      process.env.PATH = originalPath;
+      const fs = await import("node:fs");
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    });
+
     it("агент (type='ai', role='agent') получает 403", async () => {
       const jwt = await login("matrix-agent@test");
       const token = await apiToken(jwt);
