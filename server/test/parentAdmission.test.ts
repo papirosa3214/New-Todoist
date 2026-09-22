@@ -107,6 +107,16 @@ describe("родитель со своими пунктами исполняет
       .prepare("SELECT COUNT(*) AS n FROM task_events WHERE task_id = ? AND kind = 'ready_flag_changed'")
       .get(parentId) as { n: number };
     expect(ev.n).toBe(1);
+    // Флаг и раздачу сделала автоматика — в ленте «Система», не владелец.
+    const actors = db
+      .prepare(
+        "SELECT kind, actor_id FROM task_events WHERE task_id = ? AND kind IN ('ready_flag_changed', 'task_dispatched', 'role_choice')",
+      )
+      .all(parentId) as Array<{ kind: string; actor_id: string | null }>;
+    expect(actors.map((a) => a.kind).sort()).toEqual(
+      ["ready_flag_changed", "role_choice", "task_dispatched"],
+    );
+    expect(actors.every((a) => a.actor_id === null)).toBe(true);
   }, 20_000);
 
   it("не все дочерние сданы — родитель ждёт", async () => {
@@ -154,4 +164,82 @@ describe("родитель со своими пунктами исполняет
     }
     expect(parentRow(parentId).ready_for_pickup).toBe(1);
   }, 20_000);
+});
+
+describe("лента: отправка на проверку видна", () => {
+  let app: FastifyInstance;
+  let ownerAuth: string;
+  let ownerId: string;
+  const serviceKey = `svc-${crypto.randomUUID()}`;
+  const PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2";
+
+  beforeAll(async () => {
+    app = await buildApp();
+    demoteSeededOwner(db);
+    seedRoleAccounts(db);
+    const reg = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { name: "JournalOwner", email: `journal-owner-${Date.now()}@test`, password: "password123" },
+    });
+    ownerId = reg.json().user.id;
+    ownerAuth = `Bearer ${reg.json().token}`;
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(ownerId);
+    // Служебная учётка будильника (Pi Agent) со своим ключом.
+    db.prepare(
+      `INSERT OR IGNORE INTO users (id, name, email, password_hash, role, type)
+       VALUES (?, 'Pi Agent', 'pi-journal@test', 'x', 'agent', 'ai')`,
+    ).run(PI_AGENT_ID);
+    db.prepare("UPDATE users SET api_token = ? WHERE id = ?").run(
+      crypto.createHash("sha256").update(serviceKey, "utf8").digest("hex"),
+      PI_AGENT_ID,
+    );
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  function newTask() {
+    const id = uid();
+    db.prepare(
+      "INSERT INTO tasks (id, title, creator_id, status) VALUES (?, 'Карточка', ?, 'active')",
+    ).run(id, ownerId);
+    return id;
+  }
+
+  it("служба отмечает отправку на проверку — запись от системы", async () => {
+    const id = newTask();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${id}/journal`,
+      headers: { authorization: `Bearer ${serviceKey}` },
+      payload: { kind: "reviewer_sent", to_value: "Критик-проверяющий" },
+    });
+    expect(res.statusCode).toBe(200);
+    const ev = db
+      .prepare("SELECT actor_id, to_value FROM task_events WHERE task_id = ? AND kind = 'reviewer_sent'")
+      .get(id) as { actor_id: string | null; to_value: string };
+    expect(ev.actor_id).toBeNull();
+    expect(ev.to_value).toBe("Критик-проверяющий");
+  });
+
+  it("не служба в ленту писать не может, неизвестное событие не принимается", async () => {
+    const id = newTask();
+    const byOwner = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${id}/journal`,
+      headers: { authorization: ownerAuth },
+      payload: { kind: "reviewer_sent" },
+    });
+    expect(byOwner.statusCode).toBe(403);
+    const unknown = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${id}/journal`,
+      headers: { authorization: `Bearer ${serviceKey}` },
+      payload: { kind: "task_created" },
+    });
+    expect(unknown.statusCode).toBe(400);
+  });
+
 });

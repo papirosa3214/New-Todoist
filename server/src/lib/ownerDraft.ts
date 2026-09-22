@@ -383,7 +383,7 @@ async function admitTreeAutomatically(
       upd.run(owner, card.id);
       logEvent({
         taskId: card.id,
-        actorId: owner,
+        actorId: null,
         kind: "ready_flag_changed",
         field: "ready_for_pickup",
         fromValue: "0",
@@ -403,7 +403,7 @@ async function admitTreeAutomatically(
     // Тот же путь, которым карточку отдаёт владелец руками: гейты и швы
     // доставки общие, иначе автомат начал бы запускать то, что вручную
     // запустить нельзя.
-    const outcome = await dispatchTaskToPi(card.id, owner);
+    const outcome = await dispatchTaskToPi(card.id, owner, { system: true });
     if (outcome.ok) {
       dispatched += 1;
     } else {

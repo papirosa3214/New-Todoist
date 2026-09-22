@@ -2883,6 +2883,9 @@ def wake_reviewer(task: dict) -> bool:
         },
         daemon=True,
     ).start()
+    # След в ленте карточки: когда и кому ушло на проверку (22.09.2026).
+    api("POST", f"/api/tasks/{task_id}/journal",
+        {"kind": "reviewer_sent", "to_value": "Критик-проверяющий"})
     return True
 
 

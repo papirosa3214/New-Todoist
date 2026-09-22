@@ -256,7 +256,13 @@ export type DispatchOutcome =
 export async function dispatchTaskToPi(
   taskId: string,
   actorId: string,
+  // `system` — раздачу сделала автоматика, а не человек: в ленте она
+  // подписывается «Система», а не владельцем (владелец 22.09.2026: «надо
+  // писать, кто это делает»). Уведомление исполнителю по-прежнему идёт от
+  // actorId — по нему будильник ловит назначение.
+  opts: { system?: boolean } = {},
 ): Promise<DispatchOutcome> {
+  const eventActor = opts.system ? null : actorId;
   const task = db
     .prepare("SELECT * FROM tasks WHERE id = ?")
     .get(taskId) as any;
@@ -358,7 +364,7 @@ export async function dispatchTaskToPi(
 
     logEvent({
       taskId,
-      actorId,
+      actorId: eventActor,
       kind: "task_dispatched",
       field: "dispatched_role",
       fromValue: previousRole,
@@ -373,7 +379,7 @@ export async function dispatchTaskToPi(
     // ушла именно туда, и спорный выбор нечем заметить.
     logEvent({
       taskId,
-      actorId,
+      actorId: eventActor,
       kind: "role_choice",
       field: "dispatched_role",
       fromValue: null,
@@ -538,7 +544,7 @@ export async function applyIntakeToNewTask(
       );
       logEvent({
         taskId,
-        actorId,
+        actorId: null,
         kind: "field_changed",
         field: "block_type",
         toValue: "dead",
@@ -550,7 +556,7 @@ export async function applyIntakeToNewTask(
       ).run(choice.role, taskId);
       logEvent({
         taskId,
-        actorId,
+        actorId: null,
         kind: "field_changed",
         field: "machine_selected_role",
         toValue: roleChoiceNoteRu(choice),
@@ -564,7 +570,7 @@ export async function applyIntakeToNewTask(
   // требует флага.
   if (mode !== "automatic") return;
 
-  db.prepare(
+  const flagged = db.prepare(
     `UPDATE tasks
         SET ready_for_pickup = 1,
             ready_set_at = datetime('now'),
@@ -572,11 +578,23 @@ export async function applyIntakeToNewTask(
             updated_at = datetime('now')
       WHERE id = ? AND ready_for_pickup = 0`,
   ).run(ownerId, taskId);
+  // Раньше флаг здесь ставился молча — в ленте не было видно, когда и кем
+  // карточка отмечена готовой. Ставит его система, не владелец.
+  if (flagged.changes > 0) {
+    logEvent({
+      taskId,
+      actorId: null,
+      kind: "ready_flag_changed",
+      field: "ready_for_pickup",
+      fromValue: "0",
+      toValue: "1",
+    });
+  }
   // Раздача (проставление исполнителя) — только когда будильник жив:
   // назначить агента, которого некому разбудить, смысла нет.
   // Раздача — только для карточки без исполнителя: dispatchTaskToPi и сам
   // откажется отдавать чужую работу, но звать его впустую незачем.
-  if (alarmOn && !assigneeAlreadySet) await dispatchTaskToPi(taskId, ownerId);
+  if (alarmOn && !assigneeAlreadySet) await dispatchTaskToPi(taskId, ownerId, { system: true });
 }
 
 /**
@@ -658,7 +676,7 @@ export async function admitParentAfterChildren(
     if (r.changes > 0) {
       logEvent({
         taskId: parentId,
-        actorId: ownerRow.id,
+        actorId: null,
         kind: "ready_flag_changed",
         field: "ready_for_pickup",
         fromValue: "0",
@@ -674,7 +692,9 @@ export async function admitParentAfterChildren(
   if (!parent.assignee_id) {
     const { unitState } = await import("./agent-service.js");
     if ((await unitState()).active) {
-      const outcome = await dispatchTaskToPi(parentId, ownerRow.id);
+      const outcome = await dispatchTaskToPi(parentId, ownerRow.id, {
+        system: true,
+      });
       if (!outcome.ok) {
         console.warn(
           `родитель ${parentId}: флаг поднят, отдать не удалось:`,
@@ -723,7 +743,9 @@ export async function releaseQueuedSuccessors(
     if ((sibling.ready_for_pickup ?? 0) !== 1) continue;
     if (sibling.assignee_id) continue;
 
-    const outcome = await dispatchTaskToPi(sibling.id, actorId);
+    const outcome = await dispatchTaskToPi(sibling.id, actorId, {
+      system: true,
+    });
     if (outcome.ok) {
       released += 1;
     } else {
