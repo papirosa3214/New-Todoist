@@ -5,7 +5,7 @@ import { getTaskForRead, isOwner } from "../access.js";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES } from "../roleRouting.js";
-import { runRoleInProcess } from "../runtime/inProcessRun.js";
+import { reviewPromptFor, runRoleInProcess } from "../runtime/inProcessRun.js";
 import { isServiceUser } from "./agent-state.js";
 
 // Ручной разовый запуск агента на карточке — по команде владельца.
@@ -33,6 +33,22 @@ export async function registerManualRunRoutes(app: FastifyInstance): Promise<voi
         (task.dispatched_role as string | null) ??
         (task.owner_selected_role as string | null) ??
         (task.machine_selected_role as string | null);
+      // Проверка Критиком — тоже внутри сервера (этап C2).
+      if (mode === "reviewer" && ROLE_NAMES.includes("critic_verifier")) {
+        try {
+          await runRoleInProcess({ taskId: task.id, role: "critic_verifier", prompt: reviewPromptFor(task.id) });
+        } catch (err) {
+          return reply.code(409).send({ error: err instanceof Error ? err.message : String(err) });
+        }
+        logEvent({
+          taskId: task.id,
+          actorId: req.userId,
+          kind: "run_requested",
+          field: "reviewer",
+          toValue: REVIEWER_NAME,
+        });
+        return { ok: true, mode, inProcess: true };
+      }
       if (mode === "executor" && role && ROLE_NAMES.includes(role)) {
         try {
           await runRoleInProcess({ taskId: task.id, role });

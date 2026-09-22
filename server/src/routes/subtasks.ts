@@ -802,6 +802,12 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         });
       }
 
+      // Комментарий — повод для роли: ответить владельцу или продолжить
+      // после его ответа (этап C2).
+      void import("../runtime/inProcessRun.js")
+        .then((m) => m.kickRoleTask(req.params.taskId, "commented", req.userId))
+        .catch(() => {});
+
       return db
         .prepare(
           `SELECT c.*, u.name as user_name, u.avatar_color as user_color, u.avatar_url as user_avatar_url, u.initials as user_initials

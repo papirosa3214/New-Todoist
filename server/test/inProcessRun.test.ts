@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 const script = vi.hoisted(() => ({
-  steps: null as null | ((tools: Map<string, any>) => Promise<void>),
+  steps: null as null | ((tools: Map<string, any>, prompt: string) => Promise<void>),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
@@ -17,8 +17,8 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
       return {
         session: {
           subscribe: () => () => {},
-          prompt: async () => {
-            if (script.steps) await script.steps(tools);
+          prompt: async (text: string) => {
+            if (script.steps) await script.steps(tools, text);
           },
           abort: async () => {},
           dispose: () => {},
@@ -36,10 +36,16 @@ vi.mock("../src/runtime/PiRuntimeAdapter.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../src/routes/agent-service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/routes/agent-service.js")>();
+  return { ...actual, unitState: async () => ({ active: true, enabled: true, last_alive_at: null, next_scan_at: null, scan_interval_sec: 180 }) };
+});
+process.env.TASKFLOW_KICK_IN_TESTS = "1";
+
 const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
 const { demoteSeededOwner, seedRoleAccounts } = await import("./helpers/seedOwner.js");
-const { runRoleInProcess, _settleInProcessRunsForTests } = await import("../src/runtime/inProcessRun.js");
+const { runRoleInProcess, kickRoleTask, _settleInProcessRunsForTests } = await import("../src/runtime/inProcessRun.js");
 
 describe("агент роли внутри сервера", () => {
   let app: FastifyInstance;
@@ -117,6 +123,37 @@ describe("агент роли внутри сервера", () => {
       .prepare("SELECT text FROM comments WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
       .get(taskId) as { text: string };
     expect(c.text).toContain("провайдер не ответил");
+  });
+
+  it("сервер сам будит роль, а после сдачи — Критика (этап C2)", async () => {
+    db.prepare("UPDATE users SET reviewer_first_default = 1 WHERE role = 'owner'").run();
+    // На живой базе Критик проходит как проверяющий по профилю роли; у
+    // тестовой учётки профиля нет — отметка напрямую.
+    db.prepare("UPDATE users SET reviewer = 1 WHERE id = 'role_critic_verifier'").run();
+    const { taskId, stepId } = builderTask("Цепочка без будильника");
+    script.steps = async (tools, prompt) => {
+      if (prompt.includes("Проверь сданную работу")) {
+        await call(tools, "taskflow_review", { id: taskId, verdict: "approved", findings: "Работа подтверждена." });
+        return;
+      }
+      await call(tools, "taskflow_claim", { id: taskId });
+      await call(tools, "taskflow_subtask_work", { id: stepId, state: "in_progress" });
+      await call(tools, "taskflow_subtask_done", { id: stepId, result: "Сделано." });
+      await call(tools, "taskflow_state", { id: taskId, state: "review", comment: "Итог: сделано." });
+    };
+    await kickRoleTask(taskId, "assigned");
+    for (let i = 0; i < 20; i++) {
+      await _settleInProcessRunsForTests();
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const verdict = db
+      .prepare("SELECT reviewer_id, verdict FROM reviews WHERE task_id = ?")
+      .get(taskId) as { reviewer_id: string; verdict: string } | undefined;
+    expect(verdict).toMatchObject({ reviewer_id: "role_critic_verifier", verdict: "approved" });
+    const sent = db
+      .prepare("SELECT actor_id FROM task_events WHERE task_id = ? AND kind = 'reviewer_sent'")
+      .get(taskId) as { actor_id: string | null } | undefined;
+    expect(sent?.actor_id).toBeNull();
   });
 
   it("роль не из списка не запускается", async () => {

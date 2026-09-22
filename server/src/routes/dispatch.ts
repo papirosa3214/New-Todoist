@@ -415,6 +415,10 @@ export async function dispatchTaskToPi(
     task: hydrateTask(updated),
   });
 
+  // Роль исполняет сервер сам (этап C2, 23.09.2026) — будильнику ключ не нужен.
+  void import("../runtime/inProcessRun.js")
+    .then((m) => m.kickRoleTask(taskId, "assigned"))
+    .catch(() => {});
   return { ok: true, role: chosen };
 }
 

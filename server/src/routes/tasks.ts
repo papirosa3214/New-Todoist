@@ -1378,6 +1378,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // действием, и про него легко забывалось. Сам подбор исполнителя
         // сидит внутри отдачи, так что ручной и автоматический режимы
         // расходятся ровно в одном — кто поднял флаг.
+        // Исполнитель уже назначен — флаг и есть запуск: роль будит сервер.
+        if (newValue === 1 && previous !== 1 && existing.assignee_id) {
+          void import("../runtime/inProcessRun.js")
+            .then((m) => m.kickRoleTask(id, "assigned"))
+            .catch(() => {});
+        }
         if (newValue === 1 && previous !== 1 && !existing.assignee_id) {
           try {
             const { dispatchTaskToPi } = await import("./dispatch.js");

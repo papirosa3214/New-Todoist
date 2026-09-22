@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import db from "../db.js";
-import { AGENT_RULES } from "../agentState.js";
+import { AGENT_RULES, logEvent } from "../agentState.js";
 import { loadRoleRouting, providerOfModel, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
 
@@ -405,10 +405,104 @@ export async function runRoleInProcess(input: {
       clearInterval(beat);
       activeRuns.delete(runId);
       session.dispose();
+      // Сдал на проверку — дальше Критик (если включена автопроверка).
+      // После самого Критика не будим: при сбое он будил бы себя по кругу.
+      if (role !== "critic_verifier") void kickRoleTask(taskId, "after_run");
     }
   })();
   pending.add(work);
   void work.finally(() => pending.delete(work));
 
   return { runId };
+}
+
+// ── Кто и когда будит роль (этап C2, 23.09.2026) ───────────────────────────
+//
+// Те же решения, что принимал будильник (trigger.py → decide), но в сервере:
+// он и так видит каждое изменение карточки. Будильник с флагом
+// TASKFLOW_ROLES_IN_SERVER=1 карточки ролей больше не берёт.
+
+export type KickReason = "assigned" | "commented" | "review" | "after_run";
+
+export function reviewPromptFor(taskId: string): string {
+  const task = db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title?: string } | undefined;
+  return [
+    `Ты — ${roleTitle("critic_verifier")}. Проверь сданную работу по задаче ${taskId}: «${task?.title ?? ""}».`,
+    "Прочитай карточку и ленту (taskflow_task): что просили, что сделано, чем подтверждено.",
+    "Вынеси вердикт инструментом taskflow_review: approved — если работа сделана и подтверждена;",
+    "changes_requested — если нет, с конкретным комментарием, что доработать.",
+    "Задачу в работу не бери и её состояние сам не меняй — только вердикт.",
+  ].join("\n");
+}
+
+function replyPrompt(taskId: string, role: string): string {
+  const task = db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title?: string } | undefined;
+  return [
+    `Ты — ${roleTitle(role)}. По твоей задаче ${taskId} («${task?.title ?? ""}») владелец написал в ленте.`,
+    "Прочитай карточку и ленту (taskflow_task) и ответь ему комментарием (taskflow_comment).",
+    "Работу не продолжай и состояние задачи не меняй — только ответ.",
+  ].join("\n");
+}
+
+function reviewerPending(taskId: string): boolean {
+  const reviewerFirst = (
+    db.prepare("SELECT reviewer_first_default FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1").get() as
+      | { reviewer_first_default?: number }
+      | undefined
+  )?.reviewer_first_default;
+  if ((reviewerFirst ?? 1) !== 1) return false;
+  const current = db
+    .prepare("SELECT id FROM artifact_versions WHERE task_id = ? ORDER BY version_no DESC LIMIT 1")
+    .get(taskId) as { id?: string } | undefined;
+  if (!current?.id) return true;
+  const verdict = db
+    .prepare("SELECT 1 FROM reviews WHERE task_id = ? AND version_id = ? LIMIT 1")
+    .get(taskId, current.id);
+  return !verdict;
+}
+
+/**
+ * Разбудить роль по карточке, если есть повод. Никогда не бросает: это
+ * следствие чужого действия, а не его часть. Работает, только когда
+ * включена «Система» (тот же выключатель, что и раздача).
+ */
+export async function kickRoleTask(taskId: string, reason: KickReason, actorId?: string | null): Promise<void> {
+  // В тестах живых агентов не зовём — только там, где тест это разрешил явно.
+  if (process.env.VITEST && process.env.TASKFLOW_KICK_IN_TESTS !== "1") return;
+  try {
+    const { unitState } = await import("../routes/agent-service.js");
+    if (!(await unitState()).active) return;
+    if (activeInProcessRun(taskId)) return;
+    const task = db
+      .prepare("SELECT id, status, assignee_id, agent_state, ready_for_pickup FROM tasks WHERE id = ?")
+      .get(taskId) as
+      | { id: string; status: string; assignee_id: string | null; agent_state: string | null; ready_for_pickup: number | null }
+      | undefined;
+    if (!task || task.status !== "active") return;
+    const assignee = task.assignee_id ?? "";
+    const role = assignee.startsWith("role_") ? assignee.slice("role_".length) : "";
+
+    // Сдано на проверку — Критик, если автопроверка включена и вердикта ещё нет.
+    if (task.agent_state === "review" && (reason === "review" || reason === "after_run")) {
+      if (ROLE_NAMES.includes("critic_verifier") && reviewerPending(taskId)) {
+        await runRoleInProcess({ taskId, role: "critic_verifier", prompt: reviewPromptFor(taskId) });
+        logEvent({ taskId, actorId: null, kind: "reviewer_sent", toValue: roleTitle("critic_verifier") });
+      }
+      return;
+    }
+    if (!role || !ROLE_NAMES.includes(role)) return;
+
+    // Владелец написал по сданной карточке — роль только отвечает.
+    if (task.agent_state === "review" && reason === "commented" && actorId && actorId !== assignee) {
+      await runRoleInProcess({ taskId, role, prompt: replyPrompt(taskId, role) });
+      return;
+    }
+    if (task.agent_state === "blocked") return; // ждёт владельца
+    // Работа не начата (или снята с агента после ответа владельцу) — выполнить.
+    if (!task.agent_state && (task.ready_for_pickup ?? 0) === 1 && reason !== "after_run") {
+      await runRoleInProcess({ taskId, role });
+    }
+  } catch (err) {
+    console.warn(`роль по карточке ${taskId} не разбужена:`, err);
+  }
 }

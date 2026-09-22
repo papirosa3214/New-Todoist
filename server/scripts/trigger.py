@@ -61,6 +61,12 @@ LOG_FILE = STATE_DIR / "trigger.log"
 
 ME = PI_AGENT_ID
 
+# Этап C2 (23.09.2026): роли исполняет сам сервер, внутри себя, без ключей
+# (server/src/runtime/inProcessRun.ts → kickRoleTask). С этим флагом служба
+# не держит подключения на ключах ролей, не берёт их карточки и не будит
+# Критика — иначе сервер и служба взялись бы за одну карточку вдвоём.
+ROLES_IN_SERVER = os.environ.get("TASKFLOW_ROLES_IN_SERVER") == "1"
+
 # Учётки, чьи комментарии в карточке пишет САМА служба, а не исполнитель:
 # по ним нельзя судить, было ли движение в заходе (см. activity_mark).
 SERVICE_AUTHORS = {ME}
@@ -117,7 +123,7 @@ EXTERNAL_AGENTS = {
     #
     # Ключи лежат в хранилище под TASKFLOW_AGENT_TOKEN_<РОЛЬ> и прокинуты в
     # окружение службы через vault-run (--secret можно указывать несколько раз).
-    **{
+    **({} if ROLES_IN_SERVER else {
         f"role_{role}": {
             "id": f"role_{role}",
             "token_env": f"TASKFLOW_AGENT_TOKEN_{role.upper()}",
@@ -125,7 +131,7 @@ EXTERNAL_AGENTS = {
             "roles": [role],
         }
         for role in ROLE_NAMES
-    },
+    }),
 }
 
 
@@ -2695,13 +2701,21 @@ def handle_task(task_id: str, why: str, kind: str = "", actor_id: str = "",
     # Reviewer-first: карточка сдана — будим верификатора. Карточка остаётся
     # у исполнителя, вердикт он выносит по токену (см. wake_reviewer). Не
     # выходим: владелец мог ещё и написать по этой же карточке.
-    if task.get("agent_state") == "review" and task.get("requires_reviewer_review"):
+    if (task.get("agent_state") == "review" and task.get("requires_reviewer_review")
+            and not ROLES_IN_SERVER):
         wake_reviewer(task)
 
     # Если сдан ребёнок — будим Оркестратора на родительской карточке!
     if task.get("agent_state") in ("review", "blocked") and parent_task_id(task):
         if wake_parent(task, owner_id):
             return
+
+    # Карточки ролей исполняет сервер (этап C2).
+    if ROLES_IN_SERVER and (
+        (task.get("assignee_id") or "").startswith("role_") or task.get("role")
+    ):
+        log(f"  {why}: карточку роли исполняет сервер — не берусь")
+        return
 
     ok, reason = decide(task, kind, actor_id)
     if not ok:
