@@ -19,7 +19,6 @@ export const PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2";
 export const ROLE_USER_IDS: Record<RoleName, string> = {
   researcher: "role_researcher",
   analyst: "role_analyst",
-  synthesizer: "role_synthesizer",
   critic_verifier: "role_critic_verifier",
   architect: "role_architect",
   builder: "role_builder",

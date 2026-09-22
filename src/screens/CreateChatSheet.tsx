@@ -39,7 +39,6 @@ const ROLE_ORDER = [
   "role_builder",
   "role_qa",
   "role_designer",
-  "role_synthesizer",
   "role_critic_verifier",
 ];
 

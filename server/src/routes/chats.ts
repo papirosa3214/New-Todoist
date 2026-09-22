@@ -681,7 +681,6 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
 const ROLE_USER_IDS: Record<RoleName, string> = {
   researcher: "role_researcher",
   analyst: "role_analyst",
-  synthesizer: "role_synthesizer",
   critic_verifier: "role_critic_verifier",
   architect: "role_architect",
   builder: "role_builder",
@@ -692,7 +691,6 @@ const ROLE_USER_IDS: Record<RoleName, string> = {
 const ROLE_TITLES_RU: Record<RoleName, string> = {
   researcher: "Исследователь",
   analyst: "Аналитик",
-  synthesizer: "Синтезатор",
   critic_verifier: "Критик-проверяющий",
   architect: "Архитектор",
   builder: "Разработчик",

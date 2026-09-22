@@ -179,7 +179,6 @@ const AVATAR_SLUGS: Record<string, string> = {
   // только имена; пока нет файла — iOS отрисует букву, без поломки.
   Исследователь: "researcher",
   Аналитик: "analyst",
-  Синтезатор: "synthesizer",
   "Критик-проверяющий": "critic_verifier",
   Архитектор: "architect",
   Разработчик: "builder",

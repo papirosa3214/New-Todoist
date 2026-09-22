@@ -46,17 +46,6 @@ const roles = [
     ],
   },
   {
-    role: "synthesizer",
-    name: "Синтезатор",
-    email: "synthesizer@taskflow.local",
-    initials: "S",
-    color: "#A78BFA",
-    skills: [
-      ["synthesis", "Сведение фактов в выводы"],
-      ["communication", "Ясная формулировка результата"],
-    ],
-  },
-  {
     role: "critic_verifier",
     name: "Критик-проверяющий",
     email: "critic-verifier@taskflow.local",

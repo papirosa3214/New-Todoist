@@ -200,7 +200,7 @@ vi.mock("../src/lib/embeddingClient.js", () => ({
 
 function seedRoleAccounts(): void {
   const roles = [
-    "researcher", "analyst", "synthesizer", "critic_verifier",
+    "researcher", "analyst", "critic_verifier",
     "architect", "builder", "qa", "designer",
   ];
   const insert = db.prepare(
@@ -538,7 +538,7 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     const chat = await createChat({
       title: "Сериализация",
       kind: "group",
-      member_ids: ["role_synthesizer"],
+      member_ids: ["role_qa"],
     });
     const chatId = chat.json().chat.id;
 
@@ -551,20 +551,20 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
       method: "POST",
       url: `/api/chats/${chatId}/messages`,
       headers: ownerAuth,
-      payload: { text: "@synthesizer первый" },
+      payload: { text: "@qa первый" },
     });
     expect(firstSent.statusCode).toBe(200);
     // Даём первому ходу дойти до promptAndWait.
     await tick(50);
 
-    // К моменту второго сообщения очередь на (chat, role_synthesizer)
+    // К моменту второго сообщения очередь на (chat, role_qa)
     // не пуста — значит, второй ход будет ждать, а не стартанёт
     // параллельно.
     const secondSent = await app.inject({
       method: "POST",
       url: `/api/chats/${chatId}/messages`,
       headers: ownerAuth,
-      payload: { text: "@synthesizer второй" },
+      payload: { text: "@qa второй" },
     });
     expect(secondSent.statusCode).toBe(200);
     await tick(50);
@@ -576,7 +576,7 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
 
     // В ленте — пока только сообщения пользователя, ни одного ответа:
     // первый ход завис, второй ждёт.
-    const repliesBefore = messagesByAuthor(chatId, "role_synthesizer");
+    const repliesBefore = messagesByAuthor(chatId, "role_qa");
     expect(repliesBefore).toHaveLength(0);
 
     // Отпускаем первый — он дописывает ответ в ленту и снимает лок/очередь.
@@ -589,7 +589,7 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     releasePromptWaiter(1);
     await tick(80);
 
-    const repliesAfter = messagesByAuthor(chatId, "role_synthesizer");
+    const repliesAfter = messagesByAuthor(chatId, "role_qa");
     expect(repliesAfter).toHaveLength(2);
   });
 });

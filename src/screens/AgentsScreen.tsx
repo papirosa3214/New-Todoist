@@ -44,12 +44,6 @@ const PI_ROLE_META: Record<string, PiRoleMeta> = {
     purpose: "Сравнивает данные, находит закономерности и риски.",
     specialization: "Расчёты · таблицы · структурирование данных",
   },
-  synthesizer: {
-    label: "Синтезатор",
-    invocation: "--mcp-config ~/.pi/agent/taskflow-profiles/synthesizer.json",
-    purpose: "Собирает выводы из нескольких материалов в понятный план.",
-    specialization: "Сводки · требования · варианты решений",
-  },
   critic_verifier: {
     label: "Критик-проверяющий",
     invocation:

@@ -69,18 +69,17 @@ describe("role catalog API", () => {
     await app.close();
   });
 
-  it("lists eight roles and returns Architect details", async () => {
+  it("lists seven roles and returns Architect details", async () => {
     const list = await app.inject({
       method: "GET",
       url: "/api/roles",
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(list.statusCode).toBe(200);
-    expect(list.json().roles).toHaveLength(8);
+    expect(list.json().roles).toHaveLength(7);
     expect(list.json().roles.map((role: { role: string }) => role.role)).toEqual([
       "researcher",
       "analyst",
-      "synthesizer",
       "critic_verifier",
       "architect",
       "builder",

@@ -41,7 +41,6 @@ export function demoteSeededOwner(db: Database): void {
 const ROLE_ACCOUNTS: Array<{ id: string; name: string; email: string; role: string }> = [
   { id: "role_researcher", name: "Researcher", email: "researcher@taskflow.local", role: "researcher" },
   { id: "role_analyst", name: "Analyst", email: "analyst@taskflow.local", role: "analyst" },
-  { id: "role_synthesizer", name: "Synthesizer", email: "synthesizer@taskflow.local", role: "synthesizer" },
   { id: "role_critic_verifier", name: "Critic Verifier", email: "critic@taskflow.local", role: "critic_verifier" },
   { id: "role_architect", name: "Architect", email: "architect@taskflow.local", role: "architect" },
   { id: "role_builder", name: "Builder", email: "builder@taskflow.local", role: "builder" },

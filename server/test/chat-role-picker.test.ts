@@ -54,7 +54,7 @@ let app: FastifyInstance | undefined;
 
 function seedRoleAccounts(): void {
   const roles = [
-    "researcher", "analyst", "synthesizer", "critic_verifier",
+    "researcher", "analyst", "critic_verifier",
     "architect", "builder", "qa", "designer",
   ];
   const insert = db.prepare(

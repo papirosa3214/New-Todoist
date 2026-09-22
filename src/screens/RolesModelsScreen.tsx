@@ -15,7 +15,6 @@ import { getErrorMessage } from "../lib/errors";
 const ROLE_LABEL: Record<string, string> = {
   researcher: "Исследователь",
   analyst: "Аналитик",
-  synthesizer: "Синтезатор",
   critic_verifier: "Критик-проверяющий",
   architect: "Архитектор",
   builder: "Разработчик",
@@ -26,7 +25,6 @@ const ROLE_LABEL: Record<string, string> = {
 const ROLES = [
   "researcher",
   "analyst",
-  "synthesizer",
   "critic_verifier",
   "architect",
   "builder",

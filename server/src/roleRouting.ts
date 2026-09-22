@@ -5,7 +5,6 @@ import { parse, stringify } from "yaml";
 export const ROLE_NAMES = [
   "researcher",
   "analyst",
-  "synthesizer",
   "critic_verifier",
   "architect",
   "builder",

@@ -52,7 +52,6 @@ const uid = () => crypto.randomUUID();
 const ROLE_USER_IDS: Record<RoleName, string> = {
   researcher: "role_researcher",
   analyst: "role_analyst",
-  synthesizer: "role_synthesizer",
   critic_verifier: "role_critic_verifier",
   architect: "role_architect",
   builder: "role_builder",
@@ -197,7 +196,6 @@ export async function pickRole(
 const ROLE_TITLES_RU: Record<string, string> = {
   researcher: "Исследователь",
   analyst: "Аналитик",
-  synthesizer: "Синтезатор",
   critic_verifier: "Критик-проверяющий",
   architect: "Архитектор",
   builder: "Разработчик",

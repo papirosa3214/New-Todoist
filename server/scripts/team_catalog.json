@@ -44,14 +44,6 @@
       "skills": ["analysis", "data", "comparison"],
       "auto_route": true
     },
-    "synthesizer": {
-      "id": "role_synthesizer",
-      "level": 3,
-      "title": "Синтезатор",
-      "competence": "сборка разрозненных фактов в один связный документ",
-      "skills": ["synthesis", "writing", "structuring"],
-      "auto_route": true
-    },
     "critic_verifier": {
       "id": "role_critic_verifier",
       "level": 3,

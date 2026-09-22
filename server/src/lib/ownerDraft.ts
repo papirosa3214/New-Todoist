@@ -172,7 +172,6 @@ export function whereLine(where: string): string {
 const ROLE_TITLES: Record<string, string> = {
   researcher: "Исследователь",
   analyst: "Аналитик",
-  synthesizer: "Синтезатор",
   critic_verifier: "Критик-проверяющий",
   architect: "Архитектор",
   builder: "Разработчик",

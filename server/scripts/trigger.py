@@ -68,7 +68,6 @@ SERVICE_AUTHORS = {ME}
 ROLE_NAMES = frozenset({
     "researcher",
     "analyst",
-    "synthesizer",
     "critic_verifier",
     "architect",
     "builder",
