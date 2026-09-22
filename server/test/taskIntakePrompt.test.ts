@@ -11,32 +11,24 @@ import { describe, expect, it } from "vitest";
 const { buildDictationSystemPrompt } = await import("../src/routes/ai.js");
 
 describe("Двухслойный промпт постановки", () => {
-  it("без слоя владельца отдаётся только системный промпт", () => {
+  it("без текста владельца работает шаблон постановки", () => {
     const prompt = buildDictationSystemPrompt("");
-    expect(prompt).toContain("надиктовку");
-    expect(prompt).not.toContain("Дополнительные пожелания");
+    expect(prompt).toContain("ШАБЛОН");
+    expect(prompt).toContain('"role"');
+    expect(prompt).toContain('"where"');
   });
 
-  it("пустой слой из пробелов не считается слоем", () => {
+  it("пустой текст из пробелов не считается текстом владельца", () => {
     expect(buildDictationSystemPrompt("   \n  ")).toEqual(
       buildDictationSystemPrompt(""),
     );
   });
 
-  it("слой владельца идёт после системного и ограничен рамкой", () => {
-    const prompt = buildDictationSystemPrompt(
-      "Названия пиши глаголом. Дроби на дерево охотнее.",
-    );
-
-    // Смысловые пожелания дошли.
-    expect(prompt).toContain("Названия пиши глаголом");
-    // И пришли ПОСЛЕ системного слоя: он остаётся главным.
-    expect(prompt.indexOf("надиктовку")).toBeLessThan(
-      prompt.indexOf("Названия пиши глаголом"),
-    );
-    // С явной рамкой: текст владельца не переопределяет формат ответа и
-    // не может разрешить запуск задачи.
-    expect(prompt).toContain("НЕ меняют");
+  // 23.09.2026: что владелец видит в «Постановке задач», то и работает —
+  // его текст заменяет шаблон, а не приклеивается к нему.
+  it("текст владельца заменяет шаблон целиком", () => {
+    const own = "Названия пиши глаголом. Дроби на дерево охотнее.";
+    expect(buildDictationSystemPrompt(own)).toBe(own);
   });
 
   it("системный слой требует критерий результата и вопрос владельцу", () => {

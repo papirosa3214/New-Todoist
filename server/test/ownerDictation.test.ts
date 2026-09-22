@@ -615,6 +615,67 @@ describe("Окно постановки задач (карточка 4396f8c9)",
     await setMode("manual");
   });
 
+  it("роль из постановки записана в карточку и в ленту с причиной", async () => {
+    model.impl = async () => ({
+      title: "Показать «печатает» в чате",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+      role: "builder",
+      roleReason: "нужно событие на сервере и его показ в приложении",
+      where: "iphone",
+    });
+    const sent = await dictate("сделай индикатор печатает в приложении");
+    const draft = await waitForDraft(sent.json().id);
+    const row = db
+      .prepare("SELECT machine_selected_role, description FROM tasks WHERE id = ?")
+      .get(draft.task_id) as { machine_selected_role: string; description: string };
+    expect(row.machine_selected_role).toBe("builder");
+    expect(row.description).toContain("📍 ГДЕ: приложение на iPhone");
+    const ev = db
+      .prepare("SELECT actor_id, to_value FROM task_events WHERE task_id = ? AND kind = 'role_choice'")
+      .get(draft.task_id) as { actor_id: string | null; to_value: string };
+    expect(ev.actor_id).toBeNull();
+    expect(ev.to_value).toContain("Разработчик");
+    expect(ev.to_value).toContain("событие на сервере");
+  });
+
+  it("автоматический режим: личное дело остаётся владельцу, агенту не уходит", async () => {
+    await setMode("automatic");
+    model.impl = async () => ({
+      title: "Продлить ОСАГО",
+      description: "",
+      subtasks: ["Оплатить полис"],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+      role: null,
+      roleReason: "",
+      where: "личное",
+    });
+    const sent = await dictate("продли осаго до четвёртого сентября");
+    const draft = await waitForDraft(sent.json().id);
+    await new Promise((r) => setTimeout(r, 200));
+    const row = db
+      .prepare("SELECT ready_for_pickup, assignee_id, dispatched_role FROM tasks WHERE id = ?")
+      .get(draft.task_id) as {
+      ready_for_pickup: number;
+      assignee_id: string | null;
+      dispatched_role: string | null;
+    };
+    expect(row.ready_for_pickup).toBe(0);
+    expect(row.dispatched_role).toBeNull();
+    const owner = db
+      .prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1")
+      .get() as { id: string };
+    expect(row.assignee_id).toBe(owner.id);
+    await setMode("manual");
+  });
+
   it("ручной режим по-прежнему останавливается на черновике", async () => {
     await setMode("manual");
     model.impl = async () => ({

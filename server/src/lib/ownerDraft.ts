@@ -158,6 +158,69 @@ function resultLine(result: string): string {
   return `✅ РЕЗУЛЬТАТ: ${result}`;
 }
 
+/** Где делается работа — строкой в описании, тем же приёмом: агент на .110
+ *  иначе не знает, что речь о приложении на iPhone, и делает в вебе. */
+const WHERE_TITLES: Record<string, string> = {
+  iphone: "приложение на iPhone",
+  web: "веб",
+  server: "сервер",
+};
+function whereLine(where: string): string {
+  return `📍 ГДЕ: ${WHERE_TITLES[where] ?? where}`;
+}
+
+const ROLE_TITLES: Record<string, string> = {
+  researcher: "Исследователь",
+  analyst: "Аналитик",
+  synthesizer: "Синтезатор",
+  critic_verifier: "Критик-проверяющий",
+  architect: "Архитектор",
+  builder: "Разработчик",
+  qa: "QA",
+  designer: "Дизайнер",
+};
+
+/** Личное дело владельца (оплата, звонок, поездка) — агентам не отдаётся. */
+function isPersonal(card: { where?: string | null }): boolean {
+  return card.where === "личное";
+}
+
+/**
+ * Роль, выбранная вместе с постановкой: в machine_selected_role (диспетчер
+ * берёт её без пересчёта) и в ленту с причиной. Личное дело — исполнитель
+ * сам владелец, чтобы автомат не отдал его агенту.
+ */
+function applyCardRole(
+  taskId: string,
+  card: { role?: string | null; roleReason?: string; where?: string | null },
+  owner: string,
+): void {
+  if (isPersonal(card)) {
+    db.prepare("UPDATE tasks SET assignee_id = ? WHERE id = ?").run(owner, taskId);
+    logEvent({
+      taskId,
+      actorId: null,
+      kind: "role_choice",
+      field: "assignee_id",
+      toValue: "Личное дело — делаете вы, агентам не отдаётся.",
+    });
+    return;
+  }
+  if (!card.role) return;
+  db.prepare("UPDATE tasks SET machine_selected_role = ? WHERE id = ?").run(
+    card.role,
+    taskId,
+  );
+  const reason = card.roleReason ? ` — ${card.roleReason}` : "";
+  logEvent({
+    taskId,
+    actorId: null,
+    kind: "role_choice",
+    field: "machine_selected_role",
+    toValue: `Роль «${ROLE_TITLES[card.role] ?? card.role}» подобрана при постановке${reason}.`,
+  });
+}
+
 /** Русское склонение при числе: 1 карточка, 2 карточки, 5 карточек.
  *  Эти строки владелец читает в чате с телефона, и «2 карточка(и)» там
  *  выглядит как недоделка, а не как отчёт. */
@@ -208,6 +271,7 @@ function createDraftCards(
     const parentParts: string[] = [];
     if (cards.description) parentParts.push(cards.description);
     if (cards.result) parentParts.push(resultLine(cards.result));
+    if (cards.where && !isPersonal(cards)) parentParts.push(whereLine(cards.where));
 
     insTask.run(
       parentId,
@@ -235,6 +299,7 @@ function createDraftCards(
       }
       if (child.description) parts.push(child.description);
       if (child.result) parts.push(resultLine(child.result));
+      if (child.where && !isPersonal(child)) parts.push(whereLine(child.where));
       insTask.run(
         childIds[i],
         child.title,
@@ -278,6 +343,11 @@ function createDraftCards(
         toValue: cards.children[i].title,
       });
     });
+
+    // Исполнители, выбранные вместе с постановкой, — после записей о
+    // создании, чтобы лента читалась по порядку.
+    applyCardRole(parentId, cards, owner);
+    cards.children.forEach((child, i) => applyCardRole(childIds[i], child, owner));
   });
   txn();
 
@@ -365,9 +435,18 @@ async function admitTreeAutomatically(
   owner: string,
 ): Promise<{ dispatched: number; queued: number }> {
   // Исполняемые карточки и признак «есть предшественница».
-  const executable: Array<{ id: string; waits: boolean }> = childIds.length
-    ? childIds.map((id, i) => ({ id, waits: cards.children[i].after !== null }))
-    : [{ id: parentId, waits: false }];
+  // Личные дела владельца (оплата, звонок, поездка) агентам не отдаются:
+  // ни флага, ни раздачи — они остаются владельцу (23.09.2026).
+  const executable: Array<{ id: string; waits: boolean }> = (childIds.length
+    ? childIds.map((id, i) => ({
+        id,
+        waits: cards.children[i].after !== null,
+        personal: isPersonal(cards.children[i]),
+      }))
+    : [{ id: parentId, waits: false, personal: isPersonal(cards) }]
+  )
+    .filter((card) => !card.personal)
+    .map(({ id, waits }) => ({ id, waits }));
 
   // Флаг — одной транзакцией на всё дерево.
   const raise = db.transaction(() => {

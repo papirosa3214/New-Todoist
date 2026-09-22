@@ -646,6 +646,8 @@ export async function admitParentAfterChildren(
     | undefined;
   if (!parent || parent.status !== "active") return false;
   if ((parent.ready_for_pickup ?? 0) === 1 || parent.agent_state) return false;
+  // Родитель — личное дело владельца: его пункты делает он сам.
+  if (parent.assignee_id === ownerRow.id) return false;
 
   const openSteps = (
     db
