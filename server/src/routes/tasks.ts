@@ -1621,7 +1621,18 @@ export function registerTaskRoutes(app: FastifyInstance) {
           const allDone =
             siblings.length > 0 &&
             siblings.every((s) => s.status === "completed");
-          if (allDone) {
+          // Предохранитель (владелец 22.09.2026): у родителя есть свои
+          // невыполненные пункты — его работа ещё не сделана, и закрытие
+          // дочерних на проверку его не отправляет. Уйдёт туда сам, когда
+          // исполнитель закроет последний свой пункт (routes/subtasks.ts).
+          const openOwnSteps = (
+            db
+              .prepare(
+                "SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ? AND done = 0",
+              )
+              .get(parent.id) as { n: number }
+          ).n;
+          if (allDone && openOwnSteps === 0) {
             const beforeVersion = currentResultVersion(parent.id);
             const version = ensureResultVersionForReview(
               parent.id,
