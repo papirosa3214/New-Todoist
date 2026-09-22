@@ -524,6 +524,93 @@ function summary(cards: DictationCards): string {
  * chat_message_id, поэтому второй заход упирается в PRIMARY KEY и молча
  * уходит.
  */
+/**
+ * «✓ Идёт» на карточке Секретаря в чате (владелец 23.09.2026): запустить
+ * черновик, не открывая задачу. Тем же порядком, что автоматика
+ * (admitTreeAutomatically), но по данным из базы: исполняются дочерние, а
+ * если их нет — сама карточка; личные дела (исполнитель — владелец) не
+ * трогаем; ждущие очереди получают флаг, но отдаются, только когда дойдёт
+ * их черёд (releaseQueuedSuccessors). Действие владельца — и в ленте от него.
+ */
+export async function startDraftTree(
+  parentId: string,
+  owner: string,
+): Promise<{ started: number; queued: number } | null> {
+  const parent = db
+    .prepare("SELECT id, status, parent_id FROM tasks WHERE id = ?")
+    .get(parentId) as { id: string; status: string; parent_id: string | null } | undefined;
+  if (!parent || parent.status !== "active" || parent.parent_id) return null;
+
+  type Row = {
+    id: string;
+    description: string | null;
+    assignee_id: string | null;
+    ready_for_pickup: number | null;
+    status: string;
+  };
+  const children = db
+    .prepare(
+      `SELECT id, description, assignee_id, ready_for_pickup, status
+         FROM tasks WHERE parent_id = ? ORDER BY position, created_at`,
+    )
+    .all(parentId) as Row[];
+  const cards: Row[] = children.length
+    ? children
+    : [
+        db
+          .prepare(
+            "SELECT id, description, assignee_id, ready_for_pickup, status FROM tasks WHERE id = ?",
+          )
+          .get(parentId) as Row,
+      ];
+  const executable = cards.filter(
+    (c) =>
+      c.status === "active" &&
+      (c.ready_for_pickup ?? 0) === 0 &&
+      c.assignee_id !== owner,
+  );
+
+  const raise = db.transaction(() => {
+    const upd = db.prepare(
+      `UPDATE tasks
+          SET ready_for_pickup = 1,
+              ready_set_at = datetime('now'),
+              ready_set_by = ?,
+              updated_at = datetime('now')
+        WHERE id = ? AND ready_for_pickup = 0`,
+    );
+    for (const card of executable) {
+      upd.run(owner, card.id);
+      logEvent({
+        taskId: card.id,
+        actorId: owner,
+        kind: "ready_flag_changed",
+        field: "ready_for_pickup",
+        fromValue: "0",
+        toValue: "1",
+      });
+    }
+  });
+  raise();
+
+  let started = 0;
+  let queued = 0;
+  for (const card of executable) {
+    if (card.description?.includes("⛓ ОЧЕРЕДЬ:")) {
+      queued += 1;
+      continue;
+    }
+    if (card.assignee_id) {
+      started += 1; // исполнитель уже есть — флаг и есть запуск
+      continue;
+    }
+    const outcome = await dispatchTaskToPi(card.id, owner);
+    if (outcome.ok) started += 1;
+    else console.warn(`запуск черновика: ${card.id} не отдан:`, outcome.error);
+  }
+  return { started, queued };
+}
+
 export function startDraftFromChat(message: {
   id: string;
   from_user_id: string;

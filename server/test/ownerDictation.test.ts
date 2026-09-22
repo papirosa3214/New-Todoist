@@ -676,6 +676,45 @@ describe("Окно постановки задач (карточка 4396f8c9)",
     await setMode("manual");
   });
 
+  it("«✓ Идёт» из чата: черновик запускается с очередью, личное не трогается", async () => {
+    await setMode("manual");
+    model.impl = async () => ({
+      title: "Три дела",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [
+        { title: "Починить кнопку", description: "", result: "", question: null, subtasks: [], after: null, role: "builder" },
+        { title: "Добавить фильтр", description: "", result: "", question: null, subtasks: [], after: 1, role: "builder" },
+        { title: "Записаться к врачу", description: "", result: "", question: null, subtasks: [], after: null, role: null, where: "личное" },
+      ],
+    });
+    const sent = await dictate("почини кнопку потом фильтр и запишись к врачу");
+    const draft = await waitForDraft(sent.json().id);
+    const kids = db
+      .prepare("SELECT id, title FROM tasks WHERE parent_id = ? ORDER BY position")
+      .all(draft.task_id) as Array<{ id: string; title: string }>;
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/task-intake/drafts/${draft.task_id}/start`,
+      headers: { authorization: ownerAuth },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ started: 1, queued: 1 });
+
+    const row = (id: string) =>
+      db.prepare("SELECT ready_for_pickup, dispatched_role FROM tasks WHERE id = ?").get(id) as {
+        ready_for_pickup: number;
+        dispatched_role: string | null;
+      };
+    expect(row(kids[0].id)).toMatchObject({ ready_for_pickup: 1, dispatched_role: "builder" });
+    expect(row(kids[1].id)).toMatchObject({ ready_for_pickup: 1, dispatched_role: null });
+    expect(row(kids[2].id).ready_for_pickup).toBe(0);
+  });
+
   it("ручной режим по-прежнему останавливается на черновике", async () => {
     await setMode("manual");
     model.impl = async () => ({

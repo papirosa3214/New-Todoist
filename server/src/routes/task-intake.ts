@@ -136,6 +136,24 @@ export function claimDraftForParsing(
 }
 
 export function registerTaskIntakeRoutes(app: FastifyInstance): void {
+  // «✓ Идёт» на карточке Секретаря в чате — запустить черновик целиком.
+  // Только владелец: флаг готовности — его решение.
+  app.post<{ Params: { id: string } }>(
+    "/api/task-intake/drafts/:id/start",
+    { preHandler: authOrApiToken },
+    async (req: any, reply) => {
+      const owner = ownerIdOrNull();
+      if (!owner || req.userId !== owner) {
+        return reply.code(403).send({ error: "только владелец" });
+      }
+      // Отложенный импорт: ownerDraft сам зависит от этого модуля.
+      const { startDraftTree } = await import("../lib/ownerDraft.js");
+      const result = await startDraftTree(req.params.id, owner);
+      if (!result) return reply.code(404).send({ error: "черновик не найден" });
+      return { ok: true, ...result };
+    },
+  );
+
   // GET — текущий режим. Источник правды (владелец) — фиксированный:
   // ровно один, тот же, что в /api/agents. Не-владельцу возвращаем 403:
   // настройка чужая, и читать её чужим агентам незачем.
