@@ -17,6 +17,7 @@
 // один раз применяемая запись.
 import type { Database } from "better-sqlite3";
 import db from "./db.js";
+import { refreshRoles } from "./roleRouting.js";
 
 export type Migration = {
   id: string;
@@ -2014,6 +2015,35 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // Роли — данные, а не код (владелец 23.09.2026). Посев — нынешние семь
+    // ролей (Синтезатор убран 23.09.2026). Модели ролей остаются в
+    // scripts/role-routing.yaml: с ним работают экран моделей и скрипты.
+    id: "056_roles",
+    description:
+      "roles — справочник ролей исполнителей: ключ, название, «чем занимается» " +
+      "(строка для Секретаря), включена ли, порядок. Заменяет список в коде.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS roles (
+          key TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          position INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+        INSERT OR IGNORE INTO roles (key, title, summary, enabled, position) VALUES
+          ('researcher', 'Исследователь', 'узнать, найти, сравнить варианты вне нашего кода и свести найденное в выводы или документ.', 1, 0),
+          ('analyst', 'Аналитик', 'посчитать цифры, метрики, деньги.', 1, 1),
+          ('critic_verifier', 'Критик-проверяющий', 'проверить готовую работу и вынести вердикт.', 1, 2),
+          ('architect', 'Архитектор', 'продумать устройство системы до кода, когда решений несколько.', 1, 3),
+          ('builder', 'Разработчик', 'пишет и чинит код: сервер, приложение, веб. «Сделать, чтобы работало».', 1, 4),
+          ('qa', 'QA', 'прогнать сценарии и найти баги.', 1, 5),
+          ('designer', 'Дизайнер', 'как выглядит: макет, экран, отступы, цвета. Не пишет серверную логику.', 1, 6);
+      `);
+    },
+  },
 ];
 
 /**
@@ -2038,6 +2068,15 @@ export interface RunMigrationsOptions {
 
 /** Apply all still-unapplied migrations, one transaction per migration. */
 export function runMigrations(options?: RunMigrationsOptions): void {
+  try {
+    runMigrationsInner(options);
+  } finally {
+    // Состав ролей живёт в таблице roles — после миграций перечитать.
+    refreshRoles();
+  }
+}
+
+function runMigrationsInner(options?: RunMigrationsOptions): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,

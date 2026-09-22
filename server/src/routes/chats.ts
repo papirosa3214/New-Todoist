@@ -28,6 +28,8 @@ import { authOrApiToken } from "../auth.js";
 import { broadcastToUsers } from "../ws.js";
 import {
   ROLE_NAMES,
+  roleTitle as titleOfRole,
+  roleUserId as userIdOfRole,
   type RoleName,
 } from "../roleRouting.js";
 import {
@@ -506,7 +508,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           // — хуже того, контекст (pi_session_id) мог бы перемешаться.
           // Очередь сериализует ходы; другие роли и чаты продолжают
           // работать параллельно.
-          void enqueueChatReply(chatId, ROLE_USER_IDS[targetRole], () =>
+          void enqueueChatReply(chatId, userIdOfRole(targetRole), () =>
             deliverAgentReply({
               chatId,
               role: targetRole,
@@ -678,27 +680,8 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
 
 // ===== Помощники онлайн-сессии (этап 2) =====
 
-const ROLE_USER_IDS: Record<RoleName, string> = {
-  researcher: "role_researcher",
-  analyst: "role_analyst",
-  critic_verifier: "role_critic_verifier",
-  architect: "role_architect",
-  builder: "role_builder",
-  qa: "role_qa",
-  designer: "role_designer",
-};
-
-const ROLE_TITLES_RU: Record<RoleName, string> = {
-  researcher: "Исследователь",
-  analyst: "Аналитик",
-  critic_verifier: "Критик-проверяющий",
-  architect: "Архитектор",
-  builder: "Разработчик",
-  qa: "QA",
-  designer: "Дизайнер",
-};
-
-const VALID_ROLES = new Set<RoleName>(ROLE_NAMES);
+// Живой список: роли добавляются и отключаются без перезапуска.
+const VALID_ROLES = { has: (role: string) => ROLE_NAMES.includes(role) };
 
 /** Роли, которые реально есть среди участников чата. id вроде role_*
  *  считаются ролевыми, остальные id (владелец, гость) — нет. */
@@ -750,11 +733,11 @@ function parseRoleMention(text: string): RoleName | null {
   // «@Дизайнер интерфейсов» (22.09.2026). Имена берём из учёток ролей;
   // длинные проверяем первыми, чтобы составное имя не перехватило короткое.
   const lower = text.toLowerCase();
-  const named = [...VALID_ROLES]
+  const named = [...ROLE_NAMES]
     .map((role) => ({
       role,
       name: (
-        (db.prepare("SELECT name FROM users WHERE id = ?").get(ROLE_USER_IDS[role]) as
+        (db.prepare("SELECT name FROM users WHERE id = ?").get(userIdOfRole(role)) as
           | { name?: string }
           | undefined)?.name ?? ""
       ).toLowerCase(),
@@ -919,7 +902,7 @@ async function deliverAgentReply(args: {
   userText: string;
 }): Promise<string | null> {
   const { chatId, role } = args;
-  const roleUserId = ROLE_USER_IDS[role];
+  const roleUserId = userIdOfRole(role);
   if (!db.prepare("SELECT id FROM users WHERE id = ?").get(roleUserId)) {
     // Роль-учётка не заведена — пропускаем, без сообщения. Владелец увидит
     // проблему в логах, чат продолжит работать.
@@ -956,7 +939,7 @@ async function deliverAgentReply(args: {
     })
     .join("\n");
 
-  const roleTitle = ROLE_TITLES_RU[role] || role;
+  const roleTitle = titleOfRole(role);
   const prompt = [
     `Ты — ${roleTitle} (${role}). Это онлайн-сессия внутри чата TaskFlow.`,
     "Перед тобой история чата (от старых к новым) и только что пришедшее",

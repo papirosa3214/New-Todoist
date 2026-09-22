@@ -30,6 +30,7 @@ import {
   type IntakeMode,
 } from "../routes/task-intake.js";
 import { dispatchTaskToPi } from "../routes/dispatch.js";
+import { roleTitle } from "../roleRouting.js";
 import {
   structureDictationToCards,
   type DictationCards,
@@ -169,16 +170,6 @@ export function whereLine(where: string): string {
   return `📍 ГДЕ: ${WHERE_TITLES[where] ?? where}`;
 }
 
-const ROLE_TITLES: Record<string, string> = {
-  researcher: "Исследователь",
-  analyst: "Аналитик",
-  critic_verifier: "Критик-проверяющий",
-  architect: "Архитектор",
-  builder: "Разработчик",
-  qa: "QA",
-  designer: "Дизайнер",
-};
-
 /** Личное дело владельца (оплата, звонок, поездка) — агентам не отдаётся. */
 function isPersonal(card: { where?: string | null }): boolean {
   return card.where === "личное";
@@ -216,7 +207,7 @@ function applyCardRole(
     actorId: null,
     kind: "role_choice",
     field: "machine_selected_role",
-    toValue: `Роль «${ROLE_TITLES[card.role] ?? card.role}» подобрана при постановке${reason}.`,
+    toValue: `Роль «${roleTitle(card.role)}» подобрана при постановке${reason}.`,
   });
 }
 

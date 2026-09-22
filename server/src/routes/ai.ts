@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead } from "../access.js";
 import { OBSERVER_SYSTEM_PROMPT } from "./activity.js";
-import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
+import { ROLE_NAMES, rolesPromptBlock, type RoleName } from "../roleRouting.js";
 
 // ═══════════ AI-разбивка задачи на подзадачи (локальная модель) ═══════════
 // Дёргает Ollama (OpenAI-совместимый /v1/chat/completions) на домашнем
@@ -85,13 +85,7 @@ const DICTATION_SYSTEM_PROMPT = `Ты — секретарь. Из надикт�
 НИЧЕГО НЕ ТЕРЯЙ: каждое условие, «но», «только когда», «и при этом» владельца должно попасть в description или result. Короткий пересказ, потерявший условие, — ошибка.
 
 ИСПОЛНИТЕЛИ — выбирай по тому, какую РАБОТУ надо сделать, а не по словам:
-- builder — пишет и чинит код: сервер, приложение, веб. «Сделать, чтобы работало».
-- designer — как выглядит: макет, экран, отступы, цвета. Не пишет серверную логику.
-- architect — продумать устройство системы до кода, когда решений несколько.
-- researcher — узнать, найти, сравнить варианты вне нашего кода и свести найденное в выводы или документ.
-- analyst — посчитать цифры, метрики, деньги.
-- critic_verifier — проверить готовую работу и вынести вердикт.
-- qa — прогнать сценарии и найти баги.
+{{ИСПОЛНИТЕЛИ}}
 - null — личное дело владельца: звонок, оплата, поездка, документы.
 
 ПРИМЕРЫ
@@ -781,7 +775,13 @@ export function buildDictationSystemPrompt(ownerLayer: string): string {
   // иначе в модель уходили две инструкции подряд. Формат страхует разбор
   // ниже: чужие поля отбрасываются, роль и проект сверяются по спискам.
   const layer = (ownerLayer || "").trim();
-  return layer || DICTATION_SYSTEM_PROMPT;
+  return withRoles(layer || DICTATION_SYSTEM_PROMPT);
+}
+
+/** Подставить живой список ролей на место {{ИСПОЛНИТЕЛИ}} (таблица roles):
+ *  новая роль сразу видна Секретарю, отключённая — пропадает. */
+export function withRoles(prompt: string): string {
+  return prompt.split("{{ИСПОЛНИТЕЛИ}}").join(rolesPromptBlock());
 }
 
 /**
@@ -801,8 +801,9 @@ export async function pickRoleByModel(
   // В тестах живую модель не зовём: она на .110 и грузится до минуты.
   // Тесты, которым подбор нужен, подменяют эту функцию.
   if (process.env.VITEST) return null;
-  const source = (ownerId ? await getUserPrompt(ownerId, "task_intake") : "").trim()
-    || DICTATION_SYSTEM_PROMPT;
+  const source = withRoles(
+    (ownerId ? await getUserPrompt(ownerId, "task_intake") : "").trim() || DICTATION_SYSTEM_PROMPT,
+  );
   const section = (text: string, from: string, to: string): string => {
     const a = text.indexOf(from);
     if (a < 0) return "";
@@ -811,7 +812,7 @@ export async function pickRoleByModel(
   };
   const roles =
     section(source, "ИСПОЛНИТЕЛИ", "ПРИМЕРЫ") ||
-    section(DICTATION_SYSTEM_PROMPT, "ИСПОЛНИТЕЛИ", "ПРИМЕРЫ");
+    section(withRoles(DICTATION_SYSTEM_PROMPT), "ИСПОЛНИТЕЛИ", "ПРИМЕРЫ");
   const whereRule =
     section(source, "ГДЕ:", "НИЧЕГО НЕ ТЕРЯЙ") ||
     section(DICTATION_SYSTEM_PROMPT, "ГДЕ:", "НИЧЕГО НЕ ТЕРЯЙ");

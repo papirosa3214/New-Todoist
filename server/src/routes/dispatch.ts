@@ -36,7 +36,7 @@ import { isOwner } from "../access.js";
 import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
 import { isServiceUser } from "./agent-state.js";
-import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
+import { ROLE_NAMES, roleTitle, roleUserId, type RoleName } from "../roleRouting.js";
 import { getTaskRow, hydrateTask } from "./tasks.js";
 
 const uid = () => crypto.randomUUID();
@@ -49,16 +49,6 @@ const uid = () => crypto.randomUUID();
 // остаётся чисто внутренней механикой: наружу имя процесса не выходит,
 // `assignee_id` всегда идёт на конкретного role-юзера. Это закрывает
 // 14.09.2026: «В системе нет никакого „Pi“».
-const ROLE_USER_IDS: Record<RoleName, string> = {
-  researcher: "role_researcher",
-  analyst: "role_analyst",
-  critic_verifier: "role_critic_verifier",
-  architect: "role_architect",
-  builder: "role_builder",
-  qa: "role_qa",
-  designer: "role_designer",
-};
-
 // Запасная роль — на случай, когда подобрать не удалось: семантика не
 // ответила (Ollama недоступна) или вернула пусто. Не «роль по умолчанию
 // для всех», а именно запасной вариант: до 14.09.2026 сюда попадало ВСЁ,
@@ -193,16 +183,6 @@ export async function pickRole(
 
 /** Человеческие имена ролей — владелец читает ленту, а не наши
  *  идентификаторы. Порядок и состав — раздел 4.2 спецификации. */
-const ROLE_TITLES_RU: Record<string, string> = {
-  researcher: "Исследователь",
-  analyst: "Аналитик",
-  critic_verifier: "Критик-проверяющий",
-  architect: "Архитектор",
-  builder: "Разработчик",
-  qa: "QA",
-  designer: "Дизайнер",
-};
-
 /** Строка для ленты: какая роль и почему именно она. */
 export function roleChoiceNoteRu(choice: RoleChoice): string {
   if (choice.how === "dead" || choice.role === null) {
@@ -210,7 +190,7 @@ export function roleChoiceNoteRu(choice: RoleChoice): string {
     // ленты — отдельная ветка нужна, чтобы «имя» не упало на null.
     return "Подобрать роль не удалось — все кандидаты исключены.";
   }
-  const имя = ROLE_TITLES_RU[choice.role] || choice.role;
+  const имя = roleTitle(choice.role);
   if (choice.how === "owner") {
     return `Роль «${имя}» — выбрана вами.`;
   }
@@ -358,7 +338,7 @@ export async function dispatchTaskToPi(
               dispatched_by = ?,
               updated_at = datetime('now')
         WHERE id = ?`,
-    ).run(ROLE_USER_IDS[chosen], chosen, actorId, taskId);
+    ).run(roleUserId(chosen), chosen, actorId, taskId);
 
     logEvent({
       taskId,
@@ -391,7 +371,7 @@ export async function dispatchTaskToPi(
        VALUES (?, ?, 'assigned', ?, ?, ?)`,
     ).run(
       notifId,
-      ROLE_USER_IDS[chosen],
+      roleUserId(chosen),
       taskId,
       `Новая задача назначена: ${(latest.title || taskId).slice(0, 200)}`,
       actorId,
@@ -407,13 +387,13 @@ export async function dispatchTaskToPi(
     ).run(
       inboxId,
       `dispatch-${inboxId}`,
-      ROLE_USER_IDS[chosen],
+      roleUserId(chosen),
       `Вам назначена задача «${(latest.title || taskId).slice(0, 120)}» (роль ${chosen}).`,
       taskId,
       Number(latest.current_revision ?? 1),
     );
 
-    broadcastToUsers([ROLE_USER_IDS[chosen]], {
+    broadcastToUsers([roleUserId(chosen)], {
       type: "notification:new",
       notificationId: notifId,
       taskId,
@@ -574,7 +554,7 @@ export async function applyIntakeToNewTask(
       actorId: null,
       kind: "role_choice",
       field: "machine_selected_role",
-      toValue: `Роль «${ROLE_TITLES_RU[modelPick.role] ?? modelPick.role}» подобрана по сути работы${reason}.`,
+      toValue: `Роль «${roleTitle(modelPick.role)}» подобрана по сути работы${reason}.`,
     });
   } else if (alarmOn && !assigneeAlreadySet && !task.owner_selected_role) {
     // Подбираем роль и пишем в machine_selected_role. Роутер НИКОГДА не
