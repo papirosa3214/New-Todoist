@@ -785,6 +785,65 @@ export function buildDictationSystemPrompt(ownerLayer: string): string {
   return layer || DICTATION_SYSTEM_PROMPT;
 }
 
+/**
+ * Роль для карточки, заведённой РУКАМИ (или агентом), — той же моделью и
+ * по тем же разделам шаблона, что у Секретаря (владелец 23.09.2026: «чтобы
+ * не было большой разницы, ручками я задачу делаю или через секретаря»).
+ *
+ * Разделы «ИСПОЛНИТЕЛИ» и «ГДЕ» берутся из действующего текста постановки
+ * (свой текст владельца, иначе шаблон) — одна правка в «Постановке задач»
+ * действует на оба пути. null — модель не ответила или ответ не разобран:
+ * тогда вызывающий берёт прежний подбор по словам.
+ */
+export async function pickRoleByModel(
+  task: { title: string; description: string | null; subtasks: string[] },
+  ownerId: string | null,
+): Promise<{ role: RoleName | null; roleReason: string; where: string | null } | null> {
+  // В тестах живую модель не зовём: она на .110 и грузится до минуты.
+  // Тесты, которым подбор нужен, подменяют эту функцию.
+  if (process.env.VITEST) return null;
+  const source = (ownerId ? await getUserPrompt(ownerId, "task_intake") : "").trim()
+    || DICTATION_SYSTEM_PROMPT;
+  const section = (text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    if (a < 0) return "";
+    const b = to ? text.indexOf(to, a + from.length) : -1;
+    return text.slice(a, b > a ? b : undefined).trim();
+  };
+  const roles =
+    section(source, "ИСПОЛНИТЕЛИ", "ПРИМЕРЫ") ||
+    section(DICTATION_SYSTEM_PROMPT, "ИСПОЛНИТЕЛИ", "ПРИМЕРЫ");
+  const whereRule =
+    section(source, "ГДЕ:", "НИЧЕГО НЕ ТЕРЯЙ") ||
+    section(DICTATION_SYSTEM_PROMPT, "ГДЕ:", "НИЧЕГО НЕ ТЕРЯЙ");
+  const systemPrompt =
+    "Ты — секретарь. Для готовой карточки задачи выбери исполнителя и платформу.\n\n" +
+    `${roles}\n\n${whereRule}\n\n` +
+    'Верни ТОЛЬКО JSON: {"role": "исполнитель из списка или null", ' +
+    '"role_reason": "почему он — одной фразой по сути работы", ' +
+    '"where": "не указано | iphone | web | server | личное"}';
+  const steps = task.subtasks.length
+    ? `\nШаги:\n${task.subtasks.map((t) => `- ${t}`).join("\n")}`
+    : "";
+  try {
+    const content = await callUnifiedAi({
+      systemPrompt,
+      userPrompt: `Карточка:\nНазвание: ${task.title}\nОписание: ${task.description ?? ""}${steps}`,
+      temperature: 0.2,
+      predictTokens: 400,
+    });
+    const parsed = parseJsonObject(content);
+    return {
+      role: parseRole(parsed?.role),
+      roleReason: typeof parsed?.role_reason === "string" ? parsed.role_reason.trim() : "",
+      where: parseWhere(parsed?.where),
+    };
+  } catch (err) {
+    console.warn("подбор роли моделью не удался:", err);
+    return null;
+  }
+}
+
 export async function structureDictationToCards(
   rawText: string,
   projects: Array<{ id: string; name: string }>,

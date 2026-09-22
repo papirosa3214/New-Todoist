@@ -519,7 +519,66 @@ export async function applyIntakeToNewTask(
   const { unitState } = await import("./agent-service.js");
   const alarmOn = (await unitState()).active;
 
-  if (alarmOn && !assigneeAlreadySet && !task.owner_selected_role) {
+  // Тот же подбор, что у Секретаря (23.09.2026): модель читает карточку и
+  // говорит, кто её делает, почему и где. Личное дело остаётся владельцу —
+  // без флага и раздачи, как у постановки Секретаря.
+  const exclusions = parseRoleExclusions(task.role_exclusions);
+  let modelPick: Awaited<ReturnType<typeof import("./ai.js").pickRoleByModel>> = null;
+  if (!assigneeAlreadySet && !task.owner_selected_role) {
+    const { pickRoleByModel } = await import("./ai.js");
+    const steps = (
+      db
+        .prepare("SELECT title FROM subtasks WHERE task_id = ? ORDER BY position")
+        .all(taskId) as Array<{ title: string }>
+    ).map((r) => r.title);
+    modelPick = await pickRoleByModel(
+      { title: task.title ?? "", description: task.description, subtasks: steps },
+      ownerId,
+    );
+    if (modelPick?.where === "личное") {
+      db.prepare(
+        "UPDATE tasks SET assignee_id = ?, updated_at = datetime('now') WHERE id = ? AND assignee_id IS NULL",
+      ).run(ownerId, taskId);
+      logEvent({
+        taskId,
+        actorId: null,
+        kind: "role_choice",
+        field: "assignee_id",
+        toValue: "Личное дело — делаете вы, агентам не отдаётся.",
+      });
+      return;
+    }
+    if (modelPick?.where) {
+      const { whereLine } = await import("../lib/ownerDraft.js");
+      db.prepare(
+        `UPDATE tasks
+            SET description = CASE WHEN description IS NULL OR description = ''
+                                   THEN ? ELSE description || char(10) || char(10) || ? END
+          WHERE id = ?`,
+      ).run(whereLine(modelPick.where), whereLine(modelPick.where), taskId);
+    }
+  }
+
+  if (
+    alarmOn &&
+    !assigneeAlreadySet &&
+    !task.owner_selected_role &&
+    modelPick?.role &&
+    !exclusions.includes(modelPick.role)
+  ) {
+    db.prepare(
+      `UPDATE tasks SET machine_selected_role = ?, updated_at = datetime('now')
+        WHERE id = ? AND assignee_id IS NULL`,
+    ).run(modelPick.role, taskId);
+    const reason = modelPick.roleReason ? ` — ${modelPick.roleReason}` : "";
+    logEvent({
+      taskId,
+      actorId: null,
+      kind: "role_choice",
+      field: "machine_selected_role",
+      toValue: `Роль «${ROLE_TITLES_RU[modelPick.role] ?? modelPick.role}» подобрана по сути работы${reason}.`,
+    });
+  } else if (alarmOn && !assigneeAlreadySet && !task.owner_selected_role) {
     // Подбираем роль и пишем в machine_selected_role. Роутер НИКОГДА не
     // пишет в owner_selected_role — это поле только владельца
     // (см. taskflow-pipeline-head-plan.md, шаг 1).
@@ -527,7 +586,7 @@ export async function applyIntakeToNewTask(
       taskId,
       task.owner_selected_role,
       task.machine_selected_role,
-      parseRoleExclusions(task.role_exclusions),
+      exclusions,
     );
     if (choice.how === "dead" || choice.role === null) {
       // Кандидатов нет — задача в тупике. Планировщик (шаг 4) увидит

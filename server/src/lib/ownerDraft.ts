@@ -165,7 +165,7 @@ const WHERE_TITLES: Record<string, string> = {
   web: "веб",
   server: "сервер",
 };
-function whereLine(where: string): string {
+export function whereLine(where: string): string {
   return `📍 ГДЕ: ${WHERE_TITLES[where] ?? where}`;
 }
 
