@@ -579,6 +579,113 @@ export async function applyIntakeToNewTask(
   if (alarmOn && !assigneeAlreadySet) await dispatchTaskToPi(taskId, ownerId);
 }
 
+/**
+ * Родитель со СВОИМИ пунктами тоже исполняется — после дочерних.
+ *
+ * Владелец 22.09.2026: секретарь завёл родителя с двумя дочерними и пунктом
+ * у самого родителя («проверить интеграцию…»). Приём флаг родителю не
+ * ставит (он контейнер, см. applyIntakeToNewTask), и пункт некому было
+ * выполнить — владелец поднял флаг руками, когда обе дочерние сдали работу.
+ * Теперь это делает сервер: как только ВСЕ дочерние на проверке или
+ * закрыты, а у родителя есть невыполненные пункты, родитель получает флаг
+ * и уходит исполнителю — тем же путём, что и при создании.
+ *
+ * Только в автоматическом режиме: в ручном флаг — решение владельца.
+ * Родитель без своих пунктов не трогается: делать ему нечего, он сам уйдёт
+ * на проверку сводкой, когда дочерние закроют (routes/tasks.ts).
+ *
+ * Вызывается после каждого перехода дочерней в review / completed. Не
+ * бросает: это следствие чужого перехода, а не его часть.
+ */
+export async function admitParentAfterChildren(
+  childTaskId: string,
+): Promise<boolean> {
+  const child = db
+    .prepare("SELECT parent_id FROM tasks WHERE id = ?")
+    .get(childTaskId) as { parent_id: string | null } | undefined;
+  const parentId = child?.parent_id;
+  if (!parentId) return false;
+
+  const ownerRow = db
+    .prepare(
+      "SELECT id, task_intake_mode FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+    )
+    .get() as { id: string; task_intake_mode?: string } | undefined;
+  if (!ownerRow || ownerRow.task_intake_mode !== "automatic") return false;
+
+  const parent = db
+    .prepare(
+      "SELECT id, status, ready_for_pickup, agent_state, assignee_id FROM tasks WHERE id = ?",
+    )
+    .get(parentId) as
+    | {
+        id: string;
+        status: string;
+        ready_for_pickup: number | null;
+        agent_state: string | null;
+        assignee_id: string | null;
+      }
+    | undefined;
+  if (!parent || parent.status !== "active") return false;
+  if ((parent.ready_for_pickup ?? 0) === 1 || parent.agent_state) return false;
+
+  const openSteps = (
+    db
+      .prepare("SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ? AND done = 0")
+      .get(parentId) as { n: number }
+  ).n;
+  if (!openSteps) return false;
+
+  const children = db
+    .prepare("SELECT status, agent_state FROM tasks WHERE parent_id = ?")
+    .all(parentId) as Array<{ status: string; agent_state: string | null }>;
+  const allSubmitted =
+    children.length > 0 &&
+    children.every((c) => c.status === "completed" || c.agent_state === "review");
+  if (!allSubmitted) return false;
+
+  const raised = db.transaction(() => {
+    const r = db
+      .prepare(
+        `UPDATE tasks
+            SET ready_for_pickup = 1,
+                ready_set_at = datetime('now'),
+                ready_set_by = ?,
+                updated_at = datetime('now')
+          WHERE id = ? AND ready_for_pickup = 0`,
+      )
+      .run(ownerRow.id, parentId);
+    if (r.changes > 0) {
+      logEvent({
+        taskId: parentId,
+        actorId: ownerRow.id,
+        kind: "ready_flag_changed",
+        field: "ready_for_pickup",
+        fromValue: "0",
+        toValue: "1",
+      });
+    }
+    return r.changes > 0;
+  })();
+  if (!raised) return false;
+
+  // Раздача — как при создании: только без исполнителя и при живом
+  // будильнике (назначать агента, которого некому разбудить, незачем).
+  if (!parent.assignee_id) {
+    const { unitState } = await import("./agent-service.js");
+    if ((await unitState()).active) {
+      const outcome = await dispatchTaskToPi(parentId, ownerRow.id);
+      if (!outcome.ok) {
+        console.warn(
+          `родитель ${parentId}: флаг поднят, отдать не удалось:`,
+          outcome.error,
+        );
+      }
+    }
+  }
+  return true;
+}
+
 export async function releaseQueuedSuccessors(
   completedTaskId: string,
   actorId: string,

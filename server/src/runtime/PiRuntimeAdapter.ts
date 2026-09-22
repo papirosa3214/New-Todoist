@@ -469,6 +469,12 @@ async function finalizeRun(run: ActiveRun, outcome: AgentRun["status"], stopReas
         WHERE id = ?`,
     ).run(nextState, stopReason, run.sessionId, run.taskId);
   } catch { /* ignore */ }
+  if (nextState === "review") {
+    // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
+    void import("../routes/dispatch.js")
+      .then((m) => m.admitParentAfterChildren(run.taskId))
+      .catch((err) => console.warn("родитель после дочерней:", err));
+  }
 
   // client.stop() вызывается ТОЛЬКО здесь — не на agent_end. На agent_end
   // Pi может ещё продолжать (retry/compaction), гасить процесс нельзя.

@@ -1552,6 +1552,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Только на active→completed: возврат задачи в работу очередь не
       // двигает, иначе «вернуть в работу» запускало бы следующий шаг.
       if (body.status === "completed" && existing.status !== "completed") {
+        // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
+        void import("./dispatch.js")
+          .then((m) => m.admitParentAfterChildren(id))
+          .catch((err) => console.warn("родитель после дочерней:", err));
         try {
           // Импорт отложенный: dispatch.ts уже зависит от этого модуля
           // (getTaskRow, hydrateTask), и статический импорт в обратную

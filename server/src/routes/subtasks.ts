@@ -414,6 +414,11 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
                 fromValue: "in_progress",
                 toValue: "review",
               });
+
+              // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
+              void import("./dispatch.js")
+                .then((m) => m.admitParentAfterChildren(parentTask.id))
+                .catch((err) => console.warn("родитель после дочерней:", err));
             }
           }
         }

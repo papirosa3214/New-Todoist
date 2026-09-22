@@ -1176,6 +1176,12 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         });
       });
       stateTxn();
+      if (state === "review") {
+        // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
+        void import("./dispatch.js")
+          .then((m) => m.admitParentAfterChildren(task.id))
+          .catch((err) => console.warn("родитель после дочерней:", err));
+      }
 
       const updated = getTaskRow(task.id);
       const hydrated = hydrateTask(updated);
