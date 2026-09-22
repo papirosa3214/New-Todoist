@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import fastifyJwt from "@fastify/jwt";
 import { setRoleTokenSigner } from "./runtime/roleRunAccess.js";
+import { setInProcessApp } from "./runtime/inProcessRun.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
@@ -218,6 +219,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Пропуск роли на время запуска агента подписывается тем же механизмом,
   // что вход в веб (runtime/roleRunAccess.ts).
   setRoleTokenSigner((payload, options) => app.jwt.sign(payload, options));
+  // Агент роли внутри сервера ходит по маршрутам внутренним вызовом
+  // (runtime/inProcessRun.ts) — без ключей, как профили у Гермеса.
+  setInProcessApp(app);
   await app.register(fastifyWebsocket);
   // global: false — лимит НЕ применяется автоматически ко всем маршрутам.
   // Агенты и служба-будильник (taskflow-trigger) бьют по /api/tasks и

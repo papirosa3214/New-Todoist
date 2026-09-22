@@ -4,6 +4,8 @@ import { authOrApiToken } from "../auth.js";
 import { getTaskForRead, isOwner } from "../access.js";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
+import { ROLE_NAMES } from "../roleRouting.js";
+import { runRoleInProcess } from "../runtime/inProcessRun.js";
 import { isServiceUser } from "./agent-state.js";
 
 // Ручной разовый запуск агента на карточке — по команде владельца.
@@ -24,6 +26,28 @@ export async function registerManualRunRoutes(app: FastifyInstance): Promise<voi
       const task = getTaskForRead(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
       const mode = req.body?.mode === "reviewer" ? "reviewer" : "executor";
+      // Исполнитель запускается ВНУТРИ сервера (runtime/inProcessRun.ts,
+      // 23.09.2026) — без ключей ролей и без будильника. Роль — та, что
+      // уже на карточке; нет роли — старым путём, пусть подберёт диспетчер.
+      const role =
+        (task.dispatched_role as string | null) ??
+        (task.owner_selected_role as string | null) ??
+        (task.machine_selected_role as string | null);
+      if (mode === "executor" && role && ROLE_NAMES.includes(role)) {
+        try {
+          await runRoleInProcess({ taskId: task.id, role });
+        } catch (err) {
+          return reply.code(409).send({ error: err instanceof Error ? err.message : String(err) });
+        }
+        logEvent({
+          taskId: task.id,
+          actorId: req.userId,
+          kind: "run_requested",
+          field: "executor",
+          toValue: roleTitleOf(role),
+        });
+        return { ok: true, mode, inProcess: true };
+      }
       const args = ["--once", task.id];
       if (mode === "reviewer") args.push("--review");
       try {
@@ -86,4 +110,9 @@ export async function registerManualRunRoutes(app: FastifyInstance): Promise<voi
 }
 
 const REVIEWER_NAME = "Критик-проверяющий";
+
+function roleTitleOf(role: string): string {
+  const row = db.prepare("SELECT title FROM roles WHERE key = ?").get(role) as { title?: string } | undefined;
+  return row?.title ?? role;
+}
 const SERVICE_JOURNAL_KINDS = new Set(["reviewer_sent"]);

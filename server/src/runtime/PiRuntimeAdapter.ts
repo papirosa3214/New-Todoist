@@ -79,7 +79,7 @@ function resolvePiCliPath(): string {
  *  моделей), поэтому держим его в lazy-переменной. */
 let modelRuntime: ModelRuntime | null = null;
 
-async function getModelRuntime(): Promise<ModelRuntime> {
+export async function getModelRuntime(): Promise<ModelRuntime> {
   if (!modelRuntime) {
     try {
       modelRuntime = await ModelRuntime.create();
