@@ -211,6 +211,29 @@ describe("pickRoleForChat (адресация в чате)", () => {
     expect(role).toBe("qa");
   });
 
+  // Телефон вставляет имя участника так, как его видит человек (22.09.2026).
+  it("@Имя роли по-русски — адресует ту же роль", async () => {
+    embMock.next = [1, 0];
+    seedRoleEmbedding("qa", [1, 0]);
+    seedRoleEmbedding("architect", [0, 1]);
+    for (const [id, name] of [
+      ["role_qa", "QA"],
+      ["role_architect", "Архитектор"],
+    ]) {
+      db.prepare(
+        `INSERT OR IGNORE INTO users (id, name, email, password_hash, role, type)
+         VALUES (?, ?, ?, 'x', 'agent', 'ai')`,
+      ).run(id, name, `${id}@picker.test`);
+      db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, id);
+    }
+
+    const role = await pickRoleForChat({
+      messageText: "@Архитектор подскажи схему",
+      memberRoles: ["qa", "architect"],
+    });
+    expect(role).toBe("architect");
+  });
+
   // R1 (обновление): @роль вне участников — НЕ подменяется дефолтом.
   // Если пользователь явно попросил роль, которой нет в чате, мы не
   // обманываем — возвращаем null. В прямом чате с одной ролью особенно

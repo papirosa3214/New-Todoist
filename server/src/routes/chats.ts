@@ -748,6 +748,28 @@ function parseRoleMention(text: string): RoleName | null {
       return candidate as RoleName;
     }
   }
+  // Телефон подставляет имя участника, как его видит человек: «@Разработчик»,
+  // «@Дизайнер интерфейсов» (22.09.2026). Имена берём из учёток ролей;
+  // длинные проверяем первыми, чтобы составное имя не перехватило короткое.
+  const lower = text.toLowerCase();
+  const named = [...VALID_ROLES]
+    .map((role) => ({
+      role,
+      name: (
+        (db.prepare("SELECT name FROM users WHERE id = ?").get(ROLE_USER_IDS[role]) as
+          | { name?: string }
+          | undefined)?.name ?? ""
+      ).toLowerCase(),
+    }))
+    .filter((r) => r.name)
+    .sort((a, b) => b.name.length - a.name.length);
+  for (const r of named) {
+    const at = lower.indexOf(`@${r.name}`);
+    if (at < 0) continue;
+    const before = at > 0 ? lower[at - 1] : "";
+    if (before && /[\p{L}\p{N}_]/u.test(before)) continue;
+    return r.role;
+  }
   return null;
 }
 
@@ -953,7 +975,25 @@ async function deliverAgentReply(args: {
   // Достаём ранее сохранённый sessionId, чтобы продолжить ту же сессию.
   const previousSessionId = getChatSessionId(chatId, roleUserId);
 
+  // «Печатает» (владелец 22.09.2026): показываем ровно то время, пока роль
+  // готовит ответ, — от запуска до готового текста или сбоя. Не таймер и не
+  // догадка клиента: сигнал даёт тот, кто роль запускает.
+  const typing = (active: boolean) => {
+    const name =
+      (db.prepare("SELECT name FROM users WHERE id = ?").get(roleUserId) as
+        | { name?: string }
+        | undefined)?.name ?? role;
+    broadcastToUsers(memberIds(chatId), {
+      type: "chats:typing",
+      chat_id: chatId,
+      user_id: roleUserId,
+      name,
+      active,
+    });
+  };
+
   let reply: { sessionId: string | null; text: string };
+  typing(true);
   try {
     reply = await startChatRun({
       chatId,
@@ -970,6 +1010,8 @@ async function deliverAgentReply(args: {
       error instanceof Error ? error.message : error,
     );
     return null;
+  } finally {
+    typing(false);
   }
 
   const replyText = (reply.text || "").trim();
