@@ -150,6 +150,28 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
 
       const note = (findings || "").trim();
       if (note) {
+        // Прецедент 22.09.2026: critic_verifier вызывал taskflow_review 3-4
+        // раза подряд (видно по логам — req-3gv / 3h4 / 3he / 3hm за 13 сек),
+        // и сервер на каждый запрос честно вставлял новую строку в comments.
+        // В ленте оказывалось 2-4 одинаковых записи «Ревьюер проверил и
+        // одобрил: …». Защита ставится именно тут, а не в MCP-инструменте:
+        // LLM нельзя заставить «правильно» звать инструмент, а серверный
+        // гард отрезает дубль независимо от поведения агента. TTL — 60 сек,
+        // окно шире, чем самая длинная retry-петля LLM, но уже, чем реальный
+        // повторный вердикт по той же задаче (такого сценария у нас нет —
+        // verdict один на версию).
+        const dup = db
+          .prepare(
+            `SELECT id FROM comments
+              WHERE task_id = ? AND user_id = ?
+                AND created_at >= datetime('now', '-60 seconds')
+              LIMIT 1`,
+          )
+          .get(taskId, req.userId) as { id: string } | undefined;
+        if (dup) {
+          // reviews-запись уже выше INSERT-нута — это нормально, версии
+          // обязаны учитывать каждый вердикт. А вот comments-строка одна.
+        } else {
         db.prepare(
           "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
         ).run(
@@ -158,6 +180,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
           req.userId,
           `Ревьюер ${verdictWord === "одобрил" ? "проверил и одобрил" : verdictWord === "вернул на доработку" ? "вернул на доработку" : "остановил работу"}: ${note}`,
         );
+        }
       }
       // Владельцу — только если он не сам вынес вердикт (свой вердикт не шлём).
       if (task.creator_id && task.creator_id !== req.userId) {
