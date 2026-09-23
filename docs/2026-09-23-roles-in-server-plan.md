@@ -56,8 +56,9 @@
 - Отвергнутые варианты: (а) пометка «действую как роль X» для служебного ключа и (б) временные
   пропуска для будильника — это заплатки, сохраняющие «агент — посторонний». Владелец выбрал
   «как у Гермеса, без ключей».
-- Сервер оставлен в режиме `tsx watch` (правки применяются сразу): агентами пока пользуются только
-  для проверок, обрыв идущей работы при перезапуске допустим.
+- Сервер оставлен в режиме `tsx watch`. Перезапуск обрывает текущую Pi-сессию,
+  но её durable job после истечения lease возвращается в очередь; событие запуска
+  больше не теряется вместе с памятью процесса.
 - Роль не удаляется, а **отключается** — чтобы не терялась история её задач.
 
 ## 5. Что уже сделано
@@ -86,10 +87,13 @@
 | `3338c7fb` | Восстановлены воспроизводимые `npm ci` и hermetic server tests без внешнего embedding endpoint и абсолютного checkout path |
 | `50674f86` | Восстановлен web production build и корректный раздел «Без проекта»; добавлен Playwright regression scenario |
 | `1d6b1b5d` | Устранён P0: `users.role` отделён от business role через `users.role_key`, reserved keys запрещены в API и БД, migration `058_role_account_authority` сохраняет legacy identity/token/FK, добавлены security/upgrade-регрессии |
+| `701f1be` | Добавлены migration `059_role_run_jobs`, SQLite outbox, атомарный claim, lease, retry/dead, recovery и базовые queue-регрессии |
+| `75d9798` | Worker подключён после реального `listen`; assignment, ready flag, внешний комментарий и review пишут job в транзакции исходного изменения |
+| `3f49731` | Добавлены migration `060_role_run_job_chain`, durable C3-depth, DB unique active lease, defer без расхода попытки, owner API list/retry/cancel и route-интеграционные тесты |
 
 Финальная проверка неподвижного дерева на Node `22.19.0` прошла полностью:
 root и server `npm ci`; обе production-сборки; web — 9 файлов и 126 тестов;
-server — 64 файла и 514 тестов; lint — 40 предупреждений и 0 ошибок;
+server — 65 файлов и 525 тестов; lint — 40 предупреждений и 0 ошибок;
 security probe — `createStatus=422`, `account=null`, owner-only mutation `403`.
 
 Конфигурация вне репозитория (сделано):
@@ -107,8 +111,8 @@ security probe — `createStatus=422`, `account=null`, owner-only mutation `403`
   владельцем (03:35, с его устройства), агентов не запускали.
 
 Исторический прогон до hardening: 498/498 (`cd server && npx vitest run`, Node 22 из `~/.nvm`).
-Актуальный локальный hardening-прогон: 514/514; web: 126/126. Подробности и
-ограничения зафиксированы в §5.1 и независимом ревью.
+Актуальный локальный hardening-прогон: 525/525; web: 126/126. Подробности
+durable-механизма — в `docs/architecture/2026-09-23-durable-role-run-orchestration.md`.
 
 ## 6. Как это работает сейчас (карта кода)
 
@@ -124,13 +128,17 @@ security probe — `createStatus=422`, `account=null`, owner-only mutation `403`
     doc_write, kb_search`;
   - `runRoleInProcess({taskId, role, prompt?, cwd?, model?, mode?})` — один заход в фоне; аренда —
     сервер раз в 90 с; действия встроенных инструментов → `/api/tasks/:id/activity`; сбой →
-    карточка `blocked` с причиной; один заход на карточку одновременно;
-  - `kickRoleTask(taskId, reason, actorId?)` — решения «кого будить» (аналог `decide` будильника);
+    карточка `blocked` с причиной; `completion` сообщает worker технический сбой;
+  - `kickRoleTaskStrict(taskId, reason, actorId?)` — решения «кого будить» (аналог `decide` будильника);
     работает только при включённой «Системе» (`unitState().active`); в тестах выключен
     (`VITEST` без `TASKFLOW_KICK_IN_TESTS=1`);
-  - `continueOrHandOff` — повтор захода или передача Критику.
-- Вызовы `kickRoleTask`: `routes/dispatch.ts` (успешная раздача), `routes/tasks.ts` (флаг при уже
-  назначенном исполнителе), `routes/subtasks.ts` (комментарий), `routes/agent-state.ts` (сдача).
+  - `continueOrHandOff` — повтор захода до трёх раз; worker-путь сохраняет chain depth в БД.
+- `server/src/runtime/roleRunQueue.ts`, `roleRunWorker.ts` — durable очередь,
+  idempotency, один running job на задачу, lease heartbeat, retry/backoff/dead,
+  restart recovery и последовательный worker.
+- Transactional enqueue: `routes/dispatch.ts` (успешная раздача), `routes/tasks.ts`
+  (флаг при уже назначенном исполнителе), `routes/subtasks.ts` (внешний комментарий),
+  `routes/agent-state.ts` (сдача). Owner API: `routes/role-run-jobs.ts`.
 - `routes/manual-run.ts` — ручные «Запустить исполнителя/проверку» → внутри сервера.
 - `scripts/trigger.py` — с `ROLES_IN_SERVER` не держит WS на ключах ролей, пропускает карточки ролей
   в `handle_task`, не зовёт `wake_reviewer`. Всё остальное (Гермес и пр.) — как было.
@@ -171,8 +179,11 @@ security probe — `createStatus=422`, `account=null`, owner-only mutation `403`
   `status/agents/runtime`, вложения к комментарию (`files`), `web_search/web_get/ocr/youtube/
   local_model/report`. Переносить по мере надобности (логика — в `mcp_server.py`, функции `t_*`).
 - Нет учёта расхода токенов/стоимости по заходу (будильник писал «Расход захода»).
-- Нет ограничения числа одновременных заходов (агент делит память с сервером).
-- Перезапуск сервера (`tsx watch`) обрывает идущие заходы — принято владельцем.
+- Текущий worker намеренно последовательный: глобальный предел — один
+  автоматический role run на server process. Настраиваемая capacity пока не нужна.
+- Перезапуск сервера обрывает текущую Pi-сессию, но job восстанавливается после
+  lease expiry. Точная продолжительность может повториться с последнего
+  идемпотентного действия, поэтому инструменты должны сохранять свои проверки.
 - Будильник по-прежнему будит оркестратора/родителя (`wake_parent`, `wake_creator`) для не-ролевых
   исполнителей; журнал доставки `agent_inbox` для ролей больше не ведётся.
 
