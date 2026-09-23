@@ -156,6 +156,51 @@ describe("агент роли внутри сервера", () => {
     expect(sent?.actor_id).toBeNull();
   });
 
+  it("вышел посреди работы, но продвинулся — сервер зовёт снова, и агент доделывает (C3)", async () => {
+    const { taskId, stepId } = builderTask("Две части работы");
+    const step2 = `${taskId}-s2`;
+    db.prepare("INSERT INTO subtasks (id, task_id, title, position) VALUES (?, ?, 'Доделать', 2)").run(step2, taskId);
+    db.prepare("UPDATE users SET reviewer_first_default = 0 WHERE role = 'owner'").run();
+    const prompts: string[] = [];
+    script.steps = async (tools, prompt) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        await call(tools, "taskflow_claim", { id: taskId });
+        await call(tools, "taskflow_subtask_work", { id: stepId, state: "in_progress" });
+        await call(tools, "taskflow_subtask_done", { id: stepId, result: "Первая часть." });
+        return; // вышел, не сдав
+      }
+      await call(tools, "taskflow_subtask_work", { id: step2, state: "in_progress" });
+      await call(tools, "taskflow_subtask_done", { id: step2, result: "Вторая часть." });
+      await call(tools, "taskflow_state", { id: taskId, state: "review", comment: "Всё." });
+    };
+    await runRoleInProcess({ taskId, role: "builder" });
+    for (let i = 0; i < 20; i++) {
+      await _settleInProcessRunsForTests();
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("Продолжай работу");
+    const task = db.prepare("SELECT agent_state FROM tasks WHERE id = ?").get(taskId) as { agent_state: string };
+    expect(task.agent_state).toBe("review");
+    db.prepare("UPDATE users SET reviewer_first_default = 1 WHERE role = 'owner'").run();
+  });
+
+  it("без продвижения повторно не зовёт", async () => {
+    const { taskId } = builderTask("Ничего не сделал");
+    let runs = 0;
+    script.steps = async (tools) => {
+      runs += 1;
+      if (runs === 1) await call(tools, "taskflow_claim", { id: taskId });
+    };
+    await runRoleInProcess({ taskId, role: "builder" });
+    for (let i = 0; i < 10; i++) {
+      await _settleInProcessRunsForTests();
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(runs).toBe(1);
+  });
+
   it("роль не из списка не запускается", async () => {
     const { taskId } = builderTask("Чужая роль");
     await expect(runRoleInProcess({ taskId, role: "synthesizer" })).rejects.toThrow(/нет или она отключена/);

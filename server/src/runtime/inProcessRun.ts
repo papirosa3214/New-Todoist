@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
+import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -302,6 +304,74 @@ export function defaultTaskPrompt(taskId: string, role: string): string {
   ].join("\n");
 }
 
+// ── Папка проекта, справка, продолжение разговора (этап C3) ──────────────
+
+const PROJECTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-projects.json");
+const RUNS_BASE = process.env.TASKFLOW_RUNS_DIR || path.join(os.homedir(), ".local", "state", "taskflow-runs");
+
+/** Репозиторий проекта карточки — из того же файла, что читал будильник
+ *  (scripts/task-context-projects.json); не сопоставлен — репозиторий TaskFlow. */
+function projectRepo(taskId: string): string {
+  const fallback = path.resolve(process.cwd(), "..");
+  try {
+    const projectId = (db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(taskId) as
+      | { project_id?: string | null }
+      | undefined)?.project_id;
+    const map = JSON.parse(fs.readFileSync(PROJECTS_CONFIG, "utf8")).projects ?? {};
+    const repo = projectId ? map[projectId] : undefined;
+    return repo && fs.existsSync(repo) ? repo : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Справка для агента: ветка и незакоммиченные файлы — только чтение git. */
+function repoNote(cwd: string): string {
+  try {
+    const branch = execFileSync("git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8", timeout: 5000 }).trim();
+    const dirty = execFileSync("git", ["-C", cwd, "status", "--short"], { encoding: "utf8", timeout: 5000 })
+      .split("\n").filter((l) => l.trim()).slice(0, 20);
+    return [
+      `Рабочая папка: ${cwd}, ветка ${branch}.`,
+      dirty.length ? `Незакоммиченные файлы (чужая работа — не трогай без нужды):\n${dirty.join("\n")}` : "Незакоммиченных файлов нет.",
+    ].join("\n");
+  } catch {
+    return `Рабочая папка: ${cwd}.`;
+  }
+}
+
+/** Разговор агента хранится на пару «задача + роль» и продолжается при
+ *  следующем заходе — после ответа владельца, паузы или повтора. */
+function sessionDir(taskId: string, role: string): string {
+  return path.join(RUNS_BASE, "sessions", `${taskId}-${role}`);
+}
+
+function hasSession(taskId: string, role: string): boolean {
+  try {
+    return fs.readdirSync(sessionDir(taskId, role)).some((f) => f.endsWith(".jsonl"));
+  } catch {
+    return false;
+  }
+}
+
+function resumePrompt(taskId: string): string {
+  return [
+    `Продолжай работу по задаче ${taskId}. С прошлого захода могло что-то измениться — владелец мог ответить в ленте.`,
+    "Перечитай карточку и ленту (taskflow_task). Закрытые шаги не повторяй. Всё сделано — сдай (taskflow_state state=review);",
+    "упёрся — taskflow_state state=blocked с причиной.",
+  ].join("\n");
+}
+
+/** Сколько раз подряд агент вышел посреди работы — для повторного захода. */
+const chainCount = new Map<string, number>();
+const MAX_CHAIN = 3;
+
+function progressMark(taskId: string): string {
+  const steps = (db.prepare("SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ? AND done = 1").get(taskId) as { n: number }).n;
+  const comments = (db.prepare("SELECT COUNT(*) AS n FROM comments WHERE task_id = ?").get(taskId) as { n: number }).n;
+  return `${steps}:${comments}`;
+}
+
 type ActiveInProcessRun = { runId: string; taskId: string; role: string; abort: () => Promise<void> };
 const activeRuns = new Map<string, ActiveInProcessRun>();
 
@@ -327,6 +397,9 @@ export async function runRoleInProcess(input: {
   prompt?: string;
   cwd?: string;
   model?: string;
+  /** work — работа по задаче (с повторами), reply — только ответ владельцу,
+   *  review — вердикт Критика. */
+  mode?: "work" | "reply" | "review";
 }): Promise<{ runId: string }> {
   const { taskId, role } = input;
   if (!ROLE_NAMES.includes(role)) throw new Error(`роли «${role}» нет или она отключена`);
@@ -340,7 +413,10 @@ export async function runRoleInProcess(input: {
     ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === modelId);
   if (!model) throw new Error(`модель «${modelId}» недоступна`);
 
-  const cwd = input.cwd ?? path.resolve(process.cwd(), "..");
+  const cwd = input.cwd ?? projectRepo(taskId);
+  const mode = input.mode ?? (role === "critic_verifier" ? "review" : "work");
+  const resumed = hasSession(taskId, role);
+  fs.mkdirSync(sessionDir(taskId, role), { recursive: true });
   const systemPrompt = rolePrompt(role) || `Ты — ${roleTitle(role)} в трекере TaskFlow.`;
   const resourceLoader = {
     getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
@@ -365,11 +441,12 @@ export async function runRoleInProcess(input: {
     resourceLoader,
     tools: [...BUILTIN_TOOLS, ...customTools.map((t: any) => t.name)],
     customTools,
-    sessionManager: SessionManager.inMemory(cwd),
+    sessionManager: SessionManager.continueRecent(cwd, sessionDir(taskId, role)),
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
   } as any);
 
   const runId = `inproc_${crypto.randomUUID()}`;
+  const before = progressMark(taskId);
   activeRuns.set(runId, { runId, taskId, role, abort: () => session.abort() });
 
   // Действия встроенных инструментов — строкой в карточке, как раньше делало
@@ -390,7 +467,8 @@ export async function runRoleInProcess(input: {
 
   const work = (async () => {
     try {
-      await session.prompt(input.prompt ?? defaultTaskPrompt(taskId, role));
+      const task = input.prompt ?? (resumed ? resumePrompt(taskId) : defaultTaskPrompt(taskId, role));
+      await session.prompt(mode === "work" ? `${task}\n\n${repoNote(cwd)}\nПеред работой поищи похожее в документации (taskflow_kb_search).` : task);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       try {
@@ -407,7 +485,7 @@ export async function runRoleInProcess(input: {
       session.dispose();
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
-      if (role !== "critic_verifier") void kickRoleTask(taskId, "after_run");
+      if (mode === "work") void continueOrHandOff(taskId, role, before);
     }
   })();
   pending.add(work);
@@ -485,7 +563,7 @@ export async function kickRoleTask(taskId: string, reason: KickReason, actorId?:
     // Сдано на проверку — Критик, если автопроверка включена и вердикта ещё нет.
     if (task.agent_state === "review" && (reason === "review" || reason === "after_run")) {
       if (ROLE_NAMES.includes("critic_verifier") && reviewerPending(taskId)) {
-        await runRoleInProcess({ taskId, role: "critic_verifier", prompt: reviewPromptFor(taskId) });
+        await runRoleInProcess({ taskId, role: "critic_verifier", prompt: reviewPromptFor(taskId), mode: "review" });
         logEvent({ taskId, actorId: null, kind: "reviewer_sent", toValue: roleTitle("critic_verifier") });
       }
       return;
@@ -494,15 +572,41 @@ export async function kickRoleTask(taskId: string, reason: KickReason, actorId?:
 
     // Владелец написал по сданной карточке — роль только отвечает.
     if (task.agent_state === "review" && reason === "commented" && actorId && actorId !== assignee) {
-      await runRoleInProcess({ taskId, role, prompt: replyPrompt(taskId, role) });
+      await runRoleInProcess({ taskId, role, prompt: replyPrompt(taskId, role), mode: "reply" });
       return;
     }
     if (task.agent_state === "blocked") return; // ждёт владельца
     // Работа не начата (или снята с агента после ответа владельцу) — выполнить.
     if (!task.agent_state && (task.ready_for_pickup ?? 0) === 1 && reason !== "after_run") {
+      chainCount.delete(taskId);
       await runRoleInProcess({ taskId, role });
     }
   } catch (err) {
     console.warn(`роль по карточке ${taskId} не разбужена:`, err);
   }
+}
+
+/**
+ * После захода по работе: сдал — дальше Критик (kickRoleTask); вышел посреди
+ * работы, но продвинулся — ещё заход, до трёх подряд, в том же разговоре.
+ * Без продвижения не зовём: крутиться впустую нельзя.
+ */
+async function continueOrHandOff(taskId: string, role: string, before: string): Promise<void> {
+  const task = db.prepare("SELECT status, agent_state FROM tasks WHERE id = ?").get(taskId) as
+    | { status: string; agent_state: string | null }
+    | undefined;
+  if (task?.status === "active" && task.agent_state === "in_progress") {
+    const n = (chainCount.get(taskId) ?? 0) + 1;
+    if (n <= MAX_CHAIN && progressMark(taskId) !== before) {
+      chainCount.set(taskId, n);
+      try {
+        await runRoleInProcess({ taskId, role, prompt: resumePrompt(taskId) });
+      } catch (err) {
+        console.warn(`повторный заход по ${taskId} не начат:`, err);
+      }
+    }
+    return;
+  }
+  chainCount.delete(taskId);
+  await kickRoleTask(taskId, "after_run");
 }
