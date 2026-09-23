@@ -18,6 +18,7 @@ import {
 import { withSubtaskState, getTaskRow } from "./tasks.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks } from "../resultVersions.js";
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -739,9 +740,19 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "text required" });
 
       const id = uid();
-      db.prepare(
-        "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
-      ).run(id, req.params.taskId, req.userId, req.body.text ?? "");
+      db.transaction(() => {
+        db.prepare(
+          "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
+        ).run(id, req.params.taskId, req.userId, req.body.text ?? "");
+        if (String(task.assignee_id ?? "").startsWith("role_")) {
+          enqueueRoleRunJob({
+            taskId: req.params.taskId,
+            reason: "commented",
+            actorId: req.userId,
+            dedupeKey: `comment:${id}`,
+          });
+        }
+      })();
 
       // Комментарий агента — это признак жизни, а не только текст.
       //
@@ -801,12 +812,6 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           taskId: req.params.taskId,
         });
       }
-
-      // Комментарий — повод для роли: ответить владельцу или продолжить
-      // после его ответа (этап C2).
-      void import("../runtime/inProcessRun.js")
-        .then((m) => m.kickRoleTask(req.params.taskId, "commented", req.userId))
-        .catch(() => {});
 
       return db
         .prepare(

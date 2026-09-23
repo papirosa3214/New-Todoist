@@ -11,6 +11,7 @@ import {
   getRoleRunJob,
   recoverExpiredRoleRunJobs,
 } from "../src/runtime/roleRunQueue.js";
+import { processOneRoleRunJob } from "../src/runtime/roleRunWorker.js";
 
 const ownerId = `queue-owner-${crypto.randomUUID()}`;
 const createdTasks: string[] = [];
@@ -206,6 +207,50 @@ describe("durable role-run queue", () => {
       status: "dead",
       attempts: 2,
       last_error: "permanent provider failure",
+    });
+  });
+
+  it("worker ждёт executor и только затем завершает job", async () => {
+    const taskId = makeTask("worker-success");
+    const job = enqueueRoleRunJob({
+      taskId,
+      reason: "assigned",
+      dedupeKey: dedupe(taskId, "worker"),
+    });
+    const seen: string[] = [];
+
+    expect(
+      await processOneRoleRunJob({
+        workerId: "worker-success",
+        executor: async (claimed) => {
+          expect(getRoleRunJob(claimed.id)?.status).toBe("running");
+          seen.push(claimed.id);
+          return { outcome: "succeeded" };
+        },
+      }),
+    ).toBe(true);
+    expect(seen).toEqual([job.id]);
+    expect(getRoleRunJob(job.id)?.status).toBe("succeeded");
+  });
+
+  it("worker записывает terminal failure как dead", async () => {
+    const taskId = makeTask("worker-dead");
+    const job = enqueueRoleRunJob({
+      taskId,
+      reason: "review",
+      dedupeKey: dedupe(taskId, "worker-dead"),
+      maxAttempts: 1,
+    });
+
+    await processOneRoleRunJob({
+      workerId: "worker-dead",
+      executor: async () => {
+        throw new Error("executor crashed");
+      },
+    });
+    expect(getRoleRunJob(job.id)).toMatchObject({
+      status: "dead",
+      last_error: "executor crashed",
     });
   });
 });

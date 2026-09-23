@@ -29,6 +29,7 @@ import {
 } from "../resultVersions.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
 import { attemptLadderForTask } from "../lib/attemptLadder.js";
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -1370,6 +1371,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
               fromValue: String(previous),
               toValue: String(newValue),
             });
+            if (newValue === 1 && existing.assignee_id) {
+              enqueueRoleRunJob({
+                taskId: id,
+                reason: "assigned",
+                actorId: req.userId,
+                dedupeKey: `ready:${id}:${uid()}`,
+              });
+            }
           });
           txn();
         }
@@ -1379,11 +1388,6 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // сидит внутри отдачи, так что ручной и автоматический режимы
         // расходятся ровно в одном — кто поднял флаг.
         // Исполнитель уже назначен — флаг и есть запуск: роль будит сервер.
-        if (newValue === 1 && previous !== 1 && existing.assignee_id) {
-          void import("../runtime/inProcessRun.js")
-            .then((m) => m.kickRoleTask(id, "assigned"))
-            .catch(() => {});
-        }
         if (newValue === 1 && previous !== 1 && !existing.assignee_id) {
           try {
             const { dispatchTaskToPi } = await import("./dispatch.js");

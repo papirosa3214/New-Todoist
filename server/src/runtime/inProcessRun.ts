@@ -17,6 +17,7 @@ import db from "../db.js";
 import { AGENT_RULES, logEvent } from "../agentState.js";
 import { loadRoleRouting, providerOfModel, rolePromptText, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
+import { enqueueRoleRunJob } from "./roleRunQueue.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -400,7 +401,10 @@ export async function runRoleInProcess(input: {
   /** work — работа по задаче (с повторами), reply — только ответ владельцу,
    *  review — вердикт Критика. */
   mode?: "work" | "reply" | "review";
-}): Promise<{ runId: string }> {
+  /** Автоматический worker пишет следующий after_run в durable queue.
+   *  Прямой ручной/тестовый запуск сохраняет немедленный handoff. */
+  durableHandoff?: boolean;
+}): Promise<{ runId: string; completion: Promise<void> }> {
   const { taskId, role } = input;
   if (!ROLE_NAMES.includes(role)) throw new Error(`роли «${role}» нет или она отключена`);
   if (activeInProcessRun(taskId)) throw new Error("по этой задаче агент уже работает");
@@ -485,13 +489,20 @@ export async function runRoleInProcess(input: {
       session.dispose();
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
-      if (mode === "work") void continueOrHandOff(taskId, role, before);
+      if (mode === "work") {
+        void continueOrHandOff(
+          taskId,
+          role,
+          before,
+          input.durableHandoff ?? false,
+        );
+      }
     }
   })();
   pending.add(work);
   void work.finally(() => pending.delete(work));
 
-  return { runId };
+  return { runId, completion: work };
 }
 
 // ── Кто и когда будит роль (этап C2, 23.09.2026) ───────────────────────────
@@ -544,43 +555,85 @@ function reviewerPending(taskId: string): boolean {
  * следствие чужого действия, а не его часть. Работает, только когда
  * включена «Система» (тот же выключатель, что и раздача).
  */
-export async function kickRoleTask(taskId: string, reason: KickReason, actorId?: string | null): Promise<void> {
+export type KickRoleTaskResult =
+  | { outcome: "started"; runId: string; completion: Promise<void> }
+  | { outcome: "skipped"; reason: string };
+
+/**
+ * Проверить актуальное состояние карточки и начать run. В отличие от
+ * kickRoleTask, ошибки не проглатываются: durable worker обязан записать
+ * retry/dead, а не считать технический сбой успешной обработкой job.
+ */
+export async function kickRoleTaskStrict(
+  taskId: string,
+  reason: KickReason,
+  actorId?: string | null,
+  options?: { durableHandoff?: boolean },
+): Promise<KickRoleTaskResult> {
   // В тестах живых агентов не зовём — только там, где тест это разрешил явно.
-  if (process.env.VITEST && process.env.TASKFLOW_KICK_IN_TESTS !== "1") return;
+  if (process.env.VITEST && process.env.TASKFLOW_KICK_IN_TESTS !== "1") {
+    return { outcome: "skipped", reason: "role runs are disabled in tests" };
+  }
+  const { unitState } = await import("../routes/agent-service.js");
+  if (!(await unitState()).active) {
+    return { outcome: "skipped", reason: "autonomous system is disabled" };
+  }
+  if (activeInProcessRun(taskId)) {
+    return { outcome: "skipped", reason: "task already has an active in-process run" };
+  }
+  const task = db
+    .prepare("SELECT id, status, assignee_id, agent_state, ready_for_pickup FROM tasks WHERE id = ?")
+    .get(taskId) as
+    | { id: string; status: string; assignee_id: string | null; agent_state: string | null; ready_for_pickup: number | null }
+    | undefined;
+  if (!task || task.status !== "active") {
+    return { outcome: "skipped", reason: "task is absent or no longer active" };
+  }
+  const assignee = task.assignee_id ?? "";
+  const role = assignee.startsWith("role_") ? assignee.slice("role_".length) : "";
+
+  // Сдано на проверку — Критик, если автопроверка включена и вердикта ещё нет.
+  if (task.agent_state === "review" && (reason === "review" || reason === "after_run")) {
+    if (ROLE_NAMES.includes("critic_verifier") && reviewerPending(taskId)) {
+      const run = await runRoleInProcess({
+        taskId,
+        role: "critic_verifier",
+        prompt: reviewPromptFor(taskId),
+        mode: "review",
+      });
+      logEvent({ taskId, actorId: null, kind: "reviewer_sent", toValue: roleTitle("critic_verifier") });
+      return { outcome: "started", ...run };
+    }
+    return { outcome: "skipped", reason: "reviewer is disabled or verdict already exists" };
+  }
+  if (!role || !ROLE_NAMES.includes(role)) {
+    return { outcome: "skipped", reason: "task has no enabled role assignee" };
+  }
+
+  // Владелец написал по сданной карточке — роль только отвечает.
+  if (task.agent_state === "review" && reason === "commented" && actorId && actorId !== assignee) {
+    const run = await runRoleInProcess({ taskId, role, prompt: replyPrompt(taskId, role), mode: "reply" });
+    return { outcome: "started", ...run };
+  }
+  if (task.agent_state === "blocked") {
+    return { outcome: "skipped", reason: "task is blocked and awaits owner action" };
+  }
+  // Работа не начата (или снята с агента после ответа владельцу) — выполнить.
+  if (!task.agent_state && (task.ready_for_pickup ?? 0) === 1 && reason !== "after_run") {
+    chainCount.delete(taskId);
+    const run = await runRoleInProcess({
+      taskId,
+      role,
+      durableHandoff: options?.durableHandoff ?? false,
+    });
+    return { outcome: "started", ...run };
+  }
+  return { outcome: "skipped", reason: "job is stale for the current task state" };
+}
+
+export async function kickRoleTask(taskId: string, reason: KickReason, actorId?: string | null): Promise<void> {
   try {
-    const { unitState } = await import("../routes/agent-service.js");
-    if (!(await unitState()).active) return;
-    if (activeInProcessRun(taskId)) return;
-    const task = db
-      .prepare("SELECT id, status, assignee_id, agent_state, ready_for_pickup FROM tasks WHERE id = ?")
-      .get(taskId) as
-      | { id: string; status: string; assignee_id: string | null; agent_state: string | null; ready_for_pickup: number | null }
-      | undefined;
-    if (!task || task.status !== "active") return;
-    const assignee = task.assignee_id ?? "";
-    const role = assignee.startsWith("role_") ? assignee.slice("role_".length) : "";
-
-    // Сдано на проверку — Критик, если автопроверка включена и вердикта ещё нет.
-    if (task.agent_state === "review" && (reason === "review" || reason === "after_run")) {
-      if (ROLE_NAMES.includes("critic_verifier") && reviewerPending(taskId)) {
-        await runRoleInProcess({ taskId, role: "critic_verifier", prompt: reviewPromptFor(taskId), mode: "review" });
-        logEvent({ taskId, actorId: null, kind: "reviewer_sent", toValue: roleTitle("critic_verifier") });
-      }
-      return;
-    }
-    if (!role || !ROLE_NAMES.includes(role)) return;
-
-    // Владелец написал по сданной карточке — роль только отвечает.
-    if (task.agent_state === "review" && reason === "commented" && actorId && actorId !== assignee) {
-      await runRoleInProcess({ taskId, role, prompt: replyPrompt(taskId, role), mode: "reply" });
-      return;
-    }
-    if (task.agent_state === "blocked") return; // ждёт владельца
-    // Работа не начата (или снята с агента после ответа владельцу) — выполнить.
-    if (!task.agent_state && (task.ready_for_pickup ?? 0) === 1 && reason !== "after_run") {
-      chainCount.delete(taskId);
-      await runRoleInProcess({ taskId, role });
-    }
+    await kickRoleTaskStrict(taskId, reason, actorId);
   } catch (err) {
     console.warn(`роль по карточке ${taskId} не разбужена:`, err);
   }
@@ -591,7 +644,12 @@ export async function kickRoleTask(taskId: string, reason: KickReason, actorId?:
  * работы, но продвинулся — ещё заход, до трёх подряд, в том же разговоре.
  * Без продвижения не зовём: крутиться впустую нельзя.
  */
-async function continueOrHandOff(taskId: string, role: string, before: string): Promise<void> {
+async function continueOrHandOff(
+  taskId: string,
+  role: string,
+  before: string,
+  durableHandoff: boolean,
+): Promise<void> {
   const task = db.prepare("SELECT status, agent_state FROM tasks WHERE id = ?").get(taskId) as
     | { status: string; agent_state: string | null }
     | undefined;
@@ -608,5 +666,13 @@ async function continueOrHandOff(taskId: string, role: string, before: string): 
     return;
   }
   chainCount.delete(taskId);
-  await kickRoleTask(taskId, "after_run");
+  if (!durableHandoff) {
+    await kickRoleTask(taskId, "after_run");
+    return;
+  }
+  enqueueRoleRunJob({
+    taskId,
+    reason: "after_run",
+    dedupeKey: `after-run:${taskId}:${crypto.randomUUID()}`,
+  });
 }

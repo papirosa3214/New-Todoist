@@ -7,6 +7,7 @@ import cors from "@fastify/cors";
 import fastifyJwt from "@fastify/jwt";
 import { setRoleTokenSigner } from "./runtime/roleRunAccess.js";
 import { setInProcessApp } from "./runtime/inProcessRun.js";
+import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
@@ -434,13 +435,20 @@ if (isMain) {
   const PORT = Number(process.env.PORT) || 3001;
   const HOST = process.env.HOST || "0.0.0.0";
 
-  buildApp().then((app) => {
-    app.listen({ port: PORT, host: HOST }).then((addr) => {
-      // Сокетов после рестарта нет ни у кого — значит и «online» в базе быть
-      // не может: иначе статус, оставшийся с прошлого запуска, врал бы до
-      // первого подключения того же пользователя.
-      resetAllOffline();
-      console.log(`🚀 TaskFlow API running at ${addr}`);
+  buildApp().then(async (app) => {
+    let stopRoleRuns: (() => Promise<void>) | null = null;
+    app.addHook("onClose", async () => {
+      if (stopRoleRuns) await stopRoleRuns();
     });
+
+    const addr = await app.listen({ port: PORT, host: HOST });
+    // Сокетов после рестарта нет ни у кого — значит и «online» в базе быть
+    // не может: иначе статус, оставшийся с прошлого запуска, врал бы до
+    // первого подключения того же пользователя.
+    resetAllOffline();
+    // Durable worker стартует только в реальном process после listen.
+    // buildApp() в unit tests остаётся полностью детерминированным.
+    stopRoleRuns = startRoleRunWorker();
+    console.log(`🚀 TaskFlow API running at ${addr}`);
   });
 }

@@ -45,6 +45,7 @@ import {
   registryRecord,
   releaseSubtaskWork,
 } from "../agentState.js";
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -1174,13 +1175,17 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           fromValue: from,
           toValue: state,
         });
+        if (state === "review") {
+          enqueueRoleRunJob({
+            taskId: task.id,
+            reason: "review",
+            actorId: req.userId,
+            dedupeKey: `review:${task.id}:${(task as any).current_attempt_id ?? uid()}`,
+          });
+        }
       });
       stateTxn();
       if (state === "review") {
-        // Сдано — Критик, если включена автопроверка (этап C2).
-        void import("../runtime/inProcessRun.js")
-          .then((m) => m.kickRoleTask(task.id, "review"))
-          .catch(() => {});
         // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
         void import("./dispatch.js")
           .then((m) => m.admitParentAfterChildren(task.id))

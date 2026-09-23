@@ -38,6 +38,7 @@ import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
 import { isServiceUser } from "./agent-state.js";
 import { ROLE_NAMES, roleTitle, roleUserId, type RoleName } from "../roleRouting.js";
 import { getTaskRow, hydrateTask } from "./tasks.js";
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -393,6 +394,15 @@ export async function dispatchTaskToPi(
       Number(latest.current_revision ?? 1),
     );
 
+    // Назначение и повод запуска — одна SQLite-транзакция. Если процесс
+    // упадёт после commit, durable worker подберёт job после рестарта.
+    enqueueRoleRunJob({
+      taskId,
+      reason: "assigned",
+      actorId,
+      dedupeKey: `dispatch:${inboxId}`,
+    });
+
     broadcastToUsers([roleUserId(chosen)], {
       type: "notification:new",
       notificationId: notifId,
@@ -415,10 +425,6 @@ export async function dispatchTaskToPi(
     task: hydrateTask(updated),
   });
 
-  // Роль исполняет сервер сам (этап C2, 23.09.2026) — будильнику ключ не нужен.
-  void import("../runtime/inProcessRun.js")
-    .then((m) => m.kickRoleTask(taskId, "assigned"))
-    .catch(() => {});
   return { ok: true, role: chosen };
 }
 
