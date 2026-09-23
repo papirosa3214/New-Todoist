@@ -228,9 +228,10 @@ describe("PiRuntimeAdapter", () => {
 
   beforeAll(async () => {
     app = await buildApp();
-    db.prepare(`INSERT OR IGNORE INTO users (id, name, role, type) VALUES
-      ('role_architect', 'Архитектор', 'architect', 'ai'),
-      ('role_qa', 'QA', 'qa', 'ai')`).run();
+    db.prepare(`INSERT OR IGNORE INTO users
+      (id, name, email, password_hash, role, role_key, type, is_system_bot) VALUES
+      ('role_architect', 'Архитектор', 'architect-runtime@test', '!test', 'agent', 'architect', 'ai', 1),
+      ('role_qa', 'QA', 'qa-runtime@test', '!test', 'agent', 'qa', 'ai', 1)`).run();
   });
 
   afterAll(async () => {

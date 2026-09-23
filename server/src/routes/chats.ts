@@ -29,7 +29,6 @@ import { broadcastToUsers } from "../ws.js";
 import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
-  roleUserId as userIdOfRole,
   type RoleName,
 } from "../roleRouting.js";
 import {
@@ -77,6 +76,15 @@ function isMember(chatId: string, userId: string): boolean {
   return !!db
     .prepare("SELECT 1 FROM chat_members WHERE chat_id = ? AND member_id = ?")
     .get(chatId, userId);
+}
+
+function roleAccountId(role: RoleName): string | null {
+  const row = db
+    .prepare(
+      "SELECT id FROM users WHERE role_key = ? AND role = 'agent' AND type = 'ai'",
+    )
+    .get(role) as { id: string } | undefined;
+  return row?.id ?? null;
 }
 
 function chatRow(chatId: string) {
@@ -510,13 +518,16 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           // — хуже того, контекст (pi_session_id) мог бы перемешаться.
           // Очередь сериализует ходы; другие роли и чаты продолжают
           // работать параллельно.
-          void enqueueChatReply(chatId, userIdOfRole(targetRole), () =>
-            deliverAgentReply({
-              chatId,
-              role: targetRole,
-              userText: text,
-            }),
-          );
+          const accountId = roleAccountId(targetRole);
+          if (accountId) {
+            void enqueueChatReply(chatId, accountId, () =>
+              deliverAgentReply({
+                chatId,
+                role: targetRole,
+                userText: text,
+              }),
+            );
+          }
         }
       } catch (error) {
         // Логируем, но не возвращаем 5xx — текст уже в ленте, а ошибку
@@ -699,12 +710,14 @@ function chatMemberRoles(chatId: string): RoleName[] {
 
 function roleFromUserId(userId: string): RoleName | null {
   const row = db
-    .prepare("SELECT role, type FROM users WHERE id = ?")
-    .get(userId) as { role: string | null; type: string | null } | undefined;
+    .prepare("SELECT role, role_key, type FROM users WHERE id = ?")
+    .get(userId) as
+    | { role: string | null; role_key: string | null; type: string | null }
+    | undefined;
   if (!row) return null;
-  if (row.type !== "ai") return null;
-  if (!row.role || !VALID_ROLES.has(row.role as RoleName)) return null;
-  return row.role as RoleName;
+  if (row.type !== "ai" || row.role !== "agent") return null;
+  if (!row.role_key || !VALID_ROLES.has(row.role_key as RoleName)) return null;
+  return row.role_key as RoleName;
 }
 
 /** Распарсить явное @упоминание роли в тексте. Возвращает первую
@@ -739,7 +752,7 @@ function parseRoleMention(text: string): RoleName | null {
     .map((role) => ({
       role,
       name: (
-        (db.prepare("SELECT name FROM users WHERE id = ?").get(userIdOfRole(role)) as
+        (db.prepare("SELECT name FROM users WHERE role_key = ?").get(role) as
           | { name?: string }
           | undefined)?.name ?? ""
       ).toLowerCase(),
@@ -904,12 +917,12 @@ async function deliverAgentReply(args: {
   userText: string;
 }): Promise<string | null> {
   const { chatId, role } = args;
-  const roleUserId = userIdOfRole(role);
-  if (!db.prepare("SELECT id FROM users WHERE id = ?").get(roleUserId)) {
+  const roleUserId = roleAccountId(role);
+  if (!roleUserId) {
     // Роль-учётка не заведена — пропускаем, без сообщения. Владелец увидит
     // проблему в логах, чат продолжит работать.
     console.warn(
-      `[chats] deliverAgentReply: ролевая учётка ${roleUserId} не найдена`,
+      `[chats] deliverAgentReply: ролевая учётка для ${role} не найдена`,
     );
     return null;
   }

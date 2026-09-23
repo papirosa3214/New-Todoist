@@ -204,8 +204,9 @@ function seedRoleAccounts(): void {
     "architect", "builder", "qa", "designer",
   ];
   const insert = db.prepare(
-    `INSERT OR IGNORE INTO users (id, name, role, type, email, password_hash)
-     VALUES (?, ?, ?, 'ai', ?, '!test')`,
+    `INSERT OR IGNORE INTO users
+       (id, name, role, role_key, type, email, password_hash, is_system_bot)
+     VALUES (?, ?, 'agent', ?, 'ai', ?, '!test', 1)`,
   );
   for (const r of roles) {
     insert.run(`role_${r}`, r, r, `${r}@test`);

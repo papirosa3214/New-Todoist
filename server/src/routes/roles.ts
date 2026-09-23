@@ -29,6 +29,13 @@ const ROLE_PROFILES_DIR = path.resolve(
 
 /** Ключ роли: он же часть id учётки role_<ключ> и имя в role-routing.yaml. */
 const ROLE_KEY_RE = /^[a-z][a-z0-9_]{1,31}$/;
+const RESERVED_ROLE_KEYS = new Set([
+  "owner",
+  "agent",
+  "viewer",
+  "orchestrator",
+  "service",
+]);
 
 function isRole(value: string): value is RoleName {
   return ROLE_NAMES.includes(value as RoleName);
@@ -64,7 +71,7 @@ function roleAccount(role: RoleName) {
     .prepare(
       `SELECT id, name, permissions, status, last_seen_at
          FROM users
-        WHERE role = ?
+        WHERE role_key = ? AND role = 'agent' AND type = 'ai'
         ORDER BY created_at
         LIMIT 1`,
     )
@@ -306,12 +313,20 @@ export function registerRoleRoutes(app: FastifyInstance): void {
           error: "ключ роли — латиница в нижнем регистре, цифры и _, от 2 до 32 знаков",
         });
       }
+      if (RESERVED_ROLE_KEYS.has(key)) {
+        return reply.code(422).send({ error: "этот ключ роли зарезервирован системой" });
+      }
       if (!title) return reply.code(422).send({ error: "нужно название роли" });
       if (allRoles().some((r) => r.key === key)) {
         return reply.code(409).send({ error: "роль с таким ключом уже есть" });
       }
 
       const userId = roleUserId(key);
+      if (db.prepare("SELECT 1 FROM users WHERE id = ?").get(userId)) {
+        return reply.code(409).send({
+          error: "учётная запись с каноническим id этой роли уже существует",
+        });
+      }
       db.transaction(() => {
         const position = (
           db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM roles").get() as { p: number }
@@ -319,26 +334,19 @@ export function registerRoleRoutes(app: FastifyInstance): void {
         db.prepare(
           "INSERT INTO roles (key, title, summary, enabled, position, prompt) VALUES (?, ?, ?, 1, ?, ?)",
         ).run(key, title, summary, position, prompt || null);
-        // Учётка могла остаться от роли, убранной раньше (как Синтезатор) —
-        // тогда её возвращаем, а не заводим вторую.
-        const existing = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
-        if (existing) {
-          db.prepare("UPDATE users SET name = ?, role = ?, archived = 0 WHERE id = ?")
-            .run(title, key, userId);
-        } else {
-          db.prepare(
-            `INSERT INTO users
-               (id, name, email, password_hash, role, type, is_system_bot, profile, initials, avatar_color)
-             VALUES (?, ?, ?, '!no-login', ?, 'ai', 1, ?, ?, '#8E8E93')`,
-          ).run(
-            userId,
-            title,
-            `${key.replace(/_/g, "-")}@taskflow.local`,
-            key,
-            key,
-            title.slice(0, 1).toUpperCase(),
-          );
-        }
+        db.prepare(
+          `INSERT INTO users
+             (id, name, email, password_hash, role, role_key, type, is_system_bot,
+              profile, initials, avatar_color)
+           VALUES (?, ?, ?, '!no-login', 'agent', ?, 'ai', 1, ?, ?, '#8E8E93')`,
+        ).run(
+          userId,
+          title,
+          `${key.replace(/_/g, "-")}@taskflow.local`,
+          key,
+          key,
+          title.slice(0, 1).toUpperCase(),
+        );
       })();
       refreshRoles();
       return reply.code(201).send(roleDetails(key, await piAlive()));
@@ -447,14 +455,14 @@ export function registerRoleRoutes(app: FastifyInstance): void {
     { preHandler: authPre },
     async (req, reply) => {
       const user = db
-        .prepare("SELECT id, name, role, type FROM users WHERE id = ?")
+        .prepare("SELECT id, name, role_key, type FROM users WHERE id = ?")
         .get(req.params.id) as
-        { id: string; name: string; role: string; type: string } | undefined;
+        { id: string; name: string; role_key: string | null; type: string } | undefined;
       if (!user) return reply.code(404).send({ error: "Not found" });
       return {
         agent_id: user.id,
         name: user.name,
-        role: isRole(user.role) ? user.role : null,
+        role: user.role_key && isRole(user.role_key) ? user.role_key : null,
         type: user.type,
       };
     },

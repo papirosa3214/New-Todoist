@@ -180,7 +180,9 @@ function readRoleAccount(role: RoleName) {
   return db
     .prepare(
       `SELECT id, name, permissions, status, last_seen_at
-         FROM users WHERE role = ? ORDER BY created_at LIMIT 1`,
+         FROM users
+        WHERE role_key = ? AND role = 'agent' AND type = 'ai'
+        ORDER BY created_at LIMIT 1`,
     )
     .get(role) as
       | {

@@ -52,7 +52,7 @@ describe("provider_limit fallback routing", () => {
       },
     });
     roleAgentId = agent.json().user.id;
-    db.prepare("UPDATE users SET type = 'ai', role = 'architect' WHERE id = ?").run(
+    db.prepare("UPDATE users SET type = 'ai', role = 'agent' WHERE id = ?").run(
       roleAgentId,
     );
     roleAgentToken = (
@@ -135,7 +135,6 @@ describe("provider_limit fallback routing", () => {
 
   it("blocks when provider_limit happens on the last fallback", async () => {
     const task = await claimTask("provider limit last fallback blocks");
-    db.prepare("UPDATE users SET role = 'qa' WHERE id = ?").run(roleAgentId);
     db.prepare("UPDATE attempts SET executor_id = ? WHERE id = ?").run(
       "b85212d6-abab-4afb-a4c6-0d379b6537a4",
       task.attemptId,

@@ -133,7 +133,7 @@ describe("Профили ролей для экрана «Команда»", () 
     const roles = await fetchRoles();
     const designer = roles.find((r) => r.role === "designer");
     const account = db
-      .prepare("SELECT name FROM users WHERE role = 'designer' LIMIT 1")
+      .prepare("SELECT name FROM users WHERE role_key = 'designer' LIMIT 1")
       .get() as { name: string } | undefined;
     if (account) expect(designer.title).toBe(account.name);
   });

@@ -30,8 +30,8 @@ describe("roles: создание и правка с экрана «Команд
   });
 
   afterAll(async () => {
-    db.prepare("DELETE FROM roles WHERE key = ?").run(key);
     db.prepare("DELETE FROM users WHERE id = ?").run(`role_${key}`);
+    db.prepare("DELETE FROM roles WHERE key = ?").run(key);
     refreshRoles();
     await app.close();
   });
@@ -69,15 +69,61 @@ describe("roles: создание и правка с экрана «Команд
     expect(ROLE_NAMES).toContain(key);
     expect(roleTitle(key)).toBe("Проба");
     expect(rolePromptText(key)).toBe("Ты — проба.");
-    const user = db.prepare("SELECT type, api_token, role FROM users WHERE id = ?").get(`role_${key}`) as
-      { type: string; api_token: string | null; role: string };
-    expect(user).toEqual({ type: "ai", api_token: null, role: key });
+    const user = db.prepare("SELECT type, api_token, role, role_key FROM users WHERE id = ?").get(`role_${key}`) as
+      { type: string; api_token: string | null; role: string; role_key: string };
+    expect(user).toEqual({ type: "ai", api_token: null, role: "agent", role_key: key });
+
+    const roleJwt = app.jwt.sign({ id: `role_${key}` }, { expiresIn: "5m" });
+    const ownerOnlyPatch = await app.inject({
+      method: "PATCH",
+      url: `/api/roles/${key}`,
+      headers: auth(roleJwt),
+      payload: { summary: "эскалация не должна пройти" },
+    });
+    expect(ownerOnlyPatch.statusCode).toBe(403);
 
     const again = await app.inject({
       method: "POST", url: "/api/roles", headers: auth(ownerToken),
       payload: { key, title: "Проба 2" },
     });
     expect(again.statusCode).toBe(409);
+  });
+
+  it.each(["owner", "agent", "viewer", "orchestrator", "service"])(
+    "зарезервированный ключ %s отклоняется без создания роли и account",
+    async (reservedKey) => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/roles",
+        headers: auth(ownerToken),
+        payload: { key: reservedKey, title: "Недопустимая роль" },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(db.prepare("SELECT 1 FROM roles WHERE key = ?").get(reservedKey)).toBeUndefined();
+      expect(db.prepare("SELECT 1 FROM users WHERE id = ?").get(`role_${reservedKey}`)).toBeUndefined();
+    },
+  );
+
+  it("не захватывает произвольного существующего пользователя role_<key>", async () => {
+    const collisionKey = `${key}_collision`;
+    const collisionId = `role_${collisionKey}`;
+    db.prepare(
+      `INSERT INTO users (id, name, email, password_hash, role, type)
+       VALUES (?, 'Existing human', ?, 'hash', 'viewer', 'human')`,
+    ).run(collisionId, `${collisionKey}@test`);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/roles",
+      headers: auth(ownerToken),
+      payload: { key: collisionKey, title: "Collision" },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(db.prepare("SELECT 1 FROM roles WHERE key = ?").get(collisionKey)).toBeUndefined();
+    expect(
+      db.prepare("SELECT role, role_key, type FROM users WHERE id = ?").get(collisionId),
+    ).toEqual({ role: "viewer", role_key: null, type: "human" });
+    db.prepare("DELETE FROM users WHERE id = ?").run(collisionId);
   });
 
   it("правка названия меняет и подпись учётки", async () => {

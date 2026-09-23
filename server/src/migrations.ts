@@ -238,6 +238,140 @@ export function runIntakePipelineMigration(target: Database = db): void {
   }
 }
 
+/**
+ * Отделяет полномочие учётки (users.role) от бизнес-роли исполнителя
+ * (users.role_key). Экспорт нужен upgrade-тесту на отдельной старой БД.
+ *
+ * Backfill намеренно берёт только канонические системные AI-учётки:
+ * совпадения одного лишь id `role_<key>` недостаточно. Так миграция не
+ * присваивает роль произвольному существующему человеку с таким id.
+ */
+export function runRoleAccountSecurityMigration(target: Database = db): void {
+  const columns = new Set(
+    (target.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  if (!columns.has("role_key")) {
+    // SQLite разрешает ADD COLUMN с FK только при определённых комбинациях
+    // PRAGMA/DEFAULT. Связь ниже всё равно проверяется триггерами — одинаково
+    // для старой и для свежей базы.
+    target.exec("ALTER TABLE users ADD COLUMN role_key TEXT");
+  }
+
+  target.exec(`
+    -- Канонический legacy account мог получить даже reserved authority
+    -- (уязвимый role_owner). Сохраняем саму строку, token и все внешние
+    -- ссылки на users.id, меняя только authority/business-role binding.
+    UPDATE users
+       SET role_key = role,
+           role = 'agent'
+     WHERE type = 'ai'
+       AND COALESCE(is_system_bot, 0) = 1
+       AND id = 'role_' || role
+       AND (role_key IS NULL OR role_key = role)
+       AND EXISTS (SELECT 1 FROM roles WHERE roles.key = users.role);
+
+    -- Business keys must never remain authorization authorities. Legacy
+    -- non-canonical rows are safely demoted without claiming a role_key.
+    UPDATE users
+       SET role = 'agent'
+     WHERE role NOT IN ('owner', 'agent', 'viewer', 'orchestrator', 'service');
+  `);
+
+  const invalid = target
+    .prepare(
+      `SELECT id
+         FROM users
+        WHERE role_key IS NOT NULL
+          AND (type <> 'ai'
+               OR role <> 'agent'
+               OR COALESCE(is_system_bot, 0) <> 1
+               OR id <> 'role_' || role_key
+               OR NOT EXISTS (SELECT 1 FROM roles WHERE roles.key = users.role_key))
+        LIMIT 1`,
+    )
+    .get() as { id: string } | undefined;
+  if (invalid) {
+    throw new Error(
+      `058_role_account_authority: некорректная связь users.role_key у ${invalid.id}`,
+    );
+  }
+
+  target.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_role_key_unique
+      ON users(role_key) WHERE role_key IS NOT NULL;
+
+    CREATE TRIGGER IF NOT EXISTS users_authority_insert_guard
+    BEFORE INSERT ON users
+    WHEN NEW.role NOT IN ('owner', 'agent', 'viewer', 'orchestrator', 'service')
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid users.role authority');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS users_authority_update_guard
+    BEFORE UPDATE OF role ON users
+    WHEN NEW.role NOT IN ('owner', 'agent', 'viewer', 'orchestrator', 'service')
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid users.role authority');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS users_role_key_insert_guard
+    BEFORE INSERT ON users
+    WHEN NEW.role_key IS NOT NULL AND (
+      NEW.type <> 'ai'
+      OR NEW.role <> 'agent'
+      OR COALESCE(NEW.is_system_bot, 0) <> 1
+      OR NEW.id <> 'role_' || NEW.role_key
+      OR NOT EXISTS (SELECT 1 FROM roles WHERE key = NEW.role_key)
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid users.role_key binding');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS users_role_key_update_guard
+    BEFORE UPDATE OF id, role, role_key, type, is_system_bot ON users
+    WHEN NEW.role_key IS NOT NULL AND (
+      NEW.type <> 'ai'
+      OR NEW.role <> 'agent'
+      OR COALESCE(NEW.is_system_bot, 0) <> 1
+      OR NEW.id <> 'role_' || NEW.role_key
+      OR NOT EXISTS (SELECT 1 FROM roles WHERE key = NEW.role_key)
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid users.role_key binding');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS roles_reserved_key_insert_guard
+    BEFORE INSERT ON roles
+    WHEN NEW.key IN ('owner', 'agent', 'viewer', 'orchestrator', 'service')
+    BEGIN
+      SELECT RAISE(ABORT, 'reserved role key');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS roles_reserved_key_update_guard
+    BEFORE UPDATE OF key ON roles
+    WHEN NEW.key IN ('owner', 'agent', 'viewer', 'orchestrator', 'service')
+    BEGIN
+      SELECT RAISE(ABORT, 'reserved role key');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS roles_bound_key_update_guard
+    BEFORE UPDATE OF key ON roles
+    WHEN EXISTS (SELECT 1 FROM users WHERE role_key = OLD.key)
+    BEGIN
+      SELECT RAISE(ABORT, 'role key is bound to an account');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS roles_bound_key_delete_guard
+    BEFORE DELETE ON roles
+    WHEN EXISTS (SELECT 1 FROM users WHERE role_key = OLD.key)
+    BEGIN
+      SELECT RAISE(ABORT, 'role key is bound to an account');
+    END;
+  `);
+}
+
 const migrations: Migration[] = [
   {
     id: "001_baseline",
@@ -2055,6 +2189,13 @@ const migrations: Migration[] = [
         db.exec("ALTER TABLE roles ADD COLUMN prompt TEXT");
       }
     },
+  },
+  {
+    id: "058_role_account_authority",
+    description:
+      "users.role_key связывает каноническую AI-учётку с бизнес-ролью; " +
+      "users.role остаётся authority agent, reserved keys и небезопасные связи блокируются БД.",
+    up: () => runRoleAccountSecurityMigration(),
   },
 ];
 

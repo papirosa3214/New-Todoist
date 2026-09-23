@@ -156,9 +156,10 @@ beforeAll(async () => {
   ).run();
   // Минимальные роли для FK на chat_sessions.role_id.
   db.prepare(
-    `INSERT OR IGNORE INTO users (id, name, role, type, email, password_hash)
-     VALUES ('role_architect', 'Архитектор', 'architect', 'ai', 'arch@test', '!t'),
-            ('role_qa', 'QA', 'qa', 'ai', 'qa@test', '!t')`,
+    `INSERT OR IGNORE INTO users
+       (id, name, role, role_key, type, email, password_hash, is_system_bot)
+     VALUES ('role_architect', 'Архитектор', 'agent', 'architect', 'ai', 'arch@test', '!t', 1),
+            ('role_qa', 'QA', 'agent', 'qa', 'ai', 'qa@test', '!t', 1)`,
   ).run();
   // Чат под FK на chat_sessions.chat_id.
   db.prepare(

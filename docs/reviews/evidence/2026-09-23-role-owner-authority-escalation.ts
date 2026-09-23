@@ -46,24 +46,35 @@ async function main() {
       },
     });
 
+    const account = db
+      .prepare("SELECT id, role, role_key, type FROM users WHERE id = 'role_owner'")
+      .get();
+    // Подпись JWT с произвольным id не создаёт identity: role_owner в БД
+    // отсутствует, поэтому auth обязан отклонить токен.
     const roleJwt = app.jwt.sign({ id: "role_owner" }, { expiresIn: "5m" });
     const privilegedMutation = await app.inject({
       method: "PATCH",
-      url: "/api/roles/owner",
+      url: "/api/roles/researcher",
       headers: { authorization: `Bearer ${roleJwt}` },
-      payload: { summary: "privileged mutation accepted" },
+      payload: { summary: "privileged mutation must be rejected" },
     });
 
-    console.log(
-      JSON.stringify({
-        createStatus: create.statusCode,
-        account: db
-          .prepare("SELECT id, role, type FROM users WHERE id = 'role_owner'")
-          .get(),
-        privilegedMutationStatus: privilegedMutation.statusCode,
-        privilegedMutationBody: privilegedMutation.json(),
-      }),
-    );
+    const result = {
+      createStatus: create.statusCode,
+      account: account ?? null,
+      privilegedMutationStatus: privilegedMutation.statusCode,
+      escalationPossible:
+        create.statusCode !== 422 || account !== undefined || privilegedMutation.statusCode < 400,
+    };
+    console.log(JSON.stringify(result));
+    if (
+      result.createStatus !== 422 ||
+      result.account !== null ||
+      result.privilegedMutationStatus !== 403 ||
+      result.escalationPossible
+    ) {
+      throw new Error(`P0 regression: ${JSON.stringify(result)}`);
+    }
   } finally {
     await app.close();
     fs.rmSync(temp, { recursive: true, force: true });

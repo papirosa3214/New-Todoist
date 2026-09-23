@@ -51,12 +51,11 @@ const ROLE_ACCOUNTS: Array<{ id: string; name: string; email: string; role: stri
 export function seedRoleAccounts(db: Database): void {
   const ins = db.prepare(
     `INSERT OR IGNORE INTO users
-       (id, name, email, password_hash, role, type, avatar_color, initials, status, is_system_bot)
-     VALUES (?, ?, ?, '', ?, 'ai', '#8E8E93', ?, 'offline', 1)`,
+       (id, name, email, password_hash, role, role_key, type, avatar_color, initials, status, is_system_bot)
+     VALUES (?, ?, ?, '', 'agent', ?, 'ai', '#8E8E93', ?, 'offline', 1)`,
   );
   const tx = db.transaction((rows: typeof ROLE_ACCOUNTS) => {
     for (const r of rows) ins.run(r.id, r.name, r.email, r.role, r.name[0]);
   });
   tx(ROLE_ACCOUNTS);
 }
-
