@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import {
   claimNextRoleRunJob,
   completeRoleRunJob,
+  deferRoleRunJob,
   failRoleRunJob,
   recoverExpiredRoleRunJobs,
   renewRoleRunJob,
@@ -11,18 +12,22 @@ import { kickRoleTaskStrict } from "./inProcessRun.js";
 
 export type RoleRunExecutor = (
   job: RoleRunJob,
-) => Promise<{ outcome: "succeeded" | "skipped" }>;
+) => Promise<
+  | { outcome: "succeeded" | "skipped" }
+  | { outcome: "deferred"; reason: string; delaySeconds: number }
+>;
 
 async function defaultExecutor(
   job: RoleRunJob,
-): Promise<{ outcome: "succeeded" | "skipped" }> {
+): ReturnType<RoleRunExecutor> {
   const result = await kickRoleTaskStrict(
     job.task_id,
     job.reason,
     job.actor_id,
-    { durableHandoff: true },
+    { durableHandoff: true, chainDepth: job.chain_depth },
   );
   if (result.outcome === "skipped") return { outcome: "skipped" };
+  if (result.outcome === "deferred") return result;
   await result.completion;
   return { outcome: "succeeded" };
 }
@@ -59,11 +64,20 @@ export async function processOneRoleRunJob(input: {
 
   try {
     const result = await (input.executor ?? defaultExecutor)(job);
-    completeRoleRunJob({
-      jobId: job.id,
-      workerId: input.workerId,
-      status: result.outcome,
-    });
+    if (result.outcome === "deferred") {
+      deferRoleRunJob({
+        jobId: job.id,
+        workerId: input.workerId,
+        reason: result.reason,
+        delaySeconds: result.delaySeconds,
+      });
+    } else {
+      completeRoleRunJob({
+        jobId: job.id,
+        workerId: input.workerId,
+        status: result.outcome,
+      });
+    }
   } catch (error) {
     failRoleRunJob({
       jobId: job.id,

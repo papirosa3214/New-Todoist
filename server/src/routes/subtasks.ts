@@ -744,7 +744,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         db.prepare(
           "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
         ).run(id, req.params.taskId, req.userId, req.body.text ?? "");
-        if (String(task.assignee_id ?? "").startsWith("role_")) {
+        if (
+          String(task.assignee_id ?? "").startsWith("role_") &&
+          task.assignee_id !== req.userId
+        ) {
           enqueueRoleRunJob({
             taskId: req.params.taskId,
             reason: "commented",

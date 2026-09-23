@@ -2242,6 +2242,28 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "060_role_run_job_chain",
+    description:
+      "Durable-глубина C3 continuation и уникальный active lease на задачу.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(role_run_jobs)").all() as Array<{ name: string }>).map(
+          (column) => column.name,
+        ),
+      );
+      if (!cols.has("chain_depth")) {
+        db.exec(
+          "ALTER TABLE role_run_jobs ADD COLUMN chain_depth INTEGER NOT NULL DEFAULT 0 CHECK (chain_depth BETWEEN 0 AND 3)",
+        );
+      }
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_role_run_jobs_running_task
+          ON role_run_jobs(task_id)
+          WHERE status = 'running';
+      `);
+    },
+  },
 ];
 
 /**

@@ -27,6 +27,7 @@ export type RoleRunJob = {
   status: RoleRunJobStatus;
   attempts: number;
   max_attempts: number;
+  chain_depth: number;
   available_at: string;
   lease_owner: string | null;
   lease_expires_at: string | null;
@@ -48,13 +49,14 @@ export function enqueueRoleRunJob(input: {
   actorId?: string | null;
   dedupeKey: string;
   maxAttempts?: number;
+  chainDepth?: number;
 }): { id: string; created: boolean } {
   const id = `rrj_${crypto.randomUUID()}`;
   const result = db
     .prepare(
       `INSERT INTO role_run_jobs
-         (id, task_id, reason, actor_id, dedupe_key, max_attempts)
-       VALUES (?, ?, ?, ?, ?, ?)
+         (id, task_id, reason, actor_id, dedupe_key, max_attempts, chain_depth)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(dedupe_key) DO NOTHING`,
     )
     .run(
@@ -64,6 +66,7 @@ export function enqueueRoleRunJob(input: {
       input.actorId ?? null,
       input.dedupeKey,
       input.maxAttempts ?? 3,
+      input.chainDepth ?? 0,
     );
   if (result.changes > 0) return { id, created: true };
 
@@ -186,6 +189,40 @@ export function completeRoleRunJob(input: {
   );
 }
 
+/**
+ * Вернуть job в ожидание без расходования попытки. Это не техническое
+ * падение: например, владелец временно выключил автономную «Систему» или
+ * ручной запуск уже держит ту же карточку.
+ */
+export function deferRoleRunJob(input: {
+  jobId: string;
+  workerId: string;
+  reason: string;
+  delaySeconds?: number;
+}): boolean {
+  const delay = Math.max(1, Math.floor(input.delaySeconds ?? 30));
+  return (
+    db
+      .prepare(
+        `UPDATE role_run_jobs
+            SET status = 'retry_wait',
+                attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+                available_at = datetime('now', ?),
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                last_error = ?,
+                updated_at = datetime('now')
+          WHERE id = ? AND status = 'running' AND lease_owner = ?`,
+      )
+      .run(
+        `+${delay} seconds`,
+        input.reason.slice(0, 1000),
+        input.jobId,
+        input.workerId,
+      ).changes === 1
+  );
+}
+
 export function failRoleRunJob(input: {
   jobId: string;
   workerId: string;
@@ -237,4 +274,64 @@ export function getRoleRunJob(id: string): RoleRunJob | undefined {
   return db.prepare("SELECT * FROM role_run_jobs WHERE id = ?").get(id) as
     | RoleRunJob
     | undefined;
+}
+
+export function listRoleRunJobs(input?: {
+  taskId?: string;
+  limit?: number;
+}): RoleRunJob[] {
+  const limit = Math.min(200, Math.max(1, Math.floor(input?.limit ?? 50)));
+  if (input?.taskId) {
+    return db
+      .prepare(
+        `SELECT * FROM role_run_jobs
+          WHERE task_id = ?
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT ?`,
+      )
+      .all(input.taskId, limit) as RoleRunJob[];
+  }
+  return db
+    .prepare(
+      `SELECT * FROM role_run_jobs
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT ?`,
+    )
+    .all(limit) as RoleRunJob[];
+}
+
+export function retryRoleRunJob(id: string): RoleRunJob | undefined {
+  const changed = db
+    .prepare(
+      `UPDATE role_run_jobs
+          SET status = 'queued',
+              attempts = 0,
+              available_at = datetime('now'),
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              last_error = NULL,
+              started_at = NULL,
+              finished_at = NULL,
+              updated_at = datetime('now')
+        WHERE id = ? AND status IN ('dead', 'cancelled', 'skipped')`,
+    )
+    .run(id);
+  return changed.changes === 1 ? getRoleRunJob(id) : undefined;
+}
+
+/** Running job здесь намеренно не отменяется: для него нужен подтверждённый
+ * abort протокол конкретной Pi-сессии. API возвращает conflict вместо лжи. */
+export function cancelPendingRoleRunJob(id: string): RoleRunJob | undefined {
+  const changed = db
+    .prepare(
+      `UPDATE role_run_jobs
+          SET status = 'cancelled',
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              finished_at = datetime('now'),
+              updated_at = datetime('now')
+        WHERE id = ? AND status IN ('queued', 'retry_wait')`,
+    )
+    .run(id);
+  return changed.changes === 1 ? getRoleRunJob(id) : undefined;
 }

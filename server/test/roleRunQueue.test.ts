@@ -32,6 +32,7 @@ function dedupe(taskId: string, suffix: string): string {
 
 describe("durable role-run queue", () => {
   let app: FastifyInstance;
+  let ownerToken: string;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -39,11 +40,13 @@ describe("durable role-run queue", () => {
       `INSERT INTO users (id, name, email, password_hash, role, type)
        VALUES (?, 'Queue Owner', ?, '!', 'owner', 'human')`,
     ).run(ownerId, `${ownerId}@test`);
+    ownerToken = app.jwt.sign({ id: ownerId });
   });
 
   afterAll(async () => {
     for (const taskId of createdTasks) {
       db.prepare("DELETE FROM role_run_jobs WHERE task_id = ?").run(taskId);
+      db.prepare("DELETE FROM task_events WHERE task_id = ?").run(taskId);
       db.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
     }
     db.prepare("DELETE FROM users WHERE id = ?").run(ownerId);
@@ -251,6 +254,79 @@ describe("durable role-run queue", () => {
     expect(getRoleRunJob(job.id)).toMatchObject({
       status: "dead",
       last_error: "executor crashed",
+    });
+  });
+
+  it("временная недоступность откладывает job без расходования попытки", async () => {
+    const taskId = makeTask("worker-deferred");
+    const job = enqueueRoleRunJob({
+      taskId,
+      reason: "assigned",
+      dedupeKey: dedupe(taskId, "worker-deferred"),
+    });
+
+    await processOneRoleRunJob({
+      workerId: "worker-deferred",
+      executor: async () => ({
+        outcome: "deferred",
+        reason: "autonomous system is disabled",
+        delaySeconds: 60,
+      }),
+    });
+    expect(getRoleRunJob(job.id)).toMatchObject({
+      status: "retry_wait",
+      attempts: 0,
+      last_error: "autonomous system is disabled",
+    });
+  });
+
+  it("владелец видит очередь, отменяет pending и повторяет terminal job", async () => {
+    const taskId = makeTask("owner-api");
+    const queued = enqueueRoleRunJob({
+      taskId,
+      reason: "assigned",
+      dedupeKey: dedupe(taskId, "owner-api"),
+    });
+    const auth = { authorization: `Bearer ${ownerToken}` };
+
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/role-run-jobs?task_id=${taskId}`,
+      headers: auth,
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().jobs).toEqual([
+      expect.objectContaining({ id: queued.id, status: "queued" }),
+    ]);
+
+    const cancelled = await app.inject({
+      method: "POST",
+      url: `/api/role-run-jobs/${queued.id}/cancel`,
+      headers: auth,
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().job.status).toBe("cancelled");
+
+    const retried = await app.inject({
+      method: "POST",
+      url: `/api/role-run-jobs/${queued.id}/retry`,
+      headers: auth,
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().job.status).toBe("queued");
+
+    const running = claimNextRoleRunJob({ workerId: "owner-api-worker" });
+    expect(running?.id).toBe(queued.id);
+    const conflict = await app.inject({
+      method: "POST",
+      url: `/api/role-run-jobs/${queued.id}/cancel`,
+      headers: auth,
+    });
+    expect(conflict.statusCode).toBe(409);
+    completeRoleRunJob({
+      jobId: queued.id,
+      workerId: "owner-api-worker",
+      status: "succeeded",
     });
   });
 });

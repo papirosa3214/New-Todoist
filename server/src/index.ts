@@ -58,6 +58,7 @@ import { registerReviewRoutes } from "./routes/reviews.js";
 import { registerRoleRoutes } from "./routes/roles.js";
 import { registerRuntimeRoutes } from "./routes/runtime.js";
 import { registerTaskIntakeRoutes } from "./routes/task-intake.js";
+import { registerRoleRunJobRoutes } from "./routes/role-run-jobs.js";
 
 /**
  * Собирает и возвращает готовый Fastify-инстанс — регистрирует плагины,
@@ -253,6 +254,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerReviewRoutes(app);
   registerRoleRoutes(app);
   registerRuntimeRoutes(app);
+  registerRoleRunJobRoutes(app);
   registerTaskIntakeRoutes(app);
   registerProjectLabelRoutes(app);
   registerCompassRoutes(app);

@@ -12,8 +12,9 @@ import type { FastifyInstance } from "fastify";
 
 const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
-const { pickRole, roleChoiceNoteRu } =
+const { dispatchTaskToPi, pickRole, roleChoiceNoteRu } =
   await import("../src/routes/dispatch.js");
+const { seedRoleAccounts } = await import("./helpers/seedOwner.js");
 
 describe("Диспетчер: выбор роли", () => {
   let app: FastifyInstance;
@@ -32,6 +33,7 @@ describe("Диспетчер: выбор роли", () => {
 
   beforeAll(async () => {
     app = await buildApp();
+    seedRoleAccounts(db);
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/register",
@@ -124,5 +126,32 @@ describe("Диспетчер: выбор роли", () => {
     expect(уверенный).not.toContain("неочевидный");
     // Владелец читает ленту, а не наши идентификаторы ролей.
     expect(уверенный).toContain("Дизайнер");
+  });
+
+  it("назначение и durable job коммитятся вместе", async () => {
+    const taskId = makeTask("Реализовать endpoint", "Серверная разработка");
+    db.prepare(
+      `UPDATE tasks
+          SET ready_for_pickup = 1,
+              owner_selected_role = 'builder'
+        WHERE id = ?`,
+    ).run(taskId);
+
+    const result = await dispatchTaskToPi(taskId, ownerId);
+    expect(result).toMatchObject({ ok: true, role: "builder" });
+    const job = db
+      .prepare(
+        `SELECT reason, actor_id, status
+           FROM role_run_jobs
+          WHERE task_id = ?`,
+      )
+      .get(taskId) as
+      | { reason: string; actor_id: string | null; status: string }
+      | undefined;
+    expect(job).toEqual({
+      reason: "assigned",
+      actor_id: ownerId,
+      status: "queued",
+    });
   });
 });

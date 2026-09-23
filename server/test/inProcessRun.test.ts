@@ -50,6 +50,7 @@ const { runRoleInProcess, kickRoleTask, _settleInProcessRunsForTests } = await i
 describe("агент роли внутри сервера", () => {
   let app: FastifyInstance;
   let ownerId: string;
+  let ownerToken: string;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -61,6 +62,7 @@ describe("агент роли внутри сервера", () => {
       payload: { name: "InProcOwner", email: `inproc-owner-${Date.now()}@test`, password: "password123" },
     });
     ownerId = reg.json().user.id;
+    ownerToken = reg.json().token;
     db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(ownerId);
   });
 
@@ -114,8 +116,9 @@ describe("агент роли внутри сервера", () => {
       await call(tools, "taskflow_claim", { id: taskId });
       throw new Error("провайдер не ответил");
     };
-    await runRoleInProcess({ taskId, role: "builder" });
+    const run = await runRoleInProcess({ taskId, role: "builder" });
     await _settleInProcessRunsForTests();
+    await expect(run.completion).rejects.toThrow("провайдер не ответил");
 
     const task = db.prepare("SELECT agent_state FROM tasks WHERE id = ?").get(taskId) as { agent_state: string };
     expect(task.agent_state).toBe("blocked");
@@ -204,5 +207,64 @@ describe("агент роли внутри сервера", () => {
   it("роль не из списка не запускается", async () => {
     const { taskId } = builderTask("Чужая роль");
     await expect(runRoleInProcess({ taskId, role: "synthesizer" })).rejects.toThrow(/нет или она отключена/);
+  });
+
+  it("комментарий владельца и durable job записываются вместе", async () => {
+    const { taskId } = builderTask("Ответить владельцу");
+    db.prepare("UPDATE tasks SET agent_state = 'review' WHERE id = ?").run(taskId);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/comments`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { text: "Уточни результат" },
+    });
+    expect(response.statusCode).toBe(200);
+    const comment = response.json();
+    const job = db
+      .prepare(
+        `SELECT reason, actor_id, status, dedupe_key
+           FROM role_run_jobs
+          WHERE task_id = ? AND reason = 'commented'
+          ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(taskId) as any;
+    expect(job).toMatchObject({
+      reason: "commented",
+      actor_id: ownerId,
+      status: "queued",
+      dedupe_key: `comment:${comment.id}`,
+    });
+  });
+
+  it("переход в review и durable reviewer job записываются вместе", async () => {
+    const { taskId, stepId } = builderTask("Отправить на проверку");
+    const roleToken = app.jwt.sign({ id: "role_builder" });
+    const headers = { authorization: `Bearer ${roleToken}` };
+    const claim = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/claim`,
+      headers,
+      payload: { model: "test-model", runner: "test" },
+    });
+    expect(claim.statusCode).toBe(200);
+    db.prepare("UPDATE subtasks SET done = 1, result = 'Готово' WHERE id = ?").run(stepId);
+    const review = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/state`,
+      headers,
+      payload: { state: "review", comment: "Готово" },
+    });
+    expect(review.statusCode).toBe(200);
+    const job = db
+      .prepare(
+        "SELECT reason, actor_id, status FROM role_run_jobs WHERE task_id = ? AND reason = 'review'",
+      )
+      .get(taskId) as any;
+    expect(job).toEqual({
+      reason: "review",
+      actor_id: "role_builder",
+      status: "queued",
+    });
   });
 });

@@ -404,6 +404,8 @@ export async function runRoleInProcess(input: {
   /** Автоматический worker пишет следующий after_run в durable queue.
    *  Прямой ручной/тестовый запуск сохраняет немедленный handoff. */
   durableHandoff?: boolean;
+  /** Число уже выполненных C3 continuation-заходов durable chain. */
+  chainDepth?: number;
 }): Promise<{ runId: string; completion: Promise<void> }> {
   const { taskId, role } = input;
   if (!ROLE_NAMES.includes(role)) throw new Error(`роли «${role}» нет или она отключена`);
@@ -469,12 +471,14 @@ export async function runRoleInProcess(input: {
     void asRole(role, "POST", `/api/tasks/${taskId}/heartbeat`, {}).catch(() => {});
   }, HEARTBEAT_MS);
 
+  let runFailure: Error | null = null;
   const work = (async () => {
     try {
       const task = input.prompt ?? (resumed ? resumePrompt(taskId) : defaultTaskPrompt(taskId, role));
       await session.prompt(mode === "work" ? `${task}\n\n${repoNote(cwd)}\nПеред работой поищи похожее в документации (taskflow_kb_search).` : task);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      runFailure = error instanceof Error ? error : new Error(reason);
       try {
         await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
           state: "blocked",
@@ -495,6 +499,8 @@ export async function runRoleInProcess(input: {
           role,
           before,
           input.durableHandoff ?? false,
+          input.chainDepth ?? 0,
+          runId,
         );
       }
     }
@@ -502,7 +508,14 @@ export async function runRoleInProcess(input: {
   pending.add(work);
   void work.finally(() => pending.delete(work));
 
-  return { runId, completion: work };
+  const completion = work.then(() => {
+    if (runFailure) throw runFailure;
+  });
+  // Прямые ручные вызовы исторически не обязаны await completion. Worker
+  // await-ит её и видит reject; этот handler предотвращает unhandled rejection
+  // у совместимых fire-and-forget callers, не меняя исходную Promise.
+  void completion.catch(() => {});
+  return { runId, completion };
 }
 
 // ── Кто и когда будит роль (этап C2, 23.09.2026) ───────────────────────────
@@ -557,7 +570,8 @@ function reviewerPending(taskId: string): boolean {
  */
 export type KickRoleTaskResult =
   | { outcome: "started"; runId: string; completion: Promise<void> }
-  | { outcome: "skipped"; reason: string };
+  | { outcome: "skipped"; reason: string }
+  | { outcome: "deferred"; reason: string; delaySeconds: number };
 
 /**
  * Проверить актуальное состояние карточки и начать run. В отличие от
@@ -568,18 +582,30 @@ export async function kickRoleTaskStrict(
   taskId: string,
   reason: KickReason,
   actorId?: string | null,
-  options?: { durableHandoff?: boolean },
+  options?: { durableHandoff?: boolean; chainDepth?: number },
 ): Promise<KickRoleTaskResult> {
   // В тестах живых агентов не зовём — только там, где тест это разрешил явно.
   if (process.env.VITEST && process.env.TASKFLOW_KICK_IN_TESTS !== "1") {
-    return { outcome: "skipped", reason: "role runs are disabled in tests" };
+    return {
+      outcome: "deferred",
+      reason: "role runs are disabled in tests",
+      delaySeconds: 30,
+    };
   }
   const { unitState } = await import("../routes/agent-service.js");
   if (!(await unitState()).active) {
-    return { outcome: "skipped", reason: "autonomous system is disabled" };
+    return {
+      outcome: "deferred",
+      reason: "autonomous system is disabled",
+      delaySeconds: 30,
+    };
   }
   if (activeInProcessRun(taskId)) {
-    return { outcome: "skipped", reason: "task already has an active in-process run" };
+    return {
+      outcome: "deferred",
+      reason: "task already has an active in-process run",
+      delaySeconds: 5,
+    };
   }
   const task = db
     .prepare("SELECT id, status, assignee_id, agent_state, ready_for_pickup FROM tasks WHERE id = ?")
@@ -608,6 +634,21 @@ export async function kickRoleTaskStrict(
   }
   if (!role || !ROLE_NAMES.includes(role)) {
     return { outcome: "skipped", reason: "task has no enabled role assignee" };
+  }
+
+  if (reason === "after_run" && task.agent_state === "in_progress") {
+    const chainDepth = options?.chainDepth ?? 0;
+    if (chainDepth > MAX_CHAIN) {
+      return { outcome: "skipped", reason: "continuation chain limit reached" };
+    }
+    const run = await runRoleInProcess({
+      taskId,
+      role,
+      prompt: resumePrompt(taskId),
+      durableHandoff: options?.durableHandoff ?? false,
+      chainDepth,
+    });
+    return { outcome: "started", ...run };
   }
 
   // Владелец написал по сданной карточке — роль только отвечает.
@@ -649,13 +690,26 @@ async function continueOrHandOff(
   role: string,
   before: string,
   durableHandoff: boolean,
+  chainDepth: number,
+  runId: string,
 ): Promise<void> {
   const task = db.prepare("SELECT status, agent_state FROM tasks WHERE id = ?").get(taskId) as
     | { status: string; agent_state: string | null }
     | undefined;
   if (task?.status === "active" && task.agent_state === "in_progress") {
-    const n = (chainCount.get(taskId) ?? 0) + 1;
+    const n = durableHandoff
+      ? chainDepth + 1
+      : (chainCount.get(taskId) ?? 0) + 1;
     if (n <= MAX_CHAIN && progressMark(taskId) !== before) {
+      if (durableHandoff) {
+        enqueueRoleRunJob({
+          taskId,
+          reason: "after_run",
+          dedupeKey: `after-run:${runId}`,
+          chainDepth: n,
+        });
+        return;
+      }
       chainCount.set(taskId, n);
       try {
         await runRoleInProcess({ taskId, role, prompt: resumePrompt(taskId) });
@@ -666,13 +720,5 @@ async function continueOrHandOff(
     return;
   }
   chainCount.delete(taskId);
-  if (!durableHandoff) {
-    await kickRoleTask(taskId, "after_run");
-    return;
-  }
-  enqueueRoleRunJob({
-    taskId,
-    reason: "after_run",
-    dedupeKey: `after-run:${taskId}:${crypto.randomUUID()}`,
-  });
+  if (!durableHandoff) await kickRoleTask(taskId, "after_run");
 }
