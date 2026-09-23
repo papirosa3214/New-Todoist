@@ -2197,6 +2197,51 @@ const migrations: Migration[] = [
       "users.role остаётся authority agent, reserved keys и небезопасные связи блокируются БД.",
     up: () => runRoleAccountSecurityMigration(),
   },
+  {
+    id: "059_role_run_jobs",
+    description:
+      "Durable-очередь автоматических запусков ролей: idempotency key, " +
+      "атомарный claim, lease, retry/dead и recovery после рестарта.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS role_run_jobs (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          reason TEXT NOT NULL
+            CHECK (reason IN ('assigned', 'commented', 'review', 'after_run')),
+          actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          dedupe_key TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL DEFAULT 'queued'
+            CHECK (status IN (
+              'queued', 'running', 'retry_wait', 'succeeded',
+              'skipped', 'dead', 'cancelled'
+            )),
+          attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+          max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts BETWEEN 1 AND 10),
+          available_at TEXT NOT NULL DEFAULT (datetime('now')),
+          lease_owner TEXT,
+          lease_expires_at TEXT,
+          last_error TEXT,
+          started_at TEXT,
+          finished_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (
+            status <> 'running'
+            OR (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+          )
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_role_run_jobs_ready
+          ON role_run_jobs(status, available_at, created_at);
+        CREATE INDEX IF NOT EXISTS idx_role_run_jobs_task_status
+          ON role_run_jobs(task_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_role_run_jobs_lease
+          ON role_run_jobs(status, lease_expires_at)
+          WHERE status = 'running';
+      `);
+    },
+  },
 ];
 
 /**
