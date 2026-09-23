@@ -73,6 +73,25 @@
 | `0a71253f` | C3: разговор на пару «задача + роль» (`SessionManager.continueRecent`), повтор захода до 3 раз при продвижении, рабочая папка по `scripts/task-context-projects.json`, справка (ветка, незакоммиченные файлы) |
 | `891b704e` | 7.2, сервер: `POST /api/roles`, `PATCH /api/roles/:key` (владелец), `GET /api/roles?all=1`; миграция `057_roles_prompt` — инструкция роли в `roles.prompt` (пусто — файл); роль без профиля Pi не «Недоступна». Живьём по HTTP не проверено — нет рабочего ключа агента (отозван 22.09), проверено тестами `rolesManage.test.ts` |
 
+### 5.1. Hardening после независимого ревью
+
+23.09.2026 независимое ревью выявило P0-эскалацию полномочий и красные
+инженерные gates. Исправления ниже зафиксированы в локальной ветке
+`manus/roles-hardening-2026-09-23`; по решению владельца push пока не выполнялся.
+
+| Коммит | Что |
+|---|---|
+| `e56ed700` | Сохранён независимый аудит плана, включая доказательство P0 и приоритетную очередь работ |
+| `e232d274` | Восстановлен server TypeScript build: лимиты AI-ввода и безопасное чтение chat rows |
+| `3338c7fb` | Восстановлены воспроизводимые `npm ci` и hermetic server tests без внешнего embedding endpoint и абсолютного checkout path |
+| `50674f86` | Восстановлен web production build и корректный раздел «Без проекта»; добавлен Playwright regression scenario |
+| `1d6b1b5d` | Устранён P0: `users.role` отделён от business role через `users.role_key`, reserved keys запрещены в API и БД, migration `058_role_account_authority` сохраняет legacy identity/token/FK, добавлены security/upgrade-регрессии |
+
+Финальная проверка неподвижного дерева на Node `22.19.0` прошла полностью:
+root и server `npm ci`; обе production-сборки; web — 9 файлов и 126 тестов;
+server — 64 файла и 514 тестов; lint — 40 предупреждений и 0 ошибок;
+security probe — `createStatus=422`, `account=null`, owner-only mutation `403`.
+
 Конфигурация вне репозитория (сделано):
 - `~/.config/systemd/user/taskflow-server.service.d/node-proxy.conf` — `NODE_USE_ENV_PROXY=1`
   (иначе внешние модели дают 403 из-за гео-блока; `NO_PROXY` уже исключает домашнюю сеть).
@@ -87,7 +106,9 @@
 - **Не проверено живьём:** продолжение разговора между заходами (C3) — «Система» была выключена
   владельцем (03:35, с его устройства), агентов не запускали.
 
-Тесты сервера: 498/498 (`cd server && npx vitest run`, Node 22 из `~/.nvm`).
+Исторический прогон до hardening: 498/498 (`cd server && npx vitest run`, Node 22 из `~/.nvm`).
+Актуальный локальный hardening-прогон: 514/514; web: 126/126. Подробности и
+ограничения зафиксированы в §5.1 и независимом ревью.
 
 ## 6. Как это работает сейчас (карта кода)
 
@@ -161,8 +182,9 @@
   синтаксическая ошибка кладёт его (было ~2 минуты простоя). Порядок: `cp -r src tsconfig.json
   package.json /tmp/tfcheck/` + симлинк `node_modules`, правка там, проверка
   `node ~/Проекты/New-Todoist/node_modules/typescript/bin/tsc --noEmit -p .`, потом — на живые файлы,
-  потом `curl http://127.0.0.1:3001/api/health`. Старые ошибки типов `ai.ts(…,38)` и
-  `chats.ts(…,24)` — чужие, существовали до нас.
+  потом `curl http://127.0.0.1:3001/api/health`. Ранее известные ошибки типов в
+  `ai.ts` и `chats.ts` исправлены hardening-коммитом `e232d274`; build снова является
+  обязательным зелёным gate.
 - **Тесты не должны трогать живое:** `systemctl` в тестах — только пустышка в `PATH`; агенты в
   тестах — только с подменённой моделью (`vi.mock("@earendil-works/pi-coding-agent")`); файлы запусков
   — в `TASKFLOW_RUNS_DIR` (задан в `test/setup.ts`).
