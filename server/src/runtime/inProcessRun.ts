@@ -15,7 +15,7 @@ import {
 import { Type } from "typebox";
 import db from "../db.js";
 import { AGENT_RULES, logEvent } from "../agentState.js";
-import { loadRoleRouting, providerOfModel, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
+import { loadRoleRouting, providerOfModel, rolePromptText, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
 
 /**
@@ -279,15 +279,15 @@ export function taskflowTools(role: string, model: string | null) {
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-const ROLE_PROMPTS_DIR = path.join(process.cwd(), "scripts", "role-prompts");
 const HEARTBEAT_MS = 90_000;
 
+/** Что агент роли получает на заходе внутри сервера — для экрана «Команда». */
+export function inProcessToolNames(): string[] {
+  return [...BUILTIN_TOOLS, ...taskflowTools("", null).map((t) => t.name)];
+}
+
 function rolePrompt(role: string): string {
-  try {
-    return fs.readFileSync(path.join(ROLE_PROMPTS_DIR, `${role}.md`), "utf8");
-  } catch {
-    return "";
-  }
+  return rolePromptText(role) ?? "";
 }
 
 /** Задание по умолчанию — когда вызывающий не собрал своё (ручной запуск). */

@@ -2,8 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
-import { authOrApiToken } from "../auth.js";
-import { ROLE_NAMES, loadRoleRouting, type RoleName } from "../roleRouting.js";
+import { authOrApiToken, ownerOrApiToken } from "../auth.js";
+import {
+  ROLE_NAMES,
+  allRoles,
+  loadRoleRouting,
+  refreshRoles,
+  rolePromptText,
+  roleUserId,
+  type RoleName,
+} from "../roleRouting.js";
+import { inProcessToolNames } from "../runtime/inProcessRun.js";
 
 type ProfileConfig = {
   mcpServers?: {
@@ -13,14 +22,13 @@ type ProfileConfig = {
   };
 };
 
-const ROLE_PROMPTS_DIR = path.resolve(
-  process.env.TASKFLOW_ROLE_PROMPTS_DIR ??
-    path.join(process.cwd(), "scripts", "role-prompts"),
-);
 const ROLE_PROFILES_DIR = path.resolve(
   process.env.TASKFLOW_ROLE_PROFILES_DIR ??
     path.join(process.env.HOME ?? ".", ".pi", "agent", "taskflow-profiles"),
 );
+
+/** Ключ роли: он же часть id учётки role_<ключ> и имя в role-routing.yaml. */
+const ROLE_KEY_RE = /^[a-z][a-z0-9_]{1,31}$/;
 
 function isRole(value: string): value is RoleName {
   return ROLE_NAMES.includes(value as RoleName);
@@ -28,6 +36,9 @@ function isRole(value: string): value is RoleName {
 
 function readRoleTools(role: RoleName): string[] {
   const fileName = path.join(ROLE_PROFILES_DIR, role + ".json");
+  // Роль, заведённая с экрана «Команда», профиля Pi не имеет и работает
+  // только внутри сервера — её инструменты те, что даёт заход внутри.
+  if (!fs.existsSync(fileName)) return inProcessToolNames();
   const config = JSON.parse(fs.readFileSync(fileName, "utf8")) as ProfileConfig;
   const tools = config.mcpServers?.taskflow?.env?.TASKFLOW_MCP_TOOLS;
   if (!tools) throw new Error(`MCP-профиль роли ${role} не содержит allowlist`);
@@ -37,12 +48,13 @@ function readRoleTools(role: RoleName): string[] {
     .filter(Boolean);
 }
 
-/** Системный промпт роли. Источник правды — файл, а не колонка users.prompt:
- *  она у ролевых учёток пуста, и заводить вторую копию значит гарантированно
- *  их рассинхронизировать (раздел 5 спецификации: «объединяет одним API, а не
- *  переносит всё в новое параллельное хранилище»). */
+/** Системный промпт роли: roles.prompt, пустая — файл scripts/role-prompts.
+ *  Не колонка users.prompt: она у ролевых учёток пуста, и вторая копия
+ *  гарантированно разъехалась бы с первой. */
 function readRolePrompt(role: RoleName): string {
-  return fs.readFileSync(path.join(ROLE_PROMPTS_DIR, `${role}.md`), "utf8");
+  const text = rolePromptText(role);
+  if (text === null) throw new Error("нет инструкции роли");
+  return text;
 }
 
 /** Учётка роли в users — кого диспетчер ставит исполнителем и чьим именем
@@ -198,11 +210,17 @@ function roleDetails(role: RoleName, piAlive: boolean) {
     status = "ready";
   }
 
+  const record = allRoles().find((r) => r.key === role);
+
   return {
     role,
     // Имя из учётки, а не из словаря в коде: владелец переименует роль в
     // одном месте, и экран это подхватит.
     title: account?.name ?? role,
+    /** «Чем занимается» — строка для Секретаря; правится на экране «Команда». */
+    summary: record?.summary ?? "",
+    /** Отключённая роль в работу не берётся, но в списке «Команды» видна. */
+    enabled: record?.enabled ?? false,
     account_id: account?.id ?? null,
     status,
     status_title: STATUS_TITLES_RU[status],
@@ -256,12 +274,145 @@ async function piAlive(): Promise<boolean> {
 export function registerRoleRoutes(app: FastifyInstance): void {
   const authPre = authOrApiToken;
 
-  app.get("/api/roles", { preHandler: authPre }, async () => {
-    // Здоровье исполнителя спрашивается ОДИН раз на запрос, а не на
-    // каждую из восьми ролей: за ответом стоит вызов systemctl.
-    const alive = await piAlive();
-    return { roles: ROLE_NAMES.map((role) => roleDetails(role, alive)) };
-  });
+  app.get<{ Querystring: { all?: string } }>(
+    "/api/roles",
+    { preHandler: authPre },
+    async (req) => {
+      // Здоровье исполнителя спрашивается ОДИН раз на запрос, а не на
+      // каждую из восьми ролей: за ответом стоит вызов systemctl.
+      const alive = await piAlive();
+      // ?all=1 — вместе с отключёнными: экрану «Команда» их надо показать,
+      // чтобы было что включить обратно. Без него — только рабочие роли.
+      const keys = req.query.all === "1" ? allRoles().map((r) => r.key) : ROLE_NAMES;
+      return { roles: keys.map((role) => roleDetails(role, alive)) };
+    },
+  );
+
+  // Экран «Команда»: роль заводится одним действием — запись в roles и
+  // учётка role_<ключ> (ai, без пароля и ключа: агент работает внутри
+  // сервера). Модель — существующим PUT /api/runtime/routing/:role;
+  // до этого новой роли достаётся модель по умолчанию.
+  app.post<{ Body: { key?: unknown; title?: unknown; summary?: unknown; prompt?: unknown } }>(
+    "/api/roles",
+    { preHandler: ownerOrApiToken },
+    async (req, reply) => {
+      const body = req.body ?? {};
+      const key = typeof body.key === "string" ? body.key.trim() : "";
+      const title = typeof body.title === "string" ? body.title.trim() : "";
+      const summary = typeof body.summary === "string" ? body.summary.trim() : "";
+      const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+      if (!ROLE_KEY_RE.test(key)) {
+        return reply.code(422).send({
+          error: "ключ роли — латиница в нижнем регистре, цифры и _, от 2 до 32 знаков",
+        });
+      }
+      if (!title) return reply.code(422).send({ error: "нужно название роли" });
+      if (allRoles().some((r) => r.key === key)) {
+        return reply.code(409).send({ error: "роль с таким ключом уже есть" });
+      }
+
+      const userId = roleUserId(key);
+      db.transaction(() => {
+        const position = (
+          db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM roles").get() as { p: number }
+        ).p;
+        db.prepare(
+          "INSERT INTO roles (key, title, summary, enabled, position, prompt) VALUES (?, ?, ?, 1, ?, ?)",
+        ).run(key, title, summary, position, prompt || null);
+        // Учётка могла остаться от роли, убранной раньше (как Синтезатор) —
+        // тогда её возвращаем, а не заводим вторую.
+        const existing = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
+        if (existing) {
+          db.prepare("UPDATE users SET name = ?, role = ?, archived = 0 WHERE id = ?")
+            .run(title, key, userId);
+        } else {
+          db.prepare(
+            `INSERT INTO users
+               (id, name, email, password_hash, role, type, is_system_bot, profile, initials, avatar_color)
+             VALUES (?, ?, ?, '!no-login', ?, 'ai', 1, ?, ?, '#8E8E93')`,
+          ).run(
+            userId,
+            title,
+            `${key.replace(/_/g, "-")}@taskflow.local`,
+            key,
+            key,
+            title.slice(0, 1).toUpperCase(),
+          );
+        }
+      })();
+      refreshRoles();
+      return reply.code(201).send(roleDetails(key, await piAlive()));
+    },
+  );
+
+  // Правка роли: название, «чем занимается», инструкция, включена, порядок.
+  // Роль не удаляется — отключается, чтобы не терялась история её задач.
+  app.patch<{
+    Params: { role: string };
+    Body: { title?: unknown; summary?: unknown; prompt?: unknown; enabled?: unknown; position?: unknown };
+  }>(
+    "/api/roles/:role",
+    { preHandler: ownerOrApiToken },
+    async (req, reply) => {
+      const key = req.params.role;
+      if (!allRoles().some((r) => r.key === key)) {
+        return reply.code(404).send({ error: "роль не найдена" });
+      }
+      const body = req.body ?? {};
+      const sets: string[] = [];
+      const values: unknown[] = [];
+      let title: string | null = null;
+
+      if (body.title !== undefined) {
+        if (typeof body.title !== "string" || !body.title.trim()) {
+          return reply.code(422).send({ error: "название роли не может быть пустым" });
+        }
+        title = body.title.trim();
+        sets.push("title = ?");
+        values.push(title);
+      }
+      if (body.summary !== undefined) {
+        if (typeof body.summary !== "string") {
+          return reply.code(422).send({ error: "«чем занимается» — строка" });
+        }
+        sets.push("summary = ?");
+        values.push(body.summary.trim());
+      }
+      if (body.prompt !== undefined) {
+        if (body.prompt !== null && typeof body.prompt !== "string") {
+          return reply.code(422).send({ error: "инструкция роли — строка" });
+        }
+        // Пустая строка или null — вернуться к файлу scripts/role-prompts.
+        sets.push("prompt = ?");
+        values.push(typeof body.prompt === "string" && body.prompt.trim() ? body.prompt : null);
+      }
+      if (body.enabled !== undefined) {
+        if (typeof body.enabled !== "boolean") {
+          return reply.code(422).send({ error: "enabled — true или false" });
+        }
+        sets.push("enabled = ?");
+        values.push(body.enabled ? 1 : 0);
+      }
+      if (body.position !== undefined) {
+        if (typeof body.position !== "number" || !Number.isInteger(body.position)) {
+          return reply.code(422).send({ error: "position — целое число" });
+        }
+        sets.push("position = ?");
+        values.push(body.position);
+      }
+      if (!sets.length) return reply.code(422).send({ error: "нечего менять" });
+
+      db.transaction(() => {
+        db.prepare(`UPDATE roles SET ${sets.join(", ")} WHERE key = ?`).run(...values, key);
+        // Экран и лента подписывают роль именем учётки — держим их вместе.
+        if (title !== null) {
+          db.prepare("UPDATE users SET name = ? WHERE id = ?").run(title, roleUserId(key));
+        }
+      })();
+      refreshRoles();
+      return roleDetails(key, await piAlive());
+    },
+  );
 
   app.get<{ Params: { role: string } }>(
     "/api/roles/:role",
@@ -281,20 +432,13 @@ export function registerRoleRoutes(app: FastifyInstance): void {
       if (!isRole(req.params.role)) {
         return reply.code(404).send({ error: "роль не найдена" });
       }
-      const fileName = path.join(ROLE_PROMPTS_DIR, `${req.params.role}.md`);
-      try {
-        return {
-          role: req.params.role,
-          prompt: fs.readFileSync(fileName, "utf8"),
-        };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return reply
-            .code(404)
-            .send({ error: "системный промпт роли ещё не создан" });
-        }
-        throw error;
+      const prompt = rolePromptText(req.params.role);
+      if (prompt === null) {
+        return reply
+          .code(404)
+          .send({ error: "системный промпт роли ещё не создан" });
       }
+      return { role: req.params.role, prompt };
     },
   );
 

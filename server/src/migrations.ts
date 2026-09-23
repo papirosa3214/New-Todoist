@@ -2044,6 +2044,18 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // Экран «Команда» (23.09.2026): инструкция новой роли — данные, а не
+    // файл в scripts/role-prompts. Пустая колонка — читается прежний файл.
+    id: "057_roles_prompt",
+    description: "roles.prompt — инструкция роли; NULL — файл scripts/role-prompts/<ключ>.md.",
+    up: () => {
+      const cols = db.prepare("PRAGMA table_info(roles)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "prompt")) {
+        db.exec("ALTER TABLE roles ADD COLUMN prompt TEXT");
+      }
+    },
+  },
 ];
 
 /**

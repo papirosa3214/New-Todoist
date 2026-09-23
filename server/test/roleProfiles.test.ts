@@ -143,7 +143,9 @@ describe("Профили ролей для экрана «Команда»", () 
     // «Команда» оставался пустым вместо одной проблемной строки.
     const broken = path.join(profilesDir, "qa.json");
     const backup = fs.readFileSync(broken, "utf8");
-    fs.rmSync(broken);
+    // Испорченный, а не удалённый: профиля может не быть вовсе у роли,
+    // заведённой с экрана «Команда», — это не поломка.
+    fs.writeFileSync(broken, "{}");
     try {
       const roles = await fetchRoles();
       expect(roles).toHaveLength(7);

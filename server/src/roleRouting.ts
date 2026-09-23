@@ -64,6 +64,28 @@ export function roleUserId(key: string): string {
   return `role_${key}`;
 }
 
+const ROLE_PROMPTS_DIR = path.resolve(
+  process.env.TASKFLOW_ROLE_PROMPTS_DIR ??
+    path.join(process.cwd(), "scripts", "role-prompts"),
+);
+
+/** Инструкция роли: колонка roles.prompt, а пустая — прежний файл
+ *  scripts/role-prompts/<ключ>.md. Нет ни того, ни другого — null. */
+export function rolePromptText(key: string): string | null {
+  try {
+    const row = db.prepare("SELECT prompt FROM roles WHERE key = ?").get(key) as
+      { prompt: string | null } | undefined;
+    if (row?.prompt?.trim()) return row.prompt;
+  } catch {
+    // колонки ещё нет — до миграции 057
+  }
+  try {
+    return fs.readFileSync(path.join(ROLE_PROMPTS_DIR, `${key}.md`), "utf8");
+  } catch {
+    return null;
+  }
+}
+
 /** Раздел «Исполнители» для Секретаря — из таблицы, включённые роли. */
 export function rolesPromptBlock(): string {
   return registry
