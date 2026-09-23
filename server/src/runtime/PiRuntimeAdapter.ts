@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  getPackageDir,
   ModelRuntime,
   RpcClient,
   type JsonAgentSessionEvent,
@@ -9,12 +10,16 @@ import {
 import db from "../db.js";
 import {
   ROLE_NAMES,
-  type RoleName,
+  SHELL_AGENT_IDS,
   loadRoleRouting,
+  providerOfModel,
+  type RoleName,
 } from "../roleRouting.js";
 import type {
+  AgentAttempt,
   AgentProfile,
   AgentRun,
+  AuthMethod,
   Model,
   ProviderConnection,
   Runtime,
@@ -22,14 +27,23 @@ import type {
 import { RUNTIME_ID_PI } from "./types.js";
 import {
   UnsupportedInFacadeError,
-  type AuthInteractive,
-  type AuthInteractiveEvent,
-  type AuthInstruction,
   type ConnectProviderInput,
   type RuntimeAdapter,
   type StartRunInput,
   type StartRunResult,
 } from "./RuntimeAdapter.js";
+import {
+  acquireChatRoleLock,
+  releaseChatRoleLock,
+  upsertChatSession,
+  makeChatRunId,
+} from "./chatSession.js";
+import { authSessionManager, type AuthSessionView } from "./AuthSession.js";
+import { prepareRoleRunAccess, releaseRoleRunAccess } from "./roleRunAccess.js";
+import {
+  ModelNotAvailableError,
+  RuntimeUnavailableError,
+} from "./errors.js";
 
 const ROLE_PROMPTS_DIR = process.env.TASKFLOW_ROLE_PROMPTS_DIR
   ?? path.join(process.cwd(), "scripts", "role-prompts");
@@ -39,258 +53,89 @@ const ROLE_PROFILES_DIR = process.env.TASKFLOW_ROLE_PROFILES_DIR
 
 // 18.09.2026 (правка SDK): вся самописная обвязка вокруг `pi auth check`
 // / `pi --list-models` / `~/.pi/agent/auth.json` удалена. Источник
-// правды — ModelRuntime из @earendil-works/pi-coding-agent. Кэш моделей
-// и credentials тоже на стороне SDK: он сам инвалидирует снимок при
-// записи credentials (см. setRuntimeApiKey). TaskFlow просто мапит
-// ответы SDK в фасадные типы.
+// правды — ModelRuntime из @earendil-works/pi-coding-agent.
 //
-// SDK API (из dist/core/model-runtime.d.ts):
-//   checkAuth(id)              → { source?: string, type: "api_key"|"oauth" } | undefined
-//   getProviderAuthStatus(id)  → { configured: boolean, source?: ..., label?: string }
-//   getAvailable(id?)          → readonly Model<Api>[] (полный снимок авторизованных моделей)
-//   setRuntimeApiKey(id, key)  → пишет в ~/.pi/agent/auth.json сам SDK
-//   getProviders()             → readonly Provider[] (зарегистрированные провайдеры)
-//
-// Реальные типы AuthCheck/AuthStatus/Model живут в peer-dep
-// @earendil-works/pi-ai, который вложен в pi-coding-agent и не
-// доступен как top-level зависимость. Описываем нужные поля
-// структурно через Awaited<ReturnType<...>>, чтобы не тянуть ещё одну
-// зависимость ради одного типа.
+// 18.09.2026 (доработка после ревью владельца): переписаны lifecycle
+// AgentRun, sessionId, providers/models, OAuth. См. комментарии по месту.
 
-type AuthCheck = NonNullable<Awaited<ReturnType<ModelRuntime["checkAuth"]>>>;
 type AuthStatus = Awaited<ReturnType<ModelRuntime["getProviderAuthStatus"]>>;
-type SdkModel = Awaited<ReturnType<ModelRuntime["getAvailable"]>>[number];
+type SdkModel = ReturnType<ModelRuntime["getModels"]>[number];
+type SdkProvider = ReturnType<ModelRuntime["getProviders"]>[number];
+
+/** Путь к JS-энтрипоинту Pi для RpcClient. Важно: RpcClient спавнит
+ *  `node <cliPath> --mode rpc`, поэтому это должен быть именно JS-файл
+ *  (`dist/cli.js` из установленного SDK), а НЕ shell-обёртка
+ *  `~/.local/bin/pi` — она для человека в терминале. Берём CLI из того же
+ *  пакета, что и SDK, чтобы версии клиента и агента совпадали.
+ *  PI_BIN_PATH — аварийный override. */
+function resolvePiCliPath(): string {
+  const override = process.env.PI_BIN_PATH?.trim();
+  if (override) return override;
+  return path.join(getPackageDir(), "dist", "cli.js");
+}
 
 /** Singleton ModelRuntime. ModelRuntime.create() — асинхронный (поднимает
  *  каталог провайдеров, читает credentials, проверяет доступность
  *  моделей), поэтому держим его в lazy-переменной. */
 let modelRuntime: ModelRuntime | null = null;
-async function getModelRuntime(): Promise<ModelRuntime> {
+
+export async function getModelRuntime(): Promise<ModelRuntime> {
   if (!modelRuntime) {
-    modelRuntime = await ModelRuntime.create();
+    try {
+      modelRuntime = await ModelRuntime.create();
+    } catch (error) {
+      throw new RuntimeUnavailableError(
+        `ModelRuntime.create() failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   return modelRuntime;
 }
 
-/** Маппит AuthStatus.configured в фасадный статус провайдера.
- *  SDK разделяет «есть ли credentials» (configured) и «какой именно
- *  тип credentials есть» (checkAuth().type). Старое CLI `pi auth
- *  check --json` совмещало это в один объект со status="ready"; в
- *  новой модели это два независимых запроса, и configured=true
- *  → connected. */
-function mapAuthStatus(s: AuthStatus): "connected" | "disconnected" | "expired" {
-  if (s.configured) return "connected";
-  // SDK не различает «не сконфигурирован» и «expired» через
-  // getProviderAuthStatus — это решает checkAuth() в listProviders()
-  // по признаку source. Здесь просто «не подключён».
-  return "disconnected";
+/** Сбрасывает singleton — нужно тестам и после смены credentials, если
+ *  SDK не увидел запись. */
+export function resetModelRuntime(): void {
+  modelRuntime = null;
 }
 
-/** Маппит AuthEvent (из SDK AuthInteraction) в фасадный AuthInteractiveEvent.
- *  SDK типы не реэкспортируются из pi-coding-agent (живут в peer-dep
- *  pi-ai), и без них — структурный маппинг через поля. Поле `type`
- *  определяет, какие дополнительные поля присутствуют. */
-function mapAuthEvent(
-  provider: string,
-  raw: unknown,
-): AuthInteractiveEvent | null {
-  if (!raw || typeof raw !== "object") return null;
-  const ev = raw as {
-    type?: unknown;
-    url?: unknown;
-    instructions?: unknown;
-    userCode?: unknown;
-    verificationUri?: unknown;
-    intervalSeconds?: unknown;
-    expiresInSeconds?: unknown;
-    message?: unknown;
-  };
-  switch (ev.type) {
-    case "auth_url":
-      if (typeof ev.url !== "string") return null;
-      return {
-        kind: "auth_url",
-        provider,
-        url: ev.url,
-        instructions: typeof ev.instructions === "string"
-          ? ev.instructions
-          : undefined,
-      };
-    case "device_code":
-      if (
-        typeof ev.userCode !== "string" ||
-        typeof ev.verificationUri !== "string"
-      ) {
-        return null;
-      }
-      return {
-        kind: "device_code",
-        provider,
-        userCode: ev.userCode,
-        verificationUri: ev.verificationUri,
-        intervalSeconds: typeof ev.intervalSeconds === "number"
-          ? ev.intervalSeconds
-          : undefined,
-        expiresInSeconds: typeof ev.expiresInSeconds === "number"
-          ? ev.expiresInSeconds
-          : undefined,
-      };
-    case "progress":
-      if (typeof ev.message !== "string") return null;
-      return { kind: "progress", provider, message: ev.message };
-    case "info":
-      if (typeof ev.message !== "string") return null;
-      return { kind: "info", provider, message: ev.message };
-    default:
-      return null;
-  }
-}
-
-/** Запускает OAuth login через ModelRuntime.login + AuthInteraction.
- *  Возвращает AuthInteractive — UI подписывается на events и ждёт
- *  completed. SDK login() пишет credentials в ~/.pi/agent/auth.json
- *  сам (через свой CredentialStore), TaskFlow ничего не пишет на диск.
- *
- *  manual_code/select/text prompt'ы не поддержаны в TaskFlow UI:
- *  prompt() reject'ит их сразу. Это упрощает flow — TaskFlow UI
- *  рассчитан на browser-callback (auth_url) и device-code, без
- *  ручного ввода. Если провайдер требует manual_code — login() упадёт,
- *  и completed реджектится с ошибкой.
- */
-async function startProviderLogin(
-  rt: ModelRuntime,
-  provider: string,
-): Promise<AuthInteractive> {
-  // Очередь с backpressure. notify() пушит событие; если есть
-  // ожидающий next() — резолвит его сразу. Если notify() приходит
-  // до next() — кладёт в буфер, next() заберёт при вызове.
-  let resolveNext: ((value: IteratorResult<AuthInteractiveEvent>) => void) | null = null;
-  const queue: AuthInteractiveEvent[] = [];
-  let closed = false;
-
-  function push(item: AuthInteractiveEvent) {
-    if (closed) return;
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: item, done: false });
-    } else {
-      queue.push(item);
-    }
-  }
-  function finish() {
-    if (closed) return;
-    closed = true;
-    if (resolveNext) {
-      const r = resolveNext;
-      resolveNext = null;
-      r({ value: undefined, done: true });
-    }
-  }
-
-  let resolveCompleted!: () => void;
-  let rejectCompleted!: (e: Error) => void;
-  const completed = new Promise<void>((res, rej) => {
-    resolveCompleted = res;
-    rejectCompleted = rej;
-  });
-  let cancelled = false;
-  const abort = new AbortController();
-
-  const interaction = {
-    signal: abort.signal,
-    notify: (event: unknown) => {
-      if (cancelled) return;
-      const mapped = mapAuthEvent(provider, event);
-      if (mapped) push(mapped);
-    },
-    prompt: (p: unknown) => {
-      if (cancelled) {
-        return Promise.reject(new Error("Login cancelled"));
-      }
-      // TaskFlow UI пока поддерживает только manual_code: проксируем
-      // событие в events, чтобы UI мог показать юзеру (auth_url /
-      // device_code flow). Сам submit кода пока не реализован — login()
-      // упадёт без правильного ввода, completed реджектится в .catch
-      // ниже, UI видит ошибку. Полный двусторонний канал (SSE или
-      // POST /submit) — отдельный этап.
-      //
-      // text/secret/select SDK на наших провайдерах не вызывает —
-      // Anthropic OAuth присылает только auth_url (notify) или
-      // manual_code (prompt), если callback server не сработал.
-      const pp = p as { type?: string; message?: string; placeholder?: string };
-      const kind = pp.type ?? "unknown";
-      if (kind === "manual_code") {
-        push({
-          kind: "manual_code",
-          provider,
-          message: pp.message ?? "",
-          placeholder: pp.placeholder,
-        });
-        return Promise.resolve("");
-      }
-      console.warn(
-        `[startProviderLogin:${provider}] prompt(${kind}) не поддержан в TaskFlow UI; возвращаем пустой ввод`,
+/** Полный каталог моделей Pi (все модели, независимо от того,
+ *  авторизован провайдер или нет). Именно каталог — источник правды для
+ *  «модель существует» (спека §10, §14). Если каталог недоступен —
+ *  RuntimeUnavailableError (503), а не пустой список. */
+async function loadModelCatalog(): Promise<SdkModel[]> {
+  const rt = await getModelRuntime();
+  let all = rt.getModels() as readonly SdkModel[];
+  if (all.length === 0) {
+    try {
+      await rt.refresh();
+    } catch (error) {
+      throw new RuntimeUnavailableError(
+        `Pi model catalog refresh failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return Promise.resolve("");
-    },
-  };
+    }
+    all = rt.getModels() as readonly SdkModel[];
+  }
+  if (all.length === 0) {
+    const err = rt.getError();
+    // Пустой каталог без ошибки SDK — это легитимное «провайдеров/моделей
+    // нет». Пустой каталог с ошибкой — Pi недоступен (503).
+    if (err) throw new RuntimeUnavailableError(err);
+  }
+  return [...all];
+}
 
-  // Запускаем SDK login() в фоне. resolved → completed; rejected → completed
-  // реджектится с тем же reason. В обоих случаях закрываем очередь.
-  rt.login(provider, "oauth", interaction as never)
-    .then(() => {
-      if (cancelled) return;
-      resolveCompleted();
-      finish();
-    })
-    .catch((err: unknown) => {
-      if (cancelled) return;
-      rejectCompleted(err instanceof Error ? err : new Error(String(err)));
-      finish();
-    });
+function providerAuthMethods(provider: SdkProvider): AuthMethod[] {
+  const methods: AuthMethod[] = [];
+  const auth = (provider as unknown as {
+    auth?: { apiKey?: unknown; oauth?: unknown };
+  }).auth;
+  if (auth?.apiKey) methods.push("api_key");
+  if (auth?.oauth) methods.push("oauth");
+  return methods;
+}
 
-  // AsyncIterable: UI делает `for await (const ev of authInteractive.events)`
-  // и получает события по мере прихода. Семантика:
-  //   - пока есть элементы в буфере — выдаём по одному;
-  //   - иначе ждём push() или finish() (или cancelled/closed);
-  //   - cancelled/closed завершают итератор вне зависимости от буфера.
-  const iterable: AsyncIterable<AuthInteractiveEvent> = {
-    [Symbol.asyncIterator]() {
-      return {
-        async next(): Promise<IteratorResult<AuthInteractiveEvent>> {
-          if (cancelled || closed) {
-            // Может остаться буфер — выдаём, потом закрываемся.
-            if (queue.length > 0 && !cancelled) {
-              return { value: queue.shift() as AuthInteractiveEvent, done: false };
-            }
-            return { value: undefined, done: true };
-          }
-          if (queue.length > 0) {
-            return { value: queue.shift() as AuthInteractiveEvent, done: false };
-          }
-          // Ждём нового события или завершения.
-          return new Promise<IteratorResult<AuthInteractiveEvent>>((resolve) => {
-            resolveNext = (v) => resolve(v);
-          });
-        },
-      };
-    },
-  };
-
-  return {
-    status: "auth_required",
-    provider,
-    events: iterable,
-    completed,
-    cancel: () => {
-      if (cancelled) return;
-      cancelled = true;
-      abort.abort();
-      rejectCompleted(new Error("Login cancelled by user"));
-      finish();
-    },
-  };
+function mapProviderStatus(status: AuthStatus): ProviderConnection["status"] {
+  return status.configured ? "connected" : "disconnected";
 }
 
 interface ProfileConfig {
@@ -335,7 +180,9 @@ function readRoleAccount(role: RoleName) {
   return db
     .prepare(
       `SELECT id, name, permissions, status, last_seen_at
-         FROM users WHERE role = ? ORDER BY created_at LIMIT 1`,
+         FROM users
+        WHERE role_key = ? AND role = 'agent' AND type = 'ai'
+        ORDER BY created_at LIMIT 1`,
     )
     .get(role) as
       | {
@@ -346,6 +193,30 @@ function readRoleAccount(role: RoleName) {
           last_seen_at: string | null;
         }
       | undefined;
+}
+
+/** userId, которого попытка будет записана как executor. По возможности —
+ *  ролевая учётка; иначе shell-учётка pi_runtime; иначе любой ai-пользователь.
+ *  null = записать attempt нельзя (нет пользователя), run всё равно идёт. */
+function resolveExecutorId(role: string | null, agentId: string): string | null {
+  if (role && (ROLE_NAMES as readonly string[]).includes(role)) {
+    const account = readRoleAccount(role as RoleName);
+    if (account) return account.id;
+  }
+  const shell = SHELL_AGENT_IDS[agentId] ?? SHELL_AGENT_IDS.pi_runtime;
+  if (shell) {
+    const exists = db.prepare("SELECT id FROM users WHERE id = ?").get(shell) as
+      | { id: string }
+      | undefined;
+    if (exists) return exists.id;
+  }
+  const anyAi = db
+    .prepare(
+      `SELECT id FROM users WHERE role IS NOT NULL OR type = 'ai'
+        ORDER BY created_at LIMIT 1`,
+    )
+    .get() as { id: string } | undefined;
+  return anyAi?.id ?? null;
 }
 
 async function piAlive(): Promise<boolean> {
@@ -400,11 +271,259 @@ async function buildProfile(
   };
 }
 
-/** Список известных провайдеров. Имена совпадают с тем, как Pi их знает
- *  внутри (см. ~/.pi/agent/auth.json: anthropic, openai-codex, minimax).
- *  Имя "openai-codex" — каноническое для OpenAI через Codex OAuth; "openai"
- *  Pi не знает и вернёт provider_not_found. */
-const KNOWN_PROVIDERS = ["anthropic", "openai-codex", "minimax"] as const;
+// ===== Активные запуски (in-memory) =====
+
+/** Последний фактический результат хода (turn). НЕтерминальный: нужен
+ *  только чтобы отличить финальный провал от успеха в момент
+ *  agent_settled. Успешная continuation/compaction перезаписывает его. */
+interface TurnResult {
+  stopReason: string | null;
+  errorMessage: string | null;
+}
+
+interface ActiveRun {
+  runId: string;
+  taskId: string;
+  agentId: string;
+  provider: string | null;
+  model: string | null;
+  sessionId: string | null;
+  client: RpcClient;
+  startedAt: string;
+  retrying: boolean;
+  cancelled: boolean;
+  /** Последний ход. На agent_settled решает failed/completed. */
+  lastTurn: TurnResult | null;
+  settled: boolean;
+  finish: Promise<void>;
+  /** Временный файл подключения роли к трекеру — удаляется при завершении. */
+  mcpConfigPath: string | null;
+}
+
+const activeRuns = new Map<string, ActiveRun>();
+
+/** Достаёт результат последнего assistant-хода из agent_end.messages.
+ *  Возвращает null, если ход не несёт терминального stopReason. */
+function parseTurnResult(messages: unknown): TurnResult | null {
+  if (!Array.isArray(messages)) return null;
+  const lastAssistant = [...messages]
+    .reverse()
+    .find(
+      (m) => m && typeof m === "object" && (m as { role?: string }).role === "assistant",
+    ) as { stopReason?: string; errorMessage?: string } | undefined;
+  if (!lastAssistant?.stopReason) return null;
+  return {
+    stopReason: lastAssistant.stopReason,
+    errorMessage: lastAssistant.errorMessage ?? null,
+  };
+}
+
+/** Обновляет активность/последний ход. НЕ завершает run и НЕ пишет
+ *  терминальный итог: результат вычисляется только на agent_settled. */
+function recordRunActivity(run: ActiveRun, event: { type: string; [k: string]: unknown }): void {
+  switch (event.type) {
+    case "agent_end": {
+      // agent_end — промежуточное событие: Pi после него может сделать
+      // retry, продолжить, выполнить compaction и снова запустить loop.
+      // Никакого терминального stopReason/blocked/stop здесь быть не может.
+      const willRetry = event.willRetry === true;
+      if (willRetry) run.retrying = true;
+      // Запоминаем фактический итог хода как НЕтерминальный — следующий
+      // успешный ход (например, после compaction) перезапишет эту ошибку.
+      const turn = parseTurnResult(event.messages);
+      if (turn) run.lastTurn = turn;
+      break;
+    }
+    case "auto_retry_start":
+      run.retrying = true;
+      break;
+    case "auto_retry_end":
+      run.retrying = false;
+      if (event.success === false) {
+        run.lastTurn = {
+          stopReason: "error",
+          errorMessage: typeof event.finalError === "string"
+            ? event.finalError
+            : "retry_failed",
+        };
+      } else {
+        // Успешный retry снимает промежуточную ошибку.
+        run.lastTurn = null;
+      }
+      break;
+    case "compaction_start":
+    case "compaction_end":
+    case "session_info_changed":
+    case "message_update":
+    case "message_end":
+      // просто активность
+      break;
+    default:
+      break;
+  }
+}
+
+interface AttemptRow {
+  id: string;
+  model: string | null;
+  provider: string | null;
+  started_at: string;
+  ended_at: string | null;
+  outcome: string | null;
+  reason: string | null;
+  session_id: string | null;
+}
+
+function mapAttemptStatus(row: AttemptRow): AgentAttempt["status"] {
+  if (!row.ended_at) return "running";
+  if (row.outcome === "cancelled") return "cancelled";
+  if (row.outcome === "failed") return "failed";
+  return "completed";
+}
+
+function attemptsForTask(taskId: string): AgentAttempt[] {
+  const rows = db
+    .prepare(
+      `SELECT id, model, provider, started_at, ended_at, outcome, reason, session_id
+         FROM attempts
+        WHERE task_id = ? AND subtask_id IS NULL
+        ORDER BY started_at ASC, rowid ASC`,
+    )
+    .all(taskId) as AttemptRow[];
+  return rows.map((row) => ({
+    id: row.id,
+    model: row.model,
+    provider: row.provider,
+    status: mapAttemptStatus(row),
+    outcome: row.outcome,
+    started_at: row.started_at,
+    finished_at: row.ended_at,
+    reason: row.reason,
+  }));
+}
+
+/** Закрывает ранее активную попытку задачи, чтобы partial unique index
+ *  «одна активная попытка на задачу» не падал при повторном запуске. */
+function closeActiveAttempts(taskId: string): void {
+  db.prepare(
+    `UPDATE attempts
+        SET ended_at = datetime('now'),
+            outcome = COALESCE(outcome, 'superseded')
+      WHERE task_id = ? AND subtask_id IS NULL AND ended_at IS NULL`,
+  ).run(taskId);
+}
+
+function createAttempt(input: {
+  runId: string;
+  taskId: string;
+  executorId: string;
+  model: string;
+  provider: string | null;
+  routingRole: string | null;
+}): void {
+  db.prepare(
+    `INSERT INTO attempts
+       (id, task_id, subtask_id, executor_id, runner, model, provider,
+        routing_role, started_at)
+     VALUES
+       (@id, @taskId, NULL, @executorId, 'pi', @model, @provider,
+        @routingRole, datetime('now'))`,
+  ).run({
+    id: input.runId,
+    taskId: input.taskId,
+    executorId: input.executorId,
+    model: input.model,
+    provider: input.provider,
+    routingRole: input.routingRole,
+  });
+}
+
+/** Итог run определяется НЕ boolean `success` (его в Pi нет), а
+ *  stopReason / cancel / ошибкой. Pi event type не равен TaskFlow status. */
+async function finalizeRun(run: ActiveRun, outcome: AgentRun["status"], stopReason: string | null): Promise<void> {
+  if (run.settled) return;
+  run.settled = true;
+  releaseRoleRunAccess(run.mcpConfigPath);
+
+  const attemptOutcome = outcome === "completed"
+    ? "completed"
+    : outcome === "cancelled"
+    ? "cancelled"
+    : "failed";
+  const nextState = outcome === "completed" ? "review" : "blocked";
+
+  try {
+    db.prepare(
+      `UPDATE attempts
+          SET ended_at = datetime('now'),
+              outcome = ?,
+              reason = ?,
+              stop_reason = ?,
+              session_id = COALESCE(?, session_id)
+        WHERE id = ?`,
+    ).run(attemptOutcome, stopReason, stopReason, run.sessionId, run.runId);
+  } catch { /* задача/попытка могла быть удалена */ }
+
+  try {
+    db.prepare(
+      `UPDATE tasks
+          SET agent_state = ?,
+              agent_finished_at = datetime('now'),
+              stop_reason = ?,
+              agent_session_id = COALESCE(agent_session_id, ?),
+              updated_at = datetime('now')
+        WHERE id = ?`,
+    ).run(nextState, stopReason, run.sessionId, run.taskId);
+  } catch { /* ignore */ }
+  if (nextState === "review") {
+    // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
+    void import("../routes/dispatch.js")
+      .then((m) => m.admitParentAfterChildren(run.taskId))
+      .catch((err) => console.warn("родитель после дочерней:", err));
+  }
+
+  // client.stop() вызывается ТОЛЬКО здесь — не на agent_end. На agent_end
+  // Pi может ещё продолжать (retry/compaction), гасить процесс нельзя.
+  try {
+    await run.client.stop();
+  } catch { /* процесс уже умер — окей */ }
+
+  activeRuns.delete(run.runId);
+}
+
+/** Гарантия «один task = максимум один active Pi run». Проверяем именно
+ *  in-memory activeRuns (по taskId), а не только БД: closeActiveAttempts()
+ *  закрывает запись, но оставшийся процесс Pi продолжал бы работать и
+ *  позже перезаписал состояние задачи. Предыдущий run штатно отменяем
+ *  (это безопаснее 409 для сценариев retry/fallback). */
+async function cancelActiveRunsForTask(taskId: string): Promise<void> {
+  const running = [...activeRuns.values()].filter(
+    (run) => run.taskId === taskId && !run.settled,
+  );
+  for (const run of running) {
+    run.cancelled = true;
+    try {
+      await run.client.abort();
+    } catch { /* процесс мог уже завершиться */ }
+    await finalizeRun(run, "cancelled", "cancelled");
+  }
+}
+
+/** Итог вычисляется ТОЛЬКО на agent_settled. Единственный источник
+ *  «плохого» исхода — явная отмена (cancelRun) или последний фактический
+ *  ход с stopReason error/aborted. Промежуточные agent_end эту функцию не
+ *  зовут. */
+function resultStatus(run: ActiveRun): { outcome: AgentRun["status"]; reason: string | null } {
+  if (run.cancelled) return { outcome: "cancelled", reason: "cancelled" };
+  const turn = run.lastTurn;
+  if (turn?.stopReason === "error") {
+    return { outcome: "failed", reason: turn.errorMessage ?? "error" };
+  }
+  if (turn?.stopReason === "aborted") {
+    return { outcome: "cancelled", reason: "aborted" };
+  }
+  return { outcome: "completed", reason: null };
+}
 
 export const piRuntime: RuntimeAdapter = {
   id: RUNTIME_ID_PI,
@@ -415,8 +534,6 @@ export const piRuntime: RuntimeAdapter = {
       id: RUNTIME_ID_PI,
       kind: "pi",
       status: alive ? "ready" : "down",
-      // Версия — из npm bin или из version-файла Pi. На первом этапе —
-      // строка-маркер; реальная версия появится, когда Pi её отдаст.
       version: process.env.PI_VERSION ?? "unknown",
       endpoint: process.env.PI_ENDPOINT ?? "cli",
     };
@@ -428,238 +545,315 @@ export const piRuntime: RuntimeAdapter = {
   },
 
   async listModels(): Promise<Model[]> {
+    // Каталог Pi — источник правды. Если Pi недоступен — 503, не [].
+    const catalog = await loadModelCatalog();
+    const rt = await getModelRuntime();
+
+    const availableKeys = new Set<string>();
     try {
-      const rt = await getModelRuntime();
       const available = await rt.getAvailable();
-      // SDK возвращает {id, provider, ...} — мапим в фасадный Model.
-      // Дедупликация не нужна: SDK уже отдаёт уникальные (provider, id).
-      const seen = new Set<string>();
-      const models: Model[] = [];
       for (const m of available) {
         const sm = m as SdkModel;
-        const key = `${sm.provider}:${sm.id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        models.push({
-          id: sm.id,
-          provider: sm.provider,
-          runtime_id: RUNTIME_ID_PI,
-          available: true,
-        });
+        availableKeys.add(`${sm.provider}:${sm.id}`);
       }
-      return models;
     } catch {
-      // Pi недоступен / упал — отдаём пустой массив. UI покажет «нет
-      // моделей», не 500. Кэшем здесь не управляем — это на стороне
-      // ModelRuntime (см. getAvailableSnapshot + refresh()).
-      return [];
+      // Авторизационный снимок не собрался — каталог всё равно отдаём,
+      // просто помечаем всё как недоступное. Это не «Pi недоступен».
     }
+
+    const seen = new Set<string>();
+    const models: Model[] = [];
+    for (const m of catalog) {
+      const sm = m as SdkModel;
+      const key = `${sm.provider}:${sm.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      models.push({
+        id: sm.id,
+        provider: sm.provider,
+        runtime_id: RUNTIME_ID_PI,
+        available: availableKeys.has(key),
+        name: sm.name,
+        contextWindow: sm.contextWindow,
+        maxTokens: sm.maxTokens,
+        thinking: sm.reasoning,
+        images: Array.isArray(sm.input) ? sm.input.includes("image") : undefined,
+      });
+    }
+    return models;
   },
 
   async listProviders(): Promise<ProviderConnection[]> {
-    const rt = await getModelRuntime();
-    const results = await Promise.all(
-      KNOWN_PROVIDERS.map(async (id) => {
-        try {
-          const [check, status] = await Promise.all([
-            rt.checkAuth(id),
-            Promise.resolve(rt.getProviderAuthStatus(id)),
-          ]);
-          if (!check) return null; // SDK не знает этот провайдер
-          const c = check as AuthCheck;
-          const s = status as AuthStatus;
-          return {
-            id,
-            runtime_id: RUNTIME_ID_PI,
-            status: mapAuthStatus(s),
-            authType: c.type,
-            managedBy: "pi" as const,
-            lastCheckedAt: new Date().toISOString(),
-          };
-        } catch {
-          // checkAuth упал — отдаём как expired, чтобы UI мог хотя бы
-          // показать «не отвечает» и попробовать позже.
-          return {
-            id,
-            runtime_id: RUNTIME_ID_PI,
-            status: "expired" as const,
-            authType: null,
-            managedBy: "pi" as const,
-            lastCheckedAt: new Date().toISOString(),
-          };
-        }
-      }),
-    );
-    return results.filter((p): p is NonNullable<typeof p> => p !== null);
+    let rt: ModelRuntime;
+    try {
+      rt = await getModelRuntime();
+    } catch (error) {
+      throw error instanceof RuntimeUnavailableError
+        ? error
+        : new RuntimeUnavailableError(String(error));
+    }
+    // Источник списка провайдеров — ModelRuntime.getProviders(), НЕ
+    // checkAuth(). checkAuth отвечает «есть ли рабочая авторизация», а не
+    // «существует ли провайдер». Неподключённые провайдеры обязаны
+    // оставаться в UI (спека §9).
+    let providers: readonly SdkProvider[];
+    try {
+      providers = rt.getProviders();
+    } catch (error) {
+      throw new RuntimeUnavailableError(
+        `Pi providers unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const now = new Date().toISOString();
+    return providers.map((p) => {
+      let status: ProviderConnection["status"] = "disconnected";
+      try {
+        status = mapProviderStatus(rt.getProviderAuthStatus(p.id) as AuthStatus);
+      } catch {
+        status = "expired";
+      }
+      let authType: "api_key" | "oauth" | null = null;
+      try {
+        authType = (rt.checkAuth(p.id) as unknown as { type?: "api_key" | "oauth" })
+          ?.type ?? null;
+      } catch {
+        authType = null;
+      }
+      return {
+        id: p.id,
+        name: p.name,
+        runtime_id: RUNTIME_ID_PI,
+        status,
+        authType,
+        authMethods: providerAuthMethods(p),
+        managedBy: "pi" as const,
+        lastCheckedAt: now,
+      };
+    });
   },
 
   async connectProvider(
     provider: string,
     body: ConnectProviderInput,
-  ): Promise<ProviderConnection | AuthInteractive> {
-    const rt = await getModelRuntime();
-    // Определяем тип провайдера через SDK. checkAuth() возвращает
-    // { type: "api_key"|"oauth" } если credentials уже есть; для
-    // НЕ-сконфигурированного api_key провайдера (то, что мы хотим
-    // подключить) — undefined. Опираемся на белый список для OAuth.
-    const check = await rt.checkAuth(provider);
-    const c = check as AuthCheck | undefined;
-    const knownOauth: ReadonlySet<string> = new Set(["anthropic", "openai-codex"]);
-    const isOauth = c?.type === "oauth" || (c === undefined && knownOauth.has(provider));
-
-    if (isOauth) {
-      // OAuth провайдер: вместо записи ключей запускаем
-      // ModelRuntime.login() с AuthInteraction. UI получает
-      // AuthInteractive — стрим событий (auth_url/device_code/...)
-      // + Promise completed. SDK сам пишет credentials после успешного
-      // flow в свой CredentialStore.
-      return startProviderLogin(rt, provider);
-    }
-
+  ): Promise<ProviderConnection> {
     const apiKey = body.apiKey?.trim();
     if (!apiKey) {
       throw new Error(`apiKey required for ${provider}`);
     }
-    // credential НЕ логируем — ни здесь, ни дальше. Длина — единственное,
-    // что можно показать в случае диагностики.
-    const keyLen = apiKey.length;
+    const rt = await getModelRuntime();
 
-    // SDK сам пишет в ~/.pi/agent/auth.json (через свой
-    // CredentialStore), сам инвалидирует кэш моделей и credentials,
-    // и не требует от нас lock-файла. Возвращаемый Promise<void>
-    // резолвится после успешной записи и обновления снимка.
-    await rt.setRuntimeApiKey(provider, apiKey);
+    // Штатный persistent credential mechanism Pi: ModelRuntime.login с
+    // типом api_key. Провайдер сам запрашивает ключ через interaction.prompt
+    // (нам ключ уже известен — отдаём его), а SDK пишет credential в свой
+    // CredentialStore (auth.json) через modify(). Runtime setRuntimeApiKey
+    // для этого НЕ годится: он in-memory и умирает с процессом (спека §8).
+    await rt.login(provider, "api_key", {
+      signal: new AbortController().signal,
+      notify: () => { /* api_key flow не эмитит событий */ },
+      prompt: () => Promise.resolve(apiKey),
+    } as never);
 
-    // Проверяем через SDK, что Pi действительно увидел ключ: после
-    // записи getProviderAuthStatus должен показать configured=true.
     const status = rt.getProviderAuthStatus(provider) as AuthStatus;
     if (!status.configured) {
       throw new Error(
-        `api_key for ${provider} written (${keyLen} chars), but getProviderAuthStatus ` +
-        `still returns configured=false${status.source ? ` (source=${status.source})` : ""}`,
+        `api_key for ${provider} не сохранился: getProviderAuthStatus.configured=false`,
       );
     }
+    const providerInfo = rt.getProvider(provider) as SdkProvider | undefined;
     return {
       id: provider,
+      name: providerInfo?.name,
       runtime_id: RUNTIME_ID_PI,
       status: "connected",
-      managedBy: "pi",
       authType: "api_key",
+      authMethods: providerInfo ? providerAuthMethods(providerInfo) : ["api_key"],
+      managedBy: "pi",
       lastCheckedAt: new Date().toISOString(),
     };
   },
 
-  async authInstruction(
-    provider: string,
-  ): Promise<AuthInstruction | AuthInteractive> {
-    // 18.09.2026 (правка AuthInteraction): старая текстовая команда
-    // для интерактивного TUI больше не нужна — TaskFlow UI получает
-    // тот же AuthInteractive, что и connectProvider(OAuth).
-    // authInstruction оставлен в RuntimeAdapter ради обратной
-    // совместимости с уже-собранным UI, который знает про этот метод.
+  async startAuthSession(provider: string): Promise<AuthSessionView> {
     const rt = await getModelRuntime();
-    return startProviderLogin(rt, provider);
+    const session = authSessionManager.startOAuth(provider, rt);
+    return session.toView();
+  },
+
+  getAuthSession(id: string): AuthSessionView | null {
+    return authSessionManager.get(id)?.toView() ?? null;
+  },
+
+  submitAuthInput(id: string, value: string): void {
+    authSessionManager.submitInput(id, value);
+  },
+
+  cancelAuthSession(id: string): void {
+    authSessionManager.cancel(id);
   },
 
   async startRun(input: StartRunInput): Promise<StartRunResult> {
-    // 18.09.2026 (правка SDK): startRun идёт через официальный
-    // RpcClient из @earendil-works/pi-coding-agent, который спавнит
-    // `pi --mode rpc` под капотом. Никакого Python/JSON RPC поверх
-    // CLI: SDK берёт на себя протокол, мы только подписываемся на
-    // события (session_start → agent_session_id, agent_end →
-    // agent_state review/blocked).
-    //
-    // Поведение сохраняется: возвращаем сразу {runId, status: queued}
-    // — реальное обновление БД идёт в background через onEvent.
+    // 18.09.2026: startRun честно запускает выбранную model/provider через
+    // официальный RpcClient. Возвращает реальный sessionId из
+    // client.getState(). AgentRun завершается ТОЛЬКО по agent_settled.
     const task = db
       .prepare(
         `SELECT id, assignee_id, dispatched_role, role FROM tasks WHERE id = ?`,
       )
       .get(input.taskId) as
-      | { id: string; assignee_id: string | null; dispatched_role: string | null; role: string | null }
+      | {
+          id: string;
+          assignee_id: string | null;
+          dispatched_role: string | null;
+          role: string | null;
+        }
       | undefined;
     if (!task) {
       throw new Error(`task ${input.taskId} not found`);
     }
-    // Намеренно НЕ вычисляем `const model = input.model?.trim() || undefined` —
-    // раньше это была впустую, сейчас поля напрямую идут в RpcClient.
-    const trimmedProvider = input.provider?.trim();
-    const trimmedModel = input.model?.trim();
 
-    const runId = crypto.randomUUID();
+    const routing = loadRoleRouting();
+    const role = task.dispatched_role ?? task.role ?? input.agentId;
+    let provider = input.provider?.trim() || undefined;
+    let model = input.model?.trim() || undefined;
+    if (!model && role && (ROLE_NAMES as readonly string[]).includes(role)) {
+      model = routing.models[role as RoleName];
+    }
+    if (!provider && model) {
+      provider = providerOfModel(model);
+    }
+
+    // Модель обязана существовать в каталоге Pi. Различаем «Pi недоступен»
+    // (RuntimeUnavailableError → 503) и «модели нет» (ModelNotAvailableError
+    // → 422).
+    const catalog = await loadModelCatalog();
+    const match = catalog.find(
+      (m) => m.id === model && (!provider || m.provider === provider),
+    ) ?? catalog.find((m) => m.id === model);
+    if (!match) {
+      throw new ModelNotAvailableError(model ?? "(default)", provider ?? null);
+    }
+    provider = match.provider;
+    model = match.id;
+
+    const runId = `run_${crypto.randomUUID()}`;
+    // Доступ роли к трекеру — пропуск, подписанный сервером, во временном
+    // файле подключения (см. roleRunAccess.ts): ключи из хранилища не нужны.
+    const mcpConfigPath = prepareRoleRunAccess(runId, role);
     const client = new RpcClient({
-      cliPath: "/home/maksim/.local/bin/pi",
-      cwd: process.cwd(),
-      provider: trimmedProvider,
-      model: trimmedModel,
+      cliPath: resolvePiCliPath(),
+      cwd: input.cwd ?? process.cwd(),
+      ...(mcpConfigPath ? { args: ["--mcp-config", mcpConfigPath] } : {}),
+      provider,
+      model,
       // NODE_USE_ENV_PROXY=1 — без него Pi встроенный fetch игнорирует
-      // HTTPS_PROXY и провайдеры отвечают 403 (гео-блок). Остальной env
-      // пробрасываем, потому что Pi читает VAULT/TOKEN/... из окружения.
+      // HTTPS_PROXY и провайдеры отвечают 403 (гео-блок).
       env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
     });
 
-    // Подписываемся на события ДО client.start() — к этому моменту
-    // события ещё не идут, но onEvent сохранит listener, и первый
-    // session_start мы поймаем.
+    // Один task = максимум один active Pi run: гасим предыдущий процесс.
+    await cancelActiveRunsForTask(input.taskId);
+
+    const executorId = resolveExecutorId(role, input.agentId);
+    closeActiveAttempts(input.taskId);
+    if (executorId) {
+      try {
+        createAttempt({
+          runId,
+          taskId: input.taskId,
+          executorId,
+          model,
+          provider: provider ?? null,
+          routingRole: (ROLE_NAMES as readonly string[]).includes(role) ? role : null,
+        });
+      } catch { /* attempt — не критично для запуска */ }
+    }
+    try {
+      db.prepare(
+        `UPDATE tasks
+            SET current_attempt_id = ?, agent_state = 'in_progress',
+                agent_started_at = datetime('now'), updated_at = datetime('now')
+          WHERE id = ?`,
+      ).run(runId, input.taskId);
+    } catch { /* ignore */ }
+
+    const run: ActiveRun = {
+      runId,
+      taskId: input.taskId,
+      agentId: input.agentId,
+      provider: provider ?? null,
+      model,
+      sessionId: null,
+      client,
+      startedAt: new Date().toISOString(),
+      retrying: false,
+      cancelled: false,
+      lastTurn: null,
+      settled: false,
+      finish: Promise.resolve(),
+      mcpConfigPath,
+    };
+    activeRuns.set(runId, run);
+
     client.onEvent((event: JsonAgentSessionEvent) => {
-      const e = event as { type: string; [k: string]: unknown };
+      const e = event as unknown as { type: string; [k: string]: unknown };
       if (e.type === "session_start") {
-        // SDK шлёт session id; кладём в tasks.agent_session_id для
-        // последующих getRun() и для UI.
+        // Резервный источник sessionId, если getState() недоступен.
         const sid = (e as { sessionId?: string }).sessionId;
-        if (typeof sid === "string" && sid) {
-          try {
-            db.prepare(
-              `UPDATE tasks SET agent_session_id = ?, agent_started_at = datetime('now'),
-                       updated_at = datetime('now')
-                 WHERE id = ?`,
-            ).run(sid, input.taskId);
-          } catch { /* задача могла быть удалена */ }
+        if (typeof sid === "string" && sid && !run.sessionId) {
+          run.sessionId = sid;
         }
         return;
       }
-      if (e.type === "agent_end") {
-        // success — флаг в AgentSessionEvent, который JsonAgentSessionEvent
-        // наследует. Если не пришёл — считаем попытку неуспешной
-        // (безопасный default: blocked, планировщик может ретраить).
-        const ok = (e as { success?: boolean }).success ?? false;
-        const next: "review" | "blocked" = ok ? "review" : "blocked";
-        try {
-          db.prepare(
-            `UPDATE tasks SET agent_state = ?, agent_finished_at = datetime('now'),
-                     updated_at = datetime('now')
-               WHERE id = ?`,
-          ).run(next, input.taskId);
-        } catch { /* ignore */ }
-        // Гасим RPC процесс — он сам себя не закрывает после agent_end.
-        client.stop().catch(() => { /* процесс уже умер — окей */ });
+      if (e.type === "agent_settled") {
+        const { outcome, reason } = resultStatus(run);
+        void finalizeRun(run, outcome, reason);
+        return;
       }
+      // Всё остальное — активность, run не завершаем.
+      recordRunActivity(run, e);
     });
 
-    // Стартуем процесс и отправляем prompt. start() спавнит `pi --mode
-    // rpc`, дожидается handshake'а. prompt() шлёт первое сообщение
-    // агенту; далее стрим событий идёт через onEvent.
     try {
       await client.start();
-      await client.prompt(input.prompt);
-    } catch (err) {
-      // Process не поднялся (ENOENT, провайдер не настроен и т.п.) —
-      // пишем blocked, чтобы планировщик мог ретраить.
+      // sessionId берём через getState(), а не ждём session_start.
       try {
-        db.prepare(
-          `UPDATE tasks SET agent_state = 'blocked', updated_at = datetime('now')
-             WHERE id = ?`,
-        ).run(input.taskId);
-      } catch { /* ignore — задача могла быть удалена */ }
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[startRun] RpcClient failed for ${input.taskId}: ${msg}`);
-      throw err;
+        const state = await client.getState();
+        if (state?.sessionId) run.sessionId = state.sessionId;
+        // Проверяем, что Pi реально поднял запрошенную модель.
+        const actual = state?.model as { provider?: string; id?: string } | undefined;
+        if (actual?.id) {
+          run.model = actual.id;
+          run.provider = actual.provider ?? run.provider;
+          db.prepare(
+            `UPDATE attempts SET model = ?, provider = ? WHERE id = ?`,
+          ).run(run.model, run.provider, runId);
+        }
+      } catch {
+        // getState упал — sessionId останется из session_start (если был).
+      }
+      if (run.sessionId) {
+        try {
+          db.prepare(
+            `UPDATE attempts SET session_id = ? WHERE id = ?`,
+          ).run(run.sessionId, runId);
+          db.prepare(
+            `UPDATE tasks SET agent_session_id = ?, updated_at = datetime('now') WHERE id = ?`,
+          ).run(run.sessionId, input.taskId);
+        } catch { /* ignore */ }
+      }
+      await client.prompt(input.prompt);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await finalizeRun(run, "failed", reason);
+      throw new RuntimeUnavailableError(
+        `Pi startRun failed for ${input.taskId}: ${reason}`,
+      );
     }
 
     return {
       runId,
-      sessionId: "",
-      status: "queued",
+      sessionId: run.sessionId,
+      status: "running",
     };
   },
 
@@ -670,14 +864,75 @@ export const piRuntime: RuntimeAdapter = {
     );
   },
 
-  async cancelRun(_runId: string): Promise<void> {
-    throw new UnsupportedInFacadeError(
-      "PiRuntimeAdapter.cancelRun() недоступен: отмена — через cancel " +
-        "на карточке, см. /api/tasks/:id/cancel.",
-    );
+  async cancelRun(runId: string): Promise<void> {
+    const run = activeRuns.get(runId);
+    if (!run) {
+      throw new UnsupportedInFacadeError(
+        `PiRuntimeAdapter.cancelRun(${runId}): активный заход не найден. ` +
+          "Отмена задачи — через /api/tasks/:id/cancel.",
+      );
+    }
+    run.cancelled = true;
+    try {
+      await run.client.abort();
+    } catch { /* процесс мог уже завершиться */ }
+    await finalizeRun(run, "cancelled", "cancelled");
   },
 
   async getRun(runId: string): Promise<AgentRun> {
+    // runId — это id попытки (attempts.id), уникальный на каждый запуск.
+    const attempt = db
+      .prepare(
+        `SELECT a.id, a.task_id, a.executor_id, a.model, a.provider,
+                a.session_id, a.started_at, a.ended_at, a.outcome, a.reason,
+                t.dispatched_role, t.assignee_id, t.agent_session_id AS task_session
+           FROM attempts a
+           JOIN tasks t ON t.id = a.task_id
+          WHERE a.id = ?`,
+      )
+      .get(runId) as
+      | {
+          id: string;
+          task_id: string;
+          executor_id: string;
+          model: string | null;
+          provider: string | null;
+          session_id: string | null;
+          started_at: string;
+          ended_at: string | null;
+          outcome: string | null;
+          reason: string | null;
+          dispatched_role: string | null;
+          assignee_id: string | null;
+          task_session: string | null;
+        }
+      | undefined;
+
+    if (attempt) {
+      return {
+        id: attempt.id,
+        task_id: attempt.task_id,
+        agent_id: attempt.dispatched_role ?? attempt.assignee_id ?? "",
+        runtime_id: RUNTIME_ID_PI,
+        provider: attempt.provider,
+        model: attempt.model,
+        session_id: attempt.session_id ?? attempt.task_session,
+        status: mapAttemptStatus(attempt as AttemptRow) === "running"
+          ? "running"
+          : mapAttemptStatus(attempt as AttemptRow) === "cancelled"
+          ? "cancelled"
+          : mapAttemptStatus(attempt as AttemptRow) === "failed"
+          ? "failed"
+          : "completed",
+        started_at: attempt.started_at,
+        finished_at: attempt.ended_at,
+        stop_reason: attempt.reason,
+        attempts: attemptsForTask(attempt.task_id),
+      };
+    }
+
+    // Обратная совместимость: раньше runId был taskId. Планировщик/UI могли
+    // звать getRun(taskId).
     const task = db
       .prepare(
         `SELECT id, assignee_id, dispatched_role, agent_session_id,
@@ -697,10 +952,10 @@ export const piRuntime: RuntimeAdapter = {
         }
       | undefined;
     if (!task) {
-      throw new Error(`AgentRun ${runId}: задача не найдена`);
+      throw new Error(`AgentRun ${runId}: не найдена ни попытка, ни задача`);
     }
     return {
-      id: `run-${task.id.slice(0, 8)}`,
+      id: `run_${task.id}`,
       task_id: task.id,
       agent_id: task.dispatched_role ?? task.assignee_id ?? "",
       runtime_id: RUNTIME_ID_PI,
@@ -718,30 +973,267 @@ export const piRuntime: RuntimeAdapter = {
       started_at: task.agent_started_at ?? new Date().toISOString(),
       finished_at: task.agent_finished_at,
       stop_reason: task.stop_reason,
+      attempts: attemptsForTask(task.id),
     };
   },
 };
 
-/** Множество id моделей, реально доступных в Pi (без провайдера — модель
- *  уникальна по id, не по (provider, id): Pi использует то же имя для
- *  одной и той же модели в разных провайдерах редко). Используется
- *  PUT /api/runtime/routing для валидации — owner не может назначить
- *  роль на модель, которой Pi не знает (422 model_not_available).
- *
- * 18.09.2026 (правка SDK): идём через ModelRuntime.getAvailable() —
- *  SDK сам держит снимок и не дёргает сеть на каждый вызов.
- *  Самописный listModelsCache удалён, invalidateListModelsCache
- *  больше не нужен: SDK сам инвалидирует снимок при setRuntimeApiKey.
- */
+/** Множество id моделей из полного каталога Pi. Используется для валидации
+ *  routing: несуществующая модель → 422, недоступный Pi → 503 (ловит роут). */
 export async function getAvailableModelIds(): Promise<Set<string>> {
-  const rt = await getModelRuntime();
-  const available = await rt.getAvailable();
-  return new Set(available.map((m) => (m as SdkModel).id));
+  const catalog = await loadModelCatalog();
+  return new Set(catalog.map((m) => m.id));
 }
 
-/** Проверяет, что модель существует в ModelRuntime (по id, без
- *  провайдера). Используется PUT /api/runtime/routing. */
+/** Проверяет, что модель есть в каталоге Pi. */
 export async function modelExists(id: string): Promise<boolean> {
   const ids = await getAvailableModelIds();
   return ids.has(id);
+}
+
+// ===== Живая онлайн-сессия Пи для чата (Этап 2 плана от 21.09.2026) =====
+//
+// Та же машинерия, что у startRun (RpcClient, провайдер/модель из routing,
+// валидация каталога), но БЕЗ taskId/attempt/claim/agent_state. Никаких
+// попыток в attempts, никаких правок tasks.agent_state, никакой аренды.
+// Онлайн-сессия Пи живёт параллельно карточкам: карточка про свой путь
+// (claim→heartbeat→review), чат про свой (чат→чат→чат). Это и есть
+// «изоляция» из требований плана.
+//
+// Состояние сессии — в chat_sessions (chat_id, role_id) → pi_session_id,
+// одна строка на пару. In-memory `activeChatRuns` — только рантайм-лок,
+// чтобы не словить гонку «два сообщения подряд на одну пару». После
+// рестарта процесса карта пуста, но sessionId в таблице сохраняется и
+// следующее сообщение продолжает контекст.
+
+/** Аргументы старта живой сессии Пи в чате. Никакого taskId — чат живёт
+ *  отдельной осью, карточки и аренда остаются нетронутыми. */
+export interface StartChatRunInput {
+  chatId: string;
+  role: RoleName;
+  /** id ролевой учётки (role_<role>) — будет автором сообщения-ответа. */
+  roleId: string;
+  prompt: string;
+  /** Сохранённый ранее pi_session_id — продолжит ту же сессию. Если
+   *  null/undefined — стартует новую. */
+  sessionId?: string | null;
+  /** Максимум времени на один ответ. По умолчанию 60 секунд — больше,
+   *  чем типичный онлайн-ответ, но без зависания, если модель ушла в
+   *  retry-loop. */
+  timeoutMs?: number;
+}
+
+/** Результат одного захода онлайн-сессии: runId живёт в логах, sessionId
+ *  сохраняется в chat_sessions, text — ответ ассистента для укладки в
+ *  chat_messages (может быть пустой строкой — это легитимный ответ). */
+export interface StartChatRunResult {
+  runId: string;
+  sessionId: string | null;
+  text: string;
+}
+
+/** Активная онлайн-сессия чата. Только рантайм-лок; источник правды
+ *  по sessionId — таблица chat_sessions. */
+interface ActiveChatRun {
+  runId: string;
+  chatId: string;
+  role: RoleName;
+  roleId: string;
+  client: RpcClient;
+  startedAt: string;
+  cancelled: boolean;
+}
+
+const activeChatRuns = new Map<string, ActiveChatRun>();
+
+/** Стандартные лимиты на одну онлайн-сессию. Документированы как константы,
+ *  чтобы тесты могли на них опереться, а продакшен подменить через
+ *  переменные окружения при росте нагрузки. */
+const CHAT_RUN_DEFAULT_TIMEOUT_MS = 60_000;
+const CHAT_RUN_MAX_TIMEOUT_MS = 5 * 60_000; // 5 минут — жёсткий потолок
+
+function resolveChatRunTimeout(override?: number): number {
+  const raw =
+    override && override > 0
+      ? override
+      : Number(process.env.TASKFLOW_CHAT_RUN_TIMEOUT_MS) ||
+        CHAT_RUN_DEFAULT_TIMEOUT_MS;
+  return Math.min(raw, CHAT_RUN_MAX_TIMEOUT_MS);
+}
+
+/** Снять все активные онлайн-сессии Пи — единственная «глобальная» кнопка.
+ *  Нужна для тестов и для аварийной остановки; в проде процесс один и
+ *  сервис не перезапускают ради одного чата. */
+export async function stopAllChatRuns(): Promise<void> {
+  const runs = [...activeChatRuns.values()];
+  for (const run of runs) {
+    run.cancelled = true;
+    try {
+      await run.client.abort();
+    } catch { /* процесс мог уже завершиться */ }
+    releaseChatRoleLock(run.chatId, run.roleId);
+  }
+  activeChatRuns.clear();
+}
+
+/** Живая онлайн-сессия Пи в чате. Не трогает attempts/tasks/agent_state;
+ *  ответ сохраняется в chat_messages отдельно (вызывающей стороной —
+ *  routes/chats.ts), здесь только RpcClient, валидация и сохранение
+ *  pi_session_id в chat_sessions.
+ *
+ *  Жизненный цикл:
+ *    1. Захватываем слот (chat, role) — если уже занят, ошибка «живая
+ *       сессия уже идёт», без ожидания: параллельный ход для одной роли в
+ *       одном чате не нужен и будет просто дороже по токенам.
+ *    2. Валидируем роль и модель в каталоге (тот же путь, что у startRun).
+ *    3. Поднимаем RpcClient: если есть сохранённый sessionId — передаём
+ *       `--session-id` через args, иначе Pi создаст сессию сам и отдаст
+ *       id через getState().
+ *    4. Шлём promptAndWait(prompt, timeoutMs): один ответ на одно
+ *       сообщение. timeoutMs ограничивает общий wall-time; Pi сам
+ *       следит за retry/compaction, наш потолок — сверху.
+ *    5. Достаём финальный текст через getLastAssistantText (Pi хранит
+ *       свою историю сообщений и возвращает последний assistant turn).
+ *    6. Апсёртим sessionId в chat_sessions, отдаём результат.
+ *    7. Освобождаем слот в любом исходе (finally) — чтобы ошибка одного
+ *       хода не подвешивала дальнейшие. */
+export async function startChatRun(
+  input: StartChatRunInput,
+): Promise<StartChatRunResult> {
+  const role: RoleName = input.role;
+  if (!(ROLE_NAMES as readonly string[]).includes(role)) {
+    throw new Error(`startChatRun: неизвестная роль «${role}»`);
+  }
+  if (!acquireChatRoleLock(input.chatId, input.roleId)) {
+    throw new Error(
+      `startChatRun: для пары (chat=${input.chatId}, role=${input.roleId}) ` +
+        `уже идёт живая сессия — дождитесь ответа или отмените её`,
+    );
+  }
+
+  const runId = makeChatRunId();
+  const client: RpcClient | null = null;
+  // Инициализируем фиктивной ссылкой — реальный client создаётся после
+  // успешной валидации модели; в блоке finally смотрим на activeChatRuns.
+  void client;
+
+  try {
+    // Модель/провайдер берём из routing роли — ровно как в startRun.
+    // Различие: input.provider/model не предусмотрены, чат ходит всегда
+    // на «своей» для роли модели (маркировка роли и есть намерение).
+    const routing = loadRoleRouting();
+    const model = routing.models[role];
+    const provider = providerOfModel(model);
+
+    const catalog = await loadModelCatalog();
+    const match =
+      catalog.find(
+        (m) => m.id === model && m.provider === provider,
+      ) ?? catalog.find((m) => m.id === model);
+    if (!match) {
+      throw new ModelNotAvailableError(model, provider);
+    }
+    const resolvedProvider = match.provider;
+    const resolvedModel = match.id;
+
+    const args: string[] = [];
+    if (input.sessionId) {
+      // --session-id продолжает РОВНО ту сессию, что у нас в таблице.
+      // Если по какой-то причине сессия была удалена из Pi — Pi создаст
+      // новую с тем же id (по спецификации CLI), и мы её же и запишем
+      // обратно в chat_sessions. Это поведение совпадает с
+      // ожиданием «следующее сообщение продолжает тот же контекст».
+      args.push("--session-id", input.sessionId);
+    }
+
+    const newClient = new RpcClient({
+      cliPath: resolvePiCliPath(),
+      cwd: process.cwd(),
+      provider: resolvedProvider,
+      model: resolvedModel,
+      // NODE_USE_ENV_PROXY=1 — без него встроенный fetch Pi игнорирует
+      // HTTPS_PROXY и провайдеры отвечают 403 (гео-блок).
+      env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
+      args,
+    });
+
+    const run: ActiveChatRun = {
+      runId,
+      chatId: input.chatId,
+      role,
+      roleId: input.roleId,
+      client: newClient,
+      startedAt: new Date().toISOString(),
+      cancelled: false,
+    };
+    activeChatRuns.set(runId, run);
+
+    let finalText = "";
+    let finalSessionId: string | null = input.sessionId ?? null;
+    const timeoutMs = resolveChatRunTimeout(input.timeoutMs);
+
+    try {
+      await newClient.start();
+      // Сессия могла стартовать с нашим sessionId (resume) или с новым
+      // (Pi создал сам). Реальный id берём через getState(), а не
+      // session_start — тот же путь, что в startRun: getState()
+      // надёжнее.
+      try {
+        const state = await newClient.getState();
+        const sid = (state as { sessionId?: string } | null)?.sessionId;
+        if (sid) finalSessionId = sid;
+      } catch { /* getState() упал — оставим то, что было */ }
+      // Один user message = один ответ. promptAndWait блокирует до
+      // agent_settled и прибит к timeoutMs сверху.
+      await newClient.promptAndWait(input.prompt, undefined, timeoutMs);
+      try {
+        const text = await newClient.getLastAssistantText();
+        finalText = (text ?? "").trim();
+      } catch { /* нет ассистентского хода — оставим пустую строку */ }
+    } finally {
+      // Останавливать процесс ОБЯЗАТЕЛЬНО, иначе каждый user-message
+      // оставит висеть по zombie-RpcClient. На повторное использование
+      // не рассчитываем — на следующее сообщение поднимем свежий client.
+      try {
+        await newClient.stop();
+      } catch { /* процесс уже умер — окей */ }
+      activeChatRuns.delete(runId);
+    }
+
+    if (finalSessionId) {
+      // Сохраняем pi_session_id ДЛЯ СЛЕДУЮЩЕГО СООБЩЕНИЯ. Это
+      // единственная запись в БД, которую делает онлайн-сессия —
+      // tasks/attempts/agent_state остаются нетронутыми.
+      upsertChatSession(input.chatId, input.roleId, finalSessionId);
+    }
+
+    return { runId, sessionId: finalSessionId, text: finalText };
+  } finally {
+    releaseChatRoleLock(input.chatId, input.roleId);
+  }
+}
+
+/** Отменить активную онлайн-сессию. Используется, когда владелец явно
+ *  прервал разговор (например, через «Стоп» в UI). Неизвестный runId —
+ *  no-op (тихий отказ), а не 404: вызывающая сторона могла опоздать
+ *  с отменой, и упасть на чужой гонке — хуже, чем промолчать. */
+export async function cancelChatRun(runId: string): Promise<boolean> {
+  const run = activeChatRuns.get(runId);
+  if (!run) return false;
+  run.cancelled = true;
+  try {
+    await run.client.abort();
+  } catch { /* процесс мог уже завершиться */ }
+  // activeChatRuns сам себя почистит в finally startChatRun, но
+  // освободим слот сразу — чтобы следующее сообщение могло стартовать
+  // новую сессию, не дожидаясь финала cleanup.
+  activeChatRuns.delete(runId);
+  releaseChatRoleLock(run.chatId, run.roleId);
+  return true;
+}
+
+/** Тестовая утилита: сбросить in-memory карту активных чат-сессий и
+ *  локи. В проде не нужна — после рестарта процесса всё и так пусто. */
+export function _resetActiveChatRunsForTests(): void {
+  activeChatRuns.clear();
 }

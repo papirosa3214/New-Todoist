@@ -46,17 +46,6 @@ const roles = [
     ],
   },
   {
-    role: "synthesizer",
-    name: "Синтезатор",
-    email: "synthesizer@taskflow.local",
-    initials: "S",
-    color: "#A78BFA",
-    skills: [
-      ["synthesis", "Сведение фактов в выводы"],
-      ["communication", "Ясная формулировка результата"],
-    ],
-  },
-  {
     role: "critic_verifier",
     name: "Критик-проверяющий",
     email: "critic-verifier@taskflow.local",
@@ -125,14 +114,15 @@ if (missing.length) {
 const unusablePassword = () => "!" + crypto.randomBytes(24).toString("hex");
 const upsertUser = db.prepare(
   "INSERT INTO users " +
-    "(id, name, email, password_hash, role, type, avatar_color, initials, " +
+    "(id, name, email, password_hash, role, role_key, type, avatar_color, initials, " +
     "status, api_token, is_system_bot, created_by) " +
-    "VALUES (?, ?, ?, ?, ?, 'ai', ?, ?, 'offline', ?, 1, ?) " +
-    "ON CONFLICT(email) DO UPDATE SET " +
-    "name = excluded.name, role = excluded.role, type = excluded.type, " +
+    "VALUES (?, ?, ?, ?, 'agent', ?, 'ai', ?, ?, 'offline', ?, 1, ?) " +
+    "ON CONFLICT(id) DO UPDATE SET " +
+    "name = excluded.name, role = 'agent', role_key = excluded.role_key, type = 'ai', " +
     "avatar_color = excluded.avatar_color, initials = excluded.initials, " +
     "api_token = excluded.api_token, is_system_bot = 1, " +
-    "created_by = excluded.created_by",
+    "created_by = excluded.created_by " +
+    "WHERE users.type = 'ai' AND users.is_system_bot = 1",
 );
 const upsertSkill = db.prepare(
   "INSERT INTO role_skills (role, skill_name, description) VALUES (?, ?, ?) " +

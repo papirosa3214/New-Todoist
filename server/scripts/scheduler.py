@@ -26,16 +26,29 @@ Auth: TASKFLOW_SERVICE_TOKEN — служебный ключ из systemd drop-i
 Без fallback. Если переменной нет — KeyError на старте, fail loudly.
 """
 
+import calendar
+import datetime as dt
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 API = os.environ.get("TASKFLOW_API", "http://localhost:3001")
 TOKEN = os.environ["TASKFLOW_SERVICE_TOKEN"].strip()
 RETRY_DELAY_MIN = 5
 RETRY_LIMIT = 3
+# Разовый запуск исполнителя тем же путём, что и ручной (все ключи внутри).
+RUN_SCRIPT = str(Path.home() / "Проекты/New-Todoist/server/scripts/manual_run.sh")
+# Окно догона: не поднимаем карточки, чьё время прошло давно, иначе
+# расписание воскрешало бы все старые карточки с прошедшей датой.
+RUN_CATCH_HOURS = 24
+# Отпечаток живости: воркер пишет его каждый обход, по нему владелец
+# видит лампу «Расписание» (и сторож ловит тихий отказ).
+STATE_DIR = Path.home() / ".local/state/taskflow-scheduler"
+HEARTBEAT = STATE_DIR / "last-run.json"
 LOG_PREFIX = "[scheduler]"
 
 
@@ -257,12 +270,201 @@ def branch_notify_dead() -> int:
     return handled
 
 
+def write_heartbeat(counts: dict) -> None:
+    """Отметить обход: время и что сделано. Тихо, если не удалось — воркер
+    не должен падать из-за отсутствия каталога."""
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        HEARTBEAT.write_text(
+            json.dumps(
+                {
+                    "at": dt.datetime.now().isoformat(timespec="seconds"),
+                    "at_epoch": int(dt.datetime.now().timestamp() * 1000),
+                    **counts,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        log(f"  ⚠️ отпечаток живости не записан: {e}")
+
+
+def branch_launch_scheduled() -> int:
+    """Ветка 4: запуск по времени.
+
+    Карточка, у которой run_at наступил, статус active, ещё не начата и
+    исполнитель — агент-роль, поднимается одиночным заходом. Работает
+    НЕЗАВИСИМО от будильника (решение владельца 19.09.2026: расписание —
+    явное действие владельца, службой не гейтится). Себя и свободные
+    карточки не трогаем.
+    """
+    tasks = api("GET", "/api/tasks")
+    if not isinstance(tasks, list):
+        log(f"  ⚠️ ветка 4: ответ не список — {tasks!r}")
+        return 0
+    now = dt.datetime.now()
+    floor = now - dt.timedelta(hours=RUN_CATCH_HOURS)
+    handled = 0
+    for t in tasks:
+        if t.get("status") != "active" or t.get("agent_state") is not None:
+            continue
+        assignee = t.get("assignee_id") or ""
+        if not assignee.startswith("role_"):
+            continue
+        run_at = t.get("run_at")
+        if not run_at:
+            continue
+        try:
+            when = dt.datetime.strptime(str(run_at)[:16], "%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+        if when > now or when < floor:
+            continue
+        subprocess.Popen(
+            ["bash", RUN_SCRIPT, "--once", t["id"]],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log(f"  ⏰ {t['id'][:8]} по времени {run_at} — поднимаю исполнителя")
+        handled += 1
+    return handled
+
+
+def _next_due(due: str, repeat: str) -> str | None:
+    """Следующая дата по интервалу повторения."""
+    try:
+        d = dt.datetime.strptime(due[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    if repeat == "daily":
+        n = d + dt.timedelta(days=1)
+    elif repeat == "weekdays":
+        n = d + dt.timedelta(days=1)
+        while n.weekday() >= 5:
+            n += dt.timedelta(days=1)
+    elif repeat == "weekly":
+        n = d + dt.timedelta(days=7)
+    elif repeat == "monthly":
+        month = d.month + 1
+        year = d.year + (month - 1) // 12
+        month = (month - 1) % 12 + 1
+        day = min(d.day, calendar.monthrange(year, month)[1])
+        n = dt.date(year, month, day)
+    else:
+        return None
+    return n.isoformat()
+
+
+def branch_clone_recurring() -> int:
+    """Ветка 5: повтор «одна за раз». По завершённой карточке создаём
+    СЛЕДУЮЩЕЕ вхождение (с новой датой), только если серия не кончилась.
+    Никаких пачек вперёд — максимум одна будущая карточка."""
+    items = api("GET", "/api/scheduler/recurring")
+    if not isinstance(items, list):
+        log(f"  ⚠️ ветка 5: ответ не список — {items!r}")
+        return 0
+    handled = 0
+    for t in items:
+        tid = t.get("id")
+        due = t.get("due_date")
+        repeat = t.get("run_repeat")
+        if not tid or not due or not repeat:
+            continue
+        nxt = _next_due(due, repeat)
+        if not nxt:
+            continue
+        # Владелец 20.09.2026: повтор в любом случае ограничен КАЛЕНДАРНЫМ
+        # ГОДОМ — дальше 31 декабря текущего года серия не идёт.
+        year_end = dt.date(dt.datetime.now().year, 12, 31).isoformat()
+        until = t.get("repeat_until")
+        cap = min(str(until)[:10], year_end) if until else year_end
+        if nxt > cap:
+            # Уперлись в предел. Если это календарный год (а не явный выбор
+            # владельца) — спрашиваем его и даём продлить, а не обрываем молча.
+            if until and str(until)[:10] <= year_end:
+                api("PATCH", f"/api/tasks/{tid}", {"recurrence_spawned": 1})
+                log(f"  ⏹ {tid[:8]} серия завершена (до {until})")
+            else:
+                api("POST", f"/api/tasks/{tid}/repeat-ended", {})
+                log(f"  ❓ {tid[:8]} конец года — спросил владельца о продлении")
+            continue
+        body = {
+            "title": t.get("title"),
+            "description": t.get("description"),
+            "due_date": nxt,
+            "start_time": t.get("start_time"),
+            "project_id": t.get("project_id"),
+            "assignee_id": t.get("assignee_id"),
+            "run_repeat": repeat,
+            "repeat_until": until,
+        }
+        res = api("POST", "/api/tasks", body)
+        if isinstance(res, dict) and (res.get("task") or res.get("id")):
+            api("PATCH", f"/api/tasks/{tid}", {"recurrence_spawned": 1})
+            log(f"  ↻ {tid[:8]} → следующая на {nxt}")
+            handled += 1
+        else:
+            log(f"  ⚠️ {tid[:8]} следующая не создалась: {res!r}")
+    return handled
+
+
+def branch_deferred_retries() -> int:
+    """Ветка 6: отложенный технический повтор.
+
+    /api/tasks/:id/stop с reason_code='technical_failure' пишет строку в
+    attempt_retries с scheduled_at = now() + задержка. До этой ветки её
+    никто не читал. Сервер атомарно отдаёт назревшие повторы (сравнение
+    scheduled_at <= now, отметка fired_at — см.
+    POST /api/scheduler/deferred-retries/claim), а мы поднимаем по каждому
+    одиночный заход тем же путём, что расписание: manual_run.sh --once.
+    """
+    res = api("POST", "/api/scheduler/deferred-retries/claim", {})
+    retries = res.get("retries") if isinstance(res, dict) else None
+    if not isinstance(retries, list):
+        log(f"  ⚠️ ветка 6: ответ не список — {res!r}")
+        return 0
+    handled = 0
+    for r in retries:
+        task_id = r.get("task_id")
+        if not task_id:
+            continue
+        subprocess.Popen(
+            ["bash", RUN_SCRIPT, "--once", task_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log(
+            f"  ♻ {task_id[:8]} отложенный повтор"
+            f" ({r.get('reason_code')}, scheduled_at={r.get('scheduled_at')})"
+        )
+        handled += 1
+    return handled
+
+
 def main() -> int:
     log("обход доски")
     n1 = branch_retry_technical()
     n2 = branch_repick_wrong_role()
     n3 = branch_notify_dead()
-    log(f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}")
+    n4 = branch_launch_scheduled()
+    n5 = branch_clone_recurring()
+    n6 = branch_deferred_retries()
+    write_heartbeat(
+        {
+            "retry": n1,
+            "repick": n2,
+            "dead": n3,
+            "scheduled": n4,
+            "repeat": n5,
+            "deferred": n6,
+        }
+    )
+    log(
+        f"итого: ветка 1={n1}, ветка 2={n2}, ветка 3={n3}, "
+        f"ветка 4(расписание)={n4}, ветка 5(повтор)={n5}, "
+        f"ветка 6(отложенный повтор)={n6}"
+    )
     return 0
 
 

@@ -126,6 +126,22 @@ export function registerNoteRoutes(app: FastifyInstance) {
     },
   );
 
+  // Разбор markdown для РЕДАКТОРА: он живёт во фронте, а конвертер — здесь,
+  // и тащить второй его экземпляр в бандл значило бы получить две правды.
+  // Нужен он при вставке из буфера: TipTap принимает markdown как простой
+  // текст, и таблица превращается в абзац с hardBreak вместо сетки —
+  // ровно так были испорчены 9 заметок (найдено 22.09.2026).
+  app.post<{ Body: { markdown?: string } }>(
+    "/api/notes/markdown-to-doc",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const md = typeof req.body?.markdown === "string" ? req.body.markdown : null;
+      if (md === null)
+        return reply.code(400).send({ error: "нужно поле markdown" });
+      return { doc: JSON.parse(markdownToTiptap(md)) };
+    },
+  );
+
   // Частичное обновление: шлём только то, что реально меняем. Именно
   // поэтому PATCH, а не PUT — у Дневника PUT с обязательным content
   // однажды чуть не стёр запись при смене папки (см. journal.ts).

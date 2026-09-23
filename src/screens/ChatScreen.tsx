@@ -175,6 +175,31 @@ function TypingLine({ names }: { names: string[] }) {
 }
 
 /**
+ * «Отправил — жду ответ» (22.09.2026, заметка d7e98ed7): три точки без
+ * подписи под последним пузырём. Те же точки, что и в «работает…», но
+ * без текста — DESIGN.md не любит пояснять словами то, что видно по
+ * картинке. Цвет text-dim чуть приглушённее, чем у TypingLine: без
+ * подписи индикатору достаточно намёка, чтобы не конкурировать с
+ * сообщением. Класс анимации тот же — переиспользуем существующий,
+ * prefers-reduced-motion уже обработан в index.css.
+ */
+function AwaitingLine() {
+  return (
+    <div className="flex items-center gap-2 px-4 text-[12px] text-dim">
+      <span className="flex items-center gap-1">
+        {[0, 0.2, 0.4].map((delay) => (
+          <span
+            key={delay}
+            className="nt-typing-dot"
+            style={{ animationDelay: `${delay}s` }}
+          />
+        ))}
+      </span>
+    </div>
+  );
+}
+
+/**
  * Переключатель каналов (28.08.2026, владелец: «должно быть тут 2 канала: у
  * нас с тобой, оркестратор, и другой канал между вами, чтобы я только для
  * контроля туда смотрел»).
@@ -219,12 +244,45 @@ function ChannelTabs({
 }
 
 export function ChatScreen() {
-  // Живые обновления, пока экран открыт — не в Layout.tsx (общий сокет там
-  // уже есть для notifications/tasks, но эта подписка нужна только тут).
-  useChatLiveUpdates();
+  // Хуки, от которых зависит логика ниже — поднимаем ДО useState и
+  // useChatLiveUpdates. До правки useCurrentUser() стоял ниже, и callback
+  // «отправил — жду ответ» замыкался на ещё не инициализированный me —
+  // формально работало через ref внутри useChatLiveUpdates, но читалось
+  // вкривь и в первые миллисекунды после открытия экрана условие
+  // «ответ лично мне» не срабатывало (me === undefined).
   const navigate = useNavigate();
   const { data: me } = useCurrentUser();
   const { data: participants = [] } = useChatParticipants();
+
+  // «Отправил — жду ответ» (заметка d7e98ed7). Хранится здесь, а не в
+  // общем кеше: индикатор — локальное состояние разговора, не нужно
+  // светить его в других вкладках. messageId нужен только как ключ
+  // таймаута, чтобы повторная отправка перезапускала отсчёт.
+  const [awaiting, setAwaiting] = useState<
+    { messageId: string; toUserId: string } | null
+  >(null);
+
+  // Живые обновления, пока экран открыт — не в Layout.tsx (общий сокет там
+  // уже есть для notifications/tasks, но эта подписка нужна только тут).
+  // Колбэк сбрасывает индикатор «отправил — жду ответ», когда в канал
+  // приходит сообщение от моего адресата (или мне лично). Логика —
+  // здесь, а не в хуке: только ChatScreen знает, кому он сейчас пишет.
+  useChatLiveUpdates((event) => {
+    const m = event.message;
+    if (!m || m.from_user_id === me?.id) return;
+    setAwaiting((cur) => {
+      if (!cur) return cur;
+      // Ответ лично мне — всегда гасит, в любом канале.
+      if (m.to_user_id === me?.id) return null;
+      // Сообщение от моего адресата (когда я писал лично) — гасит.
+      // Если я писал «всем» (cur.toUserId === "all"), это условие
+      // пропускается: жду первого ответа ЛИЧНО мне, чужая переписка
+      // мимо меня индикатор не гасит (спека, «Критерии приёмки»).
+      if (cur.toUserId !== "all" && m.from_user_id === cur.toUserId)
+        return null;
+      return cur;
+    });
+  });
 
   // Две ленты видят только владелец и оркестратор — они и есть две стороны
   // первого канала. Остальным исполнителям выбирать нечего: у них одна
@@ -339,10 +397,31 @@ export function ChatScreen() {
       to_user_id: string;
       attachment_ids?: string[];
     }) => {
-      await sendMessage.mutateAsync({ ...payload, channel: activeChannel });
+      const res = await sendMessage.mutateAsync({
+        ...payload,
+        channel: activeChannel,
+      });
+      // Индикатор «отправил — жду ответ». Ответ сервера приходит
+      // синхронно с успешной отправкой — берём его, чтобы привязать
+      // таймаут к конкретному сообщению.
+      const messageId = res?.id;
+      if (messageId) {
+        setAwaiting({ messageId, toUserId: payload.to_user_id });
+      }
     },
     [sendMessage, activeChannel],
   );
+
+  // Таймаут 60 с (заметка d7e98ed7): если за это время никто из
+  // адресатов не ответил — гасим. Собеседник имеет право молчать, и
+  // вечная точка не нужна ни ему, ни нам. Зависимость по awaiting —
+  // повторная отправка перезапускает отсчёт, ручной сброс отменяет
+  // таймер чисто.
+  useEffect(() => {
+    if (!awaiting) return;
+    const t = setTimeout(() => setAwaiting(null), 60_000);
+    return () => clearTimeout(t);
+  }, [awaiting]);
 
   return (
     <div className="flex flex-col h-full">
@@ -425,6 +504,7 @@ export function ChatScreen() {
             />
           ))}
           <TypingLine names={typingNames} />
+          {awaiting && <AwaitingLine />}
         </div>
       </div>
 

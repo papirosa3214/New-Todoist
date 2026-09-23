@@ -160,7 +160,6 @@ const AVATAR_SLUGS: Record<string, string> = {
   // Изображения добавятся на стороне мака (Assets.xcassets).
   Исследователь: "researcher",
   Аналитик: "analyst",
-  Синтезатор: "synthesizer",
   "Критик-проверяющий": "critic_verifier",
   Архитектор: "architect",
   Разработчик: "builder",

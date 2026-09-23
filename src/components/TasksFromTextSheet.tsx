@@ -7,7 +7,7 @@
 // каждую строку), с чек-боксом «включить/выключить», плюс выбор — в какой
 // проект их положить: существующий (радио-список, приём из
 // TaskFilterSheet.tsx) или создать новый прямо здесь.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon, SheetHandle, ErrorBanner } from "./UI";
 import { useBottomSheet } from "../lib/useBottomSheet";
 import { useProjects, useCreateProject } from "../api/projects";
@@ -18,6 +18,19 @@ interface Row {
   include: boolean;
   title: string;
   source: ExtractedTask;
+}
+
+// Строит ключ из заголовков задач. Раньше эта логика стояла прямо в render
+// (`tasks.map(...).join("|")` с setState-during-render) — в React 18+
+// формально работает, но ловит undefined.tasks с TypeError без шанса
+// отреагировать; пользователь видит «белый экран», а в логах ничего.
+// Карточка 70697681: «Собрать задачи» падает — на сервере пусто,
+// падение случается на клиенте при странной форме ответа. Теперь
+// useEffect: tasks=undefined → пустой массив, rows не сбрасываются
+// зря при переходе между notes, ключ — стабильный.
+function tasksKeyOf(tasks: ExtractedTask[] | undefined | null): string {
+  if (!tasks) return "";
+  return tasks.map((t) => t?.title ?? "").join("|");
 }
 
 export function TasksFromTextSheet({
@@ -43,19 +56,27 @@ export function TasksFromTextSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  // Строки пересобираются заново при каждом открытии с новым набором задач
-  // (та же дата не откроет шторку дважды подряд с разными tasks без
-  // пересоздания родителя — но на всякий случай синхронизируемся явно).
-  const tasksKey = tasks.map((t) => t.title).join("|");
-  const [lastKey, setLastKey] = useState("");
-  if (open && tasksKey !== lastKey) {
-    setLastKey(tasksKey);
+  // При каждом открытии с новым набором задач пересобираем строки.
+  // useEffect вместо setState-during-render: ошибки в render-phase
+  // ломают всё дерево без возможности показать баннер, в useEffect —
+  // поймает ближайший ErrorBoundary (см. ErrorBoundary.tsx).
+  const tasksKey = tasksKeyOf(tasks);
+  useEffect(() => {
+    if (!open) return;
+    if (!Array.isArray(tasks)) {
+      setRows([]);
+      setError(null);
+      return;
+    }
     setRows(tasks.map((t) => ({ include: true, title: t.title, source: t })));
     setSelectedProjectId(null);
     setCreatingNew(false);
     setNewProjectName("");
     setError(null);
-  }
+    // tasksKey закрывает «та же дата не откроет шторку дважды подряд» —
+    // меняется только при смене состава, не на каждый рендер.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, tasksKey]);
 
   if (!sheet.mounted) return null;
 

@@ -17,6 +17,7 @@
 // один раз применяемая запись.
 import type { Database } from "better-sqlite3";
 import db from "./db.js";
+import { refreshRoles } from "./roleRouting.js";
 
 export type Migration = {
   id: string;
@@ -235,6 +236,140 @@ export function runIntakePipelineMigration(target: Database = db): void {
   if (!taskCols.has("clarification_question")) {
     target.exec(`ALTER TABLE tasks ADD COLUMN clarification_question TEXT`);
   }
+}
+
+/**
+ * Отделяет полномочие учётки (users.role) от бизнес-роли исполнителя
+ * (users.role_key). Экспорт нужен upgrade-тесту на отдельной старой БД.
+ *
+ * Backfill намеренно берёт только канонические системные AI-учётки:
+ * совпадения одного лишь id `role_<key>` недостаточно. Так миграция не
+ * присваивает роль произвольному существующему человеку с таким id.
+ */
+export function runRoleAccountSecurityMigration(target: Database = db): void {
+  const columns = new Set(
+    (target.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  if (!columns.has("role_key")) {
+    // SQLite разрешает ADD COLUMN с FK только при определённых комбинациях
+    // PRAGMA/DEFAULT. Связь ниже всё равно проверяется триггерами — одинаково
+    // для старой и для свежей базы.
+    target.exec("ALTER TABLE users ADD COLUMN role_key TEXT");
+  }
+
+  target.exec(`
+    -- Канонический legacy account мог получить даже reserved authority
+    -- (уязвимый role_owner). Сохраняем саму строку, token и все внешние
+    -- ссылки на users.id, меняя только authority/business-role binding.
+    UPDATE users
+       SET role_key = role,
+           role = 'agent'
+     WHERE type = 'ai'
+       AND COALESCE(is_system_bot, 0) = 1
+       AND id = 'role_' || role
+       AND (role_key IS NULL OR role_key = role)
+       AND EXISTS (SELECT 1 FROM roles WHERE roles.key = users.role);
+
+    -- Business keys must never remain authorization authorities. Legacy
+    -- non-canonical rows are safely demoted without claiming a role_key.
+    UPDATE users
+       SET role = 'agent'
+     WHERE role NOT IN ('owner', 'agent', 'viewer', 'orchestrator', 'service');
+  `);
+
+  const invalid = target
+    .prepare(
+      `SELECT id
+         FROM users
+        WHERE role_key IS NOT NULL
+          AND (type <> 'ai'
+               OR role <> 'agent'
+               OR COALESCE(is_system_bot, 0) <> 1
+               OR id <> 'role_' || role_key
+               OR NOT EXISTS (SELECT 1 FROM roles WHERE roles.key = users.role_key))
+        LIMIT 1`,
+    )
+    .get() as { id: string } | undefined;
+  if (invalid) {
+    throw new Error(
+      `058_role_account_authority: некорректная связь users.role_key у ${invalid.id}`,
+    );
+  }
+
+  target.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_role_key_unique
+      ON users(role_key) WHERE role_key IS NOT NULL;
+
+    CREATE TRIGGER IF NOT EXISTS users_authority_insert_guard
+    BEFORE INSERT ON users
+    WHEN NEW.role NOT IN ('owner', 'agent', 'viewer', 'orchestrator', 'service')
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid users.role authority');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS users_authority_update_guard
+    BEFORE UPDATE OF role ON users
+    WHEN NEW.role NOT IN ('owner', 'agent', 'viewer', 'orchestrator', 'service')
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid users.role authority');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS users_role_key_insert_guard
+    BEFORE INSERT ON users
+    WHEN NEW.role_key IS NOT NULL AND (
+      NEW.type <> 'ai'
+      OR NEW.role <> 'agent'
+      OR COALESCE(NEW.is_system_bot, 0) <> 1
+      OR NEW.id <> 'role_' || NEW.role_key
+      OR NOT EXISTS (SELECT 1 FROM roles WHERE key = NEW.role_key)
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid users.role_key binding');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS users_role_key_update_guard
+    BEFORE UPDATE OF id, role, role_key, type, is_system_bot ON users
+    WHEN NEW.role_key IS NOT NULL AND (
+      NEW.type <> 'ai'
+      OR NEW.role <> 'agent'
+      OR COALESCE(NEW.is_system_bot, 0) <> 1
+      OR NEW.id <> 'role_' || NEW.role_key
+      OR NOT EXISTS (SELECT 1 FROM roles WHERE key = NEW.role_key)
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid users.role_key binding');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS roles_reserved_key_insert_guard
+    BEFORE INSERT ON roles
+    WHEN NEW.key IN ('owner', 'agent', 'viewer', 'orchestrator', 'service')
+    BEGIN
+      SELECT RAISE(ABORT, 'reserved role key');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS roles_reserved_key_update_guard
+    BEFORE UPDATE OF key ON roles
+    WHEN NEW.key IN ('owner', 'agent', 'viewer', 'orchestrator', 'service')
+    BEGIN
+      SELECT RAISE(ABORT, 'reserved role key');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS roles_bound_key_update_guard
+    BEFORE UPDATE OF key ON roles
+    WHEN EXISTS (SELECT 1 FROM users WHERE role_key = OLD.key)
+    BEGIN
+      SELECT RAISE(ABORT, 'role key is bound to an account');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS roles_bound_key_delete_guard
+    BEFORE DELETE ON roles
+    WHEN EXISTS (SELECT 1 FROM users WHERE role_key = OLD.key)
+    BEGIN
+      SELECT RAISE(ABORT, 'role key is bound to an account');
+    END;
+  `);
 }
 
 const migrations: Migration[] = [
@@ -1652,6 +1787,483 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "045_attempts_provider_session_stop_reason",
+    description:
+      "18.09.2026 (доработка Pi runtime): AgentRun/attempt должен хранить " +
+      "фактического провайдера, sessionId Pi и stop_reason, а история " +
+      "попыток не должна перетираться при fallback. Добавляет в attempts " +
+      "колонки provider, session_id, stop_reason. Идемпотентна (PRAGMA).",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(attempts)").all() as Array<{
+          name: string;
+        }>).map((c) => c.name),
+      );
+      if (!cols.has("provider")) {
+        db.exec("ALTER TABLE attempts ADD COLUMN provider TEXT");
+      }
+      if (!cols.has("session_id")) {
+        db.exec("ALTER TABLE attempts ADD COLUMN session_id TEXT");
+      }
+      if (!cols.has("stop_reason")) {
+        db.exec("ALTER TABLE attempts ADD COLUMN stop_reason TEXT");
+      }
+    },
+  },
+  {
+    id: "046_reviewer_first_review",
+    description:
+      "Reviewer-first review: старые карточки сохраняют прямую приёмку " +
+      "владельцем, а новые по умолчанию проходят через Reviewer.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("requires_reviewer_review")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN requires_reviewer_review INTEGER NOT NULL DEFAULT 0");
+      }
+    },
+  },
+  {
+    id: "047_reviewer_first_default",
+    description:
+      "Общая настройка владельца: новые карточки по умолчанию проходят " +
+      "Reviewer (Обзор → Система). Раньше это был флаг на каждой карточке.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(users)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("reviewer_first_default")) {
+        db.exec("ALTER TABLE users ADD COLUMN reviewer_first_default INTEGER NOT NULL DEFAULT 1");
+      }
+    },
+  },
+  {
+    id: "048_model_ladder",
+    description:
+      "Ступени эскалации моделей (5 ступеней, по две учётки на ступень) и " +
+      "состояние лимитов по УЧЁТКЕ (provider_limits). Проект владельца " +
+      "16.09.2026: не потянул — вверх по ступени; лимит — вбок, в другую " +
+      "учётку той же ступени.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS model_ladder (
+          step INTEGER NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          priority INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (step, model)
+        );
+      `);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS provider_limits (
+          provider TEXT PRIMARY KEY,
+          unavailable_until TEXT,
+          window_kind TEXT,
+          reason TEXT,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      const seed: Array<[number, string, string, number]> = [
+        [0, "minimax", "MiniMax-M3", 0],
+        [1, "anthropic", "claude-haiku-4-5", 0],
+        [1, "openai-codex", "gpt-5.6-luna", 1],
+        [2, "anthropic", "claude-sonnet-5", 0],
+        [2, "openai-codex", "gpt-5.6-terra", 1],
+        [3, "anthropic", "claude-opus-5", 0],
+        [3, "openai-codex", "gpt-5.6-sol", 1],
+        [4, "anthropic", "claude-fable-5-1", 0],
+        [4, "openai-codex", "gpt-6-astra", 1],
+      ];
+      const ins = db.prepare(
+        "INSERT OR IGNORE INTO model_ladder (step, provider, model, priority) VALUES (?, ?, ?, ?)",
+      );
+      for (const row of seed) ins.run(row[0], row[1], row[2], row[3]);
+    },
+  },
+  {
+    id: "049_run_schedule",
+    description:
+      "Расписание запуска карточки: run_at (когда поднимать исполнителя; " +
+      "собирается из даты+времени, по умолчанию 09:00), run_repeat " +
+      "(none|daily|weekdays|weekly|monthly) и repeat_until (до когда, " +
+      "пусто — постоянно). Одна карточка за раз: следующая создаётся, " +
+      "когда текущая закрыта.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("run_at")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN run_at TEXT");
+      }
+      if (!cols.has("run_repeat")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN run_repeat TEXT NOT NULL DEFAULT 'none'",
+        );
+      }
+      if (!cols.has("repeat_until")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN repeat_until TEXT");
+      }
+    },
+  },
+  {
+    id: "050_recurrence_spawned",
+    description:
+      "Повтор «одна за раз»: признак, что по завершённой карточке уже " +
+      "создано следующее вхождение (иначе воркер плодил бы дубли).",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("recurrence_spawned")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN recurrence_spawned INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+    },
+  },
+  {
+    id: "051_attempt_retries_fired_at",
+    description:
+      "Отложенный технический повтор: отметка, что воркер уже поднял " +
+      "заход по attempt_retries.scheduled_at (иначе один и тот же повтор " +
+      "поднимался бы на каждом обходе планировщика).",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(attempt_retries)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("fired_at")) {
+        db.exec("ALTER TABLE attempt_retries ADD COLUMN fired_at TEXT");
+      }
+    },
+  },
+  {
+    id: "052_needs_research",
+    description:
+      "Флаг «нужно глубокое исследование» на карточке (владелец 21.09.2026): " +
+      "серверный конвейер исследования запускается вручную только по этой " +
+      "отметке, чтобы не гоняться за источниками по рабочим пустякам. " +
+      "Идемпотентна (PRAGMA): в уже прогретой БД колонки может не быть.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (!cols.has("needs_research")) {
+        db.exec(
+          "ALTER TABLE tasks ADD COLUMN needs_research INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+    },
+  },
+  {
+    id: "053_chats",
+    description:
+      "Чаты с ролями-агентами (владелец 21.09.2026): персональные (одна роль) и " +
+      "групповые (несколько). Таблицы chats/chat_members + chat_messages.chat_id; " +
+      "канал сообщения теперь допускает 'chat'. chat_messages ПЕРЕСОБИРАЕТСЯ — " +
+      "CHECK канала расширяется, а SQLite не умеет менять CHECK на месте. Поэтому " +
+      "миграция без общей транзакции: своей транзакцией подменяет таблицу при " +
+      "foreign_keys=OFF. FK-нарушения сравниваются до/после — в живой базе есть " +
+      "давняя сирота agent_inbox→tasks, из-за неё падать нельзя.",
+    noTransaction: true,
+    up: () => {
+      // Справочники чатов — обычные аддитивные таблицы, их можно создавать
+      // всегда (idempotent), и ДО пересборки: chat_messages_new ссылается на chats.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chats (
+          id TEXT PRIMARY KEY,
+          title TEXT,
+          kind TEXT NOT NULL DEFAULT 'group' CHECK (kind IN ('direct', 'group')),
+          created_by TEXT REFERENCES users(id),
+          task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS chat_members (
+          chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          member_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          added_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (chat_id, member_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_members_member
+          ON chat_members(member_id);
+      `);
+
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{
+          name: string;
+        }>).map((column) => column.name),
+      );
+      if (cols.has("chat_id")) return; // уже пересобрана
+
+      const fkBefore = (db.prepare("PRAGMA foreign_key_check").all() as unknown[])
+        .length;
+      // B2 (проверка Гермеса 21.09.2026): сверяем и ЧИСЛО строк. FK-чек ловит
+      // только сироты, а ошибка в INSERT ... SELECT могла бы тихо потерять
+      // строки. Считаем до и после и падаем, если разошлось.
+      const rowsBefore = (
+        db.prepare("SELECT COUNT(*) AS n FROM chat_messages").get() as {
+          n: number;
+        }
+      ).n;
+      db.pragma("foreign_keys = OFF");
+      db.exec(`
+        BEGIN;
+        CREATE TABLE chat_messages_new (
+          id TEXT PRIMARY KEY,
+          from_user_id TEXT NOT NULL REFERENCES users(id),
+          to_user_id TEXT REFERENCES users(id),
+          task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+          kind TEXT CHECK (kind IS NULL OR kind IN ('совещание', 'делегирование', 'находка')),
+          text TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          channel TEXT NOT NULL DEFAULT 'agents'
+            CHECK (channel IN ('owner', 'agents', 'chat')),
+          chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE
+        );
+        INSERT INTO chat_messages_new
+          (id, from_user_id, to_user_id, task_id, kind, text, created_at, channel)
+          SELECT id, from_user_id, to_user_id, task_id, kind, text, created_at, channel
+            FROM chat_messages;
+        DROP TABLE chat_messages;
+        ALTER TABLE chat_messages_new RENAME TO chat_messages;
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_to
+          ON chat_messages(to_user_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_task
+          ON chat_messages(task_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_channel
+          ON chat_messages(channel, created_at);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_chat
+          ON chat_messages(chat_id, created_at);
+        COMMIT;
+      `);
+      db.pragma("foreign_keys = ON");
+
+      const rowsAfter = (
+        db.prepare("SELECT COUNT(*) AS n FROM chat_messages").get() as {
+          n: number;
+        }
+      ).n;
+      if (rowsAfter !== rowsBefore) {
+        throw new Error(
+          `053: пересборка chat_messages потеряла строки (было ${rowsBefore}, стало ${rowsAfter})`,
+        );
+      }
+      const fkAfter = (db.prepare("PRAGMA foreign_key_check").all() as unknown[])
+        .length;
+      if (fkAfter > fkBefore) {
+        throw new Error(
+          `053: после пересборки chat_messages появились FK-нарушения (было ${fkBefore}, стало ${fkAfter})`,
+        );
+      }
+    },
+  },
+  {
+    // 21.09.2026 (этап 2 плана по чатам с ролями-агентами,
+    // docs/superpowers/plans/2026-09-21-chat-online-pi-runtime.md).
+    //
+    // На каждый чат и каждую роль-участницу держим ровно одну строку: под
+    // какой именно pi_session_id сейчас «живёт» агент в этом чате. Онлайн-
+    // сессии Пи поднимаются без задачи (startChatRun), и единственное, что
+    // у них есть устойчивого — sessionId, который Pi отдаёт через
+    // client.getState() и который мы передаём обратно, чтобы следующее
+    // сообщение продолжало тот же контекст, а не начинало разговор заново.
+    //
+    // PK(chat_id, role_id) — естественное ограничение «на пару один сеанс»;
+    // апсёрт по составному ключу делается INSERT … ON CONFLICT DO UPDATE.
+    //
+    // Никаких FK на tasks здесь быть не может: чат живёт без задачи и без
+    // прецедента связи с attempt/agent_state. Это и есть «изоляция» —
+    // аддитивная таблица, в которую карточки не пишут и которая на них не
+    // ссылается. FK на chats держим, чтобы удаление чата автоматически
+    // убирало и его сессии (как и messages в миграции 053).
+    id: "054_chat_sessions",
+    description:
+      "Живая онлайн-сессия Пи на (чат, роль): chat_sessions(chat_id, role_id, " +
+      "pi_session_id, updated_at) — одна строка на пару, FK на chats, без " +
+      "привязки к задаче или попытке. Аддитивно; на tasks/attempts/agent_state " +
+      "не влияет.",
+    up: () => {
+      // Идемпотентно: пересборка стартует миграцию с уже возможной
+      // таблицей, и CREATE IF NOT EXISTS проходит как no-op.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+          chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+          role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          pi_session_id TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (chat_id, role_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_chat
+          ON chat_sessions(chat_id);
+      `);
+    },
+  },
+  {
+    // 21.09.2026 (список чатов по образцу Teams, LOCK-195).
+    //
+    // Бейдж непрочитанных в списке чатов. У старых каналов отметка прочтения
+    // одна на пользователя (chat_reads.last_read_at), но чаты — отдельная ось,
+    // и у каждого чата свой счётчик. Поэтому отметка живёт на УЧАСТНИКЕ чата,
+    // а не на пользователе: один и тот же человек в разных чатах прочитал
+    // разное.
+    //
+    // Аддитивно: новая колонка в существующей chat_members. Старые каналы
+    // owner/agents, автоматика и карточки о ней не знают.
+    //
+    // Дефолт — КОНСТАНТА, а не datetime('now'): SQLite не принимает
+    // неконстантный DEFAULT в ALTER TABLE ADD COLUMN. Поэтому существующим
+    // участникам отметка сразу выставляется в «сейчас»: на момент появления
+    // колонки вся прежняя переписка считается прочитанной, иначе владелец
+    // получил бы бейджи на чаты, которые уже читал.
+    id: "055_chat_members_last_read_at",
+    description:
+      "chat_members.last_read_at — отметка прочтения на участнике чата (бейдж " +
+      "непрочитанных в списке чатов). Аддитивно, старые каналы не затронуты.",
+    up: () => {
+      const cols = new Set(
+        (
+          db.prepare("PRAGMA table_info(chat_members)").all() as Array<{
+            name: string;
+          }>
+        ).map((c) => c.name),
+      );
+      if (cols.has("last_read_at")) return; // уже добавлена
+      db.exec(`
+        ALTER TABLE chat_members
+          ADD COLUMN last_read_at TEXT NOT NULL DEFAULT '1970-01-01 00:00:00';
+        UPDATE chat_members SET last_read_at = datetime('now');
+      `);
+    },
+  },
+  {
+    // Роли — данные, а не код (владелец 23.09.2026). Посев — нынешние семь
+    // ролей (Синтезатор убран 23.09.2026). Модели ролей остаются в
+    // scripts/role-routing.yaml: с ним работают экран моделей и скрипты.
+    id: "056_roles",
+    description:
+      "roles — справочник ролей исполнителей: ключ, название, «чем занимается» " +
+      "(строка для Секретаря), включена ли, порядок. Заменяет список в коде.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS roles (
+          key TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          position INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+        INSERT OR IGNORE INTO roles (key, title, summary, enabled, position) VALUES
+          ('researcher', 'Исследователь', 'узнать, найти, сравнить варианты вне нашего кода и свести найденное в выводы или документ.', 1, 0),
+          ('analyst', 'Аналитик', 'посчитать цифры, метрики, деньги.', 1, 1),
+          ('critic_verifier', 'Критик-проверяющий', 'проверить готовую работу и вынести вердикт.', 1, 2),
+          ('architect', 'Архитектор', 'продумать устройство системы до кода, когда решений несколько.', 1, 3),
+          ('builder', 'Разработчик', 'пишет и чинит код: сервер, приложение, веб. «Сделать, чтобы работало».', 1, 4),
+          ('qa', 'QA', 'прогнать сценарии и найти баги.', 1, 5),
+          ('designer', 'Дизайнер', 'как выглядит: макет, экран, отступы, цвета. Не пишет серверную логику.', 1, 6);
+      `);
+    },
+  },
+  {
+    // Экран «Команда» (23.09.2026): инструкция новой роли — данные, а не
+    // файл в scripts/role-prompts. Пустая колонка — читается прежний файл.
+    id: "057_roles_prompt",
+    description: "roles.prompt — инструкция роли; NULL — файл scripts/role-prompts/<ключ>.md.",
+    up: () => {
+      const cols = db.prepare("PRAGMA table_info(roles)").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "prompt")) {
+        db.exec("ALTER TABLE roles ADD COLUMN prompt TEXT");
+      }
+    },
+  },
+  {
+    id: "058_role_account_authority",
+    description:
+      "users.role_key связывает каноническую AI-учётку с бизнес-ролью; " +
+      "users.role остаётся authority agent, reserved keys и небезопасные связи блокируются БД.",
+    up: () => runRoleAccountSecurityMigration(),
+  },
+  {
+    id: "059_role_run_jobs",
+    description:
+      "Durable-очередь автоматических запусков ролей: idempotency key, " +
+      "атомарный claim, lease, retry/dead и recovery после рестарта.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS role_run_jobs (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          reason TEXT NOT NULL
+            CHECK (reason IN ('assigned', 'commented', 'review', 'after_run')),
+          actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          dedupe_key TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL DEFAULT 'queued'
+            CHECK (status IN (
+              'queued', 'running', 'retry_wait', 'succeeded',
+              'skipped', 'dead', 'cancelled'
+            )),
+          attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+          max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts BETWEEN 1 AND 10),
+          available_at TEXT NOT NULL DEFAULT (datetime('now')),
+          lease_owner TEXT,
+          lease_expires_at TEXT,
+          last_error TEXT,
+          started_at TEXT,
+          finished_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (
+            status <> 'running'
+            OR (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+          )
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_role_run_jobs_ready
+          ON role_run_jobs(status, available_at, created_at);
+        CREATE INDEX IF NOT EXISTS idx_role_run_jobs_task_status
+          ON role_run_jobs(task_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_role_run_jobs_lease
+          ON role_run_jobs(status, lease_expires_at)
+          WHERE status = 'running';
+      `);
+    },
+  },
+  {
+    id: "060_role_run_job_chain",
+    description:
+      "Durable-глубина C3 continuation и уникальный active lease на задачу.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(role_run_jobs)").all() as Array<{ name: string }>).map(
+          (column) => column.name,
+        ),
+      );
+      if (!cols.has("chain_depth")) {
+        db.exec(
+          "ALTER TABLE role_run_jobs ADD COLUMN chain_depth INTEGER NOT NULL DEFAULT 0 CHECK (chain_depth BETWEEN 0 AND 3)",
+        );
+      }
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_role_run_jobs_running_task
+          ON role_run_jobs(task_id)
+          WHERE status = 'running';
+      `);
+    },
+  },
 ];
 
 /**
@@ -1676,6 +2288,15 @@ export interface RunMigrationsOptions {
 
 /** Apply all still-unapplied migrations, one transaction per migration. */
 export function runMigrations(options?: RunMigrationsOptions): void {
+  try {
+    runMigrationsInner(options);
+  } finally {
+    // Состав ролей живёт в таблице roles — после миграций перечитать.
+    refreshRoles();
+  }
+}
+
+function runMigrationsInner(options?: RunMigrationsOptions): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,

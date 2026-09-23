@@ -36,8 +36,9 @@ import { isOwner } from "../access.js";
 import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
 import { isServiceUser } from "./agent-state.js";
-import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
+import { ROLE_NAMES, roleTitle, roleUserId, type RoleName } from "../roleRouting.js";
 import { getTaskRow, hydrateTask } from "./tasks.js";
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -49,17 +50,6 @@ const uid = () => crypto.randomUUID();
 // остаётся чисто внутренней механикой: наружу имя процесса не выходит,
 // `assignee_id` всегда идёт на конкретного role-юзера. Это закрывает
 // 14.09.2026: «В системе нет никакого „Pi“».
-const ROLE_USER_IDS: Record<RoleName, string> = {
-  researcher: "role_researcher",
-  analyst: "role_analyst",
-  synthesizer: "role_synthesizer",
-  critic_verifier: "role_critic_verifier",
-  architect: "role_architect",
-  builder: "role_builder",
-  qa: "role_qa",
-  designer: "role_designer",
-};
-
 // Запасная роль — на случай, когда подобрать не удалось: семантика не
 // ответила (Ollama недоступна) или вернула пусто. Не «роль по умолчанию
 // для всех», а именно запасной вариант: до 14.09.2026 сюда попадало ВСЁ,
@@ -194,17 +184,6 @@ export async function pickRole(
 
 /** Человеческие имена ролей — владелец читает ленту, а не наши
  *  идентификаторы. Порядок и состав — раздел 4.2 спецификации. */
-const ROLE_TITLES_RU: Record<string, string> = {
-  researcher: "Исследователь",
-  analyst: "Аналитик",
-  synthesizer: "Синтезатор",
-  critic_verifier: "Критик-проверяющий",
-  architect: "Архитектор",
-  builder: "Разработчик",
-  qa: "QA",
-  designer: "Дизайнер",
-};
-
 /** Строка для ленты: какая роль и почему именно она. */
 export function roleChoiceNoteRu(choice: RoleChoice): string {
   if (choice.how === "dead" || choice.role === null) {
@@ -212,7 +191,7 @@ export function roleChoiceNoteRu(choice: RoleChoice): string {
     // ленты — отдельная ветка нужна, чтобы «имя» не упало на null.
     return "Подобрать роль не удалось — все кандидаты исключены.";
   }
-  const имя = ROLE_TITLES_RU[choice.role] || choice.role;
+  const имя = roleTitle(choice.role);
   if (choice.how === "owner") {
     return `Роль «${имя}» — выбрана вами.`;
   }
@@ -256,7 +235,13 @@ export type DispatchOutcome =
 export async function dispatchTaskToPi(
   taskId: string,
   actorId: string,
+  // `system` — раздачу сделала автоматика, а не человек: в ленте она
+  // подписывается «Система», а не владельцем (владелец 22.09.2026: «надо
+  // писать, кто это делает»). Уведомление исполнителю по-прежнему идёт от
+  // actorId — по нему будильник ловит назначение.
+  opts: { system?: boolean } = {},
 ): Promise<DispatchOutcome> {
+  const eventActor = opts.system ? null : actorId;
   const task = db
     .prepare("SELECT * FROM tasks WHERE id = ?")
     .get(taskId) as any;
@@ -354,11 +339,11 @@ export async function dispatchTaskToPi(
               dispatched_by = ?,
               updated_at = datetime('now')
         WHERE id = ?`,
-    ).run(ROLE_USER_IDS[chosen], chosen, actorId, taskId);
+    ).run(roleUserId(chosen), chosen, actorId, taskId);
 
     logEvent({
       taskId,
-      actorId,
+      actorId: eventActor,
       kind: "task_dispatched",
       field: "dispatched_role",
       fromValue: previousRole,
@@ -373,7 +358,7 @@ export async function dispatchTaskToPi(
     // ушла именно туда, и спорный выбор нечем заметить.
     logEvent({
       taskId,
-      actorId,
+      actorId: eventActor,
       kind: "role_choice",
       field: "dispatched_role",
       fromValue: null,
@@ -387,7 +372,7 @@ export async function dispatchTaskToPi(
        VALUES (?, ?, 'assigned', ?, ?, ?)`,
     ).run(
       notifId,
-      ROLE_USER_IDS[chosen],
+      roleUserId(chosen),
       taskId,
       `Новая задача назначена: ${(latest.title || taskId).slice(0, 200)}`,
       actorId,
@@ -403,13 +388,22 @@ export async function dispatchTaskToPi(
     ).run(
       inboxId,
       `dispatch-${inboxId}`,
-      ROLE_USER_IDS[chosen],
+      roleUserId(chosen),
       `Вам назначена задача «${(latest.title || taskId).slice(0, 120)}» (роль ${chosen}).`,
       taskId,
       Number(latest.current_revision ?? 1),
     );
 
-    broadcastToUsers([ROLE_USER_IDS[chosen]], {
+    // Назначение и повод запуска — одна SQLite-транзакция. Если процесс
+    // упадёт после commit, durable worker подберёт job после рестарта.
+    enqueueRoleRunJob({
+      taskId,
+      reason: "assigned",
+      actorId,
+      dedupeKey: `dispatch:${inboxId}`,
+    });
+
+    broadcastToUsers([roleUserId(chosen)], {
       type: "notification:new",
       notificationId: notifId,
       taskId,
@@ -498,9 +492,81 @@ export async function applyIntakeToNewTask(
     db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE parent_id = ?").get(taskId) as any
   )?.n;
   if (hasChildren) return;
-  if (task.assignee_id) return;
+  // Назначенный исполнитель раньше означал полный выход — и карточка,
+  // заведённая сразу с исполнителем, проходила мимо приёма целиком: без
+  // флага, а значит и без возможности взять её в работу. Чужое назначение
+  // мы по-прежнему не трогаем, но это про подбор роли и раздачу; режим
+  // владельца должен действовать одинаково, кем бы карточка ни была
+  // заведена и с исполнителем она или без.
+  const assigneeAlreadySet = Boolean(task.assignee_id);
 
-  if (!task.owner_selected_role) {
+  // Владелец 19.09.2026: автоназначение роли привязано к БУДИЛЬНИКУ.
+  // Выключен — назначать некому и незачем (никого не разбудят); тогда
+  // карточка не получает ни подбора роли, ни раздачи, только флаг
+  // (если режим автоматический), чтобы её взяли руками.
+  const { unitState } = await import("./agent-service.js");
+  const alarmOn = (await unitState()).active;
+
+  // Тот же подбор, что у Секретаря (23.09.2026): модель читает карточку и
+  // говорит, кто её делает, почему и где. Личное дело остаётся владельцу —
+  // без флага и раздачи, как у постановки Секретаря.
+  const exclusions = parseRoleExclusions(task.role_exclusions);
+  let modelPick: Awaited<ReturnType<typeof import("./ai.js").pickRoleByModel>> = null;
+  if (!assigneeAlreadySet && !task.owner_selected_role) {
+    const { pickRoleByModel } = await import("./ai.js");
+    const steps = (
+      db
+        .prepare("SELECT title FROM subtasks WHERE task_id = ? ORDER BY position")
+        .all(taskId) as Array<{ title: string }>
+    ).map((r) => r.title);
+    modelPick = await pickRoleByModel(
+      { title: task.title ?? "", description: task.description, subtasks: steps },
+      ownerId,
+    );
+    if (modelPick?.where === "личное") {
+      db.prepare(
+        "UPDATE tasks SET assignee_id = ?, updated_at = datetime('now') WHERE id = ? AND assignee_id IS NULL",
+      ).run(ownerId, taskId);
+      logEvent({
+        taskId,
+        actorId: null,
+        kind: "role_choice",
+        field: "assignee_id",
+        toValue: "Личное дело — делаете вы, агентам не отдаётся.",
+      });
+      return;
+    }
+    if (modelPick?.where) {
+      const { whereLine } = await import("../lib/ownerDraft.js");
+      db.prepare(
+        `UPDATE tasks
+            SET description = CASE WHEN description IS NULL OR description = ''
+                                   THEN ? ELSE description || char(10) || char(10) || ? END
+          WHERE id = ?`,
+      ).run(whereLine(modelPick.where), whereLine(modelPick.where), taskId);
+    }
+  }
+
+  if (
+    alarmOn &&
+    !assigneeAlreadySet &&
+    !task.owner_selected_role &&
+    modelPick?.role &&
+    !exclusions.includes(modelPick.role)
+  ) {
+    db.prepare(
+      `UPDATE tasks SET machine_selected_role = ?, updated_at = datetime('now')
+        WHERE id = ? AND assignee_id IS NULL`,
+    ).run(modelPick.role, taskId);
+    const reason = modelPick.roleReason ? ` — ${modelPick.roleReason}` : "";
+    logEvent({
+      taskId,
+      actorId: null,
+      kind: "role_choice",
+      field: "machine_selected_role",
+      toValue: `Роль «${roleTitle(modelPick.role)}» подобрана по сути работы${reason}.`,
+    });
+  } else if (alarmOn && !assigneeAlreadySet && !task.owner_selected_role) {
     // Подбираем роль и пишем в machine_selected_role. Роутер НИКОГДА не
     // пишет в owner_selected_role — это поле только владельца
     // (см. taskflow-pipeline-head-plan.md, шаг 1).
@@ -508,7 +574,7 @@ export async function applyIntakeToNewTask(
       taskId,
       task.owner_selected_role,
       task.machine_selected_role,
-      parseRoleExclusions(task.role_exclusions),
+      exclusions,
     );
     if (choice.how === "dead" || choice.role === null) {
       // Кандидатов нет — задача в тупике. Планировщик (шаг 4) увидит
@@ -525,7 +591,7 @@ export async function applyIntakeToNewTask(
       );
       logEvent({
         taskId,
-        actorId,
+        actorId: null,
         kind: "field_changed",
         field: "block_type",
         toValue: "dead",
@@ -537,7 +603,7 @@ export async function applyIntakeToNewTask(
       ).run(choice.role, taskId);
       logEvent({
         taskId,
-        actorId,
+        actorId: null,
         kind: "field_changed",
         field: "machine_selected_role",
         toValue: roleChoiceNoteRu(choice),
@@ -551,7 +617,7 @@ export async function applyIntakeToNewTask(
   // требует флага.
   if (mode !== "automatic") return;
 
-  db.prepare(
+  const flagged = db.prepare(
     `UPDATE tasks
         SET ready_for_pickup = 1,
             ready_set_at = datetime('now'),
@@ -559,7 +625,134 @@ export async function applyIntakeToNewTask(
             updated_at = datetime('now')
       WHERE id = ? AND ready_for_pickup = 0`,
   ).run(ownerId, taskId);
-  await dispatchTaskToPi(taskId, ownerId);
+  // Раньше флаг здесь ставился молча — в ленте не было видно, когда и кем
+  // карточка отмечена готовой. Ставит его система, не владелец.
+  if (flagged.changes > 0) {
+    logEvent({
+      taskId,
+      actorId: null,
+      kind: "ready_flag_changed",
+      field: "ready_for_pickup",
+      fromValue: "0",
+      toValue: "1",
+    });
+  }
+  // Раздача (проставление исполнителя) — только когда будильник жив:
+  // назначить агента, которого некому разбудить, смысла нет.
+  // Раздача — только для карточки без исполнителя: dispatchTaskToPi и сам
+  // откажется отдавать чужую работу, но звать его впустую незачем.
+  if (alarmOn && !assigneeAlreadySet) await dispatchTaskToPi(taskId, ownerId, { system: true });
+}
+
+/**
+ * Родитель со СВОИМИ пунктами тоже исполняется — после дочерних.
+ *
+ * Владелец 22.09.2026: секретарь завёл родителя с двумя дочерними и пунктом
+ * у самого родителя («проверить интеграцию…»). Приём флаг родителю не
+ * ставит (он контейнер, см. applyIntakeToNewTask), и пункт некому было
+ * выполнить — владелец поднял флаг руками, когда обе дочерние сдали работу.
+ * Теперь это делает сервер: как только ВСЕ дочерние на проверке или
+ * закрыты, а у родителя есть невыполненные пункты, родитель получает флаг
+ * и уходит исполнителю — тем же путём, что и при создании.
+ *
+ * Только в автоматическом режиме: в ручном флаг — решение владельца.
+ * Родитель без своих пунктов не трогается: делать ему нечего, он сам уйдёт
+ * на проверку сводкой, когда дочерние закроют (routes/tasks.ts).
+ *
+ * Вызывается после каждого перехода дочерней в review / completed. Не
+ * бросает: это следствие чужого перехода, а не его часть.
+ */
+export async function admitParentAfterChildren(
+  childTaskId: string,
+): Promise<boolean> {
+  const child = db
+    .prepare("SELECT parent_id FROM tasks WHERE id = ?")
+    .get(childTaskId) as { parent_id: string | null } | undefined;
+  const parentId = child?.parent_id;
+  if (!parentId) return false;
+
+  const ownerRow = db
+    .prepare(
+      "SELECT id, task_intake_mode FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+    )
+    .get() as { id: string; task_intake_mode?: string } | undefined;
+  if (!ownerRow || ownerRow.task_intake_mode !== "automatic") return false;
+
+  const parent = db
+    .prepare(
+      "SELECT id, status, ready_for_pickup, agent_state, assignee_id FROM tasks WHERE id = ?",
+    )
+    .get(parentId) as
+    | {
+        id: string;
+        status: string;
+        ready_for_pickup: number | null;
+        agent_state: string | null;
+        assignee_id: string | null;
+      }
+    | undefined;
+  if (!parent || parent.status !== "active") return false;
+  if ((parent.ready_for_pickup ?? 0) === 1 || parent.agent_state) return false;
+  // Родитель — личное дело владельца: его пункты делает он сам.
+  if (parent.assignee_id === ownerRow.id) return false;
+
+  const openSteps = (
+    db
+      .prepare("SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ? AND done = 0")
+      .get(parentId) as { n: number }
+  ).n;
+  if (!openSteps) return false;
+
+  const children = db
+    .prepare("SELECT status, agent_state FROM tasks WHERE parent_id = ?")
+    .all(parentId) as Array<{ status: string; agent_state: string | null }>;
+  const allSubmitted =
+    children.length > 0 &&
+    children.every((c) => c.status === "completed" || c.agent_state === "review");
+  if (!allSubmitted) return false;
+
+  const raised = db.transaction(() => {
+    const r = db
+      .prepare(
+        `UPDATE tasks
+            SET ready_for_pickup = 1,
+                ready_set_at = datetime('now'),
+                ready_set_by = ?,
+                updated_at = datetime('now')
+          WHERE id = ? AND ready_for_pickup = 0`,
+      )
+      .run(ownerRow.id, parentId);
+    if (r.changes > 0) {
+      logEvent({
+        taskId: parentId,
+        actorId: null,
+        kind: "ready_flag_changed",
+        field: "ready_for_pickup",
+        fromValue: "0",
+        toValue: "1",
+      });
+    }
+    return r.changes > 0;
+  })();
+  if (!raised) return false;
+
+  // Раздача — как при создании: только без исполнителя и при живом
+  // будильнике (назначать агента, которого некому разбудить, незачем).
+  if (!parent.assignee_id) {
+    const { unitState } = await import("./agent-service.js");
+    if ((await unitState()).active) {
+      const outcome = await dispatchTaskToPi(parentId, ownerRow.id, {
+        system: true,
+      });
+      if (!outcome.ok) {
+        console.warn(
+          `родитель ${parentId}: флаг поднят, отдать не удалось:`,
+          outcome.error,
+        );
+      }
+    }
+  }
+  return true;
 }
 
 export async function releaseQueuedSuccessors(
@@ -599,7 +792,9 @@ export async function releaseQueuedSuccessors(
     if ((sibling.ready_for_pickup ?? 0) !== 1) continue;
     if (sibling.assignee_id) continue;
 
-    const outcome = await dispatchTaskToPi(sibling.id, actorId);
+    const outcome = await dispatchTaskToPi(sibling.id, actorId, {
+      system: true,
+    });
     if (outcome.ok) {
       released += 1;
     } else {

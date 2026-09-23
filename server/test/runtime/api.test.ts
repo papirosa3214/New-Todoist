@@ -36,7 +36,7 @@ describe("runtime API — status, profiles, models", () => {
     expect(res.json()).toMatchObject({ runtime: { id: "runtime:pi", kind: "pi" } });
   });
 
-  it("GET /api/runtime/profiles returns 8 profiles", async () => {
+  it("GET /api/runtime/profiles returns 7 profiles", async () => {
     const res = await app.inject({
       method: "GET",
       url: "/api/runtime/profiles",
@@ -44,7 +44,7 @@ describe("runtime API — status, profiles, models", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { profiles: Array<{ id: string; runtime_id: string }> };
-    expect(body.profiles).toHaveLength(8);
+    expect(body.profiles).toHaveLength(7);
     expect(body.profiles[0].runtime_id).toBe("runtime:pi");
   });
 

@@ -2,18 +2,99 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse, stringify } from "yaml";
 
-export const ROLE_NAMES = [
-  "researcher",
-  "analyst",
-  "synthesizer",
-  "critic_verifier",
-  "architect",
-  "builder",
-  "qa",
-  "designer",
-] as const;
+import db from "./db.js";
 
-export type RoleName = (typeof ROLE_NAMES)[number];
+/**
+ * Роли — ДАННЫЕ, а не код (владелец 23.09.2026: «почему всё так зашито,
+ * неужели так сложно добавить или удалить агента»). Источник правды —
+ * таблица `roles` (миграция 056): ключ, название, «чем занимается» (строка
+ * для Секретаря), включена ли, порядок.
+ *
+ * `ROLE_NAMES` — ЖИВОЙ список включённых ролей: тот же массив, который
+ * `refreshRoles()` переписывает на месте, поэтому все старые проверки
+ * `ROLE_NAMES.includes(x)` работают без правок. Учётка роли — `role_<ключ>`.
+ */
+export type RoleName = string;
+
+export type RoleRecord = {
+  key: string;
+  title: string;
+  summary: string;
+  enabled: boolean;
+  position: number;
+};
+
+/** Начальный состав — до миграции 056 (свежая база в тестах) и для её посева. */
+export const DEFAULT_ROLES: ReadonlyArray<{ key: string; title: string; summary: string }> = [
+  { key: "researcher", title: "Исследователь", summary: "узнать, найти, сравнить варианты вне нашего кода и свести найденное в выводы или документ." },
+  { key: "analyst", title: "Аналитик", summary: "посчитать цифры, метрики, деньги." },
+  { key: "critic_verifier", title: "Критик-проверяющий", summary: "проверить готовую работу и вынести вердикт." },
+  { key: "architect", title: "Архитектор", summary: "продумать устройство системы до кода, когда решений несколько." },
+  { key: "builder", title: "Разработчик", summary: "пишет и чинит код: сервер, приложение, веб. «Сделать, чтобы работало»." },
+  { key: "qa", title: "QA", summary: "прогнать сценарии и найти баги." },
+  { key: "designer", title: "Дизайнер", summary: "как выглядит: макет, экран, отступы, цвета. Не пишет серверную логику." }
+];
+
+export const ROLE_NAMES: string[] = DEFAULT_ROLES.map((r) => r.key);
+let registry: RoleRecord[] = DEFAULT_ROLES.map((r, i) => ({ ...r, enabled: true, position: i }));
+
+/** Перечитать роли из таблицы. Таблицы ещё нет — остаётся начальный состав. */
+export function refreshRoles(): void {
+  try {
+    const rows = db
+      .prepare("SELECT key, title, summary, enabled, position FROM roles ORDER BY position, key")
+      .all() as Array<{ key: string; title: string; summary: string; enabled: number; position: number }>;
+    registry = rows.map((r) => ({ ...r, enabled: r.enabled === 1 }));
+    ROLE_NAMES.splice(0, ROLE_NAMES.length, ...registry.filter((r) => r.enabled).map((r) => r.key));
+  } catch {
+    // таблицы roles ещё нет — до миграции 056
+  }
+}
+
+/** Все роли, включая отключённые (для экрана «Команда»). */
+export function allRoles(): RoleRecord[] {
+  return registry.map((r) => ({ ...r }));
+}
+
+export function roleTitle(key: string): string {
+  return registry.find((r) => r.key === key)?.title ?? key;
+}
+
+export function roleUserId(key: string): string {
+  return `role_${key}`;
+}
+
+const ROLE_PROMPTS_DIR = path.resolve(
+  process.env.TASKFLOW_ROLE_PROMPTS_DIR ??
+    path.join(process.cwd(), "scripts", "role-prompts"),
+);
+
+/** Инструкция роли: колонка roles.prompt, а пустая — прежний файл
+ *  scripts/role-prompts/<ключ>.md. Нет ни того, ни другого — null. */
+export function rolePromptText(key: string): string | null {
+  try {
+    const row = db.prepare("SELECT prompt FROM roles WHERE key = ?").get(key) as
+      { prompt: string | null } | undefined;
+    if (row?.prompt?.trim()) return row.prompt;
+  } catch {
+    // колонки ещё нет — до миграции 057
+  }
+  try {
+    return fs.readFileSync(path.join(ROLE_PROMPTS_DIR, `${key}.md`), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Раздел «Исполнители» для Секретаря — из таблицы, включённые роли. */
+export function rolesPromptBlock(): string {
+  return registry
+    .filter((r) => r.enabled)
+    .map((r) => `- ${r.key} — ${r.summary}`)
+    .join("\n");
+}
+
+refreshRoles();
 
 export type RoleRouting = {
   defaults: Record<RoleName, string>;
@@ -60,11 +141,9 @@ function roleSection(
 ): Record<RoleName, unknown> {
   const value = document[name];
   if (!isRecord(value)) throw new Error(`role-routing: ${name} должен быть mapping`);
-  const expected = new Set<string>(ROLE_NAMES);
-  const actual = new Set(Object.keys(value));
-  if (actual.size !== expected.size || [...expected].some((role) => !actual.has(role))) {
-    throw new Error(`role-routing: ${name} должен содержать все роли`);
-  }
+  // С 23.09.2026 состав ролей задаёт таблица roles, а не этот файл: новой
+  // роли в файле может ещё не быть — ниже ей подставляются значения по
+  // умолчанию; лишние ключи (отключённые роли) не мешают.
   return value as Record<RoleName, unknown>;
 }
 
@@ -91,7 +170,17 @@ export function loadRuntimeConfig(fileName = ROLE_ROUTING_FILE): RoleRouting {
   const models = roleSection(document, "models") as Record<RoleName, string>;
   const fallbacks = {} as Record<RoleName, string[]>;
 
+  // Модель по умолчанию для роли, которой ещё нет в файле, — самая частая
+  // среди уже настроенных; поменять её можно на экране моделей.
+  const counts = new Map<string, number>();
+  for (const m of Object.values(models)) {
+    if (typeof m === "string" && m.trim()) counts.set(m, (counts.get(m) ?? 0) + 1);
+  }
+  const defaultModel = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "MiniMax-M3";
   for (const role of ROLE_NAMES) {
+    if (defaults[role] === undefined) defaults[role] = "pi_runtime";
+    if (models[role] === undefined) models[role] = defaultModel;
+    if (rawFallbacks[role] === undefined) rawFallbacks[role] = [];
     if (typeof defaults[role] !== "string" || !defaults[role].trim()) {
       throw new Error(`role-routing: defaults.${role} должен быть непустой строкой`);
     }
@@ -182,8 +271,8 @@ export function nextModelForProfile(
   role: string,
   currentModel: string,
 ): ModelRoute | null {
-  if (!ROLE_NAMES.includes(role as RoleName)) return null;
-  const typedRole = role as RoleName;
+  if (!ROLE_NAMES.includes(role)) return null;
+  const typedRole = role;
   const chain = [config.models[typedRole], ...config.fallbacks[typedRole]];
   const idx = chain.indexOf(currentModel);
   for (const candidate of chain.slice(idx + 1)) {

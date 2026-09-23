@@ -26,9 +26,34 @@ import { getTaskForWrite } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { hydrateTask, getTaskRow } from "./tasks.js";
 
-export type ActivityKind = "read" | "edit" | "search" | "run";
+export type ActivityKind =
+  | "read"
+  | "edit"
+  | "write"
+  | "search"
+  | "run"
+  | "think"
+  | "web"
+  | "image"
+  | "test"
+  | "build"
+  | "git"
+  | "attach";
 
-const KINDS: ActivityKind[] = ["read", "edit", "search", "run"];
+const KINDS: ActivityKind[] = [
+  "read",
+  "edit",
+  "write",
+  "search",
+  "run",
+  "think",
+  "web",
+  "image",
+  "test",
+  "build",
+  "git",
+  "attach",
+];
 
 /** Сколько действий помним на задачу — хватает на раскрывающийся список. */
 const RING = 50;
@@ -124,14 +149,36 @@ function shortPath(p: string): string {
  */
 function verbFor(a: Action): string {
   const t = a.target.toLowerCase();
-  if (a.kind === "search") return "ищет";
-  if (a.kind === "edit") return "правит";
-  if (a.kind === "run") {
-    const c = (a.detail || a.target).toLowerCase();
-    if (/\b(test|vitest|jest|pytest)\b/.test(c)) return "проверяет";
-    if (/^git\b/.test(c)) return "сверяет историю";
-    if (/\b(build|tsc|vite)\b/.test(c)) return "собирает";
-    return "запускает";
+  switch (a.kind) {
+    case "search":
+      return "ищет";
+    case "edit":
+      return "правит";
+    case "write":
+      return "создаёт";
+    case "think":
+      return "обдумывает";
+    case "web":
+      return "смотрит в сети";
+    case "image":
+      return "разглядывает картинку";
+    case "test":
+      return "прогоняет тесты";
+    case "build":
+      return "собирает";
+    case "git":
+      return "работает с историей";
+    case "attach":
+      return "прикладывает";
+    case "run": {
+      const c = (a.detail || a.target).toLowerCase();
+      if (/\b(test|vitest|jest|pytest)\b/.test(c)) return "проверяет";
+      if (/^git\b/.test(c)) return "сверяет историю";
+      if (/\b(build|tsc|vite)\b/.test(c)) return "собирает";
+      return "запускает";
+    }
+    default:
+      break;
   }
   if (/\.test\.[tj]sx?$/.test(t)) return "проверяет поведение";
   if (/\.md$/.test(t)) return "сверяется с документацией";
@@ -333,7 +380,7 @@ const WATCH_TTL_MS = 45_000;
  * символов из тикета, чтобы не резать честный ответ впритык. */
 const OBSERVER_MAX_CHARS = 70;
 
-const OBSERVER_SYSTEM_PROMPT =
+export const OBSERVER_SYSTEM_PROMPT =
   "Ты наблюдаешь за работой ИИ-агента над задачей в трекере. По названию " +
   "задачи, текущему шагу и списку последних технических действий выдай " +
   "ОДНУ короткую фразу по-русски (до 60 символов) о том, ЗАЧЕМ агент это " +
@@ -384,6 +431,23 @@ async function interpretOnce(): Promise<void> {
 
     const recent = entry.actions.slice(-8);
     const step = runningStepTitle(task);
+
+    // Пользовательский промпт владельца для расшифровки (scope 'activity').
+    // Пусто/нет строки — работаем штатным серверным, как раньше. Смысл
+    // промпта — стиль и акцент фразы; решение «что делать» он не меняет.
+    let observerSystem = OBSERVER_SYSTEM_PROMPT;
+    try {
+      const row = db
+        .prepare(
+          "SELECT prompt FROM user_ai_prompts WHERE user_id = ? AND scope = 'activity'",
+        )
+        .get(task.creator_id) as { prompt?: string } | undefined;
+      const custom = (row?.prompt || "").trim();
+      if (custom) observerSystem = custom;
+    } catch {
+      // нет таблицы/строки — не повод терять расшифровку, остаёмся на штатном
+    }
+
     const userPrompt =
       `Задача: ${task.title}\n` +
       (step ? `Текущий шаг: ${step}\n` : "") +
@@ -395,7 +459,7 @@ async function interpretOnce(): Promise<void> {
       body: JSON.stringify({
         model: OBSERVER_MODEL,
         messages: [
-          { role: "system", content: OBSERVER_SYSTEM_PROMPT },
+          { role: "system", content: observerSystem },
           { role: "user", content: userPrompt },
         ],
         stream: false,
@@ -479,7 +543,7 @@ export function registerActivityRoutes(app: FastifyInstance) {
 
       const kind = String(req.body?.kind || "") as ActivityKind;
       if (!KINDS.includes(kind)) {
-        return reply.code(400).send({ error: "kind: read|edit|search|run" });
+        return reply.code(400).send({ error: `kind: ${KINDS.join("|")}` });
       }
       const rawTarget = String(req.body?.target || "").trim();
       if (!rawTarget)

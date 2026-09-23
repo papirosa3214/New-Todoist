@@ -20,9 +20,9 @@ describe("role catalog API", () => {
     ).run();
     db.prepare(
       `INSERT OR IGNORE INTO users
-         (id, name, email, password_hash, role, type, is_system_bot)
-       VALUES ('role_architect_api_test', 'Architect API test',
-               'architect-api-test@taskflow.local', 'hash', 'architect', 'ai', 1)`,
+         (id, name, email, password_hash, role, role_key, type, is_system_bot)
+       VALUES ('role_architect', 'Architect API test',
+               'architect-api-test@taskflow.local', 'hash', 'agent', 'architect', 'ai', 1)`,
     ).run();
     db.prepare(
       `INSERT OR IGNORE INTO role_skills (role, skill_name, description)
@@ -53,7 +53,7 @@ describe("role catalog API", () => {
       },
     });
     agentId = agent.json().user.id;
-    db.prepare("UPDATE users SET type = 'ai', role = 'architect' WHERE id = ?").run(
+    db.prepare("UPDATE users SET type = 'ai', role = 'agent' WHERE id = ?").run(
       agentId,
     );
     agentToken = (
@@ -69,18 +69,17 @@ describe("role catalog API", () => {
     await app.close();
   });
 
-  it("lists eight roles and returns Architect details", async () => {
+  it("lists seven roles and returns Architect details", async () => {
     const list = await app.inject({
       method: "GET",
       url: "/api/roles",
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(list.statusCode).toBe(200);
-    expect(list.json().roles).toHaveLength(8);
+    expect(list.json().roles).toHaveLength(7);
     expect(list.json().roles.map((role: { role: string }) => role.role)).toEqual([
       "researcher",
       "analyst",
-      "synthesizer",
       "critic_verifier",
       "architect",
       "builder",
@@ -112,12 +111,12 @@ describe("role catalog API", () => {
   it("returns a role for a role account and null for a shell account", async () => {
     const role = await app.inject({
       method: "GET",
-      url: "/api/agents/role_architect_api_test/role",
+      url: "/api/agents/role_architect/role",
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(role.statusCode).toBe(200);
     expect(role.json()).toMatchObject({
-      agent_id: "role_architect_api_test",
+      agent_id: "role_architect",
       role: "architect",
     });
 

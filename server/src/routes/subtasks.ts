@@ -18,6 +18,7 @@ import {
 import { withSubtaskState, getTaskRow } from "./tasks.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks } from "../resultVersions.js";
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -414,6 +415,11 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
                 fromValue: "in_progress",
                 toValue: "review",
               });
+
+              // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
+              void import("./dispatch.js")
+                .then((m) => m.admitParentAfterChildren(parentTask.id))
+                .catch((err) => console.warn("родитель после дочерней:", err));
             }
           }
         }
@@ -734,9 +740,22 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "text required" });
 
       const id = uid();
-      db.prepare(
-        "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
-      ).run(id, req.params.taskId, req.userId, req.body.text ?? "");
+      db.transaction(() => {
+        db.prepare(
+          "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
+        ).run(id, req.params.taskId, req.userId, req.body.text ?? "");
+        if (
+          String(task.assignee_id ?? "").startsWith("role_") &&
+          task.assignee_id !== req.userId
+        ) {
+          enqueueRoleRunJob({
+            taskId: req.params.taskId,
+            reason: "commented",
+            actorId: req.userId,
+            dedupeKey: `comment:${id}`,
+          });
+        }
+      })();
 
       // Комментарий агента — это признак жизни, а не только текст.
       //

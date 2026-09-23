@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useTasks } from "../api/tasks";
 import {
   useProjects,
   useCreateProject,
@@ -21,11 +22,12 @@ import type { ApiProject } from "../api/types";
 function ProjectRow({
   project,
   onRequestDelete,
+  onOpen,
 }: {
   project: ApiProject;
   onRequestDelete: (project: ApiProject) => void;
+  onOpen: () => void;
 }) {
-  const navigate = useNavigate();
   const updateProject = useUpdateProject();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(project.name);
@@ -162,7 +164,7 @@ function ProjectRow({
           а замены не дали. rounded-l-xl — чтобы заливка отклика не
           квадратила левый скруглённый угол карточки строки. */}
         <button
-          onClick={() => navigate(`/projects/${project.id}`)}
+          onClick={onOpen}
           className="tap-row rounded-xl flex-1 min-w-0 flex items-center gap-3 py-3 pl-4 pr-4 text-left"
         >
           <div
@@ -184,7 +186,9 @@ function ProjectRow({
 }
 
 export function ProjectsScreen() {
+  const navigate = useNavigate();
   const { data: projects = [], isLoading, isError, error } = useProjects();
+  const { data: allTasks = [] } = useTasks();
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
   const { confirm, dialog } = useDialog();
@@ -218,6 +222,9 @@ export function ProjectsScreen() {
   const [name, setName] = useState("");
   const [color, setColor] = useState(PROJECT_COLORS[0]);
   const [deleteError, setDeleteError] = useState<unknown>(null);
+  const noProjectCount = allTasks.filter(
+    (t) => t.project_id == null && t.status === "active",
+  ).length;
 
   const handleCreate = useGuardedCallback(async (e: FormEvent) => {
     e.preventDefault();
@@ -325,8 +332,25 @@ export function ProjectsScreen() {
       )}
 
       <div className="space-y-[2px]">
+        {/* Синтетический раздел рядом с проектами: все задачи без проекта
+            в одном списке (владелец 19.09.2026). */}
+        <button
+          onClick={() => navigate("/projects/no-project")}
+          className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-card text-left tap-row"
+        >
+          <Icon name="list" size={18} className="text-sub" />
+          <span className="text-[15px] text-text">Без проекта</span>
+          <span className="ml-auto text-[12px] text-sub">
+            {noProjectCount === 0 ? "" : noProjectCount}
+          </span>
+        </button>
         {projects.map((p) => (
-          <ProjectRow key={p.id} project={p} onRequestDelete={handleDelete} />
+          <ProjectRow
+            key={p.id}
+            project={p}
+            onRequestDelete={handleDelete}
+            onOpen={() => navigate(`/projects/${p.id}`)}
+          />
         ))}
         {!isLoading && !isError && projects.length === 0 && !showCreate && (
           <p className="px-1 text-[13px] text-dim">

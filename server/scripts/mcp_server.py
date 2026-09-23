@@ -384,6 +384,50 @@ def t_state(args):
     return out
 
 
+def t_review(args):
+    """Вердикт Reviewer по сданной задаче: одобрить или вернуть на доработку.
+
+    Обёртка над POST /api/reviews: сама достаёт актуальную версию результата
+    (её id/hash/revision нужны серверу), поэтому агенту не надо знать про
+    версии. «changes_requested» дополнительно возвращает карточку в работу
+    через /state — Reviewer это разрешено, владельца гейт не касается.
+    """
+    task_id = args["id"]
+    verdict = args["verdict"]
+    findings = (args.get("findings") or "").strip()
+
+    versions = api("GET", f"/api/tasks/{task_id}/versions")
+    current = next(
+        (v for v in (versions.get("versions") or []) if v.get("is_current")), None
+    )
+    if not current:
+        raise TaskFlowError(
+            "у задачи нет актуальной версии результата — проверять нечего"
+        )
+
+    body = {
+        "task_id": task_id,
+        "version_id": current["id"],
+        "artifact_hash": current["artifact_hash"],
+        "criteria_version": "1",
+        "task_revision": current["task_revision"],
+        "verdict": verdict,
+    }
+    if findings:
+        body["findings"] = findings
+
+    if verdict == "changes_requested":
+        if not findings:
+            raise TaskFlowError("для возврата нужен комментарий: что доработать")
+        api("POST", "/api/reviews", body)
+        api("POST", f"/api/tasks/{task_id}/state",
+            {"state": "in_progress", "comment": findings})
+        return {"вердикт": "возвращено на доработку", "комментарий": findings}
+
+    resp = api("POST", "/api/reviews", body)
+    return {"вердикт": resp.get("verdict"), "комментарий": resp.get("findings")}
+
+
 def upload_file(task_id: str, path: str) -> dict:
     """Заливает файл к задаче и возвращает запись вложения.
 
@@ -509,6 +553,29 @@ def t_rules(_args):
     экране задач и не имеет права держать свою копию.
     """
     return {"правила": api("GET", "/api/agent/rules").get("rules", [])}
+
+
+def t_runtime(_args):
+    """Что РЕАЛЬНО доступно сейчас в runtime Pi: только ПОДКЛЮЧЁННЫЕ
+    провайдеры и их доступные модели. Никакого «теоретического» каталога и
+    секретов — агенту нужен факт, а не список всего, что в принципе бывает.
+
+    Выбираешь, чем работать задаче, или думаешь про параллель — сперва глянь
+    сюда, чтобы не звать модель, которой нет.
+    """
+    providers = api("GET", "/api/runtime/providers").get("providers", []) or []
+    connected = {
+        str(p.get("provider"))
+        for p in providers
+        if p.get("status") == "connected"
+    }
+    models = api("GET", "/api/runtime/models").get("models", []) or []
+    by_provider: dict = {}
+    for m in models:
+        prov = str(m.get("provider"))
+        if m.get("available") and prov in connected:
+            by_provider.setdefault(prov, []).append(m.get("id"))
+    return {"подключены": by_provider}
 
 
 def t_status(_args):
@@ -1031,6 +1098,354 @@ def t_structure_dictation(args):
     }
 
 
+# ---------------------------------------------------------------- инструменты исследователя
+#
+# Владелец 20.09.2026: «в модель должен заходить готовый markdown без лишнего
+# мусора» и «добавить распознавание документов и сканов». Первое — _html_to_markdown
+# (убираем меню/рекламу/скрипты, берём статью), второе — t_ocr (tesseract rus+eng,
+# PDF со сканом рендерим через pdftoppm).
+
+def _html_to_markdown(html: str) -> str:
+    """HTML → чистый markdown: выбрасываем скрипты, стили, навигацию, подвалы
+    и формы; берём основную статью (article/main, иначе самый текстовый div)."""
+    from bs4 import BeautifulSoup
+    import html2text
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "iframe", "template",
+                     "nav", "footer", "header", "aside", "form", "button", "figure"]):
+        tag.decompose()
+    node = soup.find("article") or soup.find("main") or soup.find(attrs={"role": "main"})
+    if node is None:
+        best, best_len = None, 0
+        for div in soup.find_all("div"):
+            n = len(div.get_text(strip=True))
+            if n > best_len:
+                best, best_len = div, n
+        node = best or soup.body or soup
+    conv = html2text.HTML2Text()
+    conv.body_width = 0
+    conv.ignore_images = True
+    return conv.handle(str(node)).strip()
+
+
+def t_web_get(args):
+    """Скачать страницу и вернуть её основное содержимое чистым markdown."""
+    url = str(args.get("url") or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise TaskFlowError("нужен http(s)-адрес")
+    import requests
+    try:
+        resp = requests.get(url, timeout=40, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; TaskFlow-Research/1.0)",
+            "Accept-Language": "ru,en;q=0.8",
+        })
+        resp.raise_for_status()
+    except Exception as e:  # noqa: BLE001 — наружу понятный текст
+        raise TaskFlowError(f"не удалось скачать {url}: {e}")
+    ctype = (resp.headers.get("content-type") or "").lower()
+    if "html" in ctype or "xml" in ctype or not ctype:
+        text = _html_to_markdown(resp.text)
+    else:
+        text = resp.text
+    cap = int(args.get("max_chars") or 24000)
+    return {
+        "url": url,
+        "markdown": text[:cap],
+        "chars": len(text),
+        "truncated": len(text) > cap,
+    }
+
+
+def t_ocr(args):
+    """Распознать текст из документа или скана (изображение/PDF)."""
+    att_id = str(args.get("attachment_id") or "").strip()
+    path = str(args.get("path") or "").strip()
+    langs = str(args.get("langs") or "rus+eng")
+    cap = int(args.get("max_chars") or 24000)
+    if not att_id and not path:
+        raise TaskFlowError("нужен attachment_id или path")
+
+    import glob
+    import mimetypes
+    import shutil
+    import subprocess
+    import tempfile
+
+    work = tempfile.mkdtemp(prefix="tf-ocr-")
+    try:
+        if att_id:
+            req = urllib.request.Request(
+                f"{BASE}/api/attachments/{att_id}",
+                headers={"Authorization": f"Bearer {TOKEN}"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = r.read()
+                ctype = (r.headers.get("Content-Type") or "").split(";")[0]
+            ext = mimetypes.guess_extension(ctype) or ".bin"
+            path = os.path.join(work, "src" + ext)
+            with open(path, "wb") as f:
+                f.write(data)
+
+        ext = os.path.splitext(path)[1].lower()
+        text = ""
+        pages = 0
+        if ext == ".pdf":
+            txt = subprocess.run(["pdftotext", "-layout", path, "-"],
+                                 capture_output=True, text=True, timeout=120)
+            text = (txt.stdout or "").strip()
+            if len(text) < 40:
+                subprocess.run(
+                    ["pdftoppm", "-r", "200", "-png", path, os.path.join(work, "p")],
+                    capture_output=True, text=True, timeout=300,
+                )
+                chunks = []
+                for img in sorted(glob.glob(os.path.join(work, "p*.png"))):
+                    pages += 1
+                    out = subprocess.run(["tesseract", img, "stdout", "-l", langs],
+                                         capture_output=True, text=True, timeout=180)
+                    chunks.append((out.stdout or "").strip())
+                text = "\n\n".join(chunks)
+        elif ext in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"):
+            out = subprocess.run(["tesseract", path, "stdout", "-l", langs],
+                                 capture_output=True, text=True, timeout=180)
+            text = (out.stdout or "").strip()
+            pages = 1
+        else:
+            raise TaskFlowError(f"распознавание для {ext or 'без расширения'} не поддержано")
+
+        return {
+            "text": text[:cap],
+            "chars": len(text),
+            "pages": pages,
+            "truncated": len(text) > cap,
+        }
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+# ---------------------------------------------------------------- поиск в интернете
+#
+# Владелец 20.09.2026: «возьми ключ из хранилища и организуй, чтобы агент искал».
+# Основной провайдер — Tavily; но с .110 он отдаёт 403 (блок по IP), поэтому
+# при отказе молча уходим на Brave (ключ тоже в хранилище). Один раз убедились,
+# что Tavily недоступен — больше к нему не ходим в этом процессе.
+
+_TAVILY_USABLE = True
+
+
+def _vault_read(name: str) -> str:
+    r = subprocess.run([sys.executable, VAULT_GET, "--raw", name],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0 or not r.stdout.strip():
+        raise TaskFlowError(f"ключ {name} не выдан хранилищем")
+    return r.stdout.strip()
+
+
+def _tavily_search(query: str, n: int, key: str):
+    import requests
+    resp = requests.post(
+        "https://api.tavily.com/search",
+        json={"query": query, "max_results": n},
+        headers={"Authorization": f"Bearer {key}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return [
+        {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("content")}
+        for r in (resp.json().get("results") or [])
+    ]
+
+
+def _brave_search(query: str, n: int, key: str):
+    import requests
+    resp = requests.get(
+        "https://api.search.brave.com/res/v1/web/search",
+        params={"q": query, "count": n},
+        headers={"X-Subscription-Token": key, "Accept": "application/json"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    out = []
+    for r in ((resp.json().get("web") or {}).get("results") or []):
+        out.append({"title": r.get("title"), "url": r.get("url"), "snippet": r.get("description")})
+    return out
+
+
+def t_web_search(args):
+    """Найти в интернете: Tavily, при недоступности — Brave. Возвращает список
+    результатов со ссылками; текст страницы потом бери через taskflow_web_get."""
+    global _TAVILY_USABLE
+    query = str(args.get("query") or "").strip()
+    if not query:
+        raise TaskFlowError("нужен query")
+    n = max(1, min(int(args.get("max_results") or 5), 10))
+    errors = []
+
+    if _TAVILY_USABLE:
+        try:
+            key = _vault_read("TAVILY_API_KEY")
+            results = _tavily_search(query, n, key)
+            return {"query": query, "provider": "tavily", "results": results}
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"tavily: {e}")
+            # 403 = блок по IP, дальше смысла нет в этом процессе
+            if "403" in str(e):
+                _TAVILY_USABLE = False
+
+    try:
+        key = _vault_read("BRAVE_API_KEY")
+        results = _brave_search(query, n, key)
+        return {"query": query, "provider": "brave", "results": results}
+    except Exception as e:  # noqa: BLE001
+        errors.append(f"brave: {e}")
+
+    raise TaskFlowError("поиск не удался: " + "; ".join(errors))
+
+def t_report(args):
+    """Собрать отчёт по задаче: markdown → светлый HTML + PDF, зеркало-заметка
+    в документации проекта. Титул несёт «когда, кем, по какой задаче»."""
+    task_id = str(args.get("task_id") or args.get("id") or "").strip()
+    title = str(args.get("title") or "Отчёт").strip()
+    markdown = str(args.get("markdown") or "").strip()
+    if not task_id:
+        raise TaskFlowError("нужен task_id")
+    if len(markdown) < 20:
+        raise TaskFlowError("markdown слишком короткий")
+    r = api("POST", f"/api/tasks/{task_id}/reports",
+            {"title": title, "markdown": markdown})
+    return {
+        "отчёт": r.get("title"),
+        "report_id": r.get("id"),
+        "заметка_в_доках": r.get("note_id"),
+        "автор": r.get("author"),
+        "составлен": r.get("date"),
+    }
+
+# ---------------------------------------------------------------- YouTube
+
+def _vtt_to_text(vtt: str) -> str:
+    """VTT-субтитры → читаемый текст: без таймкодов, тегов и повторов
+    (авто-субтитры идут «катящейся» строкой и дублируют соседние куски)."""
+    import re
+    lines = []
+    recent = []
+    for raw in vtt.splitlines():
+        s = raw.strip()
+        if not s or s == "WEBVTT" or "-->" in s or s.startswith(("NOTE", "STYLE")):
+            continue
+        if s.isdigit():
+            continue
+        s = re.sub(r"<[^>]+>", "", s)
+        s = s.replace("&amp;", "&").replace("&nbsp;", " ").strip()
+        if not s:
+            continue
+        if s in recent:
+            continue
+        lines.append(s)
+        recent.append(s)
+        if len(recent) > 24:
+            recent.pop(0)
+    text = " ".join(lines)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def t_youtube(args):
+    """Транскрипт видео YouTube в текст (ручные субтитры, иначе авто)."""
+    url = str(args.get("url") or "").strip()
+    if not url:
+        raise TaskFlowError("нужен url")
+    langs = str(args.get("langs") or "ru,en")
+    cap = int(args.get("max_chars") or 24000)
+
+    import glob
+    import shutil
+    import subprocess
+    import tempfile
+
+    work = tempfile.mkdtemp(prefix="tf-yt-")
+    try:
+        meta = subprocess.run(
+            ["yt-dlp", "--skip-download", "--extractor-args",
+             "youtube:player_client=web,mweb", "--print", "%(title)s", url],
+            capture_output=True, text=True, timeout=60,
+        )
+        title = (meta.stdout or "").strip().splitlines()[0] if meta.stdout.strip() else ""
+
+        subprocess.run(
+            ["yt-dlp", "--skip-download", "--extractor-args",
+             "youtube:player_client=web,mweb",
+             "--write-subs", "--write-auto-subs",
+             "--sub-langs", langs, "--sub-format", "vtt", "--convert-subs", "vtt",
+             "-o", os.path.join(work, "s.%(ext)s"), url],
+            capture_output=True, text=True, timeout=240,
+        )
+        files = sorted(glob.glob(os.path.join(work, "*.vtt")))
+        if not files:
+            raise TaskFlowError("у видео нет субтитров (ни ручных, ни авто)")
+        with open(files[0], encoding="utf-8", errors="ignore") as f:
+            text = _vtt_to_text(f.read())
+        return {
+            "title": title,
+            "url": url,
+            "transcript": text[:cap],
+            "chars": len(text),
+            "truncated": len(text) > cap,
+            "sub_file": os.path.basename(files[0]),
+        }
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+# ---------------------------------------------------------------- локальная модель
+#
+# Владелец 21.09.2026: у роли researcher должен быть ЯВНЫЙ этап «синтез локальной
+# моделью» — как в серверном конвейере. Даём агенту инструмент: он присылает
+# собранный материал, локальная Ollama на .110 возвращает связный текст. Ничего
+# наружу не ходит, деньги не тратятся.
+OLLAMA_BASE = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6-27b-iq4-16k:latest")
+
+
+def t_local_model(args):
+    """Прогнать текст через ЛОКАЛЬНУЮ модель (Ollama на .110). Для этапа
+    «синтез»: собранные факты → связный черновик/сводка."""
+    prompt = str(args.get("prompt") or args.get("text") or "").strip()
+    if not prompt:
+        raise TaskFlowError("нужен prompt (задание локальной модели)")
+    system = str(args.get("system") or "").strip()
+    model = str(args.get("model") or OLLAMA_MODEL)
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    body = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "think": False,
+        "options": {
+            "num_ctx": int(args.get("num_ctx") or 16384),
+            "num_predict": int(args.get("max_tokens") or 4096),
+            "temperature": 0.2,
+        },
+    }
+    req = urllib.request.Request(
+        OLLAMA_BASE + "/api/chat",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            data = json.loads(r.read().decode())
+    except Exception as e:  # noqa: BLE001
+        raise TaskFlowError(f"локальная модель недоступна: {e}")
+    msg = data.get("message") or {}
+    text = (msg.get("content") or msg.get("thinking") or "").strip()
+    if not text:
+        raise TaskFlowError("локальная модель вернула пустой ответ")
+    return {"model": model, "text": text}
+
+
 TOOLS = [
     {
         "name": "taskflow_my_tasks",
@@ -1075,6 +1490,20 @@ TOOLS = [
             "required": ["id", "state"],
         },
         "fn": t_state,
+    },
+    {
+        "name": "taskflow_review",
+        "description": "Вердикт Reviewer по сданной задаче. verdict=approved одобряет результат (комментарий обязателен); verdict=changes_requested возвращает карточку в работу (комментарий обязателен). Только для роли Critic/Verifier.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "verdict": {"type": "string", "description": "approved | changes_requested"},
+                "findings": {"type": "string", "description": "комментарий к вердикту (обязателен)"},
+            },
+            "required": ["id", "verdict"],
+        },
+        "fn": t_review,
     },
     {
         "name": "taskflow_comment",
@@ -1137,6 +1566,12 @@ TOOLS = [
         "description": "Правила ведения учёта задач — как их требует сервер TaskFlow. Те же, что приходят при взятии задачи и шага; здесь их можно спросить, ничего не занимая.",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": t_rules,
+    },
+    {
+        "name": "taskflow_runtime",
+        "description": "Что реально доступно сейчас в runtime Pi: подключённые провайдеры и их доступные модели. Только факт, без всего каталога.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": t_runtime,
     },
     {
         "name": "taskflow_status",
@@ -1420,6 +1855,35 @@ TOOLS = [
             "required": ["query"],
         },
         "fn": t_kb_search,
+    },
+    {
+        "name": "taskflow_report",
+        "description": (
+            "Собрать ОТЧЁТ по задаче из markdown: светлый печатный HTML + PDF, "
+            "с отметкой когда/кем/по какой задаче. Физически ложится заметкой в "
+            "документацию проекта, в карточке задачи виден в секции «Отчёты». "
+            "Пиши разделы сам (введение, анализ данных, заключение). "
+            "Вёрстка умеет КАЧЕСТВЕННЫЕ ТАБЛИЦЫ (обычные markdown-таблицы), "
+            "СХЕМЫ и ГРАФИКИ:\n"
+            "• СХЕМА/диаграмма — блок с языком mermaid, например:\n"
+            "```mermaid\nflowchart TD\n  A[Вопрос] --> B[Сбор] --> C[Отчёт]\n```\n"
+            "поддерживаются flowchart, sequenceDiagram, gantt, pie, timeline;\n"
+            "• ГРАФИК из данных — блок с языком chart (спека Vega-Lite JSON), "
+            "например:\n```chart\n"
+            '{"data":{"values":[{"x":"A","y":3}]},'
+            '"mark":"bar","encoding":{"x":{"field":"x","type":"nominal"},'
+            '"y":{"field":"y","type":"quantitative"}}}\n```'
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "id задачи"},
+                "title": {"type": "string", "description": "название отчёта"},
+                "markdown": {"type": "string", "description": "текст отчёта в markdown"},
+            },
+            "required": ["task_id", "title", "markdown"],
+        },
+        "fn": t_report,
     },
 ]
 BY_NAME = {t["name"]: t for t in TOOLS}

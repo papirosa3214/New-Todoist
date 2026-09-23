@@ -38,6 +38,7 @@ import {
   type ExtractedTask,
 } from "../api/ai";
 import { useNote, useUpdateNote, useDeleteNote } from "../api/notes";
+import { api } from "../api/client";
 import { useJournalFolders } from "../api/journal";
 import { tiptapToMarkdown, safeFileName } from "../lib/tiptapToMarkdown";
 
@@ -332,6 +333,26 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
   );
 }
 
+/**
+ * Похож ли текст из буфера на markdown, который стоит разобрать.
+ *
+ * Проверка намеренно строгая: обычный текст со случайным дефисом в начале
+ * строки трогать нельзя, иначе вставка простого абзаца начнёт молча менять
+ * форматирование. Срабатываем на том, что человек и правда копирует из
+ * markdown: строка-разделитель таблицы, заголовок решёткой, забор кода или
+ * несколько пунктов списка подряд.
+ */
+function looksLikeMarkdown(text: string): boolean {
+  const lines = text.split(/\r?\n/);
+  const hasTableDivider = lines.some((l) =>
+    /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(l),
+  );
+  const hasHeading = lines.some((l) => /^#{1,6}\s+\S/.test(l));
+  const hasFence = lines.some((l) => /^```/.test(l));
+  const bulletCount = lines.filter((l) => /^\s*[-*+]\s+\S/.test(l)).length;
+  return hasTableDivider || hasHeading || hasFence || bulletCount >= 2;
+}
+
 export function NoteEditorScreen() {
   const navigate = useNavigate();
   const params = useParams();
@@ -431,6 +452,43 @@ export function NoteEditorScreen() {
     ],
     content: "",
     editable: false,
+    editorProps: {
+      // Вставка markdown из буфера. Без этого TipTap принимает текст как
+      // простой: строки таблицы склеиваются в ОДИН абзац через hardBreak,
+      // палки остаются символами, а строки с дефисом уезжают в буллеты.
+      // Так были испорчены 9 заметок проекта (найдено 22.09.2026).
+      // Разбирает тот же серверный markdownToTiptap, что и путь отчётов —
+      // второй парсер в бандле означал бы две разные правды.
+      handlePaste: (view, event) => {
+        const text = event.clipboardData?.getData("text/plain");
+        // HTML в буфере TipTap разбирает сам и делает это хорошо —
+        // перехватываем только чистый текст.
+        const html = event.clipboardData?.getData("text/html");
+        if (!text || html) return false;
+        if (!looksLikeMarkdown(text)) return false;
+
+        event.preventDefault();
+        // Запрос асинхронный, а handlePaste синхронный: отменяем вставку
+        // здесь и досылаем разобранный документ, когда ответ придёт.
+        void api
+          .post<{ doc: unknown }>("/api/notes/markdown-to-doc", {
+            markdown: text,
+          })
+          .then((res) => {
+            const doc = res?.doc as { content?: unknown[] } | undefined;
+            if (doc?.content?.length) {
+              view.dispatch(view.state.tr.scrollIntoView());
+              editorRef.current?.commands.insertContent(doc.content as never);
+            }
+          })
+          .catch(() => {
+            // Сервер не ответил — вставляем как было, лишь бы не потерять
+            // содержимое буфера.
+            editorRef.current?.commands.insertContent(text);
+          });
+        return true;
+      },
+    },
     onFocus: () => setEditorFocused(true),
     onBlur: () => setEditorFocused(false),
     onUpdate: ({ editor }) => {
@@ -545,8 +603,13 @@ export function NoteEditorScreen() {
     setAiBusy(true);
     try {
       const res = await extractTasks.mutateAsync(text);
-      setExtractedTasks(res.tasks);
-      if (res.tasks.length === 0) {
+      // На странный ответ сервера (200 + пустое тело, не-JSON, { tasks: null })
+      // клиентский api.post вернёт null/undefined. Без этой проверки
+      // `res.tasks` падает с TypeError прямо в render-phase, и пользователь
+      // видит белый экран (карточка 70697681). Теперь — понятный баннер.
+      const extracted = Array.isArray(res?.tasks) ? res.tasks : [];
+      setExtractedTasks(extracted);
+      if (extracted.length === 0) {
         setAiError(new Error("AI не нашёл в тексте конкретных задач"));
         return;
       }

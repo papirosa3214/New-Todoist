@@ -70,6 +70,7 @@ const PROFILE_ROLE: Record<string, string> = {
   pi_agent: "Builder",
   deepseek: "Researcher",
   reviewer: "Critic/Verifier",
+  critic_verifier: "Critic/Verifier",
   orchestrator: "Architect",
 };
 

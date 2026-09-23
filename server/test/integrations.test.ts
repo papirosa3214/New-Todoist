@@ -45,12 +45,19 @@ describe("Интеграции: статус и Google Tasks", () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it("возвращает ошибку при запросе списков Google без подключённого аккаунта", async () => {
+  it("без подключённого Google отдаёт пустой список, а не 401", async () => {
+    // /api/integrations/google/lists в routes/integrations.ts держит
+    // «Google не подключён» отдельно от сессии: APIClient на любой 401
+    // чистит токен и разлогинивает, а здесь состояние «не подключён» — это
+    // про интеграцию, а не про сессию. Сервер возвращает 200 + { lists: [] },
+    // клиент рисует пустой список и кнопку «Подключить Google». Раньше
+    // тест ждал 401 — этот контракт был до фикса «401 чистит токен».
     const res = await app.inject({
       method: "GET",
       url: "/api/integrations/google/lists",
       headers: { authorization: `Bearer ${userToken}` },
     });
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ lists: [] });
   });
 });

@@ -15,7 +15,6 @@ import { getErrorMessage } from "../lib/errors";
 const ROLE_LABEL: Record<string, string> = {
   researcher: "Исследователь",
   analyst: "Аналитик",
-  synthesizer: "Синтезатор",
   critic_verifier: "Критик-проверяющий",
   architect: "Архитектор",
   builder: "Разработчик",
@@ -26,7 +25,6 @@ const ROLE_LABEL: Record<string, string> = {
 const ROLES = [
   "researcher",
   "analyst",
-  "synthesizer",
   "critic_verifier",
   "architect",
   "builder",
@@ -34,24 +32,57 @@ const ROLES = [
   "designer",
 ];
 
+type ModelOption = { id: string; label: string };
+type ModelGroup = { provider: string; options: ModelOption[] };
+
+/** Человеческие подписи провайдеров; неизвестный — как есть. */
+function providerTitle(provider: string): string {
+  const map: Record<string, string> = {
+    anthropic: "Anthropic",
+    openai: "OpenAI",
+    "openai-codex": "OpenAI",
+    minimax: "MiniMax",
+    "minimax-cn": "MiniMax",
+    opencode: "OpenCode",
+    "opencode-go": "OpenCode Go",
+    google: "Google",
+    "google-vertex": "Google",
+    ollama: "Ollama (на сервере)",
+  };
+  return map[provider] ?? provider;
+}
+
+/**
+ * Резервные модели (fallbacks) УДАЛЕНЫ из веба (20.09.2026) — не по прихоти,
+ * а потому что они нигде не использовались и ни на что не влияли: эскалацию
+ * при сбое делает глобальная лесенка (`model_ladder`), а роль-специфичную
+ * цепочку primary+fallbacks читала единственная функция `nextModelForProfile`,
+ * которая не вызывается. Поэтому в `PUT /api/runtime/routing/:role` уходит
+ * пустой список fallbacks — он затирает оставшиеся с прежних времён.
+ *
+ * В списке — только ДОСТУПНЫЕ модели (`available`: провайдер авторизован),
+ * сгруппированы по провайдеру. Каталог Pi отдаёт 1000+ моделей всех
+ * провайдеров, включая те, к которым нет ключей.
+ */
 function ModelSelect({
   role,
   model,
   onChange,
-  options,
+  groups,
 }: {
   role: string;
   model: string;
   onChange: (m: string) => void;
-  options: string[];
+  groups: ModelGroup[];
 }) {
+  const known = groups.some((g) => g.options.some((o) => o.id === model));
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div style={{ marginBottom: 4 }}>
       <label
         htmlFor={`primary-${role}`}
         style={{ display: "block", fontSize: 12, color: "#6B7280", marginBottom: 4 }}
       >
-        Primary
+        Основная
       </label>
       <select
         id={`primary-${role}`}
@@ -67,64 +98,21 @@ function ModelSelect({
         }}
       >
         <option value="">— выберите —</option>
-        {options.map((m) => (
-          <option key={m} value={m}>{m}</option>
+        {model !== "" && !known && (
+          <optgroup label="Текущая модель">
+            <option value={model}>{model}</option>
+          </optgroup>
+        )}
+        {groups.map((g) => (
+          <optgroup key={g.provider} label={providerTitle(g.provider)}>
+            {g.options.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
-    </div>
-  );
-}
-
-function FallbackPicker({
-  role,
-  fallbacks,
-  primary,
-  onChange,
-  options,
-}: {
-  role: string;
-  fallbacks: string[];
-  primary: string;
-  onChange: (f: string[]) => void;
-  options: string[];
-}) {
-  const toggle = (m: string) => {
-    if (m === primary) return;
-    if (fallbacks.includes(m)) onChange(fallbacks.filter((x) => x !== m));
-    else onChange([...fallbacks, m]);
-  };
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <label
-        style={{ display: "block", fontSize: 12, color: "#6B7280", marginBottom: 4 }}
-      >
-        Fallbacks (по убыванию приоритета)
-      </label>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-        {options
-          .filter((m) => m !== primary)
-          .map((m) => {
-            const selected = fallbacks.includes(m);
-            return (
-              <button
-                key={m}
-                type="button"
-                onClick={() => toggle(m)}
-                style={{
-                  padding: "6px 10px",
-                  borderRadius: 16,
-                  fontSize: 12,
-                  border: selected ? "1px solid #2563EB" : "1px solid #D1D5DB",
-                  background: selected ? "#EFF6FF" : "#fff",
-                  color: selected ? "#1E40AF" : "#374151",
-                  cursor: "pointer",
-                }}
-              >
-                {m}
-              </button>
-            );
-          })}
-      </div>
     </div>
   );
 }
@@ -132,40 +120,32 @@ function FallbackPicker({
 function RoleRow({
   role,
   currentPrimary,
-  currentFallbacks,
-  options,
+  groups,
 }: {
   role: string;
   currentPrimary: string;
-  currentFallbacks: string[];
-  options: string[];
+  groups: ModelGroup[];
 }) {
   const put = usePutRouting();
   const dialog = useDialog();
   const [primary, setPrimary] = useState(currentPrimary);
-  const [fallbacks, setFallbacks] = useState(currentFallbacks);
 
   // Если из кэша пришли новые значения (другой пользователь поменял) —
   // подтягиваем. Локальный ввод пользователя важнее — но при первом
   // монтировании берём с сервера.
   if (primary === "" && currentPrimary !== "") setPrimary(currentPrimary);
-  if (fallbacks.length === 0 && currentFallbacks.length > 0) {
-    setFallbacks(currentFallbacks);
-  }
 
-  const dirty =
-    primary !== currentPrimary ||
-    JSON.stringify(fallbacks.slice().sort()) !==
-      JSON.stringify(currentFallbacks.slice().sort());
+  const dirty = primary !== currentPrimary;
 
   const handleSave = async () => {
     try {
       await put.mutateAsync({
         role,
-        body: { primary, fallbacks },
+        // fallbacks всегда пустые: резервные удалены (см. комментарий выше).
+        body: { primary, fallbacks: [] },
       });
     } catch (e) {
-      await dialog.alert("Ошибка", getErrorMessage(e));
+      await dialog.alert({ title: "Ошибка", description: getErrorMessage(e) });
     }
   };
 
@@ -203,14 +183,7 @@ function RoleRow({
           </button>
         )}
       </div>
-      <ModelSelect role={role} model={primary} onChange={setPrimary} options={options} />
-      <FallbackPicker
-        role={role}
-        fallbacks={fallbacks}
-        primary={primary}
-        onChange={setFallbacks}
-        options={options}
-      />
+      <ModelSelect role={role} model={primary} onChange={setPrimary} groups={groups} />
     </div>
   );
 }
@@ -219,14 +192,30 @@ export function RolesModelsScreen() {
   const models = useRuntimeModels();
   const routing = useRuntimeRouting();
 
-  // Опции для select — список id моделей, доступных в Pi.
-  const options = (models.data?.models ?? []).map((m) => m.id).sort();
+  // Только доступные модели, сгруппированные по провайдеру (порядок — как в
+  // каталоге). Недоступные сюда не попадают.
+  const order: string[] = [];
+  const byProvider: Record<string, ModelOption[]> = {};
+  for (const m of models.data?.models ?? []) {
+    if (!m.available) continue;
+    if (!byProvider[m.provider]) {
+      byProvider[m.provider] = [];
+      order.push(m.provider);
+    }
+    if (byProvider[m.provider].some((o) => o.id === m.id)) continue;
+    byProvider[m.provider].push({ id: m.id, label: m.name ?? m.id });
+  }
+  const groups: ModelGroup[] = order.map((provider) => ({
+    provider,
+    options: byProvider[provider],
+  }));
 
   return (
     <div className="screen" style={{ padding: "16px 16px 80px" }}>
       <ScreenHeader title="Агенты: модели ролей" />
       <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>
-        Для каждой из 8 ролей выберите primary и fallbacks. Источник правды —&nbsp;
+        Для каждой из 8 ролей выберите основную модель (доступные,
+        сгруппированы по провайдеру). Источник правды —&nbsp;
         <code>server/scripts/role-routing.yaml</code>; меняется через&nbsp;
         <code>PUT /api/runtime/routing/:role</code> (owner/service).
       </div>
@@ -240,6 +229,11 @@ export function RolesModelsScreen() {
           <code>pi --list-models</code> на хосте .110.
         </div>
       )}
+      {models.data != null && models.data.models.length > 0 && groups.length === 0 && (
+        <div style={{ textAlign: "center", padding: 24, color: "#6B7280" }}>
+          Нет ни одной доступной модели — проверьте ключи провайдеров.
+        </div>
+      )}
 
       {routing.data?.routing && (
         <>
@@ -248,8 +242,7 @@ export function RolesModelsScreen() {
               key={role}
               role={role}
               currentPrimary={routing.data!.routing.models[role] ?? ""}
-              currentFallbacks={routing.data!.routing.fallbacks[role] ?? []}
-              options={options}
+              groups={groups}
             />
           ))}
         </>

@@ -9,6 +9,7 @@ import {
   isReviewer,
 } from "../access.js";
 import { logEvent } from "../agentState.js";
+import { broadcastToUsers } from "../ws.js";
 import {
   createResultVersion,
   currentResultVersion,
@@ -103,8 +104,12 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     if (!VERDICTS.includes(verdict as Verdict)) {
       return reply.code(400).send({ error: `verdict должен быть одним из: ${VERDICTS.join(", ")}` });
     }
-    if (!isOwner(req.userId) && !isReviewer(req.userId)) {
+    const reviewer = isReviewer(req.userId);
+    if (!isOwner(req.userId) && !reviewer) {
       return reply.code(403).send({ error: "вердикт может вынести только владелец или Reviewer" });
+    }
+    if (reviewer && verdict === "approved" && !findings?.trim()) {
+      return reply.code(400).send({ error: "Reviewer обязан оставить комментарий при одобрении" });
     }
     const task = getTaskForRead(taskId, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
@@ -126,6 +131,77 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     ).run(reviewId, taskId, version.id, version.task_revision, req.userId,
       version.artifact_hash, criteriaVersion, verdict, findings);
     logEvent({ taskId, actorId: req.userId, kind: "review_recorded", field: "result_version", toValue: `${version.version_no}:${verdict}` });
+
+    // Вердикт виден в карточке: комментарий от ревьюера в ленту + уведомление
+    // владельцу. Раньше записывалась только строка reviews и событие
+    // review_recorded — ни вердикта, ни комментария, ни сигнала владелец не
+    // видел (владелец 19.09.2026).
+    {
+      const verdictWord =
+        verdict === "approved"
+          ? "одобрил"
+          : verdict === "changes_requested"
+            ? "вернул на доработку"
+            : "остановил";
+      const reviewerName =
+        (db.prepare("SELECT name FROM users WHERE id = ?").get(req.userId) as
+          | { name?: string }
+          | undefined)?.name || "Reviewer";
+
+      const note = (findings || "").trim();
+      if (note) {
+        // Прецедент 22.09.2026: critic_verifier вызывал taskflow_review 3-4
+        // раза подряд (видно по логам — req-3gv / 3h4 / 3he / 3hm за 13 сек),
+        // и сервер на каждый запрос честно вставлял новую строку в comments.
+        // В ленте оказывалось 2-4 одинаковых записи «Ревьюер проверил и
+        // одобрил: …». Защита ставится именно тут, а не в MCP-инструменте:
+        // LLM нельзя заставить «правильно» звать инструмент, а серверный
+        // гард отрезает дубль независимо от поведения агента. TTL — 60 сек,
+        // окно шире, чем самая длинная retry-петля LLM, но уже, чем реальный
+        // повторный вердикт по той же задаче (такого сценария у нас нет —
+        // verdict один на версию).
+        const dup = db
+          .prepare(
+            `SELECT id FROM comments
+              WHERE task_id = ? AND user_id = ?
+                AND created_at >= datetime('now', '-60 seconds')
+              LIMIT 1`,
+          )
+          .get(taskId, req.userId) as { id: string } | undefined;
+        if (dup) {
+          // reviews-запись уже выше INSERT-нута — это нормально, версии
+          // обязаны учитывать каждый вердикт. А вот comments-строка одна.
+        } else {
+        db.prepare(
+          "INSERT INTO comments (id, task_id, user_id, text) VALUES (?,?,?,?)",
+        ).run(
+          crypto.randomUUID(),
+          taskId,
+          req.userId,
+          `Ревьюер ${verdictWord === "одобрил" ? "проверил и одобрил" : verdictWord === "вернул на доработку" ? "вернул на доработку" : "остановил работу"}: ${note}`,
+        );
+        }
+      }
+      // Владельцу — только если он не сам вынес вердикт (свой вердикт не шлём).
+      if (task.creator_id && task.creator_id !== req.userId) {
+        const notifId = crypto.randomUUID();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'reviewed', ?, ?, ?)",
+        ).run(
+          notifId,
+          task.creator_id,
+          taskId,
+          `${reviewerName}: «${task.title}» — ${verdictWord}`,
+          req.userId,
+        );
+        broadcastToUsers([task.creator_id], {
+          type: "notification:new",
+          notificationId: notifId,
+          taskId,
+        });
+      }
+    }
+
     return reply.code(201).send({
       review_id: reviewId, task_id: taskId, version_id: version.id,
       task_revision: version.task_revision, reviewer_id: req.userId,

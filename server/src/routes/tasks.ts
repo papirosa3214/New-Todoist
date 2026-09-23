@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
+import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "../resultVersions.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
 import { attemptLadderForTask } from "../lib/attemptLadder.js";
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -248,6 +250,17 @@ export function hydrateTask(task: any) {
 
   return {
     ...withAgentStale(task, subtasks, children),
+    // Живое значение общего рубильника, а не сохранённый в карточке флаг:
+    // решает в моменте, включён он сейчас или нет (см. reviewerPolicy.ts).
+    requires_reviewer_review: reviewerFirstEnabled(),
+    // Время запуска: собирается из даты+времени карточки; время не
+    // задано — 09:00 (владелец 19.09.2026). Отдельного поля в UI нет.
+    run_at: task.due_date
+      ? `${task.due_date} ${task.start_time || "09:00"}`
+      : null,
+    run_repeat: task.run_repeat ?? "none",
+    recurrence_spawned: task.recurrence_spawned ?? 0,
+    repeat_until: task.repeat_until ?? null,
     labels,
     subtasks,
     children,
@@ -296,6 +309,68 @@ export function registerTaskRoutes(app: FastifyInstance) {
   // зарегистрированному человеку — только свои. Раньше правило было одно
   // для всех, и задача, заведённая агентом без проекта и без исполнителя,
   // не показывалась владельцу вообще.
+  // Серия повтора дошла до конца календарного года — помечаем завершённой
+  // и спрашиваем владельца (карточка f8e8a055, решение 20.09.2026).
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/repeat-ended",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const task = db
+        .prepare("SELECT id, title FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id: string; title: string } | undefined;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      db.prepare(
+        "UPDATE tasks SET recurrence_spawned = 1, updated_at = datetime('now') WHERE id = ?",
+      ).run(task.id);
+      const owner = db
+        .prepare(
+          "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
+        )
+        .get() as { id?: string } | undefined;
+      if (owner?.id && owner.id !== req.userId) {
+        const notifId = uid();
+        db.prepare(
+          "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'repeat_ended', ?, ?, ?)",
+        ).run(
+          notifId,
+          owner.id,
+          task.id,
+          `Серия «${task.title}» дошла до конца года. Продлить на следующий год?`,
+          req.userId,
+        );
+        broadcastToUsers([owner.id], {
+          type: "notification:new",
+          notificationId: notifId,
+          taskId: task.id,
+        });
+      }
+      return { ok: true };
+    },
+  );
+
+  // Продлить серию на следующий год: «до 31 декабря следующего» и снова
+  // разрешаем воркеру создавать следующее вхождение (владелец).
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/repeat-extend",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply
+          .code(403)
+          .send({ error: "продлевать серию может только владелец" });
+      }
+      const task = db
+        .prepare("SELECT id FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id?: string } | undefined;
+      if (!task) return reply.code(404).send({ error: "Not found" });
+      const until = `${new Date().getFullYear() + 1}-12-31`;
+      db.prepare(
+        "UPDATE tasks SET repeat_until = ?, recurrence_spawned = 0, updated_at = datetime('now') WHERE id = ?",
+      ).run(until, task.id);
+      return { ok: true, repeat_until: until };
+    },
+  );
+
   app.get("/api/tasks", { preHandler: authPre }, async (req: any) => {
     const userId = req.userId;
     const includeChildren = req.query.include_children === "true";
@@ -477,6 +552,51 @@ export function registerTaskRoutes(app: FastifyInstance) {
       for (const c of comments) {
         c.attachments = attachments.filter((a) => a.comment_id === c.id);
       }
+
+      // Сообщения чатов, привязанных к этой задаче (владелец 21.09.2026:
+      // «чтобы не комментарии они там писать в самой задаче, а в чате
+      // переписываться»). Отдаются в ОБЩЕМ списке comments — той же формой,
+      // что обычные комментарии, плюс пометка source='chat' и id чата: лента
+      // задачи и веб рисуют их наравне с комментариями, а отличать могут по
+      // пометке. Только канал 'chat' — старые owner/agents живут своей
+      // жизнью и в ленту задачи не подмешиваются (их для этого никто и не
+      // привязывал).
+      const chatComments = db
+        .prepare(
+          `SELECT m.id, m.task_id, m.from_user_id AS user_id, m.text, m.created_at,
+                  m.chat_id,
+                  u.name AS user_name, u.avatar_color AS user_color,
+                  u.avatar_url AS user_avatar_url, u.initials AS user_initials
+             FROM chat_messages m
+             LEFT JOIN users u ON u.id = m.from_user_id
+            WHERE m.task_id = ? AND m.channel = 'chat'
+            ORDER BY m.created_at`,
+        )
+        .all(task.id) as any[];
+      if (chatComments.length) {
+        // Вложения сообщений чата лежат не на задаче, а на самом сообщении
+        // (`chat_message_id`), поэтому в общий `attachments` выше они не
+        // попали — тянем их отдельным запросом.
+        const chatFiles = db
+          .prepare(
+            `SELECT id, chat_message_id, kind, file_name, mime, size, created_at
+               FROM attachments
+              WHERE chat_message_id IN (${chatComments.map(() => "?").join(",")})
+              ORDER BY created_at`,
+          )
+          .all(...chatComments.map((c) => c.id)) as any[];
+        for (const c of chatComments) {
+          c.source = "chat";
+          c.attachments = chatFiles.filter((a) => a.chat_message_id === c.id);
+        }
+        comments.push(...chatComments);
+        // Сортировка устойчивая (ES2019): при равных секундах комментарии
+        // задачи сохраняют свой прежний порядок, а сообщения чата встают
+        // после них — не перемешиваем две ленты внутри одной секунды.
+        comments.sort((a, b) =>
+          String(a.created_at).localeCompare(String(b.created_at)),
+        );
+      }
       // Файлы самой задачи — то, что приложено к её заметке (19.08.2026).
       // Разделение идёт по kind, а НЕ по «comment_id пустой»: пустой он и у
       // комментарийного файла, пока комментарий не отправлен, и брошенный
@@ -516,6 +636,16 @@ export function registerTaskRoutes(app: FastifyInstance) {
         subtasks,
         children,
         comments,
+        // Чаты, привязанные к этой задаче. Нужны карточке, чтобы дать переход
+        // в переписку («Чат по задаче»); сам чат в карточке не заводится и не
+        // рисуется — для этого есть свой экран (владелец 21.09.2026, LOCK-195).
+        chats: db
+          .prepare(
+            `SELECT c.id, c.title, c.kind, c.updated_at,
+                    (SELECT COUNT(*) FROM chat_members cm WHERE cm.chat_id = c.id) AS members_count
+               FROM chats c WHERE c.task_id = ? ORDER BY c.updated_at DESC`,
+          )
+          .all(task.id),
         attachments: taskAttachments,
         events,
         attempts,
@@ -544,6 +674,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
       assignee_id?: string;
       label_ids?: string[];
       parent_id?: string;
+      requires_reviewer_review?: boolean;
+      // «Нужно глубокое исследование» (миграция 052): отметка при
+      // постановке — владелец или Секретарь. По ней владелец запускает
+      // серверный конвейер исследования (POST /api/tasks/:id/research).
+      needs_research?: boolean;
+      run_repeat?: string;
+      repeat_until?: string | null;
       // Optional bulk-create for subtasks, created in the same transaction
       // as the task (see below). Accepts either plain titles or objects
       // shaped like { title } — TaskFormScreen currently sends plain
@@ -565,6 +702,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
         assignee_id,
         label_ids,
         parent_id,
+        requires_reviewer_review,
+        needs_research,
+        run_repeat,
+        repeat_until,
         subtasks,
       } = req.body;
 
@@ -646,6 +787,17 @@ export function registerTaskRoutes(app: FastifyInstance) {
           return reply.code(400).send({ error: "invalid assignee_id" });
       }
 
+      if (requires_reviewer_review !== undefined && typeof requires_reviewer_review !== "boolean") {
+        return reply.code(400).send({ error: "requires_reviewer_review должен быть boolean" });
+      }
+      // Отметка «нужно глубокое исследование» при постановке. Раньше
+      // принималась только PATCH'ем, поэтому созданная Секретарём/владельцем
+      // карточка с флагом теряла его молча (найдено 21.09.2026 на живом
+      // прогоне в симуляторе).
+      if (needs_research !== undefined && typeof needs_research !== "boolean") {
+        return reply.code(400).send({ error: "needs_research должен быть boolean" });
+      }
+
       // Normalize+validate subtasks up front, before touching the DB, so a
       // bad entry 400s cleanly instead of failing mid-transaction.
       const subtaskTitles: string[] = [];
@@ -672,6 +824,21 @@ export function registerTaskRoutes(app: FastifyInstance) {
       }
 
       const id = uid();
+      // По умолчанию — общая настройка владельца «Сначала проверка
+      // Reviewer» (Обзор → Система). Клиент флаг больше не шлёт, поэтому
+      // решение тут, а не в форме карточки. Явное значение всё ещё
+      // уважается (серверный контракт не ломаем).
+      const ownerSetting = db
+        .prepare("SELECT reviewer_first_default FROM users WHERE id = ?")
+        .get(req.userId) as { reviewer_first_default?: number } | undefined;
+      const requiresReviewerReview =
+        requires_reviewer_review ?? ((ownerSetting?.reviewer_first_default ?? 1) === 1);
+      // Расписание повторения карточки (карточка f8e8a055).
+      const runRepeat =
+        ["daily", "weekdays", "weekly", "monthly"].includes(String(run_repeat))
+          ? String(run_repeat)
+          : "none";
+      const repeatUntil = repeat_until || null;
 
       // Task + labels + subtasks all land in one transaction — the frontend
       // used to POST the task, then POST each subtask separately (see
@@ -682,8 +849,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const createTaskTxn = db.transaction(() => {
         db.prepare(
           `
-          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO tasks (id, title, description, due_date, start_time, duration_min, project_id, priority, assignee_id, creator_id, parent_id, requires_reviewer_review, needs_research, run_repeat, repeat_until)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         ).run(
           id,
@@ -700,6 +867,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
           assignee_id || null,
           req.userId,
           parent_id || null,
+          requiresReviewerReview ? 1 : 0,
+          needs_research ? 1 : 0,
+          runRepeat,
+          repeatUntil,
         );
 
         if (label_ids?.length) {
@@ -844,26 +1015,31 @@ export function registerTaskRoutes(app: FastifyInstance) {
       //
       // Импорт отложенный: dispatch.ts уже зависит от этого модуля,
       // статический импорт в обратную сторону замкнул бы круг.
-      if (!assignee_id) {
-        void (async () => {
-          try {
-            const { applyIntakeToNewTask } = await import("./dispatch.js");
-            await applyIntakeToNewTask(id, req.userId);
-            const after = getTaskRow(id);
-            if (after) {
-              broadcastToUsers(Array.from(notifyUsers), {
-                type: "task:updated",
-                task: hydrateTask(after),
-              });
-            }
-          } catch (err) {
-            // Приём — улучшение, а не условие создания: задача уже
-            // заведена и видна. Молча ронять её из-за недоступной модели
-            // подбора нельзя.
-            console.warn(`приём задачи ${id} не удался:`, err);
+      // Приём зовём ВСЕГДА, даже когда исполнитель указан при создании:
+      // режим постановки — настройка владельца, и она должна действовать
+      // одинаково для любой карточки. Раньше здесь стояло
+      // `if (!assignee_id)`, и карточка с указанной ролью не получала ни
+      // флага, ни приёма — её нельзя было взять в работу вообще.
+      // Что подбор роли и раздачу чужому исполнителю делать не надо —
+      // знает сам applyIntakeToNewTask.
+      void (async () => {
+        try {
+          const { applyIntakeToNewTask } = await import("./dispatch.js");
+          await applyIntakeToNewTask(id, req.userId);
+          const after = getTaskRow(id);
+          if (after) {
+            broadcastToUsers(Array.from(notifyUsers), {
+              type: "task:updated",
+              task: hydrateTask(after),
+            });
           }
-        })();
-      }
+        } catch (err) {
+          // Приём — улучшение, а не условие создания: задача уже
+          // заведена и видна. Молча ронять её из-за недоступной модели
+          // подбора нельзя.
+          console.warn(`приём задачи ${id} не удался:`, err);
+        }
+      })();
 
       return { task: hydrated };
     },
@@ -894,6 +1070,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Признак готовности к самозахвату (миграция 026, карточка d598de9f).
       // Поднимает только владелец; пока false — claim отклоняется.
       ready_for_pickup: boolean;
+      // «Нужно глубокое исследование» (миграция 052). Галочка в карточке;
+      // по ней запускается серверный конвейер исследования. Ставит владелец
+      // или Секретарь при постановке — см. POST /api/tasks/:id/research.
+      needs_research: boolean;
     }>;
   }>("/api/tasks/:id", {
     preHandler: authPre,
@@ -1117,6 +1297,25 @@ export function registerTaskRoutes(app: FastifyInstance) {
         body.pinned = body.pinned ? 1 : 0;
       }
 
+      // Тот же приём, что у pinned: JS-булево better-sqlite3 не примет
+      // параметром. Флаг глубокого исследования — обычное поле карточки,
+      // менять его может тот, кому доступна запись задачи (владелец либо
+      // исполнитель), отдельного owner-guard'а здесь нет: это не рубильник
+      // сервиса, а отметка на карточке.
+      if (body.needs_research !== undefined) {
+        body.needs_research = body.needs_research ? 1 : 0;
+      }
+
+      if (body.requires_reviewer_review !== undefined) {
+        if (!isOwner(req.userId)) {
+          return reply.code(403).send({ error: "маршрут ревью может менять только владелец трекера" });
+        }
+        if (typeof body.requires_reviewer_review !== "boolean") {
+          return reply.code(400).send({ error: "requires_reviewer_review должен быть boolean" });
+        }
+        body.requires_reviewer_review = body.requires_reviewer_review ? 1 : 0;
+      }
+
       // ФЛАГ ГОТОВНОСТИ К САМОЗАХВАТУ (миграция 026, карточка d598de9f):
       // поднимает только владелец трекера. Если body.ready_for_pickup
       // передано — обрабатываем здесь и НЕ пропускаем в общий UPDATE ниже
@@ -1172,6 +1371,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
               fromValue: String(previous),
               toValue: String(newValue),
             });
+            if (newValue === 1 && existing.assignee_id) {
+              enqueueRoleRunJob({
+                taskId: id,
+                reason: "assigned",
+                actorId: req.userId,
+                dedupeKey: `ready:${id}:${uid()}`,
+              });
+            }
           });
           txn();
         }
@@ -1180,6 +1387,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // действием, и про него легко забывалось. Сам подбор исполнителя
         // сидит внутри отдачи, так что ручной и автоматический режимы
         // расходятся ровно в одном — кто поднял флаг.
+        // Исполнитель уже назначен — флаг и есть запуск: роль будит сервер.
         if (newValue === 1 && previous !== 1 && !existing.assignee_id) {
           try {
             const { dispatchTaskToPi } = await import("./dispatch.js");
@@ -1283,6 +1491,11 @@ export function registerTaskRoutes(app: FastifyInstance) {
         "status",
         "position",
         "pinned",
+        "requires_reviewer_review",
+        "needs_research",
+        "run_repeat",
+        "repeat_until",
+        "recurrence_spawned",
       ] as const;
       const fields: string[] = [];
       const values: any[] = [];
@@ -1349,6 +1562,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Только на active→completed: возврат задачи в работу очередь не
       // двигает, иначе «вернуть в работу» запускало бы следующий шаг.
       if (body.status === "completed" && existing.status !== "completed") {
+        // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
+        void import("./dispatch.js")
+          .then((m) => m.admitParentAfterChildren(id))
+          .catch((err) => console.warn("родитель после дочерней:", err));
         try {
           // Импорт отложенный: dispatch.ts уже зависит от этого модуля
           // (getTaskRow, hydrateTask), и статический импорт в обратную
@@ -1414,7 +1631,18 @@ export function registerTaskRoutes(app: FastifyInstance) {
           const allDone =
             siblings.length > 0 &&
             siblings.every((s) => s.status === "completed");
-          if (allDone) {
+          // Предохранитель (владелец 22.09.2026): у родителя есть свои
+          // невыполненные пункты — его работа ещё не сделана, и закрытие
+          // дочерних на проверку его не отправляет. Уйдёт туда сам, когда
+          // исполнитель закроет последний свой пункт (routes/subtasks.ts).
+          const openOwnSteps = (
+            db
+              .prepare(
+                "SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ? AND done = 0",
+              )
+              .get(parent.id) as { n: number }
+          ).n;
+          if (allDone && openOwnSteps === 0) {
             const beforeVersion = currentResultVersion(parent.id);
             const version = ensureResultVersionForReview(
               parent.id,

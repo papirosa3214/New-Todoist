@@ -1,11 +1,15 @@
 // Спек 1.2, задача 1.2.6: семантический матчинг задачи на роль.
-// Интеграционные тесты и live-блок против
-// реального bge-m3 на .110: проверяем, что задача про "REST API"
-// попадает на architect по cosine (subtask 5), а неизвестная задача —
-// не даёт высокого score (subtask 6). Live-блок skip'ается, если
-// .110:11434 не отвечает.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+// Мок embeddingClient ниже намеренно детерминированный: тесты проверяют
+// cosine/gate логику без зависимости от Ollama, сети или установленной модели.
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
+
+const embeddingClientMock = vi.hoisted(() => ({
+  getEmbeddings: vi.fn(),
+}));
+
+vi.mock("../src/lib/embeddingClient.js", () => embeddingClientMock);
+
 import db from "../src/db.js";
 import { buildApp } from "../src/index.js";
 import { markReadyForPickup } from "./helpers.js";
@@ -16,6 +20,30 @@ import {
 
 let app: FastifyInstance;
 let ownerToken = "";
+
+function deterministicEmbedding(text: string): number[] {
+  if (text.includes("Архитектор")) return [1, 0, 0];
+  if (text.includes("Строитель")) return [0, 1, 0];
+  if (text.includes("Тестировщик")) return [0, 0, 1];
+  if (text.includes("REST API")) return [1, 0.2, 0];
+  if (text.includes("кашу на завтрак")) return [0.2, 0.1, 1];
+  return [1, 1, 1];
+}
+
+beforeEach(() => {
+  embeddingClientMock.getEmbeddings.mockReset();
+  embeddingClientMock.getEmbeddings.mockImplementation(
+    async (input: string | string[]) => {
+      const texts = Array.isArray(input) ? input : [input];
+      const embeddings = texts.map(deterministicEmbedding);
+      return {
+        embeddings: Array.isArray(input) ? embeddings : embeddings[0],
+        dim: 3,
+        durationMs: 0,
+      };
+    },
+  );
+});
 
 beforeAll(async () => {
   app = await buildApp();
@@ -82,19 +110,16 @@ async function makeGateOpen(taskId: string): Promise<void> {
   );
 }
 
-describe("enrichSemantic: интеграция (bge-m3 на .110:11434)", () => {
+describe("enrichSemantic: герметичный cosine/gate", () => {
   it("semanticEnrich возвращает gate_open=true когда доля эскалаций > threshold", async () => {
     const taskId = await setupTaskWithTitle("gate helper");
     await makeGateOpen(taskId);
     const rate = getEscalationRate(30);
     expect(rate).toBeGreaterThan(0);
+    expect(embeddingClientMock.getEmbeddings).not.toHaveBeenCalled();
   });
 
   it("задача 'Спроектировать REST API' ранжирует architect выше builder", async () => {
-    // Проверяем доступность Ollama — если нет, skip.
-    const health = await app.inject({ method: "GET", url: "/api/health" });
-    if (health.statusCode !== 200) return;
-
     await seedRoles([
       {
         role: "architect",
@@ -112,13 +137,17 @@ describe("enrichSemantic: интеграция (bge-m3 на .110:11434)", () => 
         tags: ["test", "qa"],
       },
     ]);
+    // seedRoles создаёт fixture через тот же клиент; далее учитываем только
+    // запрос semanticEnrich, чтобы проверить отсутствие лишних вызовов.
+    embeddingClientMock.getEmbeddings.mockClear();
 
-    const taskId = await setupTaskWithTitle(
-      "Нужно спроектировать REST API для нового модуля уведомлений и согласовать схему БД",
-    );
+    const title = "Нужно спроектировать REST API для нового модуля уведомлений и согласовать схему БД";
+    const taskId = await setupTaskWithTitle(title);
     await makeGateOpen(taskId);
 
     const result = await semanticEnrich(taskId, { topK: 3 });
+    expect(embeddingClientMock.getEmbeddings).toHaveBeenCalledTimes(1);
+    expect(embeddingClientMock.getEmbeddings).toHaveBeenCalledWith(title);
     expect(result.gate_open).toBe(true);
     expect(result.matched.length).toBeGreaterThan(0);
     const top = result.matched[0];
@@ -133,9 +162,6 @@ describe("enrichSemantic: интеграция (bge-m3 на .110:11434)", () => 
   }, 30_000);
 
   it("низкое совпадение: задача про 'сделать кашу на завтрак' не попадает ни на какую роль с высоким score", async () => {
-    const health = await app.inject({ method: "GET", url: "/api/health" });
-    if (health.statusCode !== 200) return;
-
     await seedRoles([
       {
         role: "architect",
@@ -148,13 +174,15 @@ describe("enrichSemantic: интеграция (bge-m3 на .110:11434)", () => 
         tags: ["implement", "code"],
       },
     ]);
+    embeddingClientMock.getEmbeddings.mockClear();
 
-    const taskId = await setupTaskWithTitle(
-      "Сделать кашу на завтрак",
-    );
+    const title = "Сделать кашу на завтрак";
+    const taskId = await setupTaskWithTitle(title);
     await makeGateOpen(taskId);
 
     const result = await semanticEnrich(taskId, { topK: 3 });
+    expect(embeddingClientMock.getEmbeddings).toHaveBeenCalledTimes(1);
+    expect(embeddingClientMock.getEmbeddings).toHaveBeenCalledWith(title);
     expect(result.gate_open).toBe(true);
     expect(result.matched.length).toBeGreaterThan(0);
     // Максимальный score должен быть низким — кулинария далека от IT-ролей.
@@ -179,6 +207,7 @@ describe("enrichSemantic: интеграция (bge-m3 на .110:11434)", () => 
     expect(result.gate_open).toBe(false);
     expect(result.escalation_rate).toBe(0);
     expect(result.matched).toEqual([]);
+    expect(embeddingClientMock.getEmbeddings).not.toHaveBeenCalled();
     // Без сети — должно быть очень быстро.
     expect(result.duration_ms).toBeLessThan(50);
   });

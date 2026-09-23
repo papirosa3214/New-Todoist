@@ -95,6 +95,25 @@ describe("Родитель-зонтик: последняя дочерняя з�
     expect(p.status).toBe("active");
   });
 
+  it("у родителя свой невыполненный пункт — закрытие дочерних его на приёмку не шлёт", async () => {
+    // Владелец 22.09.2026: работа родителя ещё не сделана — на проверку
+    // рано. Пункт заводим прямо в базе: через API родителю с детьми шаги
+    // не заводятся, а секретарь кладёт их при постановке.
+    const parent = await makeTask("Зонтик со своим пунктом");
+    const first = await makeTask("Ребёнок C", parent);
+    const second = await makeTask("Ребёнок D", parent);
+    db.prepare(
+      "INSERT INTO subtasks (id, task_id, title, position) VALUES (?, ?, ?, 1)",
+    ).run(`own-step-${Date.now()}`, parent, "Свой пункт родителя");
+
+    await close(first);
+    await close(second);
+
+    const p = stateOf(parent);
+    expect(p.status).toBe("active");
+    expect(p.agent_state).toBeNull();
+  });
+
   it("в ленте родителя остаётся след — почему он оказался на приёмке", async () => {
     const parent = await makeTask("Зонтик: след в ленте");
     const only = await makeTask("Единственный ребёнок", parent);

@@ -32,6 +32,7 @@ import crypto from "crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { broadcastToUsers } from "../ws.js";
+import { isOwner } from "../access.js";
 import { currentTypists, startTyping, stopTyping } from "../chatTyping.js";
 import {
   attachmentRow,
@@ -915,4 +916,25 @@ export function registerChatRoutes(app: FastifyInstance) {
     ).run(req.userId);
     return { ok: true };
   });
+
+  // Очистить ленту канала — владелец 21.09.2026: «должна быть возможность
+  // очищать этот чат». Удаляем ВСЕ сообщения канала (owner/agents), не
+  // трогая чаты с ролями (у них chat_id заполнен) и вложения.
+  app.delete<{ Querystring: { channel?: string } }>(
+    "/api/chat/messages",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId))
+        return reply
+          .code(403)
+          .send({ error: "очистить чат может только владелец" });
+      const channel = req.query?.channel === "agents" ? "agents" : "owner";
+      const info = db
+        .prepare(
+          "DELETE FROM chat_messages WHERE channel = ? AND chat_id IS NULL",
+        )
+        .run(channel);
+      return { ok: true, deleted: info.changes };
+    },
+  );
 }

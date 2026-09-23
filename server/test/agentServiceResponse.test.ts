@@ -55,7 +55,14 @@ describe("POST /api/agent-service", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
+    // POST /api/agent-service возвращает «подтверждение мутации» (ok +
+    // актуальное состояние юнита). В 7c45c18b / 055e2735 в ответ
+    // добавились last_alive_at, next_scan_at, scan_interval_sec — для
+    // тумблера в UI; в тесте проверяем именно «мутация подтверждена и
+    // юнит в ожидаемом положении», а не полный снимок полей. toMatchObject
+    // устойчив к будущим расширениям ответа и не ломается при добавлении
+    // новых диагностических полей.
+    expect(response.json()).toMatchObject({
       ok: true,
       active: true,
       enabled: true,

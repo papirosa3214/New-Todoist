@@ -31,9 +31,14 @@ export interface CreateTaskInput {
   // сервер отвергает время без даты (миграция 005_task_time_of_day).
   start_time?: string | null;
   duration_min?: number | null;
+  // Повтор (миграция 049): сервер принимает только
+  // none|daily|weekdays|weekly|monthly, дата — «ГГГГ-ММ-ДД».
+  run_repeat?: string;
+  repeat_until?: string | null;
   project_id?: string;
   priority?: number;
   assignee_id?: string;
+  requires_reviewer_review?: boolean;
   label_ids?: string[];
   // Created atomically with the task in one transaction (server-side —
   // see AGENT-API.md §Tasks) — either a plain title or `{ title }`.
@@ -62,6 +67,9 @@ export interface UpdateTaskInput {
   due_date?: string | null;
   start_time?: string | null;
   duration_min?: number | null;
+  // Повтор (миграция 049): «none» снимает серию, repeat_until — до когда.
+  run_repeat?: string;
+  repeat_until?: string | null;
   project_id?: string | null;
   priority?: number;
   assignee_id?: string | null;
@@ -69,9 +77,12 @@ export interface UpdateTaskInput {
   label_ids?: string[];
   position?: number | null;
   pinned?: boolean;
+  requires_reviewer_review?: boolean;
   // Готовность к самозахвату (миграция 026). На сервере поднимает только
   // владелец, так что здесь тип широкий, а проверка прав — в routes/tasks.ts.
   ready_for_pickup?: boolean;
+  // «Нужно глубокое исследование» (миграция 052) — обычное поле карточки.
+  needs_research?: boolean;
 }
 
 export function useUpdateTask() {
@@ -184,5 +195,45 @@ export function useSetAgentState() {
     }) =>
       api.post<{ task: ApiTask }>(`/api/tasks/${id}/state`, { state, comment }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+  });
+}
+
+// POST /api/tasks/:id/repeat-extend — владелец продлевает завершённую серию
+// повтора на следующий календарный год: сервер ставит repeat_until =
+// «31 декабря следующего года» и сбрасывает recurrence_spawned, после чего
+// воркер снова может создавать вхождения. Доступно только владельцу (403).
+export function useExtendRepeat() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ ok: boolean; repeat_until: string }>(
+        `/api/tasks/${id}/repeat-extend`,
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+  });
+}
+
+// POST /api/tasks/:id/run — ручной разовый запуск агента на карточке по
+// команде владельца: executor — поднять исполнителя, reviewer — верификатора.
+// Служба-будильник при этом может быть выключена: это одиночный заход, а не
+// автоматика. Ничего в авторежиме не включает.
+export function useRunTaskAgent() {
+  return useMutation({
+    mutationFn: ({ id, mode }: { id: string; mode: "executor" | "reviewer" }) =>
+      api.post<{ ok: boolean; mode: string }>(`/api/tasks/${id}/run`, { mode }),
+  });
+}
+
+// POST /api/tasks/:id/research — ручной запуск серверного конвейера глубокого
+// исследования (владелец, задача помечена needs_research). Сервер поднимает
+// отдельный процесс и сразу отвечает: план → сбор → проверка → синтез →
+// отчёт в секции «Отчёты» карточки.
+export function useStartResearch() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ ok: boolean; started: boolean }>(
+        `/api/tasks/${id}/research`,
+        {},
+      ),
   });
 }

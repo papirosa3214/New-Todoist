@@ -15,7 +15,7 @@ describe("миграция ролей спека 1.1", () => {
     await app.close();
   });
 
-  it("убирает закрытый CHECK и сохраняет старые роли", () => {
+  it("сохраняет системные authority и ставит DB guard поверх старой схемы", () => {
     const ddl = db
       .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
       .get() as { sql: string };
@@ -37,14 +37,14 @@ describe("миграция ролей спека 1.1", () => {
     ).toEqual(["agent", "orchestrator", "owner", "viewer"]);
   });
 
-  it("позволяет новую роль и создаёт role_skills с индексом навыка", () => {
+  it("не позволяет business key в authority и сохраняет role_skills", () => {
     expect(() =>
       db
         .prepare(
           "INSERT INTO users (id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?)",
         )
         .run("new-role", "Researcher", "new-role@test", "hash", "researcher"),
-    ).not.toThrow();
+    ).toThrow(/invalid users\.role authority/);
     expect(
       db
         .prepare(
@@ -76,14 +76,13 @@ describe("миграция ролей спека 1.1", () => {
     );
     owner.run("claim-owner", "Claim owner", "claim-owner@test", "hash");
     const insertAgent = db.prepare(
-      "INSERT INTO users (id, name, email, password_hash, role, type, api_token) VALUES (?, ?, ?, ?, ?, 'ai', ?)",
+      "INSERT INTO users (id, name, email, password_hash, role, type, api_token) VALUES (?, ?, ?, ?, 'agent', 'ai', ?)",
     );
     insertAgent.run(
       "claim-researcher",
       "Claim Researcher",
       "claim-researcher@test",
       "hash",
-      "researcher",
       hashApiToken("tf_claim_researcher"),
     );
     insertAgent.run(
@@ -91,7 +90,6 @@ describe("миграция ролей спека 1.1", () => {
       "Claim Analyst",
       "claim-analyst@test",
       "hash",
-      "analyst",
       hashApiToken("tf_claim_analyst"),
     );
     db.prepare(

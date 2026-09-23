@@ -100,6 +100,23 @@ export function ChatComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pickerAnchorRef = useRef<HTMLButtonElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Упоминание через @: активный «поиск» участника прямо в тексте.
+  // null — mention сейчас не идёт (@ не набирали или между @ и курсором
+  // появился разрыв). Иначе — позиция @, набираемый запрос и индекс
+  // подсветки в дропдауне.
+  const [mention, setMention] = useState<{
+    start: number;
+    query: string;
+    selectedIndex: number;
+  } | null>(null);
+  // Зеркало mention в ref, чтобы обработчики клавиатуры видели актуальное
+  // состояние даже между рендерами (замыкание onKeyDown живёт от прошлого
+  // рендера, а setMention — отложенный).
+  const mentionRef = useRef<typeof mention>(null);
+  useEffect(() => {
+    mentionRef.current = mention;
+  }, [mention]);
 
   useEffect(() => {
     const el = rootRef.current;
@@ -110,6 +127,29 @@ export function ChatComposer({
     ro.observe(el);
     return () => ro.disconnect();
   }, [onHeightChange]);
+
+  // ── Автодополнение @ ───────────────────────────────────────────────
+  //
+  // Курсор в input может переехать без правки текста (клик мышью, стрелки
+  // без модификаторов), поэтому детект сидит в одном хелпере и зовётся
+  // на каждом onChange. Сам mention пересоздаётся — это дёшево, стейт
+  // нужен только чтобы дропдаун открылся/закрылся и сохранил позицию.
+  //
+  // Условие: @ засчитывается только как самостоятельный символ — в начале
+  // текста или после пробельного/пунктуационного разделителя. Иначе
+  // словим ложный триггер на user@example.com.
+  const detectMention = (value: string, cursor: number) => {
+    let i = cursor - 1;
+    while (i >= 0 && /[A-Za-zА-Яа-яёЁ0-9_.-]/.test(value[i])) i--;
+    if (i < 0 || value[i] !== "@") return null;
+    const prev = i > 0 ? value[i - 1] : "";
+    if (i !== 0 && /[A-Za-zА-Яа-яёЁ0-9_.-]/.test(prev)) return null;
+    return {
+      start: i,
+      query: value.slice(i + 1, cursor),
+      selectedIndex: mentionRef.current?.selectedIndex ?? 0,
+    };
+  };
 
   const signalTyping = useTypingSignal();
 
@@ -145,6 +185,110 @@ export function ChatComposer({
   const addressee = fixedAddressee ?? others.find((p) => p.id === toUserId);
   const toEveryone = !fixedAddressee && toUserId === TO_ALL;
   const chosen = toEveryone || !!addressee;
+
+  // Кандидаты для @-подсказки: тот же «others» (фильтрация секретаря уже
+  // сделана), но сортировка по принципу «префикс раньше подстроки» и
+  // ограничение сверху. Шести пунктов хватает — в канале столько ролей
+  // обычно и есть; больше — просто лишний скролл.
+  const mentionCandidates = (() => {
+    if (!mention) return [] as ApiChatParticipant[];
+    const q = mention.query.toLowerCase();
+    if (!q) return others.slice(0, 6);
+    const prefix: ApiChatParticipant[] = [];
+    const contains: ApiChatParticipant[] = [];
+    for (const p of others) {
+      const n = p.name.toLowerCase();
+      if (!n.includes(q)) continue;
+      (n.startsWith(q) ? prefix : contains).push(p);
+    }
+    return [...prefix, ...contains].slice(0, 6);
+  })();
+
+  // Если запрос сократился так, что selectedIndex вышел за список — откат
+  // к первому пункту. Без этого клавиатура при нажатии вниз падала бы в
+  // пустоту.
+  useEffect(() => {
+    if (!mention) return;
+    if (mention.selectedIndex >= mentionCandidates.length) {
+      setMention({ ...mention, selectedIndex: 0 });
+    }
+  }, [mention, mentionCandidates.length]);
+
+  // Вставка выбранного упоминания в текст. Курсор после замены встаёт за
+  // пробелом, чтобы следующий символ шёл уже после упоминания — иначе
+  // продолжение набора тут же сольётся с @Имя без разрыва.
+  const insertMention = (p: ApiChatParticipant) => {
+    const m = mentionRef.current;
+    if (!m) return;
+    let cursorPos = 0;
+    setText((prev) => {
+      const before = prev.slice(0, m.start);
+      const after = prev.slice(m.start + 1 + m.query.length);
+      const insertion = `@${p.name} `;
+      cursorPos = before.length + insertion.length;
+      return before + insertion + after;
+    });
+    setMention(null);
+    // Фокус и курсор — после ре-рендера, иначе setSelectionRange применится
+    // к старому DOM и не подхватится.
+    requestAnimationFrame(() => {
+      inputRef.current?.setSelectionRange(cursorPos, cursorPos);
+      inputRef.current?.focus();
+    });
+  };
+
+  const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setText(value);
+    signalTyping(value.trim().length > 0);
+    const cursor = e.target.selectionStart ?? value.length;
+    setMention(detectMention(value, cursor));
+  };
+
+  const onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const m = mentionRef.current;
+    if (m && mentionCandidates.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMention((cur) =>
+          cur
+            ? {
+                ...cur,
+                selectedIndex:
+                  (cur.selectedIndex + 1) % mentionCandidates.length,
+              }
+            : cur,
+        );
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMention((cur) =>
+          cur
+            ? {
+                ...cur,
+                selectedIndex:
+                  (cur.selectedIndex - 1 + mentionCandidates.length) %
+                  mentionCandidates.length,
+              }
+            : cur,
+        );
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        insertMention(mentionCandidates[m.selectedIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
+    // Без активного дропдауна Enter по-прежнему отправляет — это нативное
+    // поведение формы, отдельный обработчик здесь не нужен.
+  };
 
   const handlePickFiles = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -245,6 +389,61 @@ export function ChatComposer({
         </div>
       )}
 
+      {/* ── Дропдаун @-подсказки ──────────────────────────────────────
+          Стоит НАД строкой ввода, внутри того же композера — общая плёнка
+          (.nt-composer::after) уже лежит под ним и под полем одновременно,
+          отдельный фон не нужен. Высота композера растёт предсказуемо, и
+          onHeightChange пододвигает ленту. На пустом списке не рисуется
+          ничего: промахнулся мимо @ — и дропдауна нет. */}
+      {mention && mentionCandidates.length > 0 && (
+        <div
+          role="listbox"
+          aria-label="Упоминание агента"
+          className="mx-4 mb-1 bg-card2 border border-stroke rounded-xl overflow-hidden shadow-lg"
+        >
+          {mentionCandidates.map((p, i) => {
+            const selected = i === mention.selectedIndex;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => insertMention(p)}
+                // Ховер двигает подсветку вместе с курсором: иначе
+                // клавиатурная подсветка (пункт N) и мышь (пункт M) живут
+                // по разным правилам, и клик «проваливается» мимо того,
+                // что выделено.
+                onMouseEnter={() =>
+                  setMention((cur) =>
+                    cur ? { ...cur, selectedIndex: i } : cur,
+                  )
+                }
+                className={`w-full flex items-center gap-2 px-3 py-2 text-left ${
+                  selected ? "bg-card" : "bg-card2"
+                }`}
+              >
+                <Avatar
+                  initials={p.initials || p.name.slice(0, 1)}
+                  color={p.avatar_color || "#A6A6A6"}
+                  avatar_url={p.avatar_url}
+                  size={28}
+                />
+                <span className="flex-1 min-w-0 truncate text-[14px] text-text">
+                  {p.name}
+                </span>
+                {p.role && (
+                  <span className="text-[11px] text-dim shrink-0">
+                    {p.role}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* preventDefault на mousedown у КАЖДОЙ кнопки строки — приём из
           SubtaskFeed, и по той же причине (владелец 20.08.2026: «нажимаю
           ответить, ввожу комментарий, и он не отправляется»). Тап при
@@ -338,14 +537,23 @@ export function ChatComposer({
           className="flex-1 min-w-0 flex items-center gap-1 bg-card rounded-xl pl-3 pr-1.5"
         >
           <input
+            ref={inputRef}
             value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              // Сигнал «печатаю» — на сам факт набора. Пустое поле значит
-              // «передумал»: держать отметку тогда не за что.
-              signalTyping(e.target.value.trim().length > 0);
+            onChange={onInputChange}
+            onKeyDown={onInputKeyDown}
+            onBlur={() => {
+              signalTyping(false);
+              // Закрываем дропдаун с задержкой: onMouseDown на пункте
+              // дропдауна успевает выставить preventDefault только если
+              // blur ещё не сработал. 100 мс хватает на связку mousedown →
+              // click, без неё пункт не успевает нажаться — фокус уходит
+              // раньше.
+              window.setTimeout(() => {
+                if (mentionRef.current) setMention(null);
+              }, 100);
             }}
-            onBlur={() => signalTyping(false)}
+            aria-autocomplete="list"
+            aria-expanded={!!mention && mentionCandidates.length > 0}
             placeholder={
               addressee
                 ? `${addressee.name}…`

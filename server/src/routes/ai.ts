@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead } from "../access.js";
+import { OBSERVER_SYSTEM_PROMPT } from "./activity.js";
+import { ROLE_NAMES, rolesPromptBlock, type RoleName } from "../roleRouting.js";
 
 // ═══════════ AI-разбивка задачи на подзадачи (локальная модель) ═══════════
 // Дёргает Ollama (OpenAI-совместимый /v1/chat/completions) на домашнем
@@ -55,45 +57,49 @@ const STRUCTURE_SYSTEM_PROMPT = `Ты умный персональный асс
 // шагами, и пустой children в ответе это нормальный, а не бракованный разбор.
 // Дробить одно дело на карточки ради дробления хуже, чем не дробить: владелец
 // получит доску из огрызков и будет их склеивать руками.
-const DICTATION_SYSTEM_PROMPT = `Ты разбираешь надиктовку владельца трекера задач в готовую постановку.
-Текст надиктован голосом: в нём есть слова-паразиты, повторы и оговорки — их надо убрать, смысл сохранить.
+// Шаблон постановки (владелец 22–23.09.2026): каркас карточки с подсказкой
+// в каждом поле, исполнители одной строкой и два примера. Заменил длинную
+// инструкцию: вместе со слоем владельца та занимала ~13 тыс. знаков, и
+// модель к концу теряла начало. Проба на 14 надиктовках — ~/intake-lab.
+const DICTATION_SYSTEM_PROMPT = `Ты — секретарь. Из надиктовки владельца собери постановку по ШАБЛОНУ. Надиктовка голосовая: убери паразиты и повторы, смысл сохрани.
 
-Верни ОДИН JSON-объект такой формы:
+ШАБЛОН (верни ровно такой JSON, без пояснений):
 {
-  "title": "короткое название главной задачи, 3-8 слов",
-  "description": "чистое описание: что надо сделать и зачем, без слов-паразитов",
-  "result": "по чему поймём, что задача сделана — проверяемый признак",
-  "subtasks": ["шаг 1", "шаг 2"],
-  "due_date": null,
-  "priority": 4,
-  "project": null,
-  "question": null,
-  "children": [
-    {"title": "название дочерней карточки", "description": "что в ней сделать", "result": "проверяемый признак готовности", "subtasks": ["шаг"], "after": null, "question": null}
-  ]
+  "title": "3–8 слов: что сделать",
+  "description": "в чём проблема и что нужно, со ВСЕМИ условиями и оговорками владельца",
+  "result": "проверяемый признак готовности, не пересказ названия",
+  "where": "не указано — пока владелец сам не назвал платформу (iphone | web | server | личное)",
+  "role": "исполнитель из списка ниже или null",
+  "role_reason": "почему он — одной фразой по сути работы",
+  "subtasks": ["2–5 конкретных шагов"],
+  "due_date": "ГГГГ-ММ-ДД или ГГГГ-ММ-ДД ЧЧ:ММ, если срок назван; иначе null",
+  "priority": "1 срочно, 2 высокий, 3 средний, 4 обычный (по умолчанию 4)",
+  "project": "название ровно из списка проектов или null",
+  "question": "один вопрос, только если без ответа работу не сделать; иначе null. Вопрос ОСТАНАВЛИВАЕТ запуск работы",
+  "children": []
 }
 
-ГЛАВНОЕ РЕШЕНИЕ — сколько в надиктовке ДЕЛ:
-- Одно дело — это один результат, который сдают целиком. Тогда "children" пустой, а вся конкретика идёт в "subtasks".
-- Несколько дел — это разные результаты: их можно сдать по отдельности, делать в разное время и поручить разным людям. Тогда КАЖДОЕ становится дочерней карточкой в "children", даже если названы они в одном предложении.
-- Признаки, что дел несколько: «а ещё», «отдельно», «потом», «заодно», «и не связанное с этим», перечисление через «во-первых/во-вторых», разные предметы работы (одно про интерфейс, другое про документацию).
-- Не превращай шаги ОДНОГО дела в дочерние карточки: «купить масло», «слить старое», «залить новое» — это шаги, а не отдельные дела.
+ОДНО ДЕЛО ИЛИ НЕСКОЛЬКО. Одно дело = один результат: children пустой, конкретика в subtasks. Несколько независимых результатов = каждый отдельной карточкой в children (те же поля, плюс "after": номер карточки, которую надо закончить раньше, или null). Шаги одного дела в children не выносить.
+Проверка на «несколько»: если две вещи можно сдать по отдельности (например, «список контактов через @» и «показывать, что агент отвечает»), это ДВЕ карточки, даже если сказаны одной фразой через «и плюс», «ещё», «и также».
+ГДЕ: по умолчанию "не указано". Меняй, только если владелец сам сказал: «на телефоне», «в приложении на айфоне» — iphone; «на сайте», «в вебе» — web; «на сервере» — server; личное дело — «личное». Названия экранов («обзор», «чат», «настройки») платформу НЕ называют — там "не указано".
+НИЧЕГО НЕ ТЕРЯЙ: каждое условие, «но», «только когда», «и при этом» владельца должно попасть в description или result. Короткий пересказ, потерявший условие, — ошибка.
 
-Пример надиктовки с несколькими делами: «почини кнопку в приложении, потом когда починишь добавь туда фильтр, и отдельно напиши инструкцию для новичков, это срочно».
-Правильный разбор: "children" из трёх карточек — «Починить кнопку» (after: null), «Добавить фильтр» (after: 1 — ждёт первую), «Написать инструкцию для новичков» (after: null — ни от чего не зависит).
+ИСПОЛНИТЕЛИ — выбирай по тому, какую РАБОТУ надо сделать, а не по словам:
+{{ИСПОЛНИТЕЛИ}}
+- null — личное дело владельца: звонок, оплата, поездка, документы.
 
-Остальные правила:
-- "subtasks" главной задачи — 2-6 конкретных шагов. Когда есть дочерние карточки, шаги главной не пересказывают их названия: там остаётся только общее (например, свести результат или проверить целиком). Нечего написать — пустой массив.
-- У КАЖДОЙ дочерней карточки — свои 2-5 шагов в её "subtasks". Карточка без шагов заставит владельца дописывать их руками, а расписывать всё должен ты.
-- "after" у дочерней карточки — номер той дочерней карточки из этого же списка (1 — первая), которую надо закончить ДО неё. Можно начинать сразу — null.
-- Дочерние карточки перечисляй в том порядке, в котором их разумно делать.
-- "due_date" — "ГГГГ-ММ-ДД" или "ГГГГ-ММ-ДД ЧЧ:ММ", если срок назван или ясен из слов вроде «до пятницы»; иначе null.
-- "priority" — 1 срочно, 2 высокий, 3 средний, 4 обычный. Не назван — 4.
-- "project" — название проекта РОВНО из предложенного списка, если работа явно про него; иначе null. Не выдумывай проектов, которых нет в списке.
-- "result" — по чему будет видно, что работа сделана: проверяемый признак, а не пересказ названия. «Кнопка сохраняет черновик и он виден после перезахода» — годится; «кнопка починена» — нет. У каждой дочерней карточки свой "result". Совсем нечего проверить — пустая строка.
-- "question" — ОДИН короткий вопрос владельцу, если без ответа работу нельзя сделать надёжно: не назван предмет работы, не ясно, о какой из двух систем речь, не хватает доступа. Всё понятно — null. Не задавай вопросов ради вежливости и не переспрашивай то, что можно решить разумным умолчанием: заданный вопрос ОСТАНАВЛИВАЕТ запуск работы и ждёт владельца.
+ПРИМЕРЫ
 
-Ответь ТОЛЬКО этим JSON, без markdown и без пояснений.`;
+Надиктовка: «в приложении когда файл грузится вообще непонятно идёт он или завис, сделай чтобы было видно»
+{"title":"Показывать ход загрузки файла в приложении","description":"При загрузке файла на iPhone не видно, идёт ли она. Нужно показывать прогресс.","result":"Во время загрузки видна полоска с процентом, после загрузки — файл в списке","where":"iphone","role":"builder","role_reason":"нужно брать прогресс из загрузки и выводить его — это код, не макет","subtasks":["Получать прогресс загрузки","Показывать полоску с процентом","Проверить на большом файле"],"due_date":null,"priority":4,"project":null,"question":null,"children":[]}
+
+Надиктовка: «почини кнопку сохранения на вебе, потом добавь туда фильтр, и отдельно запишись к стоматологу на пятницу»
+{"title":"Кнопка сохранения, фильтр и стоматолог","description":"Три дела: починить сохранение, затем добавить фильтр; отдельно записаться к стоматологу.","result":"Все три карточки закрыты","where":"web","role":null,"role_reason":"общая карточка, работу делают дочерние","subtasks":[],"due_date":null,"priority":4,"project":null,"question":null,"children":[
+{"title":"Починить кнопку сохранения","description":"Кнопка на вебе не сохраняет.","result":"Нажатие сохраняет, данные видны после перезагрузки","where":"web","role":"builder","role_reason":"починка кода","subtasks":["Воспроизвести","Исправить","Проверить"],"after":null,"question":null},
+{"title":"Добавить фильтр","description":"После починки добавить фильтр на тот же экран.","result":"Фильтр отбирает записи","where":"web","role":"builder","role_reason":"новая функция в коде","subtasks":["Добавить фильтр","Проверить отбор"],"after":1,"question":null},
+{"title":"Записаться к стоматологу","description":"Нужна запись на пятницу.","result":"Запись на пятницу подтверждена","where":"личное","role":null,"role_reason":"личное дело владельца","subtasks":["Позвонить в клинику","Подтвердить время"],"after":null,"question":null}]}
+
+Ответь ТОЛЬКО JSON.`;
 
 // ═══════════ Дневник: AI-действия над текстом + мост в задачи ═══════════
 // 25.08.2026, владелец: «дневник с ии мостом в проекты». Три действия над
@@ -191,6 +197,12 @@ export async function callUnifiedAi(opts: {
    *  карточек длиннее в разы, и обрезанный на середине JSON не парсится
    *  вовсе — там потолок поднимается явно. */
   predictTokens?: number;
+  /** Окно контекста локальной модели. Дефолт 8192 — хватало прежним мелким
+   *  вызовам. Разбору БОЛЬШОГО текста (постановка из заметки/файла) этого
+   *  мало: вход + системный промпт + ответ не влезают, и Ollama молча
+   *  обрезает НАЧАЛО промпта — модель теряет правила и лепит одну убогую
+   *  карточку. Там окно поднимается явно. */
+  numCtx?: number;
 }): Promise<string> {
   const provider = (opts.provider || "local").toLowerCase();
   const requestedModel = opts.aiModel;
@@ -375,7 +387,7 @@ export async function callUnifiedAi(opts: {
         stream: false,
         think: opts.think ?? false,
         options: {
-          num_ctx: 8192,
+          num_ctx: opts.numCtx ?? 8192,
           // С выключенным think реальный ответ укладывается в ~200 токенов
           // (замер), 2048 — щедрый запас. С включённым (Дневник) бюджет
           // должен вместить и <think>, и сам текст — поэтому больше.
@@ -658,6 +670,12 @@ export interface DictationChild {
   /** Номер дочерней карточки (1-based) в этом же списке, после которой можно
    *  браться за эту. null — ни от чего не зависит. */
   after: number | null;
+  /** Исполнитель, выбранный вместе с постановкой, и почему он. */
+  role?: RoleName | null;
+  roleReason?: string;
+  /** Платформа, если владелец её назвал: iphone | web | server; «личное» —
+   *  дело самого владельца, агентам не отдаётся. null — не указано. */
+  where?: string | null;
 }
 
 export interface DictationCards {
@@ -675,6 +693,9 @@ export interface DictationCards {
    *  владелец поправит одним касанием. */
   projectId: string | null;
   children: DictationChild[];
+  role?: RoleName | null;
+  roleReason?: string;
+  where?: string | null;
 }
 
 /** Достаёт JSON-объект из сырого ответа модели — тем же способом, что и
@@ -698,6 +719,21 @@ function parseJsonObject(rawContent: string): any {
       throw new OllamaError("Не удалось разобрать ответ модели как JSON.");
     }
   }
+}
+
+const WHERE_VALUES = new Set(["iphone", "web", "server", "личное"]);
+
+/** Роль из ответа модели — только из восьми канонических, иначе null. */
+function parseRole(raw: unknown): RoleName | null {
+  const v = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return (ROLE_NAMES as readonly string[]).includes(v) ? (v as RoleName) : null;
+}
+
+/** «Где» — только из известных значений; всё прочее, включая
+ *  «не указано», считается не названным. */
+function parseWhere(raw: unknown): string | null {
+  const v = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return WHERE_VALUES.has(v) ? v : null;
 }
 
 function cleanTitles(raw: unknown, limit: number): string[] {
@@ -734,16 +770,78 @@ function cleanTitles(raw: unknown, limit: number): string[] {
  * пользовательский слой не может физически, что бы в нём ни написали.
  */
 export function buildDictationSystemPrompt(ownerLayer: string): string {
+  // Что владелец видит в «Настройки → Постановка задач», то и работает
+  // (23.09.2026): его текст ЗАМЕНЯЕТ шаблон, а не приклеивается к нему —
+  // иначе в модель уходили две инструкции подряд. Формат страхует разбор
+  // ниже: чужие поля отбрасываются, роль и проект сверяются по спискам.
   const layer = (ownerLayer || "").trim();
-  if (!layer) return DICTATION_SYSTEM_PROMPT;
-  return (
-    DICTATION_SYSTEM_PROMPT +
-    "\n\n— — —\nДополнительные пожелания владельца к смыслу постановки " +
-    "(стиль, глубина разбиения, предпочтения по проектам). Они НЕ меняют " +
-    "формат ответа, набор полей и запрет запускать задачу — формат выше " +
-    "остаётся обязательным:\n" +
-    layer
+  return withRoles(layer || DICTATION_SYSTEM_PROMPT);
+}
+
+/** Подставить живой список ролей на место {{ИСПОЛНИТЕЛИ}} (таблица roles):
+ *  новая роль сразу видна Секретарю, отключённая — пропадает. */
+export function withRoles(prompt: string): string {
+  return prompt.split("{{ИСПОЛНИТЕЛИ}}").join(rolesPromptBlock());
+}
+
+/**
+ * Роль для карточки, заведённой РУКАМИ (или агентом), — той же моделью и
+ * по тем же разделам шаблона, что у Секретаря (владелец 23.09.2026: «чтобы
+ * не было большой разницы, ручками я задачу делаю или через секретаря»).
+ *
+ * Разделы «ИСПОЛНИТЕЛИ» и «ГДЕ» берутся из действующего текста постановки
+ * (свой текст владельца, иначе шаблон) — одна правка в «Постановке задач»
+ * действует на оба пути. null — модель не ответила или ответ не разобран:
+ * тогда вызывающий берёт прежний подбор по словам.
+ */
+export async function pickRoleByModel(
+  task: { title: string; description: string | null; subtasks: string[] },
+  ownerId: string | null,
+): Promise<{ role: RoleName | null; roleReason: string; where: string | null } | null> {
+  // В тестах живую модель не зовём: она на .110 и грузится до минуты.
+  // Тесты, которым подбор нужен, подменяют эту функцию.
+  if (process.env.VITEST) return null;
+  const source = withRoles(
+    (ownerId ? await getUserPrompt(ownerId, "task_intake") : "").trim() || DICTATION_SYSTEM_PROMPT,
   );
+  const section = (text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    if (a < 0) return "";
+    const b = to ? text.indexOf(to, a + from.length) : -1;
+    return text.slice(a, b > a ? b : undefined).trim();
+  };
+  const roles =
+    section(source, "ИСПОЛНИТЕЛИ", "ПРИМЕРЫ") ||
+    section(withRoles(DICTATION_SYSTEM_PROMPT), "ИСПОЛНИТЕЛИ", "ПРИМЕРЫ");
+  const whereRule =
+    section(source, "ГДЕ:", "НИЧЕГО НЕ ТЕРЯЙ") ||
+    section(DICTATION_SYSTEM_PROMPT, "ГДЕ:", "НИЧЕГО НЕ ТЕРЯЙ");
+  const systemPrompt =
+    "Ты — секретарь. Для готовой карточки задачи выбери исполнителя и платформу.\n\n" +
+    `${roles}\n\n${whereRule}\n\n` +
+    'Верни ТОЛЬКО JSON: {"role": "исполнитель из списка или null", ' +
+    '"role_reason": "почему он — одной фразой по сути работы", ' +
+    '"where": "не указано | iphone | web | server | личное"}';
+  const steps = task.subtasks.length
+    ? `\nШаги:\n${task.subtasks.map((t) => `- ${t}`).join("\n")}`
+    : "";
+  try {
+    const content = await callUnifiedAi({
+      systemPrompt,
+      userPrompt: `Карточка:\nНазвание: ${task.title}\nОписание: ${task.description ?? ""}${steps}`,
+      temperature: 0.2,
+      predictTokens: 400,
+    });
+    const parsed = parseJsonObject(content);
+    return {
+      role: parseRole(parsed?.role),
+      roleReason: typeof parsed?.role_reason === "string" ? parsed.role_reason.trim() : "",
+      where: parseWhere(parsed?.where),
+    };
+  } catch (err) {
+    console.warn("подбор роли моделью не удался:", err);
+    return null;
+  }
 }
 
 export async function structureDictationToCards(
@@ -757,6 +855,9 @@ export async function structureDictationToCards(
      *  `task_intake`). Без него разбор идёт на одном системном промпте —
      *  как было до 14.09.2026. */
     ownerId?: string;
+    /** Потолок входного текста. Дефолт 6000 — надиктовка; заметке/файлу
+     *  нужно больше, вызывающий поднимает явно. */
+    maxChars?: number;
   },
 ): Promise<DictationCards> {
   const today = new Date().toISOString().slice(0, 10);
@@ -786,7 +887,7 @@ export async function structureDictationToCards(
     userPrompt:
       `Сегодня ${today}.\n\n` +
       `Проекты, из которых можно выбрать:\n${projectList}\n\n` +
-      `Надиктовка:\n"${rawText.trim().slice(0, 6000)}"`,
+      `Надиктовка:\n"${rawText.trim().slice(0, opts?.maxChars ?? 6000)}"`,
     provider: opts?.provider,
     localModel: opts?.localModel,
     aiModel: opts?.aiModel,
@@ -794,6 +895,10 @@ export async function structureDictationToCards(
     // Родитель с шагами плюс несколько детей со своими шагами в 2048 токенов
     // не всегда влезают, а обрезанный JSON не парсится вовсе.
     predictTokens: 4096,
+    // 16k окно: вход (до 12000 символов) + длинный системный промпт постановки
+    // + 4096 на ответ. С 8192 Ollama обрезала начало промпта, и на большом
+    // тексте выходила одна карточка без контекста (владелец 20.09.2026).
+    numCtx: 16384,
   });
 
   const parsed = parseJsonObject(content);
@@ -832,6 +937,10 @@ export async function structureDictationToCards(
             question: q || null,
             subtasks: cleanTitles(c?.subtasks, 10),
             after,
+            role: parseRole(c?.role),
+            roleReason:
+              typeof c?.role_reason === "string" ? c.role_reason.trim() : "",
+            where: parseWhere(c?.where),
           };
         })
         .filter((c: DictationChild | null): c is DictationChild => c !== null)
@@ -847,6 +956,10 @@ export async function structureDictationToCards(
   });
 
   return {
+    role: parseRole(parsed?.role),
+    roleReason:
+      typeof parsed?.role_reason === "string" ? parsed.role_reason.trim() : "",
+    where: parseWhere(parsed?.where),
     title,
     description:
       typeof parsed?.description === "string" && parsed.description.trim()
@@ -957,7 +1070,7 @@ function parseExtractedTasks(rawContent: string): ExtractedTaskResult[] {
   return items.slice(0, 10);
 }
 
-async function extractTasksFromText(
+export async function extractTasksFromText(
   text: string,
   provider?: string,
   localModel?: string,
@@ -966,13 +1079,16 @@ async function extractTasksFromText(
    *  (подмешивается через "\n\n# Дополнение от пользователя:\n"). Карточка
    *  04c916c8: пусто или undefined = вызов без дополнения. */
   userSystemPrompt?: string,
+  /** Потолок входного текста. Дефолт 6000 — для диктовки; вложениям надо
+   *  больше, вызывающий поднимает явно. */
+  maxChars = 6000,
 ): Promise<ExtractedTaskResult[]> {
   const content = await callUnifiedAi({
     systemPrompt: composeSystemPrompt(
       EXTRACT_TASKS_SYSTEM_PROMPT,
       userSystemPrompt,
     ),
-    userPrompt: text.trim().slice(0, 6000),
+    userPrompt: text.trim().slice(0, maxChars),
     provider,
     localModel,
     aiModel,
@@ -1008,7 +1124,7 @@ function composeSystemPrompt(
  * существующей строки (не null), чтобы вызывающий мог просто склеивать.
  * Миграция таблицы — `db.ts`, см. CREATE TABLE IF NOT EXISTS user_ai_prompts.
  */
-async function getUserPrompt(userId: string, scope: string): Promise<string> {
+export async function getUserPrompt(userId: string, scope: string): Promise<string> {
   const db = (await import("../db.js")).default;
   const row = db
     .prepare(
@@ -1059,18 +1175,45 @@ export function registerAiRoutes(app: FastifyInstance) {
     preHandler: authPre,
     handler: async () => {
       try {
-        const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
-          signal: AbortSignal.timeout(3000),
-        });
-        if (!res.ok) return { models: [] };
-        const data = (await res.json()) as any;
+        // tags — что вообще лежит на диске; ps — что реально загружено в
+        // память прямо сейчас и какая доля весов попала в VRAM. Второй запрос
+        // необязателен: Ollama может не ответить, тогда отдаём только размеры.
+        const [tagsRes, psRes] = await Promise.all([
+          fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+            signal: AbortSignal.timeout(3000),
+          }),
+          fetch(`${OLLAMA_BASE_URL}/api/ps`, {
+            signal: AbortSignal.timeout(3000),
+          }).catch(() => null),
+        ]);
+        if (!tagsRes.ok) return { models: [] };
+        const data = (await tagsRes.json()) as any;
+        const running = new Map<string, { size: number; size_vram: number }>();
+        if (psRes && psRes.ok) {
+          const ps = (await psRes.json()) as any;
+          for (const m of ps.models || []) {
+            if (m?.name) {
+              running.set(m.name, {
+                size: m.size ?? 0,
+                size_vram: m.size_vram ?? 0,
+              });
+            }
+          }
+        }
         const models = (data.models || [])
           .filter((m: any) => m.name && !m.name.includes("embed"))
-          .map((m: any) => ({
-            name: m.name,
-            size: m.size,
-            details: m.details,
-          }));
+          .map((m: any) => {
+            const live = running.get(m.name);
+            return {
+              name: m.name,
+              // Загруженная модель отдаёт фактический размер в памяти, а не
+              // размер файла; size_vram — сколько из него на GPU.
+              size: live?.size ?? m.size,
+              details: m.details,
+              loaded: !!live,
+              size_vram: live?.size_vram ?? null,
+            };
+          });
         return { models };
       } catch {
         return { models: [] };
@@ -1437,6 +1580,25 @@ export function registerAiRoutes(app: FastifyInstance) {
           prompt: r.prompt,
           updated_at: r.updated_at,
         })),
+        // Штатные серверные промпты по скоупам — приложение показывает их
+        // полупрозрачным placeholder'ом в окошке, чтобы владелец видел, из
+        // чего состоит системный промпт. Пустое поле = применяется этот.
+        defaults: {
+          extract_tasks: EXTRACT_TASKS_SYSTEM_PROMPT,
+          // Слой владельца «как собирать постановку» (scope task_intake):
+          // стиль названия, глубина разбиения, когда одна карточка, а когда
+          // дерево. Подмешивается в structureDictationToCards.
+          task_intake: DICTATION_SYSTEM_PROMPT,
+          journal_assist: (
+            Object.entries(JOURNAL_ASSIST_PROMPTS) as [
+              string,
+              string,
+            ][]
+          )
+            .map(([action, text]) => `# ${action}\n${text}`)
+            .join("\n\n"),
+          activity: OBSERVER_SYSTEM_PROMPT,
+        },
       };
     },
   });

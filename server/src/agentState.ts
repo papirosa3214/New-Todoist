@@ -52,6 +52,10 @@ type Caller = {
   isOwner: boolean;
   isExecutor: boolean;
   isReviewer?: boolean;
+  // Reviewer-first: карточку после сдачи смотрит Reviewer, и исполнитель не
+  // может сам снять её из review — только Reviewer или владелец. См.
+  // canTransition, строка review -> in_progress.
+  requiresReviewerReview?: boolean;
   // Only meaningful for the from==='in_progress' rows: whether the lease
   // has expired. Drives the in_progress -> in_progress self-reclaim row —
   // see canTransition below.
@@ -81,9 +85,8 @@ export type TransitionVia = "claim" | "state";
  *  - `in_progress -> in_progress` (self-reclaim of an expired lease) only
  *    claim() can take — state() has no reason to request a no-op transition.
  *  - `review -> in_progress` only state() can take, with a mandatory comment
- *    (see commentRequiredFor). Since 20.08.2026 the executor may take it too:
- *    mandatory owner acceptance was dropped, so there is no acceptance left to
- *    skip — `review` became a voluntary way to show work, not a one-way door.
+ *    (see commentRequiredFor). Владелец и Reviewer снимают карточку из `review`; исполнитель — только
+ *    если у карточки НЕ включён reviewer-first (`who.requiresReviewerReview`).
  *    claim() still cannot reach into `review`: silently resuming a task the
  *    owner is looking at would hide the transition from the feed, and the
  *    mandatory comment is the point.
@@ -102,7 +105,14 @@ export function canTransition(
     return via === "claim" && who.isExecutor && !!who.leaseExpired;
   }
   if (from === "review" && to === "in_progress") {
-    return via === "state" && (who.isOwner || who.isExecutor || !!who.isReviewer);
+    if (via !== "state") return false;
+    // Владелец — вне процесса: снимает карточку из review всегда.
+    if (who.isOwner) return true;
+    // Reviewer снимает сданную работу на доработку.
+    if (who.isReviewer) return true;
+    // Исполнитель возвращает сам только не-reviewer-first карточку; у
+    // reviewer-first снять работу может лишь Reviewer/владелец.
+    return !!who.isExecutor && !who.requiresReviewerReview;
   }
   // "любое → NULL, владелец, снять с агента"
   if (to === null) return who.isOwner;
@@ -160,7 +170,7 @@ export const AGENT_RULES = [
   "ПАМЯТЬ И БАЗА ЗНАНИЙ — не украшение, а часть работы. ДО работы: похожее уже делали? спроси базу (`kb_search_knowledge_base` или `python3 ~/kb/kb_query.py \"вопрос своими словами\"`), и если урок нашёлся, читай его целиком и иди по нему, а не изобретай заново. ПОСЛЕ работы: рабочий рецепт, причина сбоя, трасса разбора — уроком в базу (`kb_add_lesson`); короткий устойчивый факт (порт, повадка модели, предпочтение владельца) — в память через `mnemosyne_remember`. Находка, оставленная только в ленте задачи, умирает вместе с карточкой.",
   "ДРОБЛЕНИЕ РАБОТЫ: маленькая линейная работа у одного исполнителя (1–3 действия, один набор инструментов) → subtasks внутри карточки. Сложная работа (4+ шагов, разные компетенции, нужны разные MCP-инструменты, можно делать параллельно или делегировать) → дочерние задачи на доске через parent_id. Кто нарезает: оркестратор — при поступлении задачи от владельца; исполнитель — вправе сам, если задача пришла без разбивки и оказалась сложной; владелец — как угодно.",
   "Карточка — только ход работы: за что взялся, что сделал. Обсуждения, вопросы и согласования — в чат координации, а не в ленту карточки.",
-  "Итог задачи и найденные грабли — отдельной заметкой в документацию проекта (taskflow_doc_write), до сдачи в review. Выполненную карточку закрывают, и всё написанное в ней уходит с доски; в документации знание остаётся и достаётся следующему.",
+  "ОТЧЁТ ПО ЗАДАЧЕ — обязательный финал: до сдачи в review сложи в документацию проекта (taskflow_doc_write) отчёт по шаблону из AGENT-PROTOCOL.md («Отчёт по задаче»): цель, итог, этапы, заключение, ключевые решения, грабли, границы, открытые хвосты, доказательства и как проверить, ссылки на материалы. Материалы (презентации, документы, спеки) — ссылками И файлами к карточке (taskflow_comment files=…). В самой карточке (result/комментарий) — короткий итог и ссылка на отчёт. По РОДИТЕЛЬСКОЙ задаче исполнитель собирает сводный отчёт из отчётов дочерних. Выполненную карточку закрывают, и всё написанное в ленте уходит с доски; отчёт в документации остаётся и достаётся следующему.",
 ];
 
 /** Предел длины result: «одно-два предложения» — это примерно столько. */

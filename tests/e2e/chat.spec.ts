@@ -105,3 +105,207 @@ test("без выбранного адресата сообщение не от�
   // И список адресатов открыт: отказ объясняет себя сам.
   await expect(page.getByRole("menuitem", { name: "Всем" })).toBeVisible();
 });
+
+// Управляемый список участников — мок регистрируется ПОСЛЕ setupApp, чтобы
+// его pass-through для GET не ушёл в сеть (playwright применяет route в
+// обратном порядке регистрации, и наш fulfill перебивает continue).
+const MENTION_PARTICIPANTS_BODY = JSON.stringify([
+  {
+    id: "u-secretary",
+    name: "Секретарь",
+    type: "ai",
+    role: "viewer",
+    avatar_color: "#A6A6A6",
+    initials: "С",
+  },
+  {
+    id: "u-alice",
+    name: "Alice",
+    type: "human",
+    role: "agent",
+    avatar_color: "#A6A6A6",
+    initials: "A",
+  },
+  {
+    id: "u-bob",
+    name: "Bob",
+    type: "human",
+    role: "agent",
+    avatar_color: "#A6A6A6",
+    initials: "B",
+  },
+  {
+    id: "u-carol",
+    name: "Carol",
+    type: "human",
+    role: "agent",
+    avatar_color: "#A6A6A6",
+    initials: "C",
+  },
+]);
+
+// Главная проверка карточки eb4759ea: при вводе @ в строке чата появляется
+// выпадающий список участников, фильтр по подстроке, выбор через Enter
+// вставляет @Имя в текст, и сообщение уходит именно с этим упоминанием.
+test("выбор агента через @ вставляет упоминание и уходит с ним", async ({
+  page,
+  context,
+}) => {
+  const written = await setupApp(context);
+  await context.route("**/api/chat/participants", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: MENTION_PARTICIPANTS_BODY,
+    });
+  });
+  await openScreen(page, "/chat");
+
+  const input = page.getByPlaceholder(/Секретарь/);
+  await input.click();
+
+  // 1) Сразу после @ — весь список из трёх «агентов». Секретарь в нём
+  // НЕТ: композер фильтрует viewer+ai (миграция 028).
+  await input.type("@");
+  const listbox = page.getByRole("listbox", { name: /Упоминание/ });
+  await expect(listbox).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Alice/ }),
+  ).toBeVisible();
+  await expect(page.getByRole("option", { name: /Bob/ })).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Carol/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Секретарь/ }),
+  ).toHaveCount(0);
+
+  // 2) Фильтр — префикс «bo» оставляет только Bob.
+  await input.type("bo");
+  await expect(
+    page.getByRole("option", { name: /Alice/ }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("option", { name: /Bob/ })).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: /Carol/ }),
+  ).toHaveCount(0);
+
+  // 3) Enter по выбранному — в тексте появляется @Bob с пробелом, дропдаун
+  // закрывается, курсор стоит после пробела.
+  await input.press("Enter");
+  await expect(listbox).toHaveCount(0);
+  await expect(input).toHaveValue("@Bob ");
+
+  // 4) Дописываем сообщение и отправляем.
+  await input.type("посмотри пожалуйста");
+  await input.press("Enter");
+  await page.waitForTimeout(400);
+
+  const chatPost = written.find(
+    (w) =>
+      w.method === "POST" &&
+      w.url.includes("/api/chat") &&
+      !w.url.includes("/read") &&
+      !w.url.includes("/typing"),
+  );
+  expect(chatPost).toBeTruthy();
+  expect((chatPost?.body as any)?.text).toBe(
+    "@Bob посмотри пожалуйста",
+  );
+  // Адресат — Секретарь, как и в других тестах владельца: фиксированный
+  // собеседник канала «owner» идёт из counterpart, а не из упоминания.
+  expect((chatPost?.body as any)?.to_user_id).toBe("u-secretary");
+  await expect(input).toHaveValue("");
+});
+
+// Альтернативный путь: клавиатура показала дропдаун, но выбор пошёл мышью
+// (владелец привык к «тапнуть, не отпуская стрелку»). Та же вставка @Имя.
+test("выбор агента через @ мышью по пункту дропдауна", async ({
+  page,
+  context,
+}) => {
+  const written = await setupApp(context);
+  await context.route("**/api/chat/participants", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: MENTION_PARTICIPANTS_BODY,
+    });
+  });
+  await openScreen(page, "/chat");
+
+  const input = page.getByPlaceholder(/Секретарь/);
+  await input.click();
+  await input.type("@car");
+  await expect(
+    page.getByRole("option", { name: /Alice/ }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("option", { name: /Bob/ })).toHaveCount(0);
+  const carol = page.getByRole("option", { name: /Carol/ });
+  await expect(carol).toBeVisible();
+  await carol.click();
+
+  await expect(
+    page.getByRole("listbox", { name: /Упоминание/ }),
+  ).toHaveCount(0);
+  // В самом input пробел остаётся — он нужен, чтобы следующий символ
+  // шёл уже после упоминания, а не слипался с @Carol.
+  await expect(input).toHaveValue("@Carol ");
+
+  await input.type("глянь");
+  await input.press("Enter");
+  await page.waitForTimeout(400);
+  const chatPost = written.find(
+    (w) =>
+      w.method === "POST" &&
+      w.url.includes("/api/chat") &&
+      !w.url.includes("/read") &&
+      !w.url.includes("/typing"),
+  );
+  expect((chatPost?.body as any)?.text).toBe("@Carol глянь");
+});
+
+// Escape в активном дропдауне — закрывает его, текст @… остаётся в поле.
+// Это «отмена без потери»: пользователь может стереть @ руками и набрать
+// заново, не отправляя лишнего.
+test("Escape закрывает @-дропдаун без вставки", async ({
+  page,
+  context,
+}) => {
+  const written = await setupApp(context);
+  await context.route("**/api/chat/participants", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: MENTION_PARTICIPANTS_BODY,
+    });
+  });
+  await openScreen(page, "/chat");
+
+  const input = page.getByPlaceholder(/Секретарь/);
+  await input.click();
+  await input.type("@");
+  const listbox = page.getByRole("listbox", { name: /Упоминание/ });
+  await expect(listbox).toBeVisible();
+
+  await input.press("Escape");
+  await expect(listbox).toHaveCount(0);
+  // Текст не исчез — только дропдаун закрылся.
+  await expect(input).toHaveValue("@");
+
+  // Enter после Escape — это уже отправка формы, а не вставка.
+  await input.press("Enter");
+  await page.waitForTimeout(400);
+  const chatPost = written.find(
+    (w) =>
+      w.method === "POST" &&
+      w.url.includes("/api/chat") &&
+      !w.url.includes("/read") &&
+      !w.url.includes("/typing"),
+  );
+  // Сообщение из одного символа @ уйдёт (текст.trim() === "@" — не пусто),
+  // но это уже работа существующего submit, не дропдауна. Здесь это даже
+  // полезно: проверяем, что Enter после Escape не выбирает пункт.
+  expect(chatPost).toBeTruthy();
+  expect((chatPost?.body as any)?.text).toBe("@");
+});

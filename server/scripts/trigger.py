@@ -61,6 +61,12 @@ LOG_FILE = STATE_DIR / "trigger.log"
 
 ME = PI_AGENT_ID
 
+# Этап C2 (23.09.2026): роли исполняет сам сервер, внутри себя, без ключей
+# (server/src/runtime/inProcessRun.ts → kickRoleTask). С этим флагом служба
+# не держит подключения на ключах ролей, не берёт их карточки и не будит
+# Критика — иначе сервер и служба взялись бы за одну карточку вдвоём.
+ROLES_IN_SERVER = os.environ.get("TASKFLOW_ROLES_IN_SERVER") == "1"
+
 # Учётки, чьи комментарии в карточке пишет САМА служба, а не исполнитель:
 # по ним нельзя судить, было ли движение в заходе (см. activity_mark).
 SERVICE_AUTHORS = {ME}
@@ -68,7 +74,6 @@ SERVICE_AUTHORS = {ME}
 ROLE_NAMES = frozenset({
     "researcher",
     "analyst",
-    "synthesizer",
     "critic_verifier",
     "architect",
     "builder",
@@ -118,7 +123,7 @@ EXTERNAL_AGENTS = {
     #
     # Ключи лежат в хранилище под TASKFLOW_AGENT_TOKEN_<РОЛЬ> и прокинуты в
     # окружение службы через vault-run (--secret можно указывать несколько раз).
-    **{
+    **({} if ROLES_IN_SERVER else {
         f"role_{role}": {
             "id": f"role_{role}",
             "token_env": f"TASKFLOW_AGENT_TOKEN_{role.upper()}",
@@ -126,7 +131,7 @@ EXTERNAL_AGENTS = {
             "roles": [role],
         }
         for role in ROLE_NAMES
-    },
+    }),
 }
 
 
@@ -295,6 +300,21 @@ def role_prompt_for_task(task: dict) -> str:
     return prompt
 
 
+def role_prompt_for_role(role: str) -> str:
+    """Read the role prompt by explicit role name (для запуска ревьюера)."""
+    role_name = str(role or "").strip().lower()
+    if not role_name:
+        return ""
+    path = ROLE_PROMPTS_DIR / f"{role_name}.md"
+    try:
+        prompt = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError(f"не прочитать системный prompt роли {role_name}: {path}: {exc}") from exc
+    if not prompt:
+        raise RuntimeError(f"пустой системный prompt роли {role_name}: {path}")
+    return prompt
+
+
 def pi_mcp_profile_for_role(role: str) -> Path | None:
     """Return the explicit Pi MCP profile for a routed role.
 
@@ -420,6 +440,7 @@ def validate_role_agents(routing: dict[str, dict]) -> None:
 # уходим, не трогая ни карточку, ни шаги. Строкой, потому что повод и так
 # едет через все запуски параметром reason — второй канал не нужен.
 REPLY_ONLY = "владелец написал по задаче на проверке — отвечаю, не забирая её"
+REVIEW_RUN = "карточка сдана на проверку — выношу вердикт ревьюера"
 
 MODEL_LABELS = {"opus", "sonnet", "haiku", "fable"}
 
@@ -1332,6 +1353,51 @@ def build_reply_prompt(task: dict, ctx=None) -> str:
 """
 
 
+def build_review_prompt(task: dict, role: str = "critic_verifier") -> str:
+    """Промпт ревьюеру: проверить сданную работу и вынести вердикт.
+
+    Карточку НЕ забираем — она остаётся у исполнителя; ревьюер работает
+    поверх сданной версии результата и выносит вердикт инструментом
+    taskflow_review. claim/аренду не трогаем.
+    """
+    subtasks = task.get("subtasks") or []
+    steps = "\n".join(
+        f"  {'[x]' if s.get('done') else '[ ]'} {s.get('title')}: {s.get('result') or '—'}"
+        for s in subtasks
+    )
+    comments = "\n".join(
+        f"  {c.get('user_name')}: {c.get('text')}" for c in (task.get("comments") or [])[-8:]
+    )
+    return f"""Тебя разбудила доска TaskFlow: карточка сдана на проверку — вынеси вердикт.
+
+ЗАДАЧА #{task.get('id')}
+Название: {task.get('title')}
+Описание:
+{task.get('description') or '(пусто)'}
+
+Шаги и их результат:
+{steps or '  (нет)'}
+
+Лента (последние комментарии):
+{comments or '  (пусто)'}
+
+ТЫ — ПРОВЕРЯЮЩИЙ, А НЕ ИСПОЛНИТЕЛЬ. Карточку не забирай и исполнителя не
+меняй; файлы и код не правь. Сверь результат с задачей и её критерием,
+убедись, что шаги закрыты по делу и доказательства настоящие.
+
+Вердикт вынеси инструментом taskflow_review(id="{task.get('id')}",
+verdict="…", findings="…"):
+  • verdict="approved" — работа принята; комментарий обязателен (что проверил);
+  • verdict="changes_requested" — на доработку; комментарий обязателен (что
+    именно доработать), карточка вернётся исполнителю.
+Владельца ты не ограничиваешь: он решает сам в любой момент, твой вердикт —
+сигнал, а не пропуск.
+
+Не раскрывай внутреннюю цепочку рассуждений — формулируй проверяемые замечания
+и вердикт.
+"""
+
+
 def build_orchestrator_prompt(task: dict, reason: str, is_claude: bool = False, ctx=None) -> str:
     """Промпт для оркестратора — дробит и раздаёт, сам не исполняет.
 
@@ -1612,6 +1678,33 @@ SILENT_KILL_MIN = 45
 # (нет провайдера, отвергнут ключ, кончился лимит).
 FAILURE_MARKS = ("agent failed", "no llm provider", "rate limit",
                  "quota exceeded", "insufficient", "unauthorized")
+
+
+# Причины провала захода. Разводим ДВА случая (карточка f8e8a055):
+#   • упёрлись в лимит провайдера — уходим ВБОК, в другую учётку;
+#   • модель не потянула — поднимаемся ВВЕРХ по ступеням.
+# До этого всё валилось в одну кучу и вело в блок.
+_LIMIT_MARKS = ("rate limit", "quota exceeded", "usage limit", "too many requests",
+                "429", "limit reached", "resets", "limit")
+_CAP_MARKS = ("no llm provider", "insufficient", "unauthorized", "agent failed",
+              "model not", "not available")
+
+
+def classify_failure(text: str) -> tuple:
+    """(reason_code, window_kind) по хвосту вывода агента. (None, None) —
+    ничего узнаваемого.
+
+    window_kind: "5h" | "weekly" | None. Время сброса пока не парсим —
+    форматы провайдеров разные, а без живых образцов это гадание; берём
+    консервативное окно (5ч) из markProviderLimited. Уточнить фазой позже.
+    """
+    low = (text or "").lower()
+    if any(m in low for m in _LIMIT_MARKS):
+        window = "weekly" if ("week" in low or "7 day" in low or "weekly" in low) else "5h"
+        return ("provider_limit", window)
+    if any(m in low for m in _CAP_MARKS):
+        return ("insufficient_capability", None)
+    return (None, None)
 
 
 def closed_steps(task_id: str) -> int:
@@ -2087,7 +2180,8 @@ def inbox_mark(events: list[dict], status: str, token: str, reason: str = "") ->
         api("POST", f"/api/agent-inbox/{ev['id']}/mark", body, token=token)
 
 
-def run_external(task: dict, reason: str, agent: dict) -> None:
+def run_external(task: dict, reason: str, agent: dict, role_override: str = "",
+                 review_mode: bool = False, model_override: str = "") -> None:
     """Позвать не-Claude агента одним разовым запросом.
 
     У Гермеса и dsh нет продолжаемой сессии: каждый заход самостоятелен,
@@ -2120,10 +2214,10 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         return
 
     token = agent.get("token") or ""
-    reply_only = reason == REPLY_ONLY
+    reply_only = reason == REPLY_ONLY or review_mode
     # Выбор должен состояться ДО claim: claim создаёт строку attempts и
     # сохраняет в ней фактические runner/model этого запуска.
-    model = model_of(task)
+    model = model_override or model_of(task)
 
     # Единая доставка: свериться с inbox ДО контекста, claim и запуска
     # процесса (см. inbox_consume). В режиме ответа карточка не забирается —
@@ -2292,7 +2386,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
     # переменных окружения перекрывает явный поиск ключей», verified). Их
     # собственный MCP-профиль доносит ключ сам через `load_token()` — оттуда
     # он дойдёт до vault по правильному имени `TASKFLOW_AGENT_TOKEN_<ROLE>`.
-    role = task_role(task)
+    role = role_override or task_role(task)
     vault_name = agent.get("vault_key") or agent.get("token_env", "")
     vault_value = os.environ.get(vault_name, "") if vault_name else ""
     is_role_run = bool(role) and agent_label(agent) == "Pi Agent"
@@ -2301,6 +2395,15 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         # Pi-токен ровно в этом случае и ломает actor_id. Чистим обе.
         run_env.pop("TASKFLOW_TOKEN", None)
         run_env.pop("TASKFLOW_VAULT_KEY", None)
+        # Pi-расширение activity (taskflow-activity.ts) шлёт действия
+        # инструментов (Read/Edit/Bash/Grep/WebFetch…). Ему нужны id задачи
+        # и имя ключа роли; сам токен расширение достанет из vault.
+        if task_id:
+            run_env["TASKFLOW_ACTIVITY_TASK_ID"] = str(task_id)
+        run_env["TASKFLOW_ACTIVITY_ROLE"] = role
+        run_env["TASKFLOW_ACTIVITY_VAULT_KEY"] = (
+            f"TASKFLOW_AGENT_TOKEN_{role.upper()}"
+        )
     elif vault_value:
         # Дочерний Pi и его MCP получают тот же единственный ключ напрямую.
         # Раньше сюда ошибочно записывалось значение ключа как имя записи
@@ -2326,7 +2429,7 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             f"  Pi: роль {role} → MCP-профиль {profile.name}; "
             f"skills={len(skills)}"
         )
-    role_prompt = role_prompt_for_task(task)
+    role_prompt = role_prompt_for_role(role) if review_mode else role_prompt_for_task(task)
     if claude_cli and role_prompt:
         # Claude Code умеет отделить роль от поручения настоящим системным
         # параметром. Для остальных оболочек этот же текст добавляется в
@@ -2362,7 +2465,9 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
         return (build_orchestrator_resume_prompt(fresh, reason, claude_cli, ctx=ctx) if orchestrator
                 else build_resume_prompt(fresh, reason, ctx=ctx))
 
-    if reply_only:
+    if review_mode:
+        first = build_review_prompt(task, role)
+    elif reply_only:
         first = build_reply_prompt(task, ctx=ctx)
     elif resume_sid:
         first = resume_text(task)
@@ -2464,6 +2569,21 @@ def run_external(task: dict, reason: str, agent: dict) -> None:
             tail = result["output_tail"]
             log(f"  «{agent_label(agent)}» закончил заход {run} "
                 f"(код {result['returncode']}, статус {result['status']}): {tail}")
+            # Разбор провала: лимит — вбок, нехватка — вверх (f8e8a055).
+            if not reply_only:
+                reason, window = classify_failure(tail)
+                if reason:
+                    body = {"reason_code": reason,
+                            "comment": f"авто-разбор захода: {reason}"}
+                    if window:
+                        body["window_kind"] = window
+                    try:
+                        api("POST", f"/api/tasks/{task_id}/stop", body, token=token)
+                        log(f"  разбор провала: {reason}"
+                            + (f" ({window})" if window else "") + " → /stop")
+                    except Exception as exc:  # noqa: BLE001
+                        log(f"  разбор провала: /stop не принял — {exc}")
+                    break
             spent = _format_usage_dict(result.get("usage"))
             if spent:
                 log(f"  расход захода: {spent}")
@@ -2578,10 +2698,24 @@ def handle_task(task_id: str, why: str, kind: str = "", actor_id: str = "",
     if not task:
         return
 
+    # Reviewer-first: карточка сдана — будим верификатора. Карточка остаётся
+    # у исполнителя, вердикт он выносит по токену (см. wake_reviewer). Не
+    # выходим: владелец мог ещё и написать по этой же карточке.
+    if (task.get("agent_state") == "review" and task.get("requires_reviewer_review")
+            and not ROLES_IN_SERVER):
+        wake_reviewer(task)
+
     # Если сдан ребёнок — будим Оркестратора на родительской карточке!
     if task.get("agent_state") in ("review", "blocked") and parent_task_id(task):
         if wake_parent(task, owner_id):
             return
+
+    # Карточки ролей исполняет сервер (этап C2).
+    if ROLES_IN_SERVER and (
+        (task.get("assignee_id") or "").startswith("role_") or task.get("role")
+    ):
+        log(f"  {why}: карточку роли исполняет сервер — не берусь")
+        return
 
     ok, reason = decide(task, kind, actor_id)
     if not ok:
@@ -2692,6 +2826,79 @@ def wake_creator(task: dict, owner_id: str, agent: dict) -> bool:
             CREATOR_WAKED.pop(task_id, None)
         return False
     log(f"  «{task_id[:8]}» {what} → сообщил создателю «{agent_label(agent)}» в чат")
+    return True
+
+
+REVIEWER_AGENT_ID = "role_critic_verifier"
+REVIEWER_ROLE = "critic_verifier"
+REVIEWER_WAKED: dict = {}
+REVIEWER_WAKED_TTL_SEC = 600
+
+
+def _reviewer_model() -> str:
+    """Модель роли верификатора из role-routing; пусто — на усмотрение Pi."""
+    try:
+        routing = load_role_routing()
+        return str((routing.get("models") or {}).get(REVIEWER_ROLE, "") or "")
+    except Exception:
+        return ""
+
+
+def reviewer_pending(task: dict) -> bool:
+    """Нужен ли верификатору ещё заход: флаг включён, вердикта по текущей
+    версии нет."""
+    if not task.get("requires_reviewer_review"):
+        return False
+    if task.get("agent_state") != "review":
+        return False
+    try:
+        versions = api("GET", f"/api/tasks/{task['id']}/versions")
+    except Exception:
+        return False
+    current = next(
+        (v for v in (versions.get("versions") or []) if v.get("is_current")), None
+    )
+    if not current:
+        return False
+    if any(r.get("verdict") == "approved" for r in (current.get("reviews") or [])):
+        return False
+    return True
+
+
+def wake_reviewer(task: dict) -> bool:
+    """Сдана reviewer-first карточка — поднять верификатора на проверку.
+
+    Исполнителя не трогаем: карточка остаётся за ним, верификатор работает
+    БЕЗ claim и выносит вердикт инструментом taskflow_review. Дубль гасим
+    окном TTL на задачу — тем же приёмом, что wake_parent/wake_creator.
+    """
+    if not reviewer_pending(task):
+        return False
+    task_id = task["id"]
+    now = time.time()
+    with LOCK:
+        last = REVIEWER_WAKED.get(task_id, 0.0)
+        if now - last < REVIEWER_WAKED_TTL_SEC:
+            return True
+        REVIEWER_WAKED[task_id] = now
+    agent = EXTERNAL_AGENTS.get(REVIEWER_AGENT_ID)
+    if not agent:
+        log(f"  верификатор {REVIEWER_AGENT_ID} не найден — не бужу")
+        return False
+    log(f"  карточка {task_id[:8]} сдана reviewer-first → бужу верификатора")
+    threading.Thread(
+        target=run_external,
+        args=(task, REVIEW_RUN, agent),
+        kwargs={
+            "role_override": REVIEWER_ROLE,
+            "review_mode": True,
+            "model_override": _reviewer_model(),
+        },
+        daemon=True,
+    ).start()
+    # След в ленте карточки: когда и кому ушло на проверку (22.09.2026).
+    api("POST", f"/api/tasks/{task_id}/journal",
+        {"kind": "reviewer_sent", "to_value": "Критик-проверяющий"})
     return True
 
 
@@ -2808,7 +3015,9 @@ def alive_beat_loop() -> None:
         time.sleep(ALIVE_BEAT_SEC)
 
 
-def main() -> None:
+def prepare() -> None:
+    """Общая инициализация службы и разового запуска: матрица ролей, токены
+    агентов, проверка TASKFLOW_TOKEN. Ничего не запускает."""
     global ROLE_ROUTING
     try:
         routing = load_role_routing()
@@ -2818,10 +3027,7 @@ def main() -> None:
         log(f"матрица role-routing.yaml не прошла проверку: {exc}")
         sys.exit(1)
     ROLE_ROUTING = routing
-    log(f"матрица маршрутизации ролей загружена: {len(routing['defaults'])} ролей")
 
-    # В рабочем режиме есть только ключ Pi Agent. Старые ключи намеренно не
-    # перечисляются и не читаются.
     for uid, agent in list(EXTERNAL_AGENTS.items()):
         token = os.environ.get(agent.get("token_env", ""), "").strip()
         if not token and "token_static" in agent:
@@ -2835,8 +3041,47 @@ def main() -> None:
             EXTERNAL_AGENTS.pop(uid)
 
     if not TOKEN:
-        print("Нет TASKFLOW_TOKEN в окружении — служба запускается через vault-run.py", file=sys.stderr)
+        print("Нет TASKFLOW_TOKEN в окружении — запускается через vault-run.py", file=sys.stderr)
         sys.exit(1)
+
+
+def run_once(task_id: str, review: bool = False) -> None:
+    """Разовый запуск ОДНОГО агента на ОДНОЙ карточке — по команде владельца.
+
+    Служба-будильник при этом может быть выключена: это отдельный заход, он
+    поднимает агента и выходит. Автоматику не трогает, ничего не крутит.
+    """
+    prepare()
+    task = get_task(task_id)
+    if not task:
+        print(f"нет задачи {task_id}", file=sys.stderr)
+        sys.exit(2)
+    if review:
+        agent = EXTERNAL_AGENTS.get(REVIEWER_AGENT_ID)
+        if not agent:
+            print("нет активной учётки верификатора (TASKFLOW_AGENT_TOKEN_CRITIC_VERIFIER)", file=sys.stderr)
+            sys.exit(3)
+        log(f"разовый запуск: верификатор на карточке {task_id[:8]}")
+        run_external(
+            task, REVIEW_RUN, agent,
+            role_override=REVIEWER_ROLE, review_mode=True,
+            model_override=_reviewer_model(),
+        )
+        return
+    agent = EXTERNAL_AGENTS.get(task.get("assignee_id") or "")
+    role = task_role(task)
+    if agent is None and role:
+        agent = resolve_agent_for_role(role)
+    if agent is None:
+        print("на карточке нет исполнителя — назначьте исполнителя", file=sys.stderr)
+        sys.exit(4)
+    log(f"разовый запуск: «{agent_label(agent)}» на карточке {task_id[:8]}")
+    run_external(task, "ручной запуск владельца", agent)
+
+
+def main() -> None:
+    prepare()
+    log(f"матрица маршрутизации ролей загружена: {len(ROLE_ROUTING['defaults'])} ролей")
     log("будильник TaskFlow запущен")
 
     # Поднимаем одно соединение Pi Agent. Никаких дополнительных соединений
@@ -2863,4 +3108,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _argv = sys.argv[1:]
+    if "--once" in _argv:
+        _i = _argv.index("--once")
+        if _i + 1 >= len(_argv):
+            print("нужен id задачи: --once <id> [--review]", file=sys.stderr)
+            sys.exit(64)
+        run_once(_argv[_i + 1], review="--review" in _argv)
+    else:
+        main()

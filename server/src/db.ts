@@ -39,7 +39,13 @@ export function migrate() {
       name TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'agent' CHECK(role IN ('owner','agent','viewer','orchestrator')),
+      role TEXT NOT NULL DEFAULT 'agent' CHECK(role IN ('owner','agent','viewer','orchestrator','service')),
+      -- Таблица roles появляется только в versioned migration 056. FK здесь
+      -- сделал бы невозможными INSERT в users из более ранних миграций:
+      -- при foreign_keys=ON SQLite требует уже существующую parent table.
+      -- Связь role_key с roles и канонической role_<key> account закрепляет
+      -- migration 058 триггерами после создания roles.
+      role_key TEXT,
       type TEXT NOT NULL DEFAULT 'human' CHECK(type IN ('human','ai')),
       avatar_color TEXT DEFAULT '#A6A6A6',
       initials TEXT DEFAULT '',
@@ -185,9 +191,10 @@ export function migrate() {
   if (!userCols.some((c) => c.name === "is_system_bot")) {
     db.exec("ALTER TABLE users ADD COLUMN is_system_bot INTEGER DEFAULT 0");
   }
-  // Reviewer — отдельное узкое полномочие, а не новая роль. Роль users.role
-  // намеренно остаётся совместимой со старыми значениями, а reviewer=1
-  // открывает только review -> in_progress через специальную проверку.
+  // Reviewer — отдельное узкое полномочие, а не новая роль. users.role —
+  // только системная authority; business role AI-исполнителя хранится в
+  // users.role_key. reviewer=1 открывает только review -> in_progress через
+  // специальную проверку.
   if (!userCols.some((c) => c.name === "reviewer")) {
     db.exec("ALTER TABLE users ADD COLUMN reviewer INTEGER NOT NULL DEFAULT 0");
   }
@@ -382,6 +389,23 @@ export function migrate() {
     );
     CREATE INDEX IF NOT EXISTS idx_task_events_task_created
       ON task_events(task_id, created_at);
+
+    -- Отчёты по задаче. Сам артефакт живёт документом в доках проекта
+    -- (note_id), а карточка показывает его «зеркалом» — секцией «Отчёты».
+    -- html_path/pdf_path — собранные файлы на диске (uploads/reports).
+    CREATE TABLE IF NOT EXISTS task_reports (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      note_id TEXT,
+      title TEXT NOT NULL,
+      author_id TEXT REFERENCES users(id),
+      author_name TEXT,
+      html_path TEXT,
+      pdf_path TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_reports_task
+      ON task_reports(task_id, created_at DESC);
   `);
 
   // Токены Live Activity (Dynamic Island). Один живой островок = одна строка:

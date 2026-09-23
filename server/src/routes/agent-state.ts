@@ -4,6 +4,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
+import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import {
   getTaskForRead,
@@ -17,6 +18,11 @@ import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { nextAttemptTemplate as computeNextAttemptTemplate } from "../lib/attemptLadder.js";
 import {
+  nextModelForFailure,
+  markProviderLimited,
+  ladderEntryForModel,
+} from "../lib/modelLadder.js";
+import {
   currentResultVersion,
   ensureResultVersionForReview,
   hasApprovedCurrentVersion,
@@ -26,7 +32,6 @@ import {
   stopReasonError,
   stopReasonPolicy,
 } from "../stopReasons.js";
-import { loadRoleRouting, nextModelForProfile } from "../roleRouting.js";
 import { hydrateTask, getTaskRow, withAgentStale } from "./tasks.js";
 import {
   AGENT_RULES,
@@ -40,6 +45,7 @@ import {
   registryRecord,
   releaseSubtaskWork,
 } from "../agentState.js";
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -856,6 +862,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         isOwner: isTrackerOwner(req.userId) || task.creator_id === req.userId,
         isExecutor: task.assignee_id === req.userId,
         isReviewer: isTaskReviewer(req.userId),
+        // Reviewer-first — общий рубильник владельца, читается в момент
+        // перехода. Гейт только для агентов; владельца он не касается.
+        requiresReviewerReview: reviewerFirstEnabled(),
       };
       if (!canTransition(from, state, who, "state")) {
         return reply.code(400).send({ error: "invalid transition" });
@@ -1166,8 +1175,22 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           fromValue: from,
           toValue: state,
         });
+        if (state === "review") {
+          enqueueRoleRunJob({
+            taskId: task.id,
+            reason: "review",
+            actorId: req.userId,
+            dedupeKey: `review:${task.id}:${(task as any).current_attempt_id ?? uid()}`,
+          });
+        }
       });
       stateTxn();
+      if (state === "review") {
+        // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
+        void import("./dispatch.js")
+          .then((m) => m.admitParentAfterChildren(task.id))
+          .catch((err) => console.warn("родитель после дочерней:", err));
+      }
 
       const updated = getTaskRow(task.id);
       const hydrated = hydrateTask(updated);
@@ -1251,7 +1274,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   // alive; all other reasons close the current attempt and wait in blocked.
   app.post<{
     Params: { id: string };
-    Body: { reason_code?: string; comment?: string };
+    Body: { reason_code?: string; comment?: string; window_kind?: string };
   }>("/api/tasks/:id/stop", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
@@ -1301,14 +1324,20 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
                 .get(task.assignee_id) as { role?: string | null } | undefined
             )?.role
           : null);
+      // Эскалация по ступеням (карточка f8e8a055): лимит — ВБОК, в другую
+      // учётку той же ступени; нехватка способностей — ВВЕРХ на ступень.
+      // Выбор — по model_ladder и состоянию provider_limits.
       const fallback =
-        reasonCode === "provider_limit" && assigneeRole
-          ? nextModelForProfile(
-              loadRoleRouting(),
-              assigneeRole,
-              currentAttempt?.model ?? "",
-            )
+        reasonCode === "provider_limit" ||
+        reasonCode === "insufficient_capability"
+          ? nextModelForFailure(currentAttempt?.model ?? null, reasonCode)
           : null;
+      if (reasonCode === "provider_limit" && currentAttempt?.model) {
+        const cur = ladderEntryForModel(currentAttempt.model);
+        const windowKind =
+          typeof req.body?.window_kind === "string" ? req.body.window_kind : null;
+        if (cur) markProviderLimited(cur.provider, windowKind, comment || null);
+      }
 
       const retry = db
         .prepare(
@@ -1455,7 +1484,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             notificationId,
             notifyUserId,
             task.id,
-            `Лимит провайдера: задача «${task.title}» переключена на ${fallback.model}`,
+            `${reasonCode === "provider_limit" ? "Лимит провайдера" : "Повышение ступени"}: задача «${task.title}» переключена на ${fallback.model}`,
             req.userId,
           );
           broadcastToUsers([notifyUserId], {

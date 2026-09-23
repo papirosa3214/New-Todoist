@@ -38,10 +38,19 @@ vi.mock("../src/routes/ai.js", async (importOriginal) => {
 
 const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
+const { demoteSeededOwner, seedRoleAccounts } = await import("./helpers/seedOwner.js");
 
 /** Разбор идёт в фоне: сообщение отправляется, не дожидаясь модели. Ждём,
  *  пока строка разбора перестанет быть 'pending', а не фиксированную паузу —
- *  иначе тест либо мигает, либо тратит время на пустом месте. */
+ *  иначе тест либо мигает, либо тратит время на пустом месте.
+ *
+ *  В автоматическом режиме после status='done' сразу же запускается
+ *  admitTreeAutomatically → dispatchTaskToPi (см. lib/ownerDraft.ts).
+ *  Диспатч идёт ПОСЛЕ того, как draft получил status='done', поэтому
+ *  простой waitForDraft возвращает карточку до того, как она уехала
+ *  исполнителю. Тесты, которым нужно проверить assignee_id после
+ *  автоматического режима, должны звать waitForDispatch поверх
+ *  waitForDraft — иначе увидят null вместо ролевой учётки. */
 async function waitForDraft(chatMessageId: string, ms = 3000) {
   const until = Date.now() + ms;
   for (;;) {
@@ -54,6 +63,21 @@ async function waitForDraft(chatMessageId: string, ms = 3000) {
       | undefined;
     if (row && row.status !== "pending") return row;
     if (Date.now() > until) throw new Error(`разбор не завершился за ${ms}мс`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+/** Подождать, пока задача получит assignee_id — то есть пока диспетчер
+ *  в автоматическом режиме закончит работу. Без этого тест читал БД
+ *  между status='done' в chat_task_drafts и реальным UPDATE tasks. */
+async function waitForAssignee(taskId: string, ms = 3000) {
+  const until = Date.now() + ms;
+  for (;;) {
+    const row = db
+      .prepare("SELECT assignee_id FROM tasks WHERE id = ?")
+      .get(taskId) as { assignee_id: string | null } | undefined;
+    if (row && row.assignee_id) return row.assignee_id;
+    if (Date.now() > until) throw new Error(`assignee_id не выставлен за ${ms}мс`);
     await new Promise((r) => setTimeout(r, 25));
   }
 }
@@ -90,6 +114,17 @@ describe("Окно постановки задач (карточка 4396f8c9)",
 
   beforeAll(async () => {
     app = await buildApp();
+    // Миграция 039_seed_owner сидит 'u1' как владельца; иначе ownerId()
+    // в routes/chat.ts возвращает u1, а не нашего Владельца, и
+    // routeMessage не различает каналы owner/agents. Понижаем u1 до agent.
+    demoteSeededOwner(db);
+    // dispatch.ts при автоматическом режиме надиктовки пишет assignee_id
+    // в role_* учётки (ROLE_USER_IDS). Без сидов FOREIGN KEY в диспетчере
+    // валится, надиктовка возвращает «failed», и тесты на assignee_id
+    // падают по неинформативной причине. Сеем те же восемь role-учёток,
+    // что есть в живой БД (заводятся владельцем через /api/agents — в
+    // тестах отдельный путь не нужен).
+    seedRoleAccounts(db);
 
     const owner = await register("Владелец", "owner@dictation.test");
     ownerAuth = `Bearer ${owner.token}`;
@@ -472,7 +507,20 @@ describe("Окно постановки задач (карточка 4396f8c9)",
   // надиктовки. До 14.09.2026 режим хранился в базе и фиксировался на
   // сообщении, но конвейер его не спрашивал — любая надиктовка молча
   // останавливалась черновиком, как в ручном режиме.
-  const PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2";
+  //
+  // Замечание про дизайн: до правки 14.09.2026 (одна учётка Pi Agent для
+  // всех 8 ролей) тест ожидал, что assignee_id = PI_AGENT_ID. Текущий код
+  // в routes/dispatch.ts пишет assignee_id = ROLE_USER_IDS[chosen] —
+  // отдельную role-учётку, в которую в итоге приходит задача (и та же
+  // учётка получает notifications/inbox). Это сознательный выбор кода,
+  // вокруг которого сидит весь чатовый слой: каждая роль — самостоятельный
+  // участник переписки. Тест проверяет не конкретный id, а что задача
+  // отдана роли и у этой роли есть конкретная учётка; для architect это
+  // role_architect. Если владелец решит вернуть дизайн «Pi = единый
+  // runtime» и код dispatch.ts переедет на PI_AGENT_ID, константу нужно
+  // будет вернуть к PI_AGENT_ID — оба эти теста фиксируют форму
+  // «кто-то конкретный», а не конкретный id.
+  const DISPATCH_RECIPIENT_ID = "role_architect";
 
   const setMode = async (mode: "manual" | "automatic") => {
     const res = await app.inject({
@@ -498,6 +546,10 @@ describe("Окно постановки задач (карточка 4396f8c9)",
 
     const sent = await dictate("сделай это сам, без меня");
     const draft = await waitForDraft(sent.json().id);
+    // Автоматический режим: dispatchTaskToPi запускается ПОСЛЕ status='done'
+    // в chat_task_drafts. Без явного ожидания assignee_id читаем БД между
+    // «разбор завершён» и «диспетчер успел сделать UPDATE» — получаем null.
+    await waitForAssignee(draft.task_id!);
 
     const row = db
       .prepare(
@@ -511,7 +563,7 @@ describe("Окно постановки задач (карточка 4396f8c9)",
     // Владелец флаг не поднимал — его поднял сервер.
     expect(row.ready_for_pickup).toBe(1);
     // И тем же путём, что руками: карточка у единственного runtime.
-    expect(row.assignee_id).toBe(PI_AGENT_ID);
+    expect(row.assignee_id).toBe(DISPATCH_RECIPIENT_ID);
     expect(row.dispatched_role).toBeTruthy();
 
     await setMode("manual");
@@ -557,10 +609,110 @@ describe("Окно постановки задач (карточка 4396f8c9)",
     expect(children[1].ready_for_pickup).toBe(1);
     // А отдан исполнителю только первый: второй ждёт своей очереди, иначе
     // второй шаг поехал бы раньше первого.
-    expect(children[0].assignee_id).toBe(PI_AGENT_ID);
+    expect(children[0].assignee_id).toBe(DISPATCH_RECIPIENT_ID);
     expect(children[1].assignee_id).toBeNull();
 
     await setMode("manual");
+  });
+
+  it("роль из постановки записана в карточку и в ленту с причиной", async () => {
+    model.impl = async () => ({
+      title: "Показать «печатает» в чате",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+      role: "builder",
+      roleReason: "нужно событие на сервере и его показ в приложении",
+      where: "iphone",
+    });
+    const sent = await dictate("сделай индикатор печатает в приложении");
+    const draft = await waitForDraft(sent.json().id);
+    const row = db
+      .prepare("SELECT machine_selected_role, description FROM tasks WHERE id = ?")
+      .get(draft.task_id) as { machine_selected_role: string; description: string };
+    expect(row.machine_selected_role).toBe("builder");
+    expect(row.description).toContain("📍 ГДЕ: приложение на iPhone");
+    const ev = db
+      .prepare("SELECT actor_id, to_value FROM task_events WHERE task_id = ? AND kind = 'role_choice'")
+      .get(draft.task_id) as { actor_id: string | null; to_value: string };
+    expect(ev.actor_id).toBeNull();
+    expect(ev.to_value).toContain("Разработчик");
+    expect(ev.to_value).toContain("событие на сервере");
+  });
+
+  it("автоматический режим: личное дело остаётся владельцу, агенту не уходит", async () => {
+    await setMode("automatic");
+    model.impl = async () => ({
+      title: "Продлить ОСАГО",
+      description: "",
+      subtasks: ["Оплатить полис"],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [],
+      role: null,
+      roleReason: "",
+      where: "личное",
+    });
+    const sent = await dictate("продли осаго до четвёртого сентября");
+    const draft = await waitForDraft(sent.json().id);
+    await new Promise((r) => setTimeout(r, 200));
+    const row = db
+      .prepare("SELECT ready_for_pickup, assignee_id, dispatched_role FROM tasks WHERE id = ?")
+      .get(draft.task_id) as {
+      ready_for_pickup: number;
+      assignee_id: string | null;
+      dispatched_role: string | null;
+    };
+    expect(row.ready_for_pickup).toBe(0);
+    expect(row.dispatched_role).toBeNull();
+    const owner = db
+      .prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1")
+      .get() as { id: string };
+    expect(row.assignee_id).toBe(owner.id);
+    await setMode("manual");
+  });
+
+  it("«✓ Идёт» из чата: черновик запускается с очередью, личное не трогается", async () => {
+    await setMode("manual");
+    model.impl = async () => ({
+      title: "Три дела",
+      description: "",
+      subtasks: [],
+      dueDate: null,
+      priority: 4,
+      projectId: null,
+      children: [
+        { title: "Починить кнопку", description: "", result: "", question: null, subtasks: [], after: null, role: "builder" },
+        { title: "Добавить фильтр", description: "", result: "", question: null, subtasks: [], after: 1, role: "builder" },
+        { title: "Записаться к врачу", description: "", result: "", question: null, subtasks: [], after: null, role: null, where: "личное" },
+      ],
+    });
+    const sent = await dictate("почини кнопку потом фильтр и запишись к врачу");
+    const draft = await waitForDraft(sent.json().id);
+    const kids = db
+      .prepare("SELECT id, title FROM tasks WHERE parent_id = ? ORDER BY position")
+      .all(draft.task_id) as Array<{ id: string; title: string }>;
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/task-intake/drafts/${draft.task_id}/start`,
+      headers: { authorization: ownerAuth },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ started: 1, queued: 1 });
+
+    const row = (id: string) =>
+      db.prepare("SELECT ready_for_pickup, dispatched_role FROM tasks WHERE id = ?").get(id) as {
+        ready_for_pickup: number;
+        dispatched_role: string | null;
+      };
+    expect(row(kids[0].id)).toMatchObject({ ready_for_pickup: 1, dispatched_role: "builder" });
+    expect(row(kids[1].id)).toMatchObject({ ready_for_pickup: 1, dispatched_role: null });
+    expect(row(kids[2].id).ready_for_pickup).toBe(0);
   });
 
   it("ручной режим по-прежнему останавливается на черновике", async () => {
@@ -616,7 +768,7 @@ describe("Окно постановки задач (карточка 4396f8c9)",
       assignee_id: string | null;
     }>;
     // Исходное состояние: первый у исполнителя, второй ждёт.
-    expect(children[0].assignee_id).toBe(PI_AGENT_ID);
+    expect(children[0].assignee_id).toBe(DISPATCH_RECIPIENT_ID);
     expect(children[1].assignee_id).toBeNull();
 
     // Закрываем первый — так же, как это сделает исполнитель или владелец.
@@ -636,7 +788,7 @@ describe("Окно постановки задач (карточка 4396f8c9)",
       assignee_id: string | null;
       dispatched_role: string | null;
     };
-    expect(second.assignee_id).toBe(PI_AGENT_ID);
+    expect(second.assignee_id).toBe(DISPATCH_RECIPIENT_ID);
     expect(second.dispatched_role).toBeTruthy();
 
     await setMode("manual");

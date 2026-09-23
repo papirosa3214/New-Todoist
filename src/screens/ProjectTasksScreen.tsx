@@ -12,6 +12,9 @@ import { ProjectNotes } from "../components/ProjectNotes";
 
 export function ProjectTasksScreen() {
   const { id } = useParams<{ id: string }>();
+  // Синтетический раздел «Без проекта» — тот же список, но по задачам
+  // без project_id. id проекта — UUID, коллизии со строкой нет.
+  const noProject = id === "no-project";
   const navigate = useNavigate();
 
   const {
@@ -42,16 +45,19 @@ export function ProjectTasksScreen() {
   const tasks = useMemo(
     () =>
       allTasks
-        .filter((t) => t.project_id === id && t.status === "active")
+        .filter((t) =>
+          (noProject ? t.project_id == null : t.project_id === id) &&
+          t.status === "active",
+        )
         .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)),
-    [allTasks, id],
+    [allTasks, id, noProject],
   );
 
   const isLoading = projectsLoading || tasksLoading;
   // Only "not found" once the projects list has actually loaded without
   // error — otherwise a still-loading or failed projects query would look
   // exactly like a deleted/unknown project id.
-  const notFound = !projectsLoading && !projectsError && !project;
+  const notFound = !noProject && !projectsLoading && !projectsError && !project;
 
   return (
     <div className="px-4 pb-4">
@@ -66,6 +72,8 @@ export function ProjectTasksScreen() {
               />
               <span className="truncate">{project.name}</span>
             </span>
+          ) : noProject ? (
+            "Без проекта"
           ) : (
             "Проект"
           )
@@ -78,6 +86,7 @@ export function ProjectTasksScreen() {
           // 27.08.2026: «проваливаюсь в проект, а кнопки создать нет».
           // ?project= уже понимает TaskFormScreen — просто не было, кому на
           // него сослаться.
+          !noProject &&
           project && (
             <button
               onClick={() => navigate(`/task/new?project=${project.id}`)}

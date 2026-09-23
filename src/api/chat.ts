@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import { onChatMessage, onChatTyping } from "./ws";
+import { onChatMessage, onChatTyping, type ChatMessageEvent } from "./ws";
 import type {
   ApiChatAttachment,
   ApiChatMessage,
@@ -113,12 +113,29 @@ export function useMarkChatRead() {
 // invalidateQueries по тем же причинам, что task:activity). Один подписчик
 // на всё приложение — достаточно смонтировать один раз там, где уже живёт
 // сокет (App.tsx), а не в каждом экране, который читает историю чата.
-export function useChatLiveUpdates() {
+//
+// onIncoming (22.09.2026, заметка d7e98ed7) — опциональный колбэк для
+// сброса индикатора «отправил — жду ответ» в ChatScreen. Сам стейт
+// awaiting живёт в ChatScreen и сюда не поднимается: глобальный кеш для
+// этого не нужен (см. спеку, раздел «Поведение»), а передать логику
+// «когда гасить» мимо ChatScreen нельзя — только он знает, кто там
+// адресат.
+export function useChatLiveUpdates(
+  onIncoming?: (event: ChatMessageEvent) => void,
+) {
   const qc = useQueryClient();
+  // Колбэк держим в ref, чтобы смена ссылки на каждый рендер не
+  // переподписывалась на сокет. Сам сокет один на приложение, и
+  // отписка/подписка при каждом сообщении — лишняя работа.
+  const cbRef = useRef(onIncoming);
   useEffect(() => {
-    return onChatMessage(() => {
+    cbRef.current = onIncoming;
+  }, [onIncoming]);
+  useEffect(() => {
+    return onChatMessage((event) => {
       qc.invalidateQueries({ queryKey: ["chat", "history"] });
       qc.invalidateQueries({ queryKey: ["chat", "unread"] });
+      cbRef.current?.(event);
     });
   }, [qc]);
 }

@@ -21,7 +21,6 @@ process.env.TASKFLOW_ROLE_PROFILES_DIR = profilesDir;
 const ROLES = [
   "researcher",
   "analyst",
-  "synthesizer",
   "critic_verifier",
   "architect",
   "builder",
@@ -83,9 +82,9 @@ describe("Профили ролей для экрана «Команда»", () 
     fs.rmSync(profilesDir, { recursive: true, force: true });
   });
 
-  it("отдаёт ровно восемь ролей с собранным профилем", async () => {
+  it("отдаёт ровно семь ролей с собранным профилем", async () => {
     const roles = await fetchRoles();
-    expect(roles).toHaveLength(8);
+    expect(roles).toHaveLength(7);
 
     for (const r of roles) {
       // Экрану нужно, чем роль подписать и кого ставить исполнителем.
@@ -134,20 +133,22 @@ describe("Профили ролей для экрана «Команда»", () 
     const roles = await fetchRoles();
     const designer = roles.find((r) => r.role === "designer");
     const account = db
-      .prepare("SELECT name FROM users WHERE role = 'designer' LIMIT 1")
+      .prepare("SELECT name FROM users WHERE role_key = 'designer' LIMIT 1")
       .get() as { name: string } | undefined;
     if (account) expect(designer.title).toBe(account.name);
   });
 
-  it("сломанный профиль одной роли не роняет остальные семь", async () => {
+  it("сломанный профиль одной роли не роняет остальные шесть", async () => {
     // Раньше отсутствие файла профиля обрушивало ручку целиком, и экран
     // «Команда» оставался пустым вместо одной проблемной строки.
     const broken = path.join(profilesDir, "qa.json");
     const backup = fs.readFileSync(broken, "utf8");
-    fs.rmSync(broken);
+    // Испорченный, а не удалённый: профиля может не быть вовсе у роли,
+    // заведённой с экрана «Команда», — это не поломка.
+    fs.writeFileSync(broken, "{}");
     try {
       const roles = await fetchRoles();
-      expect(roles).toHaveLength(8);
+      expect(roles).toHaveLength(7);
 
       const qa = roles.find((r) => r.role === "qa");
       expect(qa.status).toBe("unavailable");
@@ -155,7 +156,7 @@ describe("Профили ролей для экрана «Команда»", () 
 
       // Остальные не пострадали и видны на экране.
       const другие = roles.filter((r) => r.role !== "qa");
-      expect(другие).toHaveLength(7);
+      expect(другие).toHaveLength(6);
       for (const r of другие) {
         // Сверяем сам текст: toContain с матчером на массиве строк
         // проходит всегда и проверял бы ничего.

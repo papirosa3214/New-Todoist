@@ -237,6 +237,29 @@ export function OverviewScreen() {
           <Icon name="chevron" size={16} className="text-dim" />
         </button>
 
+        {/* Чаты с ролями-агентами (этап 8 клиент, 21.09.2026) — рядом
+            с «Уведомлениями»: оба про переписку, и владельцу естественно
+            перейти от ленты событий к ленте разговоров. В нижнюю панель
+            не идёт: маршрут /chat там уже занят task-чатом, дублировать
+            иконку «чата» для разных разделов — путаница. */}
+        <button
+          onClick={() => navigate("/chats")}
+          className="tap-row w-full flex items-center justify-between bg-card rounded-2xl p-4"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-[32px] h-[32px] rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-400">
+              <Icon name="chat" size={18} />
+            </div>
+            <div className="text-left">
+              <div className="text-[15px] font-medium text-text">Чаты</div>
+              <div className="text-[12px] text-sub">
+                Разговоры с ролями-агентами
+              </div>
+            </div>
+          </div>
+          <Icon name="chevron" size={16} className="text-dim" />
+        </button>
+
         <button
           onClick={() => navigate("/activity")}
           className="tap-row w-full flex items-center justify-between bg-card rounded-2xl p-4"

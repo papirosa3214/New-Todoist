@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "/home/maksim/Проекты/New-Todoist/server/src/index.js";
-import db from "/home/maksim/Проекты/New-Todoist/server/src/db.js";
+import { buildApp } from "../src/index.js";
+import db from "../src/db.js";
 
 // Порядок работ: задача ждёт завершения тех, от которых зависит.
 //

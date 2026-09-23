@@ -662,6 +662,20 @@ function DurationStrip({
   );
 }
 
+// Варианты повтора — те же значения, что принимает сервер (миграция 049).
+const REPEAT_OPTIONS: { value: string; label: string }[] = [
+  { value: "none", label: "Не повторять" },
+  { value: "daily", label: "Ежедневно" },
+  { value: "weekdays", label: "По будням" },
+  { value: "weekly", label: "Еженедельно" },
+  { value: "monthly", label: "Ежемесячно" },
+];
+
+/** Конец текущего календарного года — дальше серия всё равно не идёт. */
+function yearEndStr(): string {
+  return `${new Date().getFullYear()}-12-31`;
+}
+
 export function DueDateField({
   value,
   onChange,
@@ -675,12 +689,31 @@ export function DueDateField({
   time,
   duration,
   onTimeChange,
+  runRepeat,
+  onRunRepeatChange,
+  repeatUntil,
+  onRepeatUntilChange,
+  seriesEnded,
+  onExtendRepeat,
+  extendingRepeat,
 }: {
   value: string | null | undefined;
   onChange: (v: string | null) => void;
   time?: string | null;
   duration?: number | null;
   onTimeChange?: (time: string | null, duration: number | null) => void;
+  // Повтор (миграция 049). Пропсы необязательные: экраны без повтора
+  // (read-only карточка, быстрые поля) передают только срок, и тогда
+  // блок повтора просто не рисуется.
+  runRepeat?: string | null;
+  onRunRepeatChange?: (v: string) => void;
+  repeatUntil?: string | null;
+  onRepeatUntilChange?: (v: string | null) => void;
+  // Серия повтора дошла до конца года (recurrence_spawned === 1) — владельцу
+  // показываем «Продлить на год».
+  seriesEnded?: boolean;
+  onExtendRepeat?: () => void;
+  extendingRepeat?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const base = value
@@ -913,10 +946,16 @@ export function DueDateField({
             <div className="mt-3 border-t border-stroke pt-3">
               <div className="mb-1 flex items-baseline justify-between">
                 <span className="text-[12px] text-sub">Во сколько</span>
-                {!hasValue && (
+                {!hasValue ? (
                   <span className="text-[11px] text-dim">
                     сначала выберите день
                   </span>
+                ) : (
+                  !time && (
+                    <span className="text-[11px] text-dim">
+                      старт 9:00, если время не задано
+                    </span>
+                  )
                 )}
               </div>
               {/* Один барабан вместо двух: время начала крутится с шагом
@@ -962,6 +1001,63 @@ export function DueDateField({
                 </>
               )}
             </div>
+          )}
+
+          {/* Повтор — только когда срок задан (владелец 20.09.2026,
+              паритет с нативным TaskFormScreen): серия без даты
+              бессмысленна, и сервер её такую не примет. */}
+          {hasValue && onRunRepeatChange && (
+            <div className="mt-3 border-t border-stroke pt-3">
+              <div className="mb-2 text-[12px] text-sub">Повтор</div>
+              <div className="flex flex-wrap gap-2">
+                {REPEAT_OPTIONS.map((opt) => {
+                  const active = (runRepeat ?? "none") === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => onRunRepeatChange(opt.value)}
+                      className={`h-[36px] px-3 rounded-xl text-[13px] font-medium transition-colors ${
+                        active
+                          ? "bg-red text-white"
+                          : "bg-card2 text-text active:bg-white/10"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {(runRepeat ?? "none") !== "none" && (
+                <>
+                  <div className="mb-1 mt-3 text-[12px] text-sub">
+                    Повторять до
+                  </div>
+                  <input
+                    type="date"
+                    value={repeatUntil ?? yearEndStr()}
+                    onChange={(e) =>
+                      onRepeatUntilChange?.(e.target.value || null)
+                    }
+                    className="w-full h-[40px] rounded-xl bg-card2 px-3 text-[14px] text-text"
+                  />
+                  <div className="mt-2 text-[12px] text-dim">
+                    Повтор идёт до конца года, дальше назначьте заново.
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {seriesEnded && onExtendRepeat && (
+            <button
+              type="button"
+              onClick={onExtendRepeat}
+              disabled={extendingRepeat}
+              className="mt-3 w-full h-[40px] rounded-xl bg-card2 text-[13px] font-medium text-text active:bg-white/10 disabled:opacity-50"
+            >
+              {extendingRepeat ? "Продлеваем…" : "Продлить на год"}
+            </button>
           )}
 
           {hasValue && (

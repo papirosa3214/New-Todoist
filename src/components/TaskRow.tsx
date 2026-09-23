@@ -199,6 +199,9 @@ export function TaskRow({
   // (владелец 11.09.2026). Приоритет уехал вправо шевронами и в ряду
   // бейджей больше не участвует.
   const hasReadyFlag = !!task.ready_for_pickup;
+  // «Нужно глубокое исследование» (миграция 052) — бейдж в списке, чтобы
+  // владелец видел помеченные карточки, не проваливаясь в каждую.
+  const hasResearchFlag = !!task.needs_research;
   const hasLabels = visibleLabels.length > 0;
   // Проект — бейджем с названием, ровно как на доске (владелец
   // 19.08.2026: «нужно бы прописывать, к какому проекту относится
@@ -210,6 +213,7 @@ export function TaskRow({
   const hasMeta =
     hasProjectBadge ||
     hasReadyFlag ||
+    hasResearchFlag ||
     hasOverduePill ||
     hasDueBadge ||
     hasSubtasksBadge ||
@@ -553,6 +557,16 @@ export function TaskRow({
                   {/* 2. Поднятый флаг готовности — освободившийся флажок.
                       Приоритет с 11.09.2026 рисуется шевронами справа. */}
                   {task.ready_for_pickup ? <ReadyFlag /> : null}
+
+                  {/* 2.1. Помечена как глубокое исследование (миграция 052) */}
+                  {task.needs_research ? (
+                    <span
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] bg-card text-sub font-medium"
+                      title="Нужно глубокое исследование"
+                    >
+                      <Icon name="search" size={10} /> Исследование
+                    </span>
+                  ) : null}
 
                   {/* 3. Просрочено */}
                   {hasOverduePill && (

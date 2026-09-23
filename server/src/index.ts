@@ -5,6 +5,9 @@ import { execFileSync } from "child_process";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import fastifyJwt from "@fastify/jwt";
+import { setRoleTokenSigner } from "./runtime/roleRunAccess.js";
+import { setInProcessApp } from "./runtime/inProcessRun.js";
+import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
@@ -15,6 +18,7 @@ import { addClient, removeClient, resetAllOffline } from "./ws.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
+import { registerManualRunRoutes } from "./routes/manual-run.js";
 import { registerRetryRoutes } from "./routes/retry.js";
 import { registerConsultationRoutes } from "./routes/consultation.js";
 import { registerEmbeddingsRoutes } from "./routes/embeddings.js";
@@ -29,6 +33,10 @@ import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerAvatarRoutes } from "./routes/avatars.js";
 import { registerAgentDetailsRoutes } from "./routes/agent-details.js";
 import { registerAiRoutes } from "./routes/ai.js";
+import { registerStructureRoutes } from "./routes/structure.js";
+import { registerReportRoutes } from "./routes/reports.js";
+import { registerResearchRoutes } from "./routes/research.js";
+import { registerChatsRoutes } from "./routes/chats.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerCompassRoutes } from "./routes/compass.js";
 import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
@@ -50,6 +58,7 @@ import { registerReviewRoutes } from "./routes/reviews.js";
 import { registerRoleRoutes } from "./routes/roles.js";
 import { registerRuntimeRoutes } from "./routes/runtime.js";
 import { registerTaskIntakeRoutes } from "./routes/task-intake.js";
+import { registerRoleRunJobRoutes } from "./routes/role-run-jobs.js";
 
 /**
  * Собирает и возвращает готовый Fastify-инстанс — регистрирует плагины,
@@ -135,17 +144,21 @@ export async function buildApp(): Promise<FastifyInstance> {
   // он отвечает понятным текстом вместо сырого FST_ERR_CTP_INVALID_MEDIA_TYPE.
   const ATTACHMENT_CONTENT_TYPES = [
     /^image\//,
-    /^text\/plain/,
-    // markdown принимаем наравне с обычным текстом: в нём приходят отчёты и
-    // описи агентов. 26.08.2026 такой файл отлетал с сырым 415 ещё ДО маршрута —
-    // разборщика тела на этот тип не было, и понятный ответ маршрута не успевал
-    // сработать. Список разрешённого для самого вложения — в routes/attachments.ts.
-    /^text\/markdown/,
+    // Любой текст: раньше перечисляли text/plain и text/markdown поимённо, и
+    // .py/.sh/.js отлетали с сырым 415 ЕЩЁ ДО маршрута — разборщика тела на
+    // их тип не было, и понятный ответ маршрута не успевал сработать (владелец
+    // 20.09.2026: «хочу приложить питоновский скрипт»). Список разрешённого
+    // для самого вложения — в routes/attachments.ts.
+    /^text\//,
     "application/pdf",
     "application/octet-stream",
     "application/msword",
     /^application\/vnd\.openxmlformats-officedocument\./,
     /^application\/vnd\.oasis\.opendocument\./,
+    // Кодовые/конфиговые типы, которые система отдаёт НЕ как text/*.
+    // ВАЖНО: без application/json — на нём держится весь остальной API, и
+    // перехватив его разборщиком буфера, мы сломали бы все JSON-запросы.
+    /^application\/(xml|yaml|x-yaml|javascript|x-javascript|x-sh|x-shellscript|x-python|x-ruby|x-perl|x-httpd-php|sql|graphql|toml|x-ndjson)$/,
   ];
   // У Fastify два разборщика тела ИЗ КОРОБКИ: application/json и text/plain.
   // Встроенный text/plain отдаёт тело СТРОКОЙ, и он выигрывает у нашего
@@ -205,6 +218,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(fastifyJwt, {
     secret: process.env.JWT_SECRET as string,
   });
+  // Пропуск роли на время запуска агента подписывается тем же механизмом,
+  // что вход в веб (runtime/roleRunAccess.ts).
+  setRoleTokenSigner((payload, options) => app.jwt.sign(payload, options));
+  // Агент роли внутри сервера ходит по маршрутам внутренним вызовом
+  // (runtime/inProcessRun.ts) — без ключей, как профили у Гермеса.
+  setInProcessApp(app);
   await app.register(fastifyWebsocket);
   // global: false — лимит НЕ применяется автоматически ко всем маршрутам.
   // Агенты и служба-будильник (taskflow-trigger) бьют по /api/tasks и
@@ -225,6 +244,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAuthRoutes(app);
   registerTaskRoutes(app);
   registerAgentStateRoutes(app);
+  await registerManualRunRoutes(app);
   registerRetryRoutes(app);
   registerConsultationRoutes(app);
   registerEmbeddingsRoutes(app);
@@ -234,6 +254,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerReviewRoutes(app);
   registerRoleRoutes(app);
   registerRuntimeRoutes(app);
+  registerRoleRunJobRoutes(app);
   registerTaskIntakeRoutes(app);
   registerProjectLabelRoutes(app);
   registerCompassRoutes(app);
@@ -245,6 +266,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAvatarRoutes(app);
   registerAgentDetailsRoutes(app);
   registerAiRoutes(app);
+  registerStructureRoutes(app);
+  registerReportRoutes(app);
+  registerResearchRoutes(app);
+  registerChatsRoutes(app);
   registerTranscribeRoutes(app);
   // Архив диктовок (18.08.2026): аудио выгружается с телефона и хранится
   // бессрочно — прямое решение владельца.
@@ -412,13 +437,20 @@ if (isMain) {
   const PORT = Number(process.env.PORT) || 3001;
   const HOST = process.env.HOST || "0.0.0.0";
 
-  buildApp().then((app) => {
-    app.listen({ port: PORT, host: HOST }).then((addr) => {
-      // Сокетов после рестарта нет ни у кого — значит и «online» в базе быть
-      // не может: иначе статус, оставшийся с прошлого запуска, врал бы до
-      // первого подключения того же пользователя.
-      resetAllOffline();
-      console.log(`🚀 TaskFlow API running at ${addr}`);
+  buildApp().then(async (app) => {
+    let stopRoleRuns: (() => Promise<void>) | null = null;
+    app.addHook("onClose", async () => {
+      if (stopRoleRuns) await stopRoleRuns();
     });
+
+    const addr = await app.listen({ port: PORT, host: HOST });
+    // Сокетов после рестарта нет ни у кого — значит и «online» в базе быть
+    // не может: иначе статус, оставшийся с прошлого запуска, врал бы до
+    // первого подключения того же пользователя.
+    resetAllOffline();
+    // Durable worker стартует только в реальном process после listen.
+    // buildApp() в unit tests остаётся полностью детерминированным.
+    stopRoleRuns = startRoleRunWorker();
+    console.log(`🚀 TaskFlow API running at ${addr}`);
   });
 }

@@ -62,7 +62,15 @@ SQLite), фронт на Vite+React.
 подключении, текст задания от будильника, подсказки в ответах
 инструментов. Чужой `CLAUDE.md` агенту не виден — всё нужное кладётся туда.
 
-## Последние изменения (21.08.2026)
+## Последние изменения (23.09.2026)
+
+- **Локально закрыты hardening ролей и durable-оркестрация.** Рабочая ветка
+  `manus/roles-hardening-2026-09-23` содержит P0-исправление authority,
+  SQLite очередь role runs, lease/retry/recovery, transactional enqueue из
+  основных route и owner API list/retry/cancel. Финальный gate: web 126/126,
+  server 525/525, lint без errors, security probe без эскалации. Push, merge,
+  production deploy и живая C3-проба намеренно не выполнялись. Полный порядок
+  публикации и продолжения: [`docs/handoffs/2026-09-23-roles-hardening-and-orchestration-handoff.md`](docs/handoffs/2026-09-23-roles-hardening-and-orchestration-handoff.md).
 
 - **Ветки зафиксированы в документации (01.09.2026).** Нативное iOS-направление
   ведётся в `native-app`; `main` остаётся основной стабильной линией. Перед
@@ -118,9 +126,11 @@ SQLite), фронт на Vite+React.
 
 ## Следующее
 
-Открытых обязательств по коду нет. В работе остаются карточки самого
-трекера (интерфейс, календарь) — смотреть на доске, проект
-«TaskFlow - NewTodoist».
+Сначала безопасно опубликовать и развернуть локальную ветку hardening ролей,
+затем провести одну удаляемую живую C3-пробу и несколько дней наблюдать queue
+статусы. Только после этого отдельно планировать C4-уборку legacy role tokens
+и временного JWT/MCP-пути. Детали, команды и границы — в актуальном
+[handoff](docs/handoffs/2026-09-23-roles-hardening-and-orchestration-handoff.md).
 
 ## Известные хвосты
 

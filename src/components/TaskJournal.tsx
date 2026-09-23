@@ -25,7 +25,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Avatar, Button, ErrorBanner, Icon, SheetHandle } from "./UI";
 import { useDialog } from "./Dialog";
-import { useSetAgentState, useUpdateTask } from "../api/tasks";
+import { useRunTaskAgent, useSetAgentState, useUpdateTask } from "../api/tasks";
 import { useAddComment } from "../api/comments";
 import { useAgents } from "../api/agents";
 import { useProjects } from "../api/projects";
@@ -293,6 +293,7 @@ export function AgentOwnerActions({
 }) {
   const updateTask = useUpdateTask();
   const setAgentState = useSetAgentState();
+  const runAgent = useRunTaskAgent();
   const addComment = useAddComment(task.id);
   const [returning, setReturning] = useState(false);
   // Для заблокированной задачи тот же лист собирает не «что доработать», а
@@ -432,7 +433,7 @@ export function AgentOwnerActions({
         {task.agent_state === "review" && (
           <Button variant="primary" onClick={handleAccept}>
             <Icon name="check" size={16} />
-            Принять
+            Принять и закрыть задачу
           </Button>
         )}
         {task.agent_state === "review" && (
@@ -468,9 +469,29 @@ export function AgentOwnerActions({
             </Button>
           </>
         )}
+        {task.assignee_id && (
+          <Button
+            variant="secondary"
+            onClick={() => runAgent.mutate({ id: task.id, mode: "executor" })}
+            disabled={runAgent.isPending}
+          >
+            <Icon name="play" size={16} />
+            Запустить исполнителя
+          </Button>
+        )}
+        {task.agent_state === "review" && (
+          <Button
+            variant="secondary"
+            onClick={() => runAgent.mutate({ id: task.id, mode: "reviewer" })}
+            disabled={runAgent.isPending}
+          >
+            <Icon name="check" size={16} />
+            Отправить на проверку верификатору
+          </Button>
+        )}
       </div>
       <ErrorBanner
-        error={updateTask.error || setAgentState.error || addComment.error}
+        error={updateTask.error || setAgentState.error || runAgent.error || addComment.error}
         fallback="Не удалось изменить состояние задачи"
         variant="block"
         className="mt-2"

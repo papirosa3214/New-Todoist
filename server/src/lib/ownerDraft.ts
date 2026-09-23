@@ -30,10 +30,12 @@ import {
   type IntakeMode,
 } from "../routes/task-intake.js";
 import { dispatchTaskToPi } from "../routes/dispatch.js";
+import { roleTitle } from "../roleRouting.js";
 import {
   structureDictationToCards,
   type DictationCards,
 } from "../routes/ai.js";
+import { saveUploadedFile } from "../routes/attachments.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -50,7 +52,7 @@ const SECRETARY_ID = "u-secretary";
  *  журналу этого скрипта. */
 const ALERT_SEND = `${process.env.HOME}/infra-ops/alert_send.py`;
 
-function ownerId(): string | null {
+export function ownerId(): string | null {
   const row = db
     .prepare(
       "SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1",
@@ -157,6 +159,58 @@ function resultLine(result: string): string {
   return `✅ РЕЗУЛЬТАТ: ${result}`;
 }
 
+/** Где делается работа — строкой в описании, тем же приёмом: агент на .110
+ *  иначе не знает, что речь о приложении на iPhone, и делает в вебе. */
+const WHERE_TITLES: Record<string, string> = {
+  iphone: "приложение на iPhone",
+  web: "веб",
+  server: "сервер",
+};
+export function whereLine(where: string): string {
+  return `📍 ГДЕ: ${WHERE_TITLES[where] ?? where}`;
+}
+
+/** Личное дело владельца (оплата, звонок, поездка) — агентам не отдаётся. */
+function isPersonal(card: { where?: string | null }): boolean {
+  return card.where === "личное";
+}
+
+/**
+ * Роль, выбранная вместе с постановкой: в machine_selected_role (диспетчер
+ * берёт её без пересчёта) и в ленту с причиной. Личное дело — исполнитель
+ * сам владелец, чтобы автомат не отдал его агенту.
+ */
+function applyCardRole(
+  taskId: string,
+  card: { role?: string | null; roleReason?: string; where?: string | null },
+  owner: string,
+): void {
+  if (isPersonal(card)) {
+    db.prepare("UPDATE tasks SET assignee_id = ? WHERE id = ?").run(owner, taskId);
+    logEvent({
+      taskId,
+      actorId: null,
+      kind: "role_choice",
+      field: "assignee_id",
+      toValue: "Личное дело — делаете вы, агентам не отдаётся.",
+    });
+    return;
+  }
+  if (!card.role) return;
+  db.prepare("UPDATE tasks SET machine_selected_role = ? WHERE id = ?").run(
+    card.role,
+    taskId,
+  );
+  const reason = card.roleReason ? ` — ${card.roleReason}` : "";
+  logEvent({
+    taskId,
+    actorId: null,
+    kind: "role_choice",
+    field: "machine_selected_role",
+    toValue: `Роль «${roleTitle(card.role)}» подобрана при постановке${reason}.`,
+  });
+}
+
 /** Русское склонение при числе: 1 карточка, 2 карточки, 5 карточек.
  *  Эти строки владелец читает в чате с телефона, и «2 карточка(и)» там
  *  выглядит как недоделка, а не как отчёт. */
@@ -207,6 +261,7 @@ function createDraftCards(
     const parentParts: string[] = [];
     if (cards.description) parentParts.push(cards.description);
     if (cards.result) parentParts.push(resultLine(cards.result));
+    if (cards.where && !isPersonal(cards)) parentParts.push(whereLine(cards.where));
 
     insTask.run(
       parentId,
@@ -234,6 +289,7 @@ function createDraftCards(
       }
       if (child.description) parts.push(child.description);
       if (child.result) parts.push(resultLine(child.result));
+      if (child.where && !isPersonal(child)) parts.push(whereLine(child.where));
       insTask.run(
         childIds[i],
         child.title,
@@ -277,10 +333,74 @@ function createDraftCards(
         toValue: cards.children[i].title,
       });
     });
+
+    // Исполнители, выбранные вместе с постановкой, — после записей о
+    // создании, чтобы лента читалась по порядку.
+    applyCardRole(parentId, cards, owner);
+    cards.children.forEach((child, i) => applyCardRole(childIds[i], child, owner));
   });
   txn();
 
   return { parentId, childIds };
+}
+
+/**
+ * Собрать постановку из ПРОИЗВОЛЬНОГО текста — заметка или файл, а не чат.
+ * Тем же контуром, что и надиктовка (`structureDictationToCards`): локальная
+ * модель → родитель + шаги + дочерние карточки со связью `parent_id`.
+ *
+ * НИЧЕГО не запускаем и в чат не пишем: карточки ложатся черновиком без флага
+ * готовности (миграция 026) — владелец откроет и поднимет флаг сам. В этом и
+ * смысл: большой текст (диалог, план) не влезает в чат, но структуру собирает
+ * та же машина, что и надиктовку, с владельческим слоем `task_intake`.
+ */
+export async function createDraftFromText(
+  rawText: string,
+  owner: string,
+): Promise<{ parentId: string; childIds: string[]; title: string }> {
+  const projects = db
+    .prepare("SELECT id, name FROM projects ORDER BY name")
+    .all() as Array<{ id: string; name: string }>;
+  const cards = await structureDictationToCards(rawText, projects, {
+    ownerId: owner,
+    maxChars: 12_000,
+  });
+  const { parentId, childIds } = createDraftCards(cards, owner);
+  attachSourceText(rawText, parentId, owner, cards.title);
+  return { parentId, childIds, title: cards.title };
+}
+
+/**
+ * Прикрепить ИСХОДНЫЙ текст постановки к родительской карточке файлом .md.
+ * Иначе задачи ссылаются на «предоставленный текст», которого в карточке нет
+ * (жалоба владельца 20.09.2026): структура собрана, а контекст потерян.
+ * Мягкая деградация: не смогли приложить — постановку не рушим.
+ */
+function attachSourceText(
+  text: string,
+  taskId: string,
+  owner: string,
+  title: string,
+): void {
+  try {
+    const safeName = (title || "Исходный текст").slice(0, 80) + ".md";
+    saveUploadedFile(
+      {
+        body: Buffer.from(text, "utf8"),
+        name: encodeURIComponent(safeName),
+        mime: "text/markdown",
+      },
+      (f) =>
+        db
+          .prepare(
+            `INSERT INTO attachments (id, task_id, comment_id, kind, user_id, file_name, mime, size, stored_name)
+             VALUES (?, ?, NULL, 'task', ?, ?, ?, ?, ?)`,
+          )
+          .run(f.id, taskId, owner, f.fileName, f.mime, f.size, f.storedName),
+    );
+  } catch {
+    // контекст не приложился — это не повод терять постановку
+  }
 }
 
 /**
@@ -305,9 +425,18 @@ async function admitTreeAutomatically(
   owner: string,
 ): Promise<{ dispatched: number; queued: number }> {
   // Исполняемые карточки и признак «есть предшественница».
-  const executable: Array<{ id: string; waits: boolean }> = childIds.length
-    ? childIds.map((id, i) => ({ id, waits: cards.children[i].after !== null }))
-    : [{ id: parentId, waits: false }];
+  // Личные дела владельца (оплата, звонок, поездка) агентам не отдаются:
+  // ни флага, ни раздачи — они остаются владельцу (23.09.2026).
+  const executable: Array<{ id: string; waits: boolean }> = (childIds.length
+    ? childIds.map((id, i) => ({
+        id,
+        waits: cards.children[i].after !== null,
+        personal: isPersonal(cards.children[i]),
+      }))
+    : [{ id: parentId, waits: false, personal: isPersonal(cards) }]
+  )
+    .filter((card) => !card.personal)
+    .map(({ id, waits }) => ({ id, waits }));
 
   // Флаг — одной транзакцией на всё дерево.
   const raise = db.transaction(() => {
@@ -323,7 +452,7 @@ async function admitTreeAutomatically(
       upd.run(owner, card.id);
       logEvent({
         taskId: card.id,
-        actorId: owner,
+        actorId: null,
         kind: "ready_flag_changed",
         field: "ready_for_pickup",
         fromValue: "0",
@@ -343,7 +472,7 @@ async function admitTreeAutomatically(
     // Тот же путь, которым карточку отдаёт владелец руками: гейты и швы
     // доставки общие, иначе автомат начал бы запускать то, что вручную
     // запустить нельзя.
-    const outcome = await dispatchTaskToPi(card.id, owner);
+    const outcome = await dispatchTaskToPi(card.id, owner, { system: true });
     if (outcome.ok) {
       dispatched += 1;
     } else {
@@ -385,6 +514,93 @@ function summary(cards: DictationCards): string {
  * chat_message_id, поэтому второй заход упирается в PRIMARY KEY и молча
  * уходит.
  */
+/**
+ * «✓ Идёт» на карточке Секретаря в чате (владелец 23.09.2026): запустить
+ * черновик, не открывая задачу. Тем же порядком, что автоматика
+ * (admitTreeAutomatically), но по данным из базы: исполняются дочерние, а
+ * если их нет — сама карточка; личные дела (исполнитель — владелец) не
+ * трогаем; ждущие очереди получают флаг, но отдаются, только когда дойдёт
+ * их черёд (releaseQueuedSuccessors). Действие владельца — и в ленте от него.
+ */
+export async function startDraftTree(
+  parentId: string,
+  owner: string,
+): Promise<{ started: number; queued: number } | null> {
+  const parent = db
+    .prepare("SELECT id, status, parent_id FROM tasks WHERE id = ?")
+    .get(parentId) as { id: string; status: string; parent_id: string | null } | undefined;
+  if (!parent || parent.status !== "active" || parent.parent_id) return null;
+
+  type Row = {
+    id: string;
+    description: string | null;
+    assignee_id: string | null;
+    ready_for_pickup: number | null;
+    status: string;
+  };
+  const children = db
+    .prepare(
+      `SELECT id, description, assignee_id, ready_for_pickup, status
+         FROM tasks WHERE parent_id = ? ORDER BY position, created_at`,
+    )
+    .all(parentId) as Row[];
+  const cards: Row[] = children.length
+    ? children
+    : [
+        db
+          .prepare(
+            "SELECT id, description, assignee_id, ready_for_pickup, status FROM tasks WHERE id = ?",
+          )
+          .get(parentId) as Row,
+      ];
+  const executable = cards.filter(
+    (c) =>
+      c.status === "active" &&
+      (c.ready_for_pickup ?? 0) === 0 &&
+      c.assignee_id !== owner,
+  );
+
+  const raise = db.transaction(() => {
+    const upd = db.prepare(
+      `UPDATE tasks
+          SET ready_for_pickup = 1,
+              ready_set_at = datetime('now'),
+              ready_set_by = ?,
+              updated_at = datetime('now')
+        WHERE id = ? AND ready_for_pickup = 0`,
+    );
+    for (const card of executable) {
+      upd.run(owner, card.id);
+      logEvent({
+        taskId: card.id,
+        actorId: owner,
+        kind: "ready_flag_changed",
+        field: "ready_for_pickup",
+        fromValue: "0",
+        toValue: "1",
+      });
+    }
+  });
+  raise();
+
+  let started = 0;
+  let queued = 0;
+  for (const card of executable) {
+    if (card.description?.includes("⛓ ОЧЕРЕДЬ:")) {
+      queued += 1;
+      continue;
+    }
+    if (card.assignee_id) {
+      started += 1; // исполнитель уже есть — флаг и есть запуск
+      continue;
+    }
+    const outcome = await dispatchTaskToPi(card.id, owner);
+    if (outcome.ok) started += 1;
+    else console.warn(`запуск черновика: ${card.id} не отдан:`, outcome.error);
+  }
+  return { started, queued };
+}
+
 export function startDraftFromChat(message: {
   id: string;
   from_user_id: string;

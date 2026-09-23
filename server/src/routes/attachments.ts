@@ -25,6 +25,8 @@ import path from "path";
 import db, { DB_PATH } from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
+import { extractAttachmentText, AttachmentTextError } from "../lib/attachmentText.js";
+import { extractTasksFromText, getUserPrompt } from "./ai.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -40,22 +42,22 @@ export const UPLOAD_DIR =
 // первым, с понятным текстом вместо сырой ошибки Fastify.
 const MAX_SIZE = 15 * 1024 * 1024;
 
-// Что принимаем. Не «всё подряд»: файл потом отдаётся браузеру, и список
-// держит его в предсказуемых рамках. Исполняемое и архивы сюда не входят
-// сознательно — для задач это не вложения, а способ занести на машину что
-// угодно.
+// Что принимаем. Владелец 20.09.2026: «почему только текстовые документы —
+// приложить вообще всё, это же контекст задачи: код, скрипт, ссылка».
+// Поэтому принимаем любой текст (`text/*` покрывает .py/.js/.sh/.md и т.п.),
+// частые кодовые/конфиговые типы и всё неопознанное (`application/octet-stream`)
+// — расширение .py система часто не опознаёт и отдаёт именно им. Файл
+// по-прежнему отдаётся как есть, но с `Content-Disposition: inline` и
+// неизвестным типом браузер его не исполняет. Предел размера 15 МБ остаётся.
 const ALLOWED_MIME = [
   /^image\//,
+  /^text\//,
   /^application\/pdf$/,
-  /^text\/plain$/,
-  // markdown — тот же простой текст, и именно им агенты отдают отчёты и описи.
-  // 26.08.2026 попытка приложить к задаче отчёт .md отлетела с 415: клиент
-  // проставляет `text/markdown`, а в списке был только `text/plain`. Браузеру
-  // такой файл отдаётся как текст, исполняемым он не становится.
-  /^text\/markdown$/,
   /^application\/msword$/,
   /^application\/vnd\.openxmlformats-officedocument\./,
   /^application\/vnd\.oasis\.opendocument\./,
+  /^application\/(json|xml|yaml|x-yaml|javascript|x-javascript|x-sh|x-shellscript|x-python|x-ruby|x-perl|x-httpd-php|sql|graphql|toml|x-ndjson)$/,
+  /^application\/octet-stream$/,
 ];
 
 function mimeAllowed(mime: string): boolean {
@@ -135,7 +137,7 @@ export function saveUploadedFile(
 // видит каждый»), поэтому виден любому участнику. Ещё не подобранный файл
 // (обе ссылки NULL) виден только тому, кто его залил: он существует ровно
 // между выбором файла и отправкой сообщения.
-function canRead(att: any, userId: string): boolean {
+export function canRead(att: any, userId: string): boolean {
   if (att.task_id) return Boolean(getTaskForRead(att.task_id, userId));
   if (att.chat_message_id) return true;
   return att.user_id === userId;
@@ -262,6 +264,59 @@ export function registerAttachmentRoutes(app: FastifyInstance) {
       }
       db.prepare("DELETE FROM attachments WHERE id = ?").run(req.params.id);
       return { ok: true };
+    },
+  );
+  // Задачи из вложения (просьба владельца 20.09.2026): вытаскиваем из файла
+  // ТЕКСТ (pdf — pdftotext, doc/docx/odt — libreoffice, txt/md — как есть) и
+  // отдаём ЛОКАЛЬНОЙ модели, которая предлагает список задач. Ничего не
+  // создаём: клиент показывает список и создаёт по подтверждению (как у
+  // заметок в NoteExtractedTasksSheet).
+  app.post<{ Params: { id: string } }>(
+    "/api/attachments/:id/tasks",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const att = db
+        .prepare("SELECT * FROM attachments WHERE id = ?")
+        .get(req.params.id) as any;
+      if (!att || !canRead(att, req.userId)) {
+        return reply.code(404).send({ error: "Вложение не найдено" });
+      }
+
+      const full = path.join(UPLOAD_DIR, att.stored_name);
+      if (!fs.existsSync(full)) {
+        return reply.code(410).send({ error: "файл потерян на диске" });
+      }
+
+      let text: string;
+      try {
+        text = await extractAttachmentText(full, att.mime);
+      } catch (e) {
+        const message =
+          e instanceof AttachmentTextError ? e.message : (e as Error).message;
+        return reply
+          .code(422)
+          .send({ error: `Не удалось прочитать файл: ${message}` });
+      }
+      if (text.trim().length < 3) {
+        return reply.code(422).send({ error: "В файле не нашлось текста" });
+      }
+
+      try {
+        const userPrompt = await getUserPrompt(req.userId, "extract_tasks");
+        const tasks = await extractTasksFromText(
+          text,
+          undefined,
+          undefined,
+          undefined,
+          userPrompt,
+          16_000,
+        );
+        return { tasks, chars: text.length };
+      } catch (e) {
+        return reply
+          .code(502)
+          .send({ error: `Модель не справилась: ${(e as Error).message}` });
+      }
     },
   );
 }

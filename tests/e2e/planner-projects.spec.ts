@@ -211,3 +211,106 @@ test.describe("«Сегодня»: [+] в PlannerProjectChips раскрывае
     expect(errors, errors.join("\n")).toEqual([]);
   });
 });
+
+test.describe("«Проекты»: раздел «Без проекта»", () => {
+  test("считает только активные задачи без проекта и открывает их список", async ({
+    page,
+    context,
+  }) => {
+    await setupApp(context);
+    await context.route("**/api/projects", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "p-work",
+            name: "Работа",
+            color: "#3B82F6",
+            owner_id: "e2e-fixture-owner",
+            task_count: 1,
+          },
+        ]),
+      });
+    });
+    await context.route("**/api/tasks**", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "t-without-project",
+            title: "Активная без проекта",
+            description: null,
+            due_date: null,
+            project_id: null,
+            priority: 4,
+            assignee_id: null,
+            creator_id: "e2e-fixture-owner",
+            status: "active",
+            created_at: "2026-08-20T00:00:00.000Z",
+            updated_at: "2026-08-20T00:00:00.000Z",
+            completed_at: null,
+            labels: [],
+            subtasks: [],
+            comments: [],
+            events: [],
+            attachments: [],
+          },
+          {
+            id: "t-completed-without-project",
+            title: "Завершённая без проекта",
+            description: null,
+            due_date: null,
+            project_id: null,
+            priority: 4,
+            assignee_id: null,
+            creator_id: "e2e-fixture-owner",
+            status: "completed",
+            created_at: "2026-08-20T00:00:00.000Z",
+            updated_at: "2026-08-20T00:00:00.000Z",
+            completed_at: "2026-08-21T00:00:00.000Z",
+            labels: [],
+            subtasks: [],
+            comments: [],
+            events: [],
+            attachments: [],
+          },
+          {
+            id: "t-in-project",
+            title: "Активная в проекте",
+            description: null,
+            due_date: null,
+            project_id: "p-work",
+            priority: 4,
+            assignee_id: null,
+            creator_id: "e2e-fixture-owner",
+            status: "active",
+            created_at: "2026-08-20T00:00:00.000Z",
+            updated_at: "2026-08-20T00:00:00.000Z",
+            completed_at: null,
+            labels: [],
+            subtasks: [],
+            comments: [],
+            events: [],
+            attachments: [],
+          },
+        ]),
+      });
+    });
+
+    const errors = collectErrors(page);
+    await openScreen(page, "/projects");
+
+    const noProject = page.getByRole("button", { name: "Без проекта 1" });
+    await expect(noProject).toBeVisible();
+    await noProject.click();
+    await expect(page).toHaveURL(/\/projects\/no-project$/);
+    await expect(page.getByText("Активная без проекта")).toBeVisible();
+    await expect(page.getByText("Завершённая без проекта")).toBeHidden();
+    await expect(page.getByText("Активная в проекте")).toBeHidden();
+    expect(errors, errors.join("\n")).toEqual([]);
+  });
+});
