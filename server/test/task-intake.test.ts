@@ -29,6 +29,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 
 const { buildApp } = await import("../src/index.js");
@@ -585,9 +586,18 @@ import { spawnSync } from "node:child_process";
 
 // Путь к tsx внутри локального node_modules. Используем абсолютный путь,
 // чтобы spawn не зависел от PATH, который в CI может быть урезан.
-const TSX_BIN = "/home/maksim/Проекты/New-Todoist/server/node_modules/.bin/tsx";
-// Серверный корень, относительно которого tsx загружает .ts/.mjs.
-const SERVER_CWD = "/home/maksim/Проекты/New-Todoist/server";
+// Корень сервера и URL модулей выводим от расположения этого теста, чтобы
+// child-процессы работали в любом checkout, включая CI.
+const TEST_FILE = fileURLToPath(import.meta.url);
+const SERVER_CWD = path.resolve(path.dirname(TEST_FILE), "..");
+const TSX_BIN = path.join(SERVER_CWD, "node_modules", ".bin", "tsx");
+const DB_MODULE_URL = pathToFileURL(path.join(SERVER_CWD, "src", "db.ts")).href;
+const MIGRATIONS_MODULE_URL = pathToFileURL(
+  path.join(SERVER_CWD, "src", "migrations.ts"),
+).href;
+const TASK_INTAKE_MODULE_URL = pathToFileURL(
+  path.join(SERVER_CWD, "src", "routes", "task-intake.ts"),
+).href;
 
 interface ChildResult {
   stdout: string;
@@ -666,9 +676,9 @@ describe("real migration runner on a temporary file DB", () => {
     // schema_migrations руками — ровно столько, сколько сделал бы
     // buildApp() в проде до точки «до 037».
     const child1 = `
-      const { migrate } = await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts");
-      const { runMigrations } = await import("/home/maksim/Проекты/New-Todoist/server/src/migrations.ts");
-      const db = (await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts")).default;
+      const { migrate } = await import(${JSON.stringify(DB_MODULE_URL)});
+      const { runMigrations } = await import(${JSON.stringify(MIGRATIONS_MODULE_URL)});
+      const db = (await import(${JSON.stringify(DB_MODULE_URL)})).default;
 
       migrate();
       runMigrations({ through: "036_agent_execution_connection" });
@@ -713,8 +723,8 @@ describe("real migration runner on a temporary file DB", () => {
     // незакрытую 037 и применит её через настоящий up(), а потом
     // запишет в schema_migrations.
     const child2 = `
-      const { runMigrations } = await import("/home/maksim/Проекты/New-Todoist/server/src/migrations.ts");
-      const db = (await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts")).default;
+      const { runMigrations } = await import(${JSON.stringify(MIGRATIONS_MODULE_URL)});
+      const db = (await import(${JSON.stringify(DB_MODULE_URL)})).default;
 
       runMigrations();
 
@@ -843,10 +853,10 @@ describe("process boundary: snapshot stability survives restart", () => {
     // которую мы хотим зафиксировать в тесте. С явной строкой оба
     // хелпера проходят первый вызов и дальше ведут себя по-разному.
     const child1 = `
-      const { migrate } = await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts");
-      const { runMigrations } = await import("/home/maksim/Проекты/New-Todoist/server/src/migrations.ts");
-      const { snapshotIntakeMode } = await import("/home/maksim/Проекты/New-Todoist/server/src/routes/task-intake.ts");
-      const db = (await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts")).default;
+      const { migrate } = await import(${JSON.stringify(DB_MODULE_URL)});
+      const { runMigrations } = await import(${JSON.stringify(MIGRATIONS_MODULE_URL)});
+      const { snapshotIntakeMode } = await import(${JSON.stringify(TASK_INTAKE_MODULE_URL)});
+      const db = (await import(${JSON.stringify(DB_MODULE_URL)})).default;
 
       migrate();
       runMigrations();
@@ -892,9 +902,9 @@ describe("process boundary: snapshot stability survives restart", () => {
     // module-level состояния из child1 в нём нет. Свежий import
     // snapshotIntakeMode, вызов для того же сообщения.
     const child2 = `
-      const { runMigrations } = await import("/home/maksim/Проекты/New-Todoist/server/src/migrations.ts");
-      const { snapshotIntakeMode } = await import("/home/maksim/Проекты/New-Todoist/server/src/routes/task-intake.ts");
-      const db = (await import("/home/maksim/Проекты/New-Todoist/server/src/db.ts")).default;
+      const { runMigrations } = await import(${JSON.stringify(MIGRATIONS_MODULE_URL)});
+      const { snapshotIntakeMode } = await import(${JSON.stringify(TASK_INTAKE_MODULE_URL)});
+      const db = (await import(${JSON.stringify(DB_MODULE_URL)})).default;
 
       // На случай, если бы child1 не оставил БД в консистентном
       // состоянии — обычный прогон миграций; на реальной БД после
