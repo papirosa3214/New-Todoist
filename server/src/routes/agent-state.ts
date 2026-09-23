@@ -1185,6 +1185,26 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         }
       });
       stateTxn();
+      // Владелец ответил на блокировку ролевой карточки: снятие блокировки
+      // обнуляет исполнителя (ветка state=null выше), а раздача сама
+      // срабатывает только при поднятии флага. Без этого карточка с
+      // поднятым флагом оставалась ничьей, и роль не просыпалась (живая
+      // проба C3 23.09.2026, карточка bad6799f). Раздаём заново — та же
+      // роль берётся из owner_selected_role, запуск ставится в очередь
+      // в транзакции раздачи. Флаг не поднят — dispatchTaskToPi откажет сам.
+      if (
+        from === "blocked" &&
+        state === null &&
+        String(task.assignee_id ?? "").startsWith("role_") &&
+        task.assignee_id !== req.userId
+      ) {
+        try {
+          const { dispatchTaskToPi } = await import("./dispatch.js");
+          await dispatchTaskToPi(task.id, req.userId, { system: true });
+        } catch (err) {
+          console.warn(`повторная раздача ${task.id} после ответа на блокировку:`, err);
+        }
+      }
       if (state === "review") {
         // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
         void import("./dispatch.js")
