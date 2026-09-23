@@ -268,11 +268,12 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!isMember(req.params.id, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
       const chat = db
-        .prepare("SELECT created_by, task_id FROM chats WHERE id = ?")
-        .get(req.params.id) as
-        | { created_by: string; task_id: string | null }
-        | undefined;
-      if (chat?.created_by !== req.userId)
+        .prepare<[string], { created_by: string; task_id: string | null }>(
+          "SELECT created_by, task_id FROM chats WHERE id = ?",
+        )
+        .get(req.params.id);
+      if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+      if (chat.created_by !== req.userId)
         return reply.code(403).send({ error: "менять чат может создатель" });
 
       const hasTask = Object.prototype.hasOwnProperty.call(req.body ?? {}, "task_id");
@@ -438,12 +439,13 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // писать в самой задаче, а в чате переписываться»). Сообщение берёт
       // задачу у СВОЕГО чата; явный task_id в теле перекрывает её — этим
       // привязывается отдельное сообщение, когда чат живёт сам по себе.
-      const chatTaskId =
-        (
-          db.prepare("SELECT task_id FROM chats WHERE id = ?").get(chatId) as
-            | { task_id: string | null }
-            | undefined
-        )?.task_id ?? null;
+      const chat = db
+        .prepare<[string], { task_id: string | null }>(
+          "SELECT task_id FROM chats WHERE id = ?",
+        )
+        .get(chatId);
+      if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+      const chatTaskId = chat.task_id;
       const taskId =
         typeof req.body?.task_id === "string" && req.body.task_id
           ? req.body.task_id
