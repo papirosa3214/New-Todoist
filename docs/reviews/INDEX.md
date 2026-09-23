@@ -4,7 +4,7 @@
 
 | Дата | Канонический документ | Ревью | Проверенные ревизии | Итог |
 |---|---|---|---|---|
-| 23.09.2026 | [Роли внутри сервера](../2026-09-23-roles-in-server-plan.md) | [Аудит плана и реализации](2026-09-23-roles-in-server-plan-review.md) | Server `8d1dbf3`; iOS `7e1f0a7` | Server-first ядро жизнеспособно, но merge заблокирован P0-дефектом authority, ненадёжной доставкой запусков и красными сборками. |
+| 23.09.2026 | [Роли внутри сервера](../2026-09-23-roles-in-server-plan.md) | [Аудит плана и реализации](2026-09-23-roles-in-server-plan-review.md) | Audit: Server `8d1dbf3`; iOS `7e1f0a7`. Remediation: local `813b7c1` + следующий handoff commit | Исторический аудит заблокировал merge из-за P0, доставки запусков и красных gates. P0, gates и durable delivery исправлены локально; [handoff remediation](../handoffs/2026-09-23-roles-hardening-and-orchestration-handoff.md) фиксирует оставшиеся пункты и то, что push/deploy не выполнялись. |
 
 ## Доказательства
 
