@@ -29,6 +29,7 @@ import { broadcastToUsers } from "../ws.js";
 import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
+  rolePromptText,
   type RoleName,
 } from "../roleRouting.js";
 import {
@@ -38,6 +39,9 @@ import {
 import {
   startChatRun,
 } from "../runtime/PiRuntimeAdapter.js";
+import {
+  LOCAL_EXECUTION_POLICY,
+} from "../runtime/inProcessRun.js";
 import {
   attachmentRow,
   saveUploadedFile,
@@ -955,7 +959,12 @@ async function deliverAgentReply(args: {
     .join("\n");
 
   const roleTitle = titleOfRole(role);
+  const roleInstruction =
+    rolePromptText(role) || `Ты — ${roleTitle} в трекере TaskFlow.`;
   const prompt = [
+    roleInstruction,
+    LOCAL_EXECUTION_POLICY,
+    "",
     `Ты — ${roleTitle} (${role}). Это онлайн-сессия внутри чата TaskFlow.`,
     "Перед тобой история чата (от старых к новым) и только что пришедшее",
     "сообщение от пользователя. Ответь как этот собеседник — кратко и по",

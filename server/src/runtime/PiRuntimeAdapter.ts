@@ -1113,6 +1113,7 @@ export async function startChatRun(
 
   const runId = makeChatRunId();
   const client: RpcClient | null = null;
+  let mcpConfigPath: string | null = null;
   // Инициализируем фиктивной ссылкой — реальный client создаётся после
   // успешной валидации модели; в блоке finally смотрим на activeChatRuns.
   void client;
@@ -1136,7 +1137,16 @@ export async function startChatRun(
     const resolvedProvider = match.provider;
     const resolvedModel = match.id;
 
+    // Доступ роли к трекеру — пропуск, подписанный сервером, во временном
+    // файле подключения (см. roleRunAccess.ts). Роль в чате подключается
+    // своей учёткой и своим набором инструментов, а не личным MCP-конфигом
+    // владельца (владелец 25.09.2026: роли в чате — те же агенты, что и в
+    // карточках, без ассоциации с Pi Agent).
+    mcpConfigPath = prepareRoleRunAccess(runId, role);
     const args: string[] = [];
+    if (mcpConfigPath) {
+      args.push("--mcp-config", mcpConfigPath);
+    }
     if (input.sessionId) {
       // --session-id продолжает РОВНО ту сессию, что у нас в таблице.
       // Если по какой-то причине сессия была удалена из Pi — Pi создаст
@@ -1209,6 +1219,7 @@ export async function startChatRun(
 
     return { runId, sessionId: finalSessionId, text: finalText };
   } finally {
+    releaseRoleRunAccess(mcpConfigPath);
     releaseChatRoleLock(input.chatId, input.roleId);
   }
 }
