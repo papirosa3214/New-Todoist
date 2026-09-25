@@ -8,9 +8,18 @@ import logging
 import os
 from dataclasses import dataclass
 
+import aiohttp
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    RunContext,
+    cli,
+    function_tool,
+)
 from livekit.plugins.google.realtime import RealtimeModel
 
 load_dotenv()
@@ -65,12 +74,45 @@ SECRETARY_INSTRUCTIONS = (
 )
 
 
+async def create_task_via_api(title: str, base_url: str, token: str) -> dict:
+    async with aiohttp.ClientSession() as http:
+        async with http.post(
+            f"{base_url}/api/tasks",
+            json={"title": title},
+            headers={"Authorization": f"Bearer {token}"},
+        ) as resp:
+            body = await resp.json()
+            if resp.status != 200:
+                raise RuntimeError(f"TaskFlow отказал: {body.get('error', resp.status)}")
+            return body
+
+
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(instructions=SECRETARY_INSTRUCTIONS)
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="поздоровайся коротко и спроси, чем помочь")
+
+    @function_tool
+    async def create_task(self, context: RunContext, title: str) -> str:
+        """Завести карточку задачи в TaskFlow.
+
+        Вызывай ТОЛЬКО когда владелец явно попросил («создай задачу»,
+        «запиши это») или когда абсолютно уверен, что реплика — задача.
+        При сомнении сначала переспроси голосом, не вызывай этот инструмент.
+
+        Args:
+            title: Короткое название задачи, как оно должно выглядеть в списке.
+        """
+        cfg = load_config()
+        try:
+            task = await create_task_via_api(
+                title, base_url=cfg.taskflow_api_base, token=cfg.taskflow_agent_token
+            )
+        except RuntimeError as exc:
+            return f"Не получилось завести задачу: {exc}"
+        return f"Готово, завёл задачу «{task['title']}»."
 
 
 server = AgentServer()
