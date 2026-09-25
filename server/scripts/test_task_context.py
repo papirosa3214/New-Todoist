@@ -1,5 +1,5 @@
 # Тесты для server/scripts/task_context.py
-# Шаг 6 ТЗ docs/taskflow-direct-dispatch-mvp.md.
+# Шаг 6 архивного ТЗ docs/archive/2026-09-24-before-canonical/taskflow-direct-dispatch-mvp.md.
 # Прогон: python3 server/scripts/test_task_context.py
 # (не требует pytest — просто стандартный unittest из stdlib.)
 

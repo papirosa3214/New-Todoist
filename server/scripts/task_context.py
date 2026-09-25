@@ -1,5 +1,5 @@
 # Локальная заготовка для заливки на .110:/home/maksim/Проекты/New-Todoist/server/scripts/task_context.py
-# Шаг 2 ТЗ docs/taskflow-direct-dispatch-mvp.md.
+# Шаг 2 архивного ТЗ docs/archive/2026-09-24-before-canonical/taskflow-direct-dispatch-mvp.md.
 #
 # TaskContext v1 — единый контракт пакета перед запуском исполнителя.
 # Владелец вручную назначает исполнителя; trigger.py собирает этот пакет

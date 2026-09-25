@@ -113,9 +113,9 @@ TaskFlow/
 │   └── App/
 │       ├── App/                # Swift плагины (EventKitPlugin, LocalAIPlugin, TFHaptics)
 │       └── App.xcodeproj       # Проект Xcode с подключенным WhisperKit SPM
-├── docs/                       # Документация и технические уроки
-│   ├── lessons/                # Инженерные разборы и бенчмарки
-│   └── ...
+├── docs/
+│   ├── current/                # Единственная актуальная документация
+│   └── archive/                # Исторические планы, ревью и разборы
 ├── AGENT-PROTOCOL.md           # Правила и протокол работы AI-агентов
 ├── AGENT-API.md                # Спецификация API для внешних агентов
 ├── DESIGN.md                   # Гайдлайны дизайна и системы откликов
@@ -156,11 +156,12 @@ npm run dev
 
 ## 📱 Сборка и запуск на iOS
 
-Подробный разбор сборки: [`docs/lessons/2026-08-18-ios-build-and-on-device-speech.md`](docs/lessons/2026-08-18-ios-build-and-on-device-speech.md).
+Исторический разбор сборки сохранён в
+[`docs/archive/2026-09-24-before-canonical/lessons/2026-08-18-ios-build-and-on-device-speech.md`](docs/archive/2026-09-24-before-canonical/lessons/2026-08-18-ios-build-and-on-device-speech.md).
 
 > **Рабочая ветка iOS — `native-app`.** Перед любой правкой или сборкой
 > проверьте `git branch --show-current`; правила синхронизации и публикации
-> описаны в [`docs/BRANCHING.md`](docs/BRANCHING.md). `main` не является
+> описаны в [канонической документации](docs/current/README.md). `main` не является
 > веткой текущей разработки нативного приложения.
 
 ### Сборка и деплой на физическое устройство за одну команду:
@@ -210,19 +211,15 @@ xcrun devicectl device process launch --device 00008150-001545400144401C \
 
 | Документ | Описание |
 | :--- | :--- |
-| [`STATUS.md`](STATUS.md) | **Живой статус проекта:** текущие задачи, кто работает, последние изменения. |
-| [`docs/BRANCHING.md`](docs/BRANCHING.md) | **Ветки и рабочие копии:** активная `native-app`, источник iOS-изменений и порядок синхронизации. |
-| [`docs/NATIVE-IOS-TODAY-CHROME.md`](docs/NATIVE-IOS-TODAY-CHROME.md) | **Экран «Сегодня» на iOS:** слои липкой шапки, поведение свайпов и нативное стеклянное меню фильтров. |
-| [`docs/NATIVE-IOS-CHAT.md`](docs/NATIVE-IOS-CHAT.md) | **Экран чата на iOS:** отдельная нижняя панель ввода, размытая шапка и возврат в «Обзор». |
-| [`docs/NATIVE-IOS-PERFORMANCE.md`](docs/NATIVE-IOS-PERFORMANCE.md) | **Аудит плавности iOS:** устранённые горячие пути, жесты и ограничения профилирования. |
-| [`docs/TASK-LIFECYCLE-SCENARIOS.md`](docs/TASK-LIFECYCLE-SCENARIOS.md) | **Матрица сценариев и состояний задач:** человек, агент, блокеры, приёмка, доработка. |
-| [`docs/AGENTS-SETUP-GUIDE.md`](docs/AGENTS-SETUP-GUIDE.md) | **Подключение агентов от А до Я:** создание, ключи, MCP, автономный будильник. |
+| [`docs/current/README.md`](docs/current/README.md) | **Единственная актуальная точка правды:** состояние агентской платформы, сверка с планом Manus и дальнейшие этапы. |
+| [`docs/current/taskflow-orchestrator.md`](docs/current/taskflow-orchestrator.md) | **Операционный регламент автономных исполнителей.** |
+| [`docs/current/taskflow-task-route-map.html`](docs/current/taskflow-task-route-map.html) | **Живая HTML-карта маршрута задачи.** |
+| [`docs/archive/2026-09-24-before-canonical/`](docs/archive/2026-09-24-before-canonical/) | **История:** прежние планы, ревью, handoff, спецификации и инженерные разборы. |
 | [`AGENT-PROTOCOL.md`](AGENT-PROTOCOL.md) | **Правила агентов:** жизненный цикл задач, шаги, аренда, сдача работы. |
 | [`AGENT-API.md`](AGENT-API.md) | **API для агентов:** спецификация REST-эндпоинтов, токены, MCP. |
 | [`INTEGRATIONS.md`](INTEGRATIONS.md) | **Интеграции:** настройка Google Tasks, Apple Calendar и Reminders. |
 | [`DESIGN.md`](DESIGN.md) | **Дизайн-система:** палитра, анимации, правила вёрстки, тактильный отклик (Haptics). |
 | [`server/scripts/TRIGGER.md`](server/scripts/TRIGGER.md) | **Служба будильника:** WebSocket-слушатель задач и запуск агентов. |
-| [`docs/lessons/`](docs/lessons/) | **Инженерные уроки:** разборы нативного звука Whisper, кастомных клавиатур и др. |
 
 ---
 

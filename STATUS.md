@@ -24,7 +24,7 @@ SQLite), фронт на Vite+React.
 рабочая копия — `~/Проекты/New-Todoist` на .110. Перед началом работы в любой
 копии проверить `git branch --show-current` и `git status --short --branch`;
 не перезаписывать чужую рабочую директорию. Полные правила синхронизации и
-публикации: [`docs/BRANCHING.md`](docs/BRANCHING.md).
+публикации и актуальный план: [`docs/current/README.md`](docs/current/README.md).
 
 ## Кто работает с доской (21.08.2026)
 
@@ -69,12 +69,13 @@ SQLite), фронт на Vite+React.
   SQLite очередь role runs, lease/retry/recovery, transactional enqueue из
   основных route и owner API list/retry/cancel. Финальный gate: web 126/126,
   server 525/525, lint без errors, security probe без эскалации. Push, merge,
-  production deploy и живая C3-проба намеренно не выполнялись. Полный порядок
-  публикации и продолжения: [`docs/handoffs/2026-09-23-roles-hardening-and-orchestration-handoff.md`](docs/handoffs/2026-09-23-roles-hardening-and-orchestration-handoff.md).
+  production deploy и живая C3-проба на момент handoff намеренно не выполнялись.
+  С тех пор PR влит и код развёрнут; актуальная сверка находится в
+  [`docs/current/README.md`](docs/current/README.md).
 
 - **Ветки зафиксированы в документации (01.09.2026).** Нативное iOS-направление
   ведётся в `native-app`; `main` остаётся основной стабильной линией. Перед
-  работой, синхронизацией и публикацией сверяться с `docs/BRANCHING.md`, чтобы
+  работой, синхронизацией и публикацией сверяться с `docs/current/README.md`, чтобы
   не потерять непубликованные коммиты из серверной рабочей копии.
 
 - **Отказ агента виден на доске, а не только в журнале.** Ход, который не
@@ -127,10 +128,10 @@ SQLite), фронт на Vite+React.
 ## Следующее
 
 Сначала безопасно опубликовать и развернуть локальную ветку hardening ролей,
-затем провести одну удаляемую живую C3-пробу и несколько дней наблюдать queue
-статусы. Только после этого отдельно планировать C4-уборку legacy role tokens
-и временного JWT/MCP-пути. Детали, команды и границы — в актуальном
-[handoff](docs/handoffs/2026-09-23-roles-hardening-and-orchestration-handoff.md).
+провести контролируемую C3-регрессию и наблюдать queue-статусы. C4-уборку legacy
+role tokens и временного JWT/MCP-пути выполнять отдельным обратимым этапом.
+Актуальные статусы и границы — в
+[`docs/current/README.md`](docs/current/README.md).
 
 ## Известные хвосты
 

@@ -1428,7 +1428,7 @@ def build_orchestrator_prompt(task: dict, reason: str, is_claude: bool = False, 
     Лента (последние комментарии):
     {comments or '  (пусто)'}
 
-ВАЖНО: Вся должностная инструкция о том, КАК именно работать с TaskFlow (как бить задачи, как использовать `parent_id`, кто есть кто в команде и как принимать работу), лежит в файле `docs/taskflow-orchestrator.md`. 
+ВАЖНО: Вся должностная инструкция о том, КАК именно работать с TaskFlow (как бить задачи, как использовать `parent_id`, кто есть кто в команде и как принимать работу), лежит в файле `docs/current/taskflow-orchestrator.md`. 
 Если ты забыл регламент — обязательно прочитай этот файл перед тем, как действовать!
     {_render_ctx(ctx)}
 """
@@ -1521,7 +1521,7 @@ def build_orchestrator_resume_prompt(task: dict, reason: str, is_claude: bool = 
 Свежее в ленте:
 {comments or '  (пусто)'}
 
-Напоминаю: регламент Оркестратора лежит в `docs/taskflow-orchestrator.md`.
+Напоминаю: регламент Оркестратора лежит в `docs/current/taskflow-orchestrator.md`.
 Проверь статусы дочерних задач. Используй свой сеньорский опыт, чтобы оценить сданный агентами результат. 
 Прими работу, помоги с блокером или заверни на доработку.
     {_render_ctx(ctx)}
@@ -2230,7 +2230,7 @@ def run_external(task: dict, reason: str, agent: dict, role_override: str = "",
                 RUNNING.pop(task_id, None)
             return
 
-    # Шаг 4 ТЗ docs/taskflow-direct-dispatch-mvp.md — собрать TaskContext v1
+    # Шаг 4 архивного ТЗ docs/archive/2026-09-24-before-canonical/taskflow-direct-dispatch-mvp.md — собрать TaskContext v1
     # перед запуском. mode/parent_task_id различают прямого исполнителя и
     # оркестратора. TaskEnricher обязателен — если он упал, запуск НЕ
     # происходит (Шаг 6 ТЗ: «Недоступен основной API-запрос карточки —

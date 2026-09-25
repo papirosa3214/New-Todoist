@@ -37,7 +37,7 @@ describe("статусный граф TaskFlow", () => {
 
   it("маршрут задачи не содержит снимок устаревшей очереди", () => {
     const routeMap = fs.readFileSync(
-      path.join(projectRoot, "docs/taskflow-task-route-map.html"),
+      path.join(projectRoot, "docs/current/taskflow-task-route-map.html"),
       "utf8",
     );
     expect(routeMap).not.toContain("8ca87c61");
