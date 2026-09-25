@@ -9,7 +9,7 @@ class CreateTaskViaApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_posts_title_and_returns_task_id(self):
         mock_response = AsyncMock()
         mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={"id": "task-123", "title": "Купить молоко"})
+        mock_response.json = AsyncMock(return_value={"task": {"id": "task-123", "title": "Купить молоко"}})
 
         mock_post_cm = AsyncMock()
         mock_post_cm.__aenter__ = AsyncMock(return_value=mock_response)
@@ -26,6 +26,7 @@ class CreateTaskViaApiTests(unittest.IsolatedAsyncioTestCase):
             headers={"Authorization": "Bearer tok"},
         )
         self.assertEqual(result["id"], "task-123")
+        self.assertEqual(result["title"], "Купить молоко")
 
     async def test_server_error_raises(self):
         mock_response = AsyncMock()

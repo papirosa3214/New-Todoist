@@ -85,7 +85,7 @@ async def create_task_via_api(title: str, base_url: str, token: str) -> dict:
             body = await resp.json()
             if resp.status != 200:
                 raise RuntimeError(f"TaskFlow отказал: {body.get('error', resp.status)}")
-            return body
+            return body["task"]
 
 
 class Assistant(Agent):
