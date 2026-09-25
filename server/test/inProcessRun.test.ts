@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 
 const script = vi.hoisted(() => ({
   steps: null as null | ((tools: Map<string, any>, prompt: string) => Promise<void>),
+  systemPrompts: [] as string[],
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
@@ -14,6 +15,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     ...actual,
     createAgentSession: async (options: any) => {
       const tools = new Map<string, any>((options.customTools ?? []).map((t: any) => [t.name, t]));
+      script.systemPrompts.push(options.resourceLoader.getSystemPrompt());
       return {
         session: {
           subscribe: () => () => {},
@@ -108,6 +110,19 @@ describe("агент роли внутри сервера", () => {
       .prepare("SELECT actor_id FROM task_events WHERE task_id = ? AND kind = 'claimed'")
       .get(taskId) as { actor_id: string };
     expect(claimed.actor_id).toBe("role_builder");
+  });
+
+  it("системный prompt объясняет роли, что она уже работает локально на .110", async () => {
+    const { taskId } = builderTask("Локальная файловая операция");
+    script.systemPrompts.length = 0;
+    script.steps = async () => {};
+
+    await runRoleInProcess({ taskId, role: "builder" });
+    await _settleInProcessRunsForTests();
+
+    expect(script.systemPrompts.at(-1)).toContain("ты уже работаешь на сервере .110");
+    expect(script.systemPrompts.at(-1)).toContain("не подключайся к .110 по SSH");
+    expect(script.systemPrompts.at(-1)).toContain("/home/maksim/Проекты/Хранилище");
   });
 
   it("сбой запуска — карточка заблокирована с причиной", async () => {

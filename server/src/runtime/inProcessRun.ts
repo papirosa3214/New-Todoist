@@ -309,6 +309,11 @@ export function defaultTaskPrompt(taskId: string, role: string): string {
 
 const PROJECTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-projects.json");
 const RUNS_BASE = process.env.TASKFLOW_RUNS_DIR || path.join(os.homedir(), ".local", "state", "taskflow-runs");
+export const LOCAL_EXECUTION_POLICY = [
+  "Среда выполнения: ты уже работаешь на сервере .110 (192.168.1.110).",
+  "Работай исключительно локально на этой машине; не подключайся к .110 по SSH и не ищи sshpass/expect.",
+  "Пути /home/maksim и /home/maksim/Проекты/Хранилище доступны напрямую. Не запускай find / и не обходи системные каталоги или NAS без отдельного явного поручения владельца.",
+].join("\n");
 
 /** Репозиторий проекта карточки — из того же файла, что читал будильник
  *  (scripts/task-context-projects.json); не сопоставлен — репозиторий TaskFlow. */
@@ -423,7 +428,10 @@ export async function runRoleInProcess(input: {
   const mode = input.mode ?? (role === "critic_verifier" ? "review" : "work");
   const resumed = hasSession(taskId, role);
   fs.mkdirSync(sessionDir(taskId, role), { recursive: true });
-  const systemPrompt = rolePrompt(role) || `Ты — ${roleTitle(role)} в трекере TaskFlow.`;
+  const systemPrompt = [
+    rolePrompt(role) || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
+    LOCAL_EXECUTION_POLICY,
+  ].join("\n\n");
   const resourceLoader = {
     getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
     getSkills: () => ({ skills: [], diagnostics: [] }),
