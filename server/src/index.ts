@@ -58,6 +58,7 @@ import { registerReviewRoutes } from "./routes/reviews.js";
 import { registerRoleRoutes } from "./routes/roles.js";
 import { registerRuntimeRoutes } from "./routes/runtime.js";
 import { registerTaskIntakeRoutes } from "./routes/task-intake.js";
+import { registerSecretaryVoiceRoutes } from "./routes/secretary-voice.js";
 import { registerRoleRunJobRoutes } from "./routes/role-run-jobs.js";
 
 /**
@@ -256,6 +257,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerRuntimeRoutes(app);
   registerRoleRunJobRoutes(app);
   registerTaskIntakeRoutes(app);
+  registerSecretaryVoiceRoutes(app);
   registerProjectLabelRoutes(app);
   registerCompassRoutes(app);
   registerSubtaskCommentRoutes(app);
