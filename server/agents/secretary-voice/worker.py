@@ -10,7 +10,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-from livekit.agents import AgentServer, JobContext, cli
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
+from livekit.plugins.google.realtime import RealtimeModel
 
 load_dotenv()
 
@@ -55,21 +56,39 @@ def load_config() -> Config:
     )
 
 
+SECRETARY_INSTRUCTIONS = (
+    "Ты — Секретарь, голосовой помощник Максима в TaskFlow. Отвечай кратко "
+    "и по-русски. Не используй эмодзи и markdown — тебя слушают, а не читают. "
+    "Карточку задачи создавай только по явной просьбе («создай задачу», "
+    "«запиши») или когда сам уверен, что это задача; при сомнении — "
+    "переспроси коротким вопросом, не создавай молча."
+)
+
+
+class Assistant(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions=SECRETARY_INSTRUCTIONS)
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="поздоровайся коротко и спроси, чем помочь")
+
+
 server = AgentServer()
 
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
-    logger.info("secretary-voice: подключаюсь к комнате %s", ctx.room.name)
+    cfg = load_config()
 
-    @ctx.room.on("participant_connected")
-    def _on_participant(participant) -> None:  # noqa: ANN001
-        logger.info("secretary-voice: участник подключился: %s", participant.identity)
-
-    # Задача 3 подставит сюда AgentSession с Gemini Live вместо простого
-    # логирования — на этом шаге цель ровно одна: подтвердить, что dispatch
-    # воркера в комнату реально срабатывает.
+    session = AgentSession(
+        llm=RealtimeModel(
+            model="gemini-3.8-live",
+            api_key=cfg.gemini_api_key,
+            voice="Puck",
+        ),
+    )
+    await session.start(agent=Assistant(), room=ctx.room)
 
 
 if __name__ == "__main__":
