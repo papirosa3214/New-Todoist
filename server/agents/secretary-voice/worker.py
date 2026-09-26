@@ -74,6 +74,17 @@ SECRETARY_INSTRUCTIONS = (
 )
 
 
+DEFAULT_VOICE = "Puck"
+# Тот же закрытый список, что в POST /api/secretary/voice-token и настройках
+# приложения: Gemini Live незнакомое имя молча подменяет своим голосом.
+SECRETARY_VOICES = frozenset({"Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"})
+
+
+def pick_voice(attributes: dict[str, str]) -> str:
+    voice = attributes.get("voice")
+    return voice if voice in SECRETARY_VOICES else DEFAULT_VOICE
+
+
 async def create_task_via_api(title: str, base_url: str, token: str) -> dict:
     async with aiohttp.ClientSession() as http:
         async with http.post(
@@ -123,11 +134,16 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
     cfg = load_config()
 
+    await ctx.connect()
+    owner = await ctx.wait_for_participant()
+    voice = pick_voice(owner.attributes)
+    logger.info("голос Секретаря: %s", voice)
+
     session = AgentSession(
         llm=RealtimeModel(
             model="gemini-3.8-live",
             api_key=cfg.gemini_api_key,
-            voice="Puck",
+            voice=voice,
         ),
     )
     await session.start(agent=Assistant(), room=ctx.room)

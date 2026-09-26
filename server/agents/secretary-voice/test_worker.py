@@ -34,5 +34,16 @@ class LoadConfigTests(unittest.TestCase):
         self.assertEqual(cfg.taskflow_api_base, "http://127.0.0.1:3001")
 
 
+class PickVoiceTests(unittest.TestCase):
+    def test_voice_from_attributes(self):
+        self.assertEqual(worker.pick_voice({"voice": "Kore"}), "Kore")
+
+    def test_unknown_voice_falls_back_to_default(self):
+        self.assertEqual(worker.pick_voice({"voice": "Robot"}), worker.DEFAULT_VOICE)
+
+    def test_no_attributes_default(self):
+        self.assertEqual(worker.pick_voice({}), worker.DEFAULT_VOICE)
+
+
 if __name__ == "__main__":
     unittest.main()

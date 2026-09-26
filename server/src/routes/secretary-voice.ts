@@ -9,6 +9,10 @@ import { AccessToken } from "livekit-server-sdk";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 
+// Gemini Live молча подменяет незнакомое имя голосом по умолчанию, поэтому
+// список закрытый — тот же, что в настройках приложения и в воркере.
+const SECRETARY_VOICES = new Set(["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"]);
+
 function ownerIdOrNull(): string | null {
   const row = db
     .prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1")
@@ -32,7 +36,9 @@ export function registerSecretaryVoiceRoutes(app: FastifyInstance): void {
     }
 
     const room = `secretary-voice-${owner}`;
-    const at = new AccessToken(apiKey, apiSecret, { identity: owner, ttl: "10m" });
+    const voice = req.body?.voice;
+    const attributes = SECRETARY_VOICES.has(voice) ? { voice } : undefined;
+    const at = new AccessToken(apiKey, apiSecret, { identity: owner, ttl: "10m", attributes });
     at.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true });
     const token = await at.toJwt();
 

@@ -56,6 +56,33 @@ describe("POST /api/secretary/voice-token — только владелец", ()
     expect(body.room).toBe(`secretary-voice-${ownerId}`);
   });
 
+  function tokenAttributes(token: string): Record<string, string> | undefined {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
+    return payload.attributes;
+  }
+
+  it("голос из тела запроса попадает в атрибуты участника", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/secretary/voice-token",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { voice: "Kore" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(tokenAttributes(res.json().token)).toEqual({ voice: "Kore" });
+  });
+
+  it("неизвестный голос не пропускается в токен", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/secretary/voice-token",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { voice: "Robot" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(tokenAttributes(res.json().token)?.voice).toBeUndefined();
+  });
+
   it("не-владельцу — 403", async () => {
     const res = await app.inject({
       method: "POST",
