@@ -102,13 +102,14 @@ export async function deliverSecretaryReply(userText: string): Promise<string | 
   // иначе строковое сравнение ниже врёт.
   const turnStartedAt = (db.prepare("SELECT datetime('now') as ts").get() as { ts: string }).ts;
 
-  const typing = (active: boolean) => {
+  const typing = (active: boolean, tool?: string) => {
     broadcastToUsers(memberIds(chatId), {
       type: "chats:typing",
       chat_id: chatId,
       user_id: SECRETARY_ID,
       name: "Секретарь",
       active,
+      ...(tool ? { tool } : {}),
     });
   };
 
@@ -121,6 +122,7 @@ export async function deliverSecretaryReply(userText: string): Promise<string | 
       roleId: SECRETARY_ID,
       prompt,
       sessionId: previousSessionId,
+      onStep: (tool) => typing(true, tool),
     });
   } catch (error) {
     console.warn(
