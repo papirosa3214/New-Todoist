@@ -148,6 +148,12 @@ async def entrypoint(ctx: JobContext) -> None:
     )
     await session.start(agent=Assistant(), room=ctx.room)
 
+    # Тап по анимации на телефоне — перебить Секретаря на полуслове.
+    @ctx.room.local_participant.register_rpc_method("interrupt")
+    async def _interrupt(_data) -> str:
+        session.interrupt()
+        return "ok"
+
 
 if __name__ == "__main__":
     load_config()  # падаем рано и явно, не на первом же job
