@@ -1021,6 +1021,10 @@ export interface StartChatRunInput {
    *  чем типичный онлайн-ответ, но без зависания, если модель ушла в
    *  retry-loop. */
   timeoutMs?: number;
+  /** Вызывается на каждом начале использования инструмента в ходе — для
+   *  живой ленты «что роль делает сейчас» в чате (owner UI). Необязательный:
+   *  вызовы без колбэка (если такие появятся) работают как раньше. */
+  onStep?: (tool: string) => void;
 }
 
 /** Результат одного захода онлайн-сессии: runId живёт в логах, sessionId
@@ -1177,6 +1181,15 @@ export async function startChatRun(
       cancelled: false,
     };
     activeChatRuns.set(runId, run);
+
+    newClient.onEvent((event: JsonAgentSessionEvent) => {
+      if (
+        event.type === "message_update" &&
+        event.assistantMessageEvent.type === "toolcall_start"
+      ) {
+        input.onStep?.(event.assistantMessageEvent.toolName);
+      }
+    });
 
     let finalText = "";
     let finalSessionId: string | null = input.sessionId ?? null;

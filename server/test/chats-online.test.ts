@@ -118,6 +118,7 @@ function makeFakeRpcClient(options: any): FakeRpcClient {
   const resumedSessionId =
     sessionIdx >= 0 ? argsList[sessionIdx + 1] : null;
   const index = fakeClients.length;
+  const listeners: Array<(event: unknown) => void> = [];
   const client: FakeRpcClient = {
     options,
     start: vi.fn(async () => {}),
@@ -140,8 +141,13 @@ function makeFakeRpcClient(options: any): FakeRpcClient {
         slot.resolve = resolve;
       });
     }),
-    onEvent: vi.fn(() => () => {}),
-    emit: () => {},
+    onEvent: vi.fn((listener: (event: unknown) => void) => {
+      listeners.push(listener);
+      return () => {};
+    }),
+    emit: (event: unknown) => {
+      for (const listener of listeners) listener(event);
+    },
   };
   fakeClients.push(client);
   promptWaiters.push({ resolve: () => {} });
@@ -194,6 +200,28 @@ vi.mock("../src/lib/embeddingClient.js", () => ({
     dim: 0,
     durationMs: 0,
   })),
+}));
+
+// === Замоканный ../src/ws.js — ловим бродкасты chats:typing ===
+//
+// Реальные фактические экспорты ws.ts (проверено grep -n "^export"):
+// resetAllOffline, addClient, removeClient, onUserGone, broadcast,
+// broadcastTaskEvent, broadcastToUsers. Мокаем все, чтобы не уронить
+// код, который может дёрнуть их за пределами этого теста (WS-роуты в
+// buildApp()); broadcastToUsers пишет вызовы в broadcastCalls для
+// проверки поля tool в chats:typing.
+const broadcastCalls: Array<{ userIds: unknown; event: any }> = [];
+
+vi.mock("../src/ws.js", () => ({
+  resetAllOffline: vi.fn(),
+  addClient: vi.fn(),
+  removeClient: vi.fn(),
+  onUserGone: vi.fn(),
+  broadcast: vi.fn(),
+  broadcastTaskEvent: vi.fn(),
+  broadcastToUsers: vi.fn((userIds: unknown, event: any) => {
+    broadcastCalls.push({ userIds, event });
+  }),
 }));
 
 // === Вспомогательные штуки ===
@@ -281,6 +309,7 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     fakeClients.length = 0;
     blockedPromptIndexes.clear();
     promptWaiters.length = 0;
+    broadcastCalls.length = 0;
     // Сбрасываем in-memory карту активных сессий и лок, чтобы тесты
     // не цеплялись друг за друга. На каждый тест — чистое состояние.
     resetModelRuntime();
@@ -355,6 +384,49 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     expect(fakeClients).toHaveLength(1);
     const client = lastClient();
     expect(client.options.args ?? []).not.toContain("--session-id");
+  });
+
+  it("во время хода роли chats:typing несёт tool из toolcall_start", async () => {
+    const chat = await createChat({
+      title: "Диалог с архитектором",
+      kind: "group",
+      member_ids: ["role_architect", "role_qa"],
+    });
+    const chatId = chat.json().chat.id;
+
+    blockPromptFor(0);
+    const sendPromise = app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+      payload: { text: "@architect подскажи архитектуру" },
+    });
+    await tick(30);
+
+    const client = lastClient();
+    client.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "toolcall_start", id: "t1", toolName: "read" },
+    });
+    await tick(30);
+
+    releasePromptWaiter(0);
+    const sent = await sendPromise;
+    expect(sent.statusCode).toBe(200);
+    await tick(30);
+
+    const stepCall = broadcastCalls.find(
+      (c) => c.event?.type === "chats:typing" && c.event?.tool === "read",
+    );
+    expect(stepCall).toBeDefined();
+    expect(stepCall?.event.active).toBe(true);
+    expect(stepCall?.event.chat_id).toBe(chatId);
+
+    const finalStop = broadcastCalls.find(
+      (c) => c.event?.type === "chats:typing" && c.event?.active === false,
+    );
+    expect(finalStop).toBeDefined();
+    expect(finalStop?.event.tool).toBeUndefined();
   });
 
   it("второе сообщение в чат продолжает ту же pi_session_id", async () => {

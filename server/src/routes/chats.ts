@@ -1053,7 +1053,7 @@ async function deliverAgentReply(args: {
   // «Печатает» (владелец 22.09.2026): показываем ровно то время, пока роль
   // готовит ответ, — от запуска до готового текста или сбоя. Не таймер и не
   // догадка клиента: сигнал даёт тот, кто роль запускает.
-  const typing = (active: boolean) => {
+  const typing = (active: boolean, tool?: string) => {
     const name =
       (db.prepare("SELECT name FROM users WHERE id = ?").get(roleUserId) as
         | { name?: string }
@@ -1064,6 +1064,7 @@ async function deliverAgentReply(args: {
       user_id: roleUserId,
       name,
       active,
+      ...(tool ? { tool } : {}),
     });
   };
 
@@ -1076,6 +1077,7 @@ async function deliverAgentReply(args: {
       roleId: roleUserId,
       prompt,
       sessionId: previousSessionId,
+      onStep: (tool) => typing(true, tool),
     });
   } catch (error) {
     // Онлайн-сессия не должна ронять HTTP-запрос — пользовательский
