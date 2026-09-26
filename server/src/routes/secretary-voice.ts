@@ -1,10 +1,12 @@
 // POST /api/secretary/voice-token — короткоживущий LiveKit room-токен для
-// голосового разговора с Секретарём. Только владелец. Комната одна и та же
-// между сессиями одного владельца (`secretary-voice-<ownerId>`) — так
-// Python-воркер (server/agents/secretary-voice) может использовать
-// автоматический dispatch по факту создания комнаты, без ручной регистрации
-// per-session. Секрет LiveKit не уходит на телефон — только подписанный JWT.
+// голосового разговора с Секретарём. Только владелец. Каждый звонок —
+// НОВАЯ комната (`secretary-voice-<ownerId>-<случайный хвост>`): LiveKit
+// шлёт воркера только в свежесозданную комнату, а пустая комната после
+// звонка ещё живёт какое-то время — второй звонок подряд в ту же комнату
+// оставался без Секретаря (26.09.2026). Секрет LiveKit не уходит на
+// телефон — только подписанный JWT.
 import type { FastifyInstance } from "fastify";
+import { randomUUID } from "crypto";
 import { AccessToken } from "livekit-server-sdk";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
@@ -35,7 +37,7 @@ export function registerSecretaryVoiceRoutes(app: FastifyInstance): void {
       return reply.code(503).send({ error: "LiveKit не настроен на сервере" });
     }
 
-    const room = `secretary-voice-${owner}`;
+    const room = `secretary-voice-${owner}-${randomUUID().slice(0, 8)}`;
     const voice = req.body?.voice;
     const attributes = SECRETARY_VOICES.has(voice) ? { voice } : undefined;
     const at = new AccessToken(apiKey, apiSecret, { identity: owner, ttl: "10m", attributes });

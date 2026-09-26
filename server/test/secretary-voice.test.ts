@@ -53,7 +53,17 @@ describe("POST /api/secretary/voice-token — только владелец", ()
     expect(body.url).toBe("wss://test.livekit.cloud");
     expect(typeof body.token).toBe("string");
     expect(body.token.length).toBeGreaterThan(20);
-    expect(body.room).toBe(`secretary-voice-${ownerId}`);
+    expect(body.room.startsWith(`secretary-voice-${ownerId}-`)).toBe(true);
+  });
+
+  it("каждый звонок — новая комната (иначе второй звонок подряд остаётся без Секретаря)", async () => {
+    const call = () => app.inject({
+      method: "POST",
+      url: "/api/secretary/voice-token",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const [a, b] = [await call(), await call()];
+    expect(a.json().room).not.toBe(b.json().room);
   });
 
   function tokenAttributes(token: string): Record<string, string> | undefined {
