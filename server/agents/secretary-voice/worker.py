@@ -19,7 +19,6 @@ from livekit.agents import (
     RunContext,
     cli,
     function_tool,
-    inference,
 )
 from livekit.plugins.google.realtime import RealtimeModel
 
@@ -124,16 +123,12 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
     cfg = load_config()
 
-    # ВРЕМЕННО (владелец 25.09.2026): Gemini Live недоступен с .110
-    # (geo-блокировка, см. журнал плана) — каскадный STT->LLM->TTS через
-    # inference-шлюз LiveKit (agent-gateway.livekit.cloud, тот же домен,
-    # что уже работает для регистрации воркера) закрывает разрыв на время
-    # проверки пайплайна. Вернуть RealtimeModel(Gemini) одной правкой,
-    # когда появится рабочий выход в интернет для Gemini с .110.
     session = AgentSession(
-        stt=inference.STT("deepgram/nova-3", language="ru"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=inference.TTS("cartesia/sonic-3"),
+        llm=RealtimeModel(
+            model="gemini-3.8-live",
+            api_key=cfg.gemini_api_key,
+            voice="Puck",
+        ),
     )
     await session.start(agent=Assistant(), room=ctx.room)
 
