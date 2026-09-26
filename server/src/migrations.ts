@@ -2264,6 +2264,122 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // «Супер Секретарь» (владелец 25.09.2026, план в
+    // docs/ПЛАН Супер Секретарь/): строка roles ещё выключена — включим
+    // вместе с переносом iOS-экрана (docs/ПЛАН Супер Секретарь/..., этап
+    // 2.1), чтобы Секретарь не задвоился в списке чатов раньше времени.
+    // u-secretary получает authority agent — как у остальных ролей,
+    // нужно для app.inject/JWT-пропуска в startChatRun.
+    id: "061_secretary_role",
+    description:
+      "roles: строка secretary (enabled=0 до переноса iOS-экрана); " +
+      "u-secretary получает authority agent для app.inject-вызовов.",
+    up: () => {
+      db.exec(`
+        INSERT OR IGNORE INTO roles (key, title, summary, enabled, position) VALUES
+          ('secretary', 'Секретарь', 'личный помощник владельца: разговор, вопросы, разбор надиктовки задач.', 0, 7);
+      `);
+      db.prepare("UPDATE users SET role = 'agent' WHERE id = 'u-secretary' AND role != 'agent'").run();
+    },
+  },
+  {
+    // Продолжение LOCK 061 — вынесено в отдельную миграцию (владелец
+    // 25.09.2026): 061 уже применена на живой БД, дописывать в её тело
+    // бессмысленно, раннер её больше не тронет. Якорный ряд в chats —
+    // только для chat_sessions (продолжение разговора Пи между
+    // сообщениями), НЕ для видимости в /api/chats: без строки в
+    // chat_members он не попадёт в список чатов владельца (GET /api/chats
+    // джойнит chat_members), пока не включим этап 2.1.
+    id: "062_secretary_chat_session_anchor",
+    description:
+      "chats: якорный ряд chat-secretary для chat_sessions; " +
+      "roles.prompt для secretary.",
+    up: () => {
+      const owner = (db.prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined)?.id;
+      if (owner) {
+        db.prepare(
+          `INSERT OR IGNORE INTO chats (id, title, kind, created_by, task_id) VALUES (?, ?, ?, ?, NULL)`,
+        ).run("chat-secretary", "Секретарь", "direct", owner);
+      }
+      db.prepare("UPDATE roles SET prompt = ? WHERE key = 'secretary' AND prompt IS NULL").run(
+        [
+          "Ты — Секретарь, личный помощник владельца в TaskFlow. Общайся живо,",
+          "по-русски, кратко и по-человечески — как собеседник, а не как отчёт.",
+          "",
+          "Про постановку задач: НЕ создавай карточку на каждое сообщение.",
+          "Создавай задачу (taskflow_structure_dictation, затем taskflow_create_task)",
+          "только когда владелец явно просит («создай карточку», «запиши задачу»",
+          "и т.п.) ИЛИ когда сам уверен, что сообщение — постановка задачи. Если",
+          "не уверен — переспроси коротко, не создавай вслепую.",
+        ].join("\n"),
+      );
+    },
+  },
+  {
+    // Владелец 25.09.2026 (docs/ПЛАН Супер Секретарь/): историю старого
+    // канала owner не жалко, переносим Секретаря на настоящую комнату
+    // /api/chats целиком — экран iOS переиспользует RoleChatRoomScreen без
+    // изменений. chat_members делает комнату chat-secretary видимой в
+    // GET /api/chats (раньше нарочно её не было — см. миграцию 062);
+    // roles.enabled включаем в этом же шаге, так как iOS-переключение
+    // делается вместе.
+    id: "063_secretary_room_go_live",
+    description:
+      "chat_members для chat-secretary (владелец + u-secretary); roles.enabled=1 для secretary.",
+    up: () => {
+      const owner = (db.prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined)?.id;
+      if (owner) {
+        db.prepare(
+          "INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES (?, ?)",
+        ).run("chat-secretary", owner);
+      }
+      db.prepare(
+        "INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES (?, ?)",
+      ).run("chat-secretary", "u-secretary");
+      db.prepare("UPDATE roles SET enabled = 1 WHERE key = 'secretary'").run();
+    },
+  },
+  {
+    // Быстрые ответы (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/):
+    // 2-4 коротких варианта под последним сообщением роли, чтобы не
+    // печатать каждый раз руками. Храним JSON-строкой — своего типа
+    // массива у SQLite нет, разворачивается в withAttachments().
+    id: "064_chat_quick_replies",
+    description: "chat_messages.quick_replies — JSON-массив коротких вариантов ответа.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!cols.has("quick_replies")) {
+        db.exec("ALTER TABLE chat_messages ADD COLUMN quick_replies TEXT");
+      }
+    },
+  },
+  {
+    // Новая сессия без удаления истории (владелец 25.09.2026, docs/ПЛАН
+    // Супер Секретарь/): «очистить чат мне не надо... надо по сессиям
+    // потом полистать». Сброс памяти агента — DELETE из chat_sessions
+    // (нового пропуска pi_session_id не будет, startChatRun поднимет
+    // сессию с нуля); сообщения не трогаются, в ленту кладётся видимая
+    // метка-разделитель.
+    id: "065_chat_session_marker",
+    description: "chat_messages.is_session_marker — разделитель «новая сессия» в ленте.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!cols.has("is_session_marker")) {
+        db.exec(
+          "ALTER TABLE chat_messages ADD COLUMN is_session_marker INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+    },
+  },
 ];
 
 /**

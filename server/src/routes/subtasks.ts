@@ -10,6 +10,7 @@ import {
   isStale,
   subtaskWorkRefusal,
   RESULT_MAX,
+  SUBTASK_TITLE_MAX,
 } from "../agentState.js";
 // Тот же расчёт state/agent_stale, что у GET /api/tasks/:id (tasks.ts) —
 // иначе ответы этого файла (add/patch/delete подзадачи, WS-рассылка)
@@ -119,10 +120,22 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
 
       if (!req.body?.title)
         return reply.code(400).send({ error: "title required" });
-      if (req.body.title.length > 100)
-        return reply
-          .code(400)
-          .send({ error: "title слишком длинный (max 100)" });
+      // Предел на заголовок шага — про агентов, чтобы чек-лист оставался
+      // коротким пунктом работы, а не абзацем. Владелец 26.09.2026 упёрся
+      // в него сам, дописывая шаг руками в уже закрытую карточку — лимит,
+      // не различавший вызывающего, ловил и его тоже. Человека это не
+      // касается, тем же приёмом, что и предел на result при закрытии.
+      const titleCaller = db
+        .prepare("SELECT type FROM users WHERE id = ?")
+        .get(req.userId) as { type?: string } | undefined;
+      if (
+        titleCaller?.type === "ai" &&
+        req.body.title.length > SUBTASK_TITLE_MAX
+      ) {
+        return reply.code(400).send({
+          error: `title слишком длинный (max ${SUBTASK_TITLE_MAX})`,
+        });
+      }
 
       const id = uid();
 

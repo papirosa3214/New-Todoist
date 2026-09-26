@@ -26,6 +26,7 @@ import crypto from "node:crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { broadcastToUsers } from "../ws.js";
+import { deliverSecretaryReply, SECRETARY_CHAT_ID } from "../lib/secretaryReply.js";
 import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
@@ -62,7 +63,17 @@ function withAttachments(message: any) {
     `SELECT id, file_name, mime, size FROM attachments
       WHERE chat_message_id = ? ORDER BY created_at`,
   );
-  return { ...message, attachments: attachmentsOf.all(message.id) };
+  return {
+    ...message,
+    attachments: attachmentsOf.all(message.id),
+    // Быстрые ответы (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/) —
+    // хранятся в chat_messages.quick_replies как JSON-строка (у SQLite
+    // нет своего типа массива), здесь разворачиваем в настоящий массив.
+    quick_replies: message.quick_replies ? JSON.parse(message.quick_replies) : null,
+    // SQLite отдаёт 0/1 числом — iOS Decodable для Bool ждёт true/false,
+    // не 0/1, приводим здесь же.
+    is_session_marker: Boolean(message.is_session_marker),
+  };
 }
 
 type ChatKind = "direct" | "group";
@@ -401,9 +412,11 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const messages = db
         .prepare(
           `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
-                  f.avatar_url as from_user_avatar_url, f.initials as from_user_initials
+                  f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
+                  t.title as task_title
              FROM chat_messages m
              LEFT JOIN users f ON f.id = m.from_user_id
+             LEFT JOIN tasks t ON t.id = m.task_id
             WHERE m.chat_id = ? ORDER BY m.created_at ASC`,
         )
         .all(req.params.id);
@@ -491,9 +504,11 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         db
           .prepare(
             `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
-                    f.avatar_url as from_user_avatar_url, f.initials as from_user_initials
+                    f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
+                    t.title as task_title
                FROM chat_messages m
                LEFT JOIN users f ON f.id = m.from_user_id
+               LEFT JOIN tasks t ON t.id = m.task_id
               WHERE m.id = ?`,
           )
           .get(id),
@@ -509,7 +524,15 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // должны откатывать уже сохранённое сообщение и не должны ронять
       // запрос — пользователь уже видит своё сообщение в ленте. Поэтому
       // вокруг — try/catch с логированием.
+      //
+      // Секретарь (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/) —
+      // отдельная ветка: chatMemberRoles/roleAccountId завязаны на
+      // users.role_key, а у Секретаря его нет и не может быть (БД-триггер
+      // требует id = 'role_' + role_key, у него фиксированный u-secretary).
       try {
+        if (chatId === SECRETARY_CHAT_ID) {
+          void deliverSecretaryReply(text);
+        } else {
         const memberRoles = chatMemberRoles(chatId);
         const targetRole = await pickRoleForChat({
           messageText: text,
@@ -532,6 +555,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
               }),
             );
           }
+        }
         }
       } catch (error) {
         // Логируем, но не возвращаем 5xx — текст уже в ленте, а ошибку
@@ -623,6 +647,52 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       txn();
 
       return { deleted: targets.length };
+    },
+  );
+
+  // Новая сессия без удаления истории (владелец 25.09.2026, docs/ПЛАН
+  // Супер Секретарь/): сбрасывает pi_session_id роли в этом чате — агент
+  // следующим сообщением поднимет разговор с нуля, сама лента остаётся
+  // нетронутой. В ленту кладётся видимая метка-разделитель.
+  app.post<{ Params: { id: string }; Body: { role_id?: string } }>(
+    "/api/chats/:id/new-session",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const chatId = req.params.id;
+      if (!isMember(chatId, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const roleId = typeof req.body?.role_id === "string" ? req.body.role_id : "";
+      if (!roleId) return reply.code(400).send({ error: "role_id обязателен" });
+      if (!isMember(chatId, roleId))
+        return reply.code(400).send({ error: "role_id не участник этого чата" });
+
+      db.prepare("DELETE FROM chat_sessions WHERE chat_id = ? AND role_id = ?").run(
+        chatId,
+        roleId,
+      );
+
+      const id = uid();
+      db.prepare(
+        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, is_session_marker)
+         VALUES (?, ?, 'Новая сессия', 'chat', ?, 1)`,
+      ).run(id, roleId, chatId);
+      db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
+
+      const message = withAttachments(
+        db
+          .prepare(
+            `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
+                    f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
+                    t.title as task_title
+               FROM chat_messages m
+               LEFT JOIN users f ON f.id = m.from_user_id
+               LEFT JOIN tasks t ON t.id = m.task_id
+              WHERE m.id = ?`,
+          )
+          .get(id),
+      );
+      broadcastToUsers(memberIds(chatId), { type: "chat:new", message });
+      return { message };
     },
   );
 
@@ -1034,9 +1104,11 @@ async function deliverAgentReply(args: {
   const replyRow = db
     .prepare(
       `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
-              f.avatar_url as from_user_avatar_url, f.initials as from_user_initials
+              f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
+              t.title as task_title
          FROM chat_messages m
          LEFT JOIN users f ON f.id = m.from_user_id
+         LEFT JOIN tasks t ON t.id = m.task_id
         WHERE m.id = ?`,
     )
     .get(replyId);

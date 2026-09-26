@@ -61,6 +61,11 @@ export function roleTitle(key: string): string {
 }
 
 export function roleUserId(key: string): string {
+  // Секретарь — фиксированная учётка u-secretary (заведена до системы
+  // ролей, на неё уже ссылаются chat_messages и iOS-константа
+  // ChatBubble.secretaryID); переименовывать в role_secretary — ломать
+  // историю сообщений и клиент. Единственное исключение из паттерна.
+  if (key === "secretary") return "u-secretary";
   return `role_${key}`;
 }
 

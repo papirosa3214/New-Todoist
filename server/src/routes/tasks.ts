@@ -371,6 +371,38 @@ export function registerTaskRoutes(app: FastifyInstance) {
     },
   );
 
+  // Слойный контекст для ролей (владелец 25.09.2026, docs/ПЛАН Супер
+  // Секретарь/): счётчики + названия выполненных задач по периодам, а не
+  // вся история целиком — роль зовёт это сама, когда владелец спрашивает
+  // «что сделал за неделю», вместо того чтобы либо не знать, либо тащить
+  // в контекст полные карточки. Названия ограничены (15 на период) —
+  // счётчик при этом точный.
+  app.get("/api/tasks/my-stats", { preHandler: authPre }, async (req: any) => {
+    const actorId = req.userId;
+    const titleLimit = 15;
+    const period = (days: number) => {
+      const count = (
+        db
+          .prepare(
+            `SELECT COUNT(*) as n FROM tasks
+              WHERE assignee_id = ? AND status = 'completed'
+                AND completed_at >= datetime('now', ?)`,
+          )
+          .get(actorId, `-${days} days`) as { n: number }
+      ).n;
+      const tasks = db
+        .prepare(
+          `SELECT id, title FROM tasks
+            WHERE assignee_id = ? AND status = 'completed'
+              AND completed_at >= datetime('now', ?)
+            ORDER BY completed_at DESC LIMIT ?`,
+        )
+        .all(actorId, `-${days} days`, titleLimit);
+      return { count, tasks };
+    };
+    return { week: period(7), month: period(30) };
+  });
+
   app.get("/api/tasks", { preHandler: authPre }, async (req: any) => {
     const userId = req.userId;
     const includeChildren = req.query.include_children === "true";
