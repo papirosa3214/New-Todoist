@@ -59,6 +59,7 @@ import { registerRoleRoutes } from "./routes/roles.js";
 import { registerRuntimeRoutes } from "./routes/runtime.js";
 import { registerTaskIntakeRoutes } from "./routes/task-intake.js";
 import { registerSecretaryVoiceRoutes } from "./routes/secretary-voice.js";
+import { registerMcpManifestRoutes } from "./routes/mcp-manifest.js";
 import { registerRoleRunJobRoutes } from "./routes/role-run-jobs.js";
 
 /**
@@ -258,6 +259,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerRoleRunJobRoutes(app);
   registerTaskIntakeRoutes(app);
   registerSecretaryVoiceRoutes(app);
+  registerMcpManifestRoutes(app);
   registerProjectLabelRoutes(app);
   registerCompassRoutes(app);
   registerSubtaskCommentRoutes(app);
