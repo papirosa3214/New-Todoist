@@ -32,15 +32,25 @@ export function registerAuthRoutes(app: FastifyInstance) {
   // Работает только при TASKFLOW_LAN_NO_AUTH=1 и только для приватных адресов
   // (проверка в lanOwnerId, заголовкам X-Forwarded-For не верим). Снаружи
   // маршрут отвечает 404, как будто его нет.
-  app.post("/api/auth/lan", async (req, reply) => {
-    const ownerId = lanOwnerId(req);
-    if (!ownerId) return reply.code(404).send({ error: "Not found" });
-    const user = db
-      .prepare("SELECT id, name, email, role, type FROM users WHERE id = ?")
-      .get(ownerId);
-    const token = app.jwt.sign({ id: ownerId }, { expiresIn: "30d" });
-    return { token, user };
-  });
+  app.post<{ Body?: never }>(
+    "/api/auth/lan",
+    {
+      // iOS-клиент шлёт `Content-Type: application/json` с пустым телом `{}`
+      // — без явного `Body: undefined` Fastify отвечает 400
+      // "Body cannot be empty when content-type is set". Эндпоинт body не
+      // использует, поэтому разрешаем пустой/отсутствующий body.
+      schema: { body: undefined },
+    },
+    async (req, reply) => {
+      const ownerId = lanOwnerId(req);
+      if (!ownerId) return reply.code(404).send({ error: "Not found" });
+      const user = db
+        .prepare("SELECT id, name, email, role, type FROM users WHERE id = ?")
+        .get(ownerId);
+      const token = app.jwt.sign({ id: ownerId }, { expiresIn: "30d" });
+      return { token, user };
+    },
+  );
 
   // ═══════ REGISTER ═══════
   app.post<{
