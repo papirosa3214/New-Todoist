@@ -69,14 +69,14 @@ describe("role catalog API", () => {
     await app.close();
   });
 
-  it("lists seven roles and returns Architect details", async () => {
+  it("lists eight roles and returns Architect details", async () => {
     const list = await app.inject({
       method: "GET",
       url: "/api/roles",
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(list.statusCode).toBe(200);
-    expect(list.json().roles).toHaveLength(7);
+    expect(list.json().roles).toHaveLength(8);
     expect(list.json().roles.map((role: { role: string }) => role.role)).toEqual([
       "researcher",
       "analyst",
@@ -85,7 +85,12 @@ describe("role catalog API", () => {
       "builder",
       "qa",
       "designer",
+      "secretary",
     ]);
+    // У Секретаря нет учётки role_secretary — название всё равно по-русски,
+    // из таблицы ролей (владелец 27.09.2026 видел в исполнителях «secretary»).
+    const secretary = list.json().roles.find((r: { role: string }) => r.role === "secretary");
+    expect(secretary.title).toBe("Секретарь");
 
     const details = await app.inject({
       method: "GET",

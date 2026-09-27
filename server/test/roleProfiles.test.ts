@@ -82,9 +82,10 @@ describe("Профили ролей для экрана «Команда»", () 
     fs.rmSync(profilesDir, { recursive: true, force: true });
   });
 
-  it("отдаёт ровно семь ролей с собранным профилем", async () => {
+  it("отдаёт ровно восемь ролей с собранным профилем", async () => {
     const roles = await fetchRoles();
-    expect(roles).toHaveLength(7);
+    // Восемь с 25.09.2026: миграция 063 включила Секретаря.
+    expect(roles).toHaveLength(8);
 
     for (const r of roles) {
       // Экрану нужно, чем роль подписать и кого ставить исполнителем.
@@ -138,7 +139,7 @@ describe("Профили ролей для экрана «Команда»", () 
     if (account) expect(designer.title).toBe(account.name);
   });
 
-  it("сломанный профиль одной роли не роняет остальные шесть", async () => {
+  it("сломанный профиль одной роли не роняет остальные семь", async () => {
     // Раньше отсутствие файла профиля обрушивало ручку целиком, и экран
     // «Команда» оставался пустым вместо одной проблемной строки.
     const broken = path.join(profilesDir, "qa.json");
@@ -148,7 +149,7 @@ describe("Профили ролей для экрана «Команда»", () 
     fs.writeFileSync(broken, "{}");
     try {
       const roles = await fetchRoles();
-      expect(roles).toHaveLength(7);
+      expect(roles).toHaveLength(8);
 
       const qa = roles.find((r) => r.role === "qa");
       expect(qa.status).toBe("unavailable");
@@ -156,7 +157,7 @@ describe("Профили ролей для экрана «Команда»", () 
 
       // Остальные не пострадали и видны на экране.
       const другие = roles.filter((r) => r.role !== "qa");
-      expect(другие).toHaveLength(6);
+      expect(другие).toHaveLength(7);
       for (const r of другие) {
         // Сверяем сам текст: toContain с матчером на массиве строк
         // проходит всегда и проверял бы ничего.

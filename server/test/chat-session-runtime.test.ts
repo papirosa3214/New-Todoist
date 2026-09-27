@@ -216,8 +216,11 @@ describe("startChatRun (адаптер онлайн-сессии)", () => {
     const client = fakeClients[0];
     expect(client.options.model).toBe("MiniMax-M3");
     expect(client.options.provider).toBe("minimax");
-    // Без args для новой сессии.
-    expect(client.options.args ?? []).toEqual([]);
+    // Новая сессия — без --session-id. С 25.09.2026 роль в чате ходит своим
+    // пропуском (roleRunAccess), поэтому --mcp-config в аргументах есть всегда.
+    const args: string[] = client.options.args ?? [];
+    expect(args).not.toContain("--session-id");
+    expect(args[0]).toBe("--mcp-config");
     // promptAndWait вызван с нашим промптом.
     expect(client.promptAndWait).toHaveBeenCalledWith(
       "привет",
