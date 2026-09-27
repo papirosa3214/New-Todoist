@@ -74,6 +74,33 @@ import { registerRoleRunJobRoutes } from "./routes/role-run-jobs.js";
  * невозможно в принципе, импорт index.ts сразу поднимал настоящий сервер.
  * Реальный запуск (низ файла) — тонкий вызов buildApp().then(listen).
  */
+const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+
+/** Номер запроса: присланный клиентом X-Request-ID, если это короткая
+ *  строка из безопасных символов (он попадает в лог и в заголовок ответа),
+ *  иначе свой — `srv-<время>-<случайное>`. */
+export function requestIdFor(req: { headers: Record<string, unknown> }): string {
+  const raw = req.headers["x-request-id"];
+  const incoming = typeof raw === "string" ? raw.trim() : "";
+  if (REQUEST_ID_RE.test(incoming)) return incoming;
+  return `srv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Первые 2 КБ тела ответа для лога, с затёртыми ключами. */
+export function errorBodyPreview(payload: unknown): string | undefined {
+  let text: string | undefined;
+  if (typeof payload === "string") text = payload;
+  else if (Buffer.isBuffer(payload)) text = payload.subarray(0, 2048).toString("utf8");
+  else if (payload && typeof payload === "object" && !("pipe" in (payload as object))) {
+    try { text = JSON.stringify(payload); } catch { text = undefined; }
+  }
+  if (!text) return undefined;
+  return text
+    .slice(0, 2048)
+    .replace(/("(?:token|api_token|access_token|refresh_token|password|secret|api_key)"\s*:\s*")[^"]*"/gi, '$1•••"')
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/g, "$1•••");
+}
+
 export async function buildApp(): Promise<FastifyInstance> {
   // До всего остального — секрет подписи JWT должен быть в process.env
   // раньше, чем fastifyJwt.register() ниже его прочитает (см. env.ts).
@@ -133,38 +160,38 @@ export async function buildApp(): Promise<FastifyInstance> {
             requestId: request.id,
           };
         },
-        res(reply: any) {
-          return {
-            statusCode: reply.statusCode,
-            // Тело ответа до 2 КБ — чтобы видеть, что именно вернулось
-            // клиенту на неуспешный запрос (Fastify по умолчанию не пишет
-            // тело, и на 5xx приходилось лезть в другое место).
-            body: reply._body
-              ? (typeof reply._body === "string"
-                  ? reply._body.slice(0, 2048)
-                  : JSON.stringify(reply._body).slice(0, 2048))
-              : undefined,
-          };
-        },
-      },
-      // Генерим req-id если клиент не прислал X-Request-ID. Fastify уже
-      // делает это по умолчанию (req.id = req-${counter}), но для явной
-      // диагностики оставляем.
-      genReqId: (req) => {
-        const incoming = (req.headers["x-request-id"] || "") as string;
-        return incoming || `srv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       },
     },
+    // Номер запроса (27.09.2026): клиентский X-Request-ID, если он похож на
+    // номер, иначе свой. Раньше эта функция лежала внутри logger — там
+    // Fastify её не читает, и номера были стандартные req-1, req-2…
+    genReqId: requestIdFor,
     bodyLimit: 25 * 1024 * 1024,
   });
 
   // Пробрасываем request-id обратно клиенту в response-header, чтобы
   // iPhone мог его залогировать и сопоставить со своим логом.
-  app.addHook("onSend", async (req, reply) => {
+  // Ответ с ошибкой (4xx/5xx) — отдельной строкой в лог с началом тела:
+  // по номеру запроса из лога телефона сразу видно, что именно сервер ему
+  // ответил. Штатный лог Fastify тело не пишет (раньше пытались через
+  // reply._body в сериализаторе — такого поля нет, тело не писалось).
+  app.addHook("onSend", async (req, reply, payload) => {
     const id = (req as any).id;
     if (id && typeof reply.getHeader === "function") {
       reply.header("X-Request-ID", id);
     }
+    if (reply.statusCode >= 400) {
+      // reqId в строку добавляет сам логгер запроса.
+      const entry = {
+        method: req.method,
+        url: redactSensitiveQuery(req.url || ""),
+        statusCode: reply.statusCode,
+        body: errorBodyPreview(payload),
+      };
+      if (reply.statusCode >= 500) req.log.error(entry, "ответ с ошибкой");
+      else req.log.warn(entry, "ответ с ошибкой");
+    }
+    return payload;
   });
 
   // Сырые байты audio/* (запись из MediaRecorder на фронтенде) — не JSON,
