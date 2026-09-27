@@ -51,6 +51,8 @@ import {
   registerActivityRoutes,
   startActivityObserver,
 } from "./routes/activity.js";
+import { startInboxTriageWatcher } from "./lib/inboxTriageWatcher.js";
+import { startInboxResultsWriter } from "./lib/inboxResultsWriter.js";
 import { registerSeedRoutes } from "./seed.js";
 import { registerEnrichmentRoutes } from "./routes/enrichment.js";
 import { registerDispatchRoutes } from "./routes/dispatch.js";
@@ -121,11 +123,48 @@ export async function buildApp(): Promise<FastifyInstance> {
             host: request.headers?.host,
             remoteAddress: request.ip,
             remotePort: request.socket?.remotePort,
+            // Корреляционный id: берём из заголовка X-Request-ID (если его
+            // шлёт клиент), иначе генерим свой. Пробрасываем в response
+            // через onSend-хук ниже — iOS-лог и серверный лог связываются
+            // одним id, что сильно упрощает разбор «клиент упал, сервер
+            // видит 200 — почему?». Это диагностическая инфраструктура
+            // 27.09.2026: iPhone показывал «нет задач», а в логе сервера
+            // всё было 200 — нужно было одной строкой связать обе стороны.
+            requestId: request.id,
+          };
+        },
+        res(reply: any) {
+          return {
+            statusCode: reply.statusCode,
+            // Тело ответа до 2 КБ — чтобы видеть, что именно вернулось
+            // клиенту на неуспешный запрос (Fastify по умолчанию не пишет
+            // тело, и на 5xx приходилось лезть в другое место).
+            body: reply._body
+              ? (typeof reply._body === "string"
+                  ? reply._body.slice(0, 2048)
+                  : JSON.stringify(reply._body).slice(0, 2048))
+              : undefined,
           };
         },
       },
+      // Генерим req-id если клиент не прислал X-Request-ID. Fastify уже
+      // делает это по умолчанию (req.id = req-${counter}), но для явной
+      // диагностики оставляем.
+      genReqId: (req) => {
+        const incoming = (req.headers["x-request-id"] || "") as string;
+        return incoming || `srv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      },
     },
     bodyLimit: 25 * 1024 * 1024,
+  });
+
+  // Пробрасываем request-id обратно клиенту в response-header, чтобы
+  // iPhone мог его залогировать и сопоставить со своим логом.
+  app.addHook("onSend", async (req, reply) => {
+    const id = (req as any).id;
+    if (id && typeof reply.getHeader === "function") {
+      reply.header("X-Request-ID", id);
+    }
   });
 
   // Сырые байты audio/* (запись из MediaRecorder на фронтенде) — не JSON,
@@ -291,6 +330,17 @@ export async function buildApp(): Promise<FastifyInstance> {
   // поверх уже рабочих слоёв 1-2, включается/выключается на лету через
   // ACTIVITY_OBSERVER_ENABLED (см. комментарий в activity.ts).
   startActivityObserver();
+  // Inbox-triage watcher: при появлении ticket'а в ~/Проекты/taskflow-уведомления/
+  // inbox/*/_diagnostic/*.json создаёт карточку на диагностику прямо в БД.
+  // Никаких внешних HTTP/Hermes/timer'ов — всё внутри процесса сервера
+  // (правило Maksim 27.09.2026). Выключается через INBOX_TRIAGE_DISABLED=1.
+  if (process.env.INBOX_TRIAGE_DISABLED !== "1") {
+    startInboxTriageWatcher();
+  }
+  // Результаты: при закрытии карточки на диагностику/устранение дописывает
+  // блок в файл уведомления (Phase 4, правило Maksim 27.09.2026 — внутри
+  // TaskFlow, не внешний cron).
+  startInboxResultsWriter();
   registerSeedRoutes(app);
 
   // Health
