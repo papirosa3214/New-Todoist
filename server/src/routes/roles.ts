@@ -7,6 +7,7 @@ import {
   ROLE_NAMES,
   allRoles,
   loadRoleRouting,
+  roleTitle,
   refreshRoles,
   rolePromptText,
   roleUserId,
@@ -222,8 +223,10 @@ function roleDetails(role: RoleName, piAlive: boolean) {
   return {
     role,
     // Имя из учётки, а не из словаря в коде: владелец переименует роль в
-    // одном месте, и экран это подхватит.
-    title: account?.name ?? role,
+    // одном месте, и экран это подхватит. Учётки role_<ключ> может не быть
+    // (Секретарь живёт на u-secretary) — тогда название из таблицы ролей,
+    // а не голый ключ: владелец 27.09.2026 видел в исполнителях «secretary».
+    title: account?.name ?? roleTitle(role),
     /** «Чем занимается» — строка для Секретаря; правится на экране «Команда». */
     summary: record?.summary ?? "",
     /** Отключённая роль в работу не берётся, но в списке «Команды» видна. */

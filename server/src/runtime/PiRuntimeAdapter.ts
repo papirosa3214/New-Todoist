@@ -13,6 +13,7 @@ import {
   SHELL_AGENT_IDS,
   loadRoleRouting,
   providerOfModel,
+  roleTitle,
   type RoleName,
 } from "../roleRouting.js";
 import type {
@@ -256,7 +257,7 @@ async function buildProfile(
   return {
     id: role,
     role,
-    title: account?.name ?? role,
+    title: account?.name ?? roleTitle(role),
     account_id: account?.id ?? "",
     runtime_id: RUNTIME_ID_PI,
     prompt,
