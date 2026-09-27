@@ -31,6 +31,7 @@ import * as os from "node:os";
 import * as crypto from "node:crypto";
 
 import db from "../db.js";
+import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
 
 export const NOTIF_ROOT =
   process.env.TASKFLOW_NOTIF_ROOT ||
@@ -336,8 +337,9 @@ export function startInboxResultsWriter(): () => void {
         subId = crypto.randomUUID();
         try {
           db.prepare(
-            `INSERT INTO tasks (id, title, description, priority, creator_id, status, agent_state, parent_id)
-             VALUES (?, ?, ?, ?, ?, 'active', 'todo', ?)`,
+            // Устранение — туда же, куда диагностика: проект «Серверные уведомления».
+            `INSERT INTO tasks (id, title, description, priority, creator_id, status, agent_state, parent_id, project_id)
+             VALUES (?, ?, ?, ?, ?, 'active', 'todo', ?, ?)`,
           ).run(
             subId,
             subTitlePrefix,
@@ -350,6 +352,7 @@ export function startInboxResultsWriter(): () => void {
             2,
             "u1",
             task.id,
+            serverNotificationsProjectId("u1"),
           );
         } catch {
           // уже существует другая карточка на устранение? — пропустим INSERT

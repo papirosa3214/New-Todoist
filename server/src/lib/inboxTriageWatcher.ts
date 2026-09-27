@@ -25,6 +25,7 @@ import * as crypto from "node:crypto";
 
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
+import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
 
 export const NOTIF_ROOT =
   process.env.TASKFLOW_NOTIF_ROOT ||
@@ -80,6 +81,13 @@ export function startInboxTriageWatcher(): () => void {
   let busy = false;
   let stopped = false;
   const knownDirs = new Set<string>(scanDayDirs());
+  // Проект заводится сразу при старте — Максим видит его, не дожидаясь первой
+  // тревоги (27.09.2026).
+  try {
+    serverNotificationsProjectId(OWNER_ID);
+  } catch (error) {
+    console.warn("[inbox-triage] проект «Серверные уведомления»:", error);
+  }
 
   const pollHandle = setInterval(() => {
     if (stopped) return;
@@ -208,9 +216,9 @@ export function startInboxTriageWatcher(): () => void {
     const txn = db.transaction(() => {
       db.prepare(
         `INSERT INTO tasks (
-          id, title, description, priority, creator_id, status, agent_state
-        ) VALUES (?, ?, ?, ?, ?, 'active', 'todo')`,
-      ).run(id, title, description, PRIORITY, OWNER_ID);
+          id, title, description, priority, creator_id, status, agent_state, project_id
+        ) VALUES (?, ?, ?, ?, ?, 'active', 'todo', ?)`,
+      ).run(id, title, description, PRIORITY, OWNER_ID, serverNotificationsProjectId(OWNER_ID));
     });
     txn();
 
