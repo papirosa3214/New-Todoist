@@ -112,3 +112,5 @@ server/dev.db
 
 # Сторож планировщика расписания — состояние между прогонами (не в репо, как agent-watch).
 server/scheduler-watch.state.json
+server/agents/secretary-voice/__pycache__/
+server/secretary-voice-watch.state.json
