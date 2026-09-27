@@ -28,6 +28,12 @@ import { authOrApiToken } from "../auth.js";
 import { broadcastToUsers } from "../ws.js";
 import { deliverSecretaryReply, SECRETARY_CHAT_ID } from "../lib/secretaryReply.js";
 import {
+  chatRunFailureText,
+  liveTurnsOfChat,
+  startLiveTurn,
+  type SavedSteps,
+} from "../runtime/chatLiveTurn.js";
+import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
   rolePromptText,
@@ -73,6 +79,9 @@ function withAttachments(message: any) {
     // SQLite отдаёт 0/1 числом — iOS Decodable для Bool ждёт true/false,
     // не 0/1, приводим здесь же.
     is_session_marker: Boolean(message.is_session_marker),
+    // Шаги хода роли (владелец 27.09.2026, живой ход как в Claude Code) —
+    // JSON-строка в chat_messages.steps, см. runtime/chatLiveTurn.ts.
+    steps: message.steps ? JSON.parse(message.steps) : null,
   };
 }
 
@@ -399,6 +408,19 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           return reply.code(e.status).send({ error: e.message });
         throw e;
       }
+    },
+  );
+
+  // Идущие сейчас ходы ролей в чате — снимок живого хода (текст, шаги) для
+  // того, кто открыл чат посреди ответа или переподключился. Дальше
+  // обновления идут событием chats:live.
+  app.get<{ Params: { id: string } }>(
+    "/api/chats/:id/live",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isMember(req.params.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      return { turns: liveTurnsOfChat(req.params.id) };
     },
   );
 
@@ -1068,7 +1090,20 @@ async function deliverAgentReply(args: {
     });
   };
 
-  let reply: { sessionId: string | null; text: string };
+  const roleName =
+    (db.prepare("SELECT name FROM users WHERE id = ?").get(roleUserId) as
+      | { name?: string }
+      | undefined)?.name ?? role;
+  const live = startLiveTurn({
+    chatId,
+    userId: roleUserId,
+    name: roleName,
+    audience: () => memberIds(chatId),
+  });
+
+  let reply: { sessionId: string | null; text: string } | null = null;
+  let failure: unknown = null;
+  let steps: SavedSteps | null = null;
   typing(true);
   try {
     reply = await startChatRun({
@@ -1078,27 +1113,38 @@ async function deliverAgentReply(args: {
       prompt,
       sessionId: previousSessionId,
       onStep: (tool) => typing(true, tool),
+      onEvent: live.onEvent,
     });
   } catch (error) {
     // Онлайн-сессия не должна ронять HTTP-запрос — пользовательский
-    // текст уже в ленте. Пишем в журнал и идём дальше.
+    // текст уже в ленте. Но и молчать нельзя (владелец 27.09.2026): о
+    // сорванном ходе в чат ложится сообщение с причиной.
     console.warn(
       `[chats] startChatRun не удался для chat=${chatId} role=${role}:`,
       error instanceof Error ? error.message : error,
     );
-    return null;
+    failure = error;
   } finally {
+    steps = live.finish();
     typing(false);
   }
 
-  const replyText = (reply.text || "").trim();
+  const replyText = failure
+    ? chatRunFailureText(failure)
+    : (reply?.text || "").trim();
   if (!replyText) return null;
 
   const replyId = uid();
   db.prepare(
-    `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id)
-     VALUES (?, ?, ?, 'chat', ?)`,
-  ).run(replyId, roleUserId, replyText, chatId);
+    `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, steps)
+     VALUES (?, ?, ?, 'chat', ?, ?)`,
+  ).run(
+    replyId,
+    roleUserId,
+    replyText,
+    chatId,
+    steps ? JSON.stringify(steps) : null,
+  );
   db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
     chatId,
   );

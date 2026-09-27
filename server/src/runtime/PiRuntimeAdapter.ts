@@ -1017,10 +1017,17 @@ export interface StartChatRunInput {
   /** Сохранённый ранее pi_session_id — продолжит ту же сессию. Если
    *  null/undefined — стартует новую. */
   sessionId?: string | null;
-  /** Максимум времени на один ответ. По умолчанию 60 секунд — больше,
-   *  чем типичный онлайн-ответ, но без зависания, если модель ушла в
-   *  retry-loop. */
+  /** Общий потолок на один ход (стена сверху). По умолчанию 30 минут.
+   *  Обрывает ход раньше не он, а тишина — см. idleMs. */
   timeoutMs?: number;
+  /** Сколько роль может молчать (ни одного события рантайма), прежде чем
+   *  ход оборвётся. По умолчанию 3 минуты. Пока идёт вызов инструмента
+   *  (длинная команда, сборка), тишина не считается — такой ход ограничен
+   *  только общим потолком. */
+  idleMs?: number;
+  /** Сырые события рантайма хода — для живого хода в окне чата
+   *  (chatLiveTurn.ts). Необязательный. */
+  onEvent?: (event: unknown) => void;
   /** Вызывается на каждом начале использования инструмента в ходе — для
    *  живой ленты «что роль делает сейчас» в чате (owner UI). Необязательный:
    *  вызовы без колбэка (если такие появятся) работают как раньше. */
@@ -1053,16 +1060,43 @@ const activeChatRuns = new Map<string, ActiveChatRun>();
 /** Стандартные лимиты на одну онлайн-сессию. Документированы как константы,
  *  чтобы тесты могли на них опереться, а продакшен подменить через
  *  переменные окружения при росте нагрузки. */
-const CHAT_RUN_DEFAULT_TIMEOUT_MS = 60_000;
-const CHAT_RUN_MAX_TIMEOUT_MS = 5 * 60_000; // 5 минут — жёсткий потолок
+//
+// Владелец 27.09.2026: прежние «60 секунд на весь ход» обрывали роль посреди
+// работы (в журнале — «Timeout collecting events» у Секретаря и QA), причём
+// молча. Теперь ход живёт, пока роль что-то делает: обрыв — только по
+// тишине (idle) или по общему потолку (ceiling), и о нём пишется в чат.
+export const CHAT_RUN_IDLE_MS = 3 * 60_000;
+export const CHAT_RUN_CEILING_MS = 30 * 60_000;
 
 function resolveChatRunTimeout(override?: number): number {
   const raw =
     override && override > 0
       ? override
-      : Number(process.env.TASKFLOW_CHAT_RUN_TIMEOUT_MS) ||
-        CHAT_RUN_DEFAULT_TIMEOUT_MS;
-  return Math.min(raw, CHAT_RUN_MAX_TIMEOUT_MS);
+      : Number(process.env.TASKFLOW_CHAT_RUN_TIMEOUT_MS) || CHAT_RUN_CEILING_MS;
+  return Math.min(raw, CHAT_RUN_CEILING_MS);
+}
+
+function resolveChatRunIdle(override?: number): number {
+  return override && override > 0
+    ? override
+    : Number(process.env.TASKFLOW_CHAT_RUN_IDLE_MS) || CHAT_RUN_IDLE_MS;
+}
+
+/** Ход оборван сторожем: code = CHAT_RUN_IDLE (тишина) или
+ *  CHAT_RUN_CEILING (общий потолок). limitMs — сработавший предел. */
+export class ChatRunTimeoutError extends Error {
+  readonly code: "CHAT_RUN_IDLE" | "CHAT_RUN_CEILING";
+  readonly limitMs: number;
+  constructor(code: "CHAT_RUN_IDLE" | "CHAT_RUN_CEILING", limitMs: number) {
+    super(
+      code === "CHAT_RUN_IDLE"
+        ? `ход роли оборван: ${limitMs} мс без событий`
+        : `ход роли оборван: превышен потолок ${limitMs} мс`,
+    );
+    this.name = "ChatRunTimeoutError";
+    this.code = code;
+    this.limitMs = limitMs;
+  }
 }
 
 /** Снять все активные онлайн-сессии Пи — единственная «глобальная» кнопка.
@@ -1109,9 +1143,14 @@ export async function startChatRun(
     throw new Error(`startChatRun: неизвестная роль «${role}»`);
   }
   if (!acquireChatRoleLock(input.chatId, input.roleId)) {
-    throw new Error(
-      `startChatRun: для пары (chat=${input.chatId}, role=${input.roleId}) ` +
-        `уже идёт живая сессия — дождитесь ответа или отмените её`,
+    // code = CHAT_RUN_BUSY: ход этой роли в этом чате уже идёт и ответит
+    // сам — вызывающая сторона молчит, а не пишет в чат об ошибке.
+    throw Object.assign(
+      new Error(
+        `startChatRun: для пары (chat=${input.chatId}, role=${input.roleId}) ` +
+          `уже идёт живая сессия — дождитесь ответа или отмените её`,
+      ),
+      { code: "CHAT_RUN_BUSY" },
     );
   }
 
@@ -1182,18 +1221,51 @@ export async function startChatRun(
     };
     activeChatRuns.set(runId, run);
 
+    // Сторож тишины: каждое событие рантайма — признак жизни. Пока идёт
+    // вызов инструмента, тишина не копится (команда может честно работать
+    // минуты), ход держит только общий потолок.
+    const idleMs = resolveChatRunIdle(input.idleMs);
+    const runningTools = new Set<string>();
+    let lastActivity = Date.now();
+    let watchdogFired: ChatRunTimeoutError | null = null;
+    let rejectWatchdog: (error: ChatRunTimeoutError) => void = () => {};
+    const watchdog = new Promise<never>((_, reject) => {
+      rejectWatchdog = reject;
+    });
+    watchdog.catch(() => {});
+
     newClient.onEvent((event: JsonAgentSessionEvent) => {
+      lastActivity = Date.now();
+      const e = event as { type: string; toolCallId?: string };
+      if (e.type === "tool_execution_start" && e.toolCallId) {
+        runningTools.add(e.toolCallId);
+      } else if (e.type === "tool_execution_end" && e.toolCallId) {
+        runningTools.delete(e.toolCallId);
+      }
       if (
         event.type === "message_update" &&
         event.assistantMessageEvent.type === "toolcall_start"
       ) {
         input.onStep?.(event.assistantMessageEvent.toolName);
       }
+      try {
+        input.onEvent?.(event);
+      } catch (error) {
+        // Живая лента — украшение, её сбой не должен ронять ход роли.
+        console.warn("[chats] onEvent живого хода упал:", error);
+      }
     });
 
     let finalText = "";
     let finalSessionId: string | null = input.sessionId ?? null;
     const timeoutMs = resolveChatRunTimeout(input.timeoutMs);
+    const idleTimer = setInterval(() => {
+      if (watchdogFired || runningTools.size > 0) return;
+      if (Date.now() - lastActivity < idleMs) return;
+      watchdogFired = new ChatRunTimeoutError("CHAT_RUN_IDLE", idleMs);
+      newClient.abort().catch(() => {});
+      rejectWatchdog(watchdogFired);
+    }, Math.min(5_000, Math.max(50, Math.floor(idleMs / 4))));
 
     try {
       await newClient.start();
@@ -1207,13 +1279,27 @@ export async function startChatRun(
         if (sid) finalSessionId = sid;
       } catch { /* getState() упал — оставим то, что было */ }
       // Один user message = один ответ. promptAndWait блокирует до
-      // agent_settled и прибит к timeoutMs сверху.
-      await newClient.promptAndWait(input.prompt, undefined, timeoutMs);
+      // agent_settled; сверху — общий потолок timeoutMs, сбоку — сторож
+      // тишины (он прерывает ход раньше, если роль замолчала).
+      try {
+        await Promise.race([
+          newClient.promptAndWait(input.prompt, undefined, timeoutMs),
+          watchdog,
+        ]);
+      } catch (error) {
+        if (watchdogFired) throw watchdogFired;
+        if (error instanceof Error && /^Timeout collecting events/.test(error.message)) {
+          newClient.abort().catch(() => {});
+          throw new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs);
+        }
+        throw error;
+      }
       try {
         const text = await newClient.getLastAssistantText();
         finalText = (text ?? "").trim();
       } catch { /* нет ассистентского хода — оставим пустую строку */ }
     } finally {
+      clearInterval(idleTimer);
       // Останавливать процесс ОБЯЗАТЕЛЬНО, иначе каждый user-message
       // оставит висеть по zombie-RpcClient. На повторное использование
       // не рассчитываем — на следующее сообщение поднимем свежий client.

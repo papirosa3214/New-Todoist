@@ -16,6 +16,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import {
+  CHAT_RUN_CEILING_MS,
   resetModelRuntime,
   startChatRun,
   cancelChatRun,
@@ -50,6 +51,7 @@ interface FakeRpcClient {
   getLastAssistantText: ReturnType<typeof vi.fn>;
   promptAndWait: ReturnType<typeof vi.fn>;
   onEvent: ReturnType<typeof vi.fn>;
+  emit: (event: unknown) => void;
 }
 
 /** Контролируемое ожидание для promptAndWait: для каждого fakeClient
@@ -59,6 +61,8 @@ interface FakeRpcClient {
  *  releasePromptWaiter(index). Это нужно для теста гонки на лок. */
 interface WaiterSlot { resolve: () => void; }
 const fakeClients: FakeRpcClient[] = [];
+/** Следующий promptAndWait упадёт этой ошибкой. */
+let failNextPrompt: Error | null = null;
 const promptWaiters: WaiterSlot[] = [];
 /** Индексы fakeClient, у которых promptAndWait должен зависнуть. */
 const blockedPromptIndexes = new Set<number>();
@@ -87,6 +91,7 @@ function makeFakeRpcClient(options: any): FakeRpcClient {
   // По умолчанию promptAndWait резолвится мгновенно. Если тест положил
   // индекс клиента в blockedPromptIndexes — promptAndWait повисает
   // на deferred, пока тест не позовёт releasePromptWaiter(index).
+  const listeners: Array<(event: unknown) => void> = [];
   const client: FakeRpcClient = {
     options,
     start: vi.fn(async () => {}),
@@ -103,6 +108,11 @@ function makeFakeRpcClient(options: any): FakeRpcClient {
     })),
     getLastAssistantText: vi.fn(async () => "какой-то ответ"),
     promptAndWait: vi.fn(async () => {
+      if (failNextPrompt) {
+        const error = failNextPrompt;
+        failNextPrompt = null;
+        throw error;
+      }
       if (!blockedPromptIndexes.has(index)) return;
       const slot = { resolve: () => {} };
       promptWaiters[index] = slot;
@@ -110,7 +120,13 @@ function makeFakeRpcClient(options: any): FakeRpcClient {
         slot.resolve = resolve;
       });
     }),
-    onEvent: vi.fn(() => () => {}),
+    onEvent: vi.fn((listener: (event: unknown) => void) => {
+      listeners.push(listener);
+      return () => {};
+    }),
+    emit: (event: unknown) => {
+      for (const listener of listeners) listener(event);
+    },
   };
   fakeClients.push(client);
   promptWaiters.push({ resolve: () => {} });
@@ -332,5 +348,77 @@ describe("startChatRun (адаптер онлайн-сессии)", () => {
     expect(cancelled).toBe(false);
 
     await first;
+  });
+});
+
+describe("startChatRun: сторож тишины (владелец 27.09.2026)", () => {
+  const tickMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const base = {
+    chatId: "chat-direct",
+    role: "architect" as const,
+    roleId: "role_architect",
+    prompt: "сделай",
+  };
+  async function firstClient() {
+    await vi.waitFor(() => expect(fakeClients).toHaveLength(1));
+    return fakeClients[0] as FakeRpcClient;
+  }
+
+  it("роль молчит дольше idleMs — ход обрывается с CHAT_RUN_IDLE, рантайм прерван", async () => {
+    blockPromptFor(0);
+    const run = startChatRun({ ...base, idleMs: 150 });
+    const client = await firstClient();
+    await expect(run).rejects.toMatchObject({ code: "CHAT_RUN_IDLE", limitMs: 150 });
+    expect(client.abort).toHaveBeenCalled();
+    expect(client.stop).toHaveBeenCalled();
+  });
+
+  it("пока идут события, ход живёт дольше idleMs", async () => {
+    blockPromptFor(0);
+    const run = startChatRun({ ...base, idleMs: 150 });
+    const client = await firstClient();
+    for (let i = 0; i < 8; i++) {
+      await tickMs(60);
+      client.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "." } });
+    }
+    releasePromptWaiter(0);
+    await expect(run).resolves.toMatchObject({ text: "какой-то ответ" });
+    expect(client.abort).not.toHaveBeenCalled();
+  });
+
+  it("долгий вызов инструмента тишиной не считается", async () => {
+    blockPromptFor(0);
+    const run = startChatRun({ ...base, idleMs: 150 });
+    const client = await firstClient();
+    client.emit({ type: "tool_execution_start", toolCallId: "b1", toolName: "bash", args: {} });
+    await tickMs(500);
+    releasePromptWaiter(0);
+    await expect(run).resolves.toBeDefined();
+    expect(client.abort).not.toHaveBeenCalled();
+  });
+
+  it("события хода пробрасываются наружу через onEvent", async () => {
+    const seen: unknown[] = [];
+    blockPromptFor(0);
+    const run = startChatRun({ ...base, onEvent: (e) => seen.push(e) });
+    const client = await firstClient();
+    const event = { type: "tool_execution_start", toolCallId: "r1", toolName: "read", args: {} };
+    client.emit(event);
+    releasePromptWaiter(0);
+    await run;
+    expect(seen).toEqual([event]);
+  });
+
+  it("общий потолок: по умолчанию 30 минут, срыв по нему — CHAT_RUN_CEILING", async () => {
+    const run = startChatRun({ ...base });
+    const client = await firstClient();
+    await run;
+    expect(client.promptAndWait).toHaveBeenCalledWith("сделай", undefined, CHAT_RUN_CEILING_MS);
+
+    failNextPrompt = new Error("Timeout collecting events. Stderr: x");
+    await expect(startChatRun({ ...base, timeoutMs: 1000 })).rejects.toMatchObject({
+      code: "CHAT_RUN_CEILING",
+      limitMs: 1000,
+    });
   });
 });

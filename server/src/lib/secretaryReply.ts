@@ -15,6 +15,11 @@ import { broadcastToUsers } from "../ws.js";
 import { rolePromptText } from "../roleRouting.js";
 import { startChatRun } from "../runtime/PiRuntimeAdapter.js";
 import { getChatSessionId, upsertChatSession } from "../runtime/chatSession.js";
+import {
+  chatRunFailureText,
+  startLiveTurn,
+  type SavedSteps,
+} from "../runtime/chatLiveTurn.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -113,7 +118,17 @@ export async function deliverSecretaryReply(userText: string): Promise<string | 
     });
   };
 
-  let reply: { sessionId: string | null; text: string };
+  // Живой ход (владелец 27.09.2026): текст растёт по словам, над ним шаги.
+  const live = startLiveTurn({
+    chatId,
+    userId: SECRETARY_ID,
+    name: "Секретарь",
+    audience: () => memberIds(chatId),
+  });
+
+  let reply: { sessionId: string | null; text: string } | null = null;
+  let failure: unknown = null;
+  let steps: SavedSteps | null = null;
   typing(true);
   try {
     reply = await startChatRun({
@@ -123,22 +138,29 @@ export async function deliverSecretaryReply(userText: string): Promise<string | 
       prompt,
       sessionId: previousSessionId,
       onStep: (tool) => typing(true, tool),
+      onEvent: live.onEvent,
     });
   } catch (error) {
+    // Сорванный ход — сообщение с причиной в чат, а не тишина.
     console.warn(
       "[secretaryReply] startChatRun не удался:",
       error instanceof Error ? error.message : error,
     );
-    return null;
+    failure = error;
   } finally {
+    steps = live.finish();
     typing(false);
   }
 
-  if (reply.sessionId) upsertChatSession(chatId, SECRETARY_ID, reply.sessionId);
+  if (reply?.sessionId) upsertChatSession(chatId, SECRETARY_ID, reply.sessionId);
 
-  const rawReplyText = (reply.text || "").trim();
+  const rawReplyText = failure
+    ? chatRunFailureText(failure)
+    : (reply?.text || "").trim();
   if (!rawReplyText) return null;
-  const { clean: replyText, replies: quickReplies } = extractQuickReplies(rawReplyText);
+  const { clean: replyText, replies: quickReplies } = failure
+    ? { clean: rawReplyText, replies: null }
+    : extractQuickReplies(rawReplyText);
 
   // Карточка задачи (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/,
   // этап 2): если за этот ход Секретарь создал задачу инструментом
@@ -156,8 +178,8 @@ export async function deliverSecretaryReply(userText: string): Promise<string | 
 
   const replyId = uid();
   db.prepare(
-    `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, quick_replies)
-     VALUES (?, ?, ?, 'chat', ?, ?, ?)`,
+    `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, quick_replies, steps)
+     VALUES (?, ?, ?, 'chat', ?, ?, ?, ?)`,
   ).run(
     replyId,
     SECRETARY_ID,
@@ -165,6 +187,7 @@ export async function deliverSecretaryReply(userText: string): Promise<string | 
     chatId,
     createdTask?.id ?? null,
     quickReplies ? JSON.stringify(quickReplies) : null,
+    steps ? JSON.stringify(steps) : null,
   );
   db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
 

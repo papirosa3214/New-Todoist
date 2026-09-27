@@ -2380,6 +2380,23 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    // Живой ход роли как в Claude Code (владелец 27.09.2026): шаги хода
+    // (что читала, что выполняла) остаются в истории вместе с ответом —
+    // JSON {duration_ms, items[]}, см. runtime/chatLiveTurn.ts.
+    id: "066_chat_message_steps",
+    description: "chat_messages.steps — шаги хода роли, свёрнутые под ответом.",
+    up: () => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!cols.has("steps")) {
+        db.exec("ALTER TABLE chat_messages ADD COLUMN steps TEXT");
+      }
+    },
+  },
 ];
 
 /**

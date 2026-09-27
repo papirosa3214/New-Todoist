@@ -109,6 +109,8 @@ function releasePromptWaiter(index: number): void {
 }
 
 const fakeClients: FakeRpcClient[] = [];
+/** Следующий promptAndWait упадёт этой ошибкой — сорванный ход рантайма. */
+let failNextPrompt: Error | null = null;
 
 function makeFakeRpcClient(options: any): FakeRpcClient {
   // Имитируем --session-id в Pi: если в args передан --session-id, getState
@@ -134,6 +136,11 @@ function makeFakeRpcClient(options: any): FakeRpcClient {
     })),
     getLastAssistantText: vi.fn(async () => "ответил агент"),
     promptAndWait: vi.fn(async () => {
+      if (failNextPrompt) {
+        const error = failNextPrompt;
+        failNextPrompt = null;
+        throw error;
+      }
       if (!blockedPromptIndexes.has(index)) return;
       const slot = { resolve: () => {} };
       promptWaiters[index] = slot;
@@ -427,6 +434,113 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     );
     expect(finalStop).toBeDefined();
     expect(finalStop?.event.tool).toBeUndefined();
+  });
+
+  // Живой ход как в Claude Code (владелец 27.09.2026).
+  it("во время хода роли идёт chats:live с текстом и шагами, шаги ложатся в историю", async () => {
+    const chat = await createChat({
+      title: "Живой ход",
+      kind: "group",
+      member_ids: ["role_architect"],
+    });
+    const chatId = chat.json().chat.id;
+
+    blockPromptFor(0);
+    const sendPromise = app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+      payload: { text: "@architect глянь конфиг" },
+    });
+    await tick(30);
+    const client = lastClient();
+    client.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "Смотрю конфиг." },
+    });
+    client.emit({
+      type: "tool_execution_start",
+      toolCallId: "c1",
+      toolName: "read",
+      args: { path: "/home/maksim/app/config.yaml" },
+    });
+    await tick(200);
+
+    // Открыл чат посреди хода — снимок отдаётся запросом.
+    const live = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/live`,
+      headers: ownerAuth,
+    });
+    expect(live.statusCode).toBe(200);
+    const turn = live.json().turns[0];
+    expect(turn.user_id).toBe("role_architect");
+    expect(turn.items).toEqual([
+      { kind: "text", text: "Смотрю конфиг." },
+      expect.objectContaining({ kind: "step", tool: "read", detail: "~/app/config.yaml", status: "running" }),
+    ]);
+    expect(
+      broadcastCalls.some((c) => c.event?.type === "chats:live" && c.event?.turn?.items?.length === 2),
+    ).toBe(true);
+
+    client.emit({ type: "tool_execution_end", toolCallId: "c1", toolName: "read", isError: false });
+    client.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "ответил агент" },
+    });
+    releasePromptWaiter(0);
+    await sendPromise;
+    await tick(50);
+
+    expect(
+      broadcastCalls.some((c) => c.event?.type === "chats:live" && c.event?.turn === null),
+    ).toBe(true);
+    const done = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/live`,
+      headers: ownerAuth,
+    });
+    expect(done.json().turns).toEqual([]);
+
+    const history = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+    });
+    const reply = history
+      .json()
+      .messages.find((m: any) => m.from_user_id === "role_architect");
+    expect(reply.text).toBe("ответил агент");
+    expect(reply.steps.items).toEqual([
+      { kind: "text", text: "Смотрю конфиг." },
+      expect.objectContaining({ kind: "step", tool: "read", status: "done" }),
+    ]);
+    expect(typeof reply.steps.duration_ms).toBe("number");
+  });
+
+  it("сорванный ход — в чат ложится сообщение с причиной, а не тишина", async () => {
+    const chat = await createChat({
+      title: "Обрыв",
+      kind: "group",
+      member_ids: ["role_architect"],
+    });
+    const chatId = chat.json().chat.id;
+
+    failNextPrompt = new Error("provider exploded\nStderr: trace");
+    const sent = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+      payload: { text: "@architect сделай" },
+    });
+    expect(sent.statusCode).toBe(200);
+    await tick(80);
+
+    const replies = messagesByAuthor(chatId, "role_architect");
+    expect(replies.map((r) => r.text)).toEqual(["Не смог ответить: provider exploded"]);
+    expect(
+      broadcastCalls.some((c) => c.event?.type === "chats:live" && c.event?.turn === null),
+    ).toBe(true);
   });
 
   it("второе сообщение в чат продолжает ту же pi_session_id", async () => {
