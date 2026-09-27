@@ -126,6 +126,18 @@ export function stepDetail(tool: string, args: unknown): string | null {
         : where && shortPath(where);
       break;
     }
+    case "mcp": {
+      // Инструменты трекера роль зовёт через общий `mcp`: настоящее
+      // действие — в args.tool («taskflow_taskflow_status»), его аргументы —
+      // в args.args. Живой ход 27.09.2026 показал голое «Действие» без
+      // подписи — называем по-человечески.
+      const inner = str("tool");
+      if (!inner) break;
+      const what = mcpToolTitle(inner);
+      const nested = a.args && typeof a.args === "object" ? stepDetail("", a.args) : null;
+      raw = nested ? `${what} — ${nested}` : what;
+      break;
+    }
     default: {
       // Инструменты трекера и прочие: первая осмысленная строка из
       // аргументов (название задачи, запрос поиска и т.п.).
@@ -138,6 +150,40 @@ export function stepDetail(tool: string, args: unknown): string | null {
     }
   }
   return raw ? clip(redactSecrets(raw)) : null;
+}
+
+const MCP_TOOL_TITLES: Record<string, string> = {
+  my_tasks: "мои задачи",
+  task: "карточка задачи",
+  status: "сводка доски",
+  agents: "кто на связи",
+  projects: "проекты",
+  project_tasks: "задачи проекта",
+  create_task: "новая задача",
+  create_project: "новый проект",
+  comment: "комментарий к задаче",
+  state: "состояние задачи",
+  subtask_add: "новый шаг задачи",
+  subtask_done: "шаг задачи закрыт",
+  subtask_work: "шаг задачи в работе",
+  rules: "правила трекера",
+  runtime: "рантайм",
+  docs: "документы",
+  doc_read: "чтение документа",
+  doc_write: "запись документа",
+  kb_search: "поиск в базе знаний",
+  chat_read: "чтение чата",
+  chat_send: "сообщение в чат",
+  suggest_subtasks: "разбивка на шаги",
+  structure_dictation: "разбор надиктовки",
+  my_stats: "статистика",
+};
+
+/** «taskflow_taskflow_status» → «сводка доски»; незнакомое — словами без
+ *  служебных приставок сервера. */
+export function mcpToolTitle(name: string): string {
+  const bare = name.replace(/^(?:taskflow_)+/, "");
+  return MCP_TOOL_TITLES[bare] ?? bare.replace(/_/g, " ");
 }
 
 /** Строка быстрых ответов Секретаря («БЫСТРО: …») — служебная, её

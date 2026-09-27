@@ -122,6 +122,12 @@ describe("подпись шага", () => {
     expect(stepDetail("bash", { command: "npm\n  test" })).toBe("npm test");
     expect(stepDetail("grep", { pattern: "foo", path: "/Users/max/x" })).toBe("foo — ~/x");
     expect(stepDetail("taskflow_create_task", { title: "Позвонить" })).toBe("Позвонить");
+    expect(stepDetail("mcp", { tool: "taskflow_taskflow_status" })).toBe("сводка доски");
+    expect(stepDetail("mcp", { tool: "taskflow_taskflow_kb_search", args: { query: "стриминг" } })).toBe(
+      "поиск в базе знаний — стриминг",
+    );
+    expect(stepDetail("mcp", { tool: "other_server_do_thing" })).toBe("other server do thing");
+    expect(stepDetail("mcp", {})).toBeNull();
     expect(stepDetail("bash", null)).toBeNull();
     expect(stepDetail("bash", { command: "x".repeat(500) })!.length).toBeLessThanOrEqual(140);
   });
