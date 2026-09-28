@@ -1,0 +1,204 @@
+import type { FastifyInstance } from "fastify";
+import crypto from "node:crypto";
+import { authOrApiToken } from "../auth.js";
+import { getTaskForRead, isOrchestrator, isOwner } from "../access.js";
+import db from "../db.js";
+import { logEvent } from "../agentState.js";
+import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
+
+const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual"]);
+const CONDITIONS = new Set(["submitted", "accepted", "artifact_ready"]);
+const SLOT_KEY = /^[a-z][a-z0-9_]{1,63}$/;
+
+type Plan = {
+  id: string;
+  task_id: string;
+  revision: number;
+  status: "draft" | "approved" | "superseded";
+  profile: string;
+  rationale: string;
+  context_version: number | null;
+  created_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+};
+
+type NodeInput = { slot_key?: unknown; role_key?: unknown; required?: unknown; expected_result?: unknown };
+type EdgeInput = { from_slot_key?: unknown; to_slot_key?: unknown; start_condition?: unknown };
+type Node = { slot_key: string; role_key: string; required: boolean; expected_result: string };
+type Edge = { from_slot_key: string; to_slot_key: string; start_condition: string };
+
+function mayManage(userId: string): boolean {
+  return isOwner(userId) || isOrchestrator(userId);
+}
+
+function present(plan: Plan) {
+  const nodes = db.prepare(`SELECT slot_key, role_key, required, expected_result FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key`)
+    .all(plan.id) as Array<Omit<Node, "required"> & { required: number }>;
+  const edges = db.prepare(`SELECT from_slot_key, to_slot_key, start_condition FROM task_collaboration_plan_edges WHERE plan_id = ? ORDER BY from_slot_key, to_slot_key`)
+    .all(plan.id) as Edge[];
+  return { ...plan, nodes: nodes.map((node) => ({ ...node, required: node.required === 1 })), edges };
+}
+
+function parseGraph(body: { nodes?: unknown; edges?: unknown }) {
+  if (!Array.isArray(body.nodes) || body.nodes.length === 0 || body.nodes.length > 16) throw new Error("нужны от 1 до 16 nodes");
+  if (body.edges !== undefined && !Array.isArray(body.edges)) throw new Error("edges должен быть массивом");
+  if (Array.isArray(body.edges) && body.edges.length > 48) throw new Error("слишком много edges");
+
+  const nodes = (body.nodes as NodeInput[]).map((raw) => ({
+    slot_key: String(raw.slot_key ?? "").trim(),
+    role_key: String(raw.role_key ?? "").trim(),
+    required: raw.required !== false,
+    expected_result: String(raw.expected_result ?? "").trim(),
+  }));
+  const keys = new Set<string>();
+  for (const node of nodes) {
+    if (!SLOT_KEY.test(node.slot_key)) throw new Error("некорректный slot_key");
+    if (!ROLE_NAMES.includes(node.role_key)) throw new Error("unknown role");
+    if (node.expected_result.length > 1000) throw new Error("expected_result длиннее 1000 символов");
+    if (keys.has(node.slot_key)) throw new Error("slot_key должен быть уникальным");
+    keys.add(node.slot_key);
+  }
+
+  const edgeKeys = new Set<string>();
+  const edges = ((body.edges ?? []) as EdgeInput[]).map((raw) => ({
+    from_slot_key: String(raw.from_slot_key ?? "").trim(),
+    to_slot_key: String(raw.to_slot_key ?? "").trim(),
+    start_condition: String(raw.start_condition ?? "accepted").trim(),
+  }));
+  for (const edge of edges) {
+    if (!keys.has(edge.from_slot_key) || !keys.has(edge.to_slot_key) || edge.from_slot_key === edge.to_slot_key) throw new Error("edge должен связывать разные известные slots");
+    if (!CONDITIONS.has(edge.start_condition)) throw new Error("unknown start_condition");
+    const key = `${edge.from_slot_key}:${edge.to_slot_key}`;
+    if (edgeKeys.has(key)) throw new Error("edge должен быть уникальным");
+    edgeKeys.add(key);
+  }
+
+  const next = new Map<string, string[]>();
+  for (const key of keys) next.set(key, []);
+  for (const edge of edges) next.get(edge.from_slot_key)!.push(edge.to_slot_key);
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (key: string): boolean => {
+    if (visiting.has(key)) return true;
+    if (visited.has(key)) return false;
+    visiting.add(key);
+    if (next.get(key)!.some(visit)) return true;
+    visiting.delete(key);
+    visited.add(key);
+    return false;
+  };
+  if ([...keys].some(visit)) throw new Error("граф collaboration plan содержит цикл");
+  return { nodes, edges };
+}
+
+function planForTask(taskId: string, planId: string): Plan | undefined {
+  return db.prepare("SELECT * FROM task_collaboration_plans WHERE id = ? AND task_id = ?").get(planId, taskId) as Plan | undefined;
+}
+
+function createDraftPlan(taskId: string, createdBy: string, profile: string, rationale: string, contextVersion: number | null, graph: { nodes: Node[]; edges: Edge[] }) {
+  const revision = ((db.prepare("SELECT MAX(revision) AS revision FROM task_collaboration_plans WHERE task_id = ?").get(taskId) as { revision: number | null }).revision ?? 0) + 1;
+  const id = `tcp_${crypto.randomUUID()}`;
+  db.transaction(() => {
+    db.prepare(`INSERT INTO task_collaboration_plans (id, task_id, revision, profile, rationale, context_version, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, taskId, revision, profile, rationale, contextVersion, createdBy);
+    const insertNode = db.prepare(`INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result)
+                                   VALUES (?, ?, ?, ?, ?, ?)`);
+    for (const node of graph.nodes) insertNode.run(`tcpn_${crypto.randomUUID()}`, id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result);
+    const insertEdge = db.prepare(`INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition)
+                                   VALUES (?, ?, ?, ?, ?)`);
+    for (const edge of graph.edges) insertEdge.run(`tcpe_${crypto.randomUUID()}`, id, edge.from_slot_key, edge.to_slot_key, edge.start_condition);
+  })();
+  return { id, revision };
+}
+
+function proposalFor(taskId: string, requested: string) {
+  const task = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title: string; description: string | null };
+  const text = `${task.title}\n${task.description ?? ""}`.toLowerCase();
+  const profile = requested === "auto"
+    ? (/\b(ui|ux|api)\b|дизайн|интерфейс|экран/.test(text) && /исслед|анализ|сравн|вариант/.test(text) ? "full_cycle"
+      : /\b(ui|ux|api)\b|сервер|миграц|swift|react|код|интеграц/.test(text) ? "delivery"
+      : /исслед|анализ|сравн|вариант|источник/.test(text) ? "research"
+      : "single_executor")
+    : requested;
+  const node = (slot_key: string, role_key: string, expected_result: string): Node => ({ slot_key, role_key, required: true, expected_result });
+  const edge = (from_slot_key: string, to_slot_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "accepted" });
+  const templates: Record<string, { nodes: Node[]; edges: Edge[]; rationale: string }> = {
+    single_executor: { nodes: [node("executor", "builder", "Выполненный результат задачи")], edges: [], rationale: "Низкая неопределённость: достаточно основного исполнителя." },
+    research: { nodes: [node("research", "researcher", "Факты, источники и ограничения"), node("analysis", "analyst", "Требования, выводы и критерии")], edges: [edge("research", "analysis")], rationale: "Сначала собрать факты, затем превратить их в проверяемые выводы." },
+    delivery: { nodes: [node("architecture", "architect", "Техническое решение и риски"), node("executor", "builder", "Реализация"), node("qa", "qa", "Проверенные сценарии и дефекты"), node("critic", "critic_verifier", "Итоговый вердикт")], edges: [edge("architecture", "executor"), edge("executor", "qa"), edge("qa", "critic")], rationale: "Нужны техническое решение, реализация и независимая проверка." },
+    full_cycle: { nodes: [node("research", "researcher", "Факты, источники и ограничения"), node("analysis", "analyst", "Требования и критерии"), node("architecture", "architect", "Техническое решение"), node("design", "designer", "Пользовательский сценарий и UX-решение"), node("executor", "builder", "Реализация"), node("qa", "qa", "Проверка сценариев"), node("critic", "critic_verifier", "Итоговый вердикт")], edges: [edge("research", "analysis"), edge("analysis", "architecture"), edge("analysis", "design"), edge("architecture", "executor"), edge("design", "executor"), edge("executor", "qa"), edge("qa", "critic")], rationale: "Высокая неопределённость: исследование, анализ, техническая и UX-ветки, реализация и две проверки." },
+  };
+  return { profile, ...templates[profile] };
+}
+
+export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void {
+  app.get<{ Params: { id: string } }>("/api/tasks/:id/collaboration-plans", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan доступен владельцу или оркестратору" });
+    const plans = db.prepare("SELECT * FROM task_collaboration_plans WHERE task_id = ? ORDER BY revision DESC").all(task.id) as Plan[];
+    return { plans: plans.map(present) };
+  });
+
+  app.post<{ Params: { id: string }; Body: { profile?: unknown; rationale?: unknown; context_version?: unknown; nodes?: unknown; edges?: unknown } }>("/api/tasks/:id/collaboration-plans", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan создаёт владелец или оркестратор" });
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const profile = String(req.body?.profile ?? "").trim();
+    const rationale = String(req.body?.rationale ?? "").trim();
+    const contextVersion = req.body?.context_version === undefined ? null : Number(req.body.context_version);
+    if (!PROFILES.has(profile)) return reply.code(422).send({ error: "unknown collaboration profile" });
+    if (rationale.length > 2000) return reply.code(400).send({ error: "rationale длиннее 2000 символов" });
+    if (contextVersion !== null && (!Number.isInteger(contextVersion) || contextVersion < 1)) return reply.code(400).send({ error: "context_version должен быть положительным целым" });
+    let graph: { nodes: Node[]; edges: Edge[] };
+    try { graph = parseGraph(req.body ?? {}); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
+    const created = createDraftPlan(task.id, req.userId, profile, rationale, contextVersion, graph);
+    logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: profile });
+    return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!) });
+  });
+
+  app.post<{ Params: { id: string }; Body: { profile?: unknown; context_version?: unknown } }>("/api/tasks/:id/collaboration-plans/propose", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan предлагает владелец или оркестратор" });
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const requested = String(req.body?.profile ?? "auto").trim();
+    if (requested !== "auto" && !PROFILES.has(requested)) return reply.code(422).send({ error: "unknown collaboration profile" });
+    const contextVersion = req.body?.context_version === undefined ? null : Number(req.body.context_version);
+    if (contextVersion !== null && (!Number.isInteger(contextVersion) || contextVersion < 1)) return reply.code(400).send({ error: "context_version должен быть положительным целым" });
+    const proposal = proposalFor(task.id, requested);
+    const created = createDraftPlan(task.id, req.userId, proposal.profile, proposal.rationale, contextVersion, proposal);
+    logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: `${proposal.profile}: template` });
+    return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!), suggested: true });
+  });
+
+  app.post<{ Params: { id: string; planId: string } }>("/api/tasks/:id/collaboration-plans/:planId/approve", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "collaboration plan утверждает владелец" });
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const plan = planForTask(task.id, req.params.planId);
+    if (!plan) return reply.code(404).send({ error: "plan not found" });
+    if (plan.status !== "draft") return reply.code(409).send({ error: "утвердить можно только draft plan" });
+    const nodes = db.prepare("SELECT slot_key, role_key, required FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key").all(plan.id) as Array<{ slot_key: string; role_key: string; required: number }>;
+    const incoming = new Set((db.prepare("SELECT to_slot_key FROM task_collaboration_plan_edges WHERE plan_id = ?").all(plan.id) as Array<{ to_slot_key: string }>).map((edge) => edge.to_slot_key));
+    try {
+      db.transaction(() => {
+      const existing = db.prepare("SELECT COUNT(*) AS count FROM task_role_slots WHERE collaboration_plan_id = ?").get(plan.id) as { count: number };
+      if (existing.count !== 0) throw new Error("slots этой revision уже materialized");
+      const insertSlot = db.prepare(`INSERT INTO task_role_slots (id, task_id, slot_key, role_key, participant_id, state, required, created_by, collaboration_plan_id, plan_node_key)
+                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (const node of nodes) {
+        const runtimeKey = `p${plan.revision}_${node.slot_key}`;
+        insertSlot.run(`trs_${crypto.randomUUID()}`, task.id, runtimeKey, node.role_key, roleUserId(node.role_key), incoming.has(node.slot_key) ? "waiting" : "ready", node.required, req.userId, plan.id, node.slot_key);
+      }
+      db.prepare("UPDATE task_collaboration_plans SET status = 'superseded' WHERE task_id = ? AND status = 'approved'").run(task.id);
+      db.prepare("UPDATE task_collaboration_plans SET status = 'approved', approved_by = ?, approved_at = datetime('now') WHERE id = ?").run(req.userId, plan.id);
+      })();
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_approved", field: `revision:${plan.revision}`, toValue: plan.profile });
+    return { plan: present(planForTask(task.id, plan.id)!) };
+  });
+}

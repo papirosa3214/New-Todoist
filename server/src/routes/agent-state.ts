@@ -46,6 +46,7 @@ import {
   releaseSubtaskWork,
 } from "../agentState.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
+import { unmetPrimaryPlanPredecessors } from "../lib/collaborationPlanAdmission.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -451,6 +452,12 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         return reply.code(403).send({
           error:
             "задача ждёт завершения зависимостей — взять её можно после их приёмки",
+        });
+      }
+      const unmetPlan = unmetPrimaryPlanPredecessors(task.id, req.userId);
+      if (unmetPlan.length > 0) {
+        return reply.code(409).send({
+          error: `основной исполнитель ждёт результаты ролей плана: ${unmetPlan.map((slot) => slot.slot_key).join(", ")}`,
         });
       }
 

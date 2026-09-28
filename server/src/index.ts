@@ -1,3 +1,4 @@
+import { startSecretaryVoiceBridge } from "./runtime/secretaryVoiceBridge.js";
 import { pathToFileURL } from "url";
 import fs from "fs";
 import path from "path";
@@ -63,6 +64,8 @@ import { registerTaskIntakeRoutes } from "./routes/task-intake.js";
 import { registerSecretaryVoiceRoutes } from "./routes/secretary-voice.js";
 import { registerMcpManifestRoutes } from "./routes/mcp-manifest.js";
 import { registerRoleRunJobRoutes } from "./routes/role-run-jobs.js";
+import { registerTaskRoleSlotRoutes } from "./routes/task-role-slots.js";
+import { registerTaskCollaborationPlanRoutes } from "./routes/task-collaboration-plans.js";
 
 /**
  * Собирает и возвращает готовый Fastify-инстанс — регистрирует плагины,
@@ -323,6 +326,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerRoleRoutes(app);
   registerRuntimeRoutes(app);
   registerRoleRunJobRoutes(app);
+  registerTaskRoleSlotRoutes(app);
+  registerTaskCollaborationPlanRoutes(app);
   registerTaskIntakeRoutes(app);
   registerSecretaryVoiceRoutes(app);
   registerMcpManifestRoutes(app);
@@ -520,8 +525,10 @@ if (isMain) {
 
   buildApp().then(async (app) => {
     let stopRoleRuns: (() => Promise<void>) | null = null;
+    let stopVoiceBridge: (() => Promise<void>) | null = null;
     app.addHook("onClose", async () => {
       if (stopRoleRuns) await stopRoleRuns();
+      if (stopVoiceBridge) await stopVoiceBridge();
     });
 
     const addr = await app.listen({ port: PORT, host: HOST });
@@ -532,6 +539,7 @@ if (isMain) {
     // Durable worker стартует только в реальном process после listen.
     // buildApp() в unit tests остаётся полностью детерминированным.
     stopRoleRuns = startRoleRunWorker();
+    stopVoiceBridge = await startSecretaryVoiceBridge(app);
     console.log(`🚀 TaskFlow API running at ${addr}`);
   });
 }

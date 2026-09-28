@@ -1,3 +1,4 @@
+import { isOwner } from "../access.js";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
@@ -18,6 +19,8 @@ import { AGENT_RULES, logEvent } from "../agentState.js";
 import { loadRoleRouting, providerOfModel, rolePromptText, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
+import { buildInProcessTaskContext } from "./taskContextBridge.js";
+import { buildDependencyContext } from "./dependencyContext.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -107,7 +110,7 @@ async function activity(role: string, taskId: string, kind: string, target: stri
 
 /** Инструменты трекера для роли — те же имена и смысл, что в mcp_server.py,
  *  чтобы инструкции ролей не переписывать. */
-export function taskflowTools(role: string, model: string | null) {
+export function taskflowTools(role: string, model: string | null, slotId?: string) {
   const T = (
     name: string,
     description: string,
@@ -130,7 +133,7 @@ export function taskflowTools(role: string, model: string | null) {
     } as any);
   const Id = Type.Object({ id: Type.String() });
 
-  return [
+  const tools = [
     T("taskflow_my_tasks", "Мои задачи (назначенные на эту роль). state: free | in_progress | review | blocked.",
       Type.Object({ state: Type.Optional(Type.String()), include_completed: Type.Optional(Type.Boolean()) }),
       async (p) => {
@@ -277,6 +280,13 @@ export function taskflowTools(role: string, model: string | null) {
         return { запрос: p.query, куски: (d.results ?? []).map((r: any) => ({ текст: String(r.text ?? "").slice(0, 1500), id_заметки: r.doc_id })) };
       }),
   ];
+  if (slotId) {
+    tools.push(T("taskflow_slot_result", "Сдать результат только своего персонального slot-а.",
+      Type.Object({ result: Type.String(), evidence: Type.Optional(Type.Array(Type.Any())) }),
+      async (p) => asRole(role, "POST", `/api/task-role-slots/${slotId}/result`, { result: p.result, evidence: p.evidence ?? [] })));
+    return tools.filter((tool: any) => ["taskflow_task", "taskflow_kb_search", "taskflow_slot_result"].includes(tool.name));
+  }
+  return tools;
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -289,6 +299,22 @@ export function inProcessToolNames(): string[] {
 
 function rolePrompt(role: string): string {
   return rolePromptText(role) ?? "";
+}
+
+function taskForLaunchContext(taskId: string): Record<string, unknown> {
+  const task = db.prepare(
+    "SELECT id, title, description, project_id, priority, due_date FROM tasks WHERE id = ?",
+  ).get(taskId) as Record<string, unknown> | undefined;
+  if (!task) throw new Error("карточка больше не существует");
+  const comments = db.prepare(`
+    SELECT COALESCE(u.name, c.user_id) AS author, c.text, c.created_at
+      FROM comments c
+ LEFT JOIN users u ON u.id = c.user_id
+     WHERE c.task_id = ?
+  ORDER BY c.created_at DESC, c.rowid DESC
+     LIMIT 10
+  `).all(taskId);
+  return { ...task, comments };
 }
 
 /** Задание по умолчанию — когда вызывающий не собрал своё (ручной запуск). */
@@ -359,13 +385,13 @@ function repoNote(cwd: string): string {
 
 /** Разговор агента хранится на пару «задача + роль» и продолжается при
  *  следующем заходе — после ответа владельца, паузы или повтора. */
-function sessionDir(taskId: string, role: string): string {
-  return path.join(RUNS_BASE, "sessions", `${taskId}-${role}`);
+function sessionDir(taskId: string, role: string, slotId?: string): string {
+  return path.join(RUNS_BASE, "sessions", `${taskId}-${role}-${slotId ?? "main"}`);
 }
 
-function hasSession(taskId: string, role: string): boolean {
+function hasSession(taskId: string, role: string, slotId?: string): boolean {
   try {
-    return fs.readdirSync(sessionDir(taskId, role)).some((f) => f.endsWith(".jsonl"));
+    return fs.readdirSync(sessionDir(taskId, role, slotId)).some((f) => f.endsWith(".jsonl"));
   } catch {
     return false;
   }
@@ -389,11 +415,11 @@ function progressMark(taskId: string): string {
   return `${steps}:${comments}`;
 }
 
-type ActiveInProcessRun = { runId: string; taskId: string; role: string; abort: () => Promise<void> };
+type ActiveInProcessRun = { runId: string; taskId: string; role: string; slotId?: string; abort: () => Promise<void> };
 const activeRuns = new Map<string, ActiveInProcessRun>();
 
-export function activeInProcessRun(taskId: string): ActiveInProcessRun | undefined {
-  return [...activeRuns.values()].find((r) => r.taskId === taskId);
+export function activeInProcessRun(taskId: string, slotId?: string): ActiveInProcessRun | undefined {
+  return [...activeRuns.values()].find((r) => r.taskId === taskId && r.slotId === slotId);
 }
 
 /** Для тестов: дождаться окончания всех фоновых запусков. */
@@ -422,10 +448,12 @@ export async function runRoleInProcess(input: {
   durableHandoff?: boolean;
   /** Число уже выполненных C3 continuation-заходов durable chain. */
   chainDepth?: number;
+  /** Изолированный персональный slot специалиста. */
+  slotId?: string;
 }): Promise<{ runId: string; completion: Promise<void> }> {
   const { taskId, role } = input;
   if (!ROLE_NAMES.includes(role)) throw new Error(`роли «${role}» нет или она отключена`);
-  if (activeInProcessRun(taskId)) throw new Error("по этой задаче агент уже работает");
+  if (activeInProcessRun(taskId, input.slotId)) throw new Error("по этому окну агент уже работает");
 
   const routing = loadRoleRouting();
   const modelId = input.model || routing.models[role];
@@ -437,8 +465,21 @@ export async function runRoleInProcess(input: {
 
   const cwd = input.cwd ?? projectRepo(taskId);
   const mode = input.mode ?? (role === "critic_verifier" ? "review" : "work");
-  const resumed = hasSession(taskId, role);
-  fs.mkdirSync(sessionDir(taskId, role), { recursive: true });
+  const resumed = hasSession(taskId, role, input.slotId);
+  const dependencyContext = buildDependencyContext(taskId);
+  const launchContext = await buildInProcessTaskContext({
+    task: taskForLaunchContext(taskId),
+    actor: { id: roleUserId(role), name: roleTitle(role) },
+    dependency_context: dependencyContext,
+  });
+  if (mode === "work" && !resumed) {
+    try {
+      await asRole(role, "POST", `/api/tasks/${taskId}/comments`, { text: launchContext.summary });
+    } catch (error) {
+      console.warn(`контекст для ${taskId} собран, но сводка не записана:`, error);
+    }
+  }
+  fs.mkdirSync(sessionDir(taskId, role, input.slotId), { recursive: true });
   const systemPrompt = [
     rolePrompt(role) || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     LOCAL_EXECUTION_POLICY,
@@ -457,7 +498,7 @@ export async function runRoleInProcess(input: {
     reload: async () => {},
   } as unknown as ResourceLoader;
 
-  const customTools = taskflowTools(role, model.id ?? modelId);
+  const customTools = taskflowTools(role, model.id ?? modelId, input.slotId);
   const { session } = await createAgentSession({
     cwd,
     model,
@@ -466,13 +507,13 @@ export async function runRoleInProcess(input: {
     resourceLoader,
     tools: [...BUILTIN_TOOLS, ...customTools.map((t: any) => t.name)],
     customTools,
-    sessionManager: SessionManager.continueRecent(cwd, sessionDir(taskId, role)),
+    sessionManager: SessionManager.continueRecent(cwd, sessionDir(taskId, role, input.slotId)),
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
   } as any);
 
   const runId = `inproc_${crypto.randomUUID()}`;
   const before = progressMark(taskId);
-  activeRuns.set(runId, { runId, taskId, role, abort: () => session.abort() });
+  activeRuns.set(runId, { runId, taskId, role, slotId: input.slotId, abort: () => session.abort() });
 
   // Действия встроенных инструментов — строкой в карточке, как раньше делало
   // расширение Pi taskflow-activity.ts.
@@ -493,8 +534,11 @@ export async function runRoleInProcess(input: {
   let runFailure: Error | null = null;
   const work = (async () => {
     try {
-      const task = input.prompt ?? (resumed ? resumePrompt(taskId) : defaultTaskPrompt(taskId, role));
-      await session.prompt(mode === "work" ? `${task}\n\n${repoNote(cwd)}\nПеред работой поищи похожее в документации (taskflow_kb_search).` : task);
+      const task = input.prompt ?? (input.slotId
+        ? `Ты работаешь только в персональном slot-е ${input.slotId}. Прочитай карточку. Не меняй состояние задачи, её шаги или чужие результаты. Сдай свой итог только taskflow_slot_result.`
+        : (resumed ? resumePrompt(taskId) : defaultTaskPrompt(taskId, role)));
+      const prompt = `${task}\n\n${launchContext.prompt}`;
+      await session.prompt(mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\nПеред работой поищи похожее в документации (taskflow_kb_search).` : prompt);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       runFailure = error instanceof Error ? error : new Error(reason);
@@ -512,7 +556,7 @@ export async function runRoleInProcess(input: {
       session.dispose();
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
-      if (mode === "work") {
+      if (mode === "work" && !input.slotId) {
         void continueOrHandOff(
           taskId,
           role,
@@ -601,7 +645,7 @@ export async function kickRoleTaskStrict(
   taskId: string,
   reason: KickReason,
   actorId?: string | null,
-  options?: { durableHandoff?: boolean; chainDepth?: number },
+  options?: { durableHandoff?: boolean; chainDepth?: number; manualStart?: boolean },
 ): Promise<KickRoleTaskResult> {
   // В тестах живых агентов не зовём — только там, где тест это разрешил явно.
   if (process.env.VITEST && process.env.TASKFLOW_KICK_IN_TESTS !== "1") {
@@ -612,7 +656,8 @@ export async function kickRoleTaskStrict(
     };
   }
   const { unitState } = await import("../routes/agent-service.js");
-  if (!(await unitState()).active) {
+  const explicitOwnerStart = options?.manualStart === true && reason === "assigned" && Boolean(actorId && isOwner(actorId));
+  if (!(await unitState()).active && !explicitOwnerStart) {
     return {
       outcome: "deferred",
       reason: "autonomous system is disabled",

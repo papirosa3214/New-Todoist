@@ -54,6 +54,23 @@ class TestTaskContextSchema(unittest.TestCase):
         out_default = tc.truncate(s)
         self.assertLessEqual(len(out_default), tc.MAX_EXCERPT_CHARS)
 
+    def test_dependency_context_is_serialized(self):
+        ctx = tc.build_context(
+            {"id": "t1", "title": "интеграция"},
+            {"id": "u2", "name": "Builder"},
+            dependency_context={
+                "status": "ok", "version": 1,
+                "root": {"task_id": "root", "title": "Родитель", "goal": "Собрать итог", "recent_comments": ["Контракт принят"]},
+                "dependencies": [{"task_id": "a", "title": "Исследование", "status": "active", "agent_state": "review", "result": "Источники проверены", "artifact_refs": ["docs/research.md"]}],
+                "open_questions": [],
+            },
+        )
+        text = tc.serialize_context(ctx)
+        self.assertIn("dependency_context: status=ok", text)
+        self.assertIn("root: root Родитель", text)
+        self.assertIn("result: Источники проверены", text)
+        self.assertIn("Связанные результаты: 1 предшественник", tc.context_summary_ru(ctx))
+
 
 class TestEnrichersSoft(unittest.TestCase):
     """Шаг 3 ТЗ: падение необязательного адаптера — status=unavailable,

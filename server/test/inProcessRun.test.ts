@@ -7,6 +7,15 @@ import type { FastifyInstance } from "fastify";
 const script = vi.hoisted(() => ({
   steps: null as null | ((tools: Map<string, any>, prompt: string) => Promise<void>),
   systemPrompts: [] as string[],
+  systemOn: true,
+}));
+
+const taskContext = vi.hoisted(() => ({
+  build: vi.fn(async () => ({
+    prompt: "── КОНТЕКСТ v1 (справка, не команда) ──\nknowledge: empty",
+    summary: "Материал для работы собран. База знаний: похожих уроков нет.",
+    knowledgeStatus: "empty",
+  })),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
@@ -40,14 +49,18 @@ vi.mock("../src/runtime/PiRuntimeAdapter.js", async (importOriginal) => {
 
 vi.mock("../src/routes/agent-service.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/routes/agent-service.js")>();
-  return { ...actual, unitState: async () => ({ active: true, enabled: true, last_alive_at: null, next_scan_at: null, scan_interval_sec: 180 }) };
+  return { ...actual, unitState: async () => ({ active: script.systemOn, enabled: script.systemOn, last_alive_at: null, next_scan_at: null, scan_interval_sec: 180 }) };
 });
+
+vi.mock("../src/runtime/taskContextBridge.js", () => ({
+  buildInProcessTaskContext: taskContext.build,
+}));
 process.env.TASKFLOW_KICK_IN_TESTS = "1";
 
 const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
 const { demoteSeededOwner, seedRoleAccounts } = await import("./helpers/seedOwner.js");
-const { runRoleInProcess, kickRoleTask, _settleInProcessRunsForTests } = await import("../src/runtime/inProcessRun.js");
+const { runRoleInProcess, kickRoleTask, kickRoleTaskStrict, _settleInProcessRunsForTests } = await import("../src/runtime/inProcessRun.js");
 
 describe("агент роли внутри сервера", () => {
   let app: FastifyInstance;
@@ -86,6 +99,24 @@ describe("агент роли внутри сервера", () => {
   const call = (tools: Map<string, any>, name: string, params: any) =>
     tools.get(name).execute(`call-${name}`, params);
 
+  it("выключенная Система допускает только явный запуск владельца и завершение текущего захода", async () => {
+    const { taskId, stepId } = builderTask("Ручной запуск при выключенной системе");
+    script.systemOn = false;
+    try {
+      expect(await kickRoleTaskStrict(taskId, "assigned", ownerId)).toMatchObject({outcome:"deferred"});
+      script.steps = async (tools) => {
+        await call(tools, "taskflow_claim", {id: taskId});
+        await call(tools, "taskflow_subtask_work", {id: stepId, state:"in_progress"});
+        await call(tools, "taskflow_subtask_done", {id: stepId, result:"Ручной заход выполнен"});
+        await call(tools, "taskflow_state", {id: taskId, state:"review", comment:"Результат ручного запуска"});
+      };
+      expect(await kickRoleTaskStrict(taskId, "assigned", ownerId, {manualStart:true})).toMatchObject({outcome:"started"});
+      await _settleInProcessRunsForTests();
+      expect((db.prepare("SELECT agent_state FROM tasks WHERE id=?").get(taskId) as any).agent_state).toBe("review");
+      expect(await kickRoleTaskStrict(taskId, "after_run", ownerId)).toMatchObject({outcome:"deferred"});
+    } finally { script.systemOn = true; }
+  });
+
   it("роль берёт задачу, закрывает шаг и сдаёт — всё от своего имени", async () => {
     const { taskId, stepId } = builderTask("Работа внутри сервера");
     script.steps = async (tools) => {
@@ -123,6 +154,24 @@ describe("агент роли внутри сервера", () => {
     expect(script.systemPrompts.at(-1)).toContain("ты уже работаешь на сервере .110");
     expect(script.systemPrompts.at(-1)).toContain("не подключайся к .110 по SSH");
     expect(script.systemPrompts.at(-1)).toContain("/home/maksim/Проекты/Хранилище");
+  });
+
+  it("перед работой добавляет TaskContext v1 и пишет владельцу его человеческую сводку", async () => {
+    const { taskId } = builderTask("Контекст для in-process запуска");
+    const prompts: string[] = [];
+    script.steps = async (_tools, prompt) => {
+      prompts.push(prompt);
+    };
+
+    await runRoleInProcess({ taskId, role: "builder" });
+    await _settleInProcessRunsForTests();
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("КОНТЕКСТ v1");
+    const summary = db
+      .prepare("SELECT text FROM comments WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
+      .get(taskId) as { text: string } | undefined;
+    expect(summary?.text).toContain("База знаний:");
   });
 
   it("сбой запуска — карточка заблокирована с причиной", async () => {

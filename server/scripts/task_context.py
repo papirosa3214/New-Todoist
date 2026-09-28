@@ -109,6 +109,15 @@ class RepositoryBlock(TypedDict, total=False):
     dirty_files: list[str]
 
 
+class DependencyBlock(TypedDict, total=False):
+    """Снимок корня и предшественников, собранный сервером из графа."""
+    status: BlockStatus
+    version: int
+    root: dict | None
+    dependencies: list[dict]
+    open_questions: list[str]
+
+
 @dataclass
 class TaskContext:
     """Полный пакет, который передаётся в prompt builders (Шаг 4 ТЗ).
@@ -131,6 +140,9 @@ class TaskContext:
     )
     repository: RepositoryBlock = field(
         default_factory=lambda: {"status": "empty", "branch": "", "dirty_files": []}
+    )
+    dependency_context: DependencyBlock = field(
+        default_factory=lambda: {"status": "empty", "version": 1, "root": None, "dependencies": [], "open_questions": []}
     )
     warnings: list[str] = field(default_factory=list)
     generated_at: str = ""  # ISO-8601 UTC, заполняется build_context
@@ -459,6 +471,7 @@ def build_context(
     projects_config: dict | None = None,
     mode: str = "direct",
     parent_task_id: str | None = None,
+    dependency_context: DependencyBlock | None = None,
 ) -> TaskContext:
     """Сборка всего пакета. TaskEnricher обязателен — если он упал,
     исключение поднимается выше, trigger.py логирует и НЕ запускает
@@ -471,6 +484,8 @@ def build_context(
     в рамках которой он работает).
     """
     ctx = enrich_task(task, actor, mode=mode, parent_task_id=parent_task_id)
+    if isinstance(dependency_context, dict):
+        ctx.dependency_context = dependency_context
     try:
         ctx.knowledge = enrich_knowledge(task)
     except Exception as exc:  # noqa: BLE001
@@ -483,6 +498,72 @@ def build_context(
         ctx.warnings.append(f"repository: {exc!r}")
     ctx.generated_at = _now_iso()
     return ctx
+
+
+def _plural_ru(n: int, one: str, few: str, many: str) -> str:
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return many
+    last = n % 10
+    if last == 1:
+        return one
+    if 2 <= last <= 4:
+        return few
+    return many
+
+
+def context_summary_ru(ctx: TaskContext) -> str:
+    """Короткая понятная владельцу сводка о собранном контексте."""
+    parts: list[str] = []
+    knowledge = ctx.knowledge or {}
+    excerpts = knowledge.get("excerpts") or []
+    status = knowledge.get("status")
+    if status == "ok" and excerpts:
+        dates = sorted({(e.get("date") or "").strip() for e in excerpts if e.get("date")})
+        freshest = f", самый свежий от {dates[-1]}" if dates else ""
+        count = len(excerpts)
+        parts.append(
+            f"База знаний: {_plural_ru(count, 'нашёлся', 'нашлось', 'нашлось')} "
+            f"{count} {_plural_ru(count, 'фрагмент', 'фрагмента', 'фрагментов')}{freshest}"
+        )
+    elif status == "empty":
+        parts.append("База знаний: похожих уроков нет")
+    elif status == "denied":
+        parts.append("База знаний: доступ закрыт")
+    else:
+        parts.append("База знаний: не ответила, работаю без неё")
+
+    repository = ctx.repository or {}
+    if repository.get("status") == "ok":
+        branch = repository.get("branch") or "неизвестная ветка"
+        dirty_count = len(repository.get("dirty_files") or [])
+        dirty = (
+            f", {dirty_count} "
+            f"{_plural_ru(dirty_count, 'несохранённый файл', 'несохранённых файла', 'несохранённых файлов')}"
+            if dirty_count
+            else ", всё сохранено"
+        )
+        parts.append(f"Репозиторий: ветка {branch}{dirty}")
+    elif repository.get("status") == "empty":
+        parts.append("Репозиторий: к проекту не привязан")
+    else:
+        parts.append("Репозиторий: прочитать не удалось")
+
+    dependency_context = ctx.dependency_context or {}
+    dependencies = dependency_context.get("dependencies") or []
+    if dependency_context.get("status") == "ok":
+        count = len(dependencies)
+        parts.append(
+            f"Связанные результаты: {count} "
+            f"{_plural_ru(count, 'предшественник', 'предшественника', 'предшественников')}"
+        )
+    elif dependency_context.get("status") == "unavailable":
+        parts.append("Связанные результаты: прочитать не удалось")
+
+    if ctx.warnings:
+        count = len(ctx.warnings)
+        parts.append(f"При сборке {count} {_plural_ru(count, 'замечание', 'замечания', 'замечаний')}")
+    return "Материал для работы собран. " + ". ".join(parts) + "."
 
 
 def serialize_context(ctx, max_total_chars: int = MAX_TOTAL_CHARS) -> str:
@@ -564,6 +645,40 @@ def serialize_context(ctx, max_total_chars: int = MAX_TOTAL_CHARS) -> str:
                 ref = e.get("reference", "")
                 if ref:
                     parts.append(f"      (полностью: {truncate(ref, 200)})")
+    dependency_context = getattr(ctx, "dependency_context", {}) or {}
+    dependencies = dependency_context.get("dependencies") or []
+    root = dependency_context.get("root") or {}
+    if dependency_context.get("status") or root or dependencies:
+        parts.append(
+            f"dependency_context: status={dependency_context.get('status', '?')}, "
+            f"version={dependency_context.get('version', '?')}, dependencies={len(dependencies)}"
+        )
+        if root:
+            parts.append(f"  root: {root.get('task_id', '?')} {truncate(root.get('title', ''), 180)}")
+            goal = truncate(root.get("goal", ""), MAX_EXCERPT_CHARS)
+            if goal:
+                parts.append(f"    goal: {goal}")
+            for note in (root.get("recent_comments") or [])[:3]:
+                text = truncate(str(note), 360)
+                if text:
+                    parts.append(f"    root_note: {text}")
+        for dependency in dependencies[:12]:
+            parts.append(
+                f"  - dependency: {dependency.get('task_id', '?')} "
+                f"[{dependency.get('status', '?')}/{dependency.get('agent_state') or '—'}] "
+                f"{truncate(dependency.get('title', ''), 180)}"
+            )
+            result = truncate(dependency.get("result", ""), MAX_EXCERPT_CHARS)
+            if result:
+                parts.append(f"    result: {result}")
+            for reference in (dependency.get("artifact_refs") or [])[:4]:
+                text = truncate(str(reference), 240)
+                if text:
+                    parts.append(f"    artifact: {text}")
+        for question in (dependency_context.get("open_questions") or [])[:3]:
+            text = truncate(str(question), 240)
+            if text:
+                parts.append(f"  open_question: {text}")
     repository = getattr(ctx, "repository", {}) or {}
     if repository.get("status") or repository.get("branch"):
         dirty = repository.get("dirty_files") or []
