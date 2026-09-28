@@ -467,6 +467,15 @@ export async function runRoleInProcess(input: {
   const mode = input.mode ?? (role === "critic_verifier" ? "review" : "work");
   const resumed = hasSession(taskId, role, input.slotId);
   const dependencyContext = buildDependencyContext(taskId);
+  if (dependencyContext.status === "ok" && dependencyContext.dependencies.length) {
+    logEvent({
+      taskId,
+      actorId: null,
+      kind: "dependency_context_used",
+      field: "dependencies",
+      toValue: JSON.stringify(dependencyContext.dependencies.map((d) => d.task_id)),
+    });
+  }
   const launchContext = await buildInProcessTaskContext({
     task: taskForLaunchContext(taskId),
     actor: { id: roleUserId(role), name: roleTitle(role) },

@@ -448,7 +448,15 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             "при создании, а брать чужую работу самому нельзя",
         });
       }
-      if (unmetDependencyIds(task.id).length > 0) {
+      const unmetDeps = unmetDependencyIds(task.id);
+      if (unmetDeps.length > 0) {
+        logEvent({
+          taskId: task.id,
+          actorId: req.userId,
+          kind: "dependency_context_blocked",
+          field: "unmet_dependency_ids",
+          toValue: JSON.stringify(unmetDeps),
+        });
         return reply.code(403).send({
           error:
             "задача ждёт завершения зависимостей — взять её можно после их приёмки",

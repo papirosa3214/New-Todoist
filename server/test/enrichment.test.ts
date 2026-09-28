@@ -112,4 +112,90 @@ describe("зависимости задач: порядок работ", () => {
     });
     expect(cycle.statusCode).toBe(400);
   });
+
+  it("policy review допускает после agent_state=review, без ожидания completed", async () => {
+    const blockerId = await createTask("предшественник review");
+    const taskId = await createTask("policy review");
+    const put = await app.inject({
+      method: "PUT",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+      payload: { depends_on_task_ids: [blockerId], policies: { [blockerId]: "review" } },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().dependencies[0].policy).toBe("review");
+    expect(put.json().unmet_dependency_ids).toContain(blockerId);
+
+    db.prepare("UPDATE tasks SET agent_state = 'review' WHERE id = ?").run(blockerId);
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+    });
+    expect(after.json().unmet_dependency_ids).toHaveLength(0);
+  });
+
+  it("policy completed игнорирует review предшественника и ждёт полного принятия", async () => {
+    const blockerId = await createTask("предшественник completed");
+    const taskId = await createTask("policy completed");
+    await app.inject({
+      method: "PUT",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+      payload: { depends_on_task_ids: [blockerId], policies: { [blockerId]: "completed" } },
+    });
+
+    db.prepare("UPDATE tasks SET agent_state = 'review' WHERE id = ?").run(blockerId);
+    const stillBlocked = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+    });
+    expect(stillBlocked.json().unmet_dependency_ids).toContain(blockerId);
+
+    db.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(blockerId);
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+    });
+    expect(after.json().unmet_dependency_ids).toHaveLength(0);
+  });
+
+  it("неизвестная policy отклоняется, блокировка допуска пишет audit-событие", async () => {
+    const blockerId = await createTask("блокер для аудита");
+    const taskId = await createTask("ждёт с аудитом");
+    const badPolicy = await app.inject({
+      method: "PUT",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+      payload: { depends_on_task_ids: [blockerId], policies: { [blockerId]: "нет-такой" } },
+    });
+    expect(badPolicy.statusCode).toBe(400);
+
+    await app.inject({
+      method: "PUT",
+      url: `/api/tasks/${taskId}/dependencies`,
+      headers: { authorization: ownerAuth },
+      payload: { depends_on_task_ids: [blockerId] },
+    });
+    await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${taskId}`,
+      headers: { authorization: ownerAuth },
+      payload: { assignee_id: agentId, ready_for_pickup: true },
+    });
+    const claim = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/claim`,
+      headers: { authorization: agentAuth },
+      payload: {},
+    });
+    expect(claim.statusCode).toBe(403);
+    const events = db
+      .prepare("SELECT to_value FROM task_events WHERE task_id = ? AND kind = 'dependency_context_blocked'")
+      .all(taskId) as Array<{ to_value: string }>;
+    expect(events).toHaveLength(1);
+    expect(JSON.parse(events[0].to_value)).toContain(blockerId);
+  });
 });

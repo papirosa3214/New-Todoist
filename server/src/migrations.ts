@@ -2489,6 +2489,14 @@ const migrations: Migration[] = [
         WHERE collaboration_plan_id IS NOT NULL;
     `),
   },
+  {
+    id: "073_task_dependency_policy",
+    description: "Policy допуска на dependency edge: review (по умолчанию) либо completed.",
+    up: () => {
+      const cols = new Set((db.prepare("PRAGMA table_info(task_dependencies)").all() as Array<{name:string}>).map(c => c.name));
+      if (!cols.has("policy")) db.exec("ALTER TABLE task_dependencies ADD COLUMN policy TEXT NOT NULL DEFAULT 'review' CHECK (policy IN ('review','completed'))");
+    },
+  },
 ];
 
 /**
