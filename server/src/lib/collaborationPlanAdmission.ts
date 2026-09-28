@@ -11,7 +11,7 @@ const SLOT_ORDER = ["waiting", "ready", "active", "submitted", "accepted"];
  *  зависимые ноды (QA, Критик) вечно ждали бы событие, которого не будет.
  *  Вызывается из routes/tasks.ts, routes/subtasks.ts и routes/agent-state.ts
  *  в момент, когда основная попытка реально переходит в review/completed. */
-export function advancePrimaryPlanSlot(taskId: string, actorId: string, toState: "submitted" | "accepted"): void {
+export async function advancePrimaryPlanSlot(taskId: string, actorId: string, toState: "submitted" | "accepted"): Promise<void> {
   const task = db.prepare("SELECT assignee_id FROM tasks WHERE id = ?").get(taskId) as { assignee_id: string | null } | undefined;
   if (!task?.assignee_id) return;
   const assignee = db.prepare("SELECT role_key FROM users WHERE id = ?").get(task.assignee_id) as { role_key: string | null } | undefined;
@@ -25,7 +25,7 @@ export function advancePrimaryPlanSlot(taskId: string, actorId: string, toState:
   if (SLOT_ORDER.indexOf(slotRow.state) >= SLOT_ORDER.indexOf(toState)) return;
   db.prepare("UPDATE task_role_slots SET state = ?, updated_at = datetime('now') WHERE id = ?").run(toState, slotRow.id);
   logEvent({ taskId, actorId, kind: "primary_plan_slot_advanced", field: node.slot_key, toValue: toState });
-  unlockReadySlots(plan.id, taskId, actorId);
+  await unlockReadySlots(plan.id, taskId, actorId);
 }
 
 /**

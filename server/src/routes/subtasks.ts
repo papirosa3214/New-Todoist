@@ -391,7 +391,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
                 "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
               ).run(parentTask.id);
               bumpContextVersion(parentTask.id);
-              advancePrimaryPlanSlot(parentTask.id, req.userId, "submitted");
+              await advancePrimaryPlanSlot(parentTask.id, req.userId, "submitted");
               // Последний закрытый шаг автоматически сдаёт родителя в
               // review. Завершаем именно его содержательную попытку здесь,
               // иначе у задачи остаётся живая аренда после сдачи и метрики

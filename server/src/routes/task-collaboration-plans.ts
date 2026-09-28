@@ -97,7 +97,7 @@ function planForTask(taskId: string, planId: string): Plan | undefined {
   return db.prepare("SELECT * FROM task_collaboration_plans WHERE id = ? AND task_id = ?").get(planId, taskId) as Plan | undefined;
 }
 
-function createDraftPlan(taskId: string, createdBy: string, profile: string, rationale: string, contextVersion: number | null, graph: { nodes: Node[]; edges: Edge[] }) {
+export function createDraftPlan(taskId: string, createdBy: string, profile: string, rationale: string, contextVersion: number | null, graph: { nodes: Node[]; edges: Edge[] }) {
   const revision = ((db.prepare("SELECT MAX(revision) AS revision FROM task_collaboration_plans WHERE task_id = ?").get(taskId) as { revision: number | null }).revision ?? 0) + 1;
   const id = `tcp_${crypto.randomUUID()}`;
   db.transaction(() => {
@@ -113,7 +113,7 @@ function createDraftPlan(taskId: string, createdBy: string, profile: string, rat
   return { id, revision };
 }
 
-function proposalFor(taskId: string, requested: string) {
+export function proposalFor(taskId: string, requested: string) {
   const task = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title: string; description: string | null };
   const text = `${task.title}\n${task.description ?? ""}`.toLowerCase();
   const profile = requested === "auto"
@@ -131,6 +131,40 @@ function proposalFor(taskId: string, requested: string) {
     full_cycle: { nodes: [node("research", "researcher", "Факты, источники и ограничения"), node("analysis", "analyst", "Требования и критерии"), node("architecture", "architect", "Техническое решение"), node("design", "designer", "Пользовательский сценарий и UX-решение"), node("executor", "builder", "Реализация"), node("qa", "qa", "Проверка сценариев"), node("critic", "critic_verifier", "Итоговый вердикт")], edges: [edge("research", "analysis"), edge("analysis", "architecture"), edge("analysis", "design"), edge("architecture", "executor"), edge("design", "executor"), edge("executor", "qa"), edge("qa", "critic")], rationale: "Высокая неопределённость: исследование, анализ, техническая и UX-ветки, реализация и две проверки." },
   };
   return { profile, ...templates[profile] };
+}
+
+/**
+ * Владелец 28.09.2026: карточки не получали план сами — `propose` нигде не
+ * вызывался автоматически, только вручную через API. Вызывается сразу после
+ * создания задачи (routes/tasks.ts). Для одиночного исполнителя план не
+ * создаём — не даёт пользы, только шум. Утверждает план по-прежнему
+ * ТОЛЬКО владелец (`/collaboration-plans/:planId/approve` — это не трогали).
+ *
+ * created_by ищем по роли `orchestrator` в БД, а не хардкодим конкретный id:
+ * захардкоженный id архивной учётки «Оркестратор Claude» ловил
+ * FOREIGN KEY constraint failed на любой базе без этой конкретной строки
+ * (тестовая/чистая — поймано тестами task-collaboration-plans.test.ts до
+ * выкладки). Fallback на owner — так работает и там, где role=orchestrator
+ * вообще не заведён. Найденная учётка используется ТОЛЬКО как значение
+ * внешнего ключа для аудита — в чат не заходит, задач не берёт. Это замена
+ * внешней агентской координации (закрыта 27.09.2026, CLAUDE.md §5.1/§15)
+ * серверным кодом, а не возврат к ней.
+ */
+function resolveAutoProposalActorId(): string | null {
+  const orchestrator = db.prepare("SELECT id FROM users WHERE role = 'orchestrator' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined;
+  if (orchestrator) return orchestrator.id;
+  const owner = db.prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined;
+  return owner?.id ?? null;
+}
+
+export function autoProposeCollaborationPlanIfNeeded(taskId: string): { profile: string; revision: number } | null {
+  const proposal = proposalFor(taskId, "auto");
+  if (proposal.profile === "single_executor") return null;
+  const actorId = resolveAutoProposalActorId();
+  if (!actorId) return null;
+  const created = createDraftPlan(taskId, actorId, proposal.profile, proposal.rationale, null, proposal);
+  logEvent({ taskId, actorId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: `${proposal.profile}: auto on create` });
+  return { profile: proposal.profile, revision: created.revision };
 }
 
 export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void {

@@ -897,6 +897,11 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       const leaseWasExpired =
         from === "in_progress" && isStale(task.agent_heartbeat_at);
 
+      // db.transaction() принимает только синхронный колбэк (better-sqlite3),
+      // а advancePrimaryPlanSlot теперь async (сама стартует открывшийся
+      // slot) — поэтому вызов не может остаться внутри stateTxn. Флаг ставим
+      // в транзакции, сам await — сразу после её коммита.
+      let shouldAdvancePrimaryPlanSlot = false;
       const stateTxn = db.transaction(() => {
         // actor_id = NULL — тот же довод, что в claim(): это не действие
         // req.userId, а факт, который вскрыл его вызов.
@@ -988,7 +993,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           // Основная попытка сдана — мост в её узел collaboration plan
           // (если он есть) и монотонная версия контекста ветки.
           bumpContextVersion(task.id);
-          advancePrimaryPlanSlot(task.id, req.userId, "submitted");
+          shouldAdvancePrimaryPlanSlot = true;
         }
 
         // Re-entering in_progress (from blocked, or owner sending it back
@@ -1205,6 +1210,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         }
       });
       stateTxn();
+      if (shouldAdvancePrimaryPlanSlot) {
+        await advancePrimaryPlanSlot(task.id, req.userId, "submitted");
+      }
       // Владелец ответил на блокировку ролевой карточки: снятие блокировки
       // обнуляет исполнителя (ветка state=null выше), а раздача сама
       // срабатывает только при поднятии флага. Без этого карточка с

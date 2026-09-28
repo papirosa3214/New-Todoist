@@ -45,13 +45,49 @@ function canBecomeReady(row: Slot): boolean {
   });
 }
 
-export function unlockReadySlots(planId: string | null, taskId: string, actorId: string): void {
+/**
+ * Реальный старт slot'а: `ready` -> `active` -> `runRoleInProcess`. Общее
+ * тело для ручного `/run` и автостарта из `unlockReadySlots` — раньше это
+ * было только внутри HTTP-хендлера, поэтому открытый графом slot сам не
+ * впрягался в работу, пока кто-то не дёрнет `/run` руками.
+ */
+async function startSlotRun(slotId: string, actorId: string): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
+  const current = slot(slotId);
+  if (!current || current.state !== "ready") return { ok: false, error: "slot ещё не допущен или уже завершён" };
+  db.prepare("UPDATE task_role_slots SET state = 'active', updated_at = datetime('now') WHERE id = ?").run(current.id);
+  try {
+    const run = await runRoleInProcess({ taskId: current.task_id, role: current.role_key, slotId: current.id, mode: "work" });
+    logEvent({ taskId: current.task_id, actorId, kind: "role_slot_started", field: current.slot_key, toValue: roleTitle(current.role_key) });
+    return { ok: true, runId: run.runId };
+  } catch (error) {
+    db.prepare("UPDATE task_role_slots SET state = 'ready', updated_at = datetime('now') WHERE id = ?").run(current.id);
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Открывает по графу все slots, чьи предшественники выполнены, и сразу
+ * стартует роль в каждом — «роль сама подключается к плану и впрягается в
+ * работу», а не ждёт, пока кто-то руками дёрнет `/run`. Неудача автостарта
+ * одного slot'а (например, недоступна модель) не должна ронять открытие
+ * соседних независимых веток — поэтому try/catch на каждый отдельно; slot
+ * при неудаче остаётся в `ready`, ручной `/run` — рабочий fallback.
+ */
+export async function unlockReadySlots(planId: string | null, taskId: string, actorId: string): Promise<void> {
   if (!planId) return;
   const waiting = db.prepare("SELECT * FROM task_role_slots WHERE collaboration_plan_id = ? AND state = 'waiting'").all(planId) as Slot[];
   for (const next of waiting) {
     if (!canBecomeReady(next)) continue;
     db.prepare("UPDATE task_role_slots SET state = 'ready', updated_at = datetime('now') WHERE id = ?").run(next.id);
     logEvent({ taskId, actorId, kind: "role_slot_ready", field: next.slot_key, toValue: roleTitle(next.role_key) });
+    try {
+      const started = await startSlotRun(next.id, actorId);
+      if (!started.ok) {
+        logEvent({ taskId, actorId, kind: "role_slot_autostart_failed", field: next.slot_key, toValue: started.error });
+      }
+    } catch (error) {
+      logEvent({ taskId, actorId, kind: "role_slot_autostart_failed", field: next.slot_key, toValue: error instanceof Error ? error.message : String(error) });
+    }
   }
 }
 
@@ -95,7 +131,7 @@ export function registerTaskRoleSlotRoutes(app: FastifyInstance): void {
     if (next === "ready" && !canBecomeReady(current)) return reply.code(409).send({ error: "slot ждёт обязательные результаты предыдущих ролей" });
     db.prepare("UPDATE task_role_slots SET state = ?, updated_at = datetime('now') WHERE id = ?").run(next, current.id);
     logEvent({ taskId: current.task_id, actorId: req.userId, kind: "role_slot_state_changed", field: current.slot_key, fromValue: current.state, toValue: next });
-    if (next === "accepted") unlockReadySlots(current.collaboration_plan_id, current.task_id, req.userId);
+    if (next === "accepted") await unlockReadySlots(current.collaboration_plan_id, current.task_id, req.userId);
     return { slot: present(slot(current.id)!) };
   });
 
@@ -110,7 +146,7 @@ export function registerTaskRoleSlotRoutes(app: FastifyInstance): void {
     db.prepare("UPDATE task_role_slots SET result = ?, evidence_json = ?, state = 'submitted', updated_at = datetime('now') WHERE id = ?")
       .run(result, JSON.stringify(evidence), current.id);
     logEvent({ taskId: current.task_id, actorId: req.userId, kind: "role_slot_submitted", field: current.slot_key, toValue: roleTitle(current.role_key) });
-    unlockReadySlots(current.collaboration_plan_id, current.task_id, req.userId);
+    await unlockReadySlots(current.collaboration_plan_id, current.task_id, req.userId);
     return { slot: present(slot(current.id)!) };
   });
 
@@ -120,15 +156,8 @@ export function registerTaskRoleSlotRoutes(app: FastifyInstance): void {
     if (current.participant_id !== req.userId && !isOwner(req.userId) && !isOrchestrator(req.userId)) {
       return reply.code(403).send({ error: "это не ваш персональный slot" });
     }
-    if (current.state !== 'ready') return reply.code(409).send({ error: "slot ещё не допущен или уже завершён" });
-    db.prepare("UPDATE task_role_slots SET state = 'active', updated_at = datetime('now') WHERE id = ?").run(current.id);
-    try {
-      const run = await runRoleInProcess({ taskId: current.task_id, role: current.role_key, slotId: current.id, mode: "work" });
-      logEvent({ taskId: current.task_id, actorId: req.userId, kind: "role_slot_started", field: current.slot_key, toValue: roleTitle(current.role_key) });
-      return { ok: true, run_id: run.runId, slot: present(slot(current.id)!) };
-    } catch (error) {
-      db.prepare("UPDATE task_role_slots SET state = 'ready', updated_at = datetime('now') WHERE id = ?").run(current.id);
-      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
-    }
+    const started = await startSlotRun(current.id, req.userId);
+    if (!started.ok) return reply.code(409).send({ error: started.error });
+    return { ok: true, run_id: started.runId, slot: present(slot(current.id)!) };
   });
 }

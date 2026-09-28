@@ -1,6 +1,16 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
+
+// unlockReadySlots теперь сама стартует роль в открывшемся slot'е
+// (runRoleInProcess); этот файл проверяет только переходы состояний slot'ов,
+// не реальный запуск роли — подменяем runRoleInProcess лёгкой заглушкой,
+// чтобы не дёргать настоящую модель.
+vi.mock("../src/runtime/inProcessRun.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/runtime/inProcessRun.js")>();
+  return { ...actual, runRoleInProcess: async () => ({ runId: "test-run", completion: Promise.resolve() }) };
+});
+
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { roleUserId } from "../src/roleRouting.js";
@@ -56,7 +66,10 @@ describe("основная попытка ↔ узел collaboration plan", () =
 
     const slotsAfter = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots;
     expect(slotsAfter.find((s: { plan_node_key: string }) => s.plan_node_key === "build").state).toBe("submitted");
-    expect(slotsAfter.find((s: { plan_node_key: string }) => s.plan_node_key === "qa").state).toBe("ready");
+    // QA открылся и сразу сам стартовал (unlockReadySlots теперь запускает
+    // runRoleInProcess для только что открытого slot'а) — заглушка резолвится
+    // мгновенно, поэтому к моменту ответа slot уже active, а не ready.
+    expect(slotsAfter.find((s: { plan_node_key: string }) => s.plan_node_key === "qa").state).toBe("active");
 
     const bridged = db.prepare("SELECT to_value FROM task_events WHERE task_id = ? AND kind = 'primary_plan_slot_advanced'").all(taskId) as Array<{ to_value: string }>;
     expect(bridged).toHaveLength(1);

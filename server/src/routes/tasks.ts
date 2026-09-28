@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { advancePrimaryPlanSlot } from "../lib/collaborationPlanAdmission.js";
+import { autoProposeCollaborationPlanIfNeeded } from "./task-collaboration-plans.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
@@ -939,6 +940,19 @@ export function registerTaskRoutes(app: FastifyInstance) {
         field: "task",
         toValue: trimmedTitle,
       });
+
+      // Владелец 28.09.2026: до этого предложить collaboration plan можно
+      // было только руками через API — при создании задачи ничего не
+      // считалось само. Для одиночного исполнителя план не создаётся
+      // (см. autoProposeCollaborationPlanIfNeeded); утверждает план
+      // по-прежнему только владелец. Ошибка здесь не должна ломать
+      // создание задачи — отдельный try/catch.
+      try {
+        autoProposeCollaborationPlanIfNeeded(id);
+      } catch (error) {
+        req.log?.error?.({ err: error, taskId: id }, "auto collaboration plan proposal failed");
+      }
+
       if (assignee_id) {
         logEvent({
           taskId: id,
@@ -1600,7 +1614,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // двигает, иначе «вернуть в работу» запускало бы следующий шаг.
       if (body.status === "completed" && existing.status !== "completed") {
         bumpContextVersion(id);
-        advancePrimaryPlanSlot(id, req.userId, "accepted");
+        await advancePrimaryPlanSlot(id, req.userId, "accepted");
         // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
         void import("./dispatch.js")
           .then((m) => m.admitParentAfterChildren(id))
@@ -1692,7 +1706,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
               "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
             ).run(parent.id);
             bumpContextVersion(parent.id);
-            advancePrimaryPlanSlot(parent.id, req.userId, "submitted");
+            await advancePrimaryPlanSlot(parent.id, req.userId, "submitted");
             if (!beforeVersion) {
               logEvent({
                 taskId: parent.id,

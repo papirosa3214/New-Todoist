@@ -1,6 +1,16 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
+
+// unlockReadySlots теперь сама стартует роль в открывшемся slot'е
+// (runRoleInProcess); этот файл проверяет только версии/переходы графа
+// плана, не реальный запуск роли — подменяем runRoleInProcess лёгкой
+// заглушкой, чтобы не дёргать настоящую модель.
+vi.mock("../src/runtime/inProcessRun.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/runtime/inProcessRun.js")>();
+  return { ...actual, runRoleInProcess: async () => ({ runId: "test-run", completion: Promise.resolve() }) };
+});
+
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { roleUserId } from "../src/roleRouting.js";
@@ -47,7 +57,10 @@ describe("collaboration plans", () => {
     expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${research.id}/state`, headers: { authorization: researcherAuth }, payload: { state: "active" } })).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${research.id}/result`, headers: { authorization: researcherAuth }, payload: { result: "Факты", evidence: [{ path: "research.md" }] } })).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${research.id}/state`, headers: { authorization: ownerAuth }, payload: { state: "accepted" } })).statusCode).toBe(200);
-    expect((await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots.find((slot: { id: string }) => slot.id === architecture.id).state).toBe("ready");
+    // architecture открылся и сразу сам стартовал (unlockReadySlots теперь
+    // запускает runRoleInProcess для только что открытого slot'а) — заглушка
+    // резолвится мгновенно, поэтому slot уже active, а не ready.
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots.find((slot: { id: string }) => slot.id === architecture.id).state).toBe("active");
 
     const cyclic = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans`, headers: { authorization: ownerAuth }, payload: {
       profile: "manual", nodes: [{ slot_key: "analyst", role_key: "analyst" }, { slot_key: "designer", role_key: "designer" }],
