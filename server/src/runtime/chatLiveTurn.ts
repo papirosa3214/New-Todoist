@@ -36,6 +36,9 @@ export interface LiveTurnSnapshot {
   name: string;
   started_at: string;
   items: LiveItem[];
+  /** Роль сейчас думает (28.09.2026): последняя законченная фраза её
+   *  размышлений, "" — думает, но фразы ещё нет; null — не думает. */
+  thinking: string | null;
 }
 
 /** То, что ложится в chat_messages.steps вместе с ответом. */
@@ -186,6 +189,21 @@ export function mcpToolTitle(name: string): string {
   return MCP_TOOL_TITLES[bare] ?? bare.replace(/_/g, " ");
 }
 
+const THINKING_BUF_MAX = 2_000;
+
+/** Последняя законченная фраза размышлений — её видно в чате, пока роль
+ *  думает. Недописанную не берём: она дёргалась бы на каждом слове. */
+export function lastThinkingPhrase(buf: string): string {
+  const text = buf.replace(/[*_`#>]+/g, "");
+  const parts = text.split(/(?<=[.!?…:])\s+|\n+/);
+  const complete = /[.!?…:]\s*$|\n\s*$/.test(text) ? parts : parts.slice(0, -1);
+  for (let i = complete.length - 1; i >= 0; i--) {
+    const phrase = complete[i].trim();
+    if (phrase.length >= 3) return clip(redactSecrets(phrase));
+  }
+  return "";
+}
+
 /** Строка быстрых ответов Секретаря («БЫСТРО: …») — служебная, её
  *  разбирает secretaryReply.ts. В живом тексте её не показываем, в том
  *  числе недописанную («БЫС…»), чтобы она не мигала в пузыре. */
@@ -209,6 +227,8 @@ export class LiveTurn {
   private readonly audience: () => string[];
   private readonly startedAt = new Date();
   private items: LiveItem[] = [];
+  /** Текст идущих размышлений; null — роль сейчас не думает. */
+  private thinkingBuf: string | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   /** Ход-двойник: для этой пары уже идёт живой ход, этот ничего не
@@ -241,9 +261,22 @@ export class LiveTurn {
       isError?: boolean;
       assistantMessageEvent?: { type?: string; delta?: string };
     };
-    if (e.type === "message_update" && e.assistantMessageEvent?.type === "text_delta") {
-      this.appendText(e.assistantMessageEvent.delta ?? "");
+    const sub = e.type === "message_update" ? e.assistantMessageEvent?.type : undefined;
+    if (sub === "thinking_start") {
+      this.thinkingBuf = "";
+      this.schedule(true);
+    } else if (sub === "thinking_delta") {
+      this.thinkingBuf = ((this.thinkingBuf ?? "") + (e.assistantMessageEvent?.delta ?? ""))
+        .slice(-THINKING_BUF_MAX);
+      this.schedule(false);
+    } else if (sub === "thinking_end") {
+      this.thinkingBuf = null;
+      this.schedule(true);
+    } else if (sub === "text_delta") {
+      this.thinkingBuf = null;
+      this.appendText(e.assistantMessageEvent?.delta ?? "");
     } else if (e.type === "tool_execution_start" && e.toolName) {
+      this.thinkingBuf = null;
       if (this.items.length >= ITEMS_MAX) return;
       this.items.push({
         kind: "step",
@@ -293,6 +326,7 @@ export class LiveTurn {
       name: this.name,
       started_at: this.startedAt.toISOString(),
       items,
+      thinking: this.thinkingBuf === null ? null : lastThinkingPhrase(this.thinkingBuf),
     };
   }
 

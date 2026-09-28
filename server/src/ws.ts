@@ -70,6 +70,11 @@ function alsoPushToIsland(event: unknown) {
 /** Push an event to every open socket for a single user. */
 export function broadcast(userId: string | null | undefined, event: unknown) {
   if (!userId) return;
+  const notification = event as {type?:string;notificationId?:string};
+  // Миграция подавляет дубли ещё при INSERT; не посылаем пустой сигнал.
+  if (notification?.type === "notification:new" && notification.notificationId &&
+      db.prepare("SELECT 1 FROM users WHERE id=? AND role='owner'").get(userId) &&
+      !db.prepare("SELECT 1 FROM notifications WHERE id=? AND user_id=?").get(notification.notificationId,userId)) return;
   const set = clients.get(userId);
   if (!set || set.size === 0) return;
   const payload = JSON.stringify(event);
@@ -127,3 +132,21 @@ export function broadcastToUsers(
     broadcast(id, event);
   }
 }
+
+// Сигнал «на связи» (28.09.2026). Клиенты (iOS — RealtimeClient.swift)
+// считают сокет мёртвым после 45 с без входящих сообщений и переподключаются.
+// Сервер раньше ничего не слал в тишине — телефон рвал живой канал раз в
+// минуту и терял события, пришедшие в разрыв (живой ход роли в чате). Раз в
+// 20 с — {"type":"ping"}, клиент отвечает {"type":"pong"}.
+export const KEEPALIVE_MS = 20_000;
+export const KEEPALIVE_PAYLOAD = JSON.stringify({ type: "ping" });
+
+export function pingAllClients() {
+  for (const set of clients.values()) {
+    for (const socket of set) {
+      if (socket.readyState === 1) socket.send(KEEPALIVE_PAYLOAD);
+    }
+  }
+}
+
+setInterval(pingAllClients, KEEPALIVE_MS).unref();

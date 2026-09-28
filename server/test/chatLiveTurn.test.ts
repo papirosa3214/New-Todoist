@@ -13,6 +13,7 @@ import {
   LIVE_BROADCAST_MS,
   _resetLiveTurnsForTests,
   chatRunFailureText,
+  lastThinkingPhrase,
   liveTurnsOfChat,
   redactSecrets,
   startLiveTurn,
@@ -113,6 +114,50 @@ describe("живой ход", () => {
     expect(stripQuickRepliesLine("Ответ\nБЫСТРО: да | нет")).toBe("Ответ");
     expect(stripQuickRepliesLine("Ответ\nБЫС")).toBe("Ответ");
     expect(stripQuickRepliesLine("Ответ\nБыстрый текст")).toBe("Ответ\nБыстрый текст");
+  });
+});
+
+const think = (type: string, delta?: string) => ({
+  type: "message_update",
+  assistantMessageEvent: { type, delta },
+});
+
+describe("размышления роли (28.09.2026)", () => {
+  it("пока думает — последняя законченная фраза, потом null", () => {
+    vi.useFakeTimers();
+    const turn = newTurn();
+    turn.onEvent(think("thinking_start"));
+    expect(sent).toHaveLength(1);
+    expect(sent[0].event.turn.thinking).toBe("");
+
+    turn.onEvent(think("thinking_delta", "Пользователь просит сводку. Сначала посмотрю до"));
+    vi.advanceTimersByTime(LIVE_BROADCAST_MS);
+    expect(sent.at(-1)!.event.turn.thinking).toBe("Пользователь просит сводку.");
+
+    turn.onEvent(think("thinking_delta", "ску.\n"));
+    vi.advanceTimersByTime(LIVE_BROADCAST_MS);
+    expect(sent.at(-1)!.event.turn.thinking).toBe("Сначала посмотрю доску.");
+
+    turn.onEvent(think("thinking_end"));
+    expect(sent.at(-1)!.event.turn.thinking).toBeNull();
+    expect(sent.at(-1)!.event.turn.items).toEqual([]);
+  });
+
+  it("текст ответа или шаг гасят размышления, в историю они не идут", () => {
+    vi.useFakeTimers();
+    const turn = newTurn();
+    turn.onEvent(think("thinking_start"));
+    turn.onEvent(think("thinking_delta", "Надо проверить файл."));
+    turn.onEvent(toolStart("t1", "read", { path: "/tmp/a" }));
+    expect(sent.at(-1)!.event.turn.thinking).toBeNull();
+    turn.onEvent(toolEnd("t1"));
+    expect(turn.finish()!.items).toHaveLength(1);
+  });
+
+  it("фраза: без разметки, ключи затёрты, недописанное не берётся", () => {
+    expect(lastThinkingPhrase("**План:** проверить")).toBe("План:");
+    expect(lastThinkingPhrase("начало без точки")).toBe("");
+    expect(lastThinkingPhrase("token=abcdef123 в конфиге.")).toBe("token=••• в конфиге.");
   });
 });
 

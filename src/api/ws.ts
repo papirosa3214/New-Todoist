@@ -158,6 +158,7 @@ export function useNotificationsSocket(enabled: boolean) {
           }
           if (
             data?.type === "connected" ||
+            data?.type === "ping" || // сигнал «на связи» от сервера (28.09.2026)
             data?.type === "pong" ||
             data?.type === "error"
           )
