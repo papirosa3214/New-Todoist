@@ -160,7 +160,7 @@ def main() -> int:
             build = subprocess.run(
                 # --allow-partial: несколько неописуемых файлов не валят всё;
                 # сколько их — считаем сами ниже.
-                [GRAFT, "build", "--deep", "--allow-partial", "-j", "2", a.repo],
+                [GRAFT, "build", "--deep", "--allow-partial", "-j", "1", a.repo],
                 stdout=log, stderr=subprocess.STDOUT, env=env, timeout=BUILD_TIMEOUT_S,
             )
             build_exit = build.returncode
