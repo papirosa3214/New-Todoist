@@ -1,3 +1,5 @@
+import db from "../db.js";
+import { parseIntakeMetadata } from "../lib/taskIntakeMetadata.js";
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead } from "../access.js";
@@ -657,6 +659,9 @@ async function structureTask(
 // ── Разбор надиктовки в пачку карточек (карточка 4396f8c9) ──────────────
 
 export interface DictationChild {
+  dueDate?: string | null;
+  startTime?: string | null;
+  labelIds?: string[];
   title: string;
   description: string;
   /** Проверяемый признак готовности (раздел 7 спецификации от 14.09.2026).
@@ -679,6 +684,8 @@ export interface DictationChild {
 }
 
 export interface DictationCards {
+  startTime?: string | null;
+  labelIds?: string[];
   title: string;
   description: string;
   /** Проверяемый признак готовности (раздел 7 спецификации). */
@@ -860,7 +867,10 @@ export async function structureDictationToCards(
     maxChars?: number;
   },
 ): Promise<DictationCards> {
-  const today = new Date().toISOString().slice(0, 10);
+  const timezone = process.env.TASKFLOW_TIMEZONE || "Europe/Moscow";
+  const dateParts = new Intl.DateTimeFormat("en-CA",{timeZone:timezone,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
+  const part=(name:string)=>dateParts.find(p=>p.type===name)!.value;
+  const today = `${part("year")}-${part("month")}-${part("day")}`;
   const projectList = projects.length
     ? projects.map((p) => `- ${p.name}`).join("\n")
     : "(проектов нет)";
@@ -881,11 +891,26 @@ export async function structureDictationToCards(
     ? await getUserPrompt(opts.ownerId, "task_intake")
     : "";
   const systemPrompt = buildDictationSystemPrompt(ownerLayer);
+  const labels = db.prepare("SELECT id,name FROM labels ORDER BY name").all() as Array<{id:string;name:string}>;
+  const fieldContract = `Дополнительные поля того же JSON, только из явных слов владельца:
+` +
+    `due_date: YYYY-MM-DD (даты относительно ${today}, часовой пояс ${timezone}); start_time: HH:MM или null.
+` +
+    `assignee: "self" если на меня/мне/я сделаю (владелец Максим); иначе null, роли указывай прежним полем role.
+` +
+    `labels: массив названий существующих меток или []; доступные метки: ${JSON.stringify(labels.map(l=>l.name))}.
+` +
+    `priority: целое 1 срочный, 2 высокий, 3 обычный, 4 низкий; если не указан — 4.
+` +
+    `Не выдумывай сроки и метки. Неизвестная метка или неоднозначный срок — question.
+` +
+    `Те же поля можно указать у children. Остальной шаблон и правила постановки не меняются.`;
+
 
   const content = await callUnifiedAi({
     systemPrompt,
     userPrompt:
-      `Сегодня ${today}.\n\n` +
+      `Сегодня ${today}.\n\n${fieldContract}\n\n` +
       `Проекты, из которых можно выбрать:\n${projectList}\n\n` +
       `Надиктовка:\n"${rawText.trim().slice(0, opts?.maxChars ?? 6000)}"`,
     provider: opts?.provider,
@@ -919,6 +944,8 @@ export async function structureDictationToCards(
       null;
   }
 
+  const metadata = parseIntakeMetadata(parsed,labels);
+
   const children: DictationChild[] = Array.isArray(parsed?.children)
     ? parsed.children
         .map((c: any): DictationChild | null => {
@@ -928,9 +955,11 @@ export async function structureDictationToCards(
             typeof c?.after === "number" && Number.isInteger(c.after)
               ? c.after
               : null;
-          const q = typeof c?.question === "string" ? c.question.trim() : "";
+          const childMetadata = parseIntakeMetadata(c,labels);
+          const q = [typeof c?.question === "string" ? c.question.trim() : "",childMetadata.question].filter(Boolean).join(" ");
           return {
             title: t,
+            dueDate:childMetadata.dueDate, startTime:childMetadata.startTime, labelIds:childMetadata.labelIds.length ? childMetadata.labelIds : undefined,
             description:
               typeof c?.description === "string" ? c.description.trim() : "",
             result: typeof c?.result === "string" ? c.result.trim() : "",
@@ -940,7 +969,7 @@ export async function structureDictationToCards(
             role: parseRole(c?.role),
             roleReason:
               typeof c?.role_reason === "string" ? c.role_reason.trim() : "",
-            where: parseWhere(c?.where),
+            where: childMetadata.selfAssigned ? "личное" : parseWhere(c?.where),
           };
         })
         .filter((c: DictationChild | null): c is DictationChild => c !== null)
@@ -959,24 +988,19 @@ export async function structureDictationToCards(
     role: parseRole(parsed?.role),
     roleReason:
       typeof parsed?.role_reason === "string" ? parsed.role_reason.trim() : "",
-    where: parseWhere(parsed?.where),
+    where: metadata.selfAssigned ? "личное" : parseWhere(parsed?.where),
+    startTime:metadata.startTime, labelIds:metadata.labelIds,
     title,
     description:
       typeof parsed?.description === "string" && parsed.description.trim()
         ? parsed.description.trim()
         : rawText.trim(),
     result: typeof parsed?.result === "string" ? parsed.result.trim() : "",
-    question:
-      typeof parsed?.question === "string" && parsed.question.trim()
-        ? parsed.question.trim()
-        : null,
+    question: [typeof parsed?.question === "string" ? parsed.question.trim() : "",metadata.question].filter(Boolean).join(" ") || null,
     subtasks: cleanTitles(parsed?.subtasks, 10),
-    dueDate:
-      typeof parsed?.due_date === "string" && parsed.due_date.trim()
-        ? parsed.due_date.trim()
-        : null,
+    dueDate:metadata.dueDate,
     priority:
-      typeof parsed?.priority === "number" &&
+      Number.isInteger(parsed?.priority) &&
       parsed.priority >= 1 &&
       parsed.priority <= 4
         ? parsed.priority

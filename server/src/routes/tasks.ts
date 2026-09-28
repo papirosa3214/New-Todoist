@@ -1409,6 +1409,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
                 reason: "assigned",
                 actorId: req.userId,
                 dedupeKey: `ready:${id}:${uid()}`,
+                manualStart: true,
               });
             }
           });
@@ -1423,7 +1424,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         if (newValue === 1 && previous !== 1 && !existing.assignee_id) {
           try {
             const { dispatchTaskToPi } = await import("./dispatch.js");
-            await dispatchTaskToPi(id, req.userId);
+            await dispatchTaskToPi(id, req.userId, { manualStart: true });
           } catch (err) {
             // Отказ отдачи не отменяет поднятия флага: владелец своё
             // действие сделал, и карточка обязана остаться готовой.

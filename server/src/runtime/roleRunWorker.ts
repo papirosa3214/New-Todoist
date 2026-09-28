@@ -24,7 +24,7 @@ async function defaultExecutor(
     job.task_id,
     job.reason,
     job.actor_id,
-    { durableHandoff: true, chainDepth: job.chain_depth },
+    { durableHandoff: true, chainDepth: job.chain_depth, manualStart: job.manual_start === 1 },
   );
   if (result.outcome === "skipped") return { outcome: "skipped" };
   if (result.outcome === "deferred") return result;

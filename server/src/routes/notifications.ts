@@ -51,7 +51,8 @@ export function registerNotificationRoutes(app: FastifyInstance) {
         text.trim(),
         actor_id ?? null,
       );
-      return reply.code(201).send({ id });
+      const inserted = db.prepare("SELECT id FROM notifications WHERE id=?").get(id);
+      return inserted ? reply.code(201).send({ id }) : reply.code(200).send({ suppressed: true });
     },
   });
 
@@ -66,7 +67,7 @@ export function registerNotificationRoutes(app: FastifyInstance) {
       LEFT JOIN users u ON n.user_id = u.id
       LEFT JOIN tasks t ON n.task_id = t.id
       LEFT JOIN users a ON n.actor_id = a.id
-      WHERE n.user_id = ?
+      WHERE n.user_id = ? AND NOT (n.type IN ('assigned','commented','reviewed','agent_state') AND EXISTS (SELECT 1 FROM users owner WHERE owner.id=n.user_id AND owner.role='owner'))
       ORDER BY n.created_at DESC
     `,
       )

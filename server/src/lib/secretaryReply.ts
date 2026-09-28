@@ -21,6 +21,8 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 
+import { mayRequestSummary, parseSummaryRequest, collectTaskSummary, sendSummaryToSecretaryChat } from "./secretaryTaskSummary.js";
+
 const uid = () => crypto.randomUUID();
 
 export const SECRETARY_CHAT_ID = "chat-secretary";
@@ -58,6 +60,20 @@ function memberIds(chatId: string): string[] {
 
 export async function deliverSecretaryReply(userText: string): Promise<string | null> {
   const chatId = SECRETARY_CHAT_ID;
+  // Сводка использует тот же серверный разбор и факты, что голосовой инструмент.
+  // Свободный разговор продолжает существующую сессию роли.
+  if (mayRequestSummary(userText)) {
+    const owner = db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY created_at LIMIT 1").get() as {id:string}|undefined;
+    if (owner) {
+      try {
+        const filter = await parseSummaryRequest(userText);
+        if (filter.is_summary) return sendSummaryToSecretaryChat(owner.id,filter.question || collectTaskSummary(owner.id,filter).text);
+      } catch (error) {
+        console.warn("[secretaryReply] сводка не получена:",error);
+        return sendSummaryToSecretaryChat(owner.id,"Не удалось получить сводку задач. Уточни исполнителя и период или повтори запрос.");
+      }
+    }
+  }
   const history = db
     .prepare(
       `SELECT m.from_user_id, m.text, m.created_at, f.name as from_name

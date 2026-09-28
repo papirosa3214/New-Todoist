@@ -2397,6 +2397,98 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: "067_manual_role_run_start",
+    description: "role_run_jobs.manual_start — явный запуск владельца при выключенной Системе.",
+    up: () => {
+      const cols = new Set((db.prepare("PRAGMA table_info(role_run_jobs)").all() as Array<{name:string}>).map(c => c.name));
+      if (!cols.has("manual_start")) db.exec("ALTER TABLE role_run_jobs ADD COLUMN manual_start INTEGER NOT NULL DEFAULT 0 CHECK (manual_start IN (0,1))");
+    },
+  },
+  {
+    id: "068_owner_notification_no_activity",
+    description: "Владелец: действия задач остаются в ленте, не дублируются в уведомления.",
+    up: () => db.exec(`CREATE TRIGGER IF NOT EXISTS notifications_owner_no_activity BEFORE INSERT ON notifications WHEN NEW.type IN ('assigned','commented','reviewed','agent_state','completed') AND EXISTS (SELECT 1 FROM users WHERE id=NEW.user_id AND role='owner') BEGIN SELECT RAISE(IGNORE); END;`),
+  },
+  {
+    id: "069_keep_owner_completion_notifications",
+    description: "Сохранить уведомления о завершении согласно ранее подтверждённой границе владельца.",
+    up: () => db.exec(`DROP TRIGGER IF EXISTS notifications_owner_no_activity; CREATE TRIGGER notifications_owner_no_activity BEFORE INSERT ON notifications WHEN NEW.type IN ('assigned','commented','reviewed','agent_state') AND EXISTS (SELECT 1 FROM users WHERE id=NEW.user_id AND role='owner') BEGIN SELECT RAISE(IGNORE); END;`),
+  },
+  {
+    id: "070_task_role_slots",
+    description: "Изолированные персональные slots специалистов для одной задачи.",
+    up: () => db.exec(`
+      CREATE TABLE IF NOT EXISTS task_role_slots (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        slot_key TEXT NOT NULL,
+        role_key TEXT NOT NULL REFERENCES roles(key),
+        participant_id TEXT NOT NULL REFERENCES users(id),
+        state TEXT NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting','ready','active','submitted','accepted')),
+        required INTEGER NOT NULL DEFAULT 1 CHECK (required IN (0,1)),
+        result TEXT,
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(task_id, slot_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_role_slots_task ON task_role_slots(task_id, state);
+      CREATE INDEX IF NOT EXISTS idx_task_role_slots_participant ON task_role_slots(participant_id, state);
+    `),
+  },
+  {
+    id: "071_task_collaboration_plans",
+    description: "Версии графа совместной работы: роли, зависимости и решение владельца.",
+    up: () => db.exec(`
+      CREATE TABLE IF NOT EXISTS task_collaboration_plans (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','superseded')),
+        profile TEXT NOT NULL CHECK (profile IN ('single_executor','research','delivery','full_cycle','manual')),
+        rationale TEXT NOT NULL DEFAULT '',
+        context_version INTEGER,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        approved_by TEXT REFERENCES users(id),
+        approved_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(task_id, revision)
+      );
+      CREATE TABLE IF NOT EXISTS task_collaboration_plan_nodes (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL REFERENCES task_collaboration_plans(id) ON DELETE CASCADE,
+        slot_key TEXT NOT NULL,
+        role_key TEXT NOT NULL REFERENCES roles(key),
+        required INTEGER NOT NULL DEFAULT 1 CHECK (required IN (0,1)),
+        expected_result TEXT NOT NULL DEFAULT '',
+        UNIQUE(plan_id, slot_key)
+      );
+      CREATE TABLE IF NOT EXISTS task_collaboration_plan_edges (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL REFERENCES task_collaboration_plans(id) ON DELETE CASCADE,
+        from_slot_key TEXT NOT NULL,
+        to_slot_key TEXT NOT NULL,
+        start_condition TEXT NOT NULL CHECK (start_condition IN ('submitted','accepted','artifact_ready')),
+        UNIQUE(plan_id, from_slot_key, to_slot_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_collaboration_plans_task ON task_collaboration_plans(task_id, revision DESC);
+      CREATE INDEX IF NOT EXISTS idx_task_collaboration_plan_nodes_plan ON task_collaboration_plan_nodes(plan_id);
+      CREATE INDEX IF NOT EXISTS idx_task_collaboration_plan_edges_plan ON task_collaboration_plan_edges(plan_id);
+    `),
+  },
+  {
+    id: "072_collaboration_plan_slot_admission",
+    description: "Связать slots с revision плана и допускать их только по edges.",
+    up: () => db.exec(`
+      ALTER TABLE task_role_slots ADD COLUMN collaboration_plan_id TEXT REFERENCES task_collaboration_plans(id);
+      ALTER TABLE task_role_slots ADD COLUMN plan_node_key TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_task_role_slots_plan_node
+        ON task_role_slots(collaboration_plan_id, plan_node_key)
+        WHERE collaboration_plan_id IS NOT NULL;
+    `),
+  },
 ];
 
 /**

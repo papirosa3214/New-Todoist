@@ -1,3 +1,4 @@
+import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 // Окно постановки задач: надиктовка владельца в чат → карточка-черновик.
 // Карточка 4396f8c9, 10.09.2026.
 //
@@ -277,6 +278,10 @@ function createDraftCards(
       cards.question,
     );
     cards.subtasks.forEach((t, i) => insSub.run(uid(), parentId, t, i + 1));
+    db.prepare("UPDATE tasks SET start_time=? WHERE id=?").run(cards.startTime ?? null,parentId);
+    const insLabel = db.prepare("INSERT OR IGNORE INTO task_labels(task_id,label_id) VALUES (?,?)");
+    for (const label of cards.labelIds ?? []) insLabel.run(parentId,label);
+
 
     cards.children.forEach((child, i) => {
       // Порядок между дочерними: position задаёт место в списке, а строка
@@ -303,6 +308,9 @@ function createDraftCards(
         child.question ? 1 : 0,
         child.question,
       );
+      db.prepare("UPDATE tasks SET due_date=?,start_time=? WHERE id=?").run(
+        child.dueDate ?? cards.dueDate,child.startTime ?? cards.startTime ?? null,childIds[i]);
+      for (const label of child.labelIds ?? cards.labelIds ?? []) insLabel.run(childIds[i],label);
       child.subtasks.forEach((t, j) =>
         insSub.run(uid(), childIds[i], t, j + 1),
       );
@@ -337,7 +345,7 @@ function createDraftCards(
     // Исполнители, выбранные вместе с постановкой, — после записей о
     // создании, чтобы лента читалась по порядку.
     applyCardRole(parentId, cards, owner);
-    cards.children.forEach((child, i) => applyCardRole(childIds[i], child, owner));
+    cards.children.forEach((child, i) => applyCardRole(childIds[i], isPersonal(cards) ? {...child,where:"личное"} : child, owner));
   });
   txn();
 
@@ -431,7 +439,7 @@ async function admitTreeAutomatically(
     ? childIds.map((id, i) => ({
         id,
         waits: cards.children[i].after !== null,
-        personal: isPersonal(cards.children[i]),
+        personal: isPersonal(cards) || isPersonal(cards.children[i]),
       }))
     : [{ id: parentId, waits: false, personal: isPersonal(cards) }]
   )
@@ -591,14 +599,30 @@ export async function startDraftTree(
       continue;
     }
     if (card.assignee_id) {
-      started += 1; // исполнитель уже есть — флаг и есть запуск
+      enqueueRoleRunJob({ taskId: card.id, reason: "assigned", actorId: owner,
+        dedupeKey: `manual-start:${card.id}:${crypto.randomUUID()}`, manualStart: true });
+      started += 1; // явный запуск назначенного исполнителя
       continue;
     }
-    const outcome = await dispatchTaskToPi(card.id, owner);
+    const outcome = await dispatchTaskToPi(card.id, owner, { manualStart: true });
     if (outcome.ok) started += 1;
     else console.warn(`запуск черновика: ${card.id} не отдан:`, outcome.error);
   }
   return { started, queued };
+}
+
+/** Общий путь постановки: сообщения и живой голос используют один разбор,
+ *  слой task_intake, создание дерева и допуск. Режим фиксируется при приёме. */
+export async function submitOwnerTaskText(rawText: string, owner: string, mode: IntakeMode) {
+  const projects = db.prepare("SELECT id,name FROM projects ORDER BY name").all() as Array<{id:string;name:string}>;
+  const cards = await structureDictationToCards(rawText, projects, {ownerId:owner});
+  const {parentId,childIds} = createDraftCards(cards,owner);
+  attachSourceText(rawText,parentId,owner,cards.title);
+  const questions = [cards.question,...cards.children.map(c=>c.question)].filter((q):q is string=>!!q);
+  const admission = mode === "automatic" && !questions.length
+    ? await admitTreeAutomatically(parentId,childIds,cards,owner)
+    : {dispatched:0,queued:0};
+  return {parentId,childIds,cards,questions,...admission};
 }
 
 export function startDraftFromChat(message: {
@@ -629,16 +653,8 @@ export function startDraftFromChat(message: {
 
   void (async () => {
     try {
-      const projects = db
-        .prepare("SELECT id, name FROM projects ORDER BY name")
-        .all() as Array<{ id: string; name: string }>;
-      // ownerId включает смысловой слой владельца (scope `task_intake`):
-      // его пожелания к стилю названий и глубине разбиения. Формат ответа
-      // при этом остаётся за сервером — см. structureDictationToCards.
-      const cards = await structureDictationToCards(text, projects, {
-        ownerId: owner,
-      });
-      const { parentId: taskId, childIds } = createDraftCards(cards, owner);
+      const intake = await submitOwnerTaskText(text, owner, mode);
+      const {parentId:taskId,childIds,cards} = intake;
 
       db.prepare(
         `UPDATE chat_task_drafts
@@ -654,10 +670,7 @@ export function startDraftFromChat(message: {
       // Частичный запуск запрещён»). Запустить половину работы, пока
       // вторая половина непонятна, хуже, чем не запустить ничего: сделанное
       // придётся переделывать под ответ владельца.
-      const вопросы = [
-        cards.question,
-        ...cards.children.map((c) => c.question),
-      ].filter((q): q is string => !!q);
+      const вопросы = intake.questions;
 
       if (mode === "automatic" && вопросы.length) {
         const списком = вопросы.map((q) => `• ${q}`).join("\n");
@@ -678,12 +691,7 @@ export function startDraftFromChat(message: {
         // Автоматический режим: черновик владельцу не показывается и
         // подтверждения не ждёт (раздел 8.1 спецификации). Сервер сам
         // поднимает флаг и отдаёт работу — владелец узнаёт постфактум.
-        const { dispatched, queued } = await admitTreeAutomatically(
-          taskId,
-          childIds,
-          cards,
-          owner,
-        );
+        const { dispatched, queued } = intake;
         const очередь = queued
           ? ` Ещё ${queued} ${plural(queued, "карточка ждёт", "карточки ждут", "карточек ждут")} своей очереди.`
           : "";

@@ -116,7 +116,7 @@ describe("Reviewer-first review", () => {
     expect(hasReviewerApprovedCurrentVersion(task.id)).toBe(true);
   });
 
-  it("вердикт ревьюера виден в ленте карточки и уведомляет владельца", async () => {
+  it("вердикт ревьюера виден в ленте карточки без дубля в уведомлениях владельца", async () => {
     const { task, version } = await createSubmittedTask();
     const approve = await app.inject({
       method: "POST",
@@ -147,7 +147,7 @@ describe("Reviewer-first review", () => {
       url: "/api/notifications",
       headers: { authorization: `Bearer ${ownerToken}` },
     });
-    expect(JSON.stringify(notifs.json())).toContain("одобрил");
+    expect(JSON.stringify(notifs.json())).not.toContain("одобрил");
   });
 
 });

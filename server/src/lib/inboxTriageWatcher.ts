@@ -26,6 +26,7 @@ import * as crypto from "node:crypto";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
+import { dispatchPendingDiagnosticTasks } from "./diagnosticDispatch.js";
 
 export const NOTIF_ROOT =
   process.env.TASKFLOW_NOTIF_ROOT ||
@@ -80,6 +81,8 @@ export function startInboxTriageWatcher(): () => void {
   const queue = new Set<string>();
   let busy = false;
   let stopped = false;
+  let dispatchBusy = false;
+  let lastDispatchAttempt = 0;
   const knownDirs = new Set<string>(scanDayDirs());
   // Проект заводится сразу при старте — Максим видит его, не дожидаясь первой
   // тревоги (27.09.2026).
@@ -102,6 +105,16 @@ export function startInboxTriageWatcher(): () => void {
     }
     // Подцепить появившиеся files даже если watcher был стартован без них
     processQueue();
+    // Новые и уже созданные диагностические карточки допускаются к
+    // штатной durable-очереди независимо от ручного приёма обычных задач.
+    // Повтор раз в минуту; назначенные/закрытые карточки выборка исключает.
+    if (!dispatchBusy && Date.now() - lastDispatchAttempt >= 60_000) {
+      dispatchBusy = true;
+      lastDispatchAttempt = Date.now();
+      void dispatchPendingDiagnosticTasks()
+        .catch((error) => console.warn("[inbox-triage] dispatch scan:", error))
+        .finally(() => { dispatchBusy = false; });
+    }
   }, POLL_MS);
 
   function scanDayDirs(): Set<string> {
@@ -217,7 +230,7 @@ export function startInboxTriageWatcher(): () => void {
       db.prepare(
         `INSERT INTO tasks (
           id, title, description, priority, creator_id, status, agent_state, project_id
-        ) VALUES (?, ?, ?, ?, ?, 'active', 'todo', ?)`,
+        ) VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)`,
       ).run(id, title, description, PRIORITY, OWNER_ID, serverNotificationsProjectId(OWNER_ID));
     });
     txn();

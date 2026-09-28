@@ -239,7 +239,7 @@ export async function dispatchTaskToPi(
   // подписывается «Система», а не владельцем (владелец 22.09.2026: «надо
   // писать, кто это делает»). Уведомление исполнителю по-прежнему идёт от
   // actorId — по нему будильник ловит назначение.
-  opts: { system?: boolean } = {},
+  opts: { system?: boolean; manualStart?: boolean } = {},
 ): Promise<DispatchOutcome> {
   const eventActor = opts.system ? null : actorId;
   const task = db
@@ -401,6 +401,7 @@ export async function dispatchTaskToPi(
       reason: "assigned",
       actorId,
       dedupeKey: `dispatch:${inboxId}`,
+      manualStart: opts.manualStart ?? false,
     });
 
     broadcastToUsers([roleUserId(chosen)], {
@@ -834,7 +835,7 @@ export function registerDispatchRoutes(app: FastifyInstance): void {
         });
       }
 
-      const outcome = await dispatchTaskToPi(id, req.userId);
+      const outcome = await dispatchTaskToPi(id, req.userId, { manualStart: true });
       if (!outcome.ok) {
         return reply.code(outcome.code).send({ error: outcome.error });
       }

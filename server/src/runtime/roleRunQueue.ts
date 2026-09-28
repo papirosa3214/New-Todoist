@@ -28,6 +28,7 @@ export type RoleRunJob = {
   attempts: number;
   max_attempts: number;
   chain_depth: number;
+  manual_start: number;
   available_at: string;
   lease_owner: string | null;
   lease_expires_at: string | null;
@@ -50,13 +51,14 @@ export function enqueueRoleRunJob(input: {
   dedupeKey: string;
   maxAttempts?: number;
   chainDepth?: number;
+  manualStart?: boolean;
 }): { id: string; created: boolean } {
   const id = `rrj_${crypto.randomUUID()}`;
   const result = db
     .prepare(
       `INSERT INTO role_run_jobs
-         (id, task_id, reason, actor_id, dedupe_key, max_attempts, chain_depth)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+         (id, task_id, reason, actor_id, dedupe_key, max_attempts, chain_depth, manual_start)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(dedupe_key) DO NOTHING`,
     )
     .run(
@@ -67,6 +69,7 @@ export function enqueueRoleRunJob(input: {
       input.dedupeKey,
       input.maxAttempts ?? 3,
       input.chainDepth ?? 0,
+      input.manualStart ? 1 : 0,
     );
   if (result.changes > 0) return { id, created: true };
 
