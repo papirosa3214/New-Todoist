@@ -2505,6 +2505,17 @@ const migrations: Migration[] = [
       if (!cols.has("context_version")) db.exec("ALTER TABLE tasks ADD COLUMN context_version INTEGER NOT NULL DEFAULT 1");
     },
   },
+  {
+    id: "075_collaboration_plan_artifact_contract",
+    description: "Контракты выходных артефактов collaboration plan и ключ артефакта на edge.",
+    up: () => {
+      const nodeCols = new Set((db.prepare("PRAGMA table_info(task_collaboration_plan_nodes)").all() as Array<{name:string}>).map(c => c.name));
+      if (!nodeCols.has("output_artifact_json")) db.exec("ALTER TABLE task_collaboration_plan_nodes ADD COLUMN output_artifact_json TEXT");
+      const edgeCols = new Set((db.prepare("PRAGMA table_info(task_collaboration_plan_edges)").all() as Array<{name:string}>).map(c => c.name));
+      if (!edgeCols.has("artifact_key")) db.exec("ALTER TABLE task_collaboration_plan_edges ADD COLUMN artifact_key TEXT");
+    },
+  },
+
 ];
 
 /**

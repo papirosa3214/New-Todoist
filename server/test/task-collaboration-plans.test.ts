@@ -88,4 +88,41 @@ describe("collaboration plans", () => {
     expect(proposal.json().plan.status).toBe("draft");
     expect(proposal.json().plan.nodes.map((node: { role_key: string }) => node.role_key)).toEqual(expect.arrayContaining(["researcher", "analyst", "architect", "designer", "builder", "qa", "critic_verifier"]));
   });
+  it("persists an artifact contract and validates artifact edge keys", async () => {
+    const createPlan = async (nodes: unknown[], edges: unknown[]) => {
+      const task = await app.inject({
+        method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth },
+        payload: { title: `Artifact contract ${crypto.randomUUID()}` },
+      });
+      return app.inject({
+        method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans`, headers: { authorization: ownerAuth },
+        payload: { profile: "manual", nodes, edges },
+      });
+    };
+    const featureSpec = {
+      key: "feature_spec", type: "specification", format: "json",
+      required_fields: ["scope", "acceptance_criteria"],
+    };
+    const validNodes = [
+      { slot_key: "analysis", role_key: "analyst", output_artifact: featureSpec },
+      { slot_key: "delivery", role_key: "builder" },
+    ];
+    const valid = await createPlan(validNodes, [
+      { from_slot_key: "analysis", to_slot_key: "delivery", artifact_key: "feature_spec" },
+    ]);
+    expect(valid.statusCode).toBe(201);
+    expect(valid.json().plan.nodes.find((node: { slot_key: string }) => node.slot_key === "analysis").output_artifact).toEqual(featureSpec);
+    expect(valid.json().plan.edges[0].artifact_key).toBe("feature_spec");
+
+    expect((await createPlan([
+      ...validNodes,
+      { slot_key: "architecture", role_key: "architect", output_artifact: featureSpec },
+    ], [])).statusCode).toBe(400);
+    expect((await createPlan([
+      { slot_key: "analysis", role_key: "analyst", output_artifact: { ...featureSpec, key: "Feature Spec" } },
+    ], [])).statusCode).toBe(400);
+    expect((await createPlan(validNodes, [
+      { from_slot_key: "analysis", to_slot_key: "delivery", artifact_key: "implementation_pack" },
+    ])).statusCode).toBe(400);
+  });
 });

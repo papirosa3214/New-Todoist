@@ -25,21 +25,50 @@ type Plan = {
   created_at: string;
 };
 
-type NodeInput = { slot_key?: unknown; role_key?: unknown; required?: unknown; expected_result?: unknown };
-type EdgeInput = { from_slot_key?: unknown; to_slot_key?: unknown; start_condition?: unknown };
-type Node = { slot_key: string; role_key: string; required: boolean; expected_result: string };
-type Edge = { from_slot_key: string; to_slot_key: string; start_condition: string };
+type ArtifactContract = { key: string; type: string; format: "json"; required_fields: string[] };
+type NodeInput = { slot_key?: unknown; role_key?: unknown; required?: unknown; expected_result?: unknown; output_artifact?: unknown };
+type EdgeInput = { from_slot_key?: unknown; to_slot_key?: unknown; start_condition?: unknown; artifact_key?: unknown };
+type Node = { slot_key: string; role_key: string; required: boolean; expected_result: string; output_artifact: ArtifactContract | null };
+type Edge = { from_slot_key: string; to_slot_key: string; start_condition: string; artifact_key: string | null };
 
 function mayManage(userId: string): boolean {
   return isOwner(userId) || isOrchestrator(userId);
 }
 
 function present(plan: Plan) {
-  const nodes = db.prepare(`SELECT slot_key, role_key, required, expected_result FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key`)
-    .all(plan.id) as Array<Omit<Node, "required"> & { required: number }>;
-  const edges = db.prepare(`SELECT from_slot_key, to_slot_key, start_condition FROM task_collaboration_plan_edges WHERE plan_id = ? ORDER BY from_slot_key, to_slot_key`)
+  const nodes = db.prepare("SELECT slot_key, role_key, required, expected_result, output_artifact_json FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key")
+    .all(plan.id) as Array<Omit<Node, "required" | "output_artifact"> & { required: number; output_artifact_json: string | null }>;
+  const edges = db.prepare("SELECT from_slot_key, to_slot_key, start_condition, artifact_key FROM task_collaboration_plan_edges WHERE plan_id = ? ORDER BY from_slot_key, to_slot_key")
     .all(plan.id) as Edge[];
-  return { ...plan, nodes: nodes.map((node) => ({ ...node, required: node.required === 1 })), edges };
+  return {
+    ...plan,
+    nodes: nodes.map((node) => ({
+      slot_key: node.slot_key,
+      role_key: node.role_key,
+      required: node.required === 1,
+      expected_result: node.expected_result,
+      output_artifact: node.output_artifact_json === null ? null : JSON.parse(node.output_artifact_json) as ArtifactContract,
+    })),
+    edges,
+  };
+}
+
+function parseArtifactContract(raw: unknown): ArtifactContract | null {
+  if (raw === undefined) return null;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("output_artifact должен быть объектом");
+  const contract = raw as Record<string, unknown>;
+  const key = String(contract.key ?? "").trim();
+  const type = String(contract.type ?? "").trim();
+  const format = String(contract.format ?? "").trim();
+  const requiredFields = contract.required_fields;
+  if (!SLOT_KEY.test(key)) throw new Error("некорректный output_artifact key");
+  if (!SLOT_KEY.test(type)) throw new Error("некорректный output_artifact type");
+  if (format !== "json") throw new Error("output_artifact format должен быть json");
+  if (!Array.isArray(requiredFields) || requiredFields.length === 0 || requiredFields.length > 32
+    || requiredFields.some((field) => typeof field !== "string" || !SLOT_KEY.test(field))) {
+    throw new Error("некорректный output_artifact required_fields");
+  }
+  return { key, type, format: "json", required_fields: requiredFields };
 }
 
 function parseGraph(body: { nodes?: unknown; edges?: unknown }) {
@@ -52,14 +81,22 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }) {
     role_key: String(raw.role_key ?? "").trim(),
     required: raw.required !== false,
     expected_result: String(raw.expected_result ?? "").trim(),
+    output_artifact: parseArtifactContract(raw.output_artifact),
   }));
   const keys = new Set<string>();
+  const artifactKeys = new Set<string>();
+  const sourceArtifacts = new Map<string, ArtifactContract>();
   for (const node of nodes) {
     if (!SLOT_KEY.test(node.slot_key)) throw new Error("некорректный slot_key");
     if (!ROLE_NAMES.includes(node.role_key)) throw new Error("unknown role");
     if (node.expected_result.length > 1000) throw new Error("expected_result длиннее 1000 символов");
     if (keys.has(node.slot_key)) throw new Error("slot_key должен быть уникальным");
+    if (node.output_artifact && artifactKeys.has(node.output_artifact.key)) throw new Error("output_artifact key должен быть уникальным");
     keys.add(node.slot_key);
+    if (node.output_artifact) {
+      artifactKeys.add(node.output_artifact.key);
+      sourceArtifacts.set(node.slot_key, node.output_artifact);
+    }
   }
 
   const edgeKeys = new Set<string>();
@@ -67,13 +104,17 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }) {
     from_slot_key: String(raw.from_slot_key ?? "").trim(),
     to_slot_key: String(raw.to_slot_key ?? "").trim(),
     start_condition: String(raw.start_condition ?? "accepted").trim(),
+    artifact_key: raw.artifact_key === undefined ? null : String(raw.artifact_key).trim(),
   }));
   for (const edge of edges) {
     if (!keys.has(edge.from_slot_key) || !keys.has(edge.to_slot_key) || edge.from_slot_key === edge.to_slot_key) throw new Error("edge должен связывать разные известные slots");
     if (!CONDITIONS.has(edge.start_condition)) throw new Error("unknown start_condition");
-    const key = `${edge.from_slot_key}:${edge.to_slot_key}`;
-    if (edgeKeys.has(key)) throw new Error("edge должен быть уникальным");
-    edgeKeys.add(key);
+    const sourceArtifact = sourceArtifacts.get(edge.from_slot_key);
+    if (sourceArtifact && edge.artifact_key !== sourceArtifact.key) throw new Error("edge artifact_key должен совпадать с output_artifact source node");
+    if (!sourceArtifact && edge.artifact_key !== null) throw new Error("edge artifact_key требует output_artifact source node");
+    const edgeKey = edge.from_slot_key + ":" + edge.to_slot_key;
+    if (edgeKeys.has(edgeKey)) throw new Error("edge должен быть уникальным");
+    edgeKeys.add(edgeKey);
   }
 
   const next = new Map<string, string[]>();
@@ -104,12 +145,10 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
   db.transaction(() => {
     db.prepare(`INSERT INTO task_collaboration_plans (id, task_id, revision, profile, rationale, context_version, created_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, taskId, revision, profile, rationale, contextVersion, createdBy);
-    const insertNode = db.prepare(`INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result)
-                                   VALUES (?, ?, ?, ?, ?, ?)`);
-    for (const node of graph.nodes) insertNode.run(`tcpn_${crypto.randomUUID()}`, id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result);
-    const insertEdge = db.prepare(`INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition)
-                                   VALUES (?, ?, ?, ?, ?)`);
-    for (const edge of graph.edges) insertEdge.run(`tcpe_${crypto.randomUUID()}`, id, edge.from_slot_key, edge.to_slot_key, edge.start_condition);
+    const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact));
+    const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
+    for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, edge.start_condition, edge.artifact_key);
   })();
   return { id, revision };
 }
@@ -123,8 +162,8 @@ export function proposalFor(taskId: string, requested: string) {
       : /исслед|анализ|сравн|вариант|источник/.test(text) ? "research"
       : "single_executor")
     : requested;
-  const node = (slot_key: string, role_key: string, expected_result: string): Node => ({ slot_key, role_key, required: true, expected_result });
-  const edge = (from_slot_key: string, to_slot_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "accepted" });
+  const node = (slot_key: string, role_key: string, expected_result: string): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact: null });
+  const edge = (from_slot_key: string, to_slot_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "accepted", artifact_key: null });
   const templates: Record<string, { nodes: Node[]; edges: Edge[]; rationale: string }> = {
     single_executor: { nodes: [node("executor", "builder", "Выполненный результат задачи")], edges: [], rationale: "Низкая неопределённость: достаточно основного исполнителя." },
     research: { nodes: [node("research", "researcher", "Факты, источники и ограничения"), node("analysis", "analyst", "Требования, выводы и критерии")], edges: [edge("research", "analysis")], rationale: "Сначала собрать факты, затем превратить их в проверяемые выводы." },
