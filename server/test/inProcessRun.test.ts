@@ -61,6 +61,8 @@ const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
 const { demoteSeededOwner, seedRoleAccounts } = await import("./helpers/seedOwner.js");
 const { runRoleInProcess, kickRoleTask, kickRoleTaskStrict, _settleInProcessRunsForTests } = await import("../src/runtime/inProcessRun.js");
+const { buildDependencyContext } = await import("../src/runtime/dependencyContext.js");
+const { contextVersionOf } = await import("../src/runtime/taskContextVersion.js");
 
 describe("агент роли внутри сервера", () => {
   let app: FastifyInstance;
@@ -172,6 +174,70 @@ describe("агент роли внутри сервера", () => {
       .prepare("SELECT text FROM comments WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
       .get(taskId) as { text: string } | undefined;
     expect(summary?.text).toContain("База знаний:");
+  });
+
+  it("A и B завершаются — C реально получает их итог в контекст запуска (этап 5)", async () => {
+    // Живой закрытый сценарий из плана docs/2026-09-28-parent-child-execution-context,
+    // этап 5: A (policy completed) и B (policy review) закрываются через
+    // настоящий runtime-путь (не подмену SQL), C собирает их артефакты через
+    // DependencyContextEnricher прямо в runtime-запуске, и это видно в
+    // audit-событии dependency_context_used с выросшей версией контекста
+    // ветки (все три — дети одного родителя, поэтому версия общая).
+    const { taskId: parentId } = builderTask("Родитель ветки");
+
+    const { taskId: aId } = builderTask("A: исследование");
+    db.prepare("UPDATE tasks SET parent_id = ? WHERE id = ?").run(parentId, aId);
+    script.steps = async (tools) => {
+      await call(tools, "taskflow_claim", { id: aId });
+      await call(tools, "taskflow_subtask_work", { id: `${aId}-s1`, state: "in_progress" });
+      // Единственный шаг закрывается -> сервер сам сдаёт задачу в review
+      // (routes/tasks.ts, авто-review) и пишет artifact_versions.result из
+      // resultFromSubtasks; отдельный taskflow_state здесь не нужен.
+      await call(tools, "taskflow_subtask_done", { id: `${aId}-s1`, result: "Источники проверены" });
+    };
+    await runRoleInProcess({ taskId: aId, role: "builder" });
+    await _settleInProcessRunsForTests();
+    const versionBefore = contextVersionOf(parentId);
+    const acceptA = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${aId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { status: "completed" },
+    });
+    expect(acceptA.statusCode).toBe(200);
+
+    const { taskId: bId } = builderTask("B: контракт");
+    db.prepare("UPDATE tasks SET parent_id = ? WHERE id = ?").run(parentId, bId);
+    script.steps = async (tools) => {
+      await call(tools, "taskflow_claim", { id: bId });
+      await call(tools, "taskflow_subtask_work", { id: `${bId}-s1`, state: "in_progress" });
+      await call(tools, "taskflow_subtask_done", { id: `${bId}-s1`, result: "Контракт согласован" });
+    };
+    await runRoleInProcess({ taskId: bId, role: "builder" });
+    await _settleInProcessRunsForTests();
+
+    const { taskId: cId } = builderTask("C: интеграция A и B");
+    db.prepare("UPDATE tasks SET parent_id = ? WHERE id = ?").run(parentId, cId);
+    db.prepare("INSERT INTO task_dependencies (task_id, depends_on_task_id, policy) VALUES (?, ?, 'completed')").run(cId, aId);
+    db.prepare("INSERT INTO task_dependencies (task_id, depends_on_task_id, policy) VALUES (?, ?, 'review')").run(cId, bId);
+
+    script.steps = async () => {};
+    await runRoleInProcess({ taskId: cId, role: "builder" });
+    await _settleInProcessRunsForTests();
+
+    const used = db
+      .prepare("SELECT to_value FROM task_events WHERE task_id = ? AND kind = 'dependency_context_used'")
+      .get(cId) as { to_value: string } | undefined;
+    expect(used).toBeTruthy();
+    const payload = JSON.parse(used!.to_value) as { version: number; dependencies: string[] };
+    expect(payload.dependencies.sort()).toEqual([aId, bId].sort());
+    expect(payload.version).toBeGreaterThan(versionBefore);
+
+    const ctx = buildDependencyContext(cId);
+    expect(ctx.status).toBe("ok");
+    const results = ctx.dependencies.map((d) => d.result ?? "");
+    expect(results.some((r) => r.includes("Источники проверены"))).toBe(true);
+    expect(results.some((r) => r.includes("Контракт согласован"))).toBe(true);
   });
 
   it("сбой запуска — карточка заблокирована с причиной", async () => {
