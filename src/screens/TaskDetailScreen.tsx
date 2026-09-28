@@ -43,6 +43,7 @@ import { useUploadAttachment, useDeleteAttachment } from "../api/attachments";
 import { TemplateStore } from "../lib/templates";
 import { AttachmentView } from "../components/AttachmentView";
 import { AttemptLadderBadge } from "../components/AttemptLadderBadge";
+import { CollaborationPlanPanel } from "../components/CollaborationPlanPanel";
 import type { ApiAttachment } from "../api/types";
 import { SubtaskFeed } from "../components/SubtaskFeed";
 import {
@@ -565,6 +566,7 @@ export function TaskDetailScreen() {
         )}
         <AgentStatusRow task={task} />
         <AttemptLadderBadge task={task} />
+        <CollaborationPlanPanel taskId={task.id} />
       </div>
 
       {/* Owner actions — agent-work protocol (AGENT-PROTOCOL.md): visible
