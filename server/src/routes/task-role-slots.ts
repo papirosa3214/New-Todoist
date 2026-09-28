@@ -45,7 +45,7 @@ function canBecomeReady(row: Slot): boolean {
   });
 }
 
-function unlockReadySlots(planId: string | null, taskId: string, actorId: string): void {
+export function unlockReadySlots(planId: string | null, taskId: string, actorId: string): void {
   if (!planId) return;
   const waiting = db.prepare("SELECT * FROM task_role_slots WHERE collaboration_plan_id = ? AND state = 'waiting'").all(planId) as Slot[];
   for (const next of waiting) {

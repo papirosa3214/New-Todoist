@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
+import { advancePrimaryPlanSlot } from "../lib/collaborationPlanAdmission.js";
+import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
@@ -388,6 +390,8 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
               db.prepare(
                 "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
               ).run(parentTask.id);
+              bumpContextVersion(parentTask.id);
+              advancePrimaryPlanSlot(parentTask.id, req.userId, "submitted");
               // Последний закрытый шаг автоматически сдаёт родителя в
               // review. Завершаем именно его содержательную попытку здесь,
               // иначе у задачи остаётся живая аренда после сдачи и метрики

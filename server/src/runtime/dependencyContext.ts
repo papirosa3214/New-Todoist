@@ -1,4 +1,5 @@
 import db from "../db.js";
+import { contextVersionOf } from "./taskContextVersion.js";
 
 const MAX_DEPENDENCIES = 12;
 const MAX_RESULT_CHARS = 700;
@@ -7,7 +8,7 @@ const MAX_NOTE_CHARS = 360;
 
 export type DependencyContext = {
   status: "ok" | "empty" | "unavailable";
-  version: 1;
+  version: number;
   root: { task_id: string; title: string; goal: string; recent_comments: string[] } | null;
   dependencies: Array<{ task_id: string; title: string; status: string; agent_state: string | null; result: string | null; artifact_refs: string[] }>;
   open_questions: string[];
@@ -63,6 +64,7 @@ export function buildDependencyContext(taskId: string): DependencyContext {
     const task = taskRow(taskId);
     if (!task) return { ...empty, status: "unavailable", open_questions: ["карточка не найдена"] };
     const root = rootFor(task);
+    const version = contextVersionOf(task.id);
     const dependencies: DependencyContext["dependencies"] = [];
     const seen = new Set<string>([taskId]);
     const queue = (db.prepare("SELECT depends_on_task_id AS id FROM task_dependencies WHERE task_id = ? ORDER BY created_at, depends_on_task_id").all(taskId) as Array<{ id: string }>).map((row) => row.id);
@@ -79,6 +81,7 @@ export function buildDependencyContext(taskId: string): DependencyContext {
     }
     return {
       ...empty,
+      version,
       status: dependencies.length || root.id !== task.id ? "ok" : "empty",
       root: { task_id: root.id, title: root.title, goal: clip(root.description || root.title, MAX_RESULT_CHARS), recent_comments: recentRootComments(root.id) },
       dependencies,

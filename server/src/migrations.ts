@@ -2497,6 +2497,14 @@ const migrations: Migration[] = [
       if (!cols.has("policy")) db.exec("ALTER TABLE task_dependencies ADD COLUMN policy TEXT NOT NULL DEFAULT 'review' CHECK (policy IN ('review','completed'))");
     },
   },
+  {
+    id: "074_task_context_version",
+    description: "Монотонная версия контекста ветки на каждой задаче (растёт на корне при review/completed).",
+    up: () => {
+      const cols = new Set((db.prepare("PRAGMA table_info(tasks)").all() as Array<{name:string}>).map(c => c.name));
+      if (!cols.has("context_version")) db.exec("ALTER TABLE tasks ADD COLUMN context_version INTEGER NOT NULL DEFAULT 1");
+    },
+  },
 ];
 
 /**

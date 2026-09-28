@@ -473,7 +473,7 @@ export async function runRoleInProcess(input: {
       actorId: null,
       kind: "dependency_context_used",
       field: "dependencies",
-      toValue: JSON.stringify(dependencyContext.dependencies.map((d) => d.task_id)),
+      toValue: JSON.stringify({ version: dependencyContext.version, dependencies: dependencyContext.dependencies.map((d) => d.task_id) }),
     });
   }
   const launchContext = await buildInProcessTaskContext({

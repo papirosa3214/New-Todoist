@@ -46,7 +46,8 @@ import {
   releaseSubtaskWork,
 } from "../agentState.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
-import { unmetPrimaryPlanPredecessors } from "../lib/collaborationPlanAdmission.js";
+import { unmetPrimaryPlanPredecessors, advancePrimaryPlanSlot } from "../lib/collaborationPlanAdmission.js";
+import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -984,6 +985,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
               toValue: String(version.version_no),
             });
           }
+          // Основная попытка сдана — мост в её узел collaboration plan
+          // (если он есть) и монотонная версия контекста ветки.
+          bumpContextVersion(task.id);
+          advancePrimaryPlanSlot(task.id, req.userId, "submitted");
         }
 
         // Re-entering in_progress (from blocked, or owner sending it back

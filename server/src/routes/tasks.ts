@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
+import { advancePrimaryPlanSlot } from "../lib/collaborationPlanAdmission.js";
+import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
@@ -1595,6 +1597,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Только на active→completed: возврат задачи в работу очередь не
       // двигает, иначе «вернуть в работу» запускало бы следующий шаг.
       if (body.status === "completed" && existing.status !== "completed") {
+        bumpContextVersion(id);
+        advancePrimaryPlanSlot(id, req.userId, "accepted");
         // Дочерняя сдана — может, пора исполнять родителя (его свои пункты).
         void import("./dispatch.js")
           .then((m) => m.admitParentAfterChildren(id))
@@ -1685,6 +1689,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
             db.prepare(
               "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
             ).run(parent.id);
+            bumpContextVersion(parent.id);
+            advancePrimaryPlanSlot(parent.id, req.userId, "submitted");
             if (!beforeVersion) {
               logEvent({
                 taskId: parent.id,
