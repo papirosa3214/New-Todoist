@@ -5,6 +5,7 @@ import { getTaskForRead, isOrchestrator, isOwner } from "../access.js";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
+import { startSlotRun } from "./task-role-slots.js";
 
 const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual"]);
 const CONDITIONS = new Set(["submitted", "accepted", "artifact_ready"]);
@@ -216,6 +217,11 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (plan.status !== "draft") return reply.code(409).send({ error: "утвердить можно только draft plan" });
     const nodes = db.prepare("SELECT slot_key, role_key, required FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key").all(plan.id) as Array<{ slot_key: string; role_key: string; required: number }>;
     const incoming = new Set((db.prepare("SELECT to_slot_key FROM task_collaboration_plan_edges WHERE plan_id = ?").all(plan.id) as Array<{ to_slot_key: string }>).map((edge) => edge.to_slot_key));
+    // Корневые (без входящих рёбер) slots собираем отдельно — их нужно не
+    // только вставить как ready, но и сразу стартовать, а db.transaction()
+    // принимает только синхронный колбэк (better-sqlite3), поэтому реальный
+    // async-старт роли идёт после коммита, не внутри него.
+    const rootSlots: Array<{ id: string; slotKey: string }> = [];
     try {
       db.transaction(() => {
       const existing = db.prepare("SELECT COUNT(*) AS count FROM task_role_slots WHERE collaboration_plan_id = ?").get(plan.id) as { count: number };
@@ -224,7 +230,10 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
                                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const node of nodes) {
         const runtimeKey = `p${plan.revision}_${node.slot_key}`;
-        insertSlot.run(`trs_${crypto.randomUUID()}`, task.id, runtimeKey, node.role_key, roleUserId(node.role_key), incoming.has(node.slot_key) ? "waiting" : "ready", node.required, req.userId, plan.id, node.slot_key);
+        const slotId = `trs_${crypto.randomUUID()}`;
+        const isRoot = !incoming.has(node.slot_key);
+        insertSlot.run(slotId, task.id, runtimeKey, node.role_key, roleUserId(node.role_key), isRoot ? "ready" : "waiting", node.required, req.userId, plan.id, node.slot_key);
+        if (isRoot) rootSlots.push({ id: slotId, slotKey: runtimeKey });
       }
       db.prepare("UPDATE task_collaboration_plans SET status = 'superseded' WHERE task_id = ? AND status = 'approved'").run(task.id);
       db.prepare("UPDATE task_collaboration_plans SET status = 'approved', approved_by = ?, approved_at = datetime('now') WHERE id = ?").run(req.userId, plan.id);
@@ -233,6 +242,21 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
     }
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_approved", field: `revision:${plan.revision}`, toValue: plan.profile });
+    // Утверждение плана — тот самый момент, когда роль должна сама впрячься
+    // в работу, а не ждать ручного POST .../role-slots/:slotId/run. Неудача
+    // одного корневого узла не должна ронять утверждение плана целиком или
+    // блокировать соседние независимые ветки — try/catch на каждый, тот же
+    // fallback, что и в unlockReadySlots: slot остаётся ready, /run работает.
+    for (const rootSlot of rootSlots) {
+      try {
+        const started = await startSlotRun(rootSlot.id, req.userId);
+        if (!started.ok) {
+          logEvent({ taskId: task.id, actorId: req.userId, kind: "role_slot_autostart_failed", field: rootSlot.slotKey, toValue: started.error });
+        }
+      } catch (error) {
+        logEvent({ taskId: task.id, actorId: req.userId, kind: "role_slot_autostart_failed", field: rootSlot.slotKey, toValue: error instanceof Error ? error.message : String(error) });
+      }
+    }
     return { plan: present(planForTask(task.id, plan.id)!) };
   });
 }

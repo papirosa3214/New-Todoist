@@ -75,13 +75,14 @@ describe("персональные task role slots", () => {
     const slotsBefore = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots;
     const buildSlot = slotsBefore.find((s: { plan_node_key: string }) => s.plan_node_key === "build");
     const qaSlot = slotsBefore.find((s: { plan_node_key: string }) => s.plan_node_key === "qa");
-    expect(buildSlot.state).toBe("ready");
+    // Корневой slot при approve тоже стартует сам — не только через
+    // unlockReadySlots, но и напрямую в /approve (LOCK-249): владелец не
+    // должен после утверждения ещё и дёргать /run руками для первого узла.
+    expect(buildSlot.state).toBe("active");
     expect(qaSlot.state).toBe("waiting");
-    // Корневой slot при approve становится ready напрямую (не через
-    // unlockReadySlots) — автостарт его не касается, только ручной /run.
-    expect(runRoleInProcessMock).not.toHaveBeenCalled();
+    expect(runRoleInProcessMock).toHaveBeenCalledTimes(1);
+    expect(runRoleInProcessMock).toHaveBeenCalledWith(expect.objectContaining({ taskId, role: "builder", slotId: buildSlot.id, mode: "work" }));
 
-    expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${buildSlot.id}/state`, headers: { authorization: builderAuth }, payload: { state: "active" } })).statusCode).toBe(200);
     const submitted = await app.inject({ method: "POST", url: `/api/task-role-slots/${buildSlot.id}/result`, headers: { authorization: builderAuth }, payload: { result: "Готово", evidence: [{ path: "build.md" }] } });
     expect(submitted.statusCode).toBe(200);
 
@@ -91,10 +92,10 @@ describe("персональные task role slots", () => {
     const slotsAfter = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots;
     const qaAfter = slotsAfter.find((s: { plan_node_key: string }) => s.plan_node_key === "qa");
     expect(qaAfter.state).toBe("active");
-    expect(runRoleInProcessMock).toHaveBeenCalledTimes(1);
+    expect(runRoleInProcessMock).toHaveBeenCalledTimes(2);
     expect(runRoleInProcessMock).toHaveBeenCalledWith(expect.objectContaining({ taskId, role: "qa", slotId: qaSlot.id, mode: "work" }));
 
     const startedEvent = db.prepare("SELECT field FROM task_events WHERE task_id = ? AND kind = 'role_slot_started'").all(taskId) as Array<{ field: string }>;
-    expect(startedEvent.map((e) => e.field)).toContain(qaAfter.slot_key);
+    expect(startedEvent.map((e) => e.field)).toEqual(expect.arrayContaining([buildSlot.slot_key, qaAfter.slot_key]));
   });
 });

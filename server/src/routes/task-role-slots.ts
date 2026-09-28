@@ -51,7 +51,7 @@ function canBecomeReady(row: Slot): boolean {
  * было только внутри HTTP-хендлера, поэтому открытый графом slot сам не
  * впрягался в работу, пока кто-то не дёрнет `/run` руками.
  */
-async function startSlotRun(slotId: string, actorId: string): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
+export async function startSlotRun(slotId: string, actorId: string): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
   const current = slot(slotId);
   if (!current || current.state !== "ready") return { ok: false, error: "slot ещё не допущен или уже завершён" };
   db.prepare("UPDATE task_role_slots SET state = 'active', updated_at = datetime('now') WHERE id = ?").run(current.id);

@@ -52,9 +52,11 @@ describe("collaboration plans", () => {
     const slots = await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } });
     const research = slots.json().slots.find((slot: { plan_node_key: string }) => slot.plan_node_key === "research");
     const architecture = slots.json().slots.find((slot: { plan_node_key: string }) => slot.plan_node_key === "architecture");
-    expect([research.state, architecture.state]).toEqual(["ready", "waiting"]);
+    // Корневой research стартует сам при approve (новая правка: startSlotRun
+    // для корневых nodes, не только для открывшихся через unlockReadySlots)
+    // — заглушка runRoleInProcess резолвится сразу, поэтому slot уже active.
+    expect([research.state, architecture.state]).toEqual(["active", "waiting"]);
     expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${architecture.id}/state`, headers: { authorization: architectAuth }, payload: { state: "ready" } })).statusCode).toBe(409);
-    expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${research.id}/state`, headers: { authorization: researcherAuth }, payload: { state: "active" } })).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${research.id}/result`, headers: { authorization: researcherAuth }, payload: { result: "Факты", evidence: [{ path: "research.md" }] } })).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${research.id}/state`, headers: { authorization: ownerAuth }, payload: { state: "accepted" } })).statusCode).toBe(200);
     // architecture открылся и сразу сам стартовал (unlockReadySlots теперь

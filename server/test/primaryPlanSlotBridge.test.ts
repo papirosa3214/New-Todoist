@@ -56,7 +56,9 @@ describe("основная попытка ↔ узел collaboration plan", () =
     const slotsBefore = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots;
     const buildSlot = slotsBefore.find((s: { plan_node_key: string }) => s.plan_node_key === "build");
     const qaSlot = slotsBefore.find((s: { plan_node_key: string }) => s.plan_node_key === "qa");
-    expect(buildSlot.state).toBe("ready");
+    // Корневой build стартует сам при approve (LOCK-249) — заглушка
+    // runRoleInProcess резолвится сразу, поэтому slot уже active.
+    expect(buildSlot.state).toBe("active");
     expect(qaSlot.state).toBe("waiting");
 
     await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}`, headers: { authorization: ownerAuth }, payload: { assignee_id: roleUserId("builder"), ready_for_pickup: true } });
