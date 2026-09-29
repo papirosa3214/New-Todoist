@@ -896,7 +896,7 @@ export async function structureDictationToCards(
 ` +
     `due_date: YYYY-MM-DD (даты относительно ${today}, часовой пояс ${timezone}); start_time: HH:MM или null.
 ` +
-    `assignee: "self" если на меня/мне/я сделаю (владелец Максим); иначе null, роли указывай прежним полем role.
+    `assignee: "self" ТОЛЬКО когда владелец явно берёт дело на себя как исполнителя («сделаю сам», «займусь сам») или это личное дело, которое агентам не отдаётся (звонок, запись, оплата, поездка, документы). Обычное «мне», «я» в описании проблемы от первого лица («мне не видно», «когда я делаю») — НЕ основание для self, это просто рассказ о баге. Если дело явно про код/интерфейс/сервер, self не ставь, даже если сказано от первого лица; роль указывай прежним полем role. self и role одновременно не бывают: раз работу может сделать роль — это не self.
 ` +
     `labels: массив названий существующих меток или []; доступные метки: ${JSON.stringify(labels.map(l=>l.name))}.
 ` +
@@ -969,7 +969,13 @@ export async function structureDictationToCards(
             role: parseRole(c?.role),
             roleReason:
               typeof c?.role_reason === "string" ? c.role_reason.trim() : "",
-            where: childMetadata.selfAssigned ? "личное" : parseWhere(c?.where),
+            // Роль — более сильный сигнал, чем эвристика self (она ловит
+            // обычное «мне»/«я» в описании бага, см. fieldContract выше):
+            // если модель параллельно назвала исполнителя, self её не
+            // перебивает. Прецедент 29.09.2026: три инженерные подзадачи
+            // («реализовать парсинг Markdown», «исправить баги форматирования»)
+            // ушли владельцу как «личное», хотя role был «builder».
+            where: childMetadata.selfAssigned && !parseRole(c?.role) ? "личное" : parseWhere(c?.where),
           };
         })
         .filter((c: DictationChild | null): c is DictationChild => c !== null)
@@ -988,7 +994,8 @@ export async function structureDictationToCards(
     role: parseRole(parsed?.role),
     roleReason:
       typeof parsed?.role_reason === "string" ? parsed.role_reason.trim() : "",
-    where: metadata.selfAssigned ? "личное" : parseWhere(parsed?.where),
+    // Тот же приоритет роли над self, что у children — см. комментарий там.
+    where: metadata.selfAssigned && !parseRole(parsed?.role) ? "личное" : parseWhere(parsed?.where),
     startTime:metadata.startTime, labelIds:metadata.labelIds,
     title,
     description:

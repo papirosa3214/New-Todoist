@@ -618,6 +618,23 @@ export async function applyIntakeToNewTask(
   // требует флага.
   if (mode !== "automatic") return;
 
+  // Владелец 30.09.2026: если карточке уже предложен план совместной работы
+  // (draft, ждёт решения владельца) — не отдавать её тут же одному
+  // исполнителю. Раньше план и обычная раздача гонялись наперегонки: план
+  // просто предложение, а раздача синхронная и срабатывала первой — план
+  // так и висел неутверждённым черновиком рядом с уже занятой карточкой
+  // (прецедент: «Добавить бейдж…», T03 предложен, но раздача забрала
+  // карточку одному дизайнеру раньше, чем владелец успел решить). Теперь
+  // ровно один из двух путей: «Утвердить план»
+  // (/collaboration-plans/:id/approve) или «Запустить исполнителя» (тот же
+  // PATCH ready_for_pickup, что и раньше, см. routes/tasks.ts) — выбор
+  // одного гасит другой (approve требует status='draft'; ручной запуск
+  // сам переводит план в 'superseded').
+  const pendingPlan = db
+    .prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id = ? AND status = 'draft'")
+    .get(taskId);
+  if (pendingPlan) return;
+
   const flagged = db.prepare(
     `UPDATE tasks
         SET ready_for_pickup = 1,

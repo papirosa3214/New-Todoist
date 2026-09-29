@@ -62,6 +62,52 @@ SQLite), фронт на Vite+React.
 подключении, текст задания от будильника, подсказки в ответах
 инструментов. Чужой `CLAUDE.md` агенту не виден — всё нужное кладётся туда.
 
+## Последние изменения (29.09.2026)
+
+- **Узлы collaboration plan — обычные `subtasks`, не `task_role_slots`**
+  (LOCK-SLOTS-TO-SUBTASKS, `AGENT-WORK-SCOPES.md`). Дизайн и решения
+  владельца — `/Users/max/Проекты/TaskFlowNativeBuild/docs/2026-09-29-role-slot-execution-integration/DESIGN.md`.
+  Миграция 078 (`subtasks.collaboration_plan_id`/`plan_node_key`,
+  `subtask_artifact_versions`, `DROP task_role_slots`/
+  `role_slot_artifact_versions`) **развёрнута на .110 в тот же день**:
+  бэкап `server/taskflow.db.bak-20260929-120814-pre-slots-migration`,
+  `git pull` (fast-forward), `systemctl --user restart
+  taskflow-server.service`. Схема на .110 проверена постфактум
+  (`PRAGMA table_info(subtasks)`, `.tables`) — соответствует ожидаемой.
+  Необратимо потеряны 19 строк `task_role_slots` (3 тестовые карточки,
+  0 артефактов, ни одной submitted/accepted) — решение принято владельцем
+  осознанно, задокументировано в `AGENT-WORK-SCOPES.md` этого репозитория.
+  `POST /api/subtasks/:id/run` добавлен отдельным коммитом — ручной
+  повторный старт узла плана (перенос убранного
+  `/api/task-role-slots/:slotId/run`).
+  iOS-клиент (`TaskFlowNativeBuild`, LOCK-251) синхронно переписан на
+  чтение графа из подзадач вместо `/role-slots` и уже установлен на
+  телефон владельца.
+- **Разработка сервера переезжает на мак** (`INDEX.md`, владелец
+  29.09.2026): второй легитимный клон — `/Users/max/Проекты/New-Todoist-server`
+  (тот же Gitea `maksim/taskflow-server`). .110 остаётся площадкой живых
+  сервисов, синхронизация — git push с мака / git pull на .110 по решению
+  владельца, не автоматически.
+- **Инцидент: голосовой Секретарь не отвечал ~13 часов** (обнаружено
+  владельцем 29.09.2026 по уведомлению, не связано с миграцией выше).
+  Причина — тот же класс проблемы, что 26.09 (см. урок
+  `2026-09-26-gemini-live-secretary-voice-proxy.md`): из трёх узлов
+  `xray-secretary-voice` (`gemini-6/4/3`) Google геоблокирует Gemini на
+  двух, балансировщик `leastPing` этого не видит (проверяет только
+  общую доступность через `gstatic/generate_204`, не факт ответа
+  Gemini) и продолжал слать трафик на мёртвый `gemini-4`. Починено:
+  мёртвые узлы (`gemini-4`, `gemini-3`) убраны из
+  `~/.config/xray-secretary-voice/config.json` (бэкап рядом,
+  `config.json.bak-20260929-1225`), сервисы `xray-secretary-voice` и
+  `taskflow-secretary-voice` перезапущены, сторож подтвердил «Gemini
+  через выход отвечает 200». **Не записано в базу знаний** — MCP-инструмент
+  записи в этой сессии не был подключён, а `kb_query.py`/директория
+  уроков на .110 — только чтение (зеркало, перезаписывается). Кто-то с
+  доступом к `mcp__kb__add_lesson` должен дописать в существующий урок:
+  находка про пробник (`observatory.probeUrl` не валидирует
+  Gemini-специфичную доступность, только общую) — та же дыра повторится,
+  когда `gemini-6` тоже умрёт.
+
 ## Последние изменения (23.09.2026)
 
 - **Локально закрыты hardening ролей и durable-оркестрация.** Рабочая ветка
@@ -143,3 +189,13 @@ role tokens и временного JWT/MCP-пути выполнять отде
 - ⚠️ Ядро AI Control Center запускается ТОЙ ЖЕ командой `tsx src/index.ts`.
   Перед `kill` смотреть рабочий каталог (`ls -l /proc/PID/cwd`) или порт:
   3001 — TaskFlow, 8301 — ядро.
+- ⚠️ `xray-secretary-voice` (голосовой Секретарь, Gemini Live): observatory
+  проверяет узлы пробником `gstatic/generate_204` — это общая доступность,
+  НЕ факт, что Google пустит именно Gemini API. Геоблокированный, но
+  быстрый узел выигрывает `leastPing` и молча ломает голос на часы
+  (29.09.2026 — 13 часов простоя, см. «Последние изменения»). Проверять
+  узел фактом: `curl -x http://127.0.0.1:10816 …generativelanguage.googleapis.com/v1beta/models?key=<GEMINI_API_KEY>`.
+  Список живых на 29.09.2026: только `gemini-6`. Если и он умрёт — см.
+  урок `2026-09-26-gemini-live-secretary-voice-proxy.md`, раздел «Когда
+  сервер выхода умрёт» (нужен HWID Мака от владельца, агенту это
+  недоступно).

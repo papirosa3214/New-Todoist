@@ -1402,6 +1402,16 @@ export function registerTaskRoutes(app: FastifyInstance) {
                         updated_at = datetime('now')
                   WHERE id = ?`,
               ).run(req.userId, id);
+              // Владелец 30.09.2026: «Запустить исполнителя» и «Утвердить
+              // план» — одно из двух. Ручной запуск здесь означает явный
+              // отказ от предложенного плана командной работы (если он
+              // есть и ещё не утверждён) — гасим черновик, чтобы он не
+              // висел «утверди меня» рядом с уже занятой одним
+              // исполнителем карточкой. approve на superseded/draft-only
+              // плане и так откажет 409 (task-collaboration-plans.ts:349).
+              db.prepare(
+                "UPDATE task_collaboration_plans SET status = 'superseded' WHERE task_id = ? AND status = 'draft'",
+              ).run(id);
             } else {
               db.prepare(
                 `UPDATE tasks

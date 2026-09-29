@@ -13,7 +13,7 @@ import {
   roleUserId,
   type RoleName,
 } from "../roleRouting.js";
-import { inProcessToolNames } from "../runtime/inProcessRun.js";
+import { inProcessToolNames, sweepPendingReviews } from "../runtime/inProcessRun.js";
 
 type ProfileConfig = {
   mcpServers?: {
@@ -369,6 +369,7 @@ export function registerRoleRoutes(app: FastifyInstance): void {
       if (!allRoles().some((r) => r.key === key)) {
         return reply.code(404).send({ error: "роль не найдена" });
       }
+      const wasEnabled = allRoles().find((r) => r.key === key)?.enabled ?? false;
       const body = req.body ?? {};
       const sets: string[] = [];
       const values: unknown[] = [];
@@ -421,6 +422,20 @@ export function registerRoleRoutes(app: FastifyInstance): void {
         }
       })();
       refreshRoles();
+      // Включение Критика обратно из выключенного — карточки, сданные на
+      // ревью, пока роль молчала, застряли: kickRoleTaskStrict в тот момент
+      // вернул терминальный "skipped" (роли не было в ROLE_NAMES), а не
+      // "deferred" — job в очереди сам больше не перезапустится. Владелец
+      // 30.09.2026: включил — значит пошёл смотреть, а не «жди следующего
+      // повода». Тот же принцип и результат, что у sweepStragglers на
+      // тумблере «Система» (agent-service.ts).
+      if (key === "critic_verifier" && body.enabled === true && !wasEnabled) {
+        try {
+          await sweepPendingReviews((req as any).userId ?? roleUserId(key));
+        } catch (err) {
+          req.log.error({ err }, "roles: не удалось разобрать зависшие ревью при включении Критика");
+        }
+      }
       return roleDetails(key, await piAlive());
     },
   );
