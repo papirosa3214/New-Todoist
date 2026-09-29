@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
-import { advancePrimaryPlanSlot } from "../lib/collaborationPlanAdmission.js";
+import { unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
@@ -26,7 +26,7 @@ import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 const uid = () => crypto.randomUUID();
 
 /** Get full task state with assignee info, labels, subtasks, and comments. */
-function getFullTask(taskId: string) {
+export function getFullTask(taskId: string) {
   const full = getTaskRow(taskId);
   if (!full) return undefined;
 
@@ -57,7 +57,7 @@ function getFullTask(taskId: string) {
  * assignee_id = ?`, из-за чего владелец не мог тронуть шаг в задаче,
  * которую агент завёл сам.
  */
-function getSubtaskWithTaskForUser(
+export function getSubtaskWithTaskForUser(
   subtaskId: string,
   userId: string,
 ): any | undefined {
@@ -391,7 +391,6 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
                 "UPDATE tasks SET agent_state = 'review', updated_at = datetime('now') WHERE id = ?",
               ).run(parentTask.id);
               bumpContextVersion(parentTask.id);
-              await advancePrimaryPlanSlot(parentTask.id, req.userId, "submitted");
               // Последний закрытый шаг автоматически сдаёт родителя в
               // review. Завершаем именно его содержательную попытку здесь,
               // иначе у задачи остаётся живая аренда после сдачи и метрики
@@ -438,6 +437,21 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
                 .then((m) => m.admitParentAfterChildren(parentTask.id))
                 .catch((err) => console.warn("родитель после дочерней:", err));
             }
+          }
+
+          // ЗАКРЫТ УЗЕЛ ПЛАНА — ОТКРЫВАЕМ СЛЕДУЮЩИЕ ПО ГРАФУ.
+          //
+          // Независимо от роллапа родительской задачи выше (тот — про
+          // «все подзадачи закрыты», этот — про конкретный узел
+          // collaboration plan): подзадача-узел без output_artifact
+          // (обычный текстовый result) закрывается таким же
+          // `taskflow_subtask_done`, как любой шаг, и это и есть её
+          // «артефакт готов» — сдача через `/api/subtasks/:id/artifact`
+          // (узлы С контрактом) закрывает done сама и вызывает
+          // unlockReadyPlanSubtasks оттуда же, повторного срабатывания
+          // здесь для них не будет (done уже был 1).
+          if (subtask.collaboration_plan_id) {
+            await unlockReadyPlanSubtasks(subtask.collaboration_plan_id, subtask.task_id, req.userId);
           }
         }
       }

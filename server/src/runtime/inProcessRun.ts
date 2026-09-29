@@ -110,8 +110,13 @@ async function activity(role: string, taskId: string, kind: string, target: stri
 }
 
 /** Инструменты трекера для роли — те же имена и смысл, что в mcp_server.py,
- *  чтобы инструкции ролей не переписывать. */
-export function taskflowTools(role: string, model: string | null, slotId?: string) {
+ *  чтобы инструкции ролей не переписывать. Владелец 29.09.2026 (DESIGN.md
+ *  «Роли плана — это подзадачи»): узел collaboration plan получает ТОТ ЖЕ
+ *  полный набор, что и обычный запуск роли, без урезанного изолированного
+ *  списка, который раньше был у slot'ов (`taskflow_slot_result`) — решение
+ *  №2, «не вижу смысла что-то выдумывать, обычные тулы подзадачи более
+ *  чем достаточно». */
+export function taskflowTools(role: string, model: string | null) {
   const T = (
     name: string,
     description: string,
@@ -228,9 +233,19 @@ export function taskflowTools(role: string, model: string | null, slotId?: strin
         if (p.state === "in_progress" && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: начал`);
         return { подзадача: row.title, состояние: STEP_STATE_RU[row.state] ?? "не в работе", итог: row.result ?? "—" };
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения).",
-      Type.Object({ id: Type.String(), result: Type.Optional(Type.String()), done: Type.Optional(Type.Boolean()) }),
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
+      Type.Object({
+        id: Type.String(),
+        result: Type.Optional(Type.String()),
+        done: Type.Optional(Type.Boolean()),
+        artifact: Type.Optional(Type.Object({ summary: Type.String(), payload: Type.Any(), evidence: Type.Optional(Type.Array(Type.Any())) })),
+      }),
       async (p) => {
+        if (p.artifact) {
+          const row = await asRole(role, "POST", `/api/subtasks/${p.id}/artifact`, p.artifact);
+          void activity(role, row.subtask?.task_id ?? "", "edit", `шаг «${row.subtask?.title ?? ""}»: сдал артефакт`);
+          return { "артефакт сдан": p.id, версия: row.artifact?.version_no };
+        }
         const done = p.done ?? true;
         const body: Json = { done };
         if (p.result) body.result = p.result;
@@ -281,12 +296,6 @@ export function taskflowTools(role: string, model: string | null, slotId?: strin
         return { запрос: p.query, куски: (d.results ?? []).map((r: any) => ({ текст: String(r.text ?? "").slice(0, 1500), id_заметки: r.doc_id })) };
       }),
   ];
-  if (slotId) {
-    tools.push(T("taskflow_slot_result", "Сдать результат только своего персонального slot-а.",
-      Type.Object({ result: Type.String(), evidence: Type.Optional(Type.Array(Type.Any())) }),
-      async (p) => asRole(role, "POST", `/api/task-role-slots/${slotId}/result`, { result: p.result, evidence: p.evidence ?? [] })));
-    return tools.filter((tool: any) => ["taskflow_task", "taskflow_kb_search", "taskflow_slot_result"].includes(tool.name));
-  }
   return tools;
 }
 
@@ -326,6 +335,29 @@ export function defaultTaskPrompt(taskId: string, role: string): string {
     "Прочитай карточку (taskflow_task), возьми её в работу (taskflow_claim),",
     "веди шаги (taskflow_subtask_work, taskflow_subtask_done с result), а когда всё сделано —",
     "сдай на проверку (taskflow_state state=review с коротким итогом). Упёрся — taskflow_state state=blocked с причиной.",
+    "",
+    "Правила:",
+    ...AGENT_RULES.map((r) => `- ${r}`),
+  ].join("\n");
+}
+
+/**
+ * Задание для роли, запущенной на конкретном узле collaboration plan
+ * (владелец 29.09.2026, DESIGN.md «Роли плана — это подзадачи»). В отличие
+ * от бывших slot-запусков — инструменты и видимость карточки ПОЛНЫЕ, те же,
+ * что у обычного запуска: изоляция была осознанно снята (решение №2).
+ * `taskflow_claim` здесь не нужен — узел плана уже назначен этой роли
+ * (`agent_id`) и уже in_progress, работа начинается сразу с самого шага.
+ */
+function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): string {
+  const subtask = db.prepare("SELECT title FROM subtasks WHERE id = ?").get(subtaskId) as { title?: string } | undefined;
+  return [
+    `Ты — ${roleTitle(role)} в трекере TaskFlow. Твой узел плана совместной работы по задаче ${taskId} — шаг ${subtaskId}: «${subtask?.title ?? ""}».`,
+    "Прочитай карточку целиком (taskflow_task) — увидишь все шаги и ленту, не только свой.",
+    "Сделай свою часть и сдай именно свой шаг: taskflow_subtask_done с result (одно-два предложения),",
+    "а если шаг требует структурного артефакта (в названии шага перечислены поля вроде scope/acceptance_criteria) —",
+    "передай artifact: {summary, payload: {...требуемые поля...}, evidence} вместо простого result.",
+    "Задачу целиком и чужие шаги не трогай — только свой.",
     "",
     "Правила:",
     ...AGENT_RULES.map((r) => `- ${r}`),
@@ -386,13 +418,13 @@ function repoNote(cwd: string): string {
 
 /** Разговор агента хранится на пару «задача + роль» и продолжается при
  *  следующем заходе — после ответа владельца, паузы или повтора. */
-function sessionDir(taskId: string, role: string, slotId?: string): string {
-  return path.join(RUNS_BASE, "sessions", `${taskId}-${role}-${slotId ?? "main"}`);
+function sessionDir(taskId: string, role: string, subtaskId?: string): string {
+  return path.join(RUNS_BASE, "sessions", `${taskId}-${role}-${subtaskId ?? "main"}`);
 }
 
-function hasSession(taskId: string, role: string, slotId?: string): boolean {
+function hasSession(taskId: string, role: string, subtaskId?: string): boolean {
   try {
-    return fs.readdirSync(sessionDir(taskId, role, slotId)).some((f) => f.endsWith(".jsonl"));
+    return fs.readdirSync(sessionDir(taskId, role, subtaskId)).some((f) => f.endsWith(".jsonl"));
   } catch {
     return false;
   }
@@ -416,11 +448,11 @@ function progressMark(taskId: string): string {
   return `${steps}:${comments}`;
 }
 
-type ActiveInProcessRun = { runId: string; taskId: string; role: string; slotId?: string; abort: () => Promise<void> };
+type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void> };
 const activeRuns = new Map<string, ActiveInProcessRun>();
 
-export function activeInProcessRun(taskId: string, slotId?: string): ActiveInProcessRun | undefined {
-  return [...activeRuns.values()].find((r) => r.taskId === taskId && r.slotId === slotId);
+export function activeInProcessRun(taskId: string, subtaskId?: string): ActiveInProcessRun | undefined {
+  return [...activeRuns.values()].find((r) => r.taskId === taskId && r.subtaskId === subtaskId);
 }
 
 /** Для тестов: дождаться окончания всех фоновых запусков. */
@@ -449,12 +481,13 @@ export async function runRoleInProcess(input: {
   durableHandoff?: boolean;
   /** Число уже выполненных C3 continuation-заходов durable chain. */
   chainDepth?: number;
-  /** Изолированный персональный slot специалиста. */
-  slotId?: string;
+  /** Узел collaboration plan — запуск роли на конкретной подзадаче плана,
+   *  а не на задаче целиком (изолированный сеанс/сессия на этот узел). */
+  subtaskId?: string;
 }): Promise<{ runId: string; completion: Promise<void> }> {
   const { taskId, role } = input;
   if (!ROLE_NAMES.includes(role)) throw new Error(`роли «${role}» нет или она отключена`);
-  if (activeInProcessRun(taskId, input.slotId)) throw new Error("по этому окну агент уже работает");
+  if (activeInProcessRun(taskId, input.subtaskId)) throw new Error("по этому окну агент уже работает");
 
   const routing = loadRoleRouting();
   const modelId = input.model || routing.models[role];
@@ -466,7 +499,7 @@ export async function runRoleInProcess(input: {
 
   const cwd = input.cwd ?? projectRepo(taskId);
   const mode = input.mode ?? (role === "critic_verifier" ? "review" : "work");
-  const resumed = hasSession(taskId, role, input.slotId);
+  const resumed = hasSession(taskId, role, input.subtaskId);
   const dependencyContext = buildDependencyContext(taskId);
   if (dependencyContext.status === "ok" && dependencyContext.dependencies.length) {
     logEvent({
@@ -477,13 +510,13 @@ export async function runRoleInProcess(input: {
       toValue: JSON.stringify({ version: dependencyContext.version, dependencies: dependencyContext.dependencies.map((d) => d.task_id) }),
     });
   }
-  const collaborationContext = input.slotId ? buildCollaborationPlanContext(input.slotId) : undefined;
+  const collaborationContext = input.subtaskId ? buildCollaborationPlanContext(input.subtaskId) : undefined;
   if (collaborationContext && collaborationContext.status === "ok") {
     logEvent({
       taskId,
       actorId: null,
       kind: "collaboration_context_used",
-      field: collaborationContext.slot_key ?? input.slotId ?? "",
+      field: collaborationContext.slot_key ?? input.subtaskId ?? "",
       toValue: JSON.stringify({
         plan_id: collaborationContext.plan_id,
         revision: collaborationContext.revision,
@@ -504,7 +537,7 @@ export async function runRoleInProcess(input: {
       console.warn(`контекст для ${taskId} собран, но сводка не записана:`, error);
     }
   }
-  fs.mkdirSync(sessionDir(taskId, role, input.slotId), { recursive: true });
+  fs.mkdirSync(sessionDir(taskId, role, input.subtaskId), { recursive: true });
   const systemPrompt = [
     rolePrompt(role) || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     LOCAL_EXECUTION_POLICY,
@@ -523,7 +556,7 @@ export async function runRoleInProcess(input: {
     reload: async () => {},
   } as unknown as ResourceLoader;
 
-  const customTools = taskflowTools(role, model.id ?? modelId, input.slotId);
+  const customTools = taskflowTools(role, model.id ?? modelId);
   const { session } = await createAgentSession({
     cwd,
     model,
@@ -532,13 +565,13 @@ export async function runRoleInProcess(input: {
     resourceLoader,
     tools: [...BUILTIN_TOOLS, ...customTools.map((t: any) => t.name)],
     customTools,
-    sessionManager: SessionManager.continueRecent(cwd, sessionDir(taskId, role, input.slotId)),
+    sessionManager: SessionManager.continueRecent(cwd, sessionDir(taskId, role, input.subtaskId)),
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
   } as any);
 
   const runId = `inproc_${crypto.randomUUID()}`;
   const before = progressMark(taskId);
-  activeRuns.set(runId, { runId, taskId, role, slotId: input.slotId, abort: () => session.abort() });
+  activeRuns.set(runId, { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort() });
 
   // Действия встроенных инструментов — строкой в карточке, как раньше делало
   // расширение Pi taskflow-activity.ts.
@@ -559,8 +592,8 @@ export async function runRoleInProcess(input: {
   let runFailure: Error | null = null;
   const work = (async () => {
     try {
-      const task = input.prompt ?? (input.slotId
-        ? `Ты работаешь только в персональном slot-е ${input.slotId}. Прочитай карточку. Не меняй состояние задачи, её шаги или чужие результаты. Сдай свой итог только taskflow_slot_result.`
+      const task = input.prompt ?? (input.subtaskId
+        ? planSubtaskPrompt(taskId, role, input.subtaskId)
         : (resumed ? resumePrompt(taskId) : defaultTaskPrompt(taskId, role)));
       const prompt = `${task}\n\n${launchContext.prompt}`;
       await session.prompt(mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\nПеред работой поищи похожее в документации (taskflow_kb_search).` : prompt);
@@ -581,7 +614,7 @@ export async function runRoleInProcess(input: {
       session.dispose();
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
-      if (mode === "work" && !input.slotId) {
+      if (mode === "work" && !input.subtaskId) {
         void continueOrHandOff(
           taskId,
           role,

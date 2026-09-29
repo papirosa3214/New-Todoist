@@ -32,7 +32,7 @@ describe("CollaborationPlanContext builder", () => {
     architectAuth = `Bearer ${app.jwt.sign({ id: roleUserId("architect") })}`;
   });
 
-  it("собирает только прямые accepted-артефакты предшественников, в порядке edges, без несвязанного slot-а", async () => {
+  it("собирает только прямые submitted+-артефакты предшественников, в порядке edges, без несвязанного узла", async () => {
     const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "Collab context " + crypto.randomUUID() } });
     const taskId = created.json().task.id as string;
     const plan = await app.inject({
@@ -54,13 +54,16 @@ describe("CollaborationPlanContext builder", () => {
     const planId = plan.json().plan.id as string;
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: ownerAuth } });
 
-    const slots = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots as Array<{ id: string; plan_node_key: string }>;
-    const byKey = (key: string) => slots.find((s) => s.plan_node_key === key)!;
+    const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } })).json() as Array<{ id: string; plan_node_key: string }>;
+    const byKey = (key: string) => subtasks.find((s) => s.plan_node_key === key)!;
 
-    await app.inject({ method: "POST", url: `/api/task-role-slots/${byKey("analysis").id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
-    await app.inject({ method: "POST", url: `/api/task-role-slots/${byKey("analysis").id}/artifact/accept`, headers: { authorization: ownerAuth } });
-    await app.inject({ method: "POST", url: `/api/task-role-slots/${byKey("architecture").id}/artifact`, headers: { authorization: architectAuth }, payload: { summary: "Решение принято", payload: { decision: "монолит" }, evidence: [] } });
-    await app.inject({ method: "POST", url: `/api/task-role-slots/${byKey("architecture").id}/artifact/accept`, headers: { authorization: ownerAuth } });
+    // start_condition="accepted" требует статус artifact accepted — сдача
+    // сама закрывает узел (done=1), явный /accept владельца — отдельная
+    // запись поверх, как и раньше у slots.
+    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("analysis").id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
+    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("analysis").id}/artifact/accept`, headers: { authorization: ownerAuth } });
+    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("architecture").id}/artifact`, headers: { authorization: architectAuth }, payload: { summary: "Решение принято", payload: { decision: "монолит" }, evidence: [] } });
+    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("architecture").id}/artifact/accept`, headers: { authorization: ownerAuth } });
 
     const context = buildCollaborationPlanContext(byKey("delivery").id);
 
@@ -89,18 +92,20 @@ describe("CollaborationPlanContext builder", () => {
     });
     const planId = plan.json().plan.id as string;
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: ownerAuth } });
-    const slots = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots as Array<{ id: string; plan_node_key: string }>;
-    const analysis = slots.find((s) => s.plan_node_key === "analysis")!;
-    const delivery = slots.find((s) => s.plan_node_key === "delivery")!;
+    const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } })).json() as Array<{ id: string; plan_node_key: string }>;
+    const analysis = subtasks.find((s) => s.plan_node_key === "analysis")!;
+    const delivery = subtasks.find((s) => s.plan_node_key === "delivery")!;
 
-    await app.inject({ method: "POST", url: `/api/task-role-slots/${analysis.id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Черновик", payload: { scope: "в рамках" }, evidence: [] } });
+    // Сдача без accept — artifact.status остаётся "submitted", а edge этого
+    // теста требует "accepted": контекст остаётся пустым до явного accept.
+    await app.inject({ method: "POST", url: `/api/subtasks/${analysis.id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Черновик", payload: { scope: "в рамках" }, evidence: [] } });
 
     const context = buildCollaborationPlanContext(delivery.id);
     expect(context.status).toBe("empty");
     expect(context.predecessor_artifacts).toEqual([]);
   });
 
-  it("возвращает unavailable для несуществующего slot-а", () => {
-    expect(buildCollaborationPlanContext("trs_missing").status).toBe("unavailable");
+  it("возвращает unavailable для несуществующего узла", () => {
+    expect(buildCollaborationPlanContext("missing-subtask-id").status).toBe("unavailable");
   });
 });

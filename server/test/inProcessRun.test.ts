@@ -258,24 +258,24 @@ describe("агент роли внутри сервера", () => {
     expect(plan.statusCode).toBe(201);
     const planId = plan.json().plan.id as string;
     script.steps = async () => {};
-    // approve сам стартует оба корневых slot-а (analysis, unrelated) —
+    // approve сам стартует оба корневых узла (analysis, unrelated) —
     // у обоих нет incoming edges, поэтому canBecomeReady() пропускает их
     // сразу; проверяемый вызов buildInProcessTaskContext нас пока не
     // интересует, интересен только последующий для "delivery".
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: `Bearer ${ownerToken}` } });
     await _settleInProcessRunsForTests();
 
-    const slots = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: `Bearer ${ownerToken}` } })).json().slots as Array<{ id: string; plan_node_key: string }>;
-    const analysisSlot = slots.find((s) => s.plan_node_key === "analysis")!;
+    const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: `Bearer ${ownerToken}` } })).json() as Array<{ id: string; plan_node_key: string }>;
+    const analysisSubtask = subtasks.find((s) => s.plan_node_key === "analysis")!;
     const analystAuth = `Bearer ${app.jwt.sign({ id: roleUserId("analyst") })}`;
 
-    await app.inject({ method: "POST", url: `/api/task-role-slots/${analysisSlot.id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
+    await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
 
     taskContext.build.mockClear();
-    // accept удовлетворяет gate edge analysis→delivery — unlockReadySlots
+    // accept удовлетворяет gate edge analysis→delivery — unlockReadyPlanSubtasks
     // сама стартует "delivery" реальным runRoleInProcess внутри этого же
     // запроса (LOCK-249: роль впрягается сама, без ручного /run).
-    await app.inject({ method: "POST", url: `/api/task-role-slots/${analysisSlot.id}/artifact/accept`, headers: { authorization: `Bearer ${ownerToken}` } });
+    await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact/accept`, headers: { authorization: `Bearer ${ownerToken}` } });
     await _settleInProcessRunsForTests();
 
     expect(taskContext.build).toHaveBeenCalledTimes(1);

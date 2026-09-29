@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 
-// unlockReadySlots теперь сама стартует роль в открывшемся slot'е
+// unlockReadyPlanSubtasks теперь сама стартует роль в открывшемся узле
 // (runRoleInProcess); этот файл проверяет только версии/переходы графа
 // плана, не реальный запуск роли — подменяем runRoleInProcess лёгкой
 // заглушкой, чтобы не дёргать настоящую модель.
@@ -16,6 +16,8 @@ import db from "../src/db.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 import { buildCollaborationPlanContext } from "../src/runtime/collaborationPlanContext.js";
+
+type PlanSubtask = { id: string; plan_node_key: string; done: number; agent_state: string | null };
 
 describe("collaboration plans", () => {
   let app: FastifyInstance;
@@ -40,6 +42,11 @@ describe("collaboration plans", () => {
     builderAuth = `Bearer ${app.jwt.sign({ id: roleUserId("builder") })}`;
   });
 
+  const planSubtasks = async (taskId: string): Promise<Record<string, PlanSubtask>> => {
+    const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } })).json() as Array<PlanSubtask & { collaboration_plan_id: string | null }>;
+    return Object.fromEntries(subtasks.filter((s) => s.collaboration_plan_id).map((s) => [s.plan_node_key, s]));
+  };
+
   it("хранит версию графа, не допускает цикл и заменяет утверждённую версию", async () => {
     const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Plan task ${crypto.randomUUID()}` } });
     const taskId = created.json().task.id as string;
@@ -56,20 +63,25 @@ describe("collaboration plans", () => {
     expect(first.json().plan.status).toBe("draft");
     expect(first.json().plan.nodes).toHaveLength(2);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${first.json().plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
-    const slots = await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } });
-    const research = slots.json().slots.find((slot: { plan_node_key: string }) => slot.plan_node_key === "research");
-    const architecture = slots.json().slots.find((slot: { plan_node_key: string }) => slot.plan_node_key === "architecture");
-    // Корневой research стартует сам при approve (новая правка: startSlotRun
-    // для корневых nodes, не только для открывшихся через unlockReadySlots)
-    // — заглушка runRoleInProcess резолвится сразу, поэтому slot уже active.
-    expect([research.state, architecture.state]).toEqual(["active", "waiting"]);
-    expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${architecture.id}/state`, headers: { authorization: architectAuth }, payload: { state: "ready" } })).statusCode).toBe(409);
-    expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${research.id}/result`, headers: { authorization: researcherAuth }, payload: { result: "Факты", evidence: [{ path: "research.md" }] } })).statusCode).toBe(200);
-    expect((await app.inject({ method: "POST", url: `/api/task-role-slots/${research.id}/state`, headers: { authorization: ownerAuth }, payload: { state: "accepted" } })).statusCode).toBe(200);
-    // architecture открылся и сразу сам стартовал (unlockReadySlots теперь
-    // запускает runRoleInProcess для только что открытого slot'а) — заглушка
-    // резолвится мгновенно, поэтому slot уже active, а не ready.
-    expect((await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots.find((slot: { id: string }) => slot.id === architecture.id).state).toBe("active");
+
+    let subtasks = await planSubtasks(taskId);
+    // Корневой research стартует сам при approve — заглушка runRoleInProcess
+    // резолвится сразу, поэтому узел уже in_progress ("active").
+    expect(subtasks.research.agent_state).toBe("in_progress");
+    expect(subtasks.architecture.agent_state).toBeNull();
+    expect(subtasks.architecture.done).toBe(0);
+
+    // Закрытие research (done=true, ai-исполнитель) — это и есть «сдал
+    // результат»; на subtasks нет отдельного промежуточного submitted-без-
+    // accept состояния, edge start_condition="accepted" без артефактного
+    // контракта схлопывается в done=1 (см. planSubtaskAdmission.ts).
+    expect((await app.inject({ method: "PATCH", url: `/api/subtasks/${subtasks.research.id}`, headers: { authorization: researcherAuth }, payload: { done: true, result: "Факты" } })).statusCode).toBe(200);
+
+    // architecture открылся и сразу сам стартовал (unlockReadyPlanSubtasks
+    // запускает runRoleInProcess для только что открытого узла) — заглушка
+    // резолвится мгновенно, поэтому узел уже in_progress.
+    subtasks = await planSubtasks(taskId);
+    expect(subtasks.architecture.agent_state).toBe("in_progress");
 
     const cyclic = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans`, headers: { authorization: ownerAuth }, payload: {
       profile: "manual", nodes: [{ slot_key: "analyst", role_key: "analyst" }, { slot_key: "designer", role_key: "designer" }],
@@ -145,9 +157,10 @@ describe("collaboration plans", () => {
     expect(plan.edges).toEqual([{ from_slot_key: "analysis", to_slot_key: "delivery", start_condition: "artifact_ready", artifact_key: "feature_spec" }]);
 
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
-    const slots = (await app.inject({ method: "GET", url: `/api/tasks/${task.json().task.id}/role-slots`, headers: { authorization: ownerAuth } })).json().slots as Array<{ plan_node_key: string; state: string }>;
-    expect(slots.find((s) => s.plan_node_key === "analysis")!.state).toBe("active");
-    expect(slots.find((s) => s.plan_node_key === "delivery")!.state).toBe("waiting");
+    const subtasks = await planSubtasks(task.json().task.id);
+    expect(subtasks.analysis.agent_state).toBe("in_progress");
+    expect(subtasks.delivery.agent_state).toBeNull();
+    expect(subtasks.delivery.done).toBe(0);
   });
 
   it("T03 product_feature: включённые H1/D1/Q1 без висячих edges, отключённые — без ссылок на себя", async () => {
@@ -184,10 +197,10 @@ describe("collaboration plans", () => {
     expect(plan2.edges.map((e: { from_slot_key: string; to_slot_key: string }) => `${e.from_slot_key}->${e.to_slot_key}`).sort()).toEqual(["analysis->delivery", "delivery->qa"]);
 
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
-    const slots = (await app.inject({ method: "GET", url: `/api/tasks/${task.json().task.id}/role-slots`, headers: { authorization: ownerAuth } })).json().slots as Array<{ plan_node_key: string; state: string }>;
-    expect(slots).toHaveLength(5);
-    expect(slots.find((s) => s.plan_node_key === "analysis")!.state).toBe("active");
-    expect(["architecture", "design", "delivery", "qa"].every((key) => slots.find((s) => s.plan_node_key === key)!.state === "waiting")).toBe(true);
+    const subtasks = await planSubtasks(task.json().task.id);
+    expect(Object.keys(subtasks)).toHaveLength(5);
+    expect(subtasks.analysis.agent_state).toBe("in_progress");
+    expect(["architecture", "design", "delivery", "qa"].every((key) => subtasks[key].agent_state === null && subtasks[key].done === 0)).toBe(true);
   });
 
   it("T03 product_feature: неизвестный профиль по-прежнему отклоняется", async () => {
@@ -229,42 +242,39 @@ describe("collaboration plans", () => {
     const plan = proposal.json().plan;
     expect((await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
 
-    const slotsByKey = async () => {
-      const slots = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots as Array<{ id: string; plan_node_key: string; state: string }>;
-      return Object.fromEntries(slots.map((s) => [s.plan_node_key, s]));
-    };
-
     // Analysis — корневой, стартует сам при approve. Это и есть
     // единственное участие владельца во всём пути — сам approve плана.
-    let slots = await slotsByKey();
-    expect(slots.analysis.state).toBe("active");
-    expect(["architecture", "design", "delivery", "qa"].every((k) => slots[k].state === "waiting")).toBe(true);
+    let subtasks = await planSubtasks(taskId);
+    expect(subtasks.analysis.agent_state).toBe("in_progress");
+    expect(["architecture", "design", "delivery", "qa"].every((k) => subtasks[k].agent_state === null && subtasks[k].done === 0)).toBe(true);
 
     // Ни разу не вызываем /artifact/accept — gate artifact_ready требует
     // только submitted-статус с непустым evidence, дальше сервер открывает
-    // successor сам, без участия владельца.
-    const submitArtifact = async (slotId: string, auth: string, summary: string, payload: Record<string, unknown>, evidence: unknown[]) => {
-      const submitted = await app.inject({ method: "POST", url: `/api/task-role-slots/${slotId}/artifact`, headers: { authorization: auth }, payload: { summary, payload, evidence } });
+    // successor сам, без участия владельца. Сдача структурного артефакта
+    // сама закрывает узел (done=1) — см. subtask-artifacts.ts.
+    const submitArtifact = async (subtaskId: string, auth: string, summary: string, payload: Record<string, unknown>, evidence: unknown[]) => {
+      const submitted = await app.inject({ method: "POST", url: `/api/subtasks/${subtaskId}/artifact`, headers: { authorization: auth }, payload: { summary, payload, evidence } });
       expect(submitted.statusCode).toBe(201);
     };
 
-    await submitArtifact(slots.analysis.id, analystAuth, "Согласован scope", { scope: "в рамках", out_of_scope: "не входит", acceptance_criteria: ["работает"], nfr: "нет", open_questions: ["нет"] }, [{ path: "docs/spec.json" }]);
+    await submitArtifact(subtasks.analysis.id, analystAuth, "Согласован scope", { scope: "в рамках", out_of_scope: "не входит", acceptance_criteria: ["работает"], nfr: "нет", open_questions: ["нет"] }, [{ path: "docs/spec.json" }]);
 
     // Сдача A1 сама открыла и стартовала H1 и D1 — без единого /accept.
-    slots = await slotsByKey();
-    expect(slots.architecture.state).toBe("active");
-    expect(slots.design.state).toBe("active");
-    expect(slots.delivery.state).toBe("waiting");
+    subtasks = await planSubtasks(taskId);
+    expect(subtasks.analysis.done).toBe(1);
+    expect(subtasks.architecture.agent_state).toBe("in_progress");
+    expect(subtasks.design.agent_state).toBe("in_progress");
+    expect(subtasks.delivery.agent_state).toBeNull();
 
-    await submitArtifact(slots.architecture.id, architectAuth, "Решение принято", { context: "фича", options: ["A", "B"], decision: "монолит", consequences: "проще эксплуатировать", rollout_rollback: "фиче-флаг" }, [{ path: "docs/adr.md" }]);
-    await submitArtifact(slots.design.id, designerAuth, "UX согласован", { screens: ["main"], state_matrix: "loading/empty/ok", accessibility: "контраст AA", open_questions: ["нет"] }, [{ path: "docs/ux.md" }]);
+    await submitArtifact(subtasks.architecture.id, architectAuth, "Решение принято", { context: "фича", options: ["A", "B"], decision: "монолит", consequences: "проще эксплуатировать", rollout_rollback: "фиче-флаг" }, [{ path: "docs/adr.md" }]);
+    await submitArtifact(subtasks.design.id, designerAuth, "UX согласован", { screens: ["main"], state_matrix: "loading/empty/ok", accessibility: "контраст AA", open_questions: ["нет"] }, [{ path: "docs/ux.md" }]);
 
     // V1 получает ровно три declared артефакта предшественников — не больше
     // и не меньше — прямо из builder-а Task 3, а не заново руками. Владелец
     // за весь путь не сделал ни одного /accept.
-    slots = await slotsByKey();
-    expect(slots.delivery.state).toBe("active");
-    const deliveryContext = buildCollaborationPlanContext(slots.delivery.id);
+    subtasks = await planSubtasks(taskId);
+    expect(subtasks.delivery.agent_state).toBe("in_progress");
+    const deliveryContext = buildCollaborationPlanContext(subtasks.delivery.id);
     expect(deliveryContext.status).toBe("ok");
     expect(deliveryContext.predecessor_artifacts.map((a) => a.slot_key).sort()).toEqual(["analysis", "architecture", "design"]);
     expect(deliveryContext.predecessor_artifacts.map((a) => a.artifact_key).sort()).toEqual(["architecture_decision", "feature_spec", "feature_ux_spec"]);
@@ -272,7 +282,7 @@ describe("collaboration plans", () => {
     // V1 сдаёт implementation_pack — Q1 стартует сам по одному только
     // artifact_ready (submitted + evidence), как и было для этого шага раньше.
     const v1Submit = await app.inject({
-      method: "POST", url: `/api/task-role-slots/${slots.delivery.id}/artifact`, headers: { authorization: builderAuth },
+      method: "POST", url: `/api/subtasks/${subtasks.delivery.id}/artifact`, headers: { authorization: builderAuth },
       payload: {
         summary: "Реализовано и собрано",
         payload: { change_refs: ["src/feature.ts"], build_id: "b123", test_report: "unit зелёные", deployment_notes: "фиче-флаг выключен по умолчанию", known_limitations: "нет" },
@@ -281,11 +291,11 @@ describe("collaboration plans", () => {
     });
     expect(v1Submit.statusCode).toBe(201);
 
-    slots = await slotsByKey();
-    expect(slots.delivery.state).toBe("submitted");
-    expect(slots.qa.state).toBe("active");
+    subtasks = await planSubtasks(taskId);
+    expect(subtasks.delivery.done).toBe(1);
+    expect(subtasks.qa.agent_state).toBe("in_progress");
 
-    const qaContext = buildCollaborationPlanContext(slots.qa.id);
+    const qaContext = buildCollaborationPlanContext(subtasks.qa.id);
     expect(qaContext.status).toBe("ok");
     expect(qaContext.predecessor_artifacts).toEqual([
       expect.objectContaining({ slot_key: "delivery", artifact_key: "implementation_pack" }),

@@ -16,7 +16,7 @@ export type CollaborationPlanContext = {
   predecessor_artifacts: CollaborationArtifactRef[];
 };
 
-type SlotRow = { id: string; collaboration_plan_id: string | null; plan_node_key: string | null };
+type SubtaskRow = { id: string; collaboration_plan_id: string | null; plan_node_key: string | null };
 type PlanRow = { id: string; revision: number };
 type EdgeRow = { from_slot_key: string; start_condition: string; artifact_key: string | null };
 type ArtifactRow = { artifact_key: string; summary: string; payload_json: string; evidence_json: string; status: string };
@@ -46,14 +46,14 @@ function parseArray(text: string): unknown[] {
 }
 
 /**
- * Прямой (не транзитивный) контекст предшественников одного plan slot-а:
+ * Прямой (не транзитивный) контекст предшественников одного узла плана:
  * только incoming edges с объявленным artifact_key, чей источник сдал
  * артефакт нужного ключа в статусе, достаточном для этого edge gate.
  */
-export function buildCollaborationPlanContext(slotId: string): CollaborationPlanContext {
+export function buildCollaborationPlanContext(subtaskId: string): CollaborationPlanContext {
   const empty: CollaborationPlanContext = { status: "empty", plan_id: null, revision: null, slot_key: null, predecessor_artifacts: [] };
   try {
-    const current = db.prepare("SELECT id, collaboration_plan_id, plan_node_key FROM task_role_slots WHERE id = ?").get(slotId) as SlotRow | undefined;
+    const current = db.prepare("SELECT id, collaboration_plan_id, plan_node_key FROM subtasks WHERE id = ?").get(subtaskId) as SubtaskRow | undefined;
     if (!current) return { ...empty, status: "unavailable" };
     if (!current.collaboration_plan_id || !current.plan_node_key) return empty;
     const plan = db.prepare("SELECT id, revision FROM task_collaboration_plans WHERE id = ?").get(current.collaboration_plan_id) as PlanRow | undefined;
@@ -67,11 +67,11 @@ export function buildCollaborationPlanContext(slotId: string): CollaborationPlan
     for (const edge of edges) {
       if (!edge.artifact_key) continue;
       const predecessor = db
-        .prepare("SELECT id FROM task_role_slots WHERE collaboration_plan_id = ? AND plan_node_key = ?")
+        .prepare("SELECT id FROM subtasks WHERE collaboration_plan_id = ? AND plan_node_key = ?")
         .get(current.collaboration_plan_id, edge.from_slot_key) as { id: string } | undefined;
       if (!predecessor) continue;
       const artifact = db
-        .prepare("SELECT artifact_key, summary, payload_json, evidence_json, status FROM role_slot_artifact_versions WHERE slot_id = ? ORDER BY version_no DESC LIMIT 1")
+        .prepare("SELECT artifact_key, summary, payload_json, evidence_json, status FROM subtask_artifact_versions WHERE subtask_id = ? ORDER BY version_no DESC LIMIT 1")
         .get(predecessor.id) as ArtifactRow | undefined;
       if (!artifact || artifact.artifact_key !== edge.artifact_key) continue;
       const allowedStatuses = GATE_STATUSES[edge.start_condition] ?? ["accepted"];

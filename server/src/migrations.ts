@@ -2581,6 +2581,38 @@ const migrations: Migration[] = [
     noTransaction: true,
     up: () => addProductFeatureProfile(),
   },
+  {
+    id: "078_role_slot_to_subtask",
+    description: "Узлы collaboration plan — обычные subtasks (collaboration_plan_id/plan_node_key), а не отдельная сущность task_role_slots. Решение владельца 29.09.2026 (docs/2026-09-29-role-slot-execution-integration/DESIGN.md): выводим task_role_slots/role_slot_artifact_versions из употребления сразу, без переходного периода — ничего в проде на них не завязано долгосрочно.",
+    up: () => db.exec(`
+      ALTER TABLE subtasks ADD COLUMN collaboration_plan_id TEXT REFERENCES task_collaboration_plans(id);
+      ALTER TABLE subtasks ADD COLUMN plan_node_key TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_subtasks_plan_node
+        ON subtasks(collaboration_plan_id, plan_node_key)
+        WHERE collaboration_plan_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS subtask_artifact_versions (
+        id TEXT PRIMARY KEY,
+        subtask_id TEXT NOT NULL REFERENCES subtasks(id) ON DELETE CASCADE,
+        version_no INTEGER NOT NULL,
+        artifact_key TEXT NOT NULL,
+        artifact_type TEXT NOT NULL,
+        artifact_format TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL CHECK (status IN ('submitted','accepted','revision_requested','rejected')),
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(subtask_id, version_no)
+      );
+      CREATE INDEX IF NOT EXISTS idx_subtask_artifact_versions_subtask
+        ON subtask_artifact_versions(subtask_id, version_no DESC);
+
+      DROP TABLE IF EXISTS role_slot_artifact_versions;
+      DROP TABLE IF EXISTS task_role_slots;
+    `),
+  },
 
 ];
 
