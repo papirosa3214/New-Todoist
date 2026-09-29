@@ -96,6 +96,32 @@ describe("renderInlineMarkdown: граничные случаи", () => {
       "**первая\nвторая**",
     );
   });
+
+  // Регрессия: опечатка `* *` оставляла пустой <em>, который в строке
+  // выглядел как «невидимый курсив» и ломал line-clamp.
+  it("пустой/пробельный курсив с * не курсивится", () => {
+    expect(renderInlineMarkdown("* *")).toBe("* *");
+    expect(renderInlineMarkdown("*   *")).toBe("*   *");
+    expect(renderInlineMarkdown("* foo *")).toBe("* foo *");
+  });
+
+  // Регрессия: `_1_` превращался в <em>1</em>, и цифра в названии задачи
+  // уходила в наклонный шрифт, выбиваясь из строки.
+  it("курсив только из цифр не курсивится", () => {
+    expect(renderInlineMarkdown("_1_")).toBe("_1_");
+    expect(renderInlineMarkdown("_42_")).toBe("_42_");
+    expect(renderInlineMarkdown("*7*")).toBe("*7*");
+  });
+
+  // Курсив из букв по-прежнему работает.
+  it("курсив из букв по-прежнему работает", () => {
+    expect(renderInlineMarkdown("слово _между_ подчёркиваниями")).toBe(
+      "слово <em>между</em> подчёркиваниями",
+    );
+    expect(renderInlineMarkdown("a *x* b")).toBe("a <em>x</em> b");
+    // Буква + цифра — тоже разметка, не число.
+    expect(renderInlineMarkdown("_v2_")).toBe("<em>v2</em>");
+  });
 });
 
 describe("renderInlineMarkdown: XSS и экранирование", () => {

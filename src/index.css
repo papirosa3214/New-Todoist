@@ -1819,3 +1819,47 @@ body::-webkit-scrollbar {
     opacity: 0.6;
   }
 }
+
+/* Inline-Markdown в названиях и описаниях задач (29.09.2026).
+   Классы навешивает src/lib/markdownInline.ts. Все три правила должны
+   быть устойчивы к line-clamp и text-overflow: ellipsis — в TaskRow/
+   TaskBoard/SubtaskFeed заголовок режется одной строкой, а в
+   TaskQuickPreviewModal/TaskDetailScreen — двумя. */
+.md-inline-code {
+  /* Моноширинный шрифт: тот же стек, что в ProseMirror-коде, чтобы
+     `npm install` в названии и в комментарии выглядел одинаково. */
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: var(--color-card2);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+  /* Оставляем <code> обычным inline-элементом. Если делать inline-block,
+     браузер режет строку ПО ГРАНИЦЕ блока (включая паддинги), и в конце
+     строки с truncate получается «висящий» пустой фон. С обычным inline
+     фон и паддинг уходят в ellipsis целиком — это выглядит как обычное
+     окончание текста, а не как «битый» элемент. */
+  vertical-align: baseline;
+  /* Дополнительный фон на самом тексте кода делает его ярче обычного
+     текста строки (иначе серый на чёрном почти не видно). */
+  color: var(--color-text);
+}
+
+.md-inline-link {
+  /* Цвет — из той же палитры, что --color-red (бренд) и --color-text,
+     но в менее насыщенной форме для спокойного «это ссылка, не сигнал».
+     Один тон, не два — иначе в TaskBoard карточка пестрит. */
+  color: var(--color-red);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  /* Курсором управляет сам <a>, но явно сбрасываем жирный: ссылка внутри
+     <strong> наследует font-weight:700, и текст карточки становится
+     визуально тяжёлым. */
+  font-weight: inherit;
+}
+
+/* Ссылка поверх перечёркнутого состояния (завершённая задача) — теряет
+   подчёркивание, иначе карточка выглядит как «зачёркнуто + подчёркнуто»
+   одновременно. */
+.line-through .md-inline-link {
+  text-decoration: none;
+}
