@@ -22,6 +22,7 @@ import type {
   DraggableSyntheticListeners,
 } from "@dnd-kit/core";
 import { Icon } from "./UI";
+import { MarkdownInline } from "./MarkdownInline";
 import {
   formatDueLabel,
   formatTimeRange,
@@ -1263,10 +1264,16 @@ export function SubtaskRow({
           }}
           className="flex-1 min-w-0 text-left"
         >
+          {/* Markdown-разметка в названии подзадачи — тот же парсер, что у
+              ленты (SubtaskFeed.tsx). Владелец 29.09.2026 ожидал жирный/
+              курсив и в форме «Изменить», а не только в карточке: иначе при
+              правке подзадачи теряется визуальный акцент, который видел на
+              доске. При клике парсер не мешает: onClick ведёт к
+              переименованию, кнопка остаётся обёрткой вокруг span. */}
           <span
             className={`text-[14px] ${done ? "line-through text-sub" : "text-text"}`}
           >
-            {title}
+            <MarkdownInline source={title} />
           </span>
         </button>
       )}
