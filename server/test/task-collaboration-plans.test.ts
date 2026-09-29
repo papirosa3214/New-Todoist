@@ -301,4 +301,78 @@ describe("collaboration plans", () => {
       expect.objectContaining({ slot_key: "delivery", artifact_key: "implementation_pack" }),
     ]);
   });
+
+  it("повторный /propose гасит старый draft — не плодит дубли рядом (живой инцидент 30.09.2026)", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Повторное предложение ${crypto.randomUUID()}` } });
+    const taskId = task.json().task.id as string;
+    const first = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "research" } });
+    expect(first.json().plan.status).toBe("draft");
+    const second = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "delivery" } });
+    expect(second.json().plan.status).toBe("draft");
+
+    const plans = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/collaboration-plans`, headers: { authorization: ownerAuth } })).json().plans;
+    expect(plans.map((p: { id: string; status: string }) => [p.id === first.json().plan.id, p.status])).toEqual(
+      expect.arrayContaining([[true, "superseded"], [false, "draft"]]),
+    );
+    // Утвердить погашенный старый draft теперь нельзя.
+    const approveOld = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${first.json().plan.id}/approve`, headers: { authorization: ownerAuth } });
+    expect(approveOld.statusCode).toBe(409);
+  });
+
+  it("PATCH редактирует draft (нельзя редактировать approved/чужой профиль)", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Правка черновика ${crypto.randomUUID()}` } });
+    const taskId = task.json().task.id as string;
+    const created = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans`, headers: { authorization: ownerAuth }, payload: {
+      profile: "research", rationale: "Черновая причина",
+      nodes: [{ slot_key: "research", role_key: "researcher", expected_result: "Факты" }],
+      edges: [],
+    } });
+    const planId = created.json().plan.id as string;
+
+    const patched = await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}/collaboration-plans/${planId}`, headers: { authorization: ownerAuth }, payload: {
+      rationale: "Уточнённая причина",
+      nodes: [
+        { slot_key: "research", role_key: "researcher", expected_result: "Факты" },
+        { slot_key: "analysis", role_key: "analyst", expected_result: "Выводы" },
+      ],
+      edges: [{ from_slot_key: "research", to_slot_key: "analysis" }],
+    } });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().plan.rationale).toBe("Уточнённая причина");
+    expect(patched.json().plan.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "research"]);
+    expect(patched.json().plan.revision).toBe(created.json().plan.revision); // правка на месте, не новая ревизия
+
+    // Цикл в правке отклоняется, как и при создании.
+    const cyclic = await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}/collaboration-plans/${planId}`, headers: { authorization: ownerAuth }, payload: {
+      nodes: [{ slot_key: "step_one", role_key: "researcher" }, { slot_key: "step_two", role_key: "analyst" }],
+      edges: [{ from_slot_key: "step_one", to_slot_key: "step_two" }, { from_slot_key: "step_two", to_slot_key: "step_one" }],
+    } });
+    expect(cyclic.statusCode).toBe(400);
+    expect(cyclic.json().error).toContain("цикл");
+
+    await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: ownerAuth } });
+    const afterApprove = await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}/collaboration-plans/${planId}`, headers: { authorization: ownerAuth }, payload: { rationale: "поздно" } });
+    expect(afterApprove.statusCode).toBe(409);
+  });
+
+  it("DELETE явно отклоняет draft, не трогая approved", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Отказ от черновика ${crypto.randomUUID()}` } });
+    const taskId = task.json().task.id as string;
+    const created = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "delivery" } });
+    const planId = created.json().plan.id as string;
+
+    const declined = await app.inject({ method: "DELETE", url: `/api/tasks/${taskId}/collaboration-plans/${planId}`, headers: { authorization: ownerAuth } });
+    expect(declined.statusCode).toBe(200);
+    const plans = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/collaboration-plans`, headers: { authorization: ownerAuth } })).json().plans;
+    expect(plans[0].status).toBe("superseded");
+
+    // Повторный DELETE на уже погашенном — 409, не тихий успех.
+    const again = await app.inject({ method: "DELETE", url: `/api/tasks/${taskId}/collaboration-plans/${planId}`, headers: { authorization: ownerAuth } });
+    expect(again.statusCode).toBe(409);
+
+    // Не владелец (оркестратор/роль) отклонить не может — только владелец.
+    const created2 = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "research" } });
+    const forbidden = await app.inject({ method: "DELETE", url: `/api/tasks/${taskId}/collaboration-plans/${created2.json().plan.id}`, headers: { authorization: researcherAuth } });
+    expect(forbidden.statusCode).toBe(403);
+  });
 });

@@ -139,7 +139,17 @@ function planForTask(taskId: string, planId: string): Plan | undefined {
   return db.prepare("SELECT * FROM task_collaboration_plans WHERE id = ? AND task_id = ?").get(planId, taskId) as Plan | undefined;
 }
 
+/** Гасит любой висящий draft этой карточки перед тем, как завести новый —
+ *  владелец 30.09.2026: одновременно годен только один черновик, иначе
+ *  плодятся дубли ревизий, о которых никто не спрашивал (найдено живым
+ *  инцидентом: повторный /propose оставлял старый draft висеть рядом,
+ *  а не гасил его). */
+function supersedePendingDrafts(taskId: string): void {
+  db.prepare("UPDATE task_collaboration_plans SET status = 'superseded' WHERE task_id = ? AND status = 'draft'").run(taskId);
+}
+
 export function createDraftPlan(taskId: string, createdBy: string, profile: string, rationale: string, contextVersion: number | null, graph: { nodes: Node[]; edges: Edge[] }) {
+  supersedePendingDrafts(taskId);
   const revision = ((db.prepare("SELECT MAX(revision) AS revision FROM task_collaboration_plans WHERE task_id = ?").get(taskId) as { revision: number | null }).revision ?? 0) + 1;
   const id = `tcp_${crypto.randomUUID()}`;
   db.transaction(() => {
@@ -390,5 +400,78 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       }
     }
     return { plan: present(planForTask(task.id, plan.id)!) };
+  });
+
+  // Правка черновика ДО утверждения — владелец 30.09.2026: «план пока я
+  // его не утвердил, он должен быть редактируемым». Раньше правки не было
+  // вообще: единственный способ «поменять» план — предложить заново через
+  // /propose, а старый черновик просто оставался висеть рядом (см.
+  // supersedePendingDrafts выше — тот же инцидент навёл и на эту дыру).
+  // Правит владелец или оркестратор, как и создаёт; только пока draft —
+  // у approved/superseded плана менять уже нечего, это история.
+  app.patch<{
+    Params: { id: string; planId: string };
+    Body: { profile?: unknown; rationale?: unknown; nodes?: unknown; edges?: unknown };
+  }>("/api/tasks/:id/collaboration-plans/:planId", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan правит владелец или оркестратор" });
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const plan = planForTask(task.id, req.params.planId);
+    if (!plan) return reply.code(404).send({ error: "plan not found" });
+    if (plan.status !== "draft") return reply.code(409).send({ error: "редактировать можно только draft plan" });
+
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    if (req.body?.profile !== undefined) {
+      const profile = String(req.body.profile).trim();
+      if (!PROFILES.has(profile)) return reply.code(422).send({ error: "unknown collaboration profile" });
+      sets.push("profile = ?");
+      values.push(profile);
+    }
+    if (req.body?.rationale !== undefined) {
+      const rationale = String(req.body.rationale).trim();
+      if (rationale.length > 2000) return reply.code(400).send({ error: "rationale длиннее 2000 символов" });
+      sets.push("rationale = ?");
+      values.push(rationale);
+    }
+    // nodes/edges — только вместе, тем же parseGraph, что и при создании:
+    // частичная правка графа (один node без своих edges) не имеет
+    // однозначного смысла — проще прислать граф целиком, как и создаётся.
+    let graph: { nodes: Node[]; edges: Edge[] } | null = null;
+    if (req.body?.nodes !== undefined) {
+      try { graph = parseGraph(req.body); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
+    }
+    if (!sets.length && !graph) return reply.code(422).send({ error: "нечего менять" });
+
+    db.transaction(() => {
+      if (sets.length) db.prepare(`UPDATE task_collaboration_plans SET ${sets.join(", ")} WHERE id = ?`).run(...values, plan.id);
+      if (graph) {
+        db.prepare("DELETE FROM task_collaboration_plan_edges WHERE plan_id = ?").run(plan.id);
+        db.prepare("DELETE FROM task_collaboration_plan_nodes WHERE plan_id = ?").run(plan.id);
+        const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json) VALUES (?, ?, ?, ?, ?, ?, ?)");
+        for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact));
+        const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
+        for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, edge.from_slot_key, edge.to_slot_key, edge.start_condition, edge.artifact_key);
+      }
+    })();
+    logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_edited", field: `revision:${plan.revision}`, toValue: graph ? "graph+meta" : "meta" });
+    return { plan: present(planForTask(task.id, plan.id)!) };
+  });
+
+  // Явный отказ от черновика — владелец решил «нет, не план, одного
+  // исполнителя хватит» БЕЗ того, чтобы попутно его запускать (это уже
+  // делает PATCH ready_for_pickup=true, dispatch.ts). Раньше единственный
+  // способ погасить draft — начать раздачу; отдельного «просто отклонить»
+  // не было вообще.
+  app.delete<{ Params: { id: string; planId: string } }>("/api/tasks/:id/collaboration-plans/:planId", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "collaboration plan отклоняет владелец" });
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const plan = planForTask(task.id, req.params.planId);
+    if (!plan) return reply.code(404).send({ error: "plan not found" });
+    if (plan.status !== "draft") return reply.code(409).send({ error: "отклонить можно только draft plan" });
+    db.prepare("UPDATE task_collaboration_plans SET status = 'superseded' WHERE id = ?").run(plan.id);
+    logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_declined", field: `revision:${plan.revision}`, toValue: plan.profile });
+    return { ok: true };
   });
 }
