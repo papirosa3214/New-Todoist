@@ -15,12 +15,16 @@ import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
+import { buildCollaborationPlanContext } from "../src/runtime/collaborationPlanContext.js";
 
 describe("collaboration plans", () => {
   let app: FastifyInstance;
   let ownerAuth: string;
   let researcherAuth: string;
   let architectAuth: string;
+  let analystAuth: string;
+  let designerAuth: string;
+  let builderAuth: string;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -31,6 +35,9 @@ describe("collaboration plans", () => {
     ownerAuth = `Bearer ${reg.json().token}`;
     researcherAuth = `Bearer ${app.jwt.sign({ id: roleUserId("researcher") })}`;
     architectAuth = `Bearer ${app.jwt.sign({ id: roleUserId("architect") })}`;
+    analystAuth = `Bearer ${app.jwt.sign({ id: roleUserId("analyst") })}`;
+    designerAuth = `Bearer ${app.jwt.sign({ id: roleUserId("designer") })}`;
+    builderAuth = `Bearer ${app.jwt.sign({ id: roleUserId("builder") })}`;
   });
 
   it("хранит версию графа, не допускает цикл и заменяет утверждённую версию", async () => {
@@ -190,5 +197,76 @@ describe("collaboration plans", () => {
 
     const autoProposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "auto" } });
     expect(autoProposal.json().plan.profile).not.toBe("product_feature");
+  });
+
+  it("T03 сквозной прогон (Task 5): A1/H1/D1 accepted → V1 получает ровно их артефакты → V1 submitted → Q1 стартует без owner acceptance", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 e2e ${crypto.randomUUID()}` } });
+    const taskId = task.json().task.id as string;
+    const proposal = await app.inject({
+      method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/propose`, headers: { authorization: ownerAuth },
+      payload: { profile: "product_feature", include_architecture: true, include_design: true, include_qa: true },
+    });
+    const plan = proposal.json().plan;
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
+
+    const slotsByKey = async () => {
+      const slots = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: ownerAuth } })).json().slots as Array<{ id: string; plan_node_key: string; state: string }>;
+      return Object.fromEntries(slots.map((s) => [s.plan_node_key, s]));
+    };
+
+    // Analysis — корневой, стартует сам при approve.
+    let slots = await slotsByKey();
+    expect(slots.analysis.state).toBe("active");
+    expect(["architecture", "design", "delivery", "qa"].every((k) => slots[k].state === "waiting")).toBe(true);
+
+    const submitAndAccept = async (slotId: string, auth: string, summary: string, payload: Record<string, unknown>, evidence: unknown[] = []) => {
+      const submitted = await app.inject({ method: "POST", url: `/api/task-role-slots/${slotId}/artifact`, headers: { authorization: auth }, payload: { summary, payload, evidence } });
+      expect(submitted.statusCode).toBe(201);
+      const accepted = await app.inject({ method: "POST", url: `/api/task-role-slots/${slotId}/artifact/accept`, headers: { authorization: ownerAuth } });
+      expect(accepted.statusCode).toBe(200);
+    };
+
+    await submitAndAccept(slots.analysis.id, analystAuth, "Согласован scope", { scope: "в рамках", out_of_scope: "не входит", acceptance_criteria: ["работает"], nfr: "нет", open_questions: ["нет"] });
+
+    // После accepted A1 — H1 и D1 открылись и сами стартовали (root-подобно,
+    // единственная их зависимость только что удовлетворена).
+    slots = await slotsByKey();
+    expect(slots.architecture.state).toBe("active");
+    expect(slots.design.state).toBe("active");
+    expect(slots.delivery.state).toBe("waiting");
+
+    await submitAndAccept(slots.architecture.id, architectAuth, "Решение принято", { context: "фича", options: ["A", "B"], decision: "монолит", consequences: "проще эксплуатировать", rollout_rollback: "фиче-флаг" });
+    await submitAndAccept(slots.design.id, designerAuth, "UX согласован", { screens: ["main"], state_matrix: "loading/empty/ok", accessibility: "контраст AA", open_questions: ["нет"] });
+
+    // V1 получает ровно три declared артефакта предшественников — не больше
+    // и не меньше — прямо из builder-а Task 3, а не заново руками.
+    slots = await slotsByKey();
+    expect(slots.delivery.state).toBe("active");
+    const deliveryContext = buildCollaborationPlanContext(slots.delivery.id);
+    expect(deliveryContext.status).toBe("ok");
+    expect(deliveryContext.predecessor_artifacts.map((a) => a.slot_key).sort()).toEqual(["analysis", "architecture", "design"]);
+    expect(deliveryContext.predecessor_artifacts.map((a) => a.artifact_key).sort()).toEqual(["architecture_decision", "feature_spec", "feature_ux_spec"]);
+
+    // V1 сдаёт implementation_pack и НЕ получает owner acceptance — Q1
+    // должен открыться по одному только artifact_ready (submitted + evidence).
+    const v1Submit = await app.inject({
+      method: "POST", url: `/api/task-role-slots/${slots.delivery.id}/artifact`, headers: { authorization: builderAuth },
+      payload: {
+        summary: "Реализовано и собрано",
+        payload: { change_refs: ["src/feature.ts"], build_id: "b123", test_report: "unit зелёные", deployment_notes: "фиче-флаг выключен по умолчанию", known_limitations: "нет" },
+        evidence: [{ path: "docs/build-log.txt" }],
+      },
+    });
+    expect(v1Submit.statusCode).toBe(201);
+
+    slots = await slotsByKey();
+    expect(slots.delivery.state).toBe("submitted");
+    expect(slots.qa.state).toBe("active");
+
+    const qaContext = buildCollaborationPlanContext(slots.qa.id);
+    expect(qaContext.status).toBe("ok");
+    expect(qaContext.predecessor_artifacts).toEqual([
+      expect.objectContaining({ slot_key: "delivery", artifact_key: "implementation_pack" }),
+    ]);
   });
 });
