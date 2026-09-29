@@ -5,7 +5,7 @@ import { authOrApiToken } from "../auth.js";
 import { isOwner, isOrchestrator } from "../access.js";
 import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent } from "../ws.js";
-import { unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { getFullTask, getSubtaskWithTaskForUser } from "./subtasks.js";
 
 /**
@@ -119,4 +119,23 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
 
   app.post<{ Params: { id: string }; Body: { reason?: unknown } }>("/api/subtasks/:id/artifact/revision-request", { preHandler: authOrApiToken }, reopen("revision_requested", "plan_subtask_artifact_revision_requested"));
   app.post<{ Params: { id: string }; Body: { reason?: unknown } }>("/api/subtasks/:id/artifact/reject", { preHandler: authOrApiToken }, reopen("rejected", "plan_subtask_artifact_rejected"));
+
+  /**
+   * Ручной повторный старт узла плана — перенос `POST
+   * /api/task-role-slots/:slotId/run`. Автостарт (unlockReadyPlanSubtasks)
+   * покрывает штатный путь; этот эндпоинт — fallback на случай, если
+   * автостарт упал (недоступна модель и т.п.) и узел остался
+   * незапущенным, хотя предшественники уже выполнены. Без него такой узел
+   * был бы вечно висящим "хвостом" без способа его подтолкнуть.
+   */
+  app.post<{ Params: { id: string } }>("/api/subtasks/:id/run", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const current = getSubtaskWithTaskForUser(req.params.id, req.userId);
+    if (!current) return reply.code(404).send({ error: "Not found" });
+    if (current.agent_id !== req.userId && !isOwner(req.userId) && !isOrchestrator(req.userId)) {
+      return reply.code(403).send({ error: "это не ваш узел плана" });
+    }
+    const started = await startPlanSubtaskRun(current.id, req.userId);
+    if (!started.ok) return reply.code(409).send({ error: started.error });
+    return { ok: true, run_id: started.runId, subtask: db.prepare("SELECT * FROM subtasks WHERE id = ?").get(current.id) };
+  });
 }
