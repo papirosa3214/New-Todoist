@@ -12,6 +12,9 @@
 лишь подменяет список инструментов и отдаёт их по тому же протоколу. Ключ для
 скачивания вложений (OCR) — ролевой, из хранилища.
 """
+import json
+import sys
+
 import mcp_server as mcp
 
 RESEARCH_TOOLS = [
@@ -112,5 +115,50 @@ mcp.BY_NAME = {t["name"]: t for t in RESEARCH_TOOLS}
 mcp.SERVER_NAME = "taskflow-research"
 
 
+def _call_once(name: str) -> int:
+    """Разовый вызов одного инструмента: JSON-аргументы на stdin, JSON-результат
+    на stdout. Владелец 30.09.2026: инструменты этого сервера лежали в профиле
+    (`researcher.json`) для СТАРОЙ схемы — внешний Pi-процесс сам говорил с этим
+    сервером по MCP-протоколу через stdio. С переходом ролей на исполнение
+    внутри сервера (23.09.2026) внешние MCP больше не подключаются вообще
+    (`getExtensions()` в inProcessRun.ts пуст) — профиль тихо перестал работать,
+    никто не заметил. Здесь — не полноценный MCP-хендшейк, а минимальный режим
+    ровно под то, как сервер сейчас реально зовёт инструменты: один вызов,
+    один результат, без держания процесса и состояния между вызовами.
+    """
+    tool = mcp.BY_NAME.get(name)
+    if not tool:
+        print(json.dumps({"error": f"неизвестный инструмент: {name}"}, ensure_ascii=False))
+        return 1
+    try:
+        raw = sys.stdin.read()
+        args = json.loads(raw) if raw.strip() else {}
+    except ValueError as e:
+        print(json.dumps({"error": f"аргументы не JSON: {e}"}, ensure_ascii=False))
+        return 1
+    try:
+        mcp.TOKEN = mcp.load_token()
+    except mcp.TaskFlowError as e:
+        # Не у каждого инструмента этот сервер нужен токен TaskFlow (web_search
+        # им не пользуется вовсе) — не падаем заранее, пусть решит сам инструмент,
+        # понадобился ли ему TOKEN (тогда упадёт содержательно ниже).
+        mcp.log(f"TOKEN не получен: {e}")
+    try:
+        result = tool["fn"](args)
+    except mcp.TaskFlowError as e:
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        return 1
+    except Exception as e:  # noqa: BLE001 — наружу понятный текст, не трассировка
+        print(json.dumps({"error": f"сбой инструмента {name}: {e}"}, ensure_ascii=False))
+        return 1
+    print(json.dumps({"result": result}, ensure_ascii=False))
+    return 0
+
+
 if __name__ == "__main__":
-    mcp.main()
+    if "--call" in sys.argv:
+        _i = sys.argv.index("--call")
+        _name = sys.argv[_i + 1] if len(sys.argv) > _i + 1 else ""
+        sys.exit(_call_once(_name))
+    else:
+        mcp.main()

@@ -1,6 +1,7 @@
 import { isOwner } from "../access.js";
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -107,6 +108,72 @@ async function activity(role: string, taskId: string, kind: string, target: stri
   } catch {
     // активность — не работа
   }
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Пять специальных инструментов роли researcher (web_search, web_get, ocr,
+ * youtube, local_model) — реализованы в `scripts/mcp_server.py`, отданы
+ * через `scripts/research_server.py`. Раньше цепляли их через отдельный
+ * внешний MCP-профиль (`~/.pi/agent/taskflow-profiles/researcher.json`,
+ * схема «внешний Pi-процесс говорит по MCP через stdio») — эта схема
+ * умерла молча 23.09.2026, когда роли переехали исполняться внутри
+ * сервера: `resourceLoader.getExtensions()` ниже всегда пуст, внешние MCP
+ * вообще не подключаются. Владелец 30.09.2026, вспомнил и попросил
+ * восстановить — но уже под сегодняшнюю схему: разовый процесс на вызов
+ * (`research_server.py --call <name>`, аргументы JSON на stdin, результат
+ * JSON на stdout), не полноценный MCP-хендшейк с долгоживущим процессом.
+ * Реализации остаются одним кодом в mcp_server.py — не копируем в TS.
+ */
+const RESEARCH_SERVER_SCRIPT = path.join(process.cwd(), "scripts", "research_server.py");
+const RESEARCH_TOOL_TIMEOUT_MS = 90_000; // web_get/youtube/ocr реально не мгновенные
+
+/**
+ * Прокси НЕ читаем из `researcher.json` и не зашиваем сюда сами — владелец
+ * 30.09.2026: это была бы ровно ещё одна копия того же порта, что уже
+ * захардкожен в `.bashrc` (`HTTP_PROXY=http://127.0.0.1:10811`, xray-claude)
+ * — вторая точка, которую при смене сети забудут поправить, тот же класс
+ * бага, что уже усыпил весь этот тулинг 23.09.2026. Наследуем process.env
+ * как есть: если `taskflow-server.service` получит HTTP(S)_PROXY/NO_PROXY
+ * из ЕДИНОГО systemd-уровневого источника (см. итог разговора) — все
+ * дочерние процессы, в том числе этот, подхватят его сами, без своей копии.
+ */
+async function callResearchTool(name: string, args: unknown): Promise<unknown> {
+  let stdout: string;
+  try {
+    // execFile (промисифицированный) не понимает опцию input, как
+    // execFileSync — аргументы пишем в stdin самого child вручную, до
+    // ожидания результата (PromiseWithChild даёт доступ к процессу через
+    // .child, не дожидаясь await).
+    const pending = execFileAsync("python3", [RESEARCH_SERVER_SCRIPT, "--call", name], {
+      timeout: RESEARCH_TOOL_TIMEOUT_MS,
+      maxBuffer: 16 * 1024 * 1024,
+      env: {
+        ...process.env,
+        // Ролевой ключ — НЕ общий TASKFLOW_AGENT_TOKEN (он сознательно
+        // отозван, см. CLAUDE.md §5.1), а свой, для собственных запросов
+        // роли к API (например, скачать вложение задачи под ocr).
+        TASKFLOW_VAULT_KEY: "TASKFLOW_AGENT_TOKEN_RESEARCHER",
+      },
+    });
+    pending.child.stdin?.end(JSON.stringify(args ?? {}));
+    const result = await pending;
+    stdout = result.stdout;
+  } catch (err: any) {
+    // execFile бросает и на ненулевой exit code — наш --call всегда пишет
+    // JSON в stdout ДО exit(1), так что содержательная ошибка обычно там же.
+    stdout = err?.stdout ?? "";
+    if (!stdout) throw new ToolError(`research-инструмент ${name} не запустился: ${err?.message ?? String(err)}`);
+  }
+  let parsed: { result?: unknown; error?: string };
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new ToolError(`research-инструмент ${name} вернул не JSON: ${stdout.slice(0, 500)}`);
+  }
+  if (parsed.error) throw new ToolError(parsed.error);
+  return parsed.result;
 }
 
 /** Инструменты трекера для роли — те же имена и смысл, что в mcp_server.py,
@@ -296,6 +363,31 @@ export function taskflowTools(role: string, model: string | null) {
         return { запрос: p.query, куски: (d.results ?? []).map((r: any) => ({ текст: String(r.text ?? "").slice(0, 1500), id_заметки: r.doc_id })) };
       }),
   ];
+
+  // Пять специальных инструментов Исследователя — см. callResearchTool выше.
+  // Только для этой роли: другим они не нужны и не были для них заведены
+  // (researcher.json, сервер research — владелец 21.09.2026: «это НЕ общие
+  // инструменты TaskFlow»).
+  if (role === "researcher") {
+    tools.push(
+      T("web_search", "Найти в интернете: сначала Tavily, при недоступности — Brave. Возвращает список результатов со ссылками и выжимками. Текст страницы потом бери через web_get.",
+        Type.Object({ query: Type.String(), max_results: Type.Optional(Type.Number()) }),
+        (p) => callResearchTool("web_search", p)),
+      T("web_get", "Скачать страницу и вернуть её основное содержимое чистым markdown — без меню, рекламы и скриптов. Для PDF и сканов — ocr.",
+        Type.Object({ url: Type.String(), max_chars: Type.Optional(Type.Number()) }),
+        (p) => callResearchTool("web_get", p)),
+      T("ocr", "Распознать текст из изображения или PDF (в том числе скан без текстового слоя), русский+английский. Источник — attachment_id вложения задачи или path файла на машине.",
+        Type.Object({ attachment_id: Type.Optional(Type.String()), path: Type.Optional(Type.String()), langs: Type.Optional(Type.String()), max_chars: Type.Optional(Type.Number()) }),
+        (p) => callResearchTool("ocr", p)),
+      T("youtube", "Транскрипт видео YouTube в текст (сначала ручные субтитры, иначе авто). Источник-видео для исследования.",
+        Type.Object({ url: Type.String(), langs: Type.Optional(Type.String()), max_chars: Type.Optional(Type.Number()) }),
+        (p) => callResearchTool("youtube", p)),
+      T("local_model", "ЛОКАЛЬНАЯ модель на сервере (Ollama, бесплатно, без интернета). Этап «синтез»: отдай собранные фрагменты и задание — вернёт связный черновик или сводку.",
+        Type.Object({ prompt: Type.String(), system: Type.Optional(Type.String()), max_tokens: Type.Optional(Type.Number()), num_ctx: Type.Optional(Type.Number()) }),
+        (p) => callResearchTool("local_model", p)),
+    );
+  }
+
   return tools;
 }
 
