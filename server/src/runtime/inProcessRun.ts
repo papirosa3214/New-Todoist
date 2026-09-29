@@ -803,6 +803,26 @@ export async function kickRoleTask(taskId: string, reason: KickReason, actorId?:
 }
 
 /**
+ * Карточки на ревью, которые Критик так и не посмотрел, потому что в
+ * момент их сдачи роль `critic_verifier` была выключена: `kickRoleTaskStrict`
+ * тогда возвращает терминальный "skipped" (не "deferred" — это не про
+ * выключенную «Систему», attempts не сохраняются), и job в очереди больше
+ * не перезапускается сам. Включение роли обратно должно значить «пошёл
+ * смотреть», а не «жди следующего повода» — владелец 30.09.2026, тот же
+ * принцип, что у тумблера «Система» (`sweepStragglers` в agent-service.ts).
+ * Безопасно звать и для карточек, которым ревью не нужно прямо сейчас —
+ * kickRoleTaskStrict сам проверяет reviewerPending и no-op'ает.
+ */
+export async function sweepPendingReviews(actorId: string): Promise<void> {
+  const pending = db
+    .prepare(`SELECT id FROM tasks WHERE status = 'active' AND agent_state = 'review' ORDER BY updated_at ASC`)
+    .all() as Array<{ id: string }>;
+  for (const { id } of pending) {
+    await kickRoleTaskStrict(id, "review", actorId);
+  }
+}
+
+/**
  * После захода по работе: сдал — дальше Критик (kickRoleTask); вышел посреди
  * работы, но продвинулся — ещё заход, до трёх подряд, в том же разговоре.
  * Без продвижения не зовём: крутиться впустую нельзя.
