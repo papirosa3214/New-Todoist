@@ -22,6 +22,7 @@ describe("персональные task role slots", () => {
   let ownerAuth: string;
   let qaAuth: string;
   let builderAuth: string;
+  let analystAuth: string;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -33,6 +34,7 @@ describe("персональные task role slots", () => {
     ownerAuth = `Bearer ${reg.json().token}`;
     qaAuth = `Bearer ${app.jwt.sign({ id: roleUserId("qa") })}`;
     builderAuth = `Bearer ${app.jwt.sign({ id: roleUserId("builder") })}`;
+    analystAuth = "Bearer " + app.jwt.sign({ id: roleUserId("analyst") });
   });
 
   it("выделяет QA отдельный slot и не пускает туда другую роль", async () => {
@@ -98,4 +100,52 @@ describe("персональные task role slots", () => {
     const startedEvent = db.prepare("SELECT field FROM task_events WHERE task_id = ? AND kind = 'role_slot_started'").all(taskId) as Array<{ field: string }>;
     expect(startedEvent.map((e) => e.field)).toEqual(expect.arrayContaining([buildSlot.slot_key, qaAfter.slot_key]));
   });
+  it("versions structured artifacts and gates successor after owner acceptance", async () => {
+    const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "Artifact lifecycle " + crypto.randomUUID() } });
+    const taskId = created.json().task.id as string;
+    const plan = await app.inject({ method: "POST", url: "/api/tasks/" + taskId + "/collaboration-plans", headers: { authorization: ownerAuth }, payload: {
+      profile: "manual",
+      nodes: [
+        { slot_key: "analysis", role_key: "analyst", output_artifact: { key: "feature_spec", type: "specification", format: "json", required_fields: ["scope", "acceptance_criteria"] } },
+        { slot_key: "delivery", role_key: "builder" },
+      ],
+      edges: [{ from_slot_key: "analysis", to_slot_key: "delivery", start_condition: "accepted", artifact_key: "feature_spec" }],
+    } });
+    await app.inject({ method: "POST", url: "/api/tasks/" + taskId + "/collaboration-plans/" + plan.json().plan.id + "/approve", headers: { authorization: ownerAuth } });
+    const analysis = (await app.inject({ method: "GET", url: "/api/tasks/" + taskId + "/role-slots", headers: { authorization: ownerAuth } })).json().slots.find((s: { plan_node_key: string }) => s.plan_node_key === "analysis");
+
+    expect((await app.inject({ method: "POST", url: "/api/task-role-slots/" + analysis.id + "/artifact", headers: { authorization: analystAuth }, payload: { summary: "incomplete", payload: { scope: "only scope" }, evidence: [] } })).statusCode).toBe(400);
+    const submitted = await app.inject({ method: "POST", url: "/api/task-role-slots/" + analysis.id + "/artifact", headers: { authorization: analystAuth }, payload: { summary: "agreed", payload: { scope: "in", acceptance_criteria: ["works"] }, evidence: [{ path: "docs/spec.json" }] } });
+    expect(submitted.statusCode).toBe(201);
+    expect(submitted.json().artifact.version_no).toBe(1);
+    expect((await app.inject({ method: "POST", url: "/api/task-role-slots/" + analysis.id + "/artifact/accept", headers: { authorization: ownerAuth } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/tasks/" + taskId + "/role-slots", headers: { authorization: ownerAuth } })).json().slots.find((s: { plan_node_key: string }) => s.plan_node_key === "delivery").state).toBe("active");
+  });
+
+  it("uses only the latest artifact version for artifact_ready and revision", async () => {
+    const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "Artifact revision " + crypto.randomUUID() } });
+    const taskId = created.json().task.id as string;
+    const plan = await app.inject({ method: "POST", url: "/api/tasks/" + taskId + "/collaboration-plans", headers: { authorization: ownerAuth }, payload: {
+      profile: "manual",
+      nodes: [
+        { slot_key: "research", role_key: "analyst", output_artifact: { key: "research_brief", type: "brief", format: "json", required_fields: ["finding"] } },
+        { slot_key: "qa", role_key: "qa" },
+      ],
+      edges: [{ from_slot_key: "research", to_slot_key: "qa", start_condition: "artifact_ready", artifact_key: "research_brief" }],
+    } });
+    expect(plan.statusCode).toBe(201);
+    await app.inject({ method: "POST", url: "/api/tasks/" + taskId + "/collaboration-plans/" + plan.json().plan.id + "/approve", headers: { authorization: ownerAuth } });
+    const research = (await app.inject({ method: "GET", url: "/api/tasks/" + taskId + "/role-slots", headers: { authorization: ownerAuth } })).json().slots.find((s: { plan_node_key: string }) => s.plan_node_key === "research");
+
+    expect((await app.inject({ method: "POST", url: "/api/task-role-slots/" + research.id + "/artifact", headers: { authorization: analystAuth }, payload: { summary: "draft", payload: { finding: "first" }, evidence: [] } })).statusCode).toBe(201);
+    expect((await app.inject({ method: "POST", url: "/api/task-role-slots/" + research.id + "/artifact/revision-request", headers: { authorization: ownerAuth }, payload: { reason: "need evidence" } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/api/task-role-slots/" + research.id + "/artifact", headers: { authorization: analystAuth }, payload: { summary: "rejected", payload: { finding: "second" }, evidence: [] } })).json().artifact.version_no).toBe(2);
+    expect((await app.inject({ method: "POST", url: "/api/task-role-slots/" + research.id + "/artifact/reject", headers: { authorization: ownerAuth }, payload: { reason: "not sufficient" } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/api/task-role-slots/" + research.id + "/artifact", headers: { authorization: analystAuth }, payload: { summary: "final", payload: { finding: "third" }, evidence: [{ path: "research.md" }] } })).json().artifact.version_no).toBe(3);
+
+    const slots = (await app.inject({ method: "GET", url: "/api/tasks/" + taskId + "/role-slots", headers: { authorization: ownerAuth } })).json().slots;
+    expect(slots.find((s: { plan_node_key: string }) => s.plan_node_key === "qa").state).toBe("active");
+    expect(db.prepare("SELECT status FROM role_slot_artifact_versions WHERE slot_id = ? ORDER BY version_no").all(research.id)).toEqual([{ status: "revision_requested" }, { status: "rejected" }, { status: "submitted" }]);
+  });
+
 });

@@ -2516,6 +2516,12 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    id: "076_role_slot_artifact_versions",
+    description: "Immutable role slot artifact versions.",
+    up: () => db.exec("CREATE TABLE IF NOT EXISTS role_slot_artifact_versions (id TEXT PRIMARY KEY, slot_id TEXT NOT NULL REFERENCES task_role_slots(id) ON DELETE CASCADE, version_no INTEGER NOT NULL, artifact_key TEXT NOT NULL, artifact_type TEXT NOT NULL, artifact_format TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL, evidence_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL CHECK (status IN ('submitted','accepted','revision_requested','rejected')), created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(slot_id, version_no)); CREATE INDEX IF NOT EXISTS idx_role_slot_artifact_versions_slot ON role_slot_artifact_versions(slot_id, version_no DESC);"),
+  },
+
 ];
 
 /**
