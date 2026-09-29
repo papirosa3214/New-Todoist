@@ -71,6 +71,29 @@ class TestTaskContextSchema(unittest.TestCase):
         self.assertIn("result: Источники проверены", text)
         self.assertIn("Связанные результаты: 1 предшественник", tc.context_summary_ru(ctx))
 
+    def test_collaboration_context_is_serialized(self):
+        """T03: collaboration_context — отдельный блок, не смешанный с dependency_context."""
+        ctx = tc.build_context(
+            {"id": "t1", "title": "продуктовая фича"},
+            {"id": "u2", "name": "Builder"},
+            dependency_context={"status": "empty", "version": 1, "root": None, "dependencies": [], "open_questions": []},
+            collaboration_context={
+                "status": "ok", "plan_id": "tcp_1", "revision": 1, "slot_key": "delivery",
+                "predecessor_artifacts": [
+                    {"slot_key": "analysis", "artifact_key": "feature_spec", "summary": "Согласован scope",
+                     "payload": {"scope": "в рамках"}, "evidence": [{"path": "docs/spec.json"}]},
+                ],
+            },
+        )
+        text = tc.serialize_context(ctx)
+        self.assertIn("collaboration_context: status=ok, plan=tcp_1, revision=1, slot=delivery, predecessor_artifacts=1", text)
+        self.assertIn("predecessor: analysis -> feature_spec", text)
+        self.assertIn("summary: Согласован scope", text)
+        self.assertIn("scope: в рамках", text)
+        self.assertIn("evidence: docs/spec.json", text)
+        # dependency_context пуст, значит его блок в тексте не появляется, но collaboration_context — независимо от него.
+        self.assertNotIn("dependency_context: status=ok", text)
+
 
 class TestEnrichersSoft(unittest.TestCase):
     """Шаг 3 ТЗ: падение необязательного адаптера — status=unavailable,

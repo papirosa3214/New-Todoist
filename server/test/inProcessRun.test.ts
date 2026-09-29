@@ -63,6 +63,7 @@ const { demoteSeededOwner, seedRoleAccounts } = await import("./helpers/seedOwne
 const { runRoleInProcess, kickRoleTask, kickRoleTaskStrict, _settleInProcessRunsForTests } = await import("../src/runtime/inProcessRun.js");
 const { buildDependencyContext } = await import("../src/runtime/dependencyContext.js");
 const { contextVersionOf } = await import("../src/runtime/taskContextVersion.js");
+const { roleUserId } = await import("../src/roleRouting.js");
 
 describe("агент роли внутри сервера", () => {
   let app: FastifyInstance;
@@ -238,6 +239,66 @@ describe("агент роли внутри сервера", () => {
     const results = ctx.dependencies.map((d) => d.result ?? "");
     expect(results.some((r) => r.includes("Источники проверены"))).toBe(true);
     expect(results.some((r) => r.includes("Контракт согласован"))).toBe(true);
+  });
+
+  it("T03: V1 получает в runtime только declared collaboration_context A1, без чужого slot-а и чата", async () => {
+    const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: `Bearer ${ownerToken}` }, payload: { title: "T03 runtime context " + Date.now() } });
+    const taskId = created.json().task.id as string;
+    const plan = await app.inject({
+      method: "POST", url: `/api/tasks/${taskId}/collaboration-plans`, headers: { authorization: `Bearer ${ownerToken}` }, payload: {
+        profile: "manual",
+        nodes: [
+          { slot_key: "analysis", role_key: "analyst", output_artifact: { key: "feature_spec", type: "specification", format: "json", required_fields: ["scope"] } },
+          { slot_key: "unrelated", role_key: "qa" },
+          { slot_key: "delivery", role_key: "builder" },
+        ],
+        edges: [{ from_slot_key: "analysis", to_slot_key: "delivery", start_condition: "accepted", artifact_key: "feature_spec" }],
+      },
+    });
+    expect(plan.statusCode).toBe(201);
+    const planId = plan.json().plan.id as string;
+    script.steps = async () => {};
+    // approve сам стартует оба корневых slot-а (analysis, unrelated) —
+    // у обоих нет incoming edges, поэтому canBecomeReady() пропускает их
+    // сразу; проверяемый вызов buildInProcessTaskContext нас пока не
+    // интересует, интересен только последующий для "delivery".
+    await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: `Bearer ${ownerToken}` } });
+    await _settleInProcessRunsForTests();
+
+    const slots = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/role-slots`, headers: { authorization: `Bearer ${ownerToken}` } })).json().slots as Array<{ id: string; plan_node_key: string }>;
+    const analysisSlot = slots.find((s) => s.plan_node_key === "analysis")!;
+    const analystAuth = `Bearer ${app.jwt.sign({ id: roleUserId("analyst") })}`;
+
+    await app.inject({ method: "POST", url: `/api/task-role-slots/${analysisSlot.id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
+
+    taskContext.build.mockClear();
+    // accept удовлетворяет gate edge analysis→delivery — unlockReadySlots
+    // сама стартует "delivery" реальным runRoleInProcess внутри этого же
+    // запроса (LOCK-249: роль впрягается сама, без ручного /run).
+    await app.inject({ method: "POST", url: `/api/task-role-slots/${analysisSlot.id}/artifact/accept`, headers: { authorization: `Bearer ${ownerToken}` } });
+    await _settleInProcessRunsForTests();
+
+    expect(taskContext.build).toHaveBeenCalledTimes(1);
+    const bridgeInput = taskContext.build.mock.calls[0][0] as { collaboration_context?: any };
+    expect(bridgeInput.collaboration_context).toMatchObject({
+      status: "ok",
+      plan_id: planId,
+      slot_key: "delivery",
+      predecessor_artifacts: [
+        { slot_key: "analysis", artifact_key: "feature_spec", summary: "Согласован scope", payload: { scope: "в рамках" } },
+      ],
+    });
+    const serialized = JSON.stringify(bridgeInput);
+    expect(serialized).not.toContain("unrelated");
+    expect(serialized.toLowerCase()).not.toContain("token");
+    expect(serialized.toLowerCase()).not.toContain("password");
+
+    const used = db
+      .prepare("SELECT field, to_value FROM task_events WHERE task_id = ? AND kind = 'collaboration_context_used'")
+      .get(taskId) as { field: string; to_value: string } | undefined;
+    expect(used).toBeTruthy();
+    expect(used!.field).toBe("delivery");
+    expect(JSON.parse(used!.to_value)).toMatchObject({ plan_id: planId, artifacts: ["analysis:feature_spec"] });
   });
 
   it("сбой запуска — карточка заблокирована с причиной", async () => {

@@ -5,6 +5,7 @@ export type LaunchContextInput = {
   task: Record<string, unknown>;
   actor: { id: string; name: string };
   dependency_context?: Record<string, unknown>;
+  collaboration_context?: Record<string, unknown>;
 };
 
 export type LaunchContext = {

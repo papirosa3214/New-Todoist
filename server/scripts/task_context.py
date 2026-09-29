@@ -118,6 +118,15 @@ class DependencyBlock(TypedDict, total=False):
     open_questions: list[str]
 
 
+class CollaborationBlock(TypedDict, total=False):
+    """Прямые (не транзитивные) артефакты предшественников одного plan slot-а."""
+    status: BlockStatus
+    plan_id: str | None
+    revision: int | None
+    slot_key: str | None
+    predecessor_artifacts: list[dict]
+
+
 @dataclass
 class TaskContext:
     """Полный пакет, который передаётся в prompt builders (Шаг 4 ТЗ).
@@ -143,6 +152,9 @@ class TaskContext:
     )
     dependency_context: DependencyBlock = field(
         default_factory=lambda: {"status": "empty", "version": 1, "root": None, "dependencies": [], "open_questions": []}
+    )
+    collaboration_context: CollaborationBlock = field(
+        default_factory=lambda: {"status": "empty", "plan_id": None, "revision": None, "slot_key": None, "predecessor_artifacts": []}
     )
     warnings: list[str] = field(default_factory=list)
     generated_at: str = ""  # ISO-8601 UTC, заполняется build_context
@@ -472,6 +484,7 @@ def build_context(
     mode: str = "direct",
     parent_task_id: str | None = None,
     dependency_context: DependencyBlock | None = None,
+    collaboration_context: CollaborationBlock | None = None,
 ) -> TaskContext:
     """Сборка всего пакета. TaskEnricher обязателен — если он упал,
     исключение поднимается выше, trigger.py логирует и НЕ запускает
@@ -482,10 +495,16 @@ def build_context(
     кто получает пакет — прямой исполнитель или оркестратор. Для
     оркестратора parent_task_id обязателен (id родительской задачи,
     в рамках которой он работает).
+
+    `collaboration_context` — прямые artifact предшественники одного
+    collaboration plan slot-а (T03); независим от `dependency_context`,
+    который описывает только межкарточные зависимости.
     """
     ctx = enrich_task(task, actor, mode=mode, parent_task_id=parent_task_id)
     if isinstance(dependency_context, dict):
         ctx.dependency_context = dependency_context
+    if isinstance(collaboration_context, dict):
+        ctx.collaboration_context = collaboration_context
     try:
         ctx.knowledge = enrich_knowledge(task)
     except Exception as exc:  # noqa: BLE001
@@ -679,6 +698,36 @@ def serialize_context(ctx, max_total_chars: int = MAX_TOTAL_CHARS) -> str:
             text = truncate(str(question), 240)
             if text:
                 parts.append(f"  open_question: {text}")
+    collaboration_context = getattr(ctx, "collaboration_context", {}) or {}
+    collaboration_artifacts = collaboration_context.get("predecessor_artifacts") or []
+    if collaboration_context.get("status") or collaboration_artifacts:
+        parts.append(
+            f"collaboration_context: status={collaboration_context.get('status', '?')}, "
+            f"plan={collaboration_context.get('plan_id', '?')}, "
+            f"revision={collaboration_context.get('revision', '?')}, "
+            f"slot={collaboration_context.get('slot_key', '?')}, "
+            f"predecessor_artifacts={len(collaboration_artifacts)}"
+        )
+        for artifact in collaboration_artifacts[:12]:
+            parts.append(
+                f"  - predecessor: {artifact.get('slot_key', '?')} -> {artifact.get('artifact_key', '?')}"
+            )
+            summary = truncate(str(artifact.get("summary", "")), MAX_EXCERPT_CHARS)
+            if summary:
+                parts.append(f"    summary: {summary}")
+            payload = artifact.get("payload") or {}
+            if isinstance(payload, dict):
+                for key, value in list(payload.items())[:8]:
+                    text = truncate(str(value), 400)
+                    if text:
+                        parts.append(f"    {key}: {text}")
+            for reference in (artifact.get("evidence") or [])[:4]:
+                if isinstance(reference, dict):
+                    text = truncate(str(reference.get("path") or reference.get("url") or reference.get("file") or reference), 240)
+                else:
+                    text = truncate(str(reference), 240)
+                if text:
+                    parts.append(f"    evidence: {text}")
     repository = getattr(ctx, "repository", {}) or {}
     if repository.get("status") or repository.get("branch"):
         dirty = repository.get("dirty_files") or []

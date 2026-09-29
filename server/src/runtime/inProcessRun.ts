@@ -21,6 +21,7 @@ import { getModelRuntime } from "./PiRuntimeAdapter.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { buildInProcessTaskContext } from "./taskContextBridge.js";
 import { buildDependencyContext } from "./dependencyContext.js";
+import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -476,10 +477,25 @@ export async function runRoleInProcess(input: {
       toValue: JSON.stringify({ version: dependencyContext.version, dependencies: dependencyContext.dependencies.map((d) => d.task_id) }),
     });
   }
+  const collaborationContext = input.slotId ? buildCollaborationPlanContext(input.slotId) : undefined;
+  if (collaborationContext && collaborationContext.status === "ok") {
+    logEvent({
+      taskId,
+      actorId: null,
+      kind: "collaboration_context_used",
+      field: collaborationContext.slot_key ?? input.slotId ?? "",
+      toValue: JSON.stringify({
+        plan_id: collaborationContext.plan_id,
+        revision: collaborationContext.revision,
+        artifacts: collaborationContext.predecessor_artifacts.map((a) => a.slot_key + ":" + a.artifact_key),
+      }),
+    });
+  }
   const launchContext = await buildInProcessTaskContext({
     task: taskForLaunchContext(taskId),
     actor: { id: roleUserId(role), name: roleTitle(role) },
     dependency_context: dependencyContext,
+    collaboration_context: collaborationContext,
   });
   if (mode === "work" && !resumed) {
     try {
