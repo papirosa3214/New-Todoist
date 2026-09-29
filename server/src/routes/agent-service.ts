@@ -63,6 +63,31 @@ async function schedulerState(): Promise<{
   return { active, last_run_at: lastRunAt, handled };
 }
 
+/** Отложенные карточки: созданы, пока «Система» была выключена, и с тех
+ *  пор ни разу не пытались взлететь (без исполнителя, флаг не поднят,
+ *  не контейнер — у контейнеров работу делают дети). Включение «Системы»
+ *  подбирает им роль и раздаёт тем же путём, что и новой карточке —
+ *  владелец 30.09.2026: тумблер должен быть разрешением на будущее И
+ *  прошлое разом, а не окном, которое нужно поймать точно в момент
+ *  создания карточки («мало ли что случилось... никто не стартанет уже»).
+ */
+async function sweepStragglers(actorId: string): Promise<void> {
+  const { applyIntakeToNewTask } = await import("./dispatch.js");
+  const stragglers = db
+    .prepare(
+      `SELECT id FROM tasks
+        WHERE status = 'active'
+          AND assignee_id IS NULL
+          AND ready_for_pickup = 0
+          AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id = tasks.id)
+        ORDER BY created_at ASC`,
+    )
+    .all() as Array<{ id: string }>;
+  for (const row of stragglers) {
+    await applyIntakeToNewTask(row.id, actorId);
+  }
+}
+
 export function registerAgentServiceRoutes(app: FastifyInstance) {
   app.get(
     "/api/agent-service",
@@ -168,7 +193,24 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
 
       const owner = db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY created_at LIMIT 1").get() as {id:string} | undefined;
       if (!owner) return reply.code(404).send({ error: "владелец не найден" });
+      const wasOn = (await unitState()).active;
       db.prepare("UPDATE users SET task_intake_mode=? WHERE id=?").run(req.body.on ? "automatic" : "manual", owner.id);
+
+      // Только на переходе выкл→вкл: подбор роли зовёт модель, гонять его
+      // на каждый повторный POST с on:true было бы лишней нагрузкой и
+      // риском переписать то, что уже раздано. Ждём здесь же (не фоном):
+      // если процесс упадёт посреди фонового разбора, зависшие карточки
+      // так и останутся зависшими без повторной попытки — а тумблер в
+      // приложении и так уже показывает "isTogglingService" на время
+      // запроса, лишняя секунда-другая на разбор очереди не заметна.
+      if (req.body.on && !wasOn) {
+        const actorId = (req as any).userId ?? owner.id;
+        try {
+          await sweepStragglers(actorId);
+        } catch (err) {
+          app.log.error({ err }, "agent-service: не удалось разобрать отложенные карточки при включении «Системы»");
+        }
+      }
 
       return { ok: true, ...(await unitState()) };
     },
