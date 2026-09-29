@@ -170,7 +170,7 @@ function TaskChip({
           compact ? "text-[9px]" : "text-[11px]"
         } ${done ? "text-sub line-through" : "text-text"}`}
       >
-        {task.title}
+        <MarkdownInline source={task.title} />
       </span>
       {!compact && task.start_time && (
         <span className="shrink-0 text-[10px] tabular-nums text-dim">

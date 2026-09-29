@@ -161,7 +161,7 @@ export function LabelTasksScreen() {
                   <div
                     className={`text-[15px] leading-snug mb-1 truncate ${isDone ? "line-through text-sub" : "text-text"}`}
                   >
-                    {task.title}
+                    <MarkdownInline source={task.title} />
                   </div>
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-sub">
                     {task.description && (

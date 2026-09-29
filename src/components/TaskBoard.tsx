@@ -89,6 +89,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useQueryClient } from "@tanstack/react-query";
 import { Icon, Avatar, AgentStateTag, PriorityArrows, ReadyFlag } from "./UI";
+import { MarkdownInline } from "./MarkdownInline";
 import { MONTHS_SHORT } from "../lib/date";
 import { useTapGuard } from "../lib/useTapGuard";
 import { hapticCross, hapticDrop, hapticGrab } from "../lib/haptics";
@@ -262,14 +263,14 @@ function BoardCard({
             <div
               className={`text-[13px] leading-snug line-clamp-2 flex-1 min-w-0 ${isDone ? "line-through text-sub" : "text-text"}`}
             >
-              {task.title}
+              <MarkdownInline source={task.title} />
             </div>
           </div>
 
           {/* Описание */}
           {task.description && (
             <div className="text-[11px] text-sub truncate mt-0.5">
-              {task.description}
+              <MarkdownInline source={task.description} />
             </div>
           )}
 

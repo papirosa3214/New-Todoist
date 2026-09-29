@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { Icon } from "../components/UI";
+import { MarkdownInline } from "../components/MarkdownInline";
 import { useOpenTask } from "../lib/useOpenTask";
 import type { ApiTask, ApiProject } from "../api/types";
 
@@ -135,7 +136,7 @@ function TimelineInboxTask({
         {project ? project.name : "Без проекта"}
       </div>
       <div className="text-lg font-light leading-tight group-hover:text-text transition-colors">
-        {task.title}
+        <MarkdownInline source={task.title} />
       </div>
     </button>
   );

@@ -25,6 +25,7 @@ import {
   ReadyFlag,
 } from "../components/UI";
 import { PRIORITIES } from "../components/TaskFields";
+import { MarkdownInline } from "../components/MarkdownInline";
 import {
   AgentStatusRow,
   AgentOwnerActions,
@@ -452,7 +453,7 @@ export function TaskDetailScreen() {
         <h1
           className={`text-[20px] font-semibold flex-1 ${task.status === "completed" ? "line-through text-sub" : ""}`}
         >
-          {task.title}
+          <MarkdownInline source={task.title} />
         </h1>
         {/* Справа от заголовка — ПОДНЯТЫЙ ФЛАГ ГОТОВНОСТИ, а не приоритет.
             До 11.09.2026 здесь стоял флажок приоритета, и он же сбил

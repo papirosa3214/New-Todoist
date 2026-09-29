@@ -81,6 +81,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon, Avatar, AgentStateTag, PriorityArrows, ReadyFlag } from "./UI";
+import { MarkdownInline } from "./MarkdownInline";
 import { hapticCross, hapticDrop } from "../lib/haptics";
 import {
   formatDueLabel,
@@ -526,14 +527,14 @@ export function TaskRow({
                 <div
                   className={`text-[15px] leading-snug truncate flex-1 min-w-0 ${isDone ? "line-through text-sub" : "text-text"}`}
                 >
-                  {task.title}
+                  <MarkdownInline source={task.title} />
                 </div>
               </div>
 
               {/* Описание — на всю ширину карточки */}
               {task.description && (
                 <div className="w-full text-[13px] text-sub mt-1 line-clamp-2">
-                  {task.description}
+                  <MarkdownInline source={task.description} />
                 </div>
               )}
 

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTasks } from "../api/tasks";
 import { todayStr, formatDueLabel, MONTHS_SHORT } from "../lib/date";
 import { Icon } from "../components/UI";
+import { MarkdownInline } from "../components/MarkdownInline";
 import { useOpenTask } from "../lib/useOpenTask";
 import { isAgentAssignedTask } from "../lib/taskOwner";
 import { useAgents } from "../api/agents";
@@ -429,7 +430,7 @@ function TimelineTask({ task, onOpen }: { task: ApiTask; onOpen: () => void }) {
         {time}
       </div>
       <div className="text-lg font-light leading-tight group-hover:text-text transition-colors">
-        {task.title}
+        <MarkdownInline source={task.title} />
       </div>
     </button>
   );

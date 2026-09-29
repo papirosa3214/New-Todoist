@@ -33,6 +33,7 @@ import {
   SheetHandle,
 } from "../components/UI";
 import { Card, FieldRow } from "../components/TaskFields";
+import { MarkdownInline } from "../components/MarkdownInline";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { parseServerDate, todayStr, addDays } from "../lib/date";
 import { useBottomSheet } from "../lib/useBottomSheet";
@@ -131,7 +132,7 @@ function CompletedTaskCard({ task }: { task: ApiTask }) {
         className="tap-row w-full text-left px-4 pt-3 pb-2.5 flex flex-col gap-1.5"
       >
         <span className="text-[15px] text-sub line-through leading-snug">
-          {task.title}
+          <MarkdownInline source={task.title} />
         </span>
         <div className="flex flex-wrap items-center gap-1.5">
           {timeLabel && (

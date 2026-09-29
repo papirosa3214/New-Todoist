@@ -1129,7 +1129,7 @@ export function DayHours({
               }}
               className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[12px] leading-[16px] font-medium [display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden"
             >
-              {ghostRef.current.task.title}
+              <MarkdownInline source={ghostRef.current.task.title} />
             </span>
           </div>
         ) : null}

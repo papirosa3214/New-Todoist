@@ -33,6 +33,7 @@ import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import { combineDictatedText } from "../lib/dictationParser";
 import { ErrorBanner } from "./UI";
+import { MarkdownInline } from "./MarkdownInline";
 
 /** Вложение, уже загруженное на сервер — минимум полей, нужных здесь для
     превью-чипа (не тащим сюда весь ApiAttachment ради имени файла). */
@@ -520,7 +521,7 @@ function SubtaskRow({
           <span
             className={`flex-1 min-w-0 text-[14px] ${state === "done" ? "line-through" : ""} ${v.text}`}
           >
-            {st.title}
+            <MarkdownInline source={st.title} />
           </span>
           {/* Текстовая подпись «в работе» рядом с заголовком убрана
               (18.08.2026, прямое указание) — избыточна: статус самой

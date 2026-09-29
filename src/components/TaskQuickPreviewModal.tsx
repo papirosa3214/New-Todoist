@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { ApiTask } from "../api/types";
 import { Icon } from "./UI";
+import { MarkdownInline } from "./MarkdownInline";
 import { PRIORITIES } from "../lib/priority";
 import { MONTHS_SHORT } from "../lib/date";
 
@@ -135,7 +136,7 @@ export function TaskQuickPreviewModal({
 
           {/* Заголовок задачи */}
           <h3 className="text-[15px] font-bold text-text group-hover:text-red transition-colors line-clamp-2 leading-snug mb-2">
-            {task.title}
+            <MarkdownInline source={task.title} />
           </h3>
 
           {/* Нижняя строка: Время / дата, подзадачи, исполнитель + стрелочка перехода */}
