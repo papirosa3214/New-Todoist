@@ -190,11 +190,31 @@ describe("collaboration plans", () => {
     expect(["architecture", "design", "delivery", "qa"].every((key) => slots.find((s) => s.plan_node_key === key)!.state === "waiting")).toBe(true);
   });
 
-  it("T03 product_feature: неизвестный профиль по-прежнему отклоняется, auto не подбирает T03 сам", async () => {
-    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 auto guard ${crypto.randomUUID()}`, description: "Добавить новую фичу с acceptance criteria" } });
+  it("T03 product_feature: неизвестный профиль по-прежнему отклоняется", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 auto guard ${crypto.randomUUID()}` } });
     const badProfile = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "not_a_real_profile" } });
     expect(badProfile.statusCode).toBe(422);
+  });
 
+  it("T03 auto: диспетчер сам предлагает product_feature для ограниченной фичи с acceptance criteria", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 auto pick ${crypto.randomUUID()}`, description: "Добавить новую фичу с acceptance criteria: новый экран с интерфейсом настроек" } });
+    const autoProposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "auto" } });
+    expect(autoProposal.statusCode).toBe(201);
+    const plan = autoProposal.json().plan;
+    expect(plan.profile).toBe("product_feature");
+    // Есть сигнал "экран/интерфейс" — D1 должен включиться сам; про
+    // архитектуру/миграции в тексте ни слова — H1 включаться не должен.
+    expect(plan.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "delivery", "design", "qa"]);
+  });
+
+  it("T03 auto: подтверждённый баг/регрессия не подбирается как product_feature", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Баг в форме ${crypto.randomUUID()}`, description: "Экран не работает: форма падает с ошибкой при сохранении, нужно исправить регрессию" } });
+    const autoProposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "auto" } });
+    expect(autoProposal.json().plan.profile).not.toBe("product_feature");
+  });
+
+  it("T03 auto: чистый исследовательский вопрос без acceptance criteria не подбирается как product_feature", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Нужно ли это делать ${crypto.randomUUID()}`, description: "Стоит ли вообще добавлять такую фичу — нужно исследовать спрос" } });
     const autoProposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "auto" } });
     expect(autoProposal.json().plan.profile).not.toBe("product_feature");
   });

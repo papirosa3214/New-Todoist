@@ -156,9 +156,10 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
 /**
  * T03 «Продуктовая фича» (docs/2026-09-29-collaboration-plan-templates,
  * HANDOFF-T03-CONTRACT.md): A1/V1 обязательны всегда, H1/D1/Q1 — только по
- * явному флагу владельца. Никакой текстовой эвристики — включение условного
- * узла здесь не «предположение по тексту задачи», а прямое решение того, кто
- * вызывает `/propose`. Отключённый узел не оставляет edge на себя.
+ * флагу. При явном `profile: "product_feature"` в `/propose` флаг — прямое
+ * решение вызывающего; при `profile: "auto"` флаги считает
+ * `autoProductFeatureCandidate()` по тексту задачи. В обоих случаях
+ * отключённый узел не оставляет edge на себя.
  */
 function productFeatureTemplate(flags: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }): { nodes: Node[]; edges: Edge[]; rationale: string } {
   const artifact = (key: string, type: string, required_fields: string[]): ArtifactContract => ({ key, type, format: "json", required_fields });
@@ -197,12 +198,44 @@ function productFeatureTemplate(flags: { includeArchitecture: boolean; includeDe
   return { nodes, edges, rationale: `T03 «Продуктовая фича»: ${included.join(" → ")}` };
 }
 
+/**
+ * T03 в auto-подборе (владелец 29.09.2026: шаблон выбирает диспетчер по
+ * правилам, а не владелец вручную именем профиля). Правила — прямо из
+ * HANDOFF-T03-CONTRACT.md «Применимость» и «Триггеры условных узлов»:
+ * ограниченная фича с проверяемыми AC — да; исследование необходимости
+ * функции (T01), подтверждённый баг/регрессия (T05) или внешний
+ * API-контракт как главный результат (T04) — нет, даже если совпадают
+ * прочие ключевые слова. Детерминированный regex, не embeddings — тот
+ * подбор остаётся отдельным будущим шагом (README «Предлагаемая целевая
+ * модель»), пока не накопится больше шаблонов, которые есть смысл ранжировать.
+ * Возвращает null, если T03 неприменим — тогда решают остальные профили ниже.
+ */
+function autoProductFeatureCandidate(text: string): { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean } | null {
+  const isBugOrRegression = /\bбаг\b|регресси|дефект|не работает|сломал|ошибк[аи]|падает|краш|почин|исправ/.test(text);
+  const isPureResearchQuestion = /нужно ли|стоит ли|имеет ли смысл|целесообразно/.test(text) && !/критери[ийя]? приём|acceptance criteria/.test(text);
+  const isApiContractOnly = /(внешн\w* api|api[- ]контракт|спецификация api)/.test(text) && !/(экран|интерфейс|\bui\b|\bux\b)/.test(text);
+  if (isBugOrRegression || isPureResearchQuestion || isApiContractOnly) return null;
+
+  const hasFeatureSignal = /\bфич[ауеы]?\b|новая возможность|новый экран|добавить|расшир[ияь]|критери[ийя]? приём|acceptance criteria/.test(text);
+  if (!hasFeatureSignal) return null;
+
+  return {
+    includeArchitecture: /миграц|интеграц|кросс-сервис|контракт api|\bnfr\b|производительн|масштаб|инфраструктур/.test(text),
+    includeDesign: /экран|интерфейс|\bui\b|\bux\b|дизайн|пользовательск\w*\s+(путь|сценари)/.test(text),
+    includeQa: true,
+  };
+}
+
 export function proposalFor(taskId: string, requested: string, productFeatureFlags?: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }) {
   if (requested === "product_feature") {
     return { profile: "product_feature", ...productFeatureTemplate(productFeatureFlags ?? { includeArchitecture: false, includeDesign: false, includeQa: false }) };
   }
   const task = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title: string; description: string | null };
   const text = `${task.title}\n${task.description ?? ""}`.toLowerCase();
+  if (requested === "auto") {
+    const t03 = autoProductFeatureCandidate(text);
+    if (t03) return { profile: "product_feature", ...productFeatureTemplate(t03) };
+  }
   const profile = requested === "auto"
     ? (/\b(ui|ux|api)\b|дизайн|интерфейс|экран/.test(text) && /исслед|анализ|сравн|вариант/.test(text) ? "full_cycle"
       : /\b(ui|ux|api)\b|сервер|миграц|swift|react|код|интеграц/.test(text) ? "delivery"
