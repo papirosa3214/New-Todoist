@@ -125,4 +125,70 @@ describe("collaboration plans", () => {
       { from_slot_key: "analysis", to_slot_key: "delivery", artifact_key: "implementation_pack" },
     ])).statusCode).toBe(400);
   });
+
+  it("T03 product_feature: минимальный маршрут A1→V1 без флагов", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 minimal ${crypto.randomUUID()}` } });
+    const proposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "product_feature" } });
+    expect(proposal.statusCode).toBe(201);
+    const plan = proposal.json().plan;
+    expect(plan.profile).toBe("product_feature");
+    expect(plan.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "delivery"]);
+    expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "analysis").output_artifact).toMatchObject({ key: "feature_spec", required_fields: ["scope", "out_of_scope", "acceptance_criteria", "nfr", "open_questions"] });
+    expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "delivery").output_artifact).toMatchObject({ key: "implementation_pack" });
+    expect(plan.edges).toEqual([{ from_slot_key: "analysis", to_slot_key: "delivery", start_condition: "accepted", artifact_key: "feature_spec" }]);
+
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
+    const slots = (await app.inject({ method: "GET", url: `/api/tasks/${task.json().task.id}/role-slots`, headers: { authorization: ownerAuth } })).json().slots as Array<{ plan_node_key: string; state: string }>;
+    expect(slots.find((s) => s.plan_node_key === "analysis")!.state).toBe("active");
+    expect(slots.find((s) => s.plan_node_key === "delivery")!.state).toBe("waiting");
+  });
+
+  it("T03 product_feature: включённые H1/D1/Q1 без висячих edges, отключённые — без ссылок на себя", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 full ${crypto.randomUUID()}` } });
+    const proposal = await app.inject({
+      method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth },
+      payload: { profile: "product_feature", include_architecture: true, include_design: true, include_qa: true },
+    });
+    expect(proposal.statusCode).toBe(201);
+    const plan = proposal.json().plan;
+    expect(plan.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "architecture", "delivery", "design", "qa"]);
+    const edgeSet = plan.edges.map((e: { from_slot_key: string; to_slot_key: string; start_condition: string; artifact_key: string }) => `${e.from_slot_key}->${e.to_slot_key}:${e.start_condition}:${e.artifact_key}`).sort();
+    expect(edgeSet).toEqual([
+      "analysis->architecture:accepted:feature_spec",
+      "analysis->delivery:accepted:feature_spec",
+      "analysis->design:accepted:feature_spec",
+      "architecture->delivery:accepted:architecture_decision",
+      "delivery->qa:artifact_ready:implementation_pack",
+      "design->delivery:accepted:feature_ux_spec",
+    ].sort());
+    expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "architecture").output_artifact).toMatchObject({ key: "architecture_decision" });
+    expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "design").output_artifact).toMatchObject({ key: "feature_ux_spec" });
+    expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "qa").output_artifact).toMatchObject({ key: "feature_test_report" });
+
+    // Только Q1 без H1/D1 — delivery не должен получить висячую ссылку на
+    // отключённые узлы, а qa-edge остаётся на месте.
+    const task2 = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 qa only ${crypto.randomUUID()}` } });
+    const proposal2 = await app.inject({
+      method: "POST", url: `/api/tasks/${task2.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth },
+      payload: { profile: "product_feature", include_qa: true },
+    });
+    const plan2 = proposal2.json().plan;
+    expect(plan2.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "delivery", "qa"]);
+    expect(plan2.edges.map((e: { from_slot_key: string; to_slot_key: string }) => `${e.from_slot_key}->${e.to_slot_key}`).sort()).toEqual(["analysis->delivery", "delivery->qa"]);
+
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
+    const slots = (await app.inject({ method: "GET", url: `/api/tasks/${task.json().task.id}/role-slots`, headers: { authorization: ownerAuth } })).json().slots as Array<{ plan_node_key: string; state: string }>;
+    expect(slots).toHaveLength(5);
+    expect(slots.find((s) => s.plan_node_key === "analysis")!.state).toBe("active");
+    expect(["architecture", "design", "delivery", "qa"].every((key) => slots.find((s) => s.plan_node_key === key)!.state === "waiting")).toBe(true);
+  });
+
+  it("T03 product_feature: неизвестный профиль по-прежнему отклоняется, auto не подбирает T03 сам", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 auto guard ${crypto.randomUUID()}`, description: "Добавить новую фичу с acceptance criteria" } });
+    const badProfile = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "not_a_real_profile" } });
+    expect(badProfile.statusCode).toBe(422);
+
+    const autoProposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "auto" } });
+    expect(autoProposal.json().plan.profile).not.toBe("product_feature");
+  });
 });

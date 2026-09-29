@@ -7,7 +7,7 @@ import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
 import { startSlotRun } from "./task-role-slots.js";
 
-const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual"]);
+const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual", "product_feature"]);
 const CONDITIONS = new Set(["submitted", "accepted", "artifact_ready"]);
 const SLOT_KEY = /^[a-z][a-z0-9_]{1,63}$/;
 
@@ -153,7 +153,54 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
   return { id, revision };
 }
 
-export function proposalFor(taskId: string, requested: string) {
+/**
+ * T03 «Продуктовая фича» (docs/2026-09-29-collaboration-plan-templates,
+ * HANDOFF-T03-CONTRACT.md): A1/V1 обязательны всегда, H1/D1/Q1 — только по
+ * явному флагу владельца. Никакой текстовой эвристики — включение условного
+ * узла здесь не «предположение по тексту задачи», а прямое решение того, кто
+ * вызывает `/propose`. Отключённый узел не оставляет edge на себя.
+ */
+function productFeatureTemplate(flags: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }): { nodes: Node[]; edges: Edge[]; rationale: string } {
+  const artifact = (key: string, type: string, required_fields: string[]): ArtifactContract => ({ key, type, format: "json", required_fields });
+  const node = (slot_key: string, role_key: string, expected_result: string, output_artifact: ArtifactContract): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact });
+  const edge = (from_slot_key: string, to_slot_key: string, start_condition: string, artifact_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition, artifact_key });
+
+  const nodes: Node[] = [
+    node("analysis", "analyst", "feature_spec: scope, out_of_scope, acceptance_criteria, nfr, open_questions", artifact("feature_spec", "specification", ["scope", "out_of_scope", "acceptance_criteria", "nfr", "open_questions"])),
+  ];
+  const edges: Edge[] = [];
+  const included = ["A1"];
+
+  if (flags.includeArchitecture) {
+    nodes.push(node("architecture", "architect", "architecture_decision: варианты, решение, последствия, rollout/rollback", artifact("architecture_decision", "decision", ["context", "options", "decision", "consequences", "rollout_rollback"])));
+    edges.push(edge("analysis", "architecture", "accepted", "feature_spec"));
+    included.push("H1");
+  }
+  if (flags.includeDesign) {
+    nodes.push(node("design", "designer", "feature_ux_spec: экраны, state matrix, доступность, открытые вопросы", artifact("feature_ux_spec", "specification", ["screens", "state_matrix", "accessibility", "open_questions"])));
+    edges.push(edge("analysis", "design", "accepted", "feature_spec"));
+    included.push("D1");
+  }
+
+  nodes.push(node("delivery", "builder", "implementation_pack: изменения, build id, тесты, deployment notes", artifact("implementation_pack", "pack", ["change_refs", "build_id", "test_report", "deployment_notes", "known_limitations"])));
+  edges.push(edge("analysis", "delivery", "accepted", "feature_spec"));
+  if (flags.includeArchitecture) edges.push(edge("architecture", "delivery", "accepted", "architecture_decision"));
+  if (flags.includeDesign) edges.push(edge("design", "delivery", "accepted", "feature_ux_spec"));
+  included.push("V1");
+
+  if (flags.includeQa) {
+    nodes.push(node("qa", "qa", "feature_test_report: acceptance matrix, evidence, дефекты, рекомендация", artifact("feature_test_report", "report", ["acceptance_matrix", "evidence", "defects", "recommendation"])));
+    edges.push(edge("delivery", "qa", "artifact_ready", "implementation_pack"));
+    included.push("Q1");
+  }
+
+  return { nodes, edges, rationale: `T03 «Продуктовая фича»: ${included.join(" → ")}` };
+}
+
+export function proposalFor(taskId: string, requested: string, productFeatureFlags?: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }) {
+  if (requested === "product_feature") {
+    return { profile: "product_feature", ...productFeatureTemplate(productFeatureFlags ?? { includeArchitecture: false, includeDesign: false, includeQa: false }) };
+  }
   const task = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title: string; description: string | null };
   const text = `${task.title}\n${task.description ?? ""}`.toLowerCase();
   const profile = requested === "auto"
@@ -233,7 +280,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!) });
   });
 
-  app.post<{ Params: { id: string }; Body: { profile?: unknown; context_version?: unknown } }>("/api/tasks/:id/collaboration-plans/propose", { preHandler: authOrApiToken }, async (req: any, reply) => {
+  app.post<{ Params: { id: string }; Body: { profile?: unknown; context_version?: unknown; include_architecture?: unknown; include_design?: unknown; include_qa?: unknown } }>("/api/tasks/:id/collaboration-plans/propose", { preHandler: authOrApiToken }, async (req: any, reply) => {
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan предлагает владелец или оркестратор" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
@@ -241,7 +288,13 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (requested !== "auto" && !PROFILES.has(requested)) return reply.code(422).send({ error: "unknown collaboration profile" });
     const contextVersion = req.body?.context_version === undefined ? null : Number(req.body.context_version);
     if (contextVersion !== null && (!Number.isInteger(contextVersion) || contextVersion < 1)) return reply.code(400).send({ error: "context_version должен быть положительным целым" });
-    const proposal = proposalFor(task.id, requested);
+    // T03: H1/D1/Q1 включаются только явным булевым флагом владельца, а не
+    // текстовой эвристикой selector-а — тот же принцип, что и в остальном
+    // auto-подборе, но проговорённый Task 4 отдельно для product_feature.
+    const productFeatureFlags = requested === "product_feature"
+      ? { includeArchitecture: req.body?.include_architecture === true, includeDesign: req.body?.include_design === true, includeQa: req.body?.include_qa === true }
+      : undefined;
+    const proposal = proposalFor(task.id, requested, productFeatureFlags);
     const created = createDraftPlan(task.id, req.userId, proposal.profile, proposal.rationale, contextVersion, proposal);
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: `${proposal.profile}: template` });
     return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!), suggested: true });

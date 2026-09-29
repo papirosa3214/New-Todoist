@@ -153,6 +153,60 @@ function removeUsersRoleCheck(): void {
 }
 
 /**
+ * Добавить 'product_feature' в закрытый CHECK task_collaboration_plans.profile
+ * (T03). SQLite не умеет ALTER CHECK — тот же rebuild-паттерн, что и в
+ * removeUsersRoleCheck: читаем живой DDL, дописываем значение в список CHECK,
+ * пересобираем таблицу под foreign_keys=OFF.
+ */
+function addProductFeatureProfile(): void {
+  const ddl =
+    (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='task_collaboration_plans'",
+        )
+        .get() as { sql?: string } | undefined
+    )?.sql ?? "";
+  if (!ddl || ddl.includes("'product_feature'")) {
+    return;
+  }
+
+  const newDdl = ddl
+    .replace(/CHECK\s*\(\s*profile\s+IN\s*\(([^)]*)\)\s*\)/i, (_match, list: string) => `CHECK (profile IN (${list},'product_feature'))`)
+    .replace(/CREATE TABLE\s+"?task_collaboration_plans"?/i, 'CREATE TABLE "task_collaboration_plans_new"');
+  if (newDdl === ddl || !newDdl.includes('CREATE TABLE "task_collaboration_plans_new"') || !newDdl.includes("'product_feature'")) {
+    throw new Error(
+      "077_collaboration_plan_product_feature_profile: не удалось безопасно подготовить task_collaboration_plans с product_feature",
+    );
+  }
+
+  db.pragma("foreign_keys = OFF");
+  try {
+    const rebuild = db.transaction(() => {
+      db.exec(newDdl);
+      db.exec('INSERT INTO "task_collaboration_plans_new" SELECT * FROM task_collaboration_plans');
+      db.exec("DROP TABLE task_collaboration_plans");
+      db.exec('ALTER TABLE "task_collaboration_plans_new" RENAME TO task_collaboration_plans');
+      // DROP TABLE забирает с собой отдельно объявленный (не inline UNIQUE)
+      // индекс 071_task_collaboration_plans — пересоздаём его на новой таблице.
+      db.exec("CREATE INDEX IF NOT EXISTS idx_task_collaboration_plans_task ON task_collaboration_plans(task_id, revision DESC)");
+    });
+    rebuild();
+
+    const broken = (
+      db.pragma("foreign_key_check") as Array<{ parent?: string }>
+    ).filter((row) => row.parent === "task_collaboration_plans");
+    if (broken.length > 0) {
+      throw new Error(
+        `077_collaboration_plan_product_feature_profile: после пересборки task_collaboration_plans осталось ${broken.length} битых ссылок`,
+      );
+    }
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
+/**
  * Тело миграции 037_task_intake_pipeline. Экспортируется отдельно, чтобы
  * тесты могли прогнать его на отдельном свежем better-sqlite3-инстансе
  * (модульный db.ts-синглтон к этому моменту уже занят). Идемпотентна:
@@ -2520,6 +2574,12 @@ const migrations: Migration[] = [
     id: "076_role_slot_artifact_versions",
     description: "Immutable role slot artifact versions.",
     up: () => db.exec("CREATE TABLE IF NOT EXISTS role_slot_artifact_versions (id TEXT PRIMARY KEY, slot_id TEXT NOT NULL REFERENCES task_role_slots(id) ON DELETE CASCADE, version_no INTEGER NOT NULL, artifact_key TEXT NOT NULL, artifact_type TEXT NOT NULL, artifact_format TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL, evidence_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL CHECK (status IN ('submitted','accepted','revision_requested','rejected')), created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(slot_id, version_no)); CREATE INDEX IF NOT EXISTS idx_role_slot_artifact_versions_slot ON role_slot_artifact_versions(slot_id, version_no DESC);"),
+  },
+  {
+    id: "077_collaboration_plan_product_feature_profile",
+    description: "Разрешить profile='product_feature' (T03) в task_collaboration_plans.profile.",
+    noTransaction: true,
+    up: () => addProductFeatureProfile(),
   },
 
 ];
