@@ -10,4 +10,29 @@
 
 | Lock ID | Статус | Scope ID | Что делаем | Разрешённые/затронутые файлы | Цель / контекст | Исполнитель | Проверено |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| LOCK-T03-01 | REVIEW | COLLABORATION-PLAN-T03-ARTIFACT-CONTRACT | Первый исполняемый шаблон совместной работы T03 «Продуктовая фича» — версионируемые артефакты между ролями одной карточки поверх существующих `task_dependencies`/`TaskContext v1` | `server/src/migrations.ts` (075/076/077), `server/src/routes/task-collaboration-plans.ts`, `server/src/routes/task-role-slots.ts`, `server/src/runtime/collaborationPlanContext.ts` (новый), `server/src/runtime/inProcessRun.ts`, `server/src/runtime/taskContextBridge.ts`, `server/scripts/task_context.py`, `server/scripts/task_context_bridge.py`, тесты рядом с каждым | Дизайн и план — `/Users/max/Проекты/TaskFlowNativeBuild/docs/2026-09-29-collaboration-plan-templates/` (HANDOFF-T03-CONTRACT.md, t03-product-feature/T03-IMPLEMENTATION-PLAN.md, t03-product-feature/T03-ARTIFACT-CONTRACT-DESIGN.md — все три обновлены с evidence 29.09.2026). Прошлая сессия дошла до середины Task 2 и упёрлась в лимит, не закоммитив готовую работу — эта сессия нашла её, закоммитила и довела план до конца (Task 3, 4, 5) | Claude Sonnet 5 | Все 5 задач плана реализованы и закоммичены: Task 1 `4b848568`, Task 2 `96a3f13`, Task 3 `c62e0417`, Task 4 `d5d9137`, Task 5 (E2E-тест) `53778c2d`. Итог: `tsc` чисто, `npm test` **620/620** (83 файла, Node 22), `python3 scripts/test_task_context.py` 16/16, `git diff --check` чисто в обоих репозиториях. Изолированный E2E на Vitest-БД подтверждает весь путь T03: approve A1/H1/D1/V1/Q1 → accept A1 → H1/D1 стартуют сами → accept H1+D1 → V1 стартует и получает РОВНО 3 declared артефакта предшественников (не больше, не меньше) → V1 сдаёт implementation_pack с evidence БЕЗ owner acceptance → Q1 стартует сам по artifact_ready. **Не сделано и не выдаётся за сделанное:** real-model прогон (везде мок runRoleInProcess), iOS-рендер (критерий приёмки №5 — отдельный scope после стабилизации API, намеренно), рестарт живого процесса сервера на `.110` (миграция 077 лежит в коде, применится к прод-БД при следующем рестарте — решение о рестарте за владельцем), автоподбор `product_feature` через embeddings/эвристику (профиль запускается только явным вызовом). Следующая очередь по README — T05 «Баг/регрессия», затем T04 «API-интеграция», не раньше проверки метрик на реальном T03. |
+| LOCK-T03-01 | REVIEW | COLLABORATION-PLAN-T03-ARTIFACT-CONTRACT | Первый исполняемый шаблон совместной работы T03 «Продуктовая фича» — версионируемые артефакты между ролями одной карточки поверх существующих `task_dependencies`/`TaskContext v1` | `server/src/migrations.ts` (075/076/077), `server/src/routes/task-collaboration-plans.ts`, `server/src/routes/task-role-slots.ts`, `server/src/runtime/collaborationPlanContext.ts` (новый), `server/src/runtime/inProcessRun.ts`, `server/src/runtime/taskContextBridge.ts`, `server/scripts/task_context.py`, `server/scripts/task_context_bridge.py`, тесты рядом с каждым | Дизайн и план — `/Users/max/Проекты/TaskFlowNativeBuild/docs/2026-09-29-collaboration-plan-templates/` (HANDOFF-T03-CONTRACT.md, t03-product-feature/T03-IMPLEMENTATION-PLAN.md, t03-product-feature/T03-ARTIFACT-CONTRACT-DESIGN.md — все три обновлены с evidence 29.09.2026). Прошлая сессия дошла до середины Task 2 и упёрлась в лимит, не закоммитив готовую работу — эта сессия нашла её, закоммитила и довела план до конца (Task 3, 4, 5) | Claude Sonnet 5 | Все 5 задач плана реализованы и закоммичены: Task 1 `4b848568`, Task 2 `96a3f13`, Task 3 `c62e0417`, Task 4 `d5d9137`, Task 5 (E2E-тест) `53778c2d`. Итог: `tsc` чисто, `npm test` **620/620** (83 файла, Node 22), `python3 scripts/test_task_context.py` 16/16, `git diff --check` чисто в обоих репозиториях. Изолированный E2E на Vitest-БД подтверждает весь путь T03: approve A1/H1/D1/V1/Q1 → accept A1 → H1/D1 стартуют сами → accept H1+D1 → V1 стартует и получает РОВНО 3 declared артефакта предшественников (не больше, не меньше) → V1 сдаёт implementation_pack с evidence БЕЗ owner acceptance → Q1 стартует сам по artifact_ready. **Обновление того же дня (`3a5dd82`):** владелец уточнил — выбор шаблона не
+должен требовать от него ручного ввода имени профиля через приложение;
+решение принимает уже существующий диспетчер (`profile: "auto"`), а владелец
+только жмёт одну и ту же кнопку «Утвердить». `autoProductFeatureCandidate()`
+добавляет T03 в `proposalFor(taskId, "auto")` по детерминированным правилам из
+HANDOFF «Применимость»/«Триггеры условных узлов»: включается на сигнал новой
+ограниченной фичи с acceptance criteria, отключается на баг/регрессию, чистый
+исследовательский вопрос без AC или чистый внешний API-контракт; H1/D1/Q1
+флаги считаются по тем же текстовым правилам (D1 — упоминание экрана/UI,
+H1 — миграция/интеграция/NFR, Q1 — всегда true). Embeddings-ранжирование
+осознанно не подключено (см. README «целевая модель») — это детерминированная
+эвристика, следующий шаг после накопления нескольких реальных шаблонов.
+Тесты: auto подбирает T03 с верным набором узлов по ключевым словам, не
+подбирает T03 для явного бага/регрессии и для чистого «нужно ли это делать»
+без AC. `tsc` чисто, `npm test` **623/623**. iOS ничего менять не пришлось —
+существующая кнопка approve (LOCK-249 в iOS-реестре) уже обрабатывает любой
+предложенный профиль.
+
+**Не сделано и не выдаётся за сделанное:** real-model прогон (везде мок
+runRoleInProcess), iOS-рендер (критерий приёмки №5 — отдельный scope после
+стабилизации API, намеренно), рестарт живого процесса сервера на `.110`
+(миграции 075-077 лежат в коде, применятся к прод-БД при следующем
+рестарте — решение о рестарте за владельцем), embeddings-ранжирование между
+несколькими кандидатами (пока эвристика жёстко выбирает один профиль, не
+ранжирует 2-3). Следующая очередь по README — T05 «Баг/регрессия», затем T04
+«API-интеграция», не раньше проверки метрик на реальном T03. |
