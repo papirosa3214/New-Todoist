@@ -19,7 +19,7 @@ fallbacks:
   designer: []
 models:
   researcher: MiniMax-M3
-  analyst: claude-opus-4-8
+  analyst: MiniMax-M3
   critic_verifier: MiniMax-M3
   architect: MiniMax-M3
   builder: MiniMax-M3
