@@ -66,6 +66,41 @@ export type SemanticEnrichResult = {
 };
 
 /**
+ * Ядро подбора: топ-K ролей по косинусу для ПРОИЗВОЛЬНОГО текста, без гейта
+ * эскалаций и без привязки к конкретной задаче — `semanticEnrich` ниже это
+ * же самое, только с гейтом и текстом, взятым из задачи. Вынесено 30.09.2026
+ * для подбора роли по тексту ОДНОЙ подзадачи (умная параллелизация —
+ * `subtaskRoleFanout.ts`), где гейт эскалаций не имеет смысла: подзадача не
+ * эскалирует сама по себе, решение принимает не пользователь по кнопке.
+ */
+export async function matchRoleForText(
+  text: string,
+  opts: { topK?: number } = {},
+): Promise<{ matched: SemanticRoleMatch[]; duration_ms: number }> {
+  const startedAt = Date.now();
+  const trimmed = text.trim();
+  if (!trimmed) return { matched: [], duration_ms: Date.now() - startedAt };
+
+  const rows = db
+    .prepare("SELECT role, embedding, tags FROM role_embeddings")
+    .all() as RoleEmbeddingRow[];
+  if (rows.length === 0) return { matched: [], duration_ms: Date.now() - startedAt };
+
+  const { embeddings, dim } = await getEmbeddings(trimmed);
+  if (!Array.isArray(embeddings) || dim === 0) return { matched: [], duration_ms: Date.now() - startedAt };
+  const queryF32 = new Float32Array(embeddings as number[]);
+
+  const scored: SemanticRoleMatch[] = rows.map((row) => ({
+    role: row.role,
+    score: cosine(queryF32, rowToVector(row)),
+    tags: parseTags(row.tags),
+  }));
+  scored.sort((a, b) => b.score - a.score || a.role.localeCompare(b.role));
+
+  return { matched: scored.slice(0, opts.topK ?? 3), duration_ms: Date.now() - startedAt };
+}
+
+/**
  * Доля pending-эскалаций за последние `windowDays` дней. Если эскалаций
  * нет вообще — возвращаем 0 (gate_open станет false, fallback на enricher).
  */
@@ -142,51 +177,9 @@ export async function semanticEnrich(
   }
 
   const text = `${task.title ?? ""}\n${task.description ?? ""}`.trim();
-  if (!text) {
-    return {
-      matched: [],
-      escalation_rate: escalationRate,
-      gate_open: true,
-      threshold: SEMANTIC_GATE_THRESHOLD,
-      duration_ms: Date.now() - startedAt,
-    };
-  }
-
-  const rows = db
-    .prepare("SELECT role, embedding, tags FROM role_embeddings")
-    .all() as RoleEmbeddingRow[];
-  if (rows.length === 0) {
-    return {
-      matched: [],
-      escalation_rate: escalationRate,
-      gate_open: true,
-      threshold: SEMANTIC_GATE_THRESHOLD,
-      duration_ms: Date.now() - startedAt,
-    };
-  }
-
-  const { embeddings, dim } = await getEmbeddings(text);
-  if (!Array.isArray(embeddings) || dim === 0) {
-    return {
-      matched: [],
-      escalation_rate: escalationRate,
-      gate_open: true,
-      threshold: SEMANTIC_GATE_THRESHOLD,
-      duration_ms: Date.now() - startedAt,
-    };
-  }
-  const queryF32 = new Float32Array(embeddings as number[]);
-
-  const scored: SemanticRoleMatch[] = rows.map((row) => ({
-    role: row.role,
-    score: cosine(queryF32, rowToVector(row)),
-    tags: parseTags(row.tags),
-  }));
-  scored.sort((a, b) => b.score - a.score || a.role.localeCompare(b.role));
-
-  const topK = opts.topK ?? 3;
+  const { matched } = await matchRoleForText(text, { topK: opts.topK });
   return {
-    matched: scored.slice(0, topK),
+    matched,
     escalation_rate: escalationRate,
     gate_open: true,
     threshold: SEMANTIC_GATE_THRESHOLD,

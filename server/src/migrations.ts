@@ -2614,6 +2614,16 @@ const migrations: Migration[] = [
     `),
   },
 
+  {
+    id: "079_plan_node_source_subtask",
+    description:
+      "task_collaboration_plan_nodes.source_subtask_id — узел плана может занять уже существующую обычную подзадачу вместо создания дубля при approve. Владелец 30.09.2026: «у нас всё завязано на подзадачах» — умная параллелизация (subtaskRoleFanout.ts) предлагает план ИЗ уже написанных подзадач, и approve должен не плодить рядом новые строки, а превратить те же самые.",
+    up: () => {
+      const cols = new Set((db.prepare("PRAGMA table_info(task_collaboration_plan_nodes)").all() as Array<{ name: string }>).map((c) => c.name));
+      if (!cols.has("source_subtask_id")) db.exec("ALTER TABLE task_collaboration_plan_nodes ADD COLUMN source_subtask_id TEXT REFERENCES subtasks(id)");
+    },
+  },
+
 ];
 
 /**

@@ -6,6 +6,7 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
 import { startPlanSubtaskRun } from "../runtime/planSubtaskAdmission.js";
+import { suggestFanoutFromSubtasks } from "../runtime/subtaskRoleFanout.js";
 
 const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual", "product_feature"]);
 const CONDITIONS = new Set(["submitted", "accepted", "artifact_ready"]);
@@ -26,9 +27,9 @@ type Plan = {
 };
 
 type ArtifactContract = { key: string; type: string; format: "json"; required_fields: string[] };
-type NodeInput = { slot_key?: unknown; role_key?: unknown; required?: unknown; expected_result?: unknown; output_artifact?: unknown };
+type NodeInput = { slot_key?: unknown; role_key?: unknown; required?: unknown; expected_result?: unknown; output_artifact?: unknown; source_subtask_id?: unknown };
 type EdgeInput = { from_slot_key?: unknown; to_slot_key?: unknown; start_condition?: unknown; artifact_key?: unknown };
-type Node = { slot_key: string; role_key: string; required: boolean; expected_result: string; output_artifact: ArtifactContract | null };
+type Node = { slot_key: string; role_key: string; required: boolean; expected_result: string; output_artifact: ArtifactContract | null; source_subtask_id: string | null };
 type Edge = { from_slot_key: string; to_slot_key: string; start_condition: string; artifact_key: string | null };
 
 function mayManage(userId: string): boolean {
@@ -36,7 +37,7 @@ function mayManage(userId: string): boolean {
 }
 
 function present(plan: Plan) {
-  const nodes = db.prepare("SELECT slot_key, role_key, required, expected_result, output_artifact_json FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key")
+  const nodes = db.prepare("SELECT slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key")
     .all(plan.id) as Array<Omit<Node, "required" | "output_artifact"> & { required: number; output_artifact_json: string | null }>;
   const edges = db.prepare("SELECT from_slot_key, to_slot_key, start_condition, artifact_key FROM task_collaboration_plan_edges WHERE plan_id = ? ORDER BY from_slot_key, to_slot_key")
     .all(plan.id) as Edge[];
@@ -48,6 +49,7 @@ function present(plan: Plan) {
       required: node.required === 1,
       expected_result: node.expected_result,
       output_artifact: node.output_artifact_json === null ? null : JSON.parse(node.output_artifact_json) as ArtifactContract,
+      source_subtask_id: node.source_subtask_id ?? null,
     })),
     edges,
   };
@@ -71,7 +73,11 @@ function parseArtifactContract(raw: unknown): ArtifactContract | null {
   return { key, type, format: "json", required_fields: requiredFields };
 }
 
-function parseGraph(body: { nodes?: unknown; edges?: unknown }) {
+/** `taskId` — если передан, каждый `source_subtask_id` проверяется живой
+ *  выборкой: подзадача этой же карточки, ещё не занята другим узлом
+ *  (`collaboration_plan_id IS NULL`) и не закрыта. Без `taskId` (вызов не
+ *  привязан к конкретной карточке) проверка синтаксическая — формат UUID. */
+function parseGraph(body: { nodes?: unknown; edges?: unknown }, taskId?: string) {
   if (!Array.isArray(body.nodes) || body.nodes.length === 0 || body.nodes.length > 16) throw new Error("нужны от 1 до 16 nodes");
   if (body.edges !== undefined && !Array.isArray(body.edges)) throw new Error("edges должен быть массивом");
   if (Array.isArray(body.edges) && body.edges.length > 48) throw new Error("слишком много edges");
@@ -82,10 +88,12 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }) {
     required: raw.required !== false,
     expected_result: String(raw.expected_result ?? "").trim(),
     output_artifact: parseArtifactContract(raw.output_artifact),
+    source_subtask_id: raw.source_subtask_id === undefined || raw.source_subtask_id === null ? null : String(raw.source_subtask_id).trim(),
   }));
   const keys = new Set<string>();
   const artifactKeys = new Set<string>();
   const sourceArtifacts = new Map<string, ArtifactContract>();
+  const sourceSubtaskIds = new Set<string>();
   for (const node of nodes) {
     if (!SLOT_KEY.test(node.slot_key)) throw new Error("некорректный slot_key");
     if (!ROLE_NAMES.includes(node.role_key)) throw new Error("unknown role");
@@ -96,6 +104,14 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }) {
     if (node.output_artifact) {
       artifactKeys.add(node.output_artifact.key);
       sourceArtifacts.set(node.slot_key, node.output_artifact);
+    }
+    if (node.source_subtask_id) {
+      if (sourceSubtaskIds.has(node.source_subtask_id)) throw new Error("source_subtask_id должен быть уникальным среди узлов");
+      sourceSubtaskIds.add(node.source_subtask_id);
+      if (taskId) {
+        const subtask = db.prepare("SELECT id FROM subtasks WHERE id = ? AND task_id = ? AND done = 0 AND collaboration_plan_id IS NULL").get(node.source_subtask_id, taskId);
+        if (!subtask) throw new Error(`source_subtask_id ${node.source_subtask_id} — не найдена свободная открытая подзадача этой карточки`);
+      }
     }
   }
 
@@ -155,8 +171,8 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
   db.transaction(() => {
     db.prepare(`INSERT INTO task_collaboration_plans (id, task_id, revision, profile, rationale, context_version, created_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, taskId, revision, profile, rationale, contextVersion, createdBy);
-    const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json) VALUES (?, ?, ?, ?, ?, ?, ?)");
-    for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact));
+    const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id ?? null);
     const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
     for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, edge.start_condition, edge.artifact_key);
   })();
@@ -180,7 +196,7 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
  */
 function productFeatureTemplate(flags: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }): { nodes: Node[]; edges: Edge[]; rationale: string } {
   const artifact = (key: string, type: string, required_fields: string[]): ArtifactContract => ({ key, type, format: "json", required_fields });
-  const node = (slot_key: string, role_key: string, expected_result: string, output_artifact: ArtifactContract): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact });
+  const node = (slot_key: string, role_key: string, expected_result: string, output_artifact: ArtifactContract): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact, source_subtask_id: null });
   const edge = (from_slot_key: string, to_slot_key: string, artifact_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "artifact_ready", artifact_key });
 
   const nodes: Node[] = [
@@ -259,7 +275,7 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
       : /исслед|анализ|сравн|вариант|источник/.test(text) ? "research"
       : "single_executor")
     : requested;
-  const node = (slot_key: string, role_key: string, expected_result: string): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact: null });
+  const node = (slot_key: string, role_key: string, expected_result: string): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact: null, source_subtask_id: null });
   const edge = (from_slot_key: string, to_slot_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "accepted", artifact_key: null });
   const templates: Record<string, { nodes: Node[]; edges: Edge[]; rationale: string }> = {
     single_executor: { nodes: [node("executor", "builder", "Выполненный результат задачи")], edges: [], rationale: "Низкая неопределённость: достаточно основного исполнителя." },
@@ -324,7 +340,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (rationale.length > 2000) return reply.code(400).send({ error: "rationale длиннее 2000 символов" });
     if (contextVersion !== null && (!Number.isInteger(contextVersion) || contextVersion < 1)) return reply.code(400).send({ error: "context_version должен быть положительным целым" });
     let graph: { nodes: Node[]; edges: Edge[] };
-    try { graph = parseGraph(req.body ?? {}); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
+    try { graph = parseGraph(req.body ?? {}, task.id); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
     const created = createDraftPlan(task.id, req.userId, profile, rationale, contextVersion, graph);
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: profile });
     return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!) });
@@ -350,6 +366,26 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!), suggested: true });
   });
 
+  // Умная параллелизация: подобрать план ИЗ уже написанных подзадач
+  // (subtaskRoleFanout.ts), не из шаблона по ключевым словам карточки.
+  // Ничего не утверждает и не запускает — ровно draft, как и /propose;
+  // владелец так же правит его PATCH'ем или утверждает как есть.
+  app.post<{ Params: { id: string }; Body: { context_version?: unknown } }>("/api/tasks/:id/collaboration-plans/suggest-from-subtasks", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan предлагает владелец или оркестратор" });
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const contextVersion = req.body?.context_version === undefined ? null : Number(req.body.context_version);
+    if (contextVersion !== null && (!Number.isInteger(contextVersion) || contextVersion < 1)) return reply.code(400).send({ error: "context_version должен быть положительным целым" });
+
+    const suggestion = await suggestFanoutFromSubtasks(task.id);
+    if (!suggestion.suggested) return { suggested: false, reason: suggestion.reason };
+
+    const graph = { nodes: suggestion.nodes.map((n) => ({ ...n, required: true, output_artifact: null })), edges: [] };
+    const created = createDraftPlan(task.id, req.userId, "manual", suggestion.rationale, contextVersion, graph);
+    logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: "manual: subtask fanout" });
+    return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!), suggested: true });
+  });
+
   app.post<{ Params: { id: string; planId: string } }>("/api/tasks/:id/collaboration-plans/:planId/approve", { preHandler: authOrApiToken }, async (req: any, reply) => {
     if (!isOwner(req.userId)) return reply.code(403).send({ error: "collaboration plan утверждает владелец" });
     const task = getTaskForRead(req.params.id, req.userId);
@@ -357,7 +393,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     const plan = planForTask(task.id, req.params.planId);
     if (!plan) return reply.code(404).send({ error: "plan not found" });
     if (plan.status !== "draft") return reply.code(409).send({ error: "утвердить можно только draft plan" });
-    const nodes = db.prepare("SELECT slot_key, role_key, expected_result FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key").all(plan.id) as Array<{ slot_key: string; role_key: string; expected_result: string }>;
+    const nodes = db.prepare("SELECT slot_key, role_key, expected_result, source_subtask_id FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key").all(plan.id) as Array<{ slot_key: string; role_key: string; expected_result: string; source_subtask_id: string | null }>;
     const incoming = new Set((db.prepare("SELECT to_slot_key FROM task_collaboration_plan_edges WHERE plan_id = ?").all(plan.id) as Array<{ to_slot_key: string }>).map((edge) => edge.to_slot_key));
     // Корневые (без входящих рёбер) узлы плана собираем отдельно — их нужно
     // не только вставить как обычные подзадачи, но и сразу стартовать, а
@@ -371,7 +407,21 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       const maxPos = (db.prepare("SELECT COALESCE(MAX(position), 0) AS m FROM subtasks WHERE task_id = ?").get(task.id) as { m: number }).m;
       const insertSubtask = db.prepare(`INSERT INTO subtasks (id, task_id, title, position, agent_id, collaboration_plan_id, plan_node_key)
                                         VALUES (?, ?, ?, ?, ?, ?, ?)`);
+      // Узел с source_subtask_id — умная параллелизация из уже написанных
+      // подзадач (владелец 30.09.2026: «у нас всё завязано на подзадачах»):
+      // занимаем ТУ ЖЕ строку вместо дубля. WHERE done=0 AND
+      // collaboration_plan_id IS NULL — та же гонка, что и при PATCH-правке
+      // черновика, могла успеть измениться между правкой и approve; 0
+      // затронутых строк — не тихий пропуск узла, а отказ approve целиком.
+      const claimSubtask = db.prepare(`UPDATE subtasks SET collaboration_plan_id = ?, plan_node_key = ?, agent_id = ?
+                                        WHERE id = ? AND task_id = ? AND done = 0 AND collaboration_plan_id IS NULL`);
       nodes.forEach((node, index) => {
+        if (node.source_subtask_id) {
+          const claimed = claimSubtask.run(plan.id, node.slot_key, roleUserId(node.role_key), node.source_subtask_id, task.id);
+          if (claimed.changes !== 1) throw new Error(`подзадача узла «${node.slot_key}» больше не свободна — её забрал другой план или она уже закрыта`);
+          if (!incoming.has(node.slot_key)) rootSubtasks.push({ id: node.source_subtask_id, slotKey: node.slot_key });
+          return;
+        }
         const subtaskId = crypto.randomUUID();
         const title = node.expected_result || node.slot_key;
         insertSubtask.run(subtaskId, task.id, title, maxPos + index + 1, roleUserId(node.role_key), plan.id, node.slot_key);
@@ -439,7 +489,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     // однозначного смысла — проще прислать граф целиком, как и создаётся.
     let graph: { nodes: Node[]; edges: Edge[] } | null = null;
     if (req.body?.nodes !== undefined) {
-      try { graph = parseGraph(req.body); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
+      try { graph = parseGraph(req.body, task.id); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
     }
     if (!sets.length && !graph) return reply.code(422).send({ error: "нечего менять" });
 
@@ -448,8 +498,8 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       if (graph) {
         db.prepare("DELETE FROM task_collaboration_plan_edges WHERE plan_id = ?").run(plan.id);
         db.prepare("DELETE FROM task_collaboration_plan_nodes WHERE plan_id = ?").run(plan.id);
-        const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json) VALUES (?, ?, ?, ?, ?, ?, ?)");
-        for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact));
+        const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id);
         const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
         for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, edge.from_slot_key, edge.to_slot_key, edge.start_condition, edge.artifact_key);
       }

@@ -355,6 +355,50 @@ describe("collaboration plans", () => {
     expect(afterApprove.statusCode).toBe(409);
   });
 
+  it("source_subtask_id: approve занимает уже существующую подзадачу вместо дубля (умная параллелизация)", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Занять подзадачу узлом ${crypto.randomUUID()}` } });
+    const taskId = task.json().task.id as string;
+    const plainSubtask = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth }, payload: { title: "Разобрать интеграцию с внешним API" } });
+    expect(plainSubtask.statusCode).toBe(200);
+    const subtaskId = plainSubtask.json().id as string;
+
+    const plan = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans`, headers: { authorization: ownerAuth }, payload: {
+      profile: "manual",
+      nodes: [{ slot_key: "delivery", role_key: "builder", expected_result: "Интеграция реализована", source_subtask_id: subtaskId }],
+      edges: [],
+    } });
+    expect(plan.statusCode).toBe(201);
+    expect(plan.json().plan.nodes[0].source_subtask_id).toBe(subtaskId);
+
+    const before = await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } });
+    expect(before.json()).toHaveLength(1); // ещё не approved — дубля нет, подзадача одна
+
+    await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.json().plan.id}/approve`, headers: { authorization: ownerAuth } });
+
+    const after = await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } });
+    const afterList = after.json() as Array<{ id: string; collaboration_plan_id: string | null; plan_node_key: string | null; agent_id: string | null }>;
+    expect(afterList).toHaveLength(1); // approve НЕ создал вторую строку — та же самая подзадача стала узлом
+    expect(afterList[0].id).toBe(subtaskId);
+    expect(afterList[0].collaboration_plan_id).toBe(plan.json().plan.id);
+    expect(afterList[0].plan_node_key).toBe("delivery");
+    expect(afterList[0].agent_id).toBe(roleUserId("builder"));
+  });
+
+  it("source_subtask_id: нельзя занять чужую/закрытую/уже-в-плане подзадачу", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Защита source_subtask_id ${crypto.randomUUID()}` } });
+    const taskId = task.json().task.id as string;
+    const otherTask = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Другая карточка ${crypto.randomUUID()}` } });
+    const foreignSubtask = await app.inject({ method: "POST", url: `/api/tasks/${otherTask.json().task.id}/subtasks`, headers: { authorization: ownerAuth }, payload: { title: "Чужая подзадача" } });
+
+    const rejected = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans`, headers: { authorization: ownerAuth }, payload: {
+      profile: "manual",
+      nodes: [{ slot_key: "delivery", role_key: "builder", source_subtask_id: foreignSubtask.json().id }],
+      edges: [],
+    } });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error).toContain("source_subtask_id");
+  });
+
   it("DELETE явно отклоняет draft, не трогая approved", async () => {
     const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Отказ от черновика ${crypto.randomUUID()}` } });
     const taskId = task.json().task.id as string;
