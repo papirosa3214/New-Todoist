@@ -160,11 +160,18 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
  * решение вызывающего; при `profile: "auto"` флаги считает
  * `autoProductFeatureCandidate()` по тексту задачи. В обоих случаях
  * отключённый узел не оставляет edge на себя.
+ *
+ * Владелец 29.09.2026: участие владельца — только старт (approve плана).
+ * После старта цепочка идёт сама по сданному артефакту (`artifact_ready`),
+ * без ручного `accepted` на каждом внутреннем переходе — иначе смысла в
+ * автоматизации нет. Владелец по-прежнему может `reject`/`revision-request`
+ * в любой момент через существующие эндпоинты (Task 2), просто это больше
+ * не условие для старта следующей роли.
  */
 function productFeatureTemplate(flags: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }): { nodes: Node[]; edges: Edge[]; rationale: string } {
   const artifact = (key: string, type: string, required_fields: string[]): ArtifactContract => ({ key, type, format: "json", required_fields });
   const node = (slot_key: string, role_key: string, expected_result: string, output_artifact: ArtifactContract): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact });
-  const edge = (from_slot_key: string, to_slot_key: string, start_condition: string, artifact_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition, artifact_key });
+  const edge = (from_slot_key: string, to_slot_key: string, artifact_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "artifact_ready", artifact_key });
 
   const nodes: Node[] = [
     node("analysis", "analyst", "feature_spec: scope, out_of_scope, acceptance_criteria, nfr, open_questions", artifact("feature_spec", "specification", ["scope", "out_of_scope", "acceptance_criteria", "nfr", "open_questions"])),
@@ -174,24 +181,24 @@ function productFeatureTemplate(flags: { includeArchitecture: boolean; includeDe
 
   if (flags.includeArchitecture) {
     nodes.push(node("architecture", "architect", "architecture_decision: варианты, решение, последствия, rollout/rollback", artifact("architecture_decision", "decision", ["context", "options", "decision", "consequences", "rollout_rollback"])));
-    edges.push(edge("analysis", "architecture", "accepted", "feature_spec"));
+    edges.push(edge("analysis", "architecture", "feature_spec"));
     included.push("H1");
   }
   if (flags.includeDesign) {
     nodes.push(node("design", "designer", "feature_ux_spec: экраны, state matrix, доступность, открытые вопросы", artifact("feature_ux_spec", "specification", ["screens", "state_matrix", "accessibility", "open_questions"])));
-    edges.push(edge("analysis", "design", "accepted", "feature_spec"));
+    edges.push(edge("analysis", "design", "feature_spec"));
     included.push("D1");
   }
 
   nodes.push(node("delivery", "builder", "implementation_pack: изменения, build id, тесты, deployment notes", artifact("implementation_pack", "pack", ["change_refs", "build_id", "test_report", "deployment_notes", "known_limitations"])));
-  edges.push(edge("analysis", "delivery", "accepted", "feature_spec"));
-  if (flags.includeArchitecture) edges.push(edge("architecture", "delivery", "accepted", "architecture_decision"));
-  if (flags.includeDesign) edges.push(edge("design", "delivery", "accepted", "feature_ux_spec"));
+  edges.push(edge("analysis", "delivery", "feature_spec"));
+  if (flags.includeArchitecture) edges.push(edge("architecture", "delivery", "architecture_decision"));
+  if (flags.includeDesign) edges.push(edge("design", "delivery", "feature_ux_spec"));
   included.push("V1");
 
   if (flags.includeQa) {
     nodes.push(node("qa", "qa", "feature_test_report: acceptance matrix, evidence, дефекты, рекомендация", artifact("feature_test_report", "report", ["acceptance_matrix", "evidence", "defects", "recommendation"])));
-    edges.push(edge("delivery", "qa", "artifact_ready", "implementation_pack"));
+    edges.push(edge("delivery", "qa", "implementation_pack"));
     included.push("Q1");
   }
 
