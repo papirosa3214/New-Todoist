@@ -135,8 +135,11 @@ role tokens и временного JWT/MCP-пути выполнять отде
 
 ## Известные хвосты
 
-- Сервер поднимается вручную (`npm run dev` в `server/`), службой не
-  заведён — в отличие от будильника.
+- Сервер — systemd user-сервис `taskflow-server.service` (`tsx watch
+  src/index.ts`, порт 3001), НЕ вручную `npm run dev`. Перезапуск:
+  `systemctl --user restart taskflow-server.service`, sudo не нужен.
+  Проверено 29.09.2026 (T03): `systemctl --user status` показал
+  `enabled`/`active (running)`, живой с 28.09.2026.
 - ⚠️ Ядро AI Control Center запускается ТОЙ ЖЕ командой `tsx src/index.ts`.
   Перед `kill` смотреть рабочий каталог (`ls -l /proc/PID/cwd`) или порт:
   3001 — TaskFlow, 8301 — ядро.
