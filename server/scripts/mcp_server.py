@@ -1379,7 +1379,7 @@ def t_youtube(args):
         )
         title = (meta.stdout or "").strip().splitlines()[0] if meta.stdout.strip() else ""
 
-        subprocess.run(
+        subs = subprocess.run(
             ["yt-dlp", "--skip-download", "--extractor-args",
              "youtube:player_client=web,mweb",
              "--write-subs", "--write-auto-subs",
@@ -1389,6 +1389,24 @@ def t_youtube(args):
         )
         files = sorted(glob.glob(os.path.join(work, "*.vtt")))
         if not files:
+            # Владелец 30.09.2026: раньше здесь молча врали «нет субтитров»
+            # на ЛЮБОЙ сбой yt-dlp — бан за бота, сеть, что угодно — потому
+            # что код result скачивания вообще не смотрел. Найдено живьём:
+            # видео Стива Джобса (Stanford, точно с субтитрами) тоже давало
+            # эту же фразу — настоящая причина была в stderr, которую никто
+            # не читал. Теперь при пустом files разбираем stderr сами: если
+            # похоже на антибот-блок YouTube — говорим прямо, не выдаём его
+            # за «у видео нет субтитров» (это разные, несмежные причины и
+            # разные действия в ответ — ждать не поможет прокси починить).
+            stderr = (subs.stderr or "").strip()
+            if "Sign in to confirm" in stderr or "not a bot" in stderr:
+                raise TaskFlowError(
+                    "YouTube требует подтверждения «я не бот» с этого IP/сети — "
+                    "не про субтитры конкретного видео, антибот-блок. "
+                    f"yt-dlp: {stderr.splitlines()[-1][:300] if stderr else ''}"
+                )
+            if subs.returncode != 0 and stderr:
+                raise TaskFlowError(f"yt-dlp не смог получить субтитры (код {subs.returncode}): {stderr.splitlines()[-1][:300]}")
             raise TaskFlowError("у видео нет субтитров (ни ручных, ни авто)")
         with open(files[0], encoding="utf-8", errors="ignore") as f:
             text = _vtt_to_text(f.read())
