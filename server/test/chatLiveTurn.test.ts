@@ -18,7 +18,9 @@ import {
   redactSecrets,
   startLiveTurn,
   stepDetail,
+  stepDetailFallback,
   stripQuickRepliesLine,
+  unwrapRoleEnvelope,
 } from "../src/runtime/chatLiveTurn.js";
 
 const text = (delta: string) => ({
@@ -205,7 +207,11 @@ describe("подпись шага", () => {
     expect(stepDetail("read", { path: "/home/maksim/p/a.ts" })).toBe("~/p/a.ts");
     expect(stepDetail("bash", { command: "npm\n  test" })).toBe("npm test");
     expect(stepDetail("grep", { pattern: "foo", path: "/Users/max/x" })).toBe("foo — ~/x");
-    expect(stepDetail("taskflow_create_task", { title: "Позвонить" })).toBe("Позвонить");
+    expect(stepDetail("taskflow_create_task", { title: "Позвонить" })).toBe("новая задача — Позвонить");
+    expect(stepDetail("taskflow_taskflow_agents", {})).toBe("кто на связи");
+    expect(stepDetail("web_search", { query: "погода" })).toBe("погода");
+    expect(stepDetailFallback("taskflow_taskflow_project_tasks", null)).toBe("задачи проекта");
+    expect(stepDetailFallback("read", null)).toBeNull();
     expect(stepDetail("mcp", { tool: "taskflow_taskflow_status" })).toBe("сводка доски");
     expect(stepDetail("mcp", { tool: "taskflow_taskflow_kb_search", args: { query: "стриминг" } })).toBe(
       "поиск в базе знаний — стриминг",
@@ -232,5 +238,50 @@ describe("текст о сорванном ходе", () => {
     expect(chatRunFailureText(new Error("model_not_available: x\nStderr: boom"))).toBe(
       "Не смог ответить: model_not_available: x",
     );
+  });
+});
+
+describe("конверт ответа роли (01.10.2026)", () => {
+  const envelope = [
+    "Нашёл главное.",
+    "",
+    "```",
+    "ok: true",
+    "output: |",
+    "  Решение зафиксировано.",
+    "",
+    "  - 8 шагов: миграция → тесты.",
+    "artifacts:",
+    "  - задача 2b2638a2",
+    "error: null",
+    "next_hint: |",
+    "  Дай ответ на 4 пункта.",
+    "needs_human: true",
+    "```",
+    "",
+    "Жду твой DAG.",
+  ].join("\n");
+
+  it("оставляет только output, текст вокруг не трогает", () => {
+    expect(unwrapRoleEnvelope(envelope)).toBe(
+      "Нашёл главное.\n\nРешение зафиксировано.\n\n- 8 шагов: миграция → тесты.\n\nЖду твой DAG.",
+    );
+  });
+
+  it("недописанный конверт живого хода — уже без обёртки", () => {
+    expect(unwrapRoleEnvelope("```\nok: true\noutput: |\n  Решение зафикс")).toBe("Решение зафикс");
+    expect(unwrapRoleEnvelope("```\nok: true\nout")).toBe("");
+  });
+
+  it("обычный код и текст без конверта не меняются", () => {
+    const code = "Вот:\n```ts\nconst ok = true;\n```";
+    expect(unwrapRoleEnvelope(code)).toBe(code);
+    expect(unwrapRoleEnvelope("```yaml\nok: maybe\n```")).toBe("```yaml\nok: maybe\n```");
+  });
+
+  it("в живом снимке конверт тоже снят", () => {
+    const turn = newTurn();
+    turn.onEvent(text("```\nok: true\noutput: |\n  Готово.\n```"));
+    expect(liveTurnsOfChat("c1")[0].items).toEqual([{ kind: "text", text: "Готово." }]);
   });
 });

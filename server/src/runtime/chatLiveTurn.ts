@@ -17,6 +17,7 @@
 // открыть целиком после хода. `id`/`tool`/`status` у него есть нарочно —
 // клиент, который про размышления ещё не знает, разбирает его как шаг и не
 // роняет весь снимок.
+import { parse as parseYaml } from "yaml";
 import { broadcastToUsers } from "../ws.js";
 
 export const LIVE_BROADCAST_MS = 150;
@@ -159,12 +160,21 @@ export function stepDetail(tool: string, args: unknown): string | null {
     default: {
       // Инструменты трекера и прочие: первая осмысленная строка из
       // аргументов (название задачи, запрос поиска и т.п.).
+      let arg: string | null = null;
       for (const k of ["title", "query", "text", "url", "name", "id"]) {
         if (str(k)) {
-          raw = str(k);
+          arg = str(k);
           break;
         }
       }
+      // Инструмент трекера, вызванный напрямую (`taskflow_taskflow_agents`),
+      // без подписи был голым «Действием» (владелец 01.10.2026: «про
+      // инструмент ничего не написано») — называем его по-человечески.
+      raw = tool.startsWith("taskflow_")
+        ? arg
+          ? `${mcpToolTitle(tool)} — ${arg}`
+          : mcpToolTitle(tool)
+        : arg;
     }
   }
   return raw ? clip(redactSecrets(raw)) : null;
@@ -233,6 +243,55 @@ export function stripQuickRepliesLine(text: string): string {
     if (t.length > 0 && "БЫСТРО:".startsWith(t)) kept.pop();
   }
   return kept.join("\n");
+}
+
+/** Подпись для шага, сохранённого до 01.10.2026 без неё: инструмент трекера
+ *  называем по имени, остальное оставляем как было. */
+export function stepDetailFallback(tool: string, detail: string | null): string | null {
+  if (detail || !tool.startsWith("taskflow_")) return detail;
+  return mcpToolTitle(tool);
+}
+
+// ── Конверт ответа роли ─────────────────────────────────────────────────
+
+// Промпты ролей (scripts/role-prompts/*.md) велят сдавать работу по задаче
+// конвертом `ok / output / artifacts / error / next_hint / needs_human`, и в
+// чате роли по привычке заворачивают в него ответ — блоком кода. Владелец
+// 01.10.2026 видел это «кодовым окном». В чате показываем только `output`.
+const FENCE_RE = /```[\w-]*[ \t]*\n([\s\S]*?)(?:\n[ \t]*```[ \t]*(?=\n|$)|$)/g;
+
+function envelopeOutput(body: string): string | null {
+  const first = body.split("\n").find((l) => l.trim());
+  if (!first || !/^ok:\s*(true|false)\s*$/.test(first.trim())) return null;
+  try {
+    const doc = parseYaml(body) as unknown;
+    if (doc && typeof doc === "object" && typeof (doc as { output?: unknown }).output === "string") {
+      return ((doc as { output: string }).output).trim();
+    }
+  } catch {
+    // Конверт ещё не дописан (живой ход) — ниже вынимаем output руками.
+  }
+  const lines = body.split("\n");
+  const at = lines.findIndex((l) => /^output:/.test(l));
+  if (at < 0) return "";
+  const inline = lines[at].replace(/^output:\s*/, "");
+  if (inline && !/^[|>][-+]?\s*$/.test(inline)) {
+    return inline.replace(/^["']|["']$/g, "").trim();
+  }
+  const block: string[] = [];
+  for (const line of lines.slice(at + 1)) {
+    if (line.trim() && !/^\s/.test(line)) break;
+    block.push(line);
+  }
+  const indents = block.filter((l) => l.trim()).map((l) => l.match(/^\s*/)![0].length);
+  const cut = indents.length ? Math.min(...indents) : 0;
+  return block.map((l) => l.slice(cut)).join("\n").trim();
+}
+
+/** Снять конверт `ok/output/...` с ответа роли, оставив текст `output`. */
+export function unwrapRoleEnvelope(text: string): string {
+  if (!text || !/ok:\s*(true|false)/.test(text)) return text;
+  return text.replace(FENCE_RE, (whole, body: string) => envelopeOutput(body) ?? whole);
 }
 
 // ── Сам ход ─────────────────────────────────────────────────────────────
@@ -357,7 +416,7 @@ export class LiveTurn {
     const items: LiveItem[] = [];
     for (const it of this.items) {
       if (it.kind === "text") {
-        const text = stripQuickRepliesLine(it.text);
+        const text = unwrapRoleEnvelope(stripQuickRepliesLine(it.text));
         if (text.trim()) items.push({ kind: "text", text });
       } else if (it.kind === "thinking") {
         // Законченное пустое размышление (модель скрыла текст) — не

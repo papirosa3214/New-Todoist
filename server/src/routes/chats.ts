@@ -31,6 +31,8 @@ import {
   chatRunFailureText,
   liveTurnsOfChat,
   startLiveTurn,
+  stepDetailFallback,
+  unwrapRoleEnvelope,
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import {
@@ -81,8 +83,20 @@ function withAttachments(message: any) {
     is_session_marker: Boolean(message.is_session_marker),
     // Шаги хода роли (владелец 27.09.2026, живой ход как в Claude Code) —
     // JSON-строка в chat_messages.steps, см. runtime/chatLiveTurn.ts.
-    steps: message.steps ? JSON.parse(message.steps) : null,
+    steps: message.steps ? savedSteps(message.steps) : null,
+    // Конверт ok/output в ответе роли (01.10.2026) — показываем только output,
+    // в том числе у сообщений, сохранённых раньше.
+    text: typeof message.text === "string" ? unwrapRoleEnvelope(message.text) : message.text,
   };
+}
+
+/** Шаги из БД; инструментам трекера без подписи — подпись по имени. */
+function savedSteps(raw: string): SavedSteps {
+  const steps = JSON.parse(raw) as SavedSteps;
+  for (const it of steps.items ?? []) {
+    if (it.kind === "step") it.detail = stepDetailFallback(it.tool, it.detail);
+  }
+  return steps;
 }
 
 type ChatKind = "direct" | "group";
@@ -250,7 +264,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         };
         return {
           ...chatRow(c.id),
-          last_message: last ?? null,
+          last_message: last
+            ? { ...last, text: typeof last.text === "string" ? unwrapRoleEnvelope(last.text) : last.text }
+            : null,
           unread_count: unread,
           // Название задачи для пометки в строке списка: по ней видно, какой
           // чат за какой задачей (владелец 21.09.2026, LOCK-195).
@@ -1131,7 +1147,7 @@ async function deliverAgentReply(args: {
 
   const replyText = failure
     ? chatRunFailureText(failure)
-    : (reply?.text || "").trim();
+    : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
   if (!replyText) return null;
 
   const replyId = uid();
