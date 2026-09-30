@@ -111,6 +111,8 @@ function releasePromptWaiter(index: number): void {
 const fakeClients: FakeRpcClient[] = [];
 /** Следующий promptAndWait упадёт этой ошибкой — сорванный ход рантайма. */
 let failNextPrompt: Error | null = null;
+/** Текст ответа по номеру клиента (хода); null — стандартный ответ. */
+let replyTextFor: ((index: number) => string) | null = null;
 
 function makeFakeRpcClient(options: any): FakeRpcClient {
   // Имитируем --session-id в Pi: если в args передан --session-id, getState
@@ -134,7 +136,7 @@ function makeFakeRpcClient(options: any): FakeRpcClient {
         id: options?.model ?? "claude-sonnet-5",
       },
     })),
-    getLastAssistantText: vi.fn(async () => "ответил агент"),
+    getLastAssistantText: vi.fn(async () => (replyTextFor ? replyTextFor(index) : "ответил агент")),
     promptAndWait: vi.fn(async () => {
       if (failNextPrompt) {
         const error = failNextPrompt;
@@ -317,6 +319,7 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     blockedPromptIndexes.clear();
     promptWaiters.length = 0;
     broadcastCalls.length = 0;
+    replyTextFor = null;
     // Сбрасываем in-memory карту активных сессий и лок, чтобы тесты
     // не цеплялись друг за друга. На каждый тест — чистое состояние.
     resetModelRuntime();
@@ -778,5 +781,148 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
 
     const repliesAfter = messagesByAuthor(chatId, "role_qa");
     expect(repliesAfter).toHaveLength(2);
+  });
+  async function send(chatId: string, text: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+      payload: { text },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().message;
+  }
+
+  it("ответ роли: chat:new несёт готовое сообщение раньше, чем «ход закончен»", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_architect"] })).json().chat.id;
+    blockPromptFor(0);
+    await send(chatId, "@architect глянь");
+    await tick(30);
+    lastClient().emit({ type: "tool_execution_start", toolCallId: "c1", toolName: "read", args: { path: "/a" } });
+    lastClient().emit({ type: "tool_execution_end", toolCallId: "c1", toolName: "read", isError: false });
+    releasePromptWaiter(0);
+    await tick(80);
+
+    const newIdx = broadcastCalls.findIndex(
+      (c) => c.event?.type === "chat:new" && c.event.message?.from_user_id === "role_architect",
+    );
+    const endIdx = broadcastCalls.findIndex((c) => c.event?.type === "chats:live" && c.event.turn === null);
+    expect(newIdx).toBeGreaterThanOrEqual(0);
+    expect(endIdx).toBeGreaterThan(newIdx);
+    const message = broadcastCalls[newIdx].event.message;
+    expect(broadcastCalls[endIdx].event.message_id).toBe(message.id);
+    // Формат тот же, что у истории: шаги объектом, флаги булевы, вложения массивом.
+    expect(message.is_session_marker).toBe(false);
+    expect(message.steps.items[0]).toMatchObject({ kind: "step", tool: "read" });
+    expect(message.attachments).toEqual([]);
+  });
+
+  it("ошибка модели с пустым ответом — в чат ложится причина, а не тишина", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_architect"] })).json().chat.id;
+    replyTextFor = () => "";
+    blockPromptFor(0);
+    await send(chatId, "@architect ты тут?");
+    await tick(30);
+    lastClient().emit({
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "error", errorMessage: "Request timed out." }],
+    });
+    releasePromptWaiter(0);
+    await tick(80);
+    expect(messagesByAuthor(chatId, "role_architect").map((m) => m.text)).toEqual([
+      "Не смог ответить: Request timed out.",
+    ]);
+  });
+
+  it("несколько @упоминаний — отвечает каждая упомянутая роль", async () => {
+    const chatId = (
+      await createChat({ kind: "group", member_ids: ["role_architect", "role_qa", "role_builder"] })
+    ).json().chat.id;
+    await send(chatId, "@architect и @qa, что думаете?");
+    await tick(150);
+    expect(messagesByAuthor(chatId, "role_architect")).toHaveLength(1);
+    expect(messagesByAuthor(chatId, "role_qa")).toHaveLength(1);
+    expect(messagesByAuthor(chatId, "role_builder")).toHaveLength(0);
+  });
+
+  it("роль зовёт коллегу через @имя — тот отвечает следом в том же чате", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_architect", "role_qa"] })).json().chat.id;
+    replyTextFor = (i) => (i === 0 ? "@qa проверь, пожалуйста, граничные случаи" : "Проверил, всё в порядке");
+    await send(chatId, "@architect спроектируй");
+    await tick(250);
+    expect(messagesByAuthor(chatId, "role_architect")).toHaveLength(1);
+    expect(messagesByAuthor(chatId, "role_qa").map((m) => m.text)).toEqual(["Проверил, всё в порядке"]);
+    // QA получил сообщение архитектора как новое сообщение хода.
+    const qaPrompt = String(fakeClients[1].promptAndWait.mock.calls[0][0]);
+    expect(qaPrompt).toContain("architect: @qa проверь");
+  });
+
+  it("пинг-понг ролей ограничен — без человека разговор затихает", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_architect", "role_qa"] })).json().chat.id;
+    replyTextFor = (i) => (i % 2 === 0 ? "@qa твой ход" : "@architect твой ход");
+    await send(chatId, "@architect начни");
+    await tick(700);
+    // Первый ответ + MAX_AGENT_HOPS передач.
+    expect(fakeClients).toHaveLength(5);
+  });
+
+  it("продолжение сессии получает только новое, без повторной инструкции и истории", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_qa"] })).json().chat.id;
+    await send(chatId, "@qa первый вопрос");
+    await tick(120);
+    await send(chatId, "@qa второй вопрос");
+    await tick(120);
+    const first = String(fakeClients[0].promptAndWait.mock.calls[0][0]);
+    const second = String(fakeClients[1].promptAndWait.mock.calls[0][0]);
+    expect(first).toContain("Участники чата:");
+    expect(second).toContain("Продолжаем разговор");
+    expect(second).toContain("второй вопрос");
+    expect(second).not.toContain("первый вопрос");
+    expect(second).not.toContain("Участники чата:");
+  });
+
+  it("«Остановить» прерывает ход, написанное ролью остаётся в чате", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_architect"] })).json().chat.id;
+    blockPromptFor(0);
+    await send(chatId, "@architect длинная работа");
+    await tick(30);
+    lastClient().emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "Начал разбирать конфиг" },
+    });
+    const stop = await app.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/stop`,
+      headers: ownerAuth,
+      payload: {},
+    });
+    expect(stop.json()).toEqual({ stopped: 1 });
+    expect(lastClient().abort).toHaveBeenCalled();
+    releasePromptWaiter(0);
+    await tick(80);
+    expect(messagesByAuthor(chatId, "role_architect").map((m) => m.text)).toEqual([
+      "Начал разбирать конфиг\n\n_Остановлено._",
+    ]);
+  });
+  it("список чатов: виджет и артефакт в превью — словом, а не кодом", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_architect"] })).json().chat.id;
+    replyTextFor = () => "Держи калькулятор:\n```html\n<button>1</button>\n```";
+    await send(chatId, "@architect сделай калькулятор");
+    await tick(120);
+    const list = await app.inject({ method: "GET", url: "/api/chats", headers: ownerAuth });
+    const row = list.json().chats.find((c: any) => c.id === chatId);
+    expect(row.last_message.text).toBe("Держи калькулятор:\n✦ Интерактив");
+    // В самой истории ответ целиком — его рисует клиент.
+    expect(messagesByAuthor(chatId, "role_architect")[0].text).toContain("<button>1</button>");
+  });
+
+  it("первый ход роли знает про таблицы, виджеты и интерактив", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_qa"] })).json().chat.id;
+    await send(chatId, "@qa привет");
+    await tick(120);
+    const prompt = String(fakeClients[0].promptAndWait.mock.calls[0][0]);
+    expect(prompt).toContain("```widget");
+    expect(prompt).toContain("taskflow_weather");
+    expect(prompt).toContain("языком html");
   });
 });

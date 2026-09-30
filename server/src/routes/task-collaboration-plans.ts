@@ -5,7 +5,15 @@ import { getTaskForRead, isOrchestrator, isOwner } from "../access.js";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
-import { startPlanSubtaskRun } from "../runtime/planSubtaskAdmission.js";
+import { startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import {
+  applyPlanOps,
+  decidePlanProposal,
+  pendingPlanProposals,
+  planHistory,
+  PlanOpError,
+  type PlanOp,
+} from "../runtime/planMutations.js";
 import { suggestFanoutFromSubtasks } from "../runtime/subtaskRoleFanout.js";
 
 const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual", "product_feature"]);
@@ -24,6 +32,7 @@ type Plan = {
   approved_by: string | null;
   approved_at: string | null;
   created_at: string;
+  version?: number;
 };
 
 type ArtifactContract = { key: string; type: string; format: "json"; required_fields: string[] };
@@ -36,9 +45,22 @@ function mayManage(userId: string): boolean {
   return isOwner(userId) || isOrchestrator(userId);
 }
 
+type NodeExtra = {
+  instructions: string | null;
+  origin: string;
+  added_by: string | null;
+  added_reason: string | null;
+  iteration: number;
+  rework_of_key: string | null;
+  skipped_at: string | null;
+  skip_reason: string | null;
+};
+
 function present(plan: Plan) {
-  const nodes = db.prepare("SELECT slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key")
-    .all(plan.id) as Array<Omit<Node, "required" | "output_artifact"> & { required: number; output_artifact_json: string | null }>;
+  const nodes = db.prepare(`SELECT slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id,
+                                   instructions, origin, added_by, added_reason, iteration, rework_of_key, skipped_at, skip_reason
+                              FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY rowid`)
+    .all(plan.id) as Array<Omit<Node, "required" | "output_artifact"> & NodeExtra & { required: number; output_artifact_json: string | null }>;
   const edges = db.prepare("SELECT from_slot_key, to_slot_key, start_condition, artifact_key FROM task_collaboration_plan_edges WHERE plan_id = ? ORDER BY from_slot_key, to_slot_key")
     .all(plan.id) as Edge[];
   return {
@@ -50,9 +72,38 @@ function present(plan: Plan) {
       expected_result: node.expected_result,
       output_artifact: node.output_artifact_json === null ? null : JSON.parse(node.output_artifact_json) as ArtifactContract,
       source_subtask_id: node.source_subtask_id ?? null,
+      // Живой план (01.10.2026): задание, кто и зачем добавил шаг, круг
+      // доработки, пропуск с причиной.
+      instructions: node.instructions ?? null,
+      origin: node.origin ?? "template",
+      added_by: node.added_by ?? null,
+      added_reason: node.added_reason ?? null,
+      iteration: node.iteration ?? 0,
+      rework_of_key: node.rework_of_key ?? null,
+      skipped_at: node.skipped_at ?? null,
+      skip_reason: node.skip_reason ?? null,
     })),
     edges,
+    version: plan.version ?? 1,
+    pending_proposals: plan.status === "superseded" ? [] : pendingPlanProposals(plan.id),
   };
+}
+
+/** Ответ на ошибку правки плана — со статусом, который она несёт. */
+function planOpFailure(reply: any, error: unknown) {
+  if (error instanceof PlanOpError) return reply.code(error.status).send({ error: error.message });
+  throw error;
+}
+
+/** После правки запущенного плана: открыть и запустить шаги, которые стали готовы. */
+async function afterLiveChange(planId: string, taskId: string, actorId: string): Promise<void> {
+  const plan = db.prepare("SELECT status FROM task_collaboration_plans WHERE id = ?").get(planId) as { status: string } | undefined;
+  if (plan?.status !== "approved") return;
+  try {
+    await unlockReadyPlanSubtasks(planId, taskId, actorId);
+  } catch (error) {
+    logEvent({ taskId, actorId, kind: "plan_subtask_autostart_failed", field: planId, toValue: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 function parseArtifactContract(raw: unknown): ArtifactContract | null {
@@ -500,6 +551,106 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     })();
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_edited", field: `revision:${plan.revision}`, toValue: graph ? "graph+meta" : "meta" });
     return { plan: present(planForTask(task.id, plan.id)!) };
+  });
+
+  // Живой план (владелец 01.10.2026): правка операциями — и черновика, и
+  // уже запущенного. Сданное и идущее не трогается; новые шаги запущенного
+  // плана становятся подзадачами и стартуют сами, когда готовы.
+  app.post<{
+    Params: { id: string; planId: string };
+    Body: { base_version?: unknown; ops?: unknown; reason?: unknown };
+  }>("/api/tasks/:id/collaboration-plans/:planId/ops", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!mayManage(req.userId)) return reply.code(403).send({ error: "план правит владелец или оркестратор; роли — через свой шаг" });
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const plan = planForTask(task.id, req.params.planId);
+    if (!plan) return reply.code(404).send({ error: "plan not found" });
+    const base = req.body?.base_version;
+    if (base !== undefined && base !== null && !Number.isInteger(base)) return reply.code(400).send({ error: "base_version — целое" });
+    try {
+      const result = applyPlanOps(plan.id, req.body?.ops as PlanOp[], { kind: "owner", id: req.userId }, {
+        baseVersion: (base as number | null | undefined) ?? null,
+        reason: typeof req.body?.reason === "string" ? req.body.reason : null,
+      });
+      await afterLiveChange(plan.id, task.id, req.userId);
+      return { result, plan: present(planForTask(task.id, plan.id)!) };
+    } catch (error) {
+      return planOpFailure(reply, error);
+    }
+  });
+
+  // Предложение роли сверх лимита — решает владелец.
+  for (const decision of ["approve", "reject"] as const) {
+    app.post<{ Params: { id: string; planId: string; opId: string } }>(
+      `/api/tasks/:id/collaboration-plans/:planId/proposals/:opId/${decision}`,
+      { preHandler: authOrApiToken },
+      async (req: any, reply) => {
+        if (!isOwner(req.userId)) return reply.code(403).send({ error: "по предложениям ролей решает владелец" });
+        const task = getTaskForRead(req.params.id, req.userId);
+        if (!task) return reply.code(404).send({ error: "Not found" });
+        const plan = planForTask(task.id, req.params.planId);
+        if (!plan) return reply.code(404).send({ error: "plan not found" });
+        const owned = db.prepare("SELECT 1 FROM task_collaboration_plan_ops WHERE id = ? AND plan_id = ?").get(req.params.opId, plan.id);
+        if (!owned) return reply.code(404).send({ error: "предложение не найдено" });
+        try {
+          const result = decidePlanProposal(req.params.opId, req.userId, decision === "approve");
+          await afterLiveChange(plan.id, task.id, req.userId);
+          return { result, plan: present(planForTask(task.id, plan.id)!) };
+        } catch (error) {
+          return planOpFailure(reply, error);
+        }
+      },
+    );
+  }
+
+  // История плана: кто, что и зачем менял.
+  app.get<{ Params: { id: string; planId: string } }>("/api/tasks/:id/collaboration-plans/:planId/history", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan доступен владельцу или оркестратору" });
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const plan = planForTask(task.id, req.params.planId);
+    if (!plan) return reply.code(404).send({ error: "plan not found" });
+    return { history: planHistory(plan.id) };
+  });
+
+  // Роль достраивает план из своего идущего шага: нужен ещё шаг (add_step)
+  // или, у QA/критика, доработка (rework). В пределах лимита — сразу, выше —
+  // предложением владельцу.
+  app.post<{
+    Params: { id: string };
+    Body: { kind?: unknown; role?: unknown; expected_result?: unknown; instructions?: unknown; reason?: unknown; after?: unknown; before?: unknown; defects?: unknown };
+  }>("/api/subtasks/:id/plan-request", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    const step = db.prepare("SELECT id, task_id, collaboration_plan_id, plan_node_key, agent_id FROM subtasks WHERE id = ?")
+      .get(req.params.id) as { id: string; task_id: string; collaboration_plan_id: string | null; plan_node_key: string | null; agent_id: string | null } | undefined;
+    if (!step || !getTaskForRead(step.task_id, req.userId)) return reply.code(404).send({ error: "Not found" });
+    if (!step.collaboration_plan_id || !step.plan_node_key) return reply.code(400).send({ error: "это не шаг плана совместной работы" });
+    const node = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
+      .get(step.collaboration_plan_id, step.plan_node_key) as { role_key: string } | undefined;
+    if (!node || roleUserId(node.role_key) !== req.userId) return reply.code(403).send({ error: "менять план можно только из своего шага" });
+    const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
+    const kind = String(req.body?.kind ?? "add_step");
+    const op: PlanOp = kind === "rework"
+      ? { op: "rework", from_slot: step.plan_node_key, role_key: req.body?.role ? String(req.body.role) : undefined, defects: String(req.body?.defects ?? req.body?.expected_result ?? "") }
+      : { op: "add_step", role_key: String(req.body?.role ?? ""), expected_result: String(req.body?.expected_result ?? ""),
+          instructions: req.body?.instructions ? String(req.body.instructions) : undefined, after: list(req.body?.after), before: list(req.body?.before) };
+    if (kind !== "rework" && kind !== "add_step") return reply.code(400).send({ error: "kind: add_step | rework" });
+    try {
+      const result = applyPlanOps(step.collaboration_plan_id, [op], { kind: "role", id: req.userId, roleKey: node.role_key, slotKey: step.plan_node_key }, {
+        reason: typeof req.body?.reason === "string" ? req.body.reason : null,
+      });
+      // Новые шаги стартуют после сдачи текущего (они ждут его), но шаг,
+      // добавленный без зависимости от автора, может открыться сразу.
+      await afterLiveChange(step.collaboration_plan_id, step.task_id, req.userId);
+      const plan = db.prepare("SELECT * FROM task_collaboration_plans WHERE id = ?").get(step.collaboration_plan_id) as Plan;
+      const view = present(plan);
+      return {
+        result,
+        plan: view.nodes.map((n) => ({ slot_key: n.slot_key, role: n.role_key, expected_result: n.expected_result, skipped: Boolean(n.skipped_at) })),
+        edges: view.edges.map((e) => `${e.from_slot_key} → ${e.to_slot_key}`),
+      };
+    } catch (error) {
+      return planOpFailure(reply, error);
+    }
   });
 
   // Явный отказ от черновика — владелец решил «нет, не план, одного

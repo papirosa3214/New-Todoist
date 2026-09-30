@@ -27,15 +27,19 @@ import crypto from "node:crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { broadcastToUsers } from "../ws.js";
-import { deliverSecretaryReply, SECRETARY_CHAT_ID } from "../lib/secretaryReply.js";
+import {
+  deliverSecretaryReply,
+  SECRETARY_CHAT_ID,
+  SECRETARY_USER_ID,
+} from "../lib/secretaryReply.js";
 import {
   chatRunFailureText,
   liveTurnsOfChat,
   startLiveTurn,
-  stepDetailFallback,
   unwrapRoleEnvelope,
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
+import { formatChatMessage, loadChatMessage } from "../lib/chatMessages.js";
 import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
@@ -47,6 +51,7 @@ import {
   getChatSessionId,
 } from "../runtime/chatSession.js";
 import {
+  cancelChatRunsFor,
   startChatRun,
 } from "../runtime/PiRuntimeAdapter.js";
 import {
@@ -63,44 +68,16 @@ import {
 
 const uid = () => crypto.randomUUID();
 
-// Вложения сообщения — тем же приёмом, что в routes/chat.ts: ленивая
-// подготовка SELECT, чтобы db.prepare с колонкой chat_message_id не
-// падал на импорте, если миграция 053 ещё не прошла (тот же риск, та же
-// причина — index.ts импортирует маршруты раньше, чем прогоняет миграции).
-let attachmentsOf: import("better-sqlite3").Statement | null = null;
-
-function withAttachments(message: any) {
-  if (!message) return message;
-  attachmentsOf ??= db.prepare(
-    `SELECT id, file_name, mime, size FROM attachments
-      WHERE chat_message_id = ? ORDER BY created_at`,
-  );
-  return {
-    ...message,
-    attachments: attachmentsOf.all(message.id),
-    // Быстрые ответы (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/) —
-    // хранятся в chat_messages.quick_replies как JSON-строка (у SQLite
-    // нет своего типа массива), здесь разворачиваем в настоящий массив.
-    quick_replies: message.quick_replies ? JSON.parse(message.quick_replies) : null,
-    // SQLite отдаёт 0/1 числом — iOS Decodable для Bool ждёт true/false,
-    // не 0/1, приводим здесь же.
-    is_session_marker: Boolean(message.is_session_marker),
-    // Шаги хода роли (владелец 27.09.2026, живой ход как в Claude Code) —
-    // JSON-строка в chat_messages.steps, см. runtime/chatLiveTurn.ts.
-    steps: message.steps ? savedSteps(message.steps) : null,
-    // Конверт ok/output в ответе роли (01.10.2026) — показываем только output,
-    // в том числе у сообщений, сохранённых раньше.
-    text: typeof message.text === "string" ? unwrapRoleEnvelope(message.text) : message.text,
-  };
-}
-
-/** Шаги из БД; инструментам трекера без подписи — подпись по имени. */
-function savedSteps(raw: string): SavedSteps {
-  const steps = JSON.parse(raw) as SavedSteps;
-  for (const it of steps.items ?? []) {
-    if (it.kind === "step") it.detail = stepDetailFallback(it.tool, it.detail);
-  }
-  return steps;
+/** Превью в списке чатов: без конверта, виджет и артефакт — словом, а не
+ *  кодом. */
+function previewText(text: string): string {
+  return unwrapRoleEnvelope(text)
+    .replace(/```(?:html|artifact)[^\n]*\n[\s\S]*?(?:```|$)/g, "✦ Интерактив")
+    .replace(/```widget[^\n]*\n[\s\S]*?(?:```|$)/g, (block) => {
+      const type = block.match(/"type"\s*:\s*"([a-z_]+)"/)?.[1];
+      return type === "weather" ? "🌤 Погода" : "▦ Виджет";
+    })
+    .trim();
 }
 
 type ChatKind = "direct" | "group";
@@ -269,7 +246,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         return {
           ...chatRow(c.id),
           last_message: last
-            ? { ...last, text: typeof last.text === "string" ? unwrapRoleEnvelope(last.text) : last.text }
+            ? { ...last, text: typeof last.text === "string" ? previewText(last.text) : last.text }
             : null,
           unread_count: unread,
           // Название задачи для пометки в строке списка: по ней видно, какой
@@ -459,10 +436,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
              FROM chat_messages m
              LEFT JOIN users f ON f.id = m.from_user_id
              LEFT JOIN tasks t ON t.id = m.task_id
-            WHERE m.chat_id = ? ORDER BY m.created_at ASC`,
+            WHERE m.chat_id = ? ORDER BY m.created_at ASC, m.rowid ASC`,
         )
         .all(req.params.id);
-      return { messages: messages.map(withAttachments) };
+      return { messages: messages.map(formatChatMessage) };
     },
   );
 
@@ -542,19 +519,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         for (const attId of attachmentIds) attach.run(id, attId, req.userId);
       }
 
-      const message = withAttachments(
-        db
-          .prepare(
-            `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
-                    f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
-                    t.title as task_title
-               FROM chat_messages m
-               LEFT JOIN users f ON f.id = m.from_user_id
-               LEFT JOIN tasks t ON t.id = m.task_id
-              WHERE m.id = ?`,
-          )
-          .get(id),
-      );
+      const message = loadChatMessage(id);
 
       const audience = memberIds(chatId).filter((m) => m !== req.userId);
       broadcastToUsers([...audience, req.userId], {
@@ -562,46 +527,27 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         message,
       });
 
-      // Этап 2: попытка авто-ответа. Делается «best effort»: ошибки НЕ
-      // должны откатывать уже сохранённое сообщение и не должны ронять
-      // запрос — пользователь уже видит своё сообщение в ленте. Поэтому
-      // вокруг — try/catch с логированием.
+      // Этап 2: авто-ответ ролей. «Best effort»: ошибки НЕ откатывают уже
+      // сохранённое сообщение и не роняют запрос — пользователь уже видит
+      // своё сообщение в ленте.
       //
       // Секретарь (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/) —
-      // отдельная ветка: chatMemberRoles/roleAccountId завязаны на
-      // users.role_key, а у Секретаря его нет и не может быть (БД-триггер
-      // требует id = 'role_' + role_key, у него фиксированный u-secretary).
+      // отдельная ветка: у него нет users.role_key. Его ходы тоже идут
+      // через очередь: раньше второе сообщение подряд попадало на занятый
+      // лок и молча терялось.
       try {
         if (chatId === SECRETARY_CHAT_ID) {
-          void deliverSecretaryReply(text);
+          void enqueueChatReply(chatId, SECRETARY_USER_ID, () => deliverSecretaryReply(text));
         } else {
-        const memberRoles = chatMemberRoles(chatId);
-        const targetRole = await pickRoleForChat({
-          messageText: text,
-          memberRoles,
-        });
-        if (targetRole) {
-          // Ставим ход в очередь на (chat_id, role_id). Без неё два
-          // быстрых сообщения подряд на одну роль начнут startChatRun
-          // параллельно, и порядок ответов в ленте окажется случайным
-          // — хуже того, контекст (pi_session_id) мог бы перемешаться.
-          // Очередь сериализует ходы; другие роли и чаты продолжают
-          // работать параллельно.
-          const accountId = roleAccountId(targetRole);
-          if (accountId) {
-            void enqueueChatReply(chatId, accountId, () =>
-              deliverAgentReply({
-                chatId,
-                role: targetRole,
-                userText: text,
-              }),
-            );
-          }
-        }
+          await dispatchRoleReplies({
+            chatId,
+            messageId: id,
+            fromUserId: req.userId,
+            text,
+            hop: 0,
+          });
         }
       } catch (error) {
-        // Логируем, но не возвращаем 5xx — текст уже в ленте, а ошибку
-        // подбора/постановки в очередь разберём отдельно.
         console.warn(
           `[chats] постановка авто-ответа не удалась для chat=${chatId}:`,
           error instanceof Error ? error.message : error,
@@ -720,21 +666,26 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       ).run(id, roleId, chatId);
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
 
-      const message = withAttachments(
-        db
-          .prepare(
-            `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
-                    f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
-                    t.title as task_title
-               FROM chat_messages m
-               LEFT JOIN users f ON f.id = m.from_user_id
-               LEFT JOIN tasks t ON t.id = m.task_id
-              WHERE m.id = ?`,
-          )
-          .get(id),
-      );
+      const message = loadChatMessage(id);
       broadcastToUsers(memberIds(chatId), { type: "chat:new", message });
       return { message };
+    },
+  );
+
+  // Остановить ход роли (кнопка «Остановить» в окне чата). Без role_id —
+  // все идущие ходы этого чата. Написанное ролью до остановки ложится в
+  // чат обычным ответом — остановка не стирает сделанное.
+  app.post<{ Params: { id: string }; Body: { role_id?: string } }>(
+    "/api/chats/:id/stop",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const chatId = req.params.id;
+      if (!isMember(chatId, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const roleId =
+        typeof req.body?.role_id === "string" && req.body.role_id ? req.body.role_id : undefined;
+      const stopped = await cancelChatRunsFor(chatId, roleId);
+      return { stopped };
     },
   );
 
@@ -885,6 +836,42 @@ function parseRoleMention(text: string): RoleName | null {
   return null;
 }
 
+/** Все упомянутые роли по порядку появления в тексте, без повторов:
+ *  «@architect @qa, что думаете?» — отвечают обе. Те же правила границы
+ *  слова, что у parseRoleMention (e-mail и URL не считаются). */
+export function parseRoleMentions(text: string): RoleName[] {
+  const lower = text.toLowerCase();
+  const found: Array<{ role: RoleName; at: number; end: number }> = [];
+  for (const m of lower.matchAll(/(?<![\p{L}\p{N}_])@([a-z_][a-z0-9_]*)/gu)) {
+    if (VALID_ROLES.has(m[1] as RoleName)) {
+      found.push({ role: m[1] as RoleName, at: m.index!, end: m.index! + m[0].length });
+    }
+  }
+  const named = [...ROLE_NAMES]
+    .map((role) => ({
+      role,
+      name: (
+        (db.prepare("SELECT name FROM users WHERE role_key = ?").get(role) as
+          | { name?: string }
+          | undefined)?.name ?? ""
+      ).toLowerCase(),
+    }))
+    .filter((r) => r.name)
+    .sort((a, b) => b.name.length - a.name.length);
+  for (const r of named) {
+    const token = `@${r.name}`;
+    for (let at = lower.indexOf(token); at >= 0; at = lower.indexOf(token, at + 1)) {
+      const before = at > 0 ? lower[at - 1] : "";
+      if (before && /[\p{L}\p{N}_]/u.test(before)) continue;
+      // Уже занято более длинным именем («@Дизайнер интерфейсов»).
+      if (found.some((f) => at >= f.at && at < f.end)) continue;
+      found.push({ role: r.role, at, end: at + token.length });
+    }
+  }
+  found.sort((a, b) => a.at - b.at);
+  return [...new Set(found.map((f) => f.role))];
+}
+
 /** Эмбеддинги ролей (role_embeddings). Хранится как BLOB Float32. Читаем
  *  ленивым загрузчиком: таблица небольшая (8 ролей), но дёргать её на
  *  каждое сообщение вхолостую тоже незачем, поэтому оборачиваем в Map. */
@@ -1010,98 +997,251 @@ export async function pickRoleForChat(args: {
   }
 }
 
-/** Максимум сообщений, которые кладём в контекст агенту. Больше — дороже
- *  по токенам, меньше — агент теряет нить разговора. 20 — типичный
- *  «последний экран» чата; при необходимости владелец подкрутит. */
+/** Максимум сообщений, которые кладём в контекст агенту при первом ходе
+ *  сессии. Дальше сессия помнит разговор сама, и в ход идут только новые
+ *  сообщения (см. deliverAgentReply). */
 const CHAT_AGENT_CONTEXT_MESSAGES = 20;
+/** Потолок новых сообщений в продолжении сессии — если роль долго молчала
+ *  в оживлённой группе. */
+const CHAT_AGENT_FOLLOWUP_MESSAGES = 30;
+
+/** Сколько раз подряд роли могут передать слово друг другу через @имя,
+ *  пока в разговор не вмешается человек. Страховка от бесконечного
+ *  пинг-понга: живой разговор двух-трёх ролей укладывается с запасом. */
+export const MAX_AGENT_HOPS = 4;
+
+/** Кому отвечать на новое сообщение в чате и поставить их ходы в очередь.
+ *
+ *  Сообщение человека:
+ *    1) явные @упоминания участников — отвечают ВСЕ упомянутые, каждый в
+ *       своей очереди (разные роли работают параллельно);
+ *    2) без упоминаний — «Авто» (pickRoleForChat); если подбор ничего не
+ *       дал (нет эмбеддингов, сеть), отвечает роль, которая говорила в
+ *       чате последней: разговор продолжается с тем, с кем шёл, а не
+ *       обрывается тишиной;
+ *    3) упомянута роль, которой нет в чате, — молчание (не подменяем
+ *       адресата).
+ *
+ *  Сообщение роли (передача слова, владелец 01.10.2026: «чтобы роли
+ *  переписывались между собой без тупняка»): отвечают только те коллеги,
+ *  кого роль явно позвала через @имя, не больше двух, и не дальше
+ *  MAX_AGENT_HOPS передач подряд. */
+async function dispatchRoleReplies(args: {
+  chatId: string;
+  messageId: string;
+  fromUserId: string;
+  text: string;
+  hop: number;
+}): Promise<void> {
+  const { chatId, text } = args;
+  const senderRole = roleFromUserId(args.fromUserId);
+  const candidates = chatMemberRoles(chatId).filter((r) => r !== senderRole);
+  if (candidates.length === 0) return;
+
+  const mentioned = parseRoleMentions(text).filter((r) => candidates.includes(r));
+  let targets: RoleName[];
+  if (senderRole) {
+    if (args.hop > MAX_AGENT_HOPS) return;
+    targets = mentioned.slice(0, 2);
+  } else if (mentioned.length) {
+    targets = mentioned;
+  } else if (parseRoleMention(text)) {
+    targets = [];
+  } else {
+    const picked = await pickRoleForChat({ messageText: text, memberRoles: candidates });
+    const fallback = picked ?? lastSpeakingRole(chatId, candidates) ?? candidates[0];
+    targets = fallback ? [fallback] : [];
+  }
+
+  for (const role of targets) {
+    const accountId = roleAccountId(role);
+    if (!accountId) continue;
+    // Очередь на (chat_id, role_id): два быстрых сообщения подряд одной
+    // роли отвечаются по порядку, контекст сессии не перемешивается.
+    void enqueueChatReply(chatId, accountId, () =>
+      deliverAgentReply({
+        chatId,
+        role,
+        triggerMessageId: args.messageId,
+        hop: args.hop,
+      }),
+    );
+  }
+}
+
+/** Роль из candidates, писавшая в чате последней, — продолжение разговора
+ *  без явного адресата. */
+function lastSpeakingRole(chatId: string, candidates: RoleName[]): RoleName | null {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT from_user_id FROM chat_messages
+        WHERE chat_id = ? AND COALESCE(is_session_marker, 0) = 0
+        ORDER BY created_at DESC, rowid DESC LIMIT 20`,
+    )
+    .all(chatId) as Array<{ from_user_id: string }>;
+  for (const row of rows) {
+    const role = roleFromUserId(row.from_user_id);
+    if (role && candidates.includes(role)) return role;
+  }
+  return null;
+}
+
+interface HistoryRow {
+  id: string;
+  from_user_id: string;
+  text: string;
+  created_at: string;
+  from_name: string | null;
+  attachments: string | null;
+}
+
+const HISTORY_SELECT = `SELECT m.id, m.from_user_id, m.text, m.created_at, f.name as from_name,
+        (SELECT group_concat(a.file_name, ', ') FROM attachments a
+          WHERE a.chat_message_id = m.id) as attachments
+   FROM chat_messages m
+   LEFT JOIN users f ON f.id = m.from_user_id`;
+
+function historyLine(row: HistoryRow): string {
+  const who = row.from_name || row.from_user_id;
+  const files = row.attachments ? ` [вложения: ${row.attachments}]` : "";
+  return `- [${row.created_at}] ${who}: ${unwrapRoleEnvelope(row.text)}${files}`;
+}
+
+/** Кто в чате — чтобы роль знала, кого можно позвать через @имя. */
+function participantsText(chatId: string, selfId: string): string {
+  const rows = db
+    .prepare(
+      `SELECT u.id, u.name, u.role, u.role_key, u.type
+         FROM chat_members cm JOIN users u ON u.id = cm.member_id
+        WHERE cm.chat_id = ? ORDER BY cm.added_at`,
+    )
+    .all(chatId) as Array<{
+    id: string;
+    name: string;
+    role: string | null;
+    role_key: string | null;
+    type: string | null;
+  }>;
+  return rows
+    .map((u) => {
+      const me = u.id === selfId ? " — это ты" : "";
+      if (u.type === "ai" && u.role_key) return `- @${u.name} (${titleOfRole(u.role_key as RoleName)})${me}`;
+      return `- ${u.name}${u.role === "owner" ? " (владелец)" : ""}${me}`;
+    })
+    .join("\n");
+}
 
 /** Поднять/продолжить онлайн-сессию Пи для роли, дождаться ответа и
  *  положить его как сообщение от имени role_<role>. Никаких правок
  *  tasks/attempts/agent_state — изоляция по требованию плана.
  *
- *  Вызывающая сторона (POST /api/chats/:id/messages) ставит эту функцию
- *  В ОЧЕРЕДЬ через enqueueChatReply (B5) — иначе два быстрых сообщения
- *  подряд на одну роль стартанут параллельно, и порядок ответов в
- *  ленте станет случайным.
+ *  Вызывается ТОЛЬКО через очередь enqueueChatReply (B5).
  *
- *  Возвращает id сохранённого сообщения-ответа либо null, если ответ
- *  пуст (агент не счёл нужным ответить — легитимный исход, в ленту
- *  ничего не идёт). */
+ *  Контекст. Первый ход сессии получает инструкцию роли, состав чата и
+ *  последние сообщения. Продолжение сессии получает только то, что
+ *  написали с прошлого ответа роли: всё прежнее сессия уже помнит. Раньше
+ *  каждый ход заново вкладывал инструкцию и 20 сообщений истории — сессия
+ *  пухла копиями одного и того же, роль тупела и отвечала медленнее.
+ *
+ *  Порядок в конце хода: сохранить ответ → разослать `chat:new` с готовым
+ *  сообщением → «ход закончен». Клиент меняет живой пузырь на готовый
+ *  одним кадром.
+ *
+ *  Возвращает id сохранённого ответа либо null, если ответа нет. */
 async function deliverAgentReply(args: {
   chatId: string;
   role: RoleName;
-  userText: string;
+  triggerMessageId: string;
+  hop: number;
 }): Promise<string | null> {
   const { chatId, role } = args;
   const roleUserId = roleAccountId(role);
   if (!roleUserId) {
-    // Роль-учётка не заведена — пропускаем, без сообщения. Владелец увидит
-    // проблему в логах, чат продолжит работать.
-    console.warn(
-      `[chats] deliverAgentReply: ролевая учётка для ${role} не найдена`,
-    );
+    console.warn(`[chats] deliverAgentReply: ролевая учётка для ${role} не найдена`);
     return null;
   }
+  // Роль могли убрать из чата, пока ход ждал в очереди.
+  if (!isMember(chatId, roleUserId)) return null;
 
-  // Сборка контекста: последние N сообщений + новый user turn.
-  const history = db
-    .prepare(
-      `SELECT m.from_user_id, m.text, m.created_at, f.name as from_name,
-              f.role as from_role
-         FROM chat_messages m
-         LEFT JOIN users f ON f.id = m.from_user_id
-        WHERE m.chat_id = ?
-        ORDER BY m.created_at DESC LIMIT ?`,
-    )
-    .all(chatId, CHAT_AGENT_CONTEXT_MESSAGES) as Array<{
-      from_user_id: string;
-      text: string;
-      created_at: string;
-      from_name: string | null;
-      from_role: string | null;
-    }>;
-  // Переворачиваем обратно в хронологический порядок (от старых к новым).
-  history.reverse();
-
-  const historyLines = history
-    .map((row) => {
-      const who = row.from_name || row.from_user_id;
-      return `- [${row.created_at}] ${who}: ${row.text}`;
-    })
-    .join("\n");
+  const trigger = db
+    .prepare(`${HISTORY_SELECT} WHERE m.id = ?`)
+    .get(args.triggerMessageId) as HistoryRow | undefined;
+  // Сообщение удалили, пока ход ждал в очереди, — отвечать не на что.
+  if (!trigger) return null;
+  const triggerFiles = trigger.attachments ? `\n[вложения: ${trigger.attachments}]` : "";
+  const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerFiles}`;
 
   const roleTitle = titleOfRole(role);
-  const roleInstruction =
-    composeLayer(role, "role.prompt")?.effective
-      || rolePromptText(role)
-      || `Ты — ${roleTitle} в трекере TaskFlow.`;
-  const prompt = renderInstruction(role, "chat.wrapper", { roleInstruction, localPolicy: composeLayer(role, "local_policy")!.effective, roleTitle, role, history: historyLines || "(пусто)", userText: args.userText });
-
-  // Достаём ранее сохранённый sessionId, чтобы продолжить ту же сессию.
   const previousSessionId = getChatSessionId(chatId, roleUserId);
-
-  // «Печатает» (владелец 22.09.2026): показываем ровно то время, пока роль
-  // готовит ответ, — от запуска до готового текста или сбоя. Не таймер и не
-  // догадка клиента: сигнал даёт тот, кто роль запускает.
-  const typing = (active: boolean, tool?: string) => {
-    const name =
-      (db.prepare("SELECT name FROM users WHERE id = ?").get(roleUserId) as
-        | { name?: string }
-        | undefined)?.name ?? role;
-    broadcastToUsers(memberIds(chatId), {
-      type: "chats:typing",
-      chat_id: chatId,
-      user_id: roleUserId,
-      name,
-      active,
-      ...(tool ? { tool } : {}),
+  let prompt: string;
+  if (previousSessionId) {
+    const since = db
+      .prepare(
+        `${HISTORY_SELECT}
+          WHERE m.chat_id = ? AND m.id != ? AND COALESCE(m.is_session_marker, 0) = 0
+            AND m.rowid > COALESCE(
+              (SELECT MAX(rowid) FROM chat_messages WHERE chat_id = ? AND from_user_id = ?), 0)
+            AND m.rowid < (SELECT rowid FROM chat_messages WHERE id = ?)
+          ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
+      )
+      .all(
+        chatId,
+        trigger.id,
+        chatId,
+        roleUserId,
+        trigger.id,
+        CHAT_AGENT_FOLLOWUP_MESSAGES,
+      ) as HistoryRow[];
+    since.reverse();
+    prompt = renderInstruction(role, "chat.followup", {
+      roleTitle,
+      role,
+      history: since.map(historyLine).join("\n") || "(ничего нового)",
+      userText,
     });
-  };
+  } else {
+    const history = db
+      .prepare(
+        `${HISTORY_SELECT}
+          WHERE m.chat_id = ? AND m.id != ? AND COALESCE(m.is_session_marker, 0) = 0
+            AND m.rowid < (SELECT rowid FROM chat_messages WHERE id = ?)
+          ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
+      )
+      .all(chatId, trigger.id, trigger.id, CHAT_AGENT_CONTEXT_MESSAGES) as HistoryRow[];
+    history.reverse();
+    const roleInstruction =
+      composeLayer(role, "role.prompt")?.effective
+        || rolePromptText(role)
+        || `Ты — ${roleTitle} в трекере TaskFlow.`;
+    prompt = renderInstruction(role, "chat.wrapper", {
+      roleInstruction,
+      localPolicy: composeLayer(role, "local_policy")!.effective,
+      roleTitle,
+      role,
+      participants: participantsText(chatId, roleUserId),
+      history: history.map(historyLine).join("\n") || "(пусто)",
+      userText,
+    });
+  }
 
   const roleName =
     (db.prepare("SELECT name FROM users WHERE id = ?").get(roleUserId) as
       | { name?: string }
       | undefined)?.name ?? role;
+
+  // «Печатает» (владелец 22.09.2026): ровно то время, пока роль готовит
+  // ответ, — от запуска до готового текста или сбоя.
+  const typing = (active: boolean, tool?: string) => {
+    broadcastToUsers(memberIds(chatId), {
+      type: "chats:typing",
+      chat_id: chatId,
+      user_id: roleUserId,
+      name: roleName,
+      active,
+      ...(tool ? { tool } : {}),
+    });
+  };
+
   const live = startLiveTurn({
     chatId,
     userId: roleUserId,
@@ -1111,7 +1251,6 @@ async function deliverAgentReply(args: {
 
   let reply: { sessionId: string | null; text: string } | null = null;
   let failure: unknown = null;
-  let steps: SavedSteps | null = null;
   typing(true);
   try {
     reply = await startChatRun({
@@ -1124,53 +1263,54 @@ async function deliverAgentReply(args: {
       onEvent: live.onEvent,
     });
   } catch (error) {
-    // Онлайн-сессия не должна ронять HTTP-запрос — пользовательский
-    // текст уже в ленте. Но и молчать нельзя (владелец 27.09.2026): о
-    // сорванном ходе в чат ложится сообщение с причиной.
+    // Онлайн-сессия не роняет HTTP-запрос, но и молчать нельзя (владелец
+    // 27.09.2026): о сорванном ходе в чат ложится сообщение с причиной.
     console.warn(
       `[chats] startChatRun не удался для chat=${chatId} role=${role}:`,
       error instanceof Error ? error.message : error,
     );
     failure = error;
-  } finally {
-    steps = live.finish();
-    typing(false);
   }
+  const partial = live.partialText();
+  const steps: SavedSteps | null = live.finish({ deferAnnounce: true });
 
-  const replyText = failure
-    ? chatRunFailureText(failure)
-    : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
-  if (!replyText) return null;
+  const cancelled = (failure as { code?: string } | null)?.code === "CHAT_RUN_CANCELLED";
+  const replyText = cancelled && partial
+    ? `${partial}\n\n_Остановлено._`
+    : failure
+      ? chatRunFailureText(failure)
+      : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
 
-  const replyId = uid();
-  db.prepare(
-    `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, steps)
-     VALUES (?, ?, ?, 'chat', ?, ?)`,
-  ).run(
-    replyId,
-    roleUserId,
-    replyText,
-    chatId,
-    steps ? JSON.stringify(steps) : null,
-  );
-  db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
-    chatId,
-  );
+  let replyId: string | null = null;
+  if (replyText) {
+    replyId = uid();
+    db.prepare(
+      `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, steps)
+       VALUES (?, ?, ?, 'chat', ?, ?)`,
+    ).run(replyId, roleUserId, replyText, chatId, steps ? JSON.stringify(steps) : null);
+    db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
+    broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
+  }
+  live.announceEnd(replyId);
+  typing(false);
 
-  const replyRow = db
-    .prepare(
-      `SELECT m.*, f.name as from_user_name, f.avatar_color as from_user_color,
-              f.avatar_url as from_user_avatar_url, f.initials as from_user_initials,
-              t.title as task_title
-         FROM chat_messages m
-         LEFT JOIN users f ON f.id = m.from_user_id
-         LEFT JOIN tasks t ON t.id = m.task_id
-        WHERE m.id = ?`,
-    )
-    .get(replyId);
-
-  const audience = memberIds(chatId);
-  broadcastToUsers(audience, { type: "chat:new", message: replyRow });
+  // Передача слова коллеге по чату: роль позвала кого-то через @имя.
+  if (replyId && !failure) {
+    try {
+      await dispatchRoleReplies({
+        chatId,
+        messageId: replyId,
+        fromUserId: roleUserId,
+        text: replyText,
+        hop: args.hop + 1,
+      });
+    } catch (error) {
+      console.warn(
+        `[chats] передача слова не удалась для chat=${chatId}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
 
   return replyId;
 }

@@ -320,6 +320,8 @@ export class LiveTurn {
   private thinkingItem: Extract<LiveItem, { kind: "thinking" }> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  /** finish({ deferAnnounce }) отработал, «ход закончен» ещё не разослан. */
+  private endPending = false;
   /** Ход-двойник: для этой пары уже идёт живой ход, этот ничего не
    *  рассылает и не трогает чужой снимок. */
   private readonly detached: boolean;
@@ -480,19 +482,21 @@ export class LiveTurn {
   /** Ход закончен (успешно или нет): убрать живой снимок у всех и отдать
    *  то, что сохранится в истории. Последний текстовый кусок — это сам
    *  ответ, он ляжет пузырём, поэтому в шаги не идёт. Ни шагов, ни
-   *  размышлений — null: обычный короткий ответ без свёрнутой строки. */
-  finish(): SavedSteps | null {
+   *  размышлений — null: обычный короткий ответ без свёрнутой строки.
+   *
+   *  `deferAnnounce` — не рассылать «ход закончен» сразу: вызывающая
+   *  сторона сначала сохранит ответ и разошлёт `chat:new`, а потом позовёт
+   *  announceEnd(id). Так клиент меняет живой пузырь на готовый одним
+   *  кадром, без мгновения пустоты между ними (то самое «дёрганье» в конце
+   *  ответа). */
+  finish(opts: { deferAnnounce?: boolean } = {}): SavedSteps | null {
     if (this.closed) return null;
     this.endThinking();
     this.closed = true;
     this.dispose();
     liveTurns.delete(keyOf(this.chatId, this.userId));
-    broadcastToUsers(this.audience(), {
-      type: "chats:live",
-      chat_id: this.chatId,
-      user_id: this.userId,
-      turn: null,
-    });
+    if (!opts.deferAnnounce) this.broadcastEnd(null);
+    else this.endPending = true;
     const items = this.snapshot().items;
     if (items.length && items[items.length - 1].kind === "text") items.pop();
     const now = new Date().toISOString();
@@ -504,6 +508,35 @@ export class LiveTurn {
     }
     if (!items.some((it) => it.kind !== "text")) return null;
     return { duration_ms: Date.now() - this.startedAt.getTime(), items };
+  }
+
+  /** Разослать «ход закончен» после finish({ deferAnnounce: true }).
+   *  messageId — сообщение, которым лёг ответ (null — ответа нет): клиент
+   *  по нему понимает, что готовый пузырь уже у него и живой можно убрать. */
+  announceEnd(messageId: string | null): void {
+    if (!this.endPending) return;
+    this.endPending = false;
+    this.broadcastEnd(messageId);
+  }
+
+  private broadcastEnd(messageId: string | null): void {
+    broadcastToUsers(this.audience(), {
+      type: "chats:live",
+      chat_id: this.chatId,
+      user_id: this.userId,
+      turn: null,
+      message_id: messageId,
+    });
+  }
+
+  /** Текст ответа, который роль успела написать, — для хода, остановленного
+   *  владельцем: написанное не пропадает вместе с остановкой. */
+  partialText(): string {
+    const texts = this.items.filter((it) => it.kind === "text");
+    const last = texts[texts.length - 1];
+    return last && last.kind === "text"
+      ? unwrapRoleEnvelope(stripQuickRepliesLine(last.text)).trim()
+      : "";
   }
 
   dispose(): void {
@@ -534,6 +567,7 @@ export function chatRunFailureText(error: unknown): string {
   const code = (error as { code?: string } | null)?.code;
   // Ход этой роли уже идёт и ответит сам — писать нечего.
   if (code === "CHAT_RUN_BUSY") return "";
+  if (code === "CHAT_RUN_CANCELLED") return "Остановлено.";
   if (code === "CHAT_RUN_IDLE") {
     const min = Math.round(((error as { limitMs?: number }).limitMs ?? 0) / 60_000);
     return `Остановил ход: ${min} мин не было никаких действий. Напишите, если продолжить.`;

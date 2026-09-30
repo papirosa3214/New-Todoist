@@ -1,4 +1,5 @@
 import { renderInstruction } from "./roleContextResolver.js";
+import { loadChatMessage } from "./chatMessages.js";
 // Единая сводка из фактической БД для звонка и чата Секретаря.
 import { stopReasonPolicy } from "../stopReasons.js";
 import crypto from "node:crypto";
@@ -129,7 +130,7 @@ export function sendSummaryToSecretaryChat(ownerId:string,text:string) {
     db.prepare("INSERT INTO chat_messages (id,from_user_id,text,channel,chat_id) VALUES (?,'u-secretary',?,'chat',?)").run(id,text,chatId);
     db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(chatId);
   })();
-  const row=db.prepare(`SELECT m.*,u.name AS from_user_name,u.avatar_color AS from_user_color,u.avatar_url AS from_user_avatar_url,u.initials AS from_user_initials FROM chat_messages m JOIN users u ON u.id=m.from_user_id WHERE m.id=?`).get(id);
+  const row=loadChatMessage(id);
   const members=(db.prepare("SELECT member_id FROM chat_members WHERE chat_id=?").all(chatId) as {member_id:string}[]).map(m=>m.member_id);
   broadcastToUsers(members,{type:"chat:new",message:row});
   return id;

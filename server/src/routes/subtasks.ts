@@ -2,7 +2,7 @@ import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
-import { unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { planNodeAgentRefusal, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForRead, getTaskForWrite } from "../access.js";
@@ -231,6 +231,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       // Человека это не касается: он закрывает шаги руками в своём
       // интерфейсе, и требовать от него текст в каждой галочке — та самая
       // лишняя работа, от которой уходили.
+      if (done !== undefined || title !== undefined) {
+        const planRefusal = planNodeAgentRefusal(subtask.id, req.userId, false);
+        if (planRefusal) return reply.code(403).send({ error: planRefusal });
+      }
       if (done === true) {
         const caller = db
           .prepare("SELECT type FROM users WHERE id = ?")
@@ -532,6 +536,8 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       }
 
       const { state, result } = req.body || {};
+      const planRefusal = planNodeAgentRefusal(subtask.id, req.userId, state === "in_progress");
+      if (planRefusal) return reply.code(403).send({ error: planRefusal });
       const known =
         state === undefined ||
         state === null ||

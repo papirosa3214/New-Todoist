@@ -39,11 +39,22 @@ function roleTools(role: string): string {
       fs.readFileSync(path.join(PROFILES_DIR, `${role}.json`), "utf8"),
     ) as { mcpServers?: { taskflow?: { env?: Record<string, string> } } };
     const tools = profile.mcpServers?.taskflow?.env?.TASKFLOW_MCP_TOOLS;
-    if (tools && tools.trim()) return tools;
+    if (tools && tools.trim()) return withChatTools(tools);
   } catch {
     // профиля нет — новая роль
   }
-  return DEFAULT_TOOLS;
+  return withChatTools(DEFAULT_TOOLS);
+}
+
+/** Инструменты для ответов в чате — есть у каждой роли, даже если её
+ *  профиль задаёт свой список: без них виджет погоды пришлось бы
+ *  выдумывать (владелец 01.10.2026). */
+const CHAT_TOOLS = ["taskflow_weather", "taskflow_plan_request", "taskflow_consult"];
+
+function withChatTools(list: string): string {
+  const names = list.split(",").map((n) => n.trim()).filter(Boolean);
+  for (const tool of CHAT_TOOLS) if (!names.includes(tool)) names.push(tool);
+  return names.join(",");
 }
 
 /** Выдать запуску доступ роли. Возвращает путь к временному файлу

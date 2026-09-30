@@ -93,6 +93,33 @@ export function canPlanSubtaskBecomeReady(row: PlanSubtask): boolean {
 }
 
 /**
+ * Шаг плана — чей он (владелец 30.09.2026, docs/2026-09-30-live-
+ * collaboration-plan-spec.md): архитектор «закрыл» шаги QA и критика,
+ * взяв их в работу обычным /work и поставив галочку. Принадлежности к
+ * задаче мало — ИИ берёт и закрывает только узел своей роли, а начать
+ * его может, только когда открылись предшественники. Владелец и люди
+ * вмешиваются явно, их это не касается (проверка — только для type='ai').
+ * Возвращает текст отказа или null.
+ */
+export function planNodeAgentRefusal(subtaskId: string, userId: string, starting: boolean): string | null {
+  const row = subtask(subtaskId);
+  if (!row?.collaboration_plan_id || !row.plan_node_key) return null;
+  const caller = db.prepare("SELECT type FROM users WHERE id = ?").get(userId) as { type?: string } | undefined;
+  if (caller?.type !== "ai") return null;
+  const node = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
+    .get(row.collaboration_plan_id, row.plan_node_key) as { role_key: string } | undefined;
+  if (!node) return "узел плана не найден";
+  if (roleUserId(node.role_key) !== userId) {
+    return `это шаг плана роли «${roleTitle(node.role_key)}»: брать и закрывать его может только она. ` +
+      "Передать работу — значит сдать свой шаг, следующий откроется сам";
+  }
+  if (starting && !row.agent_state && !row.done && !canPlanSubtaskBecomeReady(row)) {
+    return "шаг плана ещё ждёт предшественников — он откроется сам, когда они сдадут работу";
+  }
+  return null;
+}
+
+/**
  * Реальный старт роли на узле плана: помечает подзадачу in_progress,
  * заводит ей attempt (тот же инвариант «одна активная попытка на
  * subtask_id», что и у обычного `POST /api/subtasks/:id/work`) и запускает
