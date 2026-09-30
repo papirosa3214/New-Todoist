@@ -17,6 +17,10 @@ process.env.DB_PATH = dbPath;
 // Роли в тестах не заводят git worktree живого репозитория
 // (runtime/roleWorkspace.ts); свой тест включает их на временной папке.
 process.env.TASKFLOW_ROLE_WORKTREES ??= "off";
+// Выгрузка в базу знаний пишет состояние в свою папку — в тестах временную,
+// и старое состояние скрипта ~/kb не подхватывает (lib/knowledgeSync.ts).
+process.env.TASKFLOW_KB_SYNC_DIR ??= path.join(os.tmpdir(), `taskflow-kb-sync-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
+process.env.TASKFLOW_KB_SYNC_LEGACY_STATE ??= path.join(os.tmpdir(), "taskflow-kb-sync-no-legacy.json");
 
 // Свой секрет на прогон — без этого ensureJwtSecret() (env.ts) читал бы
 // или писал server/.env настоящего сервера.

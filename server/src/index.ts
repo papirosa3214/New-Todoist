@@ -10,6 +10,7 @@ import { setRoleTokenSigner } from "./runtime/roleRunAccess.js";
 import { setInProcessApp } from "./runtime/inProcessRun.js";
 import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
+import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
@@ -529,7 +530,9 @@ if (isMain) {
   buildApp().then(async (app) => {
     let stopRoleRuns: (() => Promise<void>) | null = null;
     let stopVoiceBridge: (() => Promise<void>) | null = null;
+    let stopKnowledgeSync: (() => void) | null = null;
     app.addHook("onClose", async () => {
+      stopKnowledgeSync?.();
       if (stopRoleRuns) await stopRoleRuns();
       if (stopVoiceBridge) await stopVoiceBridge();
     });
@@ -542,6 +545,8 @@ if (isMain) {
     // Durable worker стартует только в реальном process после listen.
     // buildApp() в unit tests остаётся полностью детерминированным.
     stopRoleRuns = startRoleRunWorker();
+    // Документация проектов → база знаний раз в сутки (lib/knowledgeSync.ts).
+    stopKnowledgeSync = startKnowledgeSyncSchedule();
     // Ходы ролей живут в процессе: узлы плана, брошенные прошлым процессом,
     // — в ленту и продолжить (runtime/planSubtaskAdmission.ts).
     try {
