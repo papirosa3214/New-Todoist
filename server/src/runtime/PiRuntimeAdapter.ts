@@ -1,3 +1,4 @@
+import { chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
 import { chatInstructionArgs } from "./instructionResources.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -1033,6 +1034,7 @@ export async function modelExists(id: string): Promise<boolean> {
 /** Аргументы старта живой сессии Пи в чате. Никакого taskId — чат живёт
  *  отдельной осью, карточки и аренда остаются нетронутыми. */
 export interface StartChatRunInput {
+  mode?: ChatWorkMode;
   chatId: string;
   role: RoleName;
   /** id ролевой учётки (role_<role>) — будет автором сообщения-ответа. */
@@ -1209,10 +1211,11 @@ export async function startChatRun(
     // своей учёткой и своим набором инструментов, а не личным MCP-конфигом
     // владельца (владелец 25.09.2026: роли в чате — те же агенты, что и в
     // карточках, без ассоциации с Pi Agent).
-    mcpConfigPath = prepareRoleRunAccess(runId, role);
+    mcpConfigPath = prepareRoleRunAccess(runId, role, input.mode);
+    if (input.mode === "plan" && !mcpConfigPath) throw new Error("Планирование недоступно: не удалось применить ограничения инструментов");
     const args: string[] = [];
     if (mcpConfigPath) {
-      args.push("--mcp-config", mcpConfigPath, ...await chatInstructionArgs(role,mcpConfigPath));
+      args.push("--mcp-config", mcpConfigPath, ...await chatInstructionArgs(role,mcpConfigPath,input.mode));
     }
     if (input.sessionId) {
       // --session-id продолжает РОВНО ту сессию, что у нас в таблице.
@@ -1310,6 +1313,7 @@ export async function startChatRun(
 
     try {
       await newClient.start();
+      if (input.mode === "deep_research" && match.reasoning) await newClient.setThinkingLevel("high");
       // Сессия могла стартовать с нашим sessionId (resume) или с новым
       // (Pi создал сам). Реальный id берём через getState(), а не
       // session_start — тот же путь, что в startRun: getState()
@@ -1324,7 +1328,7 @@ export async function startChatRun(
       // тишины (он прерывает ход раньше, если роль замолчала).
       try {
         await Promise.race([
-          newClient.promptAndWait(input.prompt, undefined, timeoutMs),
+          newClient.promptAndWait(input.mode ? chatModeInstruction(input.mode) + "\n\n" + input.prompt : input.prompt, undefined, timeoutMs),
           watchdog,
         ]);
       } catch (error) {

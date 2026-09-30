@@ -1,3 +1,4 @@
+import { type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { renderInstruction } from "./roleContextResolver.js";
 // «Супер Секретарь» (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/):
 // настоящий ИИ-ответ в комнате `chat-secretary` — по образцу
@@ -62,7 +63,7 @@ function memberIds(chatId: string): string[] {
   ).map((r) => r.member_id);
 }
 
-export async function deliverSecretaryReply(userText: string): Promise<string | null> {
+export async function deliverSecretaryReply(userText: string, mode: ChatWorkMode = "work"): Promise<string | null> {
   const chatId = SECRETARY_CHAT_ID;
   // Сводка использует тот же серверный разбор и факты, что голосовой инструмент.
   // Свободный разговор продолжает существующую сессию роли.
@@ -134,6 +135,7 @@ export async function deliverSecretaryReply(userText: string): Promise<string | 
   typing(true);
   try {
     reply = await startChatRun({
+      mode,
       chatId,
       role: SECRETARY_ROLE,
       roleId: SECRETARY_ID,

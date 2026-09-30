@@ -1,3 +1,4 @@
+import { PLANNING_TOOLS, chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -25,13 +26,14 @@ export function instructionResources(cwd=process.cwd()) {
  return specs;
 }
 /** Freeze the exact text sources once per chat turn, leave SDK tool schema and extensions intact. */
-export async function chatInstructionArgs(role:string, configPath:string):Promise<string[]> {
+export async function chatInstructionArgs(role:string, configPath:string, mode:ChatWorkMode="work"):Promise<string[]> {
  instructionResources();
  const dir=path.dirname(configPath);const prefix=path.basename(configPath);
  const discovered=await discoverChatResources();
  const append=discovered.agentsFiles.map(x=>'# '+x.path+'\n'+composeLayer(role,keyFor(x.path))!.effective);
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
  append.push(composeLayer(role,'rules')!.effective);
+ append.push(chatModeInstruction(mode));
  const file=path.join(dir,prefix+'.prompt.txt');
  fs.writeFileSync(file,append.join('\n\n'),{mode:0o600});
  const args=['--no-context-files','--append-system-prompt',file];
@@ -48,12 +50,17 @@ export async function chatInstructionArgs(role:string, configPath:string):Promis
  const descriptionMap=Object.fromEntries(builtinTools(process.cwd()).map(t=>[t.name,composeLayer(role,'tool.builtin.'+t.name)!.effective]));
  const extension=configPath+'.tools.mjs';
  fs.writeFileSync(extension,`import * as sdk from ${JSON.stringify(import.meta.resolve('@earendil-works/pi-coding-agent'))};
- export default function(api) { const descriptions=${JSON.stringify(descriptionMap)};
+ export default function(api) { const mode=${JSON.stringify(mode)}; const allowed=${JSON.stringify(PLANNING_TOOLS)};
+ if(mode === "plan") api.on("tool_call", async event => {
+  if (!allowed.some(name => event.toolName === name || event.toolName === "mcp__taskflow__"+name)) return {block:true,reason:"Планирование: разрешены только инструменты чтения. Для выполнения выберите режим Работа."};
+ });
+ const descriptions=${JSON.stringify(descriptionMap)};
  for (const make of [sdk.createReadToolDefinition,sdk.createBashToolDefinition,sdk.createEditToolDefinition,sdk.createWriteToolDefinition,sdk.createGrepToolDefinition,sdk.createFindToolDefinition,sdk.createLsToolDefinition]) {
-  const tool=make(process.cwd()); api.registerTool({...tool,description:descriptions[tool.name] ?? tool.description});
+  const tool=make(process.cwd()); if(mode === "plan" && !allowed.includes(tool.name)) continue; api.registerTool({...tool,description:descriptions[tool.name] ?? tool.description});
  }}
 `,{mode:0o600});
  args.push('--extension',extension);
+ if(mode==='plan') args.push('--tools',PLANNING_TOOLS.join(','));
  const custom=discovered.systemPromptSource;
  if(custom){const sys=configPath+'.system.txt';fs.writeFileSync(sys,composeLayer(role,keyFor(custom.path))!.effective,{mode:0o600});args.push('--system-prompt',sys);}
  return args;

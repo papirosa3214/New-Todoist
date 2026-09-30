@@ -1,3 +1,4 @@
+import { PLANNING_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
 import { instructionResources } from "./instructionResources.js";
 import { composeLayer, LAYER_CATALOG, instructionManifest } from "../lib/roleContextResolver.js";
 import fs from "node:fs";
@@ -60,7 +61,7 @@ function withChatTools(list: string): string {
 /** Выдать запуску доступ роли. Возвращает путь к временному файлу
  *  подключения для `pi --mcp-config`; null — роль не из списка или
  *  подпись ещё не подключена (тогда запуск идёт без инструментов трекера). */
-export function prepareRoleRunAccess(runId: string, role: string): string | null {
+export function prepareRoleRunAccess(runId: string, role: string, mode: ChatWorkMode = "work"): string | null {
   if (!signer || !ROLE_NAMES.includes(role)) return null;
   const token = signer({ id: roleUserId(role) }, { expiresIn: "12h" });
   fs.mkdirSync(RUNS_DIR, { recursive: true, mode: 0o700 });
@@ -77,7 +78,7 @@ export function prepareRoleRunAccess(runId: string, role: string): string | null
           TASKFLOW_TOKEN: token,
           TASKFLOW_MCP_ROLE: role,
           TASKFLOW_INSTRUCTION_SNAPSHOT: snapshot,
-          TASKFLOW_MCP_TOOLS: roleTools(role),
+          TASKFLOW_MCP_TOOLS: mode === "plan" ? roleTools(role).split(",").filter(t => PLANNING_TOOLS.includes(t)).join(",") : roleTools(role),
         },
         directTools: true,
       },

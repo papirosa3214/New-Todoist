@@ -342,6 +342,47 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     if (app) await app.close();
   });
 
+  it("planning is persisted and reaches the guarded runtime; next work turn restores work", async () => {
+    const chatId = (await createChat({kind: "direct", member_ids: ["role_architect"]})).json().chat.id;
+    const plan = await app.inject({method: "POST",url: `/api/chats/${chatId}/messages`, headers: ownerAuth,
+      payload: {text: "Составь план", work_mode: "plan"}});
+    expect(plan.statusCode).toBe(200);
+    expect(plan.json().message.work_mode).toBe("plan");
+    await vi.waitFor(() => expect(fakeClients).toHaveLength(1));
+    await vi.waitFor(() => expect(fakeClients[0].stop).toHaveBeenCalled());
+    expect(fakeClients[0].options.args).toContain("--tools");
+    expect(fakeClients[0].promptAndWait.mock.calls[0][0]).toContain("Режим этого хода: Планирование");
+    await app.inject({method: "POST",url: `/api/chats/${chatId}/messages`,headers: ownerAuth,
+      payload: {text: "Теперь выполни", work_mode: "work"}});
+    await vi.waitFor(() => expect(fakeClients).toHaveLength(2));
+    await vi.waitFor(() => expect(fakeClients[1].stop).toHaveBeenCalled());
+    expect(fakeClients[1].options.args).not.toContain("--tools");
+    expect(fakeClients[1].promptAndWait.mock.calls[0][0]).toContain("Режим этого хода: Работа");
+  });
+
+  it("invalid and unavailable modes do not save or execute the message",async()=>{
+    const chatId=(await createChat({kind:"direct",member_ids:["role_architect"]})).json().chat.id;
+    for(const mode of ["bad","deep_research"]) {
+      const sent=await app.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers:ownerAuth,
+        payload:{text:"Проверка",work_mode:mode}});
+      expect(sent.statusCode).toBe(400);
+    }
+    expect(chatMessageCount(chatId)).toBe(0);
+    expect(fakeClients).toHaveLength(0);
+  });
+
+  it("deep research targets researcher even in a group",async()=>{
+    const chatId=(await createChat({kind:"group",member_ids:["role_architect","role_researcher"]})).json().chat.id;
+    const sent=await app.inject({method:"POST",url:`/api/chats/${chatId}/messages`,headers:ownerAuth,
+      payload:{text:"Исследуй варианты",work_mode:"deep_research"}});
+    expect(sent.statusCode).toBe(200);
+    await vi.waitFor(()=>expect(fakeClients).toHaveLength(1));
+    await vi.waitFor(()=>expect(fakeClients[0].stop).toHaveBeenCalled());
+    expect(fakeClients[0].promptAndWait.mock.calls[0][0]).toContain("Глубокое исследование");
+    expect(messagesByAuthor(chatId,"role_researcher")).toHaveLength(1);
+    expect(messagesByAuthor(chatId,"role_architect")).toHaveLength(0);
+  });
+
   it("explicit @роль в тексте → ответ от role_<role>, attempts пустая", async () => {
     const chat = await createChat({
       title: "Диалог с архитектором",

@@ -1,3 +1,4 @@
+import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { renderInstruction } from "../lib/roleContextResolver.js";
 // Чаты с ролями-агентами (владелец 21.09.2026, план
 // docs/superpowers/plans/2026-09-21-chat-online-pi-runtime.md, этапы 1–2).
@@ -113,7 +114,7 @@ function chatRow(chatId: string) {
   if (!chat) return null;
   const members = db
     .prepare(
-      `SELECT u.id, u.name, u.role, u.type, u.avatar_color, u.avatar_url, u.initials
+      `SELECT u.id, u.name, u.role, u.type, u.role_key, u.avatar_color, u.avatar_url, u.initials
          FROM chat_members cm JOIN users u ON u.id = cm.member_id
         WHERE cm.chat_id = ? ORDER BY cm.added_at`,
     )
@@ -459,14 +460,21 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // пользовательский текст уже в ленте и не потеряется).
   app.post<{
     Params: { id: string };
-    Body: { text?: string; attachment_ids?: string[]; task_id?: string };
+    Body: { text?: string; attachment_ids?: string[]; task_id?: string; work_mode?: ChatWorkMode };
   }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
     async (req: any, reply) => {
       if (!isMember(req.params.id, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
+      let mode: ChatWorkMode;
+      try { mode = parseChatWorkMode(req.body?.work_mode); }
+      catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
+      if (mode !== "work" && roleFromUserId(req.userId)) return reply.code(403).send({error: "Режим выбирает человек"});
       const text = String(req.body?.text || "").trim();
+      if (mode === "deep_research" && (!chatMemberRoles(req.params.id).includes("researcher") || parseRoleMentions(text).some(r => r !== "researcher"))) {
+        return reply.code(400).send({error: "Глубокое исследование доступно в чате с Исследователем"});
+      }
       // Вложения без подписи — то же правило, что в /api/chat: пустой
       // текст ок, когда есть файлы («вот голосовое» без комментария),
       // а пустое совсем, без файлов — 400.
@@ -496,9 +504,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           : chatTaskId;
       const id = uid();
       db.prepare(
-        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id)
-         VALUES (?, ?, ?, 'chat', ?, ?)`,
-      ).run(id, req.userId, text, chatId, taskId);
+        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode)
+         VALUES (?, ?, ?, 'chat', ?, ?, ?)`,
+      ).run(id, req.userId, text, chatId, taskId, mode);
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
         chatId,
       );
@@ -537,7 +545,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // лок и молча терялось.
       try {
         if (chatId === SECRETARY_CHAT_ID) {
-          void enqueueChatReply(chatId, SECRETARY_USER_ID, () => deliverSecretaryReply(text));
+          void enqueueChatReply(chatId, SECRETARY_USER_ID, () => deliverSecretaryReply(text, mode));
         } else {
           await dispatchRoleReplies({
             chatId,
@@ -545,6 +553,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
             fromUserId: req.userId,
             text,
             hop: 0,
+            mode,
           });
         }
       } catch (error) {
@@ -1032,6 +1041,7 @@ async function dispatchRoleReplies(args: {
   fromUserId: string;
   text: string;
   hop: number;
+  mode?: ChatWorkMode;
 }): Promise<void> {
   const { chatId, text } = args;
   const senderRole = roleFromUserId(args.fromUserId);
@@ -1040,7 +1050,10 @@ async function dispatchRoleReplies(args: {
 
   const mentioned = parseRoleMentions(text).filter((r) => candidates.includes(r));
   let targets: RoleName[];
-  if (senderRole) {
+  if (args.mode === "plan" && senderRole) return;
+  if (args.mode === "deep_research") {
+    targets = candidates.includes("researcher") ? ["researcher"] : [];
+  } else if (senderRole) {
     if (args.hop > MAX_AGENT_HOPS) return;
     targets = mentioned.slice(0, 2);
   } else if (mentioned.length) {
@@ -1064,6 +1077,7 @@ async function dispatchRoleReplies(args: {
         role,
         triggerMessageId: args.messageId,
         hop: args.hop,
+        mode: args.mode,
       }),
     );
   }
@@ -1153,6 +1167,7 @@ async function deliverAgentReply(args: {
   role: RoleName;
   triggerMessageId: string;
   hop: number;
+  mode?: ChatWorkMode;
 }): Promise<string | null> {
   const { chatId, role } = args;
   const roleUserId = roleAccountId(role);
@@ -1254,6 +1269,7 @@ async function deliverAgentReply(args: {
   typing(true);
   try {
     reply = await startChatRun({
+      mode: args.mode,
       chatId,
       role,
       roleId: roleUserId,
@@ -1303,6 +1319,7 @@ async function deliverAgentReply(args: {
         fromUserId: roleUserId,
         text: replyText,
         hop: args.hop + 1,
+        mode: args.mode,
       });
     } catch (error) {
       console.warn(

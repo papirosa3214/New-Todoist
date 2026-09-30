@@ -2769,6 +2769,17 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "083_chat_work_mode",
+    description: "Режим сообщения чата: работа, планирование, глубокое исследование.",
+    up: () => {
+      const cols = db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{name: string}>;
+      if (!cols.some(c => c.name === "work_mode")) {
+        db.exec("ALTER TABLE chat_messages ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'work' CHECK(work_mode IN ('work','plan','deep_research'))");
+      }
+    },
+  },
+
 ];
 
 /**
