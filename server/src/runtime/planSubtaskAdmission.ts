@@ -3,6 +3,8 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { runRoleInProcess } from "./inProcessRun.js";
+import { broadcastTaskEvent } from "../ws.js";
+import { getFullTask } from "../routes/subtasks.js";
 
 /**
  * Узлы collaboration plan — обычные `subtasks` с `collaboration_plan_id` +
@@ -145,4 +147,79 @@ export async function unlockReadyPlanSubtasks(planId: string | null, taskId: str
       logEvent({ taskId, actorId, kind: "plan_subtask_autostart_failed", field: next.plan_node_key ?? next.id, toValue: error instanceof Error ? error.message : String(error) });
     }
   }
+}
+
+/** Сообщение роли в ленту карточки. Напрямую, а не маршрутом комментариев:
+ *  писать туда роль может только в своей карточке, а узел плана бывает и
+ *  в чужой. */
+function roleNote(taskId: string, role: string, text: string): void {
+  db.prepare("INSERT INTO comments (id, task_id, user_id, text) VALUES (?, ?, ?, ?)")
+    .run(crypto.randomUUID(), taskId, roleUserId(role), text);
+  const task = db.prepare("SELECT creator_id, assignee_id FROM tasks WHERE id = ?").get(taskId) as
+    | { creator_id: string | null; assignee_id: string | null }
+    | undefined;
+  if (task) {
+    broadcastTaskEvent([task.creator_id, task.assignee_id], { type: "task:updated", task: getFullTask(taskId) });
+  }
+}
+
+/** Сколько обрывов подряд терпим, прежде чем перестать продолжать самим. */
+const INTERRUPTS_BEFORE_BLOCK = 2;
+const INTERRUPT_WINDOW = "-30 minutes";
+
+/**
+ * Брошенные после перезапуска сервера узлы плана (владелец 01.10.2026, T05).
+ *
+ * Ход роли живёт только внутри процесса сервера, поэтому при старте любой
+ * узел плана «в работе» — заведомо брошенный: его ход умер вместе с прошлым
+ * процессом. Раньше такой узел оставался «в работе» навсегда, а следующие
+ * роли его ждали — в ленте тишина. Теперь: попытка закрывается как
+ * `interrupted`, роль пишет в ленту, что её ход оборвался, и продолжает
+ * тот же разговор (сессия узла сохранена на диске). Второй обрыв за
+ * полчаса — узел `blocked` и сообщение владельцу, без повторов по кругу.
+ */
+export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: number; blocked: number }> {
+  const rows = db.prepare(
+    "SELECT * FROM subtasks WHERE collaboration_plan_id IS NOT NULL AND done = 0 AND agent_state = 'in_progress'",
+  ).all() as PlanSubtask[];
+  let resumed = 0;
+  let blocked = 0;
+  for (const row of rows) {
+    const node = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
+      .get(row.collaboration_plan_id, row.plan_node_key) as { role_key: string } | undefined;
+    if (row.current_attempt_id) {
+      db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = 'перезапуск сервера' WHERE id = ? AND ended_at IS NULL")
+        .run(row.current_attempt_id);
+    }
+    db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
+    logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_interrupted", field: row.plan_node_key, toValue: node ? roleTitle(node.role_key) : null });
+    if (!node) continue;
+
+    const { n: interrupts } = db.prepare(
+      `SELECT COUNT(*) AS n FROM attempts
+        WHERE subtask_id = ? AND outcome = 'interrupted' AND ended_at >= datetime('now', '${INTERRUPT_WINDOW}')`,
+    ).get(row.id) as { n: number };
+    if (interrupts >= INTERRUPTS_BEFORE_BLOCK) {
+      db.prepare("UPDATE subtasks SET agent_state = 'blocked', agent_id = ? WHERE id = ?").run(roleUserId(node.role_key), row.id);
+      blocked += 1;
+      roleNote(
+        row.task_id,
+        node.role_key,
+        `«${row.title}»: ход снова оборвался перезапуском сервера — второй раз за полчаса. Сам больше не продолжаю, нужен ваш взгляд.`,
+      );
+      continue;
+    }
+    roleNote(
+      row.task_id,
+      node.role_key,
+      `«${row.title}»: мой ход оборвался — сервер перезапустился. Продолжаю с того же места.`,
+    );
+    const started = await startPlanSubtaskRun(row.id, roleUserId(node.role_key));
+    if (started.ok) {
+      resumed += 1;
+    } else {
+      logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_autostart_failed", field: row.plan_node_key, toValue: started.error });
+    }
+  }
+  return { resumed, blocked };
 }

@@ -23,6 +23,7 @@ import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { buildInProcessTaskContext } from "./taskContextBridge.js";
 import { buildDependencyContext } from "./dependencyContext.js";
 import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
+import { roleWorkspace } from "./roleWorkspace.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -589,7 +590,9 @@ export async function runRoleInProcess(input: {
     ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === modelId);
   if (!model) throw new Error(`модель «${modelId}» недоступна`);
 
-  const cwd = input.cwd ?? projectRepo(taskId);
+  // Репозиторий самого сервера — только в отдельной копии: сохранение файла
+  // в живой перезапустило бы сервер вместе с этим ходом (roleWorkspace.ts).
+  const cwd = input.cwd ?? roleWorkspace(taskId, projectRepo(taskId));
   const mode = input.mode ?? (role === "critic_verifier" ? "review" : "work");
   const resumed = hasSession(taskId, role, input.subtaskId);
   const dependencyContext = buildDependencyContext(taskId);
