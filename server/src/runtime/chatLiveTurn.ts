@@ -11,6 +11,12 @@
 //
 // Снимок хранится только в памяти процесса: после рестарта сервера
 // незаконченный ход и так оборван, восстанавливать нечего.
+//
+// Размышления (владелец 30.09.2026) — тоже элемент хода, `kind: "thinking"`,
+// с полным текстом: в чате их можно раскрыть окошком, пока роль думает, и
+// открыть целиком после хода. `id`/`tool`/`status` у него есть нарочно —
+// клиент, который про размышления ещё не знает, разбирает его как шаг и не
+// роняет весь снимок.
 import { broadcastToUsers } from "../ws.js";
 
 export const LIVE_BROADCAST_MS = 150;
@@ -26,6 +32,15 @@ export type LiveItem =
       tool: string;
       detail: string | null;
       status: "running" | "done" | "error";
+      started_at: string;
+      ended_at?: string;
+    }
+  | {
+      kind: "thinking";
+      id: string;
+      tool: "thinking";
+      text: string;
+      status: "running" | "done";
       started_at: string;
       ended_at?: string;
     };
@@ -190,6 +205,8 @@ export function mcpToolTitle(name: string): string {
 }
 
 const THINKING_BUF_MAX = 2_000;
+/** Одно размышление целиком — до этого предела, дальше не копим. */
+const THINKING_TEXT_MAX = 16_000;
 
 /** Последняя законченная фраза размышлений — её видно в чате, пока роль
  *  думает. Недописанную не берём: она дёргалась бы на каждом слове. */
@@ -227,8 +244,8 @@ export class LiveTurn {
   private readonly audience: () => string[];
   private readonly startedAt = new Date();
   private items: LiveItem[] = [];
-  /** Текст идущих размышлений; null — роль сейчас не думает. */
-  private thinkingBuf: string | null = null;
+  /** Идущее размышление; null — роль сейчас не думает. */
+  private thinkingItem: Extract<LiveItem, { kind: "thinking" }> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   /** Ход-двойник: для этой пары уже идёт живой ход, этот ничего не
@@ -263,20 +280,23 @@ export class LiveTurn {
     };
     const sub = e.type === "message_update" ? e.assistantMessageEvent?.type : undefined;
     if (sub === "thinking_start") {
-      this.thinkingBuf = "";
+      this.endThinking();
+      this.startThinking();
       this.schedule(true);
     } else if (sub === "thinking_delta") {
-      this.thinkingBuf = ((this.thinkingBuf ?? "") + (e.assistantMessageEvent?.delta ?? ""))
-        .slice(-THINKING_BUF_MAX);
+      const item = this.thinkingItem ?? this.startThinking();
+      if (item && item.text.length < THINKING_TEXT_MAX) {
+        item.text += e.assistantMessageEvent?.delta ?? "";
+      }
       this.schedule(false);
     } else if (sub === "thinking_end") {
-      this.thinkingBuf = null;
+      this.endThinking();
       this.schedule(true);
     } else if (sub === "text_delta") {
-      this.thinkingBuf = null;
+      this.endThinking();
       this.appendText(e.assistantMessageEvent?.delta ?? "");
     } else if (e.type === "tool_execution_start" && e.toolName) {
-      this.thinkingBuf = null;
+      this.endThinking();
       if (this.items.length >= ITEMS_MAX) return;
       this.items.push({
         kind: "step",
@@ -299,6 +319,29 @@ export class LiveTurn {
     }
   };
 
+  private startThinking(): Extract<LiveItem, { kind: "thinking" }> | null {
+    if (this.items.length >= ITEMS_MAX) return null;
+    const item: Extract<LiveItem, { kind: "thinking" }> = {
+      kind: "thinking",
+      id: `thinking-${this.items.length}`,
+      tool: "thinking",
+      text: "",
+      status: "running",
+      started_at: new Date().toISOString(),
+    };
+    this.items.push(item);
+    this.thinkingItem = item;
+    return item;
+  }
+
+  private endThinking(): void {
+    const item = this.thinkingItem;
+    if (!item) return;
+    item.status = "done";
+    item.ended_at = new Date().toISOString();
+    this.thinkingItem = null;
+  }
+
   private appendText(delta: string): void {
     if (!delta) return;
     const last = this.items[this.items.length - 1];
@@ -316,6 +359,12 @@ export class LiveTurn {
       if (it.kind === "text") {
         const text = stripQuickRepliesLine(it.text);
         if (text.trim()) items.push({ kind: "text", text });
+      } else if (it.kind === "thinking") {
+        // Законченное пустое размышление (модель скрыла текст) — не
+        // показываем; идущее пустое — это «Думает…» без текста.
+        if (it.status === "running" || it.text.trim()) {
+          items.push({ ...it, text: redactSecrets(it.text) });
+        }
       } else {
         items.push({ ...it });
       }
@@ -326,7 +375,9 @@ export class LiveTurn {
       name: this.name,
       started_at: this.startedAt.toISOString(),
       items,
-      thinking: this.thinkingBuf === null ? null : lastThinkingPhrase(this.thinkingBuf),
+      thinking: this.thinkingItem
+        ? lastThinkingPhrase(this.thinkingItem.text.slice(-THINKING_BUF_MAX))
+        : null,
     };
   }
 
@@ -356,10 +407,11 @@ export class LiveTurn {
 
   /** Ход закончен (успешно или нет): убрать живой снимок у всех и отдать
    *  то, что сохранится в истории. Последний текстовый кусок — это сам
-   *  ответ, он ляжет пузырём, поэтому в шаги не идёт. Шагов не было —
-   *  null: обычный короткий ответ без свёрнутой строки. */
+   *  ответ, он ляжет пузырём, поэтому в шаги не идёт. Ни шагов, ни
+   *  размышлений — null: обычный короткий ответ без свёрнутой строки. */
   finish(): SavedSteps | null {
     if (this.closed) return null;
+    this.endThinking();
     this.closed = true;
     this.dispose();
     liveTurns.delete(keyOf(this.chatId, this.userId));
@@ -378,7 +430,7 @@ export class LiveTurn {
         it.ended_at = now;
       }
     }
-    if (!items.some((it) => it.kind === "step")) return null;
+    if (!items.some((it) => it.kind !== "text")) return null;
     return { duration_ms: Date.now() - this.startedAt.getTime(), items };
   }
 

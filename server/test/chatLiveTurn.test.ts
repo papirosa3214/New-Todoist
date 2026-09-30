@@ -140,10 +140,28 @@ describe("размышления роли (28.09.2026)", () => {
 
     turn.onEvent(think("thinking_end"));
     expect(sent.at(-1)!.event.turn.thinking).toBeNull();
-    expect(sent.at(-1)!.event.turn.items).toEqual([]);
   });
 
-  it("текст ответа или шаг гасят размышления, в историю они не идут", () => {
+  it("полный текст размышления — элементом хода (30.09.2026)", () => {
+    vi.useFakeTimers();
+    const turn = newTurn();
+    turn.onEvent(think("thinking_start"));
+    expect(sent.at(-1)!.event.turn.items).toEqual([
+      expect.objectContaining({ kind: "thinking", tool: "thinking", text: "", status: "running" }),
+    ]);
+    turn.onEvent(think("thinking_delta", "Смотрю доску. token=abcdef123 "));
+    turn.onEvent(think("thinking_delta", "и сравниваю"));
+    vi.advanceTimersByTime(LIVE_BROADCAST_MS);
+    const live = sent.at(-1)!.event.turn.items[0];
+    expect(live.text).toBe("Смотрю доску. token=••• и сравниваю");
+    expect(live.status).toBe("running");
+    turn.onEvent(think("thinking_end"));
+    const done = sent.at(-1)!.event.turn.items[0];
+    expect(done.status).toBe("done");
+    expect(done.ended_at).toBeTruthy();
+  });
+
+  it("текст ответа или шаг закрывают размышление, в историю оно идёт", () => {
     vi.useFakeTimers();
     const turn = newTurn();
     turn.onEvent(think("thinking_start"));
@@ -151,7 +169,28 @@ describe("размышления роли (28.09.2026)", () => {
     turn.onEvent(toolStart("t1", "read", { path: "/tmp/a" }));
     expect(sent.at(-1)!.event.turn.thinking).toBeNull();
     turn.onEvent(toolEnd("t1"));
-    expect(turn.finish()!.items).toHaveLength(1);
+    const saved = turn.finish()!.items;
+    expect(saved.map((it) => it.kind)).toEqual(["thinking", "step"]);
+    expect(saved[0]).toMatchObject({ text: "Надо проверить файл.", status: "done" });
+  });
+
+  it("ход только с размышлением и ответом тоже сохраняет размышление", () => {
+    const turn = newTurn();
+    turn.onEvent(think("thinking_start"));
+    turn.onEvent(think("thinking_delta", "Коротко ответить."));
+    turn.onEvent(text("Готово."));
+    expect(turn.finish()!.items).toEqual([
+      expect.objectContaining({ kind: "thinking", text: "Коротко ответить.", status: "done" }),
+    ]);
+  });
+
+  it("пустое законченное размышление не показывается и не сохраняется", () => {
+    const turn = newTurn();
+    turn.onEvent(think("thinking_start"));
+    turn.onEvent(think("thinking_end"));
+    turn.onEvent(text("Ответ."));
+    expect(liveTurnsOfChat("c1")[0].items).toEqual([{ kind: "text", text: "Ответ." }]);
+    expect(turn.finish()).toBeNull();
   });
 
   it("фраза: без разметки, ключи затёрты, недописанное не берётся", () => {
