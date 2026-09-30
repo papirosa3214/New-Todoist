@@ -3,7 +3,10 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { runRoleInProcess } from "./inProcessRun.js";
-import { broadcastTaskEvent } from "../ws.js";
+import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
+import { currentResultVersion, ensureResultVersionForReview } from "../resultVersions.js";
+import { enqueueRoleRunJob } from "./roleRunQueue.js";
+import { bumpContextVersion } from "./taskContextVersion.js";
 import { getFullTask } from "../routes/subtasks.js";
 
 /**
@@ -135,6 +138,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string): P
  */
 export async function unlockReadyPlanSubtasks(planId: string | null, taskId: string, actorId: string): Promise<void> {
   if (!planId) return;
+  if (finishPlanIfComplete(planId, taskId, actorId)) return;
   const waiting = db.prepare("SELECT * FROM subtasks WHERE collaboration_plan_id = ? AND done = 0 AND agent_state IS NULL").all(planId) as PlanSubtask[];
   for (const next of waiting) {
     if (!canPlanSubtaskBecomeReady(next)) continue;
@@ -222,4 +226,90 @@ export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: numbe
     }
   }
   return { resumed, blocked };
+}
+
+/**
+ * План совместной работы сдан целиком → карточка на проверку (владелец
+ * 01.10.2026, T05: все семь ролей сдали, а карточка висела «активной»).
+ *
+ * Обычный роллап «все шаги закрыты → review» (routes/subtasks.ts) сюда не
+ * дотягивается: он ждёт карточку «в работе», а у карточки с планом
+ * работают узлы, сама она без состояния. И считаем мы только узлы плана —
+ * личные шаги, которые роль завела себе по ходу, сдачу не держат.
+ *
+ * Путь тот же, что у штатной сдачи: версия результата (по ней проверяющий
+ * выносит вердикт), закрытая попытка, проверяющий в очереди, уведомление
+ * автору, проверка родителя. К владельцу карточка приходит только после
+ * вердикта проверяющего — «в любом случае», даже если в плане был Критик.
+ * Возвращает true, если карточка ушла на проверку этим вызовом.
+ */
+export function finishPlanIfComplete(planId: string, taskId: string, actorId: string | null): boolean {
+  const plan = db.prepare("SELECT id, status FROM task_collaboration_plans WHERE id = ? AND task_id = ?")
+    .get(planId, taskId) as { id: string; status: string } | undefined;
+  if (!plan || plan.status !== "approved") return false;
+  const nodes = db.prepare(
+    "SELECT title, done, result, plan_node_key FROM subtasks WHERE collaboration_plan_id = ? ORDER BY position",
+  ).all(planId) as Array<{ title: string; done: number; result: string | null; plan_node_key: string | null }>;
+  if (nodes.length === 0 || nodes.some((n) => !n.done)) return false;
+  const task = db.prepare("SELECT id, title, status, agent_state, creator_id, assignee_id, current_attempt_id FROM tasks WHERE id = ?")
+    .get(taskId) as
+    | { id: string; title: string; status: string; agent_state: string | null; creator_id: string | null; assignee_id: string | null; current_attempt_id: string | null }
+    | undefined;
+  if (!task || task.status !== "active" || task.agent_state === "review") return false;
+  const already = db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'collaboration_plan_completed' AND field = ? LIMIT 1")
+    .get(taskId, planId);
+  if (already) return false;
+
+  const summary = [
+    "План совместной работы сдан.",
+    ...nodes.map((n) => {
+      const result = (n.result ?? "").replace(/\s+/g, " ").trim();
+      const clipped = result.length > 400 ? `${result.slice(0, 399)}…` : result;
+      return `— ${n.title}${clipped ? `: ${clipped}` : ""}`;
+    }),
+  ].join("\n");
+
+  db.transaction(() => {
+    const before = currentResultVersion(taskId);
+    const version = ensureResultVersionForReview(taskId, actorId ?? task.assignee_id ?? task.creator_id ?? "", summary);
+    if (task.current_attempt_id) {
+      db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'review', reason = 'план сдан' WHERE id = ? AND ended_at IS NULL")
+        .run(task.current_attempt_id);
+    }
+    db.prepare("UPDATE tasks SET agent_state = 'review', current_attempt_id = NULL, updated_at = datetime('now') WHERE id = ?").run(taskId);
+    bumpContextVersion(taskId);
+    if (!before) {
+      logEvent({ taskId, actorId, kind: "result_version_created", field: "result_version", toValue: String(version.version_no) });
+    }
+    logEvent({ taskId, actorId: null, kind: "collaboration_plan_completed", field: planId, toValue: String(nodes.length) });
+    logEvent({ taskId, actorId: null, kind: "state_changed", field: "agent_state", fromValue: task.agent_state, toValue: "review" });
+    enqueueRoleRunJob({ taskId, reason: "review", actorId, dedupeKey: `plan-review:${planId}` });
+  })();
+
+  if (task.creator_id && task.creator_id !== actorId) {
+    const notifId = crypto.randomUUID();
+    db.prepare("INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'agent_state', ?, ?, ?)")
+      .run(notifId, task.creator_id, taskId, `Задача «${task.title}» на проверке`, actorId);
+    broadcastToUsers([task.creator_id], { type: "notification:new", notificationId: notifId, taskId });
+  }
+  broadcastTaskEvent([task.creator_id, task.assignee_id], { type: "task:updated", task: getFullTask(taskId) });
+  void import("../routes/dispatch.js")
+    .then((m) => m.admitParentAfterChildren(taskId))
+    .catch((err) => console.warn("родитель после плана:", err));
+  return true;
+}
+
+/** При старте: планы, сданные целиком, но карточка так и не ушла на
+ *  проверку (сданы до 01.10.2026 или сервер упал в момент сдачи). */
+export function finishCompletedPlans(): number {
+  const plans = db.prepare(
+    `SELECT p.id, p.task_id FROM task_collaboration_plans p
+       JOIN tasks t ON t.id = p.task_id
+      WHERE p.status = 'approved' AND t.status = 'active' AND COALESCE(t.agent_state, '') <> 'review'`,
+  ).all() as Array<{ id: string; task_id: string }>;
+  let finished = 0;
+  for (const plan of plans) {
+    if (finishPlanIfComplete(plan.id, plan.task_id, null)) finished += 1;
+  }
+  return finished;
 }

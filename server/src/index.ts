@@ -9,7 +9,7 @@ import fastifyJwt from "@fastify/jwt";
 import { setRoleTokenSigner } from "./runtime/roleRunAccess.js";
 import { setInProcessApp } from "./runtime/inProcessRun.js";
 import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
-import { recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
+import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
@@ -542,6 +542,12 @@ if (isMain) {
     stopRoleRuns = startRoleRunWorker();
     // Ходы ролей живут в процессе: узлы плана, брошенные прошлым процессом,
     // — в ленту и продолжить (runtime/planSubtaskAdmission.ts).
+    try {
+      const finished = finishCompletedPlans();
+      if (finished) console.log(`[plan] сданные планы отправлены на проверку: ${finished}`);
+    } catch (error) {
+      console.error("[plan] сдача завершённых планов не удалась:", error);
+    }
     void recoverInterruptedPlanSubtasks()
       .then(({ resumed, blocked }) => {
         if (resumed || blocked) console.log(`[plan] после рестарта: продолжено ${resumed}, остановлено ${blocked}`);
