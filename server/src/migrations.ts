@@ -153,6 +153,68 @@ function removeUsersRoleCheck(): void {
 }
 
 /**
+ * Добавить 'bug_regression' в закрытый CHECK task_collaboration_plans.profile
+ * (T05). Прямая копия паттерна 077 (product_feature) — повторять текст
+ * функции addProductFeatureProfile здесь нельзя: rebuild делает замену
+ * regex-ом по DDL, и если две миграции побегут подряд в одной транзакции,
+ * они могут столкнуться на этапе `DROP TABLE task_collaboration_plans`. Здесь
+ * проверка идемпотентности своя, по `'bug_regression'` в DDL.
+ *
+ * Зарегистрирована как 080: под 095/095 уже занято (`079_plan_node_source_subtask`,
+ * задача 30.09.2026), а WIP-дифф в `docs/2026-09-30-collaboration-plan-editable/
+ * t05-bug-regression-migration-wip.diff.txt` описывал её под номером 079.
+ * Сдвиг номера — административный: код миграции и её эффект не меняются,
+ * schema_migrations получит запись `080_collaboration_plan_bug_regression_profile`.
+ */
+function addBugRegressionProfile(): void {
+  const ddl =
+    (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='task_collaboration_plans'",
+        )
+        .get() as { sql?: string } | undefined
+    )?.sql ?? "";
+  if (!ddl || ddl.includes("'bug_regression'")) {
+    return;
+  }
+
+  const newDdl = ddl
+    .replace(/CHECK\s*\(\s*profile\s+IN\s*\(([^)]*)\)\s*\)/i, (_match, list: string) => `CHECK (profile IN (${list},'bug_regression'))`)
+    .replace(/CREATE TABLE\s+"?task_collaboration_plans"?/i, 'CREATE TABLE "task_collaboration_plans_new"');
+  if (newDdl === ddl || !newDdl.includes('CREATE TABLE "task_collaboration_plans_new"') || !newDdl.includes("'bug_regression'")) {
+    throw new Error(
+      "080_collaboration_plan_bug_regression_profile: не удалось безопасно подготовить task_collaboration_plans с bug_regression",
+    );
+  }
+
+  db.pragma("foreign_keys = OFF");
+  try {
+    const rebuild = db.transaction(() => {
+      db.exec(newDdl);
+      db.exec('INSERT INTO "task_collaboration_plans_new" SELECT * FROM task_collaboration_plans');
+      db.exec("DROP TABLE task_collaboration_plans");
+      db.exec('ALTER TABLE "task_collaboration_plans_new" RENAME TO task_collaboration_plans');
+      // DROP TABLE забирает с собой отдельно объявленный (не inline UNIQUE)
+      // индекс idx_task_collaboration_plans_task — пересоздаём его на новой таблице.
+      db.exec("CREATE INDEX IF NOT EXISTS idx_task_collaboration_plans_task ON task_collaboration_plans(task_id, revision DESC)");
+    });
+    rebuild();
+
+    const broken = (
+      db.pragma("foreign_key_check") as Array<{ parent?: string }>
+    ).filter((row) => row.parent === "task_collaboration_plans");
+    if (broken.length > 0) {
+      throw new Error(
+        `080_collaboration_plan_bug_regression_profile: после пересборки task_collaboration_plans осталось ${broken.length} битых ссылок`,
+      );
+    }
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
+/**
  * Добавить 'product_feature' в закрытый CHECK task_collaboration_plans.profile
  * (T03). SQLite не умеет ALTER CHECK — тот же rebuild-паттерн, что и в
  * removeUsersRoleCheck: читаем живой DDL, дописываем значение в список CHECK,
@@ -2622,6 +2684,13 @@ const migrations: Migration[] = [
       const cols = new Set((db.prepare("PRAGMA table_info(task_collaboration_plan_nodes)").all() as Array<{ name: string }>).map((c) => c.name));
       if (!cols.has("source_subtask_id")) db.exec("ALTER TABLE task_collaboration_plan_nodes ADD COLUMN source_subtask_id TEXT REFERENCES subtasks(id)");
     },
+  },
+
+  {
+    id: "080_collaboration_plan_bug_regression_profile",
+    description: "Разрешить profile='bug_regression' (T05) в task_collaboration_plans.profile. Номер сдвинут с WIP-079 на 080 — см. комментарий к addBugRegressionProfile: под 079 уже занято миграцией source_subtask_id.",
+    noTransaction: true,
+    up: () => addBugRegressionProfile(),
   },
 
 ];

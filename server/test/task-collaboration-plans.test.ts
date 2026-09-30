@@ -203,6 +203,116 @@ describe("collaboration plans", () => {
     expect(["architecture", "design", "delivery", "qa"].every((key) => subtasks[key].agent_state === null && subtasks[key].done === 0)).toBe(true);
   });
 
+  it("T05 bug_regression: минимальный маршрут A1→V1 без флагов", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T05 minimal ${crypto.randomUUID()}` } });
+    const proposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "bug_regression" } });
+    expect(proposal.statusCode).toBe(201);
+    const plan = proposal.json().plan;
+    expect(plan.profile).toBe("bug_regression");
+    expect(plan.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "fix"]);
+    expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "analysis").output_artifact).toMatchObject({ key: "bug_report", required_fields: ["summary", "repro_steps", "observed", "expected", "severity", "scope", "environment", "workaround"] });
+    expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "fix").output_artifact).toMatchObject({ key: "fix_pack" });
+    expect(plan.edges).toEqual([{ from_slot_key: "analysis", to_slot_key: "fix", start_condition: "artifact_ready", artifact_key: "bug_report" }]);
+
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
+    const subtasks = await planSubtasks(task.json().task.id);
+    expect(subtasks.analysis.agent_state).toBe("in_progress");
+    expect(subtasks.fix.agent_state).toBeNull();
+    expect(subtasks.fix.done).toBe(0);
+  });
+
+  it("T05 bug_regression: включённые H1/Q1 без висячих edges, отключённые — без ссылок на себя", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T05 full ${crypto.randomUUID()}` } });
+    const proposal = await app.inject({
+      method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth },
+      payload: { profile: "bug_regression", include_root_cause: true, include_qa: true },
+    });
+    expect(proposal.statusCode).toBe(201);
+    const plan = proposal.json().plan;
+    expect(plan.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "fix", "regression_test", "root_cause"]);
+    const edgeSet = plan.edges.map((e: { from_slot_key: string; to_slot_key: string; start_condition: string; artifact_key: string }) => `${e.from_slot_key}->${e.to_slot_key}:${e.start_condition}:${e.artifact_key}`).sort();
+    expect(edgeSet).toEqual([
+      "analysis->fix:artifact_ready:bug_report",
+      "analysis->root_cause:artifact_ready:bug_report",
+      "fix->regression_test:artifact_ready:fix_pack",
+      "root_cause->fix:artifact_ready:root_cause_analysis",
+    ].sort());
+    // Ключи переименованы против T03 (architecture_decision/feature_test_report),
+    // чтобы при сосуществовании T03 и T05 в одной БД не было ложной совместимости.
+    expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "root_cause").output_artifact).toMatchObject({ key: "root_cause_analysis" });
+    expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "regression_test").output_artifact).toMatchObject({ key: "regression_test_report" });
+
+    // Только Q1 без H1 — root_cause-edge не появляется, regression_test остаётся.
+    const task2 = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T05 qa only ${crypto.randomUUID()}` } });
+    const proposal2 = await app.inject({
+      method: "POST", url: `/api/tasks/${task2.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth },
+      payload: { profile: "bug_regression", include_qa: true },
+    });
+    const plan2 = proposal2.json().plan;
+    expect(plan2.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "fix", "regression_test"]);
+    expect(plan2.edges.map((e: { from_slot_key: string; to_slot_key: string }) => `${e.from_slot_key}->${e.to_slot_key}`).sort()).toEqual(["analysis->fix", "fix->regression_test"]);
+
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
+    const subtasks = await planSubtasks(task.json().task.id);
+    expect(Object.keys(subtasks)).toHaveLength(4);
+    expect(subtasks.analysis.agent_state).toBe("in_progress");
+    expect(["fix", "root_cause", "regression_test"].every((key) => subtasks[key].agent_state === null && subtasks[key].done === 0)).toBe(true);
+  });
+
+  it("T05 bug_regression: PROFILES принимает profile через /propose (через 422 не отлуплено)", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T05 accepted ${crypto.randomUUID()}` } });
+    const proposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "bug_regression" } });
+    expect(proposal.statusCode).toBe(201);
+    expect(proposal.json().plan.profile).toBe("bug_regression");
+  });
+
+  it("T05 bug_regression: граф ациклический — parseGraph принимает полный набор с H1+Q1", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T05 acyclic ${crypto.randomUUID()}` } });
+    const proposal = await app.inject({
+      method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth },
+      payload: { profile: "bug_regression", include_root_cause: true, include_qa: true },
+    });
+    expect(proposal.statusCode).toBe(201);
+    const plan = proposal.json().plan;
+    // 4 узла, 4 ребра — разветвление analysis → {fix, root_cause}, сведение в fix, затем fix → regression_test
+    expect(plan.nodes).toHaveLength(4);
+    expect(plan.edges).toHaveLength(4);
+    // Циклический подложный граф отклоняется тем же parseGraph — это уже
+    // покрыто общим тестом выше, здесь подтверждаем что T05-edges не
+    // подкладывают скрытых циклов (анализ идёт в обе ветки, обе сходятся в fix).
+    const reverseAttempt = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans`, headers: { authorization: ownerAuth }, payload: {
+      profile: "manual",
+      nodes: plan.nodes,
+      edges: [...plan.edges, { from_slot_key: "fix", to_slot_key: "analysis", start_condition: "artifact_ready", artifact_key: "fix_pack" }],
+    } });
+    expect(reverseAttempt.statusCode).toBe(400);
+  });
+
+  it("T05 auto: подтверждённый баг/регрессия подбирается как bug_regression", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Баг в авторизации ${crypto.randomUUID()}`, description: "Регрессия после релиза: авторизация не работает, сервер падает с ошибкой при логине" } });
+    const autoProposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "auto" } });
+    expect(autoProposal.statusCode).toBe(201);
+    expect(autoProposal.json().plan.profile).toBe("bug_regression");
+  });
+
+  it("T05 auto: новая фича без bug-сигнала не подбирается как bug_regression", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Новая фича ${crypto.randomUUID()}`, description: "Добавить экран с фильтром: новая возможность с acceptance criteria" } });
+    const autoProposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "auto" } });
+    expect(autoProposal.json().plan.profile).not.toBe("bug_regression");
+  });
+
+  it("T05 auto: T05 приоритетнее T03 на смешанном сигнале (баг + слова про фичу)", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Сломанная фича ${crypto.randomUUID()}`, description: "Добавили новый экран с фильтром, но он не работает: падает с ошибкой при клике, нужно исправить регрессию" } });
+    const autoProposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "auto" } });
+    expect(autoProposal.json().plan.profile).toBe("bug_regression");
+  });
+
+  it("T05 bug_regression: неизвестный профиль по-прежнему отклоняется", async () => {
+    const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T05 auto guard ${crypto.randomUUID()}` } });
+    const badProfile = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "not_a_real_profile" } });
+    expect(badProfile.statusCode).toBe(422);
+  });
+
   it("T03 product_feature: неизвестный профиль по-прежнему отклоняется", async () => {
     const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 auto guard ${crypto.randomUUID()}` } });
     const badProfile = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "not_a_real_profile" } });

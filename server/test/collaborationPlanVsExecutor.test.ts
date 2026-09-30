@@ -139,14 +139,14 @@ describe("План совместной работы vs единственный
     expect(approve.statusCode).toBe(409);
   }, 10_000);
 
-  it("карточке без сигнала фичи (диагностика/рутина) план не предлагается — автомат работает как раньше", async () => {
+  it("карточке без сигнала фичи/бага (рутина) план не предлагается — автомат работает как раньше", async () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/tasks",
       headers: ownerAuth,
       payload: {
-        title: "Починить падение при открытии карточки",
-        description: "Приложение падает, если открыть карточку без описания. Нужно исправить ошибку.",
+        title: "Обновить зависимости в package.json",
+        description: "Прогнать npm audit fix и поднять минорные версии библиотек до актуальных.",
       },
     });
     const taskId = created.json().task.id as string;

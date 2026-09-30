@@ -8,7 +8,7 @@ import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
 import { startPlanSubtaskRun } from "../runtime/planSubtaskAdmission.js";
 import { suggestFanoutFromSubtasks } from "../runtime/subtaskRoleFanout.js";
 
-const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual", "product_feature"]);
+const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual", "product_feature", "bug_regression"]);
 const CONDITIONS = new Set(["submitted", "accepted", "artifact_ready"]);
 const SLOT_KEY = /^[a-z][a-z0-9_]{1,63}$/;
 
@@ -244,10 +244,10 @@ function productFeatureTemplate(flags: { includeArchitecture: boolean; includeDe
  * Возвращает null, если T03 неприменим — тогда решают остальные профили ниже.
  */
 function autoProductFeatureCandidate(text: string): { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean } | null {
-  const isBugOrRegression = /\bбаг\b|регресси|дефект|не работает|сломал|ошибк[аи]|падает|краш|почин|исправ/.test(text);
+  if (bugSignals(text)) return null;
   const isPureResearchQuestion = /нужно ли|стоит ли|имеет ли смысл|целесообразно/.test(text) && !/критери[ийя]? приём|acceptance criteria/.test(text);
   const isApiContractOnly = /(внешн\w* api|api[- ]контракт|спецификация api)/.test(text) && !/(экран|интерфейс|\bui\b|\bux\b)/.test(text);
-  if (isBugOrRegression || isPureResearchQuestion || isApiContractOnly) return null;
+  if (isPureResearchQuestion || isApiContractOnly) return null;
 
   const hasFeatureSignal = /\bфич[ауеы]?\b|новая возможность|новый экран|добавить|расшир[ияь]|критери[ийя]? приём|acceptance criteria/.test(text);
   if (!hasFeatureSignal) return null;
@@ -259,13 +259,107 @@ function autoProductFeatureCandidate(text: string): { includeArchitecture: boole
   };
 }
 
-export function proposalFor(taskId: string, requested: string, productFeatureFlags?: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }) {
+/**
+ * Общий детектор бага/регрессии в свободном тексте. Раньше жил
+ * inline-локальной переменной в autoProductFeatureCandidate (T03) как
+ * `isBugOrRegression`, что не давало переиспользовать его для auto-подбора
+ * T05 — тот же сигнал должен снимать T03 и поднимать T05, а не дублироваться
+ * в двух regex'ах, которые со временем разъедутся. Детерминированный
+ * regex, не embeddings: подбор по ключевым словам остаётся отдельным
+ * будущим шагом (README «Предлагаемая целевая модель»), пока не накопится
+ * больше шаблонов, которые есть смысл ранжировать.
+ */
+function bugSignals(text: string): boolean {
+  return /\bбаг\b|регресси|дефект|не работает|сломал|ошибк[аи]|падает|краш|почин|исправ/.test(text);
+}
+
+/**
+ * T05 «Подтверждённый баг/регрессия» (docs/2026-09-30-collaboration-plan-
+ * editable/, HANDOFF-T03-CONTRACT.md как референс формы контракта; отдельный
+ * HANDOFF-T05-CONTRACT пока не заведён — решение владельца 30.09.2026):
+ * A1 (analyst, bug_report) и V1 (builder, fix_pack) обязательны всегда,
+ * H1 (architect, root_cause_analysis) — только при includeRootCause,
+ * Q1 (qa, regression_test_report) — только при includeQa. Ключи артефактов
+ * переименованы против T03 (root_cause_analysis/regression_test_report
+ * вместо architecture_decision/feature_test_report): при сосуществовании
+ * T03 и T05 в одной БД совпадение ключей давало бы ложное чувство
+ * совместимости — а контракты у них разные (root_cause_analysis для бага
+ * ссылается на bug_report, а не на feature_spec).
+ *
+ * Владелец 29.09.2026: после approve вся цепочка идёт по artifact_ready,
+ * без ручного accept на каждом внутреннем переходе (тот же принцип, что и
+ * в T03). Дизайнера (D1) в T05 нет — для визуальных багов отдельный узел
+ * не нужен; если появится живая потребность, добавим отдельным флагом
+ * позже.
+ */
+function bugRegressionTemplate(flags: { includeRootCause: boolean; includeQa: boolean }): { nodes: Node[]; edges: Edge[]; rationale: string } {
+  const artifact = (key: string, type: string, required_fields: string[]): ArtifactContract => ({ key, type, format: "json", required_fields });
+  const node = (slot_key: string, role_key: string, expected_result: string, output_artifact: ArtifactContract): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact, source_subtask_id: null });
+  const edge = (from_slot_key: string, to_slot_key: string, artifact_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "artifact_ready", artifact_key });
+
+  const nodes: Node[] = [
+    node("analysis", "analyst", "bug_report: summary, repro_steps, observed, expected, severity, scope, environment, workaround", artifact("bug_report", "report", ["summary", "repro_steps", "observed", "expected", "severity", "scope", "environment", "workaround"])),
+  ];
+  const edges: Edge[] = [];
+  const included = ["A1"];
+
+  if (flags.includeRootCause) {
+    nodes.push(node("root_cause", "architect", "root_cause_analysis: context, options, decision, consequences, rollout_rollback", artifact("root_cause_analysis", "decision", ["context", "options", "decision", "consequences", "rollout_rollback"])));
+    edges.push(edge("analysis", "root_cause", "bug_report"));
+    included.push("H1");
+  }
+
+  nodes.push(node("fix", "builder", "fix_pack: change_refs, root_cause_summary, build_id, test_report, deployment_notes, known_limitations", artifact("fix_pack", "pack", ["change_refs", "root_cause_summary", "build_id", "test_report", "deployment_notes", "known_limitations"])));
+  edges.push(edge("analysis", "fix", "bug_report"));
+  if (flags.includeRootCause) edges.push(edge("root_cause", "fix", "root_cause_analysis"));
+  included.push("V1");
+
+  if (flags.includeQa) {
+    nodes.push(node("regression_test", "qa", "regression_test_report: acceptance_matrix, evidence, defects, recommendation", artifact("regression_test_report", "report", ["acceptance_matrix", "evidence", "defects", "recommendation"])));
+    edges.push(edge("fix", "regression_test", "fix_pack"));
+    included.push("Q1");
+  }
+
+  return { nodes, edges, rationale: `T05 «Подтверждённый баг/регрессия»: ${included.join(" → ")}` };
+}
+
+/**
+ * T05 в auto-подборе (тот же принцип, что и T03 — шаблон выбирает
+ * диспетчер по правилам, а не владелец вручную именем профиля): сигнал
+ * бага/регрессии снимает T03 (см. bugSignals в autoProductFeatureCandidate)
+ * и поднимает T05 как более специфичный шаблон — баг требует своего
+ * обязательного bug_report с repro_steps, а не feature_spec с acceptance
+ * criteria. includeRootCause: true если в тексте сервер/миграция/
+ * интеграция/производительность/масштаб/инфраструктура/после релиза/на
+ * проде/под нагрузкой (та же лексика, что и H1 в T03). includeQa: true
+ * по умолчанию; владелец может снять include_qa: false в /propose, как и
+ * в T03. Детерминированный regex, не embeddings — ранжирование шаблонов
+ * отдельный будущий шаг. Возвращает null, если T05 неприменим — тогда
+ * решают остальные профили ниже.
+ */
+function autoBugRegressionCandidate(text: string): { includeRootCause: boolean; includeQa: boolean } | null {
+  if (!bugSignals(text)) return null;
+  return {
+    includeRootCause: /миграц|интеграц|кросс-сервис|\bnfr\b|производительн|масштаб|инфраструктур|после релиза|на проде|под нагрузкой|сервер/.test(text),
+    includeQa: true,
+  };
+}
+
+export function proposalFor(taskId: string, requested: string, productFeatureFlags?: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }, bugRegressionFlags?: { includeRootCause: boolean; includeQa: boolean }) {
   if (requested === "product_feature") {
     return { profile: "product_feature", ...productFeatureTemplate(productFeatureFlags ?? { includeArchitecture: false, includeDesign: false, includeQa: false }) };
+  }
+  if (requested === "bug_regression") {
+    return { profile: "bug_regression", ...bugRegressionTemplate(bugRegressionFlags ?? { includeRootCause: false, includeQa: true }) };
   }
   const task = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title: string; description: string | null };
   const text = `${task.title}\n${task.description ?? ""}`.toLowerCase();
   if (requested === "auto") {
+    // T05 приоритетнее T03: bug_signals снимает T03 (см. bugSignals в
+    // autoProductFeatureCandidate), а тут подхватывает T05 — баг требует
+    // обязательного bug_report с repro_steps, а не feature_spec.
+    const t05 = autoBugRegressionCandidate(text);
+    if (t05) return { profile: "bug_regression", ...bugRegressionTemplate(t05) };
     const t03 = autoProductFeatureCandidate(text);
     if (t03) return { profile: "product_feature", ...productFeatureTemplate(t03) };
   }
@@ -346,7 +440,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!) });
   });
 
-  app.post<{ Params: { id: string }; Body: { profile?: unknown; context_version?: unknown; include_architecture?: unknown; include_design?: unknown; include_qa?: unknown } }>("/api/tasks/:id/collaboration-plans/propose", { preHandler: authOrApiToken }, async (req: any, reply) => {
+  app.post<{ Params: { id: string }; Body: { profile?: unknown; context_version?: unknown; include_architecture?: unknown; include_design?: unknown; include_qa?: unknown; include_root_cause?: unknown } }>("/api/tasks/:id/collaboration-plans/propose", { preHandler: authOrApiToken }, async (req: any, reply) => {
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan предлагает владелец или оркестратор" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
@@ -360,7 +454,14 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     const productFeatureFlags = requested === "product_feature"
       ? { includeArchitecture: req.body?.include_architecture === true, includeDesign: req.body?.include_design === true, includeQa: req.body?.include_qa === true }
       : undefined;
-    const proposal = proposalFor(task.id, requested, productFeatureFlags);
+    // T05: H1 (root_cause) и Q1 (regression_test) включаются только явным
+    // булевым флагом владельца — тот же принцип, что и в T03, чтобы владелец
+    // мог снять QA для тривиальных фиксов или добавить root_cause для
+    // инфраструктурных регрессий, а auto-подбор не навязывал свой выбор.
+    const bugRegressionFlags = requested === "bug_regression"
+      ? { includeRootCause: req.body?.include_root_cause === true, includeQa: req.body?.include_qa === true }
+      : undefined;
+    const proposal = proposalFor(task.id, requested, productFeatureFlags, bugRegressionFlags);
     const created = createDraftPlan(task.id, req.userId, proposal.profile, proposal.rationale, contextVersion, proposal);
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: `${proposal.profile}: template` });
     return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!), suggested: true });
