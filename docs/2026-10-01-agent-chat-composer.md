@@ -8,5 +8,5 @@ POST /api/chats/:id/messages: work_mode = work | plan | deep_research (необ�
 
 Проверено: TypeScript build; 100 файлов / 729 тестов PASS. Новые проверки — реальные args и сгенерированная extension-политика, MCP allowlist, переход plan→work, режимы очереди, отклонение неизвестного/недоступного режима без сохранения сообщения, адресация research в группе.
 Миграция 083 на копии живой БД прошла; integrity_check=ok. Backup: /home/maksim/backups/taskflow/before-chat-modes-20261001-015105.db.
-Live-выкладка фиксируется после push. Реальная внешняя модель с выбранным режимом в этой приёмке не запускалась.
+Выложен серверный 80ea140 на .110: сервис active, /api/health ok=true, 083_chat_work_mode применена, колонка work_mode существует; integrity_check=ok. Реальная внешняя модель с выбранным режимом в этой приёмке не запускалась.
 UI/XCTest-отчёт и кадры: /Users/max/Проекты/TaskFlowNativeBuild/docs/2026-10-01-agent-chat-composer.md.
