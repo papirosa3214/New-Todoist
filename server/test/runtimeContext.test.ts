@@ -87,11 +87,12 @@ async function bootstrap(): Promise<{ app: FastifyInstance; session: Session }> 
 }
 
 describe("/api/runtime/context — REST", () => {
-  it("GET /catalog отдаёт список слоёв без авторизации", async () => {
-    const { app } = await bootstrap();
+  it("GET /catalog требует владельца", async () => {
+    const { app, session } = await bootstrap();
     const res = await app.inject({
       method: "GET",
       url: "/api/runtime/context/catalog",
+      headers: {authorization: `Bearer ${session.ownerToken}`},
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { layers: Array<{ key: string }> };
@@ -101,14 +102,14 @@ describe("/api/runtime/context — REST", () => {
     await app.close();
   });
 
-  it("GET list для неизвестной роли возвращает 422", async () => {
+  it("GET list для неизвестной роли возвращает 404", async () => {
     const { app, session } = await bootstrap();
     const res = await app.inject({
       method: "GET",
       url: "/api/runtime/context?role=nope&mode=work",
       headers: { authorization: `Bearer ${session.ownerToken}` },
     });
-    expect(res.statusCode).toBe(422);
+    expect(res.statusCode).toBe(404);
     await app.close();
   });
 
@@ -209,11 +210,12 @@ describe("/api/runtime/context — REST", () => {
     const res = await app.inject({
       method: "POST",
       url: `/api/runtime/context/${role}/role.prompt/reset`,
+      payload: {if_match:1},
       headers: { authorization: `Bearer ${session.ownerToken}` },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { effective: string; version: number; source: string };
-    expect(body.source).toBe("override"); // новая запись в БД как override
+    expect(body.source).toBe("original"); // reset removes override
     expect(body.effective).toBe("");      // original для роли без промпта — пустой
     expect(body.version).toBe(2);          // set v1, потом reset v2
     await app.close();
@@ -238,7 +240,7 @@ describe("/api/runtime/context — REST", () => {
       method: "POST",
       url: `/api/runtime/context/${role}/role.prompt/restore`,
       headers: { authorization: `Bearer ${session.ownerToken}` },
-      payload: { version: 1 },
+      payload: { version: 1, if_match:2 },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { effective: string; version: number };
@@ -254,7 +256,7 @@ describe("/api/runtime/context — REST", () => {
       method: "POST",
       url: `/api/runtime/context/${role}/role.prompt/restore`,
       headers: { authorization: `Bearer ${session.ownerToken}` },
-      payload: { version: 99 },
+      payload: { version: 99, if_match:0 },
     });
     expect(res.statusCode).toBe(404);
     await app.close();

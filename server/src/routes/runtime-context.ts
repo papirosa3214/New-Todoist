@@ -1,253 +1,73 @@
-import type { FastifyInstance } from "fastify";
-import db from "../db.js";
-import { authOrApiToken, ownerOrApiToken } from "../auth.js";
-import {
-  applyOverride,
-  compose,
-  composeLayer,
-  getLayerSpec,
-  globalVersionForRole,
-  listHistory,
-  LAYER_CATALOG,
-  readHistoryEntry,
-  readOriginalOnly,
-  type ComposedLayer,
-  type RunMode,
-} from "../lib/roleContextResolver.js";
-
-/**
- * REST API управления контекстом запуска ролей (карточка
- * `15c2db1f-521f-4fae-8e47-6ac18458c966`, дизайн заметки
- * `54ff50a1-37ed-45ac-badd-9cbfab02a5d5`, §7).
- *
- * GET — эффективный текст всех/одного слоя для роли в режиме.
- * PATCH — правка (owner, if_match=version, иначе 428).
- * POST .../reset — сброс к оригиналу (owner).
- * POST .../restore — восстановление версии (owner).
- *
- * Эндпоинт НЕ подменяет runtime: подключение к inProcessRun/chats/
- * secretaryReply/consultation/task_context.py — отдельный шаг 4.
- * Здесь только хранение, чтение и API для будущего редактора (шаг 5).
- */
-
-const RUN_MODES = new Set<RunMode>(["work", "resume", "reply", "review", "subtask", "chat", "voice"]);
-
-function isRunMode(value: string): value is RunMode {
-  return RUN_MODES.has(value as RunMode);
+import type {FastifyInstance} from 'fastify';
+import db from '../db.js';
+import {authOrApiToken} from '../auth.js';
+import {isOwner} from '../access.js';
+import {roleUserId} from '../roleRouting.js';
+import {taskflowTools} from '../runtime/inProcessRun.js';
+import {instructionResources, discoverChatResources} from '../runtime/instructionResources.js';
+import {applyOverride, compose, composeLayer, composeTeamText, getLayerSpec, globalVersionForRole, listHistory, LAYER_CATALOG, readHistoryEntry, revision, InstructionConflict, type ComposedLayer, type RunMode} from '../lib/roleContextResolver.js';
+const MODES=new Set(['work','resume','reply','review','subtask','chat','voice','summary']);
+function known(role:string) { return !!db.prepare('SELECT 1 FROM roles WHERE key=?').get(role); }
+function json(l:ComposedLayer,role?:string,ownerId?:string) { return {layer:l.layer,effective:l.effective,source:l.source,origin:l.origin,version:l.version,role_version:l.roleVersion,command_version:l.commandVersion,team_text:role?composeTeamText(role,l.layer,ownerId):undefined,updated_at:l.updatedAt,updated_by:l.updatedBy,read_only:l.readOnly,modes:l.modes,title:l.title,group:l.group,default_text:l.defaultText,placeholders:l.placeholders}; }
+function block(l:ComposedLayer,role:string,ownerId?:string) { return {id:l.layer,title:l.title ?? l.layer,group:l.group ?? 'Возможности',scope:l.source,source:l.origin.ref,editable:!l.readOnly,text:l.effective,teamText:composeTeamText(role,l.layer,ownerId),defaultText:l.defaultText,version:l.version,commandVersion:l.commandVersion,modes:l.modes,placeholders:l.placeholders,allowsTeam:getLayerSpec(l.layer)?.scope==='command'}; }
+function version(req:any):number|null {
+ const raw=req.headers['if-match']?.replace(/^"|"$/g,'') ?? req.body?.if_match ?? req.body?.expectedVersion;
+ if (raw===undefined) return null;
+ const n=Number(raw); return Number.isSafeInteger(n)&&n>=0?n:null;
 }
-
-/** Прочитать `if-match` из заголовка (`"3"`) или из тела (`if_match: 3`).
- *  Вернуть number или null, если ничего не передано (по дизайну — 428). */
-function readIfMatch(req: { headers: Record<string, unknown>; body?: unknown }): number | null {
-  const header = req.headers["if-match"];
-  if (typeof header === "string") {
-    const m = header.match(/^"?(\d+)"?$/);
-    if (m) return Number(m[1]);
+export function registerRuntimeContextRoutes(app:FastifyInstance) {
+ const owner=async(req:any,reply:any)=>{await authOrApiToken(req,reply); if(reply.sent)return; if(!isOwner(req.userId))return reply.code(403).send({error:'контекст ролей доступен только владельцу'});};
+ const init=async(role:string)=>{taskflowTools(role,null); instructionResources(); await discoverChatResources();};
+ app.get('/api/runtime/context/catalog',{preHandler:owner},async()=>{await init('builder');return {layers:LAYER_CATALOG};});
+ app.get<{Querystring:{role?:string;mode?:string}}>('/api/runtime/context',{preHandler:owner},async(req,reply)=>{
+  const role=req.query.role ?? ''; const mode=req.query.mode ?? 'work';
+  if(!known(role))return reply.code(404).send({error:'роль не найдена'});
+  if(!MODES.has(mode))return reply.code(422).send({error:'неизвестный режим'});
+  await init(role); return {role,mode,version:globalVersionForRole(role),layers:compose(role,mode as RunMode).map(l=>json(l,role,(req as any).userId))};
+ });
+ app.get<{Params:{role:string}}>('/api/roles/:role/runtime-context',{preHandler:owner},async(req:any,reply)=>{
+  const role=req.params.role;if(!known(role))return reply.code(404).send({error:'роль не найдена'});
+  await init(role); const layers=LAYER_CATALOG.map(s=>composeLayer(role,s.key,(req as any).userId)).filter((l):l is ComposedLayer=>!!l);
+  return {role,canEdit:true,blocks:layers.map(l=>block(l,role,(req as any).userId)),layers:layers.map(l=>({id:l.layer,title:l.title ?? l.layer,scope:l.modes.join(', '),source:l.origin.ref,editable:!l.readOnly,text:l.effective})),notice:'Правки действуют в следующем запуске. История сессии сохраняется и может содержать прежние инструкции. Текст не меняет права и схемы инструментов.'};
+ });
+ app.get<{Params:{role:string;layer:string};Querystring:{scope?:string}}>('/api/runtime/context/:role/:layer',{preHandler:owner},async(req,reply)=>{
+  const {role,layer}=req.params;if(!known(role))return reply.code(404).send({error:'роль не найдена'});await init(role);
+  const l=composeLayer(role,layer,(req as any).userId);if(!l)return reply.code(404).send({error:'слой не найден'});
+  const scope=req.query.scope==='command'?'command':'role';return {...json(l),history:listHistory(scope,layer.startsWith("owner.")?"owner:"+(req as any).userId:role,layer)};
+ });
+ const mutate=async(req:any,reply:any,action:'set'|'reset'|'restore')=>{
+  const {role,layer}=req.params;if(!known(role))return reply.code(404).send({error:'роль не найдена'});await init(role);
+  const spec=getLayerSpec(layer);if(!spec || !composeLayer(role,layer,(req as any).userId))return reply.code(404).send({error:'слой не найден'});
+  if(spec.readOnly)return reply.code(422).send({error:'слой только для просмотра'});
+  const scope=req.body?.scope==='command' || req.body?.scope==='team'?'command':'role';
+  if(req.body?.scope && !['role','command','team',`role:${role}`].includes(req.body.scope))return reply.code(422).send({error:'недопустимая область'});
+  if(scope==='command'&&spec.scope!=='command')return reply.code(422).send({error:'слой только для роли'});
+  const expected=version(req);if(expected===null)return reply.code(428).send({error:'If-Match / expectedVersion обязателен'});
+  let text=req.body?.text;
+  if(action==='reset') text='';
+  if(action==='restore') {
+   const v=req.body?.version ?? req.body?.historyVersion;
+   if(!Number.isSafeInteger(v)||v<0)return reply.code(422).send({error:'нужна версия истории'});
+   const entry=readHistoryEntry(scope,layer.startsWith("owner.")?"owner:"+req.userId:role,layer,v);if(!entry)return reply.code(404).send({error:'версия не найдена'});
+   text=entry.text;
+   if(entry.action==='reset')action='reset';
   }
-  if (req.body && typeof req.body === "object") {
-    const body = req.body as { if_match?: unknown };
-    if (typeof body.if_match === "number") return body.if_match;
-    if (typeof body.if_match === "string" && body.if_match.trim()) {
-      const n = Number(body.if_match);
-      return Number.isFinite(n) ? n : null;
-    }
+  if(typeof text!=='string')return reply.code(422).send({error:'нужен текст инструкции'});
+  try {
+   const l=applyOverride({scope,roleKey:role,layer,text,action,expectedVersion:expected,sourceKind:spec.sourceKind,sourceRef:spec.originRef,createdBy:req.userId});
+   return {...json(l),block:block(l,role,req.userId),scope_version:revision(scope,role,layer,req.userId)};
+  } catch(error) {
+   if(error instanceof InstructionConflict)return reply.code(409).send({error:error.message,current:json(composeLayer(role,layer,(req as any).userId)!),current_version:revision(scope,role,layer,req.userId)});
+   return reply.code(422).send({error:(error as Error).message});
   }
-  return null;
-}
-
-/** Сконвертировать ComposedLayer в JSON, который уйдёт клиенту.
- *  updatedAt форматируем в привычный для системы YYYY-MM-DD HH:MM:SS. */
-function toJson(layer: ComposedLayer): Record<string, unknown> {
-  return {
-    layer: layer.layer,
-    effective: layer.effective,
-    source: layer.source,
-    origin: layer.origin,
-    version: layer.version,
-    updated_at: layer.updatedAt,
-    updated_by: layer.updatedBy,
-    read_only: layer.readOnly,
-    modes: layer.modes,
-  };
-}
-
-function isKnownRole(roleKey: string): boolean {
-  // Допускаем и scope='command' с role_key='*' (общая инструкция) —
-  // для command-override отдельный путь не нужен, проверка роли
-  // делается по scope через :role/-path.
-  if (roleKey === "*") return true;
-  const row = db
-    .prepare("SELECT 1 FROM roles WHERE key = ? LIMIT 1")
-    .get(roleKey) as { 1: number } | undefined;
-  return Boolean(row);
-}
-
-export function registerRuntimeContextRoutes(app: FastifyInstance): void {
-  // Каталог слоёв — статическая структура, отдаётся без авторизации,
-  // чтобы и редактор, и runtime могли прочитать структуру реестра.
-  app.get("/api/runtime/context/catalog", async () => {
-    return { layers: LAYER_CATALOG };
-  });
-
-  // Список эффективных слоёв для роли в режиме. Показывает «что уйдёт
-  // в модель при таком-то запуске», без права правки.
-  app.get<{ Querystring: { role?: string; mode?: string } }>(
-    "/api/runtime/context",
-    { preHandler: authOrApiToken },
-    async (req, reply) => {
-      const role = req.query.role;
-      const mode = req.query.mode ?? "work";
-      if (!role || !isKnownRole(role)) {
-        return reply.code(422).send({ error: "неизвестная роль" });
-      }
-      if (!isRunMode(mode)) {
-        return reply.code(422).send({ error: `неизвестный режим: ${mode}` });
-      }
-      const layers = compose(role, mode);
-      return {
-        role,
-        mode,
-        version: globalVersionForRole(role),
-        layers: layers.map(toJson),
-      };
-    },
-  );
-
-  // Один слой — для UI вкладок (effective + источник + версия).
-  app.get<{ Params: { role: string; layer: string } }>(
-    "/api/runtime/context/:role/:layer",
-    { preHandler: authOrApiToken },
-    async (req, reply) => {
-      const role = req.params.role;
-      const layer = req.params.layer;
-      if (!isKnownRole(role)) return reply.code(404).send({ error: "роль не найдена" });
-      if (!getLayerSpec(layer)) return reply.code(404).send({ error: "слой не найден" });
-      const composed = composeLayer(role, layer);
-      if (!composed) return reply.code(404).send({ error: "слой не применим к роли" });
-      return {
-        ...toJson(composed),
-        history: listHistory("role", role, layer, 50),
-      };
-    },
-  );
-
-  // Правка слоя: владелец, if_match обязателен (428 если нет).
-  // 409 если версия не совпала — в теле возвращаем текущую версию,
-  // чтобы UI мог показать диалог «обновить и применить».
-  app.patch<{ Params: { role: string; layer: string }; Body: { text?: unknown; if_match?: unknown } }>(
-    "/api/runtime/context/:role/:layer",
-    { preHandler: ownerOrApiToken },
-    async (req: any, reply) => {
-      const role = req.params.role;
-      const layer = req.params.layer;
-      const spec = getLayerSpec(layer);
-      if (!spec) return reply.code(404).send({ error: "слой не найден" });
-      if (!isKnownRole(role)) return reply.code(404).send({ error: "роль не найдена" });
-      if (spec.readOnly) {
-        return reply.code(422).send({ error: `слой ${layer} только для просмотра` });
-      }
-      const text = req.body?.text;
-      if (typeof text !== "string" || !text.trim()) {
-        return reply.code(422).send({ error: "text — непустая строка" });
-      }
-      const ifMatch = readIfMatch(req);
-      if (ifMatch === null) {
-        return reply.code(428).send({
-          error: "If-Match обязателен (заголовок или тело if_match)",
-        });
-      }
-      const current = composeLayer(role, layer);
-      const currentVersion = current?.version ?? 0;
-      if (currentVersion !== ifMatch) {
-        return reply.code(409).send({
-          error: "версия не совпала — кто-то уже отредактировал",
-          current: current ? toJson(current) : null,
-        });
-      }
-      const applied = applyOverride({
-        scope: spec.scope,
-        roleKey: role,
-        layer,
-        text,
-        sourceKind: spec.sourceKind,
-        sourceRef: `${spec.originRef} (override v${currentVersion + 1})`,
-        createdBy: req.userId,
-        action: "set",
-      });
-      return toJson(applied);
-    },
-  );
-
-  // Сброс к оригиналу (owner). Новый active=1 с оригинальным текстом
-  // и source_ref=исходник.
-  app.post<{ Params: { role: string; layer: string } }>(
-    "/api/runtime/context/:role/:layer/reset",
-    { preHandler: ownerOrApiToken },
-    async (req: any, reply) => {
-      const role = req.params.role;
-      const layer = req.params.layer;
-      const spec = getLayerSpec(layer);
-      if (!spec) return reply.code(404).send({ error: "слой не найден" });
-      if (!isKnownRole(role)) return reply.code(404).send({ error: "роль не найдена" });
-      if (spec.readOnly) {
-        return reply.code(422).send({ error: `слой ${layer} только для просмотра` });
-      }
-      // Оригинальный текст читаем напрямую, минуя активный override —
-      // иначе reset вернул бы сам override.
-      const originalText = readOriginalOnly(role, layer);
-      if (originalText === null) {
-        return reply.code(404).send({ error: "слой не применим к роли" });
-      }
-      const applied = applyOverride({
-        scope: spec.scope,
-        roleKey: role,
-        layer,
-        text: originalText,
-        sourceKind: spec.sourceKind,
-        sourceRef: spec.originRef,
-        createdBy: req.userId,
-        action: "reset",
-      });
-      return toJson(applied);
-    },
-  );
-
-  // Восстановление версии из истории (по дизайну §6).
-  app.post<{
-    Params: { role: string; layer: string };
-    Body: { version?: unknown };
-  }>(
-    "/api/runtime/context/:role/:layer/restore",
-    { preHandler: ownerOrApiToken },
-    async (req: any, reply) => {
-      const role = req.params.role;
-      const layer = req.params.layer;
-      const spec = getLayerSpec(layer);
-      if (!spec) return reply.code(404).send({ error: "слой не найден" });
-      if (!isKnownRole(role)) return reply.code(404).send({ error: "роль не найдена" });
-      if (spec.readOnly) {
-        return reply.code(422).send({ error: `слой ${layer} только для просмотра` });
-      }
-      const version = req.body?.version;
-      if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
-        return reply.code(422).send({ error: "version — целое число ≥ 1" });
-      }
-      const entry = readHistoryEntry(spec.scope, role, layer, version);
-      if (!entry) {
-        return reply.code(404).send({ error: `версия ${version} не найдена в истории` });
-      }
-      const applied = applyOverride({
-        scope: spec.scope,
-        roleKey: role,
-        layer,
-        text: entry.text,
-        sourceKind: entry.sourceKind,
-        sourceRef: entry.sourceRef,
-        createdBy: req.userId,
-        action: "restore",
-        reason: `restore v${version}`,
-      });
-      return toJson(applied);
-    },
-  );
+ };
+ app.patch('/api/runtime/context/:role/:layer',{preHandler:owner},async(req,reply)=>mutate(req,reply,'set'));
+ app.post('/api/runtime/context/:role/:layer/reset',{preHandler:owner},async(req,reply)=>mutate(req,reply,'reset'));
+ app.post('/api/runtime/context/:role/:layer/restore',{preHandler:owner},async(req,reply)=>mutate(req,reply,'restore'));
+ // SDK internal snapshot: role can read only its own MCP descriptions/rules.
+ app.get<{Params:{role:string}}>('/api/agent/instructions/:role',{preHandler:authOrApiToken},async(req:any,reply)=>{
+  const role=req.params.role;if(!known(role))return reply.code(404).send({error:'роль не найдена'});
+  if(req.userId!==roleUserId(role)&&!isOwner(req.userId))return reply.code(403).send({error:'чужая роль'});
+  await init(role);return {role,rules:composeLayer(role,'rules')!.effective,blocks:compose(role,'chat').filter(l=>l.layer.startsWith('tool.')||l.layer==='mcp.initialize').map(l=>({id:l.layer,text:l.effective}))};
+ });
 }

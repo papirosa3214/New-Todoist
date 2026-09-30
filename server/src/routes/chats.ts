@@ -1,3 +1,4 @@
+import { renderInstruction } from "../lib/roleContextResolver.js";
 // Чаты с ролями-агентами (владелец 21.09.2026, план
 // docs/superpowers/plans/2026-09-21-chat-online-pi-runtime.md, этапы 1–2).
 //
@@ -1074,21 +1075,7 @@ async function deliverAgentReply(args: {
     composeLayer(role, "role.prompt")?.effective
       || rolePromptText(role)
       || `Ты — ${roleTitle} в трекере TaskFlow.`;
-  const prompt = [
-    roleInstruction,
-    LOCAL_EXECUTION_POLICY,
-    "",
-    `Ты — ${roleTitle} (${role}). Это онлайн-сессия внутри чата TaskFlow.`,
-    "Перед тобой история чата (от старых к новым) и только что пришедшее",
-    "сообщение от пользователя. Ответь как этот собеседник — кратко и по",
-    "существу; если вопрос вне твоей компетенции, скажи об этом прямо.",
-    "",
-    "История чата:",
-    historyLines || "(пусто)",
-    "",
-    "Последнее сообщение пользователя:",
-    args.userText,
-  ].join("\n");
+  const prompt = renderInstruction(role, "chat.wrapper", { roleInstruction, localPolicy: composeLayer(role, "local_policy")!.effective, roleTitle, role, history: historyLines || "(пусто)", userText: args.userText });
 
   // Достаём ранее сохранённый sessionId, чтобы продолжить ту же сессию.
   const previousSessionId = getChatSessionId(chatId, roleUserId);

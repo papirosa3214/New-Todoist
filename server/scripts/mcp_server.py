@@ -1939,10 +1939,23 @@ def allowed_tool_names() -> frozenset[str] | None:
     return frozenset(name.strip() for name in raw.split(",") if name.strip())
 
 
+def instruction_text(key, fallback):
+    """Per-run snapshot only. No change to names, schema or handlers."""
+    file = os.environ.get("TASKFLOW_INSTRUCTION_SNAPSHOT")
+    if not file:
+        return fallback
+    with open(file, encoding="utf-8") as stream:
+        snapshot = json.load(stream)
+    value = snapshot.get("texts", {}).get(key, fallback)
+    if not isinstance(value, str):
+        raise ValueError("instruction snapshot text must be a string")
+    return value
+
+
 def public_tools():
     allowed = allowed_tool_names()
     visible = TOOLS if allowed is None else [t for t in TOOLS if t["name"] in allowed]
-    return [{k: t[k] for k in ("name", "description", "inputSchema")} for t in visible]
+    return [{"name": t["name"], "description": instruction_text("tool.mcp." + t["name"], t["description"]), "inputSchema": t["inputSchema"]} for t in visible]
 
 
 # --------------------------------------------------------------------------- JSON-RPC
@@ -1982,7 +1995,7 @@ def handle(msg):
             # строк и дублировала taskflow_rules, переписана 14.09.2026
             # после обсуждения с владельцем (задача 1cc08ea5).
             "instructions": (
-                "TaskFlow: задачи под учёткой агента. Правила соблюдать "
+                instruction_text("mcp.initialize", "TaskFlow: задачи под учёткой агента. Правила соблюдать "
                 "строго — сервер отклоняет нарушения.\n"
                 "1. БЕРЁШЬ ЗАДАЧУ — taskflow_claim; пока работаешь, "
                 "продлевай аренду taskflow_heartbeat (каждые ≤4 мин, "
@@ -2009,7 +2022,7 @@ def handle(msg):
                 "result, проектные заметки (taskflow_docs), память/KB, "
                 "дробление (subtasks vs дочерние задачи), "
                 "suggest_subtasks для оркестратора, "
-                "taskflow_structure_dictation для сырого текста."
+                "taskflow_structure_dictation для сырого текста.")
             ),
         })
 

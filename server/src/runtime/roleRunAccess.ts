@@ -1,3 +1,5 @@
+import { instructionResources } from "./instructionResources.js";
+import { composeLayer, LAYER_CATALOG, instructionManifest } from "../lib/roleContextResolver.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +54,9 @@ export function prepareRoleRunAccess(runId: string, role: string): string | null
   const token = signer({ id: roleUserId(role) }, { expiresIn: "12h" });
   fs.mkdirSync(RUNS_DIR, { recursive: true, mode: 0o700 });
   const file = path.join(RUNS_DIR, `${runId}.json`);
+  instructionResources();
+  const snapshot = file + ".instructions.json";
+  fs.writeFileSync(snapshot, JSON.stringify({role,manifest:instructionManifest(role,"chat"),texts:Object.fromEntries(LAYER_CATALOG.filter(s=>s.key.startsWith("tool.mcp.")||s.key==="mcp.initialize").map(s=>[s.key,composeLayer(role,s.key)!.effective]))}),{mode:0o600});
   const config = {
     mcpServers: {
       taskflow: {
@@ -60,6 +65,7 @@ export function prepareRoleRunAccess(runId: string, role: string): string | null
         env: {
           TASKFLOW_TOKEN: token,
           TASKFLOW_MCP_ROLE: role,
+          TASKFLOW_INSTRUCTION_SNAPSHOT: snapshot,
           TASKFLOW_MCP_TOOLS: roleTools(role),
         },
         directTools: true,
@@ -74,7 +80,9 @@ export function prepareRoleRunAccess(runId: string, role: string): string | null
 export function releaseRoleRunAccess(file: string | null | undefined): void {
   if (!file) return;
   try {
+    fs.rmSync(file+".skills",{recursive:true,force:true});
     fs.unlinkSync(file);
+    for (const suffix of [".instructions.json", ".prompt.txt", ".system.txt", ".tools.mjs"]) { try { fs.unlinkSync(file+suffix); } catch {} }
   } catch {
     // уже удалён
   }

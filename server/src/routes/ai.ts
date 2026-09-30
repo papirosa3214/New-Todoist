@@ -1,3 +1,5 @@
+import { INSTRUCTION_DEFAULTS } from "../runtime/instructionDefaults.js";
+import { renderInstruction, applyOverride, revision, ownerPromptKey } from "../lib/roleContextResolver.js";
 import db from "../db.js";
 import { parseIntakeMetadata } from "../lib/taskIntakeMetadata.js";
 import type { FastifyInstance } from "fastify";
@@ -22,28 +24,9 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
 // JSON-массив на середине строки, а это ровно то, что должно парситься.
 const OLLAMA_TIMEOUT_MS = 120_000;
 
-const SYSTEM_PROMPT = `Ты помощник, который разбивает задачи на конкретные подзадачи.
-Дан заголовок и (опционально) описание задачи. Разбей её на 3-6 конкретных, выполнимых шагов на русском языке.
-Ответь СТРОГО валидным JSON-массивом строк и ничем больше — без markdown, без нумерации, без пояснений до или после.
-Пример формата ответа: ["Первый шаг", "Второй шаг", "Третий шаг"]`;
+const SYSTEM_PROMPT = INSTRUCTION_DEFAULTS["ai.subtasks"];
 
-const STRUCTURE_SYSTEM_PROMPT = `Ты умный персональный ассистент по планированию задач.
-Пользователь надиктовал свои мысли голосом (в тексте могут быть слова-паразиты, повторы).
-Твоя задача — преобразовать этот текст в чистую, структурированную задачу:
-1. "title": Короткий, ёмкий заголовок задачи (3-7 слов, начинающийся с глагола действия).
-2. "description": Очищенное от слов-паразитов, грамотно оформленное подробное описание задачи.
-3. "subtasks": Массив строк — конкретные пошаговые шаги/подзадачи (2-6 пунктов).
-4. "due_date": Дата/время если упоминаются в формате "YYYY-MM-DD" или "YYYY-MM-DD HH:mm", иначе null.
-5. "priority": Число 1-4 (1 — срочно, 2 — высокий, 3 — средний, 4 — обычный).
-
-Ответь СТРОГО в формате JSON без markdown:
-{
-  "title": "...",
-  "description": "...",
-  "subtasks": ["шаг 1", "шаг 2"],
-  "due_date": null,
-  "priority": 4
-}`;
+const STRUCTURE_SYSTEM_PROMPT = INSTRUCTION_DEFAULTS["ai.structure"];
 
 // ═══════════ Надиктовка в чат → пачка карточек ═══════════
 //
@@ -63,45 +46,7 @@ const STRUCTURE_SYSTEM_PROMPT = `Ты умный персональный асс
 // в каждом поле, исполнители одной строкой и два примера. Заменил длинную
 // инструкцию: вместе со слоем владельца та занимала ~13 тыс. знаков, и
 // модель к концу теряла начало. Проба на 14 надиктовках — ~/intake-lab.
-const DICTATION_SYSTEM_PROMPT = `Ты — секретарь. Из надиктовки владельца собери постановку по ШАБЛОНУ. Надиктовка голосовая: убери паразиты и повторы, смысл сохрани.
-
-ШАБЛОН (верни ровно такой JSON, без пояснений):
-{
-  "title": "3–8 слов: что сделать",
-  "description": "в чём проблема и что нужно, со ВСЕМИ условиями и оговорками владельца",
-  "result": "проверяемый признак готовности, не пересказ названия",
-  "where": "не указано — пока владелец сам не назвал платформу (iphone | web | server | личное)",
-  "role": "исполнитель из списка ниже или null",
-  "role_reason": "почему он — одной фразой по сути работы",
-  "subtasks": ["2–5 конкретных шагов"],
-  "due_date": "ГГГГ-ММ-ДД или ГГГГ-ММ-ДД ЧЧ:ММ, если срок назван; иначе null",
-  "priority": "1 срочно, 2 высокий, 3 средний, 4 обычный (по умолчанию 4)",
-  "project": "название ровно из списка проектов или null",
-  "question": "один вопрос, только если без ответа работу не сделать; иначе null. Вопрос ОСТАНАВЛИВАЕТ запуск работы",
-  "children": []
-}
-
-ОДНО ДЕЛО ИЛИ НЕСКОЛЬКО. Одно дело = один результат: children пустой, конкретика в subtasks. Несколько независимых результатов = каждый отдельной карточкой в children (те же поля, плюс "after": номер карточки, которую надо закончить раньше, или null). Шаги одного дела в children не выносить.
-Проверка на «несколько»: если две вещи можно сдать по отдельности (например, «список контактов через @» и «показывать, что агент отвечает»), это ДВЕ карточки, даже если сказаны одной фразой через «и плюс», «ещё», «и также».
-ГДЕ: по умолчанию "не указано". Меняй, только если владелец сам сказал: «на телефоне», «в приложении на айфоне» — iphone; «на сайте», «в вебе» — web; «на сервере» — server; личное дело — «личное». Названия экранов («обзор», «чат», «настройки») платформу НЕ называют — там "не указано".
-НИЧЕГО НЕ ТЕРЯЙ: каждое условие, «но», «только когда», «и при этом» владельца должно попасть в description или result. Короткий пересказ, потерявший условие, — ошибка.
-
-ИСПОЛНИТЕЛИ — выбирай по тому, какую РАБОТУ надо сделать, а не по словам:
-{{ИСПОЛНИТЕЛИ}}
-- null — личное дело владельца: звонок, оплата, поездка, документы.
-
-ПРИМЕРЫ
-
-Надиктовка: «в приложении когда файл грузится вообще непонятно идёт он или завис, сделай чтобы было видно»
-{"title":"Показывать ход загрузки файла в приложении","description":"При загрузке файла на iPhone не видно, идёт ли она. Нужно показывать прогресс.","result":"Во время загрузки видна полоска с процентом, после загрузки — файл в списке","where":"iphone","role":"builder","role_reason":"нужно брать прогресс из загрузки и выводить его — это код, не макет","subtasks":["Получать прогресс загрузки","Показывать полоску с процентом","Проверить на большом файле"],"due_date":null,"priority":4,"project":null,"question":null,"children":[]}
-
-Надиктовка: «почини кнопку сохранения на вебе, потом добавь туда фильтр, и отдельно запишись к стоматологу на пятницу»
-{"title":"Кнопка сохранения, фильтр и стоматолог","description":"Три дела: починить сохранение, затем добавить фильтр; отдельно записаться к стоматологу.","result":"Все три карточки закрыты","where":"web","role":null,"role_reason":"общая карточка, работу делают дочерние","subtasks":[],"due_date":null,"priority":4,"project":null,"question":null,"children":[
-{"title":"Починить кнопку сохранения","description":"Кнопка на вебе не сохраняет.","result":"Нажатие сохраняет, данные видны после перезагрузки","where":"web","role":"builder","role_reason":"починка кода","subtasks":["Воспроизвести","Исправить","Проверить"],"after":null,"question":null},
-{"title":"Добавить фильтр","description":"После починки добавить фильтр на тот же экран.","result":"Фильтр отбирает записи","where":"web","role":"builder","role_reason":"новая функция в коде","subtasks":["Добавить фильтр","Проверить отбор"],"after":1,"question":null},
-{"title":"Записаться к стоматологу","description":"Нужна запись на пятницу.","result":"Запись на пятницу подтверждена","where":"личное","role":null,"role_reason":"личное дело владельца","subtasks":["Позвонить в клинику","Подтвердить время"],"after":null,"question":null}]}
-
-Ответь ТОЛЬКО JSON.`;
+const DICTATION_SYSTEM_PROMPT = INSTRUCTION_DEFAULTS["owner.task_intake"];
 
 // ═══════════ Дневник: AI-действия над текстом + мост в задачи ═══════════
 // 25.08.2026, владелец: «дневник с ии мостом в проекты». Три действия над
@@ -116,12 +61,7 @@ const JOURNAL_ASSIST_PROMPTS: Record<
   expand: `Разверни присланную мысль в конкретный список пунктов — что сделать или на что обратить внимание. Ответь маркированным списком, каждый пункт с новой строки, начинается с "- ". Без вступления и пояснений.`,
 };
 
-const EXTRACT_TASKS_SYSTEM_PROMPT = `Ты помощник, который находит в тексте личного дневника конкретные дела и намерения — то, что человек хочет СДЕЛАТЬ, а не просто мысли или наблюдения.
-Дан текст дневниковой записи. Извлеки из него только конкретные, выполнимые задачи (0-10 штук). Если в тексте нет ничего похожего на задачу — верни пустой массив.
-Ответь СТРОГО валидным JSON-массивом объектов и ничем больше — без markdown, без пояснений до или после:
-[{"title": "Короткий заголовок задачи, начинается с глагола", "description": "", "priority": 4, "due_date": null}]
-"priority" — число 1-4 (1 — срочно, 4 — обычный; если из текста не ясно — 4).
-"due_date" — "YYYY-MM-DD", если дата явно упомянута или ясна из контекста, иначе null.`;
+const EXTRACT_TASKS_SYSTEM_PROMPT = INSTRUCTION_DEFAULTS["owner.extract_tasks"];
 
 function buildUserPrompt(
   title: string,
@@ -438,7 +378,7 @@ async function suggestSubtasks(
   aiModel?: string,
 ): Promise<string[]> {
   const content = await callUnifiedAi({
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: renderInstruction("secretary", "ai.subtasks", {}),
     userPrompt: buildUserPrompt(title, description),
     provider,
     localModel,
@@ -609,7 +549,7 @@ async function structureTask(
   aiModel?: string,
 ): Promise<StructuredTaskResult> {
   const content = await callUnifiedAi({
-    systemPrompt: STRUCTURE_SYSTEM_PROMPT,
+    systemPrompt: renderInstruction("secretary", "ai.structure", {}),
     userPrompt: `Текст диктовки: "${rawText}"`,
     provider,
     localModel,
@@ -1661,6 +1601,9 @@ export function registerAiRoutes(app: FastifyInstance) {
       // Лимит на размер промпта: 16 КБ — заведомо больше того, что человек
       // напишет руками, и обрезает попытки залить байтовую кашу.
       const prompt = raw.slice(0, 16_384);
+      if (["task_intake","extract_tasks"].includes(scope)) {
+        applyOverride({scope:"role",roleKey:"secretary",layer:"owner."+scope,text:prompt,action:prompt.trim() ? "set" : "reset",createdBy:req.userId,expectedVersion:revision("role","secretary","owner."+scope,req.userId),sourceKind:"db",sourceRef:"user_ai_prompts"});
+      }
       const db = (await import("../db.js")).default;
       db.prepare(
         `INSERT INTO user_ai_prompts (user_id, scope, prompt, updated_at)
@@ -1698,6 +1641,7 @@ export function registerAiRoutes(app: FastifyInstance) {
           .code(400)
           .send({ error: "scope: только латиница/цифры/_/- длиной 1..64" });
       }
+      if (["task_intake","extract_tasks"].includes(scope)) applyOverride({scope:"role",roleKey:"secretary",layer:"owner."+scope,text:"",action:"reset",createdBy:req.userId,expectedVersion:revision("role","secretary","owner."+scope,req.userId),sourceKind:"db",sourceRef:"user_ai_prompts"});
       const db = (await import("../db.js")).default;
       db.prepare(
         "DELETE FROM user_ai_prompts WHERE user_id = ? AND scope = ?",

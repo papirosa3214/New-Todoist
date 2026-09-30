@@ -1,3 +1,4 @@
+import { applyOverride, revision } from "../lib/roleContextResolver.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -415,6 +416,9 @@ export function registerRoleRoutes(app: FastifyInstance): void {
       if (!sets.length) return reply.code(422).send({ error: "нечего менять" });
 
       db.transaction(() => {
+        if (body.prompt !== undefined) {
+          applyOverride({scope:"role",roleKey:key,layer:"role.prompt",text:typeof body.prompt === "string" ? body.prompt : "",action:body.prompt ? "set" : "reset",expectedVersion:revision("role",key,"role.prompt"),sourceKind:"db",sourceRef:"roles.prompt",createdBy:(req as any).userId});
+        }
         db.prepare(`UPDATE roles SET ${sets.join(", ")} WHERE key = ?`).run(...values, key);
         // Экран и лента подписывают роль именем учётки — держим их вместе.
         if (title !== null) {

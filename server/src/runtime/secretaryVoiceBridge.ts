@@ -1,3 +1,4 @@
+import { composeLayer, instructionManifest } from "../lib/roleContextResolver.js";
 // Закрытый канал Python-воркера к живому серверу. Никаких TCP-маршрутов
 // или постоянных api_token: только Unix socket владельца процесса (0600).
 import type { FastifyInstance } from "fastify";
@@ -25,6 +26,9 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
     };
+    if (req.method === "GET" && req.url === "/secretary/instructions") {
+      send(200,{instructions:composeLayer("secretary","secretary.voice")!.effective,greeting:composeLayer("secretary","secretary.greeting")!.effective,manifest:instructionManifest("secretary","voice")}); return;
+    }
     if (req.method !== "POST" || !["/secretary/tasks", "/secretary/summary"].includes(req.url || "")) {
       send(404, { error: "неизвестный инструмент" }); return;
     }

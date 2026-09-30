@@ -20,10 +20,15 @@ type RunMode = "work" | "reply" | "review" | "chat" | "voice" | "subtask";
 
 type ComposedLayer = {
   layer: string;
+  title?: string;
+  group?: string;
   effective: string;
   source: "override" | "command_default" | "original";
   origin: { kind: string; ref: string };
   version: number;
+  command_version?: number;
+  default_text?: string;
+  team_text?: string;
   updated_at: string | null;
   updated_by: string | null;
   read_only: boolean;
@@ -54,12 +59,8 @@ interface HistoryEntry {
   reason: string | null;
 }
 
-function draftKey(role: string, layer: string): string {
-  return `taskflow-context.draft.${role}.${layer}`;
-}
-
-function versionKey(role: string, layer: string): string {
-  return `taskflow-context.ifmatch.${role}.${layer}`;
+function draftKey(role: string, layer: string, team=false): string {
+  return `taskflow-context.draft.${role}.${layer}.${team ? "team" : "role"}`;
 }
 
 export function RoleContextSheet({
@@ -173,28 +174,25 @@ export function RoleContextSheet({
                   setEditingLayer(null);
                   void reload(mode);
                 }}
-                onReset={async () => {
-                  await resetLayer(apiBase, token, role.role, layer.layer);
-                  void reload(mode);
+                onReset={async (team,version) => {
+                  try { await resetLayer(apiBase, token, role.role, layer.layer,team,version); void reload(mode); }
+                  catch (err) { setError((err as Error).message); }
                 }}
-                onShowHistory={async () => {
+                onShowHistory={async (team) => {
                   setHistoryLayer(layer.layer);
-                  const h = await fetchHistory(
-                    apiBase,
-                    token,
-                    role.role,
-                    layer.layer,
-                  );
-                  setHistory(h);
+                  try {
+                    const h = await fetchHistory(apiBase, token, role.role, layer.layer, team);
+                    setHistory(h);
+                  } catch (err) { setError((err as Error).message); }
                 }}
-                onRestore={async (v) => {
-                  await restoreLayer(
+                onRestore={async (v,team,version) => {
+                  try { await restoreLayer(
                     apiBase,
                     token,
                     role.role,
                     layer.layer,
-                    v,
-                  );
+                    v,team,version,
+                  ); } catch (err) { setError((err as Error).message); return; }
                   setHistoryLayer(null);
                   setHistory(null);
                   void reload(mode);
@@ -238,15 +236,17 @@ function LayerRow({
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSaved: () => void;
-  onReset: () => void | Promise<void>;
-  onShowHistory: () => void | Promise<void>;
-  onRestore: (v: number) => void | Promise<void>;
+  onReset: (team:boolean,version:number) => void | Promise<void>;
+  onShowHistory: (team:boolean) => void | Promise<void>;
+  onRestore: (v: number,team:boolean,version:number) => void | Promise<void>;
   showHistory: boolean;
   history: HistoryEntry[] | null;
   onCloseHistory: () => void;
 }) {
-  const [draft, setDraft] = useState<string>(layer.effective);
+  const [draft, setDraft] = useState<string>(() => sessionStorage.getItem(draftKey(role,layer.layer)) ?? layer.effective);
   const [conflict, setConflict] = useState<ComposedLayer | null>(null);
+  const [team, setTeam] = useState(false);
+  const [revision, setRevision] = useState(layer.version);
   const [submitting, setSubmitting] = useState(false);
 
   const sourceLabel = (() => {
@@ -265,9 +265,7 @@ function LayerRow({
     setSubmitting(true);
     setConflict(null);
     try {
-      const ifMatch =
-        Number(sessionStorage.getItem(versionKey(role, layer.layer))) ||
-        layer.version;
+      const ifMatch = revision;
       const res = await fetch(
         `${apiBase}/api/runtime/context/${encodeURIComponent(role)}/${encodeURIComponent(layer.layer)}`,
         {
@@ -277,23 +275,20 @@ function LayerRow({
             ...(token ? { authorization: `Bearer ${token}` } : {}),
             "if-match": `"${ifMatch}"`,
           },
-          body: JSON.stringify({ text: draft, if_match: ifMatch }),
+          body: JSON.stringify({ text: draft, if_match: ifMatch, scope: team ? "command" : "role" }),
         },
       );
       if (res.status === 409) {
         const body = (await res.json()) as { current: ComposedLayer };
         setConflict(body.current);
-        sessionStorage.setItem(draftKey(role, layer.layer), draft);
+        sessionStorage.setItem(draftKey(role, layer.layer, team), draft);
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      sessionStorage.removeItem(draftKey(role, layer.layer));
+      sessionStorage.removeItem(draftKey(role, layer.layer, team));
       onSaved();
     } catch (err) {
-      setConflict({
-        ...layer,
-        effective: `Ошибка: ${(err as Error).message}`,
-      });
+        setConflict({ ...layer, effective: `Ошибка: ${(err as Error).message}` });
     } finally {
       setSubmitting(false);
     }
@@ -302,17 +297,21 @@ function LayerRow({
   return (
     <div className="bg-card2 rounded-xl p-3">
       <div className="flex items-baseline gap-2 mb-1">
-        <span className="text-[13px] text-text font-semibold">{layer.layer}</span>
-        <span className="text-[11px] text-dim">v{layer.version}</span>
+        <span className="text-[13px] text-text font-semibold">{layer.title ?? layer.layer}</span>
+        <span className="text-[11px] text-dim">v{team ? layer.command_version ?? 0 : layer.version}</span>
         <span className="ml-auto text-[11px] text-sub">{sourceLabel}</span>
       </div>
       <p className="text-[11px] text-dim mb-2">{layer.origin.ref}</p>
 
       {editing ? (
         <div>
+          {layer.command_version !== undefined && <label className="flex gap-2 text-[12px] mb-2"><input type="checkbox" checked={team} onChange={(e) => {
+            const selected=e.target.checked; setTeam(selected); setDraft(sessionStorage.getItem(draftKey(role,layer.layer,selected)) ?? (selected ? (layer.team_text ?? layer.default_text ?? layer.effective) : layer.effective));
+            setRevision(selected ? layer.command_version ?? 0 : layer.version); setConflict(null);
+          }}/><span>Для всей команды</span></label>}
           <textarea
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => { setDraft(e.target.value); sessionStorage.setItem(draftKey(role,layer.layer,team),e.target.value); }}
             className="w-full h-32 bg-card rounded-lg p-2 text-[12px] text-text border border-card2 resize-y"
           />
           {conflict && (
@@ -324,16 +323,12 @@ function LayerRow({
               <button
                 type="button"
                 onClick={() => {
-                  sessionStorage.setItem(
-                    versionKey(role, layer.layer),
-                    String(conflict.version),
-                  );
-                  setDraft(conflict.effective);
+                  setRevision(team ? conflict.command_version ?? 0 : conflict.version);
                   setConflict(null);
                 }}
                 className="tap-scale h-8 px-3 rounded-lg bg-red text-white text-[12px]"
               >
-                Обновить и применить
+                Принять новую версию, оставить мой текст
               </button>
             </div>
           )}
@@ -348,7 +343,7 @@ function LayerRow({
             </button>
             <button
               type="button"
-              onClick={onCancelEdit}
+              onClick={() => { sessionStorage.removeItem(draftKey(role,layer.layer,team)); onCancelEdit(); }}
               className="tap-scale h-9 px-3 rounded-lg bg-card2 text-sub text-[13px]"
             >
               Отмена
@@ -374,7 +369,7 @@ function LayerRow({
             {!layer.read_only && layer.version > 0 && (
               <button
                 type="button"
-                onClick={onReset}
+                onClick={() => onReset(team,revision)}
                 className="tap-scale h-8 px-3 rounded-lg bg-card text-text text-[12px] flex items-center gap-1"
               >
                 <Icon name="refresh" size={14} className="text-sub" />
@@ -383,7 +378,7 @@ function LayerRow({
             )}
             <button
               type="button"
-              onClick={showHistory ? onCloseHistory : onShowHistory}
+              onClick={showHistory ? onCloseHistory : () => onShowHistory(team)}
               className="tap-scale h-8 px-3 rounded-lg bg-card text-text text-[12px] flex items-center gap-1"
             >
               <Icon name="clock" size={14} className="text-sub" />
@@ -408,7 +403,7 @@ function LayerRow({
                       {h.version !== layer.version && (
                         <button
                           type="button"
-                          onClick={() => onRestore(h.version)}
+                          onClick={() => onRestore(h.version,team,revision)}
                           className="tap-scale h-7 px-2 rounded bg-card2 text-text"
                         >
                           Восстановить
@@ -431,14 +426,18 @@ async function resetLayer(
   token: string | null,
   role: string,
   layer: string,
+  team:boolean,
+  version:number,
 ): Promise<void> {
-  await fetch(
+  const res=await fetch(
     `${apiBase}/api/runtime/context/${encodeURIComponent(role)}/${encodeURIComponent(layer)}/reset`,
     {
       method: "POST",
-      headers: token ? { authorization: `Bearer ${token}` } : {},
+      headers: {"content-type":"application/json", ...(token ? { authorization: `Bearer ${token}` } : {})},
+      body:JSON.stringify({scope:team?"command":"role",if_match:version}),
     },
   );
+  if(!res.ok)throw new Error(`Сброс: HTTP ${res.status}`);
 }
 
 async function restoreLayer(
@@ -447,8 +446,10 @@ async function restoreLayer(
   role: string,
   layer: string,
   version: number,
+  team:boolean,
+  expectedVersion:number,
 ): Promise<void> {
-  await fetch(
+  const res=await fetch(
     `${apiBase}/api/runtime/context/${encodeURIComponent(role)}/${encodeURIComponent(layer)}/restore`,
     {
       method: "POST",
@@ -456,9 +457,10 @@ async function restoreLayer(
         "content-type": "application/json",
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ version }),
+      body: JSON.stringify({ version,scope:team?"command":"role",if_match:expectedVersion }),
     },
   );
+  if(!res.ok)throw new Error(`Восстановление: HTTP ${res.status}`);
 }
 
 async function fetchHistory(
@@ -466,12 +468,13 @@ async function fetchHistory(
   token: string | null,
   role: string,
   layer: string,
+  team:boolean,
 ): Promise<HistoryEntry[]> {
   const res = await fetch(
-    `${apiBase}/api/runtime/context/${encodeURIComponent(role)}/${encodeURIComponent(layer)}`,
+    `${apiBase}/api/runtime/context/${encodeURIComponent(role)}/${encodeURIComponent(layer)}?scope=${team?"command":"role"}`,
     { headers: token ? { authorization: `Bearer ${token}` } : {} },
   );
-  if (!res.ok) return [];
+  if (!res.ok) throw new Error(`История: HTTP ${res.status}`);
   const body = (await res.json()) as { history: HistoryEntry[] };
   return body.history ?? [];
 }

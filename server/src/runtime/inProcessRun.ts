@@ -1,3 +1,6 @@
+import { instructionResources } from "./instructionResources.js";
+import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
+import { renderInstruction, effectiveRules, registerInstructionBlock, instructionManifest } from "../lib/roleContextResolver.js";
 import { isOwner } from "../access.js";
 import crypto from "node:crypto";
 import { execFile, execFileSync } from "node:child_process";
@@ -8,6 +11,8 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import {
   createAgentSession,
+  createCodingTools,
+  createReadOnlyTools,
   createExtensionRuntime,
   defineTool,
   SessionManager,
@@ -194,11 +199,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     description: string,
     parameters: any,
     run: (p: any) => Promise<unknown>,
-  ) =>
-    defineTool({
+  ) => {
+    const key = "tool.runtime." + name;
+    registerInstructionBlock({key,title:name,group:"Возможности",scope:"command",modes:["work","resume","reply","review","subtask"],sourceKind:"code",originRef:"inProcessRun.ts:taskflowTools:"+name,readOnly:false,
+      ...(["web_search","web_get","ocr","youtube","local_model","taskflow_report"].includes(name)?{roles:["researcher"]}:{})},description);
+    return defineTool({
       name,
       label: name,
-      description,
+      description: composeLayer(role,key)!.effective,
       parameters,
       execute: async (_id: string, params: any) => {
         try {
@@ -209,6 +217,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         }
       },
     } as any);
+  };
   const Id = Type.Object({ id: Type.String() });
 
   const tools = [
@@ -325,7 +334,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (done && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: закрыл`);
         return { [done ? "шаг отмечен" : "отметка снята"]: p.id };
       }),
-    T("taskflow_rules", "Правила ведения учёта.", Type.Object({}), async () => ({ правила: AGENT_RULES })),
+    T("taskflow_rules", "Правила ведения учёта.", Type.Object({}), async () => ({ правила: effectiveRules(role) })),
     T("taskflow_projects", "Проекты.", Type.Object({}), async () => ({
       проекты: ((await asRole(role, "GET", "/api/projects")) as any[]).map((p) => ({
         id: p.id, название: p.name, документация: p.notes_folder_id ? "есть" : "не заведена",
@@ -392,6 +401,9 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       T("local_model", "ЛОКАЛЬНАЯ модель на сервере (Ollama, бесплатно, без интернета). Этап «синтез»: отдай собранные фрагменты и задание — вернёт связный черновик или сводку.",
         Type.Object({ prompt: Type.String(), system: Type.Optional(Type.String()), max_tokens: Type.Optional(Type.Number()), num_ctx: Type.Optional(Type.Number()) }),
         (p) => callResearchTool("local_model", p)),
+      T("taskflow_report", "Собрать отчёт по задаче: markdown → HTML и PDF, зеркало в документации проекта и секция «Отчёты» карточки.",
+        Type.Object({ task_id: Type.String(), title: Type.Optional(Type.String()), markdown: Type.String() }),
+        async (p) => asRole(role,"POST",`/api/tasks/${p.task_id}/reports`,{title:p.title ?? "Отчёт",markdown:p.markdown})),
     );
   }
 
@@ -429,15 +441,7 @@ function taskForLaunchContext(taskId: string): Record<string, unknown> {
 /** Задание по умолчанию — когда вызывающий не собрал своё (ручной запуск). */
 export function defaultTaskPrompt(taskId: string, role: string): string {
   const task = db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title?: string } | undefined;
-  return [
-    `Ты — ${roleTitle(role)} в трекере TaskFlow. Тебе назначена задача ${taskId}: «${task?.title ?? ""}».`,
-    "Прочитай карточку (taskflow_task), возьми её в работу (taskflow_claim),",
-    "веди шаги (taskflow_subtask_work, taskflow_subtask_done с result), а когда всё сделано —",
-    "сдай на проверку (taskflow_state state=review с коротким итогом). Упёрся — taskflow_state state=blocked с причиной.",
-    "",
-    "Правила:",
-    ...(composeLayer(role, "rules")?.effective.split("\n") ?? AGENT_RULES.map((r) => `- ${r}`)),
-  ].join("\n");
+  return renderInstruction(role, "task.start", { roleTitle: roleTitle(role), taskId, title: task?.title ?? "", rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 /**
@@ -450,39 +454,15 @@ export function defaultTaskPrompt(taskId: string, role: string): string {
  */
 function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): string {
   const subtask = db.prepare("SELECT title FROM subtasks WHERE id = ?").get(subtaskId) as { title?: string } | undefined;
-  return [
-    `Ты — ${roleTitle(role)} в трекере TaskFlow. Твой узел плана совместной работы по задаче ${taskId} — шаг ${subtaskId}: «${subtask?.title ?? ""}».`,
-    "Прочитай карточку целиком (taskflow_task) — увидишь все шаги и ленту, не только свой.",
-    "Сделай свою часть и сдай именно свой шаг: taskflow_subtask_done с result (одно-два предложения),",
-    "а если шаг требует структурного артефакта (в названии шага перечислены поля вроде scope/acceptance_criteria) —",
-    "передай artifact: {summary, payload: {...требуемые поля...}, evidence} вместо простого result.",
-    "Задачу целиком и чужие шаги не трогай — только свой.",
-    "",
-    "Правила:",
-    ...(composeLayer(role, "rules")?.effective.split("\n") ?? AGENT_RULES.map((r) => `- ${r}`)),
-  ].join("\n");
+  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: subtask?.title ?? "", rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 // ── Папка проекта, справка, продолжение разговора (этап C3) ──────────────
 
 const PROJECTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-projects.json");
 const RUNS_BASE = process.env.TASKFLOW_RUNS_DIR || path.join(os.homedir(), ".local", "state", "taskflow-runs");
-export const LOCAL_EXECUTION_POLICY = [
-  "Среда выполнения: ты уже работаешь на сервере .110 (192.168.1.110).",
-  "Работай исключительно локально на этой машине; не подключайся к .110 по SSH и не ищи sshpass/expect.",
-  "Пути /home/maksim и /home/maksim/Проекты/Хранилище доступны напрямую. Не запускай find / и не обходи системные каталоги или NAS без отдельного явного поручения владельца.",
-  "",
-  "Если просьба владельца неоднозначна (не ясно, в каком проекте/папке",
-  "искать, о какой именно задаче речь) — сначала коротко переспроси",
-  "(хотя бы примерно, куда смотреть), а не уходи в широкое исследование",
-  "вслепую (весь .110, все проекты подряд). Переспросить дешевле по",
-  "времени и контексту, чем перелопатить всё в поисках догадки.",
-  "",
-  "Если владелец спрашивает про твою же историю работы (что сделано за",
-  "неделю/месяц, сколько задач) — используй taskflow_my_stats (счётчики",
-  "и названия по периодам), не выдумывай ответ и не говори \"не знаю\":",
-  "инструмент для этого есть.",
-].join("\n");
+export { LOCAL_EXECUTION_POLICY } from "./instructionDefaults.js";
+const LOCAL_EXECUTION_POLICY = INSTRUCTION_DEFAULTS.local_policy;
 
 /** Репозиторий проекта карточки — из того же файла, что читал будильник
  *  (scripts/task-context-projects.json); не сопоставлен — репозиторий TaskFlow. */
@@ -529,12 +509,8 @@ function hasSession(taskId: string, role: string, subtaskId?: string): boolean {
   }
 }
 
-function resumePrompt(taskId: string): string {
-  return [
-    `Продолжай работу по задаче ${taskId}. С прошлого захода могло что-то измениться — владелец мог ответить в ленте.`,
-    "Перечитай карточку и ленту (taskflow_task). Закрытые шаги не повторяй. Всё сделано — сдай (taskflow_state state=review);",
-    "упёрся — taskflow_state state=blocked с причиной.",
-  ].join("\n");
+function resumePrompt(taskId: string, role = "builder"): string {
+  return renderInstruction(role, "task.resume", { taskId });
 }
 
 /** Сколько раз подряд агент вышел посреди работы — для повторного захода. */
@@ -677,13 +653,15 @@ const customTools = taskflowTools(role, model.id ?? modelId, taskId);
     thinkingLevel: "off",
     modelRuntime: runtime,
     resourceLoader,
-    tools: [...BUILTIN_TOOLS, ...customTools.map((t: any) => t.name)],
+    tools: [...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()].filter(t=>BUILTIN_TOOLS.includes(t.name)).map(t=>({...t,description:composeLayer(role,"tool.builtin."+t.name)?.effective ?? t.description})),
     customTools,
     sessionManager: SessionManager.continueRecent(cwd, sessionDir(taskId, role, input.subtaskId)),
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
   } as any);
 
   const runId = `inproc_${crypto.randomUUID()}`;
+  db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
+  logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
   activeRuns.set(runId, { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort() });
 
@@ -708,9 +686,9 @@ const customTools = taskflowTools(role, model.id ?? modelId, taskId);
     try {
       const task = input.prompt ?? (input.subtaskId
         ? planSubtaskPrompt(taskId, role, input.subtaskId)
-        : (resumed ? resumePrompt(taskId) : defaultTaskPrompt(taskId, role)));
+        : (resumed ? resumePrompt(taskId, role) : defaultTaskPrompt(taskId, role)));
       const prompt = `${task}\n\n${launchContext.prompt}`;
-      await session.prompt(mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\nПеред работой поищи похожее в документации (taskflow_kb_search).` : prompt);
+      await session.prompt(mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       runFailure = error instanceof Error ? error : new Error(reason);
@@ -763,22 +741,12 @@ export type KickReason = "assigned" | "commented" | "review" | "after_run";
 
 export function reviewPromptFor(taskId: string): string {
   const task = db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title?: string } | undefined;
-  return [
-    `Ты — ${roleTitle("critic_verifier")}. Проверь сданную работу по задаче ${taskId}: «${task?.title ?? ""}».`,
-    "Прочитай карточку и ленту (taskflow_task): что просили, что сделано, чем подтверждено.",
-    "Вынеси вердикт инструментом taskflow_review: approved — если работа сделана и подтверждена;",
-    "changes_requested — если нет, с конкретным комментарием, что доработать.",
-    "Задачу в работу не бери и её состояние сам не меняй — только вердикт.",
-  ].join("\n");
+  return renderInstruction("critic_verifier", "task.review", { roleTitle: roleTitle("critic_verifier"), taskId, title: task?.title ?? "", rules: effectiveRules("critic_verifier").map(r => `- ${r}`).join("\n") });
 }
 
 function replyPrompt(taskId: string, role: string): string {
   const task = db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title?: string } | undefined;
-  return [
-    `Ты — ${roleTitle(role)}. По твоей задаче ${taskId} («${task?.title ?? ""}») владелец написал в ленте.`,
-    "Прочитай карточку и ленту (taskflow_task) и ответь ему комментарием (taskflow_comment).",
-    "Работу не продолжай и состояние задачи не меняй — только ответ.",
-  ].join("\n");
+  return renderInstruction(role, "task.reply", { roleTitle: roleTitle(role), taskId, title: task?.title ?? "", rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 function reviewerPending(taskId: string): boolean {
@@ -880,7 +848,7 @@ export async function kickRoleTaskStrict(
     const run = await runRoleInProcess({
       taskId,
       role,
-      prompt: resumePrompt(taskId),
+      prompt: resumePrompt(taskId, role),
       durableHandoff: options?.durableHandoff ?? false,
       chainDepth,
     });
@@ -968,7 +936,7 @@ async function continueOrHandOff(
       }
       chainCount.set(taskId, n);
       try {
-        await runRoleInProcess({ taskId, role, prompt: resumePrompt(taskId) });
+        await runRoleInProcess({ taskId, role, prompt: resumePrompt(taskId, role) });
       } catch (err) {
         console.warn(`повторный заход по ${taskId} не начат:`, err);
       }

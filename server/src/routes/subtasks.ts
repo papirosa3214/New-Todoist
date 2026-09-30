@@ -1,3 +1,4 @@
+import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
@@ -695,7 +696,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       // Взял шаг в работу — получи правила, как их писать. Тем же ответом,
       // без отдельного запроса и без надежды, что агент их где-то читал.
       return state === "in_progress"
-        ? { ...updated, rules: AGENT_RULES }
+        ? { ...updated, rules: effectiveRules((db.prepare("SELECT role_key FROM users WHERE id=?").get(req.userId) as any)?.role_key ?? "") }
         : updated;
     },
   });

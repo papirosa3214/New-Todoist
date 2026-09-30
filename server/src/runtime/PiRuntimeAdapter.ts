@@ -1,3 +1,4 @@
+import { chatInstructionArgs } from "./instructionResources.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -744,7 +745,7 @@ export const piRuntime: RuntimeAdapter = {
     const client = new RpcClient({
       cliPath: resolvePiCliPath(),
       cwd: input.cwd ?? process.cwd(),
-      ...(mcpConfigPath ? { args: ["--mcp-config", mcpConfigPath] } : {}),
+      ...(mcpConfigPath ? { args: ["--mcp-config", mcpConfigPath, ...await chatInstructionArgs(role,mcpConfigPath)] } : {}),
       provider,
       model,
       // NODE_USE_ENV_PROXY=1 — без него Pi встроенный fetch игнорирует
@@ -1211,7 +1212,7 @@ export async function startChatRun(
     mcpConfigPath = prepareRoleRunAccess(runId, role);
     const args: string[] = [];
     if (mcpConfigPath) {
-      args.push("--mcp-config", mcpConfigPath);
+      args.push("--mcp-config", mcpConfigPath, ...await chatInstructionArgs(role,mcpConfigPath));
     }
     if (input.sessionId) {
       // --session-id продолжает РОВНО ту сессию, что у нас в таблице.

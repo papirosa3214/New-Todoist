@@ -1,3 +1,4 @@
+import { effectiveRules } from "../lib/roleContextResolver.js";
 // POST /api/tasks/:id/claim | /heartbeat | /state — the agent-work protocol
 // (see AGENT-PROTOCOL.md). Core rules (transition matrix, lease math, event
 // logging) live in ../agentState.ts; this file is just the HTTP surface.
@@ -106,8 +107,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   // 20.08.2026 — правила живут на сервере трекера, чтобы действовать на
   // любого агента, а не только на прочитавшего чей-то CLAUDE.md. Значит
   // единственный честный способ их показать — спросить у нас.
-  app.get("/api/agent/rules", { preHandler: authPre }, async () => ({
-    rules: AGENT_RULES,
+  app.get("/api/agent/rules", { preHandler: authPre }, async (req: any) => ({
+    rules: effectiveRules((db.prepare("SELECT role_key FROM users WHERE id=?").get(req.userId) as any)?.role_key ?? ""),
   }));
 
   // ═══════ ЛЕСЕНКА МОДЕЛИ (спек 1.2, 1.2.2) ═══════
@@ -632,7 +633,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // приступает к работе, на него сразу же всё это навешивалось, и он
       // строго соблюдал». Памятка в чьём-то CLAUDE.md чужому агенту не
       // указ, а этот ответ получают все одинаково.
-      return { task: hydrated, rules: AGENT_RULES };
+      return { task: hydrated, rules: effectiveRules((db.prepare("SELECT role_key FROM users WHERE id=?").get(req.userId) as any)?.role_key ?? "") };
     },
   });
 

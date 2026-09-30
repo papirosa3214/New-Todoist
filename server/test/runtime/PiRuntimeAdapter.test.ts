@@ -117,7 +117,7 @@ const mockRuntime = {
   }),
 };
 
-vi.mock("@earendil-works/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => { const actual=await importOriginal<any>(); return { ...actual,
   getPackageDir: () => "/mock/pi-pkg",
   ModelRuntime: {
     create: vi.fn(async () => {
@@ -128,7 +128,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   RpcClient: vi.fn().mockImplementation(function (options: any) {
     return makeFakeRpcClient(options);
   }),
-}));
+}; });
 
 interface FakeRpcClient {
   options: any;

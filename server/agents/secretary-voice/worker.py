@@ -124,13 +124,26 @@ async def summary_via_api(text: str, socket_path: str, owner_id: str, send_to_ch
             return body
 
 
+async def instructions_via_api(socket_path: str) -> dict:
+    connector = aiohttp.UnixConnector(path=socket_path)
+    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
+        async with http.get("http://localhost/secretary/instructions") as response:
+            if response.status != 200:
+                raise RuntimeError("Не удалось получить инструкции Секретаря")
+            body = await response.json()
+            if not isinstance(body.get("instructions"), str) or not isinstance(body.get("greeting"), str):
+                raise RuntimeError("Неверный формат инструкций Секретаря")
+            return body
+
+
 class Assistant(Agent):
-    def __init__(self, owner_id: str) -> None:
-        super().__init__(instructions=SECRETARY_INSTRUCTIONS)
+    def __init__(self, owner_id: str, instructions: str = SECRETARY_INSTRUCTIONS, greeting: str = "поздоровайся коротко и спроси, чем помочь") -> None:
+        super().__init__(instructions=instructions)
         self.owner_id = owner_id
+        self.greeting = greeting
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="поздоровайся коротко и спроси, чем помочь")
+        self.session.generate_reply(instructions=self.greeting)
 
     @function_tool
     async def create_task(self, context: RunContext, text: str) -> str:
@@ -184,7 +197,8 @@ async def entrypoint(ctx: JobContext) -> None:
             voice=voice,
         ),
     )
-    await session.start(agent=Assistant(owner_id=owner.identity), room=ctx.room)
+    snapshot = await instructions_via_api(cfg.taskflow_socket_path)
+    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=snapshot["greeting"]), room=ctx.room)
 
     # Тап по анимации на телефоне — перебить Секретаря на полуслове.
     @ctx.room.local_participant.register_rpc_method("interrupt")

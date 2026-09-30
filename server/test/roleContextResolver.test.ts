@@ -80,7 +80,7 @@ describe("roleContextResolver — каталог", () => {
     expect(getLayerSpec("role.prompt")?.readOnly).toBe(false);
     expect(getLayerSpec("rules")?.readOnly).toBe(false);
     expect(getLayerSpec("local_policy")?.readOnly).toBe(false);
-    expect(getLayerSpec("intake.summary")?.readOnly).toBe(false);
+    expect(getLayerSpec("intake.summary")?.readOnly).toBe(true);
     expect(getLayerSpec("role_skills")?.readOnly).toBe(true);
     expect(getLayerSpec("mcp_tools")?.readOnly).toBe(true);
     expect(getLayerSpec("model_policy")?.readOnly).toBe(true);
@@ -172,7 +172,7 @@ describe("roleContextResolver — override с приоритетом", () => {
     seedRole(role, "Разработчик");
 
     // scope=command для role.prompt — не должно применяться (scope=role)
-    applyOverride({
+    expect(() => applyOverride({
       scope: "command",
       roleKey: "*",
       layer: "role.prompt",
@@ -181,7 +181,7 @@ describe("roleContextResolver — override с приоритетом", () => {
       sourceRef: "test",
       createdBy: ownerId,
       action: "set",
-    });
+    })).toThrow("только для роли");
 
     const rolePrompt = composeLayer(role, "role.prompt");
     // role.prompt имеет scope=role, command_default тут не применяется
@@ -279,7 +279,7 @@ describe("roleContextResolver — override с приоритетом", () => {
       action: "set",
     });
     const hist = listHistory("role", role, "role.prompt", 10);
-    expect(hist.length).toBe(2);
+    expect(hist.length).toBe(3);
     expect(hist[0].action).toBe("set");
     expect(hist[0].byUserId).toBe(ownerId);
   });

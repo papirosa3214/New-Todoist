@@ -70,7 +70,7 @@ const mockRuntime = {
   getError: vi.fn(() => undefined),
 };
 
-vi.mock("@earendil-works/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => { const actual=await importOriginal<any>(); return { ...actual,
   getPackageDir: () => "/mock/pi-pkg",
   ModelRuntime: {
     create: vi.fn(async () => {
@@ -79,7 +79,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
     }),
   },
   RpcClient: vi.fn(),
-}));
+}; });
 
 async function tick(ms = 25): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));

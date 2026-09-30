@@ -1,3 +1,4 @@
+import { renderInstruction } from "./roleContextResolver.js";
 // «Супер Секретарь» (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/):
 // настоящий ИИ-ответ в комнате `chat-secretary` — по образцу
 // deliverAgentReply (server/src/routes/chats.ts), но отдельной функцией:
@@ -98,27 +99,7 @@ export async function deliverSecretaryReply(userText: string): Promise<string | 
     composeLayer(SECRETARY_ROLE, "role.prompt")?.effective
       || rolePromptText(SECRETARY_ROLE)
       || "Ты — Секретарь, личный помощник владельца в TaskFlow.";
-  const prompt = [
-    instruction,
-    "",
-    "Это онлайн-переписка с владельцем. Перед тобой история чата и только",
-    "что пришедшее сообщение. Ответь коротко и по-человечески.",
-    "",
-    "История чата:",
-    historyLines || "(пусто)",
-    "",
-    "Последнее сообщение владельца:",
-    userText,
-    "",
-    "В конце ответа ОБЯЗАТЕЛЬНО добавь отдельной строкой 2-4 коротких",
-    "варианта следующего ответа владельца — чтобы он мог выбрать, а не",
-    "печатать. Формат ровно такой, одной строкой:",
-    "БЫСТРО: вариант1 | вариант2 | вариант3",
-    "Варианты — то, что уместно ответить именно на ТВОЙ вопрос/сообщение",
-    "(да/нет, выбор из предложенного и т.п.). Если уместного выбора нет",
-    "(ты просто рассказал что-то без вопроса) — всё равно предложи 2-3",
-    "закономерных продолжения разговора.",
-  ].join("\n");
+  const prompt = renderInstruction(SECRETARY_ROLE, "secretary.chat", { roleInstruction: instruction, history: historyLines || "(пусто)", userText });
 
   const previousSessionId = getChatSessionId(chatId, SECRETARY_ID);
   // SQL-время, не JS Date().toISOString() — формат должен совпасть с
