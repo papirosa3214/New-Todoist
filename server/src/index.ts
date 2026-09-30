@@ -11,6 +11,7 @@ import { setInProcessApp } from "./runtime/inProcessRun.js";
 import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
+import { startScheduler } from "./runtime/scheduler.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
@@ -531,8 +532,10 @@ if (isMain) {
     let stopRoleRuns: (() => Promise<void>) | null = null;
     let stopVoiceBridge: (() => Promise<void>) | null = null;
     let stopKnowledgeSync: (() => void) | null = null;
+    let stopScheduler: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
+      stopScheduler?.();
       if (stopRoleRuns) await stopRoleRuns();
       if (stopVoiceBridge) await stopVoiceBridge();
     });
@@ -547,6 +550,8 @@ if (isMain) {
     stopRoleRuns = startRoleRunWorker();
     // Документация проектов → база знаний раз в сутки (lib/knowledgeSync.ts).
     stopKnowledgeSync = startKnowledgeSyncSchedule();
+    // Планировщик доски раз в 5 минут — внутри сервера (runtime/scheduler.ts).
+    stopScheduler = startScheduler(app);
     // Ходы ролей живут в процессе: узлы плана, брошенные прошлым процессом,
     // — в ленту и продолжить (runtime/planSubtaskAdmission.ts).
     try {

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import db, { hashApiToken } from "./db.js";
 import { isOrchestrator } from "./access.js";
+import { isServiceUser } from "./serviceUser.js";
 import { touchActive } from "./activeAgent.js";
 
 /**
@@ -42,7 +43,7 @@ export function resolveUserIdFromToken(
   if (!token) return null;
 
   try {
-    const decoded = (app as any).jwt.verify(token) as { id: string };
+    const decoded = (app as any).jwt.verify(token) as { id: string; internalService?: string };
     if (decoded?.id) {
       // Вход архивной учётки больше не действует (владелец 01.10.2026:
       // «Оркестратор Claude» из архива появился в карточке). api_token
@@ -50,7 +51,11 @@ export function resolveUserIdFromToken(
       const row = db.prepare("SELECT archived FROM users WHERE id = ?").get(decoded.id) as
         | { archived: number | null }
         | undefined;
-      return row?.archived ? null : decoded.id;
+      // Служебная учётка в архиве, но её пропуск выписывает сам сервер
+      // (внутренний планировщик) — снаружи ей войти нечем: вход архивных
+      // закрыт, внешнего ключа у планировщика больше нет.
+      const internalScheduler = isServiceUser(decoded.id) && decoded.internalService === "scheduler";
+      return row?.archived && !internalScheduler ? null : decoded.id;
     }
   } catch {
     // Not a valid/current JWT — fall through and try it as an api_token.

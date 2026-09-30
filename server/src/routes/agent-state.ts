@@ -14,6 +14,7 @@ import {
   isReviewer as isTaskReviewer,
 } from "../access.js";
 import { unmetDependencyIds } from "../enricher.js";
+import { isServiceUser } from "../serviceUser.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { nextAttemptTemplate as computeNextAttemptTemplate } from "../lib/attemptLadder.js";
@@ -62,12 +63,8 @@ const uid = () => crypto.randomUUID();
  * trigger-service пользователя с ролью orchestrator, его id добавится
  * сюда без правок в триггере.
  */
-const SERVICE_USER_IDS = new Set<string>([
-  "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2", // Pi Agent
-]);
-function isServiceUser(userId: string): boolean {
-  return SERVICE_USER_IDS.has(userId);
-}
+// Сам список — в serviceUser.ts (01.10.2026): им пользуется и проверка
+// пропуска (auth.ts), и внутренний планировщик.
 
 /** Экспорт для других роутов (release и т.д.), чтобы не дублировать. */
 export { isServiceUser };

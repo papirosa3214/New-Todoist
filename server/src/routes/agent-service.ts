@@ -35,19 +35,10 @@ async function schedulerState(): Promise<{
   last_run_at: string | null;
   handled: Record<string, unknown>;
 }> {
+  // С 01.10.2026 планировщик живёт внутри сервера (runtime/scheduler.ts),
+  // systemd-таймера у него нет: живой — если отметка обхода свежая (обход
+  // раз в 5 минут, 15 минут — три пропуска подряд).
   let active = false;
-  try {
-    const { stdout } = await run("systemctl", [
-      "--user",
-      "show",
-      "taskflow-scheduler.timer",
-      "-p",
-      "ActiveState",
-    ]);
-    active = /ActiveState=active/.test(stdout);
-  } catch {
-    active = false;
-  }
   let lastRunAt: string | null = null;
   let handled: Record<string, unknown> = {};
   try {
@@ -56,6 +47,7 @@ async function schedulerState(): Promise<{
       typeof parsed?.at_epoch === "number"
         ? new Date(parsed.at_epoch).toISOString()
         : null;
+    active = typeof parsed?.at_epoch === "number" && Date.now() - parsed.at_epoch < 15 * 60 * 1000;
     handled = parsed ?? {};
   } catch {
     lastRunAt = null;
