@@ -260,6 +260,8 @@ export function stepDetailFallback(tool: string, detail: string | null): string 
 // 01.10.2026 видел это «кодовым окном». В чате показываем только `output`.
 const FENCE_RE = /```[\w-]*[ \t]*\n([\s\S]*?)(?:\n[ \t]*```[ \t]*(?=\n|$)|$)/g;
 
+const ENVELOPE_KEY = /^(artifacts|error|next_hint|needs_human):/;
+
 function envelopeOutput(body: string): string | null {
   const first = body.split("\n").find((l) => l.trim());
   if (!first || !/^ok:\s*(true|false)\s*$/.test(first.trim())) return null;
@@ -278,9 +280,11 @@ function envelopeOutput(body: string): string | null {
   if (inline && !/^[|>][-+]?\s*$/.test(inline)) {
     return inline.replace(/^["']|["']$/g, "").trim();
   }
+  // output идёт до следующего поля конверта: без обрамления кодом роль
+  // пишет его и без отступа.
   const block: string[] = [];
   for (const line of lines.slice(at + 1)) {
-    if (line.trim() && !/^\s/.test(line)) break;
+    if (ENVELOPE_KEY.test(line)) break;
     block.push(line);
   }
   const indents = block.filter((l) => l.trim()).map((l) => l.match(/^\s*/)![0].length);
@@ -291,7 +295,16 @@ function envelopeOutput(body: string): string | null {
 /** Снять конверт `ok/output/...` с ответа роли, оставив текст `output`. */
 export function unwrapRoleEnvelope(text: string): string {
   if (!text || !/ok:\s*(true|false)/.test(text)) return text;
-  return text.replace(FENCE_RE, (whole, body: string) => envelopeOutput(body) ?? whole);
+  const fenced = text.replace(FENCE_RE, (whole, body: string) => envelopeOutput(body) ?? whole);
+  if (fenced !== text) return fenced;
+  // Конверт без обрамления кодом — весь ответ, иногда поля в `кавычках`.
+  const lines = text.split("\n").map((line) => {
+    const m = line.match(/^`((?:ok|output|artifacts|error|next_hint|needs_human):.*)`\s*$/);
+    return m ? m[1] : line;
+  });
+  const first = lines.findIndex((l) => l.trim());
+  if (first < 0 || !/^ok:\s*(true|false)\s*$/.test(lines[first].trim())) return text;
+  return envelopeOutput(lines.slice(first).join("\n")) ?? text;
 }
 
 // ── Сам ход ─────────────────────────────────────────────────────────────

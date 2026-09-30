@@ -273,10 +273,22 @@ describe("конверт ответа роли (01.10.2026)", () => {
     expect(unwrapRoleEnvelope("```\nok: true\nout")).toBe("");
   });
 
+  it("конверт без обрамления и с полями в кавычках", () => {
+    expect(
+      unwrapRoleEnvelope("ok: true\n\noutput: |\n **Принято.**\n\n Дальше.\nartifacts: null\nerror: null"),
+    ).toBe("**Принято.**\n\nДальше.");
+    expect(
+      unwrapRoleEnvelope("`ok: true`\n`output:`\nДа, так.\n\nВторой абзац.\n`artifacts: null`\n`needs_human: false`"),
+    ).toBe("Да, так.\n\nВторой абзац.");
+  });
+
   it("обычный код и текст без конверта не меняются", () => {
     const code = "Вот:\n```ts\nconst ok = true;\n```";
     expect(unwrapRoleEnvelope(code)).toBe(code);
     expect(unwrapRoleEnvelope("```yaml\nok: maybe\n```")).toBe("```yaml\nok: maybe\n```");
+    const json = "Пример:\n```json\n{\"ok\": true}\n```";
+    expect(unwrapRoleEnvelope(json)).toBe(json);
+    expect(unwrapRoleEnvelope("Сервер ответил ok: true — всё хорошо.")).toBe("Сервер ответил ok: true — всё хорошо.");
   });
 
   it("в живом снимке конверт тоже снят", () => {
