@@ -8,6 +8,8 @@ import {
 } from "../api/agents";
 import { useRoles, type RoleDetails } from "../api/roles";
 import { useCurrentUser } from "../api/auth";
+import { API_BASE_URL, getToken } from "../api/client";
+import { RoleContextSheet } from "../components/RoleContextSheet";
 import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
 import {
   FieldGroup,
@@ -403,6 +405,7 @@ function roleDotClass(role: RoleDetails): string {
 
 function RoleRow({ role }: { role: RoleDetails }) {
   const [open, setOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
 
   return (
     <div>
@@ -477,8 +480,28 @@ function RoleRow({ role }: { role: RoleDetails }) {
           ) : (
             <p className="text-[12px] text-red">Системный промпт не найден</p>
           )}
+
+          {/* Полный редактор контекста запуска — вкладки по режимам,
+              каждый слой с источником, историей и (для редактируемых)
+              кнопкой «Изменить» / «Сброс» / «История». Карточка
+              15c2db1f, дизайн заметки 54ff50a1, §9. */}
+          <button
+            type="button"
+            onClick={() => setContextOpen(true)}
+            className="tap-scale h-9 px-3 rounded-xl bg-card2 text-text text-[13px] font-semibold mt-2 flex items-center gap-1"
+          >
+            <Icon name="edit" size={14} className="text-sub" />
+            Контекст запуска
+          </button>
         </div>
       )}
+      <RoleContextSheet
+        open={contextOpen}
+        onClose={() => setContextOpen(false)}
+        role={role}
+        apiBase={API_BASE_URL}
+        token={getToken()}
+      />
     </div>
   );
 }

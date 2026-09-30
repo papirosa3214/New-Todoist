@@ -13,6 +13,7 @@ import crypto from "node:crypto";
 import db from "../db.js";
 import { broadcastToUsers } from "../ws.js";
 import { rolePromptText } from "../roleRouting.js";
+import { composeLayer } from "./roleContextResolver.js";
 import { startChatRun } from "../runtime/PiRuntimeAdapter.js";
 import { getChatSessionId, upsertChatSession } from "../runtime/chatSession.js";
 import {
@@ -94,7 +95,9 @@ export async function deliverSecretaryReply(userText: string): Promise<string | 
     .join("\n");
 
   const instruction =
-    rolePromptText(SECRETARY_ROLE) || "Ты — Секретарь, личный помощник владельца в TaskFlow.";
+    composeLayer(SECRETARY_ROLE, "role.prompt")?.effective
+      || rolePromptText(SECRETARY_ROLE)
+      || "Ты — Секретарь, личный помощник владельца в TaskFlow.";
   const prompt = [
     instruction,
     "",

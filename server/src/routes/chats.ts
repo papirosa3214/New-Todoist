@@ -49,6 +49,9 @@ import {
   startChatRun,
 } from "../runtime/PiRuntimeAdapter.js";
 import {
+  composeLayer,
+} from "../lib/roleContextResolver.js";
+import {
   LOCAL_EXECUTION_POLICY,
 } from "../runtime/inProcessRun.js";
 import {
@@ -1068,7 +1071,9 @@ async function deliverAgentReply(args: {
 
   const roleTitle = titleOfRole(role);
   const roleInstruction =
-    rolePromptText(role) || `Ты — ${roleTitle} в трекере TaskFlow.`;
+    composeLayer(role, "role.prompt")?.effective
+      || rolePromptText(role)
+      || `Ты — ${roleTitle} в трекере TaskFlow.`;
   const prompt = [
     roleInstruction,
     LOCAL_EXECUTION_POLICY,

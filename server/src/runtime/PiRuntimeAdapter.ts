@@ -41,6 +41,7 @@ import {
 } from "./chatSession.js";
 import { authSessionManager, type AuthSessionView } from "./AuthSession.js";
 import { prepareRoleRunAccess, releaseRoleRunAccess } from "./roleRunAccess.js";
+import { composeLayer } from "../lib/roleContextResolver.js";
 import {
   ModelNotAvailableError,
   RuntimeUnavailableError,
@@ -767,6 +768,27 @@ export const piRuntime: RuntimeAdapter = {
           routingRole: (ROLE_NAMES as readonly string[]).includes(role) ? role : null,
         });
       } catch { /* attempt — не критично для запуска */ }
+    }
+    // Снимок effective system prompt на старте попытки (дизайн §8):
+    // если у роли есть override слоёв prompt/rules/local_policy — он
+    // идёт в Pi через тот же путь, что и в inProcessRun. Здесь тот же
+    // composeLayer(), чтобы UI и in-process показывали одну и ту же
+    // effective-версию.
+    if ((ROLE_NAMES as readonly string[]).includes(role)) {
+      try {
+        const composed = [
+          composeLayer(role, "role.prompt")?.effective || "",
+          composeLayer(role, "local_policy")?.effective || "",
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        db.prepare(
+          "UPDATE attempts SET system_prompt_snapshot = ? WHERE id = ?",
+        ).run(composed, runId);
+        db.prepare(
+          "UPDATE tasks SET composed_prompt_snapshot = ? WHERE id = ?",
+        ).run(composed, input.taskId);
+      } catch { /* колонки ещё нет — после миграции 081 */ }
     }
     try {
       db.prepare(

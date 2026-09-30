@@ -18,6 +18,7 @@ import { Type } from "typebox";
 import db from "../db.js";
 import { AGENT_RULES, logEvent } from "../agentState.js";
 import { loadRoleRouting, providerOfModel, rolePromptText, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
+import { composeLayer } from "../lib/roleContextResolver.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { buildInProcessTaskContext } from "./taskContextBridge.js";
@@ -435,7 +436,7 @@ export function defaultTaskPrompt(taskId: string, role: string): string {
     "сдай на проверку (taskflow_state state=review с коротким итогом). Упёрся — taskflow_state state=blocked с причиной.",
     "",
     "Правила:",
-    ...AGENT_RULES.map((r) => `- ${r}`),
+    ...(composeLayer(role, "rules")?.effective.split("\n") ?? AGENT_RULES.map((r) => `- ${r}`)),
   ].join("\n");
 }
 
@@ -458,7 +459,7 @@ function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): str
     "Задачу целиком и чужие шаги не трогай — только свой.",
     "",
     "Правила:",
-    ...AGENT_RULES.map((r) => `- ${r}`),
+    ...(composeLayer(role, "rules")?.effective.split("\n") ?? AGENT_RULES.map((r) => `- ${r}`)),
   ].join("\n");
 }
 
@@ -639,8 +640,10 @@ export async function runRoleInProcess(input: {
   }
   fs.mkdirSync(sessionDir(taskId, role, input.subtaskId), { recursive: true });
   const systemPrompt = [
-    rolePrompt(role) || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
-    LOCAL_EXECUTION_POLICY,
+    composeLayer(role, "role.prompt")?.effective
+      || rolePrompt(role)
+      || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
+    composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
   ].join("\n\n");
   const resourceLoader = {
     getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
@@ -656,7 +659,18 @@ export async function runRoleInProcess(input: {
     reload: async () => {},
   } as unknown as ResourceLoader;
 
-  const customTools = taskflowTools(role, model.id ?? modelId, taskId);
+  // Снимок фактического system prompt, который модель получит в этом запуске.
+// Записывается в tasks.composed_prompt_snapshot — это «что видела модель»,
+// доступное владельцу и iOS для прозрачности (дизайн §8).
+try {
+  db.prepare(
+    "UPDATE tasks SET composed_prompt_snapshot = ? WHERE id = ?",
+  ).run(systemPrompt, taskId);
+} catch {
+  // колонка появится только после миграции 081; до неё молча.
+}
+
+const customTools = taskflowTools(role, model.id ?? modelId, taskId);
   const { session } = await createAgentSession({
     cwd,
     model,

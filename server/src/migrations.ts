@@ -2623,7 +2623,102 @@ const migrations: Migration[] = [
       if (!cols.has("source_subtask_id")) db.exec("ALTER TABLE task_collaboration_plan_nodes ADD COLUMN source_subtask_id TEXT REFERENCES subtasks(id)");
     },
   },
+  {
+    // 30.09.2026 (карточка 15c2db1f, узел плана «Реализация» — Builder).
+    // Каталог инструкций запуска роли: владельческие переопределения
+    // поверх исходного текста (roles.prompt / scripts/role-prompts/*.md,
+    // agentState.AGENT_RULES, inProcessRun.LOCAL_EXECUTION_POLICY).
+    //
+    // scope='role' — переопределение для конкретной роли (ролевая
+    // инструкция, AGENT_RULES для роли и т.п.);
+    // scope='command' — общесистемное переопределение (например,
+    // AGENT_RULES на все роли: role_key='*'). В этой миграции только
+    // таблицы; правило «AGENT_RULES правятся владельцем с историей и
+    // восстановлением» включается отдельным шагом 4 (подключение к
+    // in-process runtime), в этой миграции только хранение.
+    //
+    // is_active=1 — частичный уникальный индекс: ровно одна активная
+    // запись на (scope, role_key, layer). Правка = транзакция «погасить
+    // старую + вставить новую с version=MAX+1». История — append-only
+    // role_context_overrides_history, без UNIQUE — намеренно, чтобы
+    // restore не конфликтовал с уже существующей версией.
+    id: "080_role_context_overrides",
+    description:
+      "Переопределения текстов инструкций запуска ролей и их история (scope=role/command, layer, version, активная через partial unique). Карточка 15c2db1f «Прозрачность и управление всем контекстом запуска ролей», дизайн заметки 54ff50a1-37ed-45ac-badd-9cbfab02a5d5, §6.",
+    up: () => db.exec(`
+      CREATE TABLE IF NOT EXISTS role_context_overrides (
+        scope TEXT NOT NULL CHECK (scope IN ('role', 'command')),
+        role_key TEXT NOT NULL,
+        layer TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)),
+        PRIMARY KEY (scope, role_key, layer, version)
+      );
 
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_role_context_active
+        ON role_context_overrides(scope, role_key, layer)
+        WHERE is_active = 1;
+
+      CREATE INDEX IF NOT EXISTS idx_role_context_overrides_role
+        ON role_context_overrides(scope, role_key, layer, version DESC);
+
+      CREATE TABLE IF NOT EXISTS role_context_overrides_history (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL,
+        role_key TEXT NOT NULL,
+        layer TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        prev_version INTEGER,
+        text TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('set', 'reset', 'restore')),
+        by_user_id TEXT NOT NULL REFERENCES users(id),
+        at TEXT NOT NULL DEFAULT (datetime('now')),
+        reason TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_role_context_history_lookup
+        ON role_context_overrides_history(scope, role_key, layer, version DESC);
+    `),
+  },
+  {
+    // Снимок effective system prompt, который УВИДЕЛА модель при старте
+    // попытки. Карточка 15c2db1f, дизайн §8: «активные сессии видят свою
+    // прежнюю версию», а владелец и iOS могут показать, что именно
+    // получила модель в этом запуске. Два места записи:
+    //   • tasks.composed_prompt_snapshot — для in-process хода
+    //     (runRoleInProcess), один снимок на последний старт карточки;
+    //   • attempts.system_prompt_snapshot — для RpcClient-пути
+    //     (PiRuntimeAdapter.startRun), на каждую попытку.
+    // Текст длинный (5–50 КБ), TEXT без лимита ок.
+    id: "081_prompt_snapshot",
+    description:
+      "composed_prompt_snapshot на tasks + attempts — что модель реально получила. Карточка 15c2db1f, дизайн §8.",
+    up: () => {
+      const taskCols = new Set(
+        (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!taskCols.has("composed_prompt_snapshot")) {
+        db.exec("ALTER TABLE tasks ADD COLUMN composed_prompt_snapshot TEXT");
+      }
+      const attemptCols = new Set(
+        (db.prepare("PRAGMA table_info(attempts)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      if (!attemptCols.has("system_prompt_snapshot")) {
+        db.exec("ALTER TABLE attempts ADD COLUMN system_prompt_snapshot TEXT");
+      }
+    },
+  },
 ];
 
 /**

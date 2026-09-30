@@ -70,6 +70,7 @@ import { registerMcpManifestRoutes } from "./routes/mcp-manifest.js";
 import { registerRoleRunJobRoutes } from "./routes/role-run-jobs.js";
 import { registerTaskCollaborationPlanRoutes } from "./routes/task-collaboration-plans.js";
 import { registerSubtaskArtifactRoutes } from "./routes/subtask-artifacts.js";
+import { registerRuntimeContextRoutes } from "./routes/runtime-context.js";
 
 /**
  * Собирает и возвращает готовый Fastify-инстанс — регистрирует плагины,
@@ -338,6 +339,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerCompassRoutes(app);
   registerSubtaskCommentRoutes(app);
   registerSubtaskArtifactRoutes(app);
+  registerRuntimeContextRoutes(app);
   registerNotificationRoutes(app);
   registerLiveActivityRoutes(app);
   registerSearchRoutes(app);
