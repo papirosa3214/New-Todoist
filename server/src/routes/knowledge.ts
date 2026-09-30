@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { tiptapToMarkdown } from "../lib/tiptapToMarkdown.js";
 
 // База знаний — тонкий прокси к RAGFlow (:9380 на .110), где лежит датасет
 // «TaskFlow — документация». Документы туда синкает
@@ -77,8 +78,87 @@ async function ragflow(path: string, init?: RequestInit): Promise<any> {
   return res.json();
 }
 
+/** YAML-строка для шапки документа — тем же правилом, что в
+ *  ~/kb/taskflow_docs_ragflow_sync.py (`_yaml_scalar`). */
+function yamlScalar(value: string | null | undefined): string {
+  const s = (value ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"').split(/\s+/).filter(Boolean).join(" ");
+  return `"${s}"`;
+}
+
+/**
+ * Заметка → в базу знаний сейчас, не дожидаясь ночного синка (владелец
+ * 01.10.2026: кнопка у документа в «Итоге» карточки). Имя, шапка и выбор
+ * датасета — ровно как у ~/kb/taskflow_docs_ragflow_sync.py: документ
+ * `taskflow-<id>.md`, старая копия под тем же именем удаляется — синк потом
+ * не заведёт второй.
+ */
+export async function pushNoteToKnowledge(noteId: string): Promise<{ dataset: string; document_id: string | null }> {
+  if (!ragflowToken() || !ragflowDataset()) throw new Error("База знаний не настроена");
+  const note = db.prepare(
+    `SELECT un.id, un.title, un.content, un.created_at, un.updated_at, jf.name AS folder_name,
+            (SELECT p.name FROM projects p WHERE p.notes_folder_id = un.folder_id ORDER BY p.created_at LIMIT 1) AS project_name,
+            (SELECT p.knowledge_dataset_id FROM projects p WHERE p.notes_folder_id = un.folder_id ORDER BY p.created_at LIMIT 1) AS dataset_id
+       FROM user_notes un LEFT JOIN journal_folders jf ON jf.id = un.folder_id WHERE un.id = ?`,
+  ).get(noteId) as
+    | { id: string; title: string | null; content: string; created_at: string; updated_at: string; folder_name: string | null; project_name: string | null; dataset_id: string | null }
+    | undefined;
+  if (!note) throw new Error("Заметка не найдена");
+  const body = tiptapToMarkdown(note.content).trim();
+  if (!body) throw new Error("Заметка пустая — в базе знаний от неё толку нет");
+  const title = (note.title ?? "").trim() || "без названия";
+  let text = [
+    "---",
+    "source: taskflow",
+    `doc_id: ${yamlScalar(note.id)}`,
+    `title: ${yamlScalar(title)}`,
+    `project: ${yamlScalar(note.project_name || "(вне проекта)")}`,
+    `folder: ${yamlScalar(note.folder_name || "(без папки)")}`,
+    `created_at: ${yamlScalar(note.created_at)}`,
+    `updated_at: ${yamlScalar(note.updated_at)}`,
+    "---",
+    "",
+  ].join("\n");
+  if (!body.startsWith("# ")) text += `# ${title}\n\n`;
+  text += body + "\n";
+
+  const dataset = (note.dataset_id ?? "").trim() || ragflowDataset();
+  const name = `taskflow-${note.id}.md`;
+  const listed = await ragflow(`/api/v1/datasets/${dataset}/documents?name=${encodeURIComponent(name)}&page=1&page_size=10`);
+  const old = ((listed?.data?.docs ?? []) as Array<{ id: string; name: string }>).filter((d) => d.name === name).map((d) => d.id);
+  if (old.length) {
+    await ragflow(`/api/v1/datasets/${dataset}/documents`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: old }),
+    });
+  }
+  const form = new FormData();
+  form.append("file", new Blob([text], { type: "text/markdown" }), name);
+  const uploaded = await ragflow(`/api/v1/datasets/${dataset}/documents`, { method: "POST", body: form });
+  const documentId = ((uploaded?.data ?? []) as Array<{ id: string }>)[0]?.id ?? null;
+  if (documentId) {
+    await ragflow(`/api/v1/datasets/${dataset}/chunks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document_ids: [documentId] }),
+    });
+  }
+  return { dataset, document_id: documentId };
+}
+
 export function registerKnowledgeRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
+
+  // Документ → в базу знаний сейчас (кнопка «В базу знаний» в «Итоге»).
+  app.post<{ Params: { id: string } }>("/api/notes/:id/knowledge", { preHandler: authPre }, async (req: any, reply) => {
+    if (!ragflowToken() || !ragflowDataset()) return unconfigured(reply);
+    try {
+      return { ok: true, ...(await pushNoteToKnowledge(req.params.id)) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(message === "Заметка не найдена" ? 404 : 502).send({ error: message });
+    }
+  });
 
   /** Не настроено — честный 503, а не пустой список: пустой список клиент
    *  показал бы как «документов нет», и никто бы не понял, что дело в ключе. */

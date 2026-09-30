@@ -24,6 +24,7 @@ import { buildInProcessTaskContext } from "./taskContextBridge.js";
 import { buildDependencyContext } from "./dependencyContext.js";
 import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
+import { recordTaskDocument } from "../lib/taskOutcome.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -184,7 +185,9 @@ async function callResearchTool(name: string, args: unknown): Promise<unknown> {
  *  списка, который раньше был у slot'ов (`taskflow_slot_result`) — решение
  *  №2, «не вижу смысла что-то выдумывать, обычные тулы подзадачи более
  *  чем достаточно». */
-export function taskflowTools(role: string, model: string | null) {
+/** `taskId` — карточка текущего хода: записанные `doc_write` документы
+ *  привязываются к ней и попадают в её «Итог» (01.10.2026). */
+export function taskflowTools(role: string, model: string | null, taskId?: string) {
   const T = (
     name: string,
     description: string,
@@ -349,12 +352,14 @@ export function taskflowTools(role: string, model: string | null) {
           const cur = await asRole(role, "GET", `/api/notes/${p.id}?format=markdown`);
           const merged = `${String(cur.markdown ?? "").trimEnd()}\n\n${p.markdown}`.trim();
           const n = await asRole(role, "PATCH", `/api/notes/${p.id}`, { markdown: merged });
+          if (taskId) recordTaskDocument(taskId, n.id, roleUserId(role));
           return { готово: "заметка обновлена", id: n.id };
         }
         if (!p.project_id) throw new ToolError("нужен project_id или id заметки");
         const d = await asRole(role, "GET", `/api/projects/${p.project_id}/docs`);
         if (!d.folder) throw new ToolError("у проекта нет папки документации");
         const n = await asRole(role, "POST", "/api/notes", { markdown: p.markdown, folder_id: d.folder.id });
+        if (taskId) recordTaskDocument(taskId, n.id, roleUserId(role));
         return { готово: "заметка создана", id: n.id };
       }),
     T("taskflow_kb_search", "Поиск по документации проектов.",
@@ -651,7 +656,7 @@ export async function runRoleInProcess(input: {
     reload: async () => {},
   } as unknown as ResourceLoader;
 
-  const customTools = taskflowTools(role, model.id ?? modelId);
+  const customTools = taskflowTools(role, model.id ?? modelId, taskId);
   const { session } = await createAgentSession({
     cwd,
     model,

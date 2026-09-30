@@ -9,6 +9,7 @@ import {
   isReviewer,
 } from "../access.js";
 import { logEvent } from "../agentState.js";
+import { writeOutcomeNote } from "../lib/taskOutcome.js";
 import { broadcastToUsers } from "../ws.js";
 import {
   createResultVersion,
@@ -131,6 +132,12 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     ).run(reviewId, taskId, version.id, version.task_revision, req.userId,
       version.artifact_hash, criteriaVersion, verdict, findings);
     logEvent({ taskId, actorId: req.userId, kind: "review_recorded", field: "result_version", toValue: `${version.version_no}:${verdict}` });
+    // Итог карточки — заметкой в документацию проекта (владелец 01.10.2026).
+    try {
+      writeOutcomeNote(taskId, req.userId);
+    } catch (err) {
+      console.warn(`итог ${taskId} не записан:`, err);
+    }
 
     // Вердикт виден в карточке: комментарий от ревьюера в ленту + уведомление
     // владельцу. Раньше записывалась только строка reviews и событие
