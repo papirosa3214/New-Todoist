@@ -293,20 +293,14 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
  * создаём — не даёт пользы, только шум. Утверждает план по-прежнему
  * ТОЛЬКО владелец (`/collaboration-plans/:planId/approve` — это не трогали).
  *
- * created_by ищем по роли `orchestrator` в БД, а не хардкодим конкретный id:
- * захардкоженный id архивной учётки «Оркестратор Claude» ловил
- * FOREIGN KEY constraint failed на любой базе без этой конкретной строки
- * (тестовая/чистая — поймано тестами task-collaboration-plans.test.ts до
- * выкладки). Fallback на owner — так работает и там, где role=orchestrator
- * вообще не заведён. Найденная учётка используется ТОЛЬКО как значение
- * внешнего ключа для аудита — в чат не заходит, задач не берёт. Это замена
- * внешней агентской координации (закрыта 27.09.2026, CLAUDE.md §5.1/§15)
- * серверным кодом, а не возврат к ней.
+ * created_by — владелец трекера. До 01.10.2026 здесь брался первый
+ * пользователь с ролью `orchestrator` — архивная учётка «Оркестратор
+ * Claude», и владелец увидел в карточке T05 постороннего автора плана:
+ * «когда появляется какое-то тело, становится не по себе». План предлагает
+ * сервер от имени владельца; утверждает по-прежнему только он.
  */
 function resolveAutoProposalActorId(): string | null {
-  const orchestrator = db.prepare("SELECT id FROM users WHERE role = 'orchestrator' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined;
-  if (orchestrator) return orchestrator.id;
-  const owner = db.prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined;
+  const owner = db.prepare("SELECT id FROM users WHERE role = 'owner' AND COALESCE(archived, 0) = 0 ORDER BY created_at LIMIT 1").get() as { id: string } | undefined;
   return owner?.id ?? null;
 }
 

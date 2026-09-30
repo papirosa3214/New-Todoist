@@ -207,6 +207,10 @@ export function registerAuthRoutes(app: FastifyInstance) {
       if (!user || !bcrypt.compareSync(password, user.password_hash)) {
         return reply.code(401).send({ error: "Invalid credentials" });
       }
+      // Учётка в архиве не входит (владелец 01.10.2026).
+      if (user.archived) {
+        return reply.code(401).send({ error: "Invalid credentials" });
+      }
 
       const token = app.jwt.sign({ id: user.id }, { expiresIn: "30d" });
       // Strip both the password hash AND the agent api_token — this response

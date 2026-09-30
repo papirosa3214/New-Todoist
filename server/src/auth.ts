@@ -43,7 +43,15 @@ export function resolveUserIdFromToken(
 
   try {
     const decoded = (app as any).jwt.verify(token) as { id: string };
-    if (decoded?.id) return decoded.id;
+    if (decoded?.id) {
+      // Вход архивной учётки больше не действует (владелец 01.10.2026:
+      // «Оркестратор Claude» из архива появился в карточке). api_token
+      // ниже не трогаем: им ходят службы трекера (taskflow-trigger).
+      const row = db.prepare("SELECT archived FROM users WHERE id = ?").get(decoded.id) as
+        | { archived: number | null }
+        | undefined;
+      return row?.archived ? null : decoded.id;
+    }
   } catch {
     // Not a valid/current JWT — fall through and try it as an api_token.
   }
