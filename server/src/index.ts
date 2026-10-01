@@ -72,6 +72,7 @@ import { registerRoleRunJobRoutes } from "./routes/role-run-jobs.js";
 import { registerTaskCollaborationPlanRoutes } from "./routes/task-collaboration-plans.js";
 import { registerSubtaskArtifactRoutes } from "./routes/subtask-artifacts.js";
 import { registerRuntimeContextRoutes } from "./routes/runtime-context.js";
+import { registerLinearRoutes } from "./routes/linear.js";
 import { registerComposioRoutes } from "./routes/composio.js";
 
 /**
@@ -343,6 +344,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerSubtaskArtifactRoutes(app);
   registerRuntimeContextRoutes(app);
   registerComposioRoutes(app);
+  registerLinearRoutes(app);
   registerNotificationRoutes(app);
   registerLiveActivityRoutes(app);
   registerSearchRoutes(app);

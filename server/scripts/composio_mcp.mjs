@@ -37,6 +37,22 @@ export async function openComposioSession(composio, options, userId, cacheFile) 
   return session;
 }
 
+export async function readLinearComposio(composio, userId, input) {
+    if (!/^\s*query\s/.test(input.query) || /\b(mutation|subscription)\b/.test(input.query)) throw new Error("read_only_query_required");
+    const accounts = await composio.connectedAccounts.list({ userIds: [userId], toolkitSlugs: ["linear"], statuses: ["ACTIVE"], limit: 2 });
+    if (accounts.items.length !== 1) {
+      return { error: accounts.items.length ? "multiple_accounts" : "not_connected" };
+    }
+    const result = await composio.tools.execute("LINEAR_RUN_QUERY_OR_MUTATION", {
+      userId, connectedAccountId: accounts.items[0].id, version: "20260924_00",
+      arguments: { query_or_mutation: input.query, variables: input.variables ?? {} },
+    });
+    // Never forward SDK error details, credentials, headers or account metadata.
+    if (!result.successful || result.error || result.data?.errors?.length || !result.data?.data) {
+      return { error: "query_failed" };
+    } else { return { data: result.data.data }; }
+}
+
 export async function main() {
   const options = JSON.parse(process.env.TASKFLOW_COMPOSIO_OPTIONS ?? "{}");
   const userId = process.env.TASKFLOW_COMPOSIO_USER_ID;
@@ -56,6 +72,16 @@ export async function main() {
     const session = await composio.create(userId, { ...options, toolkits: undefined });
     const connection = await session.authorize(process.env.TASKFLOW_COMPOSIO_TOOLKIT);
     process.stdout.write(JSON.stringify({ url: connection.redirectUrl }));
+    return;
+  }
+  if (process.argv.includes("--linear-read")) {
+    let raw = "";
+    for await (const chunk of process.stdin) {
+      raw += chunk;
+      if (raw.length > 100_000) throw new Error("input_too_large");
+    }
+    const input = JSON.parse(raw);
+    process.stdout.write(JSON.stringify(await readLinearComposio(composio, userId, input)));
     return;
   }
   const hash = process.env.TASKFLOW_COMPOSIO_CACHE_KEY;

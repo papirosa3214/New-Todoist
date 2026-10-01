@@ -2790,6 +2790,54 @@ const migrations: Migration[] = [
       toolkits TEXT
     )`),
   },
+  {
+    id: "085_linear_import",
+    description: "Linear: mappings, reviewed snapshots and source history without changing task semantics.",
+    up: () => db.exec(`
+      CREATE TABLE IF NOT EXISTS linear_import_tasks (
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+        source_url TEXT NOT NULL,
+        snapshot TEXT NOT NULL,
+        applied_fields TEXT NOT NULL,
+        imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(owner_id,workspace_id,source_id)
+      );
+      CREATE TABLE IF NOT EXISTS linear_import_objects (
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        source_issue_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        local_id TEXT,
+        applied_text TEXT,
+        snapshot TEXT NOT NULL,
+        PRIMARY KEY(owner_id,workspace_id,source_issue_id,kind,source_id)
+      );
+      CREATE TABLE IF NOT EXISTS linear_import_relations (
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_issue_id TEXT NOT NULL,
+        target_issue_id TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        managed_edge INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1,
+        snapshot TEXT NOT NULL,
+        PRIMARY KEY(owner_id,workspace_id,source_id)
+      );
+      CREATE TABLE IF NOT EXISTS linear_import_previews (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        snapshot TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        result TEXT
+      );
+    `),
+  },
+
 ];
 
 /**
