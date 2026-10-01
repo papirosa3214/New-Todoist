@@ -1,4 +1,5 @@
 import { instructionResources } from "./instructionResources.js";
+import { connectRoleComposio } from "./composioRuntime.js";
 import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
 import { renderInstruction, effectiveRules, registerInstructionBlock, instructionManifest } from "../lib/roleContextResolver.js";
 import { isOwner } from "../access.js";
@@ -646,7 +647,8 @@ try {
   // колонка появится только после миграции 081; до неё молча.
 }
 
-const customTools = taskflowTools(role, model.id ?? modelId, taskId);
+  const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId);
+  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId), ...composio.tools];
   const { session } = await createAgentSession({
     cwd,
     model,
@@ -657,7 +659,7 @@ const customTools = taskflowTools(role, model.id ?? modelId, taskId);
     customTools,
     sessionManager: SessionManager.continueRecent(cwd, sessionDir(taskId, role, input.subtaskId)),
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
-  } as any);
+  } as any).catch(async error => { await composio.close(); throw error; });
 
   const runId = `inproc_${crypto.randomUUID()}`;
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
@@ -704,6 +706,7 @@ const customTools = taskflowTools(role, model.id ?? modelId, taskId);
       clearInterval(beat);
       activeRuns.delete(runId);
       session.dispose();
+      await composio.close().catch(() => {});
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
       if (mode === "work" && !input.subtaskId) {

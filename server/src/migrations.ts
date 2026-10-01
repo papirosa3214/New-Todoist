@@ -2780,6 +2780,16 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    id: "084_role_composio",
+    description: "Composio: подключение и наборы инструментов по ролям, без секретов в БД.",
+    up: () => db.exec(`CREATE TABLE IF NOT EXISTS role_composio (
+      role TEXT PRIMARY KEY REFERENCES roles(key) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+      toolkits TEXT
+    )`),
+  },
 ];
 
 /**

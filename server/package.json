@@ -15,11 +15,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@composio/core": "0.22.0",
     "@earendil-works/pi-coding-agent": "^0.84.4",
     "@fastify/cors": "^11.3.0",
     "@fastify/jwt": "^10.2.1",
     "@fastify/rate-limit": "^11.2.0",
     "@fastify/websocket": "^11.3.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.3",
     "fastify": "^5.11.3",

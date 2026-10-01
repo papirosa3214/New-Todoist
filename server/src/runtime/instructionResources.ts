@@ -52,7 +52,8 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  fs.writeFileSync(extension,`import * as sdk from ${JSON.stringify(import.meta.resolve('@earendil-works/pi-coding-agent'))};
  export default function(api) { const mode=${JSON.stringify(mode)}; const allowed=${JSON.stringify(PLANNING_TOOLS)};
  if(mode === "plan") api.on("tool_call", async event => {
-  if (!allowed.some(name => event.toolName === name || event.toolName === "mcp__taskflow__"+name)) return {block:true,reason:"Планирование: разрешены только инструменты чтения. Для выполнения выберите режим Работа."};
+  const composioRead = ["COMPOSIO_SEARCH_TOOLS","COMPOSIO_MULTI_EXECUTE_TOOL","COMPOSIO_GET_TOOL_SCHEMAS"].some(name => event.toolName === "composio_"+name);
+  if (!composioRead && !allowed.some(name => event.toolName === name || event.toolName === "taskflow_"+name || event.toolName === "mcp__taskflow_"+name || event.toolName === "mcp__taskflow__"+name)) return {block:true,reason:"Планирование: разрешены только инструменты чтения. Для выполнения выберите режим Работа."};
  });
  const descriptions=${JSON.stringify(descriptionMap)};
  for (const make of [sdk.createReadToolDefinition,sdk.createBashToolDefinition,sdk.createEditToolDefinition,sdk.createWriteToolDefinition,sdk.createGrepToolDefinition,sdk.createFindToolDefinition,sdk.createLsToolDefinition]) {

@@ -1211,7 +1211,7 @@ export async function startChatRun(
     // своей учёткой и своим набором инструментов, а не личным MCP-конфигом
     // владельца (владелец 25.09.2026: роли в чате — те же агенты, что и в
     // карточках, без ассоциации с Pi Agent).
-    mcpConfigPath = prepareRoleRunAccess(runId, role, input.mode);
+    mcpConfigPath = prepareRoleRunAccess(runId, role, input.mode, input.chatId);
     if (input.mode === "plan" && !mcpConfigPath) throw new Error("Планирование недоступно: не удалось применить ограничения инструментов");
     const args: string[] = [];
     if (mcpConfigPath) {
