@@ -1,3 +1,5 @@
+import { persistPreparedPlan } from "./taskPreparationPersistence.js";
+import { NonTaskInputError } from "./taskPreparation.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 // Окно постановки задач: надиктовка владельца в чат → карточка-черновик.
 // Карточка 4396f8c9, 10.09.2026.
@@ -346,6 +348,7 @@ function createDraftCards(
     // создании, чтобы лента читалась по порядку.
     applyCardRole(parentId, cards, owner);
     cards.children.forEach((child, i) => applyCardRole(childIds[i], isPersonal(cards) ? {...child,where:"личное"} : child, owner));
+    if (cards.preparation) persistPreparedPlan(parentId,owner,cards.preparation);
   });
   txn();
 
@@ -538,6 +541,7 @@ export async function startDraftTree(
     .prepare("SELECT id, status, parent_id FROM tasks WHERE id = ?")
     .get(parentId) as { id: string; status: string; parent_id: string | null } | undefined;
   if (!parent || parent.status !== "active" || parent.parent_id) return null;
+  if (db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='draft'").get(parentId)) return {started:0,queued:1};
 
   type Row = {
     id: string;
@@ -613,16 +617,16 @@ export async function startDraftTree(
 
 /** Общий путь постановки: сообщения и живой голос используют один разбор,
  *  слой task_intake, создание дерева и допуск. Режим фиксируется при приёме. */
-export async function submitOwnerTaskText(rawText: string, owner: string, mode: IntakeMode) {
+export async function submitOwnerTaskText(rawText: string, owner: string, mode: IntakeMode, sourceRecordId?:string) {
   const projects = db.prepare("SELECT id,name FROM projects ORDER BY name").all() as Array<{id:string;name:string}>;
-  const cards = await structureDictationToCards(rawText, projects, {ownerId:owner});
+  const cards = await structureDictationToCards(rawText, projects, {ownerId:owner,sourceRecordId});
   const {parentId,childIds} = createDraftCards(cards,owner);
   attachSourceText(rawText,parentId,owner,cards.title);
   const questions = [cards.question,...cards.children.map(c=>c.question)].filter((q):q is string=>!!q);
-  const admission = mode === "automatic" && !questions.length
+  const admission = mode === "automatic" && !questions.length && cards.preparation?.representation!=="role_plan"
     ? await admitTreeAutomatically(parentId,childIds,cards,owner)
     : {dispatched:0,queued:0};
-  return {parentId,childIds,cards,questions,...admission};
+  return {parentId,childIds,cards,questions,requiresPlanApproval:cards.preparation?.representation==="role_plan",...admission};
 }
 
 export function startDraftFromChat(message: {
@@ -653,7 +657,7 @@ export function startDraftFromChat(message: {
 
   void (async () => {
     try {
-      const intake = await submitOwnerTaskText(text, owner, mode);
+      const intake = await submitOwnerTaskText(text, owner, mode, message.id);
       const {parentId:taskId,childIds,cards} = intake;
 
       db.prepare(
@@ -663,6 +667,10 @@ export function startDraftFromChat(message: {
       ).run(taskId, message.id);
 
       const what = summary(cards);
+      if (intake.requiresPlanApproval) {
+        replyInChat(`Собрал карточку и предложил план ролей: ${what}. ${intake.questions.length ? intake.questions.join(" ") : "Проверьте и утвердите план — после этого начнётся работа."}`,taskId);
+        return;
+      }
 
       // Остался вопрос — дерево целиком остаётся черновиком, ни одна
       // карточка не запускается (раздел 8.1: «Если автоматический режим
@@ -718,6 +726,11 @@ export function startDraftFromChat(message: {
         `«${cards.title}» — ${what}. Ждёт вашего флага готовности.`,
       );
     } catch (err: any) {
+      if (err instanceof NonTaskInputError) {
+        db.prepare("UPDATE chat_task_drafts SET status='done',finished_at=datetime('now') WHERE chat_message_id=?").run(message.id);
+        replyInChat(err.question || "В сообщении нет поручения — карточку не создавал.",null);
+        return;
+      }
       // Отказ модели не должен стоить владельцу надиктовки: сообщение уже
       // лежит в ленте целым, здесь остаётся объяснить, почему карточки нет.
       // Причина пишется и в chat_task_drafts — по ней видно, что разбор

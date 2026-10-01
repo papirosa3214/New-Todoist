@@ -1,3 +1,6 @@
+import { ROLE_NAMES as PREPARATION_ROLES } from "../roleRouting.js";
+import { validatePreparation, type TaskPreparation } from "../lib/taskPreparation.js";
+import { persistPreparedPlan } from "../lib/taskPreparationPersistence.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
@@ -722,6 +725,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // shaped like { title } — TaskFormScreen currently sends plain
       // strings (see localSubtasks), objects are accepted too so a future
       // richer payload doesn't need a server change.
+      preparation?: unknown;
       subtasks?: (string | { title?: string })[];
     };
   }>("/api/tasks", {
@@ -859,6 +863,15 @@ export function registerTaskRoutes(app: FastifyInstance) {
         }
       }
 
+      let preparation:TaskPreparation|undefined;
+      if (req.body.preparation!==undefined) {
+        try {
+          preparation=validatePreparation(req.body.preparation,PREPARATION_ROLES);
+          if (preparation.representation==="child_cards") throw new Error("Для дерева карточек используйте импорт постановки, а не создание одной карточки");
+          if (preparation.representation==="role_plan" && (subtaskTitles.length!==preparation.workstreams.length || subtaskTitles.some((t,i)=>t!==preparation!.workstreams[i].title))) throw new Error("Подзадачи не совпадают с результатами плана");
+          if (preparation.representation==="role_plan" && assignee_id) throw new Error("План ролей нельзя назначить одному исполнителю при создании");
+        } catch(error:any) { return reply.code(400).send({error:error.message}); }
+      }
       const id = uid();
       // По умолчанию — общая настройка владельца «Сначала проверка
       // Reviewer» (Обзор → Система). Клиент флаг больше не шлёт, поэтому
@@ -922,6 +935,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
           );
           subtaskTitles.forEach((t, i) => insSub.run(uid(), id, t, i + 1));
         }
+        if (preparation) persistPreparedPlan(id,req.userId,preparation);
       });
       createTaskTxn();
 
@@ -947,7 +961,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // по-прежнему только владелец. Ошибка здесь не должна ломать
       // создание задачи — отдельный try/catch.
       try {
-        autoProposeCollaborationPlanIfNeeded(id);
+        if (!preparation) autoProposeCollaborationPlanIfNeeded(id);
       } catch (error) {
         req.log?.error?.({ err: error, taskId: id }, "auto collaboration plan proposal failed");
       }

@@ -1001,7 +1001,7 @@ def t_project_tasks(args):
 
 def t_create_task(args):
     body = {"title": args["title"]}
-    for key in ("description", "project_id", "assignee_id", "due_date", "priority"):
+    for key in ("description", "project_id", "assignee_id", "due_date", "priority", "preparation"):
         if args.get(key) is not None:
             body[key] = args[key]
     if args.get("subtasks"):
@@ -1132,30 +1132,21 @@ def t_weather(args):
 
 
 def t_structure_dictation(args):
-    """Причесать сырой/надиктованный текст в чистую задачу — тот же AI-мост,
-    что у владельца при голосовой диктовке (server/src/routes/ai.ts,
-    structureTask). Полезно, когда владелец в TaskFlow/Telegram накидал
-    задачу разговорным текстом, а оркестратору нужно ЧИСТОЕ title +
-    description + subtasks + due_date + priority, прежде чем заводить
-    задачи и раздавать их дальше.
-
-    Ничего не создаёт сам — возвращает разобранную структуру, дальше
-    taskflow_create_task с этими полями.
-    """
+    """Тонкий клиент единой серверной подготовки: без записи и запуска."""
     text = (args.get("text") or "").strip()
     if not text:
         raise TaskFlowError("text не может быть пустым")
     body = {"text": text}
-    if args.get("provider"):
-        body["provider"] = args["provider"]
-    resp = api("POST", "/api/ai/structure-task", body)
-    return {
-        "название": resp.get("title"),
-        "описание": resp.get("description"),
-        "подзадачи": resp.get("subtasks", []),
-        "срок": resp.get("dueDate"),
-        "приоритет": resp.get("priority"),
-    }
+    for key in ("provider", "context", "source_record_id"):
+        if args.get(key) is not None:
+            body[key] = args[key]
+    result = api("POST", "/api/task-preparation/prepare", body)
+    card = result.get("card")
+    if not card:
+        return result
+    return {**result, "название": card["title"], "описание": card["description"],
+            "подзадачи": card["subtasks"], "срок": card["dueDate"], "приоритет": card["priority"],
+            "preparation": card.get("preparation")}
 
 
 # ---------------------------------------------------------------- инструменты исследователя
@@ -1811,7 +1802,7 @@ TOOLS = [
     },
     {
         "name": "taskflow_create_task",
-        "description": "Завести задачу. subtasks — список названий шагов.",
+        "description": "Завести задачу. Для плана ролей передай preparation и card.subtasks из taskflow_structure_dictation; план сохраняется черновиком без запуска.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1821,6 +1812,7 @@ TOOLS = [
                 "assignee_id": {"type": "string"},
                 "due_date": {"type": "string", "description": "ГГГГ-ММ-ДД"},
                 "priority": {"type": "integer", "description": "1 срочный … 4 низкий"},
+                "preparation": {"type": "object", "description": "Контракт из taskflow_structure_dictation; сохраняет план ролей внутри карточки без запуска"},
                 "subtasks": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["title"],
@@ -1852,17 +1844,17 @@ TOOLS = [
     {
         "name": "taskflow_structure_dictation",
         "description": (
-            "Причесать сырой/надиктованный текст в чистую задачу тем же "
-            "AI-мостом, что у владельца при голосовой диктовке: вернёт "
-            "title, description, subtasks, due_date, priority. Полезно, "
-            "когда задание пришло разговорным текстом (из чата, транскрипта, "
-            "заметки) и нужна структура ПЕРЕД тем, как заводить задачи и "
-            "раздавать их. Ничего не создаёт сам."
+            "Единая серверная подготовка поручения: intent, card и preparation "
+            "с результатами, ролями и зависимостями. Ничего не создаёт и не запускает. "
+            "card=null — вопрос/уточнение, карточку не заводить. Для role_plan передай "
+            "preparation и card.subtasks в taskflow_create_task; это одна карточка с планом ролей."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "text": {"type": "string"},
+                "context": {"type": "string"},
+                "source_record_id": {"type": "string"},
                 "provider": {"type": "string", "description": "local | claude | hermes | deepseek | antigravity — необязательно"},
             },
             "required": ["text"],

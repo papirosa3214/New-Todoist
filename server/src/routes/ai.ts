@@ -1,10 +1,15 @@
+import { callUnifiedAi, OllamaError, parseJsonObject } from "../lib/aiClient.js";
+export { callUnifiedAi } from "../lib/aiClient.js";
+export { buildDictationSystemPrompt, getUserPrompt } from "../lib/taskPreparation.js";
 import { INSTRUCTION_DEFAULTS } from "../runtime/instructionDefaults.js";
 import { renderInstruction, applyOverride, revision, ownerPromptKey } from "../lib/roleContextResolver.js";
 import db from "../db.js";
-import { parseIntakeMetadata } from "../lib/taskIntakeMetadata.js";
+import { prepareTask, parseRole, parseWhere, buildDictationSystemPrompt, getUserPrompt } from "../lib/taskPreparation.js";
+export { prepareTaskCard as structureDictationToCards } from "../lib/taskPreparation.js";
+export type { DictationCards, DictationChild } from "../lib/taskPreparation.js";
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
-import { getTaskForRead } from "../access.js";
+import { getTaskForRead, visibleScope } from "../access.js";
 import { OBSERVER_SYSTEM_PROMPT } from "./activity.js";
 import { ROLE_NAMES, rolesPromptBlock, type RoleName } from "../roleRouting.js";
 
@@ -115,260 +120,6 @@ function parseSubtasks(rawContent: string): string[] {
   return items.slice(0, 10);
 }
 
-class OllamaError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "OllamaError";
-  }
-}
-
-export async function callUnifiedAi(opts: {
-  systemPrompt: string;
-  userPrompt: string;
-  provider?: string;
-  localModel?: string;
-  aiModel?: string;
-  temperature?: number;
-  /** Включить reasoning-фазу («думание») у локальной модели. По умолчанию
-   *  ВЫКЛ — для разбивки задач и наблюдателя скорость важнее (10с против
-   *  60-76с). Максим 26.08.2026: для Дневника пусть думает — там качество
-   *  текста важнее секунд. */
-  think?: boolean;
-  /** Потолок ответа локальной модели. По умолчанию его хватает всем прежним
-   *  вызовам (замер: ~200 токенов на разбивку). Разбор надиктовки на пачку
-   *  карточек длиннее в разы, и обрезанный на середине JSON не парсится
-   *  вовсе — там потолок поднимается явно. */
-  predictTokens?: number;
-  /** Окно контекста локальной модели. Дефолт 8192 — хватало прежним мелким
-   *  вызовам. Разбору БОЛЬШОГО текста (постановка из заметки/файла) этого
-   *  мало: вход + системный промпт + ответ не влезают, и Ollama молча
-   *  обрезает НАЧАЛО промпта — модель теряет правила и лепит одну убогую
-   *  карточку. Там окно поднимается явно. */
-  numCtx?: number;
-}): Promise<string> {
-  const provider = (opts.provider || "local").toLowerCase();
-  const requestedModel = opts.aiModel;
-
-  // 1. Claude Code / Anthropic
-  if (provider === "claude" && process.env.ANTHROPIC_API_KEY) {
-    const claudeModel =
-      requestedModel || process.env.CLAUDE_MODEL || "claude-sonnet-4.6";
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": process.env.ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: claudeModel,
-          max_tokens: 2000,
-          system: opts.systemPrompt,
-          messages: [{ role: "user", content: opts.userPrompt }],
-        }),
-        signal: AbortSignal.timeout(60_000),
-      });
-      if (res.ok) {
-        const d = (await res.json()) as any;
-        const text = d?.content?.[0]?.text;
-        if (text) return text;
-      }
-    } catch (e) {
-      console.warn("Claude API error, falling back to local Ollama:", e);
-    }
-  }
-
-  // 2. Hermes / OpenRouter
-  if (provider === "hermes" && process.env.OPENROUTER_API_KEY) {
-    const hermesModel =
-      requestedModel ||
-      process.env.HERMES_MODEL ||
-      "nousresearch/hermes-3-llama-3.1-405b";
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: hermesModel,
-          messages: [
-            { role: "system", content: opts.systemPrompt },
-            { role: "user", content: opts.userPrompt },
-          ],
-        }),
-        signal: AbortSignal.timeout(60_000),
-      });
-      if (res.ok) {
-        const d = (await res.json()) as any;
-        const text = d?.choices?.[0]?.message?.content;
-        if (text) return text;
-      }
-    } catch (e) {
-      console.warn("Hermes/OpenRouter error, falling back to local Ollama:", e);
-    }
-  }
-
-  // 3. DeepSeek API
-  if (provider === "deepseek" && process.env.DEEPSEEK_API_KEY) {
-    const deepseekModel =
-      requestedModel || process.env.DEEPSEEK_MODEL || "deepseek-chat";
-    try {
-      const res = await fetch("https://api.deepseek.com/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: deepseekModel,
-          messages: [
-            { role: "system", content: opts.systemPrompt },
-            { role: "user", content: opts.userPrompt },
-          ],
-        }),
-        signal: AbortSignal.timeout(60_000),
-      });
-      if (res.ok) {
-        const d = (await res.json()) as any;
-        const text = d?.choices?.[0]?.message?.content;
-        if (text) return text;
-      }
-    } catch (e) {
-      console.warn("DeepSeek error, falling back to local Ollama:", e);
-    }
-  }
-
-  const ANTIGRAVITY_TO_GEMINI_API_MAP: Record<string, string> = {
-    "gemini-3.7-flash-high": "gemini-3-flash-preview",
-    "gemini-3.7-flash-medium": "gemini-3-flash-preview",
-    "gemini-3.7-flash-low": "gemini-3-flash-preview",
-    "gemini-3.6-flash-high": "gemini-3-flash-preview",
-    "gemini-3.6-flash-medium": "gemini-3-flash-preview",
-    "gemini-3.6-flash-low": "gemini-3-flash-preview",
-    "gemini-3.5-flash-high": "gemini-2.5-flash",
-    "gemini-3.5-flash-medium": "gemini-2.5-flash",
-    "gemini-3.5-flash-low": "gemini-2.5-flash",
-    "gemini-3.1-pro-high": "gemini-3.1-pro-preview",
-    "gemini-3.1-pro-low": "gemini-3.1-pro-preview",
-    "claude-sonnet-4-6": "gemini-3.1-pro-preview",
-    "claude-sonnet-4.6": "gemini-3.1-pro-preview",
-    "claude-opus-4-6-thinking": "gemini-3.1-pro-preview",
-    "claude-opus-4.6": "gemini-3.1-pro-preview",
-    "gpt-oss-120b-medium": "gemini-2.5-pro",
-    "gpt-oss-120b": "gemini-2.5-pro",
-  };
-
-  // 4. Antigravity / Direct Gemini API
-  if (
-    (provider === "antigravity" || provider === "gemini") &&
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)
-  ) {
-    const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    const mappedModel = requestedModel
-      ? ANTIGRAVITY_TO_GEMINI_API_MAP[requestedModel] || requestedModel
-      : undefined;
-    const geminiModel =
-      mappedModel || process.env.GEMINI_MODEL || "gemini-3.1-pro-preview";
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [{ text: `${opts.systemPrompt}\n\n${opts.userPrompt}` }],
-              },
-            ],
-          }),
-          signal: AbortSignal.timeout(60_000),
-        },
-      );
-      if (res.ok) {
-        const d = (await res.json()) as any;
-        const text = d?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) return text;
-      }
-    } catch (e) {
-      console.warn(
-        "Antigravity/Gemini error, falling back to local Ollama:",
-        e,
-      );
-    }
-  }
-
-  // Default: Local Ollama on 192.168.1.110
-  //
-  // ПОПРАВКА 26.08.2026 (Максим): coder30b-abl НЕ битая. Вчерашний диагноз
-  // «CUDA error / битый GGUF» был ложной тревогой — временный тупняк
-  // сервера (после перезагрузки воспроизвести не удаётся: живые прогоны
-  // 26.08 отрабатывают чисто, ~12с на реальную разбивку задачи). Модель
-  // оставлена в списке выбора как вариант. Дефолт — qwen3.6-27b: она
-  // reasoning-класса и по умолчанию отвечает без «думания» (см. think
-  // ниже), для Дневника думание включается точечно.
-  const targetModel =
-    opts.localModel || process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
-  let res: Response;
-  try {
-    res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: targetModel,
-        messages: [
-          {
-            role: "system",
-            content: `${opts.systemPrompt}\nРассуждай кратко. Верни СТРОГО результат.`,
-          },
-          { role: "user", content: opts.userPrompt },
-        ],
-        stream: false,
-        think: opts.think ?? false,
-        options: {
-          num_ctx: opts.numCtx ?? 8192,
-          // С выключенным think реальный ответ укладывается в ~200 токенов
-          // (замер), 2048 — щедрый запас. С включённым (Дневник) бюджет
-          // должен вместить и <think>, и сам текст — поэтому больше.
-          num_predict: opts.predictTokens ?? (opts.think ? 4096 : 2048),
-          temperature: opts.temperature ?? 0.2,
-        },
-      }),
-      signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
-    });
-  } catch (err: any) {
-    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
-      throw new OllamaError("Модель не ответила вовремя. Попробуйте ещё раз.");
-    }
-    throw new OllamaError("Не удалось связаться с локальной моделью (Ollama).");
-  }
-
-  if (!res.ok) {
-    throw new OllamaError(
-      `Локальная модель ${targetModel} ответила ошибкой (HTTP ${res.status}).`,
-    );
-  }
-
-  const data = (await res.json()) as any;
-  let content: string =
-    data?.message?.content || data?.choices?.[0]?.message?.content || "";
-
-  // Если модель reasoning поместила результат в thinking или content пуст:
-  if (!content || !content.trim()) {
-    const thinking = data?.message?.thinking || data?.thinking || "";
-    if (thinking && typeof thinking === "string") {
-      content = thinking;
-    }
-  }
-
-  if (!content || typeof content !== "string" || !content.trim()) {
-    throw new OllamaError("Модель вернула пустой ответ. Попробуйте ещё раз.");
-  }
-  return content;
-}
 
 async function suggestSubtasks(
   title: string,
@@ -393,14 +144,6 @@ async function suggestSubtasks(
       "Не удалось разобрать ответ модели как список подзадач. Попробуйте ещё раз.",
     );
   }
-}
-
-interface StructuredTaskResult {
-  title: string;
-  description: string;
-  subtasks: string[];
-  dueDate: string | null;
-  priority: number;
 }
 
 export interface WeeklySummary {
@@ -542,154 +285,13 @@ ${activeRows.map((r) => `  * [P${r.priority}] ${r.title} ${r.due_date ? `(до $
   };
 }
 
-async function structureTask(
-  rawText: string,
-  provider?: string,
-  localModel?: string,
-  aiModel?: string,
-): Promise<StructuredTaskResult> {
-  const content = await callUnifiedAi({
-    systemPrompt: renderInstruction("secretary", "ai.structure", {}),
-    userPrompt: `Текст диктовки: "${rawText}"`,
-    provider,
-    localModel,
-    aiModel,
-    temperature: 0.2,
-  });
-
-  const cleaned = stripCodeFences(stripThinkTags(content)).trim();
-  let parsed: any;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start !== -1 && end !== -1 && end > start) {
-      parsed = JSON.parse(cleaned.slice(start, end + 1));
-    } else {
-      throw new OllamaError("Не удалось разобрать JSON от модели.");
-    }
-  }
-
-  return {
-    title:
-      typeof parsed?.title === "string"
-        ? parsed.title.trim()
-        : rawText.slice(0, 50),
-    description:
-      typeof parsed?.description === "string"
-        ? parsed.description.trim()
-        : rawText,
-    subtasks: Array.isArray(parsed?.subtasks)
-      ? parsed.subtasks
-          .map((s: any) => String(s).trim())
-          .filter((s: string) => s.length > 0)
-      : [],
-    dueDate:
-      typeof parsed?.due_date === "string" ? parsed.due_date.trim() : null,
-    priority:
-      typeof parsed?.priority === "number" &&
-      parsed.priority >= 1 &&
-      parsed.priority <= 4
-        ? parsed.priority
-        : 4,
-  };
-}
-
-// ── Разбор надиктовки в пачку карточек (карточка 4396f8c9) ──────────────
-
-export interface DictationChild {
-  dueDate?: string | null;
-  startTime?: string | null;
-  labelIds?: string[];
-  title: string;
-  description: string;
-  /** Проверяемый признак готовности (раздел 7 спецификации от 14.09.2026).
-   *  Пустая строка — модель ничего проверяемого не назвала. */
-  result: string;
-  /** Вопрос владельцу, без ответа на который работу нельзя сделать
-   *  надёжно. null — всё понятно. Заданный вопрос останавливает
-   *  автоматический запуск: спрашивать ради вежливости нельзя. */
-  question: string | null;
-  subtasks: string[];
-  /** Номер дочерней карточки (1-based) в этом же списке, после которой можно
-   *  браться за эту. null — ни от чего не зависит. */
-  after: number | null;
-  /** Исполнитель, выбранный вместе с постановкой, и почему он. */
-  role?: RoleName | null;
-  roleReason?: string;
-  /** Платформа, если владелец её назвал: iphone | web | server; «личное» —
-   *  дело самого владельца, агентам не отдаётся. null — не указано. */
-  where?: string | null;
-}
-
-export interface DictationCards {
-  startTime?: string | null;
-  labelIds?: string[];
-  title: string;
-  description: string;
-  /** Проверяемый признак готовности (раздел 7 спецификации). */
-  result: string;
-  /** Вопрос владельцу; блокирует автоматический запуск дерева. */
-  question: string | null;
-  subtasks: string[];
-  dueDate: string | null;
-  priority: number;
-  /** id проекта из переданного списка. null — модель не выбрала или назвала
-   *  несуществующий: класть карточку наугад хуже, чем оставить без проекта,
-   *  владелец поправит одним касанием. */
-  projectId: string | null;
-  children: DictationChild[];
-  role?: RoleName | null;
-  roleReason?: string;
-  where?: string | null;
-}
 
 /** Достаёт JSON-объект из сырого ответа модели — тем же способом, что и
  *  соседние разборы: сначала как есть, потом по первой '{' и последней '}'. */
-function parseJsonObject(rawContent: string): any {
-  const cleaned = stripCodeFences(stripThinkTags(rawContent)).trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start === -1 || end === -1 || end <= start) {
-      throw new OllamaError("Не удалось разобрать ответ модели как JSON.");
-    }
-    try {
-      return JSON.parse(cleaned.slice(start, end + 1));
-    } catch {
-      // Иначе наружу ушёл бы текст самого JSON.parse («Unexpected token …
-      // at position 143»), а его читает владелец в чате: причина отказа
-      // должна быть на человеческом языке, а не машинной строкой.
-      throw new OllamaError("Не удалось разобрать ответ модели как JSON.");
-    }
-  }
-}
 
-const WHERE_VALUES = new Set(["iphone", "web", "server", "личное"]);
+
 
 /** Роль из ответа модели — только из восьми канонических, иначе null. */
-function parseRole(raw: unknown): RoleName | null {
-  const v = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-  return (ROLE_NAMES as readonly string[]).includes(v) ? (v as RoleName) : null;
-}
-
-/** «Где» — только из известных значений; всё прочее, включая
- *  «не указано», считается не названным. */
-function parseWhere(raw: unknown): string | null {
-  const v = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-  return WHERE_VALUES.has(v) ? v : null;
-}
-
-function cleanTitles(raw: unknown, limit: number): string[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((s) => (typeof s === "string" ? s.trim() : String(s ?? "").trim()))
-    .filter((s) => s.length > 0)
-    .slice(0, limit);
-}
 
 /**
  * Надиктовка → родительская карточка, дочерние и порядок между ними.
@@ -716,14 +318,6 @@ function cleanTitles(raw: unknown, limit: number): string[] {
  * сверка проекта по имени, срезка полей), поэтому сломать контракт
  * пользовательский слой не может физически, что бы в нём ни написали.
  */
-export function buildDictationSystemPrompt(ownerLayer: string): string {
-  // Что владелец видит в «Настройки → Постановка задач», то и работает
-  // (23.09.2026): его текст ЗАМЕНЯЕТ шаблон, а не приклеивается к нему —
-  // иначе в модель уходили две инструкции подряд. Формат страхует разбор
-  // ниже: чужие поля отбрасываются, роль и проект сверяются по спискам.
-  const layer = (ownerLayer || "").trim();
-  return withRoles(layer || DICTATION_SYSTEM_PROMPT);
-}
 
 /** Подставить живой список ролей на место {{ИСПОЛНИТЕЛИ}} (таблица roles):
  *  новая роль сразу видна Секретарю, отключённая — пропадает. */
@@ -791,171 +385,6 @@ export async function pickRoleByModel(
   }
 }
 
-export async function structureDictationToCards(
-  rawText: string,
-  projects: Array<{ id: string; name: string }>,
-  opts?: {
-    provider?: string;
-    localModel?: string;
-    aiModel?: string;
-    /** Владелец, чей смысловой слой постановки подмешать (scope
-     *  `task_intake`). Без него разбор идёт на одном системном промпте —
-     *  как было до 14.09.2026. */
-    ownerId?: string;
-    /** Потолок входного текста. Дефолт 6000 — надиктовка; заметке/файлу
-     *  нужно больше, вызывающий поднимает явно. */
-    maxChars?: number;
-  },
-): Promise<DictationCards> {
-  const timezone = process.env.TASKFLOW_TIMEZONE || "Europe/Moscow";
-  const dateParts = new Intl.DateTimeFormat("en-CA",{timeZone:timezone,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
-  const part=(name:string)=>dateParts.find(p=>p.type===name)!.value;
-  const today = `${part("year")}-${part("month")}-${part("day")}`;
-  const projectList = projects.length
-    ? projects.map((p) => `- ${p.name}`).join("\n")
-    : "(проектов нет)";
-
-  // Двухслойный промпт постановки (раздел 6 спецификации от 14.09.2026).
-  // Системный слой — технический контракт: схема ответа, допустимые
-  // проекты, диапазоны, запрет поднимать флаг. Он принадлежит серверу и
-  // на редактирование не отдаётся.
-  //
-  // Слой владельца (scope `task_intake`) управляет СМЫСЛОМ: стиль
-  // названия, глубина декомпозиции, когда одна карточка, а когда дерево.
-  // Он дописывается после системного и явно ограничен рамкой: текст
-  // владельца не может переопределить формат ответа. Это не только
-  // просьба в промпте — разобранный ответ всё равно проходит нашу
-  // валидацию ниже (схема, сверка проекта по имени, срезка полей), так
-  // что сломать контракт пользовательский слой не может физически.
-  const ownerLayer = opts?.ownerId
-    ? await getUserPrompt(opts.ownerId, "task_intake")
-    : "";
-  const systemPrompt = buildDictationSystemPrompt(ownerLayer);
-  const labels = db.prepare("SELECT id,name FROM labels ORDER BY name").all() as Array<{id:string;name:string}>;
-  const fieldContract = `Дополнительные поля того же JSON, только из явных слов владельца:
-` +
-    `due_date: YYYY-MM-DD (даты относительно ${today}, часовой пояс ${timezone}); start_time: HH:MM или null.
-` +
-    `assignee: "self" ТОЛЬКО когда владелец явно берёт дело на себя как исполнителя («сделаю сам», «займусь сам») или это личное дело, которое агентам не отдаётся (звонок, запись, оплата, поездка, документы). Обычное «мне», «я» в описании проблемы от первого лица («мне не видно», «когда я делаю») — НЕ основание для self, это просто рассказ о баге. Если дело явно про код/интерфейс/сервер, self не ставь, даже если сказано от первого лица; роль указывай прежним полем role. self и role одновременно не бывают: раз работу может сделать роль — это не self.
-` +
-    `labels: массив названий существующих меток или []; доступные метки: ${JSON.stringify(labels.map(l=>l.name))}.
-` +
-    `priority: целое 1 срочный, 2 высокий, 3 обычный, 4 низкий; если не указан — 4.
-` +
-    `Не выдумывай сроки и метки. Неизвестная метка или неоднозначный срок — question.
-` +
-    `Те же поля можно указать у children. Остальной шаблон и правила постановки не меняются.`;
-
-
-  const content = await callUnifiedAi({
-    systemPrompt,
-    userPrompt:
-      `Сегодня ${today}.\n\n${fieldContract}\n\n` +
-      `Проекты, из которых можно выбрать:\n${projectList}\n\n` +
-      `Надиктовка:\n"${rawText.trim().slice(0, opts?.maxChars ?? 6000)}"`,
-    provider: opts?.provider,
-    localModel: opts?.localModel,
-    aiModel: opts?.aiModel,
-    temperature: 0.2,
-    // Родитель с шагами плюс несколько детей со своими шагами в 2048 токенов
-    // не всегда влезают, а обрезанный JSON не парсится вовсе.
-    predictTokens: 4096,
-    // 16k окно: вход (до 12000 символов) + длинный системный промпт постановки
-    // + 4096 на ответ. С 8192 Ollama обрезала начало промпта, и на большом
-    // тексте выходила одна карточка без контекста (владелец 20.09.2026).
-    numCtx: 16384,
-  });
-
-  const parsed = parseJsonObject(content);
-
-  const title =
-    typeof parsed?.title === "string" && parsed.title.trim()
-      ? parsed.title.trim()
-      : rawText.trim().slice(0, 60);
-
-  // Проект сверяем по имени: скопировать UUID маленькая модель промахивается
-  // куда чаще, чем повторить название, а сверка всё равно наша.
-  let projectId: string | null = null;
-  if (typeof parsed?.project === "string" && parsed.project.trim()) {
-    const wanted = parsed.project.trim().toLowerCase();
-    projectId =
-      projects.find((p) => p.name.toLowerCase() === wanted)?.id ??
-      projects.find((p) => p.name.toLowerCase().includes(wanted))?.id ??
-      null;
-  }
-
-  const metadata = parseIntakeMetadata(parsed,labels);
-
-  const children: DictationChild[] = Array.isArray(parsed?.children)
-    ? parsed.children
-        .map((c: any): DictationChild | null => {
-          const t = typeof c?.title === "string" ? c.title.trim() : "";
-          if (!t) return null;
-          const after =
-            typeof c?.after === "number" && Number.isInteger(c.after)
-              ? c.after
-              : null;
-          const childMetadata = parseIntakeMetadata(c,labels);
-          const q = [typeof c?.question === "string" ? c.question.trim() : "",childMetadata.question].filter(Boolean).join(" ");
-          return {
-            title: t,
-            dueDate:childMetadata.dueDate, startTime:childMetadata.startTime, labelIds:childMetadata.labelIds.length ? childMetadata.labelIds : undefined,
-            description:
-              typeof c?.description === "string" ? c.description.trim() : "",
-            result: typeof c?.result === "string" ? c.result.trim() : "",
-            question: q || null,
-            subtasks: cleanTitles(c?.subtasks, 10),
-            after,
-            role: parseRole(c?.role),
-            roleReason:
-              typeof c?.role_reason === "string" ? c.role_reason.trim() : "",
-            // Роль — более сильный сигнал, чем эвристика self (она ловит
-            // обычное «мне»/«я» в описании бага, см. fieldContract выше):
-            // если модель параллельно назвала исполнителя, self её не
-            // перебивает. Прецедент 29.09.2026: три инженерные подзадачи
-            // («реализовать парсинг Markdown», «исправить баги форматирования»)
-            // ушли владельцу как «личное», хотя role был «builder».
-            where: childMetadata.selfAssigned && !parseRole(c?.role) ? "личное" : parseWhere(c?.where),
-          };
-        })
-        .filter((c: DictationChild | null): c is DictationChild => c !== null)
-        .slice(0, 10)
-    : [];
-
-  // Ссылка «после карточки N» проверяется здесь, а не на месте использования:
-  // модель охотно ставит after на саму себя или на карточку ниже по списку, и
-  // такой порядок нарисовал бы очередь, которую никто не пройдёт.
-  children.forEach((child, i) => {
-    if (child.after === null) return;
-    if (child.after < 1 || child.after > i) child.after = null;
-  });
-
-  return {
-    role: parseRole(parsed?.role),
-    roleReason:
-      typeof parsed?.role_reason === "string" ? parsed.role_reason.trim() : "",
-    // Тот же приоритет роли над self, что у children — см. комментарий там.
-    where: metadata.selfAssigned && !parseRole(parsed?.role) ? "личное" : parseWhere(parsed?.where),
-    startTime:metadata.startTime, labelIds:metadata.labelIds,
-    title,
-    description:
-      typeof parsed?.description === "string" && parsed.description.trim()
-        ? parsed.description.trim()
-        : rawText.trim(),
-    result: typeof parsed?.result === "string" ? parsed.result.trim() : "",
-    question: [typeof parsed?.question === "string" ? parsed.question.trim() : "",metadata.question].filter(Boolean).join(" ") || null,
-    subtasks: cleanTitles(parsed?.subtasks, 10),
-    dueDate:metadata.dueDate,
-    priority:
-      Number.isInteger(parsed?.priority) &&
-      parsed.priority >= 1 &&
-      parsed.priority <= 4
-        ? parsed.priority
-        : 4,
-    projectId,
-    children,
-  };
-}
 
 async function journalAssist(
   text: string,
@@ -1095,18 +524,21 @@ function composeSystemPrompt(
  * существующей строки (не null), чтобы вызывающий мог просто склеивать.
  * Миграция таблицы — `db.ts`, см. CREATE TABLE IF NOT EXISTS user_ai_prompts.
  */
-export async function getUserPrompt(userId: string, scope: string): Promise<string> {
-  const db = (await import("../db.js")).default;
-  const row = db
-    .prepare(
-      "SELECT prompt FROM user_ai_prompts WHERE user_id = ? AND scope = ?",
-    )
-    .get(userId, scope) as { prompt: string } | undefined;
-  return row?.prompt ?? "";
-}
 
 export function registerAiRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
+  app.post("/api/task-preparation/prepare", { preHandler: authPre }, async (req:any, reply) => {
+    if (typeof req.body?.text!=="string" || !req.body.text.trim() || req.body.text.length>12000) return reply.code(400).send({error:"Нужен текст до 12000 символов"});
+    if (req.body.context!==undefined && typeof req.body.context!=="string") return reply.code(400).send({error:"context должен быть строкой"});
+    if (req.body.source_record_id!==undefined && (typeof req.body.source_record_id!=="string" || req.body.source_record_id.length>256)) return reply.code(400).send({error:"source_record_id должен быть строкой до 256 символов"});
+    // Каталог только доступных вызывающему проектов, без утечки чужих названий.
+    const scope=visibleScope(req.userId,"owner_id");
+    const projects = db.prepare(`SELECT id,name FROM projects WHERE ${scope.sql} ORDER BY name`).all(...scope.params) as Array<{id:string;name:string}>;
+    try {
+      return await prepareTask(req.body.text,projects,{ownerId:req.userId,context:req.body.context,sourceRecordId:req.body.source_record_id,maxChars:12000,provider:req.body.provider,localModel:req.body.localModel,aiModel:req.body.aiModel});
+    } catch(error:any) { return reply.code(502).send({error:error.message}); }
+  });
+
 
   // Короткий статус серверной модели — для раздела «ИИ» в настройках.
   //
@@ -1292,8 +724,12 @@ export function registerAiRoutes(app: FastifyInstance) {
       }
 
       try {
-        const result = await structureTask(text, provider, localModel, aiModel);
-        return result;
+        const scope=visibleScope(req.userId,"owner_id");
+        const projects=db.prepare(`SELECT id,name FROM projects WHERE ${scope.sql}`).all(...scope.params) as Array<{id:string;name:string}>;
+        const prepared=await prepareTask(text,projects,{ownerId:req.userId,provider,localModel,aiModel});
+        if (!prepared.card) return reply.code(422).send({error:prepared.question || "В сообщении нет поручения",...prepared});
+        const c=prepared.card;
+        return {title:c.title,description:c.description,subtasks:c.subtasks,dueDate:c.dueDate,priority:c.priority,preparation:c.preparation,question:c.question,children:c.children};
       } catch (err: any) {
         return reply
           .code(502)

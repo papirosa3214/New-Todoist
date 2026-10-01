@@ -1,3 +1,4 @@
+import { NonTaskInputError } from "../lib/taskPreparation.js";
 import { composeLayer, instructionManifest } from "../lib/roleContextResolver.js";
 // Закрытый канал Python-воркера к живому серверу. Никаких TCP-маршрутов
 // или постоянных api_token: только Unix socket владельца процесса (0600).
@@ -60,8 +61,9 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       const labels = db.prepare("SELECT l.id,l.name FROM labels l JOIN task_labels tl ON tl.label_id=l.id WHERE tl.task_id=?").all(intake.parentId);
       const task = {...row,labels};
       send(200,{task,child_ids:intake.childIds,questions:intake.questions,
-        dispatched:intake.dispatched,queued:intake.queued});
+        requires_plan_approval:intake.requiresPlanApproval,dispatched:intake.dispatched,queued:intake.queued});
     } catch (error) {
+      if (error instanceof NonTaskInputError) { send(422,{error:error.message,intent:error.intent,task:null}); return; }
       app.log.error({err:error}, "ошибка локального инструмента голосового Секретаря");
       if (!res.headersSent) send(500, {error:"сбой инструмента Секретаря"});
     }

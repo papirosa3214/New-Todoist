@@ -6,6 +6,7 @@
 //
 // Ничего не запускаем: карточки ложатся черновиком без флага готовности —
 // владелец откроет и поднимет флаг сам. Только владелец.
+import { NonTaskInputError } from "../lib/taskPreparation.js";
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
 import { createDraftFromText, ownerId } from "../lib/ownerDraft.js";
@@ -30,6 +31,7 @@ export function registerStructureRoutes(app: FastifyInstance) {
         );
         return { task_id: parentId, children: childIds.length, title };
       } catch (e) {
+        if (e instanceof NonTaskInputError) return reply.code(422).send({intent:e.intent,error:e.message,task_id:null});
         return reply
           .code(502)
           .send({ error: `Модель не справилась: ${(e as Error).message}` });
