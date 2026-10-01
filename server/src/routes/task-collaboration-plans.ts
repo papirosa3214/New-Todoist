@@ -355,14 +355,42 @@ function resolveAutoProposalActorId(): string | null {
   return owner?.id ?? null;
 }
 
-export function autoProposeCollaborationPlanIfNeeded(taskId: string): { profile: string; revision: number } | null {
-  const proposal = proposalFor(taskId, "auto");
-  if (proposal.profile === "single_executor") return null;
-  const actorId = resolveAutoProposalActorId();
+/** Import can request a visible draft even for a single executor. Existing
+ * plans are owner work: neither imports nor retries replace their revisions. */
+export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: { actorId: string; imported: true }): { id: string; profile: string; revision: number } | null {
+  const task = db.prepare("SELECT title,status,agent_state,ready_for_pickup,context_version FROM tasks WHERE id=?").get(taskId) as any;
+  if (options && (!task || task.status === "completed" || task.agent_state || task.ready_for_pickup || db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? LIMIT 1").get(taskId))) return null;
+  let proposal = proposalFor(taskId, "auto");
+  if (!options && proposal.profile === "single_executor") return null;
+  const actorId = options?.actorId ?? resolveAutoProposalActorId();
   if (!actorId) return null;
-  const created = createDraftPlan(taskId, actorId, proposal.profile, proposal.rationale, null, proposal);
-  logEvent({ taskId, actorId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: `${proposal.profile}: auto on create` });
-  return { profile: proposal.profile, revision: created.revision };
+  let instructions: string | null = null;
+  if (options) {
+    const children = db.prepare("SELECT id,title,status FROM tasks WHERE parent_id=? ORDER BY created_at,id").all(taskId) as Array<{id:string;title:string;status:string}>;
+    if (children.length) {
+      // The existing hierarchy already owns decomposition. Parent work is
+      // synthesis/review, not another copy of its children's execution.
+      const role = ["analyst", "critic_verifier", "builder"].find(key => ROLE_NAMES.includes(key)) ?? ROLE_NAMES[0];
+      if (!role) return null;
+      proposal = { profile: "single_executor", rationale: "Дочерние карточки уже существуют. Предложение касается сводного результата родителя; их работа не дублируется.",
+        nodes: [{slot_key:"summary",role_key:role,required:true,expected_result:`Сводный результат «${task.title.slice(0,400)}»: собрать и проверить результаты ${children.length} дочерних карточек. Не выполнять их работу повторно; недостающие результаты явно указать.`,output_artifact:null,source_subtask_id:null}], edges:[] };
+      instructions = `Работай с существующими дочерними карточками TaskFlow. Не создавай повторную декомпозицию и не считай неполученный результат готовым. Их планы утверждаются отдельно.\n${children.slice(0,20).map(child=>`${child.id}: ${child.title} [${child.status}]`).join("\n")}\nПолный состав — в иерархии родительской карточки.`.slice(0,4000);
+    } else {
+      const unavailable = proposal.nodes.filter(node => !ROLE_NAMES.includes(node.role_key));
+      if (unavailable.length) {
+        // Do not drop intermediate roles and accidentally turn a sequential
+        // template into parallel execution. Offer one enabled executor instead.
+        const role = ["builder", "analyst"].find(key => ROLE_NAMES.includes(key)) ?? ROLE_NAMES[0];
+        if (!role) return null;
+        proposal = {profile:"single_executor", rationale:`Часть ролей шаблона выключена (${unavailable.map(node=>node.role_key).join(", ")}). Предложен доступный исполнитель; состав и критерии нужно проверить перед утверждением.`,nodes:[{slot_key:"executor",role_key:role,required:true,expected_result:`Проверяемый результат задачи «${task.title.slice(0,400)}» по её описанию`,output_artifact:null,source_subtask_id:null}],edges:[]};
+      }
+      instructions = "Предложение для импортированной карточки. Используй её описание, комментарии и историю источника. Проверь актуальность внешнего результата и уточни критерии до утверждения; внешние исполнители не назначают внутренние роли.";
+    }
+  }
+  const created = createDraftPlan(taskId, actorId, proposal.profile, proposal.rationale, options ? task.context_version ?? null : null, proposal);
+  if (options) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='linear_import',instructions=?,added_by=? WHERE plan_id=?").run(instructions, actorId, created.id);
+  logEvent({ taskId, actorId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: `${proposal.profile}: ${options ? "Linear import draft" : "auto on create"}` });
+  return { id:created.id, profile: proposal.profile, revision: created.revision };
 }
 
 export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void {

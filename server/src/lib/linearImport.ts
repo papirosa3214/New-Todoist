@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import db from "../db.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { getProjectForFiling } from "../access.js";
+import { autoProposeCollaborationPlanIfNeeded } from "../routes/task-collaboration-plans.js";
 import { logEvent } from "../agentState.js";
 import { LinearSourceError } from "../runtime/linearTransport.js";
 import type { LinearIssue, LinearSnapshot } from "./linearSource.js";
@@ -135,7 +136,7 @@ export function createLinearPreview(owner: string, snapshot: LinearSnapshot, pro
       comments: issue.comments.length, history: issue.history.length, labels: issue.labels.length, attachments: issue.attachments.length, documents: issue.documents.length, conflicts,
       source_state: issue.state.name, source_assignee: issue.assignee?.name ?? null };
   });
-  const warnings: string[] = [];
+  const warnings: string[] = ["Для активных карточек без существующего плана будет создан редактируемый черновик командной работы. Роли запускаются только после утверждения."];
   if (snapshot.issues.some(i => i.state.type === "canceled")) warnings.push("Отменённые задачи остаются активными внутренними карточками; исходный статус сохраняется отдельно.");
   if (snapshot.issues.some(i => i.attachments.length)) warnings.push("Вложения сохраняются ссылками на оригиналы. Файлы не скачиваются.");
   if (relationsOf(snapshot).some(r => !ids.has(r.issue.id) || !ids.has(r.relatedIssue.id))) warnings.push("Связи с неперенесёнными задачами сохраняются как внешние ссылки.");
@@ -249,6 +250,13 @@ export function commitLinearPreview(owner: string, previewId: string) {
       result.task_ids.push({ source_id: issue.id, task_id: task, title: issue.title });
     }
     importRelations(owner, snapshot, ids);
+    // All cards/parents/dependencies exist before proposing work. This is the
+    // shared draft mechanism, not intake that re-creates source decomposition.
+    for (const item of result.task_ids) {
+      const draft = autoProposeCollaborationPlanIfNeeded(item.task_id, { actorId: owner, imported: true });
+      const visible = draft ?? db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=? AND status='draft' ORDER BY revision DESC LIMIT 1").get(item.task_id) as {id:string}|undefined;
+      if (visible) item.draft_plan_id = visible.id;
+    }
     db.prepare("UPDATE linear_import_previews SET result=?,snapshot='{}' WHERE id=?").run(encode(result), previewId);
     return result;
   })();

@@ -5,6 +5,7 @@ import {createLinearPreview,commitLinearPreview,mergeLinearFields} from "../src/
 import type {LinearIssue,LinearSnapshot} from "../src/lib/linearSource.js";
 import {fetchLinearSnapshot,listLinearIssues} from "../src/lib/linearSource.js";
 import crypto from "node:crypto";
+import { ROLE_NAMES } from "../src/roleRouting.js";
 vi.mock("../src/lib/linearSource.js", async original=>({...await original<any>(),fetchLinearSnapshot:vi.fn(),listLinearIssues:vi.fn()}));
 const uuid=()=>crypto.randomUUID();
 const issue=(id=uuid(),parent:string|null=null):LinearIssue=>({id,identifier:"TF-1",title:"Внешняя задача",description:"**Описание**",url:"https://linear.app/test/issue/TF-1",priority:2,dueDate:"2026-10-10",createdAt:"2026-10-01T10:00:00Z",updatedAt:"2026-10-01T11:00:00Z",archivedAt:null,parent:parent?{id:parent}:null,state:{id:"state",name:"In Progress",type:"started"},children:[],labels:[],comments:[],history:[],attachments:[],documents:[],relations:[],inverseRelations:[],assignee:{id:"outside",name:"Внешний агент"},project:{id:"outside-project",name:"Внешний проект"},team:{id:"team",name:"Команда"}});
@@ -23,7 +24,8 @@ describe("Linear import uses existing task semantics",()=>{
   const r=commitLinearPreview(owner,p.preview_id);const rootId=r.task_ids.find((i:any)=>i.source_id===root.id).task_id,childId=r.task_ids.find((i:any)=>i.source_id===child.id).task_id;
   expect(db.prepare("SELECT parent_id,ready_for_pickup,assignee_id FROM tasks WHERE id=?").get(childId)).toEqual({parent_id:rootId,ready_for_pickup:0,assignee_id:null});
   expect(db.prepare("SELECT * FROM subtasks WHERE task_id=?").all(rootId)).toEqual([]);
-  expect(db.prepare("SELECT * FROM task_collaboration_plans WHERE task_id=?").all(rootId)).toEqual([]);
+  expect(db.prepare("SELECT status,created_by FROM task_collaboration_plans WHERE task_id=?").get(rootId)).toEqual({status:"draft",created_by:owner});
+  expect(db.prepare("SELECT source_subtask_id FROM task_collaboration_plan_nodes WHERE plan_id=?").get(r.task_ids.find((i:any)=>i.source_id===root.id).draft_plan_id)).toEqual({source_subtask_id:null});
  });
  it("repeat confirmation and new preview keep card and history IDs stable",()=>{
   const root=issue();root.comments=[{id:uuid(),body:"Результат внешнего агента",createdAt:root.createdAt,user:{name:"Внешний"}}];root.history=[{id:uuid(),createdAt:root.createdAt,actor:{name:"Агент"},fromTitle:"Старое",toTitle:root.title}];root.labels=[{id:uuid(),name:"Из Linear",color:"#123456"}];
@@ -105,6 +107,52 @@ describe("Linear import uses existing task semantics",()=>{
   db.prepare("DELETE FROM tasks WHERE id=?").run(first.task_ids[0].task_id);
   const restored=commitLinearPreview(owner,createLinearPreview(owner,source,null).preview_id);expect(restored.created).toBe(1);
   expect(JSON.stringify(db.prepare("SELECT text FROM comments WHERE task_id=?").all(restored.task_ids[0].task_id))).toContain("Документ внешнего агента");
+ });
+ it("imported drafts use the existing editor and survive reimport with added participants",async()=>{
+  const root=issue(),source=snapshot([root]);const imported=commitLinearPreview(owner,createLinearPreview(owner,source,null).preview_id);
+  const {task_id:task,draft_plan_id:plan}=imported.task_ids[0];expect(plan).toBeTruthy();
+  const shown=(await app.inject({method:"GET",url:`/api/tasks/${task}/collaboration-plans`,headers:auth()})).json().plans[0];
+  expect(shown.status).toBe("draft");expect(shown.created_by).toBe(owner);
+  const edited=await app.inject({method:"POST",url:`/api/tasks/${task}/collaboration-plans/${plan}/ops`,headers:auth(),payload:{base_version:shown.version,ops:[{op:"add_step",slot_key:"my_review",role_key:"qa",expected_result:"Моя проверка",instructions:"Добавлено владельцем"}]}});
+  expect(edited.statusCode).toBe(200);expect(edited.json().plan.nodes.some((n:any)=>n.slot_key==="my_review")).toBe(true);
+  root.description="Обновлённое внешнее описание";const again=commitLinearPreview(owner,createLinearPreview(owner,source,null).preview_id);
+  expect(again.task_ids[0].draft_plan_id).toBe(plan);
+  expect(db.prepare("SELECT COUNT(*) n FROM task_collaboration_plans WHERE task_id=?").get(task)).toEqual({n:1});
+  expect(db.prepare("SELECT expected_result FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key='my_review'").get(plan)).toEqual({expected_result:"Моя проверка"});
+  expect(db.prepare("SELECT * FROM subtasks WHERE task_id=?").all(task)).toEqual([]);
+ });
+ it("parent proposal references existing child cards instead of execution copies",()=>{
+  const root=issue(),child=issue(undefined,root.id);root.children=[{id:child.id}];const source=snapshot([root,child]);
+  const r=commitLinearPreview(owner,createLinearPreview(owner,source,null).preview_id),plan=r.task_ids[0].draft_plan_id;
+  const node:any=db.prepare("SELECT expected_result,instructions,origin FROM task_collaboration_plan_nodes WHERE plan_id=?").get(plan);
+  expect(node.expected_result).toContain("Сводный результат");expect(node.instructions).toContain(r.task_ids[1].task_id);expect(node.origin).toBe("linear_import");
+  expect(db.prepare("SELECT COUNT(*) n FROM tasks WHERE parent_id=?").get(r.task_ids[0].task_id)).toEqual({n:1});
+  expect(db.prepare("SELECT COUNT(*) n FROM subtasks WHERE task_id=?").get(r.task_ids[0].task_id)).toEqual({n:0});
+ });
+ it("completed cards get no new work and approved plans stay intact",()=>{
+  const done=issue();done.state.type="completed";
+  const imported=commitLinearPreview(owner,createLinearPreview(owner,snapshot([done]),null).preview_id);
+  expect(imported.task_ids[0].draft_plan_id).toBeUndefined();
+  expect(db.prepare("SELECT * FROM task_collaboration_plans WHERE task_id=?").all(imported.task_ids[0].task_id)).toEqual([]);
+  const root=issue(),source=snapshot([root]),r=commitLinearPreview(owner,createLinearPreview(owner,source,null).preview_id),plan=r.task_ids[0].draft_plan_id;
+  // Approval runtime is tested by the existing plan suites; here check import
+  // never replaces its approved state or starts another revision.
+  db.prepare("UPDATE task_collaboration_plans SET status='approved' WHERE id=?").run(plan);
+  commitLinearPreview(owner,createLinearPreview(owner,source,null).preview_id);
+  expect(db.prepare("SELECT id,status FROM task_collaboration_plans WHERE task_id=?").all(r.task_ids[0].task_id)).toEqual([{id:plan,status:"approved"}]);
+ });
+ it("disabled template roles never create an accidental parallel graph or invented roles",()=>{
+  const previous=[...ROLE_NAMES];
+  try {
+   ROLE_NAMES.splice(0,ROLE_NAMES.length,"builder");
+   const root=issue();root.description="Доработать сервер и интеграцию";
+   const result=commitLinearPreview(owner,createLinearPreview(owner,snapshot([root]),null).preview_id),plan=result.task_ids[0].draft_plan_id;
+   expect(db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id=?").all(plan)).toEqual([{role_key:"builder"}]);
+   expect(db.prepare("SELECT * FROM task_collaboration_plan_edges WHERE plan_id=?").all(plan)).toEqual([]);
+   ROLE_NAMES.splice(0,ROLE_NAMES.length);
+   const noRoles=commitLinearPreview(owner,createLinearPreview(owner,snapshot([issue()]),null).preview_id);
+   expect(noRoles.task_ids[0].draft_plan_id).toBeUndefined();
+  } finally { ROLE_NAMES.splice(0,ROLE_NAMES.length,...previous); }
  });
  it("merge does not call a local-only edit a remote conflict",()=>{const base:any={title:"old",description:null,priority:4,due_date:null,status:"active",parent_id:null};expect(mergeLinearFields({...base,title:"local"},base,base).conflicts).toEqual([]);});
 });
