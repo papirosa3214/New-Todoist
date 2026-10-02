@@ -2838,6 +2838,86 @@ const migrations: Migration[] = [
     `),
   },
 
+  {
+    // Память ролей внутри приложения (владелец 02.10.2026): «с чистого
+    // листа; пусть сами пишут, а я вижу и редактирую; и файлы закидывать».
+    // Запись — короткий факт/урок/предпочтение или загруженный файл
+    // (его текст режется на куски в memory_chunks). Область видимости:
+    // team — всем ролям, role — одной роли, project — ролям в проекте.
+    // Эмбеддинг — Float32 BLOB для смыслового поиска; без него ищем по словам.
+    id: "086_role_memory",
+    description: "Память ролей: memories (факты, уроки, файлы) и memory_chunks (куски текста файлов) с эмбеддингами.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memories (
+          id TEXT PRIMARY KEY,
+          scope TEXT NOT NULL CHECK (scope IN ('team','role','project')),
+          role_key TEXT,
+          project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK (kind IN ('fact','lesson','preference','file')),
+          title TEXT,
+          text TEXT NOT NULL,
+          source_kind TEXT NOT NULL CHECK (source_kind IN ('owner','role')),
+          source_ref TEXT,
+          created_by TEXT,
+          updated_by TEXT,
+          pinned INTEGER NOT NULL DEFAULT 0,
+          attachment_id TEXT,
+          embedding BLOB,
+          use_count INTEGER NOT NULL DEFAULT 0,
+          last_used_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope, role_key, project_id);
+        CREATE TABLE IF NOT EXISTS memory_chunks (
+          id TEXT PRIMARY KEY,
+          memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+          idx INTEGER NOT NULL,
+          text TEXT NOT NULL,
+          embedding BLOB
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_chunks_memory ON memory_chunks(memory_id, idx);
+      `);
+    },
+  },
+  {
+    // Вложенность задач — ровно один уровень (владелец 02.10.2026: «чтобы
+    // сломаться не могло никак»). Проверки в API дают понятный отказ, а эти
+    // триггеры — последняя линия: любой код, пишущий в tasks (маршрут,
+    // импорт, агент, будущая правка), получит отказ от самой базы.
+    //   • родитель не может быть сам дочерним;
+    //   • задача не может быть родителем самой себе;
+    //   • задача с дочерними не может стать дочерней.
+    // Уже существующие нарушения (если были) не трогаем — сервер пишет их
+    // в журнал при старте (lib/taskHierarchy.ts → hierarchyViolations).
+    id: "084_task_hierarchy_one_level",
+    description: "Триггеры: вложенность задач — один уровень (родитель не дочерний, задача с дочерними не становится дочерней).",
+    up: () => {
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS tasks_hierarchy_insert
+        BEFORE INSERT ON tasks
+        WHEN NEW.parent_id IS NOT NULL
+        BEGIN
+          SELECT RAISE(ABORT, 'task_hierarchy: задача не может быть родительской сама себе')
+            WHERE NEW.parent_id = NEW.id;
+          SELECT RAISE(ABORT, 'task_hierarchy: родительская задача сама дочерняя — вложенность одна')
+            WHERE (SELECT parent_id FROM tasks WHERE id = NEW.parent_id) IS NOT NULL;
+        END;
+        CREATE TRIGGER IF NOT EXISTS tasks_hierarchy_update
+        BEFORE UPDATE OF parent_id ON tasks
+        WHEN NEW.parent_id IS NOT NULL AND NEW.parent_id IS NOT OLD.parent_id
+        BEGIN
+          SELECT RAISE(ABORT, 'task_hierarchy: задача не может быть родительской сама себе')
+            WHERE NEW.parent_id = NEW.id;
+          SELECT RAISE(ABORT, 'task_hierarchy: родительская задача сама дочерняя — вложенность одна')
+            WHERE (SELECT parent_id FROM tasks WHERE id = NEW.parent_id) IS NOT NULL;
+          SELECT RAISE(ABORT, 'task_hierarchy: у задачи есть свои дочерние — дочерней она стать не может')
+            WHERE EXISTS (SELECT 1 FROM tasks WHERE parent_id = NEW.id);
+        END;
+      `);
+    },
+  },
 ];
 
 /**

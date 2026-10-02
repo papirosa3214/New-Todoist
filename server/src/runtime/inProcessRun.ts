@@ -1,6 +1,7 @@
 import { instructionResources, createTaskResourceLoader } from "./instructionResources.js";
 import { ensureRoleHome } from "./roleHome.js";
 import { connectRoleComposio } from "./composioRuntime.js";
+import { memoryBlock } from "../lib/memory.js";
 import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
 import { renderInstruction, effectiveRules, registerInstructionBlock, instructionManifest } from "../lib/roleContextResolver.js";
 import { isOwner } from "../access.js";
@@ -677,7 +678,20 @@ try {
       const task = input.prompt ?? (input.subtaskId
         ? planSubtaskPrompt(taskId, role, input.subtaskId)
         : (resumed ? resumePrompt(taskId, role) : defaultTaskPrompt(taskId, role)));
-      const prompt = `${task}\n\n${launchContext.prompt}`;
+      // Память команды (02.10.2026): то, что уже известно по теме задачи,
+      // приходит в задание само — роли не надо помнить, что надо спросить.
+      const about = db.prepare("SELECT title, description, project_id FROM tasks WHERE id = ?").get(taskId) as
+        | { title?: string; description?: string | null; project_id?: string | null }
+        | undefined;
+      const stepTitle = input.subtaskId
+        ? ((db.prepare("SELECT title FROM subtasks WHERE id = ?").get(input.subtaskId) as { title?: string } | undefined)?.title ?? "")
+        : "";
+      const memory = await memoryBlock({
+        roleKey: role,
+        projectId: about?.project_id ?? null,
+        query: [about?.title, stepTitle, (about?.description ?? "").slice(0, 1_500)].filter(Boolean).join("\n"),
+      });
+      const prompt = `${task}\n\n${launchContext.prompt}${memory ? `\n\n${memory}` : ""}`;
       await session.prompt(mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);

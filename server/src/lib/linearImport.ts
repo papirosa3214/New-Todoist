@@ -45,10 +45,27 @@ export function validateLinearSnapshot(snapshot: LinearSnapshot) {
   }
 }
 
-function fields(issue: LinearIssue, taskIds: Map<string, string>): Fields {
+/** Вложенность в TaskFlow одна (02.10.2026), в Linear — любая: задача
+ *  глубже первого уровня вешается на самого верхнего предка. Дерево
+ *  сплющивается, ничего не теряется. Цикл исключён validateLinearSnapshot. */
+const rootCache = new WeakMap<LinearSnapshot, Map<string, LinearIssue>>();
+function rootParentId(issue: LinearIssue, snapshot: LinearSnapshot): string | null {
+  if (!issue.parent) return null;
+  let map = rootCache.get(snapshot);
+  if (!map) {
+    map = new Map(snapshot.issues.map((i) => [i.id, i]));
+    rootCache.set(snapshot, map);
+  }
+  let id = issue.parent.id;
+  for (let ancestor = map.get(id); ancestor?.parent; ancestor = map.get(id)) id = ancestor.parent.id;
+  return id;
+}
+
+function fields(issue: LinearIssue, taskIds: Map<string, string>, snapshot: LinearSnapshot): Fields {
+  const root = rootParentId(issue, snapshot);
   return { title: issue.title.trim(), description: issue.description || null, priority: issue.priority || 4,
     due_date: issue.dueDate || null, status: issue.state.type === "completed" ? "completed" : "active",
-    parent_id: issue.parent ? taskIds.get(issue.parent.id)! : null };
+    parent_id: root ? taskIds.get(root)! : null };
 }
 
 export function mergeLinearFields(current: Fields, previous: Fields, remote: Fields) {
@@ -107,12 +124,22 @@ function validateLocalHierarchy(snapshot: LinearSnapshot, ids: Map<string, strin
   for (const issue of snapshot.issues) {
     const mapping: any = db.prepare("SELECT applied_fields FROM linear_import_tasks WHERE owner_id=? AND workspace_id=? AND source_id=?").get(owner, snapshot.workspace.id, issue.id);
     const current: any = db.prepare("SELECT parent_id,agent_state,ready_for_pickup FROM tasks WHERE id=?").get(ids.get(issue.id));
-    const remote = issue.parent ? ids.get(issue.parent.id)! : null;
+    const rootId = rootParentId(issue, snapshot);
+    const remote = rootId ? ids.get(rootId)! : null;
     if (!mapping || (!(current?.agent_state || current?.ready_for_pickup) && (current?.parent_id === JSON.parse(mapping.applied_fields).parent_id || current?.parent_id === remote))) {
       if (remote) parent.set(ids.get(issue.id)!, remote); else parent.delete(ids.get(issue.id)!);
     }
   }
   ensureAcyclic([...parent.entries()]);
+  // Вложенность одна: импорт не должен сделать дочернюю задачу из той, у
+  // которой в TaskFlow уже есть свои дочерние, или повесить задачу на дочернюю.
+  const imported = new Set(snapshot.issues.map((issue) => ids.get(issue.id)!));
+  for (const [child, parentId] of parent) {
+    if (!imported.has(child) && !imported.has(parentId)) continue;
+    if (parent.has(parentId)) {
+      throw new LinearSourceError("После импорта появилась бы задача второго уровня вложенности: в TaskFlow дочерние задачи бывают только у задач верхнего уровня. Отвяжите локальные дочерние задачи и повторите.", 409);
+    }
+  }
 }
 
 export function createLinearPreview(owner: string, snapshot: LinearSnapshot, projectId: string | null) {
@@ -121,7 +148,7 @@ export function createLinearPreview(owner: string, snapshot: LinearSnapshot, pro
   validateLocalHierarchy(snapshot, ids, owner);
   const items = snapshot.issues.map(issue => {
     const mapping = existing.get(issue.id), current: any = mapping ? db.prepare("SELECT * FROM tasks WHERE id=?").get(mapping.task_id) : undefined;
-    const merge = current ? mergeLinearFields(current, JSON.parse(mapping.applied_fields), fields(issue, ids)) : null;
+    const merge = current ? mergeLinearFields(current, JSON.parse(mapping.applied_fields), fields(issue, ids, snapshot)) : null;
     const conflicts = merge?.conflicts ?? [];
     for (const [kind, entries] of [["comment", issue.comments], ["history", issue.history], ["document", issue.documents]] as const) {
       for (const entry of entries) {
@@ -224,11 +251,11 @@ export function commitLinearPreview(owner: string, previewId: string) {
       // A deleted local card can be re-imported explicitly with its full source history.
       db.prepare("DELETE FROM linear_import_objects WHERE owner_id=? AND workspace_id=? AND source_issue_id=?").run(owner, snapshot.workspace.id, issue.id);
       db.prepare("UPDATE linear_import_relations SET active=0,managed_edge=0 WHERE owner_id=? AND workspace_id=? AND (source_issue_id=? OR target_issue_id=?)").run(owner, snapshot.workspace.id, issue.id, issue.id);
-      const remote = fields(issue, ids);
+      const remote = fields(issue, ids, snapshot);
       db.prepare("INSERT INTO tasks(id,title,description,priority,due_date,status,creator_id,project_id,ready_for_pickup,created_at) VALUES(?,?,?,?,?,?,?,?,0,?)").run(ids.get(issue.id), remote.title, remote.description, remote.priority, remote.due_date, remote.status, owner, stored.project_id, date(issue.createdAt));
     }
     for (const issue of snapshot.issues) {
-      const task = ids.get(issue.id)!, mapping = existing.get(issue.id), current: any = db.prepare("SELECT * FROM tasks WHERE id=?").get(task), remote = fields(issue, ids);
+      const task = ids.get(issue.id)!, mapping = existing.get(issue.id), current: any = db.prepare("SELECT * FROM tasks WHERE id=?").get(task), remote = fields(issue, ids, snapshot);
       const merged = mapping ? mergeLinearFields(current, JSON.parse(mapping.applied_fields), remote) : { applied: remote, updates: remote, conflicts: [] as string[] };
       if (mapping && (current.agent_state || current.ready_for_pickup)) {
         for (const key of ["status", "parent_id"]) { delete merged.updates[key]; merged.applied[key] = JSON.parse(mapping.applied_fields)[key]; }

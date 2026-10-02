@@ -41,6 +41,7 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { formatChatMessage, loadChatMessage } from "../lib/chatMessages.js";
+import { memoryBlock } from "../lib/memory.js";
 import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
@@ -1238,6 +1239,14 @@ async function deliverAgentReply(args: {
       userText,
     });
   }
+
+  // Память команды по теме сообщения (02.10.2026) — в каждый ход: тема
+  // разговора меняется, и вспоминать надо то, что относится к ней сейчас.
+  const chatProject = (db.prepare(
+    "SELECT t.project_id FROM chats c LEFT JOIN tasks t ON t.id = c.task_id WHERE c.id = ?",
+  ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
+  const memory = await memoryBlock({ roleKey: role, projectId: chatProject, query: trigger.text });
+  if (memory) prompt = `${prompt}\n\n${memory}`;
 
   const roleName =
     (db.prepare("SELECT name FROM users WHERE id = ?").get(roleUserId) as

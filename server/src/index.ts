@@ -1,4 +1,5 @@
 import { startSecretaryVoiceBridge } from "./runtime/secretaryVoiceBridge.js";
+import { hierarchyViolations } from "./lib/taskHierarchy.js";
 import { pathToFileURL } from "url";
 import fs from "fs";
 import path from "path";
@@ -42,6 +43,7 @@ import { registerReportRoutes } from "./routes/reports.js";
 import { registerResearchRoutes } from "./routes/research.js";
 import { registerChatsRoutes } from "./routes/chats.js";
 import { registerWidgetsRoutes } from "./routes/widgets.js";
+import { registerMemoryRoutes } from "./routes/memory.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
 import { registerCompassRoutes } from "./routes/compass.js";
 import { registerDictationArchiveRoutes } from "./routes/dictation-archive.js";
@@ -357,6 +359,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerResearchRoutes(app);
   registerChatsRoutes(app);
   registerWidgetsRoutes(app);
+  registerMemoryRoutes(app);
   registerTranscribeRoutes(app);
   // Архив диктовок (18.08.2026): аудио выгружается с телефона и хранится
   // бессрочно — прямое решение владельца.
@@ -573,6 +576,19 @@ if (isMain) {
         if (resumed || blocked) console.log(`[plan] после рестарта: продолжено ${resumed}, остановлено ${blocked}`);
       })
       .catch((error) => console.error("[plan] восстановление брошенных узлов не удалось:", error));
+    // Вложенность задач — один уровень (миграция 084). Нарушения, созданные
+    // до правила, не исправляем молча — называем их в журнале.
+    try {
+      const violations = hierarchyViolations();
+      if (violations.length) {
+        console.warn(
+          `[tasks] вложенность глубже одного уровня у ${violations.length} задач (созданы до правила): ` +
+            violations.slice(0, 10).map((v) => `«${v.title}» ${v.id}`).join(", "),
+        );
+      }
+    } catch (error) {
+      console.error("[tasks] проверка вложенности не удалась:", error);
+    }
     stopVoiceBridge = await startSecretaryVoiceBridge(app);
     console.log(`🚀 TaskFlow API running at ${addr}`);
   });

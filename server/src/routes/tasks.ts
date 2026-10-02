@@ -1,4 +1,5 @@
 import { ROLE_NAMES as PREPARATION_ROLES } from "../roleRouting.js";
+import { hierarchyRefusal } from "../lib/taskHierarchy.js";
 import { validatePreparation, type TaskPreparation } from "../lib/taskPreparation.js";
 import { persistPreparedPlan } from "../lib/taskPreparationPersistence.js";
 import type { FastifyInstance } from "fastify";
@@ -877,6 +878,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Reviewer» (Обзор → Система). Клиент флаг больше не шлёт, поэтому
       // решение тут, а не в форме карточки. Явное значение всё ещё
       // уважается (серверный контракт не ломаем).
+      // Вложенность одна (02.10.2026): дочернюю вешаем только на задачу
+      // верхнего уровня. Ниже то же держит триггер БД.
+      if (parent_id) {
+        const refusal = hierarchyRefusal(null, String(parent_id));
+        if (refusal) return reply.code(400).send({ error: refusal });
+      }
+
       const ownerSetting = db
         .prepare("SELECT reviewer_first_default FROM users WHERE id = ?")
         .get(req.userId) as { reviewer_first_default?: number } | undefined;
@@ -1146,6 +1154,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
 
       const existing = getTaskForWrite(id, req.userId);
       if (!existing) return reply.code(404).send({ error: "Not found" });
+
+      // Вложенность одна (02.10.2026): ни родитель-дочерняя, ни задача с
+      // дочерними в роли дочерней. Ниже то же держит триггер БД.
+      if (body.parent_id !== undefined && body.parent_id !== null && body.parent_id !== "") {
+        const refusal = hierarchyRefusal(id, String(body.parent_id));
+        if (refusal) return reply.code(400).send({ error: refusal });
+      }
+      if (body.parent_id === "") body.parent_id = null;
 
       // title, when sent, must not be blank — trim now so the ALLOWED_FIELDS
       // loop below writes the trimmed value.

@@ -377,9 +377,8 @@ def t_state(args):
             "заметкой в документацию проекта (taskflow_doc_write). Карточку "
             "закроют, и всё написанное в ней уйдёт с доски; в документации "
             "знание останется и достанется следующему. Рабочий рецепт или "
-            "причину сбоя — уроком в базу знаний "
-            "(~/kb/lessons/ГГГГ-ММ-ДД-имя.md + python3 ~/kb/kb_add.py <файл>), "
-            "короткий устойчивый факт — в память через mnemosyne_remember."
+            "причину сбоя — уроком в память (taskflow_remember kind=lesson), "
+            "короткий устойчивый факт — taskflow_remember kind=fact."
         )
     return out
 
@@ -693,7 +692,7 @@ def t_chat_send(args):
     сделал» новым ответом не отвечать, этим и гасится «спасибо-пожалуйста».
     Делегирование работы — через доску (assignee задачи/шага), это
     сообщение — контекст к уже назначенному, не замена назначению. Находка —
-    указатель на урок/память (kb_add.py, mnemosyne_shared_remember), не
+    указатель на урок/память (taskflow_remember), не
     пересказ текстом: пересказ умрёт вместе с сессией.
     """
     to_user_id = _resolve_addressee(args.get("to"))
@@ -1077,6 +1076,54 @@ def t_my_stats(args):
     владелец интересуется 'что сделал за неделю/месяц', а не гадать и не
     перечитывать всю доску."""
     return api("GET", "/api/tasks/my-stats")
+
+
+def t_remember(args):
+    """Запомнить устойчивое знание (владелец 02.10.2026: память ролей внутри
+    приложения; роли пишут сами, владелец видит и правит). Похожая запись в
+    той же области обновится, а не задвоится."""
+    text = (args.get("text") or "").strip()
+    if not text:
+        raise TaskFlowError("text — что запомнить, одной мыслью")
+    body = {"text": text}
+    for key in ("scope", "kind", "title", "project_id", "source_ref"):
+        if args.get(key):
+            body[key] = args[key]
+    resp = api("POST", "/api/memories", body)
+    memory = resp.get("memory", {})
+    return {
+        "итог": "обновил похожую запись" if resp.get("updated") else "запомнил",
+        "id": memory.get("id"),
+        "область": memory.get("scope"),
+    }
+
+
+def t_recall(args):
+    """Вспомнить, что известно команде по теме: общая память, твоя и
+    проектная, включая загруженные владельцем файлы."""
+    query = (args.get("query") or "").strip()
+    if not query:
+        raise TaskFlowError("query — о чём вспомнить")
+    qs = {"q": query}
+    if args.get("project_id"):
+        qs["project_id"] = args["project_id"]
+    items = api("GET", "/api/memories/recall?" + urllib.parse.urlencode(qs)).get("items", [])
+    if not items:
+        return {"найдено": 0, "подсказка": "ничего не помним — разберёшься, запиши через taskflow_remember"}
+    return {
+        "найдено": len(items),
+        "записи": [
+            {
+                "id": m.get("id"),
+                "откуда": {"team": "общее", "role": "твоё", "project": "проект"}.get(m.get("scope"), m.get("scope")),
+                "вид": m.get("kind"),
+                "заголовок": m.get("title"),
+                "текст": (m.get("text") or "")[:1500],
+                "записал": "владелец" if m.get("source") == "owner" else "роль",
+            }
+            for m in items
+        ],
+    }
 
 
 def t_consult(args):
@@ -1860,6 +1907,48 @@ TOOLS = [
             "required": ["text"],
         },
         "fn": t_structure_dictation,
+    },
+    {
+        "name": "taskflow_remember",
+        "description": (
+            "Запомнить устойчивое знание, чтобы оно было у тебя и команды в следующих "
+            "задачах и чатах. kind: lesson — рабочий рецепт или причина сбоя; fact — факт "
+            "(порт, устройство проекта, повадка модели); preference — предпочтение владельца "
+            "(владелец сказал «запомни» — сюда, scope=team). scope: role — твоё (по "
+            "умолчанию), team — нужно всем ролям, project — по проекту (project_id). Одна "
+            "запись — одна мысль, коротко; похожая запись обновится, а не задвоится. Не "
+            "запоминай разовое и то, что и так есть в карточке задачи."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Что запомнить"},
+                "kind": {"type": "string", "description": "lesson | fact | preference"},
+                "scope": {"type": "string", "description": "role | team | project"},
+                "title": {"type": "string", "description": "Короткий заголовок"},
+                "project_id": {"type": "string", "description": "Для scope=project"},
+                "source_ref": {"type": "string", "description": "id задачи или чата, откуда знание"},
+            },
+            "required": ["text"],
+        },
+        "fn": t_remember,
+    },
+    {
+        "name": "taskflow_recall",
+        "description": (
+            "Вспомнить, что известно по теме: общая память команды, твоя и проектная, "
+            "включая файлы, загруженные владельцем. Самое близкое к задаче и так приходит "
+            "в задание блоком «Память команды» — сюда за тем, что нужно глубже."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "О чём вспомнить, своими словами"},
+                "project_id": {"type": "string", "description": "Проект, чтобы видеть и его память"},
+            },
+            "required": ["query"],
+        },
+        "fn": t_recall,
     },
     {
         "name": "taskflow_consult",

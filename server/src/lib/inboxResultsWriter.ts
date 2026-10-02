@@ -329,9 +329,14 @@ export function startInboxResultsWriter(): () => void {
         /^\[Диагностика\] /,
         "",
       )}`;
+      // Вложенность одна (02.10.2026): диагностика сама дочерняя — карточка
+      // на устранение встаёт рядом с ней, к тому же родителю.
+      const fixParent =
+        (db.prepare("SELECT parent_id FROM tasks WHERE id = ?").get(task.id) as { parent_id: string | null } | undefined)
+          ?.parent_id ?? task.id;
       const existingFix = db.prepare(
         `SELECT id FROM tasks WHERE parent_id = ? AND title = ? LIMIT 1`,
-      ).get(task.id, subTitlePrefix) as { id: string } | undefined;
+      ).get(fixParent, subTitlePrefix) as { id: string } | undefined;
       let subId = existingFix?.id;
       if (!subId) {
         subId = crypto.randomUUID();
@@ -351,22 +356,27 @@ export function startInboxResultsWriter(): () => void {
                 .join("\n\n")}\n`,
             2,
             "u1",
-            task.id,
+            fixParent,
             serverNotificationsProjectId("u1"),
           );
         } catch {
           // уже существует другая карточка на устранение? — пропустим INSERT
           const second = db.prepare(
             `SELECT id FROM tasks WHERE parent_id = ? AND title = ? LIMIT 1`,
-          ).get(task.id, subTitlePrefix) as { id: string } | undefined;
-          if (second) subId = second.id;
+          ).get(fixParent, subTitlePrefix) as { id: string } | undefined;
+          subId = second?.id;
         }
       }
-      block +=
-        "Подтвердилось: " +
-        (commentTexts[0] ?? "(комментарий исполнителя)") +
-        `\n\nПо подтверждённым проблемам создана карточка на устранение: ` +
-        `[карточка #${subId.slice(0, 8)}](tf://task/${subId})\n`;
+      // Карточку завести не удалось — пишем это, а не падаем на пустом id.
+      if (!subId) {
+        block += "Подтвердилось, но карточку на устранение завести не удалось — заведите её вручную.\n";
+      } else {
+        block +=
+          "Подтвердилось: " +
+          (commentTexts[0] ?? "(комментарий исполнителя)") +
+          `\n\nПо подтверждённым проблемам создана карточка на устранение: ` +
+          `[карточка #${subId.slice(0, 8)}](tf://task/${subId})\n`;
+      }
     } else {
       block += "Проблема не подтвердилась.\n";
     }

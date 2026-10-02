@@ -24,6 +24,7 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { loadChatMessage } from "./chatMessages.js";
+import { memoryBlock } from "./memory.js";
 
 import { mayRequestSummary, parseSummaryRequest, collectTaskSummary, sendSummaryToSecretaryChat } from "./secretaryTaskSummary.js";
 
@@ -102,7 +103,9 @@ export async function deliverSecretaryReply(userText: string, mode: ChatWorkMode
     composeLayer(SECRETARY_ROLE, "role.prompt")?.effective
       || rolePromptText(SECRETARY_ROLE)
       || "Ты — Секретарь, личный помощник владельца в TaskFlow.";
-  const prompt = renderInstruction(SECRETARY_ROLE, "secretary.chat", { roleInstruction: instruction, history: historyLines || "(пусто)", userText });
+  const memory = await memoryBlock({ roleKey: SECRETARY_ROLE, query: userText });
+  const prompt = renderInstruction(SECRETARY_ROLE, "secretary.chat", { roleInstruction: instruction, history: historyLines || "(пусто)", userText })
+    + (memory ? `\n\n${memory}` : "");
 
   const previousSessionId = getChatSessionId(chatId, SECRETARY_ID);
   // SQL-время, не JS Date().toISOString() — формат должен совпасть с

@@ -51,7 +51,7 @@ function roleTools(role: string): string {
 /** Инструменты для ответов в чате — есть у каждой роли, даже если её
  *  профиль задаёт свой список: без них виджет погоды пришлось бы
  *  выдумывать (владелец 01.10.2026). */
-const CHAT_TOOLS = ["taskflow_weather", "taskflow_plan_request", "taskflow_consult"];
+const CHAT_TOOLS = ["taskflow_weather", "taskflow_plan_request", "taskflow_consult", "taskflow_remember", "taskflow_recall"];
 
 function withChatTools(list: string): string {
   const names = list.split(",").map((n) => n.trim()).filter(Boolean);
