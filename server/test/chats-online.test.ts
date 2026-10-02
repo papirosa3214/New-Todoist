@@ -1035,4 +1035,51 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     expect(prompt).toContain("taskflow_weather");
     expect(prompt).toContain("языком html");
   });
+
+  it("виджет Секретаря (без type) сохраняется уже каноническим", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_architect"] })).json().chat.id;
+    const secretarish = [
+      "```widget",
+      JSON.stringify({
+        title: "Сводка",
+        metrics: [{ label: "В работе", value: 5, color: "red" }],
+        chart: { type: "bar", data: [{ label: "Пн", value: 3 }] },
+        checklists: [
+          { title: "План", items: [{ text: "X", checked: true }] },
+          { title: "Готово", items: [{ text: "Y", checked: false }] },
+        ],
+      }),
+      "```",
+    ].join("\n");
+    replyTextFor = () => secretarish;
+    await send(chatId, "@architect покажи сводку");
+    await tick(150);
+    const stored = messagesByAuthor(chatId, "role_architect")[0].text;
+    // Должно стать 3 виджета: metrics, chart, два checklist.
+    const blocks = [...stored.matchAll(/```widget\n([\s\S]*?)\n```/g)].map((m) => JSON.parse(m[1]));
+    expect(blocks.map((b) => b.type)).toEqual([
+      "metrics",
+      "chart",
+      "checklist",
+      "checklist",
+    ]);
+    expect(blocks[0]).toMatchObject({ title: "Сводка", type: "metrics" });
+    expect(blocks[1]).toMatchObject({ type: "chart", kind: "bar" });
+    expect(blocks[1].points[0]).toEqual({ x: "Пн", y: 3 });
+    expect(blocks[2]).toMatchObject({ type: "checklist", title: "План" });
+    expect(blocks[2].items[0]).toEqual({ text: "X", done: true });
+    expect(blocks[3]).toMatchObject({ type: "checklist", title: "Готово" });
+  });
+
+  it("канонический виджет проходит насквозь (без перезаписи)", async () => {
+    const chatId = (await createChat({ kind: "group", member_ids: ["role_architect"] })).json().chat.id;
+    replyTextFor = () => "```widget\n{\"type\":\"metrics\",\"title\":\"x\",\"items\":[{\"label\":\"a\",\"value\":1,\"delta\":\"+1\",\"trend\":\"up\"}]}\n```";
+    await send(chatId, "@architect покажи");
+    await tick(120);
+    const stored = messagesByAuthor(chatId, "role_architect")[0].text;
+    const blocks = [...stored.matchAll(/```widget\n([\s\S]*?)\n```/g)].map((m) => JSON.parse(m[1]));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: "metrics", title: "x" });
+    expect(blocks[0].items[0]).toEqual({ label: "a", value: 1, delta: "+1", trend: "up" });
+  });
 });

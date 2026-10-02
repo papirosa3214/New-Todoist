@@ -51,6 +51,7 @@ import {
 import { formatChatMessage, loadChatMessage } from "../lib/chatMessages.js";
 import { roleProjectContext } from "../runtime/roleProjectContext.js";
 import { roleSlotSnapshotsBlock } from "../runtime/slotWorkSnapshot.js";
+import { normalizeWidgetBlocks } from "../lib/widgetNormalize.js";
 import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
@@ -1975,6 +1976,10 @@ async function deliverAgentReply(args: {
   // (лимит 800 символов на уровне БД и подмена/отмена ответа в коде) съедали
   // сообщения целиком — в чате не появлялось ничего. Ограничивать длину
   // должен не сервер, а сама роль; сервер обязан доставить то, что написали.
+  // ```widget-блоки от роли приводим к канонической схеме (владелец
+  // 02.10.2026: «виджет не разработан» из-за несовпадения имён полей и
+  // отсутствия type). Нераспознанный блок остаётся в тексте как есть.
+  if (replyText && !failure) replyText = normalizeWidgetBlocks(replyText);
   if (replyText) {
     replyId = uid();
     db.prepare(
