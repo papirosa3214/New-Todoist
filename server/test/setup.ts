@@ -41,6 +41,8 @@ process.env.UPLOAD_DIR = uploadDir;
 // Временные файлы подключения ролей (runtime/roleRunAccess.ts) — в папку
 // прогона, а не в общую /tmp/taskflow-runs живого сервера.
 process.env.TASKFLOW_RUNS_DIR = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-runs");
+// Ролевые папки тестов не пишутся в ~/taskflow живого пользователя.
+process.env.TASKFLOW_ROLES_DIR = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-roles");
 
 // PUT /api/runtime/routing/:role пишет role-routing.yaml. Тесты не должны
 // трогать боевой файл — работаем с копией в tmp. Копия делается ДО импорта
@@ -66,6 +68,7 @@ try {
 // открывать БД вручную не нужно.
 
 afterAll(() => {
+  fs.rmSync(process.env.TASKFLOW_ROLES_DIR!, { recursive: true, force: true });
   for (const suffix of ["", "-wal", "-shm"]) {
     try {
       fs.unlinkSync(dbPath + suffix);

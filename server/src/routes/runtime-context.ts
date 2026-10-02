@@ -17,7 +17,7 @@ function version(req:any):number|null {
 }
 export function registerRuntimeContextRoutes(app:FastifyInstance) {
  const owner=async(req:any,reply:any)=>{await authOrApiToken(req,reply); if(reply.sent)return; if(!isOwner(req.userId))return reply.code(403).send({error:'контекст ролей доступен только владельцу'});};
- const init=async(role:string)=>{taskflowTools(role,null); instructionResources(); await discoverChatResources();};
+ const init=async(role:string)=>{taskflowTools(role,null); instructionResources(); await discoverChatResources(role);};
  app.get('/api/runtime/context/catalog',{preHandler:owner},async()=>{await init('builder');return {layers:LAYER_CATALOG};});
  app.get<{Querystring:{role?:string;mode?:string}}>('/api/runtime/context',{preHandler:owner},async(req,reply)=>{
   const role=req.query.role ?? ''; const mode=req.query.mode ?? 'work';

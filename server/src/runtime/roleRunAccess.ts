@@ -1,6 +1,7 @@
 import { PLANNING_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
 import { composioCommand, roleComposioPolicy } from "./composioPolicy.js";
 import { instructionResources } from "./instructionResources.js";
+import { ensureRoleHome } from "./roleHome.js";
 import { composeLayer, LAYER_CATALOG, instructionManifest } from "../lib/roleContextResolver.js";
 import fs from "node:fs";
 import os from "node:os";
@@ -30,7 +31,6 @@ export function setRoleTokenSigner(fn: Signer): void {
 
 const PROFILES_DIR = path.join(os.homedir(), ".pi", "agent", "taskflow-profiles");
 const RUNS_DIR = process.env.TASKFLOW_RUNS_DIR || path.join(os.tmpdir(), "taskflow-runs");
-const MCP_SERVER = path.join(process.cwd(), "scripts", "mcp_server.py");
 const DEFAULT_TOOLS = "taskflow_my_tasks,taskflow_task,taskflow_claim,taskflow_heartbeat,taskflow_state,taskflow_comment,taskflow_subtask_done,taskflow_subtask_add,taskflow_rules,taskflow_status,taskflow_agents,taskflow_chat_send,taskflow_chat_typing,taskflow_chat_read,taskflow_subtask_work,taskflow_projects,taskflow_project_tasks,taskflow_create_project,taskflow_create_task,taskflow_suggest_subtasks,taskflow_structure_dictation,taskflow_my_stats,taskflow_docs,taskflow_doc_read,taskflow_doc_write,taskflow_kb_search,taskflow_runtime";
 
 /** Набор инструментов роли — из её прежнего профиля, если он есть; у новой
@@ -76,7 +76,7 @@ export function prepareRoleRunAccess(runId: string, role: string, mode: ChatWork
       ...(policy.enabled ? { composio: { ...composioCommand(policy, mode, context), directTools: true, toolPrefix: "server" } } : {}),
       taskflow: {
         command: "/usr/bin/python3",
-        args: [MCP_SERVER],
+        args: [path.join(ensureRoleHome(role).scripts, "mcp_server.py")],
         env: {
           TASKFLOW_TOKEN: token,
           TASKFLOW_MCP_ROLE: role,

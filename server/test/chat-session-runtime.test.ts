@@ -13,6 +13,7 @@ import {
   vi,
 } from "vitest";
 import type { FastifyInstance } from "fastify";
+import { ensureRoleHome } from "../src/runtime/roleHome.js";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import {
@@ -214,6 +215,8 @@ describe("startChatRun (адаптер онлайн-сессии)", () => {
     // Один RpcClient, провайдер/модель из role-routing.
     expect(fakeClients).toHaveLength(1);
     const client = fakeClients[0];
+    expect(client.options.cwd).toBe(ensureRoleHome("architect").workspace);
+    expect(client.options.args).toContain("--session-dir");
     expect(client.options.model).toBe("MiniMax-M3");
     expect(client.options.provider).toBe("minimax");
     // Новая сессия — без --session-id. С 25.09.2026 роль в чате ходит своим

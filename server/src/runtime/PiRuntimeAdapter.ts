@@ -1,5 +1,6 @@
 import { chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
 import { chatInstructionArgs } from "./instructionResources.js";
+import { ensureRoleHome, prepareChatSessionDirectory } from "./roleHome.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -746,7 +747,7 @@ export const piRuntime: RuntimeAdapter = {
     const client = new RpcClient({
       cliPath: resolvePiCliPath(),
       cwd: input.cwd ?? process.cwd(),
-      ...(mcpConfigPath ? { args: ["--mcp-config", mcpConfigPath, ...await chatInstructionArgs(role,mcpConfigPath)] } : {}),
+      ...(mcpConfigPath ? { args: ["--mcp-config", mcpConfigPath, ...await chatInstructionArgs(role,mcpConfigPath,"work",input.cwd ?? process.cwd())] } : {}),
       provider,
       model,
       // NODE_USE_ENV_PROXY=1 — без него Pi встроенный fetch игнорирует
@@ -1213,6 +1214,8 @@ export async function startChatRun(
     // карточках, без ассоциации с Pi Agent).
     mcpConfigPath = prepareRoleRunAccess(runId, role, input.mode, input.chatId);
     if (input.mode === "plan" && !mcpConfigPath) throw new Error("Планирование недоступно: не удалось применить ограничения инструментов");
+    const home = ensureRoleHome(role);
+    const sessionDirectory = await prepareChatSessionDirectory(role, input.chatId, input.sessionId);
     const args: string[] = [];
     if (mcpConfigPath) {
       args.push("--mcp-config", mcpConfigPath, ...await chatInstructionArgs(role,mcpConfigPath,input.mode));
@@ -1225,10 +1228,11 @@ export async function startChatRun(
       // ожиданием «следующее сообщение продолжает тот же контекст».
       args.push("--session-id", input.sessionId);
     }
+    args.push("--session-dir", sessionDirectory);
 
     const newClient = new RpcClient({
       cliPath: resolvePiCliPath(),
-      cwd: process.cwd(),
+      cwd: home.workspace,
       provider: resolvedProvider,
       model: resolvedModel,
       // NODE_USE_ENV_PROXY=1 — без него встроенный fetch Pi игнорирует

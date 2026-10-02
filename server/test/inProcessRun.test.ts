@@ -3,11 +3,15 @@
 // трекера — проверяем, что всё записывается от имени роли и без ключей.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
+import fs from "node:fs";
+import path from "node:path";
+import { ensureRoleHome } from "../src/runtime/roleHome.js";
 
 const script = vi.hoisted(() => ({
   steps: null as null | ((tools: Map<string, any>, prompt: string) => Promise<void>),
   systemPrompts: [] as string[],
   systemOn: true,
+  sessions: [] as any[],
 }));
 
 const taskContext = vi.hoisted(() => ({
@@ -23,6 +27,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   return {
     ...actual,
     createAgentSession: async (options: any) => {
+      script.sessions.push(options);
       const tools = new Map<string, any>((options.customTools ?? []).map((t: any) => [t.name, t]));
       script.systemPrompts.push(options.resourceLoader.getSystemPrompt());
       return {
@@ -101,6 +106,34 @@ describe("агент роли внутри сервера", () => {
 
   const call = (tools: Map<string, any>, name: string, params: any) =>
     tools.get(name).execute(`call-${name}`, params);
+
+  it("задача получает AGENTS и skills своей роли, а write остаётся в проекте", async () => {
+    const { taskId } = builderTask("Ресурсы роли в проекте");
+    const home = ensureRoleHome("builder");
+    const agentsBefore = fs.readFileSync(home.agents, "utf8");
+    const skill = path.join(home.skills, "task-probe", "SKILL.md");
+    const project = path.join(home.workspace, "project-probe");
+    fs.mkdirSync(path.dirname(skill), { recursive: true });
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(skill, "---\nname: task-probe\ndescription: Task probe\n---\nProbe.\n");
+    fs.writeFileSync(home.agents, "Инструкции именно разработчика");
+    script.steps = null;
+    try {
+      const run = await runRoleInProcess({ taskId, role: "builder", cwd: project });
+      await run.completion;
+      const options = script.sessions.at(-1);
+      expect(options.cwd).toBe(project);
+      expect(options.resourceLoader.getSkills().skills.map((s: any) => s.name)).toContain("task-probe");
+      expect(options.resourceLoader.getAgentsFiles().agentsFiles[0].content).toBe("Инструкции именно разработчика");
+      const write = options.tools.find((t: any) => t.name === "write");
+      await write.execute("probe", { path: "result.txt", content: "project result" });
+      expect(fs.readFileSync(path.join(project, "result.txt"), "utf8")).toBe("project result");
+    } finally {
+      fs.writeFileSync(home.agents, agentsBefore);
+      fs.rmSync(path.dirname(skill), { recursive: true, force: true });
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
 
   it("выключенная Система допускает только явный запуск владельца и завершение текущего захода", async () => {
     const { taskId, stepId } = builderTask("Ручной запуск при выключенной системе");

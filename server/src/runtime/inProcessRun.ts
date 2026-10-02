@@ -1,4 +1,5 @@
-import { instructionResources } from "./instructionResources.js";
+import { instructionResources, createTaskResourceLoader } from "./instructionResources.js";
+import { ensureRoleHome } from "./roleHome.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
 import { renderInstruction, effectiveRules, registerInstructionBlock, instructionManifest } from "../lib/roleContextResolver.js";
@@ -14,11 +15,9 @@ import {
   createAgentSession,
   createCodingTools,
   createReadOnlyTools,
-  createExtensionRuntime,
   defineTool,
   SessionManager,
   SettingsManager,
-  type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import db from "../db.js";
@@ -135,7 +134,6 @@ const execFileAsync = promisify(execFile);
  * JSON на stdout), не полноценный MCP-хендшейк с долгоживущим процессом.
  * Реализации остаются одним кодом в mcp_server.py — не копируем в TS.
  */
-const RESEARCH_SERVER_SCRIPT = path.join(process.cwd(), "scripts", "research_server.py");
 const RESEARCH_TOOL_TIMEOUT_MS = 90_000; // web_get/youtube/ocr реально не мгновенные
 
 /**
@@ -155,7 +153,9 @@ async function callResearchTool(name: string, args: unknown): Promise<unknown> {
     // execFileSync — аргументы пишем в stdin самого child вручную, до
     // ожидания результата (PromiseWithChild даёт доступ к процессу через
     // .child, не дожидаясь await).
-    const pending = execFileAsync("python3", [RESEARCH_SERVER_SCRIPT, "--call", name], {
+    const home = ensureRoleHome("researcher");
+    const pending = execFileAsync("python3", [path.join(home.scripts, "research_server.py"), "--call", name], {
+      cwd: home.workspace,
       timeout: RESEARCH_TOOL_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
       env: {
@@ -622,19 +622,7 @@ export async function runRoleInProcess(input: {
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
   ].join("\n\n");
-  const resourceLoader = {
-    getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => systemPrompt,
-    getSystemPromptSource: () => undefined,
-    getAppendSystemPrompt: () => [],
-    getAppendSystemPromptSources: () => [],
-    extendResources: () => {},
-    reload: async () => {},
-  } as unknown as ResourceLoader;
+  const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
 
   // Снимок фактического system prompt, который модель получит в этом запуске.
 // Записывается в tasks.composed_prompt_snapshot — это «что видела модель»,
@@ -659,7 +647,7 @@ try {
     customTools,
     sessionManager: SessionManager.continueRecent(cwd, sessionDir(taskId, role, input.subtaskId)),
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
-  } as any).catch(async error => { await composio.close(); throw error; });
+  } as any).catch(async error => { resourceLoader.disposeResources(); await composio.close(); throw error; });
 
   const runId = `inproc_${crypto.randomUUID()}`;
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
@@ -706,6 +694,7 @@ try {
       clearInterval(beat);
       activeRuns.delete(runId);
       session.dispose();
+      resourceLoader.disposeResources();
       await composio.close().catch(() => {});
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
