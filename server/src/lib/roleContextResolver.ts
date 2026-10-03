@@ -1,3 +1,4 @@
+import {taskBriefInstruction} from "./taskBrief.js";
 /**
  * Каталог слоёв контекста запуска ролей и единый resolver
  * (`compose(role, mode)`). Карточка `15c2db1f-521f-4fae-8e47-6ac18458c966`,
@@ -355,7 +356,7 @@ export function composeLayer(role: string, layerKey: string, ownerId?:string): C
  const commandRow = spec.scope === "command" ? readActiveOverride("command", "*", layerKey) : null;
  const row = roleRow ?? commandRow;
  return {layer: layerKey, title: spec.title, group: spec.group, defaultText: original,
-  effective: (layerKey === "role.prompt" || layerKey.startsWith("owner.")) ? original : (row?.text ?? original),
+  effective: taskBriefInstruction(layerKey, (layerKey === "role.prompt" || layerKey.startsWith("owner.")) ? original : (row?.text ?? original)),
   source: row ? (roleRow ? "override" : "command_default") : "original",
   origin: {kind: spec.sourceKind, ref: spec.originRef}, version: revision("role", role, layerKey, ownerId),
   roleVersion: revision("role", role, layerKey, ownerId), commandVersion: revision("command", "*", layerKey),

@@ -23,7 +23,8 @@ class InstructionSnapshotTests(unittest.TestCase):
             with patch.dict(os.environ, {"TASKFLOW_INSTRUCTION_SNAPSHOT": snapshot}):
                 init = mcp_server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
                 listed = mcp_server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-            self.assertEqual(init["result"]["instructions"], "Инструкция из снимка")
+            self.assertTrue(init["result"]["instructions"].startswith("Инструкция из снимка"))
+            self.assertIn("Критерии приёмки", init["result"]["instructions"])
             updated = listed["result"]["tools"]
             self.assertEqual(updated[0]["description"], "Описание из снимка")
             self.assertEqual(updated[0]["name"], first["name"])

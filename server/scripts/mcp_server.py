@@ -38,6 +38,8 @@
 """
 from __future__ import annotations
 
+from task_brief import instruction as brief_instruction, description as brief_description, INSTRUCTIONS as BRIEF_INSTRUCTIONS
+
 import hmac
 import json
 import mimetypes
@@ -999,8 +1001,8 @@ def t_project_tasks(args):
 
 
 def t_create_task(args):
-    body = {"title": args["title"]}
-    for key in ("description", "project_id", "assignee_id", "due_date", "priority", "preparation"):
+    body = {"title": args["title"], "description": brief_description(args)}
+    for key in ("parent_id", "project_id", "assignee_id", "due_date", "priority", "preparation"):
         if args.get(key) is not None:
             body[key] = args[key]
     if args.get("subtasks"):
@@ -1849,12 +1851,14 @@ TOOLS = [
     },
     {
         "name": "taskflow_create_task",
-        "description": "Завести задачу. Для плана ролей передай preparation и card.subtasks из taskflow_structure_dictation; план сохраняется черновиком без запуска.",
+        "description": BRIEF_INSTRUCTIONS + "\nЗавести задачу. Для плана ролей передай preparation и card.subtasks из taskflow_structure_dictation; план сохраняется черновиком без запуска.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "title": {"type": "string"},
-                "description": {"type": "string"},
+                "description": {"type": "string", "description": "Markdown: Работа, Результат, Критерии приёмки, Границы"},
+                "brief": {"type": "object", "properties": {k: {"type": "string", "minLength": 1} for k in ("work", "result", "acceptance", "boundaries")}, "required": ["work", "result", "acceptance", "boundaries"]},
+                "parent_id": {"type": "string", "description": "Непосредственный родитель дочерней карточки; любой уровень"},
                 "project_id": {"type": "string"},
                 "assignee_id": {"type": "string"},
                 "due_date": {"type": "string", "description": "ГГГГ-ММ-ДД"},
@@ -1863,6 +1867,7 @@ TOOLS = [
                 "subtasks": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["title"],
+            "anyOf": [{"required": ["brief"]}, {"required": ["description"]}],
         },
         "fn": t_create_task,
     },
@@ -2155,7 +2160,7 @@ def instruction_text(key, fallback):
 def public_tools():
     allowed = allowed_tool_names()
     visible = TOOLS if allowed is None else [t for t in TOOLS if t["name"] in allowed]
-    return [{"name": t["name"], "description": instruction_text("tool.mcp." + t["name"], t["description"]), "inputSchema": t["inputSchema"]} for t in visible]
+    return [{"name": t["name"], "description": brief_instruction("tool.mcp." + t["name"], instruction_text("tool.mcp." + t["name"], t["description"])), "inputSchema": t["inputSchema"]} for t in visible]
 
 
 # --------------------------------------------------------------------------- JSON-RPC
@@ -2194,7 +2199,7 @@ def handle(msg):
             # не чей-то CLAUDE.md. История: инструкция разрослась до ~70
             # строк и дублировала taskflow_rules, переписана 14.09.2026
             # после обсуждения с владельцем (задача 1cc08ea5).
-            "instructions": (
+            "instructions": brief_instruction("mcp.initialize", (
                 instruction_text("mcp.initialize", "TaskFlow: задачи под учёткой агента. Правила соблюдать "
                 "строго — сервер отклоняет нарушения.\n"
                 "1. БЕРЁШЬ ЗАДАЧУ — taskflow_claim; пока работаешь, "
@@ -2223,7 +2228,7 @@ def handle(msg):
                 "дробление (subtasks vs дочерние задачи), "
                 "suggest_subtasks для оркестратора, "
                 "taskflow_structure_dictation для сырого текста.")
-            ),
+            )),
         })
 
     if method == "ping":
