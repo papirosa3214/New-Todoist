@@ -540,7 +540,7 @@ export async function startDraftTree(
   const parent = db
     .prepare("SELECT id, status, parent_id FROM tasks WHERE id = ?")
     .get(parentId) as { id: string; status: string; parent_id: string | null } | undefined;
-  if (!parent || parent.status !== "active" || parent.parent_id) return null;
+  if (!parent || parent.status !== "active") return null;
   if (db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='draft'").get(parentId)) return {started:0,queued:1};
 
   type Row = {
@@ -550,21 +550,16 @@ export async function startDraftTree(
     ready_for_pickup: number | null;
     status: string;
   };
-  const children = db
-    .prepare(
-      `SELECT id, description, assignee_id, ready_for_pickup, status
-         FROM tasks WHERE parent_id = ? ORDER BY position, created_at`,
+  const cards = db.prepare(`
+    WITH RECURSIVE tree(id) AS (
+      SELECT ? UNION SELECT t.id FROM tasks t JOIN tree p ON t.parent_id=p.id WHERE t.status='active'
+      AND NOT EXISTS (SELECT 1 FROM task_collaboration_plans plan WHERE plan.task_id=p.id AND plan.status='draft')
     )
-    .all(parentId) as Row[];
-  const cards: Row[] = children.length
-    ? children
-    : [
-        db
-          .prepare(
-            "SELECT id, description, assignee_id, ready_for_pickup, status FROM tasks WHERE id = ?",
-          )
-          .get(parentId) as Row,
-      ];
+    SELECT t.id,t.description,t.assignee_id,t.ready_for_pickup,t.status FROM tasks t JOIN tree ON tree.id=t.id
+    WHERE NOT EXISTS (SELECT 1 FROM tasks c WHERE c.parent_id=t.id)
+      AND NOT EXISTS (SELECT 1 FROM task_collaboration_plans p WHERE p.task_id=t.id AND p.status='draft')
+    ORDER BY t.position,t.created_at
+  `).all(parentId) as Row[];
   const executable = cards.filter(
     (c) =>
       c.status === "active" &&

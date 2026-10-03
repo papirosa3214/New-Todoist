@@ -2918,6 +2918,34 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: "087_task_hierarchy_recursive",
+    description: "Произвольная глубина задач с защитой от циклов в БД",
+    up: () => db.exec(`
+      DROP TRIGGER IF EXISTS tasks_hierarchy_insert;
+      DROP TRIGGER IF EXISTS tasks_hierarchy_update;
+      CREATE TRIGGER tasks_hierarchy_insert BEFORE INSERT ON tasks
+      WHEN NEW.parent_id IS NOT NULL BEGIN
+        SELECT RAISE(ABORT, 'task_hierarchy: вложенность задач не может содержать цикл')
+        WHERE NEW.parent_id=NEW.id OR EXISTS (
+          WITH RECURSIVE ancestors(id) AS (
+            SELECT NEW.parent_id UNION
+            SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id=a.id WHERE t.parent_id IS NOT NULL
+          ) SELECT 1 FROM ancestors WHERE id=NEW.id
+        );
+      END;
+      CREATE TRIGGER tasks_hierarchy_update BEFORE UPDATE OF parent_id ON tasks
+      WHEN NEW.parent_id IS NOT NULL AND NEW.parent_id IS NOT OLD.parent_id BEGIN
+        SELECT RAISE(ABORT, 'task_hierarchy: вложенность задач не может содержать цикл')
+        WHERE EXISTS (
+          WITH RECURSIVE ancestors(id) AS (
+            SELECT NEW.parent_id UNION
+            SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id=a.id WHERE t.parent_id IS NOT NULL
+          ) SELECT 1 FROM ancestors WHERE id=NEW.id
+        );
+      END;
+    `),
+  },
 ];
 
 /**

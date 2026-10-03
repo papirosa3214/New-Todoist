@@ -45,24 +45,8 @@ export function validateLinearSnapshot(snapshot: LinearSnapshot) {
   }
 }
 
-/** Вложенность в TaskFlow одна (02.10.2026), в Linear — любая: задача
- *  глубже первого уровня вешается на самого верхнего предка. Дерево
- *  сплющивается, ничего не теряется. Цикл исключён validateLinearSnapshot. */
-const rootCache = new WeakMap<LinearSnapshot, Map<string, LinearIssue>>();
-function rootParentId(issue: LinearIssue, snapshot: LinearSnapshot): string | null {
-  if (!issue.parent) return null;
-  let map = rootCache.get(snapshot);
-  if (!map) {
-    map = new Map(snapshot.issues.map((i) => [i.id, i]));
-    rootCache.set(snapshot, map);
-  }
-  let id = issue.parent.id;
-  for (let ancestor = map.get(id); ancestor?.parent; ancestor = map.get(id)) id = ancestor.parent.id;
-  return id;
-}
-
 function fields(issue: LinearIssue, taskIds: Map<string, string>, snapshot: LinearSnapshot): Fields {
-  const root = rootParentId(issue, snapshot);
+  const root = issue.parent?.id ?? null;
   return { title: issue.title.trim(), description: issue.description || null, priority: issue.priority || 4,
     due_date: issue.dueDate || null, status: issue.state.type === "completed" ? "completed" : "active",
     parent_id: root ? taskIds.get(root)! : null };
@@ -124,22 +108,14 @@ function validateLocalHierarchy(snapshot: LinearSnapshot, ids: Map<string, strin
   for (const issue of snapshot.issues) {
     const mapping: any = db.prepare("SELECT applied_fields FROM linear_import_tasks WHERE owner_id=? AND workspace_id=? AND source_id=?").get(owner, snapshot.workspace.id, issue.id);
     const current: any = db.prepare("SELECT parent_id,agent_state,ready_for_pickup FROM tasks WHERE id=?").get(ids.get(issue.id));
-    const rootId = rootParentId(issue, snapshot);
+    const rootId = issue.parent?.id ?? null;
     const remote = rootId ? ids.get(rootId)! : null;
     if (!mapping || (!(current?.agent_state || current?.ready_for_pickup) && (current?.parent_id === JSON.parse(mapping.applied_fields).parent_id || current?.parent_id === remote))) {
       if (remote) parent.set(ids.get(issue.id)!, remote); else parent.delete(ids.get(issue.id)!);
     }
   }
   ensureAcyclic([...parent.entries()]);
-  // Вложенность одна: импорт не должен сделать дочернюю задачу из той, у
-  // которой в TaskFlow уже есть свои дочерние, или повесить задачу на дочернюю.
-  const imported = new Set(snapshot.issues.map((issue) => ids.get(issue.id)!));
-  for (const [child, parentId] of parent) {
-    if (!imported.has(child) && !imported.has(parentId)) continue;
-    if (parent.has(parentId)) {
-      throw new LinearSourceError("После импорта появилась бы задача второго уровня вложенности: в TaskFlow дочерние задачи бывают только у задач верхнего уровня. Отвяжите локальные дочерние задачи и повторите.", 409);
-    }
-  }
+
 }
 
 export function createLinearPreview(owner: string, snapshot: LinearSnapshot, projectId: string | null) {

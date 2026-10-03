@@ -1,13 +1,3 @@
-// Вложенность задач — ровно один уровень (владелец 02.10.2026: «у дочерних
-// задач не должно быть своих дочерних — семейка обрывается; чтобы это не
-// просто где-то в приложении закрыто, а сломаться не могло никак»).
-//
-// Задача либо верхнего уровня (может иметь дочерние), либо дочерняя (своих
-// дочерних не имеет). Держится в два слоя:
-//   • эта проверка — понятный отказ в API и в путях, которые сами вешают
-//     задачи на родителя (импорт Linear, результаты диагностики);
-//   • триггеры БД (миграция 084_task_hierarchy_one_level) — последняя
-//     линия: любой код, пишущий в tasks, получит отказ от самой базы.
 import db from "../db.js";
 
 /** Префикс ошибки триггера БД — по нему маршруты узнают отказ иерархии. */
@@ -23,11 +13,13 @@ export function hierarchyRefusal(taskId: string | null, parentId: string): strin
     | { title: string; parent_id: string | null }
     | undefined;
   if (!parent) return "нет такой родительской задачи";
-  if (parent.parent_id) {
-    return `«${parent.title}» сама дочерняя: вложенность в TaskFlow одна — дочернюю задачу можно повесить только на задачу верхнего уровня`;
-  }
-  if (taskId && db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? LIMIT 1").get(taskId)) {
-    return "у этой задачи есть свои дочерние — дочерней она стать не может, иначе вложенность станет двухуровневой";
+  const seen = new Set<string>();
+  let ancestor: string | null = parentId;
+  while (ancestor) {
+    if (ancestor === taskId || seen.has(ancestor)) return "вложенность задач не может содержать цикл";
+    seen.add(ancestor);
+    const row = db.prepare("SELECT parent_id FROM tasks WHERE id=?").get(ancestor) as {parent_id: string | null} | undefined;
+    ancestor = row?.parent_id ?? null;
   }
   return null;
 }
@@ -41,11 +33,6 @@ export function hierarchyErrorText(error: unknown): string | null {
 
 /** Задачи, нарушающие правило (созданные до него), — для журнала при старте. */
 export function hierarchyViolations(): Array<{ id: string; title: string; parent_id: string }> {
-  return db
-    .prepare(
-      `SELECT c.id, c.title, c.parent_id FROM tasks c
-         JOIN tasks p ON p.id = c.parent_id
-        WHERE p.parent_id IS NOT NULL`,
-    )
-    .all() as Array<{ id: string; title: string; parent_id: string }>;
+  const rows = db.prepare("SELECT id,title,parent_id FROM tasks WHERE parent_id IS NOT NULL").all() as Array<{id:string;title:string;parent_id:string}>;
+  return rows.filter(row => hierarchyRefusal(row.id, row.parent_id) !== null);
 }

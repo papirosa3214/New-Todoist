@@ -576,13 +576,13 @@ if (isMain) {
         if (resumed || blocked) console.log(`[plan] после рестарта: продолжено ${resumed}, остановлено ${blocked}`);
       })
       .catch((error) => console.error("[plan] восстановление брошенных узлов не удалось:", error));
-    // Вложенность задач — один уровень (миграция 084). Нарушения, созданные
-    // до правила, не исправляем молча — называем их в журнале.
+    // Произвольная глубина (миграция 087): повреждённые связи и циклы
+    // не исправляем молча — называем их в журнале.
     try {
       const violations = hierarchyViolations();
       if (violations.length) {
         console.warn(
-          `[tasks] вложенность глубже одного уровня у ${violations.length} задач (созданы до правила): ` +
+          `[tasks] нарушения иерархии у ${violations.length} задач: ` +
             violations.slice(0, 10).map((v) => `«${v.title}» ${v.id}`).join(", "),
         );
       }
