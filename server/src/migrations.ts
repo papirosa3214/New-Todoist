@@ -2946,6 +2946,162 @@ const migrations: Migration[] = [
       END;
     `),
   },
+  {
+    id: "088_project_chat_topics",
+    description: "Группа проекта и темы задач",
+    up() {
+      db.exec(`
+        ALTER TABLE chats ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE;
+        ALTER TABLE chats ADD COLUMN parent_chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE;
+        CREATE UNIQUE INDEX idx_project_chat ON chats(project_id) WHERE project_id IS NOT NULL AND parent_chat_id IS NULL;
+        CREATE UNIQUE INDEX idx_task_topic ON chats(task_id) WHERE parent_chat_id IS NOT NULL;
+        CREATE INDEX idx_chat_topics ON chats(parent_chat_id);
+        CREATE TRIGGER project_topic_insert BEFORE INSERT ON chats WHEN NEW.parent_chat_id IS NOT NULL BEGIN
+          SELECT RAISE(ABORT, 'invalid project topic') WHERE NEW.task_id IS NULL OR NEW.project_id IS NULL OR NEW.kind != 'group'
+            OR NOT EXISTS (SELECT 1 FROM chats g JOIN tasks t ON t.id=NEW.task_id WHERE g.id=NEW.parent_chat_id AND g.parent_chat_id IS NULL AND g.project_id=NEW.project_id AND t.project_id=NEW.project_id);
+        END;
+      `);
+    },
+  },
+  {
+    id: "089_auto_preparation_queue",
+    description: "Версионная очередь подготовки задач",
+    up() {
+      db.exec(`
+        CREATE TABLE task_preparation_jobs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          input_version INTEGER NOT NULL,
+          snapshot TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','ready','needs_clarification','structure_review','skipped','superseded','failed')),
+          worker_id TEXT, lease_until TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+          available_at TEXT NOT NULL DEFAULT (datetime('now')),
+          result_json TEXT, plan_id TEXT REFERENCES task_collaboration_plans(id) ON DELETE SET NULL,
+          error TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(task_id,input_version)
+        );
+        CREATE INDEX idx_preparation_queue ON task_preparation_jobs(status,available_at);
+        CREATE TRIGGER enqueue_new_task_preparation AFTER INSERT ON tasks
+        WHEN NEW.project_id IS NOT NULL AND NEW.status='active' BEGIN
+          INSERT INTO task_preparation_jobs(task_id,input_version,snapshot) VALUES (NEW.id,1,json_object('title',NEW.title,'description',NEW.description,'project_id',NEW.project_id));
+        END;
+        CREATE TRIGGER enqueue_changed_task_preparation AFTER UPDATE OF title,description,project_id ON tasks
+        WHEN NEW.project_id IS NOT NULL AND NEW.status='active' AND (NEW.title IS NOT OLD.title OR NEW.description IS NOT OLD.description OR NEW.project_id IS NOT OLD.project_id) BEGIN
+          INSERT INTO task_preparation_jobs(task_id,input_version,snapshot) VALUES (NEW.id,COALESCE((SELECT MAX(input_version) FROM task_preparation_jobs WHERE task_id=NEW.id),0)+1,json_object('title',NEW.title,'description',NEW.description,'project_id',NEW.project_id));
+        END;
+      `);
+    },
+  },
+  {
+    id: "090_plan_topic_events",
+    description: "Идемпотентные события версий живого графа в теме",
+    up() { db.exec(`CREATE TABLE plan_topic_events (
+      plan_id TEXT NOT NULL REFERENCES task_collaboration_plans(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+      snapshot TEXT NOT NULL,
+      broadcast_at TEXT,
+      PRIMARY KEY(plan_id,version)
+    );`); },
+  },
+  {
+    id: "091_branch_plan",
+    description: "Единое согласование планов ветки и ответственные карточек",
+    up() { db.exec(`CREATE TABLE branch_plan_members (
+      root_plan_id TEXT NOT NULL REFERENCES task_collaboration_plans(id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      plan_id TEXT NOT NULL REFERENCES task_collaboration_plans(id) ON DELETE CASCADE,
+      responsible_role TEXT NOT NULL,
+      approved_snapshot TEXT NOT NULL,
+      PRIMARY KEY(root_plan_id,task_id)
+    ); CREATE INDEX idx_branch_member_plan ON branch_plan_members(plan_id);
+    CREATE TABLE branch_rework_links (
+      root_plan_id TEXT NOT NULL REFERENCES task_collaboration_plans(id) ON DELETE CASCADE,
+      from_slot TEXT NOT NULL,
+      to_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      to_slot TEXT NOT NULL,
+      PRIMARY KEY(root_plan_id,from_slot,to_task_id,to_slot)
+    );`); },
+  },
+  {
+    id: "092_chat_message_reactions",
+    description: "Реакции участников на сообщения чата",
+    up() { db.exec(`CREATE TABLE chat_message_reactions (
+      message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL,
+      PRIMARY KEY(message_id,user_id)
+    );`); },
+  },
+  {
+    id: "093_agent_visible_text_limits",
+    description: "Краткие видимые ответы агентов; подробности остаются в артефактах",
+    up: () => {
+      for(const [table,field,actor,max] of [["comments","text","user_id","800"],["chat_messages","text","from_user_id","800"],["subtasks","result","agent_id","CASE WHEN NEW.agent_state='blocked' THEN 400 ELSE 800 END"]]) {
+        for(const event of ["INSERT","UPDATE"]) db.exec(`CREATE TRIGGER agent_short_${table}_${event.toLowerCase()} BEFORE ${event === "UPDATE" ? `UPDATE OF ${field}` : event} ON ${table}
+          WHEN (SELECT type FROM users WHERE id=NEW.${actor})='ai' AND length(NEW.${field}) > (${max})
+          BEGIN SELECT RAISE(ABORT,'Ответ агента слишком длинный: суть кратко, подробности в артефакт'); END;`);
+      }
+    },
+  },
+
+  { id: "094_plan_work_selection", description: "Выбор исходной или плановой работы", up: () => {
+    db.exec("ALTER TABLE task_collaboration_plan_nodes ADD COLUMN work_choice TEXT CHECK(work_choice IN ('original','planned'))");
+    db.exec("ALTER TABLE task_collaboration_plan_nodes ADD COLUMN original_title TEXT");
+    db.exec("UPDATE task_collaboration_plan_nodes SET work_choice='original' WHERE source_subtask_id IS NOT NULL AND plan_id IN (SELECT id FROM task_collaboration_plans WHERE status='approved')");
+  } },
+
+  { id: "095_chat_entities_task_documents", description: "Система, ссылки задач и папки артефактов", up: () => {
+    db.exec(`
+      INSERT OR IGNORE INTO users(id,name,email,password_hash,role,type,is_system_bot,initials)
+      VALUES('taskflow_system','Система','taskflow-system@invalid.local','!','service','human',1,'С');
+      ALTER TABLE chat_messages ADD COLUMN message_type TEXT CHECK(message_type IS NULL OR message_type IN ('system','task_proposal'));
+      UPDATE chat_messages SET from_user_id='taskflow_system',message_type='system'
+      WHERE id IN (SELECT message_id FROM plan_topic_events);
+      ALTER TABLE chat_messages ADD COLUMN reply_to_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL;
+      ALTER TABLE tasks ADD COLUMN artifact_folder_id INTEGER REFERENCES journal_folders(id) ON DELETE SET NULL;
+      ALTER TABLE subtask_artifact_versions ADD COLUMN note_id TEXT REFERENCES user_notes(id) ON DELETE SET NULL;
+      CREATE TRIGGER task_artifact_folder_create AFTER INSERT ON tasks BEGIN
+        INSERT INTO journal_folders(parent_id,name,position)
+          VALUES((SELECT notes_folder_id FROM projects WHERE id=NEW.project_id),substr(NEW.title,1,100),0);
+        UPDATE tasks SET artifact_folder_id=last_insert_rowid() WHERE id=NEW.id;
+      END;
+      UPDATE chat_messages SET message_type='task_proposal'
+      WHERE from_user_id='u-secretary' AND task_id IS NOT NULL AND message_type IS NULL
+        AND task_id IN (SELECT id FROM tasks WHERE creator_id='u-secretary');
+    `);
+  } },
+
+  { id: "096_plan_events_outside_chat", description: "События плана в журнале, без сообщений в чате", up: () => {
+    db.exec(`CREATE TABLE plan_event_journal(
+      plan_id TEXT NOT NULL REFERENCES task_collaboration_plans(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL, snapshot TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY(plan_id,version)
+    );
+    INSERT INTO plan_event_journal(plan_id,version,snapshot,created_at)
+      SELECT e.plan_id,e.version,e.snapshot,COALESCE(m.created_at,datetime('now'))
+      FROM plan_topic_events e LEFT JOIN chat_messages m ON m.id=e.message_id;
+    DELETE FROM chat_messages WHERE id IN (SELECT message_id FROM plan_topic_events);
+    `);
+  } },
+
+  { id: "097_shared_slot_conversation", description: "Общая сессия работы и обсуждения слота", up: () => {
+    db.exec(`CREATE TABLE slot_sessions(
+      subtask_id TEXT PRIMARY KEY REFERENCES subtasks(id) ON DELETE CASCADE,
+      session_file TEXT NOT NULL, cwd TEXT NOT NULL,
+      session_id TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    ALTER TABLE chat_messages ADD COLUMN subtask_id TEXT REFERENCES subtasks(id) ON DELETE SET NULL;
+    ALTER TABLE chat_messages ADD COLUMN recipient_subtask_id TEXT REFERENCES subtasks(id) ON DELETE SET NULL;
+    CREATE TABLE slot_topic_inbox(
+      message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+      subtask_id TEXT NOT NULL REFERENCES subtasks(id) ON DELETE CASCADE,
+      delivered_at TEXT, PRIMARY KEY(message_id,subtask_id)
+    );`);
+  } },
+
 ];
 
 /**

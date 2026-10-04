@@ -74,7 +74,8 @@ describe("шаг плана — только своей роли", () => {
     expect((db.prepare("SELECT done FROM subtasks WHERE id = ?").get(qaStep) as { done: number }).done).toBe(0);
   });
 
-  it("QA не начинает свой шаг, пока архитектор не сдал", async () => {
+  it("QA не начинает свой шаг, пока архитектор не сдал, включая повтор после блокировки", async () => {
+    db.prepare("UPDATE subtasks SET agent_state='blocked' WHERE id=?").run(qaStep);
     const early = await app.inject({
       method: "POST",
       url: `/api/subtasks/${qaStep}/work`,
@@ -86,13 +87,15 @@ describe("шаг плана — только своей роли", () => {
   });
 
   it("свой шаг роль по-прежнему ведёт, владелец вмешивается явно", async () => {
+    db.prepare("UPDATE tasks SET assignee_id=NULL,agent_state=NULL,ready_for_pickup=0 WHERE id=?").run(taskId);
     const own = await app.inject({
       method: "POST",
       url: `/api/subtasks/${archStep}/work`,
       headers: as("role_architect"),
       payload: { state: "in_progress" },
     });
-    expect(own.statusCode).not.toBe(403);
+    expect(own.statusCode).toBe(200);
+    expect((db.prepare("SELECT ready_for_pickup,agent_state,assignee_id FROM tasks WHERE id=?").get(taskId) as any)).toMatchObject({ready_for_pickup:0,agent_state:null,assignee_id:null});
 
     const byOwner = await app.inject({
       method: "PATCH",
@@ -102,4 +105,11 @@ describe("шаг плана — только своей роли", () => {
     });
     expect(byOwner.statusCode).toBe(200);
   });
+  it("черновик плана не даёт стартовать слоту без согласования", async () => {
+    db.prepare("UPDATE task_collaboration_plans SET status='draft' WHERE task_id=? AND status='approved'").run(taskId);
+    const response = await app.inject({method:"POST",url:`/api/subtasks/${archStep}/work`,headers:as("role_architect"),payload:{state:"in_progress"}});
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error).toContain("не утверждён");
+  });
+
 });

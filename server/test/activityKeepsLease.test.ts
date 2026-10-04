@@ -77,6 +77,20 @@ describe("Активность продлевает аренду", () => {
     ).run(`-${minutes} minutes`, id);
   }
 
+  it("исполнитель активного шага получает поток без назначения на карточку; после блокировки право исчезает",async()=>{
+    const created=await app.inject({method:"POST",url:"/api/tasks",headers:{authorization:`Bearer ${ownerToken}`},payload:{title:"Шаг без assignee"}});
+    const id=created.json().task.id,step=id+"-step";
+    db.prepare("INSERT INTO subtasks(id,task_id,title,agent_id,agent_state,agent_heartbeat_at) VALUES(?,?,?,?,'in_progress',datetime('now','-10 minutes'))").run(step,id,"Работа",agentId);
+    const beforeStep = (db.prepare("SELECT agent_heartbeat_at FROM subtasks WHERE id=?").get(step) as any).agent_heartbeat_at;
+    const headers={authorization:`Bearer ${agentToken}`};
+    const posted=await app.inject({method:"POST",url:`/api/tasks/${id}/activity`,headers,payload:{kind:"edit",target:"ChatHTMLView.swift"}});
+    expect(posted.statusCode).toBe(200);expect(posted.json().accepted).toBe(true);
+    expect((await app.inject({method:"GET",url:`/api/tasks/${id}/activity`,headers})).json().actions).toHaveLength(1);
+    expect((db.prepare("SELECT agent_heartbeat_at FROM subtasks WHERE id=?").get(step) as any).agent_heartbeat_at).not.toBe(beforeStep);
+    db.prepare("UPDATE subtasks SET agent_state='blocked' WHERE id=?").run(step);
+    expect((await app.inject({method:"POST",url:`/api/tasks/${id}/activity`,headers,payload:{kind:"read",target:"file"}})).statusCode).toBe(404);
+  });
+
   it("действие агента обновляет отметку живости", async () => {
     const id = await taskInProgress("Активность держит аренду");
     silenceFor(id, 3);

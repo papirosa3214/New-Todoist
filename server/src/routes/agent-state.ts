@@ -1,3 +1,4 @@
+import { agentVisibleTextError, AGENT_BLOCK_TEXT_MAX } from "../lib/agentVisibleText.js";
 import { effectiveRules } from "../lib/roleContextResolver.js";
 // POST /api/tasks/:id/claim | /heartbeat | /state — the agent-work protocol
 // (see AGENT-PROTOCOL.md). Core rules (transition matrix, lease math, event
@@ -354,6 +355,12 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }>("/api/tasks/:id/claim", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
+      const claimCaller = db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as any;
+      if (claimCaller?.type === "ai") {
+        const assigned = db.prepare("SELECT assignee_id FROM tasks WHERE id=?").get(req.params.id) as any;
+        const plan = db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved')").get(req.params.id);
+        if (plan || assigned?.assignee_id !== req.userId) return reply.code(403).send({error:"Агент не назначает себя и не захватывает командную карточку. Назначения выполняет сервер; работай в своём слоте."});
+      }
       let task =
         getTaskForWrite(req.params.id, req.userId) ??
         getTaskForReview(req.params.id, req.userId);
@@ -416,23 +423,6 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       if (task.status !== "active") {
         return reply.code(400).send({
           error: "задачу можно взять в работу, только пока она активна",
-        });
-      }
-
-      // ГОТОВНОСТЬ К САМОЗАХВАТУ (миграция 026, карточка d598de9f).
-      // Карточка, собранная машиной из чата, лежит без флага, пока
-      // владелец её не откроет и не поднимет — никто её взять не может.
-      // Проверка стоит ДО leaseAlive/canTransition, чтобы живая аренда
-      // пустой карточки тоже не давала ложного «уже держит». Сообщение
-      // отдельное, чтобы агент понял, что это не «занято», а «ещё не
-      // разрешено», и не уходил в ресет по lease.
-      if ((task.ready_for_pickup ?? 0) !== 1) {
-        return reply.code(400).send({
-          error:
-            "задача ещё не готова к самозахвату: владелец не поднял " +
-            "флаг готовности. Это нормальное состояние для карточки, " +
-            "собранной машиной из чата — её владелец должен сначала " +
-            "открыть и подтвердить",
         });
       }
 
@@ -521,13 +511,6 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           claimRejection = {
             code: 400,
             error: "задачу можно взять в работу, только пока она активна",
-          };
-          return;
-        }
-        if ((latest.ready_for_pickup ?? 0) !== 1) {
-          claimRejection = {
-            code: 400,
-            error: "задача больше не готова к самозахвату",
           };
           return;
         }
@@ -840,6 +823,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
       const comment =
         typeof req.body?.comment === "string" ? req.body.comment.trim() : "";
+      const visibleError = agentVisibleTextError(req.userId, comment, state === "blocked" ? AGENT_BLOCK_TEXT_MAX : undefined);
+      if (visibleError) return reply.code(400).send({ error: visibleError });
       // Whether a comment is mandatory depends on the (from, to) pair, not
       // just `state` — see commentRequiredFor: review -> in_progress (owner
       // sending work back) needs one just as much as blocked/review do.
@@ -1324,6 +1309,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
       const comment =
         typeof req.body?.comment === "string" ? req.body.comment.trim() : "";
+      const visibleError = agentVisibleTextError(req.userId, comment, AGENT_BLOCK_TEXT_MAX);
+      if (visibleError) return reply.code(400).send({ error: visibleError });
       const attemptId = (task as any).current_attempt_id as string | null;
       if (!attemptId) {
         return reply

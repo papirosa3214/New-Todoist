@@ -177,7 +177,9 @@ class Assistant(Agent):
         return json.dumps(result, ensure_ascii=False)
 
 
-server = AgentServer()
+# LiveKit SDK ignores NO_PROXY when it takes HTTPS_PROXY implicitly.
+# Its signaling route is configured separately from the Gemini route.
+server = AgentServer(http_proxy=os.getenv("LIVEKIT_HTTP_PROXY"), num_idle_processes=1)
 
 
 @server.rtc_session()

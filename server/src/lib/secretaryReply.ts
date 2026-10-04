@@ -24,6 +24,7 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { loadChatMessage } from "./chatMessages.js";
+import { agentVisibleTextError } from "./agentVisibleText.js";
 import { memoryBlock } from "./memory.js";
 
 import { mayRequestSummary, parseSummaryRequest, collectTaskSummary, sendSummaryToSecretaryChat } from "./secretaryTaskSummary.js";
@@ -172,7 +173,7 @@ export async function deliverSecretaryReply(userText: string, mode: ChatWorkMode
     typing(false);
     return null;
   }
-  const { clean: replyText, replies: quickReplies } = failure
+  let { clean: replyText, replies: quickReplies } = failure
     ? { clean: rawReplyText, replies: null }
     : extractQuickReplies(rawReplyText);
 
@@ -190,10 +191,12 @@ export async function deliverSecretaryReply(userText: string, mode: ChatWorkMode
     )
     .get(SECRETARY_ID, turnStartedAt) as { id: string } | undefined;
 
+  const lengthError=agentVisibleTextError(SECRETARY_ID,replyText);
+  if(lengthError) { replyText=lengthError; quickReplies=null; }
   const replyId = uid();
   db.prepare(
-    `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, quick_replies, steps)
-     VALUES (?, ?, ?, 'chat', ?, ?, ?, ?)`,
+    `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, quick_replies, steps, message_type)
+     VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?)`,
   ).run(
     replyId,
     SECRETARY_ID,
@@ -202,6 +205,7 @@ export async function deliverSecretaryReply(userText: string, mode: ChatWorkMode
     createdTask?.id ?? null,
     quickReplies ? JSON.stringify(quickReplies) : null,
     steps ? JSON.stringify(steps) : null,
+    createdTask ? "task_proposal" : null,
   );
   db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
 

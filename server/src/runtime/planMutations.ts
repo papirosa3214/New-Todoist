@@ -478,7 +478,20 @@ export function applyPlanOps(
       removed: new Set(),
       skipped: new Set(),
     };
-    for (const op of ops) applyOne(op, w, plan, steps, actor, reason);
+    const normalize=(text:string|null|undefined)=>(text??"").normalize("NFKC").trim().replace(/\s+/g," ").toLocaleLowerCase();
+    const duplicates:string[]=[];
+    for(const op of ops){
+      if(op.op==="add_step"){
+        const after=[...new Set(op.after??(actor.kind==="role"?[actor.slotKey]:[]))].sort();
+        const before=[...new Set(op.before??[])].sort();
+        const same=[...w.nodes.values()].find(n=>!n.skipped_at&&!n.rework_of_key&&normalize(n.expected_result)===normalize(op.expected_result)&&normalize(n.instructions)===normalize(op.instructions)&&
+          JSON.stringify(w.edges.filter(e=>e.to_slot_key===n.slot_key).map(e=>e.from_slot_key).sort())===JSON.stringify(after)&&
+          JSON.stringify(w.edges.filter(e=>e.from_slot_key===n.slot_key).map(e=>e.to_slot_key).sort())===JSON.stringify(before));
+        if(same){duplicates.push(same.slot_key);continue;}
+      }
+      applyOne(op,w,plan,steps,actor,reason);
+    }
+    if(duplicates.length===ops.length)return {status:"applied",version:plan.version,opId:"existing",added:duplicates};
     validate(w);
 
     const over = opts.bypassBudget ? null : overRoleBudget(w, actor);

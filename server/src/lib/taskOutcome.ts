@@ -9,6 +9,7 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { roleTitle } from "../roleRouting.js";
 import { liveServerRepo, roleBranch } from "../runtime/roleWorkspace.js";
+import { ensureTaskArtifactFolder } from "./taskArtifactFolder.js";
 import { markdownToTiptap } from "./markdownToTiptap.js";
 
 export type TaskOutcome = {
@@ -20,6 +21,8 @@ export type TaskOutcome = {
 
 /** Документ, записанный по карточке (ролью через doc_write или итог). */
 export function recordTaskDocument(taskId: string, noteId: string, actorId: string | null, kind: "doc_written" | "outcome_note" = "doc_written"): void {
+  const folderId = ensureTaskArtifactFolder(taskId);
+  db.prepare("UPDATE user_notes SET folder_id=? WHERE id=?").run(folderId,noteId);
   const seen = db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = ? AND field = ? LIMIT 1").get(taskId, kind, noteId);
   if (!seen) logEvent({ taskId, actorId, kind, field: noteId });
 }

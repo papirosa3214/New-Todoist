@@ -425,3 +425,11 @@ export function allLabelsOwnedByUser(
     .all(userId, ...unique) as Array<{ id: string }>;
   return owned.length === unique.length;
 }
+
+/** Commentary is narrower than editing a card: an assigned approved slot may report its work. */
+export function getTaskForComment(taskId:string,userId:string):any|undefined {
+  return getTaskForWrite(taskId,userId) ?? db.prepare(`SELECT t.* FROM tasks t WHERE t.id=? AND EXISTS (
+    SELECT 1 FROM subtasks s JOIN task_collaboration_plans p ON p.id=s.collaboration_plan_id
+    WHERE s.task_id=t.id AND s.agent_id=? AND s.done=0 AND p.status='approved'
+  )`).get(taskId,userId);
+}

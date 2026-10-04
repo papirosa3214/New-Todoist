@@ -255,13 +255,8 @@ export async function dispatchTaskToPi(
       error: "отдать задачу исполнителю можно только пока она активна",
     };
   }
-  if ((task.ready_for_pickup ?? 0) !== 1) {
-    return {
-      ok: false,
-      code: 400,
-      error:
-        "задача ещё не готова к отдаче: владелец не поднял флаг готовности",
-    };
+  if (db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved')").get(taskId)) {
+    return { ok: false, code: 409, error: "У задачи выбран план совместной работы; одиночный запуск требует смены схемы" };
   }
   if (task.assignee_id) {
     return {
@@ -314,11 +309,8 @@ export async function dispatchTaskToPi(
       };
       return;
     }
-    if ((latest.ready_for_pickup ?? 0) !== 1) {
-      rejectionRef.current = {
-        code: 400,
-        error: "задача больше не готова к отдаче",
-      };
+    if (db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved')").get(taskId)) {
+      rejectionRef.current = { code: 409, error: "У задачи выбран план совместной работы" };
       return;
     }
     if (latest.assignee_id) {

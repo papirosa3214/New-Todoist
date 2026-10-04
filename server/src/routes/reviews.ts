@@ -1,3 +1,5 @@
+import { completePlanFinalReview } from "../runtime/planReviewLifecycle.js";
+import { unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import crypto from "crypto";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -88,6 +90,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
       task_revision?: number;
       verdict?: string;
       findings?: string;
+      rework_steps?: string[];
     };
   }>("/api/reviews", { preHandler: authOrApiToken }, async (req: any, reply) => {
     const body = req.body ?? {};
@@ -123,7 +126,19 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
       return reply.code(409).send({ error: "версия или artifact_hash устарели" });
     }
 
+    const hasPlan = reviewer && Boolean(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId));
+    const recorded = hasPlan ? db.prepare("SELECT * FROM reviews WHERE version_id=? AND reviewer_id=? ORDER BY created_at DESC LIMIT 1").get(version.id,req.userId) as any : null;
+    if (recorded) {
+      if (recorded.verdict !== verdict) return reply.code(409).send({error:"По этой версии уже есть вердикт; повторная проверка требует новую версию результата"});
+      return reply.code(201).send({...recorded,review_id:recorded.id,handled_by_plan:true,deduplicated:true});
+    }
+    const previous = db.prepare("SELECT * FROM reviews WHERE version_id=? AND reviewer_id=? AND verdict=? AND COALESCE(findings,'')=? ORDER BY created_at DESC LIMIT 1").get(version.id,req.userId,verdict,findings ?? "") as any;
+    if (previous) return reply.code(201).send({...previous,review_id:previous.id,handled_by_plan:Boolean(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)),deduplicated:true});
+    if (body.rework_steps !== undefined && (!Array.isArray(body.rework_steps) || body.rework_steps.some((slot:any)=>typeof slot!=="string"))) return reply.code(400).send({error:"rework_steps — список ключей этапов"});
+    let planReturn:ReturnType<typeof completePlanFinalReview> = null;
     const reviewId = crypto.randomUUID();
+    try {
+      db.transaction(()=>{
     db.prepare(
       `INSERT INTO reviews
          (id, task_id, version_id, task_revision, reviewer_id, artifact_hash,
@@ -132,6 +147,13 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     ).run(reviewId, taskId, version.id, version.task_revision, req.userId,
       version.artifact_hash, criteriaVersion, verdict, findings);
     logEvent({ taskId, actorId: req.userId, kind: "review_recorded", field: "result_version", toValue: `${version.version_no}:${verdict}` });
+        if (reviewer) planReturn = completePlanFinalReview(taskId,req.userId,verdict,findings ?? "",body.rework_steps);
+      })();
+    } catch (error) {
+      return reply.code(422).send({error:error instanceof Error ? error.message : String(error)});
+    }
+    const managedPlan = planReturn as ReturnType<typeof completePlanFinalReview>;
+    if (managedPlan) await unlockReadyPlanSubtasks(managedPlan.planId,taskId,req.userId);
     // Итог карточки — заметкой в документацию проекта (владелец 01.10.2026).
     try {
       writeOutcomeNote(taskId, req.userId);
@@ -167,7 +189,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
         // окно шире, чем самая длинная retry-петля LLM, но уже, чем реальный
         // повторный вердикт по той же задаче (такого сценария у нас нет —
         // verdict один на версию).
-        const dup = db
+        const dup = managedPlan ? undefined : db
           .prepare(
             `SELECT id FROM comments
               WHERE task_id = ? AND user_id = ?
@@ -213,7 +235,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
       review_id: reviewId, task_id: taskId, version_id: version.id,
       task_revision: version.task_revision, reviewer_id: req.userId,
       artifact_hash: version.artifact_hash, criteria_version: criteriaVersion,
-      verdict, findings,
+      verdict, findings, handled_by_plan: Boolean(managedPlan),
     });
   });
 }

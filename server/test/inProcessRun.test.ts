@@ -12,6 +12,8 @@ const script = vi.hoisted(() => ({
   systemPrompts: [] as string[],
   systemOn: true,
   sessions: [] as any[],
+  steering: [] as string[],
+  emit: null as null | ((event: any) => void),
 }));
 
 const taskContext = vi.hoisted(() => ({
@@ -32,10 +34,11 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
       script.systemPrompts.push(options.resourceLoader.getSystemPrompt());
       return {
         session: {
-          subscribe: () => () => {},
+          subscribe: (listener: (event: any) => void) => { script.emit=listener; return () => {}; },
           prompt: async (text: string) => {
             if (script.steps) await script.steps(tools, text);
           },
+          steer: async (text:string) => {script.steering.push(text);},
           abort: async () => {},
           dispose: () => {},
         },
@@ -65,7 +68,7 @@ process.env.TASKFLOW_KICK_IN_TESTS = "1";
 const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
 const { demoteSeededOwner, seedRoleAccounts } = await import("./helpers/seedOwner.js");
-const { runRoleInProcess, kickRoleTask, kickRoleTaskStrict, _settleInProcessRunsForTests } = await import("../src/runtime/inProcessRun.js");
+const { taskflowTools, deliverTopicToWork, runRoleInProcess, kickRoleTask, kickRoleTaskStrict, _settleInProcessRunsForTests } = await import("../src/runtime/inProcessRun.js");
 const { buildDependencyContext } = await import("../src/runtime/dependencyContext.js");
 const { contextVersionOf } = await import("../src/runtime/taskContextVersion.js");
 const { roleUserId } = await import("../src/roleRouting.js");
@@ -106,6 +109,91 @@ describe("агент роли внутри сервера", () => {
 
   const call = (tools: Map<string, any>, name: string, params: any) =>
     tools.get(name).execute(`call-${name}`, params);
+
+  it("командные инструменты работают по слоту без исполнителя карточки и разрешения на карточку", async () => {
+    const {taskId,stepId}=builderTask("Слот без захвата карточки");
+    db.prepare("UPDATE tasks SET assignee_id=NULL,ready_for_pickup=0 WHERE id=?").run(taskId);
+    const planId=taskId+"-plan";
+    db.prepare("INSERT INTO task_collaboration_plans(id,task_id,revision,status,profile,rationale,created_by) VALUES(?,?,99,'approved','manual','test',?)").run(planId,taskId,ownerId);
+    db.prepare("INSERT INTO task_collaboration_plan_nodes(id,plan_id,slot_key,role_key,required,expected_result) VALUES(?,?,'work','builder',1,'Код')").run(planId+"-node",planId);
+    db.prepare("UPDATE subtasks SET collaboration_plan_id=?,plan_node_key='work',agent_id='role_builder' WHERE id=?").run(planId,stepId);
+    const tools=new Map(taskflowTools("builder",null,taskId,stepId).map((t:any)=>[t.name,t]));
+    expect(tools.has("taskflow_claim")).toBe(false);
+    await call(tools,"taskflow_subtask_work",{id:stepId,state:"in_progress"});
+    await call(tools,"taskflow_heartbeat",{id:taskId});
+    const mine=await call(tools,"taskflow_my_tasks",{state:"in_progress"});
+    expect(JSON.stringify(mine)).toContain(taskId);
+    await call(tools,"taskflow_comment",{id:taskId,text:"Работаю в назначенном слоте"});
+    await call(tools,"taskflow_state",{id:taskId,state:"blocked",comment:"Нужен доступ"});
+    expect((db.prepare("SELECT agent_state FROM subtasks WHERE id=?").get(stepId) as any).agent_state).toBe("blocked");
+    expect((db.prepare("SELECT assignee_id,ready_for_pickup FROM tasks WHERE id=?").get(taskId) as any)).toMatchObject({assignee_id:null,ready_for_pickup:0});
+  });
+
+  it("действия терминала поступают в live-поток с допустимым типом run", async () => {
+    const {taskId}=builderTask("Живой поток терминала");
+    script.steps=async(tools)=>{
+      await call(tools,"taskflow_claim",{id:taskId});
+      script.emit?.({type:"tool_execution_start",toolName:"bash",args:{command:"pwd"}});
+      let actions:any[]=[];
+      for(let i=0;i<20 && !actions.length;i++) {
+        await new Promise(r=>setTimeout(r,10));
+        const response=await app.inject({method:"GET",url:`/api/tasks/${taskId}/activity`,headers:{authorization:`Bearer ${ownerToken}`}});
+        actions=response.json().actions;
+      }
+      expect(actions.some(a=>a.kind==="run"&&a.target==="pwd")).toBe(true);
+    };
+    try {const run=await runRoleInProcess({taskId,role:"builder",mode:"work"});await run.completion;}
+    finally {script.steps=null;}
+  });
+
+  it("сообщение темы попадает в активную SDK сессию без второго запуска",async()=>{
+    const {taskId}=builderTask("Обсудить текущую работу");
+    let entered!:()=>void, release!:()=>void;
+    const started=new Promise<void>(r=>entered=r);
+    const gate=new Promise<void>(r=>release=r);
+    script.steering=[];
+    script.steps=async()=>{entered();await gate;};
+    const run=await runRoleInProcess({taskId,role:"builder",mode:"reply"});
+    await started;
+    try {
+      const count=script.sessions.length;
+      expect(await deliverTopicToWork(taskId,"builder","message-1","Уточни формат")).toBe("queued");
+      expect(script.steering).toHaveLength(1);
+      expect(script.steering[0]).toContain("message-1");
+      expect(script.sessions).toHaveLength(count);
+      const headers={authorization:`Bearer ${ownerToken}`};
+      const project=(await app.inject({method:"POST",url:"/api/projects",headers,payload:{name:"Тема активного запуска"}})).json();
+      db.prepare("UPDATE tasks SET project_id=? WHERE id=?").run(project.id,taskId);
+      const topic=(await app.inject({method:"POST",url:`/api/tasks/${taskId}/topic`,headers,payload:{}})).json().chat;
+      await app.inject({method:"POST",url:`/api/chats/${topic.id}/members`,headers,payload:{member_id:"role_builder"}});
+      const sent=await app.inject({method:"POST",url:`/api/chats/${topic.id}/messages`,headers,payload:{text:"@builder Уточнение из темы"}});
+      expect(sent.statusCode).toBe(200);
+      expect(script.steering).toHaveLength(2);
+      expect(script.steering[1]).toContain(sent.json().message.id);
+      expect(script.sessions).toHaveLength(count);
+      expect(await deliverTopicToWork(taskId,"qa","message-2","Проверь")).toBe("idle");
+    } finally {release();await run.completion;script.steps=null;}
+  });
+
+  it("два слота одной роли требуют адресации конкретного слота",async()=>{
+    const {taskId,stepId}=builderTask("Две ветки");
+    const second=`${taskId}-s2`;
+    db.prepare("UPDATE subtasks SET plan_node_key='first_slot' WHERE id=?").run(stepId);
+    db.prepare("INSERT INTO subtasks(id,task_id,title,position,plan_node_key) VALUES (?,?,'Вторая',2,'second_slot')").run(second,taskId);
+    let entered!:()=>void, release!:()=>void, starts=0;
+    const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+    script.steering=[];
+    script.steps=async()=>{starts++;if(starts===2)entered();await gate;};
+    const first=await runRoleInProcess({taskId,role:"builder",subtaskId:stepId,prompt:"Обсудить",mode:"reply"});
+    const next=await runRoleInProcess({taskId,role:"builder",subtaskId:second,prompt:"Обсудить",mode:"reply"});
+    await started;
+    try {
+      expect(await deliverTopicToWork(taskId,"builder","ambiguous","Вопрос")).toBe("busy");
+      expect(script.steering).toHaveLength(0);
+      expect(await deliverTopicToWork(taskId,"builder","targeted","Вопрос","second_slot")).toBe("queued");
+      expect(script.steering).toHaveLength(1);
+    } finally {release();await Promise.all([first.completion,next.completion]);script.steps=null;}
+  });
 
   it("задача получает AGENTS и skills своей роли, а write остаётся в проекте", async () => {
     const { taskId } = builderTask("Ресурсы роли в проекте");

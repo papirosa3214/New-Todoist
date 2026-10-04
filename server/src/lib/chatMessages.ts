@@ -34,8 +34,18 @@ export function formatChatMessage(message: any) {
     `SELECT id, file_name, mime, size FROM attachments
       WHERE chat_message_id = ? ORDER BY created_at`,
   );
+  const event=message.message_type==='system' || !!db.prepare("SELECT 1 FROM plan_topic_events WHERE message_id=?").get(message.id);
+  let displayText=typeof message.text==="string" ? unwrapRoleEnvelope(message.text) : message.text;
+  if(typeof displayText==="string" && message.task_id) displayText=displayText.replace(/\[slot: ([^\]]+)\]/g,(_match:string,key:string)=>{
+    const row=db.prepare("SELECT s.title FROM subtasks s WHERE s.task_id=? AND s.plan_node_key=? ORDER BY s.rowid DESC LIMIT 1").get(message.task_id,key) as {title:string}|undefined;
+    return `[этап: ${row?.title ?? key}]`;
+  });
   return {
     ...message,
+    kind:event?'system':message.message_type ?? message.kind,
+    ...(event?{from_user_id:'taskflow_system',from_user_name:'Система',from_user_initials:'С',from_user_avatar_url:null}:{}),
+    reply_to_sender_name: message.reply_to_message_id ? (db.prepare("SELECT u.name FROM chat_messages m JOIN users u ON u.id=m.from_user_id WHERE m.id=?").get(message.reply_to_message_id) as {name:string}|undefined)?.name : null,
+    reactions: db.prepare("SELECT user_id,emoji FROM chat_message_reactions WHERE message_id=? ORDER BY user_id").all(message.id),
     attachments: attachmentsOf.all(message.id),
     // Быстрые ответы (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/) —
     // хранятся JSON-строкой (у SQLite нет своего типа массива).
@@ -45,7 +55,7 @@ export function formatChatMessage(message: any) {
     // Шаги хода роли (владелец 27.09.2026) — JSON-строка в chat_messages.steps.
     steps: message.steps ? savedSteps(message.steps) : null,
     // Конверт ok/output в ответе роли (01.10.2026) — показываем только output.
-    text: typeof message.text === "string" ? unwrapRoleEnvelope(message.text) : message.text,
+    text: displayText,
   };
 }
 

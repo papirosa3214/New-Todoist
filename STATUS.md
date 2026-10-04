@@ -62,6 +62,14 @@ SQLite), фронт на Vite+React.
 подключении, текст задания от будильника, подсказки в ответах
 инструментов. Чужой `CLAUDE.md` агенту не виден — всё нужное кладётся туда.
 
+## Developer MacBook MCP — 2026-10-04
+
+Dedicated XcodeBuildMCP channel for builder/work only. All other roles and plan/review/reply receive no tools. Private config: ~/taskflow/roles/builder/mcp/xcode.json; launcher: ~/taskflow/roles/builder/scripts/mac-xcode-mcp.sh. Mac checkout TaskFlowDeveloper, branch codex/developer-mac, forced SSH gateway Tools/developer-mac-gateway.py in canonical iOS repo. Live initialize, 47 tools, schemes/defaults/read/write verified from .110; shell and file path escape denied. Shared Unix identity is not an OS sandbox; see iOS docs/2026-10-04-developer-mac.md. 24 targeted tests and TypeScript PASS. Runtime deployed, health OK; backup ~/backups/taskflow/20261004-builder-xcode. Pending: new real developer run and build/debug through the channel; existing sessions retain their original tool catalog.
+
+## Последние изменения (03.10.2026 — live-блок подзадач)
+
+Точечное восстановление telemetry: встроенный bash теперь отправляет kind=run, grep/find=search, write=write. Недопустимый bash раньше терялся в API активности. 28 профильных тестов inProcessRun/activity PASS, включая SDK event → API buffer. На .110 применено только это отображение типов, без миграций и изменения запусков; перед изменением 0 running jobs, backup /home/maksim/backups/taskflow/20261003-work-restore; health OK. Native-компоненты восстановлены отдельной работой в TaskFlowNativeBuild, отчёт docs/2026-10-03-work-restore.md. Жалоба о пропавших комментариях требует названия текущей карточки; сохранённые комментарии в проверенной ветке и свежие записи .110 подтверждены, не утверждаем исправление конкретного модельного прогона.
+
 ## Последние изменения (29.09.2026)
 
 - **Узлы collaboration plan — обычные `subtasks`, не `task_role_slots`**
@@ -199,3 +207,9 @@ role tokens и временного JWT/MCP-пути выполнять отде
   урок `2026-09-26-gemini-live-secretary-voice-proxy.md`, раздел «Когда
   сервер выхода умрёт» (нужен HWID Мака от владельца, агенту это
   недоступно).
+
+## 2026-10-04 STEP-LIVE
+Согласованный deploy .110: telemetry по активному слоту, heartbeat слота и попытки. 21 targeted tests PASS, local tsc PASS. Backup ~/backups/taskflow/20261004-step-live. Сохранены дополнительные live-правки runtime (exports и SDK tools); перенесён только heartbeat hunk. Разработчик MAK-42 blocked, attempt released 06:11:52 UTC; после restart blocked сохранён. Серверный tsc недоступен: отсутствует typescript в node_modules; локальный tsc проверен.
+
+## 2026-10-04 RETIRE-READY
+Убран ready gate в claim/dispatch и очереди персональной работы; командный слот не требует claim карточки. Сохранены роль, утверждение, зависимости, lease. 36 tests PASS, tsc PASS; baseline failure collaborationPlanVsExecutor documented. Deployed .110; health OK; backup 20261004-retire-ready. docs/2026-10-04-retire-ready.md.

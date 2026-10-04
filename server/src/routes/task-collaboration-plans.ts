@@ -1,3 +1,10 @@
+import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
+import { ensureCardResponsible } from "../runtime/branchPlan.js";
+import {branchAssignmentRole} from "../runtime/branchPlan.js";
+import { branchRoot,branchCards,branchPresentation,approveBranch,editBranchDraft } from "../runtime/branchPlan.js";
+import { unmetDependencyIds } from "../enricher.js";
+import { ensurePlanTopic } from "../lib/projectTopics.js";
+import { taskExecutionState } from "../runtime/taskExecutionState.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import { authOrApiToken } from "../auth.js";
@@ -5,7 +12,7 @@ import { getTaskForRead, isOrchestrator, isOwner } from "../access.js";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
-import { startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { canPlanSubtaskBecomeReady, startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import {
   applyPlanOps,
   decidePlanProposal,
@@ -56,7 +63,7 @@ type NodeExtra = {
   skip_reason: string | null;
 };
 
-function present(plan: Plan) {
+function presentSingle(plan: Plan) {
   const nodes = db.prepare(`SELECT slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id,
                                    instructions, origin, added_by, added_reason, iteration, rework_of_key, skipped_at, skip_reason
                               FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY rowid`)
@@ -67,11 +74,18 @@ function present(plan: Plan) {
     ...plan,
     nodes: nodes.map((node) => ({
       slot_key: node.slot_key,
+      execution_state: (()=>{const step=db.prepare("SELECT * FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key=?").get(plan.id,node.slot_key) as any;
+        if(!step) return 'waiting';
+        if(step.done) return step.result?.startsWith('changes_requested:')?'returned':'accepted';
+        if(step.agent_state==='in_progress') return 'active';
+        if(step.agent_state==='blocked') return 'blocked';
+        return canPlanSubtaskBecomeReady(step)?'ready':'waiting';})(),
       role_key: node.role_key,
       required: node.required === 1,
       expected_result: node.expected_result,
       output_artifact: node.output_artifact_json === null ? null : JSON.parse(node.output_artifact_json) as ArtifactContract,
       source_subtask_id: node.source_subtask_id ?? null,
+      ...(()=>{const c=workChoices(plan.id).find(n=>n.slot_key===node.slot_key);return {work_choice:c?.work_choice??null,original_title:c?.original_title??null,planned_work:c?.planned_work??node.expected_result,requires_choice:c?.requires_choice??false};})(),
       // Живой план (01.10.2026): задание, кто и зачем добавил шаг, круг
       // доработки, пропуск с причиной.
       instructions: node.instructions ?? null,
@@ -89,6 +103,8 @@ function present(plan: Plan) {
   };
 }
 
+function present(plan:Plan):ReturnType<typeof presentSingle> { return branchPresentation(plan,presentSingle(plan),presentSingle); }
+
 /** Ответ на ошибку правки плана — со статусом, который она несёт. */
 function planOpFailure(reply: any, error: unknown) {
   if (error instanceof PlanOpError) return reply.code(error.status).send({ error: error.message });
@@ -99,6 +115,7 @@ function planOpFailure(reply: any, error: unknown) {
 async function afterLiveChange(planId: string, taskId: string, actorId: string): Promise<void> {
   const plan = db.prepare("SELECT status FROM task_collaboration_plans WHERE id = ?").get(planId) as { status: string } | undefined;
   if (plan?.status !== "approved") return;
+  ensurePlanTopic(taskId);
   try {
     await unlockReadyPlanSubtasks(planId, taskId, actorId);
   } catch (error) {
@@ -227,6 +244,7 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
     const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
     for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, edge.start_condition, edge.artifact_key);
   })();
+  ensureCardResponsible(taskId,id);
   return { id, revision };
 }
 
@@ -311,6 +329,17 @@ function autoProductFeatureCandidate(text: string): { includeArchitecture: boole
 }
 
 export function proposalFor(taskId: string, requested: string, productFeatureFlags?: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }) {
+  if(db.prepare("SELECT 1 FROM tasks WHERE parent_id=?").get(taskId)){
+    const root=branchRoot(taskId)===taskId, role=root?'architect':'analyst';
+    const task=db.prepare("SELECT title FROM tasks WHERE id=?").get(taskId) as {title:string};
+    return {profile:'single_executor',rationale:'Сборка результатов существующей ветки; запуск всего процесса согласуется в корневой карточке.',nodes:[{slot_key:'summary',role_key:role,required:true,expected_result:`Собрать и проверить совместимость дочерних результатов: ${task.title}`,output_artifact:null,source_subtask_id:null}] as Node[],edges:[] as Edge[]};
+  }
+  if(requested==='auto' && branchRoot(taskId)!==taskId){
+    const card=db.prepare("SELECT title,description FROM tasks WHERE id=?").get(taskId) as {title:string;description:string|null};
+    return {profile:'single_executor',rationale:'Поручение общей команды: декомпозиция уже задана дочерней карточкой.',
+      nodes:[{slot_key:'work',role_key:branchAssignmentRole(card.title),required:true,
+        expected_result:card.title,output_artifact:{key:'card_result',type:'result_pack',format:'json',required_fields:['summary','evidence','document_refs']},source_subtask_id:null}] as Node[],edges:[] as Edge[]};
+  }
   if (requested === "product_feature") {
     return { profile: "product_feature", ...productFeatureTemplate(productFeatureFlags ?? { includeArchitecture: false, includeDesign: false, includeQa: false }) };
   }
@@ -361,7 +390,7 @@ export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: {
   const task = db.prepare("SELECT title,status,agent_state,ready_for_pickup,context_version FROM tasks WHERE id=?").get(taskId) as any;
   if (options && (!task || task.status === "completed" || task.agent_state || task.ready_for_pickup || db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? LIMIT 1").get(taskId))) return null;
   let proposal = proposalFor(taskId, "auto");
-  if (!options && proposal.profile === "single_executor") return null;
+  if (!options && proposal.profile === "single_executor" && !db.prepare("SELECT 1 FROM tasks WHERE parent_id=?").get(taskId)) return null;
   const actorId = options?.actorId ?? resolveAutoProposalActorId();
   if (!actorId) return null;
   let instructions: string | null = null;
@@ -370,11 +399,11 @@ export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: {
     if (children.length) {
       // The existing hierarchy already owns decomposition. Parent work is
       // synthesis/review, not another copy of its children's execution.
-      const role = ["analyst", "critic_verifier", "builder"].find(key => ROLE_NAMES.includes(key)) ?? ROLE_NAMES[0];
+      const role = branchRoot(taskId)===taskId ? "architect" : "analyst";
       if (!role) return null;
       proposal = { profile: "single_executor", rationale: "Дочерние карточки уже существуют. Предложение касается сводного результата родителя; их работа не дублируется.",
         nodes: [{slot_key:"summary",role_key:role,required:true,expected_result:`Сводный результат «${task.title.slice(0,400)}»: собрать и проверить результаты ${children.length} дочерних карточек. Не выполнять их работу повторно; недостающие результаты явно указать.`,output_artifact:null,source_subtask_id:null}], edges:[] };
-      instructions = `Работай с существующими дочерними карточками TaskFlow. Не создавай повторную декомпозицию и не считай неполученный результат готовым. Их планы утверждаются отдельно.\n${children.slice(0,20).map(child=>`${child.id}: ${child.title} [${child.status}]`).join("\n")}\nПолный состав — в иерархии родительской карточки.`.slice(0,4000);
+      instructions = `Работай с существующими дочерними карточками TaskFlow. Не создавай повторную декомпозицию и не считай неполученный результат готовым. Вся ветка согласуется одним общим планом в корневой карточке; сборка ждёт принятых дочерних результатов.\n${children.slice(0,20).map(child=>`${child.id}: ${child.title} [${child.status}]`).join("\n")}\nПолный состав — в иерархии родительской карточки.`.slice(0,4000);
     } else {
       const unavailable = proposal.nodes.filter(node => !ROLE_NAMES.includes(node.role_key));
       if (unavailable.length) {
@@ -388,6 +417,7 @@ export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: {
     }
   }
   const created = createDraftPlan(taskId, actorId, proposal.profile, proposal.rationale, options ? task.context_version ?? null : null, proposal);
+  if (!options) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='auto_template' WHERE plan_id=?").run(created.id);
   if (options) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='linear_import',instructions=?,added_by=? WHERE plan_id=?").run(instructions, actorId, created.id);
   logEvent({ taskId, actorId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: `${proposal.profile}: ${options ? "Linear import draft" : "auto on create"}` });
   return { id:created.id, profile: proposal.profile, revision: created.revision };
@@ -399,7 +429,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!task) return reply.code(404).send({ error: "Not found" });
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan доступен владельцу или оркестратору" });
     const plans = db.prepare("SELECT * FROM task_collaboration_plans WHERE task_id = ? ORDER BY revision DESC").all(task.id) as Plan[];
-    return { plans: plans.map(present) };
+    return { plans: branchRoot(task.id)!==task.id ? [] : plans.map(present), branch_root_task_id:branchRoot(task.id)!==task.id ? branchRoot(task.id) : null };
   });
 
   app.post<{ Params: { id: string }; Body: { profile?: unknown; rationale?: unknown; context_version?: unknown; nodes?: unknown; edges?: unknown } }>("/api/tasks/:id/collaboration-plans", { preHandler: authOrApiToken }, async (req: any, reply) => {
@@ -423,6 +453,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan предлагает владелец или оркестратор" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
+    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"Уже выбран одиночный запуск; командный план недоступен"});
     const requested = String(req.body?.profile ?? "auto").trim();
     if (requested !== "auto" && !PROFILES.has(requested)) return reply.code(422).send({ error: "unknown collaboration profile" });
     const contextVersion = req.body?.context_version === undefined ? null : Number(req.body.context_version);
@@ -447,6 +478,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan предлагает владелец или оркестратор" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
+    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"Уже выбран одиночный запуск; командный план недоступен"});
     const contextVersion = req.body?.context_version === undefined ? null : Number(req.body.context_version);
     if (contextVersion !== null && (!Number.isInteger(contextVersion) || contextVersion < 1)) return reply.code(400).send({ error: "context_version должен быть положительным целым" });
 
@@ -459,13 +491,50 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!), suggested: true });
   });
 
+  app.post<{Params:{id:string;planId:string};Body:{base_version:number;slot_key:string;choice:string|null}}>("/api/tasks/:id/collaboration-plans/:planId/work-choice", {preHandler:authOrApiToken}, async(req:any,reply)=>{
+    if(!isOwner(req.userId))return reply.code(403).send({error:"Выбор работы доступен владельцу"});
+    try { db.transaction(()=>{
+      const plan=planForTask(req.params.id,req.params.planId);
+      if(!plan||plan.status!=="draft"||!getTaskForRead(plan.task_id,req.userId))throw new Error("Выбор доступен только в черновике плана");
+      if(req.body.base_version!==(plan.version??1))throw new Error("План изменился — обновите карточку");
+      if(![null,"original","planned"].includes(req.body.choice))throw new Error("choice: original | planned | null");
+      const n=workChoices(plan.id).find(n=>n.slot_key===req.body.slot_key);
+      if(!n?.requires_choice)throw new Error("У слота нет альтернативной работы");
+      db.prepare("UPDATE task_collaboration_plan_nodes SET work_choice=?,original_title=COALESCE(original_title,?) WHERE plan_id=? AND slot_key=?").run(req.body.choice,n.original_title,plan.id,n.slot_key);
+      db.prepare("UPDATE task_collaboration_plans SET version=version+1 WHERE id=?").run(plan.id);
+      logEvent({taskId:plan.task_id,actorId:req.userId,kind:"collaboration_plan_changed",field:n.slot_key,toValue:req.body.choice??"Выбор сброшен"});
+    })();return {plan:present(planForTask(req.params.id,req.params.planId)!)};
+    }catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}
+  });
+
   app.post<{ Params: { id: string; planId: string } }>("/api/tasks/:id/collaboration-plans/:planId/approve", { preHandler: authOrApiToken }, async (req: any, reply) => {
     if (!isOwner(req.userId)) return reply.code(403).send({ error: "collaboration plan утверждает владелец" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
+    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"Уже выбран одиночный запуск; командный план недоступен"});
     const plan = planForTask(task.id, req.params.planId);
     if (!plan) return reply.code(404).send({ error: "plan not found" });
     if (plan.status !== "draft") return reply.code(409).send({ error: "утвердить можно только draft plan" });
+    if(req.body?.base_version!==undefined && req.body.base_version!==(plan.version??1))return reply.code(409).send({error:"План изменился — обновите карточку"});
+    try {validateWorkChoices(plan.id);}catch(error){return reply.code(409).send({error:(error as Error).message});}
+
+    if(branchRoot(task.id)!==task.id) return reply.code(409).send({error:"План этой карточки согласуется в общем плане родителя",branch_root_task_id:branchRoot(task.id)});
+    if(branchCards(task.id).length>1){
+      try{
+        const snapshot=typeof req.body?.branch_snapshot==='string' ? req.body.branch_snapshot : '';
+        const plans=approveBranch(plan.id,req.userId,snapshot);
+        logEvent({taskId:task.id,actorId:req.userId,kind:"branch_plan_approved",field:plan.id,toValue:String(plans.length)});
+        for(const member of plans) await unlockReadyPlanSubtasks(member.id,member.task_id,req.userId);
+        return {plan:present(planForTask(task.id,plan.id)!)};
+      }catch(error){return reply.code(409).send({error:error instanceof Error ? error.message : String(error)});}
+    }
+    const automatic=db.prepare("SELECT origin FROM task_collaboration_plan_nodes WHERE plan_id=? AND origin IN ('auto_preparation','auto_template','linear_import') LIMIT 1").get(plan.id);
+    if(automatic){
+      const latest=db.prepare("SELECT status,plan_id,snapshot FROM task_preparation_jobs WHERE task_id=? ORDER BY id DESC LIMIT 1").get(task.id) as any;
+      const snapshot=latest ? JSON.parse(latest.snapshot) : null;
+      if((latest || (automatic as {origin:string}).origin === "auto_preparation") && (latest?.status!=="ready" || latest.plan_id!==plan.id || snapshot?.title!==task.title || snapshot?.description!==task.description || snapshot?.project_id!==task.project_id))
+        return reply.code(409).send({error:"Постановка изменилась или подготовка ещё не завершена. Проверьте актуальный план."});
+    }
     const prepared=db.prepare("SELECT 1 FROM task_collaboration_plan_nodes WHERE plan_id=? AND origin='task_preparation'").get(plan.id);
     if (prepared && task.needs_clarification) return reply.code(409).send({error:"Перед утверждением плана нужно уточнить постановку",question:task.clarification_question});
     const nodes = db.prepare("SELECT slot_key, role_key, expected_result, source_subtask_id FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key").all(plan.id) as Array<{ slot_key: string; role_key: string; expected_result: string; source_subtask_id: string | null }>;
@@ -477,6 +546,8 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     const rootSubtasks: Array<{ id: string; slotKey: string }> = [];
     try {
       db.transaction(() => {
+      const current=planForTask(task.id,plan.id);
+      if(current?.status!=="draft" || (req.body?.base_version!==undefined && current.version!==req.body.base_version))throw new Error("План изменился — обновите карточку");
       const existing = db.prepare("SELECT COUNT(*) AS count FROM subtasks WHERE collaboration_plan_id = ?").get(plan.id) as { count: number };
       if (existing.count !== 0) throw new Error("узлы этой revision уже materialized");
       const maxPos = (db.prepare("SELECT COALESCE(MAX(position), 0) AS m FROM subtasks WHERE task_id = ?").get(task.id) as { m: number }).m;
@@ -490,6 +561,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       // затронутых строк — не тихий пропуск узла, а отказ approve целиком.
       const claimSubtask = db.prepare(`UPDATE subtasks SET collaboration_plan_id = ?, plan_node_key = ?, agent_id = ?
                                         WHERE id = ? AND task_id = ? AND done = 0 AND collaboration_plan_id IS NULL`);
+      materializeWorkChoices(plan.id);
       nodes.forEach((node, index) => {
         if (node.source_subtask_id) {
           const claimed = claimSubtask.run(plan.id, node.slot_key, roleUserId(node.role_key), node.source_subtask_id, task.id);
@@ -504,6 +576,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       });
       db.prepare("UPDATE task_collaboration_plans SET status = 'superseded' WHERE task_id = ? AND status = 'approved'").run(task.id);
       db.prepare("UPDATE task_collaboration_plans SET status = 'approved', approved_by = ?, approved_at = datetime('now') WHERE id = ?").run(req.userId, plan.id);
+      ensurePlanTopic(task.id);
       })();
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
@@ -541,6 +614,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan правит владелец или оркестратор" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
+    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"После одиночного запуска нельзя менять командный план"});
     const plan = planForTask(task.id, req.params.planId);
     if (!plan) return reply.code(404).send({ error: "plan not found" });
     if (plan.status !== "draft") return reply.code(409).send({ error: "редактировать можно только draft plan" });
@@ -570,6 +644,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
 
     db.transaction(() => {
       if (sets.length) db.prepare(`UPDATE task_collaboration_plans SET ${sets.join(", ")} WHERE id = ?`).run(...values, plan.id);
+      db.prepare("UPDATE task_collaboration_plan_nodes SET origin='owner' WHERE plan_id=? AND origin IN ('auto_template','linear_import','auto_preparation')").run(plan.id);
       if (graph) {
         db.prepare("DELETE FROM task_collaboration_plan_edges WHERE plan_id = ?").run(plan.id);
         db.prepare("DELETE FROM task_collaboration_plan_nodes WHERE plan_id = ?").run(plan.id);
@@ -598,6 +673,11 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     const base = req.body?.base_version;
     if (base !== undefined && base !== null && !Number.isInteger(base)) return reply.code(400).send({ error: "base_version — целое" });
     try {
+      if(typeof req.body?.branch_snapshot==='string') {
+        const edited=editBranchDraft(task.id,plan.id,req.body.branch_snapshot,req.body.ops as PlanOp[],req.userId);
+        await afterLiveChange(edited.sourcePlanId,edited.sourceTaskId,req.userId);
+        return {result:edited.result,plan:present(planForTask(task.id,plan.id)!)};
+      }
       const result = applyPlanOps(plan.id, req.body?.ops as PlanOp[], { kind: "owner", id: req.userId }, {
         baseVersion: (base as number | null | undefined) ?? null,
         reason: typeof req.body?.reason === "string" ? req.body.reason : null,

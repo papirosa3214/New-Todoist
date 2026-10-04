@@ -1,3 +1,6 @@
+import { branchMembership } from "./branchPlan.js";
+import { unmetDependencyIds } from "../enricher.js";
+import { ensurePlanFinalReviewer, isPlanFinalReviewStep, queuePlanFinalReview, FINAL_REVIEW_MARKER } from "./planReviewLifecycle.js";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
@@ -73,6 +76,8 @@ const ARTIFACT_GATE_STATUSES: Record<string, Array<ArtifactVersion["status"]>> =
  */
 export function canPlanSubtaskBecomeReady(row: PlanSubtask): boolean {
   if (!row.collaboration_plan_id || !row.plan_node_key) return true;
+  if (unmetDependencyIds(row.task_id).length) return false;
+  if(db.prepare("SELECT 1 FROM tasks WHERE parent_id=? AND status<>'completed'").get(row.task_id)) return false;
   const edges = db.prepare("SELECT from_slot_key, start_condition, artifact_key FROM task_collaboration_plan_edges WHERE plan_id = ? AND to_slot_key = ?")
     .all(row.collaboration_plan_id, row.plan_node_key) as Array<{ from_slot_key: string; start_condition: string; artifact_key: string | null }>;
   return edges.every((edge) => {
@@ -113,8 +118,10 @@ export function planNodeAgentRefusal(subtaskId: string, userId: string, starting
     return `это шаг плана роли «${roleTitle(node.role_key)}»: брать и закрывать его может только она. ` +
       "Передать работу — значит сдать свой шаг, следующий откроется сам";
   }
-  if (starting && !row.agent_state && !row.done && !canPlanSubtaskBecomeReady(row)) {
-    return "шаг плана ещё ждёт предшественников — он откроется сам, когда они сдадут работу";
+  if (starting) {
+    const plan = db.prepare("SELECT status FROM task_collaboration_plans WHERE id=?").get(row.collaboration_plan_id) as {status:string} | undefined;
+    if (plan?.status !== "approved") return "план ещё не утверждён";
+    if (!canPlanSubtaskBecomeReady(row)) return "шаг плана ещё ждёт предшественников — он откроется сам, когда они сдадут работу";
   }
   return null;
 }
@@ -135,15 +142,27 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string): P
     .get(current.collaboration_plan_id, current.plan_node_key) as { role_key: string } | undefined;
   if (!node) return { ok: false, error: "узел плана не найден в DAG" };
 
+  const approved=db.prepare("SELECT status FROM task_collaboration_plans WHERE id=?").get(current.collaboration_plan_id) as {status:string}|undefined;
+  if(approved?.status!=="approved")return {ok:false,error:"План ещё не утверждён"};
+  if (!canPlanSubtaskBecomeReady(current)) return { ok: false, error: "Узел ждёт зависимостей задачи или результатов предшествующих этапов" };
+
+  const terminalCritic = node.role_key === "critic_verifier" && !db.prepare("SELECT 1 FROM task_collaboration_plan_edges WHERE plan_id=? AND from_slot_key=?").get(current.collaboration_plan_id,current.plan_node_key);
+  if (terminalCritic || isPlanFinalReviewStep(current.id)) {
+    db.prepare("UPDATE task_collaboration_plan_nodes SET instructions=? WHERE plan_id=? AND slot_key=?").run(FINAL_REVIEW_MARKER,current.collaboration_plan_id,current.plan_node_key);
+    return queuePlanFinalReview(current.id,actorId);
+  }
+
   const attemptId = crypto.randomUUID();
-  db.prepare(
-    `INSERT INTO attempts (id, task_id, subtask_id, executor_id, started_at, heartbeat_at)
-     VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
-  ).run(attemptId, current.task_id, current.id, roleUserId(node.role_key));
-  db.prepare(
-    `UPDATE subtasks SET agent_state = 'in_progress', agent_id = ?, current_attempt_id = ?, agent_heartbeat_at = datetime('now')
-     WHERE id = ?`,
-  ).run(roleUserId(node.role_key), attemptId, current.id);
+  const acquired=db.transaction(()=>{
+    const latest=subtask(current.id);
+    if(!latest||latest.done||latest.agent_state||!canPlanSubtaskBecomeReady(latest))return false;
+    if(db.prepare("SELECT 1 FROM attempts WHERE subtask_id=? AND ended_at IS NULL").get(current.id))return false;
+    db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at,heartbeat_at) VALUES(?,?,?,?,datetime('now'),datetime('now'))").run(attemptId,current.task_id,current.id,roleUserId(node.role_key));
+    const changed=db.prepare("UPDATE subtasks SET agent_state='in_progress',agent_id=?,current_attempt_id=?,agent_heartbeat_at=datetime('now') WHERE id=? AND done=0 AND agent_state IS NULL").run(roleUserId(node.role_key),attemptId,current.id);
+    if(changed.changes!==1)throw new Error("Слот уже запущен");
+    return true;
+  })();
+  if(!acquired)return {ok:false,error:"Слот уже запущен или его входные данные изменились"};
 
   try {
     const run = await runRoleInProcess({ taskId: current.task_id, role: node.role_key, subtaskId: current.id, mode: "work" });
@@ -310,7 +329,16 @@ export function finishPlanIfComplete(planId: string, taskId: string, actorId: st
     }
     logEvent({ taskId, actorId: null, kind: "collaboration_plan_completed", field: planId, toValue: String(nodes.length) });
     logEvent({ taskId, actorId: null, kind: "state_changed", field: "agent_state", fromValue: task.agent_state, toValue: "review" });
-    enqueueRoleRunJob({ taskId, reason: "review", actorId, dedupeKey: `plan-review:${planId}` });
+    const reviewEnabled = (db.prepare("SELECT requires_reviewer_review FROM tasks WHERE id=?").get(taskId) as {requires_reviewer_review:number}).requires_reviewer_review;
+    const ownerReviewDefault = (db.prepare("SELECT reviewer_first_default FROM users WHERE role='owner' ORDER BY created_at LIMIT 1").get() as {reviewer_first_default:number}|undefined)?.reviewer_first_default ?? 1;
+    const member=branchMembership(taskId);
+    if(member && member.root_task_id!==taskId && (!reviewEnabled || ownerReviewDefault!==1)){
+      db.prepare("UPDATE tasks SET status='completed',agent_state=NULL,completed_at=datetime('now') WHERE id=?").run(taskId);
+    }
+    if (reviewEnabled && ownerReviewDefault === 1) {
+      const reviewer = ensurePlanFinalReviewer(planId,taskId);
+      queuePlanFinalReview(reviewer.id,actorId ?? task.assignee_id ?? task.creator_id ?? "");
+    }
   })();
 
   if (task.creator_id && task.creator_id !== actorId) {
@@ -339,4 +367,17 @@ export function finishCompletedPlans(): number {
     if (finishPlanIfComplete(plan.id, plan.task_id, null)) finished += 1;
   }
   return finished;
+}
+
+/** Recheck approved waiting graphs after a predecessor card changes or server restarts. */
+export async function unlockDependencyPlans():Promise<void> {
+  const plans=db.prepare(`SELECT DISTINCT p.id,p.task_id,p.approved_by FROM task_collaboration_plans p
+    JOIN tasks t ON t.id=p.task_id
+    WHERE p.status='approved' AND t.status='active'
+      AND (EXISTS(SELECT 1 FROM task_dependencies d WHERE d.task_id=t.id) OR EXISTS(SELECT 1 FROM branch_plan_members b WHERE b.plan_id=p.id))
+      AND EXISTS(SELECT 1 FROM subtasks s WHERE s.collaboration_plan_id=p.id AND s.done=0 AND s.agent_state IS NULL)`).all() as Array<{id:string;task_id:string;approved_by:string}>;
+  for(const plan of plans){
+    if(unmetDependencyIds(plan.task_id).length) continue;
+    await unlockReadyPlanSubtasks(plan.id,plan.task_id,plan.approved_by);
+  }
 }
