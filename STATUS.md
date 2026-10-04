@@ -213,3 +213,22 @@ role tokens и временного JWT/MCP-пути выполнять отде
 
 ## 2026-10-04 RETIRE-READY
 Убран ready gate в claim/dispatch и очереди персональной работы; командный слот не требует claim карточки. Сохранены роль, утверждение, зависимости, lease. 36 tests PASS, tsc PASS; baseline failure collaborationPlanVsExecutor documented. Deployed .110; health OK; backup 20261004-retire-ready. docs/2026-10-04-retire-ready.md.
+
+## 2026-10-04 SLOT-SNAPSHOT (этап 1)
+Снимок рабочего состояния слота: миграция 098 `slot_work_snapshots` (версии, привязка к слоту и попытке), запись ДО смены состояния (сдача шага, сдача артефакта, блокировка), техснимок сервера при обрыве/сбое/перезапуске, запрос короткого резюме при остановке с потолком 30 с, блок «на чём остановился» в контексте работы и чата, инструмент `taskflow_slot_snapshot`, чтение `GET /api/subtasks/:id/snapshot`. 14 новых тестов PASS, `tsc` PASS. Полный набор: 874 PASS / 19 FAIL — те же 19, что падают на дереве до этой работы (проверено прогоно�� на `1780c61`: 860 PASS / те же 19; `readyDispatchBridge` 5, `inProcessRun` 3, `access` 3, `topicTeam` 2, `taskOutcome` 2, `taskPreparationApi`, `ownerUnblockRedispatch`, `ownerDictation`, `collaborationPlanVsExecutor`).
+
+**Выкладка отложена по решению владельца.** На .110 в момент готовности шёл живой ход роли (Архитектор → Разработчик по карточке «Умные напоминания»), а перезапуск его обрывает; копировать файлы тоже нельзя — сервис запущен через `tsx watch` и перезапустится сам. Поэтому код только запушен: ветка `codex/task-execution-state` = `ad24a1c`. Резервная копия БД сделана: `~/backups/taskflow/20261004-slot-snapshot` (taskflow.db + wal + shm). Все 9 изменяемых файлов на .110 побайтово совпадают с базой `fa24c94` — живых правок, которые перезапись затёрла бы, там нет; `server/test/inProcessRun.test.ts` на .110 расходится, его не трогаем.
+
+Применение одной командой, когда карточка доработает (миграция 098 применится на старте):
+
+```
+cd ~/Проекты/New-Todoist && git checkout origin/codex/task-execution-state -- \
+  server/scripts/mcp_server.py server/src/agentState.ts server/src/migrations.ts \
+  server/src/routes/chats.ts server/src/routes/subtask-artifacts.ts server/src/routes/subtasks.ts \
+  server/src/runtime/inProcessRun.ts server/src/runtime/planSubtaskAdmission.ts \
+  server/src/runtime/roleRunAccess.ts server/src/runtime/slotWorkSnapshot.ts \
+  && systemctl --user restart taskflow-server.service \
+  && sqlite3 server/taskflow.db "select id from schema_migrations where id='098_slot_work_snapshots'"
+```
+
+Документ этапа: `server/docs/2026-10-04-slot-work-snapshot.md`. Этап 2 (блок «На чём остановился» в карточке слота) — отдельная работа в `/Users/max/Проекты/TaskFlowNativeBuild`.
