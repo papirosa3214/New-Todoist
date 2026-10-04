@@ -27,8 +27,10 @@ import { roleTitle } from "../roleRouting.js";
 export const SNAPSHOT_REASONS = ["progress", "done", "blocked", "stopped", "failed"] as const;
 export type SnapshotReason = (typeof SNAPSHOT_REASONS)[number] | string;
 
-/** Пределы по аналогии с agentVisibleText (миграция 093): снимок читает
- *  и человек, и модель — длинные простыни тут не по делу. */
+/** Снимок читает и человек, и модель — длинные простыни тут не по делу:
+ *  поля короткие, лишнее подрезается на записи. Это подрезка самого снимка,
+ *  а не правило для сообщений роли в чате (таких запретов у сервера больше
+ *  нет, 04.10.2026). */
 const FIELD_MAX = 400;
 const BLOCK_MAX = 2_400;
 const ARTIFACT_MAX = 12;

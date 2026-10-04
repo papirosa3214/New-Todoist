@@ -3138,6 +3138,30 @@ const migrations: Migration[] = [
     CREATE INDEX idx_slot_snapshots_attempt ON slot_work_snapshots(attempt_id, created_at);`);
   } },
 
+  // Снять запрет на длинные тексты ролей (владелец 04.10.2026).
+  //
+  // Миграция 093 повесила на три таблицы по два триггера: INSERT и UPDATE
+  // текста от учётки с `type='ai'` длиннее лимита прерывался RAISE(ABORT) —
+  // `comments.text` и `chat_messages.text` больше 800 символов,
+  // `subtasks.result` больше 400/800. Замысел был «пусть пишут короче», а
+  // вышло наоборот: длинный ответ роли не сохранялся ВООБЩЕ. В чате не
+  // появлялось ничего, в ленте карточки — тоже, и владелец видел тишину
+  // вместо работы. Переписывать короче агент при этом не переписывает: он
+  // про отказ не знает.
+  //
+  // Правило убрано целиком, вместе с кодом, который его обслуживал
+  // (`lib/agentVisibleText.ts` и пять мест применения). Сервер доставляет то,
+  // что роль написала; длину держит сама роль. Заодно это снимает и запрет
+  // на UPDATE — правка длинного сообщения больше не пропадает.
+  { id: "099_drop_agent_message_length_triggers", description: "Снять запрет на длинные тексты ролей — они больше не пропадают", up: () => {
+    db.exec(`DROP TRIGGER IF EXISTS agent_short_comments_insert;
+      DROP TRIGGER IF EXISTS agent_short_comments_update;
+      DROP TRIGGER IF EXISTS agent_short_chat_messages_insert;
+      DROP TRIGGER IF EXISTS agent_short_chat_messages_update;
+      DROP TRIGGER IF EXISTS agent_short_subtasks_insert;
+      DROP TRIGGER IF EXISTS agent_short_subtasks_update;`);
+  } },
+
 ];
 
 /**

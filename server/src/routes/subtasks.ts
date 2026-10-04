@@ -1,4 +1,3 @@
-import { agentVisibleTextError, AGENT_BLOCK_TEXT_MAX } from "../lib/agentVisibleText.js";
 import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
@@ -615,8 +614,6 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       }
 
       const { state, result } = req.body || {};
-      const resultError = agentVisibleTextError(req.userId,result,state === "blocked" ? AGENT_BLOCK_TEXT_MAX : undefined);
-      if(resultError) return reply.code(400).send({error:resultError});
       const planRefusal = planNodeAgentRefusal(subtask.id, req.userId, state === "in_progress");
       if (planRefusal) return reply.code(403).send({ error: planRefusal });
       const known =
@@ -881,9 +878,6 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (mismatch) {
         return reply.code(400).send({ error: `attempt_id: ${mismatch}` });
       }
-
-      const textError = agentVisibleTextError(req.userId, req.body?.text);
-      if(textError) return reply.code(400).send({error:textError});
 
       const attachmentIds: string[] = Array.isArray(req.body?.attachment_ids)
         ? req.body.attachment_ids

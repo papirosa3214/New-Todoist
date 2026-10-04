@@ -1,6 +1,5 @@
 import { branchMembership } from "../runtime/branchPlan.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
-import { agentVisibleTextError } from "../lib/agentVisibleText.js";
 import { deliverTopicToWork } from "../runtime/inProcessRun.js";
 import { topicContext } from "../lib/projectTopics.js";
 import { getProjectForWrite, getTaskForRead } from "../access.js";
@@ -1441,29 +1440,11 @@ async function deliverAgentReply(args: {
       ? chatRunFailureText(failure)
       : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
 
-  // Финальный ответ роли: при превышении лимита — НЕ сохраняем в чат
-  // ничего от роли (обрезанный/сырой ответ владельцу не нужен,
-  // 04.10.2026). Ставим failure, чтобы dispatchRoleReplies не сработал,
-  // и кладём в чат сообщение от системы с обращением к агенту —
-  // «перепиши и отправь заново». Агент (LLM) при следующем вызове
-  // startChatRun прочитает чат и сам сократит.
-  const visibleError = agentVisibleTextError(roleUserId, replyText);
-  if (visibleError) {
-    failure = new Error(visibleError);
-    replyText = "";
-    const sysMsgId = uid();
-    db.prepare(
-      `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, message_type)
-       VALUES (?, 'taskflow_system', ?, 'chat', ?, 'system')`,
-    ).run(
-      sysMsgId,
-      `Ответ @${roleName} не отправлен: превышен лимит (правило Максима 15.09.2026 — максимум 100 слов и 800 символов на сообщение).\n\nАгенту: перепиши ответ короче и отправь заново. Не повторяй это сообщение — оно уже отклонено, перепиши его с учётом лимита.`,
-      chatId,
-    );
-    db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
-    broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(sysMsgId) });
-  }
-
+  // Никакой обрезки и никаких «перепиши»: ответ роли сохраняется ровно
+  // таким, каким его написала модель (владелец 04.10.2026). Прежние правила
+  // (лимит 800 символов на уровне БД и подмена/отмена ответа в коде) съедали
+  // сообщения целиком — в чате не появлялось ничего. Ограничивать длину
+  // должен не сервер, а сама роль; сервер обязан доставить то, что написали.
   let replyId: string | null = null;
   if (replyText) {
     replyId = uid();
