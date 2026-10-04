@@ -3102,6 +3102,42 @@ const migrations: Migration[] = [
     );`);
   } },
 
+  // Снимок рабочего состояния слота — «на чём остановился» (владелец
+  // 04.10.2026). Слот = подзадача-узел плана (`collaboration_plan_id` +
+  // `plan_node_key`), его работа живёт в попытке (`attempts`), а ход роли
+  // умирает вместе с процессом сервера: без отдельной записи следующий
+  // вызов той же роли начинает с нуля и не понимает, где работа остановилась.
+  //
+  // Версии, а не одна строка: снимок дополняет историю и документы, ничего не
+  // затирает. Привязка к (subtask_id, attempt_id) — снимок принадлежит своей
+  // попытке; «последним» считается снимок самой свежей попытки, поэтому
+  // запоздалая запись старого запуска физически не может стать актуальной.
+  // Время последней рабочей активности сюда НЕ кладём — оно уже живёт в
+  // `subtasks.agent_heartbeat_at`/`attempts.heartbeat_at` и не должно
+  // подменяться моментом записи снимка.
+  { id: "098_slot_work_snapshots", description: "Снимки рабочего состояния слотов", up: () => {
+    db.exec(`CREATE TABLE slot_work_snapshots(
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      subtask_id TEXT NOT NULL REFERENCES subtasks(id) ON DELETE CASCADE,
+      attempt_id TEXT REFERENCES attempts(id) ON DELETE SET NULL,
+      role_key TEXT,
+      plan_node_key TEXT,
+      reason TEXT NOT NULL,
+      is_complete INTEGER NOT NULL DEFAULT 1,
+      done_summary TEXT,
+      left_summary TEXT,
+      blocker TEXT,
+      next_step TEXT,
+      last_action TEXT,
+      artifacts_json TEXT NOT NULL DEFAULT '[]',
+      author_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX idx_slot_snapshots_slot ON slot_work_snapshots(subtask_id, created_at);
+    CREATE INDEX idx_slot_snapshots_attempt ON slot_work_snapshots(attempt_id, created_at);`);
+  } },
+
 ];
 
 /**

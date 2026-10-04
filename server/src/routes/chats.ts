@@ -48,6 +48,7 @@ import {
 } from "../runtime/chatLiveTurn.js";
 import { formatChatMessage, loadChatMessage } from "../lib/chatMessages.js";
 import { roleProjectContext } from "../runtime/roleProjectContext.js";
+import { roleSlotSnapshotsBlock } from "../runtime/slotWorkSnapshot.js";
 import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
@@ -1368,6 +1369,15 @@ async function deliverAgentReply(args: {
   ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
   const memory = await roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id, query: trigger.text });
   if (memory) prompt = `${prompt}\n\n${memory}`;
+  // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
+  // последний снимок в общий контекст роли — и для чата, и для работы»).
+  // Для конкретного этапа — его снимок, без этапа — короткий перечень моих
+  // слотов. Это ДАННЫЕ о работе, а не инструкция: в чат ничего не отправляется
+  // автоматически, роль сама решает, упоминать ли это в ответе.
+  const snapshots = slot
+    ? roleSlotSnapshotsBlock({ role, taskId: slot.task_id, subtaskId: slot.id })
+    : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null });
+  if (snapshots) prompt = `${prompt}\n\n${snapshots}`;
   prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Отчёты сохраняй инструментом doc_write в документах задачи, здесь дай ссылку. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
   if(topic) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 

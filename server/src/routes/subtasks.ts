@@ -24,8 +24,43 @@ import { withSubtaskState, getTaskRow } from "./tasks.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
+import {
+  SNAPSHOT_REASONS,
+  saveSlotSnapshot,
+  slotSnapshotDto,
+  technicalSlotSnapshot,
+} from "../runtime/slotWorkSnapshot.js";
 
 const uid = () => crypto.randomUUID();
+
+/**
+ * Тело снимка от роли. Сервер не доверяет ни одной из полей вслепую: лишние
+ * отсекаются по длине, причина — по списку, а «полнота» выводится из того,
+ * сказала ли роль хоть что-то сама (в остальных случаях снимок остаётся
+ * неполным и это видно в подписи).
+ */
+function readSnapshotBody(body: any): {
+  reason: string;
+  done?: string | null;
+  left?: string | null;
+  blocker?: string | null;
+  nextStep?: string | null;
+  artifacts?: unknown;
+} | null {
+  const raw = body?.snapshot;
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object") throw new Error("snapshot — объект с полями done/left/blocker/next_step");
+  const reason = typeof raw.reason === "string" && raw.reason ? raw.reason : "progress";
+  if (!SNAPSHOT_REASONS.includes(reason as never)) throw new Error(`неизвестная причина снимка «${reason}»`);
+  return {
+    reason,
+    done: raw.done ?? null,
+    left: raw.left ?? null,
+    blocker: raw.blocker ?? null,
+    nextStep: raw.next_step ?? raw.nextStep ?? null,
+    artifacts: raw.artifacts,
+  };
+}
 
 /** Get full task state with assignee info, labels, subtasks, and comments. */
 export function getFullTask(taskId: string) {
@@ -315,6 +350,32 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       // когда шаг правда нужно показать до закрытия, — но обязательными
       // больше не являются.
       if (done !== undefined) {
+        // СНИМОК РАБОТЫ — ДО СМЕНЫ СОСТОЯНИЯ (владелец 04.10.2026).
+        //
+        // Галочка снимает `agent_state`/`agent_id` и закрывает попытку, а
+        // вместе с ними исчезает и всё, что знал о работе только сервер.
+        // Поэтому снимок пишется здесь, пока attempt_id ещё текущий: следующий
+        // вызов роли получает «где остановились» даже тогда, когда итог
+        // закрытого шага — одна строка или его вовсе не было (слот оборвался,
+        // до закрытия не дошёл). Роль может принести свой снимок в теле
+        // запроса; если не принесла — пишем техснимок с пометкой «неполный».
+        if (done === true && subtask.collaboration_plan_id) {
+          const body = readSnapshotBody(req.body);
+          if (body) {
+            saveSlotSnapshot({
+              subtaskId: subtask.id,
+              reason: "done",
+              done: body.done ?? result ?? subtask.result,
+              left: body.left,
+              blocker: body.blocker,
+              nextStep: body.nextStep,
+              artifacts: body.artifacts,
+              authorId: req.userId,
+            });
+          } else {
+            technicalSlotSnapshot(subtask.id, "done");
+          }
+        }
         db.prepare("UPDATE subtasks SET done = ? WHERE id = ?").run(
           done ? 1 : 0,
           req.params.id,
@@ -642,6 +703,27 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           }
           // При выходе из in_progress (release) закрываем свою попытку.
           if (state !== 'in_progress' && (subtask as any).current_attempt_id) {
+            // БЛОКИРОВКА — ТОЖЕ ТОЧКА СНИМКА, И ТОЖЕ ДО СМЕНЫ СОСТОЯНИЯ
+            // (владелец 04.10.2026). Здесь `agent_state` ещё `in_progress` и
+            // попытка живая, поэтому снимок привязывается к ней, а причина
+            // блока (result) известна серверу даже когда роль её не сдала.
+            if (state === 'blocked' && subtask.collaboration_plan_id) {
+              const body = readSnapshotBody(req.body);
+              if (body) {
+                saveSlotSnapshot({
+                  subtaskId: subtask.id,
+                  reason: 'blocked',
+                  done: body.done,
+                  left: body.left,
+                  blocker: body.blocker ?? result ?? null,
+                  nextStep: body.nextStep,
+                  artifacts: body.artifacts,
+                  authorId: req.userId,
+                });
+              } else {
+                technicalSlotSnapshot(subtask.id, 'blocked', { blocker: result ?? null });
+              }
+            }
             db.prepare(
               `UPDATE attempts
                   SET ended_at = datetime('now'), outcome = ?, reason = ?
@@ -873,6 +955,71 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
            FROM comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.id = ?`,
         )
         .get(id);
+    },
+  });
+
+  // ═══════ СНИМОК РАБОТЫ СЛОТА ═══════
+  //
+  // Отдельные маршруты, а не поля в /work и PATCH: снимок пишется и посреди
+  // работы (после значимого действия), и перед сдачей, и сервером при обрыве.
+  // Права и статусы снимок не трогает — это запись о работе, а не команда.
+  app.post<{
+    Params: { id: string };
+    Body: {
+      reason?: string;
+      done?: string;
+      left?: string;
+      blocker?: string;
+      next_step?: string;
+      artifacts?: unknown;
+      attempt_id?: string;
+    };
+  }>("/api/subtasks/:id/snapshot", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
+      if (!subtask) return reply.code(404).send({ error: "Not found" });
+      // Писать снимок слота может его нынешний исполнитель или владелец.
+      // Чужая роль снимок за чужой этап не пишет — иначе «где остановились»
+      // наполнялось бы догадками посторонней сессии.
+      const caller = db.prepare("SELECT type FROM users WHERE id = ?").get(req.userId) as { type?: string } | undefined;
+      if (caller?.type !== "owner" && subtask.agent_id && subtask.agent_id !== req.userId) {
+        return reply.code(403).send({ error: "снимок пишет исполнитель этого слота или владелец" });
+      }
+      const body = readSnapshotBody(req.body) ?? { reason: "progress" };
+      let saved;
+      try {
+        saved = saveSlotSnapshot({
+          subtaskId: subtask.id,
+          reason: body.reason,
+          done: body.done ?? null,
+          left: body.left ?? null,
+          blocker: body.blocker ?? null,
+          nextStep: body.nextStep ?? null,
+          artifacts: body.artifacts,
+          ...(req.body?.attempt_id ? { attemptId: req.body.attempt_id } : {}),
+          authorId: req.userId,
+        });
+      } catch (error) {
+        return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+      }
+      return {
+        снимок: saved.snapshot.id,
+        сохранён: true,
+        // Поздняя запись старого запуска: в историю она попала, но актуальным
+        // снимком новой попытки не станет (см. latestSlotSnapshot).
+        устаревший: saved.stale,
+        создан: saved.snapshot.created_at,
+      };
+    },
+  });
+
+  app.get<{ Params: { id: string } }>("/api/subtasks/:id/snapshot", {
+    preHandler: authPre,
+    handler: async (req: any, reply) => {
+      const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
+      if (!subtask) return reply.code(404).send({ error: "Not found" });
+      return slotSnapshotDto(subtask.id);
     },
   });
 }

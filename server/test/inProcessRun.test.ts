@@ -579,4 +579,62 @@ describe("агент роли внутри сервера", () => {
       status: "queued",
     });
   });
+
+  // Снимок работы слота (владелец 04.10.2026). Здесь важны два свойства:
+  // остановка без сдачи НЕ ждёт модель вечно (потолок по времени есть, а при
+  // молчании остаётся техснимок), и снимок предыдущей попытки реально
+  // приходит в задание следующей — иначе «где остановились» существует
+  // только в базе, а в модель не попадает.
+  const slotWithPlan = (title: string): { taskId: string; stepId: string } => {
+    const { taskId, stepId } = builderTask(title);
+    const planId = taskId + "-plan";
+    db.prepare("INSERT INTO task_collaboration_plans(id,task_id,revision,status,profile,rationale,created_by) VALUES(?,?,77,'approved','manual','test',?)").run(planId, taskId, ownerId);
+    db.prepare("INSERT INTO task_collaboration_plan_nodes(id,plan_id,slot_key,role_key,required,expected_result) VALUES(?,?,'work','builder',1,'Код')").run(planId + "-node", planId);
+    db.prepare("UPDATE subtasks SET collaboration_plan_id=?,plan_node_key='work',agent_id='role_builder',agent_state='in_progress' WHERE id=?").run(planId, stepId);
+    return { taskId, stepId };
+  };
+
+  it("ход слота без сдачи оставляет техснимок и не ждёт модель", async () => {
+    const { taskId, stepId } = slotWithPlan("Остановка без сдачи " + Date.now());
+    // Модель в этом тесте молчит: у сессии нет ни одного сообщения, поэтому
+    // резюме прийти не может — и ход всё равно обязан закончиться.
+    script.steps = async () => {};
+    try {
+      await runRoleInProcess({ taskId, role: "builder", subtaskId: stepId, mode: "work" });
+      await _settleInProcessRunsForTests();
+    } finally {
+      script.steps = null;
+    }
+    const row = db
+      .prepare("SELECT * FROM slot_work_snapshots WHERE subtask_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
+      .get(stepId) as any;
+    expect(row).toBeTruthy();
+    expect(row.reason).toBe("stopped");
+    expect(row.is_complete).toBe(0);
+    expect((db.prepare("SELECT done FROM subtasks WHERE id = ?").get(stepId) as { done: number }).done).toBe(0);
+  });
+
+  it("снимок предыдущей попытки приходит в задание следующей", async () => {
+    const { taskId, stepId } = slotWithPlan("Снимок в задании " + Date.now());
+    db.prepare(
+      "INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at,ended_at,outcome) VALUES(?,?,?,'role_builder',datetime('now','-2 hours'),datetime('now','-1 hours'),'interrupted')",
+    ).run(`${taskId}-old`, taskId, stepId);
+    db.prepare(
+      "INSERT INTO slot_work_snapshots(id,task_id,subtask_id,attempt_id,reason,is_complete,done_summary,left_summary,next_step,created_at) VALUES(?,?,?,?,'stopped',1,'Починил сборку','Осталась интеграция','Свести обе ветки',datetime('now','-1 hours'))",
+    ).run(`${taskId}-snap`, taskId, stepId, `${taskId}-old`);
+
+    const prompts: string[] = [];
+    script.steps = async (_tools, prompt) => {
+      prompts.push(prompt);
+    };
+    try {
+      await runRoleInProcess({ taskId, role: "builder", subtaskId: stepId, mode: "work" });
+      await _settleInProcessRunsForTests();
+    } finally {
+      script.steps = null;
+    }
+    expect(prompts[0]).toContain("На чём остановился предыдущий ход");
+    expect(prompts[0]).toContain("Сделано: Починил сборку");
+    expect(prompts[0]).toContain("Следующий шаг: Свести обе ветки");
+  });
 });
