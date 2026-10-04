@@ -1,7 +1,6 @@
 import {beforeAll,afterAll,it,expect} from "vitest";
 import {buildApp} from "../src/index.js";
 import db from "../src/db.js";
-import {agentVisibleTextError} from "../src/lib/agentVisibleText.js";
 import {ensureTaskArtifactFolder} from "../src/lib/taskArtifactFolder.js";
 import {formatChatMessage} from "../src/lib/chatMessages.js";
 let app:any; let user:string; let chat:string;
@@ -26,9 +25,15 @@ it("task link keeps message text and is not a proposal",()=>{
 it("proposal kind stays explicit",()=>{
  expect(formatChatMessage({id:"proposal",text:"Предлагаю",kind:"task_proposal"}).kind).toBe("task_proposal");
 });
-it("word limit rejects 101 short words and accepts 100",()=>{
- expect(agentVisibleTextError("coordination_agent",Array(100).fill("а").join(" "))).toBeNull();
- expect(agentVisibleTextError("coordination_agent",Array(101).fill("а").join(" "))).not.toBeNull();
+// Правило про длину текста ролей снято целиком (владелец 04.10.2026,
+// миграция 099): сервер больше не считает слова и не режет ответы. Проверяем
+// обратное — что длинное сообщение роли сохраняется, а не пропадает.
+it("long agent message is stored instead of being rejected",()=>{
+ const text=Array(300).fill("слово").join(" ");
+ const id="coordination_long";
+ db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)").run(id,"coordination_agent",text,chat);
+ const row=db.prepare("SELECT length(text) AS n FROM chat_messages WHERE id=?").get(id) as {n:number};
+ expect(row.n).toBe(text.length);
 });
 it("task folder is created once and retained",()=>{
  db.prepare("INSERT INTO tasks(id,title,creator_id) VALUES('coordination_task','Работа',?)").run(user);
