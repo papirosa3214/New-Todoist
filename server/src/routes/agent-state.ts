@@ -1,4 +1,3 @@
-import { agentVisibleTextError, AGENT_BLOCK_TEXT_MAX } from "../lib/agentVisibleText.js";
 import { effectiveRules } from "../lib/roleContextResolver.js";
 // POST /api/tasks/:id/claim | /heartbeat | /state — the agent-work protocol
 // (see AGENT-PROTOCOL.md). Core rules (transition matrix, lease math, event
@@ -823,8 +822,6 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
       const comment =
         typeof req.body?.comment === "string" ? req.body.comment.trim() : "";
-      const visibleError = agentVisibleTextError(req.userId, comment, state === "blocked" ? AGENT_BLOCK_TEXT_MAX : undefined);
-      if (visibleError) return reply.code(400).send({ error: visibleError });
       // Whether a comment is mandatory depends on the (from, to) pair, not
       // just `state` — see commentRequiredFor: review -> in_progress (owner
       // sending work back) needs one just as much as blocked/review do.
@@ -1309,8 +1306,6 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
       const comment =
         typeof req.body?.comment === "string" ? req.body.comment.trim() : "";
-      const visibleError = agentVisibleTextError(req.userId, comment, AGENT_BLOCK_TEXT_MAX);
-      if (visibleError) return reply.code(400).send({ error: visibleError });
       const attemptId = (task as any).current_attempt_id as string | null;
       if (!attemptId) {
         return reply

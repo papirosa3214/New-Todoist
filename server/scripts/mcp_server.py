@@ -523,6 +523,10 @@ def t_subtask_done(args):
     # в 400 и либо не закрывал шаг, либо шёл в обход сырым curl.
     if args.get("result"):
         body["result"] = args["result"]
+    # Снимок «где остановились» (владелец 04.10.2026): сервер сохранит его
+    # ДО закрытия шага, и следующий вызов роли продолжит с фактов.
+    if isinstance(args.get("snapshot"), dict):
+        body["snapshot"] = args["snapshot"]
     row = api("PATCH", f"/api/subtasks/{args['id']}", body)
     if done and row.get("task_id"):
         send_activity(row["task_id"], "edit", f"шаг «{row.get('title', '')}»: закрыл")
@@ -793,6 +797,8 @@ def t_subtask_work(args):
         body["state"] = args["state"]
     if args.get("result") is not None:
         body["result"] = args["result"]
+    if isinstance(args.get("snapshot"), dict):
+        body["snapshot"] = args["snapshot"]
     row = api("POST", f"/api/subtasks/{args['id']}/work", body)
     if args.get("state") == "in_progress" and row.get("task_id"):
         send_activity(row["task_id"], "edit", f"шаг «{row.get('title', '')}»: начал")
@@ -808,6 +814,27 @@ def t_subtask_work(args):
     if tail:
         out["чат"] = tail
     return out
+
+
+def t_slot_snapshot(args):
+    """Записать, где остановилась работа по своему слоту (владелец 04.10.2026).
+
+    Короткая заметка о работе: что сделано, что осталось, блок, следующий шаг
+    и ссылки на артефакты. Зови после значимого действия и перед сдачей или
+    блокировкой — тогда следующий вызов роли (или её коллеги) продолжит с
+    фактов, даже если этот ход оборвётся вместе с сервером.
+
+    Это запись о работе, а не команда: прав, статусов и порядка этапов снимок
+    не даёт, всё это остаётся за сервером.
+    """
+    subtask_id = args.get("id") or args.get("subtask_id")
+    if not subtask_id:
+        raise TaskFlowError("нужен id слота (подзадачи)")
+    body = {}
+    for key in ("done", "left", "blocker", "next_step", "artifacts"):
+        if args.get(key) is not None:
+            body[key] = args[key]
+    return api("POST", f"/api/subtasks/{subtask_id}/snapshot", body)
 
 
 def t_projects(_args):
@@ -1814,6 +1841,30 @@ TOOLS = [
             "required": ["id"],
         },
         "fn": t_subtask_work,
+    },
+    {
+        "name": "taskflow_slot_snapshot",
+        "description": (
+            "Записать, где остановилась работа по своему слоту: done (сделано), "
+            "left (что осталось), blocker (текущий блок), next_step (следующий "
+            "шаг), artifacts (ссылки на артефакты). Зови после значимого "
+            "действия и перед сдачей или блокировкой — тогда следующий вызов "
+            "роли продолжит с фактов, даже если этот ход оборвётся. Запись о "
+            "работе: прав и статусов не даёт, это остаётся за сервером."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "id подзадачи (слота)"},
+                "done": {"type": "string"},
+                "left": {"type": "string"},
+                "blocker": {"type": "string"},
+                "next_step": {"type": "string"},
+                "artifacts": {"type": "array", "items": {"type": ["string", "object"]}},
+            },
+            "required": ["id"],
+        },
+        "fn": t_slot_snapshot,
     },
     {
         "name": "taskflow_projects",

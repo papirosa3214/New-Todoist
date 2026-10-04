@@ -10,6 +10,7 @@ import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
 import { currentResultVersion, ensureResultVersionForReview } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { bumpContextVersion } from "./taskContextVersion.js";
+import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { getFullTask } from "../routes/subtasks.js";
 
 /**
@@ -172,6 +173,12 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string): P
     db.prepare("UPDATE subtasks SET agent_state = NULL, agent_id = NULL, current_attempt_id = NULL WHERE id = ?").run(current.id);
     db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'failed', reason = ? WHERE id = ?")
       .run(error instanceof Error ? error.message : String(error), attemptId);
+    // Снимок неудачного старта: роль не отработала вовсе, но следующий вызов
+    // должен знать причину, а не гадать по пустому лоту.
+    technicalSlotSnapshot(current.id, "failed", {
+      blocker: error instanceof Error ? error.message : String(error),
+      attemptId,
+    });
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -241,6 +248,15 @@ export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: numbe
       db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = 'перезапуск сервера' WHERE id = ? AND ended_at IS NULL")
         .run(row.current_attempt_id);
     }
+    // Техснимок обрыва (владелец 04.10.2026). Модель сюда не успевает ответить
+    // — её ход умер вместе с процессом, — поэтому пишем то, что сервер знает
+    // точно: последнее действие по слоту, состояние и ссылки на артефакты.
+    // Пометка «неполный» обязательна: следующий вызов роли должен понимать,
+    // что это техфакты, а не её собственный отчёт.
+    technicalSlotSnapshot(row.id, "stopped", {
+      blocker: "ход оборвался перезапуском сервера",
+      attemptId: row.current_attempt_id,
+    });
     db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
     logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_interrupted", field: row.plan_node_key, toValue: node ? roleTitle(node.role_key) : null });
     if (!node) continue;

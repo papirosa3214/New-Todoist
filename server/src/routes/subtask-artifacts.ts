@@ -9,6 +9,7 @@ import { isOwner, isOrchestrator } from "../access.js";
 import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent } from "../ws.js";
 import { startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { saveSlotSnapshot } from "../runtime/slotWorkSnapshot.js";
 import { getFullTask, getSubtaskWithTaskForUser } from "./subtasks.js";
 
 /**
@@ -77,6 +78,17 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     // Сдача структурного артефакта — это и есть закрытие узла (владелец
     // 29.09.2026: «закрытие роли-подзадачи автоматическое, в тот же момент,
     // когда её артефакт открывает gate»). Отдельного PATCH done не будет.
+    //
+    // Снимок работы пишем ДО этой строки (владелец 04.10.2026): дальше
+    // `agent_state` и `current_attempt_id` гаснут, и привязать снимок к
+    // попытке будет уже не к чему. Ссылка на сданный артефакт — в снимке же.
+    saveSlotSnapshot({
+      subtaskId: current.id,
+      reason: "done",
+      done: summary,
+      artifacts: [{ kind: contract.key, title: `${contract.key} v${versionNo}`, ref: `note:${noteId}` }],
+      authorId: req.userId,
+    });
     db.prepare("UPDATE subtasks SET result = ?, done = 1, agent_state = NULL, agent_heartbeat_at = NULL WHERE id = ?").run(summary, current.id);
     if (current.current_attempt_id) {
       db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'submitted', reason = ? WHERE id = ? AND ended_at IS NULL").run(summary, current.current_attempt_id);

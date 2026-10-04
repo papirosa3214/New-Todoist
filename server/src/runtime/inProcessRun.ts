@@ -7,6 +7,7 @@ import { instructionResources, createTaskResourceLoader } from "./instructionRes
 import { ensureRoleHome } from "./roleHome.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { roleProjectContext,roleProjectSnapshot } from "./roleProjectContext.js";
+import { saveSlotSnapshot, slotSnapshotBlock, technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
 import { renderInstruction, effectiveRules, registerInstructionBlock, instructionManifest } from "../lib/roleContextResolver.js";
 import { isOwner } from "../access.js";
@@ -229,6 +230,15 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     } as any);
   };
   const Id = Type.Object({ id: Type.String() });
+  /** Форма снимка работы слота — одна и та же для отдельного инструмента,
+   *  сдачи шага и блокировки, чтобы роль не разбиралась в трёх форматах. */
+  const SNAPSHOT_SHAPE = Type.Object({
+    done: Type.Optional(Type.String()),
+    left: Type.Optional(Type.String()),
+    blocker: Type.Optional(Type.String()),
+    next_step: Type.Optional(Type.String()),
+    artifacts: Type.Optional(Type.Array(Type.Any())),
+  });
 
   let topicSends=0;
   const tools = [
@@ -371,21 +381,28 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const s = await asRole(role, "POST", `/api/tasks/${p.task_id}/subtasks`, body);
         return { "шаг добавлен": s.title, id: s.id };
       }),
-    T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог.",
-      Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()) }),
+    T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния.",
+      Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()), snapshot: Type.Optional(SNAPSHOT_SHAPE) }),
       async (p) => {
         const body: Json = {};
         if (p.state !== undefined) body.state = p.state;
         if (p.result !== undefined) body.result = p.result;
+        if (p.snapshot) body.snapshot = p.snapshot;
         const row = await asRole(role, "POST", `/api/subtasks/${p.id}/work`, body);
         if (p.state === "in_progress" && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: начал`);
         return { подзадача: row.title, состояние: STEP_STATE_RU[row.state] ?? "не в работе", итог: row.result ?? "—" };
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
+    T("taskflow_slot_snapshot", "Записать, где остановилась работа по текущему слоту: done (сделано), left (что осталось), blocker (текущий блок), next_step (следующий шаг), artifacts (ссылки на артефакты). Зови после значимого действия и перед сдачей или блокировкой — тогда следующий вызов роли продолжит с фактов, даже если этот ход оборвётся. Это запись о работе: прав и статусов не даёт.",
+      SNAPSHOT_SHAPE, async (p) => {
+        if (!subtaskId) throw new ToolError("Снимок относится к слоту — работать без узла плана нельзя");
+        return asRole(role, "POST", `/api/subtasks/${subtaskId}/snapshot`, { ...p, reason: "progress" });
+      }),
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Приложи snapshot — что сделано, что осталось, следующий шаг, ссылки на артефакты: сервер сохранит снимок до закрытия шага, и следующий вызов роли будет знать, где работа остановилась. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
       Type.Object({
         id: Type.String(),
         result: Type.Optional(Type.String()),
         done: Type.Optional(Type.Boolean()),
+        snapshot: Type.Optional(SNAPSHOT_SHAPE),
         artifact: Type.Optional(Type.Object({ summary: Type.String(), payload: Type.Any(), evidence: Type.Optional(Type.Array(Type.Any())) })),
       }),
       async (p) => {
@@ -397,6 +414,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const done = p.done ?? true;
         const body: Json = { done };
         if (p.result) body.result = p.result;
+        if (p.snapshot) body.snapshot = p.snapshot;
         const row = await asRole(role, "PATCH", `/api/subtasks/${p.id}`, body);
         if (done && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: закрыл`);
         return { [done ? "шаг отмечен" : "отметка снята"]: p.id };
@@ -635,6 +653,89 @@ export async function _settleInProcessRunsForTests(): Promise<void> {
   await Promise.all([...pending]);
 }
 
+/** Сколько ждём резюме роли при остановке хода. Остановка не должна зависать
+ *  в ожидании модели (владелец 04.10.2026): не ответила — пишем техснимок. */
+const STOP_SUMMARY_MS = Number(process.env.TASKFLOW_SLOT_STOP_SUMMARY_MS ?? 30_000);
+const STOP_SUMMARY_ON = process.env.TASKFLOW_SLOT_STOP_SUMMARY !== "0";
+
+/** Разбор короткого резюме, которое роль пишет в конце хода. Терпимый к
+ *  формулировкам: годятся строки «Сделано:», «Осталось:», «Блок:»,
+ *  «Следующий шаг:», «Артефакты:» — с любой пунктуацией и лишними словами
+ *  вокруг двоеточия. */
+function parseStopSummary(text: string): {
+  done?: string; left?: string; blocker?: string; nextStep?: string; artifacts?: unknown[];
+} {
+  const out: { done?: string; left?: string; blocker?: string; nextStep?: string; artifacts?: unknown[] } = {};
+  const artifacts: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/^[\s\-*•—–]+/, "").trim();
+    const m = line.match(/^(сделано|осталось|блок|блокер|следующий шаг|дальше|артефакты|артефакт)\s*[:—-]\s*(.*)$/i);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const value = m[2].trim();
+    if (!value || /^(нет|нету|—|-|пусто|не знаю|неизвестно)$/i.test(value)) continue;
+    if (key === "сделано") out.done = value;
+    else if (key === "осталось" || key === "дальше") out.left = value;
+    else if (key === "блок" || key === "блокер") out.blocker = value;
+    else if (key === "следующий шаг") out.nextStep = value;
+    else artifacts.push(value);
+  }
+  if (artifacts.length) out.artifacts = artifacts;
+  return out;
+}
+
+/**
+ * Попытка снять короткое резюме у роли ДО закрытия сессии (пункт 2 плана
+ * владельца 04.10.2026: «при обычной остановке — попытаться получить короткое
+ * резюме»). Один ход, без инструментов, с жёстким потолком по времени; при
+ * таймауте ход прерывается и возвращается null — дальше пишет техснимок.
+ *
+ * Спрашиваем только когда слот НЕ сдан: при сдаче снимок уже записан на
+ * пути `/artifact` или `taskflow_subtask_done`, и второй раз спрашивать
+ * модель о том же — платный шум.
+ */
+async function askStopSummary(
+  session: any,
+  subtaskId: string,
+  role: string,
+  slotTitle: string,
+): Promise<ReturnType<typeof parseStopSummary> | null> {
+  if (!STOP_SUMMARY_ON) return null;
+  const ask =
+    "Твой рабочий ход по этому этапу заканчивается, сессия сейчас закроется. " +
+    "Ответь ОДНИМ сообщением, без инструментов и без рассуждений, максимум 8 строк, строго факты о работе:\n" +
+    "Сделано: …\nОсталось: …\nБлок: … (если есть)\nСледующий шаг: …\nАртефакты: … (названия или ссылки)\n" +
+    "Если блока нет — напиши «Блок: нет». Оценок и объяснений не нужно.";
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      session.prompt(ask),
+      new Promise<void>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("резюме не пришло вовремя")), STOP_SUMMARY_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } catch {
+    // Модель не ответила или ответила ошибкой: ход прерываем, чтобы не
+    // остался висеть, и отдаём null — техснимок напишет сервер.
+    void session.abort().catch(() => {});
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  const answer = [...(session.state?.messages ?? [])].reverse().find((m: any) => m?.role === "assistant");
+  if (!answer || answer.stopReason === "error") return null;
+  const text = (answer.content ?? [])
+    .filter((part: any) => part.type === "text")
+    .map((part: any) => String(part.text ?? ""))
+    .join("\n")
+    .trim();
+  if (!text) return null;
+  const parsed = parseStopSummary(text);
+  const empty = !parsed.done && !parsed.left && !parsed.blocker && !parsed.nextStep && !parsed.artifacts?.length;
+  return empty ? null : parsed;
+}
+
 /**
  * Запустить роль на задаче внутри сервера. Возвращается сразу; работа идёт
  * в фоне. Аренду держит сервер, пока агент работает; действия встроенных
@@ -810,7 +911,12 @@ try {
       });
       const queued=input.subtaskId ? db.prepare("SELECT m.id,m.text FROM slot_topic_inbox i JOIN chat_messages m ON m.id=i.message_id WHERE i.subtask_id=? AND i.delivered_at IS NULL ORDER BY m.created_at,m.rowid").all(input.subtaskId) as {id:string;text:string}[] : [];
       const messages=queued.map(m=>`Сообщение темы задачи ${taskId}, id ${m.id}. Ответь через taskflow_topic_reply(message_id=${m.id}). Данные: ${JSON.stringify(m.text)}`).join("\n");
-      const prompt = `${task}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
+      // Снимок предыдущей попытки этого слота (владелец 04.10.2026): ход роли
+      // умирает вместе с процессом, и без снимка следующий вызов начинает с
+      // нуля. Ставим после задания этапа и ДО контекста запуска, чтобы роль
+      // читала его как часть постановки, а не как приложение.
+      const snapshot=input.subtaskId ? slotSnapshotBlock(input.subtaskId) : null;
+      const prompt = `${task}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
       for(const m of queued)db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id=?").run(m.id,input.subtaskId);
       await session.prompt(mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt);
     } catch (error) {
@@ -827,6 +933,39 @@ try {
     } finally {
       clearInterval(beat);
       activeRuns.delete(runId);
+      // Снимок остановки (владелец 04.10.2026, пункт 2 и 3 плана). Слот не
+      // сдан — значит работа не закончилась, и следующему вызову роли без
+      // следа не продолжить. Сначала пробуем спросить саму роль (короткий
+      // ход с потолком по времени), иначе пишем техснимок сами: остановка не
+      // должна ждать модель и не должна оставлять пустоту.
+      if (input.subtaskId && mode === "work") {
+        try {
+          const closed = (db.prepare("SELECT done FROM subtasks WHERE id = ?").get(input.subtaskId) as { done: number } | undefined)?.done === 1;
+          if (closed) {
+            // Слот сдан: снимок уже записан на пути сдачи, второй раз не пишем.
+          } else if (runFailure) {
+            technicalSlotSnapshot(input.subtaskId, "failed", {
+              blocker: (runFailure as Error).message.slice(0, 300),
+            });
+          } else {
+            const slotTitle = (db.prepare("SELECT title FROM subtasks WHERE id = ?").get(input.subtaskId) as { title?: string } | undefined)?.title ?? "";
+            const summary = await askStopSummary(session, input.subtaskId, role, slotTitle);
+            if (summary) {
+              saveSlotSnapshot({ subtaskId: input.subtaskId, reason: "stopped", ...summary });
+            } else {
+              technicalSlotSnapshot(input.subtaskId, "stopped", { blocker: "ход остановлен без резюме роли" });
+            }
+          }
+        } catch (error) {
+          // Снимок не должен ронять ход: ошибка здесь — повод записать
+          // техснимок, а не причина срывать работу слота.
+          try {
+            technicalSlotSnapshot(input.subtaskId, "stopped", { blocker: "снимок не записался: " + String(error).slice(0, 120) });
+          } catch {
+            // базы нет — молча
+          }
+        }
+      }
       if(input.subtaskId)rememberSlotSession(input.subtaskId,manager);
       session.dispose();
       resourceLoader.disposeResources();

@@ -1,6 +1,5 @@
 import { branchMembership } from "../runtime/branchPlan.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
-import { agentVisibleTextError } from "../lib/agentVisibleText.js";
 import { deliverTopicToWork } from "../runtime/inProcessRun.js";
 import { topicContext } from "../lib/projectTopics.js";
 import { getProjectForWrite, getTaskForRead } from "../access.js";
@@ -48,6 +47,7 @@ import {
 } from "../runtime/chatLiveTurn.js";
 import { formatChatMessage, loadChatMessage } from "../lib/chatMessages.js";
 import { roleProjectContext } from "../runtime/roleProjectContext.js";
+import { roleSlotSnapshotsBlock } from "../runtime/slotWorkSnapshot.js";
 import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
@@ -545,8 +545,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
       if (mode !== "work" && roleFromUserId(req.userId)) return reply.code(403).send({error: "Режим выбирает человек"});
       const text = String(req.body?.text || "").trim();
-      const textError = agentVisibleTextError(req.userId,text);
-      if(textError) return reply.code(400).send({error:textError});
+      // Промежуточные сообщения ИИ в чате не валидируем по длине —
+      // иначе агент падает на 400 посреди работы (владелец 04.10.2026).
+      // Лимит остаётся только для финального ответа роли (см. ниже,
+      // truncateAgentText): сообщение в чат всегда доходит, просто короче.
       if (mode === "deep_research" && (!chatMemberRoles(req.params.id).includes("researcher") || parseRoleMentions(text).some(r => r !== "researcher"))) {
         return reply.code(400).send({error: "Глубокое исследование доступно в чате с Исследователем"});
       }
@@ -1368,6 +1370,15 @@ async function deliverAgentReply(args: {
   ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
   const memory = await roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id, query: trigger.text });
   if (memory) prompt = `${prompt}\n\n${memory}`;
+  // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
+  // последний снимок в общий контекст роли — и для чата, и для работы»).
+  // Для конкретного этапа — его снимок, без этапа — короткий перечень моих
+  // слотов. Это ДАННЫЕ о работе, а не инструкция: в чат ничего не отправляется
+  // автоматически, роль сама решает, упоминать ли это в ответе.
+  const snapshots = slot
+    ? roleSlotSnapshotsBlock({ role, taskId: slot.task_id, subtaskId: slot.id })
+    : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null, projectId: topic ? null : chatProject });
+  if (snapshots) prompt = `${prompt}\n\n${snapshots}`;
   prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Отчёты сохраняй инструментом doc_write в документах задачи, здесь дай ссылку. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
   if(topic) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 
@@ -1429,22 +1440,11 @@ async function deliverAgentReply(args: {
       ? chatRunFailureText(failure)
       : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
 
-  const visibleError = agentVisibleTextError(roleUserId, replyText);
-  if (visibleError) {
-    // Финальный текст длиннее лимита, но ход уже отстучал в стрим то, что
-    // агент напечатал в живой пузырь. Сервер не подменяет ответ правилом —
-    // иначе ход уйдёт в пустоту (пузырь исчезнет, ничего не появится).
-    // Финальным сообщением становится то, что агент успел напечатать.
-    // Правило для видимых сообщений действует на входе в API (5 гейтов).
-    failure = new Error(visibleError);
-    replyText = partial || "";
-    // SQL-триггер agent_short_chat_messages_insert не пустит >800 символов:
-    // обрезаем по границе, чтобы INSERT прошёл.
-    if (Array.from(replyText).length > 800) {
-      replyText = Array.from(replyText).slice(0, 800).join("");
-    }
-  }
-
+  // Никакой обрезки и никаких «перепиши»: ответ роли сохраняется ровно
+  // таким, каким его написала модель (владелец 04.10.2026). Прежние правила
+  // (лимит 800 символов на уровне БД и подмена/отмена ответа в коде) съедали
+  // сообщения целиком — в чате не появлялось ничего. Ограничивать длину
+  // должен не сервер, а сама роль; сервер обязан доставить то, что написали.
   let replyId: string | null = null;
   if (replyText) {
     replyId = uid();
