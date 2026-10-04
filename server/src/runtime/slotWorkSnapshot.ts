@@ -402,18 +402,30 @@ export function slotSnapshotBlock(subtaskId: string, opts: SnapshotBlockOptions 
  * без этапа и с несколькими слотами — короткий перечень, по одной строке на
  * слот, иначе контекст растёт вместе с планом.
  */
-export function roleSlotSnapshotsBlock(input: { role: string; taskId?: string | null; subtaskId?: string | null }): string | null {
+export function roleSlotSnapshotsBlock(input: { role: string; taskId?: string | null; projectId?: string | null; subtaskId?: string | null }): string | null {
   const slots = input.subtaskId
     ? ([input.subtaskId] as string[])
-    : (
-        db
-          .prepare(
-            `SELECT id FROM subtasks
-              WHERE task_id = ? AND done = 0 AND agent_id = (SELECT id FROM users WHERE role_key = ?)
-              ORDER BY rowid DESC LIMIT 5`,
-          )
-          .all(input.taskId ?? "", input.role) as Array<{ id: string }>
-      ).map((r) => r.id);
+    : input.taskId
+      ? (
+          db
+            .prepare(
+              `SELECT id FROM subtasks
+                WHERE task_id = ? AND done = 0 AND agent_id = (SELECT id FROM users WHERE role_key = ?)
+                ORDER BY rowid DESC LIMIT 5`,
+            )
+            .all(input.taskId, input.role) as Array<{ id: string }>
+        ).map((r) => r.id)
+      : input.projectId
+        ? (
+            db
+              .prepare(
+                `SELECT s.id FROM subtasks s JOIN tasks t ON t.id = s.task_id
+                  WHERE t.project_id = ? AND s.done = 0 AND s.agent_id = (SELECT id FROM users WHERE role_key = ?)
+                  ORDER BY s.rowid DESC LIMIT 5`,
+              )
+              .all(input.projectId, input.role) as Array<{ id: string }>
+          ).map((r) => r.id)
+        : [];
   if (!slots.length) return null;
   const rows: string[] = [];
   for (const id of slots) {

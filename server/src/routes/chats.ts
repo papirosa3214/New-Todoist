@@ -1376,7 +1376,7 @@ async function deliverAgentReply(args: {
   // автоматически, роль сама решает, упоминать ли это в ответе.
   const snapshots = slot
     ? roleSlotSnapshotsBlock({ role, taskId: slot.task_id, subtaskId: slot.id })
-    : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null });
+    : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null, projectId: topic ? null : chatProject });
   if (snapshots) prompt = `${prompt}\n\n${snapshots}`;
   prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Отчёты сохраняй инструментом doc_write в документах задачи, здесь дай ссылку. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
   if(topic) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;

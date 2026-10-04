@@ -370,7 +370,14 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         // до закрытия не дошёл). Роль может принести свой снимок в теле
         // запроса; если не принесла — пишем техснимок с пометкой «неполный».
         if (done === true && subtask.collaboration_plan_id) {
-          const body = readSnapshotBody(req.body);
+          let body: ReturnType<typeof readSnapshotBody>;
+          try {
+            body = readSnapshotBody(req.body);
+          } catch (error) {
+            // Кривой снимок — отказ 400, а не 500: тело запроса ошибно, и
+            // сдача шага от этого ломаться не должна.
+            return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+          }
           if (body) {
             saveSlotSnapshot({
               subtaskId: subtask.id,
@@ -718,7 +725,12 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             // попытка живая, поэтому снимок привязывается к ней, а причина
             // блока (result) известна серверу даже когда роль её не сдала.
             if (state === 'blocked' && subtask.collaboration_plan_id) {
-              const body = readSnapshotBody(req.body);
+              let body: ReturnType<typeof readSnapshotBody>;
+              try {
+                body = readSnapshotBody(req.body);
+              } catch (error) {
+                return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+              }
               if (body) {
                 saveSlotSnapshot({
                   subtaskId: subtask.id,
