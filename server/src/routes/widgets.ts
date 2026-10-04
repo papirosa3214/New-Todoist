@@ -10,6 +10,7 @@
 // Источник погоды — Open-Meteo: без ключа, геокодинг и прогноз одним
 // провайдером, ответ на русском.
 import type { FastifyInstance } from "fastify";
+import { EnvHttpProxyAgent } from "undici";
 import { authOrApiToken } from "../auth.js";
 
 const GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
@@ -34,10 +35,48 @@ export function weatherCondition(code: number): { condition: string; icon: strin
 
 const WEEKDAYS = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
 
+/** Pi при импорте (`@earendil-works/pi-coding-agent`) перехватывает
+ *  `globalThis.fetch` и глобальный dispatcher, после чего `NODE_USE_ENV_PROXY`
+ *  перестаёт действовать и undici идёт напрямую. Проверено на .110: до
+ *  импорта Pi запрос к `api.open-meteo.com` идёт через прокси (200 за 261 мс),
+ *  после импорта — напрямую и виснет (TCP SYN-SENT, ровно `TIMEOUT_MS`).
+ *  Геокод (`geocoding-api.open-meteo.com`) отвечает обоими путями, поэтому
+ *  первым падал именно прогноз.
+ *
+ *  Поэтому погода ходит через собственный `fetch` из undici с явным
+ *  `EnvHttpProxyAgent`. Диспетчер передаётся на каждый запрос, а не ставится
+ *  глобально: `setGlobalDispatcher` делит один слот с перехватом Pi, и такая
+ *  правка молча меняла бы чужой код. Если прокси в окружении не настроен или
+ *  агент не создался — запрос идёт напрямую, как было. */
+let proxyDispatcher: EnvHttpProxyAgent | undefined;
+
+function dispatcher(): EnvHttpProxyAgent | undefined {
+  if (proxyDispatcher) return proxyDispatcher;
+  const hasProxy =
+    process.env.HTTPS_PROXY || process.env.https_proxy ||
+    process.env.HTTP_PROXY || process.env.http_proxy;
+  if (!hasProxy) return undefined;
+  try {
+    proxyDispatcher = new EnvHttpProxyAgent();
+    return proxyDispatcher;
+  } catch {
+    return undefined;
+  }
+}
+
 async function getJson(url: string): Promise<any> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  const via = dispatcher();
+  // Именно глобальный fetch с ЯВНЫМ dispatcher. Проверено на .110: после
+  // импорта Pi глобальный fetch без dispatcher уходит напрямую и виснет
+  // (api.open-meteo.com напрямую с .110 не отвечает), а с dispatcher — 200.
+  // Свой undici.fetch работал бы так же, но глобальный оставляет тесты
+  // подменяемыми через vi.stubGlobal("fetch").
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+    ...(via ? { dispatcher: via } : {}),
+  } as RequestInit);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  return (await res.json()) as any;
 }
 
 /** Погода для города — готовый JSON виджета. null — город не найден. */

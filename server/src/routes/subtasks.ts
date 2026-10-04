@@ -1,3 +1,4 @@
+import { agentVisibleTextError, AGENT_BLOCK_TEXT_MAX } from "../lib/agentVisibleText.js";
 import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
@@ -5,7 +6,7 @@ import db from "../db.js";
 import { planNodeAgentRefusal, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
-import { getTaskForRead, getTaskForWrite } from "../access.js";
+import { getTaskForRead, getTaskForWrite, getTaskForComment } from "../access.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import {
   AGENT_RULES,
@@ -536,6 +537,8 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       }
 
       const { state, result } = req.body || {};
+      const resultError = agentVisibleTextError(req.userId,result,state === "blocked" ? AGENT_BLOCK_TEXT_MAX : undefined);
+      if(resultError) return reply.code(400).send({error:resultError});
       const planRefusal = planNodeAgentRefusal(subtask.id, req.userId, state === "in_progress");
       if (planRefusal) return reply.code(403).send({ error: planRefusal });
       const known =
@@ -559,11 +562,15 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       const caller = db
         .prepare("SELECT type FROM users WHERE id = ?")
         .get(req.userId) as { type?: string } | undefined;
+      if(caller?.type==="ai"&&subtask.agent_id!==req.userId&&(subtask.collaboration_plan_id || subtask.task_assignee_id!==req.userId))return reply.code(403).send({error:"Роль выполняет только назначенный сервером слот"});
       const refusal = subtaskWorkRefusal({
         from: subtask.agent_state ?? null,
         to: state,
         isAi: caller?.type === "ai",
-        taskAgentState: subtask.task_agent_state ?? null,
+        // Утверждённый слот имеет собственный допуск и собственную попытку.
+        // Роль и зависимости проверены planNodeAgentRefusal выше.
+        taskAgentState: subtask.collaboration_plan_id && subtask.plan_node_key && state === "in_progress"
+          ? "in_progress" : subtask.task_agent_state ?? null,
         hasResult: Boolean(result || subtask.result),
         resultLength: (result ?? "").length,
       });
@@ -657,6 +664,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         db.prepare(
           "UPDATE subtasks SET agent_heartbeat_at = datetime('now') WHERE id = ?",
         ).run(req.params.id);
+        db.prepare(
+          "UPDATE attempts SET heartbeat_at = datetime('now') WHERE subtask_id = ? AND executor_id = ? AND ended_at IS NULL",
+        ).run(req.params.id, req.userId);
       }
 
       if (result !== undefined) {
@@ -754,7 +764,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
   }>("/api/tasks/:taskId/comments", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const task = getTaskForWrite(req.params.taskId, req.userId) as any;
+      const task = getTaskForComment(req.params.taskId, req.userId) as any;
       if (!task) return reply.code(404).send({ error: "Not found" });
 
       // Шаг 3 карточки 8ca87c61: проверка attempt_id для комментария
@@ -767,6 +777,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (mismatch) {
         return reply.code(400).send({ error: `attempt_id: ${mismatch}` });
       }
+
+      const textError = agentVisibleTextError(req.userId, req.body?.text);
+      if(textError) return reply.code(400).send({error:textError});
 
       const attachmentIds: string[] = Array.isArray(req.body?.attachment_ids)
         ? req.body.attachment_ids

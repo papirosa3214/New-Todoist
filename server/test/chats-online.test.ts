@@ -191,8 +191,34 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => { const act
   ModelRuntime: {
     create: vi.fn(async () => mockRuntime),
   },
-  RpcClient: vi.fn().mockImplementation(function (options: any) {
-    return makeFakeRpcClient(options);
+  // Ход чата теперь внутри сервера (createAgentSession, владелец
+  // 02.10.2026). Переходник на прежнего фальшивого клиента: проверки
+  // поведения чата остаются те же — промпт, события, ответ, сессия.
+  createAgentSession: vi.fn(async (opts: any) => {
+    const id: string | undefined = opts.sessionManager?.getSessionId?.();
+    const resumed = id && !/^[0-9a-f-]{36}$/i.test(id) ? id : null;
+    const planning = !opts.tools.includes("bash");
+    const client = makeFakeRpcClient({
+      cwd: opts.cwd,
+      model: opts.model?.id,
+      provider: opts.model?.provider,
+      args: [...(resumed ? ["--session-id", resumed] : []), ...(planning ? ["--tools", "read"] : [])],
+    });
+    const state = await client.getState();
+    let last = "";
+    return {
+      session: {
+        sessionId: state.sessionId,
+        subscribe: (listener: (event: unknown) => void) => client.onEvent(listener),
+        prompt: async (text: string) => {
+          await client.promptAndWait(text, undefined, 0);
+          last = await client.getLastAssistantText();
+        },
+        abort: () => client.abort(),
+        dispose: () => { void client.stop(); },
+        getLastAssistantText: () => last,
+      },
+    };
   }),
 }; });
 

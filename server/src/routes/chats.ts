@@ -1,3 +1,9 @@
+import { branchMembership } from "../runtime/branchPlan.js";
+import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
+import { agentVisibleTextError } from "../lib/agentVisibleText.js";
+import { deliverTopicToWork } from "../runtime/inProcessRun.js";
+import { topicContext } from "../lib/projectTopics.js";
+import { getProjectForWrite, getTaskForRead } from "../access.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { renderInstruction } from "../lib/roleContextResolver.js";
 // Чаты с ролями-агентами (владелец 21.09.2026, план
@@ -41,7 +47,7 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { formatChatMessage, loadChatMessage } from "../lib/chatMessages.js";
-import { memoryBlock } from "../lib/memory.js";
+import { roleProjectContext } from "../runtime/roleProjectContext.js";
 import {
   ROLE_NAMES,
   roleTitle as titleOfRole,
@@ -90,10 +96,19 @@ function memberIds(chatId: string): string[] {
     db
       .prepare("SELECT member_id FROM chat_members WHERE chat_id = ?")
       .all(chatId) as Array<{ member_id: string }>
-  ).map((r) => r.member_id);
+  ).map((r) => r.member_id).filter((id) => isMember(chatId,id));
 }
 
 function isMember(chatId: string, userId: string): boolean {
+  const chat = db.prepare("SELECT project_id, parent_chat_id, task_id FROM chats WHERE id = ?").get(chatId) as any;
+  if (chat?.parent_chat_id) {
+    const task=chat.task_id ? getTaskForRead(chat.task_id,userId) : null;
+    if (!task || task.project_id !== chat.project_id) return false;
+  }
+  if (chat?.project_id && !chat.parent_chat_id && !getProjectForWrite(chat.project_id,userId)) {
+    const teammate=db.prepare(`SELECT 1 FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id JOIN tasks t ON t.id=p.task_id JOIN users u ON u.role_key=n.role_key WHERE t.project_id=? AND p.status='approved' AND n.skipped_at IS NULL AND u.id=? AND u.type='ai'`).get(chat.project_id,userId);
+    if(!teammate) return false;
+  }
   return !!db
     .prepare("SELECT 1 FROM chat_members WHERE chat_id = ? AND member_id = ?")
     .get(chatId, userId);
@@ -125,6 +140,49 @@ function chatRow(chatId: string) {
 
 export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   const authPre = authOrApiToken;
+
+  function ensureProjectGroup(project: any, userId: string) {
+    let group = db.prepare("SELECT id FROM chats WHERE project_id=? AND parent_chat_id IS NULL").get(project.id) as any;
+    if (!group) {
+      group={id:uid()};
+      db.prepare("INSERT INTO chats (id,title,kind,created_by,project_id) VALUES (?,?,'group',?,?)").run(group.id,project.name,userId,project.id);
+    }
+    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(group.id,userId);
+    return group.id as string;
+  }
+  app.post("/api/projects/:projectId/chat",{preHandler:authPre},async(req:any,reply)=>{
+    const project=getProjectForWrite(req.params.projectId,req.userId);
+    if (!project) return reply.code(404).send({error:"Проект не найден"});
+    const id=db.transaction(()=>ensureProjectGroup(project,req.userId))();
+    return {chat:chatRow(id)};
+  });
+  app.post("/api/tasks/:taskId/topic",{preHandler:authPre},async(req:any,reply)=>{
+    const task=getTaskForRead(req.params.taskId,req.userId);
+    if (!task?.project_id) return reply.code(404).send({error:"Задача проекта не найдена"});
+    const project=getProjectForWrite(task.project_id,req.userId);
+    if (!project) return reply.code(403).send({error:"Нет доступа к группе проекта"});
+    const previous=db.prepare("SELECT project_id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as any;
+    if (previous && previous.project_id !== task.project_id) return reply.code(409).send({error:"Тема относится к прежнему проекту задачи"});
+    const id=db.transaction(()=>{
+      const parent=ensureProjectGroup(project,req.userId);
+      let topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as any;
+      if (!topic) {
+        topic={id:uid()};
+        db.prepare("INSERT INTO chats (id,title,kind,created_by,task_id,project_id,parent_chat_id) VALUES (?,?,'group',?,?,?,?)").run(topic.id,task.title,req.userId,task.id,task.project_id,parent);
+      }
+      db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(topic.id,req.userId);
+      return topic.id;
+    })();
+    return {chat:chatRow(id)};
+  });
+  app.get("/api/chats/:id/topics",{preHandler:authPre},async(req:any,reply)=>{
+    if (!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
+    const rows=db.prepare("SELECT id FROM chats WHERE parent_chat_id=? ORDER BY updated_at DESC,id").all(req.params.id) as Array<{id:string}>;
+    return {chats:rows.filter(c=>isMember(c.id,req.userId)).map(c=>({
+      ...chatRow(c.id),
+      unread_count:(db.prepare(`SELECT COUNT(*) AS n FROM chat_messages WHERE chat_id=? AND from_user_id != ? AND created_at > COALESCE((SELECT last_read_at FROM chat_members WHERE chat_id=? AND member_id=?),'1970-01-01')`).get(c.id,req.userId,c.id,req.userId) as {n:number}).n,
+    }))};
+  });
 
   // Создать чат. member_ids — роли-агенты (или любые существующие учётки).
   // Создатель добавляется участником автоматически: он — сторона разговора.
@@ -202,7 +260,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       )
       .all(req.userId) as Array<{ id: string; task_id: string | null }>;
     return {
-      chats: rows.map((c) => {
+      chats: rows.filter((c) => isMember(c.id,req.userId)).map((c) => {
         // Имя отправителя — превью группы идёт с ним («QA: проверка
         // прошла»), счётчики вложений — чтобы клиент мог показать
         // «Голосовое»/«Файл» вместо пустой строки (у голосового текста нет).
@@ -218,7 +276,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
                FROM chat_messages m
                LEFT JOIN users f ON f.id = m.from_user_id
               WHERE m.chat_id = ?
-              ORDER BY m.created_at DESC LIMIT 1`,
+              ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1`,
           )
           .get(c.id) as
           | {
@@ -312,6 +370,8 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!hasTask && !hasTitle)
         return reply.code(400).send({ error: "нечего менять" });
 
+      const managed=db.prepare("SELECT project_id FROM chats WHERE id=?").get(req.params.id) as any;
+      if (hasTask && managed?.project_id) return reply.code(409).send({error:"Тему проекта нельзя перепривязать"});
       const rawTask = req.body?.task_id;
       const taskId = typeof rawTask === "string" && rawTask ? rawTask : null;
       if (hasTask && taskId && !db.prepare("SELECT id FROM tasks WHERE id = ?").get(taskId))
@@ -445,6 +505,18 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  app.post<{Params:{id:string;messageId:string};Body:{emoji?:unknown}}>(
+    "/api/chats/:id/messages/:messageId/reaction", {preHandler:authPre}, async (req:any,reply) => {
+      if(!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
+      const message=db.prepare("SELECT id FROM chat_messages WHERE id=? AND chat_id=?").get(req.params.messageId,req.params.id);
+      if(!message) return reply.code(404).send({error:"Сообщение не найдено"});
+      const emoji=req.body?.emoji;
+      if(emoji!==null && !["👍","❤️","🎉","🤔","👎"].includes(emoji)) return reply.code(400).send({error:"Неизвестная реакция"});
+      if(emoji===null) db.prepare("DELETE FROM chat_message_reactions WHERE message_id=? AND user_id=?").run(req.params.messageId,req.userId);
+      else db.prepare("INSERT INTO chat_message_reactions(message_id,user_id,emoji) VALUES(?,?,?) ON CONFLICT(message_id,user_id) DO UPDATE SET emoji=excluded.emoji").run(req.params.messageId,req.userId,emoji);
+      return {message:loadChatMessage(req.params.messageId)};
+    });
+
   // Сообщение в чат. Логика:
   //   1. Сохранить сообщение от пользователя.
   //   2. Определить роль-адресата (@role в тексте, иначе «Авто» через
@@ -461,7 +533,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // пользовательский текст уже в ленте и не потеряется).
   app.post<{
     Params: { id: string };
-    Body: { text?: string; attachment_ids?: string[]; task_id?: string; work_mode?: ChatWorkMode };
+    Body: { text?: string; attachment_ids?: string[]; task_id?: string; kind?: string; reply_to_message_id?: string; subtask_id?: string; recipient_subtask_id?: string; work_mode?: ChatWorkMode };
   }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
@@ -473,6 +545,8 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
       if (mode !== "work" && roleFromUserId(req.userId)) return reply.code(403).send({error: "Режим выбирает человек"});
       const text = String(req.body?.text || "").trim();
+      const textError = agentVisibleTextError(req.userId,text);
+      if(textError) return reply.code(400).send({error:textError});
       if (mode === "deep_research" && (!chatMemberRoles(req.params.id).includes("researcher") || parseRoleMentions(text).some(r => r !== "researcher"))) {
         return reply.code(400).send({error: "Глубокое исследование доступно в чате с Исследователем"});
       }
@@ -503,11 +577,25 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         typeof req.body?.task_id === "string" && req.body.task_id
           ? req.body.task_id
           : chatTaskId;
+      const replyTo = typeof req.body?.reply_to_message_id === "string" ? req.body.reply_to_message_id : null;
+      if(replyTo && !db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=?").get(replyTo,chatId)) return reply.code(400).send({error:"Исходное сообщение не принадлежит этому чату"});
+      if(taskId && !db.prepare("SELECT 1 FROM tasks WHERE id=?").get(taskId)) return reply.code(404).send({error:"Задача не найдена"});
+      const sourceSlot=roleFromUserId(req.userId) && typeof req.body?.subtask_id==="string" ? req.body.subtask_id : null;
+      const recipientSlot=typeof req.body?.recipient_subtask_id==="string" ? req.body.recipient_subtask_id : null;
+      const inTopicBranch=(stageTask:string)=>stageTask===chatTaskId || (!!chatTaskId && !!branchMembership(chatTaskId) && branchMembership(stageTask)?.root_plan_id===branchMembership(chatTaskId)?.root_plan_id);
+      if(sourceSlot){
+        const source=db.prepare("SELECT task_id FROM subtasks WHERE id=? AND agent_id=?").get(sourceSlot,req.userId) as {task_id:string}|undefined;
+        if(!source || !inTopicBranch(source.task_id))return reply.code(403).send({error:"Отправитель не назначен на этап этой ветки"});
+      }
+      if(recipientSlot){
+        const recipient=db.prepare("SELECT task_id FROM subtasks WHERE id=?").get(recipientSlot) as {task_id:string}|undefined;
+        if(!recipient || !inTopicBranch(recipient.task_id))return reply.code(400).send({error:"Этап адресата не относится к согласованной ветке"});
+      }
       const id = uid();
       db.prepare(
-        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode)
-         VALUES (?, ?, ?, 'chat', ?, ?, ?)`,
-      ).run(id, req.userId, text, chatId, taskId, mode);
+        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,message_type,reply_to_message_id,subtask_id,recipient_subtask_id)
+         VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, req.userId, text, chatId, taskId, mode,req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
         chatId,
       );
@@ -530,7 +618,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
 
       const message = loadChatMessage(id);
 
-      const audience = memberIds(chatId).filter((m) => m !== req.userId);
+      const audience = memberIds(chatId).filter((m) => m !== req.userId && isMember(chatId,m));
       broadcastToUsers([...audience, req.userId], {
         type: "chat:new",
         message,
@@ -694,7 +782,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(404).send({ error: "Чат не найден" });
       const roleId =
         typeof req.body?.role_id === "string" && req.body.role_id ? req.body.role_id : undefined;
-      const stopped = await cancelChatRunsFor(chatId, roleId);
+      const stopped = await cancelChatRunsFor(chatId, roleId) + await cancelSlotConversationsFor(chatId,roleId);
       return { stopped };
     },
   );
@@ -780,7 +868,7 @@ function chatMemberRoles(chatId: string): RoleName[] {
   const result: RoleName[] = [];
   for (const id of memberList) {
     const role = roleFromUserId(id);
-    if (role) result.push(role);
+    if (role && isMember(chatId,id)) result.push(role);
   }
   return result;
 }
@@ -1036,6 +1124,18 @@ export const MAX_AGENT_HOPS = 4;
  *  переписывались между собой без тупняка»): отвечают только те коллеги,
  *  кого роль явно позвала через @имя, не больше двух, и не дальше
  *  MAX_AGENT_HOPS передач подряд. */
+function topicSlotKey(text:string):string|undefined {
+  return text.match(/\[slot:\s*([^\]]+)\]/)?.[1]?.trim() ?? text.match(/\[этап:\s*([^\]]+)\]/i)?.[1]?.trim();
+}
+function slotChoiceNotice(chatId:string,taskId:string,role:RoleName,replyTo:string):void {
+  const roleId=roleAccountId(role);if(!roleId)return;
+  const slots=topicSlots(taskId,role);
+  const text=slots.length ? "Уточни рабочий этап, к которому относится вопрос." : "В этой задаче у меня нет рабочего этапа. Обратись к назначенному участнику или открой общий чат со мной.";
+  const name=(db.prepare("SELECT name FROM users WHERE id=?").get(roleId) as {name:string}).name;
+  const id=uid();
+  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,reply_to_message_id,quick_replies) VALUES(?,?,?,'chat',?,?,?,?)").run(id,roleId,text,chatId,taskId,replyTo,slots.length ? JSON.stringify(slots.slice(0,4).map(slot=>`@${name} [этап: ${slot.title}]`)) : null);
+  broadcastToUsers(memberIds(chatId),{type:"chat:new",message:loadChatMessage(id)});
+}
 async function dispatchRoleReplies(args: {
   chatId: string;
   messageId: string;
@@ -1046,7 +1146,7 @@ async function dispatchRoleReplies(args: {
 }): Promise<void> {
   const { chatId, text } = args;
   const senderRole = roleFromUserId(args.fromUserId);
-  const candidates = chatMemberRoles(chatId).filter((r) => r !== senderRole);
+  const candidates = chatMemberRoles(chatId).filter((r) => r !== senderRole || /\[slot:\s*[a-z][a-z0-9_]{1,63}\]/.test(text));
   if (candidates.length === 0) return;
 
   const mentioned = parseRoleMentions(text).filter((r) => candidates.includes(r));
@@ -1067,7 +1167,19 @@ async function dispatchRoleReplies(args: {
     targets = fallback ? [fallback] : [];
   }
 
+  const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
   for (const role of targets) {
+    let selectedSlot:string|undefined;
+    if(topic){
+      const recipient=(db.prepare("SELECT recipient_subtask_id FROM chat_messages WHERE id=?").get(args.messageId) as {recipient_subtask_id:string|null}|undefined)?.recipient_subtask_id;
+      const slot=resolveTopicSlot(topic.task_id,role,topicSlotKey(text),recipient ?? undefined);
+      if(!slot && (recipient || topicSlotKey(text))){slotChoiceNotice(chatId,topic.task_id,role,args.messageId);continue;}
+      if(slot){
+        selectedSlot=slot.id;
+        const delivery=await deliverTopicToWork(slot.task_id,role,args.messageId,text,slot.plan_node_key);
+        if(delivery!=="idle") continue;
+      }
+    }
     const accountId = roleAccountId(role);
     if (!accountId) continue;
     // Очередь на (chat_id, role_id): два быстрых сообщения подряд одной
@@ -1077,6 +1189,7 @@ async function dispatchRoleReplies(args: {
         chatId,
         role,
         triggerMessageId: args.messageId,
+        subtaskId: selectedSlot,
         hop: args.hop,
         mode: args.mode,
       }),
@@ -1108,9 +1221,11 @@ interface HistoryRow {
   created_at: string;
   from_name: string | null;
   attachments: string | null;
+  recipient_subtask_id: string | null;
+  subtask_id: string | null;
 }
 
-const HISTORY_SELECT = `SELECT m.id, m.from_user_id, m.text, m.created_at, f.name as from_name,
+const HISTORY_SELECT = `SELECT m.id, m.from_user_id, m.text, m.created_at, m.recipient_subtask_id, m.subtask_id, f.name as from_name,
         (SELECT group_concat(a.file_name, ', ') FROM attachments a
           WHERE a.chat_message_id = m.id) as attachments
    FROM chat_messages m
@@ -1167,6 +1282,7 @@ async function deliverAgentReply(args: {
   chatId: string;
   role: RoleName;
   triggerMessageId: string;
+  subtaskId?: string;
   hop: number;
   mode?: ChatWorkMode;
 }): Promise<string | null> {
@@ -1187,10 +1303,15 @@ async function deliverAgentReply(args: {
   const triggerFiles = trigger.attachments ? `\n[вложения: ${trigger.attachments}]` : "";
   const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerFiles}`;
 
+  const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
+  const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;
+  if(topic && !slot && (args.subtaskId || trigger.recipient_subtask_id || topicSlotKey(trigger.text))){slotChoiceNotice(chatId,topic.task_id,role,args.triggerMessageId);return null;}
+  if(topic && slot && await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)!=="idle") return null;
   const roleTitle = titleOfRole(role);
-  const previousSessionId = getChatSessionId(chatId, roleUserId);
+  const previousSessionId = slot ? null : getChatSessionId(chatId, roleUserId);
   let prompt: string;
-  if (previousSessionId) {
+  if(slot){prompt=userText;}
+  else if (previousSessionId) {
     const since = db
       .prepare(
         `${HISTORY_SELECT}
@@ -1243,10 +1364,12 @@ async function deliverAgentReply(args: {
   // Память команды по теме сообщения (02.10.2026) — в каждый ход: тема
   // разговора меняется, и вспоминать надо то, что относится к ней сейчас.
   const chatProject = (db.prepare(
-    "SELECT t.project_id FROM chats c LEFT JOIN tasks t ON t.id = c.task_id WHERE c.id = ?",
+    "SELECT COALESCE(c.project_id,t.project_id) project_id FROM chats c LEFT JOIN tasks t ON t.id = c.task_id WHERE c.id = ?",
   ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
-  const memory = await memoryBlock({ roleKey: role, projectId: chatProject, query: trigger.text });
+  const memory = await roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id, query: trigger.text });
   if (memory) prompt = `${prompt}\n\n${memory}`;
+  prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Отчёты сохраняй инструментом doc_write в документах задачи, здесь дай ссылку. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
+  if(topic) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 
   const roleName =
     (db.prepare("SELECT name FROM users WHERE id = ?").get(roleUserId) as
@@ -1277,7 +1400,7 @@ async function deliverAgentReply(args: {
   let failure: unknown = null;
   typing(true);
   try {
-    reply = await startChatRun({
+    reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:live.onEvent}) : await startChatRun({
       mode: args.mode,
       chatId,
       role,
@@ -1300,19 +1423,35 @@ async function deliverAgentReply(args: {
   const steps: SavedSteps | null = live.finish({ deferAnnounce: true });
 
   const cancelled = (failure as { code?: string } | null)?.code === "CHAT_RUN_CANCELLED";
-  const replyText = cancelled && partial
+  let replyText = cancelled && partial
     ? `${partial}\n\n_Остановлено._`
     : failure
       ? chatRunFailureText(failure)
       : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
 
+  const visibleError = agentVisibleTextError(roleUserId, replyText);
+  if (visibleError) {
+    // Финальный текст длиннее лимита, но ход уже отстучал в стрим то, что
+    // агент напечатал в живой пузырь. Сервер не подменяет ответ правилом —
+    // иначе ход уйдёт в пустоту (пузырь исчезнет, ничего не появится).
+    // Финальным сообщением становится то, что агент успел напечатать.
+    // Правило для видимых сообщений действует на входе в API (5 гейтов).
+    failure = new Error(visibleError);
+    replyText = partial || "";
+    // SQL-триггер agent_short_chat_messages_insert не пустит >800 символов:
+    // обрезаем по границе, чтобы INSERT прошёл.
+    if (Array.from(replyText).length > 800) {
+      replyText = Array.from(replyText).slice(0, 800).join("");
+    }
+  }
+
   let replyId: string | null = null;
   if (replyText) {
     replyId = uid();
     db.prepare(
-      `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, steps)
-       VALUES (?, ?, ?, 'chat', ?, ?)`,
-    ).run(replyId, roleUserId, replyText, chatId, steps ? JSON.stringify(steps) : null);
+      `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id)
+       VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?)`,
+    ).run(replyId, roleUserId, replyText, chatId, steps ? JSON.stringify(steps) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
   }

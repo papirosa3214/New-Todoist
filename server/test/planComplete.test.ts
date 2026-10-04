@@ -75,7 +75,7 @@ describe("план сдан — карточка на проверку", () => {
     const version = db.prepare("SELECT result FROM artifact_versions WHERE task_id = ? ORDER BY version_no DESC LIMIT 1").get(taskId) as { result: string };
     expect(version.result).toContain("План совместной работы сдан");
     expect(version.result).toContain("итог critic");
-    const job = db.prepare("SELECT reason FROM role_run_jobs WHERE task_id = ? AND dedupe_key = ?").get(taskId, `plan-review:${planId}`) as { reason: string };
+    const job = db.prepare("SELECT reason FROM role_run_jobs WHERE task_id = ? AND reason = 'review' ORDER BY created_at DESC LIMIT 1").get(taskId) as { reason: string };
     expect(job.reason).toBe("review");
     expect(finishPlanIfComplete(planId, taskId, null)).toBe(false);
   });

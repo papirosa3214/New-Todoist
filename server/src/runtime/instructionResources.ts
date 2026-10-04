@@ -146,3 +146,35 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
  await loader.reload();
  return Object.assign(loader,{disposeResources:()=>{if(snapshotDir)fs.rmSync(snapshotDir,{recursive:true,force:true});}});
 }
+
+/**
+ * Системная инструкция хода чата внутри сервера (владелец 02.10.2026: чат
+ * без отдельного процесса Pi и без MCP). Тот же текст, что раньше уходил в
+ * `--system-prompt` и `--append-system-prompt`: базовая инструкция роли (её
+ * SYSTEM.md или штатная Pi), дополнения роли, правила и режим чата.
+ * AGENTS.md и навыки подмешивает загрузчик ресурсов (createTaskResourceLoader).
+ */
+export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:string):Promise<string> {
+ instructionResources(cwd);
+ const discovered=await discoverChatResources(role);
+ const custom=discovered.systemPromptSource;
+ let base:string;
+ if(custom) base=composeLayer(role,keyFor(custom.path))!.effective;
+ else {
+  const sdkRoot=path.dirname(fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent')));
+  const {buildSystemPrompt}=await import(pathToFileURL(path.join(sdkRoot,'core/system-prompt.js')).href);
+  const tools=[createReadToolDefinition,createBashToolDefinition,createEditToolDefinition,createWriteToolDefinition,createGrepToolDefinition,createFindToolDefinition,createLsToolDefinition]
+   .map(make=>make(cwd)).filter(t=>mode!=='plan'||PLANNING_TOOLS.includes(t.name));
+  base=buildSystemPrompt({cwd,selectedTools:tools.map(t=>t.name),toolSnippets:Object.fromEntries(tools.map(t=>[t.name,t.promptSnippet])),promptGuidelines:tools.flatMap(t=>t.promptGuidelines ?? [])});
+ }
+ const append:string[]=[];
+ // AGENTS.md роли и её папка: при переезде чата внутрь процесса (8986da3) эти
+ // два слоя выпали из базовой инструкции — роль не знала ни про свою папку, ни
+ // про свои навыки. Возвращены оба, файлом и текстом соответственно.
+ for(const file of discovered.agentsFiles)append.push('# '+file.path+'\n'+composeLayer(role,keyFor(file.path))!.effective);
+ for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
+ append.push(composeLayer(role,'rules')!.effective);
+ append.push(roleHomeInstruction(role));
+ append.push(chatModeInstruction(mode));
+ return [base,...append].join('\n\n');
+}

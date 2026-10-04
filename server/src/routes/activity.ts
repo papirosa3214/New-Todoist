@@ -26,6 +26,15 @@ import { getTaskForWrite } from "../access.js";
 import { broadcastToUsers } from "../ws.js";
 import { hydrateTask, getTaskRow } from "./tasks.js";
 
+/** Telemetry access belongs to the active step executor as well as card owner. */
+function getTaskForActivity(taskId: string, userId: string) {
+  return getTaskForWrite(taskId, userId) ?? db.prepare(`
+    SELECT t.* FROM tasks t WHERE t.id = ? AND EXISTS (
+      SELECT 1 FROM subtasks s WHERE s.task_id=t.id AND s.agent_id=?
+      AND s.done=0 AND s.agent_state='in_progress'
+    )`).get(taskId, userId) as any;
+}
+
 export type ActivityKind =
   | "read"
   | "edit"
@@ -524,7 +533,7 @@ export function registerActivityRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/api/tasks/:id/activity/metrics", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const row = getTaskForWrite(req.params.id, req.userId);
+      const row = getTaskForActivity(req.params.id, req.userId);
       if (!row) return reply.code(404).send({ error: "Задача не найдена" });
       return { metrics: taskStopMetrics(row.id) };
     },
@@ -538,7 +547,7 @@ export function registerActivityRoutes(app: FastifyInstance) {
     handler: async (req: any, reply) => {
       // Та же дверь, что у остальных data-роутов: писать активность может
       // только тот, кто может писать в задачу.
-      const row = getTaskForWrite(req.params.id, req.userId);
+      const row = getTaskForActivity(req.params.id, req.userId);
       if (!row) return reply.code(404).send({ error: "Задача не найдена" });
 
       const kind = String(req.body?.kind || "") as ActivityKind;
@@ -580,6 +589,9 @@ export function registerActivityRoutes(app: FastifyInstance) {
           "UPDATE tasks SET agent_heartbeat_at = datetime('now') WHERE id = ?",
         ).run(row.id);
       }
+
+      db.prepare("UPDATE subtasks SET agent_heartbeat_at=datetime('now') WHERE task_id=? AND agent_id=? AND done=0 AND agent_state='in_progress'").run(row.id,req.userId);
+      db.prepare("UPDATE attempts SET heartbeat_at=datetime('now') WHERE task_id=? AND executor_id=? AND ended_at IS NULL AND subtask_id IN (SELECT id FROM subtasks WHERE task_id=? AND agent_id=? AND done=0 AND agent_state='in_progress')").run(row.id,req.userId,row.id,req.userId);
 
       const now = Date.now();
       sweep(now);
@@ -639,7 +651,7 @@ export function registerActivityRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/api/tasks/:id/activity", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
-      const row = getTaskForWrite(req.params.id, req.userId);
+      const row = getTaskForActivity(req.params.id, req.userId);
       if (!row) return reply.code(404).send({ error: "Задача не найдена" });
 
       // Та же проверка, что при записи. Без неё строка «висит» до 30 минут

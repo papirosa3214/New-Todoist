@@ -1,5 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
+import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
+import { markdownToTiptap } from "../lib/markdownToTiptap.js";
+import { recordTaskDocument } from "../lib/taskOutcome.js";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { isOwner, isOrchestrator } from "../access.js";
@@ -63,8 +66,14 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
 
     const versionNo = (db.prepare("SELECT COALESCE(MAX(version_no), 0) AS n FROM subtask_artifact_versions WHERE subtask_id = ?").get(current.id) as { n: number }).n + 1;
     const id = "sav_" + crypto.randomUUID();
+    db.transaction(() => {
     db.prepare("INSERT INTO subtask_artifact_versions (id, subtask_id, version_no, artifact_key, artifact_type, artifact_format, summary, payload_json, evidence_json, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?)")
       .run(id, current.id, versionNo, contract.key, contract.type, contract.format, summary, JSON.stringify(payload), JSON.stringify(evidence), req.userId);
+    const noteId="artifact_"+id;
+    const markdown=`# ${contract.key} · версия ${versionNo}\n\n${summary}\n\n## Данные\n\n\`\`\`json\n${JSON.stringify(payload,null,2)}\n\`\`\`\n\n## Источники\n\n${JSON.stringify(evidence,null,2)}`;
+    db.prepare("INSERT INTO user_notes(id,title,content,folder_id,updated_by) VALUES(?,?,?,?,?)").run(noteId,`${contract.key} · v${versionNo}`,JSON.stringify(markdownToTiptap(markdown)),ensureTaskArtifactFolder(current.task_id),req.userId);
+    db.prepare("UPDATE subtask_artifact_versions SET note_id=? WHERE id=?").run(noteId,id);
+    recordTaskDocument(current.task_id,noteId,req.userId);
     // Сдача структурного артефакта — это и есть закрытие узла (владелец
     // 29.09.2026: «закрытие роли-подзадачи автоматическое, в тот же момент,
     // когда её артефакт открывает gate»). Отдельного PATCH done не будет.
@@ -74,6 +83,7 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
       db.prepare("UPDATE subtasks SET current_attempt_id = NULL WHERE id = ?").run(current.id);
     }
     logEvent({ taskId: current.task_id, actorId: req.userId, kind: "plan_subtask_artifact_submitted", field: current.plan_node_key, toValue: contract.key + " v" + versionNo });
+    })();
     await unlockReadyPlanSubtasks(current.collaboration_plan_id, current.task_id, req.userId);
     const fullTask = getFullTask(current.task_id);
     broadcastTaskEvent([current.task_creator_id, current.task_assignee_id], { type: "task:updated", task: fullTask });

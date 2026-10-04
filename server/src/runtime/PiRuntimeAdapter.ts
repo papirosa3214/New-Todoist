@@ -1,10 +1,18 @@
-import { chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
-import { chatInstructionArgs } from "./instructionResources.js";
+import { chatModeInstruction, PLANNING_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
+import { chatInstructionArgs, chatSystemPrompt, createTaskResourceLoader } from "./instructionResources.js";
+import { chatTools } from "./chatTools.js";
+import { taskflowTools } from "./inProcessRun.js";
+import { connectRoleComposio } from "./composioRuntime.js";
 import { ensureRoleHome, prepareChatSessionDirectory } from "./roleHome.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  createAgentSession,
+  createCodingTools,
+  createReadOnlyTools,
+  SessionManager,
+  SettingsManager,
   getPackageDir,
   ModelRuntime,
   RpcClient,
@@ -1077,7 +1085,8 @@ interface ActiveChatRun {
   chatId: string;
   role: RoleName;
   roleId: string;
-  client: RpcClient;
+  /** Прервать ход: сессия Pi внутри сервера (`session.abort`). */
+  abort: () => Promise<void>;
   startedAt: string;
   cancelled: boolean;
 }
@@ -1134,7 +1143,7 @@ export async function stopAllChatRuns(): Promise<void> {
   for (const run of runs) {
     run.cancelled = true;
     try {
-      await run.client.abort();
+      await run.abort();
     } catch { /* процесс мог уже завершиться */ }
     releaseChatRoleLock(run.chatId, run.roleId);
   }
@@ -1182,11 +1191,6 @@ export async function startChatRun(
   }
 
   const runId = makeChatRunId();
-  const client: RpcClient | null = null;
-  let mcpConfigPath: string | null = null;
-  // Инициализируем фиктивной ссылкой — реальный client создаётся после
-  // успешной валидации модели; в блоке finally смотрим на activeChatRuns.
-  void client;
 
   try {
     // Модель/провайдер берём из routing роли — ровно как в startRun.
@@ -1207,46 +1211,80 @@ export async function startChatRun(
     const resolvedProvider = match.provider;
     const resolvedModel = match.id;
 
-    // Доступ роли к трекеру — пропуск, подписанный сервером, во временном
-    // файле подключения (см. roleRunAccess.ts). Роль в чате подключается
-    // своей учёткой и своим набором инструментов, а не личным MCP-конфигом
-    // владельца (владелец 25.09.2026: роли в чате — те же агенты, что и в
-    // карточках, без ассоциации с Pi Agent).
-    mcpConfigPath = prepareRoleRunAccess(runId, role, input.mode, input.chatId);
-    if (input.mode === "plan" && !mcpConfigPath) throw new Error("Планирование недоступно: не удалось применить ограничения инструментов");
+    // Ход чата — внутри сервера (владелец 02.10.2026: «у нас всё должно быть
+    // на сервере»). Раньше здесь поднимался отдельный процесс Pi с
+    // `--mcp-config`, а тот — `mcp_server.py`; после `--no-extensions` флаг
+    // стал неизвестен, и чаты легли. Теперь та же сессия Pi живёт в процессе
+    // сервера, инструменты трекера — прямые вызовы маршрутов от имени роли.
     const home = ensureRoleHome(role);
+    const cwd = home.workspace;
+    const mode: ChatWorkMode = input.mode ?? "work";
     const sessionDirectory = await prepareChatSessionDirectory(role, input.chatId, input.sessionId);
-    const args: string[] = [];
-    if (mcpConfigPath) {
-      args.push("--mcp-config", mcpConfigPath, ...await chatInstructionArgs(role,mcpConfigPath,input.mode));
-    }
-    if (input.sessionId) {
-      // --session-id продолжает РОВНО ту сессию, что у нас в таблице.
-      // Если по какой-то причине сессия была удалена из Pi — Pi создаст
-      // новую с тем же id (по спецификации CLI), и мы её же и запишем
-      // обратно в chat_sessions. Это поведение совпадает с
-      // ожиданием «следующее сообщение продолжает тот же контекст».
-      args.push("--session-id", input.sessionId);
-    }
-    args.push("--session-dir", sessionDirectory);
+    const known = input.sessionId
+      ? (await SessionManager.list(cwd, sessionDirectory)).find((s) => s.id === input.sessionId)
+      : undefined;
+    // Сохранённая сессия — продолжаем её; файла нет — заводим новую с тем же
+    // id (как делал `--session-id` у Pi CLI), чтобы chat_sessions не терял её.
+    const sessionManager = known
+      ? SessionManager.open(known.path, sessionDirectory, cwd)
+      : SessionManager.create(cwd, sessionDirectory, input.sessionId ? { id: input.sessionId } : undefined);
 
-    const newClient = new RpcClient({
-      cliPath: resolvePiCliPath(),
-      cwd: home.workspace,
-      provider: resolvedProvider,
-      model: resolvedModel,
-      // NODE_USE_ENV_PROXY=1 — без него встроенный fetch Pi игнорирует
-      // HTTPS_PROXY и провайдеры отвечают 403 (гео-блок).
-      env: { ...process.env, NODE_USE_ENV_PROXY: "1" },
-      args,
+    const runtime: any = await getModelRuntime();
+    const piModel =
+      runtime.getModel?.(resolvedProvider, resolvedModel) ??
+      ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === resolvedModel);
+    if (!piModel) throw new ModelNotAvailableError(model, provider);
+
+    const systemPrompt = await chatSystemPrompt(role, mode, cwd);
+    const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
+    const composio = await connectRoleComposio(role, mode, input.chatId).catch((error) => {
+      console.warn(`[chats] Composio для ${role} не подключился:`, error);
+      return { tools: [] as any[], close: async () => {} };
     });
+    const allowed = (name: string) =>
+      mode !== "plan" ||
+      PLANNING_TOOLS.includes(name) ||
+      ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_GET_TOOL_SCHEMAS"].some((n) => name.endsWith(n));
+    const builtin = [...new Map([...createCodingTools(cwd), ...createReadOnlyTools(cwd)].map((t) => [t.name, t])).values()]
+      .filter((t) => allowed(t.name))
+      .map((t) => ({ ...t, description: composeLayer(role, "tool.builtin." + t.name)?.effective ?? t.description }));
+    const custom = new Map<string, any>();
+    for (const tool of [...taskflowTools(role, resolvedModel), ...chatTools(role), ...composio.tools] as any[]) {
+      if (allowed(tool.name) && !custom.has(tool.name)) custom.set(tool.name, tool);
+    }
+
+    let session: any;
+    try {
+      ({ session } = await createAgentSession({
+        cwd,
+        model: piModel,
+        // Как у прежнего процесса Pi: уровень размышлений по умолчанию (medium;
+        // SDK сам выключит его у модели без reasoning). «off» здесь гасил
+        // живые «размышления» в окне чата (владелец 02.10.2026).
+        ...(input.mode === "deep_research" && match.reasoning ? { thinkingLevel: "high" } : {}),
+        modelRuntime: runtime,
+        resourceLoader,
+        // `tools` у SDK — список ИМЁН разрешённых инструментов. Объекты сюда
+        // нельзя: ни одно имя не совпадёт, и роль останется без инструментов
+        // («у меня нет инструментов», владелец 02.10.2026). Встроенные с
+        // описаниями владельца — через customTools: одноимённый перекрывает.
+        tools: [...builtin.map((t) => t.name), ...custom.keys()],
+        customTools: [...builtin, ...custom.values()],
+        sessionManager,
+        settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
+      } as any));
+    } catch (error) {
+      resourceLoader.disposeResources();
+      await composio.close().catch(() => {});
+      throw error;
+    }
 
     const run: ActiveChatRun = {
       runId,
       chatId: input.chatId,
       role,
       roleId: input.roleId,
-      client: newClient,
+      abort: () => session.abort(),
       startedAt: new Date().toISOString(),
       cancelled: false,
     };
@@ -1265,35 +1303,23 @@ export async function startChatRun(
     });
     watchdog.catch(() => {});
 
-    // Итог последнего хода модели (как у задач — recordRunActivity): без
-    // него ошибка провайдера («Request timed out», 30.09.2026) давала
-    // пустой текст, и роль в чате просто молчала.
+    // Итог последнего хода модели: без него ошибка провайдера давала пустой
+    // текст, и роль в чате просто молчала.
     const turnState: { last: TurnResult | null } = { last: null };
 
-    newClient.onEvent((event: JsonAgentSessionEvent) => {
+    const unsubscribe = session.subscribe((event: any) => {
       lastActivity = Date.now();
-      const e = event as { type: string; toolCallId?: string };
-      const raw = event as unknown as { type: string; messages?: unknown; success?: unknown; finalError?: unknown };
-      if (raw.type === "agent_end") {
-        const turn = parseTurnResult(raw.messages);
+      if (event?.type === "agent_end") {
+        const turn = parseTurnResult(event.messages);
         if (turn) turnState.last = turn;
-      } else if (raw.type === "auto_retry_end") {
-        turnState.last = raw.success === false
-          ? {
-              stopReason: "error",
-              errorMessage: typeof raw.finalError === "string" ? raw.finalError : "retry_failed",
-            }
+      } else if (event?.type === "auto_retry_end") {
+        turnState.last = event.success === false
+          ? { stopReason: "error", errorMessage: typeof event.finalError === "string" ? event.finalError : "retry_failed" }
           : null;
       }
-      if (e.type === "tool_execution_start" && e.toolCallId) {
-        runningTools.add(e.toolCallId);
-      } else if (e.type === "tool_execution_end" && e.toolCallId) {
-        runningTools.delete(e.toolCallId);
-      }
-      if (
-        event.type === "message_update" &&
-        event.assistantMessageEvent.type === "toolcall_start"
-      ) {
+      if (event?.type === "tool_execution_start" && event.toolCallId) runningTools.add(event.toolCallId);
+      else if (event?.type === "tool_execution_end" && event.toolCallId) runningTools.delete(event.toolCallId);
+      if (event?.type === "message_update" && event.assistantMessageEvent?.type === "toolcall_start") {
         input.onStep?.(event.assistantMessageEvent.toolName);
       }
       try {
@@ -1305,49 +1331,40 @@ export async function startChatRun(
     });
 
     let finalText = "";
-    let finalSessionId: string | null = input.sessionId ?? null;
+    let finalSessionId: string | null = session.sessionId ?? input.sessionId ?? null;
     const timeoutMs = resolveChatRunTimeout(input.timeoutMs);
+    let ceilingTimer: ReturnType<typeof setTimeout> | undefined;
+    const ceiling = new Promise<never>((_, reject) => {
+      ceilingTimer = setTimeout(() => {
+        session.abort().catch(() => {});
+        reject(new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs));
+      }, timeoutMs);
+    });
+    ceiling.catch(() => {});
     const idleTimer = setInterval(() => {
       if (watchdogFired || runningTools.size > 0) return;
       if (Date.now() - lastActivity < idleMs) return;
       watchdogFired = new ChatRunTimeoutError("CHAT_RUN_IDLE", idleMs);
-      newClient.abort().catch(() => {});
+      session.abort().catch(() => {});
       rejectWatchdog(watchdogFired);
     }, Math.min(5_000, Math.max(50, Math.floor(idleMs / 4))));
 
     try {
-      await newClient.start();
-      if (input.mode === "deep_research" && match.reasoning) await newClient.setThinkingLevel("high");
-      // Сессия могла стартовать с нашим sessionId (resume) или с новым
-      // (Pi создал сам). Реальный id берём через getState(), а не
-      // session_start — тот же путь, что в startRun: getState()
-      // надёжнее.
-      try {
-        const state = await newClient.getState();
-        const sid = (state as { sessionId?: string } | null)?.sessionId;
-        if (sid) finalSessionId = sid;
-      } catch { /* getState() упал — оставим то, что было */ }
-      // Один user message = один ответ. promptAndWait блокирует до
-      // agent_settled; сверху — общий потолок timeoutMs, сбоку — сторож
-      // тишины (он прерывает ход раньше, если роль замолчала).
+      // Один user message = один ответ; сверху — общий потолок, сбоку —
+      // сторож тишины.
       try {
         await Promise.race([
-          newClient.promptAndWait(input.mode ? chatModeInstruction(input.mode) + "\n\n" + input.prompt : input.prompt, undefined, timeoutMs),
+          session.prompt(input.mode ? chatModeInstruction(input.mode) + "\n\n" + input.prompt : input.prompt),
           watchdog,
+          ceiling,
         ]);
       } catch (error) {
         if (run.cancelled) throw chatRunCancelledError();
         if (watchdogFired) throw watchdogFired;
-        if (error instanceof Error && /^Timeout collecting events/.test(error.message)) {
-          newClient.abort().catch(() => {});
-          throw new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs);
-        }
         throw error;
       }
-      try {
-        const text = await newClient.getLastAssistantText();
-        finalText = (text ?? "").trim();
-      } catch { /* нет ассистентского хода — оставим пустую строку */ }
+      finalText = (session.getLastAssistantText?.() ?? "").trim();
+      finalSessionId = session.sessionId ?? finalSessionId;
       if (run.cancelled) throw chatRunCancelledError();
       const lastTurn = turnState.last;
       if (!finalText && lastTurn?.stopReason === "error") {
@@ -1358,12 +1375,11 @@ export async function startChatRun(
       }
     } finally {
       clearInterval(idleTimer);
-      // Останавливать процесс ОБЯЗАТЕЛЬНО, иначе каждый user-message
-      // оставит висеть по zombie-RpcClient. На повторное использование
-      // не рассчитываем — на следующее сообщение поднимем свежий client.
-      try {
-        await newClient.stop();
-      } catch { /* процесс уже умер — окей */ }
+      clearTimeout(ceilingTimer);
+      unsubscribe?.();
+      try { session.dispose(); } catch { /* уже закрыта */ }
+      resourceLoader.disposeResources();
+      await composio.close().catch(() => {});
       activeChatRuns.delete(runId);
     }
 
@@ -1376,7 +1392,6 @@ export async function startChatRun(
 
     return { runId, sessionId: finalSessionId, text: finalText };
   } finally {
-    releaseRoleRunAccess(mcpConfigPath);
     releaseChatRoleLock(input.chatId, input.roleId);
   }
 }
@@ -1390,7 +1405,7 @@ export async function cancelChatRun(runId: string): Promise<boolean> {
   if (!run) return false;
   run.cancelled = true;
   try {
-    await run.client.abort();
+    await run.abort();
   } catch { /* процесс мог уже завершиться */ }
   // activeChatRuns сам себя почистит в finally startChatRun, но
   // освободим слот сразу — чтобы следующее сообщение могло стартовать

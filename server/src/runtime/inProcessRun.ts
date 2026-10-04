@@ -1,7 +1,12 @@
+import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
+import { connectBuilderXcode } from "./builderXcode.js";
+import { branchMembership } from "./branchPlan.js";
+import { ensurePlanTopic, topicContext } from "../lib/projectTopics.js";
+import { markPlanFinalReviewerStarted, markPlanFinalReviewerWaiting, hasPendingPlanFinalReview, planReviewRouteContext } from "./planReviewLifecycle.js";
 import { instructionResources, createTaskResourceLoader } from "./instructionResources.js";
 import { ensureRoleHome } from "./roleHome.js";
 import { connectRoleComposio } from "./composioRuntime.js";
-import { memoryBlock } from "../lib/memory.js";
+import { roleProjectContext,roleProjectSnapshot } from "./roleProjectContext.js";
 import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
 import { renderInstruction, effectiveRules, registerInstructionBlock, instructionManifest } from "../lib/roleContextResolver.js";
 import { isOwner } from "../access.js";
@@ -31,6 +36,7 @@ import { buildInProcessTaskContext } from "./taskContextBridge.js";
 import { buildDependencyContext } from "./dependencyContext.js";
 import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
+import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
 
 /**
@@ -53,11 +59,11 @@ export function setInProcessApp(instance: FastifyInstance): void {
 
 type Json = Record<string, unknown>;
 
-class ToolError extends Error {}
+export class ToolError extends Error {}
 
 /** Внутренний вызов маршрута от имени роли. Подпись живёт в памяти сервера
  *  на один вызов: наружу не уходит, храниться нигде не нужно. */
-async function asRole(
+export async function asRole(
   role: string,
   method: "GET" | "POST" | "PATCH" | "DELETE",
   url: string,
@@ -84,11 +90,11 @@ async function asRole(
   return data;
 }
 
-function unwrap(d: any): any {
+export function unwrap(d: any): any {
   return d && typeof d === "object" && "task" in d ? d.task : d;
 }
 
-function short(t: any): Json {
+export function short(t: any): Json {
   return {
     id: t?.id,
     название: t?.title,
@@ -103,7 +109,7 @@ const STEP_STATE_RU: Record<string, string> = {
   review: "на проверке",
 };
 
-function asText(payload: unknown) {
+export function asText(payload: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
     details: {},
@@ -195,7 +201,7 @@ async function callResearchTool(name: string, args: unknown): Promise<unknown> {
  *  чем достаточно». */
 /** `taskId` — карточка текущего хода: записанные `doc_write` документы
  *  привязываются к ней и попадают в её «Итог» (01.10.2026). */
-export function taskflowTools(role: string, model: string | null, taskId?: string) {
+export function taskflowTools(role: string, model: string | null, taskId?: string, subtaskId?:string) {
   const T = (
     name: string,
     description: string,
@@ -212,6 +218,8 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       parameters,
       execute: async (_id: string, params: any) => {
         try {
+          if(subtaskId && ["taskflow_subtask_work","taskflow_subtask_done"].includes(name) && params.id!==subtaskId)throw new ToolError("Работай только в назначенном текущем слоте");
+          if(subtaskId && ["taskflow_state","taskflow_heartbeat"].includes(name) && params.id!==taskId)throw new ToolError("Состояние относится только к текущему слоту");
           return asText(await run(params));
         } catch (e) {
           const msg = e instanceof ToolError ? e.message : `сбой инструмента ${name}: ${String(e)}`;
@@ -222,17 +230,68 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   };
   const Id = Type.Object({ id: Type.String() });
 
+  let topicSends=0;
   const tools = [
+    T("taskflow_task_proposal", "По просьбе человека отправить настоящую карточку задачи для согласования. Для обычного упоминания используй текст со ссылкой. Доступно каждой роли.", Type.Object({chat_id:Type.String(),task_id:Type.String(),text:Type.String()}), async(p)=>asRole(role,"POST",`/api/chats/${p.chat_id}/messages`,{task_id:p.task_id,text:p.text,kind:"task_proposal",work_mode:"work"})),
+    T("taskflow_topic_reply", "Ответить на конкретное сообщение темы своей задачи: message_id и короткий text. Сервер определяет автора вопроса и его этап; подходит для ответа человеку и коллеге.",Type.Object({message_id:Type.String(),text:Type.String()}),async(p)=>{
+      if(!taskId)throw new ToolError("Нет текущей задачи");
+      if(topicSends>=4)throw new ToolError("Лимит обращений в этом запуске исчерпан");
+      const original=db.prepare("SELECT m.chat_id,m.from_user_id,m.subtask_id,c.task_id,u.name,u.role_key FROM chat_messages m JOIN chats c ON c.id=m.chat_id JOIN users u ON u.id=m.from_user_id WHERE m.id=? AND c.parent_chat_id IS NOT NULL").get(p.message_id) as {chat_id:string;from_user_id:string;subtask_id:string|null;task_id:string;name:string;role_key:string|null}|undefined;
+      if(!original || (original.task_id!==taskId && (!branchMembership(taskId) || branchMembership(original.task_id)?.root_plan_id!==branchMembership(taskId)?.root_plan_id)))throw new ToolError("Сообщение не относится к согласованной ветке");
+      if(original.from_user_id===roleUserId(role))throw new ToolError("Не отвечай сам себе");
+      const recipient=original.subtask_id && original.role_key ? resolveTopicSlot(original.task_id,original.role_key,undefined,original.subtask_id)?.id : undefined;
+      const source=subtaskId;
+      topicSends++;
+      return asRole(role,"POST",`/api/chats/${original.chat_id}/messages`,{text:`@${original.role_key ?? original.name} ${p.text}`,work_mode:"work",subtask_id:source,recipient_subtask_id:recipient,reply_to_message_id:p.message_id});
+    }),
+    T("taskflow_topic_read", "Прочитать состав, зависимости и последние сообщения темы текущей задачи.", Type.Object({task_id:Type.Optional(Type.String())}), async(p)=>{
+      if(!taskId) throw new ToolError("Нет текущей задачи");
+      const target=p.task_id??taskId;
+      if(target!==taskId && (!branchMembership(taskId) || branchMembership(target)?.root_plan_id!==branchMembership(taskId)?.root_plan_id)) throw new ToolError("Тема вне согласованной ветки");
+      return topicContext(target) || "У задачи пока нет темы";
+    }),
+    T("taskflow_topic_send", "Написать участнику текущей темы или темы task_id в общей согласованной ветке. to — role_key участника. Не запускает этап коллеги; максимум 4 обращения за этот запуск.", Type.Object({to:Type.String(),text:Type.String(),slot_key:Type.Optional(Type.String()),task_id:Type.Optional(Type.String()),reply_to_message_id:Type.Optional(Type.String())}), async(p)=>{
+      if(!taskId) throw new ToolError("Нет текущей задачи");
+      if(topicSends>=4) throw new ToolError("Лимит обращений в этом запуске исчерпан; зафиксируй блок или результат");
+      const target=p.task_id??taskId;
+      if(target!==taskId && (!branchMembership(taskId) || branchMembership(target)?.root_plan_id!==branchMembership(taskId)?.root_plan_id)) throw new ToolError("Тема вне согласованной ветки");
+      const topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(target) as {id:string}|undefined;
+      if(!topic) throw new ToolError("У задачи пока нет темы");
+      if(!ROLE_NAMES.includes(p.to)) throw new ToolError("Укажи доступную роль");
+      if(p.to===role){
+        const own=subtaskId ? db.prepare("SELECT plan_node_key FROM subtasks WHERE id=?").get(subtaskId) as {plan_node_key:string}|undefined : undefined;
+        if(target===taskId && (!own || !p.slot_key || own.plan_node_key===p.slot_key)) throw new ToolError("Не адресуй сообщение своему слоту");
+      }
+      if(!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(topic.id,roleUserId(p.to))) throw new ToolError("Роль не участвует в теме");
+      if(p.slot_key && !db.prepare(`SELECT 1 FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id WHERE p.task_id=? AND p.status='approved' AND n.role_key=? AND n.slot_key=? AND n.skipped_at IS NULL`).get(target,p.to,p.slot_key)) throw new ToolError("Слот не относится к текущему участнику");
+      const targetSlots=db.prepare("SELECT n.slot_key FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id WHERE p.task_id=? AND p.status='approved' AND n.role_key=? AND n.skipped_at IS NULL").all(target,p.to) as {slot_key:string}[];
+      if(!p.slot_key) {
+        if(targetSlots.length!==1) throw new ToolError("Укажи конкретный слот адресата");
+        p.slot_key=targetSlots[0].slot_key;
+      }
+      if(p.reply_to_message_id) {
+        const original=db.prepare("SELECT from_user_id FROM chat_messages WHERE id=? AND chat_id=?").get(p.reply_to_message_id,topic.id) as {from_user_id:string}|undefined;
+        if(!original || original.from_user_id!==roleUserId(p.to)) throw new ToolError("Ответ адресуй автору исходного вопроса");
+      }
+      topicSends++;
+      return asRole(role,"POST",`/api/chats/${topic.id}/messages`,{text:`@${p.to} ${p.slot_key ? `[slot: ${p.slot_key}] ` : ""}${String(p.text)}`,work_mode:"work",subtask_id:subtaskId,recipient_subtask_id:resolveTopicSlot(target,p.to,p.slot_key)?.id,reply_to_message_id:p.reply_to_message_id});
+    }),
+    T("taskflow_consult", "Получить второе мнение старшей модели по текущему рабочему слоту. Один совет на попытку; совет не меняет граф и приёмку.",Type.Object({question:Type.String(),context:Type.Optional(Type.Any())}),async(p)=>{
+      if(!taskId) throw new ToolError("Нет текущей задачи");
+      return asRole(role,"POST","/api/consult",{question:p.question,context:p.context,task_id:taskId,subtask_id:subtaskId});
+    }),
     T("taskflow_my_tasks", "Мои задачи (назначенные на эту роль). state: free | in_progress | review | blocked.",
       Type.Object({ state: Type.Optional(Type.String()), include_completed: Type.Optional(Type.Boolean()) }),
       async (p) => {
         const me = roleUserId(role);
         let tasks = (await asRole(role, "GET", "/api/tasks?include_children=true")) as any[];
-        tasks = tasks.filter((t) => t.assignee_id === me);
+        const ownSteps = db.prepare("SELECT * FROM subtasks WHERE agent_id=? AND done=0 AND collaboration_plan_id IN (SELECT id FROM task_collaboration_plans WHERE status='approved')").all(me) as any[];
+        const stepTaskIds = new Set(ownSteps.map(s=>s.task_id));
+        tasks = tasks.filter((t) => t.assignee_id === me || stepTaskIds.has(t.id));
         if (p.include_completed !== true) tasks = tasks.filter((t) => t.status === "active");
         if (p.state === "free") tasks = tasks.filter((t) => !t.agent_state);
-        else if (p.state) tasks = tasks.filter((t) => t.agent_state === p.state);
-        return { всего: tasks.length, задачи: tasks.map(short) };
+        else if (p.state) tasks = tasks.filter((t) => t.agent_state === p.state || ownSteps.some(s=>s.task_id===t.id && s.agent_state===p.state));
+        return { всего: tasks.length, задачи: tasks.map(t=>({...short(t), рабочие_слоты:ownSteps.filter(s=>s.task_id===t.id).map(s=>({id:s.id,состояние:s.agent_state,название:s.title}))})) };
       }),
     T("taskflow_task", "Карточка задачи целиком: описание, шаги, лента.", Id, async (p) => {
       const d = await asRole(role, "GET", `/api/tasks/${p.id}`);
@@ -253,25 +312,30 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         лента: feed,
       };
     }),
-    T("taskflow_claim", "Взять задачу в работу.", Id, async (p) => {
+    T("taskflow_claim", "Взять личную задачу в работу. В командном плане не захватывай карточку: работай через taskflow_subtask_work со своим утверждённым слотом.", Id, async (p) => {
+
       const resp = await asRole(role, "POST", `/api/tasks/${p.id}/claim`, { model, runner: "Pi" });
       void activity(role, p.id, "edit", "статус: взял задачу в работу");
       return { "взято в работу": short(unwrap(resp)), правила: resp.rules ?? undefined };
     }),
     T("taskflow_heartbeat", "Продлить аренду задачи. Сервер продлевает её и сам, пока идёт запуск.", Id, async (p) => {
-      await asRole(role, "POST", `/api/tasks/${p.id}/heartbeat`, {});
+      await asRole(role, "POST", subtaskId && p.id===taskId ? `/api/subtasks/${subtaskId}/work` : `/api/tasks/${p.id}/heartbeat`, {});
       return { "аренда продлена": p.id };
     }),
     T("taskflow_state", "Сменить состояние работы: review — сдать на проверку, blocked — упёрся и жду владельца, in_progress — вернуться. Для review и blocked комментарий обязателен.",
       Type.Object({ id: Type.String(), state: Type.String(), comment: Type.Optional(Type.String()) }),
       async (p) => {
+        if(subtaskId && p.id===taskId && ["in_progress","blocked","review"].includes(p.state)) {
+          await asRole(role,"POST",`/api/subtasks/${subtaskId}/work`,{state:p.state,...(p.comment ? {result:p.comment}:{})});
+          return {"состояние изменено":{task_id:taskId,subtask_id:subtaskId,состояние:p.state}};
+        }
         const body: Json = { state: p.state };
         if (p.comment) body.comment = p.comment;
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
         return { "состояние изменено": short(unwrap(resp)) };
       }),
-    T("taskflow_review", "Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего.",
-      Type.Object({ id: Type.String(), verdict: Type.String(), findings: Type.Optional(Type.String()) }),
+    T("taskflow_review", "Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток.",
+      Type.Object({ id: Type.String(), verdict: Type.String(), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
       async (p) => {
         const versions = await asRole(role, "GET", `/api/tasks/${p.id}/versions`);
         const current = (versions.versions ?? []).find((v: any) => v.is_current);
@@ -282,10 +346,11 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           criteria_version: "1", task_revision: current.task_revision, verdict: p.verdict,
         };
         if (findings) body.findings = findings;
+        if (p.rework_steps) body.rework_steps = p.rework_steps;
         if (p.verdict === "changes_requested") {
           if (!findings) throw new ToolError("для возврата нужен комментарий: что доработать");
-          await asRole(role, "POST", "/api/reviews", body);
-          await asRole(role, "POST", `/api/tasks/${p.id}/state`, { state: "in_progress", comment: findings });
+          const review = await asRole(role, "POST", "/api/reviews", body);
+          if (!review.handled_by_plan) await asRole(role, "POST", `/api/tasks/${p.id}/state`, { state: "in_progress", comment: findings });
           return { вердикт: "возвращено на доработку", комментарий: findings };
         }
         const resp = await asRole(role, "POST", "/api/reviews", body);
@@ -367,10 +432,15 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           if (taskId) recordTaskDocument(taskId, n.id, roleUserId(role));
           return { готово: "заметка обновлена", id: n.id };
         }
-        if (!p.project_id) throw new ToolError("нужен project_id или id заметки");
-        const d = await asRole(role, "GET", `/api/projects/${p.project_id}/docs`);
-        if (!d.folder) throw new ToolError("у проекта нет папки документации");
-        const n = await asRole(role, "POST", "/api/notes", { markdown: p.markdown, folder_id: d.folder.id });
+        let folderId: number;
+        if(taskId) folderId=ensureTaskArtifactFolder(taskId);
+        else {
+          if (!p.project_id) throw new ToolError("нужна задача, project_id или id заметки");
+          const d=await asRole(role,"GET",`/api/projects/${p.project_id}/docs`);
+          if(!d.folder) throw new ToolError("у проекта нет папки документации");
+          folderId=d.folder.id;
+        }
+        const n = await asRole(role, "POST", "/api/notes", { markdown: p.markdown, folder_id: folderId });
         if (taskId) recordTaskDocument(taskId, n.id, roleUserId(role));
         return { готово: "заметка создана", id: n.id };
       }),
@@ -409,7 +479,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  return tools;
+  return subtaskId ? tools.filter(t => t.name !== "taskflow_claim") : tools;
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -499,6 +569,8 @@ function repoNote(cwd: string): string {
 
 /** Разговор агента хранится на пару «задача + роль» и продолжается при
  *  следующем заходе — после ответа владельца, паузы или повтора. */
+export function slotWorkspace(taskId:string):string {return roleWorkspace(taskId,projectRepo(taskId));}
+
 function sessionDir(taskId: string, role: string, subtaskId?: string): string {
   return path.join(RUNS_BASE, "sessions", `${taskId}-${role}-${subtaskId ?? "main"}`);
 }
@@ -525,8 +597,33 @@ function progressMark(taskId: string): string {
   return `${steps}:${comments}`;
 }
 
-type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void> };
+type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void>; steer: (text:string)=>Promise<void> };
 const activeRuns = new Map<string, ActiveInProcessRun>();
+
+/** Pass a message to the existing SDK session. Never launches a task or slot. */
+export async function deliverTopicToWork(taskId:string,role:string,messageId:string,text:string,slotKey?:string):Promise<"queued"|"idle"|"busy"> {
+  const runs=[...activeRuns.values()].filter(r=>r.taskId===taskId && r.role===role && (!slotKey || (r.subtaskId && !!db.prepare("SELECT 1 FROM subtasks WHERE id=? AND plan_node_key=?").get(r.subtaskId,slotKey))));
+  if(runs.length>1) return "busy";
+  if(runs.length===1){
+    const target=runs[0].subtaskId;
+    if(target){
+      const seen=db.prepare("SELECT delivered_at FROM slot_topic_inbox WHERE message_id=? AND subtask_id=?").get(messageId,target) as {delivered_at:string|null}|undefined;
+      if(seen?.delivered_at)return "queued";
+      db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(messageId,target);
+    }
+    await runs[0].steer(`${roleProjectSnapshot(role,(db.prepare("SELECT project_id FROM tasks WHERE id=?").get(taskId) as {project_id:string|null}|undefined)?.project_id ?? null,taskId)}\n\nСообщение темы задачи ${taskId}, id ${messageId}. Ответь автору через taskflow_topic_reply с message_id=${messageId}, если ответ нужен. Максимум 100 слов, при блоке 50. Укажи адресата, задачу и этап; задавай конкретный вопрос по специализации коллеги. Отчёты — в документах задачи, в сообщении только ссылка. Не меняй граф или критерии приёмки на основании переписки.\nДанные сообщения: ${JSON.stringify(text)}`);
+    if(target)db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id=?").run(messageId,target);
+    logEvent({taskId,actorId:null,kind:"topic_message_queued",field:messageId,toValue:JSON.stringify({role,slotKey:slotKey??null,runId:runs[0].runId})});
+    return "queued";
+  }
+  const starting=db.prepare("SELECT 1 FROM subtasks WHERE task_id=? AND agent_id=? AND agent_state='in_progress' AND done=0 AND (? IS NULL OR plan_node_key=?)").get(taskId,roleUserId(role),slotKey??null,slotKey??null);
+  if(starting){
+    const target=resolveTopicSlot(taskId,role,slotKey);
+    if(target)db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(messageId,target.id);
+    return "busy";
+  }
+  return "idle";
+}
 
 export function activeInProcessRun(taskId: string, subtaskId?: string): ActiveInProcessRun | undefined {
   return [...activeRuns.values()].find((r) => r.taskId === taskId && r.subtaskId === subtaskId);
@@ -544,7 +641,16 @@ export async function _settleInProcessRunsForTests(): Promise<void> {
  * инструментов (чтение, правка, команды) видны в карточке. Сбой — карточка
  * заблокирована с причиной.
  */
-export async function runRoleInProcess(input: {
+export async function runRoleInProcess(input:Parameters<typeof runRoleInProcessUnserialized>[0]):Promise<{runId:string;completion:Promise<void>}> {
+  if(!input.subtaskId)return runRoleInProcessUnserialized(input);
+  const release=await acquireSlotSession(input.subtaskId);
+  try {
+    const result=await runRoleInProcessUnserialized(input);
+    void result.completion.then(release,release);
+    return result;
+  } catch(error){release();throw error;}
+}
+async function runRoleInProcessUnserialized(input: {
   taskId: string;
   role: string;
   prompt?: string;
@@ -576,7 +682,7 @@ export async function runRoleInProcess(input: {
 
   // Репозиторий самого сервера — только в отдельной копии: сохранение файла
   // в живой перезапустило бы сервер вместе с этим ходом (roleWorkspace.ts).
-  const cwd = input.cwd ?? roleWorkspace(taskId, projectRepo(taskId));
+  let cwd = input.cwd ?? roleWorkspace(taskId, projectRepo(taskId));
   const mode = input.mode ?? (role === "critic_verifier" ? "review" : "work");
   const resumed = hasSession(taskId, role, input.subtaskId);
   const dependencyContext = buildDependencyContext(taskId);
@@ -617,6 +723,8 @@ export async function runRoleInProcess(input: {
     }
   }
   fs.mkdirSync(sessionDir(taskId, role, input.subtaskId), { recursive: true });
+  const manager=input.subtaskId ? openSlotSession(taskId,role,input.subtaskId,cwd) : SessionManager.continueRecent(cwd,sessionDir(taskId,role));
+  cwd=manager.getCwd();
   const systemPrompt = [
     composeLayer(role, "role.prompt")?.effective
       || rolePrompt(role)
@@ -637,39 +745,48 @@ try {
 }
 
   const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId);
-  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId), ...composio.tools];
+  if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
+  const xcode = await connectBuilderXcode(role, mode).catch(async error => { resourceLoader.disposeResources(); await composio.close(); throw error; });
+  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...xcode.tools];
+  const builtinTools = [...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()].filter(t=>BUILTIN_TOOLS.includes(t.name)).map(t=>({...t,description:composeLayer(role,"tool.builtin."+t.name)?.effective ?? t.description}));
   const { session } = await createAgentSession({
     cwd,
     model,
     thinkingLevel: "off",
     modelRuntime: runtime,
     resourceLoader,
-    tools: [...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()].filter(t=>BUILTIN_TOOLS.includes(t.name)).map(t=>({...t,description:composeLayer(role,"tool.builtin."+t.name)?.effective ?? t.description})),
-    customTools,
-    sessionManager: SessionManager.continueRecent(cwd, sessionDir(taskId, role, input.subtaskId)),
+    // `tools` у SDK — список ИМЁН. Раньше сюда шли объекты, и роль на задаче
+    // оставалась без единого инструмента (владелец 02.10.2026). Встроенные с
+    // описаниями владельца — через customTools: одноимённый перекрывает.
+    tools: [...builtinTools.map(t=>t.name), ...customTools.map((t: any)=>t.name)],
+    customTools: [...builtinTools, ...customTools],
+    sessionManager: manager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
-  } as any).catch(async error => { resourceLoader.disposeResources(); await composio.close(); throw error; });
+  } as any).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await xcode.close(); throw error; });
 
   const runId = `inproc_${crypto.randomUUID()}`;
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
   logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
-  activeRuns.set(runId, { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort() });
+  activeRuns.set(runId, { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text) });
 
   // Действия встроенных инструментов — строкой в карточке, как раньше делало
   // расширение Pi taskflow-activity.ts.
   const KIND: Record<string, string> = {
-    read: "read", grep: "read", find: "read", ls: "read", edit: "edit", write: "edit", bash: "bash",
+    read: "read", grep: "search", find: "search", ls: "read", edit: "edit", write: "write", bash: "run",
   };
   session.subscribe((event: any) => {
-    if (event?.type !== "tool_execution_start" || !KIND[event.toolName]) return;
+    if (event?.type !== "tool_execution_start") return;
+    const kind=KIND[event.toolName] ?? (event.toolName?.startsWith("mcp__xcode__") ? (event.toolName.includes("write") ? "write" : event.toolName.includes("read") ? "read" : event.toolName.includes("test") ? "test" : "run") : undefined);
+    if(!kind) return;
     const a = event.args ?? {};
     const target = String(a.path ?? a.file_path ?? a.command ?? a.pattern ?? event.toolName).slice(0, 200);
-    void activity(role, taskId, KIND[event.toolName], target);
+    void activity(role, taskId, kind, target);
   });
 
   const beat = setInterval(() => {
-    void asRole(role, "POST", `/api/tasks/${taskId}/heartbeat`, {}).catch(() => {});
+    const heartbeatPath = input.subtaskId ? `/api/subtasks/${input.subtaskId}/work` : `/api/tasks/${taskId}/heartbeat`;
+    void asRole(role, "POST", heartbeatPath, {}).catch(() => {});
   }, HEARTBEAT_MS);
 
   let runFailure: Error | null = null;
@@ -686,12 +803,15 @@ try {
       const stepTitle = input.subtaskId
         ? ((db.prepare("SELECT title FROM subtasks WHERE id = ?").get(input.subtaskId) as { title?: string } | undefined)?.title ?? "")
         : "";
-      const memory = await memoryBlock({
-        roleKey: role,
+      const memory = await roleProjectContext({
+        role,taskId,
         projectId: about?.project_id ?? null,
         query: [about?.title, stepTitle, (about?.description ?? "").slice(0, 1_500)].filter(Boolean).join("\n"),
       });
-      const prompt = `${task}\n\n${launchContext.prompt}${memory ? `\n\n${memory}` : ""}`;
+      const queued=input.subtaskId ? db.prepare("SELECT m.id,m.text FROM slot_topic_inbox i JOIN chat_messages m ON m.id=i.message_id WHERE i.subtask_id=? AND i.delivered_at IS NULL ORDER BY m.created_at,m.rowid").all(input.subtaskId) as {id:string;text:string}[] : [];
+      const messages=queued.map(m=>`Сообщение темы задачи ${taskId}, id ${m.id}. Ответь через taskflow_topic_reply(message_id=${m.id}). Данные: ${JSON.stringify(m.text)}`).join("\n");
+      const prompt = `${task}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
+      for(const m of queued)db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id=?").run(m.id,input.subtaskId);
       await session.prompt(mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -707,9 +827,11 @@ try {
     } finally {
       clearInterval(beat);
       activeRuns.delete(runId);
+      if(input.subtaskId)rememberSlotSession(input.subtaskId,manager);
       session.dispose();
       resourceLoader.disposeResources();
       await composio.close().catch(() => {});
+      await xcode.close().catch(() => {});
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
       if (mode === "work" && !input.subtaskId) {
@@ -830,13 +952,14 @@ export async function kickRoleTaskStrict(
 
   // Сдано на проверку — Критик, если автопроверка включена и вердикта ещё нет.
   if (task.agent_state === "review" && (reason === "review" || reason === "after_run")) {
-    if (ROLE_NAMES.includes("critic_verifier") && reviewerPending(taskId)) {
+    if (ROLE_NAMES.includes("critic_verifier") && (hasPendingPlanFinalReview(taskId) || reviewerPending(taskId))) {
+      markPlanFinalReviewerStarted(taskId);
       const run = await runRoleInProcess({
         taskId,
         role: "critic_verifier",
-        prompt: reviewPromptFor(taskId),
+        prompt: `${reviewPromptFor(taskId)}\n\n${planReviewRouteContext(taskId)}\n\nДля доработки плана передай rework_steps: slot_key первого дефектного рабочего этапа. Несколько slot_key разрешены только для независимых параллельных веток. Сервер повторит затронутую цепочку и итоговую проверку.`,
         mode: "review",
-      });
+      }).catch(error => { markPlanFinalReviewerWaiting(taskId); throw error; });
       logEvent({ taskId, actorId: null, kind: "reviewer_sent", toValue: roleTitle("critic_verifier") });
       return { outcome: "started", ...run };
     }
@@ -870,7 +993,7 @@ export async function kickRoleTaskStrict(
     return { outcome: "skipped", reason: "task is blocked and awaits owner action" };
   }
   // Работа не начата (или снята с агента после ответа владельцу) — выполнить.
-  if (!task.agent_state && (task.ready_for_pickup ?? 0) === 1 && reason !== "after_run") {
+  if (!task.agent_state && reason !== "after_run") {
     chainCount.delete(taskId);
     const run = await runRoleInProcess({
       taskId,

@@ -16,7 +16,7 @@
 // не конкретному адресату (выбор роли делает сервер через @упоминание
 // или авто-подбор, см. server/src/routes/chats.ts:pickRoleForChat).
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   useChat,
@@ -26,7 +26,12 @@ import {
   useSendChatMessage,
 } from "../api/chats";
 import { useCurrentUser } from "../api/auth";
-import { formatRelativeTime, formatAbsoluteTime } from "../lib/date";
+import {
+  formatAbsoluteTime,
+  formatDaySeparator,
+  formatRelativeTime,
+  getMskDayKey,
+} from "../lib/date";
 import {
   Avatar,
   Button,
@@ -37,6 +42,13 @@ import {
 } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import type { ApiChatRoomMessage } from "../api/types";
+
+// Отступ в px от низа ленты, при котором пользователь считается
+// «у дна» — на эту величину ниже реального низа может уехать
+// scrollTop из-за дробей/растягивания, и это всё ещё «у дна».
+// 80px — высота 3-4 пузырей плюс композер, при которых «у дна»
+// читается глазами.
+const NEAR_BOTTOM_PX = 80;
 
 export function ChatRoomScreen() {
   const { id } = useParams<{ id: string }>();
@@ -62,16 +74,50 @@ export function ChatRoomScreen() {
 
   // Автоскролл к низу при появлении новых сообщений и при открытии.
   // Якорь-невидимка после последнего пузыря.
+  //
+  // Правило «когда скроллить»: если пользователь и так сидит у дна
+  // (или в пределах NEAR_BOTTOM_PX), новое сообщение должно прийти
+  // ему в поле зрения, как в Telegram/WhatsApp. Если он ушёл читать
+  // историю — НЕ дёргаем ленту, иначе он теряет место, где остановился.
+  // В этом случае кнопка «↓» в правом нижнем углу возвращает на дно
+  // одним нажатием.
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const atBottomRef = useRef(true);
+  // Реф вместо setAtBottom в эффекте: state-апдейт там же зациклит
+  // автоскролл (каждый рендер — новое значение — снова рендер). Через
+  // ref пишем «у дна?» моментально, а в state выставляем только когда
+  // оно поменялось (для видимости кнопки).
+  atBottomRef.current = atBottom;
   useLayoutEffect(() => {
+    if (!atBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length]);
   useEffect(() => {
     // И при самом монтаже — на случай, если список пришёл из кэша и
     // длина не меняется.
+    atBottomRef.current = true;
+    setAtBottom(true);
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [chatId]);
+
+  // Слушаем скролл: если пользователь ушёл от дна больше чем на
+  // NEAR_BOTTOM_PX — показываем кнопку «вниз». Если вернулся — прячем.
+  // scrollHeight здесь уменьшать не нужно: высота растёт только при
+  // добавлении сообщений, а этот слушатель срабатывает на пользовательский
+  // ввод, а не на появление новых пузырей.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const near = distance <= NEAR_BOTTOM_PX;
+      if (near !== atBottomRef.current) setAtBottom(near);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
 
   const handleDelete = async () => {
     if (!chat) return;
@@ -127,26 +173,64 @@ export function ChatRoomScreen() {
         </div>
       )}
 
-      <div
-        ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto -mx-4 px-4"
-      >
-        {isMessagesLoading && <Loading variant="block" />}
-        <ErrorBanner
-          error={isMessagesError ? messagesError : null}
-          fallback="Не удалось загрузить историю."
-        />
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={scrollRef}
+          className="absolute inset-0 overflow-y-auto -mx-4 px-4"
+        >
+          {isMessagesLoading && <Loading variant="block" />}
+          <ErrorBanner
+            error={isMessagesError ? messagesError : null}
+            fallback="Не удалось загрузить историю."
+          />
 
-        {messages.length === 0 && !isMessagesLoading && !isMessagesError && (
-          <EmptyChat />
+          {messages.length === 0 && !isMessagesLoading && !isMessagesError && (
+            <EmptyChat />
+          )}
+
+          <ul className="flex flex-col gap-3 py-2">
+            {messages.map((m, i) => {
+              // Разделитель суток вставляем перед первым сообщением
+              // нового календарного дня (по Москве). Если у соседних
+              // сообщений день совпадает — не дублируем. Сравнение по
+              // ключу «YYYY-MM-DD», а не по строке created_at: дата
+              // хранится в UTC, а день считается московский.
+              const prev = i > 0 ? messages[i - 1] : null;
+              const showDaySeparator =
+                !prev || getMskDayKey(prev.created_at) !== getMskDayKey(m.created_at);
+              return (
+                <Fragment key={m.id}>
+                  {showDaySeparator && (
+                    <DaySeparator label={formatDaySeparator(m.created_at)} />
+                  )}
+                  <MessageBubble msg={m} mine={m.from_user_id === meId} />
+                </Fragment>
+              );
+            })}
+          </ul>
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Плавающая кнопка «к последнему сообщению». Появляется только
+            когда пользователь ушёл вверх по ленте; видна поверх пузырей,
+            не уезжает со скроллом (position: absolute относительно
+            обёртки). Без неё, чтобы вернуться вниз после прочтения
+            истории, пришлось бы свайпать пальцем через всю ленту —
+            на длинных чатах это десятки пузырей. */}
+        {!atBottom && (
+          <button
+            type="button"
+            onClick={() => {
+              atBottomRef.current = true;
+              setAtBottom(true);
+              bottomRef.current?.scrollIntoView({ block: "end" });
+            }}
+            aria-label="К последнему сообщению"
+            className="absolute right-3 bottom-3 w-11 h-11 rounded-full bg-card shadow-fab z-10 flex items-center justify-center text-text tap-fade"
+          >
+            <Icon name="arrowDown" size={20} />
+          </button>
         )}
-
-        <ul className="flex flex-col gap-3 py-2">
-          {messages.map((m) => (
-            <MessageBubble key={m.id} msg={m} mine={m.from_user_id === meId} />
-          ))}
-        </ul>
-        <div ref={bottomRef} />
       </div>
 
       {chat && (
@@ -209,6 +293,27 @@ function MessageBubble({
           {formatAbsoluteTime(msg.created_at)}
         </div>
       </div>
+    </li>
+  );
+}
+
+/** Разделитель календарных суток в ленте. Тот же приём, что в
+ *  Telegram/WhatsApp: тонкая линия с подписью по центру, чтобы при
+ *  прокрутке истории сразу было видно, где проходят границы дней.
+ *  Без подписи взгляд скользит по сплошному потоку пузырей и теряется
+ *  ощущение, насколько старая та или иная «сессия» (владелец
+ *  02.10.2026). */
+function DaySeparator({ label }: { label: string }) {
+  return (
+    <li
+      aria-label={label}
+      className="flex items-center gap-2 py-1.5 select-none"
+    >
+      <div className="flex-1 h-px bg-card2" />
+      <span className="text-[11px] text-dim font-medium tracking-wide uppercase">
+        {label}
+      </span>
+      <div className="flex-1 h-px bg-card2" />
     </li>
   );
 }

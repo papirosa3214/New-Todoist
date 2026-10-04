@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { roleTitle } from "../roleRouting.js";
 
 /** Постоянный инструментарий роли, отдельно от живого API и проектов задач. */
 export function roleHome(role: string) {
@@ -12,6 +13,7 @@ export function roleHome(role: string) {
   const dir = path.join(root, role);
   return {
     dir,
+    system: path.join(dir, "SYSTEM.md"),
     agents: path.join(dir, "AGENTS.md"),
     skills: path.join(dir, "skills"),
     scripts: path.join(dir, "scripts"),
@@ -49,11 +51,70 @@ function scriptWrapper(name: string): string {
     `runpy.run_path(${JSON.stringify(source)}, run_name="__main__")\n`;
 }
 
-/** Без перезаписи существующих файлов; подходит и для новых пользовательских ролей. */
-export function ensureRoleHome(role: string) {
+/** Канон системной инструкции — один файл на всех ролей, чтобы правила
+ *  командной работы не расходились по текстам. */
+export function systemPromptSourceFile(): string {
+  return path.resolve(process.cwd(), "scripts", "role-system-prompt.md");
+}
+
+/** Подстановка личности роли и её папки в канон. Если файл канона недоступен
+ *  (запуск не из server/) — короткая запасная рамка, роль всё равно знает, кто
+ *  она и где её инструментарий. */
+let systemTemplate: string | null | undefined;
+
+export function renderSystemPrompt(role: string, home: ReturnType<typeof roleHome>): string {
+  const identity = `Ты — ${roleTitle(role)} в трекере TaskFlow (ключ роли: ${role}).`;
+  const folder = [
+    `- папка роли: ${home.dir}`,
+    `- инструкция роли (AGENTS.md): ${home.agents}`,
+    `- навыки: ${home.skills}/<имя-навыка>/SKILL.md, скрипты и файлы навыка — рядом с его SKILL.md`,
+    `- скрипты роли: ${home.scripts} (указывай абсолютный путь)`,
+    `- рабочие файлы чата: ${home.workspace}`,
+  ].join("\n");
+  // Канон читается один раз за процесс: ensureRoleHome зовётся несколько раз на
+  // каждый ход роли, и синхронное чтение файла на каждом вызове съедало
+  // бюджет (тесты чата ждут порядка 120 мс на завершение первого хода).
+  if (systemTemplate === undefined) {
+    try {
+      systemTemplate = fs.readFileSync(systemPromptSourceFile(), "utf8");
+    } catch {
+      systemTemplate = null;
+    }
+  }
+  let template = systemTemplate ?? "";
+  if (systemTemplate === null) {
+    template = [
+      "# Системная инструкция роли",
+      "",
+      "## Кто ты",
+      "",
+      identity,
+      "",
+      "Ты работаешь в трекере TaskFlow: карточки, роли, инструменты, ответственность за результат.",
+      "",
+      "## Твоя папка",
+      "",
+      folder,
+      "",
+      "Канон роли (scripts/role-system-prompt.md) в этом запуске недоступен.",
+    ].join("\n");
+  }
+  return template.split("{{IDENTITY}}").join(identity).split("{{FOLDER}}").join(folder);
+}
+
+/** Без перезаписи существующих файлов; подходит и для новых пользовательских ролей.
+ *  `refreshSystem` перезаписывает ТОЛЬКО SYSTEM.md из канона — он под правку
+ *  владельца не отдаётся, но иначе новая редакция канона никогда бы не дошла
+ *  до уже созданных ролей (writeOnce по умолчанию). */
+export function ensureRoleHome(role: string, options: { refreshSystem?: boolean } = {}) {
   const home = roleHome(role);
   for (const directory of [home.dir, home.skills, home.scripts, home.workspace, home.extensions, home.prompts, home.sessions]) {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  }
+  if (options.refreshSystem) {
+    fs.writeFileSync(home.system, renderSystemPrompt(role, home), { mode: 0o600 });
+  } else {
+    writeOnce(home.system, renderSystemPrompt(role, home));
   }
   writeOnce(home.agents, `# Роль ${role} в TaskFlow\n\n${roleHomeInstruction(role)}\n`);
   writeOnce(path.join(home.scripts, "mcp_server.py"), scriptWrapper("mcp_server.py"));

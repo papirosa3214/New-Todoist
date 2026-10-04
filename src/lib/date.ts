@@ -137,6 +137,45 @@ export function parseServerDate(value: string): Date {
   return new Date(value.replace(" ", "T") + "Z");
 }
 
+/**
+ * Календарный ключ «YYYY-MM-DD» в Москве для SQLite-даты.
+ * Нужен для группировки сообщений по суткам: «сегодня» считается
+ * московским днём, а не тем, что устройство считает локальным
+ * (29.08.2026, f5b8cc34 — то же правило, что и у todayStr). Без этого
+ * сообщение в 23:50 МСК и в 00:10 МСК разъедутся по разным группам
+ * из-за локальной зоны устройства.
+ */
+export function getMskDayKey(sqliteDatetime: string): string {
+  const d = parseServerDate(sqliteDatetime);
+  return d.toLocaleDateString("en-CA", { timeZone: MSK_TZ });
+}
+
+/**
+ * Заголовок разделителя суток в ленте: «Сегодня», «Вчера», «28 авг» или
+ * «28 авг 2025». Нужен, чтобы по ленте было видно, насколько старая та
+ * или иная «сессия» — без подписи взгляд скользит по сплошному потоку
+ * пузырей и пропадает ощущение, что между сообщениями прошли сутки
+ * (владелец 02.10.2026: «не просто люлька, новая сессия, а ещё
+ * разделительная полоса и дата»).
+ *
+ * Сравнение идёт по московскому календарному дню — иначе в 00:30 МСК
+ * «вчера» превратится в «позавчера» в зонах западнее Москвы.
+ */
+export function formatDaySeparator(sqliteDatetime: string): string {
+  const thatDay = getMskDayKey(sqliteDatetime);
+  const today = todayStr();
+  if (thatDay === today) return "Сегодня";
+  if (thatDay === addDays(today, -1)) return "Вчера";
+  const d = new Date(thatDay + "T00:00:00");
+  const day = d.getDate();
+  const month = MONTHS_SHORT[d.getMonth()];
+  const currentYear = Number(
+    new Date().toLocaleDateString("en-CA", { timeZone: MSK_TZ }).slice(0, 4),
+  );
+  if (d.getFullYear() !== currentYear) return `${day} ${month} ${d.getFullYear()}`;
+  return `${day} ${month}`;
+}
+
 // ═══════════ "Сегодня" screen: overdue/today split ═══════════
 // Single source for "what counts as overdue vs. due today" on the Today
 // screen — used by both its list layout (the red "Просрочено" block above

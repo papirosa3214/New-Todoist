@@ -65,7 +65,7 @@ describe("инструментарий роли в обоих видах зап�
     expect(fs.existsSync(path.join(process.cwd(), "probe.txt"))).toBe(false);
   });
 
-  it("глобальный SYSTEM.md не заменяет базовую инструкцию чата при отсутствии SYSTEM.md роли", async () => {
+  it("глобальный SYSTEM.md не подменяет инструкцию роли: база — канон из её папки", async () => {
     const globalDir = path.join(root, "global-agent");
     fs.mkdirSync(globalDir, { recursive: true });
     fs.writeFileSync(path.join(globalDir, "SYSTEM.md"), "GLOBAL_SYSTEM_INTRUDER");
@@ -78,8 +78,13 @@ describe("инструментарий роли в обоих видах зап�
       appendSystemPrompt: [args[args.indexOf("--append-system-prompt") + 1]],
     });
     await loader.reload();
+    // Глобальный SYSTEM.md Pi не должен подменять инструкцию роли.
     expect(loader.getSystemPrompt()).not.toContain("GLOBAL_SYSTEM_INTRUDER");
-    expect(loader.getSystemPrompt()).toContain("You are an expert coding assistant");
+    // База запуска — канон роли из ЕЁ папки (SYSTEM.md), а не стандартный
+    // промпт Pi SDK. Раньше здесь стояло обратное утверждение: пока файла
+    // роли нет, базу подставлял Pi, и роль считала себя агентом внутри pi.
+    expect(loader.getSystemPrompt()).toContain("Системная инструкция роли");
+    expect(loader.getSystemPrompt()).not.toContain("You are an expert coding assistant");
   });
 
   it("effective override навыка применяется к SDK задачи, snapshot удаляется после завершения", async () => {

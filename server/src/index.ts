@@ -1,3 +1,4 @@
+import { registerPreparationRoutes, startPreparationWorker } from "./runtime/autoPreparation.js";
 import { startSecretaryVoiceBridge } from "./runtime/secretaryVoiceBridge.js";
 import { hierarchyViolations } from "./lib/taskHierarchy.js";
 import { pathToFileURL } from "url";
@@ -336,6 +337,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerRoleRoutes(app);
   registerRuntimeRoutes(app);
   registerRoleRunJobRoutes(app);
+  registerPreparationRoutes(app);
   registerTaskCollaborationPlanRoutes(app);
   registerTaskIntakeRoutes(app);
   registerSecretaryVoiceRoutes(app);
@@ -540,6 +542,7 @@ if (isMain) {
   const HOST = process.env.HOST || "0.0.0.0";
 
   buildApp().then(async (app) => {
+    let stopPreparation: (() => Promise<void>) | null = null;
     let stopRoleRuns: (() => Promise<void>) | null = null;
     let stopVoiceBridge: (() => Promise<void>) | null = null;
     let stopKnowledgeSync: (() => void) | null = null;
@@ -547,6 +550,7 @@ if (isMain) {
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
+      if (stopPreparation) await stopPreparation();
       if (stopRoleRuns) await stopRoleRuns();
       if (stopVoiceBridge) await stopVoiceBridge();
     });
@@ -559,6 +563,7 @@ if (isMain) {
     // Durable worker стартует только в реальном process после listen.
     // buildApp() в unit tests остаётся полностью детерминированным.
     stopRoleRuns = startRoleRunWorker();
+    if(process.env.TASKFLOW_AUTO_PREPARATION!=="0") stopPreparation=startPreparationWorker();
     // Документация проектов → база знаний раз в сутки (lib/knowledgeSync.ts).
     stopKnowledgeSync = startKnowledgeSyncSchedule();
     // Планировщик доски раз в 5 минут — внутри сервера (runtime/scheduler.ts).

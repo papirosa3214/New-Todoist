@@ -1,3 +1,4 @@
+import { taskExecutionState } from "../runtime/taskExecutionState.js";
 import { ROLE_NAMES as PREPARATION_ROLES } from "../roleRouting.js";
 import { hierarchyRefusal } from "../lib/taskHierarchy.js";
 import { validatePreparation, type TaskPreparation } from "../lib/taskPreparation.js";
@@ -750,6 +751,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         subtasks,
       } = req.body;
 
+      if(assignee_id && (db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as any)?.type==='ai')return reply.code(403).send({error:"Назначения выполняет сервер"});
       const trimmedTitle = typeof title === "string" ? title.trim() : "";
       if (!trimmedTitle)
         return reply
@@ -878,8 +880,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // Reviewer» (Обзор → Система). Клиент флаг больше не шлёт, поэтому
       // решение тут, а не в форме карточки. Явное значение всё ещё
       // уважается (серверный контракт не ломаем).
-      // Вложенность одна (02.10.2026): дочернюю вешаем только на задачу
-      // верхнего уровня. Ниже то же держит триггер БД.
+      // Любая глубина; API и база запрещают циклы.
       if (parent_id) {
         const refusal = hierarchyRefusal(null, String(parent_id));
         if (refusal) return reply.code(400).send({ error: refusal });
@@ -1151,17 +1152,24 @@ export function registerTaskRoutes(app: FastifyInstance) {
     handler: async (req: any, reply) => {
       const { id } = req.params;
       const body = req.body || {};
+      if ((body.assignee_id !== undefined || body.owner_selected_role !== undefined) && (db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as any)?.type === "ai") {
+        return reply.code(403).send({error:"Агенты не назначают исполнителей. Назначения выполняет сервер."});
+      }
 
       const existing = getTaskForWrite(id, req.userId);
       if (!existing) return reply.code(404).send({ error: "Not found" });
 
-      // Вложенность одна (02.10.2026): ни родитель-дочерняя, ни задача с
-      // дочерними в роли дочерней. Ниже то же держит триггер БД.
+      // Перенос поддерева разрешён, циклы запрещены.
       if (body.parent_id !== undefined && body.parent_id !== null && body.parent_id !== "") {
         const refusal = hierarchyRefusal(id, String(body.parent_id));
         if (refusal) return reply.code(400).send({ error: refusal });
       }
       if (body.parent_id === "") body.parent_id = null;
+
+      if (isOwner(req.userId) && !taskExecutionState(id).can_change_executor &&
+          ["assignee_id","owner_selected_role"].some(key => body[key] !== undefined && body[key] !== (existing as any)[key])) {
+        return reply.code(409).send({error:"После запуска нельзя менять исполнителя"});
+      }
 
       // title, when sent, must not be blank — trim now so the ALLOWED_FIELDS
       // loop below writes the trimmed value.
