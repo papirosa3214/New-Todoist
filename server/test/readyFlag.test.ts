@@ -95,7 +95,7 @@ describe("Флаг готовности к самозахвату (карточ�
     expect(row.ready_for_pickup).toBe(0);
   });
 
-  it("claim без флага → 400 с понятной причиной", async () => {
+  it("claim назначенной задачи проходит без устаревшего флага", async () => {
     const taskId = await createTaskForAgent();
 
     const res = await app.inject({
@@ -103,8 +103,8 @@ describe("Флаг готовности к самозахвату (карточ�
       url: `/api/tasks/${taskId}/claim`,
       headers: { authorization: agentAuth },
     });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toMatch(/готова к самозахвату/);
+    expect(res.statusCode).toBe(200);
+
 
     // Аренда не выдана, agent_state пустой
     const row = db
@@ -112,7 +112,7 @@ describe("Флаг готовности к самозахвату (карточ�
         "SELECT agent_state, assignee_id FROM tasks WHERE id = ?",
       )
       .get(taskId) as { agent_state: string | null; assignee_id: string };
-    expect(row.agent_state).toBeNull();
+    expect(row.agent_state).toBe("in_progress");
     // assignee_id мог остаться за тем, кого задали изначально
     // (owner сделал assignee_id=agent), — это не значит «агент её взял».
   });

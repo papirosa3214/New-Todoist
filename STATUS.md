@@ -62,6 +62,14 @@ SQLite), фронт на Vite+React.
 подключении, текст задания от будильника, подсказки в ответах
 инструментов. Чужой `CLAUDE.md` агенту не виден — всё нужное кладётся туда.
 
+## Developer MacBook MCP — 2026-10-04
+
+Dedicated XcodeBuildMCP channel for builder/work only. All other roles and plan/review/reply receive no tools. Private config: ~/taskflow/roles/builder/mcp/xcode.json; launcher: ~/taskflow/roles/builder/scripts/mac-xcode-mcp.sh. Mac checkout TaskFlowDeveloper, branch codex/developer-mac, forced SSH gateway Tools/developer-mac-gateway.py in canonical iOS repo. Live initialize, 47 tools, schemes/defaults/read/write verified from .110; shell and file path escape denied. Shared Unix identity is not an OS sandbox; see iOS docs/2026-10-04-developer-mac.md. 24 targeted tests and TypeScript PASS. Runtime deployed, health OK; backup ~/backups/taskflow/20261004-builder-xcode. Pending: new real developer run and build/debug through the channel; existing sessions retain their original tool catalog.
+
+## Последние изменения (03.10.2026 — live-блок подзадач)
+
+Точечное восстановление telemetry: встроенный bash теперь отправляет kind=run, grep/find=search, write=write. Недопустимый bash раньше терялся в API активности. 28 профильных тестов inProcessRun/activity PASS, включая SDK event → API buffer. На .110 применено только это отображение типов, без миграций и изменения запусков; перед изменением 0 running jobs, backup /home/maksim/backups/taskflow/20261003-work-restore; health OK. Native-компоненты восстановлены отдельной работой в TaskFlowNativeBuild, отчёт docs/2026-10-03-work-restore.md. Жалоба о пропавших комментариях требует названия текущей карточки; сохранённые комментарии в проверенной ветке и свежие записи .110 подтверждены, не утверждаем исправление конкретного модельного прогона.
+
 ## Последние изменения (29.09.2026)
 
 - **Узлы collaboration plan — обычные `subtasks`, не `task_role_slots`**
@@ -199,3 +207,52 @@ role tokens и временного JWT/MCP-пути выполнять отде
   урок `2026-09-26-gemini-live-secretary-voice-proxy.md`, раздел «Когда
   сервер выхода умрёт» (нужен HWID Мака от владельца, агенту это
   недоступно).
+
+## 2026-10-04 STEP-LIVE
+Согласованный deploy .110: telemetry по активному слоту, heartbeat слота и попытки. 21 targeted tests PASS, local tsc PASS. Backup ~/backups/taskflow/20261004-step-live. Сохранены дополнительные live-правки runtime (exports и SDK tools); перенесён только heartbeat hunk. Разработчик MAK-42 blocked, attempt released 06:11:52 UTC; после restart blocked сохранён. Серверный tsc недоступен: отсутствует typescript в node_modules; локальный tsc проверен.
+
+## 2026-10-04 RETIRE-READY
+Убран ready gate в claim/dispatch и очереди персональной работы; командный слот не требует claim карточки. Сохранены роль, утверждение, зависимости, lease. 36 tests PASS, tsc PASS; baseline failure collaborationPlanVsExecutor documented. Deployed .110; health OK; backup 20261004-retire-ready. docs/2026-10-04-retire-ready.md.
+
+## 2026-10-04 SLOT-SNAPSHOT (этап 1)
+Снимок рабочего состояния слота: миграция 098 `slot_work_snapshots` (версии, привязка к слоту и попытке), запись ДО смены состояния (сдача шага, сдача артефакта, блокировка), техснимок сервера при обрыве/сбое/перезапуске, запрос короткого резюме при остановке с потолком 30 с, блок «на чём остановился» в контексте работы и чата, инструмент `taskflow_slot_snapshot`, чтение `GET /api/subtasks/:id/snapshot`. 14 новых тестов PASS, `tsc` PASS. Полный набор: 874 PASS / 19 FAIL — те же 19, что падают на дереве до этой работы (проверено прогоном на `1780c61`: 860 PASS / те же 19; `readyDispatchBridge` 5, `inProcessRun` 3, `access` 3, `topicTeam` 2, `taskOutcome` 2, `taskPreparationApi`, `ownerUnblockRedispatch`, `ownerDictation`, `collaborationPlanVsExecutor`).
+
+**Выкладка отложена по решению владельца.** На .110 в момент готовности шёл живой ход роли (Архитектор → Разработчик по карточке «Умные напоминания»), а перезапуск его обрывает; копировать файлы тоже нельзя — сервис запущен через `tsx watch` и перезапустится сам. Поэтому код только запушен: ветка `codex/task-execution-state` = `ad24a1c`. Резервная копия БД сделана: `~/backups/taskflow/20261004-slot-snapshot` (taskflow.db + wal + shm). Все 9 изменяемых файлов на .110 побайтово совпадают с базой `fa24c94` — живых правок, которые перезапись затёрла бы, там нет; `server/test/inProcessRun.test.ts` на .110 расходится, его не трогаем.
+
+Применение одной командой, когда карточка доработает (миграция 098 применится на старте):
+
+```
+cd ~/Проекты/New-Todoist && git checkout origin/codex/task-execution-state -- \
+  server/scripts/mcp_server.py server/src/agentState.ts server/src/migrations.ts \
+  server/src/routes/chats.ts server/src/routes/subtask-artifacts.ts server/src/routes/subtasks.ts \
+  server/src/runtime/inProcessRun.ts server/src/runtime/planSubtaskAdmission.ts \
+  server/src/runtime/roleRunAccess.ts server/src/runtime/slotWorkSnapshot.ts \
+  && systemctl --user restart taskflow-server.service \
+  && sqlite3 server/taskflow.db "select id from schema_migrations where id='098_slot_work_snapshots'"
+```
+
+Документ этапа: `server/docs/2026-10-04-slot-work-snapshot.md`. Этап 2 (блок «На чём остановился» в карточке слота) — отдельная работа в `/Users/max/Проекты/TaskFlowNativeBuild`.
+
+## 2026-10-04 SLOT-SNAPSHOT + СНЯТИЕ ЛИМИТА ТЕКСТА (выложено на .110)
+Выложено на .110 в 23:19 MSK, одним рестартом: миграция 098 (`slot_work_snapshots`, снимок рабочего состояния слота) и миграция 099 (снятие запрета на длинные тексты ролей).
+
+**Почему снят запрет.** Миграция 093 вешала шесть триггеров (`comments.text`, `chat_messages.text`, `subtasks.result`): текст от учётки `type='ai'` длиннее лимита (800 символов; на блоке 400) прерывался `RAISE(ABORT)`. Длинный ответ роли не сохранялся вовсе — в чате и в ленте карточки не появлялось ничего, владелец видел тишину, а агент про отказ не знал и переписывать короче не переписывал. Правило снято целиком: миграция 099 удаляет все шесть триггеров, удалён `server/src/lib/agentVisibleText.ts` и пять мест применения (`routes/chats.ts`, `lib/secretaryReply.ts`, `routes/agent-state.ts` ×2, `routes/subtasks.ts` ×2). Сервер доставляет то, что роль написала.
+
+Первым делом состояние .110 зафиксировано коммитом `ca9e91c5` (78 файлов живых правок — в истории git, потерять нельзя), правки другого агента по лимитам сохранены коммитом `a9b411d`, затем наложено `95e5621`. Бэкапы БД: `~/backups/taskflow/20261004-slot-snapshot`, `20261004-slot-snapshot-2`.
+
+**Проверено вживую на .110:** health 200; `098_slot_work_snapshots` и `099_drop_agent_message_length_triggers` в `schema_migrations`; триггеров `agent_short_*` в базе нет; вставка 3000 символов от роли в `chat_messages` и 2000 в `comments` сохраняется (проба откатана, следов нет); ошибок в журнале службы после рестарта нет. `tsc` на маке чистый, 106 тестов чата и состояний PASS.
+
+**Ещё не сделано:** тест на само снятие запрета (проверено живой пробой), запись в журнал смены правил, и вопрос «чем ограничивать длину теперь» — решает владелец: сервер больше ничего не режет.
+
+## 2026-10-05 ЗАЧИСТКА ЗАДАЧ И ЧАТА
+По прямому указанию владельца 04.10.2026 («чистенькое все», «не в архив, а удалять»): удалены все задачи и чат, документация сохранена.
+
+**Удалено (5461 строка):** задачи 134, шаги 355, комментарии 617, события 1971, попытки 284, планы 57 с узлами/связями, зависимости 14, уведомления 614, задания запусков ролей, вложения, привязанные к задачам и чату (106), чат целиком (16 чатов, 302 сообщения). Скрипт — `server/scripts/wipe-tasks-20261004.sql` (в одной транзакции, детьми вперёд).
+
+**Сохранено:** документы 110, проекты 5, память команды 17, журнал работ, роли и учётки, словари, надиктовки 16, 48 «сиротских» вложений без привязки (не трогались).
+
+**Текст задач не потерян.** Из снятого до удаления бэкапа собраны заметки-архивы по проектам и положены в документацию (через `POST /api/notes` под учёткой владельца): «TaskFlow - NewTodoist» (31 задача, папка 3), «TaskFlow Native iOS» (5, папка 20), «Apple Напоминания» (11, папка 24 — заведена заново), «Серверные уведомления» (9, папка 25 — заведена заново), «Задачи без проекта» (49, личная документация). Документов стало 115 (было 110). Полная машинная выгрузка (описания целиком, все комментарии и события) — JSON в `~/backups/taskflow/20261004-before-task-wipe/archive-notes/`; копия на маке — `~/backups/taskflow-20261004/`.
+
+**Бэкапы:** полная база до удаления — `~/backups/taskflow/20261004-before-task-wipe/taskflow.db` (на .110) и `~/backups/taskflow-20261004/taskflow-before-wipe.db` (на маке). Откат — подменой файла при остановленной службе.
+
+**Проверено:** задачи/шаги/чат/сообщения — 0; документы 115, проекты 5, health 200, ошибок в журнале службы нет. Сервис останавливался на время удаления и поднят обратно; режим системы (`automatic`) не менялся.

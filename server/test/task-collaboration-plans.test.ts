@@ -373,6 +373,12 @@ describe("collaboration plans", () => {
     const before = await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } });
     expect(before.json()).toHaveLength(1); // ещё не approved — дубля нет, подзадача одна
 
+    const rejected=await app.inject({method:"POST",url:`/api/tasks/${taskId}/collaboration-plans/${plan.json().plan.id}/approve`,headers:{authorization:ownerAuth}});
+    expect(rejected.statusCode).toBe(409);
+    const choose=await app.inject({method:"POST",url:`/api/tasks/${taskId}/collaboration-plans/${plan.json().plan.id}/work-choice`,headers:{authorization:ownerAuth},payload:{base_version:plan.json().plan.version,slot_key:"delivery",choice:"original"}});
+    expect(choose.statusCode).toBe(200);
+    const stale=await app.inject({method:"POST",url:`/api/tasks/${taskId}/collaboration-plans/${plan.json().plan.id}/work-choice`,headers:{authorization:ownerAuth},payload:{base_version:plan.json().plan.version,slot_key:"delivery",choice:"planned"}});
+    expect(stale.statusCode).toBe(409);
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.json().plan.id}/approve`, headers: { authorization: ownerAuth } });
 
     const after = await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } });

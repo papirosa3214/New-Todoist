@@ -44,6 +44,32 @@ describe("Чаты (этап 1, миграция 053)", () => {
     return app.inject({ method: "POST", url: "/api/chats", headers: ownerAuth, payload });
   }
 
+  it("preview follows the last history item when timestamps tie",async()=>{
+    const chat=(await createChat({title:"Preview",kind:"group",member_ids:[otherId]})).json().chat;
+    for(const text of ["first","last"]){
+      const res=await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers:ownerAuth,payload:{text}});
+      expect(res.statusCode).toBe(200);
+    }
+    db.prepare("UPDATE chat_messages SET created_at='2026-10-03 10:00:00' WHERE chat_id=?").run(chat.id);
+    const history=(await app.inject({url:`/api/chats/${chat.id}/messages`,headers:ownerAuth})).json().messages;
+    const list=(await app.inject({url:"/api/chats",headers:ownerAuth})).json().chats;
+    expect(list.find((c:any)=>c.id===chat.id).last_message.text).toBe(history.at(-1).text);
+  });
+
+  it("stores one reaction per member, supports removal and rejects outsiders", async () => {
+    const chat=(await createChat({title:"Reactions",kind:"group",member_ids:[otherId]})).json().chat;
+    const message=(await app.inject({method:"POST",url:`/api/chats/${chat.id}/messages`,headers:ownerAuth,payload:{text:"Result"}})).json().message;
+    const url=`/api/chats/${chat.id}/messages/${message.id}/reaction`;
+    const put=(emoji:any,headers=ownerAuth)=>app.inject({method:"POST",url,headers,payload:{emoji}});
+    expect((await put("👍")).json().message.reactions).toEqual([{user_id:ownerId,emoji:"👍"}]);
+    expect((await put("❤️")).json().message.reactions).toHaveLength(1);
+    expect((await app.inject({url:`/api/chats/${chat.id}/messages`,headers:ownerAuth})).json().messages[0].reactions[0].emoji).toBe("❤️");
+    expect((await put("invalid")).statusCode).toBe(400);
+    const outsider=await reg("Reaction outsider");
+    expect((await put("👍",bearer(outsider.jwt))).statusCode).toBe(404);
+    expect((await put(null)).json().message.reactions).toEqual([]);
+  });
+
   it("создаёт групповой чат и включает создателя в участники", async () => {
     const res = await createChat({ title: "Совет", kind: "group", member_ids: [otherId] });
     expect(res.statusCode).toBe(200);
