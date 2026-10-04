@@ -15,6 +15,16 @@ import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleTitle } from "../roleRouting.js";
 import { SCHEDULER_USER_ID } from "../serviceUser.js";
 import { runRoleInProcess } from "./inProcessRun.js";
+import {
+  defaultSteps,
+  parseSteps,
+  selectSteps,
+  stepKey,
+  type EscalationRule,
+  type EscalationStep,
+  type EscalationTask,
+} from "../lib/escalationEvaluator.js";
+import { channelsForStep } from "../routes/escalation.js";
 
 const RETRY_LIMIT = 3;
 const RETRY_DELAY_MIN = 5;
@@ -267,7 +277,233 @@ async function deferredRetries(api: Api): Promise<number> {
   return handled;
 }
 
-export type SchedulerCounts = { retry: number; repick: number; dead: number; scheduled: number; repeat: number; deferred: number };
+/** Ветка 8 (housekeeping): TTL-чистка escalation_events. Вынесена из
+ *  notifyOverdue, чтобы окно тишины и enabled=0 не блокировали чистку —
+ *  это операция обслуживания, не эскалация. Делается раз в сутки, когда
+ *  под TZ владельца сейчас 03:00..03:05. */
+export function escalationCleanupTick(now: Date = new Date()): number {
+  const timezone = process.env.TASKFLOW_TIMEZONE || "Europe/Moscow";
+  const cleanupClock = localTimeParts(now, timezone);
+  if (!(cleanupClock.hour === 3 && cleanupClock.minute < 6)) return 0;
+  try {
+    const res = db
+      .prepare(
+        "DELETE FROM escalation_events WHERE sent_at < datetime('now', '-30 days')",
+      )
+      .run();
+    if (res.changes > 0) log(`  ↻ escalation_events: очищено ${res.changes} строк старше 30 дней`);
+    return res.changes;
+  } catch (error) {
+    log(`  ⚠️ escalation_events cleanup: ${error instanceof Error ? error.message : String(error)}`);
+    return 0;
+  }
+}
+
+/** Ветка 7: умные напоминания о просроченных задачах (карточка
+ *  615095f4-…). Документация — `docs/escalation-architecture.md` §3.
+ *  Каждые 5 минут проверяем правила владельца и для каждой просроченной
+ *  задачи creator=owner вставляем событие-маркер; если вставка удалась —
+ *  создаём уведомление и (если в шаге есть `apns`) дёргаем
+ *  queueLiveActivityPush. Дубликаты гасит UNIQUE-индекс
+ *  uq_escalation_event_day. */
+async function notifyOverdue(api: Api, now: Date): Promise<number> {
+  // Один владелец на систему. Если их несколько — каждый получит уведомления
+  // только по СВОИМ задачам (creator_id = user_id), и в §0 спеки это явно
+  // обозначено как граница MVP.
+  const owners = db
+    .prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1")
+    .all() as Array<{ id: string }>;
+  if (owners.length === 0) return 0;
+  const ownerId = owners[0].id;
+
+  // Ленивая вставка дефолтной записи: как в роуте /rules, чтобы ветка
+  // работала сразу после миграции 088 без отдельной инициализации.
+  const rule = ensureRuleRow(ownerId);
+  if (!rule.enabled) return 0;
+
+  const { today, timezone } = summaryClockForScheduler(now);
+  const local = localTimeParts(now, timezone);
+  if (isInQuiet(rule, local.hour, local.minute, local.weekday)) return 0;
+
+  const tasks = db
+    .prepare(
+      `SELECT id, title, priority, due_date, status
+         FROM tasks
+        WHERE creator_id = ?
+          AND status = 'active'
+          AND due_date IS NOT NULL
+          AND trim(due_date) != ''`,
+    )
+    .all(ownerId) as EscalationTask[];
+
+  let handled = 0;
+  for (const t of tasks) {
+    // Перепроверка status='active' непосредственно перед INSERT — R-6 из
+    // спеки: между SELECT и INSERT владелец мог закрыть задачу.
+    const steps: EscalationStep[] = selectSteps(rule, t, now, timezone);
+    if (steps.length === 0) continue;
+    for (const step of steps) {
+      // step_key = "p<приоритет задачи>_h<after_hours>" — это метка
+      // НА конкретной задаче, не на шаге. Один и тот же шаг 4ч сработает
+      // и на P1 (priority=1), и на P2 (priority=2) — это разные события
+      // с разными step_key. Так дедуп по (task, step) держится корректно:
+      // нельзя подавить «4ч для P2» тем, что уже слали «4ч для P1».
+      const taskPrio: 1 | 2 | 3 | 4 =
+        t.priority == null
+          ? 4
+          : ([1, 2, 3, 4].includes(t.priority) ? (t.priority as 1 | 2 | 3 | 4) : 4);
+      const key = stepKey(taskPrio, step.after_hours);
+      const stillActive = db
+        .prepare("SELECT status FROM tasks WHERE id = ?")
+        .get(t.id) as { status: string } | undefined;
+      if (!stillActive || stillActive.status !== "active") continue;
+      const evtId = newId();
+      const ins = db
+        .prepare(
+          `INSERT OR IGNORE INTO escalation_events
+             (id, task_id, user_id, step_key, sent_at)
+           VALUES (?, ?, ?, ?, datetime('now'))`,
+        )
+        .run(evtId, t.id, ownerId, key);
+      if (ins.changes === 0) continue; // уже слали сегодня — дубль
+      // Создаём уведомление через ту же ручку, что и ветка 3: POST
+      // /api/notifications от service user. type совпадает с key и с
+      // notifications.type в спеке.
+      const text = `⏰ Просрочено: ${t.title} · было ${t.due_date} · приоритет P${t.priority ?? 4}`;
+      const channels = channelsForStep(rule, key);
+      const created = await api("POST", "/api/notifications", {
+        user_id: ownerId,
+        type: `escalation_${key}`,
+        task_id: t.id,
+        text,
+        actor_id: SCHEDULER_USER_ID,
+      });
+      const notifId: string | null = created?.id ?? null;
+      if (notifId) {
+        db.prepare(
+          "UPDATE escalation_events SET notification_id = ? WHERE id = ?",
+        ).run(notifId, evtId);
+      }
+      if (channels.includes("apns")) {
+        // Live Activity-островок прилетает и без явного вызова, через
+        // ws.broadcast(task:*) → queueLiveActivityPush. Прямой вызов тут
+        // страхует случай, когда события по задаче не было (например,
+        // сама эскалация — первое движение за день).
+        try {
+          const { queueLiveActivityPush } = await import("../apns.js");
+          queueLiveActivityPush({ id: t.id, status: "active", title: t.title });
+        } catch (error) {
+          log(`  ⚠️ apns: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      handled += 1;
+    }
+  }
+  // TTL-чистка живёт отдельной веткой (см. escalationCleanupTick) — здесь
+  // её быть не должно: тишина и enabled=0 не должны блокировать housekeeping.
+  return handled;
+}
+
+function ensureRuleRow(ownerId: string): EscalationRule {
+  const row = db
+    .prepare(
+      "SELECT enabled, quiet_from, quiet_to, weekdays, steps_json FROM escalation_rules WHERE user_id = ?",
+    )
+    .get(ownerId) as
+    | {
+        enabled: number;
+        quiet_from: string;
+        quiet_to: string;
+        weekdays: string;
+        steps_json: string;
+      }
+    | undefined;
+  if (row) {
+    return {
+      enabled: row.enabled === 1,
+      quiet_from: row.quiet_from,
+      quiet_to: row.quiet_to,
+      weekdays: row.weekdays
+        .split(",")
+        .map((s) => Number(s))
+        .filter((n) => n >= 1 && n <= 7),
+      steps: parseSteps(row.steps_json),
+    };
+  }
+  const steps = defaultSteps();
+  db.prepare(
+    `INSERT INTO escalation_rules (user_id, enabled, quiet_from, quiet_to, weekdays, steps_json)
+     VALUES (?, 1, '22:00', '08:00', '1,2,3,4,5,6,7', ?)`,
+  ).run(ownerId, JSON.stringify(steps));
+  return {
+    enabled: true,
+    quiet_from: "22:00",
+    quiet_to: "08:00",
+    weekdays: [1, 2, 3, 4, 5, 6, 7],
+    steps,
+  };
+}
+
+function summaryClockForScheduler(now: Date): { today: string; timezone: string } {
+  // Совпадает по логике с lib/secretaryTaskSummary.ts#summaryClock, но
+  // импортировать тот модуль из scheduler.ts — затянуть лишние зависимости
+  // (там подключается AI, чат, broadcast). Для тика нужны только дата и TZ.
+  const timezone = process.env.TASKFLOW_TIMEZONE || "Europe/Moscow";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const v = (kind: string) => parts.find((p) => p.type === kind)?.value ?? "";
+  return { today: `${v("year")}-${v("month")}-${v("day")}`, timezone };
+}
+
+function localTimeParts(now: Date, timezone: string): { hour: number; minute: number; weekday: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    weekday: "short",
+  }).formatToParts(now);
+  const v = (k: string) => parts.find((p) => p.type === k)?.value ?? "";
+  const hour = Number(v("hour")) % 24;
+  const minute = Number(v("minute"));
+  const map: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+  const weekday = map[v("weekday")] ?? 1;
+  return { hour, minute, weekday };
+}
+
+function isInQuiet(rule: EscalationRule, hour: number, minute: number, weekday: number): boolean {
+  if (!rule.weekdays.includes(weekday)) return true;
+  const [fromH, fromM] = parseHm(rule.quiet_from);
+  const [toH, toM] = parseHm(rule.quiet_to);
+  if (fromH === null || toH === null) return false;
+  const cur = hour * 60 + minute;
+  const from = fromH * 60 + fromM;
+  const to = toH * 60 + toM;
+  if (from === to) return false;
+  if (from < to) return cur >= from && cur < to;
+  return cur >= from || cur < to;
+}
+
+function parseHm(value: string): [number, number] | [null, null] {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!m) return [null, null];
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return [null, null];
+  return [h, min];
+}
+
+function newId(): string {
+  // crypto.randomUUID есть в Node ≥ 14.17; в проекте он уже используется
+  // (см. routes/notifications.ts), так что дублировать polyfill не нужно.
+  return (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36));
+}
+
+export type SchedulerCounts = { retry: number; repick: number; dead: number; scheduled: number; repeat: number; deferred: number; overdue: number; cleanup: number };
 
 /** Один обход доски. Сбой ветки не валит остальные. */
 export async function runSchedulerPass(app: FastifyInstance, now: Date = new Date()): Promise<SchedulerCounts> {
@@ -287,6 +523,8 @@ export async function runSchedulerPass(app: FastifyInstance, now: Date = new Dat
     scheduled: await safe("ветка 4", () => launchScheduled(api, now)),
     repeat: await safe("ветка 5", () => cloneRecurring(api, now)),
     deferred: await safe("ветка 6", () => deferredRetries(api)),
+    overdue: await safe("ветка 7", () => notifyOverdue(api, now)),
+    cleanup: await safe("ветка 8 (housekeeping)", async () => escalationCleanupTick(now)),
   };
   try {
     const file = schedulerHeartbeatPath();

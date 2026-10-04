@@ -2946,6 +2946,49 @@ const migrations: Migration[] = [
       END;
     `),
   },
+  {
+    id: "088_escalation_rules",
+    description:
+      "Умные напоминания о просроченных задачах (карточка 615095f4-…): таблица правил эскалации (по одной записи на владельца) + таблица фактов отправки для дедупа по (task, step) на сутки. Шаги лежат в steps_json — не отдельная таблица, потому что правил всегда один набор на пользователя, читается целиком, форма правит «своими» шагами без миграции БД. UNIQUE-индекс по выражению date(sent_at) (SQLite 3.31+) гасит повторный INSERT в ту же дату.",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS escalation_rules (
+          user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          quiet_from TEXT NOT NULL DEFAULT '22:00',
+          quiet_to TEXT NOT NULL DEFAULT '08:00',
+          weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
+          steps_json TEXT NOT NULL DEFAULT '[
+            {"after_hours": 1,  "priority_max": 1, "channels": ["inapp","apns"]},
+            {"after_hours": 4,  "priority_max": 2, "channels": ["inapp","apns"]},
+            {"after_hours": 24, "priority_max": 3, "channels": ["inapp"]},
+            {"after_hours": 72, "priority_max": 4, "channels": ["inapp"]}
+          ]',
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS escalation_events (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          -- Формат: "p<priority>_h<after_hours>", напр. "p1_h1", "p2_h4".
+          -- Тот же префикс, что у notifications.type = "escalation_p<priority>_h<after_hours>".
+          step_key TEXT NOT NULL,
+          sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+          notification_id TEXT REFERENCES notifications(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_escalation_events_task
+          ON escalation_events(task_id);
+        CREATE INDEX IF NOT EXISTS idx_escalation_events_user_sent
+          ON escalation_events(user_id, sent_at);
+        -- Дедуп: один (task_id, step_key) на date(sent_at). date(sent_at)
+        -- — выражение, поддерживается SQLite 3.31+; ON CONFLICT в INSERT
+        -- OR IGNORE сошлётся на этот индекс и тихо проглотит дубль.
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_escalation_event_day
+          ON escalation_events(task_id, step_key, date(sent_at));
+      `);
+    },
+  },
 ];
 
 /**
