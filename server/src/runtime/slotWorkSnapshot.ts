@@ -279,7 +279,10 @@ export function latestSlotSnapshot(subtaskId: string, opts: { beforeAttempt?: bo
     return earlier.length ? earlier[earlier.length - 1] : null;
   }
   // Актуальным считаем снимок самой свежей попытки: поздняя запись старого
-  // запуска в историю попала, но актуальным не станет.
+  // запуска в историю попала, но актуальным не станет. Если у свежей попытки
+  // снимков ещё нет — отдаём последний известный (работа предыдущей попытки),
+  // а вызывающий обязан пометить его как относящийся к более ранней попытке:
+  // см. `slotSnapshotDto().latest_from_earlier_attempt`.
   const lastRank = Math.max(-1, ...[...rank.values()]);
   const newestAttemptRows = rows.filter((r) => {
     if (!r.attempt_id) return false;
@@ -443,6 +446,10 @@ export function slotSnapshotDto(subtaskId: string): Record<string, unknown> | nu
   const slot = slotRow(subtaskId);
   if (!slot) return null;
   const latest = latestSlotSnapshot(subtaskId);
+  // Показывает ли последний снимок работу более ранней попытки (новая ещё
+  // ничего не записала). Показывать полезно, но помечать обязательно: иначе
+  // владелец и роль прочтут старое как «это текущая работа».
+  const fromEarlierAttempt = Boolean(latest?.attempt_id) && latest!.attempt_id !== slot.current_attempt_id;
   const history = slotSnapshotHistory(subtaskId).map((s) => ({
     id: s.id,
     reason: s.reason,
@@ -464,6 +471,7 @@ export function slotSnapshotDto(subtaskId: string): Record<string, unknown> | nu
     role_key: roleKeyOf(slot.agent_id),
     role_title: roleKeyOf(slot.agent_id) ? roleTitle(roleKeyOf(slot.agent_id) as string) : null,
     work: slotWorkState(subtaskId),
+    latest_from_earlier_attempt: fromEarlierAttempt,
     latest: latest
       ? {
           id: latest.id,

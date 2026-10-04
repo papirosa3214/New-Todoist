@@ -34,32 +34,42 @@ import {
 const uid = () => crypto.randomUUID();
 
 /**
- * Тело снимка от роли. Сервер не доверяет ни одной из полей вслепую: лишние
- * отсекаются по длине, причина — по списку, а «полнота» выводится из того,
+ * Поля снимка от роли. Сервер не доверяет ни одному полю вслепую: лишнее
+ * отсекается по длине, причина — по списку, а «полнота» выводится из того,
  * сказала ли роль хоть что-то сама (в остальных случаях снимок остаётся
  * неполным и это видно в подписи).
+ *
+ * Две формы: отдельный маршрут принимает поля прямо в теле (`{done, left,
+ * blocker, next_step, artifacts}` — так их шлёт инструмент роли), а /work и
+ * PATCH — вложенным объектом `snapshot` рядом с `state`/`result`. Смысл один;
+ * различаются формы только затем, чтобы снимок не путался с полями перехода.
  */
-function readSnapshotBody(body: any): {
+function readSnapshotFields(raw: any): {
   reason: string;
   done?: string | null;
   left?: string | null;
   blocker?: string | null;
   nextStep?: string | null;
   artifacts?: unknown;
-} | null {
-  const raw = body?.snapshot;
-  if (raw === undefined || raw === null) return null;
-  if (typeof raw !== "object") throw new Error("snapshot — объект с полями done/left/blocker/next_step");
-  const reason = typeof raw.reason === "string" && raw.reason ? raw.reason : "progress";
+} {
+  const reason = typeof raw?.reason === "string" && raw.reason ? raw.reason : "progress";
   if (!SNAPSHOT_REASONS.includes(reason as never)) throw new Error(`неизвестная причина снимка «${reason}»`);
   return {
     reason,
-    done: raw.done ?? null,
-    left: raw.left ?? null,
-    blocker: raw.blocker ?? null,
-    nextStep: raw.next_step ?? raw.nextStep ?? null,
-    artifacts: raw.artifacts,
+    done: raw?.done ?? null,
+    left: raw?.left ?? null,
+    blocker: raw?.blocker ?? null,
+    nextStep: raw?.next_step ?? raw?.nextStep ?? null,
+    artifacts: raw?.artifacts,
   };
+}
+
+/** Вложенный `snapshot` в теле перехода; null — роль снимок не приложила. */
+function readSnapshotBody(body: any): ReturnType<typeof readSnapshotFields> | null {
+  const raw = body?.snapshot;
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object") throw new Error("snapshot — объект с полями done/left/blocker/next_step");
+  return readSnapshotFields(raw);
 }
 
 /** Get full task state with assignee info, labels, subtasks, and comments. */
@@ -986,7 +996,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (caller?.type !== "owner" && subtask.agent_id && subtask.agent_id !== req.userId) {
         return reply.code(403).send({ error: "снимок пишет исполнитель этого слота или владелец" });
       }
-      const body = readSnapshotBody(req.body) ?? { reason: "progress" };
+      // Отдельный маршрут: поля снимка идут прямо в теле (так их шлёт
+      // инструмент роли), вложенный `snapshot` тоже принимается — тем же
+      // форматом, что и переходы.
+      const body = readSnapshotFields(req.body?.snapshot ?? req.body ?? {});
       let saved;
       try {
         saved = saveSlotSnapshot({

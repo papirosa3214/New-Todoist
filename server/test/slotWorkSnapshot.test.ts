@@ -66,14 +66,26 @@ describe("снимок рабочего состояния слота", () => {
   const currentAttempt = (subtaskId: string): string | null =>
     (db.prepare("SELECT current_attempt_id FROM subtasks WHERE id = ?").get(subtaskId) as { current_attempt_id: string | null }).current_attempt_id;
 
-  /** Отпустить слот и взять снова — новая попытка (как после обрыва). */
-  async function restartSlot(taskId: string, subtaskId: string): Promise<string> {
-    db.prepare("UPDATE tasks SET agent_state = 'in_progress', assignee_id = ? WHERE id = ?").run(roleUserId("builder"), taskId);
-    const release = await app.inject({ method: "POST", url: `/api/subtasks/${subtaskId}/work`, headers: builderAuth(), payload: { state: null } });
-    expect(release.statusCode).toBe(200);
-    const take = await app.inject({ method: "POST", url: `/api/subtasks/${subtaskId}/work`, headers: builderAuth(), payload: { state: "in_progress" } });
-    expect(take.statusCode).toBe(200);
-    return currentAttempt(subtaskId)!;
+  /**
+   * Состояние «по слоту идёт более новая попытка, чем та, что писала снимок».
+   *
+   * Даётся прямо в БД, а не через /work: отпускание слота (`state: null`)
+   * попытку не закрывает — она остаётся живой, — и повторный запуск узла
+   * после этого честно отказывает («Слот уже запущен»). Живая более новая
+   * попытка появляется по делу после обрыва и перезапуска сервера, поэтому
+   * состояние моделируем здесь, а проверяем ровно то свойство, ради которого
+   * оно нужно: поздняя запись старой попытки не становится актуальной.
+   */
+  function newerAttempt(subtaskId: string): string {
+    // Прежняя попытка обрывается — иначе частичный уникальный индекс честно
+    // не даст второй живой попытки на слот (инвариант C1).
+    db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted' WHERE subtask_id = ? AND ended_at IS NULL").run(subtaskId);
+    const id = `${subtaskId}-attempt-2`;
+    db.prepare(
+      "INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at,heartbeat_at) VALUES(?,(SELECT task_id FROM subtasks WHERE id=?),?,'role_builder',datetime('now'),datetime('now'))",
+    ).run(id, subtaskId, subtaskId);
+    db.prepare("UPDATE subtasks SET current_attempt_id = ?, agent_heartbeat_at = datetime('now') WHERE id = ?").run(id, subtaskId);
+    return id;
   }
 
   const snapshots = (subtaskId: string) =>
@@ -205,12 +217,12 @@ describe("снимок рабочего состояния слота", () => {
   // ── 3. Защита от устаревшей записи ─────────────────────────────────────
 
   it("поздняя запись старой попытки остаётся в истории, но не становится актуальной", async () => {
-    const { taskId, subtaskId } = await slot("Устаревшая запись " + Date.now());
+    const { subtaskId } = await slot("Устаревшая запись " + Date.now());
     const oldAttempt = currentAttempt(subtaskId);
 
-    // Роль успела записать снимок, потом слот отпустили и взяли заново.
+    // Роль успела записать снимок, потом попытка оборвалась и слот взяли заново.
     saveSlotSnapshot({ subtaskId, reason: "progress", done: "старая попытка: сделано до обрыва" });
-    const newAttempt = await restartSlot(taskId, subtaskId);
+    const newAttempt = newerAttempt(subtaskId);
     expect(newAttempt).not.toBe(oldAttempt);
 
     // Старый процесс, не зная об этом, пишет снимок с ПРЕЖНИМ attempt_id.
@@ -219,14 +231,22 @@ describe("снимок рабочего состояния слота", () => {
 
     // В истории она есть…
     expect(snapshots(subtaskId).some((r) => r.done_summary === "опоздалая запись")).toBe(true);
-    // …но актуальным снимком слота не является: текущая попытка новее.
-    expect(latestSlotSnapshot(subtaskId)?.attempt_id).not.toBe(oldAttempt);
+    // …пока новая попытка ничего не записала — показывается последний
+    // известный снимок, но с честной пометкой, что он от более ранней попытки.
+    expect(slotSnapshotDto(subtaskId)?.latest_from_earlier_attempt).toBe(true);
+    // Как только новая попытка пишет свой снимок, он становится актуальным, а
+    // поздняя запись старой попытки остаётся в истории.
+    saveSlotSnapshot({ subtaskId, reason: "progress", done: "новая попытка: продолжаю" });
+    expect(latestSlotSnapshot(subtaskId)?.attempt_id).toBe(newAttempt);
+    expect(latestSlotSnapshot(subtaskId)?.done_summary).toBe("новая попытка: продолжаю");
+    expect(slotSnapshotDto(subtaskId)?.latest_from_earlier_attempt).toBe(false);
+    expect(snapshots(subtaskId).some((r) => r.done_summary === "опоздалая запись")).toBe(true);
   });
 
   it("HTTP-ответ честно помечает позднюю запись старой попытки", async () => {
-    const { taskId, subtaskId } = await slot("Поздняя запись через API " + Date.now());
+    const { subtaskId } = await slot("Поздняя запись через API " + Date.now());
     const oldAttempt = currentAttempt(subtaskId);
-    await restartSlot(taskId, subtaskId);
+    newerAttempt(subtaskId);
 
     const late = await app.inject({
       method: "POST",
@@ -241,9 +261,9 @@ describe("снимок рабочего состояния слота", () => {
   // ── 4. Восстановление контекста ─────────────────────────────────────────
 
   it("блок снимка попадает в контекст следующей попытки и говорит о свежести", async () => {
-    const { taskId, subtaskId } = await slot("Снимок в контексте " + Date.now());
-    saveSlotSnapshot({ subtaskId, reason: "stopped", done: "Починил сборку", left: "Осталась интеграция", next_step: "Свести обе ветки" });
-    await restartSlot(taskId, subtaskId);
+    const { subtaskId } = await slot("Снимок в контексте " + Date.now());
+    saveSlotSnapshot({ subtaskId, reason: "stopped", done: "Починил сборку", left: "Осталась интеграция", nextStep: "Свести обе ветки" });
+    newerAttempt(subtaskId);
 
     const block = slotSnapshotBlock(subtaskId)!;
     expect(block).toContain("На чём остановился предыдущий ход");
