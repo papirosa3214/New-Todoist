@@ -191,8 +191,25 @@ export async function deliverSecretaryReply(userText: string, mode: ChatWorkMode
     )
     .get(SECRETARY_ID, turnStartedAt) as { id: string } | undefined;
 
-  const lengthError=agentVisibleTextError(SECRETARY_ID,replyText);
-  if(lengthError) { replyText=lengthError; quickReplies=null; }
+  // Финальный ответ секретаря: при превышении лимита — НЕ сохраняем
+  // обрезанный/сырой ответ (владелец 04.10.2026: пусть сам сократит).
+  // Кладём в чат сообщение от системы с обращением к секретарю —
+  // «перепиши и отправь заново».
+  const lengthError = agentVisibleTextError(SECRETARY_ID, replyText);
+  if (lengthError) {
+    const sysMsgId = uid();
+    db.prepare(
+      `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, message_type)
+       VALUES (?, 'taskflow_system', ?, 'chat', ?, 'system')`,
+    ).run(
+      sysMsgId,
+      `Ответ Секретаря не отправлен: превышен лимит (правило Максима 15.09.2026 — максимум 100 слов и 800 символов на сообщение).\n\nАгенту: перепиши ответ короче и отправь заново. Не повторяй это сообщение — оно уже отклонено, перепиши его с учётом лимита.`,
+      chatId,
+    );
+    db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
+    broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(sysMsgId) });
+    replyText = "";
+  }
   const replyId = uid();
   db.prepare(
     `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, quick_replies, steps, message_type)

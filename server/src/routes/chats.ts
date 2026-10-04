@@ -546,8 +546,10 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       catch { return reply.code(400).send({error: "Неизвестный режим работы"}); }
       if (mode !== "work" && roleFromUserId(req.userId)) return reply.code(403).send({error: "Режим выбирает человек"});
       const text = String(req.body?.text || "").trim();
-      const textError = agentVisibleTextError(req.userId,text);
-      if(textError) return reply.code(400).send({error:textError});
+      // Промежуточные сообщения ИИ в чате не валидируем по длине —
+      // иначе агент падает на 400 посреди работы (владелец 04.10.2026).
+      // Лимит остаётся только для финального ответа роли (см. ниже,
+      // truncateAgentText): сообщение в чат всегда доходит, просто короче.
       if (mode === "deep_research" && (!chatMemberRoles(req.params.id).includes("researcher") || parseRoleMentions(text).some(r => r !== "researcher"))) {
         return reply.code(400).send({error: "Глубокое исследование доступно в чате с Исследователем"});
       }
@@ -1439,8 +1441,28 @@ async function deliverAgentReply(args: {
       ? chatRunFailureText(failure)
       : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
 
+  // Финальный ответ роли: при превышении лимита — НЕ сохраняем в чат
+  // ничего от роли (обрезанный/сырой ответ владельцу не нужен,
+  // 04.10.2026). Ставим failure, чтобы dispatchRoleReplies не сработал,
+  // и кладём в чат сообщение от системы с обращением к агенту —
+  // «перепиши и отправь заново». Агент (LLM) при следующем вызове
+  // startChatRun прочитает чат и сам сократит.
   const visibleError = agentVisibleTextError(roleUserId, replyText);
-  if (visibleError) { failure = new Error(visibleError); replyText = visibleError; }
+  if (visibleError) {
+    failure = new Error(visibleError);
+    replyText = "";
+    const sysMsgId = uid();
+    db.prepare(
+      `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, message_type)
+       VALUES (?, 'taskflow_system', ?, 'chat', ?, 'system')`,
+    ).run(
+      sysMsgId,
+      `Ответ @${roleName} не отправлен: превышен лимит (правило Максима 15.09.2026 — максимум 100 слов и 800 символов на сообщение).\n\nАгенту: перепиши ответ короче и отправь заново. Не повторяй это сообщение — оно уже отклонено, перепиши его с учётом лимита.`,
+      chatId,
+    );
+    db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
+    broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(sysMsgId) });
+  }
 
   let replyId: string | null = null;
   if (replyText) {
