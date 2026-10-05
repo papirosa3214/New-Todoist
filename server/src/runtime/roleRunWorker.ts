@@ -109,29 +109,35 @@ export function startRoleRunWorker(options?: {
     `server-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
   const pollMs = Math.max(100, Math.floor(options?.pollMs ?? 1000));
   let stopping = false;
-  let loop: Promise<void> | null = null;
+  // Владелец 05.10.2026: до трёх запусков одновременно (было строго по одному —
+  // проверки стояли в очереди за длинными задачами). Каждая «полоса» берёт
+  // задание через claimNextRoleRunJob — он атомарен и не даёт одной задаче
+  // два параллельных запуска. Число полос — ROLE_RUN_CONCURRENCY.
+  const lanes = Math.max(1, Math.min(8, Math.floor(Number(process.env.ROLE_RUN_CONCURRENCY ?? 3)) || 3));
+  const loops: Array<Promise<void> | null> = Array.from({ length: lanes }, () => null);
 
   recoverExpiredRoleRunJobs();
 
   const tick = (): void => {
-    if (stopping || loop) return;
-    loop = (async () => {
-      // За один tick вычерпываем готовую очередь. Worker последовательный:
-      // текущий SQLite/server deployment не должен внезапно умножить LLM runs.
-      while (!stopping) {
-        const handled = await processOneRoleRunJob({
-          workerId,
-          executor: options?.executor,
+    if (stopping) return;
+    for (let lane = 0; lane < lanes; lane++) {
+      if (loops[lane]) continue;
+      loops[lane] = (async () => {
+        while (!stopping) {
+          const handled = await processOneRoleRunJob({
+            workerId: lanes > 1 ? `${workerId}-${lane}` : workerId,
+            executor: options?.executor,
+          });
+          if (!handled) break;
+        }
+      })()
+        .catch((error) => {
+          console.warn("[role-run-worker] tick failed:", error);
+        })
+        .finally(() => {
+          loops[lane] = null;
         });
-        if (!handled) break;
-      }
-    })()
-      .catch((error) => {
-        console.warn("[role-run-worker] tick failed:", error);
-      })
-      .finally(() => {
-        loop = null;
-      });
+    }
   };
 
   tick();
@@ -141,7 +147,7 @@ export function startRoleRunWorker(options?: {
   stopCurrentWorker = async () => {
     stopping = true;
     clearInterval(timer);
-    if (loop) await loop;
+    await Promise.all(loops.filter(Boolean));
     stopCurrentWorker = null;
   };
   return stopCurrentWorker;
