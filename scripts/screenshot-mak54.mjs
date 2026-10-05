@@ -35,16 +35,23 @@ const OUT_DIR = join(ROOT, "docs/2026-10-05-mak54-inputs-states", "web");
 const VIEWPORT = { width: 402, height: 874 };
 const BASE = "https://localhost:5180";
 
-// zustand persist в App.tsx читает localStorage и ставит data-theme на
-// <html>. Поэтому до загрузки приложения нам достаточно положить
-// settings.theme в persist-стейт (version 4, как в сторе).
+// zustand persist в store/index.ts читает localStorage и ставит data-theme
+// на <html>. Поэтому до загрузки приложения нам достаточно положить
+// settings.theme в persist-стейт (version 4, как в сторе). Ключ
+// `taskflow-ui` — из `persist({ name: "taskflow-ui" })`.
 const PERSIST = (theme) => ({
   state: {
     settings: { theme, calendarView: "month" },
     taskLayout: { inbox: "list", today: "list" },
-    upcomingLayout: "list",
+    upcomingLayout: "month",
     collapsedInboxProjects: {},
     plannerVisibleProjects: {},
+    aiProvider: "local",
+    localOllamaModel: "qwen3.6-27b-iq4-16k:latest",
+    antigravityModel: "gemini-3.7-flash-high",
+    claudeModel: "claude-sonnet-4.6",
+    hermesModel: "nous-hermes-3-405b",
+    deepseekModel: "deepseek-r1",
   },
   version: 4,
 });
@@ -54,7 +61,9 @@ async function shoot(page, url, file, settle = 3000) {
   // Анимации входа (шапка, шторка, спиннер) длятся до ~700мс. Шторки
   // открываются на 100мс медленнее из-за пружины useBottomSheet.
   await page.waitForTimeout(settle);
-  const out = join(OUT_DIR, file);
+  // `file` уже абсолютный путь (join(OUT_DIR, theme, "01-...png")),
+  // join поверх OUT_DIR склеивал бы их как «…/web/…/web/light/…png».
+  const out = file;
   await page.screenshot({ path: out, fullPage: false });
   console.log("wrote", out);
 }
@@ -73,13 +82,16 @@ async function runTheme(theme) {
   const browser = await chromium.launch({ channel: "chrome" });
   const ctx = await browser.newContext({
     viewport: VIEWPORT,
+    // vite preview на :5180 отдаёт self-signed — без этого первый же
+    // page.goto падает с ERR_CERT_AUTHORITY_INVALID.
+    ignoreHTTPSErrors: true,
     userAgent:
       "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
   });
   // Подкидываем persist до загрузки приложения, иначе App.tsx поставит
-  // дефолтную тёмную тему.
+  // дефолтную тёмную тему. Ключ — `taskflow-ui` (см. `name` в сторе).
   await ctx.addInitScript((persist) => {
-    localStorage.setItem("taskflow-app", JSON.stringify(persist));
+    localStorage.setItem("taskflow-ui", JSON.stringify(persist));
   }, PERSIST(theme));
 
   const page = await ctx.newPage();
