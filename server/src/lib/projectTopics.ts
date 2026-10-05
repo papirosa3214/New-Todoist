@@ -27,7 +27,7 @@ export function ensurePlanTopic(taskId: string): string | null {
       const branchRoles=db.prepare(`SELECT DISTINCT n.role_key FROM branch_plan_members b JOIN task_collaboration_plan_nodes n ON n.plan_id=b.plan_id WHERE b.root_plan_id=? AND n.skipped_at IS NULL`).all(member.root_plan_id) as Array<{role_key:string}>;
       roles.push(...branchRoles);
     }
-    const ids=[project.owner_id,...roles.map(n=>roleUserId(n.role_key))];
+    const ids=[project.owner_id,...roles.map(n=>roleUserId(n.role_key)),...(db.prepare("SELECT id FROM users WHERE role='orchestrator' AND COALESCE(archived,0)=0").all() as {id:string}[]).map(u=>u.id)];
     const insert=db.prepare("INSERT OR IGNORE INTO chat_members(chat_id,member_id,last_read_at) VALUES (?,?,datetime('now'))");
     for(const id of ids){
       if(!db.prepare("SELECT id FROM users WHERE id=? AND COALESCE(archived,0)=0").get(id)) continue;
