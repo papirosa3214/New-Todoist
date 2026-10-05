@@ -62,6 +62,30 @@ SQLite), фронт на Vite+React.
 подключении, текст задания от будильника, подсказки в ответах
 инструментов. Чужой `CLAUDE.md` агенту не виден — всё нужное кладётся туда.
 
+## Последние изменения (05.10.2026)
+
+- **База и миграции — аудит MAK-60** (карточка
+  `8e14801e-163a-442e-9529-b00052cbbee6`, источник — раздел 3 аудита
+  `docs/2026-10-05-server-audit.md`, решения оркестратора там же).
+  - Граница `db.ts:migrate()` ↔ `migrations.ts` зафиксирована в обеих
+    шапках одним текстом: «в db.ts — только CREATE TABLE IF NOT EXISTS и
+    идемпотентные ALTER (PRAGMA table_info → ADD COLUMN), всё нумерованное
+    — в migrations.ts; иначе дубль упадёт на живой БД при ALTER или на
+    свежей при CREATE». Дальнейшие правки схемы — через миграцию с
+    записью в `schema_migrations`.
+  - `084_task_hierarchy_one_level` помечен комментарием (id не трогаем —
+    он в `schema_migrations` живой БД; решение оркестратора 05.10.2026).
+  - Удалена ссылка на удалённый `lib/agentVisibleText.ts` в `migrations.ts`.
+  - `db.ts:203` (`UPDATE users SET is_system_bot=1 WHERE id IN ('u2','u3')`)
+    дополнен `AND archived=0` — флаг означает «активный системный бот»,
+    на архивных он не должен стоять.
+  - Удалены 4 мусорные базы: `dev.db`, `zzz.db`, `server/zzz.db`,
+    `server/scripts/zzz.db` (ни одна не использовалась кодом, в `.gitignore`
+    уже были, `DB_PATH` указывает только на `taskflow.db`).
+  - Перед правками — бэкап `taskflow.db.backup-pre-MAK-60-20261005-145505`
+    (9 883 648 байт, `Database#backup` — WAL-safe). Прогон миграции на
+    копии: `PRAGMA integrity_check=ok`, счётчики не изменились.
+
 ## Последние изменения (29.09.2026)
 
 - **Узлы collaboration plan — обычные `subtasks`, не `task_role_slots`**
