@@ -78,10 +78,6 @@ describe("Матрица прав: роли и профили (b6b57092)", () =>
   // ─────────────────────────────────────────────────────────────────────
 
   describe("getRole: маппинг profile → роль из семи", () => {
-    it("profile='claude_bot' → Builder", () => {
-      expect(getRole(agentId)).toBe("Builder");
-    });
-
     it("profile='reviewer' → Critic/Verifier (закрывает и QA)", () => {
       expect(getRole(reviewerNoFlagId)).toBe("Critic/Verifier");
     });
@@ -90,18 +86,21 @@ describe("Матрица прав: роли и профили (b6b57092)", () =>
       expect(getRole(orchId)).toBe("Architect");
     });
 
-    it("profile='deepseek' → Researcher", () => {
-      const id = (
-        db.prepare("SELECT id FROM users WHERE email = ?").get(
-          "matrix-owner@test",
-        ) as { id?: string }
-      )?.id;
-      expect(id).toBeTruthy();
-      // Создадим прямо здесь через UPDATE — нам важен profile, не регистрация.
-      db.prepare("UPDATE users SET profile = 'deepseek' WHERE id = ?").run(
-        reviewerNoFlagId,
-      );
-      expect(getRole(reviewerNoFlagId)).toBe("Researcher");
+    it("profile='claude_bot' → null (аудит 2026-10-05, п. 1.5/1.6: claude_bot заархивирован миграцией 040 и убран из PROFILE_ROLE)", () => {
+      // Создадим учётку с profile='claude_bot' в обход migrate() и убедимся,
+      // что getRole возвращает null — это и есть защита от возврата
+      // архивного профиля в team_catalog.json.
+      expect(getRole(agentId)).toBeNull();
+    });
+
+    it("profile='deepseek'/'antigravity'/'pi_agent'/'hermes' → null (исторические имена убраны из PROFILE_ROLE)", () => {
+      for (const legacy of ["deepseek", "antigravity", "pi_agent", "hermes"]) {
+        db.prepare("UPDATE users SET profile = ? WHERE id = ?").run(
+          legacy,
+          reviewerNoFlagId,
+        );
+        expect(getRole(reviewerNoFlagId)).toBeNull();
+      }
       // Откатим, чтобы не сломать тест isReviewer ниже.
       db.prepare("UPDATE users SET profile = 'reviewer' WHERE id = ?").run(
         reviewerNoFlagId,
@@ -111,17 +110,11 @@ describe("Матрица прав: роли и профили (b6b57092)", () =>
     it("profile=NULL → null (учётка без профиля, ничего не сломано)", () => {
       db.prepare("UPDATE users SET profile = NULL WHERE id = ?").run(agentId);
       expect(getRole(agentId)).toBeNull();
-      db.prepare("UPDATE users SET profile = 'claude_bot' WHERE id = ?").run(
-        agentId,
-      );
     });
 
     it("profile неизвестный → null (не падаем, не выдумываем роль)", () => {
       db.prepare("UPDATE users SET profile = 'mystery' WHERE id = ?").run(agentId);
       expect(getRole(agentId)).toBeNull();
-      db.prepare("UPDATE users SET profile = 'claude_bot' WHERE id = ?").run(
-        agentId,
-      );
     });
 
     it("role='owner' (любой profile) → null — владелец не из семи", () => {
@@ -148,10 +141,6 @@ describe("Матрица прав: роли и профили (b6b57092)", () =>
 
     it("profile='reviewer' без reviewer=1 → true (новый путь)", () => {
       expect(isReviewer(reviewerNoFlagId)).toBe(true);
-    });
-
-    it("profile='claude_bot' → false (Builder не ревьюер)", () => {
-      expect(isReviewer(agentId)).toBe(false);
     });
 
     it("profile=NULL и reviewer=0 → false (посторонний)", () => {

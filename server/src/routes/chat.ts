@@ -39,11 +39,16 @@ import {
   saveUploadedFile,
   UploadRejected,
 } from "./attachments.js";
-import { routeAddressee, loadCatalog } from "./agent-inbox.js";
 import { registryRecord } from "../agentState.js";
 import { startDraftFromChat } from "../lib/ownerDraft.js";
 
 const uid = () => crypto.randomUUID();
+
+// Литерал канала чата исполнителей (карточка 4396f8c9, 10.09.2026). Раньше
+// строка "agents" повторялась в проверках и INSERT — при переименовании
+// канала молча переставала срабатывать (аудит 2026-10-05, п. 2.3). Здесь
+// она одна, остальные места ищут по этому имени.
+const AGENT_CHANNEL = "agents" as const;
 
 // Будильник для резидента Гермеса (27-28.08.2026, подзадача «Сторона
 // Гермеса»): MCP "taskflow" у него уже подключён (taskflow_chat_send/read),
@@ -168,9 +173,12 @@ function roleOf(userId: string): string | null {
 }
 
 function orchestratorId(): string | null {
+  // archived=0 — учётку оркестратора однажды деактивировали миграцией
+  // (например, при переезде id), и без фильтра broadcast'ы и сигналы
+  // продолжили бы идти в архивную запись (аудит 2026-10-05, п. 1.8).
   const row = db
     .prepare(
-      "SELECT id FROM users WHERE role = 'orchestrator' ORDER BY created_at LIMIT 1",
+      "SELECT id FROM users WHERE role = 'orchestrator' AND archived = 0 ORDER BY created_at LIMIT 1",
     )
     .get() as { id: string } | undefined;
   return row?.id ?? null;
@@ -278,8 +286,8 @@ function routeMessage(
 
   const orchestrator = orchestratorId();
   if (fromUserId === owner)
-    return wanted === "agents"
-      ? { channel: "agents", toUserId }
+    return wanted === AGENT_CHANNEL
+      ? { channel: AGENT_CHANNEL, toUserId }
       : { channel: "owner", toUserId: null };
 
   if (toUserId === owner) {
@@ -320,7 +328,7 @@ function notifyOrchestratorOfDirect(
   const orchestrator = orchestratorId();
   if (!owner || !orchestrator) return;
   if (fromUserId !== owner) return;
-  if (routed.channel !== "agents") return;
+  if (routed.channel !== AGENT_CHANNEL) return;
   // «Всем» — не раздача работы мимо оркестратора, он в этой рассылке и сам
   // адресат. Сообщение лично ему — тем более.
   if (!routed.toUserId || routed.toUserId === orchestrator) return;
@@ -618,19 +626,20 @@ export function registerChatRoutes(app: FastifyInstance) {
     }
     // Карточка 5f292e87: agent_inbox — единый механизм доставки. Сообщение
     // по задаче с явным адресатом пишет в inbox; UNIQUE на chat_message_id
-    // обеспечивает дедупликацию (повтор — глотаем). Адресат берётся из
-    // каталога команды: явный адресат приоритетен, иначе fallback в
-    // Оркестратора. Обычный чат без task_id или без адресата — НЕ пишем
-    // (это не поручение).
+    // обеспечивает дедупликацию (повтор — глотаем). Адресат — то, что
+    // вывел routeMessage (аудит 2026-10-05, п. 1.4/2.2): раньше тут
+    // дёргался routeAddressee с подстрокой title по team_catalog.json,
+    // теперь выписка идёт из ролей отправителя и адресата. Обычный чат без
+    // task_id или без адресата — НЕ пишем (это не поручение).
     //
     // Только СЛУЖЕБНАЯ лента (10.09.2026, карточка 4396f8c9): окно
     // постановки задач поручений не порождает вовсе. Раньше владелец,
     // написавший в своё окно по карточке, поднимал этим сессию агента —
     // ровно то, от чего окно и отделяется. Раздать работу он по-прежнему
     // может, но явно и в служебной ленте, где адресат виден.
-    if (taskId && toUserId && routed.channel === "agents") {
+    if (taskId && toUserId && routed.channel === AGENT_CHANNEL) {
       try {
-        const inboxTo = routeAddressee(toUserId, req.userId, loadCatalog());
+        const inboxTo = routed.toUserId ?? toUserId;
         const inboxId = uid();
         const bodyKind = req.body?.source === "voice" ? "voice" : "text";
         db.prepare(

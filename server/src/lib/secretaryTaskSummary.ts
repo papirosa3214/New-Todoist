@@ -7,6 +7,7 @@ import db from "../db.js";
 import { isOwner } from "../access.js";
 import { callUnifiedAi } from "../routes/ai.js";
 import { broadcastToUsers } from "../ws.js";
+import { SECRETARY_USER_ID } from "./secretaryReply.js";
 
 const GROUPS = ["assigned_waiting", "blocked", "in_progress", "review", "completed", "overdue", "future", "stuck", "unassigned", "all"] as const;
 type Group = typeof GROUPS[number];
@@ -127,7 +128,7 @@ export function sendSummaryToSecretaryChat(ownerId:string,text:string) {
   if(!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(chatId,ownerId)) throw new Error("владелец не участник чата Секретаря");
   const id=crypto.randomUUID();
   db.transaction(()=>{
-    db.prepare("INSERT INTO chat_messages (id,from_user_id,text,channel,chat_id) VALUES (?,'u-secretary',?,'chat',?)").run(id,text,chatId);
+    db.prepare("INSERT INTO chat_messages (id,from_user_id,text,channel,chat_id) VALUES (?,?,?,'chat',?)").run(id,SECRETARY_USER_ID,text,chatId);
     db.prepare("UPDATE chats SET updated_at=datetime('now') WHERE id=?").run(chatId);
   })();
   const row=loadChatMessage(id);
