@@ -6,6 +6,7 @@ import {
   ScreenHeader,
   ErrorBanner,
   Avatar,
+  Switch,
 } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
 import { useServerStatus } from "../api/server";
@@ -95,38 +96,11 @@ function InfoRow({ icon, iconColor = "#FF6B6B", label, value }: InfoRowProps) {
 // Геометрия скопирована буквально из mockup-reference/index.html's `.switch`
 // (43×25px pill, 20px белый кружок, тень 0 1px 3px rgba(0,0,0,.3)) — там
 // это статичный, всегда «включённый» (красный) макет одного состояния;
-// здесь добавлено настоящее выключенное состояние (серый фон, кружок
-// слева), которого в референсе просто нет ни одного примера.
-function Switch({
-  checked,
-  onChange,
-  ariaLabel,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  ariaLabel: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={ariaLabel}
-      onClick={onChange}
-      // Сам переключатель остаётся 43×25 (геометрия снята с макета), а зона
-      // нажатия доведена до 44×44 прозрачным ::before по центру — замер
-      // показал 43×25, то есть по высоте почти вдвое меньше нормы HIG.
-      className={`tap-scale relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors before:absolute before:left-1/2 before:top-1/2 before:h-11 before:w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] ${
-        checked ? "bg-red" : "bg-card2 border border-stroke"
-      }`}
-    >
-      <span
-        className="absolute top-[2.5px] w-[20px] h-[20px] rounded-full bg-white shadow-toggle transition-[right] duration-150"
-        style={{ right: checked ? "2.5px" : "20.5px" }}
-      />
-    </button>
-  );
-}
+// Switch теперь общий в UI.tsx (§2.7 «Тумблер»). Старая локальная копипаста
+// оставалась тут до того, как SheetHeader/Switch/EmptyState были собраны в
+// одно место: внутри SettingsScreen это была корректная версия, а внутри
+// TaskFilterSheet — геометрически та же, но без tap-scale/44×44 тап-зоны.
+// Теперь оба импортируют Switch из UI.
 
 interface ToggleRowProps {
   icon: string;
@@ -158,7 +132,11 @@ function ToggleRow({
       </div>
  <span className="tf-body flex-1 text-text">{label}</span>
  {valueLabel && <span className="tf-action text-sub">{valueLabel}</span>}
-      <Switch checked={checked} onChange={onChange} ariaLabel={label} />
+      <Switch
+        checked={checked}
+        onChange={() => onChange()}
+        ariaLabel={label}
+      />
     </div>
   );
 }

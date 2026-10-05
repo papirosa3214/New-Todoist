@@ -21,6 +21,7 @@ import { useChats } from "../api/chats";
 import { useCurrentUser } from "../api/auth";
 import {
   Avatar,
+  EmptyState,
   ErrorBanner,
   Icon,
   Loading,
@@ -61,7 +62,12 @@ export function ChatsScreen() {
       />
 
       {!isLoading && chats.length === 0 && !isError && (
-        <EmptyState onCreate={openCreate} />
+        <EmptyState
+          icon="chat"
+          text="Чатов пока нет"
+          description="Создайте персональный чат с одной ролью или групповой — с несколькими сразу."
+          action={{ label: "Новый чат", onClick: openCreate }}
+        />
       )}
 
       {!isLoading && chats.length > 0 && (
@@ -83,29 +89,6 @@ export function ChatsScreen() {
           и (опционально) название, на месте же возвращает id нового
           чата и навигирует в него (см. CreateChatSheet.submit). */}
       <CreateChatSheet open={createOpen} onClose={closeCreate} />
-    </div>
-  );
-}
-
-function EmptyState({ onCreate }: { onCreate: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center text-center px-6 py-16">
-      <div className="w-16 h-16 rounded-full bg-card flex items-center justify-center mb-4">
-        <Icon name="chat" size={28} className="text-sub" />
-      </div>
- <h2 className=" font-semibold text-text mb-1">
-        Чатов пока нет
-      </h2>
- <p className="tf-row text-sub leading-relaxed max-w-[280px] mb-6">
-        Создайте персональный чат с одной ролью или групповой — с
-        несколькими сразу.
-      </p>
-      <button
-        onClick={onCreate}
- className="tf-body h-12 px-6 rounded-xl bg-red text-white tap-fade"
-      >
-        Новый чат
-      </button>
     </div>
   );
 }

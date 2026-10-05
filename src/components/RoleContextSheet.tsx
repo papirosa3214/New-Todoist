@@ -12,7 +12,7 @@
 // (BottomSheet, Icon, Loading, ErrorBanner).
 
 import { useEffect, useMemo, useState } from "react";
-import { ErrorBanner, Icon, Loading, SheetHandle } from "./UI";
+import { ErrorBanner, Icon, Loading, SheetHandle, SheetHeader } from "./UI";
 import { useBottomSheet } from "../lib/useBottomSheet";
 import type { RoleDetails } from "../api/roles";
 
@@ -129,9 +129,10 @@ export function RoleContextSheet({
         className="relative bg-card rounded-sheet-top px-4 pb-bottom-safe max-h-[88vh] overflow-y-auto"
       >
         <SheetHandle dragProps={sheet.dragProps} />
- <h3 className="tf-input text-text px-1 mb-1">
-          Контекст запуска: {role.title}
-        </h3>
+        <SheetHeader
+          title={`Контекст запуска: ${role.title}`}
+          onClose={onClose}
+        />
  <p className="tf-meta text-sub px-1 mb-3">
           Что модель реально получит при старте в выбранном режиме.
         </p>

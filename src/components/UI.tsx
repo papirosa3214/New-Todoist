@@ -577,6 +577,125 @@ export function SheetHandle({
   );
 }
 
+// ═══════════ SHEET HEADER ═══════════
+// DESIGN.md §2.7 «Нижняя шторка»: «затем ряд: крестик 44×44 слева —
+// заголовок 17px по центру — действие 13px text-sub справа». До этого
+// блок копипастился в 8 местах (TaskFilterSheet, ChatStatsSheet,
+// AttachmentViewerSheet, TasksFromTextSheet, RescheduleSheet,
+// TaskJournal, RoleContextSheet, UpcomingCalendar) и плавал от шторки
+// к шторке: где-то `pb-2`, где-то `pb-3`, где-то справа пустой
+// `<div className="w-11" />` для центрирования, где-то красная
+// круглая кнопка действия (RescheduleSheet/TaskJournal), где-то
+// текстовая 13px (TaskFilterSheet).
+//
+// Здесь три формы, общий хедер:
+//   - без действия — справа пустой слот 44×44, чтобы заголовок не
+//     уезжал влево (TasksFromTextSheet, ChatStatsSheet, RoleContextSheet);
+//   - textAction — текстовая кнопка `text-[13px] text-sub` (TaskFilterSheet
+//     «Сбросить»); это и есть «действие 13px text-sub» из §2.7;
+//   - action — круглая red-кнопка с галочкой/стрелкой, как в
+//     RescheduleSheet/TaskJournal (там без подписи, иконка действия в
+//     красном кружке). В DESIGN.md эта форма не описана отдельно, но
+//     она «созревшее» действие — та же кнопка `bg-red` что и TFButton
+//     primary, только круглая и без подписи.
+//
+// `onClose` обязателен: всякая шторка закрывается крестиком слева
+// (смахивание вниз и тап мимо — это useBottomSheet, не сюда).
+export function SheetHeader({
+  title,
+  onClose,
+  textAction,
+  actionIcon,
+  onAction,
+  actionDisabled = false,
+  actionAriaLabel,
+  actionVariant = "filled",
+  className = "",
+  /**
+   * Поведение mousedown. RescheduleSheet/TaskJournal вызываются при
+   * открытой системной клавиатуре (textarea в TaskJournal): если не
+   * перехватить mousedown, фокус сначала уходит с textarea, клавиатура
+   * сворачивается, шторка переезжает — click не доходит. Тот же приём,
+   * что в SubtaskFeed/MicKeyboardBar.
+   */
+  preventMouseDown = false,
+}: {
+  title: string;
+  onClose: () => void;
+  /** Текстовая кнопка справа (13px text-sub), опционально. */
+  textAction?: { label: string; onClick: () => void; disabled?: boolean };
+  /** Круглая red-кнопка справа с иконкой, опционально. */
+  actionIcon?: string;
+  onAction?: () => void;
+  actionDisabled?: boolean;
+  actionAriaLabel?: string;
+  /**
+   * "filled" (default) — красная круглая кнопка с белой иконкой,
+   * «созревшее» действие подтверждения (RescheduleSheet, TaskJournal).
+   * "plain" — обычная иконка-кнопка 44×44, как в шапке (AttachmentViewerSheet
+   * «Скачать»). Цвет иконки — `text-text`/`text-sub` снаружи.
+   */
+  actionVariant?: "filled" | "plain";
+  className?: string;
+  preventMouseDown?: boolean;
+}) {
+  const mouseDown = (e: React.MouseEvent) => {
+    if (preventMouseDown) e.preventDefault();
+  };
+  return (
+    <div
+      className={`flex items-center justify-between pb-3 ${className}`}
+    >
+      <button
+        type="button"
+        onMouseDown={mouseDown}
+        onClick={onClose}
+        aria-label="Закрыть"
+        className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center"
+      >
+        <Icon name="x" size={20} className="text-sub" />
+      </button>
+      <h3 className="text-[17px] font-semibold text-text truncate px-2">
+        {title}
+      </h3>
+      {textAction ? (
+        <button
+          type="button"
+          onMouseDown={mouseDown}
+          onClick={textAction.onClick}
+          disabled={textAction.disabled}
+          className="text-[13px] text-sub disabled:opacity-40 -mr-1 px-2 h-11"
+        >
+          {textAction.label}
+        </button>
+      ) : actionIcon && onAction ? (
+        <button
+          type="button"
+          onMouseDown={mouseDown}
+          onClick={onAction}
+          disabled={actionDisabled}
+          aria-label={actionAriaLabel ?? "Подтвердить"}
+          className={
+            actionVariant === "filled"
+              ? "tap-scale w-11 h-11 -mr-2 rounded-full bg-red flex items-center justify-center disabled:opacity-40"
+              : "tap-scale w-11 h-11 -mr-2 flex items-center justify-center"
+          }
+        >
+          <Icon
+            name={actionIcon}
+            size={actionVariant === "filled" ? 18 : 20}
+            className={actionVariant === "filled" ? "text-white" : "text-text"}
+          />
+        </button>
+      ) : (
+        // Пустой слот шириной кнопки закрытия — заголовок не уезжает
+        // влево, если действие отсутствует.
+        <span className="w-11" />
+      )}
+    </div>
+  );
+}
+
 // ═══════════ AGENT STATE TAG (task-row pometka, AGENT-PROTOCOL.md) ═══════════
 // Compact inline pill for a task row's agent_state: "в работе · N мин
 // назад" / "агент пропал" / "на проверке" / "заблокировано" — see
@@ -1625,6 +1744,117 @@ export function ErrorBanner({
  <p role="alert" className={`tf-action px-1 text-coral ${className}`}>
       {message}
     </p>
+  );
+}
+
+// ═══════════ SWITCH ═══════════
+// Тумблер — DESIGN.md §2.7: 43×25, включённый `bg-red`, выключенный
+// `bg-card2` с рамкой, белый кружок 20px. До этого был копипастой
+// (SettingsScreen.tsx — корректная версия, TaskFilterSheet.tsx — без
+// tap-scale и без расширения тап-зоны до 44×44), и в шторке фильтров
+// «Показывать выполненные» геометрически был тот же переключатель, а
+// ощущался другим. Эталон iOS (TFToggle) — штатный `Toggle` с
+// `.tint(.tfRed)` и `.scaleEffect(0.82)`: размеры те же.
+//
+// Тап-зона 44×44: нативная ширина переключателя 43 — на 1px ниже HIG.
+// `::before` по центру доводит зону нажатия до 44×44 прозрачно, не
+// меняя визуальный размер. `tap-scale` — общий press-feedback, как у
+// остальных кнопок-иконок в шапке/шторках. `disabled` — отдельный
+// проп, чтобы шторка фильтров могла гасить отдельные переключатели
+// (планер на скрытом проекте).
+export function Switch({
+  checked,
+  onChange,
+  disabled = false,
+  ariaLabel,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`tap-scale relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors before:absolute before:left-1/2 before:top-1/2 before:h-11 before:w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] ${
+        checked ? "bg-red" : "bg-card2 border border-stroke"
+      } ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}
+    >
+      <span
+        className="absolute top-[2.5px] w-[20px] h-[20px] rounded-full bg-white shadow-toggle transition-[right] duration-150"
+        style={{ right: checked ? "2.5px" : "20.5px" }}
+      />
+    </button>
+  );
+}
+
+// ═══════════ EMPTY STATE ═══════════
+// DESIGN.md §2.7: «пустое состояние — иконка, текст, описание, кнопка
+// red». До этого в проекте было два локальных `EmptyState` с разным
+// видом (ChatsScreen — в кружке, NotesScreen — без), а внутри экранов
+// с короткими списками — просто `<p>Задач пока нет</p>` без иконки.
+// Эталон iOS (TFEmptyState) — обёртка над штатным
+// `ContentUnavailableView` (iOS 17+): иконка, заголовок, описание,
+// (опционально) кнопка с акцентом.
+//
+// Здесь — тот же API, плюс `variant`:
+//   - "icon" (default) — крупная цветная иконка 28px в плашке `bg-card`
+//     16px над заголовком (ChatsScreen). Для экранов-разделов, где
+//     пустота — это «раздел пуст, и так должно быть».
+//   - "plain" — иконка 48px в `text-dim` без плашки (NotesScreen, что-то
+//     просто заметочное). Для контентных пустот.
+//
+// `icon` — имя из Icon. `text` обязателен, `description` опционален
+// (этот уровень бывает лишним), `action` — {label, onClick} для
+// главного CTA, и он в `bg-red`/`text-white` согласно §2.7. Если
+// действия нет — это просто факт пустоты, не сигнал «что-то делать».
+export function EmptyState({
+  icon,
+  text,
+  description,
+  action,
+  variant = "icon",
+  className = "",
+}: {
+  icon: string;
+  text: string;
+  description?: string;
+  action?: { label: string; onClick: () => void };
+  variant?: "icon" | "plain";
+  className?: string;
+}) {
+  return (
+    <div
+      className={`flex flex-col items-center justify-center text-center px-6 py-16 gap-3 ${className}`}
+    >
+      {variant === "icon" ? (
+        <div className="w-16 h-16 rounded-full bg-card flex items-center justify-center mb-1">
+          <Icon name={icon} size={28} className="text-sub" />
+        </div>
+      ) : (
+        <Icon name={icon} size={48} className="text-dim" />
+      )}
+      <p className="text-[16px] font-semibold text-text">{text}</p>
+      {description && (
+        <p className="text-[13px] text-sub max-w-[280px] leading-snug">
+          {description}
+        </p>
+      )}
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          className="tap-fade mt-3 h-12 px-6 rounded-xl bg-red text-[15px] font-semibold text-white"
+        >
+          {action.label}
+        </button>
+      )}
+    </div>
   );
 }
 
