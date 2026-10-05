@@ -44,7 +44,7 @@ export function InboxScreenTimeline() {
         <div className="tf-action text-dim tracking-widest uppercase">
           Входящие
         </div>
-        <div className="text-3xl font-medium mt-1">
+        <div className="tf-task-title mt-1">
           {inbox.length === 0
             ? "Пусто"
             : inbox.length === 1

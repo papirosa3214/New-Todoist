@@ -127,7 +127,7 @@ export function TodayScreenTimeline() {
         >
           {ZOOM_LABELS[zoom]}
         </div>
-        <div className="text-3xl font-medium mt-1">{formatDueLabel(today)}</div>
+        <div className="tf-task-title mt-1">{formatDueLabel(today)}</div>
         <button
           onClick={() => navigate(-1)}
  className="tf-meta mt-3 inline-flex items-center gap-1 text-sub hover:text-text transition-colors"
