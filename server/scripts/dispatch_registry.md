@@ -39,16 +39,16 @@ done | blocked (результат или стоп-фактор)
 
 ## 5. Маршрутизация (catalog → addressee)
 
-В `agent-inbox.ts` `routeAddressee()`:
+В `agent-inbox.ts:44-56` `routeAddressee()`:
 - Явный `to_user_id` (от sender) → приоритет.
-- Иначе → первый профиль в `team_catalog.json` с title, содержащим «оркестратор» (L4 fallback).
+- Иначе → первый профиль в `team_catalog.json` с title, содержащим «оркестратор» ИЛИ «диспетчер» (L4 fallback; в каталоге профиль назван «Технический диспетчер»).
 - В ответ `enqueue` возвращает `routed_to: {id, title}` + `basis: explicit_addressee | fallback_orchestrator | self`.
 
 ## 6. Что НЕ в этом реестре
 
-- `trigger.py` (`board_scan_loop`, `heartbeat_loop`, `wake_resident`) — лежит в отдельной задаче. **Не правим** в этой карточке (Reviewer явно запретил).
-- `agent_inbox` → в `claim`/`run_external` триггера — отдельная задача (Reviewer разрешил «точечно подключить», но пока не сделано).
-- `chat.ts` INSERT в `chat_messages` уже зовёт `agent_inbox.enqueue` (правка внесена). Дальше — триггер.
+- `trigger.py` (`board_scan_loop`, `heartbeat_loop`, `wake_resident`) — **архивируется** по решению аудита 2026-10-05 (MAK-61, п. 4.1). Служба `taskflow-trigger.service` выключается навсегда; её место займёт отдельная новая служба будильника, которой ещё нет.
+- `agent_inbox` → в `claim`/`run_external` триггера — **в работе**: код ждёт `agent_inbox.enqueue`, но trigger выключен, поэтому фактической доставки пока нет. Будет работать, когда встанет новая служба будильника.
+- `chat.ts` INSERT в `chat_messages` уже зовёт `agent_inbox.enqueue` (правка внесена). Дальше — новая служба будильника.
 
 **Why:** владелец хочет видеть, какие сигналы идут в триггер и какие обратно, без чтения trigger.py.
 **How to apply:** при добавлении нового сигнала — строка в §1. При изменении flow — обновить §2.
