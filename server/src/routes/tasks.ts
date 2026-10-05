@@ -751,7 +751,16 @@ export function registerTaskRoutes(app: FastifyInstance) {
         subtasks,
       } = req.body;
 
-      if(assignee_id && (db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as any)?.type==='ai')return reply.code(403).send({error:"Назначения выполняет сервер"});
+      // Аудит 2026-10-05, п. 1.2/1.6: организатор (role='orchestrator',
+      // type='ai') — живая роль, и ему разрешено класть задачу в любой
+      // проект и назначать исполнителя (b6b57092). Запрет стоит для
+      // рядовых исполнителей: type='ai' И role НЕ orchestrator/owner.
+      if (assignee_id) {
+        const actorRow = db.prepare("SELECT type, role FROM users WHERE id=?").get(req.userId) as { type?: string; role?: string } | undefined;
+        if (actorRow?.type === "ai" && actorRow.role !== "orchestrator" && actorRow.role !== "owner") {
+          return reply.code(403).send({error:"Назначения выполняет сервер"});
+        }
+      }
       const trimmedTitle = typeof title === "string" ? title.trim() : "";
       if (!trimmedTitle)
         return reply
@@ -1152,8 +1161,17 @@ export function registerTaskRoutes(app: FastifyInstance) {
     handler: async (req: any, reply) => {
       const { id } = req.params;
       const body = req.body || {};
-      if ((body.assignee_id !== undefined || body.owner_selected_role !== undefined) && (db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as any)?.type === "ai") {
-        return reply.code(403).send({error:"Агенты не назначают исполнителей. Назначения выполняет сервер."});
+      if ((body.assignee_id !== undefined || body.owner_selected_role !== undefined)) {
+        const actorRow = db.prepare("SELECT type, role FROM users WHERE id=?").get(req.userId) as { type?: string; role?: string } | undefined;
+        // Аудит 2026-10-05, п. 1.2/1.6: «организатор — живая роль, не
+        // автономный бот». Запрет «агенты не назначают исполнителей» стоит
+        // для исполнителей (type='ai' И role НЕ orchestrator/owner); сам
+        // организатор (role='orchestrator') в матрице прав имеет право
+        // переназначать (задача b6b57092), и резать его этой проверкой —
+        // значит ломать матрицу на ровном месте.
+        if (actorRow?.type === "ai" && actorRow.role !== "orchestrator" && actorRow.role !== "owner") {
+          return reply.code(403).send({error:"Агенты не назначают исполнителей. Назначения выполняет сервер."});
+        }
       }
 
       const existing = getTaskForWrite(id, req.userId);

@@ -45,11 +45,13 @@ describe("agent inbox /api/agent-inbox", () => {
     taskId = "t_inbox";
     expect(t.changes).toBe(1);
 
-    // Пользователь-диспетчер (id из team_catalog.json), на которого падает
-    // fallback-маршрутизация — иначе FK на to_user_id в agent_inbox упадёт.
+    // Пользователь-диспетчер, на которого падает fallback-маршрутизация
+    // (аудит 2026-10-05, п. 1.4/2.2: учётка роли architect из
+    // role-routing.yaml, не поиск по title в team_catalog.json). Без
+    // INSERT FK на agent_inbox.to_user_id упадёт на fallback'е.
     db.prepare(
-      "INSERT INTO users (id, name, email, password_hash, role, type) VALUES (?, ?, ?, ?, 'orchestrator', 'ai')",
-    ).run("6848a89b-04fe-4015-bb1c-61b03782c378", "Технический диспетчер", "orch@inbox.test", "x");
+      "INSERT INTO users (id, name, email, password_hash, role, type) VALUES (?, ?, ?, ?, 'agent', 'ai')",
+    ).run("role_architect", "Архитектор", "architect@inbox.test", "x");
   });
 
   afterAll(async () => {
@@ -206,7 +208,10 @@ describe("agent inbox /api/agent-inbox", () => {
     expect(mark.json().dropped).toBe(true);
   });
 
-  it("каталог: явный адресат приоритетен, иначе fallback в диспетчера", async () => {
+  it("каталог: явный адресат приоритетен, иначе fallback в диспетчера (role_architect)", async () => {
+    // Аудит 2026-10-05, п. 1.4/2.2: маршрутизация идёт через
+    // role-routing.yaml, fallback — учётка роли architect (диспетчер L4),
+    // а не поиск по подстроке title в team_catalog.json.
     const explicit = await app.inject({
       method: "POST",
       url: "/api/agent-inbox/enqueue",
@@ -222,7 +227,8 @@ describe("agent inbox /api/agent-inbox", () => {
       headers: { authorization: `Bearer ${aliceToken}` },
       payload: { chat_message_id: "msg-6", body_text: "без адресата", kind: "text" },
     });
-    expect(fallback.json().basis).toBe("fallback_orchestrator");
+    expect(fallback.json().basis).toBe("fallback_dispatcher");
+    expect(fallback.json().to).toBe("role_architect");
     expect(fallback.json().to).not.toBe(aliceId);
   });
 

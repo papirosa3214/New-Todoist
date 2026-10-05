@@ -198,9 +198,25 @@ export function migrate() {
   if (!userCols.some((c) => c.name === "reviewer")) {
     db.exec("ALTER TABLE users ADD COLUMN reviewer INTEGER NOT NULL DEFAULT 0");
   }
+  // users.archived — миграция 040 в migrations.ts; для свежей тестовой
+  // базы (которая бежит только этот migrate() без массива миграций) —
+  // добавляем аддитивно, чтобы UPDATE ниже мог фильтровать по archived.
+  if (!userCols.some((c) => c.name === "archived")) {
+    db.exec(
+      "ALTER TABLE users ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+    );
+  }
   // Unconditional (idempotent) so u2/u3 get flagged even on a DB that
   // already had this column from an earlier partial migration.
-  db.exec("UPDATE users SET is_system_bot = 1 WHERE id IN ('u2','u3')");
+  //
+  // archived=0 здесь обязателен: миграция 040 пометила u2/u3 как
+  // archived=1, и без фильтра UPDATE воскрешал бы флаг на архивных
+  // учётках. Если код потом смотрит только на is_system_bot (а есть
+  // места, где так и делают), он увидит заархивированных ботов как живых
+  // (аудит 2026-10-05, п. 1.7).
+  db.exec(
+    "UPDATE users SET is_system_bot = 1 WHERE id IN ('u2','u3') AND archived = 0",
+  );
 
   // Ключи агентов хранятся ОТПЕЧАТКОМ, а не открытым текстом (15.08.2026).
   //

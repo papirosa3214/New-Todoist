@@ -3,8 +3,14 @@
 // переходы статусов. Эндпоинт enqueue вызывается из chat.ts после INSERT
 // в chat_messages (если у сообщения есть task_id и адресат != null).
 //
-// Маршрутизация: явный адресат пользователя имеет приоритет, иначе fallback
-// в Оркестратора (routing_rules.team_catalog.json).
+// Маршрутизация (аудит 2026-10-05, п. 1.4/2.2): явный адресат пользователя
+// имеет приоритет; иначе fallback в диспетчера — учётку роли architect
+// (`roleUserId("architect")` из roleRouting.ts). Раньше тот же fallback
+// искал в team_catalog.json профиль с title «оркестратор/диспетчер» через
+// подстроку — это обходило 8-ролевую матрицу, и при добавлении нового
+// профиля диспетчера маршрутизация тихо менялась. Теперь единственный
+// источник истины для fallback'а — `role-routing.yaml` (через roleUserId):
+// новые роли попадают сюда сами.
 //
 // Устаревшие события (версия карточки уехала вперёд) отбрасываются прямо
 // в mark: любой переход сначала сверяет task_version с актуальной, и
@@ -18,53 +24,21 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForWrite } from "../access.js";
 import { registryRecord } from "../agentState.js";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { roleUserId, roleTitle } from "../roleRouting.js";
 
 const uid = () => crypto.randomUUID();
 
-type Verdict = "approved" | "changes_requested" | "blocked";
-const TEAM_CATALOG_PATH = join(import.meta.dirname, "..", "..", "scripts", "team_catalog.json");
-
-interface TeamCatalog {
-  profiles: Record<string, { id: string; auto_route?: boolean; title: string }>;
-  routing_rules: { explicit_addressee_wins: boolean; fallback_to_orchestrator: boolean };
+/** Запасной адресат для поручения без явного получателя: учётка роли
+ *  architect (та, что живёт в role-routing.yaml как «architect»). Это и
+ *  есть диспетчер L4 — единая точка fallback'а, без перебора по
+ *  team_catalog.json и подстроки title. */
+function fallbackDispatcherId(): string {
+  return roleUserId("architect");
 }
-
-function loadCatalog(): TeamCatalog {
-  try {
-    return JSON.parse(readFileSync(TEAM_CATALOG_PATH, "utf-8")) as TeamCatalog;
-  } catch {
-    return { profiles: {}, routing_rules: { explicit_addressee_wins: true, fallback_to_orchestrator: true } };
-  }
-}
-
-export function routeAddressee(
-  explicitTo: string | null,
-  fromUserId: string,
-  catalog: TeamCatalog,
-): string {
-  // Явный адресат — приоритет.
-  if (explicitTo && explicitTo !== fromUserId) {
-    return explicitTo;
-  }
-  // Иначе fallback в Оркестратора/диспетчера (в каталоге профиль назван
-  // «Технический диспетчер», а не «Оркестратор» — ловим оба).
-  const orch = Object.entries(catalog.profiles).find(([, p]) => {
-    const t = p.title.toLowerCase();
-    return t.includes("оркестратор") || t.includes("диспетчер");
-  });
-  if (orch) return orch[1].id;
-  return fromUserId;
-}
-
-export { loadCatalog };
 
 export async function registerAgentInboxRoutes(app: FastifyInstance): Promise<void> {
-  const catalog = loadCatalog();
-
   // POST /api/agent-inbox/enqueue — записать поручение. Вызывается из
-  // chat.ts после INSERT в chat_messages (когда у сообщения task_id и
+  // chat.ts после INSERT в chat_messages (когда у сообщения есть task_id и
   // адресат != null). UNIQUE на chat_message_id обеспечивает дедупликацию.
   app.post<{ Body: {
     chat_message_id: string;
@@ -82,8 +56,17 @@ export async function registerAgentInboxRoutes(app: FastifyInstance): Promise<vo
 
     const fromUser = req.userId;
     const explicitTo = body.to_user_id || null;
-    const routed = routeAddressee(explicitTo, fromUser, catalog);
-    const to = routed;
+    // Явный адресат приоритетен; иначе — fallback в учётку роли architect
+    // (диспетчер L4). Если fromUser сам себе диспетчер, событие остаётся у
+    // отправителя: отдать поручение «самому себе» бессмысленно и запись в
+    // inbox его не будит.
+    const dispatcher = fallbackDispatcherId();
+    const to = explicitTo && explicitTo !== fromUser
+      ? explicitTo
+      : (fromUser === dispatcher ? fromUser : dispatcher);
+    const basis = explicitTo && explicitTo !== fromUser
+      ? "explicit_addressee"
+      : (to === fromUser ? "self" : "fallback_dispatcher");
 
     const inbox_id = uid();
     const eventType = body.event_type ?? "chat";
@@ -114,16 +97,12 @@ export async function registerAgentInboxRoutes(app: FastifyInstance): Promise<vo
       data: { inbox_id, chat_message_id: body.chat_message_id, task_id: body.task_id, kind, event_type: eventType },
       result: "inbox_sent",
     });
-    const chosen = routed === fromUser
-      ? { id: routed, title: "self (fallback)" }
-      : Object.entries(catalog.profiles).find(([, p]) => p.id === routed)?.[1]
-        ?? { id: routed, title: routed };
-    const basis = explicitTo && explicitTo !== fromUser
-      ? "explicit_addressee"
-      : (routed === fromUser ? "self" : "fallback_orchestrator");
+    const routedTitle = to === fromUser
+      ? "self (fallback)"
+      : roleTitle("architect");
     return reply.code(201).send({
       inbox_id, to, event_type: eventType, kind,
-      routed_to: { id: chosen.id, title: chosen.title },
+      routed_to: { id: to, title: routedTitle },
       basis,
     });
   });
