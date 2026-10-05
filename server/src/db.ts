@@ -32,6 +32,22 @@ const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
+/**
+ * Базовая миграция схемы: `CREATE TABLE IF NOT EXISTS` для таблиц и
+ * идемпотентные `ALTER TABLE` для колонок, которые могут отсутствовать на
+ * старых БД (созданных до того, как колонка появилась в `CREATE TABLE`).
+ * Каждый такой блок опирается на `PRAGMA table_info(...)` перед `ALTER`,
+ * чтобы на БД, где колонка уже есть, он был no-op (иначе упадём на
+ * «duplicate column»).
+ *
+ * Граница с `migrations.ts` (правило одно — там, см. его файл-шапку):
+ *  — здесь держим ТОЛЬКО базовую схему и идемпотентные довески колонок.
+ *  — любое изменение, которое должно фиксироваться в `schema_migrations`
+ *    (новые таблицы, необратимые ALTER, пересборка, заполнение данными,
+ *    триггеры и т.п.) — только через versioned migration в migrations.ts.
+ *  — если не уверен — добавь миграцию, а не блок сюда: двойной учёт схемы
+ *    уже привёл к аудиту (MAK-60) и лишней работе ревьюера.
+ */
 export function migrate() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -199,8 +215,14 @@ export function migrate() {
     db.exec("ALTER TABLE users ADD COLUMN reviewer INTEGER NOT NULL DEFAULT 0");
   }
   // Unconditional (idempotent) so u2/u3 get flagged even on a DB that
-  // already had this column from an earlier partial migration.
-  db.exec("UPDATE users SET is_system_bot = 1 WHERE id IN ('u2','u3')");
+  // already had this column from an earlier partial migration. `AND
+  // archived = 0` — на случай, если кто-то в архиве проставил флаг
+  // отдельно: флаг должен означать «активный системный бот», архивный
+  // аккаунт под это определение не подходит (MAK-60, аудит п. 1.7/3.4).
+  // UPDATE на archived=1 строках no-op, поведение не меняется.
+  db.exec(
+    "UPDATE users SET is_system_bot = 1 WHERE id IN ('u2','u3') AND archived = 0",
+  );
 
   // Ключи агентов хранятся ОТПЕЧАТКОМ, а не открытым текстом (15.08.2026).
   //
