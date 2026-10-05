@@ -225,7 +225,8 @@ const INTERRUPTS_BEFORE_BLOCK = 2;
 const INTERRUPT_WINDOW = "-30 minutes";
 
 /**
- * Брошенные после перезапуска сервера узлы плана (владелец 01.10.2026, T05).
+ * Брошенные после перезапуска сервера узлы плана (владелец 01.10.2026, T05;
+ * доработка 05.10.2026, MAK-66 critic rework — todo/blocked).
  *
  * Ход роли живёт только внутри процесса сервера, поэтому при старте любой
  * узел плана «в работе» — заведомо брошенный: его ход умер вместе с прошлым
@@ -234,60 +235,93 @@ const INTERRUPT_WINDOW = "-30 minutes";
  * `interrupted`, роль пишет в ленту, что её ход оборвался, и продолжает
  * тот же разговор (сессия узла сохранена на диске). Второй обрыв за
  * полчаса — узел `blocked` и сообщение владельцу, без повторов по кругу.
+ *
+ * Помимо `in_progress`, пересматриваем и узлы `todo`/`blocked`: после
+ * рестарта у них тоже нет живой аренды, поэтому сбрасываем `agent_state`
+ * в NULL и сообщаем в ленту, что узел снова свободен. Авто-старта не
+ * делаем — `todo` сам подхватит worker, когда дойдёт очередь; `blocked`
+ * владелец должен разморозить сам.
  */
-export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: number; blocked: number }> {
+export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: number; blocked: number; freed: number }> {
   const rows = db.prepare(
-    "SELECT * FROM subtasks WHERE collaboration_plan_id IS NOT NULL AND done = 0 AND agent_state = 'in_progress'",
+    "SELECT * FROM subtasks WHERE collaboration_plan_id IS NOT NULL AND done = 0 AND agent_state IN ('in_progress','todo','blocked')",
   ).all() as PlanSubtask[];
   let resumed = 0;
   let blocked = 0;
+  let freed = 0;
   for (const row of rows) {
     const node = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
       .get(row.collaboration_plan_id, row.plan_node_key) as { role_key: string } | undefined;
+    if (!node) {
+      // Узел без живой роли в плане — на рестарте снимаем признак аренды,
+      // чтобы он снова попал в общую очередь.
+      if (row.current_attempt_id) {
+        db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = 'перезапуск сервера' WHERE id = ? AND ended_at IS NULL")
+          .run(row.current_attempt_id);
+      }
+      db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
+      freed += 1;
+      continue;
+    }
+    if (row.agent_state === "in_progress") {
+      if (row.current_attempt_id) {
+        db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = 'перезапуск сервера' WHERE id = ? AND ended_at IS NULL")
+          .run(row.current_attempt_id);
+      }
+      // Техснимок обрыва (владелец 04.10.2026). Модель сюда не успевает ответить
+      // — её ход умер вместе с процессом, — поэтому пишем то, что сервер знает
+      // точно: последнее действие по слоту, состояние и ссылки на артефакты.
+      // Пометка «неполный» обязательна: следующий вызов роли должен понимать,
+      // что это техфакты, а не её собственный отчёт.
+      technicalSlotSnapshot(row.id, "stopped", {
+        blocker: "ход оборвался перезапуском сервера",
+        attemptId: row.current_attempt_id,
+      });
+      db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
+      logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_interrupted", field: row.plan_node_key, toValue: roleTitle(node.role_key) });
+      const { n: interrupts } = db.prepare(
+        `SELECT COUNT(*) AS n FROM attempts
+          WHERE subtask_id = ? AND outcome = 'interrupted' AND ended_at >= datetime('now', '${INTERRUPT_WINDOW}')`,
+      ).get(row.id) as { n: number };
+      if (interrupts >= INTERRUPTS_BEFORE_BLOCK) {
+        db.prepare("UPDATE subtasks SET agent_state = 'blocked', agent_id = ? WHERE id = ?").run(roleUserId(node.role_key), row.id);
+        blocked += 1;
+        roleNote(
+          row.task_id,
+          node.role_key,
+          `«${row.title}»: ход снова оборвался перезапуском сервера — второй раз за полчаса. Сам больше не продолжаю, нужен ваш взгляд.`,
+        );
+        continue;
+      }
+      roleNote(
+        row.task_id,
+        node.role_key,
+        `«${row.title}»: мой ход оборвался — сервер перезапустился. Продолжаю с того же места.`,
+      );
+      const started = await startPlanSubtaskRun(row.id, roleUserId(node.role_key));
+      if (started.ok) {
+        resumed += 1;
+      } else {
+        logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_autostart_failed", field: row.plan_node_key, toValue: started.error });
+      }
+      continue;
+    }
+    // todo / blocked: аренды нет, узел снова свободен — сбрасываем без
+    // авто-старта. worker подхватит `todo` когда дойдёт очередь; `blocked`
+    // размораживает владелец или оркестратор через state=in_progress.
     if (row.current_attempt_id) {
       db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = 'перезапуск сервера' WHERE id = ? AND ended_at IS NULL")
         .run(row.current_attempt_id);
     }
-    // Техснимок обрыва (владелец 04.10.2026). Модель сюда не успевает ответить
-    // — её ход умер вместе с процессом, — поэтому пишем то, что сервер знает
-    // точно: последнее действие по слоту, состояние и ссылки на артефакты.
-    // Пометка «неполный» обязательна: следующий вызов роли должен понимать,
-    // что это техфакты, а не её собственный отчёт.
-    technicalSlotSnapshot(row.id, "stopped", {
-      blocker: "ход оборвался перезапуском сервера",
-      attemptId: row.current_attempt_id,
-    });
     db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
-    logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_interrupted", field: row.plan_node_key, toValue: node ? roleTitle(node.role_key) : null });
-    if (!node) continue;
-
-    const { n: interrupts } = db.prepare(
-      `SELECT COUNT(*) AS n FROM attempts
-        WHERE subtask_id = ? AND outcome = 'interrupted' AND ended_at >= datetime('now', '${INTERRUPT_WINDOW}')`,
-    ).get(row.id) as { n: number };
-    if (interrupts >= INTERRUPTS_BEFORE_BLOCK) {
-      db.prepare("UPDATE subtasks SET agent_state = 'blocked', agent_id = ? WHERE id = ?").run(roleUserId(node.role_key), row.id);
-      blocked += 1;
-      roleNote(
-        row.task_id,
-        node.role_key,
-        `«${row.title}»: ход снова оборвался перезапуском сервера — второй раз за полчаса. Сам больше не продолжаю, нужен ваш взгляд.`,
-      );
-      continue;
-    }
+    freed += 1;
     roleNote(
       row.task_id,
       node.role_key,
-      `«${row.title}»: мой ход оборвался — сервер перезапустился. Продолжаю с того же места.`,
+      `«${row.title}»: после рестарта сервера снят признак «${row.agent_state}» — узел снова свободен.`,
     );
-    const started = await startPlanSubtaskRun(row.id, roleUserId(node.role_key));
-    if (started.ok) {
-      resumed += 1;
-    } else {
-      logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_autostart_failed", field: row.plan_node_key, toValue: started.error });
-    }
   }
-  return { resumed, blocked };
+  return { resumed, blocked, freed };
 }
 
 /**
