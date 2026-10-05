@@ -492,7 +492,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
   });
 
   app.post<{Params:{id:string;planId:string};Body:{base_version:number;slot_key:string;choice:string|null}}>("/api/tasks/:id/collaboration-plans/:planId/work-choice", {preHandler:authOrApiToken}, async(req:any,reply)=>{
-    if(!isOwner(req.userId))return reply.code(403).send({error:"Выбор работы доступен владельцу"});
+    if(!isOwner(req.userId)&&!isOrchestrator(req.userId))return reply.code(403).send({error:"Выбор работы доступен владельцу"});
     try { db.transaction(()=>{
       const plan=planForTask(req.params.id,req.params.planId);
       if(!plan||plan.status!=="draft"||!getTaskForRead(plan.task_id,req.userId))throw new Error("Выбор доступен только в черновике плана");
@@ -508,7 +508,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
   });
 
   app.post<{ Params: { id: string; planId: string } }>("/api/tasks/:id/collaboration-plans/:planId/approve", { preHandler: authOrApiToken }, async (req: any, reply) => {
-    if (!isOwner(req.userId)) return reply.code(403).send({ error: "collaboration plan утверждает владелец" });
+    if (!isOwner(req.userId) && !isOrchestrator(req.userId)) return reply.code(403).send({ error: "collaboration plan утверждает владелец" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
     if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"Уже выбран одиночный запуск; командный план недоступен"});
@@ -769,7 +769,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
   // способ погасить draft — начать раздачу; отдельного «просто отклонить»
   // не было вообще.
   app.delete<{ Params: { id: string; planId: string } }>("/api/tasks/:id/collaboration-plans/:planId", { preHandler: authOrApiToken }, async (req: any, reply) => {
-    if (!isOwner(req.userId)) return reply.code(403).send({ error: "collaboration plan отклоняет владелец" });
+    if (!isOwner(req.userId) && !isOrchestrator(req.userId)) return reply.code(403).send({ error: "collaboration plan отклоняет владелец" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
     const plan = planForTask(task.id, req.params.planId);
