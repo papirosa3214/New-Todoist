@@ -45,7 +45,7 @@ export function PlannerProjectChips({
             удалить «входящие» нельзя. */}
         <span
           aria-label="Входящие"
-          className="shrink-0 px-3 py-1 rounded-full text-[12px] font-medium bg-card2 text-text border border-stroke"
+ className="tf-meta shrink-0 px-3 py-1 rounded-full font-medium bg-card2 text-text border border-stroke"
         >
           Входящие
         </span>
@@ -60,7 +60,7 @@ export function PlannerProjectChips({
             aria-label={`Проект ${p.name}`}
             // Тот же приём с фоном 15% alpha, что у меток в
             // TaskFields.tsx (max-w + truncate — в полоске места мало).
-            className="shrink-0 flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium max-w-[160px] truncate"
+ className="tf-meta shrink-0 flex items-center gap-1.5 px-3 py-1 rounded-full font-medium max-w-[160px] truncate"
             style={{
               backgroundColor: (p.color || "#999") + "26",
               color: p.color || "#999",
@@ -74,7 +74,7 @@ export function PlannerProjectChips({
           type="button"
           onClick={onAdd}
           aria-label="Добавить проект"
-          className="shrink-0 px-3 py-1 rounded-full text-[12px] font-medium border border-dashed border-stroke text-sub hover:text-text"
+ className="tf-meta shrink-0 px-3 py-1 rounded-full font-medium border border-dashed border-stroke text-sub hover:text-text"
         >
           <Icon name="plus" size={12} className="inline-block mr-1 -mt-0.5" />
           проект

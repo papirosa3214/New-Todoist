@@ -86,11 +86,11 @@ export function LoginScreen() {
         <div className="w-[72px] h-[72px] bg-red rounded-full flex items-center justify-center mb-3 shadow-md">
           <Icon name="check" size={36} className="text-white" />
         </div>
-        <div className="text-[28px] font-bold mb-6">TaskFlow</div>
+ <div className="tf-title-large font-bold mb-6">TaskFlow</div>
 
         {/* Welcome */}
-        <h2 className="text-[20px] font-semibold mb-1">Добро пожаловать!</h2>
-        <p className="text-[14px] text-sub mb-6">Войдите в свой аккаунт</p>
+ <h2 className="tf-task-title font-semibold mb-1">Добро пожаловать!</h2>
+ <p className="tf-row text-sub mb-6">Войдите в свой аккаунт</p>
 
         {/* Быстрый вход по Face ID (если доступен) */}
         {bioInfo.available && (
@@ -99,7 +99,7 @@ export function LoginScreen() {
               type="button"
               onClick={handleBiometricLogin}
               disabled={isBioAuthenticating}
-              className="w-full py-3.5 px-4 bg-card border border-stroke/60 hover:border-coral/50 rounded-2xl flex items-center justify-center gap-3 text-text font-semibold text-[15px] shadow-xs active:scale-[0.98] transition-all"
+ className="tf-body w-full py-3.5 px-4 bg-card border border-stroke/60 hover:border-coral/50 rounded-2xl flex items-center justify-center gap-3 text-text font-semibold shadow-xs active:scale-[0.98] transition-all"
             >
               <div className="w-7 h-7 rounded-xl bg-coral/10 text-coral flex items-center justify-center">
                 {isFaceId ? (

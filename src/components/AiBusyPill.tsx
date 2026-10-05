@@ -50,7 +50,7 @@ export function AiBusyPill({
           className="text-red shrink-0 animate-spin"
           style={{ animationDuration: "1.8s" }}
         />
-        <span className="text-[13px] font-medium text-text whitespace-nowrap">
+ <span className="tf-action font-medium text-text whitespace-nowrap">
           {label}
         </span>
       </div>

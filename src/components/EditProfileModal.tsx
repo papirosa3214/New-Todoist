@@ -98,13 +98,13 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
         {/* Form */}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           {error && (
-            <div className="text-[13px] text-coral bg-coral/10 border border-coral/20 px-3.5 py-2 rounded-xl">
+ <div className="tf-action text-coral bg-coral/10 border border-coral/20 px-3.5 py-2 rounded-xl">
               {error}
             </div>
           )}
 
           {success && (
-            <div className="text-[13px] text-green bg-green/10 border border-green/20 px-3.5 py-2 rounded-xl flex items-center gap-2">
+ <div className="tf-action text-green bg-green/10 border border-green/20 px-3.5 py-2 rounded-xl flex items-center gap-2">
               <Check className="w-4 h-4" />
               Данные успешно сохранены!
             </div>
@@ -122,7 +122,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Ваше имя"
-                className="w-full bg-card border border-stroke rounded-2xl py-3 pl-10 pr-4 text-[15px] text-text placeholder-sub focus:outline-none focus:border-red focus-visible:ring-2 focus-visible:ring-red/30 transition-[border-color,box-shadow] duration-150"
+ className="tf-body w-full bg-card border border-stroke rounded-2xl py-3 pl-10 pr-4 text-text placeholder-sub focus:outline-none focus:border-red focus-visible:ring-2 focus-visible:ring-red/30 transition-[border-color,box-shadow] duration-150"
                 required
               />
             </div>
@@ -140,7 +140,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="example@mail.com"
-                className="w-full bg-card border border-stroke rounded-2xl py-3 pl-10 pr-4 text-[15px] text-text placeholder-sub focus:outline-none focus:border-red focus-visible:ring-2 focus-visible:ring-red/30 transition-[border-color,box-shadow] duration-150"
+ className="tf-body w-full bg-card border border-stroke rounded-2xl py-3 pl-10 pr-4 text-text placeholder-sub focus:outline-none focus:border-red focus-visible:ring-2 focus-visible:ring-red/30 transition-[border-color,box-shadow] duration-150"
                 required
               />
             </div>
@@ -148,7 +148,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
 
           {/* Password Change Divider */}
           <div className="pt-2 border-t border-stroke">
-            <span className="text-[13px] font-semibold text-sub block mb-3">
+ <span className="tf-action font-semibold text-sub block mb-3">
               Смена пароля{" "}
               <span className="text-xs text-dim font-normal">
                 (оставьте пустым, если не меняете)
@@ -167,7 +167,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
                     placeholder="Введите текущий пароль"
-                    className="w-full bg-card border border-stroke rounded-2xl py-2.5 pl-10 pr-4 text-[14px] text-text placeholder-sub focus:outline-none focus:border-red focus-visible:ring-2 focus-visible:ring-red/30 transition-[border-color,box-shadow] duration-150"
+ className="tf-row w-full bg-card border border-stroke rounded-2xl py-2.5 pl-10 pr-4 text-text placeholder-sub focus:outline-none focus:border-red focus-visible:ring-2 focus-visible:ring-red/30 transition-[border-color,box-shadow] duration-150"
                   />
                 </div>
               </div>
@@ -183,7 +183,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Минимум 4 символов"
-                    className="w-full bg-card border border-stroke rounded-2xl py-2.5 pl-10 pr-4 text-[14px] text-text placeholder-sub focus:outline-none focus:border-red focus-visible:ring-2 focus-visible:ring-red/30 transition-[border-color,box-shadow] duration-150"
+ className="tf-row w-full bg-card border border-stroke rounded-2xl py-2.5 pl-10 pr-4 text-text placeholder-sub focus:outline-none focus:border-red focus-visible:ring-2 focus-visible:ring-red/30 transition-[border-color,box-shadow] duration-150"
                   />
                 </div>
               </div>
@@ -191,7 +191,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
           </div>
 
           {/* Info notice */}
-          <div className="text-[12px] text-dim bg-card2/60 border border-stroke p-3 rounded-xl leading-relaxed mt-1">
+ <div className="tf-meta text-dim bg-card2/60 border border-stroke p-3 rounded-xl leading-relaxed mt-1">
             💡 Все ваши задачи, проекты, метки, интеграции и история диалогов с
             AI моделями сохраняются в полном объёме при изменении логина и
             пароля.
@@ -202,14 +202,14 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-3 rounded-2xl bg-card2 hover:bg-card2/80 text-text font-medium text-[14px] transition-[background-color] duration-150"
+ className="tf-row flex-1 py-3 rounded-2xl bg-card2 hover:bg-card2/80 text-text font-medium transition-[background-color] duration-150"
             >
               Отмена
             </button>
             <button
               type="submit"
               disabled={updateProfile.isPending}
-              className="flex-1 py-3 rounded-2xl bg-red-solid hover:bg-red text-text font-semibold text-[14px] shadow-lg shadow-red/30 active:scale-[0.98] transition-transform duration-150 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-red/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+ className="tf-row flex-1 py-3 rounded-2xl bg-red-solid hover:bg-red text-text font-semibold shadow-lg shadow-red/30 active:scale-[0.98] transition-transform duration-150 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-red/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
             >
               {updateProfile.isPending ? "Сохранение..." : "Сохранить"}
             </button>

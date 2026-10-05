@@ -330,7 +330,7 @@ export function TodayScreen() {
         headerAction: (
           <button
             onClick={() => setRescheduleOpen(true)}
-            className="tap-fade shrink-0 min-h-11 px-2.5 flex items-center justify-center rounded-lg text-[12px] font-semibold text-red"
+ className="tf-meta tap-fade shrink-0 min-h-11 px-2.5 flex items-center justify-center rounded-lg font-semibold text-red"
           >
             Перенести
           </button>
@@ -348,7 +348,7 @@ export function TodayScreen() {
            с фоном карточек задач, и кнопка сливалась со списком. */
         <button
           onClick={() => navigate("/task/new")}
-          className="tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 text-[13px] font-semibold text-red"
+ className="tf-action tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 font-semibold text-red"
         >
           <Icon name="plus" size={16} />
           Добавить задачу
@@ -539,10 +539,10 @@ export function TodayScreen() {
               strokeWidth="1.5"
             />
           </svg>
-          <h3 className="text-[17px] font-semibold mb-2">
+ <h3 className="tf-title font-semibold mb-2">
             Чёткое видение грядущего дня
           </h3>
-          <p className="text-[14px] text-sub text-center px-8 leading-relaxed">
+ <p className="tf-row text-sub text-center px-8 leading-relaxed">
             Задачи на сегодня появятся здесь, когда вы назначите дедлайн.
           </p>
         </div>
@@ -565,7 +565,7 @@ export function TodayScreen() {
         className="mt-2"
       />
       {filteredEmpty && (
-        <div className="px-1 pt-2 flex items-center gap-2 flex-wrap text-[13px] text-dim">
+ <div className="tf-action px-1 pt-2 flex items-center gap-2 flex-wrap text-dim">
           Под выбранные фильтры ничего не подошло
           <button
             onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
@@ -635,7 +635,7 @@ export function TodayScreen() {
                ближайшая крупнее body; промежуточных в шкале нет. */
             <div className="flex items-center gap-1.5 px-1 pt-3 pb-1.5">
               <Icon name="bot" size={16} className="text-text" />
-              <span className="text-[17px] font-semibold text-text">
+ <span className="tf-title font-semibold text-text">
                 Ждут вас
               </span>
             </div>
@@ -655,7 +655,7 @@ export function TodayScreen() {
           ))}
           {overdueTasks.length > 0 && (
             <div className="flex items-center gap-1.5 px-1 pt-3 pb-1.5">
-              <span className="text-[17px] font-semibold text-red">
+ <span className="tf-title font-semibold text-red">
                 Просрочено
               </span>
             </div>
@@ -682,7 +682,7 @@ export function TodayScreen() {
               не читалось на фоне «Ждут вас» так же ясно, как дата в доске. */}
           {todayTasks.length > 0 &&
             (overdueTasks.length > 0 || waitingTasks.length > 0) && (
-              <div className="text-[17px] font-semibold text-sub px-1 pt-3 pb-1.5">
+ <div className="tf-title font-semibold text-sub px-1 pt-3 pb-1.5">
                 {formatDueLabel(today)}
               </div>
             )}

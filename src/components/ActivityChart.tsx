@@ -405,7 +405,7 @@ export function ActivityChart({
                 setSelectedPointIdx(null);
                 setSingleDayDate(null);
               }}
-              className="tap-scale px-2 py-1 -ml-1 rounded-lg bg-card2 hover:bg-card2/80 text-sub hover:text-text flex items-center gap-1 text-[12px] font-medium border border-stroke/40"
+ className="tf-meta tap-scale px-2 py-1 -ml-1 rounded-lg bg-card2 hover:bg-card2/80 text-sub hover:text-text flex items-center gap-1 font-medium border border-stroke/40"
             >
               <Icon name="chevron-left" size={14} />
               {drillDownScope.parentPeriodLabel}
@@ -417,10 +417,10 @@ export function ActivityChart({
           )}
 
           <div>
-            <h2 className="text-[15px] font-semibold text-text leading-tight">
+ <h2 className="tf-body font-semibold text-text leading-tight">
               {headerTitle}
             </h2>
-            <div className="text-[11px] text-sub">{periodSubtitle}</div>
+ <div className="tf-caption text-sub">{periodSubtitle}</div>
           </div>
         </div>
 
@@ -429,7 +429,7 @@ export function ActivityChart({
           <button
             type="button"
             onClick={() => setChartType("line")}
-            className={`tap-scale px-3 py-1 rounded-lg text-[12px] font-medium transition-all ${
+ className={`tf-meta tap-scale px-3 py-1 rounded-lg font-medium transition-all ${
               chartType === "line"
                 ? "bg-card text-text shadow-sm"
                 : "text-dim hover:text-sub"
@@ -440,7 +440,7 @@ export function ActivityChart({
           <button
             type="button"
             onClick={() => setChartType("donut")}
-            className={`tap-scale px-3 py-1 rounded-lg text-[12px] font-medium transition-all ${
+ className={`tf-meta tap-scale px-3 py-1 rounded-lg font-medium transition-all ${
               chartType === "donut"
                 ? "bg-card text-text shadow-sm"
                 : "text-dim hover:text-sub"
@@ -531,7 +531,7 @@ export function ActivityChart({
 
           {/* 1. Weekday labels — Неделя (или drill-down неделя) */}
           {(period === "week" || drillDownScope?.type === "week") && (
-            <div className="flex justify-between px-1 text-[10px] text-dim font-semibold">
+ <div className="tf-micro flex justify-between px-1 text-dim font-semibold">
               {chartPoints.map((st, i) => (
                 <button
                   key={st.key}
@@ -549,7 +549,7 @@ export function ActivityChart({
 
           {/* 2. Month Timeline — Месяц (1..сегодня или drill-down месяц) */}
           {((period === "month" && !drillDownScope) || drillDownScope?.type === "month") && (
-            <div className="flex items-center justify-between px-2 pt-1 text-[11px] text-dim font-medium">
+ <div className="tf-caption flex items-center justify-between px-2 pt-1 text-dim font-medium">
               <span className="text-dim/80">{chartPoints[0]?.shortLabel}</span>
               <span className="text-text font-semibold px-2 py-0.5 bg-card2/80 rounded-md border border-stroke/30">
                 {drillDownScope ? drillDownScope.title : MONTHS_NAMES_RU[now.getMonth()]}
@@ -560,7 +560,7 @@ export function ActivityChart({
 
           {/* 3. Quarter Timeline — 3 месяца (12 недель) */}
           {period === "quarter" && !drillDownScope && (
-            <div className="flex items-center justify-between px-2 pt-1 text-[11px] text-dim font-medium">
+ <div className="tf-caption flex items-center justify-between px-2 pt-1 text-dim font-medium">
               <span>{MONTHS_NAMES_RU[(now.getMonth() - 2 + 12) % 12]}</span>
               <span>{MONTHS_NAMES_RU[(now.getMonth() - 1 + 12) % 12]}</span>
               <span className="text-text font-semibold">{MONTHS_NAMES_RU[now.getMonth()]}</span>
@@ -569,7 +569,7 @@ export function ActivityChart({
 
           {/* 4. Year Timeline — Год (12 месяцев) */}
           {period === "year" && !drillDownScope && (
-            <div className="flex justify-between px-1 pt-1 text-[10px] text-dim font-medium">
+ <div className="tf-micro flex justify-between px-1 pt-1 text-dim font-medium">
               {chartPoints.map((st, i) => (
                 <button
                   key={st.key}
@@ -584,7 +584,7 @@ export function ActivityChart({
           )}
 
           {/* Bottom helper & Drill-down hint */}
-          <div className="mt-3 pt-2.5 border-t border-stroke/40 flex items-center justify-between text-[12px]">
+ <div className="tf-meta mt-3 pt-2.5 border-t border-stroke/40 flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLOR_GREEN }} />
               <span className="text-sub">
@@ -615,7 +615,7 @@ export function ActivityChart({
         <div className="flex flex-col gap-3 py-1">
           {/* Day selection badge if drilled-down */}
           {donutData.isSingleDay && (
-            <div className="flex items-center justify-between bg-card2/80 px-3 py-1.5 rounded-xl border border-stroke/40 text-[12px]">
+ <div className="tf-meta flex items-center justify-between bg-card2/80 px-3 py-1.5 rounded-xl border border-stroke/40">
               <span className="text-text font-semibold flex items-center gap-1.5">
                 <Icon name="calendar" size={13} className="text-red" />
                 {donutData.title}
@@ -626,7 +626,7 @@ export function ActivityChart({
                   setSingleDayDate(null);
                   setSelectedPointIdx(null);
                 }}
-                className="text-dim hover:text-text font-medium text-[11px] underline"
+ className="tf-caption text-dim hover:text-text font-medium underline"
               >
                 Показать за весь период
               </button>
@@ -697,10 +697,10 @@ export function ActivityChart({
 
               {/* В центре кружочка: общее число задач */}
               <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                <span className="text-[20px] font-bold text-text leading-none">
+ <span className="tf-task-title font-bold text-text leading-none">
                   {donutData.total}
                 </span>
-                <span className="text-[9px] text-dim font-medium mt-1">
+ <span className=" text-dim font-medium mt-1">
                   всего задач
                 </span>
               </div>
@@ -709,35 +709,35 @@ export function ActivityChart({
             {/* Metrics Breakdown Grid */}
             <div className="flex-1 grid grid-cols-2 gap-2">
               <div className="bg-card2/50 rounded-xl p-2.5 border border-stroke/30">
-                <div className="flex items-center gap-1.5 text-green text-[11px] font-medium mb-0.5">
+ <div className="tf-caption flex items-center gap-1.5 text-green font-medium mb-0.5">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLOR_GREEN }} />
                   Выполнено
                 </div>
-                <div className="text-[16px] font-bold text-text">
+ <div className="tf-input font-bold text-text">
                   {donutData.completed}{" "}
-                  <span className="text-[11px] font-normal text-dim">({donutData.completedPct}%)</span>
+ <span className="tf-caption font-normal text-dim">({donutData.completedPct}%)</span>
                 </div>
               </div>
 
               <div className="bg-card2/50 rounded-xl p-2.5 border border-stroke/30">
-                <div className="flex items-center gap-1.5 text-blue text-[11px] font-medium mb-0.5">
+ <div className="tf-caption flex items-center gap-1.5 text-blue font-medium mb-0.5">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLOR_BLUE }} />
                   В работе
                 </div>
-                <div className="text-[16px] font-bold text-text">
+ <div className="tf-input font-bold text-text">
                   {donutData.onTrack}{" "}
-                  <span className="text-[11px] font-normal text-dim">({donutData.onTrackPct}%)</span>
+ <span className="tf-caption font-normal text-dim">({donutData.onTrackPct}%)</span>
                 </div>
               </div>
 
               <div className="bg-card2/50 rounded-xl p-2.5 border border-stroke/30 col-span-2 flex items-center justify-between">
-                <div className="flex items-center gap-1.5 text-coral text-[11px] font-medium">
+ <div className="tf-caption flex items-center gap-1.5 text-coral font-medium">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLOR_CORAL }} />
                   Просрочено
                 </div>
-                <div className="text-[14px] font-bold text-coral">
+ <div className="tf-row font-bold text-coral">
                   {donutData.overdue}{" "}
-                  <span className="text-[11px] font-normal text-coral/80">({donutData.overduePct}%)</span>
+ <span className="tf-caption font-normal text-coral/80">({donutData.overduePct}%)</span>
                 </div>
               </div>
             </div>

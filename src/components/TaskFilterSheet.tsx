@@ -88,7 +88,7 @@ function FilterPicker({
             onClick={() => onSelect(null)}
             className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
           >
-            <span className="text-[14px] text-text flex-1">{allLabel}</span>
+ <span className="tf-row text-text flex-1">{allLabel}</span>
             {selectedId === null && (
               <Icon name="check" size={16} className="text-red" />
             )}
@@ -100,7 +100,7 @@ function FilterPicker({
               className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
             >
               <Icon name={optionIcon} size={16} style={{ color: opt.color }} />
-              <span className="text-[14px] text-text flex-1 truncate">
+ <span className="tf-row text-text flex-1 truncate">
                 {opt.label}
               </span>
               {selectedId === opt.id && (
@@ -109,7 +109,7 @@ function FilterPicker({
             </button>
           ))}
           {options.length === 0 && (
-            <div className="px-4 py-3 text-[13px] text-dim">{emptyText}</div>
+ <div className="tf-action px-4 py-3 text-dim">{emptyText}</div>
           )}
         </div>
       )}
@@ -252,11 +252,11 @@ export function TaskFilterSheet({
               (ScreenHeader variant="compact"): шторка это тот же уровень
               навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
               значит «поле ввода, защита от автозума iOS», см. index.css. */}
-          <h3 className="text-[17px] font-semibold text-text">Фильтры</h3>
+ <h3 className="tf-title font-semibold text-text">Фильтры</h3>
           <button
             onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
             disabled={!hasActive}
-            className="text-[13px] text-sub disabled:opacity-40 -mr-1 px-2 h-11"
+ className="tf-action text-sub disabled:opacity-40 -mr-1 px-2 h-11"
           >
             Сбросить
           </button>
@@ -318,7 +318,7 @@ export function TaskFilterSheet({
                   }}
                   className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
                 >
-                  <span className="text-[14px] text-text flex-1">
+ <span className="tf-row text-text flex-1">
                     Все исполнители
                   </span>
                   {filters.assigneeKey === null && (
@@ -340,7 +340,7 @@ export function TaskFilterSheet({
                       avatar_url={a.avatar_url}
                       size={24}
                     />
-                    <span className="text-[14px] text-text flex-1 truncate">
+ <span className="tf-row text-text flex-1 truncate">
                       {a.name}
                     </span>
                     {filters.assigneeKey === a.id && (
@@ -359,7 +359,7 @@ export function TaskFilterSheet({
                     <div className="w-[24px] h-[24px] rounded-full bg-card2 flex items-center justify-center shrink-0">
                       <Icon name="person" size={12} className="text-dim" />
                     </div>
-                    <span className="text-[14px] text-text flex-1">
+ <span className="tf-row text-text flex-1">
                       Без исполнителя
                     </span>
                     {filters.assigneeKey === "__none" && (
@@ -369,7 +369,7 @@ export function TaskFilterSheet({
                 )}
                 {assigneeOptions.list.length === 0 &&
                   !assigneeOptions.hasUnassigned && (
-                    <div className="px-4 py-3 text-[13px] text-dim">
+ <div className="tf-action px-4 py-3 text-dim">
                       Нет данных об исполнителях
                     </div>
                   )}
@@ -395,7 +395,7 @@ export function TaskFilterSheet({
               className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
             >
               <Icon name="check" size={18} className="text-sub shrink-0" />
-              <span className="text-[14px] text-text flex-1">
+ <span className="tf-row text-text flex-1">
                 Показывать выполненные
               </span>
               {/* Тот же переключатель, что в настройках: 43×25 с белым
@@ -446,7 +446,7 @@ export function TaskFilterSheet({
               />
               {openSection === "planner" && (
                 <div className="border-t border-stroke">
-                  <div className="px-4 pt-2.5 pb-1 text-[12px] text-dim">
+ <div className="tf-meta px-4 pt-2.5 pb-1 text-dim">
                     {plannerProjects.disabled
                       ? "В этот раздел попадают только задачи без проекта. Чтобы добавить проект — открой настройки раздела."
                       : "Выбери проекты, задачи которых показывать в этом разделе. По умолчанию раздел показывает только задачи без проекта."}
@@ -454,7 +454,7 @@ export function TaskFilterSheet({
                   {(() => {
                     if (plannerProjects.projects.length === 0) {
                       return (
-                        <div className="px-4 py-3 text-[13px] text-dim">
+ <div className="tf-action px-4 py-3 text-dim">
                           Нет проектов для добавления
                         </div>
                       );
@@ -464,7 +464,7 @@ export function TaskFilterSheet({
                     );
                     if (allAdded) {
                       return (
-                        <div className="px-4 py-3 text-[13px] text-dim">
+ <div className="tf-action px-4 py-3 text-dim">
                           Все проекты уже в разделе
                         </div>
                       );
@@ -501,7 +501,7 @@ export function TaskFilterSheet({
                           />
                           <span
                             className={
-                              "text-[14px] flex-1 truncate " +
+                              "tf-row flex-1 truncate " +
                               (isDisabled ? "text-sub" : "text-text")
                             }
                           >

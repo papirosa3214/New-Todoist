@@ -171,7 +171,7 @@ function AgentAvatarEditor({ agent }: { agent: ApiUser }) {
           type="button"
           onClick={() => fileRef.current?.click()}
           disabled={busy}
-          className="tap-fade py-1 px-2.5 rounded-lg bg-card2 border border-stroke text-[12px] text-text font-medium"
+ className="tf-meta tap-fade py-1 px-2.5 rounded-lg bg-card2 border border-stroke text-text font-medium"
         >
           Заменить фото
         </button>
@@ -181,12 +181,12 @@ function AgentAvatarEditor({ agent }: { agent: ApiUser }) {
             onClick={() => del.mutate()}
             disabled={busy}
             aria-label={`Убрать аватарку «${agent.name}»`}
-            className="tap-fade text-[12px] text-sub"
+ className="tf-meta tap-fade text-sub"
           >
             Убрать фото
           </button>
         )}
-        {error && <div className="text-[11px] text-coral">{error}</div>}
+ {error && <div className="tf-caption text-coral">{error}</div>}
       </div>
     </div>
   );
@@ -240,7 +240,7 @@ function AgentRow({
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Имя агента"
-          className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none mb-3"
+ className="tf-input w-full bg-card2 rounded-xl px-3 py-2.5 text-text placeholder:text-dim outline-none mb-3"
         />
         <ErrorBanner
           error={renameAgent.error}
@@ -252,7 +252,7 @@ function AgentRow({
           <button
             type="button"
             onClick={() => setEditingName(false)}
-            className="flex-1 h-11 rounded-xl bg-card2 text-[14px] text-sub font-semibold tap-row"
+ className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub font-semibold tap-row"
           >
             Отмена
           </button>
@@ -260,7 +260,7 @@ function AgentRow({
             type="button"
             onClick={handleSave}
             disabled={!name.trim() || renameAgent.isPending}
-            className="flex-1 h-11 rounded-xl bg-red text-[14px] text-white font-semibold disabled:opacity-50 tap-fade"
+ className="tf-row flex-1 h-11 rounded-xl bg-red text-white font-semibold disabled:opacity-50 tap-fade"
           >
             {renameAgent.isPending ? "Сохраняем…" : "Сохранить"}
           </button>
@@ -286,7 +286,7 @@ function AgentRow({
         style={{ width: ROW_ACTION_W, background: "#FF3B30" }}
       >
         <Icon name="trash" size={18} />
-        <span className="text-[11px] font-medium">Удалить</span>
+ <span className="tf-caption font-medium">Удалить</span>
       </button>
       {/* Изменить — справа, открывается свайпом влево */}
       <button
@@ -299,7 +299,7 @@ function AgentRow({
         style={{ width: ROW_ACTION_W, background: "#007AFF" }}
       >
         <Icon name="edit" size={18} />
-        <span className="text-[11px] font-medium">Изменить</span>
+ <span className="tf-caption font-medium">Изменить</span>
       </button>
 
       <div
@@ -313,18 +313,18 @@ function AgentRow({
       >
         <AgentAvatar agent={agent} />
         <div className="flex-1 min-w-0">
-          <div className="text-[15px] text-text truncate">
+ <div className="tf-body text-text truncate">
             {roleMeta?.label ?? agent.name}
           </div>
           {roleMeta && (
             <>
-              <div className="text-[12px] text-sub leading-4 mt-0.5">
+ <div className="tf-meta text-sub leading-4 mt-0.5">
                 {roleMeta.purpose}
               </div>
-              <div className="text-[11px] text-dim leading-4 break-words">
+ <div className="tf-caption text-dim leading-4 break-words">
                 Pi-агент · {roleMeta.invocation}
               </div>
-              <div className="text-[11px] text-dim leading-4 break-words">
+ <div className="tf-caption text-dim leading-4 break-words">
                 TaskFlow: полный доступ · {roleMeta.specialization}
               </div>
             </>
@@ -335,14 +335,14 @@ function AgentRow({
               last_action_title идут вместе: «читает задачу "Время в
               трекере отстаёт на три часа"». */}
           {agent.online && agent.last_action ? (
-            <div className="text-[12px] text-sub truncate mt-0.5">
+ <div className="tf-meta text-sub truncate mt-0.5">
               {agent.last_action}
               {agent.last_action_title ? ` «${agent.last_action_title}»` : ""}
             </div>
           ) : null}
         </div>
         <span
-          className="text-[12px] font-medium px-2 py-0.5 rounded text-white shrink-0"
+ className="tf-meta font-medium px-2 py-0.5 rounded text-white shrink-0"
           style={{
             backgroundColor:
               agent.role === "owner"
@@ -364,16 +364,16 @@ function AgentRow({
           <div
             className={`w-[7px] h-[7px] rounded-full ${agent.online ? "bg-green" : "bg-dim"}`}
           />
-          <span className="text-[12px] text-sub">
+ <span className="tf-meta text-sub">
             {agent.online ? "Онлайн" : "Офлайн"}
           </span>
           {/* Limits display */}
           {agent.limits ? (
-            <span className="ml-2 text-[11px] text-sub">
+ <span className="tf-caption ml-2 text-sub">
               Остаток: {agent.limits.remaining ?? "неизвестно"}
             </span>
           ) : (
-            <span className="ml-2 text-[11px] text-sub">без лимита</span>
+ <span className="tf-caption ml-2 text-sub">без лимита</span>
           )}
         </div>
       </div>
@@ -419,10 +419,10 @@ function RoleRow({ role }: { role: RoleDetails }) {
           aria-hidden
         />
         <span className="flex-1 min-w-0">
-          <span className="block text-[15px] text-text truncate">
+ <span className="tf-body block text-text truncate">
             {role.title}
           </span>
-          <span className="block text-[12px] text-sub truncate">
+ <span className="tf-meta block text-sub truncate">
             {role.status_title}
             {role.current_task ? ` · ${role.current_task.title}` : ""}
           </span>
@@ -437,12 +437,12 @@ function RoleRow({ role }: { role: RoleDetails }) {
       {open && (
         <div className="px-4 pb-3 -mt-1">
           {role.problems.length > 0 && (
-            <p className="text-[12px] text-red mb-2">
+ <p className="tf-meta text-red mb-2">
               {role.problems.join(". ")}
             </p>
           )}
 
-          <dl className="text-[12px] mb-2">
+ <dl className="tf-meta mb-2">
             <div className="flex gap-2">
               <dt className="text-dim shrink-0">Модель</dt>
               <dd className="text-sub truncate">{role.model || "не задана"}</dd>
@@ -465,7 +465,7 @@ function RoleRow({ role }: { role: RoleDetails }) {
           </dl>
 
           {role.skills.length > 0 && (
-            <p className="text-[12px] text-sub mb-2">
+ <p className="tf-meta text-sub mb-2">
               {role.skills.map((s) => s.skill_name).join(", ")}
             </p>
           )}
@@ -474,11 +474,11 @@ function RoleRow({ role }: { role: RoleDetails }) {
               целиком это несколько экранов текста, а убедиться нужно, что
               он вообще есть и тот самый. */}
           {role.prompt ? (
-            <p className="text-[12px] text-dim whitespace-pre-wrap line-clamp-4">
+ <p className="tf-meta text-dim whitespace-pre-wrap line-clamp-4">
               {role.prompt}
             </p>
           ) : (
-            <p className="text-[12px] text-red">Системный промпт не найден</p>
+ <p className="tf-meta text-red">Системный промпт не найден</p>
           )}
 
           {/* Полный редактор контекста запуска — вкладки по режимам,
@@ -488,7 +488,7 @@ function RoleRow({ role }: { role: RoleDetails }) {
           <button
             type="button"
             onClick={() => setContextOpen(true)}
-            className="tap-scale h-9 px-3 rounded-xl bg-card2 text-text text-[13px] font-semibold mt-2 flex items-center gap-1"
+ className="tf-action tap-scale h-9 px-3 rounded-xl bg-card2 text-text font-semibold mt-2 flex items-center gap-1"
           >
             <Icon name="edit" size={14} className="text-sub" />
             Контекст запуска
@@ -564,7 +564,7 @@ export function AgentsScreen() {
           учёток ниже: там «кто заведён в системе», здесь «что умеет и чем
           занята» — это разные вопросы, и мешать их в один список значит не
           ответить ни на один. */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2 mt-2">
+ <div className="tf-action text-sub font-semibold px-1 mb-2 mt-2">
         Роли
       </div>
       <ErrorBanner
@@ -578,7 +578,7 @@ export function AgentsScreen() {
           пока он стоит, работать некому, какой бы исправной ни была
           конфигурация. Тумблер автономки — в настройках. */}
       {!rolesLoading && roles.length > 0 && !roles[0].runtime_ready && (
-        <p className="text-[12px] text-sub px-1 mb-2">
+ <p className="tf-meta text-sub px-1 mb-2">
           Исполнитель не запущен — роли настроены, но работать некому.
           Включите автономный режим в настройках.
         </p>
@@ -589,13 +589,13 @@ export function AgentsScreen() {
             <RoleRow key={r.role} role={r} />
           ))}
           {!rolesLoading && roles.length === 0 && (
-            <div className="px-4 py-3 text-[13px] text-dim">Ролей нет</div>
+ <div className="tf-action px-4 py-3 text-dim">Ролей нет</div>
           )}
         </FieldGroup>
       </div>
 
       {/* Team */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2 mt-2">
+ <div className="tf-action text-sub font-semibold px-1 mb-2 mt-2">
         Команда
       </div>
       {isLoading && <Loading className="mb-4" />}
@@ -616,7 +616,7 @@ export function AgentsScreen() {
             />
           ))}
           {!isLoading && agents.length === 0 && (
-            <div className="px-4 py-3 text-[13px] text-dim">
+ <div className="tf-action px-4 py-3 text-dim">
               Нет пользователей
             </div>
           )}
@@ -626,21 +626,21 @@ export function AgentsScreen() {
       {/* Новый агент — учётка + ключ доступа. Почты на машине нет, и
           «пригласить» здесь значит именно завести агента: сервер создаёт
           учётку и один раз показывает ключ (POST /api/agents). */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub font-semibold px-1 mb-2">
         Новый агент
       </div>
       <div className="bg-card rounded-2xl overflow-hidden mb-4">
         {issuedToken ? (
           <div className="p-4">
-            <p className="text-[13px] text-text mb-1">
+ <p className="tf-action text-text mb-1">
               Агент «{issuedToken.name}» заведён
             </p>
-            <p className="text-[12px] text-sub mb-3">
+ <p className="tf-meta text-sub mb-3">
               Ключ показывается один раз — сохраните его сейчас. Потом он нигде
               не отображается, можно только выпустить новый.
             </p>
             <div className="bg-card2 rounded-xl px-3 py-2.5 mb-3">
-              <code className="text-[12px] text-text break-all">
+ <code className="tf-meta text-text break-all">
                 {issuedToken.token}
               </code>
             </div>
@@ -650,7 +650,7 @@ export function AgentsScreen() {
                   navigator.clipboard?.writeText(issuedToken.token);
                   setCopied(true);
                 }}
-                className="tap-scale h-11 px-4 rounded-xl bg-red text-white text-[14px] font-semibold"
+ className="tf-row tap-scale h-11 px-4 rounded-xl bg-red text-white font-semibold"
               >
                 {copied ? "Скопировано" : "Скопировать ключ"}
               </button>
@@ -659,7 +659,7 @@ export function AgentsScreen() {
                   setIssuedToken(null);
                   setCopied(false);
                 }}
-                className="tap-scale h-11 px-4 rounded-xl bg-card2 text-sub text-[14px]"
+ className="tf-row tap-scale h-11 px-4 rounded-xl bg-card2 text-sub"
               >
                 Готово
               </button>
@@ -688,7 +688,7 @@ export function AgentsScreen() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Имя агента — например, Гермес"
-              className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none mb-3"
+ className="tf-input w-full bg-card2 rounded-xl px-3 py-2.5 text-text placeholder:text-dim outline-none mb-3"
             />
             <ErrorBanner
               error={createAgent.error}
@@ -700,7 +700,7 @@ export function AgentsScreen() {
               <button
                 type="submit"
                 disabled={!name.trim() || createAgent.isPending}
-                className="tap-scale h-11 px-4 rounded-xl bg-red text-white text-[14px] font-semibold disabled:opacity-40"
+ className="tf-row tap-scale h-11 px-4 rounded-xl bg-red text-white font-semibold disabled:opacity-40"
               >
                 {createAgent.isPending ? "Завожу…" : "Завести"}
               </button>
@@ -710,7 +710,7 @@ export function AgentsScreen() {
                   setShowInvite(false);
                   setName("");
                 }}
-                className="tap-scale h-11 px-4 rounded-xl bg-card2 text-sub text-[14px]"
+ className="tf-row tap-scale h-11 px-4 rounded-xl bg-card2 text-sub"
               >
                 Отмена
               </button>
@@ -722,13 +722,13 @@ export function AgentsScreen() {
             className="tap-row w-full flex items-center gap-3 py-3 px-4 border border-dashed border-stroke rounded-2xl"
           >
             <Icon name="plus" size={18} className="text-red" />
-            <span className="text-[14px] text-text">Завести агента</span>
+ <span className="tf-row text-text">Завести агента</span>
           </button>
         )}
       </div>
 
       {/* Passport */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub font-semibold px-1 mb-2">
         Роли Pi-агента
       </div>
       <div className="bg-card rounded-2xl overflow-hidden mb-4">
@@ -743,13 +743,13 @@ export function AgentsScreen() {
               className="text-purple mt-0.5 shrink-0"
             />
             <div className="min-w-0">
-              <div className="text-[14px] text-text font-medium">
+ <div className="tf-row text-text font-medium">
                 {meta.label}
               </div>
-              <div className="text-[12px] text-sub leading-4 mt-0.5">
+ <div className="tf-meta text-sub leading-4 mt-0.5">
                 {meta.purpose}
               </div>
-              <div className="text-[11px] text-dim leading-4 mt-0.5">
+ <div className="tf-caption text-dim leading-4 mt-0.5">
                 {meta.specialization}
               </div>
             </div>
@@ -758,20 +758,20 @@ export function AgentsScreen() {
       </div>
 
       {/* Access levels */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub font-semibold px-1 mb-2">
         Уровни доступа в TaskFlow
       </div>
       <div className="bg-card rounded-2xl p-4 space-y-3">
         <div className="flex items-start gap-2">
           <Icon name="crown" size={16} className="text-red mt-0.5 shrink-0" />
-          <p className="text-[13px] text-sub leading-relaxed">
+ <p className="tf-action text-sub leading-relaxed">
             <span className="text-text font-medium">Владелец</span> — полный
             доступ ко всем задачам и настройкам
           </p>
         </div>
         <div className="flex items-start gap-2">
           <Icon name="share" size={16} className="text-blue mt-0.5 shrink-0" />
-          <p className="text-[13px] text-sub leading-relaxed">
+ <p className="tf-action text-sub leading-relaxed">
             <span className="text-text font-medium">Оркестратор</span> — ведёт
             работу ботов: заводит и правит любые задачи и проекты, назначает
             исполнителей, но ничего не удаляет
@@ -779,7 +779,7 @@ export function AgentsScreen() {
         </div>
         <div className="flex items-start gap-2">
           <Icon name="bot" size={16} className="text-purple mt-0.5 shrink-0" />
-          <p className="text-[13px] text-sub leading-relaxed">
+ <p className="tf-action text-sub leading-relaxed">
             <span className="text-text font-medium">Агент</span> — может
             редактировать назначенные задачи, добавлять комментарии, отмечать
             выполнение
@@ -787,7 +787,7 @@ export function AgentsScreen() {
         </div>
         <div className="flex items-start gap-2">
           <Icon name="eye" size={16} className="text-dim mt-0.5 shrink-0" />
-          <p className="text-[13px] text-sub leading-relaxed">
+ <p className="tf-action text-sub leading-relaxed">
             <span className="text-text font-medium">Наблюдатель</span> — только
             просмотр
           </p>

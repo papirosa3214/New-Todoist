@@ -379,7 +379,7 @@ export function KeyboardProvider({ children }: { children: ReactNode }) {
               "calc(var(--kb-inset, 0px) + env(safe-area-inset-bottom, 0px) + 12px)",
           }}
         >
-          <div className="px-3 py-1 rounded-full bg-card2/95 text-[11px] text-sub">
+ <div className="tf-caption px-3 py-1 rounded-full bg-card2/95 text-sub">
             Распознано: {engineNote}
           </div>
         </div>

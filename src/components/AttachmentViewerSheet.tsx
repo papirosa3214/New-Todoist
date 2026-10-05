@@ -118,7 +118,7 @@ export function AttachmentViewerSheet({
           >
             <Icon name="x" size={20} className="text-sub" />
           </button>
-          <h3 className="text-[17px] font-semibold text-text truncate px-2">
+ <h3 className="tf-title font-semibold text-text truncate px-2">
             {attachment.file_name}
           </h3>
           <button
@@ -149,7 +149,7 @@ export function AttachmentViewerSheet({
           {!loading && !error && text !== null && (
             // Моноширинный намеренно: в описи и отчётах агентов есть таблицы
             // и колонки, которые в пропорциональном шрифте разъезжаются.
-            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.5] text-text">
+ <pre className="tf-meta whitespace-pre-wrap break-words font-mono leading-[1.5] text-text">
               {text}
             </pre>
           )}

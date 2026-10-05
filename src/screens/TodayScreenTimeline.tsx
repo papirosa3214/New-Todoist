@@ -130,7 +130,7 @@ export function TodayScreenTimeline() {
         <div className="text-3xl font-medium mt-1">{formatDueLabel(today)}</div>
         <button
           onClick={() => navigate(-1)}
-          className="mt-3 inline-flex items-center gap-1 text-[12px] text-sub hover:text-text transition-colors"
+ className="tf-meta mt-3 inline-flex items-center gap-1 text-sub hover:text-text transition-colors"
         >
           <Icon name="chevron" size={14} className="rotate-90" />
           <span>Назад (демо)</span>
@@ -158,7 +158,7 @@ export function TodayScreenTimeline() {
 
       {/* Индикатор зума — три точки, активная белая */}
       <div className="fixed bottom-12 left-1/2 -translate-x-1/2 flex items-center gap-4 z-50">
-        <div className="text-[10px] text-neutral-600 tracking-widest uppercase">
+ <div className="tf-micro text-neutral-600 tracking-widest uppercase">
           Свайп влево/вправо
         </div>
         <div className="flex gap-2">

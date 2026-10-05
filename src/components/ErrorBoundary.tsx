@@ -57,10 +57,10 @@ export class ErrorBoundary extends Component<Props, State> {
             <Icon name="info" size={28} className="text-coral" />
           </div>
           <div>
-            <h1 className="text-[19px] font-semibold text-text mb-1">
+ <h1 className=" font-semibold text-text mb-1">
               Что-то пошло не так
             </h1>
-            <p className="text-[14px] text-sub leading-relaxed max-w-[320px]">
+ <p className="tf-row text-sub leading-relaxed max-w-[320px]">
               Экран не смог отрисоваться. Попробуйте вернуться назад или
               перезагрузить приложение — если ошибка повторится, опишите
               шаги в чате.
@@ -69,13 +69,13 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="flex gap-2">
             <button
               onClick={this.handleReset}
-              className="h-11 px-5 rounded-xl bg-card text-[14px] font-medium text-text"
+ className="tf-row h-11 px-5 rounded-xl bg-card font-medium text-text"
             >
               Назад
             </button>
             <button
               onClick={this.handleReload}
-              className="h-11 px-5 rounded-xl bg-red text-[14px] font-semibold text-white"
+ className="tf-row h-11 px-5 rounded-xl bg-red font-semibold text-white"
             >
               Перезагрузить
             </button>

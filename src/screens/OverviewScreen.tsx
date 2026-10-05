@@ -79,9 +79,9 @@ export function OverviewScreen() {
           }`}
         >
           <div className="min-w-0">
-            <div className="text-[12px] text-sub truncate">В работе</div>
+ <div className="tf-meta text-sub truncate">В работе</div>
             <div
-              className={`text-[20px] font-bold ${workingCount > 0 ? "text-blue" : "text-text"}`}
+ className={`tf-task-title font-bold ${workingCount > 0 ?"text-blue" :"text-text"}`}
             >
               {workingCount}
             </div>
@@ -103,9 +103,9 @@ export function OverviewScreen() {
           }`}
         >
           <div className="min-w-0">
-            <div className="text-[12px] text-sub truncate">На проверке</div>
+ <div className="tf-meta text-sub truncate">На проверке</div>
             <div
-              className={`text-[20px] font-bold ${reviewCount > 0 ? "text-amber-400" : "text-text"}`}
+ className={`tf-task-title font-bold ${reviewCount > 0 ?"text-amber-400" :"text-text"}`}
             >
               {reviewCount}
             </div>
@@ -125,9 +125,9 @@ export function OverviewScreen() {
           }`}
         >
           <div className="min-w-0">
-            <div className="text-[12px] text-sub truncate">Заблокированы</div>
+ <div className="tf-meta text-sub truncate">Заблокированы</div>
             <div
-              className={`text-[20px] font-bold ${blockedCount > 0 ? "text-coral" : "text-text"}`}
+ className={`tf-task-title font-bold ${blockedCount > 0 ?"text-coral" :"text-text"}`}
             >
               {blockedCount}
             </div>
@@ -147,9 +147,9 @@ export function OverviewScreen() {
           }`}
         >
           <div className="min-w-0">
-            <div className="text-[12px] text-sub truncate">Пропали</div>
+ <div className="tf-meta text-sub truncate">Пропали</div>
             <div
-              className={`text-[20px] font-bold ${staleCount > 0 ? "text-coral" : "text-text"}`}
+ className={`tf-task-title font-bold ${staleCount > 0 ?"text-coral" :"text-text"}`}
             >
               {staleCount}
             </div>
@@ -175,13 +175,13 @@ export function OverviewScreen() {
             <BrainCircuit className="w-5 h-5 text-white" />
           </div>
           <div className="text-left">
-            <div className="text-[15px] font-semibold text-text flex items-center gap-2">
+ <div className="tf-body font-semibold text-text flex items-center gap-2">
               Сводка недели
-              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-md bg-[#FF2D55]/20 text-[#FF2D55]">
+ <span className="tf-micro font-bold uppercase px-1.5 py-0.5 rounded-md bg-[#FF2D55]/20 text-[#FF2D55]">
                 Second Brain
               </span>
             </div>
-            <div className="text-[12px] text-sub">
+ <div className="tf-meta text-sub">
               Победы, хвосты и фокус на цели недели
             </div>
           </div>
@@ -208,8 +208,8 @@ export function OverviewScreen() {
               <Icon name="inbox" size={18} />
             </div>
             <div className="text-left">
-              <div className="text-[15px] font-medium text-text">Проекты</div>
-              <div className="text-[12px] text-sub">
+ <div className="tf-body font-medium text-text">Проекты</div>
+ <div className="tf-meta text-sub">
                 Задачи по проектам и документация
               </div>
             </div>
@@ -226,10 +226,10 @@ export function OverviewScreen() {
               <Icon name="bell" size={18} />
             </div>
             <div className="text-left">
-              <div className="text-[15px] font-medium text-text">
+ <div className="tf-body font-medium text-text">
                 Уведомления
               </div>
-              <div className="text-[12px] text-sub">
+ <div className="tf-meta text-sub">
                 История событий и напоминаний
               </div>
             </div>
@@ -251,8 +251,8 @@ export function OverviewScreen() {
               <Icon name="chat" size={18} />
             </div>
             <div className="text-left">
-              <div className="text-[15px] font-medium text-text">Чаты</div>
-              <div className="text-[12px] text-sub">
+ <div className="tf-body font-medium text-text">Чаты</div>
+ <div className="tf-meta text-sub">
                 Разговоры с ролями-агентами
               </div>
             </div>
@@ -269,10 +269,10 @@ export function OverviewScreen() {
               <Icon name="activity" size={18} />
             </div>
             <div className="text-left">
-              <div className="text-[15px] font-medium text-text">
+ <div className="tf-body font-medium text-text">
                 Активность и статистика
               </div>
-              <div className="text-[12px] text-sub">
+ <div className="tf-meta text-sub">
                 Графики продуктивности и выполненные задачи
               </div>
             </div>
@@ -294,8 +294,8 @@ export function OverviewScreen() {
               <Icon name="gear" size={18} />
             </div>
             <div className="text-left">
-              <div className="text-[15px] font-medium text-text">Настройки</div>
-              <div className="text-[12px] text-sub">
+ <div className="tf-body font-medium text-text">Настройки</div>
+ <div className="tf-meta text-sub">
                 Профиль, ИИ, сервер и внешний вид
               </div>
             </div>

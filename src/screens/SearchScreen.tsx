@@ -52,7 +52,7 @@ export function SearchScreen() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Задачи, проекты, метки"
-              className="flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none"
+ className="tf-input flex-1 min-w-0 bg-transparent text-text placeholder:text-dim outline-none"
               autoFocus
             />
             {query && (
@@ -67,7 +67,7 @@ export function SearchScreen() {
           </div>
           <button
             onClick={() => navigate(-1)}
-            className="tap-fade h-[44px] px-2 text-[15px] text-sub shrink-0"
+ className="tf-body tap-fade h-[44px] px-2 text-sub shrink-0"
           >
             Отмена
           </button>
@@ -77,7 +77,7 @@ export function SearchScreen() {
       {!hasQuery && (
         <div className="text-center py-16 px-6">
           <Icon name="search" size={32} className="text-dim mx-auto mb-3" />
-          <p className="text-[14px] text-dim">
+ <p className="tf-row text-dim">
             Начните вводить, чтобы найти задачи, проекты и метки
           </p>
         </div>
@@ -93,14 +93,14 @@ export function SearchScreen() {
       )}
 
       {hasQuery && isSearching && !isError && (
-        <p className="px-1 text-[13px] text-dim">Ищем…</p>
+ <p className="tf-action px-1 text-dim">Ищем…</p>
       )}
 
       {showEmpty && (
         <div className="text-center py-16 px-6">
           <Icon name="search" size={32} className="text-dim mx-auto mb-3" />
-          <p className="text-[14px] text-text mb-1">Ничего не найдено</p>
-          <p className="text-[13px] text-dim">
+ <p className="tf-row text-text mb-1">Ничего не найдено</p>
+ <p className="tf-action text-dim">
             По запросу «{query.trim()}» нет ни задач, ни проектов, ни меток
           </p>
         </div>
@@ -110,7 +110,7 @@ export function SearchScreen() {
         <div className="space-y-5">
           {tasks.length > 0 && (
             <div>
-              <h3 className="text-[13px] font-semibold text-sub mb-2 px-1">
+ <h3 className="tf-action font-semibold text-sub mb-2 px-1">
                 Задачи
               </h3>
               <div className="space-y-[2px]">
@@ -149,12 +149,12 @@ export function SearchScreen() {
                         className="flex-1 min-w-0 text-left"
                       >
                         <div
-                          className={`text-[15px] truncate ${isDone ? "line-through text-sub" : "text-text"}`}
+ className={`tf-body truncate ${isDone ?"line-through text-sub" :"text-text"}`}
                         >
                           {t.title}
                         </div>
                         {(t.project_name || t.description) && (
-                          <div className="text-[12px] text-sub mt-0.5 truncate">
+ <div className="tf-meta text-sub mt-0.5 truncate">
                             {t.project_name && (
                               <span
                                 style={{
@@ -178,7 +178,7 @@ export function SearchScreen() {
 
           {projects.length > 0 && (
             <div>
-              <h3 className="text-[13px] font-semibold text-sub mb-2 px-1">
+ <h3 className="tf-action font-semibold text-sub mb-2 px-1">
                 Проекты
               </h3>
               <div className="space-y-[2px]">
@@ -195,10 +195,10 @@ export function SearchScreen() {
                       <Icon name="hash" size={16} style={{ color: p.color }} />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-[15px] text-text truncate">
+ <div className="tf-body text-text truncate">
                         {p.name}
                       </div>
-                      <div className="text-[12px] text-sub">
+ <div className="tf-meta text-sub">
                         {p.task_count} задач
                       </div>
                     </div>
@@ -210,7 +210,7 @@ export function SearchScreen() {
 
           {labels.length > 0 && (
             <div>
-              <h3 className="text-[13px] font-semibold text-sub mb-2 px-1">
+ <h3 className="tf-action font-semibold text-sub mb-2 px-1">
                 Метки
               </h3>
               <div className="space-y-[2px]">
@@ -226,7 +226,7 @@ export function SearchScreen() {
                     >
                       <Icon name="tag" size={14} style={{ color: l.color }} />
                     </span>
-                    <span className="text-[15px] text-text">{l.name}</span>
+ <span className="tf-body text-text">{l.name}</span>
                   </button>
                 ))}
               </div>

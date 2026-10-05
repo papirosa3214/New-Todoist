@@ -95,7 +95,7 @@ export function InboxScreen() {
     const makeFooter = (projectQuery: string) => (
       <button
         onClick={() => navigate(`/task/new?project=${projectQuery}`)}
-        className="tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 text-[13px] font-semibold text-red"
+ className="tf-action tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 font-semibold text-red"
       >
         <Icon name="plus" size={16} />
         Добавить задачу
@@ -159,7 +159,7 @@ export function InboxScreen() {
         }
       />
 
-      {isLoading && <p className="px-1 text-[13px] text-dim">Загрузка…</p>}
+ {isLoading && <p className="tf-action px-1 text-dim">Загрузка…</p>}
       <ErrorBanner
         error={error}
         fallback="Не удалось загрузить задачи"
@@ -173,10 +173,10 @@ export function InboxScreen() {
         />
       )}
       {showTrueEmpty && (
-        <p className="px-1 text-[13px] text-dim">Задач пока нет</p>
+ <p className="tf-action px-1 text-dim">Задач пока нет</p>
       )}
       {showFilteredEmpty && (
-        <div className="px-1 flex items-center gap-2 flex-wrap text-[13px] text-dim">
+ <div className="tf-action px-1 flex items-center gap-2 flex-wrap text-dim">
           Под выбранные фильтры ничего не подошло
           <button
             onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
@@ -219,13 +219,13 @@ export function InboxScreen() {
                     />
                   )}
                   <span
-                    className={`text-[13px] font-semibold truncate ${
+ className={`tf-action font-semibold truncate ${
                       col.titleClassName ?? "text-text"
                     }`}
                   >
                     {col.title}
                   </span>
-                  <span className="ml-auto shrink-0 text-[11px] text-sub">
+ <span className="tf-caption ml-auto shrink-0 text-sub">
                     {col.trailingCount}
                   </span>
                 </div>

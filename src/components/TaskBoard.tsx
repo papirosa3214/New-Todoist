@@ -242,7 +242,7 @@ function BoardCard({
               цветной текст без заливки. */}
           {showProjectBadge && task.project_name && (
             <div
-              className="mb-1 inline-flex min-w-0 max-w-full items-center gap-1 text-[10px] font-medium leading-none"
+ className="tf-micro mb-1 inline-flex min-w-0 max-w-full items-center gap-1 font-medium leading-none"
               style={{ color: task.project_color || "#A6A6A6" }}
             >
               <Icon name="hash" size={9} className="shrink-0" />
@@ -261,7 +261,7 @@ function BoardCard({
               />
             )}
             <div
-              className={`text-[13px] leading-snug line-clamp-2 flex-1 min-w-0 ${isDone ? "line-through text-sub" : "text-text"}`}
+ className={`tf-action leading-snug line-clamp-2 flex-1 min-w-0 ${isDone ?"line-through text-sub" :"text-text"}`}
             >
               <MarkdownInline source={task.title} />
             </div>
@@ -269,7 +269,7 @@ function BoardCard({
 
           {/* Описание */}
           {task.description && (
-            <div className="text-[11px] text-sub truncate mt-0.5">
+ <div className="tf-caption text-sub truncate mt-0.5">
               <MarkdownInline source={task.description} />
             </div>
           )}
@@ -287,7 +287,7 @@ function BoardCard({
         {hasFooter && (
           <div className="w-full flex items-center gap-1.5 flex-wrap">
             {task.subtasks.length > 0 && (
-              <span className="text-[10px] text-sub shrink-0 font-medium">
+ <span className="tf-micro text-sub shrink-0 font-medium">
                 {doneSub}/{task.subtasks.length}
               </span>
             )}
@@ -298,7 +298,7 @@ function BoardCard({
             <PriorityArrows priority={task.priority} size={8} />
             {task.due_date && (
               <span
-                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 ${
+ className={`tf-micro inline-flex items-center gap-1 px-1.5 py-0.5 rounded shrink-0 ${
                   overdue ? "bg-red/15 text-red" : "bg-card2 text-sub"
                 }`}
               >
@@ -310,7 +310,7 @@ function BoardCard({
                 отдельной строкой (Максим 26.08.2026), см. выше. */}
             {label && (
               <span
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0"
+ className="tf-micro inline-flex items-center gap-1 px-1.5 py-0.5 rounded shrink-0"
                 style={{
                   backgroundColor: label.color + "26",
                   color: label.color,
@@ -786,7 +786,7 @@ export function TaskBoard({
 
   if (columns.length === 0) {
     return (
-      <div className="py-10 text-center text-[13px] text-dim">
+ <div className="tf-action py-10 text-center text-dim">
         {emptyMessage}
       </div>
     );
@@ -927,7 +927,7 @@ export function TaskBoard({
                   />
                 )}
                 <span
-                  className={`text-[13px] font-semibold truncate ${
+ className={`tf-action font-semibold truncate ${
                     col.titleClassName ?? "text-text"
                   }`}
                 >
@@ -936,7 +936,7 @@ export function TaskBoard({
                 {(col.trailingCount !== undefined || col.headerAction) && (
                   <div className="ml-auto shrink-0 flex items-center gap-1">
                     {col.trailingCount !== undefined && (
-                      <span className="text-[11px] text-sub">
+ <span className="tf-caption text-sub">
                         {col.trailingCount}
                       </span>
                     )}
@@ -947,7 +947,7 @@ export function TaskBoard({
 
               <ColumnDropZone columnId={col.id} taskIds={taskIds}>
                 {taskIds.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-stroke py-6 text-center text-[12px] text-dim">
+ <div className="tf-meta rounded-xl border border-dashed border-stroke py-6 text-center text-dim">
                     Нет задач
                   </div>
                 ) : (

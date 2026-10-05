@@ -144,12 +144,12 @@ export function useDialog(): {
             <Icon name="trash" size={20} className="text-coral" />
           </div>
         )}
-        <h3 className="text-[17px] font-semibold text-center mb-1">
+ <h3 className="tf-title font-semibold text-center mb-1">
           {state.title}
         </h3>
         {state.description && (
           <p
-            className={`text-[14px] text-center leading-relaxed mb-5 ${
+ className={`tf-row text-center leading-relaxed mb-5 ${
               state.mode === "confirm" && state.danger
                 ? "text-coral"
                 : "text-sub"

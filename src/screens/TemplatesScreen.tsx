@@ -297,7 +297,7 @@ export function TemplatesScreen() {
                   </div>
 
                   {t.subtasks && t.subtasks.length > 0 && (
-                    <div className="text-[11px] text-dim bg-card2/60 rounded-lg px-2.5 py-1.5 space-y-0.5">
+ <div className="tf-caption text-dim bg-card2/60 rounded-lg px-2.5 py-1.5 space-y-0.5">
                       <div className="font-semibold text-sub">
                         Подзадач: {t.subtasks.length}
                       </div>
@@ -352,14 +352,14 @@ export function TemplatesScreen() {
                     )}
                   </div>
                   {t.category && (
-                    <span className="text-[10px] uppercase font-bold text-dim bg-card2 px-2 py-0.5 rounded-full shrink-0">
+ <span className="tf-micro uppercase font-bold text-dim bg-card2 px-2 py-0.5 rounded-full shrink-0">
                       {t.category}
                     </span>
                   )}
                 </div>
 
                 {t.subtasks && t.subtasks.length > 0 && (
-                  <div className="text-[11px] text-dim bg-card2/60 rounded-lg px-2.5 py-1.5 space-y-0.5">
+ <div className="tf-caption text-dim bg-card2/60 rounded-lg px-2.5 py-1.5 space-y-0.5">
                     <div className="font-semibold text-sub">
                       Подзадач: {t.subtasks.length}
                     </div>

@@ -589,7 +589,7 @@ export function NotesScreen() {
             selecting ? (
               <button
                 onClick={exitSelecting}
-                className="h-[44px] px-2 flex items-center text-[15px] text-text tap-row"
+ className="tf-body h-[44px] px-2 flex items-center text-text tap-row"
               >
                 Отмена
               </button>
@@ -726,7 +726,7 @@ export function NotesScreen() {
               onChange={(e) => setNewFolderName(e.target.value)}
               placeholder="Название папки"
               maxLength={80}
-              className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none mb-3"
+ className="tf-input w-full bg-card2 rounded-xl px-3 py-2.5 text-text placeholder:text-dim outline-none mb-3"
             />
             <ErrorBanner
               error={createFolder.error}
@@ -737,7 +737,7 @@ export function NotesScreen() {
             <button
               type="submit"
               disabled={!newFolderName.trim() || createFolder.isPending}
-              className="w-full h-12 bg-red rounded-xl text-[14px] font-semibold text-white disabled:opacity-50 tap-fade"
+ className="tf-row w-full h-12 bg-red rounded-xl font-semibold text-white disabled:opacity-50 tap-fade"
             >
               {createFolder.isPending ? "Создаём…" : "Создать"}
             </button>
@@ -765,7 +765,7 @@ export function NotesScreen() {
         />
 
         {exporting && (
-          <p className="text-[13px] text-dim px-1 pb-2">Выгружаем заметки…</p>
+ <p className="tf-action text-dim px-1 pb-2">Выгружаем заметки…</p>
         )}
 
         {isEmpty && !showCreateFolder ? (
@@ -827,7 +827,7 @@ export function NotesScreen() {
               size={16}
               className="text-sub shrink-0"
             />
-            <span className="text-[14px] font-semibold text-text truncate max-w-[220px]">
+ <span className="tf-row font-semibold text-text truncate max-w-[220px]">
               {dragRef.current.kind === "folder"
                 ? dragRef.current.folder.name
                 : dragRef.current.note.title || "Без названия"}
@@ -1030,12 +1030,12 @@ function FolderRow({
           onChange={(e) => setRenameValue(e.target.value)}
           onBlur={onRenamed}
           maxLength={80}
-          className="flex-1 bg-card2 rounded-lg px-3 py-2 text-[16px] text-text outline-none"
+ className="tf-input flex-1 bg-card2 rounded-lg px-3 py-2 text-text outline-none"
         />
         <button
           type="submit"
           onMouseDown={(e) => e.preventDefault()}
-          className="h-9 px-3 rounded-lg bg-card2 text-[13px] text-text tap-row"
+ className="tf-action h-9 px-3 rounded-lg bg-card2 text-text tap-row"
         >
           Готово
         </button>
@@ -1096,10 +1096,10 @@ function FolderRow({
           <Icon name="folder" size={17} className="text-sub" />
         </span>
         <span className="flex items-center flex-1 min-w-0">
-          <span className="text-[15px] text-text truncate">{folder.name}</span>
+ <span className="tf-body text-text truncate">{folder.name}</span>
         </span>
         {childCount > 0 && (
-          <span className="flex items-center text-[12px] text-dim tabular-nums">
+ <span className="tf-meta flex items-center text-dim tabular-nums">
             {childCount}
           </span>
         )}
@@ -1174,7 +1174,7 @@ function NoteRow({
         <Icon name="fileText" size={16} className="text-dim" />
       </span>
       <span className="flex items-center flex-1 min-w-0">
-        <span className="text-[15px] text-text truncate">
+ <span className="tf-body text-text truncate">
           {note.title || "Без названия"}
         </span>
       </span>
@@ -1188,14 +1188,14 @@ function EmptyState({ onCreateNote }: { onCreateNote: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center text-center pt-16 gap-3">
       <Icon name="notebook" size={48} className="text-dim" />
-      <p className="text-[16px] font-semibold text-text">Записей пока нет</p>
-      <p className="text-[13px] text-sub max-w-[280px] leading-snug">
+ <p className="tf-input font-semibold text-text">Записей пока нет</p>
+ <p className="tf-action text-sub max-w-[280px] leading-snug">
         Заметки складываются в папки — перетаскиванием или сразу при создании.
       </p>
       <button
         type="button"
         onClick={onCreateNote}
-        className="tap-scale mt-3 h-11 px-5 rounded-xl bg-card2 text-[15px] font-semibold text-text flex items-center gap-2"
+ className="tf-body tap-scale mt-3 h-11 px-5 rounded-xl bg-card2 font-semibold text-text flex items-center gap-2"
       >
         <Icon name="plus" size={18} />
         Создать заметку

@@ -62,7 +62,7 @@ function ProjectRow({
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Название проекта"
-          className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none mb-3"
+ className="tf-input w-full bg-card2 rounded-xl px-3 py-2.5 text-text placeholder:text-dim outline-none mb-3"
         />
         <div className="flex items-center gap-2 mb-3">
           {PROJECT_COLORS.map((c) => (
@@ -89,7 +89,7 @@ function ProjectRow({
           <button
             type="button"
             onClick={cancelEdit}
-            className="flex-1 h-11 rounded-xl bg-card2 text-[14px] text-sub font-semibold tap-row"
+ className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub font-semibold tap-row"
           >
             Отмена
           </button>
@@ -97,7 +97,7 @@ function ProjectRow({
             type="button"
             onClick={handleSave}
             disabled={!name.trim() || updateProject.isPending}
-            className="flex-1 h-11 rounded-xl bg-red text-[14px] text-white font-semibold disabled:opacity-50 tap-fade"
+ className="tf-row flex-1 h-11 rounded-xl bg-red text-white font-semibold disabled:opacity-50 tap-fade"
           >
             {updateProject.isPending ? "Сохраняем…" : "Сохранить"}
           </button>
@@ -131,7 +131,7 @@ function ProjectRow({
         style={{ width: ROW_ACTION_W, background: "#FF3B30" }}
       >
         <Icon name="trash" size={18} />
-        <span className="text-[11px] font-medium">Удалить</span>
+ <span className="tf-caption font-medium">Удалить</span>
       </button>
       {/* Изменить — справа, открывается свайпом влево */}
       <button
@@ -144,7 +144,7 @@ function ProjectRow({
         style={{ width: ROW_ACTION_W, background: "#007AFF" }}
       >
         <Icon name="edit" size={18} />
-        <span className="text-[11px] font-medium">Изменить</span>
+ <span className="tf-caption font-medium">Изменить</span>
       </button>
 
       <div
@@ -174,8 +174,8 @@ function ProjectRow({
             <Icon name="hash" size={16} style={{ color: project.color }} />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-[15px] text-text truncate">{project.name}</div>
-            <div className="text-[12px] text-sub">
+ <div className="tf-body text-text truncate">{project.name}</div>
+ <div className="tf-meta text-sub">
               {project.task_count} задач
             </div>
           </div>
@@ -273,7 +273,7 @@ export function ProjectsScreen() {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Название проекта"
-            className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none mb-3"
+ className="tf-input w-full bg-card2 rounded-xl px-3 py-2.5 text-text placeholder:text-dim outline-none mb-3"
           />
           <div className="flex items-center gap-2 mb-3">
             {PROJECT_COLORS.map((c) => (
@@ -300,14 +300,14 @@ export function ProjectsScreen() {
             <button
               type="button"
               onClick={() => setShowCreate(false)}
-              className="flex-1 h-11 rounded-xl bg-card2 text-[14px] text-sub font-semibold tap-row"
+ className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub font-semibold tap-row"
             >
               Отмена
             </button>
             <button
               type="submit"
               disabled={!name.trim() || createProject.isPending}
-              className="flex-1 h-11 rounded-xl bg-red text-[14px] font-semibold text-white disabled:opacity-50 tap-fade"
+ className="tf-row flex-1 h-11 rounded-xl bg-red font-semibold text-white disabled:opacity-50 tap-fade"
             >
               {createProject.isPending ? "Создаём…" : "Создать"}
             </button>
@@ -339,8 +339,8 @@ export function ProjectsScreen() {
           className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-card text-left tap-row"
         >
           <Icon name="list" size={18} className="text-sub" />
-          <span className="text-[15px] text-text">Без проекта</span>
-          <span className="ml-auto text-[12px] text-sub">
+ <span className="tf-body text-text">Без проекта</span>
+ <span className="tf-meta ml-auto text-sub">
             {noProjectCount === 0 ? "" : noProjectCount}
           </span>
         </button>
@@ -353,7 +353,7 @@ export function ProjectsScreen() {
           />
         ))}
         {!isLoading && !isError && projects.length === 0 && !showCreate && (
-          <p className="px-1 text-[13px] text-dim">
+ <p className="tf-action px-1 text-dim">
             Проектов пока нет — удержите кнопку внизу, чтобы создать
           </p>
         )}

@@ -93,16 +93,16 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
       <div className="w-16 h-16 rounded-full bg-card flex items-center justify-center mb-4">
         <Icon name="chat" size={28} className="text-sub" />
       </div>
-      <h2 className="text-[19px] font-semibold text-text mb-1">
+ <h2 className=" font-semibold text-text mb-1">
         Чатов пока нет
       </h2>
-      <p className="text-[14px] text-sub leading-relaxed max-w-[280px] mb-6">
+ <p className="tf-row text-sub leading-relaxed max-w-[280px] mb-6">
         Создайте персональный чат с одной ролью или групповой — с
         несколькими сразу.
       </p>
       <button
         onClick={onCreate}
-        className="h-12 px-6 rounded-xl bg-red text-[15px] font-semibold text-white tap-fade"
+ className="tf-body h-12 px-6 rounded-xl bg-red font-semibold text-white tap-fade"
       >
         Новый чат
       </button>
@@ -147,16 +147,16 @@ function ChatRow({
       <AvatarStack members={visible} overflow={overflow} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <h3 className="text-[15px] font-semibold text-text min-w-0 truncate">
+ <h3 className="tf-body font-semibold text-text min-w-0 truncate">
             {chat.title || defaultTitle(others)}
           </h3>
           {lastTime && (
-            <span className="text-[12px] text-dim shrink-0 tabular-nums">
+ <span className="tf-meta text-dim shrink-0 tabular-nums">
               {lastTime}
             </span>
           )}
         </div>
-        <p className="text-[13px] text-sub min-w-0 truncate">{lastLine}</p>
+ <p className="tf-action text-sub min-w-0 truncate">{lastLine}</p>
       </div>
       <Icon name="chevron" size={16} className="text-dim shrink-0" />
     </button>
@@ -195,7 +195,7 @@ function AvatarStack({
       ))}
       {overflow > 0 && (
         <div
-          className="rounded-full bg-card2 border-2 border-card flex items-center justify-center text-[11px] text-sub font-semibold tabular-nums"
+ className="tf-caption rounded-full bg-card2 border-2 border-card flex items-center justify-center text-sub font-semibold tabular-nums"
           style={{
             width: SIZE,
             height: SIZE,

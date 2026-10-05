@@ -306,7 +306,7 @@ export function AppKeyboard({
         className="fixed inset-x-0 bottom-0 z-[45]"
       >
         {micError != null && (
-          <div className="px-4 pb-1 text-[12px] text-coral bg-[#171717]">
+ <div className="tf-meta px-4 pb-1 text-coral bg-[#171717]">
             {typeof micError === "string" ? micError : "Ошибка микрофона"}
           </div>
         )}

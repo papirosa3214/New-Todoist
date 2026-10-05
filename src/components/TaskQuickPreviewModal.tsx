@@ -96,13 +96,13 @@ export function TaskQuickPreviewModal({
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <div className="flex items-center gap-1.5 flex-wrap overflow-hidden">
               <span
-                className={`px-2 py-0.5 text-[10px] font-semibold rounded-full shrink-0 ${statusInfo.bg} ${statusInfo.fg}`}
+ className={`tf-micro px-2 py-0.5 font-semibold rounded-full shrink-0 ${statusInfo.bg} ${statusInfo.fg}`}
               >
                 {statusInfo.text}
               </span>
 
               {task.project_name && (
-                <span className="flex items-center gap-1 px-2 py-0.5 bg-bg/80 border border-stroke/50 text-[10px] font-medium text-sub rounded-full truncate">
+ <span className="tf-micro flex items-center gap-1 px-2 py-0.5 bg-bg/80 border border-stroke/50 font-medium text-sub rounded-full truncate">
                   <span
                     className="w-1.5 h-1.5 rounded-full shrink-0"
                     style={{ backgroundColor: task.project_color || "#3A82F6" }}
@@ -113,7 +113,7 @@ export function TaskQuickPreviewModal({
 
               {prio && task.priority > 1 && (
                 <span
-                  className="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-bg border border-stroke/50 shrink-0"
+ className="tf-micro flex items-center gap-0.5 px-1.5 py-0.5 font-semibold rounded-full bg-bg border border-stroke/50 shrink-0"
                   style={{ color: prio.color }}
                 >
                   <Icon name="chevronUp" size={10} />P{task.priority}
@@ -135,12 +135,12 @@ export function TaskQuickPreviewModal({
           </div>
 
           {/* Заголовок задачи */}
-          <h3 className="text-[15px] font-bold text-text group-hover:text-red transition-colors line-clamp-2 leading-snug mb-2">
+ <h3 className="tf-body font-bold text-text group-hover:text-red transition-colors line-clamp-2 leading-snug mb-2">
             <MarkdownInline source={task.title} />
           </h3>
 
           {/* Нижняя строка: Время / дата, подзадачи, исполнитель + стрелочка перехода */}
-          <div className="flex items-center justify-between gap-2 text-[12px] text-sub border-t border-stroke/40 pt-2 mt-1">
+ <div className="tf-meta flex items-center justify-between gap-2 text-sub border-t border-stroke/40 pt-2 mt-1">
             <div className="flex items-center gap-2 overflow-hidden flex-wrap">
               {/* Время / Дата */}
               {task.due_date && (
@@ -161,7 +161,7 @@ export function TaskQuickPreviewModal({
 
               {/* Счётчик подзадач */}
               {totalSub > 0 && (
-                <span className="px-1.5 py-0.5 bg-bg/80 rounded text-[11px] font-medium text-sub shrink-0">
+ <span className="tf-caption px-1.5 py-0.5 bg-bg/80 rounded font-medium text-sub shrink-0">
                   {doneSub}/{totalSub} шагов
                 </span>
               )}
@@ -170,20 +170,20 @@ export function TaskQuickPreviewModal({
               {task.assignee_name && (
                 <div className="flex items-center gap-1 shrink-0">
                   <span
-                    className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
+ className="w-4 h-4 rounded-full flex items-center justify-center font-bold text-white shrink-0"
                     style={{
                       backgroundColor: task.assignee_color || "#3A82F6",
                     }}
                   >
                     {task.assignee_initials || task.assignee_name[0]}
                   </span>
-                  <span className="text-[11px]">{task.assignee_name}</span>
+ <span className="tf-caption ">{task.assignee_name}</span>
                 </div>
               )}
             </div>
 
             {/* Шеврон навигации */}
-            <div className="flex items-center gap-1 text-red font-semibold text-[12px] shrink-0 group-hover:translate-x-0.5 transition-transform">
+ <div className="tf-meta flex items-center gap-1 text-red font-semibold shrink-0 group-hover:translate-x-0.5 transition-transform">
               <span>Карточка</span>
               <Icon name="chevron" size={12} />
             </div>

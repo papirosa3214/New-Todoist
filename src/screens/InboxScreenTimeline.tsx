@@ -53,7 +53,7 @@ export function InboxScreenTimeline() {
         </div>
         <button
           onClick={() => navigate(-1)}
-          className="mt-3 inline-flex items-center gap-1 text-[12px] text-sub hover:text-text transition-colors"
+ className="tf-meta mt-3 inline-flex items-center gap-1 text-sub hover:text-text transition-colors"
         >
           <Icon name="chevron" size={14} className="rotate-90" />
           <span>Назад (демо)</span>
@@ -86,7 +86,7 @@ export function InboxScreenTimeline() {
         )}
       </div>
 
-      <div className="fixed bottom-12 left-1/2 -translate-x-1/2 text-[10px] text-neutral-600 tracking-widest uppercase">
+ <div className="tf-micro fixed bottom-12 left-1/2 -translate-x-1/2 text-neutral-600 tracking-widest uppercase">
         Inbox · Time-Thread · Этап 1
       </div>
     </div>

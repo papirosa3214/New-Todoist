@@ -506,7 +506,7 @@ export function TaskRow({
               {/* Проект — САМОЙ ВЕРХНЕЙ строкой, над названием задачи */}
               {hasProjectBadge && (
                 <div
-                  className="mb-1 inline-flex min-w-0 max-w-full items-center gap-1 text-[11px] font-medium"
+ className="tf-caption mb-1 inline-flex min-w-0 max-w-full items-center gap-1 font-medium"
                   style={{ color: task.project_color || "#A6A6A6" }}
                 >
                   <Icon name="hash" size={10} className="shrink-0" />
@@ -525,7 +525,7 @@ export function TaskRow({
                   />
                 )}
                 <div
-                  className={`text-[15px] leading-snug truncate flex-1 min-w-0 ${isDone ? "line-through text-sub" : "text-text"}`}
+ className={`tf-body leading-snug truncate flex-1 min-w-0 ${isDone ?"line-through text-sub" :"text-text"}`}
                 >
                   <MarkdownInline source={task.title} />
                 </div>
@@ -533,7 +533,7 @@ export function TaskRow({
 
               {/* Описание — на всю ширину карточки */}
               {task.description && (
-                <div className="w-full text-[13px] text-sub mt-1 line-clamp-2">
+ <div className="tf-action w-full text-sub mt-1 line-clamp-2">
                   <MarkdownInline source={task.description} />
                 </div>
               )}
@@ -550,7 +550,7 @@ export function TaskRow({
                 <div className="w-full flex items-center gap-1.5 flex-wrap mt-1.5 justify-start text-left">
                   {/* 1. Бейдж подзадач (всегда первый) */}
                   {hasSubtasksBadge && (
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-card text-sub font-medium">
+ <span className="tf-caption inline-flex items-center px-1.5 py-0.5 rounded bg-card text-sub font-medium">
                       {doneSub}/{progressTotal}
                     </span>
                   )}
@@ -562,7 +562,7 @@ export function TaskRow({
                   {/* 2.1. Помечена как глубокое исследование (миграция 052) */}
                   {task.needs_research ? (
                     <span
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] bg-card text-sub font-medium"
+ className="tf-caption inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-card text-sub font-medium"
                       title="Нужно глубокое исследование"
                     >
                       <Icon name="search" size={10} /> Исследование
@@ -571,7 +571,7 @@ export function TaskRow({
 
                   {/* 3. Просрочено */}
                   {hasOverduePill && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red/15 text-red font-medium">
+ <span className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red/15 text-red font-medium">
                       <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
                       {formatDueLabel(task.due_date!)}
                     </span>
@@ -579,7 +579,7 @@ export function TaskRow({
 
                   {/* 4. Дата + сколько дней осталось */}
                   {hasDueBadge && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
+ <span className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded bg-card text-sub">
                       <Icon name="calendarSmall" size={10} />{" "}
                       {formatDue(task.due_date!)}
                       <span
@@ -598,7 +598,7 @@ export function TaskRow({
                   {visibleLabels.map((l) => (
                     <span
                       key={l.id}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+ className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded"
                       style={{
                         backgroundColor: l.color + "26",
                         color: l.color,

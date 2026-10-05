@@ -12,7 +12,7 @@ export function AttemptLadderBadge({ task }: { task: ApiTask }) {
 
   return (
     <div
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium ${tone}`}
+ className={`tf-caption inline-flex items-center gap-1.5 rounded-full border px-2 py-1 font-medium ${tone}`}
       aria-label={`Попытка ${ladder.current_step} из ${ladder.total_steps}, ${model}`}
     >
       <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-current/10 px-1 tabular-nums">

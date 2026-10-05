@@ -638,7 +638,7 @@ export function AgentStateTag({
   if (task.agent_state === "in_progress" && task.agent_stale) {
     return (
       <span
-        className={`inline-flex items-center gap-1 ${pad} rounded text-[11px] font-semibold ${plain ? "" : "bg-coral/20 "}text-coral`}
+ className={`tf-caption inline-flex items-center gap-1 ${pad} rounded font-semibold ${plain ?"" :"bg-coral/20"}text-coral`}
       >
         <Icon name="bot" size={10} />
         Агент пропал
@@ -654,7 +654,7 @@ export function AgentStateTag({
   const meta = AGENT_TAG_META[task.agent_state];
   return (
     <span
-      className={`inline-flex items-center gap-1 ${pad} rounded text-[11px] ${plain ? "" : `${meta.bg} `}${meta.text}`}
+ className={`tf-caption inline-flex items-center gap-1 ${pad} rounded ${plain ?"" : `${meta.bg} `}${meta.text}`}
     >
       <Icon name="bot" size={10} />
       {meta.label}
@@ -860,14 +860,14 @@ export function SideNav() {
             type="button"
             onClick={() => navigate(item.path)}
             aria-current={active ? "page" : undefined}
-            className={`tap-row w-full h-12 flex items-center gap-3 px-3 rounded-xl text-[14px] ${
+ className={`tf-row tap-row w-full h-12 flex items-center gap-3 px-3 rounded-xl ${
               active ? "text-red" : "text-dim hover:text-sub"
             }`}
           >
             <Icon name={item.icon} size={22} />
             <span className="flex-1 text-left truncate">{item.label}</span>
             {showBadge && (
-              <span className="min-w-5 h-5 px-1 rounded-full bg-red text-white text-[11px] font-bold flex items-center justify-center leading-none shrink-0">
+ <span className="tf-caption min-w-5 h-5 px-1 rounded-full bg-red text-white font-bold flex items-center justify-center leading-none shrink-0">
                 {todayCount}
               </span>
             )}
@@ -1421,11 +1421,11 @@ export function ScreenHeader({
         >
           {leadingNode}
           {isCompact ? (
-            <h2 className="absolute left-1/2 -translate-x-1/2 text-[17px] font-semibold whitespace-nowrap">
+ <h2 className="tf-title absolute left-1/2 -translate-x-1/2 font-semibold whitespace-nowrap">
               {title}
             </h2>
           ) : (
-            <h1 className="flex-1 min-w-0 truncate text-[28px] font-bold">
+ <h1 className="tf-title-large flex-1 min-w-0 truncate font-bold">
               {title}
             </h1>
           )}
@@ -1491,7 +1491,7 @@ export function TextField({
         // одним правилом на все поля и только при pointer: fine. Утилитами
         // на классе он был и на телефоне: :focus-visible браузеры применяют
         // к текстовым полям на ЛЮБОЙ фокус, включая обычный тап.
-        className={`flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none ${className}`}
+ className={`tf-input flex-1 min-w-0 bg-transparent text-text placeholder:text-dim outline-none ${className}`}
       />
       {trailing}
     </div>
@@ -1520,7 +1520,7 @@ export function Button({
   return (
     <button
       {...props}
-      className={`w-full h-12 rounded-xl text-[15px] font-semibold flex items-center justify-center gap-3 tap-fade disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
+ className={`tf-body w-full h-12 rounded-xl font-semibold flex items-center justify-center gap-3 tap-fade disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
     >
       {children}
     </button>
@@ -1530,7 +1530,7 @@ export function Button({
 // ═══════════ LOADING ═══════════
 // Аудит дизайн-системы 20.08.2026, пункт 3: «Загрузка…» дословно
 // копипастилась в 13 экранах — inline-строка `<p className="px-1
-// text-[13px] text-dim">Загрузка…</p>` (иногда с mt-3/mb-4/px-3), плюс
+// text-dim">Загрузка…</p>` (иногда с tf-action/mt-3/mb-4/px-3), плюс
 // отдельный полноэкранный вариант `<div className="px-4 py-8 text-center
 // text-sub">Загрузка…</div>` для экранов, которые без данных вообще не
 // могут отрисоваться (TaskDetailScreen/TaskFormScreen). Тот же приём, что
@@ -1564,7 +1564,7 @@ export function Loading({
     );
   }
   return (
-    <p className={`${LOADING_PX[px]} text-[13px] text-dim ${className}`}>
+ <p className={`tf-action ${LOADING_PX[px]} text-dim ${className}`}>
       Загрузка…
     </p>
   );
@@ -1572,7 +1572,7 @@ export function Loading({
 
 // ═══════════ ERROR BANNER ═══════════
 // Generalizes InboxScreen's inline query-error line (`<p className="px-1
-// text-[13px] text-coral">…</p>`) into a reusable primitive that also
+// text-coral">…</p>`) into a reusable primitive that also
 // covers mutation errors. Accepts the raw `error` — a caught exception, a
 // mutation's `.error`, or a plain string already extracted into local
 // state (e.g. the try/catch pattern in LoginScreen/RegisterScreen) — and
@@ -1613,7 +1613,7 @@ export function ErrorBanner({
     return (
       <div
         role="alert"
-        className={`flex items-start gap-2 bg-coral/12 text-coral rounded-xl px-3 py-2.5 text-[13px] leading-relaxed ${className}`}
+ className={`tf-action flex items-start gap-2 bg-coral/12 text-coral rounded-xl px-3 py-2.5 leading-relaxed ${className}`}
       >
         <Icon name="info" size={15} className="shrink-0 mt-[1px]" />
         <span>{message}</span>
@@ -1622,7 +1622,7 @@ export function ErrorBanner({
   }
 
   return (
-    <p role="alert" className={`px-1 text-[13px] text-coral ${className}`}>
+ <p role="alert" className={`tf-action px-1 text-coral ${className}`}>
       {message}
     </p>
   );

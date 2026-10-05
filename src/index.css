@@ -1213,18 +1213,83 @@ body::-webkit-scrollbar {
 }
 
 @layer components {
-  /* ═══════════ РАЗМЕРЫ ШРИФТА — СЕМАНТИКА (аудит 20.08.2026, п.7) ═══════
-     Аудит просил завести токены text-caption/body/title/display вместо
-     голых text-[Npx]. Сознательно НЕ заведены как Tailwind @theme --text-*
-     токены: такой токен сам по себе даёт только font-size, а трекинг и
-     интерлиньяж ниже жёстко завязаны на буквальный селектор
-     `:where([class~="text-[28px]"])` — новый класс типа `text-display` под
-     него не попал бы и молча остался БЕЗ оптического трекинга/интерлиньяжа
-     (в этом файле уже дважды пойман живой баг именно от переноса этого
-     блока в неверное место, см. ниже). Семантика «какой кегль для чего»
-     уже задокументирована текстовой таблицей — DESIGN.md, раздел
-     «Типографика (размер → где)» — держать её актуальной при появлении
-     нового кегля, а не дублировать вторым источником истины здесь. */
+  /* ═══════════ ШКАЛА 10 СТУПЕНЕЙ — iOS (MAK-47, 2026-10-05) ═══════════
+     Эталон — таблица в карточке задачи 445e106b (Linear MAK-47) и
+     `TaskFlowNativeBuild/Sources/DesignSystem/Theme/Typography.swift`
+     (только чтение). Каждой ступени — один семантический класс, который
+     задаёт font-size, font-weight и трекинг разом. Классы лежат в
+     @layer components: их бьёт base (с правильным preflight), но проигрывает
+     явная утилита `tracking-*` / `leading-*` в разметке.
+
+     ПРЕДЫДУЩАЯ СХЕМА — размер через `text-[Npx]` в разметке, трекинг через
+     селектор `:where([class~="text-[Npx]"])` ниже. Работала, но размер был
+     оторван от семантики: один и тот же `text-[13px]` встречался в роли
+     action, meta и caption, и трекинг на нём стоял единственный. Ступени
+     переехали в классы, трекинг привязан к НИМ, а не к произвольному числу.
+     Переход двусторонний: новый код пишет `tf-action` (или `text-tf-action`
+     в className вместе с цветом); если в `src/` останется один `text-[Npx]`
+     без класса — трекинг всё равно сработает (селекторы ниже сохранены до
+     полной миграции и потом удалятся).
+
+     Гарнитура: системная (`-apple-system`). Поля ввода (`tf-input`) — 16px,
+     только в <input>/<textarea>/contenteditable; iOS зумит страницу на фокусе
+     поля с меньшим кеглем. 16 px ВНЕ полей ввода запрещён (после миграции
+     такие случаи — единственные легитимные исключения из шкалы). */
+
+  .tf-title-large {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 32px;
+    letter-spacing: -0.03em;
+  }
+  .tf-task-title {
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 23px;
+    letter-spacing: -0.02em;
+  }
+  .tf-title {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.012em;
+  }
+  .tf-input {
+    /* 16 px — ТОЛЬКО для полей ввода. Вне input/textarea/contenteditable
+       не использовать (см. шапку блока). */
+    font-size: 16px;
+    font-weight: 400;
+    letter-spacing: -0.006em;
+  }
+  .tf-body {
+    font-size: 15px;
+    font-weight: 400;
+    letter-spacing: -0.002em;
+  }
+  .tf-row {
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: 0;
+  }
+  .tf-action {
+    font-size: 13px;
+    font-weight: 400;
+    letter-spacing: 0.008em;
+  }
+  .tf-meta {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.012em;
+  }
+  .tf-caption {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.018em;
+  }
+  .tf-micro {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.025em;
+  }
 
   /* ═══════════ TRACKING BY FONT SIZE ═══════════════
    ВНИМАНИЕ, БЛОК ОБЯЗАН ЛЕЖАТЬ В @layer components (20.08.2026) — ни
@@ -1355,6 +1420,9 @@ body::-webkit-scrollbar {
      Основной текст (15px/1.375, 14px, 13px) НЕ трогаем — он и так в
      правильной части шкалы. */
   :where([class~="text-[28px]"]) {
+    /* line-height:32px уже в .tf-title-large; продублировано осознанно —
+       на время миграции, пока часть заголовков ещё держится на text-[28px].
+       После прогона все text-[28px] → .tf-title-large и блок убирается. */
     line-height: 32px;
   }
   :where([class~="text-[20px]"]) {

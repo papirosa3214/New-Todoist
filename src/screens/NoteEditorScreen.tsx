@@ -211,7 +211,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
         disabled={disabled}
         onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
         aria-pressed={editor.isActive("heading", { level: 1 })}
-        className={`tap-scale shrink-0 h-9 px-2 rounded-lg text-[13px] font-bold disabled:opacity-30 ${
+ className={`tf-action tap-scale shrink-0 h-9 px-2 rounded-lg font-bold disabled:opacity-30 ${
           editor.isActive("heading", { level: 1 })
             ? "bg-red/15 text-red"
             : "text-sub"
@@ -225,7 +225,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
         disabled={disabled}
         onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
         aria-pressed={editor.isActive("heading", { level: 2 })}
-        className={`tap-scale shrink-0 h-9 px-2 rounded-lg text-[13px] font-bold disabled:opacity-30 ${
+ className={`tf-action tap-scale shrink-0 h-9 px-2 rounded-lg font-bold disabled:opacity-30 ${
           editor.isActive("heading", { level: 2 })
             ? "bg-red/15 text-red"
             : "text-sub"
@@ -239,7 +239,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
         disabled={disabled}
         onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
         aria-pressed={editor.isActive("heading", { level: 3 })}
-        className={`tap-scale shrink-0 h-9 px-2 rounded-lg text-[13px] font-bold disabled:opacity-30 ${
+ className={`tf-action tap-scale shrink-0 h-9 px-2 rounded-lg font-bold disabled:opacity-30 ${
           editor.isActive("heading", { level: 3 })
             ? "bg-red/15 text-red"
             : "text-sub"
@@ -786,7 +786,7 @@ export function NoteEditorScreen() {
             <EditorContent editor={editor} />
           </div>
 
-          <div className="text-[12px] text-dim px-1 pt-2 h-4">
+ <div className="tf-meta text-dim px-1 pt-2 h-4">
             {statusLabel}
           </div>
         </>

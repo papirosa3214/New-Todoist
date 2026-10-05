@@ -149,11 +149,11 @@ function ModelRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           {dot && <StatusDot state={dot} />}
-          <span className="text-[15px] text-text truncate">{title}</span>
+ <span className="tf-body text-text truncate">{title}</span>
         </div>
-        <div className="text-[13px] text-sub truncate">{subtitle}</div>
+ <div className="tf-action text-sub truncate">{subtitle}</div>
       </div>
-      {value && <span className="text-[13px] text-dim shrink-0">{value}</span>}
+ {value && <span className="tf-action text-dim shrink-0">{value}</span>}
       {action}
       {onClick && !action && (
         <Icon name="chevron" size={16} className="text-dim shrink-0" />
@@ -186,7 +186,7 @@ function ModelRow({
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[11px] uppercase tracking-wide text-dim px-1 mb-2 mt-4">
+ <div className="tf-caption uppercase tracking-wide text-dim px-1 mb-2 mt-4">
       {children}
     </div>
   );
@@ -296,7 +296,7 @@ export function VoiceModelsScreen() {
         <ScreenHeader
           title="Искусственный интеллект"
         />
-        <div className="px-4 text-[15px] text-sub">
+ <div className="tf-body px-4 text-sub">
           Модели на устройстве доступны только в приложении на iPhone. В
           браузере всё идёт через сервер.
         </div>
@@ -410,7 +410,7 @@ export function VoiceModelsScreen() {
                   <button
                     disabled={llmBusy}
                     onClick={() => void runLlm(deleteLocalLLM)}
-                    className="text-[14px] px-3 py-1 rounded-lg text-coral disabled:opacity-50"
+ className="tf-row px-3 py-1 rounded-lg text-coral disabled:opacity-50"
                   >
                     Удалить
                   </button>
@@ -418,7 +418,7 @@ export function VoiceModelsScreen() {
                   <button
                     disabled={llmBusy}
                     onClick={() => void runLlm(downloadLocalLLM)}
-                    className="text-[14px] px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50"
+ className="tf-row px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50"
                   >
                     {llmBusy ? "Качаю…" : "Скачать"}
                   </button>
@@ -451,7 +451,7 @@ export function VoiceModelsScreen() {
                       <button
                         disabled={isBusy}
                         onClick={() => void run(model, () => downloadWhisperModel(model))}
-                        className="text-[14px] px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50"
+ className="tf-row px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50"
                       >
                         {isBusy ? "Качаю…" : "Скачать"}
                       </button>
@@ -460,14 +460,14 @@ export function VoiceModelsScreen() {
                         <button
                           disabled={isBusy}
                           onClick={() => void run(model, () => selectWhisperModel(model))}
-                          className="text-[14px] px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50"
+ className="tf-row px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50"
                         >
                           Выбрать
                         </button>
                         <button
                           disabled={isBusy}
                           onClick={() => void run(model, () => deleteWhisperModel(model))}
-                          className="text-[14px] px-3 py-1 rounded-lg text-coral disabled:opacity-50"
+ className="tf-row px-3 py-1 rounded-lg text-coral disabled:opacity-50"
                         >
                           Удалить
                         </button>
@@ -482,7 +482,7 @@ export function VoiceModelsScreen() {
             <button
               type="button"
               onClick={() => setShowAll((v) => !v)}
-              className="tap-fade w-full text-[14px] text-blue py-3 text-center"
+ className="tf-row tap-fade w-full text-blue py-3 text-center"
             >
               {showAll ? "Свернуть" : `Ещё ${rest.length}`}
             </button>
@@ -522,7 +522,7 @@ export function VoiceModelsScreen() {
       <AiProviderModal isOpen={brainOpen} onClose={() => setBrainOpen(false)} />
 
       {available.length === 0 && (
-        <div className="text-[13px] text-sub px-1 mt-3">
+ <div className="tf-action text-sub px-1 mt-3">
           Список моделей не загрузился — нужен интернет, чтобы его получить.
           Уже скачанные работают офлайн.
           {error ? ` (${getErrorMessage(error, "")})` : ""}
@@ -561,7 +561,7 @@ function DictationLogSection() {
 
   return (
     <div className="mb-6">
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub font-semibold px-1 mb-2">
         Диагностика диктовки
       </div>
       {/* Архив аудио. Показываем всегда, а не только при включённом журнале:
@@ -570,9 +570,9 @@ function DictationLogSection() {
       <div className="mb-2">
         <FieldGroup>
           <div className="flex items-center justify-between px-4 py-3 bg-card">
-            <div className="text-[15px] text-text pr-3">
+ <div className="tf-body text-text pr-3">
               Архив аудио на сервере
-              <div className="text-[13px] text-sub">
+ <div className="tf-action text-sub">
                 {queued === 0
                   ? "Всё выгружено"
                   : `Ждут отправки: ${queued}. Уйдут, когда .110 будет доступен`}
@@ -586,7 +586,7 @@ function DictationLogSection() {
                   setSending(true);
                   void flushArchiveQueue().finally(() => setSending(false));
                 }}
-                className="text-[14px] px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50 shrink-0"
+ className="tf-row px-3 py-1 rounded-lg bg-blue/15 text-blue disabled:opacity-50 shrink-0"
               >
                 {sending ? "Отправляю…" : "Отправить"}
               </button>
@@ -598,16 +598,16 @@ function DictationLogSection() {
       <div className="mb-2">
         <FieldGroup>
           <div className="flex items-center justify-between px-4 py-3 bg-card">
-            <div className="text-[15px] text-text pr-3">
+ <div className="tf-body text-text pr-3">
               Записывать, что распознала модель
-              <div className="text-[13px] text-sub">
+ <div className="tf-action text-sub">
                 Видно текст от модели и текст после исправлений
               </div>
             </div>
             <button
               type="button"
               onClick={() => setDictationLogEnabled(!enabled)}
-              className={`text-[14px] px-3 py-1 rounded-lg shrink-0 ${
+ className={`tf-row px-3 py-1 rounded-lg shrink-0 ${
                 enabled ? "bg-green/20 text-green" : "bg-blue/15 text-blue"
               }`}
             >
@@ -618,7 +618,7 @@ function DictationLogSection() {
       </div>
 
       {enabled && entries.length === 0 && (
-        <div className="text-[13px] text-sub px-1">
+ <div className="tf-action text-sub px-1">
           Пока пусто — продиктуй что-нибудь, и запись появится здесь.
         </div>
       )}
@@ -628,17 +628,17 @@ function DictationLogSection() {
           <FieldGroup>
             {entries.map((entry) => (
               <div key={entry.at} className="px-4 py-3 bg-card">
-                <div className="text-[12px] text-dim mb-1">
+ <div className="tf-meta text-dim mb-1">
                   {new Date(entry.at).toLocaleTimeString("ru-RU", { timeZone: "Europe/Moscow" })} · {entry.engine}
                   {entry.raw === entry.normalized
                     ? " · исправлений не потребовалось"
                     : " · исправлено нами"}
                 </div>
-                <div className="text-[13px] text-sub break-words">
+ <div className="tf-action text-sub break-words">
                   от модели: {entry.raw || "—"}
                 </div>
                 {entry.raw !== entry.normalized && (
-                  <div className="text-[13px] text-text break-words">
+ <div className="tf-action text-text break-words">
                     после правок: {entry.normalized}
                   </div>
                 )}
@@ -648,7 +648,7 @@ function DictationLogSection() {
           <button
             type="button"
             onClick={clearDictationLog}
-            className="text-[14px] text-coral px-1 mt-2"
+ className="tf-row text-coral px-1 mt-2"
           >
             Очистить журнал
           </button>

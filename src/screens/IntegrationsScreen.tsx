@@ -292,7 +292,7 @@ export function IntegrationsScreen() {
                   <Icon name="calendar" size={18} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[15px] font-medium text-text">Apple Календарь</div>
+ <div className="tf-body font-medium text-text">Apple Календарь</div>
                   <div className="text-xs text-sub truncate">
                     {isApple
                       ? calPerm.granted
@@ -307,7 +307,7 @@ export function IntegrationsScreen() {
 
               <div className="flex items-center gap-2 shrink-0">
                 {isApple && calPerm.granted && (
-                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+ <span className="tf-caption text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
                     Включён
                   </span>
                 )}
@@ -376,7 +376,7 @@ export function IntegrationsScreen() {
                   <Icon name="calendar-check" size={18} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[15px] font-medium text-text">Apple Напоминания</div>
+ <div className="tf-body font-medium text-text">Apple Напоминания</div>
                   <div className="text-xs text-sub truncate">
                     {isApple
                       ? remPerm.granted
@@ -389,7 +389,7 @@ export function IntegrationsScreen() {
 
               <div className="flex items-center gap-2 shrink-0">
                 {isApple && remPerm.granted && (
-                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+ <span className="tf-caption text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
                     Включён
                   </span>
                 )}
@@ -470,7 +470,7 @@ export function IntegrationsScreen() {
                   <Icon name="tag" size={18} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[15px] font-medium text-text">Google Задачи</div>
+ <div className="tf-body font-medium text-text">Google Задачи</div>
                   <div className="text-xs text-sub truncate">
                     {isStatusLoading
                       ? "Проверка..."
@@ -483,7 +483,7 @@ export function IntegrationsScreen() {
 
               <div className="flex items-center gap-2 shrink-0">
                 {googleConnected && (
-                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+ <span className="tf-caption text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
                     В сети
                   </span>
                 )}
@@ -553,7 +553,7 @@ export function IntegrationsScreen() {
                     </div>
 
                     {intStatus?.google?.lastSyncedAt && (
-                      <div className="text-[11px] text-dim text-center">
+ <div className="tf-caption text-dim text-center">
                         Последняя синхронизация: {new Date(intStatus.google.lastSyncedAt).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })}
                       </div>
                     )}
@@ -574,7 +574,7 @@ export function IntegrationsScreen() {
                   <Icon name="calendar" size={18} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[15px] font-medium text-text">Google Календарь</div>
+ <div className="tf-body font-medium text-text">Google Календарь</div>
                   <div className="text-xs text-sub truncate">
                     {googleConnected
                       ? gCalsData?.calendars && gCalsData.calendars.length > 0
@@ -587,7 +587,7 @@ export function IntegrationsScreen() {
 
               <div className="flex items-center gap-2 shrink-0">
                 {googleConnected && (
-                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+ <span className="tf-caption text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
                     В сети
                   </span>
                 )}
