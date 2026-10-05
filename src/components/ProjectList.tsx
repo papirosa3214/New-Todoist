@@ -214,10 +214,10 @@ function ProjectRow({
         {!!project.pinned && (
           <Icon name="pin" size={12} className="text-dim shrink-0 -ml-1.5" />
         )}
-        <span className="text-[14px] text-text flex-1 truncate">
+ <span className="tf-row text-text flex-1 truncate">
           {project.name}
         </span>
-        <span className="text-[13px] text-sub">{project.task_count}</span>
+ <span className="tf-action text-sub">{project.task_count}</span>
       </button>
       <button
         ref={menuAnchorRef}

@@ -42,7 +42,7 @@ function StatRows({
   empty: string;
 }) {
   if (rows.length === 0)
-    return <p className="text-[13px] text-dim px-1 py-1">{empty}</p>;
+ return <p className="tf-action text-dim px-1 py-1">{empty}</p>;
   const max = Math.max(...rows.map((r) => r.сообщений), 1);
   return (
     <div className="flex flex-col gap-2">
@@ -50,13 +50,13 @@ function StatRows({
         <div key={r.имя} className="flex flex-col gap-1">
           <div className="flex items-baseline justify-between gap-3">
             <span
-              className={`text-[14px] min-w-0 truncate ${
+ className={`tf-row min-w-0 truncate ${
                 r.выделить ? "text-red font-semibold" : "text-text"
               }`}
             >
               {r.имя}
             </span>
-            <span className="text-[13px] text-sub shrink-0 tabular-nums">
+ <span className="tf-action text-sub shrink-0 tabular-nums">
               {r.сообщений}
             </span>
           </div>
@@ -81,7 +81,7 @@ function Section({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <h4 className="text-[13px] text-sub px-1">{title}</h4>
+ <h4 className="tf-action text-sub px-1">{title}</h4>
       {children}
     </div>
   );
@@ -132,7 +132,7 @@ export function ChatStatsSheet({
           >
             <Icon name="x" size={20} className="text-sub" />
           </button>
-          <h3 className="text-[17px] font-semibold text-text">
+ <h3 className="tf-title text-text">
             Кого озадачивают
           </h3>
           {/* Пустой блок в ширину кнопки — заголовок остаётся по центру. */}
@@ -149,7 +149,7 @@ export function ChatStatsSheet({
 
         {data && (
           <div className="flex flex-col gap-5 pb-4">
-            <p className="text-[13px] text-dim px-1">
+ <p className="tf-action text-dim px-1">
               Служебная переписка исполнителей: {data.всего}{" "}
               {plural(data.всего, "сообщение", "сообщения", "сообщений")}. Твой
               разговор с оркестратором сюда не входит.

@@ -41,10 +41,10 @@ export function InboxScreenTimeline() {
   return (
     <div className="min-h-screen bg-bg text-text pb-12">
       <header className="px-8 pt-12 pb-4">
-        <div className="text-sm text-dim tracking-widest uppercase">
+        <div className="tf-action text-dim tracking-widest uppercase">
           Входящие
         </div>
-        <div className="text-3xl font-medium mt-1">
+        <div className="tf-task-title mt-1">
           {inbox.length === 0
             ? "Пусто"
             : inbox.length === 1
@@ -53,7 +53,7 @@ export function InboxScreenTimeline() {
         </div>
         <button
           onClick={() => navigate(-1)}
-          className="mt-3 inline-flex items-center gap-1 text-[12px] text-sub hover:text-text transition-colors"
+ className="tf-meta mt-3 inline-flex items-center gap-1 text-sub hover:text-text transition-colors"
         >
           <Icon name="chevron" size={14} className="rotate-90" />
           <span>Назад (демо)</span>
@@ -67,9 +67,9 @@ export function InboxScreenTimeline() {
         />
 
         {isLoading ? (
-          <div className="text-sub text-sm pl-8 py-8">Загрузка…</div>
+          <div className="text-sub tf-action pl-8 py-8">Загрузка…</div>
         ) : inbox.length === 0 ? (
-          <div className="text-sub text-sm pl-8 py-8">
+          <div className="text-sub tf-action pl-8 py-8">
             Во Входящих пусто.
           </div>
         ) : (
@@ -86,7 +86,7 @@ export function InboxScreenTimeline() {
         )}
       </div>
 
-      <div className="fixed bottom-12 left-1/2 -translate-x-1/2 text-[10px] text-neutral-600 tracking-widest uppercase">
+ <div className="tf-micro fixed bottom-12 left-1/2 -translate-x-1/2 text-neutral-600 tracking-widest uppercase">
         Inbox · Time-Thread · Этап 1
       </div>
     </div>
@@ -132,10 +132,10 @@ function TimelineInboxTask({
           style={{ backgroundColor: projectColor }}
         />
       )}
-      <div className="text-xs text-dim font-mono mb-1 tracking-widest uppercase">
+      <div className="tf-caption text-dim font-mono mb-1 tracking-widest uppercase">
         {project ? project.name : "Без проекта"}
       </div>
-      <div className="text-lg font-light leading-tight group-hover:text-text transition-colors">
+      <div className="tf-title leading-tight group-hover:text-text transition-colors">
         <MarkdownInline source={task.title} />
       </div>
     </button>

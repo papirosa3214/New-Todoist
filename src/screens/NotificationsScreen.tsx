@@ -63,11 +63,11 @@ function NotificationRow({ n }: { n: ApiNotification }) {
           className="tap-row w-full text-left"
           title={n.task_title || undefined}
         >
-          <div className="text-[14px] text-text leading-snug">{n.text}</div>
+ <div className="tf-row text-text leading-snug">{n.text}</div>
           {n.task_title && (
-            <div className="text-[13px] text-sub mt-0.5">{n.task_title}</div>
+ <div className="tf-action text-sub mt-0.5">{n.task_title}</div>
           )}
-          <div className="text-[12px] text-dim mt-0.5">
+ <div className="tf-meta text-dim mt-0.5">
             {formatRelativeTime(n.created_at)} · {formatAbsoluteTime(n.created_at)}
           </div>
         </button>
@@ -127,7 +127,7 @@ export function NotificationsScreen() {
             // Надпись 87×19.5 — по высоте вдвое меньше нормы HIG в 44pt.
             // Кегль и место в шапке не трогаем, зону добираем прозрачным
             // ::before на всю ширину надписи и 44pt по высоте.
-            className="tap-fade relative text-[13px] text-sub disabled:opacity-40 before:absolute before:inset-x-0 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-['']"
+ className="tf-action tap-fade relative text-sub disabled:opacity-40 before:absolute before:inset-x-0 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-['']"
           >
             Прочитать все
           </button>
@@ -149,7 +149,7 @@ export function NotificationsScreen() {
 
       {isLoading && <Loading className="mt-3" />}
       {!isLoading && notifications.length === 0 && (
-        <p className="px-1 text-[13px] text-dim mt-3">Уведомлений пока нет</p>
+ <p className="tf-action px-1 text-dim mt-3">Уведомлений пока нет</p>
       )}
 
       {/* Notification list */}

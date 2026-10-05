@@ -269,7 +269,7 @@ export function IntegrationsScreen() {
         <ErrorBanner error={error} variant="block" />
 
         {appleSyncStatus && (
-          <div className="bg-card border border-teal/30 rounded-xl p-3 flex items-center gap-3 text-sm text-teal">
+          <div className="bg-card border border-teal/30 rounded-xl p-3 flex items-center gap-3 tf-action text-teal">
             <Icon name="check" size={18} className="shrink-0" />
             <span>{appleSyncStatus}</span>
           </div>
@@ -277,7 +277,7 @@ export function IntegrationsScreen() {
 
         {/* ═══════════ СЕКЦИЯ: APPLE ЭКОСИСТЕМА ═══════════ */}
         <div className="space-y-3">
-          <div className="text-xs font-semibold uppercase tracking-wider text-sub px-1">
+          <div className="tf-caption uppercase tracking-wider text-sub px-1">
             Apple Экосистема (iOS)
           </div>
 
@@ -292,8 +292,8 @@ export function IntegrationsScreen() {
                   <Icon name="calendar" size={18} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[15px] font-medium text-text">Apple Календарь</div>
-                  <div className="text-xs text-sub truncate">
+ <div className="tf-body text-text">Apple Календарь</div>
+                  <div className="tf-caption text-sub truncate">
                     {isApple
                       ? calPerm.granted
                         ? calendars.length > 0
@@ -307,7 +307,7 @@ export function IntegrationsScreen() {
 
               <div className="flex items-center gap-2 shrink-0">
                 {isApple && calPerm.granted && (
-                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+ <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
                     Включён
                   </span>
                 )}
@@ -325,14 +325,14 @@ export function IntegrationsScreen() {
                   <div className="pt-2">
                     <button
                       onClick={handleRequestCalendar}
-                      className="w-full py-2 bg-coral text-white rounded-xl text-xs font-semibold active:scale-98 transition-transform"
+                      className="w-full py-2 bg-coral text-white rounded-xl tf-caption active:scale-98 transition-transform"
                     >
                       Разрешить доступ к Apple Календарю
                     </button>
                   </div>
                 ) : calendars.length > 0 ? (
                   <div className="pt-2 space-y-2">
-                    <div className="text-xs font-medium text-sub">Отображать календари в расписании:</div>
+                    <div className="tf-caption text-sub">Отображать календари в расписании:</div>
                     <div className="space-y-1 bg-card rounded-xl p-2 border border-stroke/40">
                       {calendars.map((cal) => {
                         const isChecked =
@@ -348,7 +348,7 @@ export function IntegrationsScreen() {
                                 className="w-2.5 h-2.5 rounded-full shrink-0"
                                 style={{ backgroundColor: cal.color }}
                               />
-                              <span className="text-xs text-text truncate">{cal.title}</span>
+                              <span className="tf-caption text-text truncate">{cal.title}</span>
                             </div>
                             {isChecked && (
                               <Icon name="check" size={14} className="text-coral shrink-0 ml-2" />
@@ -359,7 +359,7 @@ export function IntegrationsScreen() {
                     </div>
                   </div>
                 ) : (
-                  <div className="text-xs text-sub pt-2">Календари не найдены</div>
+                  <div className="tf-caption text-sub pt-2">Календари не найдены</div>
                 )}
               </div>
             )}
@@ -376,8 +376,8 @@ export function IntegrationsScreen() {
                   <Icon name="calendar-check" size={18} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[15px] font-medium text-text">Apple Напоминания</div>
-                  <div className="text-xs text-sub truncate">
+ <div className="tf-body text-text">Apple Напоминания</div>
+                  <div className="tf-caption text-sub truncate">
                     {isApple
                       ? remPerm.granted
                         ? "Двусторонняя синхронизация задач"
@@ -389,7 +389,7 @@ export function IntegrationsScreen() {
 
               <div className="flex items-center gap-2 shrink-0">
                 {isApple && remPerm.granted && (
-                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+ <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
                     Включён
                   </span>
                 )}
@@ -407,7 +407,7 @@ export function IntegrationsScreen() {
                   <div className="pt-2">
                     <button
                       onClick={handleRequestReminders}
-                      className="w-full py-2 bg-coral text-white rounded-xl text-xs font-semibold active:scale-98 transition-transform"
+                      className="w-full py-2 bg-coral text-white rounded-xl tf-caption active:scale-98 transition-transform"
                     >
                       Разрешить доступ к Apple Напоминаниям
                     </button>
@@ -416,14 +416,14 @@ export function IntegrationsScreen() {
                   <div className="pt-2 space-y-3">
                     {reminderLists.length > 0 && (
                       <div>
-                        <label className="text-xs text-sub block mb-1">Список Apple Напоминаний:</label>
+                        <label className="tf-caption text-sub block mb-1">Список Apple Напоминаний:</label>
                         <select
                           value={selectedRemListId}
                           onChange={(e) => {
                             setSelectedRemListId(e.target.value);
                             localStorage.setItem("apple_reminders_list_id", e.target.value);
                           }}
-                          className="w-full bg-card border border-stroke rounded-xl px-3 py-2 text-xs text-text focus:outline-none focus:border-coral"
+                          className="w-full bg-card border border-stroke rounded-xl px-3 py-2 tf-caption text-text focus:outline-none focus:border-coral"
                         >
                           {reminderLists.map((l) => (
                             <option key={l.id} value={l.id}>
@@ -437,7 +437,7 @@ export function IntegrationsScreen() {
                     <button
                       onClick={handleSyncAppleReminders}
                       disabled={isAppleSyncing}
-                      className="w-full py-2.5 bg-card border border-stroke rounded-xl text-xs font-medium text-text flex items-center justify-center gap-2 active:scale-98 transition-transform disabled:opacity-50 shadow-2xs"
+                      className="w-full py-2.5 bg-card border border-stroke rounded-xl tf-caption text-text flex items-center justify-center gap-2 active:scale-98 transition-transform disabled:opacity-50 shadow-2xs"
                     >
                       <Icon
                         name="refresh-cw"
@@ -455,7 +455,7 @@ export function IntegrationsScreen() {
 
         {/* ═══════════ СЕКЦИЯ: GOOGLE СЕРВИСЫ ═══════════ */}
         <div className="space-y-3 pt-2">
-          <div className="text-xs font-semibold uppercase tracking-wider text-sub px-1">
+          <div className="tf-caption uppercase tracking-wider text-sub px-1">
             Google Сервисы
           </div>
 
@@ -470,8 +470,8 @@ export function IntegrationsScreen() {
                   <Icon name="tag" size={18} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[15px] font-medium text-text">Google Задачи</div>
-                  <div className="text-xs text-sub truncate">
+ <div className="tf-body text-text">Google Задачи</div>
+                  <div className="tf-caption text-sub truncate">
                     {isStatusLoading
                       ? "Проверка..."
                       : googleConnected
@@ -483,7 +483,7 @@ export function IntegrationsScreen() {
 
               <div className="flex items-center gap-2 shrink-0">
                 {googleConnected && (
-                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+ <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
                     В сети
                   </span>
                 )}
@@ -502,7 +502,7 @@ export function IntegrationsScreen() {
                     <button
                       onClick={handleConnectGoogle}
                       disabled={getAuthUrl.isPending}
-                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold active:scale-98 transition-transform shadow-2xs"
+                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl tf-caption active:scale-98 transition-transform shadow-2xs"
                     >
                       {getAuthUrl.isPending ? "Формирование ссылки..." : "Войти через Google"}
                     </button>
@@ -510,14 +510,14 @@ export function IntegrationsScreen() {
                 ) : (
                   <div className="pt-2 space-y-3">
                     {isGListsLoading ? (
-                      <div className="text-xs text-sub">Загрузка списков задач...</div>
+                      <div className="tf-caption text-sub">Загрузка списков задач...</div>
                     ) : gListsData?.lists && gListsData.lists.length > 0 ? (
                       <div>
-                        <label className="text-xs text-sub block mb-1">Список Google Tasks:</label>
+                        <label className="tf-caption text-sub block mb-1">Список Google Tasks:</label>
                         <select
                           value={intStatus?.google?.settings?.listId || "@default"}
                           onChange={(e) => handleSelectGoogleList(e.target.value)}
-                          className="w-full bg-card border border-stroke rounded-xl px-3 py-2 text-xs text-text focus:outline-none focus:border-coral"
+                          className="w-full bg-card border border-stroke rounded-xl px-3 py-2 tf-caption text-text focus:outline-none focus:border-coral"
                         >
                           <option value="@default">Основной список (@default)</option>
                           {gListsData.lists.map((l) => (
@@ -533,7 +533,7 @@ export function IntegrationsScreen() {
                       <button
                         onClick={handleSyncGoogle}
                         disabled={googleSync.isPending}
-                        className="flex-1 py-2.5 bg-card border border-stroke rounded-xl text-xs font-medium text-text flex items-center justify-center gap-2 active:scale-98 transition-transform disabled:opacity-50 shadow-2xs"
+                        className="flex-1 py-2.5 bg-card border border-stroke rounded-xl tf-caption text-text flex items-center justify-center gap-2 active:scale-98 transition-transform disabled:opacity-50 shadow-2xs"
                       >
                         <Icon
                           name="refresh-cw"
@@ -546,14 +546,14 @@ export function IntegrationsScreen() {
                       <button
                         onClick={handleDisconnectGoogle}
                         disabled={disconnectGoogle.isPending}
-                        className="px-3 py-2.5 bg-card border border-stroke rounded-xl text-xs text-coral font-medium active:scale-98 transition-transform hover:bg-red-500/10"
+                        className="px-3 py-2.5 bg-card border border-stroke rounded-xl tf-caption text-coral active:scale-98 transition-transform hover:bg-red-500/10"
                       >
                         Отключить
                       </button>
                     </div>
 
                     {intStatus?.google?.lastSyncedAt && (
-                      <div className="text-[11px] text-dim text-center">
+ <div className="tf-caption text-dim text-center">
                         Последняя синхронизация: {new Date(intStatus.google.lastSyncedAt).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })}
                       </div>
                     )}
@@ -574,8 +574,8 @@ export function IntegrationsScreen() {
                   <Icon name="calendar" size={18} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[15px] font-medium text-text">Google Календарь</div>
-                  <div className="text-xs text-sub truncate">
+ <div className="tf-body text-text">Google Календарь</div>
+                  <div className="tf-caption text-sub truncate">
                     {googleConnected
                       ? gCalsData?.calendars && gCalsData.calendars.length > 0
                         ? `Выбрано: ${selectedGoogleCalIds.length || "все"} из ${gCalsData.calendars.length}`
@@ -587,7 +587,7 @@ export function IntegrationsScreen() {
 
               <div className="flex items-center gap-2 shrink-0">
                 {googleConnected && (
-                  <span className="text-[11px] text-teal font-medium px-2 py-0.5 bg-teal/10 rounded-md">
+ <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
                     В сети
                   </span>
                 )}
@@ -606,7 +606,7 @@ export function IntegrationsScreen() {
                     <button
                       onClick={handleConnectGoogle}
                       disabled={getAuthUrl.isPending}
-                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold active:scale-98 transition-transform shadow-2xs"
+                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl tf-caption active:scale-98 transition-transform shadow-2xs"
                     >
                       {getAuthUrl.isPending ? "Формирование ссылки..." : "Войти через Google"}
                     </button>
@@ -614,10 +614,10 @@ export function IntegrationsScreen() {
                 ) : (
                   <div className="pt-2 space-y-2">
                     {isGCalsLoading ? (
-                      <div className="text-xs text-sub">Загрузка календарей Google...</div>
+                      <div className="tf-caption text-sub">Загрузка календарей Google...</div>
                     ) : gCalsData?.calendars && gCalsData.calendars.length > 0 ? (
                       <>
-                        <div className="text-xs font-medium text-sub">Отображать календари Google:</div>
+                        <div className="tf-caption text-sub">Отображать календари Google:</div>
                         <div className="space-y-1 bg-card rounded-xl p-2 border border-stroke/40">
                           {gCalsData.calendars.map((cal) => {
                             const isChecked =
@@ -634,7 +634,7 @@ export function IntegrationsScreen() {
                                     className="w-2.5 h-2.5 rounded-full shrink-0"
                                     style={{ backgroundColor: cal.backgroundColor || "#4285F4" }}
                                   />
-                                  <span className="text-xs text-text truncate">
+                                  <span className="tf-caption text-text truncate">
                                     {cal.summary} {cal.primary ? "(Основной)" : ""}
                                   </span>
                                 </div>
@@ -647,7 +647,7 @@ export function IntegrationsScreen() {
                         </div>
                       </>
                     ) : (
-                      <div className="text-xs text-sub">Календари не найдены или нет доступа</div>
+                      <div className="tf-caption text-sub">Календари не найдены или нет доступа</div>
                     )}
                   </div>
                 )}

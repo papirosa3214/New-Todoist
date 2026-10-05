@@ -123,7 +123,7 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
     <div className="mt-6">
       {dialog}
       <div className="flex items-center justify-between mb-2">
-        <div className="text-[17px] text-sub font-semibold">Документация</div>
+ <div className="tf-title text-sub ">Документация</div>
         {folder ? (
           <button
             onClick={addNote}
@@ -139,7 +139,7 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
         // Пусто — объясняем, что это даёт, и предлагаем оба пути: завести
         // новую папку под проект или привязать уже существующую.
         <div className="rounded-xl bg-card px-4 py-4">
-          <p className="text-[13px] text-sub leading-snug mb-3">
+ <p className="tf-action text-sub leading-snug mb-3">
             Прикрепите папку заметок — вся документация по проекту будет
             здесь же, рядом с задачами. Папка живёт в Дневнике, так что
             заметки можно перетаскивать и открывать оттуда.
@@ -148,7 +148,7 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
             <button
               onClick={() => void createAndAttach()}
               disabled={busy}
-              className="tap-scale h-10 px-4 rounded-xl bg-card2 text-[13px] font-semibold text-text flex items-center gap-2 disabled:opacity-50"
+ className="tf-action tap-scale h-10 px-4 rounded-xl bg-card2 text-text flex items-center gap-2 disabled:opacity-50"
             >
               <Icon name="folderPlus" size={16} />
               {busy ? "Создаём…" : `Создать «${project.name}»`}
@@ -157,7 +157,7 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
               <button
                 ref={pickerAnchorRef}
                 onClick={() => setPickerOpen(true)}
-                className="tap-scale h-10 px-4 rounded-xl bg-card2 text-[13px] font-semibold text-text flex items-center gap-2"
+ className="tf-action tap-scale h-10 px-4 rounded-xl bg-card2 text-text flex items-center gap-2"
               >
                 <Icon name="folder" size={16} />
                 Выбрать папку
@@ -174,17 +174,17 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
             className="w-full flex items-center gap-2 h-[42px] px-1 tap-row rounded-lg"
           >
             <Icon name="folder" size={17} className="text-sub shrink-0" />
-            <span className="text-[15px] text-text flex-1 truncate text-left">
+ <span className="tf-body text-text flex-1 truncate text-left">
               {folder.name}
             </span>
-            <span className="text-[12px] text-dim tabular-nums">
+ <span className="tf-meta text-dim tabular-nums">
               {folderNotes.length}
             </span>
             <Icon name="chevron" size={14} className="text-dim shrink-0" />
           </button>
 
           {folderNotes.length === 0 ? (
-            <p className="px-1 text-[13px] text-dim">
+ <p className="tf-action px-1 text-dim">
               В папке пока нет заметок
             </p>
           ) : (
@@ -196,7 +196,7 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
                   className="w-full flex items-center gap-2 h-[42px] pl-5 pr-2 tap-row rounded-lg"
                 >
                   <Icon name="fileText" size={16} className="text-dim shrink-0" />
-                  <span className="text-[15px] text-text flex-1 truncate text-left">
+ <span className="tf-body text-text flex-1 truncate text-left">
                     {note.title || "Без названия"}
                   </span>
                 </button>
@@ -206,7 +206,7 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
 
           <button
             onClick={() => void detach()}
-            className="mt-2 px-1 h-9 text-[13px] text-dim tap-row"
+ className="tf-action mt-2 px-1 h-9 text-dim tap-row"
           >
             Открепить папку
           </button>

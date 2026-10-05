@@ -29,41 +29,54 @@ typography:
     fontFamily: -apple-system
     fontSize: 28px
     fontWeight: 700
-    lineHeight: 1.2
+    letterSpacing: -0.84px
+    lineHeight: 32px
+  task-title:
+    fontFamily: -apple-system
+    fontSize: 20px
+    fontWeight: 600
+    letterSpacing: -0.40px
+    lineHeight: 23px
   title:
     fontFamily: -apple-system
     fontSize: 17px
     fontWeight: 600
-    lineHeight: 1.3
-  body:
-    fontFamily: -apple-system
-    fontSize: 15px
-    fontWeight: 400
-    lineHeight: 1.5
-  row:
-    fontFamily: -apple-system
-    fontSize: 14px
-    fontWeight: 400
-  action:
-    fontFamily: -apple-system
-    fontSize: 13px
-    fontWeight: 400
-  meta:
-    fontFamily: -apple-system
-    fontSize: 12px
-    fontWeight: 500
-  caption:
-    fontFamily: -apple-system
-    fontSize: 11px
-    fontWeight: 500
-  micro:
-    fontFamily: -apple-system
-    fontSize: 10px
-    fontWeight: 500
+    letterSpacing: -0.20px
   input:
     fontFamily: -apple-system
     fontSize: 16px
     fontWeight: 400
+    letterSpacing: -0.10px
+  body:
+    fontFamily: -apple-system
+    fontSize: 15px
+    fontWeight: 400
+    letterSpacing: -0.03px
+  row:
+    fontFamily: -apple-system
+    fontSize: 14px
+    fontWeight: 400
+    letterSpacing: 0
+  action:
+    fontFamily: -apple-system
+    fontSize: 13px
+    fontWeight: 400
+    letterSpacing: 0.10px
+  meta:
+    fontFamily: -apple-system
+    fontSize: 12px
+    fontWeight: 500
+    letterSpacing: 0.14px
+  caption:
+    fontFamily: -apple-system
+    fontSize: 11px
+    fontWeight: 500
+    letterSpacing: 0.20px
+  micro:
+    fontFamily: -apple-system
+    fontSize: 10px
+    fontWeight: 500
+    letterSpacing: 0.25px
 rounded:
   sm: 6px
   md: 8px
@@ -216,24 +229,85 @@ TaskFlow — личный планировщик Максима: iPhone-прил
 
 ## Typography
 
-Одна системная гарнитура (`-apple-system`), шкала из восьми ступеней:
+Одна системная гарнитура (`-apple-system`), шкала из **десяти ступеней** —
+по эталону iOS (`TaskFlowNativeBuild/Sources/DesignSystem/Theme/Typography.swift`,
+только чтение) и DESIGN-SYSTEM.md §1.2 (2026-10-05, MAK-47). В коде
+используются как семантические классы `.tf-<step>` в `src/index.css`
+(`@layer components`), а не голые `text-[Npx]`: класс несёт размер, вес и
+трекинг разом и подменяться не должен.
 
-| Ступень     | Размер | Где                                                   |
-| ----------- | ------ | ----------------------------------------------------- |
-| title-large | 28px   | Заголовок корневого экрана (iOS large title)          |
-| title       | 17px   | Заголовок вторичного экрана и шторки, кнопка «Готово» |
-| body        | 15px   | Основной текст, редактор Дневника                     |
-| row         | 14px   | Строка списка, пункт меню                             |
-| action      | 13px   | Вторичное действие («Сбросить»), подпись под строкой  |
-| meta        | 12px   | Мета-данные, статусы, счётчики                        |
-| caption     | 11px   | Мелкая подпись                                        |
-| micro       | 10px   | Совсем мелкое: буквы дней недели, деления графика     |
+| Ступень       | Класс             | Кегль | Вес   | Трекинг   | Где                                                            |
+| ------------- | ----------------- | ----- | ----- | --------- | -------------------------------------------------------------- |
+| title-large   | `.tf-title-large` | 28px  | 700   | −0.84px   | Заголовок корневого экрана (iOS large title)                   |
+| task-title    | `.tf-task-title`  | 20px  | 600   | −0.40px   | Заголовок карточки задачи                                      |
+| title         | `.tf-title`       | 17px  | 600   | −0.20px   | Заголовок вторичного экрана/шторки, кнопка «Готово»            |
+| input         | `.tf-input`       | 16px  | 400   | −0.10px   | **Только** `<input>` / `<textarea>` / `contenteditable`        |
+| body          | `.tf-body`        | 15px  | 400   | −0.03px   | Основной текст, редактор Дневника                              |
+| row           | `.tf-row`         | 14px  | 400   | 0         | Строка списка, пункт меню, текст задачи в списке               |
+| action        | `.tf-action`      | 13px  | 400   | +0.10px   | Вторичное действие («Сбросить»), подпись под строкой           |
+| meta          | `.tf-meta`        | 12px  | 500   | +0.14px   | Мета-данные, статусы, счётчики                                 |
+| caption       | `.tf-caption`     | 11px  | 500   | +0.20px   | Мелкая подпись, буквы дней недели                              |
+| micro         | `.tf-micro`       | 10px  | 500   | +0.25px   | Деления графика, совсем мелкое                                 |
 
 **16px зарезервирован под поля ввода** — iOS зумит страницу на фокусе
-поля с меньшим кеглем. Использовать 16px не в `<input>`/`<textarea>` нельзя.
+поля с меньшим кеглем. Использовать `.tf-input` не в `<input>`/`<textarea>`
+запрещено.
 
-Промежуточные размеры (9, 18, 19, 20px) — не в шкале. Если нужен «чуть
-крупнее» — берётся следующая ступень, а не новое число.
+**Промежуточные размеры (9, 18, 19, 22, 24px) — не в шкале.** Единственное
+осознанное исключение сейчас — `text-[9px]` для букв дней в компактном
+режиме `UpcomingCalendar` (нет ни в шихт ни в iOS, но локальная плотность
+сетки). Если нужен «чуть крупнее» — берётся следующая ступень, а не новое
+число.
+
+Принцип «крупнее заголовок — теснее трекинг, мельче текст — свободнее»
+остаётся в силе (Skill §15): 28px с −0.84px трекинга и 10px с +0.25px —
+это оптическая компенсация, а не случайный символ.
+
+**Подписи полей и секций в формах** — `.tf-caption` (11/500/+0.20px) +
+`uppercase tracking-wider`. Раньше такие подписи жили на `text-xs
+font-semibold uppercase tracking-wider` (12/600), что не ложилось ни на
+одну из десяти ступеней; на доработке 1 (2026-10-05) решено НЕ расширять
+шкалу и использовать `tf-caption`. Если визуально станет слишком мелко
+или блёкло — кандидат на 11-ю ступень `.tf-label` (12/600), но это
+расширение эталонной шкалы и требует согласования с владельцем.
+
+**Семантический акцент весом (исключение, доработка 2, 2026-10-05).**
+Шкала задаёт кегль/вес/трекинг разом, но в коде есть утилиты
+`font-{semibold|bold|medium|...}`, которые задают ТОЛЬКО вес рядом со
+ступенью или без неё — это семантический акцент, не смена кегля. Критерий
+приёмки №1 запрещает задавать кегль вне шкалы; вес — отдельное
+измерение, и для него такие случаи допустимы и перечислены здесь. Список
+ситуаций (расширяется вместе с дизайном):
+
+- **«Сегодня» в таймлайне/календаре.** `tf-micro font-semibold text-red`
+  на текущей дате мини-календаря (`UpcomingCalendar.tsx` — бейдж дня и
+  мини-ячейка), `tf-caption font-semibold` на плашке «сегодня» в крупных
+  сетках. Акцент «этот день — текущий», не смена кегля.
+- **«Приоритет» и акцентные подписи** — `text-red font-semibold`/`font-medium`
+  на счётчиках и заголовках «сегодня»/«просрочено» (TodayScreen,
+  InboxScreen, UpcomingScreen, RegisterScreen, InboxScreenTimeline).
+- **Бейджи/кнопки на цветной плашке** — `bg-red text-white font-semibold`
+  (TaskFields, RescheduleSheet, RoleContextSheet, UpcomingScreen).
+- **Маркеры статистики** (WeeklySummaryModal) — `font-bold` на крупных
+  цифрах 4-5px, без `tf-*` рядом: цифра и цвет — главные носители
+  смысла, размер подразумевается контекстом, шкала здесь не нужна.
+- **Заголовки ошибок и empty-state** — `font-semibold` поверх цвета
+  (`App.tsx`, `ErrorBoundary`, `ChatsScreen`, `AttachmentsField`).
+- **Подписи в таблицах/формах без `tf-*`** — `font-medium` в AgentsScreen
+  (роли), `text-sub font-semibold` в шаблонах (TemplatesScreen).
+
+Если при ревью попадётся `font-{weight}` рядом с `tf-*` — это ошибка
+прошлой доработки (всё ещё конкурирует со ступенью) и должно быть
+убрано без замены. Если попадётся `text-{xs|sm|base|lg|xl|3xl|...}` без
+`tf-*` — это задание кегля в обход шкалы и должно быть переведено на
+ступень (или на `text-[9px]` как задокументированное исключение в
+`UpcomingCalendar`).
+
+**Отложенное расширение шкалы: `.tf-label` (12/600).** Кандидат на
+одиннадцатую ступень — для подписей полей и секций в формах, где
+`.tf-caption` (11/500) визуально проигрывает iOS. Введение требует
+согласования с владельцем (расширение эталонной шкалы iOS) и сейчас
+НЕ делается.
 
 ## Layout
 

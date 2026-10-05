@@ -73,7 +73,7 @@ export function MicOverlay({
           </div>
         )}
       </MicRing>
-      <div className="mt-6 text-[13px] text-dim tabular-nums">
+ <div className="tf-action mt-6 text-dim tabular-nums">
         {state === "recording" ? elapsedLabel : "Распознаю…"}
       </div>
     </div>,

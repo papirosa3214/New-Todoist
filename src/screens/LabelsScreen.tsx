@@ -116,7 +116,7 @@ function LabelRow({
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Название метки"
-          className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none mb-3"
+ className="tf-input w-full bg-card2 rounded-xl px-3 py-2.5 text-text placeholder:text-dim outline-none mb-3"
         />
         <ColorSwatches value={color} onChange={setColor} />
         <ErrorBanner
@@ -129,7 +129,7 @@ function LabelRow({
           <button
             type="button"
             onClick={cancelEdit}
-            className="flex-1 h-11 rounded-xl bg-card2 text-[14px] text-sub font-semibold tap-row"
+ className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub tap-row"
           >
             Отмена
           </button>
@@ -137,7 +137,7 @@ function LabelRow({
             type="button"
             onClick={handleSave}
             disabled={!name.trim() || updateLabel.isPending}
-            className="flex-1 h-11 rounded-xl bg-red text-[14px] text-white font-semibold disabled:opacity-50 tap-fade"
+ className="tf-row flex-1 h-11 rounded-xl bg-red text-white disabled:opacity-50 tap-fade"
           >
             {updateLabel.isPending ? "Сохраняем…" : "Сохранить"}
           </button>
@@ -159,9 +159,9 @@ function LabelRow({
           <Icon name="tag" size={16} style={{ color: label.color }} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-[15px] text-text truncate">{label.name}</div>
+ <div className="tf-body text-text truncate">{label.name}</div>
           {taskCount !== null && (
-            <div className="text-[12px] text-sub">
+ <div className="tf-meta text-sub">
               {taskCount === 0
                 ? "Нет задач"
                 : `${taskCount} ${taskWord(taskCount)}`}
@@ -271,7 +271,7 @@ export function LabelsScreen() {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Название метки"
-            className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none mb-3"
+ className="tf-input w-full bg-card2 rounded-xl px-3 py-2.5 text-text placeholder:text-dim outline-none mb-3"
           />
           <ColorSwatches value={color} onChange={setColor} />
           <ErrorBanner
@@ -283,7 +283,7 @@ export function LabelsScreen() {
           <button
             type="submit"
             disabled={!name.trim() || createLabel.isPending}
-            className="w-full h-12 bg-red rounded-xl text-[14px] font-semibold text-white disabled:opacity-50 tap-fade"
+ className="tf-row w-full h-12 bg-red rounded-xl text-white disabled:opacity-50 tap-fade"
           >
             {createLabel.isPending ? "Создаём…" : "Создать"}
           </button>
@@ -311,8 +311,8 @@ export function LabelsScreen() {
           <div className="w-[64px] h-[64px] rounded-full bg-card flex items-center justify-center mb-4">
             <Icon name="tag" size={28} className="text-dim" />
           </div>
-          <h3 className="text-[17px] font-semibold mb-1">Меток пока нет</h3>
-          <p className="text-[14px] text-sub leading-relaxed mb-6 max-w-[280px]">
+ <h3 className="tf-title mb-1">Меток пока нет</h3>
+ <p className="tf-row text-sub leading-relaxed mb-6 max-w-[280px]">
             Метки помогают группировать задачи по-своему — независимо от
             проектов и сроков. Создайте первую, а состав всегда можно поменять
             позже.
@@ -345,7 +345,7 @@ export function LabelsScreen() {
           className="w-full flex items-center gap-3 py-3 px-4 mt-4 border border-dashed border-stroke rounded-xl tap-row"
         >
           <Icon name="plus" size={18} className="text-dim" />
-          <span className="text-[14px] text-sub">Создать метку</span>
+ <span className="tf-row text-sub">Создать метку</span>
         </button>
       )}
     </div>

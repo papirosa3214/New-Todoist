@@ -116,12 +116,12 @@ export function ProjectTasksScreen() {
 
       {notFound && (
         <div className="px-1 py-8 text-center">
-          <p className="text-[14px] text-sub mb-4">
+ <p className="tf-row text-sub mb-4">
             Проект не найден — возможно, он удалён.
           </p>
           <button
             onClick={() => navigate("/projects")}
-            className="h-11 px-5 rounded-xl bg-card text-[13px] text-text font-semibold"
+ className="tf-action h-11 px-5 rounded-xl bg-card text-text "
           >
             К списку проектов
           </button>
@@ -133,7 +133,7 @@ export function ProjectTasksScreen() {
         !tasksError &&
         project &&
         tasks.length === 0 && (
-          <p className="px-1 text-[13px] text-dim">В проекте пока нет задач</p>
+ <p className="tf-action px-1 text-dim">В проекте пока нет задач</p>
         )}
 
       <div className="space-y-[2px]">

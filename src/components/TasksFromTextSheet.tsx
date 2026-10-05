@@ -152,14 +152,14 @@ export function TasksFromTextSheet({
           >
             <Icon name="x" size={20} className="text-sub" />
           </button>
-          <h3 className="text-[17px] font-semibold text-text">
+ <h3 className="tf-title text-text">
             Задачи из дневника
           </h3>
           <div className="w-11" />
         </div>
 
         {rows.length === 0 && (
-          <div className="px-1 py-3 text-[13px] text-dim">
+ <div className="tf-action px-1 py-3 text-dim">
             AI не нашёл в тексте конкретных задач
           </div>
         )}
@@ -186,7 +186,7 @@ export function TasksFromTextSheet({
                 value={row.title}
                 onChange={(e) => updateTitle(idx, e.target.value)}
                 disabled={!row.include || busy}
-                className="flex-1 bg-card2 rounded-lg px-3 py-2 text-[14px] text-text placeholder:text-dim outline-none disabled:opacity-40"
+ className="tf-row flex-1 bg-card2 rounded-lg px-3 py-2 text-text placeholder:text-dim outline-none disabled:opacity-40"
               />
             </div>
           ))}
@@ -194,7 +194,7 @@ export function TasksFromTextSheet({
 
         {rows.length > 0 && (
           <>
-            <div className="text-[12px] text-dim uppercase tracking-wide pt-2 pb-1.5 px-1">
+ <div className="tf-meta text-dim uppercase tracking-wide pt-2 pb-1.5 px-1">
               Куда добавить
             </div>
             <div className="border-t border-stroke">
@@ -210,7 +210,7 @@ export function TasksFromTextSheet({
                   className="tap-row w-full flex items-center gap-3 py-2.5 px-1 text-left"
                 >
                   <Icon name="hash" size={16} style={{ color: p.color }} />
-                  <span className="text-[14px] text-text flex-1 truncate">
+ <span className="tf-row text-text flex-1 truncate">
                     {p.name}
                   </span>
                   {!creatingNew && selectedProjectId === p.id && (
@@ -228,7 +228,7 @@ export function TasksFromTextSheet({
                 className="tap-row w-full flex items-center gap-3 py-2.5 px-1 text-left"
               >
                 <Icon name="plus" size={16} className="text-sub" />
-                <span className="text-[14px] text-text flex-1">
+ <span className="tf-row text-text flex-1">
                   Новый проект
                 </span>
                 {creatingNew && (
@@ -242,7 +242,7 @@ export function TasksFromTextSheet({
                   onChange={(e) => setNewProjectName(e.target.value)}
                   placeholder="Название проекта"
                   disabled={busy}
-                  className="w-full bg-card2 rounded-lg px-3 py-2 mb-2 text-[14px] text-text placeholder:text-dim outline-none"
+ className="tf-row w-full bg-card2 rounded-lg px-3 py-2 mb-2 text-text placeholder:text-dim outline-none"
                 />
               )}
             </div>
@@ -259,7 +259,7 @@ export function TasksFromTextSheet({
           <button
             onClick={handleConfirm}
             disabled={!canConfirm}
-            className="tap-scale w-full h-12 rounded-xl bg-red text-[15px] font-semibold text-white disabled:opacity-40 mt-3"
+ className="tf-body tap-scale w-full h-12 rounded-xl bg-red text-white disabled:opacity-40 mt-3"
           >
             {busy
               ? "Создаю…"

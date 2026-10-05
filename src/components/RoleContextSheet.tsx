@@ -129,10 +129,10 @@ export function RoleContextSheet({
         className="relative bg-card rounded-sheet-top px-4 pb-bottom-safe max-h-[88vh] overflow-y-auto"
       >
         <SheetHandle dragProps={sheet.dragProps} />
-        <h3 className="text-[16px] text-text font-semibold px-1 mb-1">
+ <h3 className="tf-input text-text px-1 mb-1">
           Контекст запуска: {role.title}
         </h3>
-        <p className="text-[12px] text-sub px-1 mb-3">
+ <p className="tf-meta text-sub px-1 mb-3">
           Что модель реально получит при старте в выбранном режиме.
         </p>
 
@@ -143,7 +143,7 @@ export function RoleContextSheet({
               key={m.key}
               type="button"
               onClick={() => setMode(m.key)}
-              className={`tap-scale h-9 px-3 rounded-xl text-[13px] ${
+ className={`tf-action tap-scale h-9 px-3 rounded-xl ${
                 m.key === mode
                   ? "bg-red text-white font-semibold"
                   : "bg-card2 text-sub"
@@ -297,25 +297,25 @@ function LayerRow({
   return (
     <div className="bg-card2 rounded-xl p-3">
       <div className="flex items-baseline gap-2 mb-1">
-        <span className="text-[13px] text-text font-semibold">{layer.title ?? layer.layer}</span>
-        <span className="text-[11px] text-dim">v{team ? layer.command_version ?? 0 : layer.version}</span>
-        <span className="ml-auto text-[11px] text-sub">{sourceLabel}</span>
+ <span className="tf-action text-text ">{layer.title ?? layer.layer}</span>
+ <span className="tf-caption text-dim">v{team ? layer.command_version ?? 0 : layer.version}</span>
+ <span className="tf-caption ml-auto text-sub">{sourceLabel}</span>
       </div>
-      <p className="text-[11px] text-dim mb-2">{layer.origin.ref}</p>
+ <p className="tf-caption text-dim mb-2">{layer.origin.ref}</p>
 
       {editing ? (
         <div>
-          {layer.command_version !== undefined && <label className="flex gap-2 text-[12px] mb-2"><input type="checkbox" checked={team} onChange={(e) => {
+ {layer.command_version !== undefined && <label className="tf-meta flex gap-2 mb-2"><input type="checkbox" checked={team} onChange={(e) => {
             const selected=e.target.checked; setTeam(selected); setDraft(sessionStorage.getItem(draftKey(role,layer.layer,selected)) ?? (selected ? (layer.team_text ?? layer.default_text ?? layer.effective) : layer.effective));
             setRevision(selected ? layer.command_version ?? 0 : layer.version); setConflict(null);
           }}/><span>Для всей команды</span></label>}
           <textarea
             value={draft}
             onChange={(e) => { setDraft(e.target.value); sessionStorage.setItem(draftKey(role,layer.layer,team),e.target.value); }}
-            className="w-full h-32 bg-card rounded-lg p-2 text-[12px] text-text border border-card2 resize-y"
+ className="tf-meta w-full h-32 bg-card rounded-lg p-2 text-text border border-card2 resize-y"
           />
           {conflict && (
-            <div className="bg-card rounded-lg p-2 mt-2 text-[12px] text-sub">
+ <div className="tf-meta bg-card rounded-lg p-2 mt-2 text-sub">
               <p className="mb-1">
                 Версия не совпала: текущая v{conflict.version}. Сохранилось в
                 черновик, можешь обновить и применить.
@@ -326,7 +326,7 @@ function LayerRow({
                   setRevision(team ? conflict.command_version ?? 0 : conflict.version);
                   setConflict(null);
                 }}
-                className="tap-scale h-8 px-3 rounded-lg bg-red text-white text-[12px]"
+ className="tf-meta tap-scale h-8 px-3 rounded-lg bg-red text-white"
               >
                 Принять новую версию, оставить мой текст
               </button>
@@ -337,14 +337,14 @@ function LayerRow({
               type="button"
               onClick={save}
               disabled={submitting}
-              className="tap-scale h-9 px-3 rounded-lg bg-red text-white text-[13px] font-semibold disabled:opacity-50"
+ className="tf-action tap-scale h-9 px-3 rounded-lg bg-red text-white disabled:opacity-50"
             >
               {submitting ? "Сохранение…" : "Сохранить"}
             </button>
             <button
               type="button"
               onClick={() => { sessionStorage.removeItem(draftKey(role,layer.layer,team)); onCancelEdit(); }}
-              className="tap-scale h-9 px-3 rounded-lg bg-card2 text-sub text-[13px]"
+ className="tf-action tap-scale h-9 px-3 rounded-lg bg-card2 text-sub"
             >
               Отмена
             </button>
@@ -352,7 +352,7 @@ function LayerRow({
         </div>
       ) : (
         <>
-          <pre className="text-[12px] text-sub whitespace-pre-wrap line-clamp-5 mb-2">
+ <pre className="tf-meta text-sub whitespace-pre-wrap line-clamp-5 mb-2">
             {layer.effective || "(пусто)"}
           </pre>
           <div className="flex gap-2 flex-wrap">
@@ -360,7 +360,7 @@ function LayerRow({
               <button
                 type="button"
                 onClick={onStartEdit}
-                className="tap-scale h-8 px-3 rounded-lg bg-card text-text text-[12px] font-semibold flex items-center gap-1"
+ className="tf-meta tap-scale h-8 px-3 rounded-lg bg-card text-text flex items-center gap-1"
               >
                 <Icon name="edit" size={14} className="text-sub" />
                 Изменить
@@ -370,7 +370,7 @@ function LayerRow({
               <button
                 type="button"
                 onClick={() => onReset(team,revision)}
-                className="tap-scale h-8 px-3 rounded-lg bg-card text-text text-[12px] flex items-center gap-1"
+ className="tf-meta tap-scale h-8 px-3 rounded-lg bg-card text-text flex items-center gap-1"
               >
                 <Icon name="refresh" size={14} className="text-sub" />
                 Сброс
@@ -379,7 +379,7 @@ function LayerRow({
             <button
               type="button"
               onClick={showHistory ? onCloseHistory : () => onShowHistory(team)}
-              className="tap-scale h-8 px-3 rounded-lg bg-card text-text text-[12px] flex items-center gap-1"
+ className="tf-meta tap-scale h-8 px-3 rounded-lg bg-card text-text flex items-center gap-1"
             >
               <Icon name="clock" size={14} className="text-sub" />
               История
@@ -389,13 +389,13 @@ function LayerRow({
           {showHistory && history && (
             <div className="mt-3 bg-card rounded-lg p-2">
               {history.length === 0 ? (
-                <p className="text-[12px] text-sub">История пуста</p>
+ <p className="tf-meta text-sub">История пуста</p>
               ) : (
                 <ul className="space-y-1">
                   {history.map((h) => (
                     <li
                       key={`${h.at}-${h.version}`}
-                      className="text-[12px] text-sub flex items-center gap-2"
+ className="tf-meta text-sub flex items-center gap-2"
                     >
                       <span className="font-mono">v{h.version}</span>
                       <span className="text-dim">{h.action}</span>

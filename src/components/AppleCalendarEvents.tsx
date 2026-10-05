@@ -91,7 +91,7 @@ export function AppleCalendarEvents({ dateStr, className = "" }: Props) {
                 });
               }
             }}
-            className="flex items-start gap-2.5 px-3 py-2 rounded-xl bg-card border border-stroke/40 text-xs shadow-xs transition-transform active:scale-[0.98] cursor-pointer"
+            className="flex items-start gap-2.5 px-3 py-2 rounded-xl bg-card border border-stroke/40 tf-caption shadow-xs transition-transform active:scale-[0.98] cursor-pointer"
           >
             <div
               className="w-1.5 h-full min-h-[28px] rounded-full shrink-0"
@@ -100,12 +100,12 @@ export function AppleCalendarEvents({ dateStr, className = "" }: Props) {
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-1">
                 <span className="font-medium text-text truncate">{ev.title}</span>
-                <span className="text-[10px] text-dim shrink-0 flex items-center gap-1">
+ <span className="tf-micro text-dim shrink-0 flex items-center gap-1">
                   <Icon name="calendar" size={11} className="text-sub" />
                   {ev.calendarTitle}
                 </span>
               </div>
-              <div className="text-[11px] text-sub mt-0.5">
+ <div className="tf-caption text-sub mt-0.5">
                 {startTime}
                 {endTime}
                 {ev.location && ` · ${ev.location}`}

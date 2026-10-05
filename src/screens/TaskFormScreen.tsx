@@ -813,7 +813,7 @@ export function TaskFormScreen() {
                шапке заголовок набран 17px. Тем же заходом на 17px
                переведены заголовки четырёх шторок — теперь весь неполевой
                17px значит одно: «крупный, но не заголовок экрана». */
-            className="text-[17px] font-semibold text-red active:opacity-70 disabled:opacity-50"
+ className="tf-title text-red active:opacity-70 disabled:opacity-50"
           >
             {isSaving ? "Сохранение…" : "Готово"}
           </button>
@@ -866,7 +866,7 @@ export function TaskFormScreen() {
           случай). 16px — тот же межблочный модуль, что mb-4 держит между
           остальными секциями формы ниже. */}
       <div className="flex items-center justify-between mb-2 mt-4">
-        <div className="text-[17px] text-sub font-semibold">
+ <div className="tf-title text-sub ">
           {isEdit ? "Изменить задачу" : "Новая задача"}
         </div>
         {(title.trim() || desc.trim()) && (
@@ -874,7 +874,7 @@ export function TaskFormScreen() {
             type="button"
             onClick={() => handleStructureWithAI()}
             disabled={isStructuring}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold text-white bg-gradient-to-r from-[#FF2D55] to-[#FF9500] active:scale-95 transition-transform disabled:opacity-50 shadow-sm"
+ className="tf-meta inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-white bg-gradient-to-r from-[#FF2D55] to-[#FF9500] active:scale-95 transition-transform disabled:opacity-50 shadow-sm"
           >
             <Icon name="sparkles" size={12} />
             {/* Подпись кнопки НЕ меняется на «думает»: статус теперь
@@ -894,7 +894,7 @@ export function TaskFormScreen() {
         }}
         onFocus={() => handleFieldFocus("title")}
         placeholder="Название задачи"
-        className="block w-full bg-transparent text-[13px] text-text placeholder:text-dim resize-none outline-none mb-4 min-h-[20px] overflow-hidden"
+ className="tf-action block w-full bg-transparent text-text placeholder:text-dim resize-none outline-none mb-4 min-h-[20px] overflow-hidden"
         rows={1}
       />
 
@@ -919,7 +919,7 @@ export function TaskFormScreen() {
           textarea измерялся 12px вместо 8px, как у «Новая задача»→
           textarea и «Подзадачи»→«Добавить подзадачу». Текст теперь прямо
           в div, тем же приёмом, что и заголовок экрана выше. */}
-      <div className="text-[17px] text-sub font-semibold mb-2">Заметка</div>
+ <div className="tf-title text-sub mb-2">Заметка</div>
       <textarea
         ref={descRef}
         value={desc}
@@ -927,7 +927,7 @@ export function TaskFormScreen() {
         onFocus={() => handleFieldFocus("desc")}
         onBlur={handleFieldBlur}
         placeholder="Описание"
-        className="block w-full bg-transparent text-[13px] text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px] overflow-hidden"
+ className="tf-action block w-full bg-transparent text-sub placeholder:text-dim resize-none outline-none mb-4 min-h-[40px] overflow-hidden"
         rows={1}
       />
 
@@ -952,7 +952,7 @@ export function TaskFormScreen() {
           поля всё ещё в одном экране без скролла, просто заметка теперь
           между ними. */}
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[17px] text-sub font-semibold">Подзадачи</span>
+ <span className="tf-title text-sub ">Подзадачи</span>
       </div>
 
       <div>
@@ -1036,7 +1036,7 @@ export function TaskFormScreen() {
           : [
               ...localSubtasks.map((s, i) => (
                 <div key={i} className="flex items-center gap-3 py-[12px]">
-                  <span className="text-[14px] text-text flex-1">{s}</span>
+ <span className="tf-row text-text flex-1">{s}</span>
                   <button
                     onClick={() =>
                       setLocalSubtasks(localSubtasks.filter((_, j) => j !== i))
@@ -1136,7 +1136,7 @@ export function TaskFormScreen() {
                     className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-white/[0.04] transition-colors"
                   >
                     <Icon name="hash" size={16} style={{ color: p.color }} />
-                    <span className="text-[14px] text-text flex-1">
+ <span className="tf-row text-text flex-1">
                       {p.name}
                     </span>
                     {p.id === effectiveProjectId && (
@@ -1145,7 +1145,7 @@ export function TaskFormScreen() {
                   </button>
                 ))}
                 {projects.length === 0 && (
-                  <div className="px-4 py-3 text-[13px] text-dim">
+ <div className="tf-action px-4 py-3 text-dim">
                     Проектов пока нет
                   </div>
                 )}
@@ -1162,7 +1162,7 @@ export function TaskFormScreen() {
       </div>
 
       {/* ── Assignee (tappable → picker) ── */}
-      <div className="text-[13px] text-sub font-semibold mb-2">Назначить</div>
+ <div className="tf-action text-sub mb-2">Назначить</div>
       <div className="bg-card rounded-[14px] overflow-hidden mb-4">
         {showAssigneePicker ? (
           <>
@@ -1182,7 +1182,7 @@ export function TaskFormScreen() {
                   size={32}
                 />
                 <div className="flex-1 min-w-0">
-                  <div className="text-[14px] text-text truncate">{u.name}</div>
+ <div className="tf-row text-text truncate">{u.name}</div>
                   {/* Кто на связи — видно там, где это и решает: назначать
                       задачу агенту, который сейчас не отвечает, смысла мало
                       (просьба Максима 14.08.2026 — статус нужен в момент
@@ -1196,7 +1196,7 @@ export function TaskFormScreen() {
                         }`}
                       />
                       <span
-                        className={`text-[12px] ${
+ className={`tf-meta ${
                           u.status === "online" ? "text-green" : "text-dim"
                         }`}
                       >
@@ -1205,7 +1205,7 @@ export function TaskFormScreen() {
                     </div>
                   )}
                 </div>
-                <span className="text-[12px] text-sub bg-card2 px-2 py-0.5 rounded shrink-0">
+ <span className="tf-meta text-sub bg-card2 px-2 py-0.5 rounded shrink-0">
                   {roleLabel(u.role)}
                 </span>
                 {assignee === u.id ? (
@@ -1217,7 +1217,7 @@ export function TaskFormScreen() {
             ))}
             <button
               onClick={() => setShowAssigneePicker(false)}
-              className="w-full text-center text-[13px] text-sub py-2"
+ className="tf-action w-full text-center text-sub py-2"
             >
               Отмена
             </button>
@@ -1240,9 +1240,9 @@ export function TaskFormScreen() {
                       size={32}
                     />
                     <div className="flex-1">
-                      <div className="text-[14px] text-text">{u.name}</div>
+ <div className="tf-row text-text">{u.name}</div>
                     </div>
-                    <span className="text-[12px] text-sub bg-card2 px-2 py-0.5 rounded">
+ <span className="tf-meta text-sub bg-card2 px-2 py-0.5 rounded">
                       {roleLabel(u.role)}
                     </span>
                     <Icon name="check" size={18} className="text-red" />
@@ -1257,7 +1257,7 @@ export function TaskFormScreen() {
                 <div className="w-[32px] h-[32px] rounded-full border-2 border-dashed border-stroke flex items-center justify-center">
                   <Icon name="plus" size={16} className="text-dim" />
                 </div>
-                <span className="text-[14px]">Выбрать исполнителя</span>
+ <span className="tf-row ">Выбрать исполнителя</span>
               </button>
             )}
           </>
@@ -1287,7 +1287,7 @@ export function TaskFormScreen() {
           следующей диктовки в этой же форме, не auto-hide — не мигающий
           toast, а факт, который можно спокойно прочитать в своём темпе. */}
       {voiceSource && mic.state === "idle" && (
-        <p className="text-[12px] text-dim mb-4 -mt-2">
+ <p className="tf-meta text-dim mb-4 -mt-2">
           Распознано{" "}
           {voiceSource === "whisper"
             ? "Whisper на устройстве"

@@ -45,7 +45,7 @@ function AddressLine({
   const target = toMe ? "тебе" : msg.to_user_id ? msg.to_user_name : "всем";
   return (
     <div
-      className={`text-[12px] mb-0.5 px-1 ${mine ? "text-dim" : "text-sub"}`}
+ className={`tf-meta mb-0.5 px-1 ${mine ?"text-dim" :"text-sub"}`}
     >
       {!mine && <span>{msg.from_user_name || "—"} </span>}
       <span className={toMe ? "text-red font-semibold" : ""}>→ {target}</span>
@@ -79,7 +79,7 @@ function ChatBubble({
         <AddressLine msg={msg} mine={mine} toMe={toMe} />
         {msg.text && (
           <div
-            className={`rounded-2xl px-3.5 py-2.5 text-[14px] leading-snug whitespace-pre-wrap break-words ${
+ className={`tf-row rounded-2xl px-3.5 py-2.5 leading-snug whitespace-pre-wrap break-words ${
               mine
                 ? "bg-red text-white"
                 : toMe
@@ -118,7 +118,7 @@ function ChatBubble({
               className="mt-1 flex items-center gap-2 rounded-xl bg-card2 px-3 h-9 max-w-[220px]"
             >
               <Paperclip size={13} className="text-sub shrink-0" />
-              <span className="min-w-0 truncate text-[12px] text-text">
+ <span className="tf-meta min-w-0 truncate text-text">
                 {att.file_name}
               </span>
             </a>
@@ -127,12 +127,12 @@ function ChatBubble({
         {msg.task_id && msg.task_title && (
           <button
             onClick={() => navigate(`/task/${msg.task_id}`)}
-            className="tap-fade text-[12px] text-sub mt-1 px-1 underline underline-offset-2"
+ className="tf-meta tap-fade text-sub mt-1 px-1 underline underline-offset-2"
           >
             {msg.task_title}
           </button>
         )}
-        <div className="text-[11px] text-dim mt-0.5 px-1">
+ <div className="tf-caption text-dim mt-0.5 px-1">
           {formatRelativeTime(msg.created_at)} ·{" "}
           {formatAbsoluteTime(msg.created_at)}
         </div>
@@ -159,7 +159,7 @@ function TypingLine({ names }: { names: string[] }) {
       ? `${names[0]} работает…`
       : `${names.slice(0, -1).join(", ")} и ${names[names.length - 1]} работают…`;
   return (
-    <div className="flex items-center gap-2 px-4 text-[12px] text-sub">
+ <div className="tf-meta flex items-center gap-2 px-4 text-sub">
       <span className="min-w-0 truncate">{who}</span>
       <span className="flex items-center gap-1 shrink-0">
         {[0, 0.2, 0.4].map((delay) => (
@@ -185,7 +185,7 @@ function TypingLine({ names }: { names: string[] }) {
  */
 function AwaitingLine() {
   return (
-    <div className="flex items-center gap-2 px-4 text-[12px] text-dim">
+ <div className="tf-meta flex items-center gap-2 px-4 text-dim">
       <span className="flex items-center gap-1">
         {[0, 0.2, 0.4].map((delay) => (
           <span
@@ -232,7 +232,7 @@ function ChannelTabs({
           key={tab.id}
           type="button"
           onClick={() => onChange(tab.id)}
-          className={`flex-1 h-[38px] rounded-lg text-[14px] tap-fade ${
+ className={`tf-row flex-1 h-[38px] rounded-lg tap-fade ${
             value === tab.id ? "bg-card text-text" : "text-sub"
           }`}
         >
@@ -481,7 +481,7 @@ export function ChatScreen() {
       >
         {isLoading && <Loading className="mt-3" />}
         {!isLoading && messages.length === 0 && (
-          <p className="px-5 text-[13px] text-dim mt-3">
+ <p className="tf-action px-5 text-dim mt-3">
             {/* У владельца первая вкладка — окно постановки задач, и пустой
                 экран это единственное место, где можно сказать, что оно
                 делает: дальше он сам увидит по ответам (карточка 4396f8c9). */}

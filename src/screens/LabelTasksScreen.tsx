@@ -97,12 +97,12 @@ export function LabelTasksScreen() {
 
       {notFound && (
         <div className="px-1 py-8 text-center">
-          <p className="text-[14px] text-sub mb-4">
+ <p className="tf-row text-sub mb-4">
             Метка не найдена — возможно, она удалена.
           </p>
           <button
             onClick={() => navigate("/labels")}
-            className="h-11 px-5 rounded-xl bg-card text-[13px] text-text font-semibold"
+ className="tf-action h-11 px-5 rounded-xl bg-card text-text "
           >
             К списку меток
           </button>
@@ -114,7 +114,7 @@ export function LabelTasksScreen() {
         !tasksError &&
         label &&
         tasks.length === 0 && (
-          <p className="px-1 text-[13px] text-dim">
+ <p className="tf-action px-1 text-dim">
             Этой меткой пока не помечена ни одна задача
           </p>
         )}
@@ -159,11 +159,11 @@ export function LabelTasksScreen() {
               >
                 <div className="flex-1 min-w-0">
                   <div
-                    className={`text-[15px] leading-snug mb-1 truncate ${isDone ? "line-through text-sub" : "text-text"}`}
+ className={`tf-body leading-snug mb-1 truncate ${isDone ?"line-through text-sub" :"text-text"}`}
                   >
                     <MarkdownInline source={task.title} />
                   </div>
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-sub">
+ <div className="tf-meta flex flex-wrap items-center gap-x-2 gap-y-1 text-sub">
                     {task.description && (
                       <span className="truncate max-w-[200px]">
                         {task.description.substring(0, 50)}…
@@ -174,7 +174,7 @@ export function LabelTasksScreen() {
                     {task.labels.map((l) => (
                       <span
                         key={l.id}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+ className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded"
                         style={{
                           backgroundColor: l.color + "26",
                           color: l.color,
@@ -184,13 +184,13 @@ export function LabelTasksScreen() {
                       </span>
                     ))}
                     {task.due_date && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-card text-sub">
+ <span className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded bg-card text-sub">
                         <Icon name="calendarSmall" size={10} />{" "}
                         {formatDue(task.due_date)}
                       </span>
                     )}
                     {hasSubtasks && (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] bg-card text-sub">
+ <span className="tf-caption inline-flex items-center px-1.5 py-0.5 rounded bg-card text-sub">
                         {doneSub}/{task.subtasks.length}
                       </span>
                     )}

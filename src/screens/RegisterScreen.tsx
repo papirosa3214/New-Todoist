@@ -44,8 +44,8 @@ export function RegisterScreen() {
       />
 
       <div className="flex-1 flex flex-col items-center justify-start py-6">
-        <h2 className="text-[20px] font-semibold mb-1">Создайте аккаунт</h2>
-        <p className="text-[14px] text-sub mb-6">Присоединяйтесь к команде</p>
+ <h2 className="tf-task-title mb-1">Создайте аккаунт</h2>
+ <p className="tf-row text-sub mb-6">Присоединяйтесь к команде</p>
 
         <form onSubmit={handleSubmit} className="w-full">
           {/* Fields */}
@@ -104,7 +104,7 @@ export function RegisterScreen() {
           </div>
         </form>
 
-        <p className="text-[14px] text-sub">
+ <p className="tf-row text-sub">
           Уже есть аккаунт?{" "}
           <button
             onClick={() => navigate("/login")}

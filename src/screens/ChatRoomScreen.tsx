@@ -168,7 +168,7 @@ export function ChatRoomScreen() {
       />
 
       {chat && (
-        <div className="text-[12px] text-sub mb-3 px-1">
+ <div className="tf-meta text-sub mb-3 px-1">
           {participantSummary(chat.members, meId)}
         </div>
       )}
@@ -277,18 +277,18 @@ function MessageBubble({
         }`}
       >
         {!mine && msg.from_user_name && (
-          <div className="text-[12px] text-sub px-1 mb-0.5">
+ <div className="tf-meta text-sub px-1 mb-0.5">
             {msg.from_user_name}
           </div>
         )}
         <div
-          className={`rounded-2xl px-3.5 py-2.5 text-[14px] leading-snug whitespace-pre-wrap break-words ${
+ className={`tf-row rounded-2xl px-3.5 py-2.5 leading-snug whitespace-pre-wrap break-words ${
             mine ? "bg-red text-white" : "bg-card text-text"
           }`}
         >
           {msg.text}
         </div>
-        <div className="text-[11px] text-dim mt-0.5 px-1">
+ <div className="tf-caption text-dim mt-0.5 px-1">
           {formatRelativeTime(msg.created_at)} ·{" "}
           {formatAbsoluteTime(msg.created_at)}
         </div>
@@ -310,7 +310,7 @@ function DaySeparator({ label }: { label: string }) {
       className="flex items-center gap-2 py-1.5 select-none"
     >
       <div className="flex-1 h-px bg-card2" />
-      <span className="text-[11px] text-dim font-medium tracking-wide uppercase">
+ <span className="tf-caption text-dim tracking-wide uppercase">
         {label}
       </span>
       <div className="flex-1 h-px bg-card2" />
@@ -350,7 +350,7 @@ function Composer({
           }}
           placeholder="Сообщение…"
           rows={1}
-          className="w-full bg-transparent text-[15px] text-text placeholder:text-dim outline-none resize-none max-h-32"
+ className="tf-body w-full bg-transparent text-text placeholder:text-dim outline-none resize-none max-h-32"
         />
       </div>
       <Button
@@ -375,7 +375,7 @@ function EmptyChat() {
       <div className="w-12 h-12 rounded-full bg-card2 flex items-center justify-center mb-3">
         <Icon name="chat" size={20} className="text-sub" />
       </div>
-      <p className="text-[14px] text-sub leading-relaxed max-w-[260px]">
+ <p className="tf-row text-sub leading-relaxed max-w-[260px]">
         Сообщений ещё нет — напишите первым.
       </p>
     </div>

@@ -372,7 +372,7 @@ export function ChatComposer({
               className="flex items-center gap-2 px-3 h-9 rounded-lg bg-card2"
             >
               <Paperclip size={13} className="text-sub shrink-0" />
-              <span className="flex-1 min-w-0 truncate text-[12px] text-text">
+ <span className="tf-meta flex-1 min-w-0 truncate text-text">
                 {att.file_name}
               </span>
               <button
@@ -430,11 +430,11 @@ export function ChatComposer({
                   avatar_url={p.avatar_url}
                   size={28}
                 />
-                <span className="flex-1 min-w-0 truncate text-[14px] text-text">
+ <span className="tf-row flex-1 min-w-0 truncate text-text">
                   {p.name}
                 </span>
                 {p.role && (
-                  <span className="text-[11px] text-dim shrink-0">
+ <span className="tf-caption text-dim shrink-0">
                     {p.role}
                   </span>
                 )}
@@ -563,7 +563,7 @@ export function ChatComposer({
             }
             // 16px — не «покрупнее для красоты», а порог: на меньшем iOS
             // зумит страницу при фокусе, и экран уезжает.
-            className="flex-1 min-w-0 bg-transparent text-[16px] text-text placeholder:text-dim outline-none"
+ className="tf-input flex-1 min-w-0 bg-transparent text-text placeholder:text-dim outline-none"
           />
           <input
             ref={fileInputRef}

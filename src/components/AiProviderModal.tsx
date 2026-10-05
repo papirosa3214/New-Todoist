@@ -207,10 +207,10 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
               <Bot className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h2 className="text-[17px] font-bold tracking-tight text-white">
+ <h2 className="tf-title tracking-tight text-white">
                 AI Ассистент и Модели
               </h2>
-              <p className="text-[11px] text-white/50">
+ <p className="tf-caption text-white/50">
                 Выберите основной мозг и модель для задач
               </p>
             </div>
@@ -255,11 +255,11 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-[15px] font-semibold text-white truncate">
+ <span className="tf-body text-white truncate">
                           {item.name}
                         </span>
                         <span
-                          className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border shrink-0"
+ className="tf-micro uppercase px-2 py-0.5 rounded-full border shrink-0"
                           style={{
                             backgroundColor: `${item.color}15`,
                             borderColor: `${item.color}40`,
@@ -269,7 +269,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                           {item.badge}
                         </span>
                       </div>
-                      <div className="text-[12px] text-white/50 truncate mt-0.5">
+ <div className="tf-meta text-white/50 truncate mt-0.5">
                         {item.subtitle}
                       </div>
                     </div>
@@ -289,7 +289,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for Antigravity Models */}
                 {key === "antigravity" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-[#06B6D4]/40 space-y-1.5 py-1">
-                    <div className="text-[11px] font-semibold text-[#06B6D4] uppercase tracking-wider mb-1">
+ <div className="tf-caption text-[#06B6D4] uppercase tracking-wider mb-1">
                       Модели Antigravity (Google DeepMind):
                     </div>
                     {antigravityModels.map((m) => {
@@ -304,7 +304,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                             hapticSuccess();
                             setAntigravityModel(m.id);
                           }}
-                          className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 text-[12px] cursor-pointer transition-all active:scale-98 ${
+ className={`tf-meta p-2.5 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition-all active:scale-98 ${
                             isModelActive
                               ? "bg-[#06B6D4]/15 border-[#06B6D4]/50 text-white font-medium shadow-sm"
                               : "bg-white/[0.02] border-white/5 hover:bg-white/[0.05] text-white/70"
@@ -312,15 +312,15 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                         >
                           <div className="flex flex-col min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <span className="text-[13px]">{m.icon}</span>
+ <span className="tf-action ">{m.icon}</span>
                               <span className="font-semibold text-white truncate">
                                 {m.name}
                               </span>
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#06B6D4]/20 text-[#06B6D4] font-bold">
+ <span className=" px-1.5 py-0.2 rounded bg-[#06B6D4]/20 text-[#06B6D4] font-bold">
                                 {m.badge}
                               </span>
                             </div>
-                            <span className="text-[10px] text-white/50 truncate mt-0.5">
+ <span className="tf-micro text-white/50 truncate mt-0.5">
                               {m.desc}
                             </span>
                           </div>
@@ -336,7 +336,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for Local Ollama Models */}
                 {key === "local" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-white/10 space-y-1.5 py-1">
-                    <div className="text-[11px] font-semibold text-white/40 uppercase tracking-wider mb-1">
+ <div className="tf-caption text-white/40 uppercase tracking-wider mb-1">
                       Модель на 192.168.1.110:
                     </div>
                     {availableLocalModels.map((mName) => {
@@ -354,24 +354,24 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                             hapticSuccess();
                             setLocalModel(mName);
                           }}
-                          className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 text-[12px] cursor-pointer transition-all active:scale-98 ${
+ className={`tf-meta p-2.5 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition-all active:scale-98 ${
                             isModelActive
                               ? "bg-[#34C759]/15 border-[#34C759]/40 text-white font-medium shadow-sm"
                               : "bg-white/[0.02] border-white/5 hover:bg-white/[0.05] text-white/70"
                           }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-[13px]">
+ <span className="tf-action ">
                               {isFast ? "⚡" : isReasoning ? "🧠" : "🤖"}
                             </span>
                             <span className="truncate">{mName}</span>
                             {isFast && (
-                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#34C759]/20 text-[#34C759] font-bold">
+ <span className=" px-1.5 py-0.5 rounded bg-[#34C759]/20 text-[#34C759] font-bold">
                                 Быстрая
                               </span>
                             )}
                             {isReasoning && (
-                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#8B5CF6]/20 text-[#8B5CF6] font-bold">
+ <span className=" px-1.5 py-0.5 rounded bg-[#8B5CF6]/20 text-[#8B5CF6] font-bold">
                                 Думающая
                               </span>
                             )}
@@ -388,7 +388,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for Claude Models */}
                 {key === "claude" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-[#D97706]/40 space-y-1.5 py-1">
-                    <div className="text-[11px] font-semibold text-[#D97706] uppercase tracking-wider mb-1">
+ <div className="tf-caption text-[#D97706] uppercase tracking-wider mb-1">
                       Модели Claude (Anthropic):
                     </div>
                     {claudeModels.map((m) => {
@@ -402,7 +402,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                             hapticSuccess();
                             setClaudeModel(m.id);
                           }}
-                          className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 text-[12px] cursor-pointer transition-all active:scale-98 ${
+ className={`tf-meta p-2.5 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition-all active:scale-98 ${
                             isModelActive
                               ? "bg-[#D97706]/15 border-[#D97706]/50 text-white font-medium shadow-sm"
                               : "bg-white/[0.02] border-white/5 hover:bg-white/[0.05] text-white/70"
@@ -410,15 +410,15 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                         >
                           <div className="flex flex-col min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <span className="text-[13px]">{m.icon}</span>
+ <span className="tf-action ">{m.icon}</span>
                               <span className="font-semibold text-white truncate">
                                 {m.name}
                               </span>
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#D97706]/20 text-[#D97706] font-bold">
+ <span className=" px-1.5 py-0.2 rounded bg-[#D97706]/20 text-[#D97706] font-bold">
                                 {m.badge}
                               </span>
                             </div>
-                            <span className="text-[10px] text-white/50 truncate mt-0.5">
+ <span className="tf-micro text-white/50 truncate mt-0.5">
                               {m.desc}
                             </span>
                           </div>
@@ -434,7 +434,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for Hermes Models */}
                 {key === "hermes" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-[#8B5CF6]/40 space-y-1.5 py-1">
-                    <div className="text-[11px] font-semibold text-[#8B5CF6] uppercase tracking-wider mb-1">
+ <div className="tf-caption text-[#8B5CF6] uppercase tracking-wider mb-1">
                       Модели Hermes (Nous Research):
                     </div>
                     {hermesModels.map((m) => {
@@ -448,7 +448,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                             hapticSuccess();
                             setHermesModel(m.id);
                           }}
-                          className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 text-[12px] cursor-pointer transition-all active:scale-98 ${
+ className={`tf-meta p-2.5 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition-all active:scale-98 ${
                             isModelActive
                               ? "bg-[#8B5CF6]/15 border-[#8B5CF6]/50 text-white font-medium shadow-sm"
                               : "bg-white/[0.02] border-white/5 hover:bg-white/[0.05] text-white/70"
@@ -456,15 +456,15 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                         >
                           <div className="flex flex-col min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <span className="text-[13px]">{m.icon}</span>
+ <span className="tf-action ">{m.icon}</span>
                               <span className="font-semibold text-white truncate">
                                 {m.name}
                               </span>
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#8B5CF6]/20 text-[#8B5CF6] font-bold">
+ <span className=" px-1.5 py-0.2 rounded bg-[#8B5CF6]/20 text-[#8B5CF6] font-bold">
                                 {m.badge}
                               </span>
                             </div>
-                            <span className="text-[10px] text-white/50 truncate mt-0.5">
+ <span className="tf-micro text-white/50 truncate mt-0.5">
                               {m.desc}
                             </span>
                           </div>
@@ -480,7 +480,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for DeepSeek Models */}
                 {key === "deepseek" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-[#3B82F6]/40 space-y-1.5 py-1">
-                    <div className="text-[11px] font-semibold text-[#3B82F6] uppercase tracking-wider mb-1">
+ <div className="tf-caption text-[#3B82F6] uppercase tracking-wider mb-1">
                       Модели DeepSeek:
                     </div>
                     {deepseekModels.map((m) => {
@@ -494,7 +494,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                             hapticSuccess();
                             setDeepseekModel(m.id);
                           }}
-                          className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 text-[12px] cursor-pointer transition-all active:scale-98 ${
+ className={`tf-meta p-2.5 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition-all active:scale-98 ${
                             isModelActive
                               ? "bg-[#3B82F6]/15 border-[#3B82F6]/50 text-white font-medium shadow-sm"
                               : "bg-white/[0.02] border-white/5 hover:bg-white/[0.05] text-white/70"
@@ -502,15 +502,15 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                         >
                           <div className="flex flex-col min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <span className="text-[13px]">{m.icon}</span>
+ <span className="tf-action ">{m.icon}</span>
                               <span className="font-semibold text-white truncate">
                                 {m.name}
                               </span>
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#3B82F6]/20 text-[#3B82F6] font-bold">
+ <span className=" px-1.5 py-0.2 rounded bg-[#3B82F6]/20 text-[#3B82F6] font-bold">
                                 {m.badge}
                               </span>
                             </div>
-                            <span className="text-[10px] text-white/50 truncate mt-0.5">
+ <span className="tf-micro text-white/50 truncate mt-0.5">
                               {m.desc}
                             </span>
                           </div>
@@ -528,7 +528,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
         </div>
 
         {/* Footer Note */}
-        <div className="px-5 py-3 border-t border-white/10 bg-black/20 text-[11px] text-white/40 flex items-center gap-2">
+ <div className="tf-caption px-5 py-3 border-t border-white/10 bg-black/20 text-white/40 flex items-center gap-2">
           <ShieldCheck className="w-4 h-4 text-[#34C759] shrink-0" />
           <span>
             Диктовка голосом остаётся на быстром выделенном ASR Whisper

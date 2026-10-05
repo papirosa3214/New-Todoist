@@ -227,7 +227,7 @@ export function RescheduleSheet({
               (ScreenHeader variant="compact"): шторка это тот же уровень
               навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
               значит «поле ввода, защита от автозума iOS», см. index.css. */}
-          <h3 className="text-[17px] font-semibold text-text">Срок</h3>
+ <h3 className="tf-title text-text">Срок</h3>
           <button
             onClick={() => stagedDate && applyDate(stagedDate)}
             disabled={!stagedDate || busy}
@@ -254,9 +254,9 @@ export function RescheduleSheet({
                   size={15}
                 />
               </div>
-              <span className="flex-1 text-[14px] text-text">{opt.label}</span>
+ <span className="tf-row flex-1 text-text">{opt.label}</span>
               {opt.hint && (
-                <span className="text-[12px] text-sub">{opt.hint}</span>
+ <span className="tf-meta text-sub">{opt.hint}</span>
               )}
             </button>
           ))}
@@ -272,7 +272,7 @@ export function RescheduleSheet({
             >
               <Icon name="chevronLeft" size={16} className="text-sub" />
             </button>
-            <span className="text-[13px] font-semibold text-text">
+ <span className="tf-action text-text">
               {MONTHS_FULL[viewMonth]} {viewYear}
             </span>
             <button
@@ -289,7 +289,7 @@ export function RescheduleSheet({
             {WEEKDAYS_SHORT.map((d, i) => (
               <div
                 key={`${d}-${i}`}
-                className="text-center text-[11px] text-sub py-1"
+ className="tf-caption text-center text-sub py-1"
               >
                 {d}
               </div>
@@ -306,7 +306,7 @@ export function RescheduleSheet({
                   key={i}
                   onClick={() => setStagedDate(isStaged ? null : dateStr)}
                   disabled={busy}
-                  className={`h-[38px] flex items-center justify-center rounded-full transition-all active:scale-90 text-[13px] disabled:opacity-50 ${
+ className={`tf-action h-[38px] flex items-center justify-center rounded-full transition-all active:scale-90 disabled:opacity-50 ${
                     isStaged
                       ? "bg-red text-white font-semibold"
                       : isToday
@@ -322,7 +322,7 @@ export function RescheduleSheet({
         </div>
 
         {busy && progress && (
-          <p className="text-[12px] text-sub text-center py-2">
+ <p className="tf-meta text-sub text-center py-2">
             Переносим {progress.done} из {progress.total}…
           </p>
         )}

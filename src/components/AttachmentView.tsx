@@ -114,7 +114,7 @@ export function AttachmentView({ attachment }: { attachment: ApiAttachment }) {
             className="w-full max-h-[320px] object-contain"
           />
         ) : (
-          <div className="h-24 flex items-center justify-center text-[12px] text-dim">
+ <div className="tf-meta h-24 flex items-center justify-center text-dim">
             Загрузка изображения…
           </div>
         )}
@@ -141,10 +141,10 @@ export function AttachmentView({ attachment }: { attachment: ApiAttachment }) {
           }
         >
           <Icon name="paperclip" size={16} className="text-sub shrink-0" />
-          <span className="flex-1 min-w-0 truncate text-[13px] text-text">
+ <span className="tf-action flex-1 min-w-0 truncate text-text">
             {attachment.file_name}
           </span>
-          <span className="text-[12px] text-dim shrink-0">
+ <span className="tf-meta text-dim shrink-0">
             {formatSize(attachment.size)}
           </span>
         </button>

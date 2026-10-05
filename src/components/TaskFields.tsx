@@ -98,12 +98,12 @@ export function FieldRow({
           style={iconStyle}
         />
       )}
-      <span className="text-[15px] font-medium text-text flex-1 min-w-0 truncate">
+ <span className="tf-body text-text flex-1 min-w-0 truncate">
         {label}
       </span>
       {value !== undefined && (
         <span
-          className={`text-[14px] shrink-0 ${typeof value === "string" ? valueClassName : ""}`}
+ className={`tf-row shrink-0 ${typeof value ==="string" ? valueClassName :""}`}
         >
           {value}
         </span>
@@ -135,7 +135,7 @@ export function PriorityPill({ priority }: { priority: number }) {
   const p = PRIORITIES.find((x) => x.key === priority) ?? PRIORITIES[3];
   return (
     <span
-      className="inline-flex items-center justify-center text-[11px] font-bold text-white rounded-[10px] px-2 h-[20px] min-w-[26px] shrink-0"
+ className="tf-caption inline-flex items-center justify-center text-white rounded-[10px] px-2 h-[20px] min-w-[26px] shrink-0"
       style={{ backgroundColor: p.color }}
     >
       {p.label}
@@ -186,12 +186,12 @@ export function PriorityField({
               className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-stroke transition-colors"
             >
               <span
-                className="w-[24px] h-[24px] rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
+ className="tf-caption w-[24px] h-[24px] rounded-full flex items-center justify-center text-white shrink-0"
                 style={{ backgroundColor: p.color }}
               >
                 {p.label}
               </span>
-              <span className="text-[14px] text-text flex-1">{p.name}</span>
+ <span className="tf-row text-text flex-1">{p.name}</span>
               {p.key === value && (
                 <Icon name="check" size={16} className="text-red shrink-0" />
               )}
@@ -505,7 +505,7 @@ function TimeWheel({
             return (
               <div
                 key={i}
-                className={`absolute inset-x-0 flex items-center justify-center text-[14px] tabular-nums ${
+ className={`tf-row absolute inset-x-0 flex items-center justify-center tabular-nums ${
                   near ? "font-semibold text-white" : "text-sub"
                 }`}
                 style={{
@@ -625,7 +625,7 @@ function DurationStrip({
           // Повторный тап снимает длительность — так её можно не только
           // поставить, но и передумать, не убирая время целиком.
           onClick={() => onChange(value === d ? null : d)}
-          className="relative flex-1 text-[13px] font-medium tabular-nums"
+ className="tf-action relative flex-1 tabular-nums"
         >
           {i === activeIdx && (
             <span
@@ -848,7 +848,7 @@ export function DueDateField({
                 // спрятать время, ради которого поле и объединили.
                 if (!withTime) setOpen(false);
               }}
-              className={`flex-1 h-[40px] rounded-xl text-[13px] font-medium transition-colors ${
+ className={`tf-action flex-1 h-[40px] rounded-xl transition-colors ${
                 value === today
                   ? "bg-red text-white"
                   : "bg-card2 text-text active:bg-white/10"
@@ -861,7 +861,7 @@ export function DueDateField({
                 onChange(tomorrow);
                 if (!withTime) setOpen(false);
               }}
-              className={`flex-1 h-[40px] rounded-xl text-[13px] font-medium transition-colors ${
+ className={`tf-action flex-1 h-[40px] rounded-xl transition-colors ${
                 value === tomorrow
                   ? "bg-red text-white"
                   : "bg-card2 text-text active:bg-white/10"
@@ -883,7 +883,7 @@ export function DueDateField({
             >
               <Icon name="chevronLeft" size={16} className="text-sub" />
             </button>
-            <span className="text-[13px] font-semibold">
+ <span className="tf-action ">
               {CAL_MONTHS[calMonth]} {calYear}
             </span>
             <button
@@ -913,7 +913,7 @@ export function DueDateField({
                 {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((d) => (
                   <div
                     key={d}
-                    className="text-center text-[10px] text-dim py-1"
+ className="tf-micro text-center text-dim py-1"
                   >
                     {d}
                   </div>
@@ -929,7 +929,7 @@ export function DueDateField({
                         onChange(ds);
                         if (!withTime) setOpen(false);
                       }}
-                      className={`h-[32px] text-[13px] rounded-full transition-all ${
+ className={`tf-action h-[32px] rounded-full transition-all ${
                         selected
                           ? "bg-red text-white font-semibold"
                           : "text-text active:bg-card2"
@@ -946,14 +946,14 @@ export function DueDateField({
           {withTime && (
             <div className="mt-3 border-t border-stroke pt-3">
               <div className="mb-1 flex items-baseline justify-between">
-                <span className="text-[12px] text-sub">Во сколько</span>
+ <span className="tf-meta text-sub">Во сколько</span>
                 {!hasValue ? (
-                  <span className="text-[11px] text-dim">
+ <span className="tf-caption text-dim">
                     сначала выберите день
                   </span>
                 ) : (
                   !time && (
-                    <span className="text-[11px] text-dim">
+ <span className="tf-caption text-dim">
                       старт 9:00, если время не задано
                     </span>
                   )
@@ -992,7 +992,7 @@ export function DueDateField({
                   заодно фиксирует время, которое барабан показывает. */}
               {hasValue && (
                 <>
-                  <div className="mt-3 mb-2 text-[12px] text-sub">
+ <div className="tf-meta mt-3 mb-2 text-sub">
                     Продолжительность
                   </div>
                   <DurationStrip
@@ -1009,7 +1009,7 @@ export function DueDateField({
               бессмысленна, и сервер её такую не примет. */}
           {hasValue && onRunRepeatChange && (
             <div className="mt-3 border-t border-stroke pt-3">
-              <div className="mb-2 text-[12px] text-sub">Повтор</div>
+ <div className="tf-meta mb-2 text-sub">Повтор</div>
               <div className="flex flex-wrap gap-2">
                 {REPEAT_OPTIONS.map((opt) => {
                   const active = (runRepeat ?? "none") === opt.value;
@@ -1018,7 +1018,7 @@ export function DueDateField({
                       key={opt.value}
                       type="button"
                       onClick={() => onRunRepeatChange(opt.value)}
-                      className={`h-[36px] px-3 rounded-xl text-[13px] font-medium transition-colors ${
+ className={`tf-action h-[36px] px-3 rounded-xl transition-colors ${
                         active
                           ? "bg-red text-white"
                           : "bg-card2 text-text active:bg-white/10"
@@ -1031,7 +1031,7 @@ export function DueDateField({
               </div>
               {(runRepeat ?? "none") !== "none" && (
                 <>
-                  <div className="mb-1 mt-3 text-[12px] text-sub">
+ <div className="tf-meta mb-1 mt-3 text-sub">
                     Повторять до
                   </div>
                   <input
@@ -1040,9 +1040,9 @@ export function DueDateField({
                     onChange={(e) =>
                       onRepeatUntilChange?.(e.target.value || null)
                     }
-                    className="w-full h-[40px] rounded-xl bg-card2 px-3 text-[14px] text-text"
+ className="tf-row w-full h-[40px] rounded-xl bg-card2 px-3 text-text"
                   />
-                  <div className="mt-2 text-[12px] text-dim">
+ <div className="tf-meta mt-2 text-dim">
                     Повтор идёт до конца года, дальше назначьте заново.
                   </div>
                 </>
@@ -1055,7 +1055,7 @@ export function DueDateField({
               type="button"
               onClick={onExtendRepeat}
               disabled={extendingRepeat}
-              className="mt-3 w-full h-[40px] rounded-xl bg-card2 text-[13px] font-medium text-text active:bg-white/10 disabled:opacity-50"
+ className="tf-action mt-3 w-full h-[40px] rounded-xl bg-card2 text-text active:bg-white/10 disabled:opacity-50"
             >
               {extendingRepeat ? "Продлеваем…" : "Продлить на год"}
             </button>
@@ -1070,7 +1070,7 @@ export function DueDateField({
                 onTimeChange?.(null, null);
                 setOpen(false);
               }}
-              className="mt-1 w-full py-2 text-center text-[13px] text-sub"
+ className="tf-action mt-1 w-full py-2 text-center text-sub"
             >
               {time ? "Убрать дату и время" : "Убрать дату"}
             </button>
@@ -1106,7 +1106,7 @@ export function LabelsField({
             key={l.id}
             type="button"
             onClick={() => onToggle(l.id)}
-            className="inline-flex items-center gap-1.5 text-[12px] font-semibold rounded-[10px] px-3 py-1.5 transition-colors active:scale-95"
+ className="tf-meta inline-flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 transition-colors active:scale-95"
             style={{
               backgroundColor: active
                 ? l.color + "33"
@@ -1123,7 +1123,7 @@ export function LabelsField({
         );
       })}
       {labels.length === 0 && (
-        <div className="text-[13px] text-dim py-1">Нет доступных меток</div>
+ <div className="tf-action text-dim py-1">Нет доступных меток</div>
       )}
     </div>
   );
@@ -1147,14 +1147,14 @@ export function LabelsField({
               {selectedLabels.slice(0, 2).map((l) => (
                 <span
                   key={l.id}
-                  className="px-2 py-0.5 rounded-[6px] text-[11px] font-medium truncate"
+ className="tf-caption px-2 py-0.5 rounded-[6px] truncate"
                   style={{ backgroundColor: l.color + "26", color: l.color }}
                 >
                   {l.name}
                 </span>
               ))}
               {selectedLabels.length > 2 && (
-                <span className="text-[12px] text-dim">
+ <span className="tf-meta text-dim">
                   +{selectedLabels.length - 2}
                 </span>
               )}
@@ -1254,7 +1254,7 @@ export function SubtaskRow({
               setEditing(false);
             }
           }}
-          className="flex-1 min-w-0 bg-transparent text-[16px] text-text outline-none"
+ className="tf-input flex-1 min-w-0 bg-transparent text-text outline-none"
         />
       ) : (
         <button
@@ -1271,7 +1271,7 @@ export function SubtaskRow({
               доске. При клике парсер не мешает: onClick ведёт к
               переименованию, кнопка остаётся обёрткой вокруг span. */}
           <span
-            className={`text-[14px] ${done ? "line-through text-sub" : "text-text"}`}
+ className={`tf-row ${done ?"line-through text-sub" :"text-text"}`}
           >
             <MarkdownInline source={title} />
           </span>
@@ -1367,7 +1367,7 @@ export function AddSubtaskRow({
         onFocus={onFocus}
         onBlur={onBlur}
         placeholder="Добавить подзадачу..."
-        className="flex-1 min-w-0 bg-transparent text-[13px] text-sub placeholder:text-sub outline-none"
+ className="tf-action flex-1 min-w-0 bg-transparent text-sub placeholder:text-sub outline-none"
       />
       {value.trim() && (
         <button onClick={submit} className="p-2 -m-1 shrink-0">

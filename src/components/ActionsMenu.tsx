@@ -221,7 +221,7 @@ export function ActionsMenu({
                 onClose();
                 item.onClick();
               }}
-              className={`tap-row flex min-h-[44px] w-full items-center gap-3 px-4 py-2 text-left text-[14px] ${
+ className={`tf-row tap-row flex min-h-[44px] w-full items-center gap-3 px-4 py-2 text-left ${
                 item.destructive ? "text-coral" : "text-text"
               }`}
             >

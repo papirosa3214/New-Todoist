@@ -167,13 +167,13 @@ function TaskChip({
       )}
       <span
         className={`min-w-0 flex-1 truncate ${
-          compact ? "text-[9px]" : "text-[11px]"
+          compact ? "text-[9px]" : "tf-caption"
         } ${done ? "text-sub line-through" : "text-text"}`}
       >
         <MarkdownInline source={task.title} />
       </span>
       {!compact && task.start_time && (
-        <span className="shrink-0 text-[10px] tabular-nums text-dim">
+ <span className="tf-micro shrink-0 tabular-nums text-dim">
           {task.start_time}
         </span>
       )}
@@ -223,7 +223,7 @@ function MiniMonth({
     <div className="flex h-full flex-col p-1.5">
       <div className="grid grid-cols-7 pb-0.5">
         {WEEKDAY_LETTERS.map((l, i) => (
-          <span key={i} className="text-center text-[9px] text-dim">
+ <span key={i} className="text-center text-dim">
             {l}
           </span>
         ))}
@@ -264,7 +264,7 @@ function MiniMonth({
                   // наложения (h-full w-full) и добавляем отклик: tap-row,
                   // потому что ячейка лежит на тёмном фоне плитки, где
                   // заливки .04 достаточно (см. index.css).
-                  className={`flex h-full w-full items-center justify-center rounded text-center text-[10px] tabular-nums tap-row ${
+ className={`tf-micro flex h-full w-full items-center justify-center rounded text-center tabular-nums tap-row ${
                     ds === today
                       ? "font-semibold text-red"
                       : dim
@@ -294,7 +294,7 @@ export function WeekMonthLabel({ monday }: { monday: string }) {
   const thursday = new Date(monday + "T00:00:00");
   thursday.setDate(thursday.getDate() + 3);
   return (
-    <div className="pb-1.5 pt-0.5 text-[15px] font-semibold text-text">
+ <div className="tf-body pb-1.5 pt-0.5 text-text">
       {MONTHS_NOM[thursday.getMonth()]} {thursday.getFullYear()}
     </div>
   );
@@ -323,7 +323,7 @@ export function MonthHeaderLabel({ month }: { year: number; month: number }) {
   // Ни года, ни стрелок (владелец 19.08.2026: «2026 не надо, убери год;
   // стрелки тоже убери» — месяц листается свайпом, см. MonthGrid).
   return (
-    <div className="pb-1.5 pt-0.5 text-[15px] font-semibold text-text">
+ <div className="tf-body pb-1.5 pt-0.5 text-text">
       {MONTHS_NOM[month]}
     </div>
   );
@@ -523,16 +523,16 @@ export function WeekGrid({
             >
               <div className="mb-0.5 flex items-baseline gap-1 px-0.5">
                 <span
-                  className={`text-[11px] font-semibold ${
+ className={`tf-caption ${
                     isToday ? "text-red" : "text-sub"
                   }`}
                 >
                   {WEEKDAYS_SHORT[i]}
                 </span>
                 <span
-                  className={`text-[12px] tabular-nums ${
+ className={`tf-meta tabular-nums ${
                     isToday
-                      ? "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red px-1 text-[11px] font-semibold text-white"
+                      ? "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red px-1 tf-caption font-semibold text-white"
                       : "text-text"
                   }`}
                 >
@@ -852,7 +852,7 @@ export function MonthGrid({
         style={{ top: "var(--screen-header-h, 0px)" }}
       >
         {WEEKDAYS_SHORT.map((w) => (
-          <span key={w} className="text-center text-[10px] text-dim">
+ <span key={w} className="tf-micro text-center text-dim">
             {w}
           </span>
         ))}
@@ -914,7 +914,7 @@ export function MonthGrid({
                           «Пн» в шапке и все его числа стоят на одной
                           вертикали. */}
                       <span
-                        className={`mb-0.5 text-[11px] tabular-nums ${
+ className={`tf-caption mb-0.5 tabular-nums ${
                           ds === today
                             ? "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red font-semibold text-white"
                             : "text-text"
@@ -931,7 +931,7 @@ export function MonthGrid({
                         />
                       ))}
                       {rest > 0 && (
-                        <span className="px-1 text-[9px] text-dim">
+ <span className="px-1 text-dim">
                           +{rest}
                         </span>
                       )}
@@ -974,7 +974,7 @@ function DayStrip({
     // недели с flex-1 забирали всю высоту себе.
     <div className="shrink-0 bg-card px-3 py-2">
       <div className="mb-1.5 flex items-center gap-2">
-        <span className="text-[13px] font-semibold text-text">
+ <span className="tf-action text-text">
           {d.getDate()} {MONTHS_GEN[d.getMonth()]},
         </span>
         {/* Кнопки «Свернуть» здесь нет намеренно (владелец 19.08.2026:
@@ -986,12 +986,12 @@ function DayStrip({
             «можешь всё-таки писать обычным шрифтом, как 20 августа,
             Четверг — там всё с большой буквы идёт»). Сокращённое «Чт»
             тонким серым читалось как служебная подпись. */}
-        <span className="text-[13px] font-semibold text-text">
+ <span className="tf-action text-text">
           {WEEKDAYS_FULL[(d.getDay() + 6) % 7]}
         </span>
       </div>
       {tasks.length === 0 ? (
-        <p className="py-2 text-[12px] text-dim">Ничего не запланировано</p>
+ <p className="tf-meta py-2 text-dim">Ничего не запланировано</p>
       ) : (
         // Своя прокрутка при длинном дне: полоса не должна выталкивать
         // календарь с экрана — она встроена в него, а не лежит поверх.
@@ -1017,7 +1017,7 @@ function DayStrip({
                 )}
               </span>
               <span
-                className={`min-w-0 flex-1 truncate text-[13px] ${
+ className={`tf-action min-w-0 flex-1 truncate ${
                   t.status === "completed"
                     ? "text-sub line-through"
                     : "text-text"
@@ -1026,7 +1026,7 @@ function DayStrip({
                 {t.title}
               </span>
               {t.start_time && (
-                <span className="shrink-0 text-[11px] tabular-nums text-dim">
+ <span className="tf-caption shrink-0 tabular-nums text-dim">
                   {formatTimeRange(t.start_time, t.duration_min)}
                 </span>
               )}
@@ -1150,22 +1150,22 @@ export function DaySheet({
       >
         <div ref={contentRef} style={{ willChange: "transform" }}>
           <div className="mb-3 flex items-center gap-2">
-            <span className="text-[17px] font-semibold text-text">
+ <span className="tf-title text-text">
               {d.getDate()} {MONTHS_GEN[d.getMonth()]}
             </span>
-            <span className="text-[13px] text-sub">
+ <span className="tf-action text-sub">
               {WEEKDAYS_SHORT[(d.getDay() + 6) % 7]}
             </span>
             <button
               onClick={onClose}
-              className="ml-auto text-[14px] text-red"
+ className="tf-row ml-auto text-red"
               aria-label="Закрыть"
             >
               Готово
             </button>
           </div>
           {tasks.length === 0 ? (
-            <p className="py-6 text-center text-[13px] text-dim">
+ <p className="tf-action py-6 text-center text-dim">
               На этот день ничего не запланировано
             </p>
           ) : (
@@ -1188,7 +1188,7 @@ export function DaySheet({
                     )}
                   </span>
                   <span
-                    className={`min-w-0 flex-1 truncate text-[14px] ${
+ className={`tf-row min-w-0 flex-1 truncate ${
                       t.status === "completed"
                         ? "text-sub line-through"
                         : "text-text"
@@ -1197,7 +1197,7 @@ export function DaySheet({
                     {t.title}
                   </span>
                   {t.start_time && (
-                    <span className="shrink-0 text-[12px] tabular-nums text-dim">
+ <span className="tf-meta shrink-0 tabular-nums text-dim">
                       {formatTimeRange(t.start_time, t.duration_min)}
                     </span>
                   )}

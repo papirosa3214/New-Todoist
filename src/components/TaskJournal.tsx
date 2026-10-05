@@ -165,23 +165,23 @@ function AgentActivityLine({
         <Icon name="bot" size={13} className="text-teal shrink-0 mt-0.5" />
         <span className="flex-1 min-w-0 flex flex-col gap-0.5">
           {/* Подпись: без неё непонятно, что это за панель и зачем она. */}
-          <span className="text-[10px] uppercase tracking-wide text-dim">
+ <span className="tf-micro uppercase tracking-wide text-dim">
             Чем занят агент
           </span>
           {/* Полностью, с переносами — не truncate: Максим 26.08.2026,
               «полтора слова влазит и всё», обрезанная фраза бесполезна.
               Фразы короткие по построению (сервер режет: наблюдатель до
               70 символов, шаг до 40) — простыни тут не бывает. */}
-          <span className="text-[13px] text-text leading-snug break-words">
+ <span className="tf-action text-text leading-snug break-words">
             {doingNow}
           </span>
           {stepTitle && (
-            <span className="text-[11px] text-dim break-words">
+ <span className="tf-caption text-dim break-words">
               по шагу: {stepTitle}
             </span>
           )}
         </span>
-        <span className="text-[11px] text-dim shrink-0 mt-0.5">
+ <span className="tf-caption text-dim shrink-0 mt-0.5">
           {activityAgoLabel(activity.at, now)}
         </span>
         <Icon
@@ -192,11 +192,11 @@ function AgentActivityLine({
       </button>
       {expanded && (
         <div className="border-t border-stroke px-4 py-2 flex flex-col gap-1 max-h-48 overflow-y-auto">
-          <p className="text-[10px] uppercase tracking-wide text-dim pb-0.5">
+ <p className="tf-micro uppercase tracking-wide text-dim pb-0.5">
             Последние действия
           </p>
           {actions.length === 0 ? (
-            <p className="text-[12px] text-sub py-1">пока пусто</p>
+ <p className="tf-meta text-sub py-1">пока пусто</p>
           ) : (
             actions
               .slice()
@@ -211,7 +211,7 @@ function AgentActivityLine({
                 // src/lib/search.ts»). Раньше здесь был голый a.target, и
                 // список выглядел выпиской из лога вызовов. Формулировка —
                 // на сервере (describeAction), одна на всех потребителей.
-                <p key={i} className="text-[12px] text-sub break-words">
+ <p key={i} className="tf-meta text-sub break-words">
                   {a.text || a.target}
                 </p>
               ))
@@ -241,8 +241,8 @@ export function AgentStatusRow({ task }: { task: ApiTask }) {
       <div className="flex items-center gap-3 py-3 px-4 bg-coral/12 rounded-xl">
         <Icon name="bot" size={18} className="text-coral shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-[14px] text-coral font-medium">Агент пропал</p>
-          <p className="text-[12px] text-coral/80">
+ <p className="tf-row text-coral ">Агент пропал</p>
+ <p className="tf-meta text-coral/80">
             Аренда истекла — последний сигнал:{" "}
             {task.agent_heartbeat_at
               ? formatRelativeTime(task.agent_heartbeat_at)
@@ -260,10 +260,10 @@ export function AgentStatusRow({ task }: { task: ApiTask }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
-        <Icon name="bot" size={18} className={`${meta.color} shrink-0`} />
-        <span className={`text-[14px] flex-1 ${meta.color}`}>{meta.label}</span>
+        <Icon name="bot" size={18} className={` shrink-0${meta.color}`} />
+ <span className={`tf-row flex-1 ${meta.color}`}>{meta.label}</span>
         {task.agent_state === "in_progress" && task.agent_heartbeat_at && (
-          <span className="text-[12px] text-dim shrink-0">
+ <span className="tf-meta text-dim shrink-0">
             {formatRelativeTime(task.agent_heartbeat_at)}
           </span>
         )}
@@ -682,7 +682,7 @@ function ReturnToWorkSheet({
               (ScreenHeader variant="compact"): шторка это тот же уровень
               навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
               значит «поле ввода, защита от автозума iOS», см. index.css. */}
-          <h3 className="text-[17px] font-semibold text-text">{title}</h3>
+ <h3 className="tf-title text-text">{title}</h3>
           <button
             type="button"
             onMouseDown={(e) => e.preventDefault()}
@@ -694,7 +694,7 @@ function ReturnToWorkSheet({
             <Icon name="check" size={18} className="text-white" />
           </button>
         </div>
-        <p className="text-[13px] text-sub mb-2 px-1">{hint}</p>
+ <p className="tf-action text-sub mb-2 px-1">{hint}</p>
         <ErrorBanner
           error={error}
           fallback="Не удалось отправить — попробуйте ещё раз"
@@ -719,7 +719,7 @@ function ReturnToWorkSheet({
           // клику отработать, а не гасит панель раньше времени.
           onBlur={() => setTimeout(() => setFocused(false), 150)}
           placeholder={placeholder}
-          className="w-full bg-card2 rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none resize-none mb-3"
+ className="tf-input w-full bg-card2 rounded-xl px-3 py-2.5 text-text placeholder:text-dim outline-none resize-none mb-3"
         />
       </div>
       {focused && mic.state === "idle" && (
@@ -902,10 +902,10 @@ function JournalLine({
   return (
     <div className="flex items-center gap-2 px-1 py-1.5">
       <span className="w-1 h-1 rounded-full bg-dim shrink-0" />
-      <span className="flex-1 min-w-0 text-[12px] text-dim">
+ <span className="tf-meta flex-1 min-w-0 text-dim">
         {describeEvent(event, look)}
       </span>
-      <span className="text-[11px] text-dim shrink-0">
+ <span className="tf-caption text-dim shrink-0">
         {formatRelativeTime(event.created_at)} · {formatAbsoluteTime(event.created_at)}
       </span>
     </div>
@@ -936,15 +936,15 @@ function CommentCard({ comment }: { comment: ApiComment }) {
             size={20}
           />
         )}
-        <span className="text-[13px] font-medium">
+ <span className="tf-action ">
           {comment.user_name || "Система"}
         </span>
-        <span className="text-[11px] text-dim ml-auto">
+ <span className="tf-caption text-dim ml-auto">
           {formatRelativeTime(comment.created_at)} · {formatAbsoluteTime(comment.created_at)}
         </span>
       </div>
       {comment.text && (
-        <p className="text-[14px] text-sub whitespace-pre-wrap">
+ <p className="tf-row text-sub whitespace-pre-wrap">
           {comment.text}
         </p>
       )}
@@ -979,7 +979,7 @@ export function TaskFeed({ task }: { task: ApiTask }) {
 
   if (feed.length === 0) {
     return (
-      <div className="bg-card rounded-2xl p-4 text-center text-[13px] text-dim mb-2">
+ <div className="tf-action bg-card rounded-2xl p-4 text-center text-dim mb-2">
         Лента пуста — ни комментариев, ни событий
       </div>
     );

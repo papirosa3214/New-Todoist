@@ -873,7 +873,7 @@ export function UpcomingScreen() {
                       aria-label="Выбрать месяц"
                       className="flex items-center gap-1 h-[40px] -ml-2 px-2 active:scale-95"
                     >
-                      <span className="text-[14px] font-semibold text-red">
+ <span className="tf-row text-red">
                         {MONTHS_ABBR_DOT[pickerMonth]} {pickerYear} г.
                       </span>
                       <Icon
@@ -891,7 +891,7 @@ export function UpcomingScreen() {
                     {WEEKDAYS.map((d) => (
                       <div
                         key={d}
-                        className="text-center text-[11px] text-sub py-0"
+ className="tf-caption text-center text-sub py-0"
                       >
                         {d}
                       </div>
@@ -929,7 +929,7 @@ export function UpcomingScreen() {
                         >
                           {firstOfMonth && (
                             <span
-                              className={`text-[10px] leading-none ${
+ className={`tf-micro leading-none ${
                                 isFilled ? "text-red" : "text-sub"
                               }`}
                             >
@@ -937,7 +937,7 @@ export function UpcomingScreen() {
                             </span>
                           )}
                           <span
-                            className={`text-[16px] leading-none w-[30px] h-[30px] rounded-full flex items-center justify-center ${
+ className={`tf-input leading-none w-[30px] h-[30px] rounded-full flex items-center justify-center ${
                               isFilled
                                 ? "bg-red text-white font-semibold"
                                 : dim
@@ -965,7 +965,7 @@ export function UpcomingScreen() {
                                Сверху — название месяца активной недели. */
                 <>
                   <div className="relative flex items-center justify-between pt-1 pb-0.5 px-1">
-                    <span className="text-[13px] font-semibold text-red">
+ <span className="tf-action text-red">
                       {formatMonthOfWeek(activeWeekDays)}
                     </span>
                   </div>
@@ -1020,14 +1020,14 @@ export function UpcomingScreen() {
                             />
                           )}
                           <span
-                            className={`relative text-[10px] font-medium uppercase ${
+ className={`tf-micro relative uppercase ${
                               isActive || isToday ? "text-red" : "text-sub"
                             }`}
                           >
                             {short}
                           </span>
                           <span
-                            className={`relative text-[15px] font-medium ${
+ className={`tf-body relative ${
                               // Сегодня — ВСЕГДА красный кружок (как
                               // было изначально); свечение — только у
                               // активной даты скролла, если это не
@@ -1100,7 +1100,7 @@ export function UpcomingScreen() {
                 </button>
                 <button
                   onClick={goToday}
-                  className="px-2 h-[36px] text-[12px] text-sub whitespace-nowrap active:scale-95"
+ className="tf-meta px-2 h-[36px] text-sub whitespace-nowrap active:scale-95"
                 >
                   Сегодня
                 </button>
@@ -1121,7 +1121,7 @@ export function UpcomingScreen() {
       {selectedDate && (
         <button
           onClick={() => setSelectedDate(null)}
-          className="flex items-center gap-2 mt-3 mb-3 px-3 py-1.5 bg-red/15 rounded-lg text-[13px] text-red"
+ className="tf-action flex items-center gap-2 mt-3 mb-3 px-3 py-1.5 bg-red/15 rounded-lg text-red"
         >
           <Icon name="calendarSmall" size={14} />
           {formatFullDate(selectedDate)}
@@ -1145,7 +1145,7 @@ export function UpcomingScreen() {
         !error &&
         datedTasks.length > 0 &&
         tasks.length === 0 && (
-          <div className="px-1 pt-1 pb-2 flex items-center gap-2 flex-wrap text-[13px] text-dim">
+ <div className="tf-action px-1 pt-1 pb-2 flex items-center gap-2 flex-wrap text-dim">
             Под выбранные фильтры ничего не подошло
             <button
               onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
@@ -1279,7 +1279,7 @@ export function UpcomingScreen() {
                     dateStr === today ? "blur(2px)" : undefined,
                 }}
               >
-                <span className="text-[13px] font-semibold">
+ <span className="tf-action ">
                   {formatFullDate(dateStr)}
                 </span>
               </div>
@@ -1298,7 +1298,7 @@ export function UpcomingScreen() {
         ))}
 
         {selectedDate && !groupedTasks[selectedDate] && (
-          <div className="text-center py-8 text-[14px] text-dim">
+ <div className="tf-row text-center py-8 text-dim">
             Нет задач на эту дату
           </div>
         )}

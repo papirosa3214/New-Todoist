@@ -159,8 +159,8 @@ export function KeyboardDemoScreen() {
   return (
     <div className="min-h-dvh bg-bg text-text flex flex-col">
       <div className="flex-1 px-4 pt-6">
-        <h1 className="text-[20px] font-semibold mb-1">Своя клавиатура</h1>
-        <p className="text-[13px] text-sub mb-4">
+ <h1 className="tf-task-title mb-1">Своя клавиатура</h1>
+ <p className="tf-action text-sub mb-4">
           Пробный экран. Тапни по полю и набирай — системная клавиатура здесь не
           участвует.
         </p>
@@ -178,17 +178,17 @@ export function KeyboardDemoScreen() {
               keyboardRef.current?.setInput(e.target.value);
             }}
             placeholder="Название задачи"
-            className="w-full bg-transparent text-[16px] text-text placeholder:text-dim outline-none"
+ className="tf-input w-full bg-transparent text-text placeholder:text-dim outline-none"
           />
         </div>
 
-        {micNote && <p className="text-[12px] text-dim mb-2">{micNote}</p>}
+ {micNote && <p className="tf-meta text-dim mb-2">{micNote}</p>}
         {micError != null && (
-          <p className="text-[12px] text-coral mb-2">
+ <p className="tf-meta text-coral mb-2">
             {typeof micError === "string" ? micError : "Ошибка микрофона"}
           </p>
         )}
-        <p className="text-[12px] text-dim">Символов: {text.length}</p>
+ <p className="tf-meta text-dim">Символов: {text.length}</p>
       </div>
 
       {/* Отступы и фон панели — в CSS (.kb-demo), не Tailwind-классами:

@@ -161,11 +161,11 @@ export function CreateChatSheet({
           >
             <Icon name="close" size={20} />
           </button>
-          <h3 className="text-[17px] font-semibold">Новый чат</h3>
+ <h3 className="tf-title ">Новый чат</h3>
           <div className="w-[44px] h-[44px]" />
         </div>
 
-        <p className="text-[13px] text-sub mb-2 px-1">
+ <p className="tf-action text-sub mb-2 px-1">
           {kind === "direct"
             ? "Персональный чат с одной ролью."
             : `Групповой чат: ${selected.length} ${pluralRoles(selected.length)}.`}
@@ -182,10 +182,10 @@ export function CreateChatSheet({
         {!isLoading && !isError && (
           <>
             <div className="mb-4">
-              <h4 className="text-[13px] text-sub mb-2 px-1">Роли</h4>
+ <h4 className="tf-action text-sub mb-2 px-1">Роли</h4>
               <div className="flex flex-wrap gap-2">
                 {roles.length === 0 && (
-                  <p className="text-[13px] text-dim px-1 py-2">
+ <p className="tf-action text-dim px-1 py-2">
                     Ролевых учёток пока нет.
                   </p>
                 )}
@@ -196,7 +196,7 @@ export function CreateChatSheet({
                       key={r.id}
                       type="button"
                       onClick={() => toggle(r.id)}
-                      className={`h-9 px-3.5 rounded-full text-[13px] tap-fade ${
+ className={`tf-action h-9 px-3.5 rounded-full tap-fade ${
                         on
                           ? "bg-red text-white"
                           : "bg-card2 text-text border border-stroke"
@@ -211,7 +211,7 @@ export function CreateChatSheet({
 
             {kind === "group" && (
               <div className="mb-4">
-                <h4 className="text-[13px] text-sub mb-2 px-1">
+ <h4 className="tf-action text-sub mb-2 px-1">
                   Название (необязательно)
                 </h4>
                 <div className="bg-card2 rounded-2xl px-4 h-12 flex items-center">
@@ -223,7 +223,7 @@ export function CreateChatSheet({
                       `Чат с ${Math.max(selected.length, 2)} ролями`
                     }
                     maxLength={200}
-                    className="w-full bg-transparent text-[15px] text-text placeholder:text-dim outline-none"
+ className="tf-body w-full bg-transparent text-text placeholder:text-dim outline-none"
                   />
                 </div>
               </div>

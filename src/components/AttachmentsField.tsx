@@ -80,10 +80,10 @@ function FileRow({
         size={14}
         className="text-sub shrink-0"
       />
-      <span className="flex-1 min-w-0 truncate text-[13px] text-text">
+ <span className="tf-action flex-1 min-w-0 truncate text-text">
         {name}
       </span>
-      <span className="text-[12px] text-dim shrink-0">{formatSize(size)}</span>
+ <span className="tf-meta text-dim shrink-0">{formatSize(size)}</span>
       <button
         type="button"
         onClick={onRemove}
@@ -166,7 +166,7 @@ export function AttachmentsField({
     <>
       {/* Тот же лейбл-заголовок секции, что у «Заметка» и «Подзадачи»
           (17px, text-sub, font-semibold) — см. DESIGN.md §6. */}
-      <div className="text-[17px] text-sub font-semibold mb-2">Файлы</div>
+ <div className="tf-title text-sub mb-2">Файлы</div>
 
       {(saved.length > 0 || files.length > 0) && (
         <div className="flex flex-col gap-1 mb-2">
@@ -221,7 +221,7 @@ export function AttachmentsField({
         className="w-full flex items-center gap-2 px-3 h-11 rounded-xl bg-card mb-4 active:opacity-70 disabled:opacity-50"
       >
         <Icon name="paperclip" size={14} className="text-sub shrink-0" />
-        <span className="text-[13px] text-sub">
+ <span className="tf-action text-sub">
           {upload.isPending ? "Загружаю…" : "Прикрепить файл"}
         </span>
       </button>

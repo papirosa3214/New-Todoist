@@ -319,7 +319,7 @@ function ReplyForm({
               className="flex items-center gap-2 px-3 h-9 rounded-lg bg-card2"
             >
               <Paperclip size={13} className="text-sub shrink-0" />
-              <span className="flex-1 min-w-0 truncate text-[12px] text-text">
+ <span className="tf-meta flex-1 min-w-0 truncate text-text">
                 {att.file_name}
               </span>
               <button
@@ -354,7 +354,7 @@ function ReplyForm({
         // mousedown), но blur всё равно приходит раньше её onClick.
         onBlur={() => setTimeout(() => setFocused(false), 150)}
         placeholder={placeholder}
-        className="w-full bg-card2 rounded-xl px-3 py-2 text-[14px] text-text placeholder:text-dim outline-none resize-none"
+ className="tf-row w-full bg-card2 rounded-xl px-3 py-2 text-text placeholder:text-dim outline-none resize-none"
       />
       {/* preventDefault на mousedown — тот же приём, что в MicKeyboardBar, и
           по той же причине, только здесь он был пропущен. Тап по кнопке при
@@ -400,7 +400,7 @@ function ReplyForm({
           onMouseDown={(e) => e.preventDefault()}
           onClick={guardedSubmit}
           disabled={!comment.trim() || busy || uploading}
-          className="text-[13px] font-semibold text-blue disabled:opacity-40 tap-fade"
+ className="tf-action text-blue disabled:opacity-40 tap-fade"
         >
           Отправить
         </button>
@@ -408,7 +408,7 @@ function ReplyForm({
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={onCancel}
-          className="text-[13px] text-dim tap-fade"
+ className="tf-action text-dim tap-fade"
         >
           Отмена
         </button>
@@ -519,7 +519,7 @@ function SubtaskRow({
           className={`flex-1 min-w-0 flex items-center gap-2 text-left ${canOpen ? "tap-fade" : ""}`}
         >
           <span
-            className={`flex-1 min-w-0 text-[14px] ${state === "done" ? "line-through" : ""} ${v.text}`}
+ className={`tf-row flex-1 min-w-0 ${state ==="done" ?"line-through" :""} ${v.text}`}
           >
             <MarkdownInline source={st.title} />
           </span>
@@ -544,7 +544,7 @@ function SubtaskRow({
       {open && (
         <div className="pb-3 pr-4 pl-[46px]">
           {st.result && (
-            <p className="text-[13px] text-sub whitespace-pre-wrap">
+ <p className="tf-action text-sub whitespace-pre-wrap">
               {st.result}
             </p>
           )}
@@ -558,13 +558,13 @@ function SubtaskRow({
             <div className="mt-2 flex justify-between">
               <button
                 onClick={guardedToggle}
-                className="text-[13px] font-semibold uppercase tracking-wider text-green tap-fade"
+ className="tf-action uppercase tracking-wider text-green tap-fade"
               >
                 Принять
               </button>
               <button
                 onClick={() => setReplying(true)}
-                className="text-[13px] font-semibold uppercase tracking-wider text-blue tap-fade"
+ className="tf-action uppercase tracking-wider text-blue tap-fade"
               >
                 Вернуть
               </button>
@@ -585,7 +585,7 @@ function SubtaskRow({
           {canComment && !replying && (
             <button
               onClick={() => setReplying(true)}
-              className="mt-2 text-[13px] font-semibold uppercase tracking-wider text-orange tap-fade"
+ className="tf-action mt-2 uppercase tracking-wider text-orange tap-fade"
             >
               Ответить
             </button>
@@ -643,10 +643,10 @@ export function SubtaskFeed({
   return (
     <div className="mb-4">
       <div className="flex items-baseline justify-between mb-2 px-1">
-        <h3 className="text-[13px] text-sub font-semibold">Подзадачи</h3>
+ <h3 className="tf-action text-sub ">Подзадачи</h3>
         {/* Счётчик вместо полосы прогресса: цифра точнее и занимает
             строку, которая и так есть. */}
-        <span className="text-[12px] text-dim">
+ <span className="tf-meta text-dim">
           {готово} из {subtasks.length}
         </span>
       </div>

@@ -60,11 +60,11 @@ function Row({
         />
       </div>
       <span
-        className={`text-[15px] flex-1 ${danger ? "text-coral" : "text-text"}`}
+ className={`tf-body flex-1 ${danger ?"text-coral" :"text-text"}`}
       >
         {label}
       </span>
-      {value && <span className="text-[13px] text-sub">{value}</span>}
+ {value && <span className="tf-action text-sub">{value}</span>}
       {!danger && <Icon name="chevron" size={16} className="text-dim" />}
     </button>
   );
@@ -86,8 +86,8 @@ function InfoRow({ icon, iconColor = "#FF6B6B", label, value }: InfoRowProps) {
       >
         <Icon name={icon} size={16} className="text-text" />
       </div>
-      <span className="text-[15px] flex-1 text-text">{label}</span>
-      <span className="text-[13px] text-sub">{value}</span>
+ <span className="tf-body flex-1 text-text">{label}</span>
+ <span className="tf-action text-sub">{value}</span>
     </div>
   );
 }
@@ -156,8 +156,8 @@ function ToggleRow({
       >
         <Icon name={icon} size={16} className="text-text" />
       </div>
-      <span className="text-[15px] flex-1 text-text">{label}</span>
-      {valueLabel && <span className="text-[13px] text-sub">{valueLabel}</span>}
+ <span className="tf-body flex-1 text-text">{label}</span>
+ {valueLabel && <span className="tf-action text-sub">{valueLabel}</span>}
       <Switch checked={checked} onChange={onChange} ariaLabel={label} />
     </div>
   );
@@ -236,11 +236,11 @@ function AccountAvatarRow({
         onChange={onPick}
       />
       <div className="flex-1 min-w-0 cursor-pointer" onClick={onEdit}>
-        <div className="text-[15px] text-text font-medium truncate flex items-center gap-1.5">
+ <div className="tf-body text-text truncate flex items-center gap-1.5">
           {name}
         </div>
-        {email && <div className="text-[13px] text-sub truncate">{email}</div>}
-        {error && <div className="text-[12px] text-coral mt-0.5">{error}</div>}
+ {email && <div className="tf-action text-sub truncate">{email}</div>}
+ {error && <div className="tf-meta text-coral mt-0.5">{error}</div>}
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
@@ -248,7 +248,7 @@ function AccountAvatarRow({
           <button
             type="button"
             onClick={onEdit}
-            className="tap-fade py-1 px-2.5 rounded-lg bg-card2 border border-stroke text-[12px] text-text font-medium"
+ className="tf-meta tap-fade py-1 px-2.5 rounded-lg bg-card2 border border-stroke text-text "
           >
             Изменить
           </button>
@@ -259,7 +259,7 @@ function AccountAvatarRow({
             onClick={() => del.mutate()}
             disabled={busy}
             aria-label="Убрать аватарку"
-            className="tap-fade text-[12px] text-sub"
+ className="tf-meta tap-fade text-sub"
           >
             Убрать фото
           </button>
@@ -537,7 +537,7 @@ export function SettingsScreen() {
       )}
 
       {/* User settings */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub px-1 mb-2">
         Пользовательские настройки
       </div>
       <div className="mb-4">
@@ -579,7 +579,7 @@ export function SettingsScreen() {
       {/* AI — ВЕСЬ в одном разделе (Максим 26.08.2026: «уже нагородили —
           мозг в одном месте, модели в другом, Ollama в третьем»). Одна
           строка-вход, всё внутри: /settings/voice-models. */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub px-1 mb-2">
         Искусственный интеллект
       </div>
       <div className="mb-4">
@@ -594,7 +594,7 @@ export function SettingsScreen() {
       </div>
 
       {/* General */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">Общие</div>
+ <div className="tf-action text-sub px-1 mb-2">Общие</div>
       <div className="mb-4">
         <FieldGroup>
           {/* Строки «Проекты» здесь больше нет (26.08.2026): проекты стали
@@ -632,7 +632,7 @@ export function SettingsScreen() {
       </div>
 
       {/* Сервер */}
-      <div className="text-[13px] text-sub font-semibold px-1 mb-2">Сервер</div>
+ <div className="tf-action text-sub px-1 mb-2">Сервер</div>
       <div className="mb-4">
         <ServerSection />
       </div>

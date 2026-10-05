@@ -60,10 +60,10 @@ export function CollaborationPlanPanel({ taskId }: { taskId: string }) {
   return (
     <div className="py-3 px-4 bg-card rounded-xl">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[13px] font-medium text-text">
+ <span className="tf-action text-text">
           План совместной работы
         </span>
-        <span className="text-[12px] text-sub">
+ <span className="tf-meta text-sub">
           {PROFILE_LABELS[plan.profile] ?? plan.profile}
         </span>
       </div>
@@ -75,7 +75,7 @@ export function CollaborationPlanPanel({ taskId }: { taskId: string }) {
           return (
             <div
               key={node.slot_key}
-              className="flex items-center justify-between gap-2 text-[13px]"
+ className="tf-action flex items-center justify-between gap-2"
             >
               <span className="text-text">
                 {roleTitle(node.role_key)}
@@ -87,7 +87,7 @@ export function CollaborationPlanPanel({ taskId }: { taskId: string }) {
                 )}
               </span>
               <span
-                className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+ className={`tf-caption shrink-0 rounded-full border px-2 py-0.5 ${
                   STATE_TONE[state] ?? STATE_TONE.waiting
                 }`}
               >

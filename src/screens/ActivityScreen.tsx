@@ -131,16 +131,16 @@ function CompletedTaskCard({ task }: { task: ApiTask }) {
         onClick={() => navigate(`/task/${task.id}`)}
         className="tap-row w-full text-left px-4 pt-3 pb-2.5 flex flex-col gap-1.5"
       >
-        <span className="text-[15px] text-sub line-through leading-snug">
+ <span className="tf-body text-sub line-through leading-snug">
           <MarkdownInline source={task.title} />
         </span>
         <div className="flex flex-wrap items-center gap-1.5">
           {timeLabel && (
-            <span className="text-[12px] text-dim">{timeLabel}</span>
+ <span className="tf-meta text-dim">{timeLabel}</span>
           )}
           {task.project_name && (
             <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+ className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded"
               style={{
                 backgroundColor: (task.project_color || "#A6A6A6") + "26",
                 color: task.project_color || "#A6A6A6",
@@ -153,7 +153,7 @@ function CompletedTaskCard({ task }: { task: ApiTask }) {
           {task.labels.map((l) => (
             <span
               key={l.id}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px]"
+ className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded"
               style={{ backgroundColor: l.color + "26", color: l.color }}
             >
               <Icon name="tag" size={10} />
@@ -167,7 +167,7 @@ function CompletedTaskCard({ task }: { task: ApiTask }) {
         <button
           onClick={restore}
           disabled={updateTask.isPending}
-          className="tap-row w-full flex items-center justify-center gap-2 h-11 text-[13px] font-semibold text-red disabled:opacity-50"
+ className="tf-action tap-row w-full flex items-center justify-center gap-2 h-11 text-red disabled:opacity-50"
         >
           <Icon name="sync" size={14} />
           Вернуть в работу
@@ -235,7 +235,7 @@ function FilterPicker({
             onClick={() => onSelect(null)}
             className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
           >
-            <span className="text-[14px] text-text flex-1">{allLabel}</span>
+ <span className="tf-row text-text flex-1">{allLabel}</span>
             {selectedId === null && (
               <Icon name="check" size={16} className="text-red" />
             )}
@@ -247,7 +247,7 @@ function FilterPicker({
               className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
             >
               <Icon name={optionIcon} size={16} style={{ color: opt.color }} />
-              <span className="text-[14px] text-text flex-1 truncate">
+ <span className="tf-row text-text flex-1 truncate">
                 {opt.label}
               </span>
               {selectedId === opt.id && (
@@ -256,7 +256,7 @@ function FilterPicker({
             </button>
           ))}
           {options.length === 0 && (
-            <div className="px-4 py-3 text-[13px] text-dim">{emptyText}</div>
+ <div className="tf-action px-4 py-3 text-dim">{emptyText}</div>
           )}
         </div>
       )}
@@ -355,11 +355,11 @@ function ActivityFilterSheet({
               (ScreenHeader variant="compact"): шторка это тот же уровень
               навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
               значит «поле ввода, защита от автозума iOS», см. index.css. */}
-          <h3 className="text-[17px] font-semibold text-text">Фильтры</h3>
+ <h3 className="tf-title text-text">Фильтры</h3>
           <button
             onClick={() => setFilters(DEFAULT_FILTERS)}
             disabled={!hasActive}
-            className="text-[13px] text-sub disabled:opacity-40 -mr-1 px-2 h-11"
+ className="tf-action text-sub disabled:opacity-40 -mr-1 px-2 h-11"
           >
             Сбросить
           </button>
@@ -421,7 +421,7 @@ function ActivityFilterSheet({
                   }}
                   className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
                 >
-                  <span className="text-[14px] text-text flex-1">
+ <span className="tf-row text-text flex-1">
                     Все исполнители
                   </span>
                   {filters.assigneeKey === null && (
@@ -443,7 +443,7 @@ function ActivityFilterSheet({
                       avatar_url={a.avatar_url}
                       size={24}
                     />
-                    <span className="text-[14px] text-text flex-1 truncate">
+ <span className="tf-row text-text flex-1 truncate">
                       {a.name}
                     </span>
                     {filters.assigneeKey === a.id && (
@@ -462,7 +462,7 @@ function ActivityFilterSheet({
                     <div className="w-[24px] h-[24px] rounded-full bg-card2 flex items-center justify-center shrink-0">
                       <Icon name="person" size={12} className="text-dim" />
                     </div>
-                    <span className="text-[14px] text-text flex-1">
+ <span className="tf-row text-text flex-1">
                       Без исполнителя
                     </span>
                     {filters.assigneeKey === "__none" && (
@@ -472,7 +472,7 @@ function ActivityFilterSheet({
                 )}
                 {assigneeOptions.list.length === 0 &&
                   !assigneeOptions.hasUnassigned && (
-                    <div className="px-4 py-3 text-[13px] text-dim">
+ <div className="tf-action px-4 py-3 text-dim">
                       Нет данных об исполнителях
                     </div>
                   )}
@@ -501,7 +501,7 @@ function ActivityFilterSheet({
                     }}
                     className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
                   >
-                    <span className="text-[14px] text-text flex-1">
+ <span className="tf-row text-text flex-1">
                       {p.label}
                     </span>
                     {filters.period === p.key && (
@@ -732,14 +732,14 @@ export function ActivityScreen() {
       )}
 
       {!isLoading && !showTrueEmpty && (
-        <p className="px-1 text-[13px] text-sub mt-2 mb-3">{summaryText}</p>
+ <p className="tf-action px-1 text-sub mt-2 mb-3">{summaryText}</p>
       )}
 
       {showTrueEmpty && (
         <div className="text-center py-16 px-6">
           <Icon name="check" size={32} className="text-dim mx-auto mb-3" />
-          <p className="text-[14px] text-text mb-1">Пока ничего не выполнено</p>
-          <p className="text-[13px] text-dim">
+ <p className="tf-row text-text mb-1">Пока ничего не выполнено</p>
+ <p className="tf-action text-dim">
             Задачи, которые вы отметите выполненными, появятся здесь — и их
             всегда можно будет вернуть в работу
           </p>
@@ -749,15 +749,15 @@ export function ActivityScreen() {
       {showFilteredEmpty && (
         <div className="text-center py-16 px-6">
           <Icon name="list" size={32} className="text-dim mx-auto mb-3" />
-          <p className="text-[14px] text-text mb-1">
+ <p className="tf-row text-text mb-1">
             Под выбранные фильтры ничего не подошло
           </p>
-          <p className="text-[13px] text-dim mb-4">
+ <p className="tf-action text-dim mb-4">
             Попробуйте изменить период или сбросить фильтры
           </p>
           <button
             onClick={() => setFilters(DEFAULT_FILTERS)}
-            className="tap-fade inline-flex items-center justify-center h-11 px-5 rounded-xl bg-card2 text-[14px] text-text"
+ className="tf-row tap-fade inline-flex items-center justify-center h-11 px-5 rounded-xl bg-card2 text-text"
           >
             Сбросить фильтры
           </button>
@@ -766,7 +766,7 @@ export function ActivityScreen() {
 
       {groups.map((g) => (
         <div key={g.key} className="mb-5">
-          <h3 className="text-[13px] font-semibold text-sub mb-2 px-1">
+ <h3 className="tf-action text-sub mb-2 px-1">
             {g.label}
           </h3>
           <div className="flex flex-col gap-2">

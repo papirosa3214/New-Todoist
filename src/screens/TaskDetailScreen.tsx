@@ -351,14 +351,14 @@ export function TaskDetailScreen() {
     <div className="px-4 pb-[calc(1rem+var(--kb-inset,0px))]">
       {dialog}
       {templateToast && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border border-stroke rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 text-sm text-text">
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border border-stroke rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 tf-action text-text">
           <Icon name="check" size={16} className="text-sub" />
           <span>Задача сохранена в шаблоны</span>
         </div>
       )}
       {liveActivityToast && (
         <div
-          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 text-sm max-w-[calc(100vw-2rem)] ${
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 tf-action max-w-[calc(100vw-2rem)] ${
             liveActivityToast.ok
               ? "border-blue-500/40 text-blue-400"
               : "border-red-500/40 text-red-400"
@@ -431,7 +431,7 @@ export function TaskDetailScreen() {
           их не вижу, поэтому понятия не имею, о какой карточке ты говоришь».
           Поэтому сносочка в самом начале и намеренно невыразительная:
           caption + text-dim — подпись, которую можно не читать. */}
-      <div className="text-[11px] text-dim mb-1">{task.id.slice(0, 8)}</div>
+ <div className="tf-caption text-dim mb-1">{task.id.slice(0, 8)}</div>
 
       {taskProject && (
         <div className="mb-2">
@@ -439,7 +439,7 @@ export function TaskDetailScreen() {
               списка и на карточке доски (владелец 19.08.2026: «она не
               должна иметь заливку, просто цветной текст с решёткой»). */}
           <span
-            className="inline-flex min-w-0 items-center gap-1 text-[11px] font-medium"
+ className="tf-caption inline-flex min-w-0 items-center gap-1 "
             style={{ color: taskProject.color || "#A6A6A6" }}
           >
             <Icon name="hash" size={10} className="shrink-0" />
@@ -451,7 +451,7 @@ export function TaskDetailScreen() {
       {/* Priority ring + Title */}
       <div className="flex items-start gap-3 mb-4">
         <h1
-          className={`text-[20px] font-semibold flex-1 ${task.status === "completed" ? "line-through text-sub" : ""}`}
+ className={`tf-task-title flex-1 ${task.status ==="completed" ?"line-through text-sub" :""}`}
         >
           <MarkdownInline source={task.title} />
         </h1>
@@ -481,7 +481,7 @@ export function TaskDetailScreen() {
           описание под заголовком с кольцом, но это лишний воздух на
           телефоне. */}
       {task.description && (
-        <p className="text-[14px] text-sub leading-relaxed mb-4 whitespace-pre-wrap">
+ <p className="tf-row text-sub leading-relaxed mb-4 whitespace-pre-wrap">
           {task.description}
         </p>
       )}
@@ -515,7 +515,7 @@ export function TaskDetailScreen() {
                 Формулировка общая с полем «Срок и время» самой формы
                 (DueDateField): одна задача не должна читаться по-разному в
                 карточке и в форме. */}
-            <span className="text-[14px] text-red">
+ <span className="tf-row text-red">
               {formatDueLabel(task.due_date)}
               {task.start_time
                 ? ` · ${formatTimeRange(task.start_time, task.duration_min)}`
@@ -534,7 +534,7 @@ export function TaskDetailScreen() {
               теперь занят под поднятый флаг готовности. */}
           <PriorityArrows priority={task.priority} size={13} />
           <span
-            className="text-[14px] flex-1"
+ className="tf-row flex-1"
             style={{ color: priority?.color }}
           >
             Приоритет
@@ -549,7 +549,7 @@ export function TaskDetailScreen() {
         {task.ready_for_pickup ? (
           <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
             <ReadyFlag size={16} />
-            <span className="text-[14px] flex-1 text-green">
+ <span className="tf-row flex-1 text-green">
               Флаг поднят — можно брать в работу
             </span>
           </div>
@@ -562,7 +562,7 @@ export function TaskDetailScreen() {
               avatar_url={task.assignee_avatar_url}
               size={24}
             />
-            <span className="text-[14px] text-text">{task.assignee_name}</span>
+ <span className="tf-row text-text">{task.assignee_name}</span>
           </div>
         )}
         <AgentStatusRow task={task} />
@@ -581,7 +581,7 @@ export function TaskDetailScreen() {
           {task.labels.map((l) => (
             <span
               key={l.id}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px]"
+ className="tf-meta inline-flex items-center gap-1 px-2.5 py-1 rounded-lg"
               style={{ backgroundColor: l.color + "26", color: l.color }}
             >
               <Icon name="tag" size={11} /> {l.name}
@@ -596,7 +596,7 @@ export function TaskDetailScreen() {
         task.children.length > 0 && (
           <div className="flex gap-4 border-b border-sub/20 mb-4 px-1">
             <button
-              className={`pb-2 text-[14px] font-medium transition-colors border-b-2 ${
+ className={`tf-row pb-2 transition-colors border-b-2 ${
                 activeTab === "details"
                   ? "border-red text-text"
                   : "border-transparent text-sub hover:text-text"
@@ -606,7 +606,7 @@ export function TaskDetailScreen() {
               Чек-лист ({task.subtasks.length})
             </button>
             <button
-              className={`pb-2 text-[14px] font-medium transition-colors border-b-2 ${
+ className={`tf-row pb-2 transition-colors border-b-2 ${
                 activeTab === "team"
                   ? "border-red text-text"
                   : "border-transparent text-sub hover:text-text"
@@ -667,7 +667,7 @@ export function TaskDetailScreen() {
         task.children.length > 0 &&
         (!task.subtasks.length || activeTab === "team") && (
           <div className="mb-4 space-y-1">
-            <div className="text-[11px] text-sub font-medium px-1 mb-2">
+ <div className="tf-caption text-sub px-1 mb-2">
               Дочерние задачи ({task.children.length})
             </div>
             {task.children.map((child: any) => (
@@ -720,7 +720,7 @@ export function TaskDetailScreen() {
               : "Готово к работе"}
           </Button>
         ) : (
-          <div className="text-[13px] text-sub">
+ <div className="tf-action text-sub">
             {task.ready_for_pickup
               ? "Готова к самозахвату"
               : "Ждёт подтверждения владельца"}
@@ -769,7 +769,7 @@ export function TaskDetailScreen() {
           комментариев перенесено в начало секции перед списком записей,
           чтобы можно было оставлять комментарии без прокрутки всей ленты. */}
       <div>
-        <h3 className="text-[13px] text-sub font-semibold mb-2 px-1">Лента</h3>
+ <h3 className="tf-action text-sub mb-2 px-1">Лента</h3>
         <ErrorBanner
           error={addComment.error}
           fallback="Не удалось отправить комментарий"
@@ -791,7 +791,7 @@ export function TaskDetailScreen() {
                   size={14}
                   className="text-sub shrink-0"
                 />
-                <span className="flex-1 min-w-0 truncate text-[13px] text-text">
+ <span className="tf-action flex-1 min-w-0 truncate text-text">
                   {att.file_name}
                 </span>
                 <button
@@ -860,7 +860,7 @@ export function TaskDetailScreen() {
             // ровно в момент нажатия.
             onBlur={() => setTimeout(() => setCommentFocused(false), 150)}
             placeholder="Написать комментарий…"
-            className="flex-1 bg-card rounded-xl px-3 py-2.5 text-[16px] text-text placeholder:text-dim outline-none"
+ className="tf-input flex-1 bg-card rounded-xl px-3 py-2.5 text-text placeholder:text-dim outline-none"
           />
           <button
             type="submit"

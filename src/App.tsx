@@ -55,16 +55,16 @@ function NotFoundScreen() {
         <Icon name="info" size={28} className="text-dim" />
       </div>
       <div>
-        <h1 className="text-[19px] font-semibold text-text mb-1">
+ <h1 className=" font-semibold text-text mb-1">
           Страница не найдена
         </h1>
-        <p className="text-[14px] text-sub leading-relaxed max-w-[280px]">
+ <p className="tf-row text-sub leading-relaxed max-w-[280px]">
           Такого адреса нет в приложении. Возможно, ссылка устарела.
         </p>
       </div>
       <button
         onClick={() => navigate("/")}
-        className="h-12 px-6 rounded-xl bg-red text-[15px] font-semibold text-white"
+ className="tf-body h-12 px-6 rounded-xl bg-red text-white"
       >
         На главную
       </button>
