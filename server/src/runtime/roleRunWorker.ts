@@ -8,7 +8,7 @@ import {
   renewRoleRunJob,
   type RoleRunJob,
 } from "./roleRunQueue.js";
-import { kickRoleTaskStrict } from "./inProcessRun.js";
+import { kickRoleTaskStrict, sweepStaleInProcessRuns } from "./inProcessRun.js";
 
 export type RoleRunExecutor = (
   job: RoleRunJob,
@@ -118,8 +118,24 @@ export function startRoleRunWorker(options?: {
 
   recoverExpiredRoleRunJobs();
 
+  // Тишина в in-process запусках (владелец 05.10.2026, п.9 части II
+  // taskflow-flow.md). pollMs по умолчанию 1 сек, так что при каждом тике
+  // пробегаемся по активным запускам; полная стоимость — пара SQL-запросов.
+  const staleSweep = async (): Promise<void> => {
+    if (stopping) return;
+    try {
+      const aborted = await sweepStaleInProcessRuns();
+      if (aborted.length > 0) {
+        console.warn(`[role-run-worker] прервал ${aborted.length} зависших заходов по тишине`);
+      }
+    } catch (error) {
+      console.warn("[role-run-worker] sweepStaleInProcessRuns упал:", error);
+    }
+  };
+
   const tick = (): void => {
     if (stopping) return;
+    void staleSweep();
     for (let lane = 0; lane < lanes; lane++) {
       if (loops[lane]) continue;
       loops[lane] = (async () => {

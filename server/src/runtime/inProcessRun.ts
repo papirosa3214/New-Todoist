@@ -284,7 +284,12 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if(!original || original.from_user_id!==roleUserId(p.to)) throw new ToolError("Ответ адресуй автору исходного вопроса");
       }
       topicSends++;
-      return asRole(role,"POST",`/api/chats/${topic.id}/messages`,{text:`@${p.to} ${p.slot_key ? `[slot: ${p.slot_key}] ` : ""}${String(p.text)}`,work_mode:"work",subtask_id:subtaskId,recipient_subtask_id:resolveTopicSlot(target,p.to,p.slot_key)?.id,reply_to_message_id:p.reply_to_message_id});
+      const result = await asRole(role,"POST",`/api/chats/${topic.id}/messages`,{text:`@${p.to} ${p.slot_key ? `[slot: ${p.slot_key}] ` : ""}${String(p.text)}`,work_mode:"work",subtask_id:subtaskId,recipient_subtask_id:resolveTopicSlot(target,p.to,p.slot_key)?.id,reply_to_message_id:p.reply_to_message_id});
+      // Сообщение в теме — это фактическая активность роли, обновляем метку
+      // для sweeper тишины. Иначе роль, которая 30 минут только пишет в чат,
+      // будет ошибочно прервана (доработка MAK-66, critic 05.10.2026).
+      touchTaskActivity(target);
+      return result;
     }),
     T("taskflow_consult", "Получить второе мнение старшей модели по текущему рабочему слоту. Один совет на попытку; совет не меняет граф и приёмку.",Type.Object({question:Type.String(),context:Type.Optional(Type.Any())}),async(p)=>{
       if(!taskId) throw new ToolError("Нет текущей задачи");
@@ -371,6 +376,9 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       async (p) => {
         await asRole(role, "POST", `/api/tasks/${p.id}/comments`, { text: p.text });
         void activity(role, p.id, "edit", "ленту задачи: оставил комментарий");
+        // Комментарий в ленту — тоже признак движения роли; иначе долгие
+        // дискуссии в ленте ошибочно истолкуются как тишина (доработка MAK-66).
+        touchTaskActivity(p.id);
         return { "комментарий добавлен": p.id };
       }),
     T("taskflow_subtask_add", "Добавить шаг в задачу.",
@@ -390,12 +398,18 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (p.snapshot) body.snapshot = p.snapshot;
         const row = await asRole(role, "POST", `/api/subtasks/${p.id}/work`, body);
         if (p.state === "in_progress" && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: начал`);
+        // Сдача и перевод шага — фактическая активность, обновляем метку для
+        // sweeper (доработка MAK-66, critic 05.10.2026).
+        if (row?.task_id) touchTaskActivity(row.task_id);
         return { подзадача: row.title, состояние: STEP_STATE_RU[row.state] ?? "не в работе", итог: row.result ?? "—" };
       }),
     T("taskflow_slot_snapshot", "Записать, где остановилась работа по текущему слоту: done (сделано), left (что осталось), blocker (текущий блок), next_step (следующий шаг), artifacts (ссылки на артефакты). Зови после значимого действия и перед сдачей или блокировкой — тогда следующий вызов роли продолжит с фактов, даже если этот ход оборвётся. Это запись о работе: прав и статусов не даёт.",
       SNAPSHOT_SHAPE, async (p) => {
         if (!subtaskId) throw new ToolError("Снимок относится к слоту — работать без узла плана нельзя");
-        return asRole(role, "POST", `/api/subtasks/${subtaskId}/snapshot`, { ...p, reason: "progress" });
+        const result = await asRole(role, "POST", `/api/subtasks/${subtaskId}/snapshot`, { ...p, reason: "progress" });
+        // Снимок слота — тоже признак работы роли (доработка MAK-66).
+        if (taskId) touchTaskActivity(taskId);
+        return result;
       }),
     T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Приложи snapshot — что сделано, что осталось, следующий шаг, ссылки на артефакты: сервер сохранит снимок до закрытия шага, и следующий вызов роли будет знать, где работа остановилась. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
       Type.Object({
@@ -409,6 +423,8 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (p.artifact) {
           const row = await asRole(role, "POST", `/api/subtasks/${p.id}/artifact`, p.artifact);
           void activity(role, row.subtask?.task_id ?? "", "edit", `шаг «${row.subtask?.title ?? ""}»: сдал артефакт`);
+          // Сдача артефакта — тоже движение роли (доработка MAK-66).
+          if (row.subtask?.task_id) touchTaskActivity(row.subtask.task_id);
           return { "артефакт сдан": p.id, версия: row.artifact?.version_no };
         }
         const done = p.done ?? true;
@@ -615,8 +631,41 @@ function progressMark(taskId: string): string {
   return `${steps}:${comments}`;
 }
 
-type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void>; steer: (text:string)=>Promise<void> };
+/** Время последней фактической активности роли в запуске (tool call,
+ *  snapshot, комментарий в ленту). Отдельно от lease-heartbeat (тот
+ *  продлевается таймером): sweeper сравнивает это поле с now и прерывает
+ *  заход, если роль зависла, не двигаясь. Владелец 05.10.2026, п.9 части II
+ *  taskflow-flow.md. */
+type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void>; steer: (text:string)=>Promise<void>; lastActivityAt: number };
 const activeRuns = new Map<string, ActiveInProcessRun>();
+
+/** Сколько минут тишины (без tool call / snapshot / комментария) сервер
+ *  ждёт, прежде чем прервать заход. Предложено владельцем 05.10.2026
+ *  (taskflow-flow.md, п.9 части II). Переопределяется через ENV, чтобы
+ *  тесты могли ускорять. Читаем динамически — тесты меняют ENV после
+ *  импорта модуля, и старое «при импорте» их ломало. */
+function readStaleRunMinutes(): number {
+  return Math.max(1, Math.floor(Number(process.env.STALE_RUN_MINUTES ?? 30)) || 30);
+}
+
+/** Коснуться «фактической активности» запуска — вызывается из подписчика
+ *  событий SDK и из других точек, где видно, что роль двигается. Чистый
+ *  lease-heartbeat (в BEAT) сюда не пишем: это продление аренды, а не
+ *  признак работы. */
+export function touchRunActivity(runId: string): void {
+  const run = activeRuns.get(runId);
+  if (run) run.lastActivityAt = Date.now();
+}
+
+/** Коснуться активности для всех запусков указанной задачи — у роли может
+ *  быть только один активный заход на карточку, поэтому из taskflow-инструментов
+ *  удобнее звать это (им известен taskId), а не искать по runId. */
+export function touchTaskActivity(taskId: string): void {
+  const now = Date.now();
+  for (const run of activeRuns.values()) {
+    if (run.taskId === taskId) run.lastActivityAt = now;
+  }
+}
 
 /** Pass a message to the existing SDK session. Never launches a task or slot. */
 export async function deliverTopicToWork(taskId:string,role:string,messageId:string,text:string,slotKey?:string):Promise<"queued"|"idle"|"busy"> {
@@ -645,6 +694,52 @@ export async function deliverTopicToWork(taskId:string,role:string,messageId:str
 
 export function activeInProcessRun(taskId: string, subtaskId?: string): ActiveInProcessRun | undefined {
   return [...activeRuns.values()].find((r) => r.taskId === taskId && r.subtaskId === subtaskId);
+}
+
+/** Для тестов: подкрутить lastActivityAt у активного запуска, чтобы
+ *  воспроизвести тишину без настоящего ожидания 30 минут. Не использовать
+ *  в проде — только в vitest. */
+export function _setRunLastActivityForTests(runId: string, ts: number): void {
+  const run = activeRuns.get(runId);
+  if (run) run.lastActivityAt = ts;
+}
+
+/** Пройтись по активным in-process запускам и прервать те, что не двигались
+ *  дольше предела. Возвращает список прерванных runId. Зовётся из worker tick
+ *  (roleRunWorker.ts). Если у узла есть слот — сначала пишется техснимок
+ *  «stopped», чтобы продолжение начиналось с фактов; сам continueOrHandOff
+ *  идёт через finally в runRoleInProcess, поэтому тут только запускаем
+ *  abort и даём finally отработать. Владелец 05.10.2026, п.9 части II
+ *  taskflow-flow.md. */
+export async function sweepStaleInProcessRuns(now = Date.now()): Promise<string[]> {
+  const staleMs = readStaleRunMinutes() * 60_000;
+  const stale: ActiveInProcessRun[] = [];
+  for (const run of activeRuns.values()) {
+    if (now - run.lastActivityAt >= staleMs) stale.push(run);
+  }
+  const ids: string[] = [];
+  for (const run of stale) {
+    const minutes = Math.round((now - run.lastActivityAt) / 60_000);
+    logEvent({ taskId: run.taskId, actorId: null, kind: "plan_subtask_stale_timeout", field: run.subtaskId ?? null, toValue: `тишина ${minutes} мин` });
+    if (run.subtaskId) {
+      try {
+        technicalSlotSnapshot(run.subtaskId, "stopped", {
+          blocker: `тишина ${minutes} мин без движения роли — ход прерван`,
+        });
+      } catch (error) {
+        // Снимок не должен ронять сам abort, но ошибку проглатывать молча —
+        // тоже плохо: иначе сломанную БД не увидим. Логируем и идём дальше.
+        console.warn(`[sweepStaleInProcessRuns] снимок для ${run.subtaskId} не записался:`, error);
+      }
+    }
+    try {
+      await run.abort();
+      ids.push(run.runId);
+    } catch (error) {
+      console.warn(`[sweepStaleInProcessRuns] abort ${run.runId} не удался:`, error);
+    }
+  }
+  return ids;
 }
 
 /** Для тестов: дождаться окончания всех фоновых запусков. */
@@ -869,7 +964,7 @@ try {
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
   logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
-  activeRuns.set(runId, { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text) });
+  activeRuns.set(runId, { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now() });
 
   // Действия встроенных инструментов — строкой в карточке, как раньше делало
   // расширение Pi taskflow-activity.ts.
@@ -883,6 +978,9 @@ try {
     const a = event.args ?? {};
     const target = String(a.path ?? a.file_path ?? a.command ?? a.pattern ?? event.toolName).slice(0, 200);
     void activity(role, taskId, kind, target);
+    // Любой реальный вызов инструмента — фактическая активность роли,
+    // обновляем метку для sweeper тишины (taskflow-flow.md, п.9 части II).
+    touchRunActivity(runId);
   });
 
   const beat = setInterval(() => {
@@ -1192,7 +1290,26 @@ async function continueOrHandOff(
     const n = durableHandoff
       ? chainDepth + 1
       : (chainCount.get(taskId) ?? 0) + 1;
-    if (n <= MAX_CHAIN && progressMark(taskId) !== before) {
+    const madeProgress = progressMark(taskId) !== before;
+    if (n > MAX_CHAIN || !madeProgress) {
+      // Лимит продолжений исчерпан или прогресса нет: сервер блокирует
+      // карточку, чтобы владелец решил, как двигаться дальше.
+      // Владелец 05.10.2026, п.9 части II taskflow-flow.md.
+      chainCount.delete(taskId);
+      const reason = !madeProgress
+        ? `Заход роли не продвинул карточку (сделано шагов/комментариев: ${before.split(":").join("/")}). Дальше без владельца не иду.`
+        : `Достигнут лимит продолжений (${MAX_CHAIN}) — карточка заблокирована, требуется решение владельца.`;
+      try {
+        await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
+          state: "blocked",
+          comment: reason.slice(0, 400),
+        });
+      } catch (error) {
+        console.warn(`продолжение по ${taskId} не заблокировано:`, error);
+      }
+      return;
+    }
+    if (n <= MAX_CHAIN && madeProgress) {
       if (durableHandoff) {
         enqueueRoleRunJob({
           taskId,

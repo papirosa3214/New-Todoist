@@ -44,7 +44,17 @@ export function openSlotSession(taskId:string,role:string,subtaskId:string,fallb
 export function rememberSlotSession(subtaskId:string,manager:SessionManager):void {
   const file=manager.getSessionFile();
   if(!file)return;
-  db.prepare("INSERT INTO slot_sessions(subtask_id,session_file,cwd,session_id) VALUES(?,?,?,?) ON CONFLICT(subtask_id) DO UPDATE SET session_file=excluded.session_file,cwd=excluded.cwd,session_id=excluded.session_id,updated_at=datetime('now')").run(subtaskId,file,manager.getCwd(),manager.getSessionId());
+  // finally в runRoleInProcess может сработать после удаления субтаска
+  // (тестовая уборка, ручной DELETE из админки). FK CASCADE не спасёт
+  // INSERT — субтаска уже нет. Проглатываем код SQLITE_CONSTRAINT_FOREIGNKEY,
+  // остальные ошибки пробрасываем: упавший апдейт — это уже потеря данных.
+  try {
+    db.prepare("INSERT INTO slot_sessions(subtask_id,session_file,cwd,session_id) VALUES(?,?,?,?) ON CONFLICT(subtask_id) DO UPDATE SET session_file=excluded.session_file,cwd=excluded.cwd,session_id=excluded.session_id,updated_at=datetime('now')").run(subtaskId,file,manager.getCwd(),manager.getSessionId());
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "SQLITE_CONSTRAINT_FOREIGNKEY") return;
+    throw error;
+  }
 }
 export type TopicSlot={id:string;task_id:string;title:string;plan_node_key:string;agent_state:string|null;done:number};
 export function topicSlots(taskId:string,role:string):TopicSlot[] {
