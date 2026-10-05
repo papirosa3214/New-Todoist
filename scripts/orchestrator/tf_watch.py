@@ -1,6 +1,6 @@
 import os,json,sys,time,urllib.request
 T=os.environ["T"]; ids=sys.argv[1:]
-A=os.environ.get("A",T)
+A=T
 def get(t):
     r=urllib.request.Request(f"http://localhost:3001/api/tasks/{t}",headers={"Authorization":"Bearer "+A})
     d=json.load(urllib.request.urlopen(r)); return d.get("task",d)

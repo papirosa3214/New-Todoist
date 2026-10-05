@@ -1,4 +1,4 @@
-# usage: tf_launch.py spec.json   (env A=agent token, O=orchestrator token)
+# usage: tf_launch.py spec.json   (env O=orchestrator token; единственный ключ, с 05.10.2026)
 import os,json,sys,urllib.request,urllib.error
 B="http://localhost:3001"
 def req(tok,m,p,body=None):
@@ -8,7 +8,7 @@ def req(tok,m,p,body=None):
     try: return json.load(urllib.request.urlopen(r))
     except urllib.error.HTTPError as e: return {"error":e.code,"body":e.read().decode()[:300]}
 spec=json.load(open(sys.argv[1]))
-t=req(os.environ["A"],"POST","/api/tasks",{"title":spec["title"],"description":spec["description"],"project_id":"c2fcbcdb-951f-449f-a1bd-123ea2a46a58","priority":spec.get("priority",2)})
+t=req(os.environ["O"],"POST","/api/tasks",{"title":spec["title"],"description":spec["description"],"project_id":"c2fcbcdb-951f-449f-a1bd-123ea2a46a58","priority":spec.get("priority",2)})
 t=t.get("task",t); tid=t.get("id")
 if not tid: print("CREATE FAIL",t); sys.exit(1)
 roles=spec["roles"]; nodes=[]; edges=[]

@@ -18,5 +18,5 @@ json.dump(spec,open("/tmp/orch_spec_re.json","w"),ensure_ascii=False)
 out=subprocess.run(["python3","/home/maksim/Проекты/New-Todoist/scripts/orchestrator/tf_launch.py","/tmp/orch_spec_re.json"],capture_output=True,text=True).stdout.strip(); print(out)
 new=out.split()[1] if out.startswith("OK") else None
 if not new: sys.exit(1)
-print("parent",req(os.environ["A"],"PATCH",f"/api/tasks/{new}",{"parent_id":parent}).get("error","ok"))
-print("delete old",req(os.environ["A"],"DELETE",f"/api/tasks/{old}"))
+print("parent",req(os.environ["O"],"PATCH",f"/api/tasks/{new}",{"parent_id":parent}).get("error","ok"))
+print("delete old",req(os.environ["O"],"DELETE",f"/api/tasks/{old}"))
