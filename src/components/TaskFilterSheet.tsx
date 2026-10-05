@@ -252,7 +252,7 @@ export function TaskFilterSheet({
               (ScreenHeader variant="compact"): шторка это тот же уровень
               навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
               значит «поле ввода, защита от автозума iOS», см. index.css. */}
- <h3 className="tf-title font-semibold text-text">Фильтры</h3>
+ <h3 className="tf-title text-text">Фильтры</h3>
           <button
             onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
             disabled={!hasActive}

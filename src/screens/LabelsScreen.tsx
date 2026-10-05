@@ -129,7 +129,7 @@ function LabelRow({
           <button
             type="button"
             onClick={cancelEdit}
- className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub font-semibold tap-row"
+ className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub tap-row"
           >
             Отмена
           </button>
@@ -137,7 +137,7 @@ function LabelRow({
             type="button"
             onClick={handleSave}
             disabled={!name.trim() || updateLabel.isPending}
- className="tf-row flex-1 h-11 rounded-xl bg-red text-white font-semibold disabled:opacity-50 tap-fade"
+ className="tf-row flex-1 h-11 rounded-xl bg-red text-white disabled:opacity-50 tap-fade"
           >
             {updateLabel.isPending ? "Сохраняем…" : "Сохранить"}
           </button>
@@ -283,7 +283,7 @@ export function LabelsScreen() {
           <button
             type="submit"
             disabled={!name.trim() || createLabel.isPending}
- className="tf-row w-full h-12 bg-red rounded-xl font-semibold text-white disabled:opacity-50 tap-fade"
+ className="tf-row w-full h-12 bg-red rounded-xl text-white disabled:opacity-50 tap-fade"
           >
             {createLabel.isPending ? "Создаём…" : "Создать"}
           </button>
@@ -311,7 +311,7 @@ export function LabelsScreen() {
           <div className="w-[64px] h-[64px] rounded-full bg-card flex items-center justify-center mb-4">
             <Icon name="tag" size={28} className="text-dim" />
           </div>
- <h3 className="tf-title font-semibold mb-1">Меток пока нет</h3>
+ <h3 className="tf-title mb-1">Меток пока нет</h3>
  <p className="tf-row text-sub leading-relaxed mb-6 max-w-[280px]">
             Метки помогают группировать задачи по-своему — независимо от
             проектов и сроков. Создайте первую, а состав всегда можно поменять

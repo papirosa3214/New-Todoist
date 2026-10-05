@@ -171,7 +171,7 @@ function AgentAvatarEditor({ agent }: { agent: ApiUser }) {
           type="button"
           onClick={() => fileRef.current?.click()}
           disabled={busy}
- className="tf-meta tap-fade py-1 px-2.5 rounded-lg bg-card2 border border-stroke text-text font-medium"
+ className="tf-meta tap-fade py-1 px-2.5 rounded-lg bg-card2 border border-stroke text-text "
         >
           Заменить фото
         </button>
@@ -252,7 +252,7 @@ function AgentRow({
           <button
             type="button"
             onClick={() => setEditingName(false)}
- className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub font-semibold tap-row"
+ className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub tap-row"
           >
             Отмена
           </button>
@@ -260,7 +260,7 @@ function AgentRow({
             type="button"
             onClick={handleSave}
             disabled={!name.trim() || renameAgent.isPending}
- className="tf-row flex-1 h-11 rounded-xl bg-red text-white font-semibold disabled:opacity-50 tap-fade"
+ className="tf-row flex-1 h-11 rounded-xl bg-red text-white disabled:opacity-50 tap-fade"
           >
             {renameAgent.isPending ? "Сохраняем…" : "Сохранить"}
           </button>
@@ -286,7 +286,7 @@ function AgentRow({
         style={{ width: ROW_ACTION_W, background: "#FF3B30" }}
       >
         <Icon name="trash" size={18} />
- <span className="tf-caption font-medium">Удалить</span>
+ <span className="tf-caption ">Удалить</span>
       </button>
       {/* Изменить — справа, открывается свайпом влево */}
       <button
@@ -299,7 +299,7 @@ function AgentRow({
         style={{ width: ROW_ACTION_W, background: "#007AFF" }}
       >
         <Icon name="edit" size={18} />
- <span className="tf-caption font-medium">Изменить</span>
+ <span className="tf-caption ">Изменить</span>
       </button>
 
       <div
@@ -342,7 +342,7 @@ function AgentRow({
           ) : null}
         </div>
         <span
- className="tf-meta font-medium px-2 py-0.5 rounded text-white shrink-0"
+ className="tf-meta px-2 py-0.5 rounded text-white shrink-0"
           style={{
             backgroundColor:
               agent.role === "owner"
@@ -488,7 +488,7 @@ function RoleRow({ role }: { role: RoleDetails }) {
           <button
             type="button"
             onClick={() => setContextOpen(true)}
- className="tf-action tap-scale h-9 px-3 rounded-xl bg-card2 text-text font-semibold mt-2 flex items-center gap-1"
+ className="tf-action tap-scale h-9 px-3 rounded-xl bg-card2 text-text mt-2 flex items-center gap-1"
           >
             <Icon name="edit" size={14} className="text-sub" />
             Контекст запуска
@@ -564,7 +564,7 @@ export function AgentsScreen() {
           учёток ниже: там «кто заведён в системе», здесь «что умеет и чем
           занята» — это разные вопросы, и мешать их в один список значит не
           ответить ни на один. */}
- <div className="tf-action text-sub font-semibold px-1 mb-2 mt-2">
+ <div className="tf-action text-sub px-1 mb-2 mt-2">
         Роли
       </div>
       <ErrorBanner
@@ -595,7 +595,7 @@ export function AgentsScreen() {
       </div>
 
       {/* Team */}
- <div className="tf-action text-sub font-semibold px-1 mb-2 mt-2">
+ <div className="tf-action text-sub px-1 mb-2 mt-2">
         Команда
       </div>
       {isLoading && <Loading className="mb-4" />}
@@ -626,7 +626,7 @@ export function AgentsScreen() {
       {/* Новый агент — учётка + ключ доступа. Почты на машине нет, и
           «пригласить» здесь значит именно завести агента: сервер создаёт
           учётку и один раз показывает ключ (POST /api/agents). */}
- <div className="tf-action text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub px-1 mb-2">
         Новый агент
       </div>
       <div className="bg-card rounded-2xl overflow-hidden mb-4">
@@ -650,7 +650,7 @@ export function AgentsScreen() {
                   navigator.clipboard?.writeText(issuedToken.token);
                   setCopied(true);
                 }}
- className="tf-row tap-scale h-11 px-4 rounded-xl bg-red text-white font-semibold"
+ className="tf-row tap-scale h-11 px-4 rounded-xl bg-red text-white "
               >
                 {copied ? "Скопировано" : "Скопировать ключ"}
               </button>
@@ -700,7 +700,7 @@ export function AgentsScreen() {
               <button
                 type="submit"
                 disabled={!name.trim() || createAgent.isPending}
- className="tf-row tap-scale h-11 px-4 rounded-xl bg-red text-white font-semibold disabled:opacity-40"
+ className="tf-row tap-scale h-11 px-4 rounded-xl bg-red text-white disabled:opacity-40"
               >
                 {createAgent.isPending ? "Завожу…" : "Завести"}
               </button>
@@ -728,7 +728,7 @@ export function AgentsScreen() {
       </div>
 
       {/* Passport */}
- <div className="tf-action text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub px-1 mb-2">
         Роли Pi-агента
       </div>
       <div className="bg-card rounded-2xl overflow-hidden mb-4">
@@ -743,7 +743,7 @@ export function AgentsScreen() {
               className="text-purple mt-0.5 shrink-0"
             />
             <div className="min-w-0">
- <div className="tf-row text-text font-medium">
+ <div className="tf-row text-text ">
                 {meta.label}
               </div>
  <div className="tf-meta text-sub leading-4 mt-0.5">
@@ -758,7 +758,7 @@ export function AgentsScreen() {
       </div>
 
       {/* Access levels */}
- <div className="tf-action text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub px-1 mb-2">
         Уровни доступа в TaskFlow
       </div>
       <div className="bg-card rounded-2xl p-4 space-y-3">

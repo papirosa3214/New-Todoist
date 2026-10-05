@@ -211,7 +211,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
         disabled={disabled}
         onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
         aria-pressed={editor.isActive("heading", { level: 1 })}
- className={`tf-action tap-scale shrink-0 h-9 px-2 rounded-lg font-bold disabled:opacity-30 ${
+ className={`tf-action tap-scale shrink-0 h-9 px-2 rounded-lg disabled:opacity-30 ${
           editor.isActive("heading", { level: 1 })
             ? "bg-red/15 text-red"
             : "text-sub"
@@ -225,7 +225,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
         disabled={disabled}
         onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
         aria-pressed={editor.isActive("heading", { level: 2 })}
- className={`tf-action tap-scale shrink-0 h-9 px-2 rounded-lg font-bold disabled:opacity-30 ${
+ className={`tf-action tap-scale shrink-0 h-9 px-2 rounded-lg disabled:opacity-30 ${
           editor.isActive("heading", { level: 2 })
             ? "bg-red/15 text-red"
             : "text-sub"
@@ -239,7 +239,7 @@ function Toolbar({ editor, disabled }: { editor: Editor; disabled: boolean }) {
         disabled={disabled}
         onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
         aria-pressed={editor.isActive("heading", { level: 3 })}
- className={`tf-action tap-scale shrink-0 h-9 px-2 rounded-lg font-bold disabled:opacity-30 ${
+ className={`tf-action tap-scale shrink-0 h-9 px-2 rounded-lg disabled:opacity-30 ${
           editor.isActive("heading", { level: 3 })
             ? "bg-red/15 text-red"
             : "text-sub"

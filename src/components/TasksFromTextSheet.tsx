@@ -152,7 +152,7 @@ export function TasksFromTextSheet({
           >
             <Icon name="x" size={20} className="text-sub" />
           </button>
- <h3 className="tf-title font-semibold text-text">
+ <h3 className="tf-title text-text">
             Задачи из дневника
           </h3>
           <div className="w-11" />
@@ -259,7 +259,7 @@ export function TasksFromTextSheet({
           <button
             onClick={handleConfirm}
             disabled={!canConfirm}
- className="tf-body tap-scale w-full h-12 rounded-xl bg-red font-semibold text-white disabled:opacity-40 mt-3"
+ className="tf-body tap-scale w-full h-12 rounded-xl bg-red text-white disabled:opacity-40 mt-3"
           >
             {busy
               ? "Создаю…"

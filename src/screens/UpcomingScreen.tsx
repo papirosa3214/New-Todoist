@@ -873,7 +873,7 @@ export function UpcomingScreen() {
                       aria-label="Выбрать месяц"
                       className="flex items-center gap-1 h-[40px] -ml-2 px-2 active:scale-95"
                     >
- <span className="tf-row font-semibold text-red">
+ <span className="tf-row text-red">
                         {MONTHS_ABBR_DOT[pickerMonth]} {pickerYear} г.
                       </span>
                       <Icon
@@ -965,7 +965,7 @@ export function UpcomingScreen() {
                                Сверху — название месяца активной недели. */
                 <>
                   <div className="relative flex items-center justify-between pt-1 pb-0.5 px-1">
- <span className="tf-action font-semibold text-red">
+ <span className="tf-action text-red">
                       {formatMonthOfWeek(activeWeekDays)}
                     </span>
                   </div>
@@ -1020,14 +1020,14 @@ export function UpcomingScreen() {
                             />
                           )}
                           <span
- className={`tf-micro relative font-medium uppercase ${
+ className={`tf-micro relative uppercase ${
                               isActive || isToday ? "text-red" : "text-sub"
                             }`}
                           >
                             {short}
                           </span>
                           <span
- className={`tf-body relative font-medium ${
+ className={`tf-body relative ${
                               // Сегодня — ВСЕГДА красный кружок (как
                               // было изначально); свечение — только у
                               // активной даты скролла, если это не
@@ -1279,7 +1279,7 @@ export function UpcomingScreen() {
                     dateStr === today ? "blur(2px)" : undefined,
                 }}
               >
- <span className="tf-action font-semibold">
+ <span className="tf-action ">
                   {formatFullDate(dateStr)}
                 </span>
               </div>

@@ -227,7 +227,7 @@ export function RescheduleSheet({
               (ScreenHeader variant="compact"): шторка это тот же уровень
               навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
               значит «поле ввода, защита от автозума iOS», см. index.css. */}
- <h3 className="tf-title font-semibold text-text">Срок</h3>
+ <h3 className="tf-title text-text">Срок</h3>
           <button
             onClick={() => stagedDate && applyDate(stagedDate)}
             disabled={!stagedDate || busy}
@@ -272,7 +272,7 @@ export function RescheduleSheet({
             >
               <Icon name="chevronLeft" size={16} className="text-sub" />
             </button>
- <span className="tf-action font-semibold text-text">
+ <span className="tf-action text-text">
               {MONTHS_FULL[viewMonth]} {viewYear}
             </span>
             <button

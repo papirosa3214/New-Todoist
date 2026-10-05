@@ -400,7 +400,7 @@ function ReplyForm({
           onMouseDown={(e) => e.preventDefault()}
           onClick={guardedSubmit}
           disabled={!comment.trim() || busy || uploading}
- className="tf-action font-semibold text-blue disabled:opacity-40 tap-fade"
+ className="tf-action text-blue disabled:opacity-40 tap-fade"
         >
           Отправить
         </button>
@@ -558,13 +558,13 @@ function SubtaskRow({
             <div className="mt-2 flex justify-between">
               <button
                 onClick={guardedToggle}
- className="tf-action font-semibold uppercase tracking-wider text-green tap-fade"
+ className="tf-action uppercase tracking-wider text-green tap-fade"
               >
                 Принять
               </button>
               <button
                 onClick={() => setReplying(true)}
- className="tf-action font-semibold uppercase tracking-wider text-blue tap-fade"
+ className="tf-action uppercase tracking-wider text-blue tap-fade"
               >
                 Вернуть
               </button>
@@ -585,7 +585,7 @@ function SubtaskRow({
           {canComment && !replying && (
             <button
               onClick={() => setReplying(true)}
- className="tf-action mt-2 font-semibold uppercase tracking-wider text-orange tap-fade"
+ className="tf-action mt-2 uppercase tracking-wider text-orange tap-fade"
             >
               Ответить
             </button>
@@ -643,7 +643,7 @@ export function SubtaskFeed({
   return (
     <div className="mb-4">
       <div className="flex items-baseline justify-between mb-2 px-1">
- <h3 className="tf-action text-sub font-semibold">Подзадачи</h3>
+ <h3 className="tf-action text-sub ">Подзадачи</h3>
         {/* Счётчик вместо полосы прогресса: цифра точнее и занимает
             строку, которая и так есть. */}
  <span className="tf-meta text-dim">

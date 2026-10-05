@@ -132,7 +132,7 @@ export function ChatStatsSheet({
           >
             <Icon name="x" size={20} className="text-sub" />
           </button>
- <h3 className="tf-title font-semibold text-text">
+ <h3 className="tf-title text-text">
             Кого озадачивают
           </h3>
           {/* Пустой блок в ширину кнопки — заголовок остаётся по центру. */}

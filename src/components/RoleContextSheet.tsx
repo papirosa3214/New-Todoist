@@ -129,7 +129,7 @@ export function RoleContextSheet({
         className="relative bg-card rounded-sheet-top px-4 pb-bottom-safe max-h-[88vh] overflow-y-auto"
       >
         <SheetHandle dragProps={sheet.dragProps} />
- <h3 className="tf-input text-text font-semibold px-1 mb-1">
+ <h3 className="tf-input text-text px-1 mb-1">
           Контекст запуска: {role.title}
         </h3>
  <p className="tf-meta text-sub px-1 mb-3">
@@ -297,7 +297,7 @@ function LayerRow({
   return (
     <div className="bg-card2 rounded-xl p-3">
       <div className="flex items-baseline gap-2 mb-1">
- <span className="tf-action text-text font-semibold">{layer.title ?? layer.layer}</span>
+ <span className="tf-action text-text ">{layer.title ?? layer.layer}</span>
  <span className="tf-caption text-dim">v{team ? layer.command_version ?? 0 : layer.version}</span>
  <span className="tf-caption ml-auto text-sub">{sourceLabel}</span>
       </div>
@@ -337,7 +337,7 @@ function LayerRow({
               type="button"
               onClick={save}
               disabled={submitting}
- className="tf-action tap-scale h-9 px-3 rounded-lg bg-red text-white font-semibold disabled:opacity-50"
+ className="tf-action tap-scale h-9 px-3 rounded-lg bg-red text-white disabled:opacity-50"
             >
               {submitting ? "Сохранение…" : "Сохранить"}
             </button>
@@ -360,7 +360,7 @@ function LayerRow({
               <button
                 type="button"
                 onClick={onStartEdit}
- className="tf-meta tap-scale h-8 px-3 rounded-lg bg-card text-text font-semibold flex items-center gap-1"
+ className="tf-meta tap-scale h-8 px-3 rounded-lg bg-card text-text flex items-center gap-1"
               >
                 <Icon name="edit" size={14} className="text-sub" />
                 Изменить

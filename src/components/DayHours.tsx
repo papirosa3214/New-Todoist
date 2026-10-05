@@ -144,7 +144,7 @@ export function DayColumnsHeader({ days }: { days: DayColumnData[] }) {
       {days.map((d) => (
         <span
           key={d.date}
- className={`tf-meta flex-1 text-center font-semibold ${
+ className={`tf-meta flex-1 text-center ${
             d.isToday ? "text-red" : "text-sub"
           }`}
         >
@@ -190,7 +190,7 @@ function NowLine() {
         // часовой отметкой (найдено на первом же тестовом скриншоте,
         // 19.08.2026), обе подписи оказываются почти в одной точке и без
         // непрозрачного фона превращаются в нечитаемую кашу из букв.
- className="tf-micro shrink-0 bg-bg py-px pr-1.5 text-right font-medium text-red tabular-nums"
+ className="tf-micro shrink-0 bg-bg py-px pr-1.5 text-right text-red tabular-nums"
         style={{ width: GUTTER_W }}
       >
         {String(now.getHours()).padStart(2, "0")}:
@@ -401,7 +401,7 @@ function TimedBlock({
           // прям с переносами всю запихать»).
           WebkitLineClamp: Math.max(1, Math.floor((height - 8) / 16)),
         }}
- className={`tf-meta min-w-0 flex-1 whitespace-pre-wrap break-words leading-[16px] font-medium [display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden ${
+ className={`tf-meta min-w-0 flex-1 whitespace-pre-wrap break-words leading-[16px] [display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden ${
           done ? "line-through opacity-70" : ""
         }`}
       >
@@ -1127,7 +1127,7 @@ export function DayHours({
                   Math.floor((ghostRef.current.height - 8) / 16),
                 ),
               }}
- className="tf-meta min-w-0 flex-1 whitespace-pre-wrap break-words leading-[16px] font-medium [display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden"
+ className="tf-meta min-w-0 flex-1 whitespace-pre-wrap break-words leading-[16px] [display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden"
             >
               <MarkdownInline source={ghostRef.current.task.title} />
             </span>
@@ -1226,7 +1226,7 @@ export function DayHours({
                     // обрезано»). Теперь выше неё идут 23:00, 22:00 — край
                     // не на ней, и особый случай только ломал бы ровный шаг
                     // между двумя верхними подписями.
- className="tf-micro absolute right-1.5 font-medium text-dim tabular-nums -translate-y-1/2"
+ className="tf-micro absolute right-1.5 text-dim tabular-nums -translate-y-1/2"
                     style={{ top: h * HOUR_H }}
                   >
                     {cycleLabel(h)}
@@ -1297,7 +1297,7 @@ export function DayHours({
                   }}
                 >
                   <span
- className="tf-micro shrink-0 bg-bg py-px pr-1.5 text-right font-semibold text-red tabular-nums"
+ className="tf-micro shrink-0 bg-bg py-px pr-1.5 text-right text-red tabular-nums"
                     style={{ width: GUTTER_W }}
                   >
                     {preview}

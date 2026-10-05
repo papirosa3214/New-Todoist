@@ -638,7 +638,7 @@ export function AgentStateTag({
   if (task.agent_state === "in_progress" && task.agent_stale) {
     return (
       <span
- className={`tf-caption inline-flex items-center gap-1 ${pad} rounded font-semibold ${plain ?"" :"bg-coral/20"}text-coral`}
+ className={`tf-caption inline-flex items-center gap-1 ${pad} rounded ${plain ?"" :"bg-coral/20"}text-coral`}
       >
         <Icon name="bot" size={10} />
         Агент пропал
@@ -867,7 +867,7 @@ export function SideNav() {
             <Icon name={item.icon} size={22} />
             <span className="flex-1 text-left truncate">{item.label}</span>
             {showBadge && (
- <span className="tf-caption min-w-5 h-5 px-1 rounded-full bg-red text-white font-bold flex items-center justify-center leading-none shrink-0">
+ <span className="tf-caption min-w-5 h-5 px-1 rounded-full bg-red text-white flex items-center justify-center leading-none shrink-0">
                 {todayCount}
               </span>
             )}
@@ -1421,11 +1421,11 @@ export function ScreenHeader({
         >
           {leadingNode}
           {isCompact ? (
- <h2 className="tf-title absolute left-1/2 -translate-x-1/2 font-semibold whitespace-nowrap">
+ <h2 className="tf-title absolute left-1/2 -translate-x-1/2 whitespace-nowrap">
               {title}
             </h2>
           ) : (
- <h1 className="tf-title-large flex-1 min-w-0 truncate font-bold">
+ <h1 className="tf-title-large flex-1 min-w-0 truncate ">
               {title}
             </h1>
           )}
@@ -1520,7 +1520,7 @@ export function Button({
   return (
     <button
       {...props}
- className={`tf-body w-full h-12 rounded-xl font-semibold flex items-center justify-center gap-3 tap-fade disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
+ className={`tf-body w-full h-12 rounded-xl flex items-center justify-center gap-3 tap-fade disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
     >
       {children}
     </button>

@@ -96,13 +96,13 @@ export function TaskQuickPreviewModal({
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <div className="flex items-center gap-1.5 flex-wrap overflow-hidden">
               <span
- className={`tf-micro px-2 py-0.5 font-semibold rounded-full shrink-0 ${statusInfo.bg} ${statusInfo.fg}`}
+ className={`tf-micro px-2 py-0.5 rounded-full shrink-0 ${statusInfo.bg} ${statusInfo.fg}`}
               >
                 {statusInfo.text}
               </span>
 
               {task.project_name && (
- <span className="tf-micro flex items-center gap-1 px-2 py-0.5 bg-bg/80 border border-stroke/50 font-medium text-sub rounded-full truncate">
+ <span className="tf-micro flex items-center gap-1 px-2 py-0.5 bg-bg/80 border border-stroke/50 text-sub rounded-full truncate">
                   <span
                     className="w-1.5 h-1.5 rounded-full shrink-0"
                     style={{ backgroundColor: task.project_color || "#3A82F6" }}
@@ -113,7 +113,7 @@ export function TaskQuickPreviewModal({
 
               {prio && task.priority > 1 && (
                 <span
- className="tf-micro flex items-center gap-0.5 px-1.5 py-0.5 font-semibold rounded-full bg-bg border border-stroke/50 shrink-0"
+ className="tf-micro flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-bg border border-stroke/50 shrink-0"
                   style={{ color: prio.color }}
                 >
                   <Icon name="chevronUp" size={10} />P{task.priority}
@@ -135,7 +135,7 @@ export function TaskQuickPreviewModal({
           </div>
 
           {/* Заголовок задачи */}
- <h3 className="tf-body font-bold text-text group-hover:text-red transition-colors line-clamp-2 leading-snug mb-2">
+ <h3 className="tf-body text-text group-hover:text-red transition-colors line-clamp-2 leading-snug mb-2">
             <MarkdownInline source={task.title} />
           </h3>
 
@@ -161,7 +161,7 @@ export function TaskQuickPreviewModal({
 
               {/* Счётчик подзадач */}
               {totalSub > 0 && (
- <span className="tf-caption px-1.5 py-0.5 bg-bg/80 rounded font-medium text-sub shrink-0">
+ <span className="tf-caption px-1.5 py-0.5 bg-bg/80 rounded text-sub shrink-0">
                   {doneSub}/{totalSub} шагов
                 </span>
               )}
@@ -183,7 +183,7 @@ export function TaskQuickPreviewModal({
             </div>
 
             {/* Шеврон навигации */}
- <div className="tf-meta flex items-center gap-1 text-red font-semibold shrink-0 group-hover:translate-x-0.5 transition-transform">
+ <div className="tf-meta flex items-center gap-1 text-red shrink-0 group-hover:translate-x-0.5 transition-transform">
               <span>Карточка</span>
               <Icon name="chevron" size={12} />
             </div>

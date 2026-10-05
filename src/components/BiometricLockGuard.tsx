@@ -102,7 +102,7 @@ export function BiometricLockGuard({ children }: Props) {
           hapticTap();
           requestNativeAuth();
         }}
- className="tf-body py-3 px-8 rounded-xl bg-card2 border border-stroke text-text font-medium active:scale-95 transition-transform"
+ className="tf-body py-3 px-8 rounded-xl bg-card2 border border-stroke text-text active:scale-95 transition-transform"
       >
         Повторить Face ID
       </button>

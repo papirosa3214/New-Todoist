@@ -813,7 +813,7 @@ export function TaskFormScreen() {
                шапке заголовок набран 17px. Тем же заходом на 17px
                переведены заголовки четырёх шторок — теперь весь неполевой
                17px значит одно: «крупный, но не заголовок экрана». */
- className="tf-title font-semibold text-red active:opacity-70 disabled:opacity-50"
+ className="tf-title text-red active:opacity-70 disabled:opacity-50"
           >
             {isSaving ? "Сохранение…" : "Готово"}
           </button>
@@ -866,7 +866,7 @@ export function TaskFormScreen() {
           случай). 16px — тот же межблочный модуль, что mb-4 держит между
           остальными секциями формы ниже. */}
       <div className="flex items-center justify-between mb-2 mt-4">
- <div className="tf-title text-sub font-semibold">
+ <div className="tf-title text-sub ">
           {isEdit ? "Изменить задачу" : "Новая задача"}
         </div>
         {(title.trim() || desc.trim()) && (
@@ -874,7 +874,7 @@ export function TaskFormScreen() {
             type="button"
             onClick={() => handleStructureWithAI()}
             disabled={isStructuring}
- className="tf-meta inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-semibold text-white bg-gradient-to-r from-[#FF2D55] to-[#FF9500] active:scale-95 transition-transform disabled:opacity-50 shadow-sm"
+ className="tf-meta inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-white bg-gradient-to-r from-[#FF2D55] to-[#FF9500] active:scale-95 transition-transform disabled:opacity-50 shadow-sm"
           >
             <Icon name="sparkles" size={12} />
             {/* Подпись кнопки НЕ меняется на «думает»: статус теперь
@@ -919,7 +919,7 @@ export function TaskFormScreen() {
           textarea измерялся 12px вместо 8px, как у «Новая задача»→
           textarea и «Подзадачи»→«Добавить подзадачу». Текст теперь прямо
           в div, тем же приёмом, что и заголовок экрана выше. */}
- <div className="tf-title text-sub font-semibold mb-2">Заметка</div>
+ <div className="tf-title text-sub mb-2">Заметка</div>
       <textarea
         ref={descRef}
         value={desc}
@@ -952,7 +952,7 @@ export function TaskFormScreen() {
           поля всё ещё в одном экране без скролла, просто заметка теперь
           между ними. */}
       <div className="flex items-center justify-between mb-2">
- <span className="tf-title text-sub font-semibold">Подзадачи</span>
+ <span className="tf-title text-sub ">Подзадачи</span>
       </div>
 
       <div>
@@ -1162,7 +1162,7 @@ export function TaskFormScreen() {
       </div>
 
       {/* ── Assignee (tappable → picker) ── */}
- <div className="tf-action text-sub font-semibold mb-2">Назначить</div>
+ <div className="tf-action text-sub mb-2">Назначить</div>
       <div className="bg-card rounded-[14px] overflow-hidden mb-4">
         {showAssigneePicker ? (
           <>

@@ -89,7 +89,7 @@ function ProjectRow({
           <button
             type="button"
             onClick={cancelEdit}
- className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub font-semibold tap-row"
+ className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub tap-row"
           >
             Отмена
           </button>
@@ -97,7 +97,7 @@ function ProjectRow({
             type="button"
             onClick={handleSave}
             disabled={!name.trim() || updateProject.isPending}
- className="tf-row flex-1 h-11 rounded-xl bg-red text-white font-semibold disabled:opacity-50 tap-fade"
+ className="tf-row flex-1 h-11 rounded-xl bg-red text-white disabled:opacity-50 tap-fade"
           >
             {updateProject.isPending ? "Сохраняем…" : "Сохранить"}
           </button>
@@ -131,7 +131,7 @@ function ProjectRow({
         style={{ width: ROW_ACTION_W, background: "#FF3B30" }}
       >
         <Icon name="trash" size={18} />
- <span className="tf-caption font-medium">Удалить</span>
+ <span className="tf-caption ">Удалить</span>
       </button>
       {/* Изменить — справа, открывается свайпом влево */}
       <button
@@ -144,7 +144,7 @@ function ProjectRow({
         style={{ width: ROW_ACTION_W, background: "#007AFF" }}
       >
         <Icon name="edit" size={18} />
- <span className="tf-caption font-medium">Изменить</span>
+ <span className="tf-caption ">Изменить</span>
       </button>
 
       <div
@@ -300,14 +300,14 @@ export function ProjectsScreen() {
             <button
               type="button"
               onClick={() => setShowCreate(false)}
- className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub font-semibold tap-row"
+ className="tf-row flex-1 h-11 rounded-xl bg-card2 text-sub tap-row"
             >
               Отмена
             </button>
             <button
               type="submit"
               disabled={!name.trim() || createProject.isPending}
- className="tf-row flex-1 h-11 rounded-xl bg-red font-semibold text-white disabled:opacity-50 tap-fade"
+ className="tf-row flex-1 h-11 rounded-xl bg-red text-white disabled:opacity-50 tap-fade"
             >
               {createProject.isPending ? "Создаём…" : "Создать"}
             </button>

@@ -161,7 +161,7 @@ export function CreateChatSheet({
           >
             <Icon name="close" size={20} />
           </button>
- <h3 className="tf-title font-semibold">Новый чат</h3>
+ <h3 className="tf-title ">Новый чат</h3>
           <div className="w-[44px] h-[44px]" />
         </div>
 

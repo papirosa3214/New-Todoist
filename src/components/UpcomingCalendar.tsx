@@ -294,7 +294,7 @@ export function WeekMonthLabel({ monday }: { monday: string }) {
   const thursday = new Date(monday + "T00:00:00");
   thursday.setDate(thursday.getDate() + 3);
   return (
- <div className="tf-body pb-1.5 pt-0.5 font-semibold text-text">
+ <div className="tf-body pb-1.5 pt-0.5 text-text">
       {MONTHS_NOM[thursday.getMonth()]} {thursday.getFullYear()}
     </div>
   );
@@ -323,7 +323,7 @@ export function MonthHeaderLabel({ month }: { year: number; month: number }) {
   // Ни года, ни стрелок (владелец 19.08.2026: «2026 не надо, убери год;
   // стрелки тоже убери» — месяц листается свайпом, см. MonthGrid).
   return (
- <div className="tf-body pb-1.5 pt-0.5 font-semibold text-text">
+ <div className="tf-body pb-1.5 pt-0.5 text-text">
       {MONTHS_NOM[month]}
     </div>
   );
@@ -523,7 +523,7 @@ export function WeekGrid({
             >
               <div className="mb-0.5 flex items-baseline gap-1 px-0.5">
                 <span
- className={`tf-caption font-semibold ${
+ className={`tf-caption ${
                     isToday ? "text-red" : "text-sub"
                   }`}
                 >
@@ -974,7 +974,7 @@ function DayStrip({
     // недели с flex-1 забирали всю высоту себе.
     <div className="shrink-0 bg-card px-3 py-2">
       <div className="mb-1.5 flex items-center gap-2">
- <span className="tf-action font-semibold text-text">
+ <span className="tf-action text-text">
           {d.getDate()} {MONTHS_GEN[d.getMonth()]},
         </span>
         {/* Кнопки «Свернуть» здесь нет намеренно (владелец 19.08.2026:
@@ -986,7 +986,7 @@ function DayStrip({
             «можешь всё-таки писать обычным шрифтом, как 20 августа,
             Четверг — там всё с большой буквы идёт»). Сокращённое «Чт»
             тонким серым читалось как служебная подпись. */}
- <span className="tf-action font-semibold text-text">
+ <span className="tf-action text-text">
           {WEEKDAYS_FULL[(d.getDay() + 6) % 7]}
         </span>
       </div>
@@ -1150,7 +1150,7 @@ export function DaySheet({
       >
         <div ref={contentRef} style={{ willChange: "transform" }}>
           <div className="mb-3 flex items-center gap-2">
- <span className="tf-title font-semibold text-text">
+ <span className="tf-title text-text">
               {d.getDate()} {MONTHS_GEN[d.getMonth()]}
             </span>
  <span className="tf-action text-sub">

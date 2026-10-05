@@ -137,7 +137,7 @@ export function TemplatesScreen() {
         {error && <ErrorBanner error={error} variant="block" />}
 
         {successMessage && (
-          <div className="bg-card border border-teal/30 rounded-xl p-3 flex items-center gap-3 text-sm text-teal">
+          <div className="bg-card border border-teal/30 rounded-xl p-3 flex items-center gap-3 tf-action text-teal">
             <Icon name="check" size={18} className="shrink-0" />
             <span>{successMessage}</span>
           </div>
@@ -150,7 +150,7 @@ export function TemplatesScreen() {
             className="bg-card border border-stroke/60 rounded-2xl p-4 space-y-4 shadow-lg"
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-text">
+              <h3 className="tf-action text-text">
                 {editingTemplate ? "Редактировать шаблон" : "Новый шаблон"}
               </h3>
               <button
@@ -163,36 +163,36 @@ export function TemplatesScreen() {
             </div>
 
             <div>
-              <label className="text-xs text-sub mb-1 block">Название шаблона</label>
+              <label className="tf-caption text-sub mb-1 block">Название шаблона</label>
               <input
                 autoFocus
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="например: 🚀 Онбординг проекта"
-                className="w-full bg-card2 rounded-xl px-3 py-2.5 text-sm text-text placeholder:text-dim outline-none"
+                className="w-full bg-card2 rounded-xl px-3 py-2.5 tf-action text-text placeholder:text-dim outline-none"
               />
             </div>
 
             <div>
-              <label className="text-xs text-sub mb-1 block">Описание (опционально)</label>
+              <label className="tf-caption text-sub mb-1 block">Описание (опционально)</label>
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Краткое описание назначения шаблона..."
                 rows={2}
-                className="w-full bg-card2 rounded-xl px-3 py-2 text-sm text-text placeholder:text-dim outline-none resize-none"
+                className="w-full bg-card2 rounded-xl px-3 py-2 tf-action text-text placeholder:text-dim outline-none resize-none"
               />
             </div>
 
             <div>
-              <label className="text-xs text-sub mb-1 block">Приоритет</label>
+              <label className="tf-caption text-sub mb-1 block">Приоритет</label>
               <div className="flex items-center gap-2">
                 {PRIORITIES.map((p) => (
                   <button
                     key={p.key}
                     type="button"
                     onClick={() => setPriority(p.key)}
-                    className={`flex-1 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                    className={`flex-1 py-2 rounded-xl tf-caption flex items-center justify-center gap-1.5 transition-all ${
                       priority === p.key
                         ? "bg-card2 ring-1 ring-white/30 text-white"
                         : "bg-card2/50 text-sub opacity-70"
@@ -209,7 +209,7 @@ export function TemplatesScreen() {
             </div>
 
             <div>
-              <label className="text-xs text-sub mb-1 block">
+              <label className="tf-caption text-sub mb-1 block">
                 Подзадачи (каждая с новой строки)
               </label>
               <textarea
@@ -217,7 +217,7 @@ export function TemplatesScreen() {
                 onChange={(e) => setSubtasksText(e.target.value)}
                 placeholder="Собрать требования&#10;Описать схему базы данных&#10;Написать тесты"
                 rows={4}
-                className="w-full bg-card2 rounded-xl px-3 py-2 text-sm text-text placeholder:text-dim outline-none font-mono text-xs"
+                className="w-full bg-card2 rounded-xl px-3 py-2 tf-action text-text placeholder:text-dim outline-none font-mono tf-caption"
               />
             </div>
 
@@ -225,14 +225,14 @@ export function TemplatesScreen() {
               <button
                 type="button"
                 onClick={() => setShowCreate(false)}
-                className="flex-1 h-11 rounded-xl bg-card2 text-sm text-sub font-semibold tap-row"
+                className="flex-1 h-11 rounded-xl bg-card2 tf-action text-sub tap-row"
               >
                 Отмена
               </button>
               <button
                 type="submit"
                 disabled={!title.trim()}
-                className="flex-1 h-11 rounded-xl bg-red text-sm text-white font-semibold disabled:opacity-50 tap-fade"
+                className="flex-1 h-11 rounded-xl bg-red tf-action text-white disabled:opacity-50 tap-fade"
               >
                 Сохранить
               </button>
@@ -243,13 +243,13 @@ export function TemplatesScreen() {
         {/* ═══════════ Пользовательские шаблоны ═══════════ */}
         <div>
           <div className="flex items-center justify-between px-1 mb-2">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-sub">
+            <h2 className="tf-caption uppercase tracking-wider text-sub">
               Мои шаблоны ({userTemplates.length})
             </h2>
             {!showCreate && (
               <button
                 onClick={handleOpenCreate}
-                className="text-xs font-semibold text-red tap-fade"
+                className="tf-caption text-red tap-fade"
               >
                 + Добавить
               </button>
@@ -257,7 +257,7 @@ export function TemplatesScreen() {
           </div>
 
           {userTemplates.length === 0 ? (
-            <div className="p-4 bg-card rounded-xl border border-stroke/40 text-center text-xs text-dim">
+            <div className="p-4 bg-card rounded-xl border border-stroke/40 text-center tf-caption text-dim">
               У вас пока нет сохранённых шаблонов. Нажмите «+ Добавить» или сохраните любую существующую задачу как шаблон из её карточки.
             </div>
           ) : (
@@ -269,11 +269,11 @@ export function TemplatesScreen() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-semibold text-text truncate">
+                      <div className="tf-action text-text truncate">
                         {t.title}
                       </div>
                       {t.description && (
-                        <div className="text-xs text-sub mt-0.5 line-clamp-2">
+                        <div className="tf-caption text-sub mt-0.5 line-clamp-2">
                           {t.description}
                         </div>
                       )}
@@ -317,7 +317,7 @@ export function TemplatesScreen() {
                   <button
                     onClick={() => handleApplyTemplate(t)}
                     disabled={createTask.isPending}
-                    className="w-full h-9 bg-red/15 hover:bg-red/25 active:bg-red/30 text-red text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 tap-row"
+                    className="w-full h-9 bg-red/15 hover:bg-red/25 active:bg-red/30 text-red tf-caption rounded-lg flex items-center justify-center gap-1.5 tap-row"
                   >
                     <Icon name="plus" size={14} />
                     <span>Создать задачу по шаблону</span>
@@ -330,7 +330,7 @@ export function TemplatesScreen() {
 
         {/* ═══════════ Готовые образцы шаблонов ═══════════ */}
         <div>
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-sub px-1 mb-2">
+          <h2 className="tf-caption uppercase tracking-wider text-sub px-1 mb-2">
             Готовые образцы ({builtinTemplates.length})
           </h2>
 
@@ -342,17 +342,17 @@ export function TemplatesScreen() {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-text">
+                    <div className="tf-action text-text">
                       {t.title}
                     </div>
                     {t.description && (
-                      <div className="text-xs text-sub mt-0.5">
+                      <div className="tf-caption text-sub mt-0.5">
                         {t.description}
                       </div>
                     )}
                   </div>
                   {t.category && (
- <span className="tf-micro uppercase font-bold text-dim bg-card2 px-2 py-0.5 rounded-full shrink-0">
+ <span className="tf-micro uppercase text-dim bg-card2 px-2 py-0.5 rounded-full shrink-0">
                       {t.category}
                     </span>
                   )}
@@ -379,7 +379,7 @@ export function TemplatesScreen() {
                 <button
                   onClick={() => handleApplyTemplate(t)}
                   disabled={createTask.isPending}
-                  className="w-full h-9 bg-red/15 hover:bg-red/25 active:bg-red/30 text-red text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 tap-row"
+                  className="w-full h-9 bg-red/15 hover:bg-red/25 active:bg-red/30 text-red tf-caption rounded-lg flex items-center justify-center gap-1.5 tap-row"
                 >
                   <Icon name="plus" size={14} />
                   <span>Создать задачу по шаблону</span>

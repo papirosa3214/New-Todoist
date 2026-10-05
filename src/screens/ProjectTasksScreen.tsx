@@ -121,7 +121,7 @@ export function ProjectTasksScreen() {
           </p>
           <button
             onClick={() => navigate("/projects")}
- className="tf-action h-11 px-5 rounded-xl bg-card text-text font-semibold"
+ className="tf-action h-11 px-5 rounded-xl bg-card text-text "
           >
             К списку проектов
           </button>

@@ -118,7 +118,7 @@ export function AttachmentViewerSheet({
           >
             <Icon name="x" size={20} className="text-sub" />
           </button>
- <h3 className="tf-title font-semibold text-text truncate px-2">
+ <h3 className="tf-title text-text truncate px-2">
             {attachment.file_name}
           </h3>
           <button

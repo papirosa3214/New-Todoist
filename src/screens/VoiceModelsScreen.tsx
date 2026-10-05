@@ -561,7 +561,7 @@ function DictationLogSection() {
 
   return (
     <div className="mb-6">
- <div className="tf-action text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub px-1 mb-2">
         Диагностика диктовки
       </div>
       {/* Архив аудио. Показываем всегда, а не только при включённом журнале:

@@ -98,7 +98,7 @@ export function FieldRow({
           style={iconStyle}
         />
       )}
- <span className="tf-body font-medium text-text flex-1 min-w-0 truncate">
+ <span className="tf-body text-text flex-1 min-w-0 truncate">
         {label}
       </span>
       {value !== undefined && (
@@ -135,7 +135,7 @@ export function PriorityPill({ priority }: { priority: number }) {
   const p = PRIORITIES.find((x) => x.key === priority) ?? PRIORITIES[3];
   return (
     <span
- className="tf-caption inline-flex items-center justify-center font-bold text-white rounded-[10px] px-2 h-[20px] min-w-[26px] shrink-0"
+ className="tf-caption inline-flex items-center justify-center text-white rounded-[10px] px-2 h-[20px] min-w-[26px] shrink-0"
       style={{ backgroundColor: p.color }}
     >
       {p.label}
@@ -186,7 +186,7 @@ export function PriorityField({
               className="w-full flex items-center gap-3 py-3 px-4 text-left active:bg-stroke transition-colors"
             >
               <span
- className="tf-caption w-[24px] h-[24px] rounded-full flex items-center justify-center font-bold text-white shrink-0"
+ className="tf-caption w-[24px] h-[24px] rounded-full flex items-center justify-center text-white shrink-0"
                 style={{ backgroundColor: p.color }}
               >
                 {p.label}
@@ -625,7 +625,7 @@ function DurationStrip({
           // Повторный тап снимает длительность — так её можно не только
           // поставить, но и передумать, не убирая время целиком.
           onClick={() => onChange(value === d ? null : d)}
- className="tf-action relative flex-1 font-medium tabular-nums"
+ className="tf-action relative flex-1 tabular-nums"
         >
           {i === activeIdx && (
             <span
@@ -848,7 +848,7 @@ export function DueDateField({
                 // спрятать время, ради которого поле и объединили.
                 if (!withTime) setOpen(false);
               }}
- className={`tf-action flex-1 h-[40px] rounded-xl font-medium transition-colors ${
+ className={`tf-action flex-1 h-[40px] rounded-xl transition-colors ${
                 value === today
                   ? "bg-red text-white"
                   : "bg-card2 text-text active:bg-white/10"
@@ -861,7 +861,7 @@ export function DueDateField({
                 onChange(tomorrow);
                 if (!withTime) setOpen(false);
               }}
- className={`tf-action flex-1 h-[40px] rounded-xl font-medium transition-colors ${
+ className={`tf-action flex-1 h-[40px] rounded-xl transition-colors ${
                 value === tomorrow
                   ? "bg-red text-white"
                   : "bg-card2 text-text active:bg-white/10"
@@ -883,7 +883,7 @@ export function DueDateField({
             >
               <Icon name="chevronLeft" size={16} className="text-sub" />
             </button>
- <span className="tf-action font-semibold">
+ <span className="tf-action ">
               {CAL_MONTHS[calMonth]} {calYear}
             </span>
             <button
@@ -1018,7 +1018,7 @@ export function DueDateField({
                       key={opt.value}
                       type="button"
                       onClick={() => onRunRepeatChange(opt.value)}
- className={`tf-action h-[36px] px-3 rounded-xl font-medium transition-colors ${
+ className={`tf-action h-[36px] px-3 rounded-xl transition-colors ${
                         active
                           ? "bg-red text-white"
                           : "bg-card2 text-text active:bg-white/10"
@@ -1055,7 +1055,7 @@ export function DueDateField({
               type="button"
               onClick={onExtendRepeat}
               disabled={extendingRepeat}
- className="tf-action mt-3 w-full h-[40px] rounded-xl bg-card2 font-medium text-text active:bg-white/10 disabled:opacity-50"
+ className="tf-action mt-3 w-full h-[40px] rounded-xl bg-card2 text-text active:bg-white/10 disabled:opacity-50"
             >
               {extendingRepeat ? "Продлеваем…" : "Продлить на год"}
             </button>
@@ -1106,7 +1106,7 @@ export function LabelsField({
             key={l.id}
             type="button"
             onClick={() => onToggle(l.id)}
- className="tf-meta inline-flex items-center gap-1.5 font-semibold rounded-[10px] px-3 py-1.5 transition-colors active:scale-95"
+ className="tf-meta inline-flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 transition-colors active:scale-95"
             style={{
               backgroundColor: active
                 ? l.color + "33"
@@ -1147,7 +1147,7 @@ export function LabelsField({
               {selectedLabels.slice(0, 2).map((l) => (
                 <span
                   key={l.id}
- className="tf-caption px-2 py-0.5 rounded-[6px] font-medium truncate"
+ className="tf-caption px-2 py-0.5 rounded-[6px] truncate"
                   style={{ backgroundColor: l.color + "26", color: l.color }}
                 >
                   {l.name}

@@ -86,10 +86,10 @@ export function LoginScreen() {
         <div className="w-[72px] h-[72px] bg-red rounded-full flex items-center justify-center mb-3 shadow-md">
           <Icon name="check" size={36} className="text-white" />
         </div>
- <div className="tf-title-large font-bold mb-6">TaskFlow</div>
+ <div className="tf-title-large mb-6">TaskFlow</div>
 
         {/* Welcome */}
- <h2 className="tf-task-title font-semibold mb-1">Добро пожаловать!</h2>
+ <h2 className="tf-task-title mb-1">Добро пожаловать!</h2>
  <p className="tf-row text-sub mb-6">Войдите в свой аккаунт</p>
 
         {/* Быстрый вход по Face ID (если доступен) */}
@@ -99,7 +99,7 @@ export function LoginScreen() {
               type="button"
               onClick={handleBiometricLogin}
               disabled={isBioAuthenticating}
- className="tf-body w-full py-3.5 px-4 bg-card border border-stroke/60 hover:border-coral/50 rounded-2xl flex items-center justify-center gap-3 text-text font-semibold shadow-xs active:scale-[0.98] transition-all"
+ className="tf-body w-full py-3.5 px-4 bg-card border border-stroke/60 hover:border-coral/50 rounded-2xl flex items-center justify-center gap-3 text-text shadow-xs active:scale-[0.98] transition-all"
             >
               <div className="w-7 h-7 rounded-xl bg-coral/10 text-coral flex items-center justify-center">
                 {isFaceId ? (
@@ -129,14 +129,14 @@ export function LoginScreen() {
             </button>
 
             {bioError && (
-              <div className="text-xs text-coral mt-2 text-center">
+              <div className="tf-caption text-coral mt-2 text-center">
                 {bioError}
               </div>
             )}
 
             <div className="relative flex py-4 items-center">
               <div className="flex-grow border-t border-stroke/40"></div>
-              <span className="flex-shrink mx-4 text-xs text-dim">
+              <span className="flex-shrink mx-4 tf-caption text-dim">
                 или по паролю
               </span>
               <div className="flex-grow border-t border-stroke/40"></div>

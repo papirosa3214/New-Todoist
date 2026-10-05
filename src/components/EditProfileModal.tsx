@@ -82,7 +82,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
             <div className="w-8 h-8 rounded-xl bg-card2 flex items-center justify-center">
               <User className="w-4 h-4 text-red" />
             </div>
-            <h3 className="text-lg font-bold text-text tracking-tight">
+            <h3 className="tf-title text-text tracking-tight">
               Редактировать профиль
             </h3>
           </div>
@@ -112,7 +112,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
 
           {/* Name Field */}
           <div>
-            <label className="text-xs font-semibold text-sub uppercase tracking-wider mb-1.5 block px-1">
+            <label className="tf-caption text-sub uppercase tracking-wider mb-1.5 block px-1">
               Имя пользователя
             </label>
             <div className="relative flex items-center">
@@ -130,7 +130,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
 
           {/* Email / Login Field */}
           <div>
-            <label className="text-xs font-semibold text-sub uppercase tracking-wider mb-1.5 block px-1">
+            <label className="tf-caption text-sub uppercase tracking-wider mb-1.5 block px-1">
               Email / Логин для входа
             </label>
             <div className="relative flex items-center">
@@ -148,16 +148,16 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
 
           {/* Password Change Divider */}
           <div className="pt-2 border-t border-stroke">
- <span className="tf-action font-semibold text-sub block mb-3">
+ <span className="tf-action text-sub block mb-3">
               Смена пароля{" "}
-              <span className="text-xs text-dim font-normal">
+              <span className="tf-caption text-dim ">
                 (оставьте пустым, если не меняете)
               </span>
             </span>
 
             <div className="flex flex-col gap-3">
               <div>
-                <label className="text-xs text-sub mb-1 block px-1">
+                <label className="tf-caption text-sub mb-1 block px-1">
                   Текущий пароль
                 </label>
                 <div className="relative flex items-center">
@@ -173,7 +173,7 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
               </div>
 
               <div>
-                <label className="text-xs text-sub mb-1 block px-1">
+                <label className="tf-caption text-sub mb-1 block px-1">
                   Новый пароль
                 </label>
                 <div className="relative flex items-center">
@@ -202,14 +202,14 @@ export function EditProfileModal({ user, isOpen, onClose }: Props) {
             <button
               type="button"
               onClick={onClose}
- className="tf-row flex-1 py-3 rounded-2xl bg-card2 hover:bg-card2/80 text-text font-medium transition-[background-color] duration-150"
+ className="tf-row flex-1 py-3 rounded-2xl bg-card2 hover:bg-card2/80 text-text transition-[background-color] duration-150"
             >
               Отмена
             </button>
             <button
               type="submit"
               disabled={updateProfile.isPending}
- className="tf-row flex-1 py-3 rounded-2xl bg-red-solid hover:bg-red text-text font-semibold shadow-lg shadow-red/30 active:scale-[0.98] transition-transform duration-150 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-red/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+ className="tf-row flex-1 py-3 rounded-2xl bg-red-solid hover:bg-red text-text shadow-lg shadow-red/30 active:scale-[0.98] transition-transform duration-150 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-red/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
             >
               {updateProfile.isPending ? "Сохранение..." : "Сохранить"}
             </button>

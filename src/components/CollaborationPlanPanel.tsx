@@ -60,7 +60,7 @@ export function CollaborationPlanPanel({ taskId }: { taskId: string }) {
   return (
     <div className="py-3 px-4 bg-card rounded-xl">
       <div className="flex items-center justify-between mb-2">
- <span className="tf-action font-medium text-text">
+ <span className="tf-action text-text">
           План совместной работы
         </span>
  <span className="tf-meta text-sub">
@@ -87,7 +87,7 @@ export function CollaborationPlanPanel({ taskId }: { taskId: string }) {
                 )}
               </span>
               <span
- className={`tf-caption shrink-0 rounded-full border px-2 py-0.5 font-medium ${
+ className={`tf-caption shrink-0 rounded-full border px-2 py-0.5 ${
                   STATE_TONE[state] ?? STATE_TONE.waiting
                 }`}
               >

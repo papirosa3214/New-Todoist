@@ -166,7 +166,7 @@ export function AttachmentsField({
     <>
       {/* Тот же лейбл-заголовок секции, что у «Заметка» и «Подзадачи»
           (17px, text-sub, font-semibold) — см. DESIGN.md §6. */}
- <div className="tf-title text-sub font-semibold mb-2">Файлы</div>
+ <div className="tf-title text-sub mb-2">Файлы</div>
 
       {(saved.length > 0 || files.length > 0) && (
         <div className="flex flex-col gap-1 mb-2">

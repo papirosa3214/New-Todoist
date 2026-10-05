@@ -207,7 +207,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
               <Bot className="w-5 h-5 text-white" />
             </div>
             <div>
- <h2 className="tf-title font-bold tracking-tight text-white">
+ <h2 className="tf-title tracking-tight text-white">
                 AI Ассистент и Модели
               </h2>
  <p className="tf-caption text-white/50">
@@ -255,11 +255,11 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
- <span className="tf-body font-semibold text-white truncate">
+ <span className="tf-body text-white truncate">
                           {item.name}
                         </span>
                         <span
- className="tf-micro font-bold uppercase px-2 py-0.5 rounded-full border shrink-0"
+ className="tf-micro uppercase px-2 py-0.5 rounded-full border shrink-0"
                           style={{
                             backgroundColor: `${item.color}15`,
                             borderColor: `${item.color}40`,
@@ -289,7 +289,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for Antigravity Models */}
                 {key === "antigravity" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-[#06B6D4]/40 space-y-1.5 py-1">
- <div className="tf-caption font-semibold text-[#06B6D4] uppercase tracking-wider mb-1">
+ <div className="tf-caption text-[#06B6D4] uppercase tracking-wider mb-1">
                       Модели Antigravity (Google DeepMind):
                     </div>
                     {antigravityModels.map((m) => {
@@ -336,7 +336,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for Local Ollama Models */}
                 {key === "local" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-white/10 space-y-1.5 py-1">
- <div className="tf-caption font-semibold text-white/40 uppercase tracking-wider mb-1">
+ <div className="tf-caption text-white/40 uppercase tracking-wider mb-1">
                       Модель на 192.168.1.110:
                     </div>
                     {availableLocalModels.map((mName) => {
@@ -388,7 +388,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for Claude Models */}
                 {key === "claude" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-[#D97706]/40 space-y-1.5 py-1">
- <div className="tf-caption font-semibold text-[#D97706] uppercase tracking-wider mb-1">
+ <div className="tf-caption text-[#D97706] uppercase tracking-wider mb-1">
                       Модели Claude (Anthropic):
                     </div>
                     {claudeModels.map((m) => {
@@ -434,7 +434,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for Hermes Models */}
                 {key === "hermes" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-[#8B5CF6]/40 space-y-1.5 py-1">
- <div className="tf-caption font-semibold text-[#8B5CF6] uppercase tracking-wider mb-1">
+ <div className="tf-caption text-[#8B5CF6] uppercase tracking-wider mb-1">
                       Модели Hermes (Nous Research):
                     </div>
                     {hermesModels.map((m) => {
@@ -480,7 +480,7 @@ export function AiProviderModal({ isOpen, onClose }: Props) {
                 {/* Sub-selector for DeepSeek Models */}
                 {key === "deepseek" && isSelected && (
                   <div className="mt-2 ml-4 pl-4 border-l-2 border-[#3B82F6]/40 space-y-1.5 py-1">
- <div className="tf-caption font-semibold text-[#3B82F6] uppercase tracking-wider mb-1">
+ <div className="tf-caption text-[#3B82F6] uppercase tracking-wider mb-1">
                       Модели DeepSeek:
                     </div>
                     {deepseekModels.map((m) => {

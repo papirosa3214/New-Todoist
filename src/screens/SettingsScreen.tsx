@@ -236,7 +236,7 @@ function AccountAvatarRow({
         onChange={onPick}
       />
       <div className="flex-1 min-w-0 cursor-pointer" onClick={onEdit}>
- <div className="tf-body text-text font-medium truncate flex items-center gap-1.5">
+ <div className="tf-body text-text truncate flex items-center gap-1.5">
           {name}
         </div>
  {email && <div className="tf-action text-sub truncate">{email}</div>}
@@ -248,7 +248,7 @@ function AccountAvatarRow({
           <button
             type="button"
             onClick={onEdit}
- className="tf-meta tap-fade py-1 px-2.5 rounded-lg bg-card2 border border-stroke text-text font-medium"
+ className="tf-meta tap-fade py-1 px-2.5 rounded-lg bg-card2 border border-stroke text-text "
           >
             Изменить
           </button>
@@ -537,7 +537,7 @@ export function SettingsScreen() {
       )}
 
       {/* User settings */}
- <div className="tf-action text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub px-1 mb-2">
         Пользовательские настройки
       </div>
       <div className="mb-4">
@@ -579,7 +579,7 @@ export function SettingsScreen() {
       {/* AI — ВЕСЬ в одном разделе (Максим 26.08.2026: «уже нагородили —
           мозг в одном месте, модели в другом, Ollama в третьем»). Одна
           строка-вход, всё внутри: /settings/voice-models. */}
- <div className="tf-action text-sub font-semibold px-1 mb-2">
+ <div className="tf-action text-sub px-1 mb-2">
         Искусственный интеллект
       </div>
       <div className="mb-4">
@@ -594,7 +594,7 @@ export function SettingsScreen() {
       </div>
 
       {/* General */}
- <div className="tf-action text-sub font-semibold px-1 mb-2">Общие</div>
+ <div className="tf-action text-sub px-1 mb-2">Общие</div>
       <div className="mb-4">
         <FieldGroup>
           {/* Строки «Проекты» здесь больше нет (26.08.2026): проекты стали
@@ -632,7 +632,7 @@ export function SettingsScreen() {
       </div>
 
       {/* Сервер */}
- <div className="tf-action text-sub font-semibold px-1 mb-2">Сервер</div>
+ <div className="tf-action text-sub px-1 mb-2">Сервер</div>
       <div className="mb-4">
         <ServerSection />
       </div>

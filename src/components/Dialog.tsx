@@ -144,7 +144,7 @@ export function useDialog(): {
             <Icon name="trash" size={20} className="text-coral" />
           </div>
         )}
- <h3 className="tf-title font-semibold text-center mb-1">
+ <h3 className="tf-title text-center mb-1">
           {state.title}
         </h3>
         {state.description && (

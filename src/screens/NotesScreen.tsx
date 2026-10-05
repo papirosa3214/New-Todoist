@@ -737,7 +737,7 @@ export function NotesScreen() {
             <button
               type="submit"
               disabled={!newFolderName.trim() || createFolder.isPending}
- className="tf-row w-full h-12 bg-red rounded-xl font-semibold text-white disabled:opacity-50 tap-fade"
+ className="tf-row w-full h-12 bg-red rounded-xl text-white disabled:opacity-50 tap-fade"
             >
               {createFolder.isPending ? "Создаём…" : "Создать"}
             </button>
@@ -827,7 +827,7 @@ export function NotesScreen() {
               size={16}
               className="text-sub shrink-0"
             />
- <span className="tf-row font-semibold text-text truncate max-w-[220px]">
+ <span className="tf-row text-text truncate max-w-[220px]">
               {dragRef.current.kind === "folder"
                 ? dragRef.current.folder.name
                 : dragRef.current.note.title || "Без названия"}
@@ -1188,14 +1188,14 @@ function EmptyState({ onCreateNote }: { onCreateNote: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center text-center pt-16 gap-3">
       <Icon name="notebook" size={48} className="text-dim" />
- <p className="tf-input font-semibold text-text">Записей пока нет</p>
+ <p className="tf-input text-text">Записей пока нет</p>
  <p className="tf-action text-sub max-w-[280px] leading-snug">
         Заметки складываются в папки — перетаскиванием или сразу при создании.
       </p>
       <button
         type="button"
         onClick={onCreateNote}
- className="tf-body tap-scale mt-3 h-11 px-5 rounded-xl bg-card2 font-semibold text-text flex items-center gap-2"
+ className="tf-body tap-scale mt-3 h-11 px-5 rounded-xl bg-card2 text-text flex items-center gap-2"
       >
         <Icon name="plus" size={18} />
         Создать заметку

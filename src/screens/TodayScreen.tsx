@@ -330,7 +330,7 @@ export function TodayScreen() {
         headerAction: (
           <button
             onClick={() => setRescheduleOpen(true)}
- className="tf-meta tap-fade shrink-0 min-h-11 px-2.5 flex items-center justify-center rounded-lg font-semibold text-red"
+ className="tf-meta tap-fade shrink-0 min-h-11 px-2.5 flex items-center justify-center rounded-lg text-red"
           >
             Перенести
           </button>
@@ -348,7 +348,7 @@ export function TodayScreen() {
            с фоном карточек задач, и кнопка сливалась со списком. */
         <button
           onClick={() => navigate("/task/new")}
- className="tf-action tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 font-semibold text-red"
+ className="tf-action tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 text-red"
         >
           <Icon name="plus" size={16} />
           Добавить задачу
@@ -539,7 +539,7 @@ export function TodayScreen() {
               strokeWidth="1.5"
             />
           </svg>
- <h3 className="tf-title font-semibold mb-2">
+ <h3 className="tf-title mb-2">
             Чёткое видение грядущего дня
           </h3>
  <p className="tf-row text-sub text-center px-8 leading-relaxed">
@@ -635,7 +635,7 @@ export function TodayScreen() {
                ближайшая крупнее body; промежуточных в шкале нет. */
             <div className="flex items-center gap-1.5 px-1 pt-3 pb-1.5">
               <Icon name="bot" size={16} className="text-text" />
- <span className="tf-title font-semibold text-text">
+ <span className="tf-title text-text">
                 Ждут вас
               </span>
             </div>
@@ -655,7 +655,7 @@ export function TodayScreen() {
           ))}
           {overdueTasks.length > 0 && (
             <div className="flex items-center gap-1.5 px-1 pt-3 pb-1.5">
- <span className="tf-title font-semibold text-red">
+ <span className="tf-title text-red">
                 Просрочено
               </span>
             </div>
@@ -682,7 +682,7 @@ export function TodayScreen() {
               не читалось на фоне «Ждут вас» так же ясно, как дата в доске. */}
           {todayTasks.length > 0 &&
             (overdueTasks.length > 0 || waitingTasks.length > 0) && (
- <div className="tf-title font-semibold text-sub px-1 pt-3 pb-1.5">
+ <div className="tf-title text-sub px-1 pt-3 pb-1.5">
                 {formatDueLabel(today)}
               </div>
             )}

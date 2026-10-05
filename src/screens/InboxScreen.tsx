@@ -95,7 +95,7 @@ export function InboxScreen() {
     const makeFooter = (projectQuery: string) => (
       <button
         onClick={() => navigate(`/task/new?project=${projectQuery}`)}
- className="tf-action tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 font-semibold text-red"
+ className="tf-action tap-row w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-dashed border-red/40 bg-red/5 text-red"
       >
         <Icon name="plus" size={16} />
         Добавить задачу
@@ -219,7 +219,7 @@ export function InboxScreen() {
                     />
                   )}
                   <span
- className={`tf-action font-semibold truncate ${
+ className={`tf-action truncate ${
                       col.titleClassName ?? "text-text"
                     }`}
                   >

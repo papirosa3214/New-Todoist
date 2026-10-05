@@ -159,7 +159,7 @@ export function KeyboardDemoScreen() {
   return (
     <div className="min-h-dvh bg-bg text-text flex flex-col">
       <div className="flex-1 px-4 pt-6">
- <h1 className="tf-task-title font-semibold mb-1">Своя клавиатура</h1>
+ <h1 className="tf-task-title mb-1">Своя клавиатура</h1>
  <p className="tf-action text-sub mb-4">
           Пробный экран. Тапни по полю и набирай — системная клавиатура здесь не
           участвует.

@@ -91,7 +91,7 @@ export function AppleCalendarEvents({ dateStr, className = "" }: Props) {
                 });
               }
             }}
-            className="flex items-start gap-2.5 px-3 py-2 rounded-xl bg-card border border-stroke/40 text-xs shadow-xs transition-transform active:scale-[0.98] cursor-pointer"
+            className="flex items-start gap-2.5 px-3 py-2 rounded-xl bg-card border border-stroke/40 tf-caption shadow-xs transition-transform active:scale-[0.98] cursor-pointer"
           >
             <div
               className="w-1.5 h-full min-h-[28px] rounded-full shrink-0"

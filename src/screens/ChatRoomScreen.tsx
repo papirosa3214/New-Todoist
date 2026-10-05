@@ -310,7 +310,7 @@ function DaySeparator({ label }: { label: string }) {
       className="flex items-center gap-2 py-1.5 select-none"
     >
       <div className="flex-1 h-px bg-card2" />
- <span className="tf-caption text-dim font-medium tracking-wide uppercase">
+ <span className="tf-caption text-dim tracking-wide uppercase">
         {label}
       </span>
       <div className="flex-1 h-px bg-card2" />

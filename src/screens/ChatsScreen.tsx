@@ -102,7 +102,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
       </p>
       <button
         onClick={onCreate}
- className="tf-body h-12 px-6 rounded-xl bg-red font-semibold text-white tap-fade"
+ className="tf-body h-12 px-6 rounded-xl bg-red text-white tap-fade"
       >
         Новый чат
       </button>
@@ -147,7 +147,7 @@ function ChatRow({
       <AvatarStack members={visible} overflow={overflow} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
- <h3 className="tf-body font-semibold text-text min-w-0 truncate">
+ <h3 className="tf-body text-text min-w-0 truncate">
             {chat.title || defaultTitle(others)}
           </h3>
           {lastTime && (
@@ -195,7 +195,7 @@ function AvatarStack({
       ))}
       {overflow > 0 && (
         <div
- className="tf-caption rounded-full bg-card2 border-2 border-card flex items-center justify-center text-sub font-semibold tabular-nums"
+ className="tf-caption rounded-full bg-card2 border-2 border-card flex items-center justify-center text-sub tabular-nums"
           style={{
             width: SIZE,
             height: SIZE,

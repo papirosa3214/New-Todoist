@@ -108,7 +108,7 @@ export function AgentWorkScreen() {
         section.tasks.length === 0 ? null : (
           <div key={section.key} className="mb-4">
             <div className="px-1 pt-2 pb-1">
- <div className="tf-action font-semibold text-text">
+ <div className="tf-action text-text">
                 {section.title} {section.tasks.length}
               </div>
  <div className="tf-meta text-sub">{section.hint}</div>

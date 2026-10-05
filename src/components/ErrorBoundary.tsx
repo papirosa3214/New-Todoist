@@ -69,13 +69,13 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="flex gap-2">
             <button
               onClick={this.handleReset}
- className="tf-row h-11 px-5 rounded-xl bg-card font-medium text-text"
+ className="tf-row h-11 px-5 rounded-xl bg-card text-text"
             >
               Назад
             </button>
             <button
               onClick={this.handleReload}
- className="tf-row h-11 px-5 rounded-xl bg-red font-semibold text-white"
+ className="tf-row h-11 px-5 rounded-xl bg-red text-white"
             >
               Перезагрузить
             </button>

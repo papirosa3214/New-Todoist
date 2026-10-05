@@ -64,7 +64,7 @@ function NotFoundScreen() {
       </div>
       <button
         onClick={() => navigate("/")}
- className="tf-body h-12 px-6 rounded-xl bg-red font-semibold text-white"
+ className="tf-body h-12 px-6 rounded-xl bg-red text-white"
       >
         На главную
       </button>

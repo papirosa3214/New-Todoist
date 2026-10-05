@@ -110,7 +110,7 @@ export function SearchScreen() {
         <div className="space-y-5">
           {tasks.length > 0 && (
             <div>
- <h3 className="tf-action font-semibold text-sub mb-2 px-1">
+ <h3 className="tf-action text-sub mb-2 px-1">
                 Задачи
               </h3>
               <div className="space-y-[2px]">
@@ -178,7 +178,7 @@ export function SearchScreen() {
 
           {projects.length > 0 && (
             <div>
- <h3 className="tf-action font-semibold text-sub mb-2 px-1">
+ <h3 className="tf-action text-sub mb-2 px-1">
                 Проекты
               </h3>
               <div className="space-y-[2px]">
@@ -210,7 +210,7 @@ export function SearchScreen() {
 
           {labels.length > 0 && (
             <div>
- <h3 className="tf-action font-semibold text-sub mb-2 px-1">
+ <h3 className="tf-action text-sub mb-2 px-1">
                 Метки
               </h3>
               <div className="space-y-[2px]">

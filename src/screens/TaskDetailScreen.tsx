@@ -351,14 +351,14 @@ export function TaskDetailScreen() {
     <div className="px-4 pb-[calc(1rem+var(--kb-inset,0px))]">
       {dialog}
       {templateToast && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border border-stroke rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 text-sm text-text">
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border border-stroke rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 tf-action text-text">
           <Icon name="check" size={16} className="text-sub" />
           <span>Задача сохранена в шаблоны</span>
         </div>
       )}
       {liveActivityToast && (
         <div
-          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 text-sm max-w-[calc(100vw-2rem)] ${
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-card border rounded-xl px-4 py-2.5 shadow-xl flex items-center gap-2 tf-action max-w-[calc(100vw-2rem)] ${
             liveActivityToast.ok
               ? "border-blue-500/40 text-blue-400"
               : "border-red-500/40 text-red-400"
@@ -439,7 +439,7 @@ export function TaskDetailScreen() {
               списка и на карточке доски (владелец 19.08.2026: «она не
               должна иметь заливку, просто цветной текст с решёткой»). */}
           <span
- className="tf-caption inline-flex min-w-0 items-center gap-1 font-medium"
+ className="tf-caption inline-flex min-w-0 items-center gap-1 "
             style={{ color: taskProject.color || "#A6A6A6" }}
           >
             <Icon name="hash" size={10} className="shrink-0" />
@@ -451,7 +451,7 @@ export function TaskDetailScreen() {
       {/* Priority ring + Title */}
       <div className="flex items-start gap-3 mb-4">
         <h1
- className={`tf-task-title font-semibold flex-1 ${task.status ==="completed" ?"line-through text-sub" :""}`}
+ className={`tf-task-title flex-1 ${task.status ==="completed" ?"line-through text-sub" :""}`}
         >
           <MarkdownInline source={task.title} />
         </h1>
@@ -596,7 +596,7 @@ export function TaskDetailScreen() {
         task.children.length > 0 && (
           <div className="flex gap-4 border-b border-sub/20 mb-4 px-1">
             <button
- className={`tf-row pb-2 font-medium transition-colors border-b-2 ${
+ className={`tf-row pb-2 transition-colors border-b-2 ${
                 activeTab === "details"
                   ? "border-red text-text"
                   : "border-transparent text-sub hover:text-text"
@@ -606,7 +606,7 @@ export function TaskDetailScreen() {
               Чек-лист ({task.subtasks.length})
             </button>
             <button
- className={`tf-row pb-2 font-medium transition-colors border-b-2 ${
+ className={`tf-row pb-2 transition-colors border-b-2 ${
                 activeTab === "team"
                   ? "border-red text-text"
                   : "border-transparent text-sub hover:text-text"
@@ -667,7 +667,7 @@ export function TaskDetailScreen() {
         task.children.length > 0 &&
         (!task.subtasks.length || activeTab === "team") && (
           <div className="mb-4 space-y-1">
- <div className="tf-caption text-sub font-medium px-1 mb-2">
+ <div className="tf-caption text-sub px-1 mb-2">
               Дочерние задачи ({task.children.length})
             </div>
             {task.children.map((child: any) => (
@@ -769,7 +769,7 @@ export function TaskDetailScreen() {
           комментариев перенесено в начало секции перед списком записей,
           чтобы можно было оставлять комментарии без прокрутки всей ленты. */}
       <div>
- <h3 className="tf-action text-sub font-semibold mb-2 px-1">Лента</h3>
+ <h3 className="tf-action text-sub mb-2 px-1">Лента</h3>
         <ErrorBanner
           error={addComment.error}
           fallback="Не удалось отправить комментарий"

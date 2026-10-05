@@ -242,7 +242,7 @@ function BoardCard({
               цветной текст без заливки. */}
           {showProjectBadge && task.project_name && (
             <div
- className="tf-micro mb-1 inline-flex min-w-0 max-w-full items-center gap-1 font-medium leading-none"
+ className="tf-micro mb-1 inline-flex min-w-0 max-w-full items-center gap-1 leading-none"
               style={{ color: task.project_color || "#A6A6A6" }}
             >
               <Icon name="hash" size={9} className="shrink-0" />
@@ -287,7 +287,7 @@ function BoardCard({
         {hasFooter && (
           <div className="w-full flex items-center gap-1.5 flex-wrap">
             {task.subtasks.length > 0 && (
- <span className="tf-micro text-sub shrink-0 font-medium">
+ <span className="tf-micro text-sub shrink-0 ">
                 {doneSub}/{task.subtasks.length}
               </span>
             )}
@@ -927,7 +927,7 @@ export function TaskBoard({
                   />
                 )}
                 <span
- className={`tf-action font-semibold truncate ${
+ className={`tf-action truncate ${
                     col.titleClassName ?? "text-text"
                   }`}
                 >

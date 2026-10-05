@@ -405,7 +405,7 @@ export function ActivityChart({
                 setSelectedPointIdx(null);
                 setSingleDayDate(null);
               }}
- className="tf-meta tap-scale px-2 py-1 -ml-1 rounded-lg bg-card2 hover:bg-card2/80 text-sub hover:text-text flex items-center gap-1 font-medium border border-stroke/40"
+ className="tf-meta tap-scale px-2 py-1 -ml-1 rounded-lg bg-card2 hover:bg-card2/80 text-sub hover:text-text flex items-center gap-1 border border-stroke/40"
             >
               <Icon name="chevron-left" size={14} />
               {drillDownScope.parentPeriodLabel}
@@ -417,7 +417,7 @@ export function ActivityChart({
           )}
 
           <div>
- <h2 className="tf-body font-semibold text-text leading-tight">
+ <h2 className="tf-body text-text leading-tight">
               {headerTitle}
             </h2>
  <div className="tf-caption text-sub">{periodSubtitle}</div>
@@ -429,7 +429,7 @@ export function ActivityChart({
           <button
             type="button"
             onClick={() => setChartType("line")}
- className={`tf-meta tap-scale px-3 py-1 rounded-lg font-medium transition-all ${
+ className={`tf-meta tap-scale px-3 py-1 rounded-lg transition-all ${
               chartType === "line"
                 ? "bg-card text-text shadow-sm"
                 : "text-dim hover:text-sub"
@@ -440,7 +440,7 @@ export function ActivityChart({
           <button
             type="button"
             onClick={() => setChartType("donut")}
- className={`tf-meta tap-scale px-3 py-1 rounded-lg font-medium transition-all ${
+ className={`tf-meta tap-scale px-3 py-1 rounded-lg transition-all ${
               chartType === "donut"
                 ? "bg-card text-text shadow-sm"
                 : "text-dim hover:text-sub"
@@ -531,7 +531,7 @@ export function ActivityChart({
 
           {/* 1. Weekday labels — Неделя (или drill-down неделя) */}
           {(period === "week" || drillDownScope?.type === "week") && (
- <div className="tf-micro flex justify-between px-1 text-dim font-semibold">
+ <div className="tf-micro flex justify-between px-1 text-dim ">
               {chartPoints.map((st, i) => (
                 <button
                   key={st.key}
@@ -549,7 +549,7 @@ export function ActivityChart({
 
           {/* 2. Month Timeline — Месяц (1..сегодня или drill-down месяц) */}
           {((period === "month" && !drillDownScope) || drillDownScope?.type === "month") && (
- <div className="tf-caption flex items-center justify-between px-2 pt-1 text-dim font-medium">
+ <div className="tf-caption flex items-center justify-between px-2 pt-1 text-dim ">
               <span className="text-dim/80">{chartPoints[0]?.shortLabel}</span>
               <span className="text-text font-semibold px-2 py-0.5 bg-card2/80 rounded-md border border-stroke/30">
                 {drillDownScope ? drillDownScope.title : MONTHS_NAMES_RU[now.getMonth()]}
@@ -560,7 +560,7 @@ export function ActivityChart({
 
           {/* 3. Quarter Timeline — 3 месяца (12 недель) */}
           {period === "quarter" && !drillDownScope && (
- <div className="tf-caption flex items-center justify-between px-2 pt-1 text-dim font-medium">
+ <div className="tf-caption flex items-center justify-between px-2 pt-1 text-dim ">
               <span>{MONTHS_NAMES_RU[(now.getMonth() - 2 + 12) % 12]}</span>
               <span>{MONTHS_NAMES_RU[(now.getMonth() - 1 + 12) % 12]}</span>
               <span className="text-text font-semibold">{MONTHS_NAMES_RU[now.getMonth()]}</span>
@@ -569,7 +569,7 @@ export function ActivityChart({
 
           {/* 4. Year Timeline — Год (12 месяцев) */}
           {period === "year" && !drillDownScope && (
- <div className="tf-micro flex justify-between px-1 pt-1 text-dim font-medium">
+ <div className="tf-micro flex justify-between px-1 pt-1 text-dim ">
               {chartPoints.map((st, i) => (
                 <button
                   key={st.key}
@@ -626,7 +626,7 @@ export function ActivityChart({
                   setSingleDayDate(null);
                   setSelectedPointIdx(null);
                 }}
- className="tf-caption text-dim hover:text-text font-medium underline"
+ className="tf-caption text-dim hover:text-text underline"
               >
                 Показать за весь период
               </button>
@@ -697,7 +697,7 @@ export function ActivityChart({
 
               {/* В центре кружочка: общее число задач */}
               <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
- <span className="tf-task-title font-bold text-text leading-none">
+ <span className="tf-task-title text-text leading-none">
                   {donutData.total}
                 </span>
  <span className=" text-dim font-medium mt-1">
@@ -709,35 +709,35 @@ export function ActivityChart({
             {/* Metrics Breakdown Grid */}
             <div className="flex-1 grid grid-cols-2 gap-2">
               <div className="bg-card2/50 rounded-xl p-2.5 border border-stroke/30">
- <div className="tf-caption flex items-center gap-1.5 text-green font-medium mb-0.5">
+ <div className="tf-caption flex items-center gap-1.5 text-green mb-0.5">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLOR_GREEN }} />
                   Выполнено
                 </div>
- <div className="tf-input font-bold text-text">
+ <div className="tf-input text-text">
                   {donutData.completed}{" "}
- <span className="tf-caption font-normal text-dim">({donutData.completedPct}%)</span>
+ <span className="tf-caption text-dim">({donutData.completedPct}%)</span>
                 </div>
               </div>
 
               <div className="bg-card2/50 rounded-xl p-2.5 border border-stroke/30">
- <div className="tf-caption flex items-center gap-1.5 text-blue font-medium mb-0.5">
+ <div className="tf-caption flex items-center gap-1.5 text-blue mb-0.5">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLOR_BLUE }} />
                   В работе
                 </div>
- <div className="tf-input font-bold text-text">
+ <div className="tf-input text-text">
                   {donutData.onTrack}{" "}
- <span className="tf-caption font-normal text-dim">({donutData.onTrackPct}%)</span>
+ <span className="tf-caption text-dim">({donutData.onTrackPct}%)</span>
                 </div>
               </div>
 
               <div className="bg-card2/50 rounded-xl p-2.5 border border-stroke/30 col-span-2 flex items-center justify-between">
- <div className="tf-caption flex items-center gap-1.5 text-coral font-medium">
+ <div className="tf-caption flex items-center gap-1.5 text-coral ">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLOR_CORAL }} />
                   Просрочено
                 </div>
- <div className="tf-row font-bold text-coral">
+ <div className="tf-row text-coral">
                   {donutData.overdue}{" "}
- <span className="tf-caption font-normal text-coral/80">({donutData.overduePct}%)</span>
+ <span className="tf-caption text-coral/80">({donutData.overduePct}%)</span>
                 </div>
               </div>
             </div>

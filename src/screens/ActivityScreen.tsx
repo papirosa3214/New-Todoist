@@ -167,7 +167,7 @@ function CompletedTaskCard({ task }: { task: ApiTask }) {
         <button
           onClick={restore}
           disabled={updateTask.isPending}
- className="tf-action tap-row w-full flex items-center justify-center gap-2 h-11 font-semibold text-red disabled:opacity-50"
+ className="tf-action tap-row w-full flex items-center justify-center gap-2 h-11 text-red disabled:opacity-50"
         >
           <Icon name="sync" size={14} />
           Вернуть в работу
@@ -355,7 +355,7 @@ function ActivityFilterSheet({
               (ScreenHeader variant="compact"): шторка это тот же уровень
               навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
               значит «поле ввода, защита от автозума iOS», см. index.css. */}
- <h3 className="tf-title font-semibold text-text">Фильтры</h3>
+ <h3 className="tf-title text-text">Фильтры</h3>
           <button
             onClick={() => setFilters(DEFAULT_FILTERS)}
             disabled={!hasActive}
@@ -766,7 +766,7 @@ export function ActivityScreen() {
 
       {groups.map((g) => (
         <div key={g.key} className="mb-5">
- <h3 className="tf-action font-semibold text-sub mb-2 px-1">
+ <h3 className="tf-action text-sub mb-2 px-1">
             {g.label}
           </h3>
           <div className="flex flex-col gap-2">

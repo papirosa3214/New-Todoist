@@ -53,9 +53,9 @@ export function WeeklySummaryModal({ isOpen, onClose }: Props) {
               <BrainCircuit className="w-5 h-5 text-white" />
             </div>
             <div>
- <h2 className="tf-title font-bold tracking-tight text-white flex items-center gap-2">
+ <h2 className="tf-title tracking-tight text-white flex items-center gap-2">
                 Сводка недели
- <span className="tf-micro font-semibold tracking-wider uppercase px-2 py-0.5 rounded-full bg-white/10 text-white/70">
+ <span className="tf-micro tracking-wider uppercase px-2 py-0.5 rounded-full bg-white/10 text-white/70">
                   Second Brain
                 </span>
               </h2>
@@ -81,7 +81,7 @@ export function WeeklySummaryModal({ isOpen, onClose }: Props) {
           {isBusy ? (
             <div className="flex flex-col items-center justify-center py-16 text-center space-y-3">
               <div className="w-12 h-12 rounded-full border-3 border-[#FF2D55]/30 border-t-[#FF2D55] animate-spin mb-2" />
- <div className="tf-body font-semibold text-white">
+ <div className="tf-body text-white">
                 AI анализирует вашу неделю...
               </div>
  <div className="tf-meta text-white/50 max-w-xs">
@@ -101,15 +101,15 @@ export function WeeklySummaryModal({ isOpen, onClose }: Props) {
               {/* Score & Greeting Banner */}
               <div className="p-4 rounded-2xl bg-gradient-to-br from-white/[0.08] to-white/[0.03] border border-white/10 shadow-sm">
                 <div className="flex items-center justify-between mb-2.5">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-[#FF9500]">
+                  <div className="flex items-center gap-1.5 tf-caption text-[#FF9500]">
                     <Zap className="w-4 h-4 fill-[#FF9500]" />
                     <span>Продуктивность</span>
                   </div>
-                  <div className="text-sm font-bold px-2.5 py-0.5 rounded-full bg-[#FF9500]/20 text-[#FF9500] border border-[#FF9500]/30">
+                  <div className="tf-action px-2.5 py-0.5 rounded-full bg-[#FF9500]/20 text-[#FF9500] border border-[#FF9500]/30">
                     {summary.productivity_score}%
                   </div>
                 </div>
- <p className="tf-row text-white/90 leading-snug font-medium">
+ <p className="tf-row text-white/90 leading-snug ">
                   {summary.greeting}
                 </p>
               </div>
@@ -139,7 +139,7 @@ export function WeeklySummaryModal({ isOpen, onClose }: Props) {
               {/* Section 1: Accomplishments */}
               {summary.accomplishments.length > 0 && (
                 <div className="space-y-2">
- <div className="tf-action flex items-center gap-2 font-semibold text-[#34C759] uppercase tracking-wider">
+ <div className="tf-action flex items-center gap-2 text-[#34C759] uppercase tracking-wider">
                     <CheckCircle2 className="w-4 h-4" />
                     <span>Главные победы недели</span>
                   </div>
@@ -162,7 +162,7 @@ export function WeeklySummaryModal({ isOpen, onClose }: Props) {
               {/* Section 2: Missed & Overdue */}
               {summary.missed_or_overdue.length > 0 && (
                 <div className="space-y-2">
- <div className="tf-action flex items-center gap-2 font-semibold text-[#FF453A] uppercase tracking-wider">
+ <div className="tf-action flex items-center gap-2 text-[#FF453A] uppercase tracking-wider">
                     <AlertTriangle className="w-4 h-4" />
                     <span>Где просели / долги и хвосты</span>
                   </div>
@@ -185,7 +185,7 @@ export function WeeklySummaryModal({ isOpen, onClose }: Props) {
               {/* Section 3: Next Week Focus */}
               {summary.next_week_focus.length > 0 && (
                 <div className="space-y-2">
- <div className="tf-action flex items-center gap-2 font-semibold text-[#0A84FF] uppercase tracking-wider">
+ <div className="tf-action flex items-center gap-2 text-[#0A84FF] uppercase tracking-wider">
                     <Target className="w-4 h-4" />
                     <span>Фокус на следующую неделю</span>
                   </div>
@@ -214,7 +214,7 @@ export function WeeklySummaryModal({ isOpen, onClose }: Props) {
             type="button"
             onClick={handleRefresh}
             disabled={isBusy}
- className="tf-action flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 active:scale-95 font-medium text-white transition-all disabled:opacity-50"
+ className="tf-action flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 active:scale-95 text-white transition-all disabled:opacity-50"
           >
             <RefreshCw
               className={`w-3.5 h-3.5 ${refreshMutation.isPending ? "animate-spin" : ""}`}
@@ -228,7 +228,7 @@ export function WeeklySummaryModal({ isOpen, onClose }: Props) {
               hapticTap();
               onClose();
             }}
- className="tf-action px-5 py-2.5 rounded-xl bg-white text-black font-semibold active:scale-95 transition-transform"
+ className="tf-action px-5 py-2.5 rounded-xl bg-white text-black active:scale-95 transition-transform"
           >
             Закрыть
           </button>

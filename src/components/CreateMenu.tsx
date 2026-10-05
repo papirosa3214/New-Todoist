@@ -110,7 +110,7 @@ export function CreateMenu({ open, onClose }: CreateMenuProps) {
                 <Icon name={item.icon} size={18} />
               </span>
               <span className="min-w-0">
- <span className="tf-body block font-medium text-text">
+ <span className="tf-body block text-text">
                   {item.label}
                 </span>
  <span className="tf-meta block text-sub">

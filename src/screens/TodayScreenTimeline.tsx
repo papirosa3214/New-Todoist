@@ -123,7 +123,7 @@ export function TodayScreenTimeline() {
       <header className="px-8 pt-12 pb-4 z-50 relative">
         <div
           key={zoom}
-          className="text-sm text-dim tracking-widest uppercase animate-fade-in"
+          className="tf-action text-dim tracking-widest uppercase animate-fade-in"
         >
           {ZOOM_LABELS[zoom]}
         </div>
@@ -220,9 +220,9 @@ function DayLayer({
         className="absolute left-[24px] top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-white/20 to-transparent"
       />
       {isLoading ? (
-        <div className="text-sub text-sm pl-8 py-8">Загрузка…</div>
+        <div className="text-sub tf-action pl-8 py-8">Загрузка…</div>
       ) : tasks.length === 0 ? (
-        <div className="text-sub text-sm pl-8 py-8">На сегодня задач нет.</div>
+        <div className="text-sub tf-action pl-8 py-8">На сегодня задач нет.</div>
       ) : (
         <div className="space-y-12">
           {tasks.map((t) => (
@@ -262,7 +262,7 @@ function WeekLayer({
                 } top-3 bg-white rounded-full`}
               />
               <div
-                className={`text-xs mb-1 tracking-widest uppercase ${
+                className={`tf-caption mb-1 tracking-widest uppercase ${
                   isCurrent ? "text-text font-medium" : "text-dim"
                 }`}
               >
@@ -271,7 +271,7 @@ function WeekLayer({
               </div>
               {d.tasks.length > 0 ? (
                 <div className="flex items-center gap-2">
-                  <div className="text-lg">
+                  <div className="tf-title">
                     {d.tasks.length === 1
                       ? "1 задача"
                       : d.tasks.length < 5
@@ -289,7 +289,7 @@ function WeekLayer({
                   </div>
                 </div>
               ) : (
-                <div className="text-lg text-sub">Отдых</div>
+                <div className="tf-title text-sub">Отдых</div>
               )}
             </div>
           );
@@ -346,7 +346,7 @@ function MonthGrid({
   return (
     <div className="relative flex-1 overflow-y-auto">
       <div className="px-2">
-        <div className="text-center text-xs text-dim mb-4">
+        <div className="text-center tf-caption text-dim mb-4">
           ПН · ВТ · СР · ЧТ · ПТ · СБ · ВС
         </div>
         <div className="grid grid-cols-7 gap-y-8 text-center">
@@ -369,7 +369,7 @@ function MonthGrid({
                 }`}
               >
                 <span
-                  className={`text-xl ${
+                  className={`tf-task-title ${
                     isToday
                       ? "text-text font-medium"
                       : "text-sub font-light"
@@ -426,10 +426,10 @@ function TimelineTask({ task, onOpen }: { task: ApiTask; onOpen: () => void }) {
         aria-hidden
         className={`absolute left-[-4px] top-1.5 w-2 h-2 rounded-full ${priorityColor}`}
       />
-      <div className="text-xs text-dim font-mono mb-1 tracking-widest">
+      <div className="tf-caption text-dim font-mono mb-1 tracking-widest">
         {time}
       </div>
-      <div className="text-lg font-light leading-tight group-hover:text-text transition-colors">
+      <div className="tf-title leading-tight group-hover:text-text transition-colors">
         <MarkdownInline source={task.title} />
       </div>
     </button>

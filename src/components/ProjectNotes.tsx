@@ -123,7 +123,7 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
     <div className="mt-6">
       {dialog}
       <div className="flex items-center justify-between mb-2">
- <div className="tf-title text-sub font-semibold">Документация</div>
+ <div className="tf-title text-sub ">Документация</div>
         {folder ? (
           <button
             onClick={addNote}
@@ -148,7 +148,7 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
             <button
               onClick={() => void createAndAttach()}
               disabled={busy}
- className="tf-action tap-scale h-10 px-4 rounded-xl bg-card2 font-semibold text-text flex items-center gap-2 disabled:opacity-50"
+ className="tf-action tap-scale h-10 px-4 rounded-xl bg-card2 text-text flex items-center gap-2 disabled:opacity-50"
             >
               <Icon name="folderPlus" size={16} />
               {busy ? "Создаём…" : `Создать «${project.name}»`}
@@ -157,7 +157,7 @@ export function ProjectNotes({ project }: { project: ApiProject }) {
               <button
                 ref={pickerAnchorRef}
                 onClick={() => setPickerOpen(true)}
- className="tf-action tap-scale h-10 px-4 rounded-xl bg-card2 font-semibold text-text flex items-center gap-2"
+ className="tf-action tap-scale h-10 px-4 rounded-xl bg-card2 text-text flex items-center gap-2"
               >
                 <Icon name="folder" size={16} />
                 Выбрать папку

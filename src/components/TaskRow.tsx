@@ -506,7 +506,7 @@ export function TaskRow({
               {/* Проект — САМОЙ ВЕРХНЕЙ строкой, над названием задачи */}
               {hasProjectBadge && (
                 <div
- className="tf-caption mb-1 inline-flex min-w-0 max-w-full items-center gap-1 font-medium"
+ className="tf-caption mb-1 inline-flex min-w-0 max-w-full items-center gap-1 "
                   style={{ color: task.project_color || "#A6A6A6" }}
                 >
                   <Icon name="hash" size={10} className="shrink-0" />
@@ -550,7 +550,7 @@ export function TaskRow({
                 <div className="w-full flex items-center gap-1.5 flex-wrap mt-1.5 justify-start text-left">
                   {/* 1. Бейдж подзадач (всегда первый) */}
                   {hasSubtasksBadge && (
- <span className="tf-caption inline-flex items-center px-1.5 py-0.5 rounded bg-card text-sub font-medium">
+ <span className="tf-caption inline-flex items-center px-1.5 py-0.5 rounded bg-card text-sub ">
                       {doneSub}/{progressTotal}
                     </span>
                   )}
@@ -562,7 +562,7 @@ export function TaskRow({
                   {/* 2.1. Помечена как глубокое исследование (миграция 052) */}
                   {task.needs_research ? (
                     <span
- className="tf-caption inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-card text-sub font-medium"
+ className="tf-caption inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-card text-sub "
                       title="Нужно глубокое исследование"
                     >
                       <Icon name="search" size={10} /> Исследование
@@ -571,7 +571,7 @@ export function TaskRow({
 
                   {/* 3. Просрочено */}
                   {hasOverduePill && (
- <span className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red/15 text-red font-medium">
+ <span className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red/15 text-red ">
                       <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
                       {formatDueLabel(task.due_date!)}
                     </span>

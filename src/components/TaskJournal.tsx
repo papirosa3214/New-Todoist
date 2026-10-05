@@ -241,7 +241,7 @@ export function AgentStatusRow({ task }: { task: ApiTask }) {
       <div className="flex items-center gap-3 py-3 px-4 bg-coral/12 rounded-xl">
         <Icon name="bot" size={18} className="text-coral shrink-0" />
         <div className="flex-1 min-w-0">
- <p className="tf-row text-coral font-medium">Агент пропал</p>
+ <p className="tf-row text-coral ">Агент пропал</p>
  <p className="tf-meta text-coral/80">
             Аренда истекла — последний сигнал:{" "}
             {task.agent_heartbeat_at
@@ -260,7 +260,7 @@ export function AgentStatusRow({ task }: { task: ApiTask }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-3 py-3 px-4 bg-card rounded-xl">
-        <Icon name="bot" size={18} className={`${meta.color} shrink-0`} />
+        <Icon name="bot" size={18} className={` shrink-0${meta.color}`} />
  <span className={`tf-row flex-1 ${meta.color}`}>{meta.label}</span>
         {task.agent_state === "in_progress" && task.agent_heartbeat_at && (
  <span className="tf-meta text-dim shrink-0">
@@ -682,7 +682,7 @@ function ReturnToWorkSheet({
               (ScreenHeader variant="compact"): шторка это тот же уровень
               навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
               значит «поле ввода, защита от автозума iOS», см. index.css. */}
- <h3 className="tf-title font-semibold text-text">{title}</h3>
+ <h3 className="tf-title text-text">{title}</h3>
           <button
             type="button"
             onMouseDown={(e) => e.preventDefault()}
@@ -936,7 +936,7 @@ function CommentCard({ comment }: { comment: ApiComment }) {
             size={20}
           />
         )}
- <span className="tf-action font-medium">
+ <span className="tf-action ">
           {comment.user_name || "Система"}
         </span>
  <span className="tf-caption text-dim ml-auto">
