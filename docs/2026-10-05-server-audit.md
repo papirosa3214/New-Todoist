@@ -436,3 +436,14 @@ Runtime-слой за эти полтора месяца (с 01.10.2026) пер�
 - 8.25: решить судьбу `synthesizer.md` (вернуть роль или удалить файл).
 - 6.11: владелец должен явно решить, что делать с веткой 4 scheduler (удалить, выключить, дописать).
 - 10.2, 10.3: подтвердить, что `scripts/scheduler.py` правда не нужен (после `startScheduler` в `runtime/scheduler.ts` он мёртв) и что `TASKFLOW_SCHEDULER_HEARTBEAT` не задан в проде. Если задан — поправить и `scheduler_watch.py` (env `SCHEDULER_HEARTBEAT`).
+
+---
+
+## Решения по открытым хвостам Части 2 (оркестратор, 05.10.2026)
+
+- **10.1** `taskflow-scheduler.service/.timer` — выключены навсегда (переименованы в `.disabled-2026-10-05`, `daemon-reload`), как `taskflow-trigger`. Живой планировщик — `runtime/scheduler.ts`, сторож `taskflow-scheduler-watch` активен, отпечаток `source: server` свежий.
+- **10.2** `server/scripts/scheduler.py` — мёртв, перенести в `server/scripts/archive/`.
+- **7.13, 7.14** владелец — без жёсткого `u1`: `TASKFLOW_OWNER_ID`, иначе `role='owner' AND archived=0`.
+- **8.11** Hermes-webhook в `chat.ts` — мёртвая ветка, убрать вместе с использованием `TASKFLOW_WEBHOOK_SECRET`, если он больше нигде не нужен (проверить grep).
+- **8.20** `seed.ts` — оставить гейт `NODE_ENV=production`, добавить явный отказ при живой базе с данными.
+- **Вопросы владельцу (не решаю сам):** 8.25 — роль «Синтезатор»: в базе учётка `role_synthesizer` есть, промпт есть, а в `DEFAULT_ROLES` её нет — вернуть роль или убрать? 6.11 — ветка 4 планировщика (`launchScheduled`, запуск по `run_at`) не работает — чинить или убрать?
