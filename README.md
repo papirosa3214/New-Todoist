@@ -41,7 +41,7 @@
 
 ### 🤖 Протокол AI-агентов (Multi-Agent System)
 - **Поддержка множества моделей:** Claude (Opus/Sonnet), Hermes, DeepSeek, Antigravity и другие.
-- **Служба-будильник (Trigger Service):** Отслеживает появление задач в реальном времени через WebSockets и автоматически запускает назначенных агентов.
+- **Исполнение ролей внутри сервера:** сервер сам ставит запуск роли в очередь (`role_run_jobs`) и исполняет её в своём процессе; отдельной службы-будильника нет.
 - **Аренда и Heartbeat:** Автоматическое продление аренды, контроль зависших процессов («Сторож тишины») и защита от конфликтов нескольких агентов.
 - **Единый протокол сдачи:** Агенты закрывают подзадачи галочками с фиксацией результатов, а финальный приём (`review` ➔ `completed`) остаётся за владельцем.
 
@@ -72,7 +72,8 @@ graph TD
     end
 
     subgraph AIOrchestration["AI-инфраструктура"]
-        TriggerService[Trigger Service / WebSocket Listener]
+        RoleRuntime[Роли: очередь запусков и сессии внутри сервера]
+        MCP[mcp_server.py: внешний MCP]
         AgentClaude[Claude Bot]
         AgentHermes[Hermes]
         AgentDeepSeek[DeepSeek Agent]
@@ -83,10 +84,11 @@ graph TD
     CapacitorBridge <--> EventKit
     CapacitorBridge <--> CoreHaptics
     FastifyServer <--> SQLite
-    TriggerService <-->|WS stream| FastifyServer
-    TriggerService --> AgentClaude
-    TriggerService --> AgentHermes
-    TriggerService --> AgentDeepSeek
+    FastifyServer --> RoleRuntime
+    MCP <-->|REST| FastifyServer
+    AgentClaude --> MCP
+    AgentHermes --> MCP
+    AgentDeepSeek --> MCP
     SyncEngine <-->|Google REST API| GoogleCloud[Google Cloud Services]
 ```
 
@@ -107,7 +109,7 @@ TaskFlow/
 │   │   ├── routes/             # tasks, subtasks, agent-state, integrations, auth
 │   │   ├── migrations.ts       # Версионные миграции базы данных
 │   │   └── access.ts           # Разграничение прав (владелец vs агенты)
-│   ├── scripts/                # Служба trigger.py, mcp_server.py, vault-run
+│   ├── scripts/                # mcp_server.py (внешний MCP для Claude/Hermes/DeepSeek-Agent и ролевых чатов), сторожа, vault-run
 │   └── test/                   # Vitest тесты бэкенда и прав доступа
 ├── ios/                        # Нативный проект iOS (Capacitor + Xcode)
 │   └── App/
@@ -219,7 +221,6 @@ xcrun devicectl device process launch --device 00008150-001545400144401C \
 | [`AGENT-API.md`](AGENT-API.md) | **API для агентов:** спецификация REST-эндпоинтов, токены, MCP. |
 | [`INTEGRATIONS.md`](INTEGRATIONS.md) | **Интеграции:** настройка Google Tasks, Apple Calendar и Reminders. |
 | [`DESIGN.md`](DESIGN.md) | **Дизайн-система:** палитра, анимации, правила вёрстки, тактильный отклик (Haptics). |
-| [`server/scripts/TRIGGER.md`](server/scripts/TRIGGER.md) | **Служба будильника:** WebSocket-слушатель задач и запуск агентов. |
 
 ---
 
