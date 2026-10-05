@@ -66,7 +66,6 @@ export function ensureCardResponsible(taskId:string,planId:string):string|null {
   catch { return null; }
   const account=roleUserId(role);
   if(!db.prepare("SELECT 1 FROM users WHERE id=?").get(account)) return null;
-  db.prepare("UPDATE tasks SET assignee_id=?,updated_at=datetime('now') WHERE id=? AND assignee_id IS NULL").run(account,taskId);
   return account;
 }
 export function branchSnapshot(rootPlanId:string):string {
@@ -117,7 +116,6 @@ export function approveBranch(rootPlanId:string,ownerId:string,snapshot:string):
     for(const {card,plan:maybePlan} of selected){
       const plan=maybePlan!;const role=responsibleRole(plan.id,card.id===root.task_id);
       db.prepare("INSERT INTO branch_plan_members(root_plan_id,task_id,plan_id,responsible_role,approved_snapshot) VALUES(?,?,?,?,?)").run(root.id,card.id,plan.id,role,snapshot);
-      db.prepare("UPDATE tasks SET assignee_id=?,updated_at=datetime('now') WHERE id=?").run(roleUserId(role),card.id);
       if(card.status==='completed') continue;
       db.prepare("UPDATE tasks SET current_revision=COALESCE(current_revision,1)+1 WHERE id=?").run(card.id);
       bumpContextVersion(card.id);
