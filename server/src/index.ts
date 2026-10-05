@@ -31,6 +31,7 @@ import { registerEmbeddingsRoutes } from "./routes/embeddings.js";
 import { registerEnrichSemanticRoutes } from "./routes/enrichSemantic.js";
 import { registerProjectLabelRoutes } from "./routes/projects.js";
 import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
+import { registerMergeMarkerRoutes } from "./routes/merge-marker.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerReleaseRoutes } from "./routes/release.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
@@ -345,6 +346,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerProjectLabelRoutes(app);
   registerCompassRoutes(app);
   registerSubtaskCommentRoutes(app);
+  registerMergeMarkerRoutes(app);
   registerSubtaskArtifactRoutes(app);
   registerRuntimeContextRoutes(app);
   registerComposioRoutes(app);

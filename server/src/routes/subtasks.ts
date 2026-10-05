@@ -23,6 +23,7 @@ import { withSubtaskState, getTaskRow } from "./tasks.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
+import { commitGuardError } from "../lib/roleCommitCheck.js";
 import {
   SNAPSHOT_REASONS,
   saveSlotSnapshot,
@@ -334,6 +335,22 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
                 "сделано, чтобы он мог оценить факт выполнения. Технические " +
                 "детали и выдержки из аудита — в базу знаний, не в карточку.",
             });
+          }
+          // ПРОВЕРКА КОММИТА НА ВЕТКЕ РОЛИ (MAK-70, 04.10.2026).
+          //
+          // Закрытие шага — последний рубеж, когда владелец ещё не видит
+          // работу. Без коммита на `roles/<id>` всё, что роль «сделала»,
+          // остаётся в её рабочей копии и при следующем входе затирается
+          // свежей `git worktree add`. Гард отклоняет закрытие, пока роль
+          // не зафиксировала изменения — это та же защита от «сделал
+          // что-то, но нигде», что в комментариях 01.10.2026.
+          //
+          // Проверяем только для репозитория самого сервера: для чужого
+          // проекта (живущего вне `server/..`) у сервера нет ни ветки, ни
+          // понятия, как туда коммитить — там гард дал бы ложный отказ.
+          const guardError = commitGuardError(subtask.task_id);
+          if (guardError) {
+            return reply.code(400).send({ error: guardError });
           }
         }
       }

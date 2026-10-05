@@ -3175,6 +3175,46 @@ const migrations: Migration[] = [
       DROP TRIGGER IF EXISTS agent_short_subtasks_update;`);
   } },
 
+  // MAK-70 (04.10.2026): признак «влито» у задачи + уборка ветки/копии.
+  //
+  // merged_at — момент, когда ветка `roles/<id>` влита владельцем в main
+  // (или в нужную базовую). До этого момента в карточке и в плане видно
+  // «не влито»: иначе непонятно, можно ли закрывать карточку (ветка ещё
+  // живая). merged_into_commit — SHA, на который влили; merged_branch —
+  // имя целевой ветки (обычно main, но инициатива владельца 01.10.2026
+  // допускает cherry-pick в рабочую ветку).
+  //
+  // workspace_cleared_at — момент, когда владелец удалил рабочую копию
+  // (`~/.local/state/taskflow-runs/worktrees/<id>`). Без отметки сервер
+  // не знает, осталась ли она на диске, и при следующем входе роли снова
+  // поднимет копию поверх влитой ветки — а это лишний шум.
+  //
+  // Идемпотентно через PRAGMA: после прогретой БД колонки могут быть,
+  // и тогда пропускаем.
+  { id: "100_task_merge_marker", description: "MAK-70: признак «влито» и метки уборки ветки/копии", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("merged_at")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN merged_at TEXT");
+    }
+    if (!cols.has("merged_into_commit")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN merged_into_commit TEXT");
+    }
+    if (!cols.has("merged_into_branch")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN merged_into_branch TEXT");
+    }
+    if (!cols.has("merged_by")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN merged_by TEXT REFERENCES users(id) ON DELETE SET NULL");
+    }
+    if (!cols.has("branch_cleared_at")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN branch_cleared_at TEXT");
+    }
+    if (!cols.has("workspace_cleared_at")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN workspace_cleared_at TEXT");
+    }
+  } },
+
 ];
 
 /**
