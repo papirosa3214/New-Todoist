@@ -3243,7 +3243,7 @@ const migrations: Migration[] = [
       db.exec("ALTER TABLE projects ADD COLUMN is_private INTEGER DEFAULT 0");
     }
   } },
-  { id: "109_role_prompts_laconism", description: "Блок «Лаконичность» в начало промпта secretary (роль в БД перекрывает файл); c19c9460 (D2).", up: () => {
+  { id: "111_role_prompts_laconism", description: "Блок «Лаконичность» в начало промпта secretary (роль в БД перекрывает файл); c19c9460 (D2).", up: () => {
     // roles.prompt для secretary задан миграцией 062 и перекрывает
     // server/scripts/role-prompts/secretary.md. Без этой правки блок
     // «Лаконичность» в файле для работающей системы не действует.
