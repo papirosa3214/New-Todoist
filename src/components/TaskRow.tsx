@@ -434,7 +434,7 @@ export function TaskRow({
             overflow: "hidden",
           }}
         >
-          <Icon name="trash" size={28} className="text-white" />
+          <Icon name="trash" size={22} className="text-white" />
         </button>
 
         {/* Синяя кнопка «Изменить» — справа, появляется при свайпе влево */}
@@ -465,7 +465,7 @@ export function TaskRow({
             overflow: "hidden",
           }}
         >
-          <Icon name="edit" size={28} className="text-white" />
+          <Icon name="edit" size={22} className="text-white" />
         </button>
 
         <div
