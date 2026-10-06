@@ -107,13 +107,21 @@ function postOwnerNotification(taskId: string, title: string, body: string): voi
  *  если каталога нет / он пуст. Поиск идёт по
  *  `~/.local/state/taskflow-runs/sessions/<task>-<role>-<step>` —
  *  формат имени зафиксирован HANDOFF-2026-10-05-orchestrator.md
- *  (mtime свежего .jsonl = «последнее событие хода»). */
+ *  (mtime свежего .jsonl = «последнее событие хода»).
+ *
+ *  ВАЖНО (дефект D1, 06.10.2026): `inProcessRun.sessionDir` и
+ *  `slotSessionDirectory` кладут журнал в `<task>-<role>-<subtaskId>`,
+ *  где `subtaskId` — UUID подзадачи, а НЕ `plan_node_key`. Поэтому
+ *  основной кандидат — UUID (`subtask.id`); `plan_node_key` и каталог
+ *  без шага оставлены как legacy-fallback, чтобы не потерять записи
+ *  старой раскладки. */
 function lastSessionEventMs(subtask: StalledSubtask, role: string): number | null {
   const root = process.env.TASKFLOW_SESSIONS_DIR
     || path.join(os.homedir(), ".local", "state", "taskflow-runs", "sessions");
   if (!fs.existsSync(root)) return null;
   const slot = subtask.plan_node_key ?? "";
   const candidates = [
+    path.join(root, `${subtask.task_id}-${role}-${subtask.id}`),
     path.join(root, `${subtask.task_id}-${role}-${slot}`),
     path.join(root, `${subtask.task_id}-${role}`),
   ];

@@ -26,9 +26,13 @@ import db from "../src/db.js";
 import { buildApp } from "../src/index.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { runStalledStepWatch } from "../src/runtime/stalledStepWatcher.js";
+import { slotSessionDirectory } from "../src/runtime/slotSession.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
-const sessionsDir = path.join(os.tmpdir(), `stalled-test-sessions-${process.pid}`);
+// Каталог сессий берём из того же корня, что и боевой `slotSessionDirectory`
+// (TASKFLOW_RUNS_DIR/sessions) — так раскладка пути в тесте совпадает с
+// production, а не выдумана руками.
+const sessionsDir = path.join(process.env.TASKFLOW_RUNS_DIR ?? os.tmpdir(), "sessions");
 
 type Subtask = {
   id: string;
@@ -75,9 +79,12 @@ const notifications = (kind: string): Array<{ text: string }> => {
 };
 
 /** Создать «журнал» потока событий: каталог с одним .jsonl, mtime которого
- *  отстоит от текущего момента на `minutesAgo` минут. */
-function seedSessionJournal(taskId: string, role: string, slot: string, minutesAgo: number): void {
-  const dir = path.join(sessionsDir, `${taskId}-${role}-${slot}`);
+ *  отстоит от текущего момента на `minutesAgo` минут. `step` — реальный
+ *  ключ каталога сессии: UUID подзадачи (`inProcessRun.sessionDir`), а не
+ *  `plan_node_key` (дефект D1, 06.10.2026). Путь берём из боевой
+ *  `slotSessionDirectory`, чтобы тест не разошёлся с production-раскладкой. */
+function seedSessionJournal(taskId: string, role: string, step: string, minutesAgo: number): void {
+  const dir = slotSessionDirectory(taskId, role, step);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `2026-01-01T00-00-00-000Z_test-${Math.random().toString(36).slice(2)}.jsonl`);
   fs.writeFileSync(file, "{\"step\":\"test\"}\n");
@@ -173,7 +180,7 @@ describe("stalledStepWatcher", () => {
   });
 
   it("живой поток (mtime 3 минуты) — сторож не трогает узел", async () => {
-    seedSessionJournal(fixture.task.id, "builder", "executor", 3);
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 3);
     const before = comments(fixture.task.id).length;
     const report = await runStalledStepWatch();
     // Узел в выборке, но действий сторож не предпринимает.
@@ -185,7 +192,7 @@ describe("stalledStepWatcher", () => {
   });
 
   it("поток молчит 12 минут, перезапусков < 2: автоперезапуск, новый dedupe_key, узел продолжен", async () => {
-    seedSessionJournal(fixture.task.id, "builder", "executor", 12);
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
     // Имитируем предыдущий перезапуск, чтобы счётчик показал «1 из 2».
     db.prepare(
       `INSERT INTO attempts(id, task_id, subtask_id, executor_id, started_at, ended_at, outcome, reason)
@@ -211,7 +218,7 @@ describe("stalledStepWatcher", () => {
   });
 
   it("2 автоперезапуска уже были — третий обход ставит узел в blocked и уведомляет владельца", async () => {
-    seedSessionJournal(fixture.task.id, "builder", "executor", 30);
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 30);
     // Имитируем два предыдущих перезапуска в окне.
     const ins = db.prepare(
       `INSERT INTO attempts(id, task_id, subtask_id, executor_id, started_at, ended_at, outcome, reason)
@@ -241,6 +248,21 @@ describe("stalledStepWatcher", () => {
     const before = comments(fixture.task.id).length;
     const report = await runStalledStepWatch();
     // Узел в выборке (он in_progress), но действий нет.
+    expect(report.stalled).toBe(1);
+    expect(report.restarted).toBe(0);
+    expect(report.blocked).toBe(0);
+    expect(comments(fixture.task.id).length).toBe(before);
+    expect(subtask(fixture.subtaskId).agent_state).toBe("in_progress");
+  });
+
+  it("реальная раскладка inProcessRun: свежий журнал в каталоге с UUID подзадачи (не plan_node_key) отменяет рестарт", async () => {
+    // Дефект D1: inProcessRun пишет журнал в <task>-<role>-<UUID>, а
+    // сторож искал <task>-<role>-<plan_node_key>. Если UUID не учтён,
+    // при старом heartbeat узел уйдёт в автоперезапуск.
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 1);
+    db.prepare("UPDATE subtasks SET agent_heartbeat_at = datetime('now', '-45 minutes') WHERE id = ?").run(fixture.subtaskId);
+    const before = comments(fixture.task.id).length;
+    const report = await runStalledStepWatch();
     expect(report.stalled).toBe(1);
     expect(report.restarted).toBe(0);
     expect(report.blocked).toBe(0);
