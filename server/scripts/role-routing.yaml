@@ -18,10 +18,10 @@ fallbacks:
   qa: []
   designer: []
 models:
-  researcher: MiniMax-M3
-  analyst: MiniMax-M3
-  critic_verifier: MiniMax-M3
-  architect: MiniMax-M3
-  builder: MiniMax-M3
-  qa: MiniMax-M3
-  designer: MiniMax-M3
+  researcher: opencode-go/deepseek-v4.1-flash
+  analyst: opencode-go/deepseek-v4.1-flash
+  critic_verifier: opencode-go/minimax-m3
+  architect: opencode-go/deepseek-v4.1-flash
+  builder: opencode-go/deepseek-v4.1-flash
+  qa: opencode-go/minimax-m3
+  designer: opencode-go/deepseek-v4.1-flash
