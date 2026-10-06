@@ -4,6 +4,8 @@
 
 **Новой сессии сказать:** «прочитай `~/Проекты/New-Todoist/docs/HANDOFF-2026-10-05-orchestrator.md`, верхний раздел». Потом: `docs/2026-10-06-improvement-plan.md`, `docs/2026-10-06-linear-audit.md`, журнал находок `docs/2026-10-05-orchestrator-findings.md` (А1–А35, раздел Г1 — обходы через БД).
 
+**07:45–08:05 МСК (обновление):** веб-метрики MAK-48 приняты Критиком и влиты (`441cb9e1`), Linear Done. Сейчас идёт MAK-49 «кнопки» — новая карточка `540a0677-a1df-486e-a0f2-eab2a75e5b8f` (старая `2df60a73` осталась, удалить может только владелец), Разработчик на `deepseek-v4.1-flash` (первый боевой прогон; первая попытка упала на «TaskContext >15 с», повторный `run` пошёл). Дальше по одной: 50, 52, 53, 55, 56; MAK-71 держится замком на `cdc95182` — он теперь выполнен, замок надо перенести на веб-карточки.
+
 ## Первое, что сделать
 1. Живая проверка: `sqlite3 server/taskflow.db "select substr(t.title,1,16), substr(s.title,1,34), s.agent_state, s.agent_heartbeat_at from subtasks s join tasks t on t.id=s.task_id where s.agent_state is not null"` и свежие журналы `~/.local/state/taskflow-runs/sessions/*/*.jsonl` (mtime за 3 минуты).
 2. Поставить сторожа фоном (он выходит при первом событии, ставить заново на каждую запущенную карточку): `cd ~/Проекты/New-Todoist/scripts/orchestrator && python3 ~/.claude/vault-run.py --secret T=TASKFLOW_ORCHESTRATOR_CLAUDE_TOKEN -- python3 tf_watch.py <id карточек TaskFlow через пробел>`. Сторож стоит на веб-метриках (`cdc95182…`), на остальное не ставился.
