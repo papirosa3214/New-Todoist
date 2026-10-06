@@ -37,6 +37,10 @@ const ARTIFACT_MAX = 12;
 const HISTORY_MAX = 20;
 /** Аренда слота — 5 минут (LEASE_MINUTES в agentState.ts). */
 const LEASE_MINUTES = 5;
+/** Сколько снимков на слот держим в базе. История всё равно показывается
+ *  последними HISTORY_MAX, а без предела таблица росла бы вместе с ходом:
+ *  периодический техснимок пишется сервером сам, без модели. */
+export const SNAPSHOT_KEEP = HISTORY_MAX;
 
 export interface SlotSnapshotRow {
   id: string;
@@ -194,8 +198,27 @@ export function saveSlotSnapshot(input: SnapshotInput): { snapshot: SlotSnapshot
     normArtifacts(input.artifacts),
     input.authorId ?? slot.agent_id ?? null,
   );
+  pruneSlotSnapshots(slot.id);
   const snapshot = db.prepare("SELECT * FROM slot_work_snapshots WHERE id = ?").get(id) as SlotSnapshotRow;
   return { snapshot, stale: Boolean(attemptId) && attemptId !== slot.current_attempt_id };
+}
+
+/** Держим на слот только последние SNAPSHOT_KEEP снимков. Читатели всё
+ *  равно видят лишь последние HISTORY_MAX (`slotSnapshotHistory`), а таблица
+ *  без предела росла бы от каждого тика сервера. */
+export function pruneSlotSnapshots(subtaskId: string, keep = SNAPSHOT_KEEP): number {
+  const info = db
+    .prepare(
+      `DELETE FROM slot_work_snapshots
+        WHERE subtask_id = ? AND id NOT IN (
+          SELECT id FROM slot_work_snapshots
+           WHERE subtask_id = ?
+           ORDER BY created_at DESC, rowid DESC
+           LIMIT ?
+        )`,
+    )
+    .run(subtaskId, subtaskId, Math.max(1, Math.floor(keep)));
+  return info.changes;
 }
 
 /** Ссылки на артефакты слота — то, что сервер знает о работе без модели. */
@@ -315,6 +338,86 @@ function agoRu(minutes: number | null): string {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours} ч назад`;
   return `${Math.round(hours / 24)} дн назад`;
+}
+
+/** Последняя по времени запись о слоте — не путать с `latestSlotSnapshot`,
+ *  который выбирает снимок самой свежей попытки: для throttle и dedupe
+ *  периодического техснимка нужен именно «что записано последним». */
+function lastSnapshotRow(subtaskId: string): SlotSnapshotRow | null {
+  const row = db
+    .prepare("SELECT * FROM slot_work_snapshots WHERE subtask_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
+    .get(subtaskId) as SlotSnapshotRow | undefined;
+  return row ?? null;
+}
+
+function ageMs(stamp: string | null | undefined, now = Date.now()): number | null {
+  if (!stamp) return null;
+  const then = Date.parse(stamp.includes("T") ? stamp : `${stamp.replace(" ", "T")}Z`);
+  if (Number.isNaN(then)) return null;
+  return Math.max(0, now - then);
+}
+
+/** Совпадает ли новая техзапись с уже сохранённой: причина, полнота, все
+ *  текстовые поля и артефакты. Если да — писать второй подряд
+ *  бессмысленно, снимок ничего не сообщает. */
+function sameSnapshotContent(a: SlotSnapshotRow, b: SnapshotInput): boolean {
+  return (
+    a.reason === String(b.reason) &&
+    a.is_complete === (b.complete ? 1 : 0) &&
+    (a.done_summary ?? null) === (b.done ?? null) &&
+    (a.left_summary ?? null) === (b.left ?? null) &&
+    (a.blocker ?? null) === (b.blocker ?? null) &&
+    (a.next_step ?? null) === (b.nextStep ?? null) &&
+    (a.last_action ?? null) === (b.lastAction ?? null) &&
+    a.artifacts_json === normArtifacts(b.artifacts)
+  );
+}
+
+export type PeriodicSnapshotResult =
+  | { written: true; snapshot: SlotSnapshotRow; stale: boolean }
+  | { written: false; skipped: "not-found" | "not-slot" | "not-working" | "fresh" | "unchanged" };
+
+/**
+ * Периодический техснимок идущего слота — пишет сервер, без модели.
+ *
+ * Зовётся на каждом продлении аренды слота (роль или её собственный beat
+ * раз в 90 секунд), но пишет не чаще, чем раз в LEASE_MINUTES: чаще —
+ * лишние строки, реже — дыра в «где стояла работа». Если с прошлого снимка
+ * ничего не изменилось, второй подряд не пишется вовсе: одинаковые снимки
+ * не сообщают ничего нового. Полный снимок от роли при этом не подменяется:
+ * техснимок всегда `is_complete = 0`.
+ */
+export function periodicSlotSnapshot(subtaskId: string, opts: { now?: number } = {}): PeriodicSnapshotResult {
+  const slot = slotRow(subtaskId);
+  if (!slot) return { written: false, skipped: "not-found" };
+  // Техснимок идущего слота — только у узла плана: у личной подзадачи нет
+  // «предыдущей попытки» и подкладки следующему вызову, там снимок не нужен.
+  if (!slot.collaboration_plan_id) return { written: false, skipped: "not-slot" };
+  // Пишем только пока работа реально идёт: у сданного, заблокированного или
+  // отпущенного слота уже есть своя запись (done/blocked/stopped).
+  if (slot.done || slot.agent_state !== "in_progress") return { written: false, skipped: "not-working" };
+
+  const now = opts.now ?? Date.now();
+  const last = lastSnapshotRow(subtaskId);
+  if (last) {
+    const age = ageMs(last.created_at, now);
+    if (age !== null && age < LEASE_MINUTES * 60_000) return { written: false, skipped: "fresh" };
+  }
+
+  const candidate: SnapshotInput = {
+    subtaskId,
+    reason: "progress",
+    complete: false,
+    lastAction: lastKnownAction(subtaskId, slot.task_id),
+    artifacts: technicalArtifacts(subtaskId),
+  };
+  // Одинаковые подряд не плодим. Смена попытки — не «то же самое»: новой
+  // попытке нужен свой снимок, даже если текст совпал.
+  if (last && last.attempt_id === slot.current_attempt_id && sameSnapshotContent(last, candidate)) {
+    return { written: false, skipped: "unchanged" };
+  }
+  const saved = saveSlotSnapshot(candidate);
+  return { written: true, ...saved };
 }
 
 export type SlotWorkState = {

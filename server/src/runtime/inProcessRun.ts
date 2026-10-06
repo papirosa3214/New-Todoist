@@ -391,7 +391,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const s = await asRole(role, "POST", `/api/tasks/${p.task_id}/subtasks`, body);
         return { "шаг добавлен": s.title, id: s.id };
       }),
-    T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния.",
+    T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния. Пока работа идёт, технический снимок сервер пишет сам; при прогрессе и сдаче снимок от тебя не нужен.",
       Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()), snapshot: Type.Optional(SNAPSHOT_SHAPE) }),
       async (p) => {
         const body: Json = {};
@@ -405,7 +405,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (row?.task_id) touchTaskActivity(row.task_id);
         return { подзадача: row.title, состояние: STEP_STATE_RU[row.state] ?? "не в работе", итог: row.result ?? "—" };
       }),
-    T("taskflow_slot_snapshot", "Записать, где остановилась работа по текущему слоту: done (сделано), left (что осталось), blocker (текущий блок), next_step (следующий шаг), artifacts (ссылки на артефакты). Зови после значимого действия и перед сдачей или блокировкой — тогда следующий вызов роли продолжит с фактов, даже если этот ход оборвётся. Это запись о работе: прав и статусов не даёт.",
+    T("taskflow_slot_snapshot", "Записать, где остановилась работа по текущему слоту: done (сделано), left (что осталось), blocker (текущий блок), next_step (следующий шаг), artifacts (ссылки на артефакты). Нужен при блокировке: сфотографировал, на чём встал, — и засыпаешь. Пока ход идёт, технический снимок сервер пишет сам, без модели: при прогрессе и сдаче звать не нужно. Это запись о работе: прав и статусов не даёт.",
       SNAPSHOT_SHAPE, async (p) => {
         if (!subtaskId) throw new ToolError("Снимок относится к слоту — работать без узла плана нельзя");
         const result = await asRole(role, "POST", `/api/subtasks/${subtaskId}/snapshot`, { ...p, reason: "progress" });
@@ -413,7 +413,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) touchTaskActivity(taskId);
         return result;
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Приложи snapshot — что сделано, что осталось, следующий шаг, ссылки на артефакты: сервер сохранит снимок до закрытия шага, и следующий вызов роли будет знать, где работа остановилась. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
       Type.Object({
         id: Type.String(),
         result: Type.Optional(Type.String()),

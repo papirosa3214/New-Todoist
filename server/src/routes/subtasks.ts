@@ -29,6 +29,7 @@ import {
   saveSlotSnapshot,
   slotSnapshotDto,
   technicalSlotSnapshot,
+  periodicSlotSnapshot,
 } from "../runtime/slotWorkSnapshot.js";
 
 const uid = () => crypto.randomUUID();
@@ -785,6 +786,18 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         db.prepare(
           "UPDATE attempts SET heartbeat_at = datetime('now') WHERE subtask_id = ? AND executor_id = ? AND ended_at IS NULL",
         ).run(req.params.id, req.userId);
+        // ПЕРИОДИЧЕСКИЙ ТЕХСНИМОК (владелец 04.10.2026): пока слот жив, сервер
+        // сам, без модели, отмечает, где стояла работа, — вместе с продлением
+        // аренды. Чаще, чем раз в LEASE_MINUTES, не пишем и одинаковые подряд
+        // не дублируем (сам throttle живёт в periodicSlotSnapshot). Снимок не
+        // должен ронять продление аренды: не записался — работа продолжается.
+        if (subtask.collaboration_plan_id) {
+          try {
+            periodicSlotSnapshot(subtask.id);
+          } catch (error) {
+            console.warn(`[subtasks] периодический снимок слота ${subtask.id} не записался:`, error);
+          }
+        }
       }
 
       if (result !== undefined) {
