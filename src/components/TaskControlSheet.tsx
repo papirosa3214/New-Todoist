@@ -169,7 +169,7 @@ export function TaskControlSheet({
             aria-label="Отмена"
             className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center"
           >
-            <Icon name="x" size={20} className="text-sub" />
+            <Icon name="x" size={18} className="text-sub" />
           </button>
           <h3 className="tf-title text-text">{TITLES[kind]}</h3>
           <button

@@ -284,14 +284,14 @@ export function TemplatesScreen() {
                         className="p-1.5 text-dim hover:text-text tap-row"
                         aria-label="Редактировать"
                       >
-                        <Icon name="edit" size={15} />
+                        <Icon name="edit" size={18} />
                       </button>
                       <button
                         onClick={() => handleDelete(t.id)}
                         className="p-1.5 text-dim hover:text-red tap-row"
                         aria-label="Удалить"
                       >
-                        <Icon name="trash" size={15} />
+                        <Icon name="trash" size={18} />
                       </button>
                     </div>
                   </div>

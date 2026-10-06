@@ -174,14 +174,14 @@ function LabelRow({
         aria-label="Изменить метку"
         className="w-[44px] h-[44px] flex items-center justify-center shrink-0 text-dim tap-row"
       >
-        <Icon name="edit" size={16} />
+        <Icon name="edit" size={18} />
       </button>
       <button
         onClick={() => onRequestDelete(label)}
         aria-label="Удалить метку"
         className="w-[44px] h-[44px] mr-1 flex items-center justify-center shrink-0 text-dim tap-row"
       >
-        <Icon name="trash" size={16} />
+        <Icon name="trash" size={18} />
       </button>
     </div>
   );
