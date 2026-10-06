@@ -26,6 +26,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Avatar, Button, ErrorBanner, Icon, SheetHandle } from "./UI";
 import { useDialog } from "./Dialog";
 import { useRunTaskAgent, useSetAgentState, useUpdateTask } from "../api/tasks";
+import { useCancelTask } from "../api/control";
 import { useAddComment } from "../api/comments";
 import { useAgents } from "../api/agents";
 import { useProjects } from "../api/projects";
@@ -34,6 +35,7 @@ import { AttachmentView } from "./AttachmentView";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { formatDueLabel, formatRelativeTime, formatAbsoluteTime } from "../lib/date";
 import { useBottomSheet } from "../lib/useBottomSheet";
+import { TaskControlSheet } from "./TaskControlSheet";
 import { MicKeyboardBar } from "./MicKeyboardBar";
 import { MicOverlay } from "./MicOverlay";
 import { useMicRecorder } from "../lib/useMicRecorder";
@@ -294,7 +296,18 @@ export function AgentOwnerActions({
   const updateTask = useUpdateTask();
   const setAgentState = useSetAgentState();
   const runAgent = useRunTaskAgent();
+  // «Отменить задание» (MAK-69, build→UI): прерывает ВСЕ активные запуски
+  // и закрывает все attempts одним вызовом. Хук лежит в src/api/control.ts,
+  // рядом с useCancelSubtask/useResetSubtask — это общий инфраструктурный
+  // модуль для ручек control.ts.
+  const cancelTask = useCancelTask();
   const addComment = useAddComment(task.id);
+  // Шторка причины для «Отменить задание» — та же TaskControlSheet, что
+  // живёт у подзадач; один экземпляр на каждый сценарий, kind приходит
+  // снаружи. Внутри AgentOwnerActions открывается «Отменить задание»
+  // (cancel_task) и больше ничего — «Прервать шаг» / «Сбросить попытку»
+  // живут в SubtaskRow.
+  const [cancelTaskOpen, setCancelTaskOpen] = useState(false);
   const [returning, setReturning] = useState(false);
   // Для заблокированной задачи тот же лист собирает не «что доработать», а
   // ответ на вопрос агента — отсюда разный заголовок и разный обработчик.
@@ -427,6 +440,11 @@ export function AgentOwnerActions({
   // и кнопка остаётся второстепенной.
   const agentGone = task.agent_state === "in_progress" && task.agent_stale;
 
+  // «Отменить задание» рисуем у всех hasOwnerActions — пока есть
+  // agent_state, есть что отменять. У самой кнопки отдельного гейта нет:
+  // условие hasOwnerActions уже отсекает «свободна / готова».
+  const canCancelTask = true;
+
   return (
     <div className="mb-4">
       <div className="space-y-2">
@@ -490,11 +508,68 @@ export function AgentOwnerActions({
           </Button>
         )}
       </div>
+
+      {/* «Управление сервером» — отдельная секция ПОСЛЕ существующих
+          кнопок «принять/вернуть/запустить» (MAK-69, спека ec109e74). Три
+          существующих кнопки работают НАД АГЕНТОМ (сменить состояние,
+          перезапустить). Эта секция — НАД СЕРВЕРОМ: остановить lease,
+          сбросить attempt, отменить задание целиком. Без подписи владелец
+          не отличил бы «вернуть на доработку» (агенту) от «отменить
+          задание» (серверу), и промахи по тапу были бы гарантированы.
+
+          Сейчас здесь одна кнопка «Отменить задание» — на уровне задачи.
+          «Прервать шаг» и «Сбросить попытку» — точечные, живут в строке
+          подзадачи (SubtaskFeed.tsx). Если у задачи нет подзадач — кнопка
+          «Отменить задание» остаётся одна и работает самостоятельно. */}
+      {canCancelTask && (
+        <div className="mt-3">
+          <h3 className="tf-micro uppercase tracking-wide text-dim px-1 mb-1.5">
+            Управление сервером
+          </h3>
+          <Button
+            variant="outline"
+            // outline (а не primary/secondary) — намеренно: «primary» в
+            // этой системе = «активно сделай это» (DESIGN.md, «Красный —
+            // не украшение»), а «отменить всё» — это тревога, не готовность.
+            // «secondary» — нейтральный оттенок, прочитался бы как «ещё
+            // одна опция среди равных», а это действие ВЫШЕ по серьёзности,
+            // чем принять/вернуть.
+            // border-coral + text-coral — берётся ДОПОЛНИТЕЛЬНО, потому что
+            // outline в UI.tsx:1503 = `border border-stroke text-sub
+            // bg-transparent` (нейтральный), не coral по умолчанию. Первая
+            // редакция спеки формулировала это расплывчато — здесь
+            // исправлено.
+            className="border-coral text-coral"
+            onClick={() => setCancelTaskOpen(true)}
+            disabled={cancelTask.isPending}
+            aria-label="Отменить задание — остановит все запуски"
+          >
+            <Icon name="power" size={16} />
+            Отменить задание
+          </Button>
+        </div>
+      )}
+
       <ErrorBanner
-        error={updateTask.error || setAgentState.error || runAgent.error || addComment.error}
+        error={
+          updateTask.error ||
+          setAgentState.error ||
+          runAgent.error ||
+          addComment.error ||
+          cancelTask.error
+        }
         fallback="Не удалось изменить состояние задачи"
         variant="block"
         className="mt-2"
+      />
+
+      {/* Шторка причины «Отменить задание» — общая TaskControlSheet, тот
+          же компонент, что живёт у подзадач; здесь kind="cancel_task". */}
+      <TaskControlSheet
+        open={cancelTaskOpen}
+        onClose={() => setCancelTaskOpen(false)}
+        kind="cancel_task"
+        taskId={task.id}
       />
 
       {answering && (

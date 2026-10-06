@@ -32,8 +32,10 @@ import { MicOverlay } from "./MicOverlay";
 import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import { combineDictatedText } from "../lib/dictationParser";
-import { ErrorBanner } from "./UI";
+import { ErrorBanner, Icon } from "./UI";
 import { MarkdownInline } from "./MarkdownInline";
+import { ActionsMenu } from "./ActionsMenu";
+import { TaskControlSheet, type TaskControlKind } from "./TaskControlSheet";
 
 /** Вложение, уже загруженное на сервер — минимум полей, нужных здесь для
     превью-чипа (не тащим сюда весь ApiAttachment ради имени файла). */
@@ -445,6 +447,13 @@ function SubtaskRow({
   onReturn?: (comment: string, attachmentIds: string[]) => Promise<unknown>;
   onComment?: (comment: string, attachmentIds: string[]) => Promise<unknown>;
   onUploadFile?: (file: File) => Promise<PendingAttachment>;
+  // «Прервать шаг» / «Сбросить попытку» (MAK-69) не требуют колбэков в
+  // SubtaskRow: шторка причины TaskControlSheet открывается здесь через
+  // локальный useState, а саму мутацию шлёт TaskControlSheet напрямую
+  // через useCancelSubtask/useResetSubtask. Раньше пропсы
+  // onServerCancel/onServerReset сюда тянулись по инерции первой спеки
+  // дизайнера, но TaskControlSheet сама является клиентом API — и
+  // дополнительная прослойка только размывает «кто отправляет запрос».
 }) {
   const [open, setOpen] = useState(false);
   const [replying, setReplying] = useState(false);
@@ -464,6 +473,26 @@ function SubtaskRow({
   // в общую ленту задачи, чтобы не листать вниз в поисках поля ввода
   // (18.08.2026, прямая просьба).
   const canComment = isOwner && state === "blocked" && !!onComment;
+  // «Прервать шаг» — есть живой run, который надо дёрнуть через
+  // run.abort(); запрещено у done/pending: прерывать нечего. По спеке
+  // ec109e74.
+  const canServerCancel =
+    isOwner && (state === "running" || state === "blocked" || state === "review");
+  // «Сбросить попытку» — есть current_attempt_id (предполагаем, что
+  // сервер снимет его при любом завершении, см. control.ts:81-86,
+  // 121-127). Точечный сценарий: процесс уже умер, а lease ещё не
+  // истёк. По спеке ec109e74.
+  const canServerReset = isOwner && state !== "done" && state !== "pending";
+  // Меню «три точки» появляется, только если есть ХОТЬ ОДНО серверное
+  // действие — иначе кнопку рисовать незачем (она была бы мёртвой зоной
+  // нажатия).
+  const showServerMenu = isOwner && (canServerCancel || canServerReset);
+  const [dotsOpen, setDotsOpen] = useState(false);
+  const dotsAnchorRef = useRef<HTMLDivElement | null>(null);
+  // kind шторки — один экземпляр TaskControlSheet, что живёт в
+  // SubtaskRow: после клика на пункт меню поднимается соответствующий
+  // kind; null — шторка закрыта.
+  const [controlKind, setControlKind] = useState<TaskControlKind | null>(null);
 
   const submitReturn = async (comment: string, attachmentIds: string[]) => {
     if (!onReturn) return;
@@ -536,7 +565,73 @@ function SubtaskRow({
             />
           )}
         </button>
+        {/* «Три точки» — серверные действия (MAK-69). Рисуются ТОЛЬКО
+            владельцу и ТОЛЬКО если есть живой run или попытка для
+            сброса (см. canServerCancel/canServerReset выше). Размещены
+            ПОСЛЕ блока заголовка — отдельной группой иконок, чтобы не
+            путать «комментировать агенту» с «прервать шаг»: та же
+            визуальная логика, что у кнопки «три точки» в шапке чата. */}
+        {showServerMenu && (
+          <div
+            ref={dotsAnchorRef}
+            className="flex items-center gap-1 shrink-0"
+          >
+            <button
+              type="button"
+              onClick={() => setDotsOpen((o) => !o)}
+              aria-label="Управление шагом"
+              className="tap-scale w-10 h-10 flex items-center justify-center text-dim"
+            >
+              <Icon name="dotsH" size={18} />
+            </button>
+            <ActionsMenu
+              open={dotsOpen}
+              onClose={() => setDotsOpen(false)}
+              anchorRef={dotsAnchorRef}
+              items={[
+                ...(canServerCancel
+                  ? [
+                      {
+                        icon: "power",
+                        label: "Прервать шаг",
+                        destructive: true,
+                        onClick: () => {
+                          setDotsOpen(false);
+                          setControlKind("cancel_subtask");
+                        },
+                      },
+                    ]
+                  : []),
+                ...(canServerReset
+                  ? [
+                      {
+                        icon: "refresh",
+                        label: "Сбросить попытку",
+                        onClick: () => {
+                          setDotsOpen(false);
+                          setControlKind("reset_subtask");
+                        },
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          </div>
+        )}
       </div>
+
+      {/* Шторка причины для серверных действий на этой подзадаче. Один
+          экземпляр TaskControlSheet с kind-стейтом: открывается с
+          соответствующим kind, после успеха мутации снимается (см.
+          useEffect внутри TaskControlSheet). */}
+      {controlKind && (
+        <TaskControlSheet
+          open={controlKind !== null}
+          onClose={() => setControlKind(null)}
+          kind={controlKind}
+          subtaskId={st.id}
+        />
+      )}
 
       {/* Итог — то, ради чего подзадачу открывают. Отступ слева равен
           кружку (18px) плюс зазору (12px), чтобы текст шёл по одной
@@ -635,6 +730,10 @@ export function SubtaskFeed({
     attachmentIds: string[],
   ) => Promise<unknown>;
   onUploadFile?: (file: File) => Promise<PendingAttachment>;
+  // «Прервать шаг» / «Сбросить попытку» (MAK-69) живут ВНУТРИ SubtaskRow:
+  // TaskControlSheet сама шлёт мутацию через useCancelSubtask/
+  // useResetSubtask. Пробрасывать колбэки через SubtaskFeed не нужно —
+  // только размывает «кто отправляет запрос».
 }) {
   if (subtasks.length === 0) return null;
 
