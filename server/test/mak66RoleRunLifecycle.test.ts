@@ -299,9 +299,8 @@ describe("MAK-66 — статус узла плана и общая очеред
       headers: ownerHeaders,
     });
     expect(approve.statusCode).toBeLessThan(300);
-    // Возвращаем automatic для recoverInterruptedPlanSubtasks —
-    // MAK-66 писался под автоприём; MAK-67 добавил гейт по intake_mode.
-    db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE id=?").run(ownerId);
+    // Режим приёма больше не глушит восстановление утверждённого плана
+    // (MAK-78): owner остаётся под manual, recover работает.
 
     const subtaskRow = db.prepare("SELECT id, agent_state, current_attempt_id FROM subtasks WHERE task_id = ? AND plan_node_key = 'executor'").get(taskId) as { id: string; agent_state: string | null; current_attempt_id: string | null };
     expect(subtaskRow.agent_state).toBe("in_progress");
@@ -380,9 +379,8 @@ describe("MAK-66 — статус узла плана и общая очеред
       headers: ownerHeaders,
     });
     expect(approve.statusCode).toBeLessThan(300);
-    // Возвращаем automatic для recoverInterruptedPlanSubtasks —
-    // MAK-66 писался под автоприём; MAK-67 добавил гейт по intake_mode.
-    db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE id=?").run(ownerId);
+    // Режим приёма больше не глушит восстановление утверждённого плана
+    // (MAK-78): owner остаётся под manual, recover работает.
 
     const todoRow = db.prepare("SELECT id FROM subtasks WHERE task_id = ? AND plan_node_key = 'todo_node'").get(taskId) as { id: string };
     const blockedRow = db.prepare("SELECT id FROM subtasks WHERE task_id = ? AND plan_node_key = 'blocked_node'").get(taskId) as { id: string };

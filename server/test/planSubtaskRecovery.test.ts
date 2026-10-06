@@ -49,11 +49,9 @@ describe("узлы плана после перезапуска сервера",
     expect(plan.statusCode).toBeLessThan(300);
     const approve = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.json().id ?? plan.json().plan?.id}/approve`, headers: ownerAuth });
     expect(approve.statusCode).toBeLessThan(300);
-    // MAK-66 писался под автоприём; MAK-67 добавил правило «Система»:
-    // при manual восстановление узла после рестарта не поднимает.
-    // Переключаем владельца в automatic, чтобы контракт MAK-66 не
-    // смешивался с новым правилом MAK-67.
-    db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE role='owner'").run();
+    // Разделение «вход vs цепочка»: mode='manual' больше не глушит
+    // восстановление утверждённого плана — согласием владельца было
+    // утверждение плана. Оставляем manual и проверяем именно это.
     const row = db.prepare("SELECT id, agent_state FROM subtasks WHERE task_id = ? AND plan_node_key = 'executor'").get(taskId) as { id: string; agent_state: string };
     subtaskId = row.id;
     expect(row.agent_state).toBe("in_progress");
@@ -69,7 +67,7 @@ describe("узлы плана после перезапуска сервера",
   it("первый обрыв: попытка interrupted, роль пишет в ленту и продолжает", async () => {
     const before = subtask().current_attempt_id;
     const startedBefore = runs.count;
-    expect(await recoverInterruptedPlanSubtasks()).toEqual({ resumed: 1, blocked: 0, freed: 0, manual_hold: 0 });
+    expect(await recoverInterruptedPlanSubtasks()).toEqual({ resumed: 1, blocked: 0, freed: 0 });
 
     const old = db.prepare("SELECT outcome, ended_at FROM attempts WHERE id = ?").get(before) as { outcome: string; ended_at: string | null };
     expect(old.outcome).toBe("interrupted");
@@ -84,7 +82,7 @@ describe("узлы плана после перезапуска сервера",
 
   it("второй обрыв за полчаса: blocked и сообщение владельцу, без нового запуска", async () => {
     const startedBefore = runs.count;
-    expect(await recoverInterruptedPlanSubtasks()).toEqual({ resumed: 0, blocked: 1, freed: 0, manual_hold: 0 });
+    expect(await recoverInterruptedPlanSubtasks()).toEqual({ resumed: 0, blocked: 1, freed: 0 });
     expect(subtask().agent_state).toBe("blocked");
     expect(runs.count).toBe(startedBefore);
     expect(comments().at(-1)!.text).toContain("Сам больше не продолжаю");
@@ -94,7 +92,7 @@ describe("узлы плана после перезапуска сервера",
     // Доработка MAK-66 (critic 05.10.2026): блокировка из-за обрыва сервера
     // — не навсегда; при рестарте узел снова попадает в общую очередь.
     // Владелец/оркестратор потом сам решает, что с ним делать.
-    expect(await recoverInterruptedPlanSubtasks()).toEqual({ resumed: 0, blocked: 0, freed: 1, manual_hold: 0 });
+    expect(await recoverInterruptedPlanSubtasks()).toEqual({ resumed: 0, blocked: 0, freed: 1 });
     expect(subtask().agent_state).toBeNull();
     expect(comments().some((c) => c.text.includes("после рестарта сервера снят признак"))).toBe(true);
   });
