@@ -130,14 +130,18 @@ describe("MAK-68: 9 входов запуска сведены к одной ф�
 
   // ── Группа A: действие владельца (manualStart: true) ──────────────────
 
-  it("Группа A: явный запуск владельцем через /dispatch создаёт план из одного шага", async () => {
+  // MAK-71: /dispatch ушёл — явный запуск владельца теперь через
+  // POST /api/tasks/:id/run (mode=executor) — это та же кнопка «Запустить
+  // исполнителя», она идёт через tryStartSingleExecutorPlan.
+  it("Группа A: явный запуск владельцем через /run создаёт план из одного шага", async () => {
     setOwnerMode("manual");
-    const taskId = await postTask("MAK-68 A: явный /dispatch", "builder");
+    const taskId = await postTask("MAK-68 A: явный /run", "builder");
 
     const r = await app.inject({
       method: "POST",
-      url: `/api/tasks/${taskId}/dispatch`,
+      url: `/api/tasks/${taskId}/run`,
       headers: ownerAuth,
+      payload: { mode: "executor" },
     });
     expect(r.statusCode).toBe(200);
 
@@ -258,6 +262,8 @@ describe("MAK-68: 9 входов запуска сведены к одной ф�
 
   // ── Группа C: расписание (system: true) ───────────────────────────────
 
+  // MAK-71: повтор через /dispatch ушёл — эквивалент идемпотентности
+  // проверяем через /run (та же единая точка входа).
   it("Группа C: повторный запуск не создаёт второй план (идемпотентность)", async () => {
     setOwnerMode("manual");
     const taskId = await postTask("MAK-68 C: повтор не должен плодить", "builder");
@@ -265,20 +271,20 @@ describe("MAK-68: 9 входов запуска сведены к одной ф�
     // Первый запуск.
     const r1 = await app.inject({
       method: "POST",
-      url: `/api/tasks/${taskId}/dispatch`,
+      url: `/api/tasks/${taskId}/run`,
       headers: ownerAuth,
+      payload: { mode: "executor" },
     });
     expect(r1.statusCode).toBe(200);
 
-    // Повторный — должен вернуть 409 со skipped-* (а не 201 и не 500).
+    // Повторный — должен вернуть 409 (а не 201 и не 500).
     const r2 = await app.inject({
       method: "POST",
-      url: `/api/tasks/${taskId}/dispatch`,
+      url: `/api/tasks/${taskId}/run`,
       headers: ownerAuth,
+      payload: { mode: "executor" },
     });
     expect(r2.statusCode).toBe(409);
-    const body = r2.json() as { reason?: string };
-    expect(body.reason).toMatch(/skipped-/);
 
     // План ровно один.
     expect(planRows(taskId)).toHaveLength(1);

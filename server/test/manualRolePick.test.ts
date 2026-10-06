@@ -69,15 +69,23 @@ describe("ручная карточка: подбор как у Секретар
     return id;
   }
 
+  // MAK-71: модель подбирает роль и пишет в machine_selected_role, дальше
+  // tryStartSingleExecutorPlan создаёт план single_executor с этой ролью.
   it("роль от модели с причиной — и карточка уходит именно этой роли", async () => {
     pick.next = { role: "builder", roleReason: "нужно событие на сервере и показ в приложении", where: "iphone" };
     const id = await create("Показывать «печатает» в чате");
     const row = db
-      .prepare("SELECT machine_selected_role, dispatched_role, description FROM tasks WHERE id = ?")
-      .get(id) as { machine_selected_role: string; dispatched_role: string; description: string };
+      .prepare("SELECT machine_selected_role, description FROM tasks WHERE id = ?")
+      .get(id) as { machine_selected_role: string; description: string };
     expect(row.machine_selected_role).toBe("builder");
-    expect(row.dispatched_role).toBe("builder");
     expect(row.description).toContain("📍 ГДЕ: приложение на iPhone");
+    const sub = db.prepare(
+      `SELECT role_key FROM task_collaboration_plan_nodes
+         WHERE plan_id IN (SELECT id FROM task_collaboration_plans
+                           WHERE task_id = ?)
+         LIMIT 1`,
+    ).get(id) as { role_key: string } | undefined;
+    expect(sub?.role_key).toBe("builder");
     const ev = db
       .prepare("SELECT actor_id, to_value FROM task_events WHERE task_id = ? AND kind = 'role_choice' ORDER BY rowid LIMIT 1")
       .get(id) as { actor_id: string | null; to_value: string };

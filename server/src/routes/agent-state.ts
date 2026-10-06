@@ -1185,6 +1185,11 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // откажет сам.
       // MAK-68: 9 входов сведены к одной функции; повторная раздача после
       // `blocked→null` тоже идёт через `tryStartSingleExecutorPlan`.
+      // Это явное действие владельца (снять блок и ответить роли), поэтому
+      // manualStart: true — как у флага готовности и кнопки «Запустить».
+      // При system: true выключенная «Система» глушила раздачу, и карточка
+      // с поднятым флагом снова оставалась ничьей — тот же сбой C3, от
+      // которого защищает эта ветка.
       if (
         from === "blocked" &&
         state === null &&
@@ -1193,7 +1198,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       ) {
         try {
           const { tryStartSingleExecutorPlan } = await import("./dispatch.js");
-          await tryStartSingleExecutorPlan(task.id, req.userId, { system: true });
+          await tryStartSingleExecutorPlan(task.id, req.userId, { manualStart: true });
         } catch (err) {
           console.warn(`повторная раздача ${task.id} после ответа на блокировку:`, err);
         }
