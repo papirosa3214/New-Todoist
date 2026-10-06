@@ -9,7 +9,7 @@ export { prepareTaskCard as structureDictationToCards } from "../lib/taskPrepara
 export type { DictationCards, DictationChild } from "../lib/taskPreparation.js";
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
-import { getTaskForRead, visibleScope } from "../access.js";
+import { getTaskForRead, visibleProjectScope } from "../access.js";
 import { OBSERVER_SYSTEM_PROMPT } from "./activity.js";
 import { ROLE_NAMES, rolesPromptBlock, type RoleName } from "../roleRouting.js";
 
@@ -532,7 +532,9 @@ export function registerAiRoutes(app: FastifyInstance) {
     if (req.body.context!==undefined && typeof req.body.context!=="string") return reply.code(400).send({error:"context должен быть строкой"});
     if (req.body.source_record_id!==undefined && (typeof req.body.source_record_id!=="string" || req.body.source_record_id.length>256)) return reply.code(400).send({error:"source_record_id должен быть строкой до 256 символов"});
     // Каталог только доступных вызывающему проектов, без утечки чужих названий.
-    const scope=visibleScope(req.userId,"owner_id");
+    // Через visibleProjectScope — приватный проект (задача 9d583c58…) не
+    // попадает в каталог ни агенту, ни оркестратору.
+    const scope=visibleProjectScope(req.userId,"owner_id");
     const projects = db.prepare(`SELECT id,name FROM projects WHERE ${scope.sql} ORDER BY name`).all(...scope.params) as Array<{id:string;name:string}>;
     try {
       return await prepareTask(req.body.text,projects,{ownerId:req.userId,context:req.body.context,sourceRecordId:req.body.source_record_id,maxChars:12000,provider:req.body.provider,localModel:req.body.localModel,aiModel:req.body.aiModel});
@@ -724,7 +726,7 @@ export function registerAiRoutes(app: FastifyInstance) {
       }
 
       try {
-        const scope=visibleScope(req.userId,"owner_id");
+        const scope=visibleProjectScope(req.userId,"owner_id");
         const projects=db.prepare(`SELECT id,name FROM projects WHERE ${scope.sql}`).all(...scope.params) as Array<{id:string;name:string}>;
         const prepared=await prepareTask(text,projects,{ownerId:req.userId,provider,localModel,aiModel});
         if (!prepared.card) return reply.code(422).send({error:prepared.question || "В сообщении нет поручения",...prepared});

@@ -477,19 +477,37 @@ export function registerTaskRoutes(app: FastifyInstance) {
       ? " AND " + extraFilters.join(" AND ")
       : "";
 
+    // Приватный проект (задача 9d583c58…): задачи такого проекта не должны
+    // попасть в список никому, кроме владельца трекера. `p` приходит из
+    // TASK_JOINS; `asOwner` — единственный обход. Владелец трекера видит
+    // всё и раньше, для него фильтр — `1 = 1`.
+    const asOwner = isOwner(userId);
+    const baseParent = includeChildren
+      ? "1 = 1"
+      : "(t.parent_id IS NULL OR t.project_id IS NOT NULL)";
+    const privacy = asOwner
+      ? "1 = 1"
+      : "(p.id IS NULL OR p.is_private = 0 OR p.is_private IS NULL)";
+
     const tasks = (
       seesEveryTask(userId)
         ? db
             .prepare(
-              `SELECT ${columns} ${joins} ${includeChildren ? "" : "WHERE (t.parent_id IS NULL OR t.project_id IS NOT NULL)"} ${extraWhere} ORDER BY t.created_at DESC`,
+              `SELECT ${columns} ${joins}
+      WHERE ${baseParent}
+        AND ${privacy}
+        ${extraWhere}
+      ORDER BY t.created_at DESC`,
             )
             .all(...extraParams)
         : db
             .prepare(
               `SELECT ${columns} ${joins}
-      WHERE ${includeChildren ? "" : "(t.parent_id IS NULL OR t.project_id IS NOT NULL) AND "}(t.creator_id = ? OR t.assignee_id = ?
-         OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))
-      ${extraWhere}
+      WHERE ${baseParent}
+        AND (t.creator_id = ? OR t.assignee_id = ?
+           OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))
+        AND ${privacy}
+        ${extraWhere}
       ORDER BY t.created_at DESC`,
             )
             .all(userId, userId, userId, ...extraParams)
@@ -837,6 +855,17 @@ export function registerTaskRoutes(app: FastifyInstance) {
 
       // project_id — свой проект, либо (для агента) проект того человека,
       // которому задача и адресована. См. getProjectForFiling в access.ts.
+      // effectiveAssignee — что реально запишется в tasks.assignee_id. По
+      // умолчанию совпадает с присланным assignee_id; для приватного
+      // проекта (задача 9d583c58…) принудительно ставится владелец
+      // трекера — иначе нарушится «не отдавать через API никому, кроме
+      // владельца». Планировщик ниже использует именно effectiveAssignee,
+      // а не assignee_id из тела.
+      let effectiveAssignee: string | null = assignee_id || null;
+      // Признак «задача ложится в приватный проект» (задача 9d583c58…).
+      // По нему глушатся авто-план и доставка в inbox исполнителя: «без
+      // запуска агентов и планов». Определяется ниже в блоке project_id.
+      let isPrivateProject = false;
       if (project_id) {
         const project = getProjectForFiling(
           project_id,
@@ -845,6 +874,27 @@ export function registerTaskRoutes(app: FastifyInstance) {
         );
         if (!project)
           return reply.code(400).send({ error: "invalid project_id" });
+        if (((project as any).is_private ?? 0) === 1) {
+          isPrivateProject = true;
+          const ownerRow = db
+            .prepare(
+              "SELECT id FROM users WHERE role = 'owner' ORDER BY id LIMIT 1",
+            )
+            .get() as { id?: string } | undefined;
+          const ownerId = ownerRow?.id;
+          if (!ownerId) {
+            return reply.code(500).send({
+              error: "владелец трекера не найден — приватный проект невозможен",
+            });
+          }
+          if (effectiveAssignee && effectiveAssignee !== ownerId) {
+            return reply.code(400).send({
+              error:
+                "в приватном проекте задача назначается только на владельца",
+            });
+          }
+          effectiveAssignee = ownerId;
+        }
       }
 
       // label_ids must all belong to the caller.
@@ -852,11 +902,15 @@ export function registerTaskRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "invalid label_ids" });
       }
 
-      // assignee_id must reference an existing user.
-      if (assignee_id) {
+      // assignee_id must reference an existing user. Для приватного
+      // проекта effectiveAssignee уже подменён на владельца трекера
+      // выше — проверяем именно его, иначе ветка пропустила бы запрос
+      // с несуществующим assignee, а приватный проект выставил бы
+      // валидного владельца (старый код «глотал» мусор).
+      if (effectiveAssignee) {
         const assignee = db
           .prepare("SELECT id FROM users WHERE id = ?")
-          .get(assignee_id);
+          .get(effectiveAssignee);
         if (!assignee)
           return reply.code(400).send({ error: "invalid assignee_id" });
       }
@@ -953,7 +1007,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
           duration_min ?? null,
           project_id || null,
           priority || 1,
-          assignee_id || null,
+          effectiveAssignee,
           req.userId,
           parent_id || null,
           requiresReviewerReview ? 1 : 0,
@@ -1001,47 +1055,51 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // по-прежнему только владелец. Ошибка здесь не должна ломать
       // создание задачи — отдельный try/catch.
       try {
-        if (!preparation) autoProposeCollaborationPlanIfNeeded(id);
+        if (!preparation && !isPrivateProject) autoProposeCollaborationPlanIfNeeded(id);
       } catch (error) {
         req.log?.error?.({ err: error, taskId: id }, "auto collaboration plan proposal failed");
       }
 
-      if (assignee_id) {
+      if (effectiveAssignee) {
         logEvent({
           taskId: id,
           actorId: req.userId,
           kind: "field_changed",
           field: "assignee_id",
           fromValue: null,
-          toValue: String(assignee_id),
+          toValue: String(effectiveAssignee),
         });
         // Назначение — тоже доставка (Reviewer 5f292e87: из реального потока
         // не создаётся event_type=assignment). Кладём поручение в inbox
         // исполнителю; chat_message_id синтетический (это не сообщение в чат).
-        db.prepare(
-          `INSERT INTO agent_inbox
-             (id, chat_message_id, to_user_id, body_text, task_id,
-              task_version, kind, event_type, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'text', 'assignment', 'sent', datetime('now'))`,
-        ).run(
-          uid(),
-          `asg-${uid()}`,
-          assignee_id,
-          trimmedTitle,
-          id,
-          (
-            db
-              .prepare("SELECT current_revision FROM tasks WHERE id=?")
-              .get(id) as any
-          )?.current_revision ?? null,
-        );
-        registryRecord({
-          source: "assignment",
-          trigger: "POST /api/tasks",
-          toUserId: assignee_id,
-          data: { task_id: id },
-          result: "inbox_sent",
-        });
+        // Для приватного проекта доставка глушится (задача 9d583c58…):
+        // это «без запуска агентов» — владелец и так видит свою задачу.
+        if (!isPrivateProject) {
+          db.prepare(
+            `INSERT INTO agent_inbox
+               (id, chat_message_id, to_user_id, body_text, task_id,
+                task_version, kind, event_type, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'text', 'assignment', 'sent', datetime('now'))`,
+          ).run(
+            uid(),
+            `asg-${uid()}`,
+            effectiveAssignee,
+            trimmedTitle,
+            id,
+            (
+              db
+                .prepare("SELECT current_revision FROM tasks WHERE id=?")
+                .get(id) as any
+            )?.current_revision ?? null,
+          );
+          registryRecord({
+            source: "assignment",
+            trigger: "POST /api/tasks",
+            toUserId: effectiveAssignee,
+            data: { task_id: id },
+            result: "inbox_sent",
+          });
+        }
       }
       // Шаги, заведённые вместе с задачей, — одной строкой с их числом, а
       // не по строке на каждый: задача из десяти шагов иначе открывалась бы

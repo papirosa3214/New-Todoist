@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { isOwner } from "../access.js";
 import { isServiceUser } from "./agent-state.js";
 
 const uid = () => crypto.randomUUID();
@@ -57,6 +58,12 @@ export function registerNotificationRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/notifications", { preHandler: authPre }, async (req: any) => {
+    // Приватный проект (задача 9d583c58…): уведомление со ссылкой на задачу
+    // приватного проекта не отдаётся никому, кроме владельца — иначе
+    // проскочил бы task_title. Владельцу не мешаем.
+    const privacyClause = isOwner(req.userId)
+      ? "1 = 1"
+      : "(t.id IS NULL OR p.id IS NULL OR p.is_private = 0 OR p.is_private IS NULL)";
     return db
       .prepare(
         `
@@ -66,8 +73,9 @@ export function registerNotificationRoutes(app: FastifyInstance) {
       FROM notifications n
       LEFT JOIN users u ON n.user_id = u.id
       LEFT JOIN tasks t ON n.task_id = t.id
+      LEFT JOIN projects p ON t.project_id = p.id
       LEFT JOIN users a ON n.actor_id = a.id
-      WHERE n.user_id = ? AND NOT (n.type IN ('assigned','commented','reviewed','agent_state') AND EXISTS (SELECT 1 FROM users owner WHERE owner.id=n.user_id AND owner.role='owner'))
+      WHERE n.user_id = ? AND ${privacyClause} AND NOT (n.type IN ('assigned','commented','reviewed','agent_state') AND EXISTS (SELECT 1 FROM users owner WHERE owner.id=n.user_id AND owner.role='owner'))
       ORDER BY n.created_at DESC
     `,
       )
