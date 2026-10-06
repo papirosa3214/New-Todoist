@@ -692,6 +692,11 @@ export async function deliverTopicToWork(taskId:string,role:string,messageId:str
   return "idle";
 }
 
+/** Снимок идущих in-process запусков: для экрана владельца и проверки перед перезапуском. */
+export function listActiveInProcessRuns(): Array<{ runId: string; taskId: string; role: string; subtaskId: string | undefined; lastActivityAt: number }> {
+  return [...activeRuns.values()].map((r) => ({ runId: r.runId, taskId: r.taskId, role: r.role, subtaskId: r.subtaskId, lastActivityAt: r.lastActivityAt }));
+}
+
 export function activeInProcessRun(taskId: string, subtaskId?: string): ActiveInProcessRun | undefined {
   return [...activeRuns.values()].find((r) => r.taskId === taskId && r.subtaskId === subtaskId);
 }

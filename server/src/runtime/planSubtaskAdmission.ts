@@ -31,7 +31,7 @@ import { getFullTask } from "../routes/subtasks.js";
  * различает submitted/accepted — см. `canPlanSubtaskBecomeReady`.
  */
 
-type PlanSubtask = {
+export type PlanSubtask = {
   id: string;
   task_id: string;
   title: string;
@@ -242,10 +242,19 @@ const INTERRUPT_WINDOW = "-30 minutes";
  * делаем — `todo` сам подхватит worker, когда дойдёт очередь; `blocked`
  * владелец должен разморозить сам.
  */
-export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: number; blocked: number; freed: number }> {
-  const rows = db.prepare(
+export type RecoverOptions = {
+  /** Узлы, которые не трогаем (например, у них идёт живой запуск). */
+  skip?: (row: PlanSubtask) => boolean;
+  /** Причина обрыва в попытке, снимке и ленте: при старте — рестарт сервера, при кнопке владельца — другое. */
+  reason?: string;
+};
+
+export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}): Promise<{ resumed: number; blocked: number; freed: number }> {
+  const byServerRestart = !opts.reason;
+  const reason = opts.reason ?? "перезапуск сервера";
+  const rows = (db.prepare(
     "SELECT * FROM subtasks WHERE collaboration_plan_id IS NOT NULL AND done = 0 AND agent_state IN ('in_progress','todo','blocked')",
-  ).all() as PlanSubtask[];
+  ).all() as PlanSubtask[]).filter((row) => !opts.skip?.(row));
   let resumed = 0;
   let blocked = 0;
   let freed = 0;
@@ -256,8 +265,8 @@ export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: numbe
       // Узел без живой роли в плане — на рестарте снимаем признак аренды,
       // чтобы он снова попал в общую очередь.
       if (row.current_attempt_id) {
-        db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = 'перезапуск сервера' WHERE id = ? AND ended_at IS NULL")
-          .run(row.current_attempt_id);
+        db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = ? WHERE id = ? AND ended_at IS NULL")
+          .run(reason, row.current_attempt_id);
       }
       db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
       freed += 1;
@@ -265,8 +274,8 @@ export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: numbe
     }
     if (row.agent_state === "in_progress") {
       if (row.current_attempt_id) {
-        db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = 'перезапуск сервера' WHERE id = ? AND ended_at IS NULL")
-          .run(row.current_attempt_id);
+        db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = ? WHERE id = ? AND ended_at IS NULL")
+          .run(reason, row.current_attempt_id);
       }
       // Техснимок обрыва (владелец 04.10.2026). Модель сюда не успевает ответить
       // — её ход умер вместе с процессом, — поэтому пишем то, что сервер знает
@@ -274,7 +283,7 @@ export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: numbe
       // Пометка «неполный» обязательна: следующий вызов роли должен понимать,
       // что это техфакты, а не её собственный отчёт.
       technicalSlotSnapshot(row.id, "stopped", {
-        blocker: "ход оборвался перезапуском сервера",
+        blocker: byServerRestart ? "ход оборвался перезапуском сервера" : `ход оборван: ${reason}`,
         attemptId: row.current_attempt_id,
       });
       db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
@@ -289,14 +298,18 @@ export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: numbe
         roleNote(
           row.task_id,
           node.role_key,
-          `«${row.title}»: ход снова оборвался перезапуском сервера — второй раз за полчаса. Сам больше не продолжаю, нужен ваш взгляд.`,
+          byServerRestart
+            ? `«${row.title}»: ход снова оборвался перезапуском сервера — второй раз за полчаса. Сам больше не продолжаю, нужен ваш взгляд.`
+            : `«${row.title}»: ход снова оборвался (${reason}) — второй раз за полчаса. Сам больше не продолжаю, нужен ваш взгляд.`,
         );
         continue;
       }
       roleNote(
         row.task_id,
         node.role_key,
-        `«${row.title}»: мой ход оборвался — сервер перезапустился. Продолжаю с того же места.`,
+        byServerRestart
+          ? `«${row.title}»: мой ход оборвался — сервер перезапустился. Продолжаю с того же места.`
+          : `«${row.title}»: мой ход оборвался (${reason}). Продолжаю с того же места.`,
       );
       const started = await startPlanSubtaskRun(row.id, roleUserId(node.role_key));
       if (started.ok) {
@@ -310,15 +323,17 @@ export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: numbe
     // авто-старта. worker подхватит `todo` когда дойдёт очередь; `blocked`
     // размораживает владелец или оркестратор через state=in_progress.
     if (row.current_attempt_id) {
-      db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = 'перезапуск сервера' WHERE id = ? AND ended_at IS NULL")
-        .run(row.current_attempt_id);
+      db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = ? WHERE id = ? AND ended_at IS NULL")
+        .run(reason, row.current_attempt_id);
     }
     db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
     freed += 1;
     roleNote(
       row.task_id,
       node.role_key,
-      `«${row.title}»: после рестарта сервера снят признак «${row.agent_state}» — узел снова свободен.`,
+      byServerRestart
+      ? `«${row.title}»: после рестарта сервера снят признак «${row.agent_state}» — узел снова свободен.`
+      : `«${row.title}»: снят признак «${row.agent_state}» (${reason}) — узел снова свободен.`,
     );
   }
   return { resumed, blocked, freed };
