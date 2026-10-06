@@ -205,11 +205,23 @@ export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.type as assignee_ty
                 JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
                WHERE s.task_id = t.id AND s.done = 0
                ORDER BY CASE WHEN s.agent_state = 'in_progress' THEN 0 ELSE 1 END, s.position ASC LIMIT 1) as plan_responsible_id,
+             (SELECT ru.avatar_url FROM subtasks s
+                JOIN task_collaboration_plans cp4 ON cp4.id = s.collaboration_plan_id AND cp4.status = 'approved'
+                JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+                JOIN users ru ON ru.id = 'role_' || n.role_key
+               WHERE s.task_id = t.id AND s.done = 0
+               ORDER BY CASE WHEN s.agent_state = 'in_progress' THEN 0 ELSE 1 END, s.position ASC LIMIT 1) as plan_responsible_avatar_url,
              (SELECT group_concat(rk) FROM (SELECT 'role_' || n.role_key AS rk, MIN(s.position) AS pos FROM subtasks s
                 JOIN task_collaboration_plans cp3 ON cp3.id = s.collaboration_plan_id AND cp3.status = 'approved'
                 JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
                WHERE s.task_id = t.id GROUP BY n.role_key ORDER BY pos)
-               WHERE NOT EXISTS (SELECT 1 FROM subtasks u2 WHERE u2.task_id = t.id AND u2.collaboration_plan_id IS NOT NULL AND u2.done = 0)) as plan_team`;
+               WHERE NOT EXISTS (SELECT 1 FROM subtasks u2 WHERE u2.task_id = t.id AND u2.collaboration_plan_id IS NOT NULL AND u2.done = 0)) as plan_team,
+             (SELECT group_concat(au) FROM (SELECT COALESCE(tu.avatar_url, '') AS au, MIN(s.position) AS pos FROM subtasks s
+                JOIN task_collaboration_plans cp5 ON cp5.id = s.collaboration_plan_id AND cp5.status = 'approved'
+                JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+                JOIN users tu ON tu.id = 'role_' || n.role_key
+               WHERE s.task_id = t.id GROUP BY n.role_key ORDER BY pos)
+               WHERE NOT EXISTS (SELECT 1 FROM subtasks u3 WHERE u3.task_id = t.id AND u3.collaboration_plan_id IS NOT NULL AND u3.done = 0)) as plan_team_avatar_urls`;
 export const TASK_JOINS = `FROM tasks t
       LEFT JOIN users u ON t.assignee_id = u.id
       LEFT JOIN users c ON t.creator_id = c.id
