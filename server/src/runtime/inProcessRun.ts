@@ -32,6 +32,7 @@ import { AGENT_RULES, logEvent } from "../agentState.js";
 import { loadRoleRouting, providerOfModel, rolePromptText, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
 import { getModelRuntime } from "./PiRuntimeAdapter.js";
+import { parseModelRef, recordAttemptModel } from "../lib/attemptModel.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { buildInProcessTaskContext } from "./taskContextBridge.js";
 import { buildDependencyContext } from "./dependencyContext.js";
@@ -39,7 +40,6 @@ import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
-import { recordAttemptModel } from "../lib/attemptModel.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -875,20 +875,21 @@ async function runRoleInProcessUnserialized(input: {
   if (activeInProcessRun(taskId, input.subtaskId)) throw new Error("по этому окну агент уже работает");
 
   const routing = loadRoleRouting();
-  const modelId = input.model || routing.models[role];
+  // MAK-77: модель может быть записана как «провайдер/модель» (opencode-go/qwen3.8-flash);
+  // запись без префикса работает по-старому.
+  const modelRef = input.model || routing.models[role];
+  const { provider: modelProvider, id: modelId } = parseModelRef(modelRef);
   const runtime: any = await getModelRuntime();
   const model =
-    runtime.getModel?.(providerOfModel(modelId), modelId) ??
+    runtime.getModel?.(modelProvider, modelId) ??
     ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === modelId);
-  if (!model) throw new Error(`модель «${modelId}» недоступна`);
-
-  // MAK-77: проставляем модель/провайдера в открытую попытку, чтобы расход
-  // по моделям было чем считать. Сбой записи не должен ронять запуск роли.
+  if (!model) throw new Error(`модель «${modelRef}» недоступна`);
   try {
-    recordAttemptModel({ taskId, subtaskId: input.subtaskId, modelId, provider: providerOfModel(modelId) });
+    recordAttemptModel({ taskId, subtaskId: input.subtaskId, modelId, provider: modelProvider });
   } catch (error) {
     console.warn("[attemptModel] не записалась:", error);
   }
+
 
   // Репозиторий самого сервера — только в отдельной копии: сохранение файла
   // в живой перезапустило бы сервер вместе с этим ходом (roleWorkspace.ts).

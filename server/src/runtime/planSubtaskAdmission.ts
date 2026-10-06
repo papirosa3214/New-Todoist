@@ -43,6 +43,8 @@ export type PlanSubtask = {
   current_attempt_id: string | null;
   collaboration_plan_id: string | null;
   plan_node_key: string | null;
+  /** MAK-77: модель шага («провайдер/модель»); NULL — по настройкам роли. */
+  model?: string | null;
 };
 
 type ArtifactVersion = {
@@ -167,7 +169,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string): P
   if(!acquired)return {ok:false,error:"Слот уже запущен или его входные данные изменились"};
 
   try {
-    const run = await runRoleInProcess({ taskId: current.task_id, role: node.role_key, subtaskId: current.id, mode: "work" });
+    const run = await runRoleInProcess({ taskId: current.task_id, role: node.role_key, subtaskId: current.id, mode: "work", model: current.model || undefined });
     logEvent({ taskId: current.task_id, actorId, kind: "plan_subtask_started", field: current.plan_node_key, toValue: roleTitle(node.role_key) });
     return { ok: true, runId: run.runId };
   } catch (error) {

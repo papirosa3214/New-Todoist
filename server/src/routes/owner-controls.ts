@@ -5,10 +5,11 @@
 import { spawn } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
-import { isOwner } from "../access.js";
+import { isOrchestrator, isOwner } from "../access.js";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { activeInProcessRun, listActiveInProcessRuns } from "../runtime/inProcessRun.js";
+import { KNOWN_MODEL_PROVIDERS, parseModelRef } from "../lib/attemptModel.js";
 import { recoverInterruptedPlanSubtasks, type PlanSubtask } from "../runtime/planSubtaskAdmission.js";
 
 /** Пульс свежее этого (секунд) — шаг считается живым, даже если запуска в памяти не видно (он только стартует). */
@@ -95,4 +96,35 @@ export function registerOwnerControlRoutes(app: FastifyInstance): void {
     }, 500);
     return reply.code(202).send({ accepted: true, active_runs: active.length });
   });
+  // MAK-77: модель конкретного шага плана. Владелец и оркестратор; роли не могут.
+  // Запись — `провайдер/модель` (opencode-go/qwen3.8-flash) или null (по настройкам роли).
+  app.put<{ Params: { id: string }; Body: { model?: string | null } }>(
+    "/api/subtasks/:id/model",
+    { preHandler: authOrApiToken },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId) && !isOrchestrator(req.userId)) {
+        return reply.code(403).send({ error: "модель шага задаёт владелец или оркестратор" });
+      }
+      const row = db.prepare("SELECT id, task_id, done, agent_state, plan_node_key FROM subtasks WHERE id = ?").get(req.params.id) as
+        | { id: string; task_id: string; done: number; agent_state: string | null; plan_node_key: string | null }
+        | undefined;
+      if (!row) return reply.code(404).send({ error: "Not found" });
+      if (row.done) return reply.code(409).send({ error: "шаг уже сдан" });
+      if (row.agent_state === "in_progress") return reply.code(409).send({ error: "шаг уже идёт — модель меняется до запуска" });
+      const raw = req.body?.model;
+      let value: string | null = null;
+      if (raw !== null && raw !== undefined) {
+        if (typeof raw !== "string" || !raw.trim()) return reply.code(400).send({ error: "model: строка «провайдер/модель» или null" });
+        const ref = parseModelRef(raw);
+        const prefixed = raw.trim().includes("/");
+        if (prefixed && !(KNOWN_MODEL_PROVIDERS as readonly string[]).includes(raw.trim().split("/")[0])) {
+          return reply.code(400).send({ error: `провайдер не из списка: ${KNOWN_MODEL_PROVIDERS.join(", ")}` });
+        }
+        value = prefixed ? `${ref.provider}/${ref.id}` : ref.id;
+      }
+      db.prepare("UPDATE subtasks SET model = ? WHERE id = ?").run(value, row.id);
+      logEvent({ taskId: row.task_id, actorId: req.userId, kind: "subtask_model_set", field: row.plan_node_key ?? row.id, toValue: value ?? "по настройкам роли" });
+      return { ok: true, subtask_id: row.id, model: value };
+    },
+  );
 }
