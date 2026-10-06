@@ -47,13 +47,15 @@ WEB_PORT="$(free_port $((API_PORT + 1)))"
 rm -f "$STATE"/taskflow.db*
 sqlite3 "$LIVE_DB" ".backup '$STATE/taskflow.db'"
 sqlite3 "$STATE/taskflow.db" "DELETE FROM role_run_jobs;" 2>/dev/null || true
+# Выбор моделей ролей в копии пишет файл маршрутов — даём ей СВОЙ, боевой не трогаем.
+cp "$SRC/server/scripts/role-routing.yaml" "$STATE/role-routing.yaml"
 
 cd "$SRC/server"
 env PORT="$API_PORT" HOST=127.0.0.1 DB_PATH="$STATE/taskflow.db" \
   TASKFLOW_QA_SANDBOX=1 TASKFLOW_LAN_NO_AUTH=1 \
   LINEAR_AUTOIMPORT_DISABLED=1 LINEAR_SYNC_DISABLED=1 ORCHESTRATOR_WEBHOOK_DISABLED=1 \
   TASKFLOW_AUTO_PREPARATION=0 INBOX_TRIAGE_DISABLED=1 ACTIVITY_OBSERVER_ENABLED=false \
-  TASKFLOW_NOTIF_ROOT="$STATE/нет-такого-каталога" \
+  TASKFLOW_NOTIF_ROOT="$STATE/нет-такого-каталога" TASKFLOW_ROLE_ROUTING_FILE="$STATE/role-routing.yaml" \
   nohup ./node_modules/.bin/tsx src/index.ts > "$STATE/api.log" 2>&1 &
 API_PID=$!
 

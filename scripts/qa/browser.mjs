@@ -9,6 +9,8 @@
 //   {"goto": "/today"}                       открыть путь относительно base
 //   {"click": "text=Сегодня"}                клик по селектору Playwright (text=…, css, role=…)
 //   {"fill": ["input[name=title]", "Тест"]}  ввести текст в поле
+//   {"select": ["select[aria-label=Модель]", "значение"]}  выбрать пункт в выпадающем списке (по value или тексту)
+//   {"scrollto": "css-селектор"}             прокрутить так, чтобы элемент оказался на экране
 //   {"press": "Enter"}                       нажать клавишу
 //   {"wait": 500}  |  {"wait": "text=Готово"}  пауза в мс или ожидание элемента
 //   {"scroll": 600}                          прокрутить страницу вниз на N px (отрицательное — вверх)
@@ -136,6 +138,8 @@ for (const [i, step] of steps.entries()) {
       case "click": await page.click(arg, { timeout: 8000 }); break;
       case "fill": await page.fill(arg[0], arg[1], { timeout: 8000 }); break;
       case "press": await page.keyboard.press(arg); break;
+      case "select": await page.selectOption(arg[0], arg[1], { timeout: 8000 }); break;
+      case "scrollto": await page.locator(arg).first().scrollIntoViewIfNeeded({ timeout: 8000 }); break;
       case "wait":
         if (typeof arg === "number") await page.waitForTimeout(arg);
         else await page.waitForSelector(arg, { timeout: 10000 });

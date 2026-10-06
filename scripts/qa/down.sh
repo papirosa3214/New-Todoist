@@ -13,5 +13,5 @@ if [ -f "$STATE/pids" ]; then
   done < "$STATE/pids"
 fi
 sleep 1
-rm -rf "$STATE"/taskflow.db* "$STATE/uploads" "$STATE/pids" "$STATE/urls"
+rm -rf "$STATE"/taskflow.db* "$STATE/uploads" "$STATE/role-routing.yaml" "$STATE/pids" "$STATE/urls"
 echo "погашено: $SRC"
