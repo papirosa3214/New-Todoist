@@ -1,8 +1,20 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { runMigrations } from "../src/migrations.js";
 import db, { migrate } from "../src/db.js";
 import { seedRoleAccounts } from "./helpers/seedOwner.js";
 import { dispatchPendingDiagnosticTasks } from "../src/lib/diagnosticDispatch.js";
+import { ROLE_NAMES } from "../src/roleRouting.js";
+
+// Семантического подбора в тесте нет (нет модели эмбеддингов) —
+// фиксируем один кандидат, чтобы проверка исключений была
+// детерминированной: все роли в exclusions → dead, пустые → builder.
+vi.mock("../src/lib/semanticEnrich.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/semanticEnrich.js")>();
+  return {
+    ...actual,
+    semanticEnrich: async () => ({ matched: [{ role: "builder", score: 0.9 }] }),
+  };
+});
 
 describe("Автоматическое назначение диагностики", () => {
   beforeAll(() => { migrate(); runMigrations(); seedRoleAccounts(db); });
@@ -13,7 +25,7 @@ describe("Автоматическое назначение диагностик
       VALUES (?, ?, ?, 'u1', 'active', 'todo', 'builder', ?)`).run(
       id, "[Диагностика] Проверить канал",
       diagnostic ? "_Авто-создано inbox-triage-watcher из inbox/2026-09-27/_diagnostic/test.json._" : "Обычная задача",
-      excluded ? JSON.stringify(["researcher","analyst","critic_verifier","architect","builder","qa","designer"]) : "[]",
+      excluded ? JSON.stringify([...ROLE_NAMES]) : "[]",
     );
     return id;
   };
@@ -31,7 +43,7 @@ describe("Автоматическое назначение диагностик
     ).get(id) as { profile: string; status: string } | undefined;
     expect(plan).toMatchObject({ profile: "single_executor", status: "approved" });
     const sub = db.prepare(
-      `SELECT role_key FROM plan_subtasks
+      `SELECT role_key FROM task_collaboration_plan_nodes
          WHERE plan_id IN (SELECT id FROM task_collaboration_plans
                            WHERE task_id = ?)
          LIMIT 1`,
@@ -60,8 +72,8 @@ describe("Автоматическое назначение диагностик
     // Прямой отказ подменяемой функции в новом пути нет, поэтому просто
     // проверяем: пока исключения роль отсекает — план не создаётся;
     // убираем исключение — план появляется.
-    db.prepare("UPDATE tasks SET role_exclusions = ? WHERE id = ?").run(
-      JSON.stringify(["researcher","analyst","critic_verifier","architect","builder","qa","designer"]),
+    db.prepare("UPDATE tasks SET machine_selected_role = NULL, role_exclusions = ? WHERE id = ?").run(
+      JSON.stringify([...ROLE_NAMES]),
       id,
     );
     await dispatchPendingDiagnosticTasks();

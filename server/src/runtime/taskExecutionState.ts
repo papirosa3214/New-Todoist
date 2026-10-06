@@ -9,8 +9,11 @@ export function taskExecutionState(taskId: string) {
   const job = db.prepare(`SELECT status,last_error,manual_start FROM role_run_jobs WHERE task_id=?
     ORDER BY CASE WHEN status IN ('queued','running','retry_wait') THEN 0 ELSE 1 END, rowid DESC LIMIT 1`).get(taskId) as {status:string;last_error:string|null;manual_start:number} | undefined;
   // MAK-71: различие «single vs team» ушло — теперь любая задача идёт планом
-  // (одна роль = план из одного шага). Остался только признак активного
-  // командного плана (нужен для гейтов can_use_plan / can_change_executor).
+  // (одна роль = план из одного шага). Признак активного плана остаётся для
+  // гейтов can_launch / can_change_executor. Для can_use_plan его нет:
+  // создание новой revision поверх утверждённого плана — штатное действие
+  // владельца (POST /collaboration-plans заменяет версию), запирает только
+  // занятость карточки.
   const team = Boolean(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('approved','running','completed') LIMIT 1").get(taskId));
   const active = Boolean(activeInProcessRun(taskId));
   const busy = active || Boolean(job && ['queued','running','retry_wait'].includes(job.status)) || task?.agent_state === 'in_progress';
@@ -25,6 +28,6 @@ export function taskExecutionState(taskId: string) {
     branch_root_task_id:isChild ? rootId : null,
     can_launch: !isBranchRoot && !isChild && !busy && !team && !task?.agent_state && task?.status === 'active',
     can_change_executor: !isBranchRoot && !isChild && !busy && !team,
-    can_use_plan: !isChild && !busy && !team,
+    can_use_plan: !isChild && !busy,
     error: canRetry ? job?.last_error ?? 'Запуск завершён без начала работы. Проверьте назначение исполнителя.' : null};
 }

@@ -80,7 +80,7 @@ describe("ручная карточка: подбор как у Секретар
     expect(row.machine_selected_role).toBe("builder");
     expect(row.description).toContain("📍 ГДЕ: приложение на iPhone");
     const sub = db.prepare(
-      `SELECT role_key FROM plan_subtasks
+      `SELECT role_key FROM task_collaboration_plan_nodes
          WHERE plan_id IN (SELECT id FROM task_collaboration_plans
                            WHERE task_id = ?)
          LIMIT 1`,

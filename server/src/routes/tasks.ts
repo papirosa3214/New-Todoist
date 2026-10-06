@@ -1421,6 +1421,63 @@ export function registerTaskRoutes(app: FastifyInstance) {
         body.requires_reviewer_review = body.requires_reviewer_review ? 1 : 0;
       }
 
+      // ВЫБОР РОЛИ ВЛАДЕЛЬЦЕМ (миграция 038, карточка 5ceda583).
+      // Обрабатывается РАНЬШЕ флага готовности: владелец может передать в
+      // одном PATCH и роль, и флаг, а запуск по флагу обязан взять уже
+      // сохранённую роль, а не дефолт (иначе выбор владельца молча
+      // игнорируется, а план уходит дефолтной роли).
+      // Логика «только владелец трекера», как и у ready_for_pickup, но это
+      // НЕЗАВИСИМАЯ ось: можно поднять роль заранее, готовность — позже.
+      // Назначение роли само по себе работу не запускает — оно лишь говорит
+      // диспетчеру, какую из 8 ролей выбрал владелец, если тот доберётся до
+      // задачи. Валидация против ROLE_NAMES идёт здесь, а не в SQL: CHECK на
+      // этой колонке запер бы список ролей в схеме (миграция 005 уже
+      // показала, что CHECK(role IN (...)) сменить дороже, чем переписать
+      // таблицу), а роль добавить — операция дешевле, чем миграция через
+      // пересборку.
+      if (body.owner_selected_role !== undefined) {
+        if (!isOwner(req.userId)) {
+          return reply.code(403).send({
+            error: "выбрать роль задачи может только владелец трекера",
+          });
+        }
+
+        const raw = body.owner_selected_role;
+        if (raw !== null) {
+          if (
+            typeof raw !== "string" ||
+            !ROLE_NAMES.includes(raw as RoleName)
+          ) {
+            return reply.code(400).send({
+              error: `owner_selected_role должен быть одной из ролей: ${ROLE_NAMES.join(", ")}`,
+            });
+          }
+        }
+        const newValue = raw === null ? null : (raw as string);
+        const previous = existing.owner_selected_role ?? null;
+        if (previous === newValue) {
+          // идемпотентность: повтор того же значения не пишет лишнего
+          // события и не трогает карточку. Это не «подтверждение», это
+          // пустой PATCH.
+        } else {
+          db.prepare(
+            `UPDATE tasks SET owner_selected_role = ?, updated_at = datetime('now') WHERE id = ?`,
+          ).run(newValue, id);
+          logEvent({
+            taskId: id,
+            actorId: req.userId,
+            kind: "owner_role_changed",
+            field: "owner_selected_role",
+            fromValue: previous ?? "",
+            toValue: newValue ?? "",
+          });
+        }
+        // готово, остальные поля PATCH не трогают owner_selected_role — это
+        // своя ось. Но если в этом же запросе передали, скажем, title —
+        // общий UPDATE ниже всё равно отработает, и это нормально: это два
+        // независимых действия в одном HTTP-вызове.
+      }
+
       // ФЛАГ ГОТОВНОСТИ К САМОЗАХВАТУ (миграция 026, карточка d598de9f):
       // поднимает только владелец трекера. Если body.ready_for_pickup
       // передано — обрабатываем здесь и НЕ пропускаем в общий UPDATE ниже
@@ -1521,59 +1578,6 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // Но если в этом же запросе передали, скажем, title — общий UPDATE
         // ниже всё равно отработает, и это нормально: это два независимых
         // действия в одном HTTP-вызове, не «одна операция».
-      }
-
-      // ВЫБОР РОЛИ ВЛАДЕЛЬЦЕМ (миграция 038, карточка 5ceda583).
-      // Та же логика «только владелец трекера», что и у ready_for_pickup,
-      // но это НЕЗАВИСИМАЯ ось: можно поднять роль заранее, готовность —
-      // позже (или наоборот). Назначение роли само по себе работу не
-      // запускает — оно лишь говорит диспетчеру, какую из 8 ролей выбрал
-      // владелец, если тот доберётся до задачи. Валидация против
-      // ROLE_NAMES идёт здесь, а не в SQL: CHECK на этой колонке запер бы
-      // список ролей в схеме (миграция 005 уже показала, что
-      // CHECK(role IN (...)) сменить дороже, чем переписать таблицу), а
-      // роль добавить — операция дешевле, чем миграция через пересборку.
-      if (body.owner_selected_role !== undefined) {
-        if (!isOwner(req.userId)) {
-          return reply.code(403).send({
-            error: "выбрать роль задачи может только владелец трекера",
-          });
-        }
-
-        const raw = body.owner_selected_role;
-        if (raw !== null) {
-          if (
-            typeof raw !== "string" ||
-            !ROLE_NAMES.includes(raw as RoleName)
-          ) {
-            return reply.code(400).send({
-              error: `owner_selected_role должен быть одной из ролей: ${ROLE_NAMES.join(", ")}`,
-            });
-          }
-        }
-        const newValue = raw === null ? null : (raw as string);
-        const previous = existing.owner_selected_role ?? null;
-        if (previous === newValue) {
-          // идемпотентность: повтор того же значения не пишет лишнего
-          // события и не трогает карточку. Это не «подтверждение», это
-          // пустой PATCH.
-        } else {
-          db.prepare(
-            `UPDATE tasks SET owner_selected_role = ?, updated_at = datetime('now') WHERE id = ?`,
-          ).run(newValue, id);
-          logEvent({
-            taskId: id,
-            actorId: req.userId,
-            kind: "owner_role_changed",
-            field: "owner_selected_role",
-            fromValue: previous ?? "",
-            toValue: newValue ?? "",
-          });
-        }
-        // готово, остальные поля PATCH не трогают owner_selected_role — это
-        // своя ось. Но если в этом же запросе передали, скажем, title —
-        // общий UPDATE ниже всё равно отработает, и это нормально: это два
-        // независимых действия в одном HTTP-вызове.
       }
 
       // СМЕНА ИСПОЛНИТЕЛЯ — владелец или оркестратор трекера. Правило

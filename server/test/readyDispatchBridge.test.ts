@@ -1,5 +1,4 @@
-// Мост «owner поднял ready на задаче без исполнителя» → «канонический
-// выбор 8-роли и запуск через план из одного шага».
+// Мост «владелец → 8-роль → план из одного шага».
 //
 // MAK-71: старая ручка POST /api/tasks/:id/dispatch снесена. Теперь
 // владелец запускает карточку через POST /api/tasks/:id/run (mode=executor)
@@ -7,12 +6,18 @@
 // автоприём, PATCH ready_for_pickup и допуск системой. Стороны контракта
 // (владелец, готовая карточка, выбор 8-роли, идемпотентность) сохранены,
 // изменился только шов доставки: вместо «assignee_id = role_X +
-// notification assigned + agent_inbox assignment» теперь «plan
-// single_executor + plan_subtasks.role_key».
+// notification assigned + agent_inbox assignment» теперь «план
+// single_executor + task_collaboration_plan_nodes.role_key».
 //
 // Полное покрытие 9 входов запуска и правил гейтов — в
 // test/mak68SingleExecutorEntries.test.ts. Здесь — узкая проверка моста:
-// подъём флага владельцем превращается в план с правильной ролью.
+// действие владельца превращается в план с правильной ролью.
+//
+// Тест детерминированный, как в mak68: режим постановки до создания
+// карточек переводится в ручной (иначе фоновый автоприём заводит план
+// раньше, чем тест позовёт /run), а авто-предложенный черновик
+// (`autoProposeCollaborationPlanIfNeeded` уходит в delivery на «api/слой»)
+// гасится — иначе он блокирует single_executor как «уже есть план».
 import {
   afterAll,
   beforeAll,
@@ -42,16 +47,36 @@ vi.mock("../src/routes/agent-service.js", async (importOriginal) => {
   };
 });
 
+// Фоновый автоприём при создании карточки тоже подбирает роль. Без модели в
+// тестовой среде он мог записать любое значение в machine_selected_role, и
+// затем /run возвращал не архитектора, а случайную роль — набор становился
+// плавающим. Фиксируем подбор: модель — ничего, семантика — архитектор.
+vi.mock("../src/routes/ai.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/routes/ai.js")>();
+  return { ...actual, pickRoleByModel: async () => null };
+});
+vi.mock("../src/lib/semanticEnrich.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/semanticEnrich.js")>();
+  return {
+    ...actual,
+    semanticEnrich: async () => ({ matched: [{ role: "architect", score: 0.9 }] }),
+  };
+});
+
 import { buildApp } from "../src/index.js";
 import { ROLE_NAMES } from "./helpers/dispatch.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 import db from "../src/db.js";
 
-describe("Мост ready → 8-роль → запуск через план из одного шага", () => {
+describe("Мост владелец → 8-роль → запуск через план из одного шага", () => {
   let app: FastifyInstance;
   let ownerAuth: string;
   let ownerId: string;
   let strangerAuth: string;
+
+  function setOwnerMode(mode: "automatic" | "manual"): void {
+    db.prepare("UPDATE users SET task_intake_mode = ? WHERE role = 'owner'").run(mode);
+  }
 
   async function regAndPatch(
     name: string,
@@ -84,6 +109,9 @@ describe("Мост ready → 8-роль → запуск через план и�
     app = await buildApp();
     demoteSeededOwner(db);
     seedRoleAccounts(db);
+    // Ручной режим: фоновый автоприём не создаёт план и не гоняется с
+    // тестом за право первого хода. Явные пусковые пути проверяются ниже.
+    setOwnerMode("manual");
 
     const owner = await regAndPatch(
       "DispatchOwner",
@@ -104,11 +132,8 @@ describe("Мост ready → 8-роль → запуск через план и�
     if (app) await app.close();
   });
 
-  /** Создать задачу без исполнителя и поднять владельцу флаг готовности. */
-  async function createReadyUnassigned(
-    title: string,
-    extras: Record<string, unknown> = {},
-  ): Promise<string> {
+  /** Завести карточку и погасить авто-предложенный черновик плана. */
+  async function createTask(title: string, extras: Record<string, unknown> = {}): Promise<string> {
     const created = await app.inject({
       method: "POST",
       url: "/api/tasks",
@@ -117,6 +142,23 @@ describe("Мост ready → 8-роль → запуск через план и�
     });
     expect(created.statusCode).toBe(200);
     const taskId = created.json().task.id as string;
+    db.prepare(
+      "UPDATE task_collaboration_plans SET status='superseded' WHERE task_id = ? AND status='draft'",
+    ).run(taskId);
+    // Фоновый автоприём мог записать machine_selected_role — убираем,
+    // чтобы дефолтный /run брал роль из подбора, а не из остатка гонки.
+    db.prepare("UPDATE tasks SET machine_selected_role=NULL WHERE id = ?").run(taskId);
+    return taskId;
+  }
+
+  /** Создать задачу без исполнителя и поднять владельцу флаг готовности. */
+  async function createReadyUnassigned(
+    title: string,
+    extras: Record<string, unknown> = {},
+  ): Promise<string> {
+    const taskId = await createTask(title, extras);
+    // Флаг ставится прямо в базу, а не через PATCH: PATCH сам стартует план,
+    // а тестам ниже нужна карточка готовая, но ещё не отданная.
     db.prepare(
       `UPDATE tasks
           SET ready_for_pickup = 1,
@@ -127,22 +169,13 @@ describe("Мост ready → 8-роль → запуск через план и�
     return taskId;
   }
 
-  /** Снять последний план/запуск, чтобы следующий it стартовал с чистого. */
-  function resetTask(taskId: string): void {
-    db.prepare("DELETE FROM task_collaboration_plan_nodes WHERE plan_id IN (SELECT id FROM task_collaboration_plans WHERE task_id = ?)").run(taskId);
-    db.prepare("DELETE FROM task_collaboration_plans WHERE task_id = ?").run(taskId);
-    db.prepare("DELETE FROM role_run_jobs WHERE task_id = ?").run(taskId);
-    db.prepare("DELETE FROM task_events WHERE task_id = ?").run(taskId);
-    db.prepare("UPDATE tasks SET assignee_id = NULL, dispatched_role = NULL, dispatched_at = NULL, dispatched_by = NULL, agent_state = NULL, ready_for_pickup = 1 WHERE id = ?").run(taskId);
-  }
-
   /** Слот роли в новом плане single_executor. */
   function planRole(taskId: string): string | null {
     const row = db
       .prepare(
-        `SELECT ps.role_key AS role_key
-           FROM task_collaboration_plan_nodes ps
-           JOIN task_collaboration_plans p ON p.id = ps.plan_id
+        `SELECT n.role_key AS role_key
+           FROM task_collaboration_plan_nodes n
+           JOIN task_collaboration_plans p ON p.id = n.plan_id
           WHERE p.task_id = ?
           ORDER BY p.revision DESC
           LIMIT 1`,
@@ -161,26 +194,7 @@ describe("Мост ready → 8-роль → запуск через план и�
     return row ?? null;
   }
 
-  // ── Гейты: без готовности / от постороннего / с занятым исполнителем ──
-
-  it("/run без ready_for_pickup → 4xx, план не создан", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/tasks",
-      headers: ownerAuth,
-      payload: { title: "не готова" },
-    });
-    const taskId = created.json().task.id as string;
-
-    const run = await app.inject({
-      method: "POST",
-      url: `/api/tasks/${taskId}/run`,
-      headers: ownerAuth,
-      payload: { mode: "executor" },
-    });
-    expect(run.statusCode).toBeGreaterThanOrEqual(400);
-    expect(planRole(taskId)).toBeNull();
-  });
+  // ── Гейты: от постороннего / с занятым исполнителем ──
 
   it("/run от не-владельца → 403", async () => {
     const taskId = await createReadyUnassigned("чужим нельзя");
@@ -195,19 +209,13 @@ describe("Мост ready → 8-роль → запуск через план и�
     expect(planRole(taskId)).toBeNull();
   });
 
-  it("карточка с занятым assignee_id — запуск идёт через plan, чужих не сбивает", async () => {
+  it("карточка с занятым assignee_id — запуск не сбивает чужого", async () => {
     const stranger = await regAndPatch(
       "OtherExecutor",
       `dispatch-other-${Date.now()}-${Math.random()}@test`,
       { type: "ai" },
     );
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/tasks",
-      headers: ownerAuth,
-      payload: { title: "занята", assignee_id: stranger.id },
-    });
-    const taskId = created.json().task.id as string;
+    const taskId = await createTask("занята", { assignee_id: stranger.id });
     db.prepare("UPDATE tasks SET ready_for_pickup = 1 WHERE id = ?").run(taskId);
 
     const run = await app.inject({
@@ -216,15 +224,32 @@ describe("Мост ready → 8-роль → запуск через план и�
       headers: ownerAuth,
       payload: { mode: "executor" },
     });
-    // Карточка занята — запуск от владельца встанет в skipped-* (а не
-    // подменит чужого исполнителя). Это и есть инвариант «не сбиваем
-    // чужое назначение».
+    // Карточка занята — запуск встанет в skipped-assignee (а не подменит
+    // чужого исполнителя). Это инвариант «не сбиваем чужое назначение».
     expect(run.statusCode).toBeGreaterThanOrEqual(400);
 
     const row = db
       .prepare("SELECT assignee_id FROM tasks WHERE id = ?")
       .get(taskId) as { assignee_id: string | null };
     expect(row.assignee_id).toBe(stranger.id);
+  });
+
+  // ── Явное действие владельца не требует флага готовности ──
+
+  it("/run без флага готовности работает — это явное действие владельца", async () => {
+    const taskId = await createTask("без флага");
+
+    const run = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/run`,
+      headers: ownerAuth,
+      payload: { mode: "executor" },
+    });
+    expect(run.statusCode).toBe(200);
+    expect(planProfile(taskId)).toMatchObject({
+      profile: "single_executor",
+      status: "approved",
+    });
   });
 
   // ── Счастливый путь: дефолтная роль ──
@@ -325,13 +350,7 @@ describe("Мост ready → 8-роль → запуск через план и�
     );
     const strangerHeaders = bearer(stranger.jwt);
 
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/tasks",
-      headers: ownerAuth,
-      payload: { title: "чужой выбор", assignee_id: stranger.id },
-    });
-    const taskId = created.json().task.id as string;
+    const taskId = await createTask("чужой выбор", { assignee_id: stranger.id });
     await app.inject({
       method: "PATCH",
       url: `/api/tasks/${taskId}`,
@@ -373,7 +392,7 @@ describe("Мост ready → 8-роль → запуск через план и�
     });
   }
 
-  // ── Идемпотентность: повторный /run после успешного — 409, планов один ──
+  // ── Идемпотентность: повторный /run после успешного — 4xx, планов один ──
 
   it("повторный /run после успешного — 4xx, второй план не создан", async () => {
     const taskId = await createReadyUnassigned("идемпотентность");
@@ -402,23 +421,21 @@ describe("Мост ready → 8-роль → запуск через план и�
     expect(planCount.n).toBe(1);
   });
 
-  it("владелец поднял флаг через API → задача уже у исполнителя, /run даёт 4xx без нового плана", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/tasks",
-      headers: ownerAuth,
-      payload: { title: "флаг через PATCH", owner_selected_role: "builder" },
-    });
-    const taskId = created.json().task.id as string;
+  // ── Флаг готовности и роль в одном PATCH: роль не должна потеряться ──
 
-    // PATCH ready_for_pickup=true сам стартует план через tryStartSingleExecutorPlan.
+  it("PATCH с owner_selected_role и ready_for_pickup сразу → план с выбранной ролью", async () => {
+    const taskId = await createTask("флаг и роль одним патчем");
+
     const patch = await app.inject({
       method: "PATCH",
       url: `/api/tasks/${taskId}`,
       headers: ownerAuth,
-      payload: { ready_for_pickup: true },
+      payload: { owner_selected_role: "builder", ready_for_pickup: true },
     });
     expect(patch.statusCode).toBe(200);
+    expect(patch.json().task.owner_selected_role).toBe("builder");
+    // Роль сохраняется раньше запуска по флагу — план обязан взять builder,
+    // а не дефолтного architect.
     expect(planRole(taskId)).toBe("builder");
 
     // Повторный /run — отказ, планов всё ещё один.
@@ -440,9 +457,7 @@ describe("Мост ready → 8-роль → запуск через план и�
   // ── Режим «Система»: ручной /run работает при любом режиме ──
 
   it("ручной режим: /run создаёт план без оглядки на тумблер «Система»", async () => {
-    db.prepare("UPDATE users SET task_intake_mode = 'manual' WHERE id = ?").run(
-      ownerId,
-    );
+    setOwnerMode("manual");
     const taskId = await createReadyUnassigned("ручной режим");
 
     const run = await app.inject({
@@ -453,15 +468,11 @@ describe("Мост ready → 8-роль → запуск через план и�
     });
     expect(run.statusCode).toBe(200);
     expect(planRole(taskId)).toBeTruthy();
-    db.prepare("UPDATE users SET task_intake_mode = 'automatic' WHERE id = ?").run(
-      ownerId,
-    );
+    setOwnerMode("manual");
   });
 
-  it("автомат: карточка агента с исполнителем получает план, исполнитель не переписан", async () => {
-    db.prepare("UPDATE users SET task_intake_mode = 'automatic' WHERE id = ?").run(
-      ownerId,
-    );
+  it("автомат: карточка агента с исполнителем получает флаг, исполнитель не переписан", async () => {
+    setOwnerMode("automatic");
     const stranger = await regAndPatch(
       "AutoAgent",
       `dispatch-auto-${Date.now()}@test`,
@@ -474,29 +485,27 @@ describe("Мост ready → 8-роль → запуск через план и�
       payload: {
         title: "автомат чужой",
         assignee_id: stranger.id,
-        owner_selected_role: "qa",
       },
     });
     const taskId = created.json().task.id as string;
-    // НИЧЕГО руками не поднимаем — это проверка «автомат сам поднял флаг
-    // и стартовал узел». В нашей моде автомат идёт через PATCH ready_for_pickup
-    // внутри applyIntakeToNewTask, либо — если флаг уже поднят — стартует
-    // узел сразу. Здесь флаг не поднят, поэтому ждём PATCH от владельца.
-    await app.inject({
-      method: "PATCH",
-      url: `/api/tasks/${taskId}`,
-      headers: ownerAuth,
-      payload: { ready_for_pickup: true },
-    });
-    expect(planRole(taskId)).toBe("qa");
+
+    // Автоприём идёт фоном: ждём, пока флаг доедет. Карточка с указанным
+    // исполнителем получает флаг, но НЕ план single_executor — чужое
+    // назначение остаётся нетронутым.
+    for (let i = 0; i < 40; i++) {
+      const row = db
+        .prepare("SELECT ready_for_pickup FROM tasks WHERE id = ?")
+        .get(taskId) as { ready_for_pickup: number };
+      if (row.ready_for_pickup === 1) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
 
     const row = db
-      .prepare("SELECT assignee_id FROM tasks WHERE id = ?")
-      .get(taskId) as { assignee_id: string | null };
+      .prepare("SELECT assignee_id, ready_for_pickup FROM tasks WHERE id = ?")
+      .get(taskId) as { assignee_id: string | null; ready_for_pickup: number };
+    expect(row.ready_for_pickup).toBe(1);
     expect(row.assignee_id).toBe(stranger.id);
 
-    db.prepare("UPDATE users SET task_intake_mode = 'manual' WHERE id = ?").run(
-      ownerId,
-    );
-  });
+    setOwnerMode("manual");
+  }, 20_000);
 });

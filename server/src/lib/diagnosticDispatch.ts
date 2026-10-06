@@ -40,8 +40,10 @@ export async function dispatchPendingDiagnosticTasks(): Promise<void> {
       if (!result.ok) throw new Error(result.error);
       if (result.reason !== "started") {
         // skipped-assignee / skipped-plan — задача уже в работе, не
-        // повторяем, бросать не нужно.
-        return;
+        // повторяем и идём к следующей карточке (не прерываем обход
+        // целиком: иначе первая же занятая карточка глушила бы раздачу
+        // остальным).
+        continue;
       }
       lastErrors.delete(task.id);
     } catch (error) {

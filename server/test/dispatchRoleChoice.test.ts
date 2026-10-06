@@ -155,7 +155,7 @@ describe("Диспетчер: выбор роли", () => {
     expect(plan).toEqual({ profile: "single_executor", status: "approved" });
     const sub = db
       .prepare(
-        `SELECT role_key FROM plan_subtasks
+        `SELECT role_key FROM task_collaboration_plan_nodes
           WHERE plan_id IN (SELECT id FROM task_collaboration_plans
                             WHERE task_id = ?)
           LIMIT 1`,
