@@ -4,7 +4,7 @@ import db from "../src/db.js";
 let app:Awaited<ReturnType<typeof buildApp>>;
 beforeAll(async()=>{app=await buildApp();});
 afterAll(async()=>{await app.close();});
-it("новые дубли действий подавлены для владельца, служебные сигналы сохранены",()=>{
+it("новые дубли действий подавлены для владельца, сигналы решения сохранены",()=>{
  const insert=db.prepare("INSERT INTO notifications(id,user_id,type,text) VALUES (?,?,?,?)");
  for(const type of ["reviewed","assigned","commented","agent_state"]){
   insert.run("suppressed-"+type,"u1",type,"Действие");
@@ -12,8 +12,12 @@ it("новые дубли действий подавлены для владе�
  }
  insert.run("completion-kept","u1","completed","Завершение");
  expect(db.prepare("SELECT id FROM notifications WHERE id='completion-kept'").get()).toBeTruthy();
- insert.run("service-kept","u1","agent_watch","Сбой");
- expect(db.prepare("SELECT id FROM notifications WHERE id='service-kept'").get()).toBeTruthy();
+ // MAK-99: краткий режим — сигнал сторожа agent_watch заменён типизированными
+ // событиями и владельцу больше не повторяется.
+ insert.run("watch-suppressed","u1","agent_watch","Сбой");
+ expect(db.prepare("SELECT id FROM notifications WHERE id='watch-suppressed'").get()).toBeUndefined();
+ insert.run("owner-decision","u1","owner_signal","Нужно ваше решение");
+ expect(db.prepare("SELECT id FROM notifications WHERE id='owner-decision'").get()).toBeTruthy();
 });
 it("старые дубли скрыты из API без удаления истории, уведомления исполнителям сохранены",async()=>{
  db.prepare("INSERT INTO users(id,name,email,password_hash,role,type) VALUES ('notify-agent','Agent','notify-agent@test','','agent','ai')").run();

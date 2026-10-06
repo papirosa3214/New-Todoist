@@ -99,6 +99,22 @@ export function rolesPromptBlock(): string {
     .join("\n");
 }
 
+/**
+ * Список коллег для системной инструкции роли (пункт 7 плана MAK-99):
+ * включённые роли, кроме собственной, с названием и «чем занимается».
+ *
+ * Источник — тот же реестр профилей, что кормит `rolesPromptBlock` и выбор
+ * модели: список не дублируется вручную в каноне и не разъезжается с
+ * таблицей `roles`. Формат строки — `- <ключ> — <название>: <занятие>`,
+ * по ней роли и адресуют коллег (`to` в `taskflow_chat_send`).
+ */
+export function colleagueList(self: string): string {
+  return registry
+    .filter((r) => r.enabled && r.key !== self)
+    .map((r) => `- ${r.key} — ${r.title}: ${r.summary}`)
+    .join("\n");
+}
+
 refreshRoles();
 
 export type RoleRouting = {

@@ -79,6 +79,8 @@ import {
   openRoleQuestion,
   recipientUserIdFor,
 } from "../runtime/roleMessageWait.js";
+import { isSilenceOnly } from "../runtime/silenceToken.js";
+import { registryRecord } from "../agentState.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -702,6 +704,31 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
             .code(409)
             .send({ error: availability.error, code: availability.code });
         }
+      }
+      // Токен молчания (MAK-99): реплика роли без вопроса, факта и результата
+      // («принял», «понял, отвечу») в ленту темы не публикуется — остаётся в
+      // журнале. Живой человек и вложения проходят всегда.
+      if (
+        senderRole &&
+        taskId &&
+        attachmentIds.length === 0 &&
+        isSilenceOnly(text)
+      ) {
+        try {
+          registryRecord({
+            source: "chat_messages",
+            trigger: "silence_token",
+            toUserId: req.userId,
+            data: { chat_id: chatId, task_id: taskId, text: text.slice(0, 240) },
+            result: "suppressed",
+          });
+        } catch (error) {
+          console.warn(
+            `[chats] журнал токена молчания не сработал для ${chatId}:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+        return reply.code(200).send({ message: null, suppressed: true, reason: "silence_token" });
       }
       const id = uid();
       db.prepare(
@@ -1588,6 +1615,25 @@ async function deliverAgentReply(args: {
     const extracted = extractQuickReplies(replyText);
     replyText = extracted.clean;
     quickReplies = extracted.replies;
+  }
+  // Токен молчания (MAK-99): ответ роли в теме задачи, который сводится к
+  // пустому подтверждению, в ленту темы не публикуем — он остаётся в журнале.
+  if (replyText && topic && isSilenceOnly(replyText)) {
+    try {
+      registryRecord({
+        source: "chat_messages",
+        trigger: "silence_token",
+        toUserId: roleUserId,
+        data: { chat_id: chatId, task_id: topic.task_id, text: replyText.slice(0, 240) },
+        result: "suppressed",
+      });
+    } catch (error) {
+      console.warn(
+        `[chats] журнал токена молчания не сработал для ${chatId}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+    replyText = "";
   }
   // Сообщение о сбое хода — не для общего чата (инвариант п. 3): сбой идёт
   // в личную переписку роли, в общем чате ему места нет.

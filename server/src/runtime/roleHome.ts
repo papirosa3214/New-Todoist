@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { roleTitle } from "../roleRouting.js";
+import { colleagueList, roleTitle } from "../roleRouting.js";
 
 /** Постоянный инструментарий роли, отдельно от живого API и проектов задач. */
 export function roleHome(role: string) {
@@ -99,7 +99,13 @@ export function renderSystemPrompt(role: string, home: ReturnType<typeof roleHom
       "Канон роли (scripts/role-system-prompt.md) в этом запуске недоступен.",
     ].join("\n");
   }
-  return template.split("{{IDENTITY}}").join(identity).split("{{FOLDER}}").join(folder);
+  return template
+    .split("{{IDENTITY}}")
+    .join(identity)
+    .split("{{FOLDER}}")
+    .join(folder)
+    .split("{{TEAM}}")
+    .join(colleagueList(role));
 }
 
 /** Без перезаписи существующих файлов; подходит и для новых пользовательских ролей.

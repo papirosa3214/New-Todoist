@@ -3687,6 +3687,18 @@ const migrations: Migration[] = [
         ON orchestrator_events(delivered_at, id);
     `);
   } },
+  // MAK-99, пункты 5 и 8: «краткий» режим уведомлений владельца по умолчанию.
+  // Владельцу доходят только сигналы, требующие его решения («меняет
+  // результат» — тип owner_signal, и завершение карточки), а шум действий и
+  // сторож `agent_watch` подавляются: его роль берут типизированные события
+  // step_outcome / block_type из MAK-96…98.
+  { id: "114_owner_brief_notifications", description: "Краткий режим уведомлений владельца: шум действий и agent_watch подавлены, сигналы решения проходят (MAK-99)", up: () => db.exec(`
+    DROP TRIGGER IF EXISTS notifications_owner_no_activity;
+    CREATE TRIGGER notifications_owner_no_activity BEFORE INSERT ON notifications
+    WHEN NEW.type IN ('assigned','commented','reviewed','agent_state','agent_watch')
+      AND EXISTS (SELECT 1 FROM users WHERE id=NEW.user_id AND role='owner')
+    BEGIN SELECT RAISE(IGNORE); END;
+  `) },
 ];
 
 /**
