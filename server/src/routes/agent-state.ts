@@ -727,8 +727,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const { state } = req.body || {};
-      // Сервисная дверь для trigger.py: при state=blocked сервисный
-      // юзер (Pi Agent) может пометить любую задачу, даже если он не
+      // Сервисная дверь системной автоматики: при state=blocked служебная
+      // учётка («Система») может пометить любую задачу, даже если она не
       // assignee/creator. Это нужно, чтобы зафиксировать техническое
       // падение claim/launch_agent, когда ролевой ключ не сработал.
       let task =

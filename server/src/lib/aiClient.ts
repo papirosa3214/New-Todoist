@@ -67,39 +67,7 @@ export async function callUnifiedAi(opts: {
     }
   }
 
-  // 2. Hermes / OpenRouter
-  if (provider === "hermes" && process.env.OPENROUTER_API_KEY) {
-    const hermesModel =
-      requestedModel ||
-      process.env.HERMES_MODEL ||
-      "nousresearch/hermes-3-llama-3.1-405b";
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: hermesModel,
-          messages: [
-            { role: "system", content: opts.systemPrompt },
-            { role: "user", content: opts.userPrompt },
-          ],
-        }),
-        signal: AbortSignal.timeout(60_000),
-      });
-      if (res.ok) {
-        const d = (await res.json()) as any;
-        const text = d?.choices?.[0]?.message?.content;
-        if (text) return text;
-      }
-    } catch (e) {
-      console.warn("Hermes/OpenRouter error, falling back to local Ollama:", e);
-    }
-  }
-
-  // 3. DeepSeek API
+  // 2. DeepSeek API
   if (provider === "deepseek" && process.env.DEEPSEEK_API_KEY) {
     const deepseekModel =
       requestedModel || process.env.DEEPSEEK_MODEL || "deepseek-chat";
@@ -126,66 +94,6 @@ export async function callUnifiedAi(opts: {
       }
     } catch (e) {
       console.warn("DeepSeek error, falling back to local Ollama:", e);
-    }
-  }
-
-  const ANTIGRAVITY_TO_GEMINI_API_MAP: Record<string, string> = {
-    "gemini-3.7-flash-high": "gemini-3-flash-preview",
-    "gemini-3.7-flash-medium": "gemini-3-flash-preview",
-    "gemini-3.7-flash-low": "gemini-3-flash-preview",
-    "gemini-3.6-flash-high": "gemini-3-flash-preview",
-    "gemini-3.6-flash-medium": "gemini-3-flash-preview",
-    "gemini-3.6-flash-low": "gemini-3-flash-preview",
-    "gemini-3.5-flash-high": "gemini-2.5-flash",
-    "gemini-3.5-flash-medium": "gemini-2.5-flash",
-    "gemini-3.5-flash-low": "gemini-2.5-flash",
-    "gemini-3.1-pro-high": "gemini-3.1-pro-preview",
-    "gemini-3.1-pro-low": "gemini-3.1-pro-preview",
-    "claude-sonnet-4-6": "gemini-3.1-pro-preview",
-    "claude-sonnet-4.6": "gemini-3.1-pro-preview",
-    "claude-opus-4-6-thinking": "gemini-3.1-pro-preview",
-    "claude-opus-4.6": "gemini-3.1-pro-preview",
-    "gpt-oss-120b-medium": "gemini-2.5-pro",
-    "gpt-oss-120b": "gemini-2.5-pro",
-  };
-
-  // 4. Antigravity / Direct Gemini API
-  if (
-    (provider === "antigravity" || provider === "gemini") &&
-    (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)
-  ) {
-    const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    const mappedModel = requestedModel
-      ? ANTIGRAVITY_TO_GEMINI_API_MAP[requestedModel] || requestedModel
-      : undefined;
-    const geminiModel =
-      mappedModel || process.env.GEMINI_MODEL || "gemini-3.1-pro-preview";
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [{ text: `${opts.systemPrompt}\n\n${opts.userPrompt}` }],
-              },
-            ],
-          }),
-          signal: AbortSignal.timeout(60_000),
-        },
-      );
-      if (res.ok) {
-        const d = (await res.json()) as any;
-        const text = d?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) return text;
-      }
-    } catch (e) {
-      console.warn(
-        "Antigravity/Gemini error, falling back to local Ollama:",
-        e,
-      );
     }
   }
 

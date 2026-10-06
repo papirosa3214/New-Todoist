@@ -311,7 +311,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   setInProcessApp(app);
   await app.register(fastifyWebsocket);
   // global: false — лимит НЕ применяется автоматически ко всем маршрутам.
-  // Агенты и служба-будильник (taskflow-trigger) бьют по /api/tasks и
+  // Агенты и внутренняя автоматика сервера бьют по /api/tasks и
   // heartbeat раз в 90 секунд под одним и тем же LAN/localhost IP — общий
   // лимит по IP превратился бы в самопроизвольную блокировку рабочего
   // трафика. Ограничение включается точечно, через config.rateLimit на
@@ -413,7 +413,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // «ничего не грузится». Владелец сидит с телефона, терминала у него нет.
   //
   // Отдаём то, по чему видно живость и свежесть, а не диагностический дамп:
-  // сколько работает, на каком коде, велика ли база, идёт ли будильник.
+  // сколько работает, на каком коде, велика ли база, включена ли «Система».
   app.get("/api/server-status", { preHandler: authOrApiToken }, async () => {
     const uptime = Math.round(process.uptime());
     let commit: string | null = null;
@@ -452,19 +452,20 @@ export async function buildApp(): Promise<FastifyInstance> {
       dbBytes = null;
     }
 
-    // Будильник — отдельная служба (taskflow-trigger.service): это она
-    // зовёт агентов в работу, и её молчание выглядит как «доска мёртвая».
+    // «Система» — единый переключатель серверной автоматики
+    // (task_intake_mode владельца). Раньше здесь опрашивалась служба-будильник
+    // taskflow-trigger.service; служба снята 05.10.2026, роли исполняет
+    // сервер. Поле trigger сохранено для совместимости с приложением.
     let trigger: string | null = null;
     try {
-      trigger = execFileSync(
-        "systemctl",
-        ["--user", "is-active", "taskflow-trigger.service"],
-        { encoding: "utf8", timeout: 3000 },
-      ).trim();
-    } catch (e: any) {
-      // is-active возвращает ненулевой код, когда служба не работает, —
-      // это ответ, а не ошибка.
-      trigger = (e?.stdout || "").toString().trim() || "unknown";
+      const owner = db
+        .prepare(
+          "SELECT task_intake_mode FROM users WHERE role='owner' ORDER BY created_at LIMIT 1",
+        )
+        .get() as { task_intake_mode?: string } | undefined;
+      trigger = owner?.task_intake_mode === "automatic" ? "active" : "inactive";
+    } catch {
+      trigger = "unknown";
     }
 
     // Проверка доступности локальной LLM (Ollama)

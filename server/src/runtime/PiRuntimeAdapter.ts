@@ -21,7 +21,6 @@ import {
 import db from "../db.js";
 import {
   ROLE_NAMES,
-  SHELL_AGENT_IDS,
   loadRoleRouting,
   providerOfModel,
   roleTitle,
@@ -208,20 +207,13 @@ function readRoleAccount(role: RoleName) {
       | undefined;
 }
 
-/** userId, которого попытка будет записана как executor. По возможности —
- *  ролевая учётка; иначе shell-учётка pi_runtime; иначе любой ai-пользователь.
+/** userId, которого попытка будет записана как executor. Исполнитель —
+ *  ролевая учётка; иначе любой ai-пользователь (страховка до посева ролей).
  *  null = записать attempt нельзя (нет пользователя), run всё равно идёт. */
-function resolveExecutorId(role: string | null, agentId: string): string | null {
+function resolveExecutorId(role: string | null, _agentId: string): string | null {
   if (role && (ROLE_NAMES as readonly string[]).includes(role)) {
     const account = readRoleAccount(role as RoleName);
     if (account) return account.id;
-  }
-  const shell = SHELL_AGENT_IDS[agentId] ?? SHELL_AGENT_IDS.pi_runtime;
-  if (shell) {
-    const exists = db.prepare("SELECT id FROM users WHERE id = ?").get(shell) as
-      | { id: string }
-      | undefined;
-    if (exists) return exists.id;
   }
   const anyAi = db
     .prepare(

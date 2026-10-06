@@ -114,22 +114,9 @@ export type ModelRoute = { model: string; provider: string };
 /** 18.09.2026 (карточка be9cf712, фаза 2): ShellRoute удалён вместе с
  *  nextShellForRole. Семантика «следующая оболочка» больше не применима. */
 
-/** Канонические имена shell'ов → userId. agent_pi → pi_runtime через
- *  SHELL_AGENT_ALIASES. Старые legacy-shells (claude_bot, hermes и т.д.)
- *  удалены 18.09.2026: Pi — единый runtime, остальные оболочки выведены. */
-export const SHELL_AGENT_IDS: Record<string, string> = {
-  pi_runtime: "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2",
-};
-
-/** Legacy-aliases shell-имён. Карточки до 18.09.2026 содержат "agent_pi",
- *  trigger.py и roleRouting трактуют оба имени одинаково. */
-export const SHELL_AGENT_ALIASES: Record<string, string> = {
-  agent_pi: "pi_runtime",
-};
-
-/** Deprecated с 18.09.2026. Новый код должен использовать SHELL_AGENT_IDS.
- *  Оставлен как алиас для существующих импортов в UI/legacy-коде. */
-export const SHELL_USER_IDS = SHELL_AGENT_IDS;
+/** С 06.10.2026 (MAK-72) shell-учётки удалены: Pi — единственный runtime,
+ *  а «оболочки» вроде claude_bot/hermes/antigravity/pi_runtime были
+ *  остатками снятой схемы и указывали на архивные/удалённые учётки. */
 
 const ROLE_ROUTING_FILE = path.resolve(
   process.env.TASKFLOW_ROLE_ROUTING_FILE ??

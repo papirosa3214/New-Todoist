@@ -43,12 +43,22 @@
 // указывали. Три такие задачи нашлись в живой базе.
 // ─────────────────────────────────────────────────────────────────────────
 import db from "./db.js";
+import { isServiceUser } from "./serviceUser.js";
 
-type Caller = { role?: string; type?: string; reviewer?: number; profile?: string | null };
+type Caller = { id?: string; role?: string; type?: string; reviewer?: number; profile?: string | null };
 
 function callerOf(userId: string): Caller | undefined {
-  return db.prepare("SELECT role, type, reviewer, profile FROM users WHERE id = ?").get(userId) as
+  return db.prepare("SELECT id, role, type, reviewer, profile FROM users WHERE id = ?").get(userId) as
     Caller | undefined;
+}
+
+/** «Агентоподобный» вызывающий: настоящий агент (type='ai') или служебная
+ *  учётка «Система» — серверная автоматика планировщика. У них одни правила
+ *  видимости: видит всё, меняет только своё или назначенное. С 06.10.2026
+ *  (MAK-72) служебная учётка — «Система» (role='service', type='human'),
+ *  но по правам она — продолжение прежней агентской Pi Agent. */
+function isAiCaller(caller: Caller | undefined): boolean {
+  return caller?.type === "ai" || (caller?.id ? isServiceUser(caller.id) : false);
 }
 
 /**
@@ -69,11 +79,9 @@ function callerOf(userId: string): Caller | undefined {
  * reviewer закрывает обе функции — узкая роль Critic/Verifier покрывает и
  * вынесение вердикта, и QA-проверку.
  *
- * Исторические имена (claude_bot, hermes, antigravity, pi_agent,
- * deepseek) с 05.10.2026 из маппинга убраны: pi_agent заархивирован
- * миграцией 040, остальные — сухие остатки старых shell-имён (см.
- * SHELL_AGENT_IDS в roleRouting.ts). Если завтра кто-то вернёт
- * `pi_agent` в team_catalog.json, getRole вернёт null и авторизация по
+ * Исторические имена старых shell-учёток (06.10.2026, MAK-72) из
+ * маппинга убраны вместе с самими учётками. Если завтра кто-то вернёт
+ * любое из них в team_catalog.json, getRole вернёт null и авторизация по
  * профилю работать не будет — это и есть защита: добавить профиль без
  * явного решения владельца.
  */
@@ -168,7 +176,7 @@ export function seesEveryTask(userId: string): boolean {
   return c?.role === "owner" ||
     c?.role === "orchestrator" ||
     c?.reviewer === 1 ||
-    c?.type === "ai";
+    isAiCaller(c);
 }
 
 /**
@@ -232,7 +240,7 @@ export function visibleScope(
     // видеть все — иначе распорядиться нечем.
     return { sql: "1 = 1", params: [] };
   }
-  if (caller?.type === "ai") {
+  if (isAiCaller(caller)) {
     // Именно владельцы (role='owner'), а не «любой человек»: регистрация
     // открыта, и по «type != 'ai'» агент видел бы справочники случайного
     // зарегистрировавшегося человека — к работе это отношения не имеет.
@@ -337,7 +345,7 @@ export function getTaskForWrite(
   if (isOwner(userId) || isOrchestrator(userId)) return row;
 
   const caller = callerOf(userId);
-  if (caller?.type === "ai") {
+  if (isAiCaller(caller)) {
     return db
       .prepare(
         "SELECT * FROM tasks WHERE id = ? AND (creator_id = ? OR assignee_id = ?)",
@@ -550,7 +558,7 @@ export function allLabelsOwnedByUser(
     return known.length === unique.length;
   }
 
-  if (callerOf(userId)?.type === "ai") {
+  if (isAiCaller(callerOf(userId))) {
     const usable = db
       .prepare(
         `SELECT l.id FROM labels l
