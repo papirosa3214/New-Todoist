@@ -39,6 +39,7 @@ import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
+import { recordAttemptModel } from "../lib/attemptModel.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -880,6 +881,14 @@ async function runRoleInProcessUnserialized(input: {
     runtime.getModel?.(providerOfModel(modelId), modelId) ??
     ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === modelId);
   if (!model) throw new Error(`модель «${modelId}» недоступна`);
+
+  // MAK-77: проставляем модель/провайдера в открытую попытку, чтобы расход
+  // по моделям было чем считать. Сбой записи не должен ронять запуск роли.
+  try {
+    recordAttemptModel({ taskId, subtaskId: input.subtaskId, modelId, provider: providerOfModel(modelId) });
+  } catch (error) {
+    console.warn("[attemptModel] не записалась:", error);
+  }
 
   // Репозиторий самого сервера — только в отдельной копии: сохранение файла
   // в живой перезапустило бы сервер вместе с этим ходом (roleWorkspace.ts).
