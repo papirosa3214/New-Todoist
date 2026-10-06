@@ -45,7 +45,7 @@ export function SearchScreen() {
   return (
     <div className="px-4 pb-4">
       <div className="sticky top-0 z-20 bg-bg/90 backdrop-blur-xl border-b border-stroke mb-4">
-        <div className="flex items-center gap-2 h-[48px]">
+        <div className="flex items-center gap-2 h-control-md">
           <div className="flex-1 flex items-center gap-2 bg-card rounded-xl px-3 h-[44px]">
             <Icon name="search" size={18} className="text-dim shrink-0" />
             <input

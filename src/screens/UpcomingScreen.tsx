@@ -1094,7 +1094,7 @@ export function UpcomingScreen() {
                 <button
                   onClick={goPrevMonth}
                   aria-label="Предыдущий месяц"
-                  className="w-[36px] h-[36px] flex items-center justify-center active:scale-95"
+                  className="w-[36px] h-control-sm flex items-center justify-center active:scale-95"
                 >
                   <Icon name="chevronLeft" size={16} className="text-sub" />
                 </button>
@@ -1107,7 +1107,7 @@ export function UpcomingScreen() {
                 <button
                   onClick={goNextMonth}
                   aria-label="Следующий месяц"
-                  className="w-[36px] h-[36px] flex items-center justify-center active:scale-95"
+                  className="w-[36px] h-control-sm flex items-center justify-center active:scale-95"
                 >
                   <Icon name="chevron" size={16} className="text-sub" />
                 </button>

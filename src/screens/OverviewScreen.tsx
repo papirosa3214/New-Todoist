@@ -171,7 +171,7 @@ export function OverviewScreen() {
         className="tap-row w-full flex items-center justify-between bg-card rounded-2xl p-4 mb-3 group"
       >
         <div className="flex items-center gap-3.5">
-          <div className="w-[36px] h-[36px] rounded-xl bg-gradient-to-tr from-[#FF2D55] to-[#FF9500] flex items-center justify-center text-white shadow-md shadow-[#FF2D55]/20 shrink-0">
+          <div className="w-[36px] h-control-sm rounded-xl bg-gradient-to-tr from-[#FF2D55] to-[#FF9500] flex items-center justify-center text-white shadow-md shadow-[#FF2D55]/20 shrink-0">
             <BrainCircuit className="w-5 h-5 text-white" />
           </div>
           <div className="text-left">

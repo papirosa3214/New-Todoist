@@ -53,7 +53,7 @@ function NotificationRow({ n }: { n: ApiNotification }) {
           size={36}
         />
       ) : (
-        <div className="w-[36px] h-[36px] rounded-full bg-card2 flex items-center justify-center shrink-0">
+        <div className="w-[36px] h-control-sm rounded-full bg-card2 flex items-center justify-center shrink-0">
           <Icon name="gear" size={17} className="text-dim" />
         </div>
       )}
