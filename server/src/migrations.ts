@@ -3660,6 +3660,17 @@ const migrations: Migration[] = [
     db.exec(`CREATE INDEX IF NOT EXISTS idx_attempts_outcome_started
                ON attempts(subtask_id, outcome, started_at)`);
   } },
+  { id: "112_test_run_budget", description: "Бюджет полных прогонов серверного набора: не больше двух на задачу, Разработчику один (владелец 06.10.2026)", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS test_run_budget (
+        task_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        full_runs INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (task_id, role)
+      )
+    `);
+  } },
 ];
 
 /**

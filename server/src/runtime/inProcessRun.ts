@@ -43,6 +43,7 @@ import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
 import { isProviderLimitText, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 import { logStepOutcome } from "./stepOutcome.js";
+import { withTestRunBudget } from "./testRunBudget.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -984,7 +985,7 @@ try {
   if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
   const xcode = await connectBuilderXcode(role, mode).catch(async error => { resourceLoader.disposeResources(); await composio.close(); throw error; });
   const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...xcode.tools];
-  const builtinTools = [...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()].filter(t=>BUILTIN_TOOLS.includes(t.name)).map(t=>({...t,description:composeLayer(role,"tool.builtin."+t.name)?.effective ?? t.description}));
+  const builtinTools = [...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()].filter(t=>BUILTIN_TOOLS.includes(t.name)).map(t=>({...t,description:composeLayer(role,"tool.builtin."+t.name)?.effective ?? t.description})).map(t=>withTestRunBudget(t,{role,taskId}));
   const { session } = await createAgentSession({
     cwd,
     model,
