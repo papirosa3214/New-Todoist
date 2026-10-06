@@ -438,6 +438,29 @@ describe("runtime providers API", () => {
     expect(bad.statusCode).toBe(422);
   });
 
+  it("failover: статус, тумблеры и «вернуть сейчас»", async () => {
+    const h = { authorization: `Bearer ${ownerToken}` };
+    db.prepare("DELETE FROM provider_limits").run();
+    db.prepare("INSERT INTO provider_limits (provider, unavailable_until, mode) VALUES ('minimax', datetime('now','+2 hours'), 'timer')").run();
+    const st = await app.inject({ method: "GET", url: "/api/runtime/failover", headers: h });
+    expect(st.statusCode).toBe(200);
+    const body = st.json() as { auto_switch: boolean; auto_return: boolean; limits: { provider: string; held: boolean }[]; roles: { role: string; primary: string; on_fallback: boolean }[] };
+    expect(body.auto_switch).toBe(true);
+    expect(body.limits.map((l) => l.provider)).toContain("minimax");
+    expect(body.roles.length).toBeGreaterThan(0);
+
+    const off = await app.inject({ method: "PUT", url: "/api/runtime/failover", headers: h, payload: { auto_return: false } });
+    expect((off.json() as { auto_return: boolean }).auto_return).toBe(false);
+    const bad = await app.inject({ method: "PUT", url: "/api/runtime/failover", headers: h, payload: { auto_switch: "да" } });
+    expect(bad.statusCode).toBe(422);
+    await app.inject({ method: "PUT", url: "/api/runtime/failover", headers: h, payload: { auto_return: true } });
+
+    const rel = await app.inject({ method: "DELETE", url: "/api/runtime/failover/limits/minimax", headers: h });
+    expect(rel.statusCode).toBe(200);
+    const after = await app.inject({ method: "GET", url: "/api/runtime/failover", headers: h });
+    expect((after.json() as { limits: unknown[] }).limits).toEqual([]);
+  });
+
   it("PUT /routing {primary} — основная модель сразу всем ролям, запасные не затираются", async () => {
     await app.inject({
       method: "PUT",

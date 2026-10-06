@@ -7,6 +7,7 @@ import db from "../src/db.js";
 import { markProviderLimited, providerAvailable } from "../src/lib/modelLadder.js";
 import { modelForProvider, runProviderProbe } from "../src/runtime/providerProbe.js";
 import { pickFailoverModel, pickStartModel, providerWorkedRecently } from "../src/runtime/providerFailover.js";
+import { setFailoverSettings, getFailoverSettings } from "../src/lib/failoverSettings.js";
 import type { RoleRouting } from "../src/roleRouting.js";
 
 const routing = {
@@ -16,6 +17,7 @@ const routing = {
 } as unknown as RoleRouting;
 
 function clear() {
+  setFailoverSettings({ autoSwitch: true, autoReturn: true });
   db.prepare("DELETE FROM provider_limits WHERE provider IN ('minimax','opencode-go')").run();
   db.prepare("DELETE FROM attempts WHERE id LIKE 'probe-test-%'").run();
 }
@@ -96,5 +98,20 @@ describe("Лимит провайдера: работал → таймер, уп
     let calls = 0;
     await runProviderProbe(async () => { calls++; return "ok"; }, routing);
     expect(calls).toBe(0);
+  });
+  it("автопереключение выключено — на запасную не уходим, но лимит запоминаем", () => {
+    setFailoverSettings({ autoSwitch: false });
+    expect(pickFailoverModel(routing, "builder", "MiniMax-M3", "429 rate limit")).toBeNull();
+    expect(providerAvailable("minimax")).toBe(false);
+  });
+
+  it("автовозврат выключен — метка не истекает сама и проба её не снимает", async () => {
+    setFailoverSettings({ autoReturn: false });
+    attemptAt(40);
+    pickFailoverModel(routing, "builder", "MiniMax-M3", "429 rate limit");
+    expect(untilMinutes("minimax")).toBeGreaterThan(60 * 24 * 365);
+    expect(await runProviderProbe(async () => "ok", routing)).toEqual([]);
+    expect(providerAvailable("minimax")).toBe(false);
+    expect(getFailoverSettings().autoReturn).toBe(false);
   });
 });

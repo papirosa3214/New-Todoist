@@ -15,6 +15,9 @@ import {
   type RoleName,
 } from "../roleRouting.js";
 import { modelExists } from "../runtime/PiRuntimeAdapter.js";
+import db from "../db.js";
+import { getFailoverSettings, setFailoverSettings } from "../lib/failoverSettings.js";
+import { pickStartModel } from "../runtime/providerFailover.js";
 
 /** Единый маппинг ошибок runtime-слоя в HTTP. Ключевое различие
  *  (спека §14): Pi недоступен → 503 runtime_unavailable; модели нет в
@@ -294,6 +297,77 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
         return reply.code(500).send({ error: `write failed: ${msg}` });
       }
       return { role, primary: primary.trim(), fallbacks: orderedFallbacks };
+    },
+  );
+
+  // GET /api/runtime/failover — тумблеры автопереключения, провайдеры в лимите и, у каждой роли,
+  // на какой модели она работает сейчас.
+  app.get("/api/runtime/failover", { preHandler: authPre }, async () => {
+    const routing = loadRoleRouting();
+    const limits = db
+      .prepare(
+        `SELECT provider, unavailable_until, mode, reason FROM provider_limits
+          WHERE unavailable_until IS NOT NULL AND unavailable_until > datetime('now')
+          ORDER BY provider`,
+      )
+      .all() as { provider: string; unavailable_until: string; mode: string; reason: string | null }[];
+    const roles = (ROLE_NAMES as RoleName[]).map((role) => {
+      const primary = routing.models[role] ?? "";
+      const current = primary ? pickStartModel(routing, role) : "";
+      return { role, primary, fallbacks: routing.fallbacks[role] ?? [], current, on_fallback: !!primary && current !== primary };
+    });
+    const s = getFailoverSettings();
+    return {
+      auto_switch: s.autoSwitch,
+      auto_return: s.autoReturn,
+      limits: limits.map((l) => ({
+        provider: l.provider,
+        until: l.unavailable_until,
+        // «Держится вручную»: автовозврат выключен, метка не истечёт сама.
+        held: new Date(l.unavailable_until.replace(" ", "T") + "Z").getTime() > Date.now() + 400 * 86400_000,
+        mode: l.mode,
+        reason: l.reason,
+      })),
+      roles,
+    };
+  });
+
+  // PUT /api/runtime/failover — тумблеры автопереключения / автовозврата (общие на все роли).
+  app.put<{ Body: { auto_switch?: unknown; auto_return?: unknown } }>(
+    "/api/runtime/failover",
+    { preHandler: ownerOrApiToken },
+    async (req, reply) => {
+      const body = req.body ?? {};
+      for (const k of ["auto_switch", "auto_return"] as const) {
+        if (body[k] !== undefined && typeof body[k] !== "boolean") {
+          return reply.code(422).send({ error: `${k} must be boolean` });
+        }
+      }
+      const before = getFailoverSettings();
+      const next = setFailoverSettings({
+        autoSwitch: body.auto_switch as boolean | undefined,
+        autoReturn: body.auto_return as boolean | undefined,
+      });
+      // Автовозврат снова включён: «ручные» метки превращаем в обычные (проба снимет, когда лимит сброшен).
+      if (!before.autoReturn && next.autoReturn) {
+        db.prepare(
+          `UPDATE provider_limits SET mode = 'probe', unavailable_until = datetime('now', '+5 hours'), updated_at = datetime('now')
+            WHERE unavailable_until > datetime('now', '+30 days')`,
+        ).run();
+      }
+      return { auto_switch: next.autoSwitch, auto_return: next.autoReturn };
+    },
+  );
+
+  // DELETE /api/runtime/failover/limits/:provider — «Вернуть сейчас»: снять метку лимита у провайдера.
+  app.delete<{ Params: { provider: string } }>(
+    "/api/runtime/failover/limits/:provider",
+    { preHandler: ownerOrApiToken },
+    async (req) => {
+      db.prepare(
+        "UPDATE provider_limits SET unavailable_until = datetime('now'), reason = 'снято владельцем', updated_at = datetime('now') WHERE provider = ?",
+      ).run(req.params.provider);
+      return { ok: true };
     },
   );
 

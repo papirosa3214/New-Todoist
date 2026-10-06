@@ -9,6 +9,7 @@
 //   • упёрлись сразу при старте — остаток до сброса неизвестен, метку снимает проба
 //     (providerProbe.ts, режим probe).
 import db from "../db.js";
+import { getFailoverSettings } from "../lib/failoverSettings.js";
 import { parseModelRef } from "../lib/attemptModel.js";
 import { markProviderLimited, providerAvailable } from "../lib/modelLadder.js";
 import type { RoleRouting } from "../roleRouting.js";
@@ -71,6 +72,8 @@ export function providerWorkedRecently(provider: string): boolean {
 export function pickFailoverModel(routing: RoleRouting, role: string, currentRef: string, reason: string): string | null {
   const current = parseModelRef(currentRef);
   markProviderLimited(current.provider, null, reason.slice(0, 200), providerWorkedRecently(current.provider) ? "timer" : "probe");
+  // Автопереключение выключено владельцем: лимит запомнили, но на запасную не уходим — шаг встанет как раньше.
+  if (!getFailoverSettings().autoSwitch) return null;
   const chain = [routing.models[role as keyof typeof routing.models], ...(routing.fallbacks[role as keyof typeof routing.fallbacks] ?? [])].filter(Boolean) as string[];
   return chain.find((m) => {
     const p = parseModelRef(m).provider;

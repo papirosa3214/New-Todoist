@@ -8,6 +8,7 @@ import db from "../db.js";
 import { loadRoleRouting, type RoleRouting } from "../roleRouting.js";
 import { parseModelRef } from "../lib/attemptModel.js";
 import { isProviderLimitText } from "./providerFailover.js";
+import { getFailoverSettings } from "../lib/failoverSettings.js";
 
 export type ProbeResult = "ok" | "limited" | "unknown";
 export type ProbeFn = (modelRef: string) => Promise<ProbeResult>;
@@ -68,6 +69,8 @@ export async function runProviderProbe(
   routing: RoleRouting = loadRoleRouting(),
 ): Promise<string[]> {
   const restored: string[] = [];
+  // Автовозврат выключен — сами метки не снимаем, это делает владелец кнопкой.
+  if (!getFailoverSettings().autoReturn) return restored;
   for (const provider of limitedProviders()) {
     const ref = modelForProvider(routing, provider);
     if (!ref) continue;

@@ -3698,6 +3698,15 @@ const migrations: Migration[] = [
       db.exec("ALTER TABLE provider_limits ADD COLUMN mode TEXT NOT NULL DEFAULT 'timer'");
     }
   } },
+  { id: "116_runtime_settings", description: "Общие настройки рантайма: автопереключение при лимите и автовозврат на основную модель (владелец 07.10.2026)", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+  } },
 ];
 
 /**

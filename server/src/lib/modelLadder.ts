@@ -1,4 +1,5 @@
 import db from "../db.js";
+import { getFailoverSettings } from "./failoverSettings.js";
 
 // Ступени эскалации моделей (карточка f8e8a055, проект dca29510).
 //
@@ -59,7 +60,9 @@ export function markProviderLimited(
 ): void {
   // Тип окна пока не разобран (фаза 4) — консервативно берём пятичасовое,
   // недельное ставим только если оно уже известно.
-  const modifiers = windowKind === "weekly" ? ["+7 days"] : mode === "timer" ? ["+5 hours", "+5 minutes"] : ["+5 hours"];
+  // Автовозврат выключен владельцем: метка не истекает сама, снимает её только он («Вернуть сейчас»).
+  const hold = !getFailoverSettings().autoReturn;
+  const modifiers = hold ? ["+10 years"] : windowKind === "weekly" ? ["+7 days"] : mode === "timer" ? ["+5 hours", "+5 minutes"] : ["+5 hours"];
   db.prepare(
     `INSERT INTO provider_limits (provider, unavailable_until, window_kind, reason, updated_at, mode)
      VALUES (?, datetime('now', ${modifiers.map(() => "?").join(", ")}), ?, ?, datetime('now'), ?)
