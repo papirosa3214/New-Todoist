@@ -384,6 +384,12 @@ export interface ApiChat {
   task_id: string | null;
   created_at: string;
   updated_at: string;
+  /** Тема задачи закрыта вместе с задачей: read-only, скрыта из списка
+   *  открытых (карточка ca816271). */
+  closed_at?: string | null;
+  /** Закреплённое сообщение чата (регламент общего чата). */
+  pinned_message_id?: string | null;
+  pinned_message?: ApiChatRoomMessage | null;
   members: ApiChatMember[];
   /** Только в ответе GET /api/chats (списка). На детальном GET /api/chats/:id
    *  превью нет — там подтягивается полная история отдельным запросом. */
