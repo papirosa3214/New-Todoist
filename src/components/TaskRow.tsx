@@ -78,7 +78,7 @@
 // raises the movement floor before ANY axis decision is made (6 → 10);
 // DIRECTION_BIAS then requires dx to clearly dominate dy, not just edge it
 // out, before calling the gesture horizontal.
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon, Avatar, AgentStateTag, PriorityArrows, ReadyFlag } from "./UI";
 import { MarkdownInline } from "./MarkdownInline";
@@ -100,6 +100,11 @@ import { useDeleteTask } from "../api/tasks";
 // function export from a component file trips oxlint's
 // react/only-export-components (see lib/priority.ts's own comment on why
 // PRIORITY_COLORS/getPriorityColor live outside UI.tsx for the same rule)
+// Модульный синглтон «какая TaskRow сейчас открыта». Хранит функцию,
+// которая закрывает открытую строку (снимает revealed, ставит x=0). При
+// открытии новой строки вызываем предыдущую — получается «открыта одна».
+let activeRowCloser: (() => void) | null = null;
+
 function formatDue(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
@@ -156,6 +161,12 @@ export interface TaskRowProps {
   // одной иконки на каждой из потенциально многих строк списка — лишнее.
   pinned?: boolean;
   onTogglePin?: () => void;
+  // Прогресс подзадач словами («2 из 5») вместо дроби («2/5»). §2.5 (MAK-52)
+  // требует форму «N из M» для строк основного списка — её передают Today,
+  // Входящие и проект. По умолчанию дробь: тесным спискам (Upcoming с
+  // maxLabels=1) развёрнутая форма не нужна, а новый экран получает ровно
+  // то же, что рисовал раньше, без сюрприза в раскладке.
+  verboseProgress?: boolean;
 }
 
 export function TaskRow({
@@ -170,6 +181,7 @@ export function TaskRow({
   showProjectBadge = true,
   pinned,
   onTogglePin,
+  verboseProgress = false,
 }: TaskRowProps) {
   const navigate = useNavigate();
   const isDone = task.status === "completed";
@@ -196,6 +208,24 @@ export function TaskRow({
   const hasAgentTag = showAgentState && !!task.agent_state;
   const hasDueBadge = showDueBadge && !overdue && !!task.due_date;
   const hasSubtasksBadge = showSubtasksBadge && progressTotal > 0;
+  // §2.5 (MAK-52): индикаторы на плашке `card` радиусом 4 — приоритет уже
+  // живёт шевронами справа, здесь идут подзадачи, дочерние и план.
+  //
+  // Значок на плашке прогресса говорит, ЧЕГО именно этот счётчик: детей
+  // (дерево) или шагов плана (список). Второй плашки с тем же числом не
+  // рисуем — ряд из двух одинаковых цифр читается как баг.
+  const progressKindIcon = countByChildren ? "listTree" : "listChecks";
+  const progressKindLabel = countByChildren
+    ? `Дочерние задачи: ${doneSub} из ${progressTotal}`
+    : `План: ${doneSub} из ${progressTotal} шагов`;
+  // Отдельная плашка «дочерних N» — только тому родителю, чей прогресс ведут
+  // НЕ они (в списке такое бывает, когда children_total пришёл нулевым, а
+  // объекты детей всё же едут): иначе это ровно тот же счётчик второй раз.
+  const hasChildrenBadge = showSubtasksBadge && kidsTotal > 0 && !countByChildren;
+  // Форму подписи (§2.5: «N из M») выбирает список — см. verboseProgress.
+  const subtaskText = verboseProgress
+    ? `${doneSub} из ${progressTotal}`
+    : `${doneSub}/${progressTotal}`;
   // Флажок теперь про поднятый флаг готовности, а не про приоритет
   // (владелец 11.09.2026). Приоритет уехал вправо шевронами и в ряду
   // бейджей больше не участвует.
@@ -218,12 +248,23 @@ export function TaskRow({
     hasOverduePill ||
     hasDueBadge ||
     hasSubtasksBadge ||
+    hasChildrenBadge ||
     hasLabels;
 
   // ── Плавный нативный iOS свайп ────────────────────────────────────────────
   // Влево → синяя «Изменить»; вправо → красная «Удалить».
   // Та же физика, те же пороги, тот же rubber-band.
+  //
+  // Значения (Linear MAK-52, DESIGN-SYSTEM.md §2.5) — единая шкала с
+  // src/lib/useRowSwipe.ts, откуда их взял и этот файл: порог открытия 36px
+  // или бросок 280 px/s, закрыть встречным движением от 25px / 250 px/s,
+  // ширина панели действия 84. Держим константами рядом с ACTION_W, а не
+  // литералами внутри if'ов, чтобы правка физики была в одном месте строки.
   const ACTION_W = 84; // ширина каждого действия
+  const OPEN_PX = 36;
+  const OPEN_VEL = 280;
+  const CLOSE_PX = 25;
+  const CLOSE_VEL = 250;
   const rowRef = useRef<HTMLDivElement | null>(null);
   const editActionRef = useRef<HTMLButtonElement | null>(null); // правая, синяя
   const deleteActionRef = useRef<HTMLButtonElement | null>(null); // левая, красная
@@ -232,6 +273,25 @@ export function TaskRow({
   const [isSwiping, setIsSwiping] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const deleteTask = useDeleteTask();
+
+  // §2.5 (MAK-52): открыта одна строка. Свайп в любой строке списка
+  // закрывает ранее открытую — иначе две соседние панели действий
+  // одновременно занимают ширину и ломают ритм. Реестр живёт
+  // модульным синглтоном в этом файле: родительский экран (Today/
+  // Inbox/Project) о нём не знает, отдельное состояние `openRowId`
+  // в списке для одной фичи — лишнее (консультация 24ecb0f8
+  // предлагала «isOpen/onToggle» на пропсах, но границы шага =
+  // TaskRow.tsx, поэтому модульный синглтон держит правку в файле).
+  // При unmount — снимаем регистрацию, чтобы выпавшая из DOM строка
+  // не залипла «активной» и не блокировала открытие соседней.
+  const ownCloseRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    return () => {
+      if (ownCloseRef.current && activeRowCloser === ownCloseRef.current) {
+        activeRowCloser = null;
+      }
+    };
+  }, []);
 
   const setRowPosition = (x: number, animated = false) => {
     currentXRef.current = x;
@@ -366,29 +426,59 @@ export function TaskRow({
         const vel = d.velocity;
 
         if (d.startOffset === 0) {
-          if (currentPos < -36 || vel < -280) {
-            // Свайп влево → открыть «Изменить»
+          if (currentPos < -OPEN_PX || vel < -OPEN_VEL) {
+            // Свайп влево → открыть «Изменить». Сначала закрываем ранее
+            // открытую строку (если есть), иначе две панели действий
+            // одновременно занимают ширину (§2.5 «открыта одна строка»).
+            if (activeRowCloser && activeRowCloser !== ownCloseRef.current) {
+              activeRowCloser();
+            }
             setRevealed(true);
             hapticDrop();
             setRowPosition(-ACTION_W, true);
-          } else if (currentPos > 36 || vel > 280) {
-            // Свайп вправо → открыть «Удалить»
+            // Регистрируем себя в общем реестре.
+            const close = () => {
+              setRevealed(false);
+              setRowPosition(0, true);
+            };
+            activeRowCloser = close;
+            ownCloseRef.current = close;
+          } else if (currentPos > OPEN_PX || vel > OPEN_VEL) {
+            // Свайп вправо → открыть «Удалить». Та же координация.
+            if (activeRowCloser && activeRowCloser !== ownCloseRef.current) {
+              activeRowCloser();
+            }
             setRevealed(true);
             hapticDrop();
             setRowPosition(ACTION_W, true);
+            const close = () => {
+              setRevealed(false);
+              setRowPosition(0, true);
+            };
+            activeRowCloser = close;
+            ownCloseRef.current = close;
           } else {
             setRowPosition(0, true);
           }
         } else if (d.startOffset < 0) {
           // Уже открыто «Изменить» (x < 0)
-          const shouldKeep = !(dx > 25 || vel > 250);
+          const shouldKeep = !(dx > CLOSE_PX || vel > CLOSE_VEL);
           setRevealed(shouldKeep);
           setRowPosition(shouldKeep ? -ACTION_W : 0, true);
+          if (!shouldKeep && activeRowCloser === ownCloseRef.current) {
+            // Снимаем регистрацию: свайп закрыл строку.
+            activeRowCloser = null;
+            ownCloseRef.current = null;
+          }
         } else {
           // Уже открыто «Удалить» (x > 0)
-          const shouldKeep = !(dx < -25 || vel < -250);
+          const shouldKeep = !(dx < -CLOSE_PX || vel < -CLOSE_VEL);
           setRevealed(shouldKeep);
           setRowPosition(shouldKeep ? ACTION_W : 0, true);
+          if (!shouldKeep && activeRowCloser === ownCloseRef.current) {
+            activeRowCloser = null;
+            ownCloseRef.current = null;
+          }
         }
       };
 
@@ -412,6 +502,10 @@ export function TaskRow({
             e.stopPropagation();
             setRevealed(false);
             setRowPosition(0, true);
+            if (activeRowCloser === ownCloseRef.current) {
+              activeRowCloser = null;
+              ownCloseRef.current = null;
+            }
             hapticDrop();
             setConfirmDelete(true);
           }}
@@ -444,6 +538,10 @@ export function TaskRow({
             e.stopPropagation();
             setRevealed(false);
             setRowPosition(0, true);
+            if (activeRowCloser === ownCloseRef.current) {
+              activeRowCloser = null;
+              ownCloseRef.current = null;
+            }
             navigate(`/task/${task.id}/edit`);
           }}
           aria-label="Изменить задачу"
@@ -489,6 +587,10 @@ export function TaskRow({
               if (revealed) {
                 setRevealed(false);
                 setRowPosition(0, true);
+                if (activeRowCloser === ownCloseRef.current) {
+                  activeRowCloser = null;
+                  ownCloseRef.current = null;
+                }
                 return;
               }
               onClick();
@@ -500,6 +602,13 @@ export function TaskRow({
             // сверху добавляются поле внутри PNG аватарки и полулидинг
             // первой строки, а нижние пилюли прижаты к своей кромке.
             // Выравнивание по нижней части, как он и просил.
+            // §2.5 (MAK-52): сверху 9pt (`pt-[9px]`), снизу 12pt (`pb-3`) —
+            // pt меньше pb, нижние пилюли прижаты к своей кромке, как на
+            // карточках доски (владелец 19.08.2026: «это и списков
+            // касается»). Горизонтальный отступ — 16pt (`px-4`),
+            // общая сетка экрана из Layout §DESIGN.md. E2E-тест
+            // (`tests/e2e/task-row-mak52.spec.ts`) проверяет именно эту
+            // тройку (9/12/16) — сменить на `px-2` = разойтись с тестом.
             className={`w-full flex items-start justify-between gap-2 pt-[9px] pb-3 px-4 bg-bg text-left${isSwiping ? "" : " tap-row"}`}
           >
             <div className="flex-1 min-w-0 flex flex-col items-start">
@@ -517,11 +626,18 @@ export function TaskRow({
               {/* Строка названия с аватаркой исполнителя (если назначен) */}
               <div className="w-full flex items-center gap-2 min-w-0">
                 {showAvatar && task.assignee_id && task.assignee_initials && (
+                  // §2.5 (MAK-52): аватар исполнителя 30pt — ступень
+                  // «аватар исполнителя в строке задачи» из DESIGN.md
+                  // §Components. В карточке задачи ровно «30px», не 60
+                  // (60 — крупный профиль в шапке настроек, не строка).
+                  // 60 в задании — iOS @2x (30pt @1x = 60px @2x) или
+                  // опечатка; DESIGN.md, написанный 05.10.2026 (MAK-51),
+                  // здесь канон.
                   <Avatar
                     initials={task.assignee_initials}
                     color={task.assignee_color || "#A6A6A6"}
                     avatar_url={task.assignee_avatar_url}
-                    size={20}
+                    size={30}
                   />
                 )}
                 <div
@@ -548,10 +664,33 @@ export function TaskRow({
               )}
               {hasMeta && (
                 <div className="w-full flex items-center gap-1.5 flex-wrap mt-1.5 justify-start text-left">
-                  {/* 1. Бейдж подзадач (всегда первый) */}
+                  {/* 1. Прогресс — всегда первым. Плашка `card`, радиус 4
+                      (§2.5, MAK-52); форма та же, что у прочих индикаторов
+                      ряда. Одно число в двух обличьях: по детям (родитель-
+                      зонтик, значок дерева) или по шагам плана (значок
+                      списка). Второй плашки с тем же числом не рисуем. */}
                   {hasSubtasksBadge && (
- <span className="tf-caption inline-flex items-center px-1.5 py-0.5 rounded bg-card text-sub ">
-                      {doneSub}/{progressTotal}
+                    <span
+ className="tf-caption inline-flex items-center gap-1 px-1.5 py-0.5 rounded r-pill bg-card text-sub"
+                      title={progressKindLabel}
+                    >
+                      <Icon
+                        name={progressKindIcon}
+                        size={10}
+                        className="shrink-0 opacity-70"
+                      />
+                      {subtaskText}
+                    </span>
+                  )}
+
+                  {/* 1.1. Дочерние задачи: сколько их всего у родителя */}
+                  {hasChildrenBadge && (
+                    <span
+ className="tf-caption inline-flex items-center gap-1 px-1.5 py-0.5 rounded r-pill bg-card text-sub"
+                      title={`Дочерних задач: ${kidsTotal}`}
+                    >
+                      <Icon name="listTree" size={10} className="shrink-0" />
+                      {kidsTotal}
                     </span>
                   )}
 
@@ -562,7 +701,7 @@ export function TaskRow({
                   {/* 2.1. Помечена как глубокое исследование (миграция 052) */}
                   {task.needs_research ? (
                     <span
- className="tf-caption inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-card text-sub "
+ className="tf-caption inline-flex items-center gap-1 px-1.5 py-0.5 rounded r-pill bg-card text-sub "
                       title="Нужно глубокое исследование"
                     >
                       <Icon name="search" size={10} /> Исследование
@@ -571,7 +710,7 @@ export function TaskRow({
 
                   {/* 3. Просрочено */}
                   {hasOverduePill && (
- <span className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red/15 text-red ">
+ <span className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded r-pill bg-red/15 text-red ">
                       <Icon name="calendarSmall" size={10} /> Просрочено,{" "}
                       {formatDueLabel(task.due_date!)}
                     </span>
@@ -579,7 +718,7 @@ export function TaskRow({
 
                   {/* 4. Дата + сколько дней осталось */}
                   {hasDueBadge && (
- <span className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded bg-card text-sub">
+ <span className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded r-pill bg-card text-sub">
                       <Icon name="calendarSmall" size={10} />{" "}
                       {formatDue(task.due_date!)}
                       <span
@@ -598,7 +737,7 @@ export function TaskRow({
                   {visibleLabels.map((l) => (
                     <span
                       key={l.id}
- className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded"
+ className="tf-caption inline-flex items-center gap-1 px-2 py-0.5 rounded r-pill"
                       style={{
                         backgroundColor: l.color + "26",
                         color: l.color,

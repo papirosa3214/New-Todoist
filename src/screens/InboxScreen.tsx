@@ -234,6 +234,8 @@ export function InboxScreen() {
                     <TaskRow
                       key={task.id}
                       task={task}
+                      // §2.5 (MAK-52): в основном списке прогресс читается словами.
+                      verboseProgress
                       onClick={() => navigate(`/task/${task.id}`)}
                     />
                   ))}
