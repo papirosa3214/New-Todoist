@@ -401,6 +401,59 @@ describe("runtime providers API", () => {
     ]);
   });
 
+  it("PUT роли без fallbacks — запасные остаются (на них держится автопереключение)", async () => {
+    const set = await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing/architect",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { primary: "minimax-m3", fallbacks: ["gpt-5", "claude-sonnet-5"] },
+    });
+    expect(set.statusCode).toBe(200);
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing/architect",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { primary: "claude-sonnet-5" },
+    });
+    expect(res.statusCode).toBe(200);
+    // Выбранная основная убрана из запасных, остальное — как было, в том же порядке.
+    expect((res.json() as { fallbacks: string[] }).fallbacks).toEqual(["gpt-5"]);
+  });
+
+  it("PUT /routing {primary} — основная модель сразу всем ролям, запасные не затираются", async () => {
+    await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing/architect",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { primary: "minimax-m3", fallbacks: ["gpt-5", "claude-sonnet-5"] },
+    });
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { primary: "claude-sonnet-5" },
+    });
+    expect(res.statusCode).toBe(200);
+    const read = await app.inject({
+      method: "GET",
+      url: "/api/runtime/routing",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const { routing } = read.json() as { routing: { models: Record<string, string>; fallbacks: Record<string, string[]> } };
+    expect(Object.values(routing.models).every((m) => m === "claude-sonnet-5")).toBe(true);
+    expect(routing.fallbacks.architect).toEqual(["gpt-5"]);
+  });
+
+  it("PUT /routing с неизвестной моделью → 422 и ничего не меняется", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { primary: "no-such-model" },
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
   it("2. AuthPrompt.signal: abort чистит currentPrompt, после успеха — null", async () => {
     mockState.loginBehavior = async ({ provider, interaction }) => {
       const ac = new AbortController();

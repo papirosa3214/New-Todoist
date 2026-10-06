@@ -256,13 +256,18 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
       if (typeof primary !== "string" || !primary.trim()) {
         return reply.code(422).send({ error: "primary must be non-empty string" });
       }
-      if (!Array.isArray(fallbacks) ||
-          fallbacks.some((m) => typeof m !== "string" || !m.trim())) {
+      // fallbacks не передан — запасные роли остаются как есть: на них держится автопереключение
+      // при лимите (runtime/providerFailover.ts), а веб запасные не показывает и не должен их затирать.
+      const keepFallbacks = fallbacks === undefined;
+      if (!keepFallbacks && (!Array.isArray(fallbacks) ||
+          fallbacks.some((m) => typeof m !== "string" || !m.trim()))) {
         return reply.code(422).send({ error: "fallbacks must be array of non-empty strings" });
       }
       // Дедуп сохраняет порядок первого вхождения.
-      const orderedFallbacks = Array.from(new Set(fallbacks as string[]));
-      if (orderedFallbacks.includes(primary)) {
+      const orderedFallbacks = keepFallbacks
+        ? (loadRoleRouting().fallbacks[role] ?? []).filter((m) => m !== primary.trim())
+        : Array.from(new Set(fallbacks as string[]));
+      if (!keepFallbacks && orderedFallbacks.includes(primary)) {
         return reply.code(422).send({ error: "primary must not appear in fallbacks" });
       }
 
@@ -289,6 +294,40 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
         return reply.code(500).send({ error: `write failed: ${msg}` });
       }
       return { role, primary: primary.trim(), fallbacks: orderedFallbacks };
+    },
+  );
+
+  // PUT /api/runtime/routing — основная модель СРАЗУ ВСЕМ ролям (кнопка «Всем ролям»).
+  // Запасные каждой роли не трогаются; если выбранная модель стояла у роли среди запасных,
+  // она из запасных убирается, чтобы не дублировать основную.
+  app.put<{ Body: { primary?: unknown } }>(
+    "/api/runtime/routing",
+    { preHandler: ownerOrApiToken },
+    async (req, reply) => {
+      const primary = req.body?.primary;
+      if (typeof primary !== "string" || !primary.trim()) {
+        return reply.code(422).send({ error: "primary must be non-empty string" });
+      }
+      const model = primary.trim();
+      try {
+        if (!(await modelExists(model))) {
+          return reply.code(422).send({ error: `model_not_available: ${model}` });
+        }
+      } catch (err) {
+        return sendRuntimeError(reply, err);
+      }
+      const config = loadRoleRouting();
+      for (const role of ROLE_NAMES as RoleName[]) {
+        config.models[role] = model;
+        config.fallbacks[role] = (config.fallbacks[role] ?? []).filter((m) => m !== model);
+      }
+      try {
+        writeRuntimeConfig(config);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return reply.code(500).send({ error: `write failed: ${msg}` });
+      }
+      return { primary: model, roles: ROLE_NAMES };
     },
   );
 }
