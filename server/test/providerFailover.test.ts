@@ -55,19 +55,26 @@ describe("Автопереключение провайдера при лими�
     expect(pickFailoverModel(routing, "builder", "opencode-go/minimax-m3", "429")).toBeNull();
   });
 
+  it("платные провайдеры выбиты — последним остаётся бесплатный space-bunny на своём провайдере", () => {
+    const r = { ...routing, fallbacks: { builder: ["opencode-go/deepseek-v4.1-flash", "opencode/space-bunny-free"] } } as unknown as RoleRouting;
+    expect(pickFailoverModel(r, "builder", "MiniMax-M3", "429")).toBe("opencode-go/deepseek-v4.1-flash");
+    expect(pickFailoverModel(r, "builder", "opencode-go/deepseek-v4.1-flash", "429")).toBe("opencode/space-bunny-free");
+    expect(pickFailoverModel(r, "builder", "opencode/space-bunny-free", "429")).toBeNull();
+  });
+
   it("явно заданная модель шага уважается", () => {
     expect(pickStartModel(routing, "builder", "opencode-go/qwen3.8-flash")).toBe("opencode-go/qwen3.8-flash");
   });
 
-  it("боевой role-routing.yaml читается: основной MiniMax; Критик и QA уходят на minimax-m3, остальные на DeepSeek, потом Qwen", () => {
+  it("боевой role-routing.yaml читается: основной MiniMax; Критик и QA уходят на minimax-m3, остальные на DeepSeek, последний запас — бесплатный space-bunny", () => {
     const live = loadRoleRouting(path.resolve(__dirname, "../scripts/role-routing.yaml"));
     for (const role of Object.keys(live.models)) {
       expect(live.models[role as keyof typeof live.models]).toBe("MiniMax-M3");
       const chain = live.fallbacks[role as keyof typeof live.fallbacks];
       if (role === "critic_verifier" || role === "qa") {
-        expect(chain).toEqual(["opencode-go/minimax-m3", "opencode-go/deepseek-v4.1-flash"]);
+        expect(chain).toEqual(["opencode-go/minimax-m3", "opencode/space-bunny-free"]);
       } else {
-        expect(chain).toEqual(["opencode-go/deepseek-v4.1-flash", "opencode-go/qwen3.8-flash"]);
+        expect(chain).toEqual(["opencode-go/deepseek-v4.1-flash", "opencode/space-bunny-free"]);
       }
     }
   });

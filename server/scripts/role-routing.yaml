@@ -13,28 +13,28 @@ defaults:
 fallbacks:
   researcher:
     - opencode-go/deepseek-v4.1-flash
-    - opencode-go/qwen3.8-flash
+    - opencode/space-bunny-free
   analyst:
     - opencode-go/deepseek-v4.1-flash
-    - opencode-go/qwen3.8-flash
+    - opencode/space-bunny-free
   critic_verifier:
     - opencode-go/minimax-m3
-    - opencode-go/deepseek-v4.1-flash
+    - opencode/space-bunny-free
   architect:
     - opencode-go/deepseek-v4.1-flash
-    - opencode-go/qwen3.8-flash
+    - opencode/space-bunny-free
   builder:
     - opencode-go/deepseek-v4.1-flash
-    - opencode-go/qwen3.8-flash
+    - opencode/space-bunny-free
   qa:
     - opencode-go/minimax-m3
-    - opencode-go/deepseek-v4.1-flash
+    - opencode/space-bunny-free
   designer:
     - opencode-go/deepseek-v4.1-flash
-    - opencode-go/qwen3.8-flash
+    - opencode/space-bunny-free
   secretary:
     - opencode-go/deepseek-v4.1-flash
-    - opencode-go/qwen3.8-flash
+    - opencode/space-bunny-free
 models:
   researcher: MiniMax-M3
   analyst: MiniMax-M3
