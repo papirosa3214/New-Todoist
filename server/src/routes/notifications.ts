@@ -58,12 +58,14 @@ export function registerNotificationRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/notifications", { preHandler: authPre }, async (req: any) => {
-    // Приватный проект (задача 9d583c58…): уведомление со ссылкой на задачу
-    // приватного проекта не отдаётся никому, кроме владельца — иначе
-    // проскочил бы task_title. Владельцу не мешаем.
+    // Приватный проект (задача 9d583c58…) и архивный проект (карточка
+    // a1be7d63…) не должны утекать через task_title: уведомление со
+    // ссылкой на задачу такого проекта не отдаётся никому, кроме
+    // владельца (приватность). Архивное не отдаём и владельцу — для него
+    // есть отдельные ручки Архива.
     const privacyClause = isOwner(req.userId)
-      ? "1 = 1"
-      : "(t.id IS NULL OR p.id IS NULL OR p.is_private = 0 OR p.is_private IS NULL)";
+      ? "(t.id IS NULL OR p.id IS NULL OR p.archived_at IS NULL)"
+      : "(t.id IS NULL OR p.id IS NULL OR (p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL)";
     return db
       .prepare(
         `

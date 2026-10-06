@@ -30,6 +30,7 @@ import { ActivityScreen } from "./screens/ActivityScreen";
 import { AgentsScreen } from "./screens/AgentsScreen";
 import { AgentWorkScreen } from "./screens/AgentWorkScreen";
 import { ProjectsScreen } from "./screens/ProjectsScreen";
+import { ProjectArchiveScreen } from "./screens/ProjectArchiveScreen";
 import { LabelsScreen } from "./screens/LabelsScreen";
 import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
 import { LabelTasksScreen } from "./screens/LabelTasksScreen";
@@ -164,6 +165,7 @@ export default function App() {
             <Route path="/agents" element={<AgentsScreen />} />
             <Route path="/agent-work" element={<AgentWorkScreen />} />
             <Route path="/projects" element={<ProjectsScreen />} />
+            <Route path="/projects/archive" element={<ProjectArchiveScreen />} />
             <Route path="/projects/:id" element={<ProjectTasksScreen />} />
             <Route path="/labels" element={<LabelsScreen />} />
             <Route path="/labels/:id" element={<LabelTasksScreen />} />

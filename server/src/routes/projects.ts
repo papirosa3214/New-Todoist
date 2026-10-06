@@ -19,8 +19,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
 
   // ── Projects ──
-  app.get("/api/projects", { preHandler: authPre }, async (req: any) => {
-    // Считаются только АКТИВНЫЕ задачи. Раньше считались все, вместе с
+  app.get("/api/projects", { preHandler: authPre }, async (req: any) => {    // Считаются только АКТИВНЫЕ задачи. Раньше считались все, вместе с
     // выполненными, и число рядом с проектом расходилось с тем, что
     // человек видит, провалившись внутрь: «Входящие — 10», а в списке
     // три (7 из них давно закрыты). Найдено Максимом 14.08.2026.
@@ -251,7 +250,8 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
           project = db
             .prepare(
               `SELECT * FROM projects WHERE id = ?
-                 AND (is_private = 0 OR is_private IS NULL)`,
+                 AND (is_private = 0 OR is_private IS NULL)
+                 AND archived_at IS NULL`,
             )
             .get(req.params.id);
         }
@@ -414,18 +414,242 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     },
   });
 
+  // Удаление проекта = архивация (карточка a1be7d63…). Раньше этот
+  // маршрут обнулял `project_id` у задач и удалял строку проекта, а чаты и
+  // память уезжали каскадом — данные терялись безвозвратно. Теперь проект
+  // вместе со всем содержимым (задачи, документы, чаты, память) остаётся в
+  // базе, но помечается архивным: `archived_at` проставлен, чаты проекта
+  // закрыты. В обычных местах архивный проект и его задачи больше не
+  // фигурируют (см. access.ts). Окончательное удаление — только из архива
+  // (DELETE /api/projects/:id/purge).
   app.delete<{ Params: { id: string } }>(
     "/api/projects/:id",
     { preHandler: authPre },
     async (req: any, reply) => {
       const project = getProjectForUser(req.params.id, req.userId);
       if (!project) return reply.code(404).send({ error: "Not found" });
+      if (project.archived_at) {
+        return reply.code(409).send({
+          error: "проект уже в архиве",
+          archived_at: project.archived_at,
+        });
+      }
 
-      db.prepare("UPDATE tasks SET project_id = NULL WHERE project_id = ?").run(
+      db.prepare(
+        "UPDATE projects SET archived_at = datetime('now'), archived_by = ? WHERE id = ?",
+      ).run(req.userId, req.params.id);
+      // Чаты проекта закрываются, но не удаляются: переписка остаётся в
+      // архиве, как и сам проект. При restore они не открываются
+      // автоматически — это осознанное решение владельца.
+      db.prepare(
+        "UPDATE chats SET closed_at = COALESCE(closed_at, datetime('now')) WHERE project_id = ?",
+      ).run(req.params.id);
+
+      const archived = db
+        .prepare("SELECT * FROM projects WHERE id = ?")
+        .get(req.params.id);
+      return { ok: true, archived: true, project: archived };
+    },
+  );
+
+  // Список архивных проектов — только владелец трекера (карточка
+  // a1be7d63…). Для каждого проекта сразу отдаём числа задач и документов,
+  // чтобы экран Архива и подтверждение purge могли перечислить последствия
+  // без добора. Нормальные списки (`GET /api/projects`) архив не
+  // показывают никому, включая владельца.
+  app.get(
+    "/api/projects/archive",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "архив доступен только владельцу" });
+      }
+      return db
+        .prepare(
+          `SELECT p.*,
+                  (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) AS task_count,
+                  (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = 'active') AS active_count,
+                  (SELECT COUNT(*) FROM user_notes n WHERE n.folder_id IS NOT NULL AND n.folder_id = p.notes_folder_id) AS docs_count,
+                  (SELECT COUNT(*) FROM chats c WHERE c.project_id = p.id) AS chat_count,
+                  (SELECT COUNT(*) FROM memories m WHERE m.project_id = p.id) AS memory_count
+             FROM projects p
+            WHERE p.archived_at IS NOT NULL
+            ORDER BY p.archived_at DESC`,
+        )
+        .all();
+    },
+  );
+
+  // Задачи архивного проекта — только владелец. Нужно экрану Архива:
+  // «в архиве можно покопаться». Прямой доступ к задаче через /api/tasks/:id
+  // и так открыт владельцу, но здесь отдаём разом весь проект, вместе с
+  // проектом.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/archive-tasks",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "архив доступен только владельцу" });
+      }
+      const project = db
+        .prepare("SELECT * FROM projects WHERE id = ? AND archived_at IS NOT NULL")
+        .get(req.params.id);
+      if (!project) return reply.code(404).send({ error: "Not found" });
+      const tasks = db
+        .prepare(
+          "SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at DESC",
+        )
+        .all(req.params.id);
+      return { project, tasks };
+    },
+  );
+
+  // Вернуть проект из архива — только владелец. Снимаем `archived_at`,
+  // проект снова виден во всех обычных местах. Чаты НЕ открываем
+  // автоматически (решение владельца): в ответе прямо сказано, что они
+  // остаются закрытыми и открыть их надо отдельным действием.
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/restore",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "восстанавливать может только владелец" });
+      }
+      const project = db
+        .prepare("SELECT * FROM projects WHERE id = ? AND archived_at IS NOT NULL")
+        .get(req.params.id);
+      if (!project) {
+        return reply.code(404).send({ error: "Not found" });
+      }
+      db.prepare(
+        "UPDATE projects SET archived_at = NULL, archived_by = NULL WHERE id = ?",
+      ).run(req.params.id);
+      const restored = db
+        .prepare("SELECT * FROM projects WHERE id = ?")
+        .get(req.params.id);
+      return {
+        ok: true,
+        project: restored,
+        chats_reopened: false,
+        message:
+          "Проект вернулся из архива. Чаты проекта остались закрытыми — откройте их отдельно, если нужно.",
+      };
+    },
+  );
+
+  // Окончательное удаление из архива — только владелец и только для уже
+  // архивного проекта. Перед удалением в журнал (`project_purge_log`)
+  // пишется факт и Числа: сколько задач, документов, чатов и записей памяти
+  // было уничтожено. Документы (папка заметок и её заметки) по умолчанию НЕ
+  // удаляются — заметки отвязываются от проекта; стереть их можно только
+  // явным флагом `with_docs=true`. Задачи, чаты и память удаляются всегда.
+  app.delete<{ Params: { id: string }; Querystring: { with_docs?: string } }>(
+    "/api/projects/:id/purge",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "удалять навсегда может только владелец" });
+      }
+      const project = db
+        .prepare("SELECT * FROM projects WHERE id = ?")
+        .get(req.params.id) as any;
+      if (!project) return reply.code(404).send({ error: "Not found" });
+      if (!project.archived_at) {
+        return reply.code(409).send({
+          error: "удалить навсегда можно только проект из архива",
+        });
+      }
+      const withDocs = req.query?.with_docs === "true";
+
+      const count = (sql: string, ...params: any[]) =>
+        (db.prepare(sql).get(...params) as { n: number }).n;
+      const tasks = count(
+        "SELECT COUNT(*) AS n FROM tasks WHERE project_id = ?",
         req.params.id,
       );
-      db.prepare("DELETE FROM projects WHERE id = ?").run(req.params.id);
-      return { ok: true };
+      const docs = count(
+        "SELECT COUNT(*) AS n FROM user_notes WHERE folder_id IS NOT NULL AND folder_id = ?",
+        project.notes_folder_id ?? -1,
+      );
+      const chats = count(
+        "SELECT COUNT(*) AS n FROM chats WHERE project_id = ?",
+        req.params.id,
+      );
+      const memories = count(
+        "SELECT COUNT(*) AS n FROM memories WHERE project_id = ?",
+        req.params.id,
+      );
+
+      db.prepare(
+        `INSERT INTO project_purge_log
+           (id, project_id, project_name, actor_id, tasks, documents, chats, memories, with_docs)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+      ).run(
+        uid(),
+        req.params.id,
+        project.name,
+        req.userId,
+        tasks,
+        docs,
+        chats,
+        memories,
+        withDocs ? 1 : 0,
+      );
+
+      const purge = db.transaction(() => {
+        // Сначала снимаем зависимости, которые foreign key НЕ удаляет
+        // каскадом и которые иначе заблокировали бы DELETE FROM tasks.
+        // Порядок: планы (внутри каскадом уходят узлы/рёбра и их ссылки на
+        // подзадачи) → журнальные и вспомогательные таблицы → сами задачи
+        // (далее каскад добирает подзадачи, попытки, комментарии, метки,
+        // вложения, отчёты и очередь ролей).
+        db.prepare(
+          "DELETE FROM task_collaboration_plans WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)",
+        ).run(req.params.id);
+        for (const table of [
+          "consultation_log",
+          "task_embeddings",
+          "task_events",
+          "notifications",
+        ]) {
+          db.prepare(
+            `DELETE FROM ${table} WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)`,
+          ).run(req.params.id);
+        }
+        db.prepare("DELETE FROM tasks WHERE project_id = ?").run(req.params.id);
+        // Чаты и память проекта — каскадом от projects, но проект пока не
+        // удаляем (он уйдёт ниже) — чистим явно, чтобы не зависеть от
+        // порядка каскадов в SQLite.
+        db.prepare("DELETE FROM memories WHERE project_id = ?").run(req.params.id);
+        db.prepare("DELETE FROM chats WHERE project_id = ?").run(req.params.id);
+
+        if (withDocs && project.notes_folder_id) {
+          // Документы стираются явным шагом: сначала заметки, потом папка.
+          db.prepare("DELETE FROM user_notes WHERE folder_id = ?").run(
+            project.notes_folder_id,
+          );
+          db.prepare("DELETE FROM journal_folders WHERE id = ?").run(
+            project.notes_folder_id,
+          );
+          db.prepare("DELETE FROM projects WHERE id = ?").run(req.params.id);
+        } else {
+          // Без with_docs документы остаются в заметках, отвязанными: папка
+          // в Дневнике сохраняется, а `notes_folder_id` проекта обнуляем.
+          db.prepare(
+            "UPDATE projects SET notes_folder_id = NULL WHERE id = ?",
+          ).run(req.params.id);
+          db.prepare("DELETE FROM projects WHERE id = ?").run(req.params.id);
+        }
+      });
+      purge();
+
+      return {
+        ok: true,
+        purged: true,
+        with_docs: withDocs,
+        documents_kept: withDocs ? 0 : docs,
+        counts: { tasks, documents: docs, chats, memories },
+      };
     },
   );
 

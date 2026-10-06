@@ -3492,6 +3492,44 @@ const migrations: Migration[] = [
       );
     `);
   } },
+
+  // Архив проектов (карточка a1be7d63…). Удаление проекта больше не
+  // уничтожает данные, а проставляет `archived_at`/`archived_by`.
+  // Колонки уже добавлены в `db.ts:migrate()` (аддитивно, как position/
+  // pinned/is_private), свежая база получает их прямо из CREATE TABLE.
+  // Эта миграция идемпотентна и нужна, чтобы зафиксировать факт в
+  // schema_migrations и дотянуть уже существующие базы.
+  { id: "107_project_archive", description: "Архив проектов: projects.archived_at/archived_by", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("archived_at")) {
+      db.exec("ALTER TABLE projects ADD COLUMN archived_at TEXT");
+    }
+    if (!cols.has("archived_by")) {
+      db.exec("ALTER TABLE projects ADD COLUMN archived_by TEXT");
+    }
+    // Журнал окончательных удалений из архива: фиксирует факт и числа до
+    // того, как данные будут стЁрты. Хранится вечно — единственный след
+    // проекта после purge, потому что `project_id` здесь без внешнего
+    // ключа (сам проект удаляется).
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS project_purge_log (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        project_name TEXT NOT NULL,
+        actor_id TEXT REFERENCES users(id),
+        tasks INTEGER NOT NULL DEFAULT 0,
+        documents INTEGER NOT NULL DEFAULT 0,
+        chats INTEGER NOT NULL DEFAULT 0,
+        memories INTEGER NOT NULL DEFAULT 0,
+        with_docs INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_project_purge_log_project
+        ON project_purge_log(project_id, created_at DESC);
+    `);
+  } },
 ];
 
 /**

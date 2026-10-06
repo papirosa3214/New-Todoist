@@ -14,6 +14,8 @@ import {
 } from "react";
 import {
   Activity,
+  Archive,
+  ArchiveRestore,
   ArrowDown,
   ArrowUp,
   Bell,
@@ -177,6 +179,8 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   link: Link,
   share: Share2,
   trash: Trash2,
+  archive: Archive,
+  restore: ArchiveRestore,
   edit: Pencil,
   info: Info,
   moon: Moon,
