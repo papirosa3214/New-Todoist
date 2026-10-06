@@ -198,7 +198,61 @@ export function usePutRouting() {
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["runtime", "routing"] });
+      qc.invalidateQueries({ queryKey: ["runtime", "failover"] });
     },
+  });
+}
+
+export interface FailoverLimit {
+  provider: string;
+  /** UTC, формат SQLite — в экран через formatAbsoluteTime. */
+  until: string;
+  /** Автовозврат выключен: метка не истечёт сама, снимается кнопкой. */
+  held: boolean;
+  mode: "timer" | "probe" | string;
+  reason: string | null;
+}
+
+export interface FailoverRoleState {
+  role: string;
+  primary: string;
+  fallbacks: string[];
+  /** Модель, на которой роль стартует сейчас (с учётом лимитов). */
+  current: string;
+  on_fallback: boolean;
+}
+
+export interface FailoverStatus {
+  auto_switch: boolean;
+  auto_return: boolean;
+  limits: FailoverLimit[];
+  roles: FailoverRoleState[];
+}
+
+export function useFailoverStatus() {
+  return useQuery({
+    queryKey: ["runtime", "failover"],
+    queryFn: () => api.get<FailoverStatus>("/api/runtime/failover"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function usePutFailover() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { auto_switch?: boolean; auto_return?: boolean }) =>
+      api.put<{ auto_switch: boolean; auto_return: boolean }>("/api/runtime/failover", body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runtime", "failover"] }),
+  });
+}
+
+/** «Вернуть сейчас»: снять метку лимита у провайдера. */
+export function useReleaseProviderLimit() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (provider: string) =>
+      api.delete<{ ok: boolean }>(`/api/runtime/failover/limits/${encodeURIComponent(provider)}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runtime", "failover"] }),
   });
 }
 
@@ -210,6 +264,7 @@ export function usePutRoutingAll() {
       api.put<{ primary: string; roles: string[] }>("/api/runtime/routing", { primary }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["runtime", "routing"] });
+      qc.invalidateQueries({ queryKey: ["runtime", "failover"] });
     },
   });
 }
