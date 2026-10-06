@@ -213,6 +213,19 @@ describe("Чаты: общий чат, тема задачи, только @", (
     expect(count.n).toBe(1);
   });
 
+  it("маркер новой сессии в общий чат не пишется (ручка new-session отбита)", async () => {
+    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES (?, ?)").run(COMMON_CHAT_ID, "role_architect");
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/chats/${COMMON_CHAT_ID}/new-session`,
+      headers: ownerAuth,
+      payload: { role_id: "role_architect" },
+    });
+    expect(res.statusCode).toBe(403);
+    const markers = db.prepare("SELECT COUNT(*) n FROM chat_messages WHERE chat_id=? AND is_session_marker=1").get(COMMON_CHAT_ID) as any;
+    expect(markers.n).toBe(0);
+  });
+
   it("тема задачи создаётся вместе с задачей проекта и закрывается с ней", async () => {
     const project = await app.inject({ method: "POST", url: "/api/projects", headers: ownerAuth, payload: { name: "Темы задач", with_docs: false } });
     expect(project.statusCode).toBe(200);

@@ -837,6 +837,16 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if (!roleId) return reply.code(400).send({ error: "role_id обязателен" });
       if (!isMember(chatId, roleId))
         return reply.code(400).send({ error: "role_id не участник этого чата" });
+      // Общий чат: маркер новой сессии — служебная запись серверного пути, а
+      // не команда роли через её инструмент. Инвариант п. 3: сюда такое не
+      // пишем (карточка ca816271).
+      try {
+        assertCommonChatWritable(chatId, "system");
+      } catch (error) {
+        return reply
+          .code(403)
+          .send({ error: error instanceof Error ? error.message : "запись запрещена" });
+      }
 
       db.prepare("DELETE FROM chat_sessions WHERE chat_id = ? AND role_id = ?").run(
         chatId,
