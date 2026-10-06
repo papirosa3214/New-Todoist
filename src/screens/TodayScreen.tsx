@@ -648,6 +648,8 @@ export function TodayScreen() {
               overdue={t.due_date !== null && t.due_date < today}
               showAgentState
               showDueBadge={false}
+              // §2.5 (MAK-52): в основном списке прогресс читается словами.
+              verboseProgress
               onClick={() => openTask(t.id)}
             />
           ))}
@@ -665,6 +667,8 @@ export function TodayScreen() {
               overdue
               showAgentState
               showDueBadge={false}
+              // §2.5 (MAK-52): в основном списке прогресс читается словами.
+              verboseProgress
               onClick={() => openTask(t.id)}
             />
           ))}
@@ -691,6 +695,8 @@ export function TodayScreen() {
               overdue={false}
               showAgentState
               showDueBadge={false}
+              // §2.5 (MAK-52): в основном списке прогресс читается словами.
+              verboseProgress
               onClick={() => openTask(t.id)}
             />
           ))}
