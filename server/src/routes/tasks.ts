@@ -1504,10 +1504,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // сидит внутри отдачи, так что ручной и автоматический режимы
         // расходятся ровно в одном — кто поднял флаг.
         // Исполнитель уже назначен — флаг и есть запуск: роль будит сервер.
+        // MAK-68: 9 входов сведены к одной функции. PATCH ready_for_pickup=1
+        // без исполнителя идёт через `tryStartSingleExecutorPlan` —
+        // единая точка, создающая план single_executor и стартующая узел.
         if (newValue === 1 && previous !== 1 && !existing.assignee_id) {
           try {
-            const { dispatchTaskToPi } = await import("./dispatch.js");
-            await dispatchTaskToPi(id, req.userId, { manualStart: true });
+            const { tryStartSingleExecutorPlan } = await import("./dispatch.js");
+            await tryStartSingleExecutorPlan(id, req.userId, { manualStart: true });
           } catch (err) {
             // Отказ отдачи не отменяет поднятия флага: владелец своё
             // действие сделал, и карточка обязана остаться готовой.

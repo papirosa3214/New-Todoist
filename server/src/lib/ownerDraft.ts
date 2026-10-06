@@ -1,6 +1,7 @@
 import { persistPreparedPlan } from "./taskPreparationPersistence.js";
 import { NonTaskInputError } from "./taskPreparation.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
+import { tryStartSingleExecutorPlan } from "../routes/dispatch.js";
 // Окно постановки задач: надиктовка владельца в чат → карточка-черновик.
 // Карточка 4396f8c9, 10.09.2026.
 //
@@ -480,13 +481,14 @@ async function admitTreeAutomatically(
       queued += 1;
       continue;
     }
-    // Тот же путь, которым карточку отдаёт владелец руками: гейты и швы
-    // доставки общие, иначе автомат начал бы запускать то, что вручную
-    // запустить нельзя.
-    const outcome = await dispatchTaskToPi(card.id, owner, { system: true });
-    if (outcome.ok) {
+    // MAK-68: 9 входов сведены к одной функции. Допуск дерева Секретаря
+    // (автоприём через надиктовку) идёт через `tryStartSingleExecutorPlan`
+    // — гейты и подбор роли общие с остальными системными путями, иначе
+    // автомат начал бы запускать то, что вручную запустить нельзя.
+    const outcome = await tryStartSingleExecutorPlan(card.id, owner, { system: true });
+    if (outcome.ok && outcome.reason === "started") {
       dispatched += 1;
-    } else {
+    } else if (!outcome.ok) {
       // Карточка осталась готовой, но неотданной. Это не молчаливая
       // потеря: флаг поднят, владелец увидит её на доске как готовую без
       // исполнителя, а причина уходит в журнал сервера.
@@ -495,6 +497,11 @@ async function admitTreeAutomatically(
         `автоматический режим: карточку ${card.id} не удалось отдать исполнителю:`,
         outcome.error,
       );
+    } else {
+      // skipped-assignee / skipped-plan / skipped-inactive — задача
+      // уже в работе или выбрана другая схема; считаем как «в очереди»,
+      // флаг поднят, диспетчер не отдал.
+      queued += 1;
     }
   }
 
@@ -598,14 +605,22 @@ export async function startDraftTree(
       continue;
     }
     if (card.assignee_id) {
+      // Уже назначенный исполнитель — это не «запуск через план», а
+      // пробуждение существующего. Через MAK-68 «план из одного шага»
+      // это идти не должно (карточка уже отдана, plan ни при чём),
+      // поэтому путь прежний: `enqueueRoleRunJob` поднимет роль ещё раз.
       enqueueRoleRunJob({ taskId: card.id, reason: "assigned", actorId: owner,
         dedupeKey: `manual-start:${card.id}:${crypto.randomUUID()}`, manualStart: true });
       started += 1; // явный запуск назначенного исполнителя
       continue;
     }
-    const outcome = await dispatchTaskToPi(card.id, owner, { manualStart: true });
-    if (outcome.ok) started += 1;
-    else console.warn(`запуск черновика: ${card.id} не отдан:`, outcome.error);
+    // MAK-68: «✓ Идёт» на карточке Секретаря идёт через
+    // `tryStartSingleExecutorPlan` — единая точка входа на план из
+    // одного шага с правилом «Система». `manualStart: true` означает
+    // явное действие владельца, проходит при любом режиме.
+    const outcome = await tryStartSingleExecutorPlan(card.id, owner, { manualStart: true });
+    if (outcome.ok && outcome.reason === "started") started += 1;
+    else if (!outcome.ok) console.warn(`запуск черновика: ${card.id} не отдан:`, outcome.error);
   }
   return { started, queued };
 }
