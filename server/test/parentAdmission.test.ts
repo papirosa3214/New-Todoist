@@ -171,7 +171,7 @@ describe("лента: отправка на проверку видна", () => 
   let ownerAuth: string;
   let ownerId: string;
   const serviceKey = `svc-${crypto.randomUUID()}`;
-  const PI_AGENT_ID = "1fa09a0a-0c41-4e7e-982a-a1c46570e5d2";
+  const SCHEDULER_ID = "taskflow_system";
 
   beforeAll(async () => {
     app = await buildApp();
@@ -185,14 +185,10 @@ describe("лента: отправка на проверку видна", () => 
     ownerId = reg.json().user.id;
     ownerAuth = `Bearer ${reg.json().token}`;
     db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(ownerId);
-    // Служебная учётка будильника (Pi Agent) со своим ключом.
-    db.prepare(
-      `INSERT OR IGNORE INTO users (id, name, email, password_hash, role, type)
-       VALUES (?, 'Pi Agent', 'pi-journal@test', 'x', 'agent', 'ai')`,
-    ).run(PI_AGENT_ID);
+    // Служебная учётка «Система» со своим ключом (заведена миграцией 095).
     db.prepare("UPDATE users SET api_token = ? WHERE id = ?").run(
       crypto.createHash("sha256").update(serviceKey, "utf8").digest("hex"),
-      PI_AGENT_ID,
+      SCHEDULER_ID,
     );
   });
 
