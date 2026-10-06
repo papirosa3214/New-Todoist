@@ -1006,7 +1006,7 @@ function DayStrip({
               className="tap-menu flex items-center gap-2 rounded-lg bg-card2 px-2 py-1.5 text-left"
             >
               <span
-                className={`flex h-[13px] w-[13px] shrink-0 items-center justify-center rounded-[4px] border ${
+                className={`flex icon-xs shrink-0 items-center justify-center rounded-[4px] border ${
                   t.status === "completed"
                     ? "border-dim bg-dim/30"
                     : "border-dim"

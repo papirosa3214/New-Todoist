@@ -83,6 +83,50 @@
   --dur-base: 200ms; /* базовое движение интерфейса по умолчанию */
   --dur-slow: 350ms; /* открытие шторки, смена вкладки */
   --dur-deliberate: 500ms; /* разворот/сворачивание, drag шторки */
+
+  /* ═══ МЕТРИКИ (2026-10-06, Linear MAK-48) — единая шкала iOS ═══
+     Источник эталона: TaskFlowNativeBuild/Sources/DesignSystem/Metrics.swift §1.3
+     (доступен владельцу на маке, в этом worktree прямого доступа нет — шкала
+     скопирована в карточку задачи cdc95182). Правило: новый код берёт
+     ТОЛЬКО эти токены; магические 17px/13px/20px/15px и т.п. в
+     комментариях не появляются. Существующие места с Tailwind-утилитами
+     rounded-xl/lg/2xl/full НЕ переименовываем механически (см. блок
+     СКРУГЛЕНИЯ ниже) — заменяем только магические числа.
+     Имена умышленно НЕ совпадают с Tailwind space-1..N и radius-sm/md/lg:
+     шкала другая (4/8/12/16/24 и 6/8/12/16/pill 4), а не 4/8/12/16/20/24
+     и 2/4/6/8 — конфликт имён с готовыми утилитами собьёт Tailwind. */
+  --space-1: 4px;   /* лейбл→значение в одной строке, межстрочный */
+  --space-2: 8px;   /* секция→поле, блок→блок внутри группы */
+  --space-3: 12px;  /* поле→поле в строке, отступ подписи сверху */
+  --space-4: 16px;  /* левое поле экрана, секция→секция */
+  --space-6: 24px;  /* блок→блок в потоке, верхняя граница крупной секции */
+
+  /* Радиусы — в iOS-стиле: control мельче, surface крупнее. pill — для
+     капсульных кнопок/чипов; full — круг/полная капсула. 20px и 14px в
+     системе НЕТ, и любые «нестандартные» радиусы в коде — ошибка шкалы. */
+  --radius-sm: 6px;   /* мелкий контрол, маленький чип */
+  --radius-md: 8px;   /* кнопка, поле ввода */
+  --radius-lg: 12px;  /* крупный контрол, шторка */
+  --radius-xl: 16px;  /* карточка, sheet-тело, крупная поверхность */
+  --radius-pill: 4px; /* капсульная кнопка/чип (НЕ full, чтобы квадратные
+                         пилюли с подписью не превращались в эллипс) */
+
+  /* Контролы — высоты по iOS: поле 52, кнопка 48, оба выше привычных
+     40/44, потому что у нас вся типографика на 1–2 ступени крупнее
+     (MAK-47). Тап-зона ≥44 (HIG) — это минимум, и она уже включена в
+     --control-h-md/lg. Маленькие «иконочные» тап-зоны 36 приходят из
+     вторичных рядов — отдельным токеном. */
+  --control-h-sm: 36px; /* второстепенный ряд (превью в атаче, чип) */
+  --control-h-md: 48px; /* кнопка, компактное поле */
+  --control-h-lg: 52px; /* поле ввода формы, §8 */
+  --tap-min: 44px;      /* минимум HIG: ниже — нельзя, иначе палец промажет */
+
+  /* Иконки — три размера iOS по соседнему тексту (caption/footnote/body).
+     22 — по умолчанию для body и крупнее; 18 — для caption/footnote;
+     14 — только inline-в-подписи. Никаких 16/20/24 в новом коде. */
+  --icon-xs: 14px;
+  --icon-sm: 18px;
+  --icon-md: 22px;
 }
 
 /* Tailwind v4 сам генерирует shadow-fab/shadow-fan-fab/…/shadow-pop из
@@ -564,6 +608,53 @@
     }
   }
 }
+
+/* ═══ МЕТРИКИ — UTILITY-КЛАССЫ (2026-10-06, Linear MAK-48) ═══
+   По аналогии с .tap-scale / .tf-row: класс берёт ровно одно число из
+   токена @theme выше, чтобы новый код писал className="…" без magic-
+   пикселей. Не пытается заменить Tailwind p-2/p-4 — рядом с ними не
+   конфликтует, потому что имена другие (space-*, radius-*, icon-*).
+   Существующие Tailwind-утилиты в коде НЕ трогаем — заменяем только
+   явные magic numbers на placeholder-значения (см. коммит). */
+
+/* Отступы (внутренний край карточки 16, секция→секция 16, блок→блок 24) */
+.p-screen        { padding: var(--space-4); }
+.px-screen       { padding-inline: var(--space-4); }
+.py-screen       { padding-block: var(--space-4); }
+.p-section-1     { padding: var(--space-6); } /* крупная секция, верх/низ */
+.p-card          { padding: var(--space-4); } /* карточка/поле внутри */
+.gap-screen      { gap: var(--space-4); }
+.gap-section-1   { gap: var(--space-6); }
+.gap-field-label { gap: var(--space-1); }   /* лейбл→значение в строке */
+.gap-row-internal{ gap: var(--space-2); }   /* блок→блок в одной строке */
+.gap-row         { gap: var(--space-3); }   /* поле→поле в строке */
+
+/* Радиусы (для мест с явными magic-числами, где Tailwind-утилита
+   округла недостаточна) */
+.r-control-sm    { border-radius: var(--radius-sm); }   /* 6 */
+.r-control-md    { border-radius: var(--radius-md); }   /* 8 */
+.r-control-lg    { border-radius: var(--radius-lg); }   /* 12 */
+.r-surface       { border-radius: var(--radius-xl); }   /* 16 */
+.r-pill          { border-radius: var(--radius-pill); } /*  4 */
+
+/* Высоты контролов */
+.h-control-sm    { height: var(--control-h-sm); min-height: var(--control-h-sm); }
+.h-control-md    { height: var(--control-h-md); min-height: var(--control-h-md); }
+.h-control-lg    { height: var(--control-h-lg); min-height: var(--control-h-lg); }
+
+/* Размеры иконок (квадратная кнопка-иконка под tap-зону ≥44) */
+.icon-xs { width: var(--icon-xs); height: var(--icon-xs); }
+.icon-sm { width: var(--icon-sm); height: var(--icon-sm); }
+.icon-md { width: var(--icon-md); height: var(--icon-md); }
+/* Иконка-кнопка: ровно tap-зона 44, иконка 22 внутри */
+.tap-icon-md {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tap-icon-md > svg { width: var(--icon-md); height: var(--icon-md); }
 
 /* ═══════════ AnimatedTabBar (перенос из CRM, задача 2026-08-11) ═══════════
    Дословный порт CSS-блока ~/Проекты/CRM/CRM-Castom/frontend/src/index.css

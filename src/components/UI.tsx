@@ -1535,7 +1535,7 @@ export function ScreenHeader({
           // подтянуть наверх») — было py-2 поровну, стало 2px сверху и 14px
           // снизу. Высота полосы та же, съезжает только содержимое.
           className={`flex items-center gap-2 relative z-10 ${
-            isCompact ? "h-[48px]" : "min-h-[56px] pt-0.5 pb-3.5"
+            isCompact ? "h-control-md" : "min-h-[56px] pt-0.5 pb-3.5"
           }`}
         >
           {leadingNode}
@@ -1602,7 +1602,7 @@ export function TextField({
   className?: string;
 } & ComponentPropsWithoutRef<"input">) {
   return (
-    <div className="flex items-center gap-3 px-4 h-[52px]">
+    <div className="flex items-center gap-3 px-4 h-control-lg">
       {icon && <Icon name={icon} size={18} className="text-dim shrink-0" />}
       <input
         {...inputProps}

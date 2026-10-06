@@ -1018,7 +1018,7 @@ export function DueDateField({
                       key={opt.value}
                       type="button"
                       onClick={() => onRunRepeatChange(opt.value)}
- className={`tf-action h-[36px] px-3 rounded-xl transition-colors ${
+ className={`tf-action h-control-sm px-3 rounded-xl transition-colors ${
                         active
                           ? "bg-red text-white"
                           : "bg-card2 text-text active:bg-white/10"
