@@ -12,6 +12,7 @@ import {
   type AuthMethod,
 } from "../api/runtime";
 import { ErrorBanner, Loading, ScreenHeader } from "../components/UI";
+import { RoleModelsBlock } from "../components/RoleModelsBlock";
 import { useDialog } from "../components/Dialog";
 import { getErrorMessage } from "../lib/errors";
 
@@ -392,7 +393,7 @@ export function ProvidersScreen() {
 
   return (
     <div className="screen" style={{ padding: "16px 16px 80px" }}>
-      <ScreenHeader title="Провайдеры" />
+      <ScreenHeader title="Модели и провайдеры" />
       <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>
         Источник истины — Pi. Список провайдеров и статус подключения TaskFlow
         читает у Pi; ключи и токены в TaskFlow не хранятся.
@@ -419,6 +420,8 @@ export function ProvidersScreen() {
           Pi не отдаёт ни одного провайдера.
         </div>
       )}
+
+      <RoleModelsBlock />
     </div>
   );
 }

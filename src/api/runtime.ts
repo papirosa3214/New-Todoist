@@ -41,7 +41,8 @@ export interface RoleRoutingView {
 
 export interface PutRoutingBody {
   primary: string;
-  fallbacks: string[];
+  /** Не передан — запасные роли остаются как есть (на них держится автопереключение при лимите). */
+  fallbacks?: string[];
 }
 
 // === AuthSession ===
@@ -195,6 +196,18 @@ export function usePutRouting() {
         `/api/runtime/routing/${input.role}`,
         input.body,
       ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["runtime", "routing"] });
+    },
+  });
+}
+
+/** Основная модель СРАЗУ всем ролям (запасные не трогаются). */
+export function usePutRoutingAll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (primary: string) =>
+      api.put<{ primary: string; roles: string[] }>("/api/runtime/routing", { primary }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["runtime", "routing"] });
     },

@@ -38,7 +38,6 @@ import { SearchScreen } from "./screens/SearchScreen";
 import { VoiceModelsScreen } from "./screens/VoiceModelsScreen";
 import { IntegrationsScreen } from "./screens/IntegrationsScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
-import { RolesModelsScreen } from "./screens/RolesModelsScreen";
 import { TemplatesScreen } from "./screens/TemplatesScreen";
 import { NotesScreen } from "./screens/NotesScreen";
 import { NoteEditorScreen } from "./screens/NoteEditorScreen";
@@ -193,9 +192,10 @@ export default function App() {
               path="/settings/providers"
               element={<ProvidersScreen />}
             />
+            {/* Модели ролей переехали на «Модели и провайдеры» (07.10.2026). */}
             <Route
               path="/settings/roles-models"
-              element={<RolesModelsScreen />}
+              element={<Navigate to="/settings/providers" replace />}
             />
             <Route path="/settings/templates" element={<TemplatesScreen />} />
           </Route>
