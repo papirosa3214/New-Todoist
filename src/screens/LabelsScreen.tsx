@@ -320,10 +320,7 @@ export function LabelsScreen() {
           <Button
             variant="primary"
             onClick={() => setShowCreate(true)}
-            className="w-auto px-6"
-          >
-            <Icon name="plus" size={18} />
-            Создать метку
+            className="w-auto px-6" icon="plus">Создать метку
           </Button>
         </div>
       ) : (

@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ComponentPropsWithoutRef,
   type CSSProperties,
   type ReactNode,
@@ -646,15 +647,13 @@ export function SheetHeader({
     <div
       className={`flex items-center justify-between pb-3 ${className}`}
     >
-      <button
-        type="button"
+      <IconButton
+        icon="x"
+        label="Закрыть"
         onMouseDown={mouseDown}
         onClick={onClose}
-        aria-label="Закрыть"
-        className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center"
-      >
-        <Icon name="x" size={20} className="text-sub" />
-      </button>
+        className="-ml-2 text-sub"
+      />
       <h3 className="text-[17px] font-semibold text-text truncate px-2">
         {title}
       </h3>
@@ -669,24 +668,27 @@ export function SheetHeader({
           {textAction.label}
         </button>
       ) : actionIcon && onAction ? (
-        <button
-          type="button"
-          onMouseDown={mouseDown}
-          onClick={onAction}
-          disabled={actionDisabled}
-          aria-label={actionAriaLabel ?? "Подтвердить"}
-          className={
-            actionVariant === "filled"
-              ? "tap-scale w-11 h-11 -mr-2 rounded-full bg-red flex items-center justify-center disabled:opacity-40"
-              : "tap-scale w-11 h-11 -mr-2 flex items-center justify-center"
-          }
-        >
-          <Icon
-            name={actionIcon}
-            size={actionVariant === "filled" ? 18 : 20}
-            className={actionVariant === "filled" ? "text-white" : "text-text"}
+        actionVariant === "filled" ? (
+          <button
+            type="button"
+            onMouseDown={mouseDown}
+            onClick={onAction}
+            disabled={actionDisabled}
+            aria-label={actionAriaLabel ?? "Подтвердить"}
+            className="tap-scale w-11 h-11 -mr-2 rounded-full bg-red flex items-center justify-center disabled:opacity-40"
+          >
+            <Icon name={actionIcon} size={18} className="text-white" />
+          </button>
+        ) : (
+          <IconButton
+            icon={actionIcon}
+            label={actionAriaLabel ?? "Подтвердить"}
+            onMouseDown={mouseDown}
+            onClick={onAction}
+            disabled={actionDisabled}
+            className="-mr-2 text-text"
           />
-        </button>
+        )
       ) : (
         // Пустой слот шириной кнопки закрытия — заголовок не уезжает
         // влево, если действие отсутствует.
@@ -1082,13 +1084,12 @@ export function BackButton({
     // двенадцати экранах, где она стоит (Настройки, Проекты, Метки,
     // Уведомления, Активность, Агенты, карточка задачи и далее) —
     // компонент один, правка одна.
-    <button
+    <IconButton
+      icon="chevronLeft"
+      label="Назад"
       onClick={onClick}
-      className={`tap-scale w-11 h-11 -ml-2.5 flex items-center justify-center ${className}`}
-      aria-label="Назад"
-    >
-      <Icon name="chevronLeft" size={22} />
-    </button>
+      className={`-ml-2.5 ${className}`}
+    />
   );
 }
 
@@ -1627,21 +1628,71 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   outline: "border border-stroke text-sub bg-transparent",
 };
 
+// Полноширинная кнопка — веб-аналог нативного `TFButton`
+// (DESIGN-SYSTEM.md §2.1, веб: DESIGN.md §Components «Кнопки»).
+//   - primary — `--color-red-solid` + белый текст (контраст 4.67:1);
+//   - secondary — `card2` + рамка `stroke`;
+//   - outline — прозрачный фон + рамка `stroke`, текст `sub`;
+//   - height 48 (`--control-h-md`), radius 12 (`--radius-lg`), full width;
+//   - 15px/600 (`.tf-body font-semibold`), иконка 16px через проп `icon`;
+//   - disabled — opacity 0.5 (`.tap-fade:disabled` в index.css);
+//   - отклик нажатия — `.tap-fade` (opacity .85), как у полноширинных
+//     CTA в mockup-reference/index.html (`.auth-btn:active`). Цвета —
+//     только токенами, hex в className не появляется.
+//
+// Иконка — пропом, а не вложенным `<Icon>`: так 16px §2.1 задаётся в
+// одном месте, и новый вызов не может случайно поставить 18/20.
 export function Button({
   variant = "primary",
+  icon,
   className = "",
   children,
   ...props
 }: {
   variant?: ButtonVariant;
+  /** Иконка перед подписью — всегда 16px (§2.1). */
+  icon?: string;
   className?: string;
 } & ComponentPropsWithoutRef<"button">) {
   return (
     <button
       {...props}
- className={`tf-body w-full h-12 rounded-xl flex items-center justify-center gap-3 tap-fade disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
+ className={`tf-body font-semibold w-full h-control-md r-control-lg flex items-center justify-center gap-3 tap-fade disabled:opacity-50 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]} ${className}`}
     >
+      {icon && <Icon name={icon} size={16} className="shrink-0" />}
       {children}
+    </button>
+  );
+}
+
+// Кнопка-иконка — веб-аналог нативного `TFIconButton` (§2.1): прозрачная,
+// без плашки, тап-зона 44×44 (`w-11 h-11`), иконка 18px по умолчанию
+// (`--icon-sm`), отклик `.tap-scale` (scale .94). `label` ОБЯЗАТЕЛЕН:
+// у кнопки без текста VoiceOver/Voice Control читать нечего, поэтому
+// aria-label — часть API, а не опция вызывающего. До этого единой
+// кнопки-иконки не было — 74 инлайновых `tap-scale w-11 h-11` по
+// экранам, часть без aria-label.
+export function IconButton({
+  icon,
+  label,
+  size = 18,
+  className = "",
+  ...props
+}: {
+  icon: string;
+  /** Обязательная подпись для скринридера (native `TFIconButton.label`). */
+  label: string;
+  size?: number | "xs" | "sm" | "md" | "lg";
+  className?: string;
+} & Omit<ComponentProps<"button">, "aria-label">) {
+  return (
+    <button
+      type="button"
+      {...props}
+      aria-label={label}
+      className={`tap-scale w-11 h-11 shrink-0 flex items-center justify-center ${className}`}
+    >
+      <Icon name={icon} size={size} />
     </button>
   );
 }

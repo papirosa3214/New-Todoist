@@ -11,7 +11,7 @@
 // sheet's own markup doesn't vary between them at all, only the task list
 // each screen feeds it does.
 import { useEffect, useState } from "react";
-import { Icon, Avatar, SheetHandle, SheetHeader, Switch } from "./UI";
+import { Icon, Avatar, IconButton, SheetHandle, SheetHeader, Switch } from "./UI";
 import { Card, FieldRow } from "./TaskFields";
 import { useBottomSheet } from "../lib/useBottomSheet";
 import {
@@ -34,13 +34,12 @@ import type { ApiProject } from "../api/types";
 // индикатора.
 export function TaskFilterButton({ onClick }: { onClick: () => void }) {
   return (
-    <button
+    <IconButton
+      icon="filter"
+      label="Фильтры"
       onClick={onClick}
-      aria-label="Фильтры"
-      className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
-    >
-      <Icon name="filter" size={18} className="text-text" />
-    </button>
+      className="text-text"
+    />
   );
 }
 
