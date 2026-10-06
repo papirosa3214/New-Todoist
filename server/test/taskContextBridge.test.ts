@@ -64,6 +64,32 @@ describe("in-process TaskContext bridge", () => {
     }]);
   });
 
+  it("пробрасывает блок «Что уже было по этой карточке» в сборщик", async () => {
+    const calls: unknown[] = [];
+    await buildInProcessTaskContext(
+      {
+        task: { id: "task-1", title: "T03 delivery" },
+        actor: { id: "role_qa", name: "QA" },
+        task_history: { status: "ok", past_steps: 1, block: "── Что уже было по этой карточке ──" },
+      },
+      async (input) => {
+        calls.push(input);
+        return JSON.stringify({
+          prompt: "── КОНТЕКСТ v1 ──",
+          summary: "Материал для работы собран. Прошлые шаги: 1 шаг.",
+          knowledge_status: "empty",
+          dependency_status: "empty",
+        });
+      },
+    );
+
+    expect(calls).toEqual([{
+      task: { id: "task-1", title: "T03 delivery" },
+      actor: { id: "role_qa", name: "QA" },
+      task_history: { status: "ok", past_steps: 1, block: "── Что уже было по этой карточке ──" },
+    }]);
+  });
+
   it("отклоняет неполный ответ bridge до запуска роли", async () => {
     await expect(buildInProcessTaskContext(
       { task: { id: "task-1" }, actor: { id: "role_builder", name: "Разработчик" } },

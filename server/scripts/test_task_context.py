@@ -4,10 +4,13 @@
 # (не требует pytest — просто стандартный unittest из stdlib.)
 
 import json
+import os
 import sys
 import unittest
 
-sys.path.insert(0, "/home/maksim/Проекты/New-Todoist/server/scripts")
+# Тестируем тот task_context.py, что лежит рядом с этим файлом, а не копию по
+# абсолютному пути: иначе в worktree проверялось бы чужое состояние.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import task_context as tc  # noqa: E402
 
@@ -70,6 +73,38 @@ class TestTaskContextSchema(unittest.TestCase):
         self.assertIn("root: root Родитель", text)
         self.assertIn("result: Источники проверены", text)
         self.assertIn("Связанные результаты: 1 предшественник", tc.context_summary_ru(ctx))
+
+    def test_task_history_is_serialized_and_summarized(self):
+        """«Что уже было по этой карточке»: блок в prompt, число шагов в сводке."""
+        ctx = tc.build_context(
+            {"id": "t1", "title": "шаг после разработчика"},
+            {"id": "role_qa", "name": "QA"},
+            task_history={
+                "status": "ok",
+                "past_steps": 2,
+                "block": "── Что уже было по этой карточке ──\nПрошлые шаги: 2.",
+            },
+        )
+        text = tc.serialize_context(ctx)
+        self.assertIn("Что уже было по этой карточке", text)
+        self.assertIn("Прошлые шаги: 2 шага", tc.context_summary_ru(ctx))
+
+    def test_first_step_history_is_marked(self):
+        ctx = tc.build_context(
+            {"id": "t1", "title": "первый шаг"},
+            {"id": "role_qa", "name": "QA"},
+            task_history={"status": "empty", "past_steps": 0, "block": "── Что уже было по этой карточке ──\nПервый шаг."},
+        )
+        self.assertIn("Первый шаг", tc.serialize_context(ctx))
+        self.assertIn("Прошлые шаги: 0 (первый шаг)", tc.context_summary_ru(ctx))
+
+    def test_task_history_absent_is_not_summarized(self):
+        """Без блока (чат/не-шаговый запуск) сводка про прошлые шаги не врёт."""
+        ctx = tc.build_context(
+            {"id": "t1", "title": "без истории"},
+            {"id": "role_qa", "name": "QA"},
+        )
+        self.assertNotIn("Прошлые шаги", tc.context_summary_ru(ctx))
 
     def test_collaboration_context_is_serialized(self):
         """T03: collaboration_context — отдельный блок, не смешанный с dependency_context."""

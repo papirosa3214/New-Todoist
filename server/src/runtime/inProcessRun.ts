@@ -8,6 +8,7 @@ import { ensureRoleHome } from "./roleHome.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { roleProjectContext,roleProjectSnapshot } from "./roleProjectContext.js";
 import { saveSlotSnapshot, slotSnapshotBlock, technicalSlotSnapshot } from "./slotWorkSnapshot.js";
+import { buildTaskHistory } from "./taskHistoryContext.js";
 import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
 import { renderInstruction, effectiveRules, registerInstructionBlock, instructionManifest } from "../lib/roleContextResolver.js";
 import { isOwner } from "../access.js";
@@ -936,6 +937,9 @@ async function runRoleInProcessUnserialized(input: {
     actor: { id: roleUserId(role), name: roleTitle(role) },
     dependency_context: dependencyContext,
     collaboration_context: collaborationContext,
+    // «Что уже было по этой карточке» (владелец 06.10.2026): сводка прошлых
+    // ходов собирается сервером без модели и входит в задание каждого шага.
+    task_history: buildTaskHistory({ taskId, subtaskId: input.subtaskId ?? null }),
   });
   if (mode === "work" && !resumed) {
     try {

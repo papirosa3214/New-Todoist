@@ -26,6 +26,7 @@ def main() -> int:
         parent_task_id=None,
         dependency_context=payload.get("dependency_context"),
         collaboration_context=payload.get("collaboration_context"),
+        task_history=payload.get("task_history"),
     )
     print(json.dumps({
         "prompt": serialize_context(context),
