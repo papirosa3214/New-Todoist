@@ -1570,10 +1570,142 @@ export function ScreenHeader({
   );
 }
 
+// ═══════════ LIST PRIMITIVES (DESIGN-SYSTEM.md §2.2/§2.7) ═══════════
+// Карточки, строки списка, секции и разделители — один язык для всех
+// списков веба (Linear MAK-50, 2026-10-06). До этого каждый экран рисовал
+// строку сам: плашка иконки 28×28 в настройках, «голые» иконки 18px в
+// формах, значение/шеврон разными ступенями. Здесь эти формы сведены в
+// четыре примитива, чтобы новая строка не могла случайно разойтись с
+// соседней. Эталон iOS на .110 не расшарен (см. kb:
+// 2026-10-05-designer-ios-etalons-not-on-server) — числа взяты из
+// формулировки MAK-50 и уже принятых правил DESIGN.md.
+
+/** Разделитель 1px `stroke` между строками карточки/секции. */
+export function Divider({ className = "" }: { className?: string }) {
+  return <div className={`h-px bg-stroke ${className}`} />;
+}
+
+/** Заголовок секции — ступень `action` (13/400/+0.10), цвет `sub`. */
+export function SectionHeader({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`tf-action text-sub px-1 ${className}`}>{children}</div>
+  );
+}
+
+// Карточка-поверхность: `bg-card`, радиус 16 (`r-surface`), без рамки;
+// строки внутри разделяются `Divider`. Раньше жила в TaskFields.tsx и
+// называлась `Card` — теперь это единственная реализация, а TaskFields
+// реэкспортирует её, чтобы прежние импорты не менялись.
+export function Card({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  const items = Children.toArray(children);
+  return (
+    <div className={`w-full bg-card r-surface overflow-hidden ${className}`}>
+      {items.map((child, i) => (
+        <div key={i}>
+          {child}
+          {i < items.length - 1 && <Divider />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Строка списка (§2.2): иконка — либо квадрат 40×40 с заливкой 18%
+// (`iconColor`), либо голые 18px `dim`; заголовок `body`, подзаголовок и
+// значение/шеврон — ступень `action` (13); подсветка нажатия — `tap-row`
+// (фон 4%, см. index.css). Высота 52 (`h-control-lg`) — та же, что у
+// строки группы полей (§2.7): ListRow и FieldRow/TextField встают в одну
+// сетку. Без `onClick` рендерится `<div>` — строка-констатация
+// (информация, тумблер) не должна притворяться кнопкой.
+export function ListRow({
+  icon,
+  iconColor,
+  label,
+  sublabel,
+  value,
+  chevron = false,
+  trailing,
+  onClick,
+  danger = false,
+  className = "",
+}: {
+  icon?: string;
+  /** Цвет заливки плашки 18% (`{color}18`) — включает квадрат 40×40. */
+  iconColor?: string;
+  label: ReactNode;
+  sublabel?: ReactNode;
+  value?: ReactNode;
+  chevron?: boolean;
+  trailing?: ReactNode;
+  onClick?: () => void;
+  danger?: boolean;
+  className?: string;
+}) {
+  const content = (
+    <>
+      {icon &&
+        (iconColor ? (
+          <span
+            className="w-[40px] h-[40px] r-control-md flex items-center justify-center shrink-0"
+            style={{ backgroundColor: iconColor + "18" }}
+          >
+            <Icon
+              name={icon}
+              size={18}
+              className={danger ? "text-coral" : "text-text"}
+            />
+          </span>
+        ) : (
+          <Icon
+            name={icon}
+            size={18}
+            className={`shrink-0 ${danger ? "text-coral" : "text-dim"}`}
+          />
+        ))}
+      <span className="flex-1 min-w-0 flex flex-col justify-center">
+        <span
+          className={`tf-body truncate ${danger ? "text-coral" : "text-text"}`}
+        >
+          {label}
+        </span>
+        {sublabel && (
+          <span className="tf-action text-sub truncate">{sublabel}</span>
+        )}
+      </span>
+      {value !== undefined && (
+        <span className="tf-action text-sub shrink-0">{value}</span>
+      )}
+      {trailing}
+      {chevron && (
+        <Icon name="chevron" size={13} className="text-dim shrink-0" />
+      )}
+    </>
+  );
+  const cls = `w-full flex items-center gap-3 px-4 h-control-lg bg-card text-left ${className}`;
+  if (!onClick) return <div className={cls}>{content}</div>;
+  return (
+    <button type="button" onClick={onClick} className={`tap-row ${cls}`}>
+      {content}
+    </button>
+  );
+}
+
 // ═══════════ FORM PRIMITIVES ═══════════
 // Unified spacing/radius scale for forms across the app:
-//   - FieldGroup: bg-card rounded-2xl card wrapping a list of rows, with a
-//     single consistent inset divider (h-px bg-stroke mx-4) between them.
+//   - FieldGroup: bg-card card wrapping a list of rows, with a single
+//     consistent inset divider (1px `stroke`, `Divider` with `mx-4`).
 //   - TextField: one icon+input row, fixed 52px height (comfortable >44px
 //     touch target), meant to live inside a FieldGroup.
 //   - Button: full-width h-12 (48px) CTA with a small variant set.
@@ -1581,11 +1713,11 @@ export function ScreenHeader({
 export function FieldGroup({ children }: { children: ReactNode }) {
   const items = Children.toArray(children);
   return (
-    <div className="w-full bg-card rounded-2xl overflow-hidden">
+    <div className="w-full bg-card r-surface overflow-hidden">
       {items.map((child, i) => (
         <div key={i}>
           {child}
-          {i < items.length - 1 && <div className="h-px bg-stroke mx-4" />}
+          {i < items.length - 1 && <Divider className="mx-4" />}
         </div>
       ))}
     </div>

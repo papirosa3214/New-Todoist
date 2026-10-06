@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { ScreenHeader, ErrorBanner, Icon } from "../components/UI";
+import { ScreenHeader, ErrorBanner, Icon, SectionHeader, ListRow, Divider } from "../components/UI";
 import {
   AppleIntegrations,
   type CalendarInfo,
@@ -277,50 +277,38 @@ export function IntegrationsScreen() {
 
         {/* ═══════════ СЕКЦИЯ: APPLE ЭКОСИСТЕМА ═══════════ */}
         <div className="space-y-3">
-          <div className="tf-caption uppercase tracking-wider text-sub px-1">
-            Apple Экосистема (iOS)
-          </div>
+          <SectionHeader>Apple Экосистема (iOS)</SectionHeader>
 
           {/* 1. Аккордеон: Apple Календарь */}
-          <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">
-            <button
-              onClick={() => toggleSection("appleCal")}
-              className="w-full p-4 flex items-center justify-between text-left hover:bg-card-hover/40 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 rounded-xl bg-red-500/10 flex items-center justify-center text-red-500 shrink-0">
-                  <Icon name="calendar" size={18} />
-                </div>
-                <div className="min-w-0">
- <div className="tf-body text-text">Apple Календарь</div>
-                  <div className="tf-caption text-sub truncate">
-                    {isApple
-                      ? calPerm.granted
-                        ? calendars.length > 0
-                          ? `Выбрано: ${selectedCalIds.length || "все"} из ${calendars.length}`
-                          : "Доступ открыт"
-                        : "Требуется разрешение"
-                      : "Доступно на iPhone"}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                {isApple && calPerm.granted && (
- <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
+          <div className="bg-card r-surface overflow-hidden">
+            <ListRow
+              icon="calendar"
+              iconColor="#e44332"
+              label="Apple Календарь"
+              sublabel={
+                isApple
+                  ? calPerm.granted
+                    ? calendars.length > 0
+                      ? `Выбрано: ${selectedCalIds.length || "все"} из ${calendars.length}`
+                      : "Доступ открыт"
+                    : "Требуется разрешение"
+                  : "Доступно на iPhone"
+              }
+              trailing={
+                isApple && calPerm.granted ? (
+                  <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
                     Включён
                   </span>
-                )}
-                <Icon
-                  name={openSections.appleCal ? "chevron-up" : "chevron-down"}
-                  size={16}
-                  className="text-sub"
-                />
-              </div>
-            </button>
+                ) : undefined
+              }
+              chevron
+              onClick={() => toggleSection("appleCal")}
+            />
 
             {openSections.appleCal && (
-              <div className="px-4 pb-4 pt-1 border-t border-stroke/40 space-y-3 bg-card2/30">
+              <>
+                <Divider />
+              <div className="px-4 pb-4 pt-3 space-y-3">
                 {!calPerm.granted ? (
                   <div className="pt-2">
                     <button
@@ -362,47 +350,38 @@ export function IntegrationsScreen() {
                   <div className="tf-caption text-sub pt-2">Календари не найдены</div>
                 )}
               </div>
+              </>
             )}
           </div>
 
           {/* 2. Аккордеон: Apple Напоминания */}
-          <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">
-            <button
-              onClick={() => toggleSection("appleRem")}
-              className="w-full p-4 flex items-center justify-between text-left hover:bg-card-hover/40 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 rounded-xl bg-orange-500/10 flex items-center justify-center text-orange-500 shrink-0">
-                  <Icon name="calendar-check" size={18} />
-                </div>
-                <div className="min-w-0">
- <div className="tf-body text-text">Apple Напоминания</div>
-                  <div className="tf-caption text-sub truncate">
-                    {isApple
-                      ? remPerm.granted
-                        ? "Двусторонняя синхронизация задач"
-                        : "Требуется разрешение"
-                      : "Доступно на iPhone"}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                {isApple && remPerm.granted && (
- <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
+          <div className="bg-card r-surface overflow-hidden">
+            <ListRow
+              icon="calendar-check"
+              iconColor="#ff9a14"
+              label="Apple Напоминания"
+              sublabel={
+                isApple
+                  ? remPerm.granted
+                    ? "Двусторонняя синхронизация задач"
+                    : "Требуется разрешение"
+                  : "Доступно на iPhone"
+              }
+              trailing={
+                isApple && remPerm.granted ? (
+                  <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
                     Включён
                   </span>
-                )}
-                <Icon
-                  name={openSections.appleRem ? "chevron-up" : "chevron-down"}
-                  size={16}
-                  className="text-sub"
-                />
-              </div>
-            </button>
+                ) : undefined
+              }
+              chevron
+              onClick={() => toggleSection("appleRem")}
+            />
 
             {openSections.appleRem && (
-              <div className="px-4 pb-4 pt-1 border-t border-stroke/40 space-y-3 bg-card2/30">
+              <>
+                <Divider />
+              <div className="px-4 pb-4 pt-3 space-y-3">
                 {!remPerm.granted ? (
                   <div className="pt-2">
                     <button
@@ -449,54 +428,43 @@ export function IntegrationsScreen() {
                   </div>
                 )}
               </div>
+              </>
             )}
           </div>
         </div>
 
         {/* ═══════════ СЕКЦИЯ: GOOGLE СЕРВИСЫ ═══════════ */}
         <div className="space-y-3 pt-2">
-          <div className="tf-caption uppercase tracking-wider text-sub px-1">
-            Google Сервисы
-          </div>
+          <SectionHeader>Google Сервисы</SectionHeader>
 
           {/* 3. Аккордеон: Google Задачи */}
-          <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">
-            <button
-              onClick={() => toggleSection("googleTasks")}
-              className="w-full p-4 flex items-center justify-between text-left hover:bg-card-hover/40 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500 shrink-0">
-                  <Icon name="tag" size={18} />
-                </div>
-                <div className="min-w-0">
- <div className="tf-body text-text">Google Задачи</div>
-                  <div className="tf-caption text-sub truncate">
-                    {isStatusLoading
-                      ? "Проверка..."
-                      : googleConnected
-                      ? intStatus?.google?.email || "Аккаунт подключён"
-                      : "Импорт задач и списков"}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                {googleConnected && (
- <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
+          <div className="bg-card r-surface overflow-hidden">
+            <ListRow
+              icon="tag"
+              iconColor="#4a9fd8"
+              label="Google Задачи"
+              sublabel={
+                isStatusLoading
+                  ? "Проверка..."
+                  : googleConnected
+                  ? intStatus?.google?.email || "Аккаунт подключён"
+                  : "Импорт задач и списков"
+              }
+              trailing={
+                googleConnected ? (
+                  <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
                     В сети
                   </span>
-                )}
-                <Icon
-                  name={openSections.googleTasks ? "chevron-up" : "chevron-down"}
-                  size={16}
-                  className="text-sub"
-                />
-              </div>
-            </button>
+                ) : undefined
+              }
+              chevron
+              onClick={() => toggleSection("googleTasks")}
+            />
 
             {openSections.googleTasks && (
-              <div className="px-4 pb-4 pt-1 border-t border-stroke/40 space-y-3 bg-card2/30">
+              <>
+                <Divider />
+              <div className="px-4 pb-4 pt-3 space-y-3">
                 {!googleConnected ? (
                   <div className="pt-2">
                     <button
@@ -560,47 +528,38 @@ export function IntegrationsScreen() {
                   </div>
                 )}
               </div>
+              </>
             )}
           </div>
 
           {/* 4. Аккордеон: Google Календарь */}
-          <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">
-            <button
-              onClick={() => toggleSection("googleCal")}
-              className="w-full p-4 flex items-center justify-between text-left hover:bg-card-hover/40 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 rounded-xl bg-blue-600/10 flex items-center justify-center text-blue-600 shrink-0">
-                  <Icon name="calendar" size={18} />
-                </div>
-                <div className="min-w-0">
- <div className="tf-body text-text">Google Календарь</div>
-                  <div className="tf-caption text-sub truncate">
-                    {googleConnected
-                      ? gCalsData?.calendars && gCalsData.calendars.length > 0
-                        ? `Выбрано: ${selectedGoogleCalIds.length || "все"} из ${gCalsData.calendars.length}`
-                        : "События в Предстоящем и Сегодня"
-                      : "Требуется вход с Google"}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                {googleConnected && (
- <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
+          <div className="bg-card r-surface overflow-hidden">
+            <ListRow
+              icon="calendar"
+              iconColor="#4a9fd8"
+              label="Google Календарь"
+              sublabel={
+                googleConnected
+                  ? gCalsData?.calendars && gCalsData.calendars.length > 0
+                    ? `Выбрано: ${selectedGoogleCalIds.length || "все"} из ${gCalsData.calendars.length}`
+                    : "События в Предстоящем и Сегодня"
+                  : "Требуется вход с Google"
+              }
+              trailing={
+                googleConnected ? (
+                  <span className="tf-caption text-teal px-2 py-0.5 bg-teal/10 rounded-md">
                     В сети
                   </span>
-                )}
-                <Icon
-                  name={openSections.googleCal ? "chevron-up" : "chevron-down"}
-                  size={16}
-                  className="text-sub"
-                />
-              </div>
-            </button>
+                ) : undefined
+              }
+              chevron
+              onClick={() => toggleSection("googleCal")}
+            />
 
             {openSections.googleCal && (
-              <div className="px-4 pb-4 pt-1 border-t border-stroke/40 space-y-3 bg-card2/30">
+              <>
+                <Divider />
+              <div className="px-4 pb-4 pt-3 space-y-3">
                 {!googleConnected ? (
                   <div className="pt-2">
                     <button
@@ -652,6 +611,7 @@ export function IntegrationsScreen() {
                   </div>
                 )}
               </div>
+              </>
             )}
           </div>
         </div>
