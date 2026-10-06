@@ -586,7 +586,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan предлагает владелец или оркестратор" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
-    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"Уже выбран одиночный запуск; командный план недоступен"});
+    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"командный план недоступен: карточка занята или для неё уже есть активный план"});
     const requested = String(req.body?.profile ?? "auto").trim();
     if (requested !== "auto" && !PROFILES.has(requested)) return reply.code(422).send({ error: "unknown collaboration profile" });
     const contextVersion = req.body?.context_version === undefined ? null : Number(req.body.context_version);
@@ -611,7 +611,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan предлагает владелец или оркестратор" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
-    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"Уже выбран одиночный запуск; командный план недоступен"});
+    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"командный план недоступен: карточка занята или для неё уже есть активный план"});
     const contextVersion = req.body?.context_version === undefined ? null : Number(req.body.context_version);
     if (contextVersion !== null && (!Number.isInteger(contextVersion) || contextVersion < 1)) return reply.code(400).send({ error: "context_version должен быть положительным целым" });
 
@@ -644,7 +644,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!isOwner(req.userId) && !isOrchestrator(req.userId)) return reply.code(403).send({ error: "collaboration plan утверждает владелец" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
-    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"Уже выбран одиночный запуск; командный план недоступен"});
+    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"командный план недоступен: карточка занята или для неё уже есть активный план"});
     const plan = planForTask(task.id, req.params.planId);
     if (!plan) return reply.code(404).send({ error: "plan not found" });
     if (plan.status !== "draft") return reply.code(409).send({ error: "утвердить можно только draft plan" });
@@ -747,7 +747,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan правит владелец или оркестратор" });
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
-    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"После одиночного запуска нельзя менять командный план"});
+    if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"командный план недоступен: карточка занята или для неё уже есть активный план"});
     const plan = planForTask(task.id, req.params.planId);
     if (!plan) return reply.code(404).send({ error: "plan not found" });
     if (plan.status !== "draft") return reply.code(409).send({ error: "редактировать можно только draft plan" });

@@ -114,37 +114,6 @@ async function retryTechnical(api: Api): Promise<number> {
   return handled;
 }
 
-/** Ветка 2: «не моя роль» — переподбор; кандидатов нет — dead. */
-async function repickWrongRole(api: Api): Promise<number> {
-  const tasks = await api("GET", "/api/tasks?agent_state=blocked&block_type=wrong_role");
-  if (!Array.isArray(tasks)) return 0;
-  let handled = 0;
-  for (const t of tasks) {
-    if (!t?.id) continue;
-    const choice = await api("POST", `/api/tasks/${t.id}/repick-role`);
-    if (!choice || choice.error) {
-      log(`  ⚠️ ${t.id.slice(0, 8)} repick: ${choice?.error}`);
-      continue;
-    }
-    const res = choice.how === "dead" || !choice.role
-      ? await api("POST", `/api/tasks/${t.id}/state`, {
-          state: "blocked",
-          block_type: "dead",
-          blocked_reason: `${t.blocked_reason ?? ""} | все роли отказались`,
-          block_notified: false,
-        })
-      : await api("POST", `/api/tasks/${t.id}/state`, {
-          state: "todo",
-          machine_selected_role: choice.role,
-          block_type: null,
-          comment: `Переподбор роли: ${choice.role} (how=${choice.how})`,
-        });
-    if (res?.error) log(`  ⚠️ ${t.id.slice(0, 8)} ветка 2: ${res.error}`);
-    else handled += 1;
-  }
-  return handled;
-}
-
 /** Ветка 3: карточки в тупике — одно уведомление владельцу на карточку. */
 async function notifyDead(api: Api): Promise<number> {
   const tasks = await api("GET", "/api/tasks?agent_state=blocked&block_type=dead");
@@ -282,7 +251,7 @@ async function deferredRetries(api: Api): Promise<number> {
   return handled;
 }
 
-export type SchedulerCounts = { retry: number; repick: number; dead: number; scheduled: number; repeat: number; deferred: number };
+export type SchedulerCounts = { retry: number; dead: number; scheduled: number; repeat: number; deferred: number };
 
 /** Один обход доски. Сбой ветки не валит остальные. */
 export async function runSchedulerPass(app: FastifyInstance, now: Date = new Date()): Promise<SchedulerCounts> {
@@ -297,7 +266,6 @@ export async function runSchedulerPass(app: FastifyInstance, now: Date = new Dat
   };
   const counts: SchedulerCounts = {
     retry: await safe("ветка 1", () => retryTechnical(api)),
-    repick: await safe("ветка 2", () => repickWrongRole(api)),
     dead: await safe("ветка 3", () => notifyDead(api)),
     scheduled: await safe("ветка 4", () => launchScheduled(api, now)),
     repeat: await safe("ветка 5", () => cloneRecurring(api, now)),

@@ -139,7 +139,10 @@ describe("План совместной работы vs единственный
     expect(approve.statusCode).toBe(409);
   }, 10_000);
 
-  it("карточке без сигнала фичи (диагностика/рутина) план не предлагается — автомат работает как раньше", async () => {
+  // MAK-71: различие «план предлагается / не предлагается» ушло — теперь
+  // для ЛЮБОЙ карточки автомат создаёт план, но для рутины это план
+  // profile='single_executor' (одна роль, не team). Проверяем это.
+  it("карточке без сигнала фичи (диагностика/рутина) автомат создаёт план single_executor, не team", async () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/tasks",
@@ -150,11 +153,6 @@ describe("План совместной работы vs единственный
       },
     });
     const taskId = created.json().task.id as string;
-
-    const plan = db
-      .prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id = ?")
-      .get(taskId);
-    expect(plan).toBeUndefined();
 
     for (let i = 0; i < 40; i++) {
       const row = db
@@ -167,5 +165,13 @@ describe("План совместной работы vs единственный
       .prepare("SELECT ready_for_pickup FROM tasks WHERE id = ?")
       .get(taskId) as { ready_for_pickup: number };
     expect(row.ready_for_pickup).toBe(1);
+
+    // План создан, но это план одной роли — single_executor, не командный.
+    const plan = db
+      .prepare(
+        "SELECT profile, status FROM task_collaboration_plans WHERE task_id = ? ORDER BY revision DESC LIMIT 1",
+      )
+      .get(taskId) as { profile: string; status: string } | undefined;
+    expect(plan).toMatchObject({ profile: "single_executor", status: "approved" });
   }, 20_000);
 });

@@ -94,7 +94,10 @@ describe("родитель со своими пунктами исполняет
       assignee_id: string | null;
     };
 
-  it("все дочерние сданы или закрыты — родитель получает флаг и исполнителя", async () => {
+  // MAK-71: после admitParentAfterChildren флаг поднят, и через
+  // tryStartSingleExecutorPlan(system:true) создан план single_executor.
+  // В ленте — события автоматики (actor_id = null).
+  it("все дочерние сданы или закрыты — родитель получает флаг и план", async () => {
     const { parentId, childIds } = tree({
       parentSteps: 1,
       children: [{ agent_state: "review" }, { status: "completed" }],
@@ -102,20 +105,20 @@ describe("родитель со своими пунктами исполняет
     expect(await admitParentAfterChildren(childIds[0])).toBe(true);
     const row = parentRow(parentId);
     expect(row.ready_for_pickup).toBe(1);
-    expect(row.assignee_id).not.toBeNull();
+    const plan = db.prepare(
+      "SELECT profile, status FROM task_collaboration_plans WHERE task_id = ? ORDER BY revision DESC LIMIT 1",
+    ).get(parentId) as { profile: string; status: string } | undefined;
+    expect(plan).toMatchObject({ profile: "single_executor", status: "approved" });
     const ev = db
       .prepare("SELECT COUNT(*) AS n FROM task_events WHERE task_id = ? AND kind = 'ready_flag_changed'")
       .get(parentId) as { n: number };
     expect(ev.n).toBe(1);
-    // Флаг и раздачу сделала автоматика — в ленте «Система», не владелец.
+    // Флаг и допуск сделала автоматика — в ленте «Система», не владелец.
     const actors = db
       .prepare(
-        "SELECT kind, actor_id FROM task_events WHERE task_id = ? AND kind IN ('ready_flag_changed', 'task_dispatched', 'role_choice')",
+        "SELECT kind, actor_id FROM task_events WHERE task_id = ? AND kind IN ('ready_flag_changed', 'role_choice')",
       )
       .all(parentId) as Array<{ kind: string; actor_id: string | null }>;
-    expect(actors.map((a) => a.kind).sort()).toEqual(
-      ["ready_flag_changed", "role_choice", "task_dispatched"],
-    );
     expect(actors.every((a) => a.actor_id === null)).toBe(true);
   }, 20_000);
 
