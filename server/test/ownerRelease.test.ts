@@ -160,7 +160,7 @@ describe("Снятие задачи с агента расклинивает к�
       method: "POST",
       url: `/api/subtasks/${subtaskId}/work`,
       headers: { authorization: `Bearer ${agentToken}` },
-      payload: { state: "blocked", result: "нужен доступ к базе" },
+      payload: { state: "blocked", block_type: "needs_input", result: "нужен доступ к базе" },
     });
 
     await app.inject({

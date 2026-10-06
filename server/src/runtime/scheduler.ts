@@ -15,6 +15,7 @@ import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleTitle } from "../roleRouting.js";
 import { SCHEDULER_USER_ID } from "../serviceUser.js";
 import { tryStartSingleExecutorPlan } from "../routes/dispatch.js";
+import { expireRoleQuestions } from "./roleMessageWait.js";
 
 const RETRY_LIMIT = 3;
 const RETRY_DELAY_MIN = 5;
@@ -251,7 +252,7 @@ async function deferredRetries(api: Api): Promise<number> {
   return handled;
 }
 
-export type SchedulerCounts = { retry: number; dead: number; scheduled: number; repeat: number; deferred: number };
+export type SchedulerCounts = { retry: number; dead: number; scheduled: number; repeat: number; deferred: number; questions: number };
 
 /** Один обход доски. Сбой ветки не валит остальные. */
 export async function runSchedulerPass(app: FastifyInstance, now: Date = new Date()): Promise<SchedulerCounts> {
@@ -270,6 +271,9 @@ export async function runSchedulerPass(app: FastifyInstance, now: Date = new Dat
     scheduled: await safe("ветка 4", () => launchScheduled(api, now)),
     repeat: await safe("ветка 5", () => cloneRecurring(api, now)),
     deferred: await safe("ветка 6", () => deferredRetries(api)),
+    // Ветка 7 (MAK-98): вопросы ролей без ответа — срок истёк,
+    // возвращаем отправителю исходом, а не молчанием.
+    questions: await safe("ветка 7", async () => expireRoleQuestions(now)),
   };
   try {
     const file = schedulerHeartbeatPath();

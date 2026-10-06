@@ -110,6 +110,7 @@ describe("перед blocked — проверь и позови помощь", (
       headers: { authorization: `Bearer ${agentToken}` },
       payload: {
         state: "blocked",
+        block_type: "needs_input",
         comment: "после совещания всё равно не сходится",
         help_attempt: "спросил architect в теме, ответ: нужен доступ к внешнему сервису",
       },
@@ -129,6 +130,7 @@ describe("перед blocked — проверь и позови помощь", (
       headers: { authorization: `Bearer ${agentToken}` },
       payload: {
         state: "blocked",
+        block_type: "needs_input",
         comment: "тупик",
         help_skip_reason: "ни одна роль это не снимет, вопрос к владельцу по существу",
       },
@@ -144,7 +146,7 @@ describe("перед blocked — проверь и позови помощь", (
       method: "POST",
       url: `/api/tasks/${id}/state`,
       headers: { authorization: `Bearer ${agentToken}` },
-      payload: { state: "blocked", comment: "нужен доступ к внешнему API" },
+      payload: { state: "blocked", block_type: "needs_input", comment: "нужен доступ к внешнему API" },
     });
     expect(res.statusCode).toBe(200);
     expect(stateOf(id)).toBe("blocked");
@@ -208,6 +210,7 @@ describe("перед blocked — проверь и позови помощь", (
       headers: { authorization: `Bearer ${agentToken}` },
       payload: {
         state: "blocked",
+        block_type: "capability",
         result: "не получается",
         help_attempt: "consult дал совет, но он не подошёл",
       },

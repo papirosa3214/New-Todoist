@@ -54,6 +54,13 @@ import {
   evaluateBlockedHelp,
   type BlockedHelpDecision,
 } from "../lib/blockedHelp.js";
+import {
+  blockTypeFromReasonCode,
+  evaluateBlockedType,
+  isBlockType,
+  ALL_BLOCK_TYPES,
+} from "../lib/blockedType.js";
+import { signalBlock } from "../runtime/blockSignals.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -717,6 +724,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // вместе с state=blocked, чтобы планировщик (шаг 4) мог отличить
       // техническое падение от ручного «не моя роль».
       block_type?: string;
+      // Признак «меняет результат карточки» (MAK-98): только он отличает
+      // needs_input, который уходит владельцу, от того, что идёт оркестратору.
+      changes_result?: boolean;
       blocked_reason?: string;
       blocked_at?: string;
       block_notified?: boolean;
@@ -772,17 +782,18 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
 
       // block_type / blocked_reason — служебные поля шага 2. Имеет смысл
       // только при state=blocked; иначе это мусор, который потом придётся
-      // вычищать. Три допустимых значения — согласно плану
-      // taskflow-pipeline-head-plan.md, шаг 1: technical | wrong_role | dead.
-      const blockType = req.body?.block_type;
-      if (blockType !== undefined) {
-        if (
-          state !== "blocked" ||
-          !["technical", "wrong_role", "dead"].includes(blockType)
-        ) {
+      // вычищать. Значение сверяем сразу (MAK-98): четыре типа роли плюс
+      // legacy-значения автоматики (technical | wrong_role | dead).
+      const blockTypeRaw = req.body?.block_type;
+      if (blockTypeRaw !== undefined) {
+        if (state !== "blocked") {
           return reply.code(400).send({
-            error:
-              "block_type допустим только при state='blocked' и должен быть одним из: technical, wrong_role, dead",
+            error: "block_type допустим только при state='blocked'",
+          });
+        }
+        if (typeof blockTypeRaw !== "string" || !isBlockType(blockTypeRaw)) {
+          return reply.code(400).send({
+            error: `block_type должен быть одним из: ${ALL_BLOCK_TYPES.join(", ")}`,
           });
         }
       }
@@ -894,6 +905,39 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           }
           blockedHelp = decision;
         }
+      }
+
+      // MAK-98: роль обязана назвать тип блока. Автоматике и старым
+      // клиентам (`/stop` с reason_code) тип выводится из кода остановки.
+      // Заодно фиксируем признак «меняет результат карточки» и прошлый тип
+      // блока — чтобы отличить первый блок от повторного.
+      let blockType: string | null =
+        typeof blockTypeRaw === "string" ? blockTypeRaw : null;
+      const changesResult = req.body?.changes_result === true;
+      let previousBlockType: string | null = null;
+      if (state === "blocked") {
+        const typeCaller = db
+          .prepare("SELECT type FROM users WHERE id = ?")
+          .get(req.userId) as { type?: string } | undefined;
+        if (typeCaller?.type === "ai" && !isServiceUser(req.userId)) {
+          const typeDecision = evaluateBlockedType({
+            blockType: blockTypeRaw ?? null,
+            reasonCode: typeof reasonCode === "string" ? reasonCode : null,
+            reason: blockedReason || comment,
+          });
+          if (!typeDecision.ok) {
+            return reply
+              .code(400)
+              .send({ error: typeDecision.error, hint: typeDecision.hint });
+          }
+          blockType = typeDecision.blockType;
+        }
+        previousBlockType =
+          (
+            db
+              .prepare("SELECT block_type FROM tasks WHERE id = ?")
+              .get(task.id) as { block_type: string | null } | undefined
+          )?.block_type ?? null;
       }
 
       // Тот же случай, что self-reclaim в claim() — система замечает
@@ -1224,6 +1268,24 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         }
       });
       stateTxn();
+
+      // MAK-98: развести сигнал по типу блока. Владельцу — только
+      // needs_input, меняющий результат карточки; остальное — оркестратору;
+      // повтор того же типа на этой же карточке — отдельное событие.
+      if (state === "blocked" && blockType) {
+        try {
+          signalBlock({
+            taskId: task.id,
+            actorId: req.userId,
+            blockType,
+            changesResult,
+            reason: blockedReason || comment,
+            previousBlockType,
+          });
+        } catch (err) {
+          console.warn(`[state] сигнал по блоку ${task.id} не ушёл:`, err);
+        }
+      }
       // Владелец ответил на блокировку ролевой карточки: снятие блокировки
       // обнуляет исполнителя (ветка state=null выше), а раздача сама
       // срабатывает только при поднятии флага. Без этого карточка с
@@ -1432,6 +1494,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // сказать, кого звал и что ответили. permission_or_owner и среда
       // проходят по reason_code без нового поля (см. blockedHelp.ts).
       let blockedHelp: BlockedHelpDecision | null = null;
+      let previousBlockType: string | null = null;
       if (!fallback && !policy.automaticRetry) {
         const stopCaller = db
           .prepare("SELECT type, role_key FROM users WHERE id = ?")
@@ -1536,9 +1599,16 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           db.prepare(
             "UPDATE tasks SET current_attempt_id = NULL WHERE id = ? AND current_attempt_id = ?",
           ).run(task.id, attemptId);
+          const stopBlockType = blockTypeFromReasonCode(reasonCode) ?? null;
+          previousBlockType =
+            (
+              db
+                .prepare("SELECT block_type FROM tasks WHERE id = ?")
+                .get(task.id) as { block_type: string | null } | undefined
+            )?.block_type ?? null;
           db.prepare(
-            "UPDATE tasks SET agent_state = 'blocked', updated_at = datetime('now') WHERE id = ?",
-          ).run(task.id);
+            "UPDATE tasks SET agent_state = 'blocked', block_type = COALESCE(?, block_type), blocked_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+          ).run(stopBlockType, task.id);
           logEvent({
             taskId: task.id,
             actorId: req.userId,
@@ -1567,6 +1637,26 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         });
       });
       stopTxn();
+
+      // MAK-98: /stop тоже уходит в типизированный blocked — тип выведен из
+      // reason_code, сигнал разведён так же, как в /state.
+      if (!fallback && !policy.automaticRetry) {
+        const stopBlockType = blockTypeFromReasonCode(reasonCode);
+        if (stopBlockType) {
+          try {
+            signalBlock({
+              taskId: task.id,
+              actorId: req.userId,
+              blockType: stopBlockType,
+              changesResult: false,
+              reason: comment,
+              previousBlockType,
+            });
+          } catch (err) {
+            console.warn(`[stop] сигнал по блоку ${task.id} не ушёл:`, err);
+          }
+        }
+      }
 
       const updated = getTaskRow(task.id);
       const hydrated = hydrateTask(updated);

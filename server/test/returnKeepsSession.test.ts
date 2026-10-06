@@ -123,7 +123,7 @@ describe("Возврат владельцем сохраняет сессию а
         authorization: `Bearer ${agentToken}`,
         "x-agent-session": ДРУГАЯ,
       },
-      payload: { state: "blocked", comment: "упёрся, нужен владелец" },
+      payload: { state: "blocked", block_type: "needs_input", comment: "упёрся, нужен владелец" },
     });
     await app.inject({
       method: "POST",

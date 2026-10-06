@@ -73,6 +73,12 @@ import {
   saveUploadedFile,
   UploadRejected,
 } from "./attachments.js";
+import {
+  answerRoleQuestionsBy,
+  evaluateRecipientAvailability,
+  openRoleQuestion,
+  recipientUserIdFor,
+} from "../runtime/roleMessageWait.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -684,6 +690,19 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         const recipient=db.prepare("SELECT task_id FROM subtasks WHERE id=?").get(recipientSlot) as {task_id:string}|undefined;
         if(!recipient || !inTopicBranch(recipient.task_id))return reply.code(400).send({error:"Этап адресата не относится к согласованной ветке"});
       }
+      // MAK-98: быстрый отказ, когда адресата некому исполнить — лучше
+      // сказать сразу с кодом причины, чем отправить вопрос в пустоту.
+      const senderRole = roleFromUserId(req.userId);
+      if (senderRole && recipientSlot) {
+        const availability = evaluateRecipientAvailability({
+          recipientSubtaskId: recipientSlot,
+        });
+        if (!availability.ok) {
+          return reply
+            .code(409)
+            .send({ error: availability.error, code: availability.code });
+        }
+      }
       const id = uid();
       db.prepare(
         `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,message_type,reply_to_message_id,subtask_id,recipient_subtask_id)
@@ -710,6 +729,32 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const message = loadChatMessage(id);
+
+      // MAK-98: вопрос роли берём под срок жизни, ответ — снимаем с учёта.
+      try {
+        if (replyTo) answerRoleQuestionsBy(chatId, req.userId, replyTo);
+        else if (senderRole) answerRoleQuestionsBy(chatId, req.userId, null);
+        if (senderRole && recipientSlot) {
+            const toUserId = recipientUserIdFor(recipientSlot);
+            if (toUserId) {
+              openRoleQuestion({
+                messageId: id,
+                chatId,
+                taskId,
+                fromUserId: req.userId,
+                toUserId,
+                subtaskId: sourceSlot,
+                recipientSubtaskId: recipientSlot,
+                text,
+              });
+            }
+          }
+      } catch (error) {
+        console.warn(
+          `[chats] учёт вопроса роли не сработал для ${id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
 
       const audience = memberIds(chatId).filter((m) => m !== req.userId && isMember(chatId,m));
       broadcastToUsers([...audience, req.userId], {

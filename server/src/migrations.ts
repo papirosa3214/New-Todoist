@@ -3583,6 +3583,42 @@ const migrations: Migration[] = [
       }
     }
   } },
+
+  { id: "109_typed_blocked_role_messages", description:
+      "MAK-98: типизированный blocked и срок жизни сообщения роли. " +
+      "subtasks получают собственный block_type/blocked_at (повторный блок того же вида " +
+      "по шагу виден серверу); таблица role_message_waiting помнит вопрос роли, его адресата " +
+      "и deadline_at, чтобы вернуть отправителю исход «срок истёк». Идемпотентно: колонки " +
+      "добавляются через pragma, таблица — CREATE IF NOT EXISTS.", up: () => {
+    const subCols = new Set(
+      (db.prepare("PRAGMA table_info(subtasks)").all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      ),
+    );
+    if (!subCols.has("block_type")) db.exec("ALTER TABLE subtasks ADD COLUMN block_type TEXT");
+    if (!subCols.has("blocked_at")) db.exec("ALTER TABLE subtasks ADD COLUMN blocked_at TEXT");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS role_message_waiting (
+        message_id TEXT PRIMARY KEY REFERENCES chat_messages(id) ON DELETE CASCADE,
+        chat_id TEXT NOT NULL,
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        from_user_id TEXT NOT NULL REFERENCES users(id),
+        to_user_id TEXT NOT NULL REFERENCES users(id),
+        subtask_id TEXT,
+        recipient_subtask_id TEXT,
+        question_text TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        deadline_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','answered','expired')),
+        answered_at TEXT,
+        expired_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_role_message_waiting_open
+        ON role_message_waiting(status, deadline_at);
+      CREATE INDEX IF NOT EXISTS idx_role_message_waiting_chat
+        ON role_message_waiting(chat_id, to_user_id, status);
+    `);
+  } },
 ];
 
 /**

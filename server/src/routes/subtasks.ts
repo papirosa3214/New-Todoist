@@ -13,6 +13,12 @@ import {
   evaluateBlockedHelp,
   type BlockedHelpDecision,
 } from "../lib/blockedHelp.js";
+import {
+  ALL_BLOCK_TYPES,
+  evaluateBlockedType,
+  isBlockType,
+} from "../lib/blockedType.js";
+import { signalBlock } from "../runtime/blockSignals.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import {
   AGENT_RULES,
@@ -632,6 +638,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       // Карточка cd10bf34: чек-ин о вызове помощи перед blocked.
       help_attempt?: string;
       help_skip_reason?: string;
+      // MAK-98: тип блока и признак «меняет результат карточки».
+      block_type?: string;
+      changes_result?: boolean;
     };
   }>("/api/subtasks/:id/work", {
     preHandler: authPre,
@@ -713,6 +722,41 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         blockedHelp = decision;
       }
 
+      // MAK-98: тип блока обязателен для роли; значение сверяем всегда.
+      const blockTypeRaw = req.body?.block_type;
+      if (blockTypeRaw !== undefined && state !== "blocked") {
+        return reply.code(400).send({
+          error: "block_type допустим только при state='blocked'",
+        });
+      }
+      if (
+        blockTypeRaw !== undefined &&
+        (typeof blockTypeRaw !== "string" || !isBlockType(blockTypeRaw))
+      ) {
+        return reply.code(400).send({
+          error: `block_type должен быть одним из: ${ALL_BLOCK_TYPES.join(", ")}`,
+        });
+      }
+      const changesResult = req.body?.changes_result === true;
+      let blockType: string | null =
+        typeof blockTypeRaw === "string" ? blockTypeRaw : null;
+      let previousBlockType: string | null = null;
+      if (state === "blocked") {
+        if (caller?.type === "ai" && !isServiceUser(req.userId)) {
+          const typeDecision = evaluateBlockedType({
+            blockType: blockTypeRaw ?? null,
+            reason: (result ?? subtask.result ?? "") as string,
+          });
+          if (!typeDecision.ok) {
+            return reply
+              .code(400)
+              .send({ error: typeDecision.error, hint: typeDecision.hint });
+          }
+          blockType = typeDecision.blockType;
+        }
+        previousBlockType = (subtask.block_type as string | null) ?? null;
+      }
+
       // Выход из review агенту тоже открыт — вместе с отменой обязательной
       // приёмки (20.08.2026) запирать шаг в этом состоянии стало не от чего:
       // review теперь добровольный способ показать работу, а не воронка, из
@@ -735,7 +779,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       if (state !== undefined) {
         if (state === null) {
           db.prepare(
-            "UPDATE subtasks SET agent_state = NULL, agent_id = NULL, agent_heartbeat_at = NULL WHERE id = ?",
+            "UPDATE subtasks SET agent_state = NULL, agent_id = NULL, agent_heartbeat_at = NULL, block_type = NULL, blocked_at = NULL WHERE id = ?",
           ).run(req.params.id);
         } else {
           // Вместе с состоянием запоминаем СЕССИЮ, которая физически ведёт
@@ -743,12 +787,23 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           // поэтому без этой метки чужая работа выглядит своей — Максим
           // 20.08.2026: «другие сессии к этой задаче отношения не имеют,
           // не должно тебя дёргать».
-          db.prepare(
-            `UPDATE subtasks
-                SET agent_state = ?, agent_id = ?, agent_session_id = ?,
-                    agent_heartbeat_at = datetime('now')
-              WHERE id = ?`,
-          ).run(state, req.userId, sessionOf(req), req.params.id);
+          if (state === "blocked") {
+            db.prepare(
+              `UPDATE subtasks
+                  SET agent_state = ?, agent_id = ?, agent_session_id = ?,
+                      agent_heartbeat_at = datetime('now'),
+                      block_type = ?, blocked_at = datetime('now')
+                WHERE id = ?`,
+            ).run(state, req.userId, sessionOf(req), blockType, req.params.id);
+          } else {
+            db.prepare(
+              `UPDATE subtasks
+                  SET agent_state = ?, agent_id = ?, agent_session_id = ?,
+                      agent_heartbeat_at = datetime('now'),
+                      block_type = NULL, blocked_at = NULL
+                WHERE id = ?`,
+            ).run(state, req.userId, sessionOf(req), req.params.id);
+          }
 
           // Блокер 3 карточки 8ca87c61: при взятии подзадачи в работу
           // создаём отдельный attempt (subtask_id) и проставляем
@@ -891,6 +946,25 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             field: "help",
             toValue: blockedHelp.detail,
           });
+        }
+      }
+
+      // MAK-98: сигнал по типизированному блоку шага — владельцу или
+      // оркестратору; повтор того же типа на этом же шаге — отдельно.
+      if (state === "blocked" && state !== subtask.agent_state && blockType) {
+        try {
+          signalBlock({
+            taskId: subtask.task_id,
+            actorId: req.userId,
+            blockType,
+            changesResult,
+            reason: (result ?? subtask.result ?? null) as string | null,
+            subtaskId: subtask.id,
+            previousBlockType,
+            stepTitle: subtask.title,
+          });
+        } catch (err) {
+          console.warn(`[subtasks] сигнал по блоку ${subtask.id} не ушёл:`, err);
         }
       }
 
