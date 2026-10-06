@@ -389,6 +389,63 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
   return { resumed, blocked, freed, manual_hold: manualHold };
 }
 
+/** Продолжений одного шага за окно, после которых он блокируется. */
+const MAX_NODE_CONTINUATIONS = 3;
+const NODE_CONTINUATION_WINDOW = "-120 minutes";
+
+/**
+ * Ход роли по шагу плана закончился, а шаг не сдан (находка А30). Раньше узел
+ * оставался «в работе» без живого запуска и висел, пока оркестратор не
+ * перезапускал его руками. Теперь: был прогресс и продолжений меньше трёх —
+ * тот же разговор продолжается; иначе (нет прогресса, лимит продолжений или
+ * ошибка запуска) шаг ВИДИМО блокируется с причиной в ленте.
+ * `starter` — подмена запуска в тестах.
+ */
+export async function settleStalledPlanNode(
+  params: { subtaskId: string; madeProgress: boolean; failure?: string | null },
+  starter: typeof startPlanSubtaskRun = startPlanSubtaskRun,
+): Promise<"skipped" | "continued" | "blocked"> {
+  // Выключатель для тестов жизненного цикла, где подменённая роль заканчивает ход мгновенно.
+  if (process.env.TASKFLOW_SETTLE_STALLED_NODES === "off") return "skipped";
+  const row = subtask(params.subtaskId);
+  if (!row || row.done || row.agent_state !== "in_progress" || !row.collaboration_plan_id || !row.plan_node_key) return "skipped";
+  const node = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
+    .get(row.collaboration_plan_id, row.plan_node_key) as { role_key: string } | undefined;
+  if (!node) return "skipped";
+
+  const closeAttempt = (outcome: string, reason: string): void => {
+    if (row.current_attempt_id) {
+      db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = ?, reason = ? WHERE id = ? AND ended_at IS NULL")
+        .run(outcome, reason, row.current_attempt_id);
+    }
+  };
+  const block = (why: string): "blocked" => {
+    closeAttempt(params.failure ? "failed" : "stalled", why.slice(0, 200));
+    db.prepare("UPDATE subtasks SET agent_state = 'blocked', agent_id = ?, current_attempt_id = NULL WHERE id = ?")
+      .run(roleUserId(node.role_key), row.id);
+    logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_stalled_blocked", field: row.plan_node_key, toValue: why.slice(0, 160) });
+    roleNote(row.task_id, node.role_key, `«${row.title}»: ход закончился без сдачи шага. ${why} Шаг заблокирован: нужен перезапуск владельцем или оркестратором.`);
+    return "blocked";
+  };
+
+  if (params.failure) return block(`Запуск оборвался ошибкой: ${params.failure.slice(0, 120)}.`);
+  const { n: continued } = db.prepare(
+    `SELECT COUNT(*) AS n FROM attempts WHERE subtask_id = ? AND outcome = 'continued' AND started_at >= datetime('now', '${NODE_CONTINUATION_WINDOW}')`,
+  ).get(row.id) as { n: number };
+  if (!params.madeProgress) return block("За ход не было работы (вызовов инструментов почти нет).");
+  if (continued >= MAX_NODE_CONTINUATIONS) return block(`Продолжений за два часа уже ${continued}, лимит ${MAX_NODE_CONTINUATIONS}.`);
+
+  closeAttempt("continued", "ход закончился без сдачи при наличии прогресса; продолжение сервером");
+  db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
+  logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_continued", field: row.plan_node_key, toValue: `продолжение ${continued + 1} из ${MAX_NODE_CONTINUATIONS}` });
+  const started = await starter(row.id, roleUserId(node.role_key));
+  if (!started.ok) {
+    logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_autostart_failed", field: row.plan_node_key, toValue: started.error });
+    return "continued";
+  }
+  return "continued";
+}
+
 /**
  * План совместной работы сдан целиком → карточка на проверку (владелец
  * 01.10.2026, T05: все семь ролей сдали, а карточка висела «активной»).

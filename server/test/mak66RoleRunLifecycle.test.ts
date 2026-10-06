@@ -105,6 +105,9 @@ function makeTask(label: string): string {
   return id;
 }
 
+// Подменённая роль здесь заканчивает ход мгновенно и без работы; правило «ход без сдачи — продолжить или заблокировать» проверяется в planNodeContinuation.test.ts.
+process.env.TASKFLOW_SETTLE_STALLED_NODES = "off";
+
 describe("MAK-66 — статус узла плана и общая очередь", () => {
   let app: FastifyInstance;
 

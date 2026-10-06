@@ -625,6 +625,8 @@ function resumePrompt(taskId: string, role = "builder"): string {
 /** Сколько раз подряд агент вышел посреди работы — для повторного захода. */
 const chainCount = new Map<string, number>();
 const MAX_CHAIN = 3;
+/** Меньше стольких вызовов инструментов за ход — прогресса нет (роль ответила и закончила). */
+const STALLED_NODE_MIN_ACTIVITY = 3;
 
 function progressMark(taskId: string): string {
   const steps = (db.prepare("SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ? AND done = 1").get(taskId) as { n: number }).n;
@@ -637,7 +639,7 @@ function progressMark(taskId: string): string {
  *  продлевается таймером): sweeper сравнивает это поле с now и прерывает
  *  заход, если роль зависла, не двигаясь. Владелец 05.10.2026, п.9 части II
  *  taskflow-flow.md. */
-type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void>; steer: (text:string)=>Promise<void>; lastActivityAt: number };
+type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void>; steer: (text:string)=>Promise<void>; lastActivityAt: number ; /** Сколько раз роль проявила активность (вызовы инструментов): отличает ход с работой от пустого. */ activityCount: number};
 const activeRuns = new Map<string, ActiveInProcessRun>();
 
 /** Сколько минут тишины (без tool call / snapshot / комментария) сервер
@@ -655,7 +657,10 @@ function readStaleRunMinutes(): number {
  *  признак работы. */
 export function touchRunActivity(runId: string): void {
   const run = activeRuns.get(runId);
-  if (run) run.lastActivityAt = Date.now();
+  if (run) {
+    run.lastActivityAt = Date.now();
+    run.activityCount += 1;
+  }
 }
 
 /** Коснуться активности для всех запусков указанной задачи — у роли может
@@ -664,7 +669,10 @@ export function touchRunActivity(runId: string): void {
 export function touchTaskActivity(taskId: string): void {
   const now = Date.now();
   for (const run of activeRuns.values()) {
-    if (run.taskId === taskId) run.lastActivityAt = now;
+    if (run.taskId === taskId) {
+      run.lastActivityAt = now;
+      run.activityCount += 1;
+    }
   }
 }
 
@@ -979,7 +987,7 @@ try {
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
   logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
-  activeRuns.set(runId, { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now() });
+  activeRuns.set(runId, { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now(), activityCount: 0 });
 
   // Действия встроенных инструментов — строкой в карточке, как раньше делало
   // расширение Pi taskflow-activity.ts.
@@ -1045,6 +1053,7 @@ try {
       }
     } finally {
       clearInterval(beat);
+      const runActivity = activeRuns.get(runId)?.activityCount ?? 0;
       activeRuns.delete(runId);
       // Снимок остановки (владелец 04.10.2026, пункт 2 и 3 плана). Слот не
       // сдан — значит работа не закончилась, и следующему вызову роли без
@@ -1084,6 +1093,21 @@ try {
       resourceLoader.disposeResources();
       await composio.close().catch(() => {});
       await xcode.close().catch(() => {});
+      // Шаг плана закончил ход без сдачи: сервер сам продолжает его при прогрессе
+      // (до 3 раз) или видимо блокирует. Раньше такой шаг молча оставался
+      // «в работе» без запуска (находка А30, 06.10.2026).
+      if (input.subtaskId && mode === "work") {
+        try {
+          const { settleStalledPlanNode } = await import("./planSubtaskAdmission.js");
+          await settleStalledPlanNode({
+            subtaskId: input.subtaskId,
+            madeProgress: runActivity >= STALLED_NODE_MIN_ACTIVITY,
+            failure: runFailure ? (runFailure as Error).message : null,
+          });
+        } catch (error) {
+          console.warn("[plan] продолжение/блокировка шага не удалась:", error);
+        }
+      }
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
       if (mode === "work" && !input.subtaskId) {
