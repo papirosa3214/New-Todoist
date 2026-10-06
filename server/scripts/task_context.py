@@ -127,6 +127,19 @@ class CollaborationBlock(TypedDict, total=False):
     predecessor_artifacts: list[dict]
 
 
+class TaskHistoryBlock(TypedDict, total=False):
+    """«Что уже было по этой карточке» — сводка прошлых ходов.
+
+    Собирается сервером БЕЗ модели (server/src/runtime/taskHistoryContext.ts) и
+    приходит готовым текстом: python только кладёт его в prompt и считает
+    число прошлых шагов для сводки. Формат держит один источник — серверный
+    сборщик.
+    """
+    status: BlockStatus
+    past_steps: int
+    block: str
+
+
 @dataclass
 class TaskContext:
     """Полный пакет, который передаётся в prompt builders (Шаг 4 ТЗ).
@@ -155,6 +168,9 @@ class TaskContext:
     )
     collaboration_context: CollaborationBlock = field(
         default_factory=lambda: {"status": "empty", "plan_id": None, "revision": None, "slot_key": None, "predecessor_artifacts": []}
+    )
+    task_history: TaskHistoryBlock = field(
+        default_factory=lambda: {"status": "empty", "past_steps": 0, "block": ""}
     )
     warnings: list[str] = field(default_factory=list)
     generated_at: str = ""  # ISO-8601 UTC, заполняется build_context
@@ -485,6 +501,7 @@ def build_context(
     parent_task_id: str | None = None,
     dependency_context: DependencyBlock | None = None,
     collaboration_context: CollaborationBlock | None = None,
+    task_history: TaskHistoryBlock | None = None,
 ) -> TaskContext:
     """Сборка всего пакета. TaskEnricher обязателен — если он упал,
     исключение поднимается выше, trigger.py логирует и НЕ запускает
@@ -505,6 +522,8 @@ def build_context(
         ctx.dependency_context = dependency_context
     if isinstance(collaboration_context, dict):
         ctx.collaboration_context = collaboration_context
+    if isinstance(task_history, dict):
+        ctx.task_history = task_history
     try:
         ctx.knowledge = enrich_knowledge(task)
     except Exception as exc:  # noqa: BLE001
@@ -582,6 +601,16 @@ def context_summary_ru(ctx: TaskContext) -> str:
     if ctx.warnings:
         count = len(ctx.warnings)
         parts.append(f"При сборке {count} {_plural_ru(count, 'замечание', 'замечания', 'замечаний')}")
+    history = getattr(ctx, "task_history", {}) or {}
+    past_steps = history.get("past_steps") or 0
+    if history.get("block"):
+        if history.get("status") == "ok":
+            parts.append(
+                f"Прошлые шаги: {past_steps} "
+                f"{_plural_ru(past_steps, 'шаг', 'шага', 'шагов')}"
+            )
+        else:
+            parts.append("Прошлые шаги: 0 (первый шаг)")
     return "Материал для работы собран. " + ". ".join(parts) + "."
 
 
@@ -625,6 +654,12 @@ def serialize_context(ctx, max_total_chars: int = MAX_TOTAL_CHARS) -> str:
         parts.append(f"assignment.actor: {actor_id} ({actor_name})")
         if assignment.get("parent_task_id"):
             parts.append(f"assignment.parent_task_id: {assignment['parent_task_id']}")
+    # «Что уже было по этой карточке» — сразу после назначения, чтобы при
+    # обрезке общего лимита (MAX_TOTAL_CHARS) блок прошлого не терялся.
+    history = getattr(ctx, "task_history", {}) or {}
+    history_block = history.get("block") or ""
+    if history_block:
+        parts.append(truncate(history_block, 1600))
     conversation = getattr(ctx, "conversation", {}) or {}
     comments = conversation.get("latest_comments") or []
     if comments:

@@ -6,6 +6,8 @@ export type LaunchContextInput = {
   actor: { id: string; name: string };
   dependency_context?: Record<string, unknown>;
   collaboration_context?: Record<string, unknown>;
+  /** «Что уже было по этой карточке» — собранная сервером сводка прошлых ходов. */
+  task_history?: Record<string, unknown>;
 };
 
 export type LaunchContext = {
