@@ -942,7 +942,7 @@ function JournalLine({
         {describeEvent(event, look)}
       </span>
  <span className="tf-caption text-dim shrink-0">
-        {formatRelativeTime(event.created_at)} · {formatAbsoluteTime(event.created_at)}
+        {formatAbsoluteTime(event.created_at)}
       </span>
     </div>
   );
@@ -976,7 +976,7 @@ function CommentCard({ comment }: { comment: ApiComment }) {
           {comment.user_name || "Система"}
         </span>
  <span className="tf-caption text-dim ml-auto">
-          {formatRelativeTime(comment.created_at)} · {formatAbsoluteTime(comment.created_at)}
+          {formatAbsoluteTime(comment.created_at)}
         </span>
       </div>
       {comment.text && (
