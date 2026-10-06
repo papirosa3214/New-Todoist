@@ -399,6 +399,9 @@ export function ProvidersScreen() {
         читает у Pi; ключи и токены в TaskFlow не хранятся.
       </div>
 
+      {/* Роли сверху: выбор моделей нужен чаще, чем подключение провайдеров. */}
+      <RoleModelsBlock />
+
       {providers.isLoading && <Loading />}
       {providers.error && <ErrorBanner error={providers.error} />}
 
@@ -421,7 +424,6 @@ export function ProvidersScreen() {
         </div>
       )}
 
-      <RoleModelsBlock />
     </div>
   );
 }

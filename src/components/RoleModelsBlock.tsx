@@ -183,7 +183,7 @@ export function RoleModelsBlock() {
   };
 
   return (
-    <section className="mt-6" data-testid="role-models-block">
+    <section className="mb-6" data-testid="role-models-block">
       {dialog}
       <SectionHeader className="mb-2">Модели ролей</SectionHeader>
       {(models.isLoading || routing.isLoading) && <Loading />}
