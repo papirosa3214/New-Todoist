@@ -50,17 +50,6 @@ const uid = () => crypto.randomUUID();
 // она одна, остальные места ищут по этому имени.
 const AGENT_CHANNEL = "agents" as const;
 
-// Будильник для резидента Гермеса (27-28.08.2026, подзадача «Сторона
-// Гермеса»): MCP "taskflow" у него уже подключён (taskflow_chat_send/read),
-// но это pull-only инструменты — без вебхука он никогда не узнает о новом
-// сообщении. Формат подписи — генерик V2 вебхук-адаптера Гермеса
-// (gateway/platforms/webhook.py): hex(HMAC-SHA256(secret, "<ts>.<body>")) в
-// заголовке X-Webhook-Signature-V2 + X-Webhook-Timestamp, окно ±300с.
-const HERMES_USER_ID = "u3";
-const HERMES_WEBHOOK_URL =
-  process.env.HERMES_WEBHOOK_URL ||
-  "http://127.0.0.1:8644/webhooks/taskflow_chat";
-
 // Вложения сообщения — одним запросом на сообщение. Отдаются и в истории, и
 // в рассылке по сокету, чтобы клиенту не приходилось догружать их отдельно и
 // пузырь не прыгал, дорисовывая скрепку через полсекунды после появления.
@@ -78,48 +67,6 @@ function withAttachments(message: any) {
       WHERE chat_message_id = ? ORDER BY created_at`,
   );
   return { ...message, attachments: attachmentsOf.all(message.id) };
-}
-
-function notifyHermesWebhook(message: any) {
-  if (message.to_user_id !== HERMES_USER_ID) return;
-  const secret = process.env.TASKFLOW_WEBHOOK_SECRET;
-  if (!secret) {
-    // Сервер не перезапущен с секретом (vault-run drop-in) — не шум, просто
-    // пропуск: отправка сообщения в чат не должна зависеть от этого пути.
-    console.warn(
-      "chat: TASKFLOW_WEBHOOK_SECRET не задан — вебхук Гермесу не отправлен",
-    );
-    return;
-  }
-  const body = JSON.stringify({
-    task_id: message.task_id,
-    from_name: message.from_user_name || message.from_user_id,
-    text: message.text,
-  });
-  const ts = String(Math.floor(Date.now() / 1000));
-  const sig = crypto
-    .createHmac("sha256", secret)
-    .update(`${ts}.${body}`)
-    .digest("hex");
-
-  // Fire-and-forget: упавший/занятый Гермес не должен ронять отправку
-  // сообщения в TaskFlow — это уведомление, не доставка.
-  const ctl = new AbortController();
-  const timeout = setTimeout(() => ctl.abort(), 3000);
-  fetch(HERMES_WEBHOOK_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Webhook-Signature-V2": sig,
-      "X-Webhook-Timestamp": ts,
-    },
-    body,
-    signal: ctl.signal,
-  })
-    .catch((err) => {
-      console.warn("chat: вебхук Гермесу не доставлен:", err.message || err);
-    })
-    .finally(() => clearTimeout(timeout));
 }
 
 const CHAT_KINDS = new Set(["совещание", "делегирование", "находка"]);
@@ -353,8 +300,8 @@ function notifyOrchestratorOfDirect(
     : undefined;
 
   // task_id НАМЕРЕННО не проставляется, хотя карточка известна и в тексте
-  // названа. Уведомление с task_id — это команда будильнику: trigger.py
-  // ловит notification:new с taskId и поднимает по этой карточке сессию
+  // названа. Уведомление с task_id — это команда Системе: серверная
+  // автоматика ловит notification:new с taskId и поднимает по этой карточке сессию
   // (handle_task). Здесь такое было бы ровно тем «вставанием посередине»,
   // от которого владелец и отделял «видеть» от «вмешиваться»: оркестратор
   // должен узнать о раздаче работы, а не побежать её делать.
@@ -604,7 +551,7 @@ export function registerChatRoutes(app: FastifyInstance) {
     ).run(id, req.userId, routed.toUserId, taskId, kind, text, routed.channel);
 
     // Сообщение по задаче — признак жизни её исполнителя (карточка 5de557a5,
-    // разбор DeepSeek-Agent, правка внесена 29.08.2026). До неё аренду
+    // разбор случая с внешним агентом, правка внесена 29.08.2026). До неё аренду
     // продлевал только комментарий в ленту задачи: правило «любое действие
     // агента по задаче продлевает аренду само» было написано, но на чат не
     // распространено. А писать в чат — теперь основной путь, и агент,
@@ -737,7 +684,6 @@ export function registerChatRoutes(app: FastifyInstance) {
     // агента, и выходило бы «Гермес печатает…» под его же свежим пузырём.
     stopTyping(req.userId);
 
-    notifyHermesWebhook(message);
     notifyOrchestratorOfDirect(req.userId, routed, taskId);
     maybeRaiseCeilingAlarm(req.userId);
 

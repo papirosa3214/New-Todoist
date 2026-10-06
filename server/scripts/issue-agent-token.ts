@@ -9,7 +9,7 @@
  * Печатает токен ОДИН раз в stdout — вызывающий обязан сразу положить его
  * в хранилище секретов и нигде больше не хранить (в базе только отпечаток).
  *
- *   npx tsx scripts/issue-agent-token.ts Hermes
+ *   npx tsx scripts/issue-agent-token.ts role_builder
  */
 import db, { hashApiToken } from "../src/db.js";
 import crypto from "crypto";

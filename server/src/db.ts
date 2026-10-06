@@ -211,7 +211,7 @@ export function migrate() {
 
   // Additive migration: users.is_system_bot may be missing on a DB created
   // before this column was added. This flag marks the seeded system agents
-  // (Claude_Bot, Hermes) — it is set only here and in seed.ts, never via
+  // — it is set only here and in seed.ts, never via
   // /api/auth/register, so a registered account can never grant itself
   // "system bot" status.
   if (!userCols.some((c) => c.name === "is_system_bot")) {
@@ -498,7 +498,7 @@ export function migrate() {
   // b6b57092, шаг 1). Идемпотентно: при перезапуске UPDATE проставит те же
   // значения, ничего не задвоится. Файл читается по id профиля: profiles.*.id
   // совпадает с users.id (проверено 11.09.2026 на живой базе), а в profile
-  // пишется ключ профиля (claude_bot / hermes / reviewer / ...), чтобы по
+  // пишется ключ профиля (строчный профиль исполнителя), чтобы по
   // нему доставать свойства из team_catalog.json в шаге 3.
   //
   // Файл может не найтись (dev-сборка без scripts/), JSON может быть

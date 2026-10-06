@@ -3530,6 +3530,59 @@ const migrations: Migration[] = [
         ON project_purge_log(project_id, created_at DESC);
     `);
   } },
+  { id: "108_remove_pi_agent_account", description:
+      "MAK-72: учётка «Pi Agent» (1fa09a0a-…) удалена. С 06.10.2026 планировщик " +
+      "и системная автоматика ходят учёткой «Система» (taskflow_system), а не " +
+      "исторической Pi Agent. Ссылки на удаляемую учётку переводятся на «Систему» " +
+      "(nullable-колонки — в NULL), затем строка users удаляется.", up: () => {
+    const LEGACY_IDS = ["1fa09a0a-0c41-4e7e-982a-a1c46570e5d2"]; // Pi Agent
+    const SYSTEM_ID = "taskflow_system";
+    const ph = LEGACY_IDS.map(() => "?").join(",");
+    const tables = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name);
+    for (const t of tables) {
+      let fks: Array<{ table: string; from: string }> = [];
+      try {
+        fks = db.prepare(`PRAGMA foreign_key_list("${t}")`).all() as Array<{ table: string; from: string }>;
+      } catch {
+        continue;
+      }
+      for (const fk of fks) {
+        if (fk.table !== "users") continue;
+        let notnull = false;
+        try {
+          const info = db.prepare(`PRAGMA table_info("${t}")`).all() as Array<{
+            name: string;
+            notnull: number;
+            pk: number;
+          }>;
+          const col = info.find((c) => c.name === fk.from);
+          notnull = Boolean(col?.notnull) || (col?.pk ?? 0) > 0;
+        } catch {
+          // нет сведений о колонке — считаем nullable
+        }
+        if (notnull && fk.from === "id") continue; // PK не переписать
+        try {
+          db.prepare(
+            `UPDATE "${t}" SET "${fk.from}" = ? WHERE "${fk.from}" IN (${ph})`,
+          ).run(notnull ? SYSTEM_ID : null, ...LEGACY_IDS);
+        } catch {
+          // колонку не перевести — падение на DELETE покажет остаток
+        }
+      }
+    }
+    for (const id of LEGACY_IDS) {
+      try {
+        db.prepare("DELETE FROM users WHERE id = ?").run(id);
+      } catch {
+        // остались ссылки из непокрытой таблицы — хотя бы не пускаем в работу
+        db.prepare("UPDATE users SET archived = 1 WHERE id = ?").run(id);
+      }
+    }
+  } },
 ];
 
 /**

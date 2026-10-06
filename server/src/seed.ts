@@ -34,9 +34,9 @@ export function registerSeedRoutes(app: FastifyInstance) {
         isSystemBot: false,
       },
       {
-        id: "u2",
-        name: "Claude_Bot",
-        email: "claude@taskflow.local",
+        id: "demo_agent_1",
+        name: "Демо-агент",
+        email: "demo1@taskflow.local",
         role: "agent",
         type: "ai",
         color: "#A78BFA",
@@ -44,9 +44,9 @@ export function registerSeedRoutes(app: FastifyInstance) {
         isSystemBot: true,
       },
       {
-        id: "u3",
-        name: "Hermes",
-        email: "hermes@taskflow.local",
+        id: "demo_agent_2",
+        name: "Демо-агент 2",
+        email: "demo2@taskflow.local",
         role: "agent",
         type: "ai",
         color: "#FF9A14",
@@ -115,7 +115,7 @@ export function registerSeedRoutes(app: FastifyInstance) {
         due: "2026-08-11",
         proj: "p1",
         pri: 1,
-        ass: "u2",
+        ass: "demo_agent_1",
         labels: ["l1"],
       },
       {
@@ -165,7 +165,7 @@ export function registerSeedRoutes(app: FastifyInstance) {
         due: "2026-08-18",
         proj: "p1",
         pri: 2,
-        ass: "u3",
+        ass: "demo_agent_2",
         labels: [],
       },
       {
@@ -195,7 +195,7 @@ export function registerSeedRoutes(app: FastifyInstance) {
         due: "2026-08-12",
         proj: "p2",
         pri: 3,
-        ass: "u2",
+        ass: "demo_agent_1",
         labels: ["l2", "l3"],
       },
       {
@@ -205,7 +205,7 @@ export function registerSeedRoutes(app: FastifyInstance) {
         due: "2026-08-13",
         proj: "p2",
         pri: 2,
-        ass: "u3",
+        ass: "demo_agent_2",
         labels: ["l3"],
       },
     ];
@@ -244,30 +244,30 @@ export function registerSeedRoutes(app: FastifyInstance) {
     // action — so the recipient's list shows a real author avatar instead
     // of the neutral gear placeholder. actor_id is the true doer of the
     // action described in `text`; it happens to equal user_id in n2
-    // because that notification genuinely describes Hermes's own action
+    // because that notification genuinely describes the agent's own action
     // (self-reporting task completion) — not a stand-in for a missing
     // value.
     const notifs = [
       {
         id: "n1",
-        user_id: "u2",
-        actor_id: "u1", // Максим assigned Claude_Bot to the task
+        user_id: "demo_agent_1",
+        actor_id: "u1", // Максим assigned Демо-агент to the task
         type: "assigned",
         task_id: "t2",
-        text: "Claude_Bot назначен на задачу: Судебное заседание",
+        text: "Демо-агент назначен на задачу: Судебное заседание",
       },
       {
         id: "n2",
-        user_id: "u3",
-        actor_id: "u3", // Hermes completed his own task
+        user_id: "demo_agent_2",
+        actor_id: "demo_agent_2", // Демо-агент 2 completed his own task
         type: "completed",
         task_id: "t7",
-        text: "Hermes завершил задачу: Настроить ИИ для семьи",
+        text: "Демо-агент 2 завершил задачу: Настроить ИИ для семьи",
       },
       {
         id: "n3",
         user_id: "u1",
-        actor_id: "u2", // Claude_Bot added this task to Максим's inbox
+        actor_id: "demo_agent_1", // Демо-агент added this task to Максим's inbox
         type: "new_task",
         task_id: "t1",
         text: "Новая задача назначена вам: Оплатить коммуналку",
