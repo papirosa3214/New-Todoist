@@ -13,7 +13,6 @@ import {
   useRef,
   useEffect,
   useMemo,
-  Children,
   type ReactNode,
   type CSSProperties,
 } from "react";
@@ -21,7 +20,7 @@ import type {
   DraggableAttributes,
   DraggableSyntheticListeners,
 } from "@dnd-kit/core";
-import { Icon } from "./UI";
+import { Icon, Card } from "./UI";
 import { MarkdownInline } from "./MarkdownInline";
 import {
   formatDueLabel,
@@ -40,20 +39,11 @@ import type { ApiLabel } from "../api/types";
 // the full label/name/color metadata).
 export { PRIORITIES };
 
-// ═══════════ CARD (mockup .card — 14px radius, edge-to-edge dividers) ═══════════
-
-export function Card({ children }: { children: ReactNode }) {
-  const items = Children.toArray(children);
-  return (
-    <div className="w-full bg-card rounded-2xl overflow-hidden">
-      {items.map((child, i) => (
-        <div key={i} className={i > 0 ? "border-t border-stroke" : ""}>
-          {child}
-        </div>
-      ))}
-    </div>
-  );
-}
+// ═══════════ CARD (перенесена в UI.tsx — §2.2/§2.7) ═══════════
+// Реализация одна — `Card` в UI.tsx (bg-card, радиус 16, без рамки,
+// разделители 1px `stroke`). Здесь — реэкспорт, чтобы прежние импорты
+// `import { Card } from "../components/TaskFields"` продолжали работать.
+export { Card };
 
 // ═══════════ FIELD ROW (mockup .row — r-ic / r-tx / r-val / r-chev) ═══════════
 
@@ -70,7 +60,7 @@ export function FieldRow({
   chevron = true,
   chevronOpen = false,
   onClick,
-  minHeight = 48,
+  minHeight = 52,
 }: {
   icon?: string;
   iconClassName?: string;
@@ -87,7 +77,7 @@ export function FieldRow({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-3 px-4 text-left active:bg-stroke transition-colors"
+      className="w-full flex items-center gap-3 px-4 text-left tap-row transition-colors"
       style={{ minHeight }}
     >
       {icon && (
@@ -103,7 +93,7 @@ export function FieldRow({
       </span>
       {value !== undefined && (
         <span
- className={`tf-row shrink-0 ${typeof value ==="string" ? valueClassName :""}`}
+ className={`tf-action shrink-0 ${typeof value ==="string" ? valueClassName :""}`}
         >
           {value}
         </span>
@@ -112,7 +102,7 @@ export function FieldRow({
       {chevron && (
         <Icon
           name={chevronOpen ? "chevronDown" : "chevron"}
-          size={14}
+          size={13}
           className="text-dim shrink-0"
         />
       )}

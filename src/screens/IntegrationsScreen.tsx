@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { ScreenHeader, ErrorBanner, Icon } from "../components/UI";
+import { ScreenHeader, ErrorBanner, Icon, SectionHeader } from "../components/UI";
 import {
   AppleIntegrations,
   type CalendarInfo,
@@ -277,9 +277,7 @@ export function IntegrationsScreen() {
 
         {/* ═══════════ СЕКЦИЯ: APPLE ЭКОСИСТЕМА ═══════════ */}
         <div className="space-y-3">
-          <div className="tf-caption uppercase tracking-wider text-sub px-1">
-            Apple Экосистема (iOS)
-          </div>
+          <SectionHeader>Apple Экосистема (iOS)</SectionHeader>
 
           {/* 1. Аккордеон: Apple Календарь */}
           <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">
@@ -455,9 +453,7 @@ export function IntegrationsScreen() {
 
         {/* ═══════════ СЕКЦИЯ: GOOGLE СЕРВИСЫ ═══════════ */}
         <div className="space-y-3 pt-2">
-          <div className="tf-caption uppercase tracking-wider text-sub px-1">
-            Google Сервисы
-          </div>
+          <SectionHeader>Google Сервисы</SectionHeader>
 
           {/* 3. Аккордеон: Google Задачи */}
           <div className="bg-card border border-stroke/50 rounded-2xl overflow-hidden shadow-xs">

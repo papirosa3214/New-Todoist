@@ -7,6 +7,8 @@ import {
   ErrorBanner,
   Avatar,
   Switch,
+  ListRow,
+  SectionHeader,
 } from "../components/UI";
 import { useCurrentUser, useLogout } from "../api/auth";
 import { useServerStatus } from "../api/server";
@@ -40,34 +42,20 @@ function Row({
   onClick,
   danger,
 }: RowProps) {
+  // Общий ListRow (§2.2): плашка иконки 40×40 с заливкой 18%, значение
+  // 13px, подсветка `tap-row` 4%. Раньше здесь была локальная копипаста
+  // с плашкой 28×28 и `py-3`, из-за которой строки настроек жили в своём
+  // масштабе, а не в общем (§2.7 — строка 52).
   return (
-    // tap-row — строка внутри карточки, ровно тот случай, под который класс
-    // и заведён (см. описание системы откликов в index.css). Без него все
-    // семь строк этого экрана нажимались вообще без видимой реакции:
-    // глобальный -webkit-tap-highlight-color: transparent снял системную
-    // подсветку, а замены строкам не дали.
-    <button
+    <ListRow
+      icon={icon}
+      iconColor={iconColor}
+      label={label}
+      value={value}
+      chevron={!danger}
       onClick={onClick}
-      className="tap-row w-full flex items-center gap-3 py-3 px-4 bg-card text-left"
-    >
-      <div
-        className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
-        style={{ backgroundColor: iconColor + "18" }}
-      >
-        <Icon
-          name={icon}
-          size={16}
-          className={danger ? "text-coral" : "text-text"}
-        />
-      </div>
-      <span
- className={`tf-body flex-1 ${danger ?"text-coral" :"text-text"}`}
-      >
-        {label}
-      </span>
- {value && <span className="tf-action text-sub">{value}</span>}
-      {!danger && <Icon name="chevron" size={16} className="text-dim" />}
-    </button>
+      danger={danger}
+    />
   );
 }
 
@@ -79,17 +67,15 @@ interface InfoRowProps {
 }
 
 function InfoRow({ icon, iconColor = "#FF6B6B", label, value }: InfoRowProps) {
+  // Строка-констатация — без `onClick`, поэтому ListRow рендерит `<div>`,
+  // а не кнопку (нечему нажиматься — незачем реагировать подсветкой).
   return (
-    <div className="w-full flex items-center gap-3 py-3 px-4 bg-card text-left">
-      <div
-        className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
-        style={{ backgroundColor: iconColor + "18" }}
-      >
-        <Icon name={icon} size={16} className="text-text" />
-      </div>
- <span className="tf-body flex-1 text-text">{label}</span>
- <span className="tf-action text-sub">{value}</span>
-    </div>
+    <ListRow
+      icon={icon}
+      iconColor={iconColor}
+      label={label}
+      value={value}
+    />
   );
 }
 
@@ -123,21 +109,19 @@ function ToggleRow({
   onChange,
 }: ToggleRowProps) {
   return (
-    <div className="w-full flex items-center gap-3 py-3 px-4 bg-card text-left">
-      <div
-        className="w-[28px] h-[28px] rounded-lg flex items-center justify-center shrink-0"
-        style={{ backgroundColor: iconColor + "18" }}
-      >
-        <Icon name={icon} size={16} className="text-text" />
-      </div>
- <span className="tf-body flex-1 text-text">{label}</span>
- {valueLabel && <span className="tf-action text-sub">{valueLabel}</span>}
-      <Switch
-        checked={checked}
-        onChange={() => onChange()}
-        ariaLabel={label}
-      />
-    </div>
+    <ListRow
+      icon={icon}
+      iconColor={iconColor}
+      label={label}
+      value={valueLabel}
+      trailing={
+        <Switch
+          checked={checked}
+          onChange={() => onChange()}
+          ariaLabel={label}
+        />
+      }
+    />
   );
 }
 
@@ -515,9 +499,7 @@ export function SettingsScreen() {
       )}
 
       {/* User settings */}
- <div className="tf-action text-sub px-1 mb-2">
-        Пользовательские настройки
-      </div>
+      <SectionHeader className="mb-2">Пользовательские настройки</SectionHeader>
       <div className="mb-4">
         <FieldGroup>
           <ToggleRow
@@ -557,9 +539,7 @@ export function SettingsScreen() {
       {/* AI — ВЕСЬ в одном разделе (Максим 26.08.2026: «уже нагородили —
           мозг в одном месте, модели в другом, Ollama в третьем»). Одна
           строка-вход, всё внутри: /settings/voice-models. */}
- <div className="tf-action text-sub px-1 mb-2">
-        Искусственный интеллект
-      </div>
+      <SectionHeader className="mb-2">Искусственный интеллект</SectionHeader>
       <div className="mb-4">
         <FieldGroup>
           <Row
@@ -572,7 +552,7 @@ export function SettingsScreen() {
       </div>
 
       {/* General */}
- <div className="tf-action text-sub px-1 mb-2">Общие</div>
+      <SectionHeader className="mb-2">Общие</SectionHeader>
       <div className="mb-4">
         <FieldGroup>
           {/* Строки «Проекты» здесь больше нет (26.08.2026): проекты стали
@@ -610,7 +590,7 @@ export function SettingsScreen() {
       </div>
 
       {/* Сервер */}
- <div className="tf-action text-sub px-1 mb-2">Сервер</div>
+      <SectionHeader className="mb-2">Сервер</SectionHeader>
       <div className="mb-4">
         <ServerSection />
       </div>

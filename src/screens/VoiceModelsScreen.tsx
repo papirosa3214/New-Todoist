@@ -1,6 +1,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FieldGroup, ScreenHeader, ErrorBanner, Icon } from "../components/UI";
+import { FieldGroup, ScreenHeader, ErrorBanner, Icon, SectionHeader } from "../components/UI";
 import {
   type ModelStatus,
   listWhisperModels,
@@ -186,9 +186,7 @@ function ModelRow({
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
- <div className="tf-caption uppercase tracking-wide text-dim px-1 mb-2 mt-4">
-      {children}
-    </div>
+    <SectionHeader className="mb-2 mt-4">{children}</SectionHeader>
   );
 }
 
