@@ -43,24 +43,33 @@ export function providerAvailable(provider: string): boolean {
   return !row;
 }
 
-/** Пометить учётку недоступной до восстановления лимита. */
+/**
+ * Пометить учётку недоступной до восстановления лимита.
+ *   timer — провайдер до этого работал и упёрся в лимит: окно пять часов засекается от
+ *           этого момента, возврат автоматом через 5 часов 5 минут, без прощупываний
+ *           (владелец 07.10.2026);
+ *   probe — упёрлись сразу при старте: сколько осталось до сброса, неизвестно, поэтому
+ *           пять часов — только страховка, а снимает метку проба (runtime/providerProbe.ts).
+ */
 export function markProviderLimited(
   provider: string,
   windowKind: string | null,
   reason: string | null,
+  mode: "timer" | "probe" = "timer",
 ): void {
   // Тип окна пока не разобран (фаза 4) — консервативно берём пятичасовое,
   // недельное ставим только если оно уже известно.
-  const until = windowKind === "weekly" ? "+7 days" : "+5 hours";
+  const modifiers = windowKind === "weekly" ? ["+7 days"] : mode === "timer" ? ["+5 hours", "+5 minutes"] : ["+5 hours"];
   db.prepare(
-    `INSERT INTO provider_limits (provider, unavailable_until, window_kind, reason, updated_at)
-     VALUES (?, datetime('now', ?), ?, ?, datetime('now'))
+    `INSERT INTO provider_limits (provider, unavailable_until, window_kind, reason, updated_at, mode)
+     VALUES (?, datetime('now', ${modifiers.map(() => "?").join(", ")}), ?, ?, datetime('now'), ?)
      ON CONFLICT(provider) DO UPDATE SET
        unavailable_until = excluded.unavailable_until,
        window_kind = excluded.window_kind,
        reason = excluded.reason,
-       updated_at = datetime('now')`,
-  ).run(provider, until, windowKind, reason);
+       updated_at = datetime('now'),
+       mode = excluded.mode`,
+  ).run(provider, ...modifiers, windowKind, reason, mode);
 }
 
 /** Куда уходить с текущей модели при такой причине. null — двигаться некуда

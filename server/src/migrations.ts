@@ -3692,6 +3692,12 @@ const migrations: Migration[] = [
     db.prepare("UPDATE roles SET title = 'Лайф-тестировщик', summary = 'пройти сценарии в живом приложении и найти баги.' WHERE key = 'qa' AND title = 'QA'").run();
     db.prepare("UPDATE users SET name = 'Лайф-тестировщик' WHERE id = 'role_qa' AND name = 'QA'").run();
   } },
+  { id: "115_provider_limits_mode", description: "Метка лимита провайдера: режим timer (работал и упёрся — возврат через 5 ч 5 мин) или probe (упёрлись сразу — снимает проба) (владелец 07.10.2026)", up: () => {
+    const cols = db.prepare("PRAGMA table_info(provider_limits)").all() as { name: string }[];
+    if (!cols.some((c) => c.name === "mode")) {
+      db.exec("ALTER TABLE provider_limits ADD COLUMN mode TEXT NOT NULL DEFAULT 'timer'");
+    }
+  } },
 ];
 
 /**

@@ -1,10 +1,9 @@
-// Возврат на основную модель по ФАКТУ сброса лимита (владелец 07.10.2026: «как только лимиты
-// сбрасываются у MiniMax — возврат автоматом»). Раньше метка «провайдер в лимите» жила пять
-// часов от первой 429 и снималась только по таймеру — окно у MiniMax могло открыться раньше, а
-// мы всё это время сидели на запасных. Теперь раз в несколько минут к каждому помеченному
-// провайдеру уходит крошечный пробный запрос: ответил без ошибки лимита — метка снимается и
-// новые запуски снова берут основную модель. Ответил лимитом — метка остаётся, а истечение по
-// таймеру работает как раньше (страховка, если проба недоступна).
+// Возврат на основную модель по ФАКТУ сброса лимита — только для случая «упёрлись сразу при
+// старте» (владелец 07.10.2026): остаток до сброса неизвестен, поэтому раз в несколько минут к
+// такому провайдеру (provider_limits.mode = 'probe') уходит крошечный запрос. Ответил без ошибки
+// лимита — метка снимается и новые запуски снова берут основную модель. Ответил лимитом — метка
+// остаётся; пять часов по таймеру — страховка, если проба недоступна. Провайдеры, которые до
+// лимита работали (mode = 'timer'), не прощупываются: у них возврат через 5 ч 5 мин.
 import db from "../db.js";
 import { loadRoleRouting, type RoleRouting } from "../roleRouting.js";
 import { parseModelRef } from "../lib/attemptModel.js";
@@ -17,12 +16,12 @@ const PROBE_INTERVAL_MS = Number(process.env.PROVIDER_PROBE_INTERVAL_MS) || 5 * 
 const PROBE_FIRST_DELAY_MS = 60_000;
 const PROBE_TIMEOUT_MS = 30_000;
 
-/** Помеченные провайдеры, у которых метка ещё не истекла. */
+/** Провайдеры в режиме probe, у которых метка ещё не истекла. */
 function limitedProviders(): string[] {
   return (
     db
       .prepare(
-        "SELECT provider FROM provider_limits WHERE unavailable_until IS NOT NULL AND unavailable_until > datetime('now')",
+        "SELECT provider FROM provider_limits WHERE mode = 'probe' AND unavailable_until IS NOT NULL AND unavailable_until > datetime('now')",
       )
       .all() as { provider: string }[]
   ).map((r) => r.provider);
