@@ -1,4 +1,4 @@
-# AGENT-API — TaskFlow API для агентов (Claude / Hermes / …)
+# AGENT-API — TaskFlow API для внешних агентов (Claude / …)
 
 Справочник для ИИ-агентов, работающих с задачами через HTTP API и WebSocket.
 Сервер: Fastify + SQLite (better-sqlite3), исходники в `server/src/`.
