@@ -1165,7 +1165,7 @@ try {
       // Запасных нет — прежнее поведение: шаг виден заблокированным, причина в ленте.
       if (input.subtaskId && mode === "work") {
         void import("./planSubtaskAdmission.js").then(({ settleStalledPlanNode }) =>
-          settleStalledPlanNode({ subtaskId: input.subtaskId!, madeProgress: false, failure: `лимит провайдера, запасных моделей нет: ${reason.slice(0, 100)}` }),
+          settleStalledPlanNode({ subtaskId: input.subtaskId!, madeProgress: false, failure: `лимит провайдера, запасных моделей нет: ${reason.slice(0, 100)}`, failureCode: "provider_quota_limit" }),
         ).catch(() => {});
       }
       return;

@@ -243,6 +243,28 @@ describe("stalledStepWatcher", () => {
     expect(snap.blocker).toMatch(/событий/);
   });
 
+  // Живой прогон MAK-97: зависший ход (журнал молчит, перезапуски исчерпаны)
+  // оставляет в ленте событие «шаг брошен» с хвостом журнала хода и снимком
+  // git рабочей копии — получателю видно, где шаг остановился.
+  it("блок зависшего шага несёт событие «шаг брошен» с хвостом журнала", async () => {
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 30);
+    const ins = db.prepare(
+      `INSERT INTO attempts(id, task_id, subtask_id, executor_id, started_at, ended_at, outcome, reason)
+       VALUES(?, ?, ?, ?, datetime('now', ?), datetime('now', ?), 'auto_restarted', 'setup')`,
+    );
+    ins.run(`att_ab_a_${Date.now()}`, fixture.task.id, fixture.subtaskId, roleUserId("builder"), "-110 minutes", "-110 minutes");
+    ins.run(`att_ab_b_${Date.now()}`, fixture.task.id, fixture.subtaskId, roleUserId("builder"), "-60 minutes", "-60 minutes");
+    const report = await runStalledStepWatch();
+    expect(report.blocked).toBe(1);
+
+    const rows = db.prepare("SELECT to_value FROM task_events WHERE task_id = ? AND kind = 'step_abandoned'").all(fixture.task.id) as Array<{ to_value: string }>;
+    expect(rows).toHaveLength(1);
+    const payload = JSON.parse(rows[0].to_value) as { reason: string; journal_tail: string | null; git_snapshot: string | null; slot_key: string | null };
+    expect(payload.slot_key).toBe("executor");
+    expect(payload.reason).toMatch(/лимит автоперезапуска/);
+    expect(payload.journal_tail).toContain('"step":"test"');
+  });
+
   it("журнал сессии ещё не создан (узел только что стартовал) — сторож ждёт", async () => {
     db.prepare("UPDATE subtasks SET agent_heartbeat_at = datetime('now', '-1 minutes') WHERE id = ?").run(fixture.subtaskId);
     const before = comments(fixture.task.id).length;
