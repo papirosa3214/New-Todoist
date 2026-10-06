@@ -3423,6 +3423,13 @@ const migrations: Migration[] = [
          AND task_id IN (SELECT id FROM tasks WHERE status = 'completed');
     `);
   } },
+  { id: "105_secretary_room_ensure", description: "Комната чата Секретаря: личный чат владельца с u-secretary, если её нет (iOS открывает chat-secretary)", up: () => {
+    const owner = (db.prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined)?.id;
+    if (!owner) return;
+    db.prepare("INSERT OR IGNORE INTO chats (id, title, kind, created_by, task_id) VALUES ('chat-secretary', 'Секретарь', 'direct', ?, NULL)").run(owner);
+    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES ('chat-secretary', ?)").run(owner);
+    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES ('chat-secretary', 'u-secretary')").run();
+  } },
 ];
 
 /**
