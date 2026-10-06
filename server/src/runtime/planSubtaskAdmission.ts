@@ -197,9 +197,50 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string): P
  * точка согласия владельца. До него узлов не существует; после — цепочка
  * идёт сама, в любом режиме. Гейта по режиму здесь больше нет.
  */
+/**
+ * MAK-98: самоснятие блока-зависимости. Шаг, ушедший в blocked как
+ * dependency, становится свободным ровно тогда, когда готовы его
+ * предшественники — проверка та же (`canPlanSubtaskBecomeReady`), что у
+ * обычного допуска. Возвращает число снятых блоков. Без этого проход
+ * `unlockReadyPlanSubtasks` смотрит только на `agent_state IS NULL` и
+ * dependency-шаг ждал бы вечно.
+ */
+export function liftDependencyBlocks(planId: string, taskId: string, actorId: string): number {
+  const dependencyBlocked = db
+    .prepare(
+      `SELECT * FROM subtasks
+        WHERE collaboration_plan_id = ? AND done = 0
+          AND agent_state = 'blocked' AND block_type = 'dependency'`,
+    )
+    .all(planId) as PlanSubtask[];
+  let lifted = 0;
+  for (const node of dependencyBlocked) {
+    if (!canPlanSubtaskBecomeReady(node)) continue;
+    const changed = db
+      .prepare(
+        `UPDATE subtasks
+            SET agent_state = NULL, agent_id = NULL, block_type = NULL, blocked_at = NULL
+          WHERE id = ? AND agent_state = 'blocked'`,
+      )
+      .run(node.id).changes;
+    if (changed) {
+      logEvent({
+        taskId,
+        actorId,
+        kind: "dependency_block_lifted",
+        field: node.plan_node_key,
+        toValue: node.title,
+      });
+      lifted += 1;
+    }
+  }
+  return lifted;
+}
+
 export async function unlockReadyPlanSubtasks(planId: string | null, taskId: string, actorId: string): Promise<void> {
   if (!planId) return;
   if (finishPlanIfComplete(planId, taskId, actorId)) return;
+  liftDependencyBlocks(planId, taskId, actorId);
   const waiting = db.prepare("SELECT * FROM subtasks WHERE collaboration_plan_id = ? AND done = 0 AND agent_state IS NULL").all(planId) as PlanSubtask[];
   if (waiting.length === 0) return;
   for (const next of waiting) {

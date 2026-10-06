@@ -341,15 +341,17 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       await asRole(role, "POST", subtaskId && p.id===taskId ? `/api/subtasks/${subtaskId}/work` : `/api/tasks/${p.id}/heartbeat`, {});
       return { "аренда продлена": p.id };
     }),
-    T("taskflow_state", "Сменить состояние работы: review — сдать на проверку, blocked — упёрся и жду владельца, in_progress — вернуться. Для review и blocked комментарий обязателен. Перед blocked реши, может ли помочь другая роль или более сильная модель; если позвал — укажи help_attempt («кого звал, что ответили»), если никто не решит — help_skip_reason. Без этого сервер откажет 409 по решаемой причине (нужен владелец/доступ/секрет проходят без него).",
-      Type.Object({ id: Type.String(), state: Type.String(), comment: Type.Optional(Type.String()), help_attempt: Type.Optional(Type.String()), help_skip_reason: Type.Optional(Type.String()) }),
+    T("taskflow_state", "Сменить состояние работы: review — сдать на проверку, blocked — упёрся и жду владельца, in_progress — вернуться. Для review и blocked комментарий обязателен. blocked принимается только с block_type: dependency (ждёт другой шаг и снимется сам), needs_input (нужно решение), capability (нет компетенции), transient (временное); для needs_input укажи changes_result=true, если это меняет «Результат», «Критерии приёмки» или «Границы». Перед blocked реши, может ли помочь другая роль или более сильная модель; если позвал — укажи help_attempt («кого звал, что ответили»), если никто не решит — help_skip_reason. Без этого сервер откажет.",
+      Type.Object({ id: Type.String(), state: Type.String(), comment: Type.Optional(Type.String()), block_type: Type.Optional(Type.String()), changes_result: Type.Optional(Type.Boolean()), help_attempt: Type.Optional(Type.String()), help_skip_reason: Type.Optional(Type.String()) }),
       async (p) => {
         if(subtaskId && p.id===taskId && ["in_progress","blocked","review"].includes(p.state)) {
-          await asRole(role,"POST",`/api/subtasks/${subtaskId}/work`,{state:p.state,...(p.comment ? {result:p.comment}:{}),...(p.help_attempt ? {help_attempt:p.help_attempt}:{}),...(p.help_skip_reason ? {help_skip_reason:p.help_skip_reason}:{})});
+          await asRole(role,"POST",`/api/subtasks/${subtaskId}/work`,{state:p.state,...(p.comment ? {result:p.comment}:{}),...(p.block_type ? {block_type:p.block_type}:{}),...(p.changes_result ? {changes_result:p.changes_result}:{}),...(p.help_attempt ? {help_attempt:p.help_attempt}:{}),...(p.help_skip_reason ? {help_skip_reason:p.help_skip_reason}:{})});
           return {"состояние изменено":{task_id:taskId,subtask_id:subtaskId,состояние:p.state}};
         }
         const body: Json = { state: p.state };
         if (p.comment) body.comment = p.comment;
+        if (p.block_type) body.block_type = p.block_type;
+        if (p.changes_result) body.changes_result = p.changes_result;
         if (p.help_attempt) body.help_attempt = p.help_attempt;
         if (p.help_skip_reason) body.help_skip_reason = p.help_skip_reason;
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
@@ -395,12 +397,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const s = await asRole(role, "POST", `/api/tasks/${p.task_id}/subtasks`, body);
         return { "шаг добавлен": s.title, id: s.id };
       }),
-    T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния. Перед blocked по решаемой причине укажи help_attempt (кого звал, что ответили) или help_skip_reason (почему никто не решит). Пока работа идёт, технический снимок сервер пишет сам; при прогрессе и сдаче снимок от тебя не нужен.",
-      Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()), snapshot: Type.Optional(SNAPSHOT_SHAPE), help_attempt: Type.Optional(Type.String()), help_skip_reason: Type.Optional(Type.String()) }),
+    T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. blocked принимается только с block_type: dependency | needs_input | capability | transient; для needs_input укажи changes_result=true, если меняет «Результат», «Критерии приёмки» или «Границы». При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния. Перед blocked по решаемой причине укажи help_attempt (кого звал, что ответили) или help_skip_reason (почему никто не решит). Пока работа идёт, технический снимок сервер пишет сам; при прогрессе и сдаче снимок от тебя не нужен.",
+      Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()), block_type: Type.Optional(Type.String()), changes_result: Type.Optional(Type.Boolean()), snapshot: Type.Optional(SNAPSHOT_SHAPE), help_attempt: Type.Optional(Type.String()), help_skip_reason: Type.Optional(Type.String()) }),
       async (p) => {
         const body: Json = {};
         if (p.state !== undefined) body.state = p.state;
         if (p.result !== undefined) body.result = p.result;
+        if (p.block_type) body.block_type = p.block_type;
+        if (p.changes_result) body.changes_result = p.changes_result;
         if (p.snapshot) body.snapshot = p.snapshot;
         if (p.help_attempt) body.help_attempt = p.help_attempt;
         if (p.help_skip_reason) body.help_skip_reason = p.help_skip_reason;
@@ -1065,6 +1069,7 @@ try {
       if (!limitHit) try {
         await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
           state: "blocked",
+          block_type: "transient",
           comment: `Запуск прервался: ${reason.slice(0, 300)}`,
           // Технический сбой среды — не то, что снимет другая роль
           // (карточка cd10bf34). Скажем это явно, а не полагаемся на слова.
@@ -1400,6 +1405,7 @@ async function continueOrHandOff(
       try {
         await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
           state: "blocked",
+          block_type: "needs_input",
           comment: reason.slice(0, 400),
           help_skip_reason: "нужно решение владельца — задача не продвигается без него",
         });

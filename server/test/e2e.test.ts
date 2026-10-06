@@ -121,7 +121,7 @@ describe("Сквозной сценарий: claim → heartbeat → blocked →
       method: "POST",
       url: `/api/tasks/${taskId}/state`,
       headers: { authorization: `Bearer ${agentToken}` },
-      payload: { state: "blocked", comment: "нужен доступ к внешнему API" },
+      payload: { state: "blocked", block_type: "needs_input", comment: "нужен доступ к внешнему API" },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().task.agent_state).toBe("blocked");

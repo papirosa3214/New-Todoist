@@ -134,6 +134,7 @@ describe("событие-исход запуска шага", () => {
       headers: builderAuth,
       payload: {
         state: "blocked",
+        block_type: "capability",
         result: "403 Forbidden: invalid api key у провайдера",
         help_skip_reason: "это доступ к провайдеру, другая роль не снимет",
       },
