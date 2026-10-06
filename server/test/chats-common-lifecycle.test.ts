@@ -185,6 +185,8 @@ describe("Чаты: общий чат, тема задачи, только @", (
     expect(row.role_key).toBe("secretary");
     expect(row.type).toBe("ai");
     expect(row.role).toBe("agent");
+    const prompt = db.prepare("SELECT prompt FROM roles WHERE key='secretary'").get() as any;
+    expect(prompt.prompt).toContain("taskflow_task_summary");
   });
 
   it("общий чат заведён: владелец в составе, регламент закреплён", () => {

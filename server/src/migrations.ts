@@ -3306,6 +3306,16 @@ const migrations: Migration[] = [
           AND COALESCE(is_system_bot, 0) = 1
           AND (role_key IS NULL OR role_key <> 'secretary')`,
     ).run();
+    // Сводка задач больше не перехватывается сервером «до модели» —
+    // Секретарь собирает её инструментом как обычная роль. Подсказываем
+    // ему инструмент прямо в промпте, чтобы просьба «пришли сводку»
+    // не осталась без ответа.
+    db.prepare(
+      `UPDATE roles SET prompt = COALESCE(prompt, '') || ?
+        WHERE key = 'secretary' AND COALESCE(prompt, '') NOT LIKE '%taskflow_task_summary%'`,
+    ).run(
+      "\n\nСводку задач по просьбе владельца собирай инструментом taskflow_task_summary — цифры не выдумывай.",
+    );
 
     // Общий чат. Владелец — самый ранний владелец трекера.
     const owner = (
