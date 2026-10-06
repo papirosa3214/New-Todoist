@@ -10,6 +10,8 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { asRole, asText, short, ToolError, unwrap } from "./inProcessRun.js";
 import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolver.js";
+import db from "../db.js";
+import { collectTaskSummary, parseSummaryRequest } from "../lib/secretaryTaskSummary.js";
 
 const TO_ALL_WORDS = new Set(["all", "всем", "*"]);
 
@@ -223,6 +225,16 @@ export function chatTools(role: string) {
     T("taskflow_my_stats",
       "Мои выполненные задачи по периодам — счётчик и названия последних за неделю и за месяц, без полных карточек.",
       None, async () => asRole(role, "GET", "/api/tasks/my-stats")),
+    T("taskflow_task_summary",
+      "Сводка задач владельца по фактам БД: что зависло, просрочено, в работе, на проверке. Исполнитель, период и раздел разбираются из вопроса владельца.",
+      Type.Object({ query: Type.String({ description: "Вопрос владельца, например «что зависло у QA за неделю»" }) }), async (p) => {
+        const owner = db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined;
+        if (!owner) throw new ToolError("владелец трекера не найден");
+        const filter = await parseSummaryRequest(String(p.query ?? ""));
+        if (!filter.is_summary || filter.question) return { нужно_уточнить: filter.question ?? "Какую сводку задач собрать?" };
+        const summary = collectTaskSummary(owner.id, filter);
+        return { текст: summary.text };
+      }),
     T("taskflow_remember",
       "Запомнить устойчивое знание для себя и команды. kind: lesson | fact | preference. scope: role (по умолчанию) | team | project. Одна запись — одна мысль; похожая обновится, а не задвоится.",
       Type.Object({ text: Type.String(), kind: S(), scope: S(), title: S(), project_id: S(), source_ref: S() }), async (p) => {
