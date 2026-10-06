@@ -27,7 +27,7 @@ import {
   Loading,
   ScreenHeader,
 } from "../components/UI";
-import { formatRelativeTime } from "../lib/date";
+import { formatAbsoluteTime } from "../lib/date";
 import { CreateChatSheet } from "./CreateChatSheet";
 import type { ApiChat, ApiChatMember } from "../api/types";
 
@@ -120,7 +120,7 @@ function ChatRow({
     ? findMemberName(chat.members, last.from_user_id)
     : null;
   const lastLine = lastAuthor ? `${lastAuthor}: ${lastText}` : lastText;
-  const lastTime = last ? formatRelativeTime(last.created_at) : "";
+  const lastTime = last ? formatAbsoluteTime(last.created_at) : "";
 
   return (
     <button

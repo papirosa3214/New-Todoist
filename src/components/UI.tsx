@@ -98,7 +98,7 @@ import {
 } from "lucide-react";
 import { useTasks } from "../api/tasks";
 import { API_BASE_URL } from "../api/client";
-import { todayStr, formatRelativeTime } from "../lib/date";
+import { todayStr, formatAbsoluteTime } from "../lib/date";
 import { getErrorMessage } from "../lib/errors";
 import { hapticTap } from "../lib/haptics";
 import { PRIORITIES, getPriorityColor } from "../lib/priority";
@@ -769,7 +769,7 @@ export function AgentStateTag({
         Агент пропал
         {!compact && task.agent_heartbeat_at && (
           <span className="font-normal opacity-80">
-            · {formatRelativeTime(task.agent_heartbeat_at)}
+            · {formatAbsoluteTime(task.agent_heartbeat_at)}
           </span>
         )}
       </span>
@@ -787,7 +787,7 @@ export function AgentStateTag({
         task.agent_state === "in_progress" &&
         task.agent_heartbeat_at && (
           <span className="opacity-80">
-            · {formatRelativeTime(task.agent_heartbeat_at)}
+            · {formatAbsoluteTime(task.agent_heartbeat_at)}
           </span>
         )}
     </span>

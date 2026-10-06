@@ -33,7 +33,7 @@ import { useProjects } from "../api/projects";
 import { PRIORITIES } from "../lib/priority";
 import { AttachmentView } from "./AttachmentView";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
-import { formatDueLabel, formatRelativeTime, formatAbsoluteTime } from "../lib/date";
+import { formatDueLabel, formatAbsoluteTime } from "../lib/date";
 import { useBottomSheet } from "../lib/useBottomSheet";
 import { TaskControlSheet } from "./TaskControlSheet";
 import { MicKeyboardBar } from "./MicKeyboardBar";
@@ -92,16 +92,16 @@ function ResumeSessionButton({ sessionId }: { sessionId: string }) {
   );
 }
 
-// «N с назад» для отметки времени живой строки — своя, помельче
-// formatRelativeTime (та начинается с минут: «5 мин. назад», «только
-// что»), а строка обновляется каждые пару секунд и должна это показывать.
-function activityAgoLabel(atMs: number | null, nowMs: number): string {
+// Обычное время отметки живой строки («02:50:13» по Москве), без «N с назад».
+function activityAgoLabel(atMs: number | null, _nowMs: number): string {
   if (!atMs) return "";
-  const diffSec = Math.max(0, Math.round((nowMs - atMs) / 1000));
-  if (diffSec < 60) return `${diffSec} с назад`;
-  const diffMin = Math.round(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} мин. назад`;
-  return `${Math.round(diffMin / 60)} ч. назад`;
+  return new Date(atMs).toLocaleTimeString("ru-RU", {
+    timeZone: "Europe/Moscow",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }
 
 // Живая строка «чем занят агент прямо сейчас», под плашкой статуса —
@@ -247,7 +247,7 @@ export function AgentStatusRow({ task }: { task: ApiTask }) {
  <p className="tf-meta text-coral/80">
             Аренда истекла — последний сигнал:{" "}
             {task.agent_heartbeat_at
-              ? formatRelativeTime(task.agent_heartbeat_at)
+              ? formatAbsoluteTime(task.agent_heartbeat_at)
               : "неизвестно"}
           </p>
         </div>
@@ -266,7 +266,7 @@ export function AgentStatusRow({ task }: { task: ApiTask }) {
  <span className={`tf-row flex-1 ${meta.color}`}>{meta.label}</span>
         {task.agent_state === "in_progress" && task.agent_heartbeat_at && (
  <span className="tf-meta text-dim shrink-0">
-            {formatRelativeTime(task.agent_heartbeat_at)}
+            {formatAbsoluteTime(task.agent_heartbeat_at)}
           </span>
         )}
         {task.agent_session_id && (

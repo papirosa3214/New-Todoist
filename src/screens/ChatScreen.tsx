@@ -11,7 +11,7 @@ import {
   useSendChatMessage,
 } from "../api/chat";
 import { attachmentUrl } from "../api/attachments";
-import { formatRelativeTime, formatAbsoluteTime } from "../api/notifications";
+import { formatAbsoluteTime } from "../api/notifications";
 import type { ApiChatMessage, ChatChannel } from "../api/types";
 import {
   Avatar,
@@ -133,7 +133,6 @@ function ChatBubble({
           </button>
         )}
  <div className="tf-caption text-dim mt-0.5 px-1">
-          {formatRelativeTime(msg.created_at)} ·{" "}
           {formatAbsoluteTime(msg.created_at)}
         </div>
       </div>

@@ -29,7 +29,6 @@ import { useCurrentUser } from "../api/auth";
 import {
   formatAbsoluteTime,
   formatDaySeparator,
-  formatRelativeTime,
   getMskDayKey,
 } from "../lib/date";
 import {
@@ -312,7 +311,6 @@ function MessageBubble({
           {msg.text}
         </div>
  <div className="tf-caption text-dim mt-0.5 px-1">
-          {formatRelativeTime(msg.created_at)} ·{" "}
           {formatAbsoluteTime(msg.created_at)}
         </div>
       </div>

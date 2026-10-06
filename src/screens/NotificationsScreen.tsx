@@ -5,7 +5,6 @@ import {
   useMarkAllNotificationsRead,
   useMarkNotificationRead,
   useDeleteNotification,
-  formatRelativeTime,
   formatAbsoluteTime,
 } from "../api/notifications";
 import {
@@ -68,7 +67,7 @@ function NotificationRow({ n }: { n: ApiNotification }) {
  <div className="tf-action text-sub mt-0.5">{n.task_title}</div>
           )}
  <div className="tf-meta text-dim mt-0.5">
-            {formatRelativeTime(n.created_at)} · {formatAbsoluteTime(n.created_at)}
+            {formatAbsoluteTime(n.created_at)}
           </div>
         </button>
         <ErrorBanner
