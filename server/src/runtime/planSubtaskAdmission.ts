@@ -250,6 +250,7 @@ export type RecoverOptions = {
 };
 
 export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}): Promise<{ resumed: number; blocked: number; freed: number }> {
+  const byServerRestart = !opts.reason;
   const reason = opts.reason ?? "перезапуск сервера";
   const rows = (db.prepare(
     "SELECT * FROM subtasks WHERE collaboration_plan_id IS NOT NULL AND done = 0 AND agent_state IN ('in_progress','todo','blocked')",
@@ -282,7 +283,7 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
       // Пометка «неполный» обязательна: следующий вызов роли должен понимать,
       // что это техфакты, а не её собственный отчёт.
       technicalSlotSnapshot(row.id, "stopped", {
-        blocker: `ход оборван: ${reason}`,
+        blocker: byServerRestart ? "ход оборвался перезапуском сервера" : `ход оборван: ${reason}`,
         attemptId: row.current_attempt_id,
       });
       db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
@@ -297,14 +298,18 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
         roleNote(
           row.task_id,
           node.role_key,
-          `«${row.title}»: ход снова оборвался (${reason}) — второй раз за полчаса. Сам больше не продолжаю, нужен ваш взгляд.`,
+          byServerRestart
+            ? `«${row.title}»: ход снова оборвался перезапуском сервера — второй раз за полчаса. Сам больше не продолжаю, нужен ваш взгляд.`
+            : `«${row.title}»: ход снова оборвался (${reason}) — второй раз за полчаса. Сам больше не продолжаю, нужен ваш взгляд.`,
         );
         continue;
       }
       roleNote(
         row.task_id,
         node.role_key,
-        `«${row.title}»: мой ход оборвался (${reason}). Продолжаю с того же места.`,
+        byServerRestart
+          ? `«${row.title}»: мой ход оборвался — сервер перезапустился. Продолжаю с того же места.`
+          : `«${row.title}»: мой ход оборвался (${reason}). Продолжаю с того же места.`,
       );
       const started = await startPlanSubtaskRun(row.id, roleUserId(node.role_key));
       if (started.ok) {
@@ -326,7 +331,9 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
     roleNote(
       row.task_id,
       node.role_key,
-      `«${row.title}»: снят признак «${row.agent_state}» (${reason}) — узел снова свободен.`,
+      byServerRestart
+      ? `«${row.title}»: после рестарта сервера снят признак «${row.agent_state}» — узел снова свободен.`
+      : `«${row.title}»: снят признак «${row.agent_state}» (${reason}) — узел снова свободен.`,
     );
   }
   return { resumed, blocked, freed };
