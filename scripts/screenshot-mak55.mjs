@@ -28,6 +28,33 @@ const OUT_DIR = join(ROOT, "docs/2026-10-06-buttons-mak-55", "web");
 const VIEWPORT = { width: 402, height: 874 };
 const BASE = process.env.BASE_URL ?? "https://localhost:5251";
 
+// Фикстура пользовательских шаблонов: кадр 01-templates должен показывать
+// строку `userTemplates` с edit/trash 18, а не только «нет шаблонов» +
+// встроенные карточки (дефект D4 ревью). Шаблоны кладутся в тот же
+// `taskflow_user_templates_v1`, из которого читает TemplateStore.
+const USER_TEMPLATES = [
+  {
+    id: "custom-mak55-1",
+    title: "Созвон с командой",
+    description: "Еженедельная синхронизация по проекту",
+    priority: 2,
+    category: "Работа",
+    subtasks: ["Собрать повестку", "Записать решения"],
+    is_builtin: false,
+    created_at: "2026-10-06T00:00:00.000Z",
+  },
+  {
+    id: "custom-mak55-2",
+    title: "Разбор входящих",
+    description: "Очистить Inbox до нуля",
+    priority: 3,
+    category: "Продуктивность",
+    subtasks: ["Просмотреть каждую задачу"],
+    is_builtin: false,
+    created_at: "2026-10-06T00:00:00.000Z",
+  },
+];
+
 const PERSIST = (theme) => ({
   state: {
     settings: { theme, calendarView: "month" },
@@ -86,6 +113,9 @@ async function runTheme(theme) {
   await ctx.addInitScript((persist) => {
     localStorage.setItem("taskflow-ui", JSON.stringify(persist));
   }, PERSIST(theme));
+  await ctx.addInitScript((templates) => {
+    localStorage.setItem("taskflow_user_templates_v1", JSON.stringify(templates));
+  }, USER_TEMPLATES);
 
   const page = await ctx.newPage();
   page.on("pageerror", (e) => console.log("pageerror:", e.message));

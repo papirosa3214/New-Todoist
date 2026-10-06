@@ -225,7 +225,7 @@ function ProjectRow({
         aria-label="Ещё"
         className="shrink-0 w-[36px] flex items-center justify-center text-dim tap-row"
       >
-        <Icon name="dots" size={16} />
+        <Icon name="dots" size={18} />
       </button>
       <ActionsMenu
         open={menuOpen}

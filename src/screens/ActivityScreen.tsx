@@ -349,7 +349,7 @@ function ActivityFilterSheet({
             aria-label="Закрыть"
             className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center"
           >
-            <Icon name="x" size={20} className="text-sub" />
+            <Icon name="x" size={18} className="text-sub" />
           </button>
           {/* Заголовок шторки — 17px, как заголовок вторичного экрана
               (ScreenHeader variant="compact"): шторка это тот же уровень

@@ -93,7 +93,7 @@ export function ProjectTasksScreen() {
               aria-label="Новая задача"
               className="w-[44px] h-[44px] flex items-center justify-center tap-row"
             >
-              <Icon name="plus" size={20} className="text-red" />
+              <Icon name="plus" size={18} className="text-red" />
             </button>
           )
         }
