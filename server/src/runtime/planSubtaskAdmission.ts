@@ -328,7 +328,7 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
       if (started.ok) {
         resumed += 1;
       } else {
-      logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "failed", error: started.error });
+        logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "failed", error: started.error });
       }
       continue;
     }

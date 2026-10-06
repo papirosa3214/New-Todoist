@@ -148,13 +148,15 @@ function parseOutcome(toValue: unknown): StepOutcome | null {
 /** Последний исход запуска конкретного шага — то, что сервер отдаёт дальше. */
 export function latestStepOutcome(subtaskId: string): StepOutcome | null {
   try {
+    const slot = slotInfo(subtaskId);
+    if (!slot) return null;
     const rows = db
       .prepare(
         `SELECT to_value, field FROM task_events
-          WHERE kind = ? AND (field = ? OR field = (SELECT plan_node_key FROM subtasks WHERE id = ?))
+          WHERE kind = ? AND task_id = ? AND (field = ? OR field = ?)
           ORDER BY created_at DESC, rowid DESC LIMIT 5`,
       )
-      .all(STEP_OUTCOME_KIND, subtaskId, subtaskId) as Array<{ to_value: string | null; field: string | null }>;
+      .all(STEP_OUTCOME_KIND, slot.task_id, subtaskId, slot.plan_node_key ?? subtaskId) as Array<{ to_value: string | null; field: string | null }>;
     for (const row of rows) {
       const outcome = parseOutcome(row.to_value);
       if (outcome) return outcome;
