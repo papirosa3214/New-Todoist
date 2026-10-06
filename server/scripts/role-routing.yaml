@@ -12,29 +12,29 @@ defaults:
   secretary: pi_runtime
 fallbacks:
   researcher:
-    - opencode-go/minimax-m3
     - opencode-go/deepseek-v4.1-flash
+    - opencode-go/qwen3.8-flash
   analyst:
-    - opencode-go/minimax-m3
     - opencode-go/deepseek-v4.1-flash
+    - opencode-go/qwen3.8-flash
   critic_verifier:
     - opencode-go/minimax-m3
     - opencode-go/deepseek-v4.1-flash
   architect:
-    - opencode-go/minimax-m3
     - opencode-go/deepseek-v4.1-flash
+    - opencode-go/qwen3.8-flash
   builder:
-    - opencode-go/minimax-m3
     - opencode-go/deepseek-v4.1-flash
+    - opencode-go/qwen3.8-flash
   qa:
     - opencode-go/minimax-m3
     - opencode-go/deepseek-v4.1-flash
   designer:
-    - opencode-go/minimax-m3
     - opencode-go/deepseek-v4.1-flash
+    - opencode-go/qwen3.8-flash
   secretary:
-    - opencode-go/minimax-m3
     - opencode-go/deepseek-v4.1-flash
+    - opencode-go/qwen3.8-flash
 models:
   researcher: MiniMax-M3
   analyst: MiniMax-M3
