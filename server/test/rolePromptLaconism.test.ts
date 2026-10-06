@@ -35,7 +35,7 @@ const TITLE_BY_ROLE: Record<string, string> = {
   builder: "# Builder",
   critic_verifier: "# Critic/Verifier",
   designer: "# Дизайнер интерфейсов",
-  qa: "# QA",
+  qa: "# Лайф-тестировщик",
   researcher: "# Researcher",
   secretary: "# Секретарь",
   synthesizer: "# Synthesizer",
