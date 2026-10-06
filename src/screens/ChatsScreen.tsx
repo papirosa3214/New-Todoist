@@ -50,7 +50,7 @@ export function ChatsScreen() {
             aria-label="Новый чат"
             className="w-[44px] h-[44px] -mr-2.5 flex items-center justify-center tap-row"
           >
-            <Icon name="plus" size={20} />
+            <Icon name="plus" size={18} />
           </button>
         }
       />

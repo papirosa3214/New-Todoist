@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Icon, ScreenHeader, ErrorBanner, SectionHeader } from "../components/UI";
+import { Icon, ScreenHeader, ErrorBanner, SectionHeader, Card } from "../components/UI";
 import { TemplateStore, type TaskTemplate } from "../lib/templates";
 import { useCreateTask } from "../api/tasks";
 import { getErrorMessage } from "../lib/errors";
@@ -243,9 +243,7 @@ export function TemplatesScreen() {
         {/* ═══════════ Пользовательские шаблоны ═══════════ */}
         <div>
           <div className="flex items-center justify-between px-1 mb-2">
-            <h2 className="tf-action text-sub">
-              Мои шаблоны ({userTemplates.length})
-            </h2>
+            <SectionHeader>Мои шаблоны ({userTemplates.length})</SectionHeader>
             {!showCreate && (
               <button
                 onClick={handleOpenCreate}
@@ -261,11 +259,11 @@ export function TemplatesScreen() {
               У вас пока нет сохранённых шаблонов. Нажмите «+ Добавить» или сохраните любую существующую задачу как шаблон из её карточки.
             </div>
           ) : (
-            <div className="space-y-2">
+            <Card>
               {userTemplates.map((t) => (
                 <div
                   key={t.id}
-                  className="bg-card border border-stroke/50 rounded-xl p-3.5 space-y-2.5"
+                  className="p-3.5 space-y-2.5"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
@@ -324,7 +322,7 @@ export function TemplatesScreen() {
                   </button>
                 </div>
               ))}
-            </div>
+            </Card>
           )}
         </div>
 
@@ -334,11 +332,11 @@ export function TemplatesScreen() {
             Готовые образцы ({builtinTemplates.length})
           </SectionHeader>
 
-          <div className="space-y-2">
+          <Card>
             {builtinTemplates.map((t) => (
               <div
                 key={t.id}
-                className="bg-card border border-stroke/50 rounded-xl p-3.5 space-y-2.5"
+                className="p-3.5 space-y-2.5"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
@@ -386,7 +384,7 @@ export function TemplatesScreen() {
                 </button>
               </div>
             ))}
-          </div>
+          </Card>
         </div>
       </div>
     </div>
