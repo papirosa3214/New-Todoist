@@ -482,5 +482,67 @@ describe("control: прервать шаг / сбросить попытку / �
       ).run(uid(), taskId, subtaskId, agent.id);
       expect(insert.changes).toBe(1);
     });
+
+    // Регрессионный тест на MAJOR-баг `de0f5406-…` / `9043b6ff-…`:
+    // `cancelTaskWork` закрывал `attempts` (массовый UPDATE), обнулял
+    // `tasks.current_attempt_id`, но забывал про `subtasks.current_attempt_id`.
+    // Указатели на подзадачах оставались указывать на закрытые попытки, и
+    // `consultation.ts:293-297` / `subtask-artifacts.ts:93-94` начинали
+    // работать с «активной» попыткой без проверки `ended_at`.
+    it("cancel задачи обнуляет current_attempt_id и на подзадачах (MAJOR регрессия)", async () => {
+      abortMock.mockClear();
+      liveRunInstalled = false;
+      // Две подзадачи, у обеих — открытая попытка и непустой указатель.
+      const { taskId, subtaskId } = seedTaskWithSubtask({
+        ownerId: owner.id,
+        assigneeId: agent.id,
+        title: "cancel обнуляет указатели подзадач",
+      });
+      const subId2 = uid();
+      db.prepare(
+        "INSERT INTO subtasks (id, task_id, title, position) VALUES (?, ?, ?, 2)",
+      ).run(subId2, taskId, "шаг 2");
+      const taskAttemptId = insertAttempt({ taskId, executorId: agent.id });
+      db.prepare("UPDATE tasks SET current_attempt_id = ?, agent_state = 'in_progress' WHERE id = ?").run(taskAttemptId, taskId);
+      const subAttemptId = insertAttempt({ taskId, subtaskId, executorId: agent.id });
+      db.prepare(
+        "UPDATE subtasks SET current_attempt_id = ?, agent_state = 'in_progress', agent_id = ?, agent_heartbeat_at = datetime('now') WHERE id = ?",
+      ).run(subAttemptId, agent.id, subtaskId);
+      const sub2AttemptId = insertAttempt({ taskId, subtaskId: subId2, executorId: agent.id });
+      db.prepare(
+        "UPDATE subtasks SET current_attempt_id = ?, agent_state = 'in_progress', agent_id = ?, agent_heartbeat_at = datetime('now') WHERE id = ?",
+      ).run(sub2AttemptId, agent.id, subId2);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${taskId}/cancel`,
+        headers: { authorization: owner.auth },
+        payload: { reason: "отмена с проверкой указателей" },
+      });
+      expect(res.statusCode).toBe(200);
+      const json = res.json();
+      // И tasks, и обе подзадачи — агенты уже остановлены, указатели
+      // обязаны быть NULL; оба attempts и так закрыты с cancelled.
+      expect(json.subtaskPointersCleared).toBe(2);
+
+      const taskRow = db.prepare("SELECT current_attempt_id FROM tasks WHERE id = ?").get(taskId) as
+        | { current_attempt_id: string | null };
+      expect(taskRow.current_attempt_id).toBeNull();
+      const subRows = db.prepare("SELECT id, current_attempt_id FROM subtasks WHERE task_id = ? ORDER BY id").all(taskId) as
+        Array<{ id: string; current_attempt_id: string | null }>;
+      expect(subRows).toHaveLength(2);
+      for (const row of subRows) {
+        expect(row.current_attempt_id).toBeNull();
+      }
+
+      // Журнал `task_cancelled` обязан отражать факт — старые ревью
+      // (de0f5406, 9043b6ff) отдельно подчёркивали, что без этого числа
+      // нельзя понять «успело ли обнулиться».
+      const ev = db
+        .prepare("SELECT to_value FROM task_events WHERE task_id = ? AND kind = 'task_cancelled'")
+        .get(taskId) as { to_value: string };
+      const evBody = JSON.parse(ev.to_value);
+      expect(evBody.subtask_pointers_cleared).toBe(2);
+    });
   });
 });

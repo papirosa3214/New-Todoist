@@ -155,11 +155,14 @@ function cancelTaskWork(taskId: string, reason: string, actorId: string): {
   abortedRuns: number;
   attemptsClosed: number;
   leaseReleased: boolean;
+  subtaskPointersCleared: number;
 } {
   const task = db
     .prepare("SELECT id, status, current_attempt_id FROM tasks WHERE id = ?")
     .get(taskId) as { id: string; status: string; current_attempt_id?: string | null } | undefined;
-  if (!task) return { taskId, abortedRuns: 0, attemptsClosed: 0, leaseReleased: false };
+  if (!task) {
+    return { taskId, abortedRuns: 0, attemptsClosed: 0, leaseReleased: false, subtaskPointersCleared: 0 };
+  }
 
   // Прервать активный заход на самой задаче (subtaskId === undefined) и
   // по одному на каждую её подзадачу — на сегодняшней схеме один in-process
@@ -191,14 +194,25 @@ function cancelTaskWork(taskId: string, reason: string, actorId: string): {
   const attemptsClosed = attemptsResult.changes;
 
   // Снять отметки работы на подзадачах (lease — единой функцией) и обнулить
-  // current_attempt_id у самой задачи, чтобы повторный запуск не наткнулся
-  // на «уже идёт попытка».
+  // current_attempt_id у самой задачи И у её подзадач, чтобы повторный
+  // запуск не наткнулся на «уже идёт попытка». До этой правки
+  // `subtasks.current_attempt_id` оставался указывать на закрытую попытку
+  // (массовый UPDATE attempts выше уже выставил ей `outcome='cancelled'` и
+  // `ended_at`), а `consultation.ts:293–297` и `subtask-artifacts.ts:93–94`
+  // берут «активную попытку» без проверки `ended_at` — это ломало
+  // корректное чтение состояния после cancel и приводило к no-op при
+  // попытке закрыть artifacts закрытого attempt'а. Один UPDATE по
+  // подзадачам, рядом с тем же обнулением на tasks.
   const leaseReleased = releaseSubtaskWork(taskId) > 0;
   // tasks.agent_id нет (исполнитель держит assignee_id); lease на уровне
   // задачи — те же три поля, что у subtasks (см. releaseSubtaskWork).
   db.prepare(
     "UPDATE tasks SET agent_state = NULL, agent_heartbeat_at = NULL, current_attempt_id = NULL WHERE id = ?",
   ).run(taskId);
+  const subtaskPointersResult = db.prepare(
+    "UPDATE subtasks SET current_attempt_id = NULL WHERE task_id = ? AND current_attempt_id IS NOT NULL",
+  ).run(taskId);
+  const subtaskPointersCleared = subtaskPointersResult.changes;
 
   logEvent({
     taskId,
@@ -209,11 +223,12 @@ function cancelTaskWork(taskId: string, reason: string, actorId: string): {
       aborted_runs: abortedRuns,
       attempts_closed: attemptsClosed,
       lease_released: leaseReleased,
+      subtask_pointers_cleared: subtaskPointersCleared,
       reason: reason.slice(0, 200),
     }),
   });
 
-  return { taskId, abortedRuns, attemptsClosed, leaseReleased };
+  return { taskId, abortedRuns, attemptsClosed, leaseReleased, subtaskPointersCleared };
 }
 
 /** Тело запроса: одна строка причины. Необязательна, но если есть —
