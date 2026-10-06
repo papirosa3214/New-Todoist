@@ -3215,6 +3215,17 @@ const migrations: Migration[] = [
     }
   } },
 
+  // MAK-77 (06.10.2026): модель конкретного шага плана («провайдер/модель»).
+  // NULL — как раньше, по настройкам роли. Основа роутера: одна и та же роль
+  // может работать на разных моделях.
+  { id: "101_subtask_model", description: "MAK-77: модель конкретного шага плана", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(subtasks)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("model")) {
+      db.exec("ALTER TABLE subtasks ADD COLUMN model TEXT");
+    }
+  } },
 ];
 
 /**
