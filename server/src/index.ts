@@ -35,7 +35,6 @@ import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerMergeMarkerRoutes } from "./routes/merge-marker.js";
 import { registerOwnerControlRoutes } from "./routes/owner-controls.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
-import { registerReleaseRoutes } from "./routes/release.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
@@ -67,7 +66,6 @@ import { startInboxTriageWatcher } from "./lib/inboxTriageWatcher.js";
 import { startInboxResultsWriter } from "./lib/inboxResultsWriter.js";
 import { registerSeedRoutes } from "./seed.js";
 import { registerEnrichmentRoutes } from "./routes/enrichment.js";
-import { registerDispatchRoutes } from "./routes/dispatch.js";
 import { registerReviewRoutes } from "./routes/reviews.js";
 import { registerRoleRoutes } from "./routes/roles.js";
 import { registerRuntimeRoutes } from "./routes/runtime.js";
@@ -335,7 +333,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerEmbeddingsRoutes(app);
   registerEnrichSemanticRoutes(app);
   registerEnrichmentRoutes(app);
-  registerDispatchRoutes(app);
   await registerReviewRoutes(app);
   registerRoleRoutes(app);
   registerRuntimeRoutes(app);
@@ -376,7 +373,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   // бессрочно — прямое решение владельца.
   registerDictationArchiveRoutes(app);
   registerAgentServiceRoutes(app);
-  registerReleaseRoutes(app);
   registerIntegrationRoutes(app);
   registerJournalFolderRoutes(app);
   registerKnowledgeRoutes(app);

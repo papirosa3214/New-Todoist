@@ -67,12 +67,20 @@ describe("ответ владельца на блокировку раздаёт
       payload: { state: null, comment: "Синий" },
     });
     expect(res.statusCode).toBe(200);
-    const row = db
-      .prepare("SELECT assignee_id, agent_state FROM tasks WHERE id = ?")
-      .get(id) as { assignee_id: string | null; agent_state: string | null };
-    expect(row.assignee_id).toBe("role_builder");
-    expect(row.agent_state).toBeNull();
-    expect(jobsOf(id)).toEqual([{ reason: "assigned", status: "queued" }]);
+    // MAK-71: разблокировка флагом поднимает узел через tryStartSingleExecutorPlan
+    // (manualStart), а не через role_run_jobs.assigned. Проверяем, что появился
+    // план single_executor с нужной ролью.
+    const plan = db.prepare(
+      "SELECT profile, status FROM task_collaboration_plans WHERE task_id = ? ORDER BY revision DESC LIMIT 1",
+    ).get(id) as { profile: string; status: string } | undefined;
+    expect(plan).toMatchObject({ profile: "single_executor", status: "approved" });
+    const sub = db.prepare(
+      `SELECT role_key FROM plan_subtasks
+         WHERE plan_id IN (SELECT id FROM task_collaboration_plans
+                           WHERE task_id = ?)
+         LIMIT 1`,
+    ).get(id) as { role_key: string } | undefined;
+    expect(sub?.role_key).toBe("builder");
   });
 
   it("флаг не поднят — никто не назначается и запуска нет", async () => {

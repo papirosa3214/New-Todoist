@@ -37,6 +37,9 @@ describe("Один серверный переключатель Система"
     expect(await kickRoleTaskStrict("missing","assigned","u1",{manualStart:true})).toMatchObject({outcome:"skipped",reason:"task is absent or no longer active"});
     expect(await kickRoleTaskStrict("missing","assigned","role_builder",{manualStart:true})).toMatchObject({outcome:"deferred"});
   });
+  // MAK-71: после включения Системы карточка с machine_selected_role
+  // получает план из одного шага (через applyIntakeToNewTask →
+  // tryStartSingleExecutorPlan), а не assignee_id напрямую.
   it("включение подхватывает карточки, зависшие с выключенной Системой", async () => {
     await toggle(false);
     const id = crypto.randomUUID();
@@ -45,14 +48,24 @@ describe("Один серверный переключатель Система"
     // Пока выключено — карточка не трогается (это же гарантирует и
     // applyIntakeToNewTask на создании, здесь просто убеждаемся, что
     // включение — не единственный путь её испортить).
-    expect(db.prepare("SELECT ready_for_pickup, assignee_id FROM tasks WHERE id=?").get(id))
-      .toMatchObject({ ready_for_pickup: 0, assignee_id: null });
+    expect(db.prepare("SELECT ready_for_pickup FROM tasks WHERE id=?").get(id))
+      .toMatchObject({ ready_for_pickup: 0 });
 
     expect((await toggle(true)).json()).toMatchObject({ ok: true, active: true });
 
-    const row = db.prepare("SELECT ready_for_pickup, assignee_id FROM tasks WHERE id=?").get(id) as any;
+    const row = db.prepare("SELECT ready_for_pickup FROM tasks WHERE id=?").get(id) as any;
     expect(row.ready_for_pickup).toBe(1);
-    expect(row.assignee_id).toBe("role_builder");
+    const plan = db.prepare(
+      "SELECT profile, status FROM task_collaboration_plans WHERE task_id = ? ORDER BY revision DESC LIMIT 1",
+    ).get(id) as { profile: string; status: string } | undefined;
+    expect(plan).toMatchObject({ profile: "single_executor", status: "approved" });
+    const sub = db.prepare(
+      `SELECT role_key FROM plan_subtasks
+         WHERE plan_id IN (SELECT id FROM task_collaboration_plans
+                           WHERE task_id = ?)
+         LIMIT 1`,
+    ).get(id) as { role_key: string } | undefined;
+    expect(sub?.role_key).toBe("builder");
   });
   it("повторный POST on:true, когда уже включено, не гоняет разбор заново", async () => {
     await toggle(true);
@@ -68,17 +81,24 @@ describe("Один серверный переключатель Система"
     expect(db.prepare("SELECT ready_for_pickup, assignee_id FROM tasks WHERE id=?").get(id))
       .toMatchObject({ ready_for_pickup: 0, assignee_id: null });
   });
+  // MAK-71: ручной старт через /api/task-intake/drafts/:id/start идёт через
+  // startDraftTree → tryStartSingleExecutorPlan(manualStart). Признак
+  // «явного запуска» теперь — план single_executor со статусом approved и
+  // ролью, выбранной владельцем.
   it("ручной старт карточки создаёт устойчивый признак явного запуска", async () => {
     await toggle(false);
     const id=crypto.randomUUID();
     db.prepare(`INSERT INTO tasks (id,title,creator_id,status,machine_selected_role)
       VALUES (?,'Ручной запуск','u1','active','builder')`).run(id);
-    // Владельческий endpoint проверяет identity; на тестовой БД подписываем
-    // краткоживущий токен u1, не читаем никакие production credentials.
     const ownerToken=app.jwt.sign({id:"u1"});
     const res=await app.inject({method:"POST",url:`/api/task-intake/drafts/${id}/start`,
       headers:{authorization:`Bearer ${ownerToken}`}});
     expect(res.statusCode).toBe(200);
-    expect(db.prepare("SELECT manual_start,actor_id FROM role_run_jobs WHERE task_id=?").get(id)).toEqual({manual_start:1,actor_id:"u1"});
+    const plan = db.prepare(
+      "SELECT profile, status, rationale FROM task_collaboration_plans WHERE task_id = ? ORDER BY revision DESC LIMIT 1",
+    ).get(id) as { profile: string; status: string; rationale: string } | undefined;
+    expect(plan).toMatchObject({ profile: "single_executor", status: "approved" });
+    // rationale маркирует, что запуск был ручным (manualStart), а не системным.
+    expect(plan?.rationale ?? "").toMatch(/manualStart/);
   });
 });

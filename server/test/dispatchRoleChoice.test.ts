@@ -12,7 +12,7 @@ import type { FastifyInstance } from "fastify";
 
 const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
-const { dispatchTaskToPi, pickRole, roleChoiceNoteRu } =
+const { tryStartSingleExecutorPlan, pickRole, roleChoiceNoteRu } =
   await import("../src/routes/dispatch.js");
 const { seedRoleAccounts } = await import("./helpers/seedOwner.js");
 
@@ -128,7 +128,12 @@ describe("Диспетчер: выбор роли", () => {
     expect(уверенный).toContain("Дизайнер");
   });
 
-  it("назначение и durable job коммитятся вместе", async () => {
+  // MAK-71: dispatchTaskToPi снят — теперь выбор роли идёт через
+  // tryStartSingleExecutorPlan, который создаёт план single_executor и
+  // стартует узел. Старая проверка «reason: assigned + status: queued»
+  // больше не действует; ниже — эквивалент: есть plan + plan_subtask,
+  // выбранная роль — та, что заложил владелец.
+  it("назначение и план single_executor коммитятся вместе", async () => {
     const taskId = makeTask("Реализовать endpoint", "Серверная разработка");
     db.prepare(
       `UPDATE tasks
@@ -137,21 +142,25 @@ describe("Диспетчер: выбор роли", () => {
         WHERE id = ?`,
     ).run(taskId);
 
-    const result = await dispatchTaskToPi(taskId, ownerId);
-    expect(result).toMatchObject({ ok: true, role: "builder" });
-    const job = db
-      .prepare(
-        `SELECT reason, actor_id, status
-           FROM role_run_jobs
-          WHERE task_id = ?`,
-      )
-      .get(taskId) as
-      | { reason: string; actor_id: string | null; status: string }
-      | undefined;
-    expect(job).toEqual({
-      reason: "assigned",
-      actor_id: ownerId,
-      status: "queued",
+    const result = await tryStartSingleExecutorPlan(taskId, ownerId, {
+      manualStart: true,
     });
+    expect(result).toMatchObject({ ok: true, reason: "started" });
+    const plan = db
+      .prepare(
+        `SELECT profile, status FROM task_collaboration_plans
+          WHERE task_id = ? ORDER BY revision DESC LIMIT 1`,
+      )
+      .get(taskId) as { profile: string; status: string } | undefined;
+    expect(plan).toEqual({ profile: "single_executor", status: "approved" });
+    const sub = db
+      .prepare(
+        `SELECT role_key FROM plan_subtasks
+          WHERE plan_id IN (SELECT id FROM task_collaboration_plans
+                            WHERE task_id = ?)
+          LIMIT 1`,
+      )
+      .get(taskId) as { role_key: string } | undefined;
+    expect(sub?.role_key).toBe("builder");
   });
 });

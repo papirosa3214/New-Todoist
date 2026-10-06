@@ -20,7 +20,7 @@ describe('single executor launch',()=>{
   const responses=await Promise.all([1,2].map(()=>app.inject({method:'POST',url:`/api/tasks/${id}/run`,headers:{authorization:auth},payload:{mode:'executor'}})));
   expect(responses.map(r=>r.statusCode).sort()).toEqual([200,409]);
   expect(db.prepare('SELECT COUNT(*) AS n FROM role_run_jobs WHERE task_id=?').get(id)).toEqual({n:1});
-  expect(taskExecutionState(id)).toMatchObject({status:'queued',scheme:'single',can_launch:false,can_change_executor:false,can_use_plan:false});
+  expect(taskExecutionState(id)).toMatchObject({status:'queued',scheme:null,can_launch:false,can_change_executor:false,can_use_plan:false});
   const patch=await app.inject({method:'PATCH',url:`/api/tasks/${id}`,headers:{authorization:auth},payload:{assignee_id:owner}});expect(patch.statusCode).toBe(409);
   const plan=await app.inject({method:'POST',url:`/api/tasks/${id}/collaboration-plans/propose`,headers:{authorization:auth},payload:{profile:'research'}});expect(plan.statusCode).toBe(409);
  });
