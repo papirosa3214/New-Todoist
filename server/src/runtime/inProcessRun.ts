@@ -40,6 +40,7 @@ import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
+import { isProviderLimitText, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -877,6 +878,8 @@ async function runRoleInProcessUnserialized(input: {
   /** Узел collaboration plan — запуск роли на конкретной подзадаче плана,
    *  а не на задаче целиком (изолированный сеанс/сессия на этот узел). */
   subtaskId?: string;
+  /** Сколько раз ход уже переехал на запасную модель из-за лимита провайдера. */
+  failoverDepth?: number;
 }): Promise<{ runId: string; completion: Promise<void> }> {
   const { taskId, role } = input;
   if (!ROLE_NAMES.includes(role)) throw new Error(`роли «${role}» нет или она отключена`);
@@ -885,7 +888,7 @@ async function runRoleInProcessUnserialized(input: {
   const routing = loadRoleRouting();
   // MAK-77: модель может быть записана как «провайдер/модель» (opencode-go/qwen3.8-flash);
   // запись без префикса работает по-старому.
-  const modelRef = input.model || routing.models[role];
+  const modelRef = pickStartModel(routing, role, input.model);
   const { provider: modelProvider, id: modelId } = parseModelRef(modelRef);
   const runtime: any = await getModelRuntime();
   const model =
@@ -1012,6 +1015,8 @@ try {
   }, HEARTBEAT_MS);
 
   let runFailure: Error | null = null;
+  /** Ход упёрся в лимит провайдера: перезапустим на запасной модели вместо блока. */
+  let limitHit: string | null = null;
   const work = (async () => {
     try {
       const task = input.prompt ?? (input.subtaskId
@@ -1040,10 +1045,14 @@ try {
       const prompt = `${task}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
       for(const m of queued)db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id=?").run(m.id,input.subtaskId);
       await session.prompt(mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt);
+      // Лимит провайдера библиотека не бросает: ход молча кончается ответом с ошибкой 429
+      // (находка А36). Ловим здесь и уходим на запасную модель.
+      limitHit = lastAssistantLimitError(session);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      runFailure = error instanceof Error ? error : new Error(reason);
-      try {
+      if (isProviderLimitText(reason)) limitHit = reason;
+      else runFailure = error instanceof Error ? error : new Error(reason);
+      if (!limitHit) try {
         await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
           state: "blocked",
           comment: `Запуск прервался: ${reason.slice(0, 300)}`,
@@ -1060,7 +1069,7 @@ try {
       // следа не продолжить. Сначала пробуем спросить саму роль (короткий
       // ход с потолком по времени), иначе пишем техснимок сами: остановка не
       // должна ждать модель и не должна оставлять пустоту.
-      if (input.subtaskId && mode === "work") {
+      if (input.subtaskId && mode === "work" && !limitHit) {
         try {
           const closed = (db.prepare("SELECT done FROM subtasks WHERE id = ?").get(input.subtaskId) as { done: number } | undefined)?.done === 1;
           if (closed) {
@@ -1096,7 +1105,7 @@ try {
       // Шаг плана закончил ход без сдачи: сервер сам продолжает его при прогрессе
       // (до 3 раз) или видимо блокирует. Раньше такой шаг молча оставался
       // «в работе» без запуска (находка А30, 06.10.2026).
-      if (input.subtaskId && mode === "work") {
+      if (input.subtaskId && mode === "work" && !limitHit) {
         try {
           const { settleStalledPlanNode } = await import("./planSubtaskAdmission.js");
           await settleStalledPlanNode({
@@ -1110,7 +1119,7 @@ try {
       }
       // Сдал на проверку — дальше Критик (если включена автопроверка).
       // После самого Критика не будим: при сбое он будил бы себя по кругу.
-      if (mode === "work" && !input.subtaskId) {
+      if (mode === "work" && !input.subtaskId && !limitHit) {
         void continueOrHandOff(
           taskId,
           role,
@@ -1126,8 +1135,45 @@ try {
   void work.finally(() => pending.delete(work));
 
   const completion = work.then(() => {
+    if (limitHit) scheduleProviderFailover();
     if (runFailure) throw runFailure;
   });
+  /** Лимит: помечаем провайдера, берём следующую модель цепочки и перезапускаем ход. */
+  function scheduleProviderFailover(): void {
+    const depth = input.failoverDepth ?? 0;
+    const reason = limitHit ?? "provider limit";
+    const next = depth < 3 ? pickFailoverModel(routing, role, modelRef, reason) : null;
+    if (!next) {
+      // Запасных нет — прежнее поведение: шаг виден заблокированным, причина в ленте.
+      if (input.subtaskId && mode === "work") {
+        void import("./planSubtaskAdmission.js").then(({ settleStalledPlanNode }) =>
+          settleStalledPlanNode({ subtaskId: input.subtaskId!, madeProgress: false, failure: `лимит провайдера, запасных моделей нет: ${reason.slice(0, 100)}` }),
+        ).catch(() => {});
+      }
+      return;
+    }
+    logEvent({ taskId, actorId: null, kind: "model_failover", field: input.subtaskId ?? role, toValue: `${modelRef} → ${next}: ${reason.slice(0, 120)}` });
+    void (async () => {
+      try {
+        if (input.subtaskId && mode === "work") {
+          // Шаг плана: закрыть неудачную попытку, записать модель шага и стартовать заново.
+          const row = db.prepare("SELECT current_attempt_id FROM subtasks WHERE id = ?").get(input.subtaskId) as { current_attempt_id: string | null } | undefined;
+          if (row?.current_attempt_id) {
+            db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'failed', reason = ? WHERE id = ? AND ended_at IS NULL")
+              .run(`provider_limit → ${next}`, row.current_attempt_id);
+          }
+          db.prepare("UPDATE subtasks SET model = ?, agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(next, input.subtaskId);
+          const { startPlanSubtaskRun } = await import("./planSubtaskAdmission.js");
+          const started = await startPlanSubtaskRun(input.subtaskId, roleUserId(role));
+          if (!started.ok) console.warn("[failover] шаг не перезапущен:", started.error);
+        } else {
+          await runRoleInProcess({ ...input, model: next, failoverDepth: depth + 1 });
+        }
+      } catch (error) {
+        console.warn("[failover] перезапуск на запасной модели не удался:", error);
+      }
+    })();
+  }
   // Прямые ручные вызовы исторически не обязаны await completion. Worker
   // await-ит её и видит reject; этот handler предотвращает unhandled rejection
   // у совместимых fire-and-forget callers, не меняя исходную Promise.

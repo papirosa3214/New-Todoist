@@ -9,19 +9,38 @@ defaults:
   builder: pi_runtime
   qa: pi_runtime
   designer: pi_runtime
+  secretary: pi_runtime
 fallbacks:
-  researcher: []
-  analyst: []
-  critic_verifier: []
-  architect: []
-  builder: []
-  qa: []
-  designer: []
+  researcher:
+    - opencode-go/minimax-m3
+    - opencode-go/deepseek-v4.1-flash
+  analyst:
+    - opencode-go/minimax-m3
+    - opencode-go/deepseek-v4.1-flash
+  critic_verifier:
+    - opencode-go/minimax-m3
+    - opencode-go/deepseek-v4.1-flash
+  architect:
+    - opencode-go/minimax-m3
+    - opencode-go/deepseek-v4.1-flash
+  builder:
+    - opencode-go/minimax-m3
+    - opencode-go/deepseek-v4.1-flash
+  qa:
+    - opencode-go/minimax-m3
+    - opencode-go/deepseek-v4.1-flash
+  designer:
+    - opencode-go/minimax-m3
+    - opencode-go/deepseek-v4.1-flash
+  secretary:
+    - opencode-go/minimax-m3
+    - opencode-go/deepseek-v4.1-flash
 models:
-  researcher: opencode-go/deepseek-v4.1-flash
-  analyst: opencode-go/deepseek-v4.1-flash
-  critic_verifier: opencode-go/minimax-m3
-  architect: opencode-go/deepseek-v4.1-flash
-  builder: opencode-go/deepseek-v4.1-flash
-  qa: opencode-go/minimax-m3
-  designer: opencode-go/deepseek-v4.1-flash
+  researcher: MiniMax-M3
+  analyst: MiniMax-M3
+  critic_verifier: MiniMax-M3
+  architect: MiniMax-M3
+  builder: MiniMax-M3
+  qa: MiniMax-M3
+  designer: MiniMax-M3
+  secretary: MiniMax-M3
