@@ -126,10 +126,15 @@ function isMember(chatId: string, userId: string): boolean {
   // владельца трекера — иначе утечка через название группового чата
   // (оно равно имени проекта) и через task_title темы.
   if (chat?.project_id && !isOwner(userId)) {
-    const priv = (db
-      .prepare("SELECT is_private FROM projects WHERE id = ?")
-      .get(chat.project_id) as { is_private?: number | null } | undefined)?.is_private;
-    if (priv === 1) return false;
+    const meta = db
+      .prepare("SELECT is_private, archived_at FROM projects WHERE id = ?")
+      .get(chat.project_id) as
+      | { is_private?: number | null; archived_at?: string | null }
+      | undefined;
+    if (meta?.is_private === 1) return false;
+    // Архивный проект (карточка a1be7d63…): его чаты закрыты и с глаз
+    // убраны — для всех, кроме владельца.
+    if (meta?.archived_at) return false;
   }
   if (chat?.parent_chat_id) {
     const task=chat.task_id ? getTaskForRead(chat.task_id,userId) : null;

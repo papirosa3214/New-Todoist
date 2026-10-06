@@ -370,7 +370,7 @@ export async function createDraftFromText(
   owner: string,
 ): Promise<{ parentId: string; childIds: string[]; title: string }> {
   const projects = db
-    .prepare("SELECT id, name FROM projects ORDER BY name")
+    .prepare("SELECT id, name FROM projects WHERE archived_at IS NULL ORDER BY name")
     .all() as Array<{ id: string; name: string }>;
   const cards = await structureDictationToCards(rawText, projects, {
     ownerId: owner,
@@ -627,7 +627,7 @@ export async function startDraftTree(
 /** Общий путь постановки: сообщения и живой голос используют один разбор,
  *  слой task_intake, создание дерева и допуск. Режим фиксируется при приёме. */
 export async function submitOwnerTaskText(rawText: string, owner: string, mode: IntakeMode, sourceRecordId?:string) {
-  const projects = db.prepare("SELECT id,name FROM projects ORDER BY name").all() as Array<{id:string;name:string}>;
+  const projects = db.prepare("SELECT id,name FROM projects WHERE archived_at IS NULL ORDER BY name").all() as Array<{id:string;name:string}>;
   const cards = await structureDictationToCards(rawText, projects, {ownerId:owner,sourceRecordId});
   const {parentId,childIds} = createDraftCards(cards,owner);
   attachSourceText(rawText,parentId,owner,cards.title);

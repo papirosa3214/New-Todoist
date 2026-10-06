@@ -197,6 +197,30 @@ export function privateProjectHides(
 }
 
 /**
+ * Скрывает ли архивный проект (или задачу в архивном проекте) от
+ * вызывающего (карточка a1be7d63…). Правило владельца 06.10.2026: удаление
+ * проекта не уничтожает данные, а переносит проект вместе со всем
+ * содержимым в Архив. В обычных местах архивное не фигурирует НИ У КОГО,
+ * включая владельца: списки, поиск, лента, чаты, уведомления и планы
+ * фильтруются SQL-условием (`visibleProjectScope`, `archivedProjectHides`
+ * используется только на прямых запросах по id).
+ *
+ * Прямой запрос по id архивного проекта/задачи владельцу читается — ему
+ * нужен экран Архива и ручки restore/purge. Всем прочим — нет.
+ *
+ * Принимает уже прочитанную строку проекта (как `privateProjectHides`),
+ * чтобы не гонять лишний SELECT.
+ */
+export function archivedProjectHides(
+  userId: string,
+  project: { archived_at?: string | null } | null | undefined,
+): boolean {
+  if (!project) return false;
+  if (!project.archived_at) return false;
+  return !isOwner(userId);
+}
+
+/**
  * Прочитать проект по id. Возвращает строку проекта или undefined, если
  * его нет. Используется в воротах, чтобы не дублировать SELECT в каждом
  * чтении задачи — задача приходит первой, проект за ней одним запросом.
@@ -204,8 +228,22 @@ export function privateProjectHides(
 function getProjectRow(projectId: string | null | undefined): any | undefined {
   if (!projectId) return undefined;
   return db
-    .prepare("SELECT is_private FROM projects WHERE id = ?")
+    .prepare("SELECT is_private, archived_at FROM projects WHERE id = ?")
     .get(projectId);
+}
+
+/**
+ * Проект скрыт от вызывающего по любому из признаков: приватный
+ * (`privateProjectHides`, задача 9d583c58…) или архивный
+ * (`archivedProjectHides`, карточка a1be7d63…). Единая точка для прямых
+ * запросов по id: обе причины возвращают `undefined`, чтобы вызывающий
+ * ответил 404 без раскрытия факта существования.
+ */
+function projectHiddenFrom(userId: string, project: any): boolean {
+  return (
+    privateProjectHides(userId, project) ||
+    archivedProjectHides(userId, project)
+  );
 }
 
 /**
@@ -256,9 +294,12 @@ export function visibleProjectScope(
 ): { sql: string; params: any[] } {
   const caller = callerOf(userId);
   if (caller?.role === "owner") {
-    return { sql: "1 = 1", params: [] };
+    // Владельцу в обычных списках архив не показываем: для него есть
+    // отдельный экран Архива и ручки /api/projects/archive. Фильтр
+    // `archived_at IS NULL` применяется и к владельцу.
+    return { sql: "archived_at IS NULL", params: [] };
   }
-  const privacyClause = "(is_private = 0 OR is_private IS NULL)";
+  const privacyClause = "(is_private = 0 OR is_private IS NULL) AND archived_at IS NULL";
   if (caller?.role === "orchestrator") {
     return { sql: privacyClause, params: [] };
   }
@@ -294,7 +335,7 @@ export function getTaskForRead(
 ): any | undefined {
   const row = taskById().get(taskId);
   if (!row) return undefined;
-  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+  if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
   if (seesEveryTask(userId)) return row;
@@ -331,7 +372,7 @@ export function getTaskForWrite(
 ): any | undefined {
   const row = taskById().get(taskId);
   if (!row) return undefined;
-  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+  if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
   if (isOwner(userId) || isOrchestrator(userId)) return row;
@@ -370,7 +411,7 @@ export function getTaskForReview(
   if (!row) return undefined;
   // Приватный проект (задача 9d583c58…): ревьюер — не владелец, задачу
   // приватного проекта он выносить не должен.
-  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+  if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
   return row;
@@ -389,7 +430,7 @@ export function getTaskForOwnerDelete(
   // Приватный проект (задача 9d583c58…): только владелец трекера. Иначе
   // агент-создатель по старому `creator_id = ?` вернул бы 200/404 и
   // подтвердил существование скрытой задачи.
-  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+  if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
   if (isOwner(userId)) return row;
@@ -422,11 +463,14 @@ export function getProjectForUser(
   }
   // Приватный проект не виден никому, кроме владельца — даже тому, кто
   // числится `owner_id` строки (это может быть любой человек, а не
-  // `users.role='owner'`). Прячем всю строку.
+  // `users.role='owner'`). Прячем всю строку. Архивный проект (карточка
+  // a1be7d63…) тоже не отдаётся никому, кроме владельца: обычные списки и
+  // прямой запрос по id к нему закрыты.
   return db
     .prepare(
       `SELECT * FROM projects WHERE id = ? AND owner_id = ?
-         AND (is_private = 0 OR is_private IS NULL)`,
+         AND (is_private = 0 OR is_private IS NULL)
+         AND archived_at IS NULL`,
     )
     .get(projectId, userId);
 }
@@ -443,7 +487,8 @@ export function getProjectForWrite(
     return db
       .prepare(
         `SELECT * FROM projects WHERE id = ?
-           AND (is_private = 0 OR is_private IS NULL)`,
+           AND (is_private = 0 OR is_private IS NULL)
+           AND archived_at IS NULL`,
       )
       .get(projectId);
   }
@@ -480,16 +525,21 @@ export function getProjectForFiling(
   // нельзя ни при каких условиях — иначе «не отдавать через API никому,
   // кроме владельца» нарушалось бы ещё на этапе создания. Сразу `undefined`,
   // вызывающий ответит 400 «invalid project_id».
-  const isPrivate = (
-    db.prepare("SELECT is_private FROM projects WHERE id = ?").get(projectId) as
-      | { is_private?: number | null }
-      | undefined
-  )?.is_private;
-  if (isPrivate === 1) return undefined;
+  const meta = db
+    .prepare("SELECT is_private, archived_at FROM projects WHERE id = ?")
+    .get(projectId) as
+    | { is_private?: number | null; archived_at?: string | null }
+    | undefined;
+  if (meta?.is_private === 1) return undefined;
+  // Архивный проект (карточка a1be7d63…): положить в него задачу нельзя —
+  // в обычных местах он не фигурирует, а новые задачи в архиве не заводят.
+  if (meta?.archived_at) return undefined;
 
   if (assigneeId) {
     const forAssignee = db
-      .prepare("SELECT * FROM projects WHERE id = ? AND owner_id = ?")
+      .prepare(
+        "SELECT * FROM projects WHERE id = ? AND owner_id = ? AND archived_at IS NULL",
+      )
       .get(projectId, assigneeId);
     if (forAssignee) return forAssignee;
   }
@@ -508,7 +558,7 @@ export function getProjectForFiling(
     .prepare(
       `SELECT p.* FROM projects p
          JOIN users u ON u.id = p.owner_id
-        WHERE p.id = ? AND u.role = 'owner'`,
+        WHERE p.id = ? AND u.role = 'owner' AND p.archived_at IS NULL`,
     )
     .get(projectId);
 }
@@ -578,7 +628,7 @@ export function getTaskForComment(taskId:string,userId:string):any|undefined {
   // Режем сразу, иначе вторая ветка ниже отдала бы строку.
   const row = taskById().get(taskId);
   if (!row) return undefined;
-  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+  if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
   return db.prepare(`SELECT t.* FROM tasks t WHERE t.id=? AND EXISTS (

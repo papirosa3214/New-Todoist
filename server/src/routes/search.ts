@@ -51,9 +51,11 @@ export function registerSearchRoutes(app: FastifyInstance) {
       const ownerBypass = seesAll
         ? "1 = 1"
         : "(t.creator_id = ? OR t.assignee_id = ?)";
+      // Архивный проект (карточка a1be7d63…) не всплывает в поиске ни у
+      // кого, включая владельца; приватность — как раньше.
       const privacyClause = asOwner
-        ? "1 = 1"
-        : "(p.id IS NULL OR p.is_private = 0 OR p.is_private IS NULL)";
+        ? "(p.id IS NULL OR p.archived_at IS NULL)"
+        : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
       const wordConditions: string[] = [];
       const params: any[] = seesAll ? [] : [userId, userId];
 

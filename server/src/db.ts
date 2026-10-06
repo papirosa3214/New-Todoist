@@ -81,7 +81,13 @@ export function migrate() {
       -- Признак «приватный» (задача 9d583c58…): 1 — проект и его задачи
       -- видны только владельцу трекера. По умолчанию 0, прежнее поведение
       -- (видимость по visibleScope из access.ts) сохранено.
-      is_private INTEGER DEFAULT 0
+      is_private INTEGER DEFAULT 0,
+      -- Архив проекта (карточка a1be7d63…): NULL — проект живой. Ненулевая
+      -- метка времени — проект удалён «в архив» вместе со всем содержимым:
+      -- задачи, документы, чаты и память остаются в базе, но нигде больше не
+      -- фигурируют. Окончательное удаление — только из архива (purge).
+      archived_at TEXT,
+      archived_by TEXT REFERENCES users(id)
     );
 
     CREATE TABLE IF NOT EXISTS labels (
@@ -411,6 +417,16 @@ export function migrate() {
   // CREATE TABLE в migrate()), здесь — для уже существующих таблиц.
   if (!projectCols.some((c) => c.name === "is_private")) {
     db.exec("ALTER TABLE projects ADD COLUMN is_private INTEGER DEFAULT 0");
+  }
+  // Архив проекта (карточка a1be7d63…). Как и is_private: свежая база
+  // получает колонки прямо из CREATE TABLE в migrate(), а для уже
+  // существующих таблиц добавляем аддитивно здесь. archived_by — учётка,
+  // которая отправила проект в архив (владелец трекера).
+  if (!projectCols.some((c) => c.name === "archived_at")) {
+    db.exec("ALTER TABLE projects ADD COLUMN archived_at TEXT");
+  }
+  if (!projectCols.some((c) => c.name === "archived_by")) {
+    db.exec("ALTER TABLE projects ADD COLUMN archived_by TEXT");
   }
 
   // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:

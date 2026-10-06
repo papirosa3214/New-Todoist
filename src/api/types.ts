@@ -308,6 +308,15 @@ export interface ApiProject {
    *  Своей иерархии у проекта нет: папка живёт в общем дереве заметок,
    *  проект лишь указывает на неё (26.08.2026). */
   notes_folder_id?: number | null;
+  /** Архив проекта (карточка a1be7d63…): NULL/отсутствует — проект
+   *  живой. Ненулевая метка — проект в архиве. */
+  archived_at?: string | null;
+  archived_by?: string | null;
+  /** Числа для экрана Архива (приходят только с /api/projects/archive). */
+  active_count?: number;
+  docs_count?: number;
+  chat_count?: number;
+  memory_count?: number;
 }
 
 export interface ApiNotification {

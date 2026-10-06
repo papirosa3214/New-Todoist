@@ -478,17 +478,19 @@ export function registerTaskRoutes(app: FastifyInstance) {
       ? " AND " + extraFilters.join(" AND ")
       : "";
 
-    // Приватный проект (задача 9d583c58…): задачи такого проекта не должны
-    // попасть в список никому, кроме владельца трекера. `p` приходит из
-    // TASK_JOINS; `asOwner` — единственный обход. Владелец трекера видит
-    // всё и раньше, для него фильтр — `1 = 1`.
+    // Архивный проект (карточка a1be7d63…): при прямом запросе задачи по
+    // id из архивного проекта отдаём 404 всем, кроме владельца — проверка
+    // стоит в access.ts (getTaskForRead).
     const asOwner = isOwner(userId);
     const baseParent = includeChildren
       ? "1 = 1"
       : "(t.parent_id IS NULL OR t.project_id IS NOT NULL)";
+    // Архивный проект (карточка a1be7d63…) не должен попасть в список ни
+    // у кого, включая владельца — для архива есть отдельные ручки. Поэтому
+    // фильтр `p.archived_at IS NULL` есть в обеих ветках.
     const privacy = asOwner
-      ? "1 = 1"
-      : "(p.id IS NULL OR p.is_private = 0 OR p.is_private IS NULL)";
+      ? "(p.id IS NULL OR p.archived_at IS NULL)"
+      : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
 
     const tasks = (
       seesEveryTask(userId)
