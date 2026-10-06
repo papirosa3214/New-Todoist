@@ -449,26 +449,18 @@ export function AgentOwnerActions({
     <div className="mb-4">
       <div className="space-y-2">
         {task.agent_state === "review" && (
-          <Button variant="primary" onClick={handleAccept}>
-            <Icon name="check" size={16} />
-            Принять и закрыть задачу
+          <Button variant="primary" onClick={handleAccept} icon="check">Принять и закрыть задачу
           </Button>
         )}
         {task.agent_state === "review" && (
-          <Button variant="secondary" onClick={() => setReturning(true)}>
-            <Icon name="sync" size={16} />
-            Вернуть на доработку
+          <Button variant="secondary" onClick={() => setReturning(true)} icon="sync">Вернуть на доработку
           </Button>
         )}
         {task.agent_state === "blocked" && (
           <>
-            <Button variant="primary" onClick={() => setAnswering(true)}>
-              <Icon name="sync" size={16} />
-              Ответить и вернуть в работу
+            <Button variant="primary" onClick={() => setAnswering(true)} icon="sync">Ответить и вернуть в работу
             </Button>
-            <Button variant="secondary" onClick={handleAccept}>
-              <Icon name="check" size={16} />
-              Принять и закрыть задачу
+            <Button variant="secondary" onClick={handleAccept} icon="check">Принять и закрыть задачу
             </Button>
           </>
         )}
@@ -476,14 +468,9 @@ export function AgentOwnerActions({
           <>
             <Button
               variant={agentGone ? "primary" : "secondary"}
-              onClick={() => setReturning(true)}
-            >
-              <Icon name="sync" size={16} />
-              Вернуть на доработку
+              onClick={() => setReturning(true)} icon="sync">Вернуть на доработку
             </Button>
-            <Button variant="secondary" onClick={handleAccept}>
-              <Icon name="check" size={16} />
-              Принять и закрыть задачу
+            <Button variant="secondary" onClick={handleAccept} icon="check">Принять и закрыть задачу
             </Button>
           </>
         )}
@@ -491,20 +478,14 @@ export function AgentOwnerActions({
           <Button
             variant="secondary"
             onClick={() => runAgent.mutate({ id: task.id, mode: "executor" })}
-            disabled={runAgent.isPending}
-          >
-            <Icon name="play" size={16} />
-            Запустить исполнителя
+            disabled={runAgent.isPending} icon="play">Запустить исполнителя
           </Button>
         )}
         {task.agent_state === "review" && (
           <Button
             variant="secondary"
             onClick={() => runAgent.mutate({ id: task.id, mode: "reviewer" })}
-            disabled={runAgent.isPending}
-          >
-            <Icon name="check" size={16} />
-            Отправить на проверку верификатору
+            disabled={runAgent.isPending} icon="check">Отправить на проверку верификатору
           </Button>
         )}
       </div>
@@ -542,10 +523,7 @@ export function AgentOwnerActions({
             className="border-coral text-coral"
             onClick={() => setCancelTaskOpen(true)}
             disabled={cancelTask.isPending}
-            aria-label="Отменить задание — остановит все запуски"
-          >
-            <Icon name="power" size={16} />
-            Отменить задание
+            aria-label="Отменить задание — остановит все запуски" icon="power">Отменить задание
           </Button>
         </div>
       )}

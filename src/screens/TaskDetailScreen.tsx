@@ -700,15 +700,11 @@ export function TaskDetailScreen() {
           владелец может завершить задачу (или открыть заново, если она закрыта). */}
       <div className="space-y-2 mb-4">
         {task.status === "active" && !task.agent_state && (
-          <Button variant="primary" onClick={handleToggleStatus}>
-            <Icon name="check" size={16} />
-            Завершить задачу
+          <Button variant="primary" onClick={handleToggleStatus} icon="check">Завершить задачу
           </Button>
         )}
         {task.status === "completed" && (
-          <Button variant="secondary" onClick={handleToggleStatus}>
-            <Icon name="refresh" size={16} />
-            Открыть задачу заново
+          <Button variant="secondary" onClick={handleToggleStatus} icon="refresh">Открыть задачу заново
           </Button>
         )}
 
@@ -719,10 +715,7 @@ export function TaskDetailScreen() {
         {isTaskOwner(currentUser, task) ? (
           <Button
             variant={task.ready_for_pickup ? "secondary" : "primary"}
-            onClick={handleToggleReady}
-          >
-            <Icon name={task.ready_for_pickup ? "check" : "flag"} size={16} />
-            {task.ready_for_pickup
+            onClick={handleToggleReady} icon={task.ready_for_pickup ? "check" : "flag"}>{task.ready_for_pickup
               ? "Снять флаг готовности"
               : "Готово к работе"}
           </Button>
@@ -741,10 +734,7 @@ export function TaskDetailScreen() {
         {isTaskOwner(currentUser, task) && (
           <Button
             variant={task.needs_research ? "secondary" : "outline"}
-            onClick={handleToggleResearch}
-          >
-            <Icon name="search" size={16} />
-            {task.needs_research
+            onClick={handleToggleResearch} icon="search">{task.needs_research
               ? "Глубокое исследование: включено"
               : "Нужно глубокое исследование"}
           </Button>
@@ -753,10 +743,7 @@ export function TaskDetailScreen() {
           <Button
             variant="primary"
             onClick={handleStartResearch}
-            disabled={startResearch.isPending}
-          >
-            <Icon name="sparkles" size={16} />
-            {startResearch.isPending
+            disabled={startResearch.isPending} icon="sparkles">{startResearch.isPending
               ? "Запускаю…"
               : "Запустить исследование"}
           </Button>
@@ -764,10 +751,7 @@ export function TaskDetailScreen() {
 
         <Button
           variant="outline"
-          onClick={() => navigate(`/task/${task.id}/edit`)}
-        >
-          <Icon name="edit" size={16} />
-          Изменить
+          onClick={() => navigate(`/task/${task.id}/edit`)} icon="edit">Изменить
         </Button>
       </div>
 

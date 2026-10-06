@@ -4,7 +4,7 @@ import { useOpenTask } from "../lib/useOpenTask";
 import { useTasks, useUpdateTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
-import { Icon, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
+import { Icon, IconButton, ScreenHeader, ErrorBanner, Loading } from "../components/UI";
 import { isAgentAssignedTask, isWaitingForUser, waitingBlockedFirst } from "../lib/taskOwner";
 import { useAgents } from "../api/agents";
 import {
@@ -392,14 +392,12 @@ export function TodayScreen() {
               один. До этого он успел побывать пунктом под тремя точками
               и кнопкой в шапке — оба следа сняты. */}
           <TaskFilterButton onClick={() => setFilterSheetOpen(true)} />
-          <button
+          <IconButton
             ref={menuAnchorRef}
+            icon="dots"
+            label="Ещё"
             onClick={() => setMenuOpen((v) => !v)}
-            aria-label="Ещё"
-            className="tap-scale w-[44px] h-[44px] flex items-center justify-center"
-          >
-            <Icon name="dots" size={18} />
-          </button>
+          />
           <ActionsMenu
             open={menuOpen}
             onClose={() => setMenuOpen(false)}
