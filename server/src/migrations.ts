@@ -3530,6 +3530,16 @@ const migrations: Migration[] = [
         ON project_purge_log(project_id, created_at DESC);
     `);
   } },
+  { id: "108_stalled_step_watch", description: "Карточка 71651ad0: индекс под сторож зависших шагов (фильтр по agent_state + agent_heartbeat_at) и по attempt outcome для счётчика auto_restarted", up: () => {
+    // Без индекса сторож сканирует всю `subtasks` раз в минуту, а это
+    // единственный серверный цикл, который крутится на холодной базе
+    // без таймеров systemd. Карточка 71651ad0 (А30/А37/А38/А39/Г1-к/Г1-л).
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_subtasks_heartbeat
+               ON subtasks(agent_state, agent_heartbeat_at)
+              WHERE agent_state = 'in_progress' AND collaboration_plan_id IS NOT NULL`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_attempts_outcome_started
+               ON attempts(subtask_id, outcome, started_at)`);
+  } },
 ];
 
 /**

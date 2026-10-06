@@ -14,6 +14,7 @@ import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
+import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
 import { startLinearAutoImport } from "./lib/linearAutoImport.js";
 import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
@@ -565,11 +566,13 @@ if (isMain) {
     let stopVoiceBridge: (() => Promise<void>) | null = null;
     let stopKnowledgeSync: (() => void) | null = null;
     let stopScheduler: (() => void) | null = null;
+    let stopStalledWatch: (() => void) | null = null;
     let stopLinearAutoImport: (() => void) | null = null;
     let stopLinearSync: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
+      stopStalledWatch?.();
       stopLinearAutoImport?.();
       stopLinearSync?.();
       if (stopPreparation) await stopPreparation();
@@ -590,6 +593,9 @@ if (isMain) {
     stopKnowledgeSync = startKnowledgeSyncSchedule();
     // Планировщик доски раз в 5 минут — внутри сервера (runtime/scheduler.ts).
     stopScheduler = startScheduler(app);
+    // Сторож зависших шагов: пинг 10/авто-перезапуск 20/blocked 30+ минут без пульса.
+    // Карточка 71651ad0; до этого всё чинил оркестратор руками (А30/А37/Г1-к/Г1-л).
+    stopStalledWatch = startStalledStepWatch();
     // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
     // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
     if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();

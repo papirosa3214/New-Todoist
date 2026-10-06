@@ -96,4 +96,50 @@ describe("узлы плана после перезапуска сервера",
     expect(subtask().agent_state).toBeNull();
     expect(comments().some((c) => c.text.includes("после рестарта сервера снят признак"))).toBe(true);
   });
+
+  it("сбрасывает succeeded/dead role_run_jobs этой задачи (Г1-к: дедупликация не возвращает старое задание)", async () => {
+    // Имитируем картину Г1-к: прошлый запуск задачи уже `succeeded`,
+    // и `POST /run` отдаёт тот же job по `dedupe_key`. Восстановление
+    // должно сбросить его в `queued` (attempts=0, lease чист), чтобы
+    // новый старт получил свежую попытку, а не чужую запись.
+    //
+    // После предыдущего теста узел в `agent_state = NULL` — переводим
+    // его в `todo`, чтобы `recoverInterruptedPlanSubtasks` подхватил
+    // его в `freed`-ветке и прошёл по `resetRoleRunJobsForTask`.
+    db.prepare("UPDATE subtasks SET agent_state='todo' WHERE id = ?").run(subtaskId);
+    db.prepare(
+      `INSERT INTO role_run_jobs
+         (id, task_id, reason, actor_id, dedupe_key, status, attempts, max_attempts, chain_depth, manual_start, last_error, started_at, finished_at)
+       VALUES (?, ?, 'after_run', NULL, ?, 'succeeded', 1, 3, 0, 0, 'old run', datetime('now','-1 hour'), datetime('now','-30 minutes'))`,
+    ).run(`rrj_test_${Date.now()}_1`, taskId, `stale-dedupe-${Date.now()}_1`);
+    db.prepare(
+      `INSERT INTO role_run_jobs
+         (id, task_id, reason, actor_id, dedupe_key, status, attempts, max_attempts, chain_depth, manual_start, last_error, started_at, finished_at)
+       VALUES (?, ?, 'after_run', NULL, ?, 'dead', 3, 3, 0, 0, 'gave up', datetime('now','-2 hours'), datetime('now','-1 hour'))`,
+    ).run(`rrj_test_${Date.now()}_2`, taskId, `stale-dedupe-${Date.now()}_2`);
+    // Третий job — `running`, его трогать НЕЛЬЗЯ (его ход живой).
+    db.prepare(
+      `INSERT INTO role_run_jobs
+         (id, task_id, reason, actor_id, dedupe_key, status, attempts, max_attempts, chain_depth, manual_start, lease_owner, lease_expires_at, started_at)
+       VALUES (?, ?, 'after_run', NULL, ?, 'running', 1, 3, 0, 0, 'live-worker', datetime('now','+5 minutes'), datetime('now','-1 minute'))`,
+    ).run(`rrj_test_${Date.now()}_3`, taskId, `stale-dedupe-${Date.now()}_3`);
+    await recoverInterruptedPlanSubtasks();
+    // Два завершённых задания — обнулены и снова в очереди.
+    const queued = db.prepare(
+      `SELECT id, status, attempts, lease_owner, finished_at FROM role_run_jobs WHERE task_id = ? AND id LIKE 'rrj_test_%' ORDER BY id`,
+    ).all(taskId) as Array<{ id: string; status: string; attempts: number; lease_owner: string | null; finished_at: string | null }>;
+    const recovered = queued.filter((j) => j.id.endsWith("_1") || j.id.endsWith("_2"));
+    for (const job of recovered) {
+      expect(job.status).toBe("queued");
+      expect(job.attempts).toBe(0);
+      expect(job.lease_owner).toBeNull();
+      expect(job.finished_at).toBeNull();
+    }
+    // Третий, «живой» — не тронут.
+    const live = queued.find((j) => j.id.endsWith("_3"))!;
+    expect(live.status).toBe("running");
+    expect(live.lease_owner).toBe("live-worker");
+    // Узел снова свободен после `freed`.
+    expect(subtask().agent_state).toBeNull();
+  });
 });
