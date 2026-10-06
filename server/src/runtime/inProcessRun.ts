@@ -42,6 +42,7 @@ import { roleWorkspace } from "./roleWorkspace.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
 import { isProviderLimitText, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
+import { logStepOutcome } from "./stepOutcome.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -1164,7 +1165,7 @@ try {
       }
       return;
     }
-    logEvent({ taskId, actorId: null, kind: "model_failover", field: input.subtaskId ?? role, toValue: `${modelRef} → ${next}: ${reason.slice(0, 120)}` });
+    logStepOutcome({ taskId, actorId: null, subtaskId: input.subtaskId ?? null, role, outcome: "failed", error: reason, message: `переключение модели ${modelRef} → ${next}: ${reason.slice(0, 120)}` });
     void (async () => {
       try {
         if (input.subtaskId && mode === "work") {

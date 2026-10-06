@@ -19,6 +19,7 @@
 import db from "../db.js";
 import { roleTitle } from "../roleRouting.js";
 import { latestSlotSnapshot } from "./slotWorkSnapshot.js";
+import { latestStepOutcome, type StepOutcomeStatus } from "./stepOutcome.js";
 
 /** Жёсткий потолок самого блока (постановка: "до ~1500 знаков"). */
 export const TASK_HISTORY_BLOCK_MAX = 1_500;
@@ -73,6 +74,42 @@ type StepRow = {
 };
 
 type ArtifactRow = { artifact_key: string; version_no: number; note_id: string | null };
+
+/** Чем кончился запуск шага — короткой строкой в сводку следующих шагов. */
+const OUTCOME_RU: Record<StepOutcomeStatus, string> = {
+  submitted: "сдан",
+  blocked: "заблокирован",
+  failed: "сбой",
+  continued: "продолжен",
+  interrupted: "прерван",
+};
+
+/** Исходы запусков прошлых шагов (MAK-96): следующий шаг видит не только
+ *  результат, но и код причины, если шаг не сдался. Берём ВСЕ шаги карточки,
+ *  а не только сдавшиеся: упавший шаг часто не имеет ни result, ни done.
+ */
+function stepOutcomeLines(taskId: string, subtaskId: string | null): string[] {
+  const slots = db
+    .prepare(
+      `SELECT s.id, s.title, s.plan_node_key
+         FROM subtasks s
+        WHERE s.task_id = ? AND (? IS NULL OR s.id <> ?)
+     ORDER BY s.rowid`,
+    )
+    .all(taskId, subtaskId, subtaskId) as Array<{ id: string; title: string; plan_node_key: string | null }>;
+  const lines: string[] = [];
+  for (const slot of slots) {
+    const outcome = latestStepOutcome(slot.id);
+    if (!outcome) continue;
+    const code = outcome.code ? ` ${outcome.code}` : "";
+    const tail = clip(outcome.message ?? "", RESULT_CLIP);
+    lines.push(
+      `— ${OUTCOME_RU[outcome.outcome] ?? outcome.outcome}${code}: «${clip(slot.title, 60)}»${slot.plan_node_key ? ` (${slot.plan_node_key})` : ""}${tail ? ` — ${tail}` : ""}`,
+    );
+    if (lines.length >= STEP_MAX) break;
+  }
+  return lines;
+}
 
 /** Ссылка на результат шага: артефакт версии (документ) или коммит. */
 function stepLink(step: StepRow): string | null {
@@ -185,10 +222,11 @@ export function buildTaskHistory(input: { taskId: string; subtaskId?: string | n
   try {
     const steps = previousSteps(taskId, subtaskId);
     const snapshots = snapshotLines(taskId, subtaskId);
+    const outcomes = stepOutcomeLines(taskId, subtaskId);
     const verdicts = verdictLines(taskId);
     const ownerComments = ownerCommentLines(taskId);
 
-    if (!steps.length && !snapshots.length && !verdicts.length && !ownerComments.length) {
+    if (!steps.length && !snapshots.length && !outcomes.length && !verdicts.length && !ownerComments.length) {
       return {
         status: "empty",
         past_steps: 0,
@@ -216,6 +254,10 @@ export function buildTaskHistory(input: { taskId: string; subtaskId?: string | n
     if (snapshots.length) {
       lines.push("Снимки этапов:");
       lines.push(...snapshots);
+    }
+    if (outcomes.length) {
+      lines.push("Исходы запусков шагов:");
+      lines.push(...outcomes);
     }
     if (verdicts.length) {
       lines.push("Вердикты и дефекты (QA/Критик):");
