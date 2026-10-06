@@ -8,7 +8,7 @@
 // проект их положить: существующий (радио-список, приём из
 // TaskFilterSheet.tsx) или создать новый прямо здесь.
 import { useEffect, useState } from "react";
-import { Icon, SheetHandle, ErrorBanner } from "./UI";
+import { Icon, SheetHandle, ErrorBanner, SheetHeader } from "./UI";
 import { useBottomSheet } from "../lib/useBottomSheet";
 import { useProjects, useCreateProject } from "../api/projects";
 import { useCreateTask } from "../api/tasks";
@@ -143,20 +143,8 @@ export function TasksFromTextSheet({
         onClick={(e) => e.stopPropagation()}
       >
         <SheetHandle dragProps={sheet.dragProps} />
-        <div className="flex items-center justify-between pb-3">
-          <button
-            onClick={onClose}
-            disabled={busy}
-            aria-label="Закрыть"
-            className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center disabled:opacity-40"
-          >
-            <Icon name="x" size={20} className="text-sub" />
-          </button>
- <h3 className="tf-title text-text">
-            Задачи из дневника
-          </h3>
-          <div className="w-11" />
-        </div>
+        {/* SheetHeader: без действия справа — пустой слот 44×44. */}
+        <SheetHeader title="Задачи из дневника" onClose={onClose} />
 
         {rows.length === 0 && (
  <div className="tf-action px-1 py-3 text-dim">

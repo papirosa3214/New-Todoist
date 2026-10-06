@@ -522,6 +522,82 @@ border-red` (пунктир = поле ждёт заполнения), выбр�
   `--color-sub`. Буквы — заглавные первые буквы имени и фамилии
   (или одна буква имени, если фамилии нет).
 
+### Поля ввода, тумблер, шторки, состояния (2026-10-05, Linear MAK-54)
+
+**Поле ввода** — `TextField` в `UI.tsx`. Строка 52px (`h-[52px]`),
+фон наследует контекст (внутри `FieldGroup`/`Card` — `bg-card`, сам по
+себе — `bg-card` тоже), иконка 18px слева (`Icon name`, `text-dim`),
+сам `<input>` — `tf-input` с базовым 16px (против iOS-зума, см.
+index.css). Используется ВСЕГДА внутри `FieldGroup` (карточка списка
+полей формы), либо — редко — как самостоятельный ряд. Своих реализаций
+поля быть не должно. На 05.10.2026 `TextField` используется только в
+LoginScreen и RegisterScreen — форма редактирования профиля в
+SettingsScreen (`EditProfileModal`) пока остаётся на сырых `<input>`
+с классами, и это сознательное разделение (SettingsScreen — это
+каркас экрана, не форма), а не упущение: новые формы должны брать
+`TextField`.
+
+**Тумблер** — `Switch` в `UI.tsx`. 43×25, `bg-red` включён,
+`bg-card2` с рамкой `border-stroke` выключен, белый кружок 20px.
+Тап-зона 44×44 через прозрачный `::before` по центру — у нативного
+43×25 высота вдвое ниже HIG. `disabled` отдельно: гасит отдельные
+переключатели (планер на скрытом проекте в TaskFilterSheet). Проп —
+50000 + `ariaLabel`. До этого были локальные копипасты в
+`SettingsScreen.tsx` (корректная) и `TaskFilterSheet.tsx` (без
+`tap-scale` и 44×44 зоны). Теперь обе импортируют из UI.
+
+**Шторка** — общая раскладка снизу, `useBottomSheet` (drag-to-dismiss
+с порогом 40% высоты или 500 px/s, пружина + spring handoff), стек
+сверху: `SheetHandle` (грабер 36×4 `bg-stroke` за который можно
+схватить), затем `SheetHeader` — крестик 44×44 слева — заголовок 17px
+по центру — действие 13px `text-sub` справа. `SheetHeader` в `UI.tsx`
+поддерживает три формы:
+  - без действия — пустой слот 44×44 справа (TasksFromTextSheet,
+    ChatStatsSheet, RoleContextSheet);
+  - `textAction` — текстовая кнопка 13px `text-sub` (TaskFilterSheet
+    «Сбросить»);
+  - `actionIcon` (default `variant="filled"`) — круглая red-кнопка
+    с белой иконкой 18px, «созревшее» действие (RescheduleSheet,
+    TaskJournal). `variant="plain"` — обычная иконка-кнопка 44×44
+    без подложки, для не-созревших действий вроде «Скачать» в
+    AttachmentViewerSheet.
+`preventMouseDown` — пробрасывается в обработчик mousedown, чтобы
+тап при открытой клавиатуре в TaskJournal не съезжал из-под пальца.
+До этого хедер шторки копипастился в 8 местах с плавающей геометрией;
+теперь 7 шторок импортируют `SheetHeader` (TaskFilterSheet,
+ChatStatsSheet, AttachmentViewerSheet, TasksFromTextSheet,
+RescheduleSheet, TaskJournal, RoleContextSheet). UpcomingCalendar —
+исключение: его панель со своей drag-логикой и текстовой кнопкой
+«Готово», под стандартный хедер §2.7 не подходит.
+
+**Пустое состояние** — `EmptyState` в `UI.tsx`. Иконка, заголовок
+16px/600, описание 13px `text-sub`, (опционально) кнопка
+`bg-red text-white`. `variant="icon"` (default) — крупная иконка
+28px в плашке `bg-card` 16px (ChatsScreen, экраны-разделы);
+`variant="plain"` — иконка 48px в `text-dim` без плашки
+(NotesScreen, контентные пустоты). До этого в проекте было два
+локальных `EmptyState` с разным видом; теперь обе импортируют
+общий, и в NotesScreen кнопка стала `bg-red` (раньше была
+`bg-card2 text-text` — «нейтральная» кнопка не дотягивала до
+«созревшего» действия).
+
+**Загрузка** — `Loading` в `UI.tsx`. `variant="inline"` (default) —
+строка «Загрузка…» `tf-action text-dim` под заголовком/списком;
+`variant="block"` — центрированный блок «Загрузка…» `text-sub`
+на всю ширину, для экранов без данных. До этого «Загрузка…»
+копипастилась дословно в 13 экранах (аудит 20.08.2026, п.3).
+
+**Ошибка** — `ErrorBanner` в `UI.tsx`. Принимает сырой `error`
+(исключение/`.error`/строку), гоняет через `getErrorMessage`,
+возвращает `null` для пустого — можно монтировать безусловно.
+`variant="inline"` (default) — плоская строка `text-coral` под
+списком; `variant="block"` — плашка `bg-coral/12 text-coral
+rounded-xl px-3 py-2.5` с иконкой, для ошибок мутации рядом с
+кнопкой «Сохранить» (нужен визуальный вес, не тонкая строка).
+`fallback` — конкретное русское одно-предложение о том, что сломалось,
+поскольку сервер отдаёт смесь RU/EN; `getErrorMessage` подменяет
+EN-сообщения на `fallback` автоматически.
+
 ## Do's and Don'ts
 
 **Do**
