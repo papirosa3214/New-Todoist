@@ -39,7 +39,7 @@ export function nextAttemptTemplate(params: {
 
 /**
  * Только имя следующей модели, без runner'а. Удобно в местах, где runner
- * вычисляется отдельно (тесты / next_step_for в trigger.py).
+ * вычисляется отдельно (тесты / next_step_for в серверной автоматике).
  */
 export function nextStep(
   reasonCode: string,

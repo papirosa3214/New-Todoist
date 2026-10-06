@@ -29,7 +29,7 @@ const SCHEDULER_HEARTBEAT = join(
 );
 
 /** Состояние планировщика (taskflow-scheduler.timer) — отдельная лампа:
- *  воркер живёт независимо от будильника и делает расписание и повторы. */
+ *  воркер живёт независимо от Системы и делает расписание и повторы. */
 async function schedulerState(): Promise<{
   active: boolean;
   last_run_at: string | null;

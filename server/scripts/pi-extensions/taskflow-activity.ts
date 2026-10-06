@@ -10,7 +10,7 @@
  * MCP-инструменты `taskflow_*` НЕ трогаем: их действия уже шлёт сам
  * MCP-сервер (`mcp_server.py`), иначе было бы задвоение.
  *
- * Данные приходят из окружения захода (см. `trigger.py`):
+ * Данные приходят из окружения захода:
  *   TASKFLOW_ACTIVITY_TASK_ID   — id задачи
  *   TASKFLOW_ACTIVITY_ROLE      — роль (для журнала)
  *   TASKFLOW_ACTIVITY_VAULT_KEY — имя ключа роли в vault

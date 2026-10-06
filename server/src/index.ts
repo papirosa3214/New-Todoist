@@ -391,7 +391,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   startActivityObserver();
   // Inbox-triage watcher: при появлении ticket'а в ~/Проекты/taskflow-уведомления/
   // inbox/*/_diagnostic/*.json создаёт карточку на диагностику прямо в БД.
-  // Никаких внешних HTTP/Hermes/timer'ов — всё внутри процесса сервера
+  // Никаких внешних HTTP/timer'ов — всё внутри процесса сервера
   // (правило Maksim 27.09.2026). Выключается через INBOX_TRIAGE_DISABLED=1.
   if (process.env.INBOX_TRIAGE_DISABLED !== "1") {
     startInboxTriageWatcher();
@@ -453,7 +453,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
 
     // «Система» — единый переключатель серверной автоматики
-    // (task_intake_mode владельца). Раньше здесь опрашивалась служба-будильник
+    // (task_intake_mode владельца). Раньше здесь опрашивалась системная автоматика
     // taskflow-trigger.service; служба снята 05.10.2026, роли исполняет
     // сервер. Поле trigger сохранено для совместимости с приложением.
     let trigger: string | null = null;

@@ -33,7 +33,7 @@ function deleteForbidden(
 /**
  * Resolves a bearer token to a userId. Accepts either:
  *  - a JWT issued by /api/auth/register or /api/auth/login (web frontend), or
- *  - a static users.api_token (AI agents — Claude/Hermes/etc).
+ *  - a static users.api_token (AI agents / integraions).
  * Returns null if the token is missing/empty or matches neither.
  */
 export function resolveUserIdFromToken(

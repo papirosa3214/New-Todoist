@@ -572,7 +572,8 @@ const RUNS_BASE = process.env.TASKFLOW_RUNS_DIR || path.join(os.homedir(), ".loc
 export { LOCAL_EXECUTION_POLICY } from "./instructionDefaults.js";
 const LOCAL_EXECUTION_POLICY = INSTRUCTION_DEFAULTS.local_policy;
 
-/** Репозиторий проекта карточки — из того же файла, что читал будильник
+/** Репозиторий проекта карточки — из того же файла, что читала Система
+ *  (прежняя внешняя автоматика).
  *  (scripts/task-context-projects.json); не сопоставлен — репозиторий TaskFlow. */
 function projectRepo(taskId: string): string {
   const fallback = path.resolve(process.cwd(), "..");
@@ -1183,8 +1184,8 @@ try {
 
 // ── Кто и когда будит роль (этап C2, 23.09.2026) ───────────────────────────
 //
-// Те же решения, что принимал будильник (trigger.py → decide), но в сервере:
-// он и так видит каждое изменение карточки. Будильник с флагом
+// Те же решения, что принимала Система (decide), но в сервере:
+// он и так видит каждое изменение карточки. При включённом флаге
 // TASKFLOW_ROLES_IN_SERVER=1 карточки ролей больше не берёт.
 
 export type KickReason = "assigned" | "commented" | "review" | "after_run";

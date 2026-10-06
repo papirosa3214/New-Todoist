@@ -115,7 +115,7 @@ export type ModelRoute = { model: string; provider: string };
  *  nextShellForRole. Семантика «следующая оболочка» больше не применима. */
 
 /** С 06.10.2026 (MAK-72) shell-учётки удалены: Pi — единственный runtime,
- *  а «оболочки» вроде claude_bot/hermes/antigravity/pi_runtime были
+ *  а прежние «оболочки» (личности старой схемы) были
  *  остатками снятой схемы и указывали на архивные/удалённые учётки. */
 
 const ROLE_ROUTING_FILE = path.resolve(
@@ -194,8 +194,8 @@ export function loadRuntimeConfig(fileName = ROLE_ROUTING_FILE): RoleRouting {
 }
 
 /** Deprecated алиас для loadRuntimeConfig. Оставлен потому, что
- *  server/scripts/trigger.py, server/test/roles.test.ts и server/src/routes/roles.ts
- *  импортируют loadRoleRouting. Будет удалён, когда переведём их на новое имя. */
+ *  server/test/roles.test.ts и server/src/routes/roles.ts импортируют
+ *  loadRoleRouting. Будет удалён, когда переведём их на новое имя. */
 export function loadRoleRouting(fileName = ROLE_ROUTING_FILE): RoleRouting {
   return loadRuntimeConfig(fileName);
 }

@@ -170,10 +170,6 @@ async function send(token: string, body: unknown): Promise<ApnsResult> {
 // имя означает, что вместо картинки внезапно появится буква.
 const AVATAR_SLUGS: Record<string, string> = {
   Максим: "maksim",
-  Claude_Bot: "claude",
-  Hermes: "hermes",
-  "DeepSeek-Agent": "deepseek",
-  Antigravity: "antigravity",
   // Восемь канонических ролей (14.09.2026). Картинки лежат в ассетах
   // расширения на маке (ios/App/TaskFlowWidgets/Assets.xcassets) — отсюда
   // только имена; пока нет файла — iOS отрисует букву, без поломки.
