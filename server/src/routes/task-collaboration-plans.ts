@@ -14,6 +14,7 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
 import { canPlanSubtaskBecomeReady, startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { logStepOutcome } from "../runtime/stepOutcome.js";
 import {
   applyPlanOps,
   decidePlanProposal,
@@ -724,10 +725,10 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       try {
         const started = await startPlanSubtaskRun(rootSubtask.id, req.userId);
         if (!started.ok) {
-          logEvent({ taskId: task.id, actorId: req.userId, kind: "plan_subtask_autostart_failed", field: rootSubtask.slotKey, toValue: started.error });
+          logStepOutcome({ taskId: task.id, actorId: req.userId, subtaskId: rootSubtask.id, outcome: "failed", error: started.error });
         }
       } catch (error) {
-        logEvent({ taskId: task.id, actorId: req.userId, kind: "plan_subtask_autostart_failed", field: rootSubtask.slotKey, toValue: error instanceof Error ? error.message : String(error) });
+        logStepOutcome({ taskId: task.id, actorId: req.userId, subtaskId: rootSubtask.id, outcome: "failed", error: error instanceof Error ? error.message : String(error) });
       }
     }
     return { plan: present(planForTask(task.id, plan.id)!) };

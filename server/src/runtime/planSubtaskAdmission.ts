@@ -12,6 +12,7 @@ import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { bumpContextVersion } from "./taskContextVersion.js";
 import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { getFullTask } from "../routes/subtasks.js";
+import { logStepOutcome } from "./stepOutcome.js";
 
 /**
  * Узлы collaboration plan — обычные `subtasks` с `collaboration_plan_id` +
@@ -206,10 +207,10 @@ export async function unlockReadyPlanSubtasks(planId: string | null, taskId: str
     try {
       const started = await startPlanSubtaskRun(next.id, actorId);
       if (!started.ok) {
-        logEvent({ taskId, actorId, kind: "plan_subtask_autostart_failed", field: next.plan_node_key ?? next.id, toValue: started.error });
+        logStepOutcome({ taskId, actorId, subtaskId: next.id, outcome: "failed", error: started.error });
       }
     } catch (error) {
-      logEvent({ taskId, actorId, kind: "plan_subtask_autostart_failed", field: next.plan_node_key ?? next.id, toValue: error instanceof Error ? error.message : String(error) });
+      logStepOutcome({ taskId, actorId, subtaskId: next.id, outcome: "failed", error: error instanceof Error ? error.message : String(error) });
     }
   }
 }
@@ -299,7 +300,7 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
         attemptId: row.current_attempt_id,
       });
       db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
-      logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_interrupted", field: row.plan_node_key, toValue: roleTitle(node.role_key) });
+      logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "interrupted", code: "runtime_died", message: reason });
       const { n: interrupts } = db.prepare(
         `SELECT COUNT(*) AS n FROM attempts
           WHERE subtask_id = ? AND outcome = 'interrupted' AND ended_at >= datetime('now', '${INTERRUPT_WINDOW}')`,
@@ -327,7 +328,7 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
       if (started.ok) {
         resumed += 1;
       } else {
-        logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_autostart_failed", field: row.plan_node_key, toValue: started.error });
+      logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "failed", error: started.error });
       }
       continue;
     }
@@ -385,7 +386,7 @@ export async function settleStalledPlanNode(
     closeAttempt(params.failure ? "failed" : "stalled", why.slice(0, 200));
     db.prepare("UPDATE subtasks SET agent_state = 'blocked', agent_id = ?, current_attempt_id = NULL WHERE id = ?")
       .run(roleUserId(node.role_key), row.id);
-    logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_stalled_blocked", field: row.plan_node_key, toValue: why.slice(0, 160) });
+    logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "blocked", error: why });
     roleNote(row.task_id, node.role_key, `«${row.title}»: ход закончился без сдачи шага. ${why} Шаг заблокирован: нужен перезапуск владельцем или оркестратором.`);
     return "blocked";
   };
@@ -402,7 +403,7 @@ export async function settleStalledPlanNode(
   logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_continued", field: row.plan_node_key, toValue: `продолжение ${continued + 1} из ${MAX_NODE_CONTINUATIONS}` });
   const started = await starter(row.id, roleUserId(node.role_key));
   if (!started.ok) {
-    logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_autostart_failed", field: row.plan_node_key, toValue: started.error });
+    logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "failed", error: started.error });
     return "continued";
   }
   return "continued";

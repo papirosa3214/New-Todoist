@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { planNodeAgentRefusal, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { logStepOutcome } from "../runtime/stepOutcome.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForRead, getTaskForWrite, getTaskForComment } from "../access.js";
@@ -452,6 +453,17 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             field: "subtask",
             toValue: title ?? subtask.title,
           });
+          // MAK-96: сдача шага — тоже исход запуска, и он тоже становится
+          // типизированным событием (без кода: сбоя не было).
+          if (done === true) {
+            logStepOutcome({
+              taskId: subtask.task_id,
+              actorId: req.userId,
+              subtaskId: subtask.id,
+              outcome: "submitted",
+              message: result ?? subtask.result,
+            });
+          }
         }
 
         // ЗАКРЫТ ПОСЛЕДНИЙ ШАГ — ЗАДАЧА САМА УХОДИТ НА ПРИЁМКУ.
@@ -844,22 +856,31 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       // доработку, и в ленте это должно читаться иначе (см. проверку прав
       // выше — сюда доходит только владелец).
       if (state !== undefined && state !== subtask.agent_state) {
-        logEvent({
-          taskId: subtask.task_id,
-          actorId: req.userId,
-          kind:
-            state === "in_progress"
-              ? "subtask_started"
-              : state === "blocked"
-                ? "subtask_blocked"
+        if (state === "blocked") {
+          // MAK-96: блок шага — исход запуска с кодом из закрытого словаря.
+          logStepOutcome({
+            taskId: subtask.task_id,
+            actorId: req.userId,
+            subtaskId: subtask.id,
+            outcome: "blocked",
+            error: (result ?? subtask.result) || null,
+          });
+        } else {
+          logEvent({
+            taskId: subtask.task_id,
+            actorId: req.userId,
+            kind:
+              state === "in_progress"
+                ? "subtask_started"
                 : state === "review"
                   ? "subtask_review"
                   : subtask.agent_state === "review"
                     ? "subtask_returned"
                     : "subtask_released",
-          field: "subtask",
-          toValue: subtask.title,
-        });
+            field: "subtask",
+            toValue: subtask.title,
+          });
+        }
         // Карточка cd10bf34, п. 3: факт вызова помощи / блокировки без
         // вызова виден в ленте для статистики.
         if (state === "blocked" && blockedHelp) {
