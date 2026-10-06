@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { buildInProcessTaskContext } from "../src/runtime/taskContextBridge.js";
+import { describe, expect, it, vi } from "vitest";
+import { buildInProcessTaskContext, type LaunchContextInput } from "../src/runtime/taskContextBridge.js";
 
 describe("in-process TaskContext bridge", () => {
   it("передаёт карточку и роль в единственный Python-сборщик", async () => {
@@ -95,5 +95,41 @@ describe("in-process TaskContext bridge", () => {
       { task: { id: "task-1" }, actor: { id: "role_builder", name: "Разработчик" } },
       async () => JSON.stringify({ prompt: "есть, но без сводки" }),
     )).rejects.toThrow("неполный пакет");
+  });
+});
+
+// Карточка 71651ad0: первый запуск роли падает на «TaskContext >15 с».
+// `buildInProcessTaskContext` обязан один раз попробовать снова, прежде
+// чем сдаваться. Два сбоя подряд — уже реальная проблема, а не флак.
+describe("buildInProcessTaskContext — автоповтор", () => {
+  const sampleInput: LaunchContextInput = {
+    task: { id: "task-1" },
+    actor: { id: "role_builder", name: "Разработчик" },
+  };
+
+  it("первый сбой → второй успех: пробрасывает результат", async () => {
+    const runner = vi.fn<Parameters<typeof buildInProcessTaskContext>[1]>()
+      .mockRejectedValueOnce(new Error("сборка TaskContext v1 превысила 15 секунд"))
+      .mockResolvedValueOnce(JSON.stringify({ prompt: "p", summary: "s", knowledge_status: "ok", dependency_status: "ok" }));
+    const out = await buildInProcessTaskContext(sampleInput, runner);
+    expect(out.prompt).toBe("p");
+    expect(out.summary).toBe("s");
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("два сбоя подряд — пробрасывает последнюю ошибку с упоминанием автоповтора", async () => {
+    const runner = vi.fn<Parameters<typeof buildInProcessTaskContext>[1]>()
+      .mockRejectedValueOnce(new Error("сборка TaskContext v1 превысила 15 секунд"))
+      .mockRejectedValueOnce(new Error("сборка TaskContext v1 превысила 15 секунд"));
+    await expect(buildInProcessTaskContext(sampleInput, runner)).rejects.toThrow(/после автоповтора/);
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("успех с первого раза — повтора нет", async () => {
+    const runner = vi.fn<Parameters<typeof buildInProcessTaskContext>[1]>()
+      .mockResolvedValueOnce(JSON.stringify({ prompt: "p", summary: "s" }));
+    const out = await buildInProcessTaskContext(sampleInput, runner);
+    expect(out.prompt).toBe("p");
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 });

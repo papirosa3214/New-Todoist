@@ -1,5 +1,5 @@
 import { completePlanFinalReview } from "../runtime/planReviewLifecycle.js";
-import { unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { closeOpenCriticPlanNode, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import crypto from "crypto";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -154,6 +154,13 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     }
     const managedPlan = planReturn as ReturnType<typeof completePlanFinalReview>;
     if (managedPlan) await unlockReadyPlanSubtasks(managedPlan.planId,taskId,req.userId);
+    // Г1-л (06.10.2026): узел `critic_verifier` (revision ≥ 2) вынес
+    // вердикт, но `completePlanFinalReview` не закрыл его — маркер
+    // `final-review` есть только у финального проверяющего. Закрываем
+    // такой узел сами и при `changes_requested` открываем доработки.
+    if (!managedPlan) {
+      closeOpenCriticPlanNode(taskId, verdict as "approved" | "changes_requested" | "blocked", findings ?? "", Array.isArray(body.rework_steps) ? body.rework_steps : null);
+    }
     // Итог карточки — заметкой в документацию проекта (владелец 01.10.2026).
     try {
       writeOutcomeNote(taskId, req.userId);

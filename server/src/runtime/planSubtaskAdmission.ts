@@ -274,6 +274,27 @@ function roleNote(taskId: string, role: string, text: string): void {
 const INTERRUPTS_BEFORE_BLOCK = 2;
 const INTERRUPT_WINDOW = "-30 minutes";
 
+/** Сбросить задания этой задачи в `role_run_jobs` (Г1-к, 06.10.2026):
+ *  прежний `dedupe_key` мог уже сидеть как `succeeded`/`skipped` и новый
+ *  запуск вернёт ту же запись вместо свежей попытки. Возвращает
+ *  количество сброшенных job'ов, чтобы тест мог это проверить. */
+function resetRoleRunJobsForTask(taskId: string): number {
+  return db.prepare(
+    `UPDATE role_run_jobs
+        SET status = 'queued',
+            attempts = 0,
+            available_at = datetime('now'),
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            last_error = 'сброс дедупликации при восстановлении после рестарта',
+            started_at = NULL,
+            finished_at = NULL,
+            updated_at = datetime('now')
+      WHERE task_id = ?
+        AND status IN ('succeeded', 'skipped', 'dead', 'cancelled', 'retry_wait')`,
+  ).run(taskId).changes;
+}
+
 /**
  * Брошенные после перезапуска сервера узлы плана (владелец 01.10.2026, T05;
  * доработка 05.10.2026, MAK-66 critic rework — todo/blocked).
@@ -323,6 +344,7 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
           .run(reason, row.current_attempt_id);
       }
       db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
+      resetRoleRunJobsForTask(row.task_id);
       freed += 1;
       continue;
     }
@@ -365,6 +387,10 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
           ? `«${row.title}»: мой ход оборвался — сервер перезапустился. Продолжаю с того же места.`
           : `«${row.title}»: мой ход оборвался (${reason}). Продолжаю с того же места.`,
       );
+      // После `interrupted` старый dedupe_key мог уже сидеть `succeeded`
+      // (Г1-к, 06.10.2026): сбрасываем `role_run_jobs` этой задачи,
+      // чтобы новый запуск не подобрал чужое задание.
+      resetRoleRunJobsForTask(row.task_id);
       const started = await startPlanSubtaskRun(row.id, roleUserId(node.role_key));
       if (started.ok) {
         resumed += 1;
@@ -381,6 +407,9 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
         .run(reason, row.current_attempt_id);
     }
     db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
+    // Снимаем `succeeded`/`dead` задания этой задачи в `role_run_jobs`,
+    // чтобы worker не подобрал прошлый dedupe_key, когда дойдёт очередь.
+    resetRoleRunJobsForTask(row.task_id);
     freed += 1;
     roleNote(
       row.task_id,
@@ -556,4 +585,206 @@ export async function unlockDependencyPlans():Promise<void> {
     if(unmetDependencyIds(plan.task_id).length) continue;
     await unlockReadyPlanSubtasks(plan.id,plan.task_id,plan.approved_by);
   }
+}
+
+/**
+ * Узел роли «critic_verifier» (revision ≥ 2, без `FINAL_REVIEW_MARKER`)
+ * вынес вердикт — его собственный шаг плана надо закрыть, иначе
+ * последующие шаги (`builder_fix_*`, `critic_recheck_*`) не откроются
+ * (Г1-л, 06.10.2026: «critic_verifier_recheck_2 не появился, пока
+ * предшественник не закрыт»).
+ *
+ * `completePlanFinalReview` уже закрывает финального проверяющего с
+ * маркером — здесь обрабатываем остальные случаи: узел `critic_verifier`
+ * ещё открыт, вердикт вынесен, граф знает, какие шаги перезапускать.
+ *
+ * `requestedTargets` — `rework_steps` из taskflow_review (могут быть
+ * пустыми; тогда `completePlanFinalReviewAtomic` подберёт дефолт).
+ * Возвращает `true`, если узел был закрыт этим вызовом.
+ */
+export function closeOpenCriticPlanNode(
+  taskId: string,
+  verdict: "approved" | "changes_requested" | "blocked",
+  findings: string,
+  requestedTargets: string[] | null,
+): boolean {
+  const plan = db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id = ? AND status = 'approved' ORDER BY revision DESC LIMIT 1")
+    .get(taskId) as { id: string } | undefined;
+  if (!plan) return false;
+  const row = db.prepare(
+    `SELECT s.id, s.title, s.done, s.agent_state, s.position, s.plan_node_key
+       FROM subtasks s
+       JOIN task_collaboration_plan_nodes n
+         ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+      WHERE s.task_id = ?
+        AND s.collaboration_plan_id = ?
+        AND n.role_key = 'critic_verifier'
+        AND (n.instructions IS NULL OR n.instructions NOT LIKE ?)
+        AND s.done = 0
+      ORDER BY s.position DESC
+      LIMIT 1`,
+  ).get(taskId, plan.id, "%taskflow:final-review%") as
+    | { id: string; title: string; done: number; agent_state: string | null; position: number; plan_node_key?: string | null }
+    | undefined;
+  if (!row) return false;
+  // Если узел уже не в работе (todo/blocked) — всё равно закрываем:
+  // вердикт вынесен, шаг плана должен быть закрыт, иначе доработка не
+  // откроется.
+  const sub = db.prepare("SELECT current_attempt_id FROM subtasks WHERE id = ?").get(row.id) as
+    | { current_attempt_id: string | null }
+    | undefined;
+  if (sub?.current_attempt_id) {
+    db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'review', reason = ? WHERE id = ? AND ended_at IS NULL")
+      .run(`вердикт: ${verdict}`, sub.current_attempt_id);
+  }
+  db.prepare(
+    "UPDATE subtasks SET done = 1, agent_state = NULL, current_attempt_id = NULL, agent_heartbeat_at = NULL, result = ? WHERE id = ?",
+  ).run(`${verdict}: ${findings}`, row.id);
+  logEvent({
+    taskId,
+    actorId: null,
+    kind: "plan_subtask_closed_by_verdict",
+    field: row.title,
+    toValue: verdict,
+  });
+  // Для changes_requested открываем шаги доработки от самого critic-узла
+  // (а не через `completePlanFinalReview`, который строит rework от
+  // финального reviewer'а: если critic уже в плане, финальный reviewer
+  // привязывается только к нему, и предшествующие рабочие узлы не
+  // попадают в `currentSegment` → `planReworkGraph` кидает ошибку).
+  if (verdict === "changes_requested") {
+    try {
+      openReworkFromCritic(taskId, plan.id, row, findings, requestedTargets ?? []);
+    } catch (error) {
+      // Узел закрыт, дальше — задача оркестратора/владельца. Ошибку
+      // логируем, но не возвращаем как неуспех: главное сделано.
+      logEvent({
+        taskId,
+        actorId: null,
+        kind: "plan_rework_after_verdict_failed",
+        field: row.title,
+        toValue: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return true;
+}
+
+/** Открыть rework-узлы от critic-узла, по аналогии с `completePlanFinalReview`,
+ *  но без финального reviewer'а (его у нас ещё нет, и в этой ветке он
+ *  не нужен — владелец/другая роль примут rework по факту). */
+function openReworkFromCritic(
+  taskId: string,
+  planId: string,
+  critic: { id: string; title: string; plan_node_key?: string | null },
+  findings: string,
+  requestedTargets: string[],
+): void {
+  const allNodes = db.prepare("SELECT * FROM task_collaboration_plan_nodes WHERE plan_id = ?")
+    .all(planId) as Array<{
+      slot_key: string;
+      role_key: string;
+      expected_result: string;
+      output_artifact_json: string | null;
+      instructions: string | null;
+      iteration: number;
+      skipped_at: string | null;
+      rework_of_key: string | null;
+    }>;
+  const allEdges = db.prepare("SELECT * FROM task_collaboration_plan_edges WHERE plan_id = ?")
+    .all(planId) as Array<{ from_slot_key: string; to_slot_key: string; start_condition: string; artifact_key: string | null }>;
+  const bySlot = new Map(allNodes.map((n) => [n.slot_key, n]));
+  // Сегмент предшественников critic-узла: всё, что через рёбра ведёт в critic.
+  const segment = new Set<string>();
+  const backwards = (slot: string): void => {
+    for (const edge of allEdges.filter((e) => e.to_slot_key === slot)) {
+      const pred = bySlot.get(edge.from_slot_key);
+      if (!pred || pred.role_key === "critic_verifier" || segment.has(pred.slot_key)) continue;
+      segment.add(pred.slot_key);
+      backwards(pred.slot_key);
+    }
+  };
+  backwards(critic.plan_node_key ?? "");
+  const candidates = allNodes.filter((n) => !n.skipped_at && n.role_key !== "critic_verifier");
+  const ownerFallback = db.prepare("SELECT id FROM users WHERE role='owner' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined;
+  const actor = ownerFallback?.id ?? "system";
+  const target = requestedTargets.length > 0
+    ? requestedTargets
+    : [candidates.filter((n) => segment.has(n.slot_key)).at(-1)?.slot_key ?? candidates.at(-1)?.slot_key ?? ""];
+  if (target.some((slot) => !segment.has(slot) && bySlot.has(slot))) {
+    throw new Error("Выберите этап текущего цикла, а не исторический результат");
+  }
+  if (target.some((t) => !bySlot.has(t))) {
+    throw new Error("Укажите существующие рабочие этапы для доработки");
+  }
+  // Находим iteration от critic — равен max(iteration) в плане.
+  const iteration = Math.max(0, ...allNodes.map((n) => n.iteration ?? 0));
+  const clone = new Map<string, string>();
+  // Соберём всех потомков target в сегменте.
+  const affected = new Set<string>();
+  const visit = (slot: string): void => {
+    if (affected.has(slot)) return;
+    affected.add(slot);
+    for (const e of allEdges.filter((edge) => edge.from_slot_key === slot)) {
+      if (bySlot.get(e.to_slot_key)?.role_key !== "critic_verifier") visit(e.to_slot_key);
+    }
+  };
+  for (const t of target) visit(t);
+  for (const t of target) {
+    const newSlot = `${bySlot.get(t)?.role_key ?? "fix"}_fix_${crypto.randomUUID().slice(0, 8)}`;
+    clone.set(t, newSlot);
+    const node = bySlot.get(t)!;
+    addPlanReworkNode(planId, taskId, { ...node, expected_result: `Доработка ${iteration + 1}: ${node.expected_result}`, instructions: `${findings}\n\nПолучите обновлённые результаты предшествующих этапов и выполните свой этап повторно.` }, newSlot, actor, findings.slice(0, 500), iteration + 1, t);
+  }
+  for (const t of target) {
+    addPlanReworkEdge(planId, critic.plan_node_key ?? "", clone.get(t)!);
+  }
+  // Связи между пересозданными узлами.
+  for (const edge of allEdges) {
+    if (clone.has(edge.to_slot_key) && clone.has(edge.from_slot_key)) {
+      addPlanReworkEdge(planId, clone.get(edge.from_slot_key)!, clone.get(edge.to_slot_key)!, edge.start_condition, edge.artifact_key);
+    }
+  }
+  // Recheck-узел — сам critic (новая итерация).
+  const recheck = `critic_recheck_${crypto.randomUUID().slice(0, 8)}`;
+  const reviewerTemplate = bySlot.get(critic.plan_node_key ?? "");
+  if (reviewerTemplate) {
+    addPlanReworkNode(planId, taskId, { ...reviewerTemplate, expected_result: `Повторная проверка ${iteration + 1}`, instructions: reviewerTemplate.instructions, rework_of_key: reviewerTemplate.slot_key }, recheck, actor, findings.slice(0, 500), iteration + 1, reviewerTemplate.slot_key);
+    for (const t of target) {
+      addPlanReworkEdge(planId, clone.get(t)!, recheck);
+    }
+  }
+  db.prepare("UPDATE tasks SET agent_state='in_progress', updated_at=datetime('now') WHERE id=?").run(taskId);
+  logEvent({ taskId, actorId: actor, kind: "plan_rework_created", field: planId, toValue: `${critic.plan_node_key} → ${target.join(", ")} → ${recheck}` });
+}
+
+function addPlanReworkNode(
+  planId: string,
+  taskId: string,
+  node: { slot_key: string; role_key: string; expected_result: string; output_artifact_json: string | null; instructions: string | null; rework_of_key?: string | null },
+  slot: string,
+  actor: string,
+  reason: string,
+  iteration: number,
+  source: string | null,
+): void {
+  db.prepare(
+    `INSERT INTO task_collaboration_plan_nodes(id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, instructions, origin, added_by, added_reason, iteration, rework_of_key)
+     VALUES(?, ?, ?, ?, 1, ?, ?, ?, 'rework', ?, ?, ?, ?)`,
+  ).run(`tcpn_${crypto.randomUUID()}`, planId, slot, node.role_key, node.expected_result, node.output_artifact_json, node.instructions, actor, reason, iteration, node.rework_of_key ?? source);
+  const position = (db.prepare("SELECT COALESCE(MAX(position),0)+1 AS n FROM subtasks WHERE task_id=?").get(taskId) as { n: number }).n;
+  db.prepare("INSERT INTO subtasks(id, task_id, title, position, collaboration_plan_id, plan_node_key) VALUES(?, ?, ?, ?, ?, ?)")
+    .run(crypto.randomUUID(), taskId, node.expected_result, position, planId, slot);
+}
+
+function addPlanReworkEdge(
+  planId: string,
+  from: string,
+  to: string,
+  condition: string = "submitted",
+  artifact: string | null = null,
+): void {
+  db.prepare(
+    "INSERT INTO task_collaboration_plan_edges(id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES(?, ?, ?, ?, ?, ?)",
+  ).run(`tcpe_${crypto.randomUUID()}`, planId, from, to, condition, artifact);
 }

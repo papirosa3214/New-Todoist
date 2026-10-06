@@ -49,13 +49,24 @@ export async function buildInProcessTaskContext(
   runner: LaunchContextRunner = runPythonContext,
 ): Promise<LaunchContext> {
   let payload: unknown;
-  try {
-    payload = JSON.parse(await runner(input));
-  } catch (error) {
-    throw new Error(`не удалось собрать TaskContext v1: ${String(error)}`);
+  // Один автоповтор при таймауте или сбое (карточка 71651ad0, Г1: первый
+  // запуск падает на «TaskContext >15 с»). Повторный сбой уже не
+  // чинится — это уже не флак, а реальная проблема сборки контекста.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      payload = JSON.parse(await runner(input));
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 1) {
+        throw new Error(`не удалось собрать TaskContext v1 после автоповтора: ${String(error)}`);
+      }
+    }
   }
   if (!payload || typeof payload !== "object") {
-    throw new Error("не удалось собрать TaskContext v1: bridge вернул не объект");
+    throw new Error(`не удалось собрать TaskContext v1: ${String(lastError)}`);
   }
   const value = payload as Record<string, unknown>;
   if (typeof value.prompt !== "string" || typeof value.summary !== "string") {
