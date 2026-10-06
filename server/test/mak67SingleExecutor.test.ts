@@ -12,9 +12,10 @@
 //  • single_executor принимается сервером: POST …/collaboration-plans с
 //    profile='single_executor' валиден (есть уже в PROFILES, но фиксируем
 //    поведение для отдельного теста);
-//  • правило «Система» действует на автоцепочках:
-//      — unlockReadyPlanSubtasks при manual не стартует готовые узлы;
-//      — recoverInterruptedPlanSubtasks при manual не поднимает узлы
+//  • «вход vs цепочка»: task_intake_mode управляет только входом; после
+//    утверждения владельцем цепочка идёт сама в любом режиме:
+//      — unlockReadyPlanSubtasks при manual стартует готовые узлы;
+//      — recoverInterruptedPlanSubtasks при manual продолжает узлы
 //        после рестарта.
 //
 // runRoleInProcess подменён заглушкой, чтобы реальный Pi-агент не
@@ -335,19 +336,19 @@ describe("MAK-67 план из одного шага с правилом «Си�
   });
 
   // ─── правило «Система» для автоцепочек (MAK-67, блокер 2) ───────────
-  // Покрывают: unlockReadyPlanSubtasks и recoverInterruptedPlanSubtasks при
-  // task_intake_mode='manual' НЕ стартуют узлы сами — лог-событие
-  // plan_subtask_manual_hold и свободный узел в ожидании явного
-  // действия владельца. При 'automatic' автоцепочка по-прежнему стартует.
+  // Покрывают: unlockReadyPlanSubtasks и recoverInterruptedPlanSubtasks
+  // под task_intake_mode='manual' продолжают утверждённый план сами —
+  // согласием владельца было утверждение плана, повторных подтверждений
+  // нет. Гейт режима остался только на входе (single_executor-plan).
 
-  it("unlockReadyPlanSubtasks при manual не стартует готовый узел, только лог-событие manual_hold", async () => {
+  it("unlockReadyPlanSubtasks при manual стартует готовый узел — цепочка идёт сама", async () => {
     setOwnerMode("manual");
     expect(ownerIntakeMode()).toBe("manual");
-    const taskId = await postTask("Готовый узел под manual");
+    const taskId = await postTask("Готовый узел под manual стартует сам");
 
-    // Утверждённый план с одним узлом, но agent_state=NULL (руками) —
-    // имитируем «готово, ещё не запущено». approve сразу поднимет узел
-    // через worker, поэтому мы сначала отменяем аренду обратно.
+    // Утверждённый владельцем план с одним узлом. approve поднимает
+    // корневой узел; имитируем «готов, ждёт»: закрываем попытку и снимаем
+    // аренду, чтобы unlock мог стартовать заново.
     const created = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/collaboration-plans`,
@@ -367,7 +368,7 @@ describe("MAK-67 план из одного шага с правилом «Си�
       headers: ownerAuth,
     });
     expect(approve.statusCode).toBeLessThan(300);
-    // Снимаем аренду approve: узел свободен и ждёт владельца.
+    db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'interrupted', reason = 'sim' WHERE subtask_id IN (SELECT id FROM subtasks WHERE task_id = ? AND plan_node_key = 'executor') AND ended_at IS NULL").run(taskId);
     db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE task_id = ? AND plan_node_key = 'executor'").run(taskId);
     const before = subtaskState(taskId);
     expect(before).toHaveLength(1);
@@ -377,14 +378,13 @@ describe("MAK-67 план из одного шага с правилом «Си�
 
     const after = subtaskState(taskId);
     expect(after).toHaveLength(1);
-    expect(after[0].agent_state).toBeNull();
-    // agent_id остаётся от approve — это поле владельца узла, не
-    // признак аренды.
+    expect(after[0].agent_state).toBe("in_progress");
+    expect(after[0].agent_id).toBe(roleUserId("builder"));
 
     const holds = db
       .prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'plan_subtask_manual_hold'")
       .get(taskId);
-    expect(holds).toBeTruthy();
+    expect(holds).toBeFalsy();
   });
 
   it("unlockReadyPlanSubtasks при automatic стартует готовый узел (старое поведение сохранено)", async () => {
@@ -428,7 +428,7 @@ describe("MAK-67 план из одного шага с правилом «Си�
     expect(after[0].agent_id).toBe(roleUserId("builder"));
   });
 
-  it("recoverInterruptedPlanSubtasks при manual не поднимает узел после рестарта", async () => {
+  it("recoverInterruptedPlanSubtasks при manual продолжает утверждённый план после рестарта", async () => {
     setOwnerMode("manual");
     expect(ownerIntakeMode()).toBe("manual");
     const taskId = await postTask("Восстановление под manual");
@@ -454,17 +454,66 @@ describe("MAK-67 план из одного шага с правилом «Си�
 
     const result = await recoverInterruptedPlanSubtasks();
 
-    expect(result.manual_hold).toBeGreaterThanOrEqual(1);
-    expect(result.resumed).toBe(0);
+    expect(result.resumed).toBeGreaterThanOrEqual(1);
     const after = subtaskState(taskId);
     expect(after).toHaveLength(1);
-    expect(after[0].agent_state).toBeNull();
-    // agent_id остаётся — это исходное поведение MAK-66 (recover снимает
-    // только аренду, но не меняет владельца узла).
-
+    expect(after[0].agent_state).toBe("in_progress");
+    // Роль написала в ленту, что продолжает, без повторного согласия.
+    const note = db
+      .prepare("SELECT text FROM comments WHERE task_id = ? AND user_id = ? ORDER BY rowid DESC LIMIT 1")
+      .get(taskId, roleUserId("builder")) as { text: string } | undefined;
+    expect(note?.text).toContain("Продолжаю с того же места");
     const holds = db
       .prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'plan_subtask_manual_hold'")
       .get(taskId);
-    expect(holds).toBeTruthy();
+    expect(holds).toBeFalsy();
+  });
+
+  it("manual + утверждённый план: слоты 2 и 3 стартуют сами по графу", async () => {
+    setOwnerMode("manual");
+    expect(ownerIntakeMode()).toBe("manual");
+    const taskId = await postTask("Цепочка из трёх слотов под manual");
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/collaboration-plans`,
+      headers: ownerAuth,
+      payload: {
+        profile: "manual",
+        rationale: "цепочка",
+        nodes: [
+          { slot_key: "s1", role_key: "builder", required: true, expected_result: "Слот 1" },
+          { slot_key: "s2", role_key: "qa", required: true, expected_result: "Слот 2" },
+          { slot_key: "s3", role_key: "analyst", required: true, expected_result: "Слот 3" },
+        ],
+        edges: [
+          { from_slot_key: "s1", to_slot_key: "s2", start_condition: "accepted" },
+          { from_slot_key: "s2", to_slot_key: "s3", start_condition: "accepted" },
+        ],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const planId = (created.json() as { plan: { id: string } }).plan.id;
+    const approve = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`,
+      headers: ownerAuth,
+    });
+    expect(approve.statusCode).toBeLessThan(300);
+
+    const byKey = () => new Map(subtaskState(taskId).map((s) => [s.plan_node_key, s]));
+    expect(byKey().get("s1")!.agent_state).toBe("in_progress");
+    expect(byKey().get("s2")!.agent_state).toBeNull();
+    expect(byKey().get("s3")!.agent_state).toBeNull();
+
+    // Слот 1 сдан — Система сама открывает слот 2.
+    db.prepare("UPDATE subtasks SET done = 1 WHERE task_id = ? AND plan_node_key = 's1'").run(taskId);
+    await unlockReadyPlanSubtasks(planId, taskId, ownerId);
+    expect(byKey().get("s2")!.agent_state).toBe("in_progress");
+    expect(byKey().get("s3")!.agent_state).toBeNull();
+
+    // Слот 2 сдан — сам стартует слот 3.
+    db.prepare("UPDATE subtasks SET done = 1 WHERE task_id = ? AND plan_node_key = 's2'").run(taskId);
+    await unlockReadyPlanSubtasks(planId, taskId, ownerId);
+    expect(byKey().get("s3")!.agent_state).toBe("in_progress");
   });
 });
