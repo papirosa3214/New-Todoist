@@ -371,3 +371,6 @@ MAK-52 (`a766663f…`), Разработчик на `opencode-go/qwen3.8-flash`:
 - Ветка `roles/53e1a7ae…` влита `git merge --no-ff` (`21a38d3f`). Тестовый vite агента на :5260 погашен по PID.
 - Замок MAK-71 (`task_dependencies` b6d3a415 ← cdc95182) снят прямым `DELETE` в БД; MAK-71 стартует сам.
 - Аватарка секретаря: `POST /api/users/u-secretary/avatar`, файл `avatar-sets/red/u-secretary.png`.
+
+### Г1-ж (06.10, ~14:00 МСК), по просьбе Максима
+Аватарка владельца (`u1`) заменена на картинку «BOSS» в обход API (как Г1-в): файл в `server/uploads/avatars/9cfc6d82-….png`, `users.avatar_url` обновлён прямой записью в БД, копия в `avatar-sets/owner/u1.png`. Старый файл не удалён.
