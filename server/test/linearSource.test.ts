@@ -29,6 +29,26 @@ describe("Linear source completeness",()=>{
  });
 });
 
+describe("Linear project label and issues",()=>{
+ const conn=(nodes:any[],next:string|null=null)=>({nodes,pageInfo:{hasNextPage:!!next,endCursor:next}});
+ it("оставляет только проекты с меткой «Сейчас»",async()=>{
+  const {findLinearProjectsByLabel}=await import("../src/lib/linearSource.js");
+  const r=await findLinearProjectsByLabel("owner","Сейчас",async()=>({organization:{id:"W",name:"W"},projects:conn([
+   {id:"now",name:"Делаем",url:"u1",state:"started",labels:{nodes:[{id:"l",name:"Сейчас"}]}},
+   {id:"later",name:"Задумка",url:"u2",state:"planned",labels:{nodes:[{id:"l2",name:"Задумка на будущее"}]}},
+  ])}));
+  expect(r.projects.map(p=>p.id)).toEqual(["now"]);
+ });
+ it("задачи проекта читает страницами и падает на дублях",async()=>{
+  const {listLinearProjectIssues}=await import("../src/lib/linearSource.js");
+  const node=(id:string)=>({id,identifier:"A",title:"t",description:null,url:"https://linear.app/a",priority:2,dueDate:null,createdAt:"2026-10-01T10:00:00Z",updatedAt:"2026-10-01T11:00:00Z",archivedAt:null,parent:null,state:{id:"s",name:"In Progress",type:"started"}});
+  const calls:string[]=[];
+  const r=await listLinearProjectIssues("owner","proj",async(_,_q,v)=>{calls.push(String(v!.after));return calls.length===1?{organization:{id:"W"},issues:conn([node("a")],"next")}:{organization:{id:"W"},issues:conn([node("b")])};});
+  expect(calls).toEqual(["null","next"]);expect(r.map(i=>i.id)).toEqual(["a","b"]);
+  await expect(listLinearProjectIssues("owner","proj",async()=>({organization:{id:"W"},issues:conn([node("a")],"n")}))).rejects.toThrow(/дубли/);
+ });
+});
+
 describe("fixed Composio Linear transport",()=>{
  it("uses the common account and refuses external mutation",async()=>{
   const {readLinearComposio}=await import("../scripts/composio_mcp.mjs");

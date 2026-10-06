@@ -3243,6 +3243,42 @@ const migrations: Migration[] = [
       db.exec("ALTER TABLE projects ADD COLUMN is_private INTEGER DEFAULT 0");
     }
   } },
+
+  // Автоимпорт из Linear (карточка cc7caa43…). Ручной импорт (085) уже умеет
+  // читать задачу, вести трёхсторонний merge по полям и хранить соответствия
+  // source_id → task_id. Автоимпорту нужны ещё две вещи:
+  //   • соответствие «проект Linear → родительская карточка», потому что
+  //     фоновая служба заводит проект как родителя, а задачи — его детьми;
+  //   • состояние службы: когда был последний успешный/неуспешный проход,
+  //     какая ошибка, когда владельцу последний раз говорили о простое, и
+  //     выключатель (по умолчанию включён).
+  // Состояние — отдельной таблицей, а не колонкой users: служба одна на
+  // владельца, но её служебные поля к учётке отношения не имеют.
+  { id: "103_linear_autoimport", description: "Автоимпорт Linear: проекты «Сейчас», состояние службы и выключатель", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS linear_autoimport_projects (
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+        snapshot TEXT NOT NULL,
+        imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(owner_id, workspace_id, project_id)
+      );
+      CREATE TABLE IF NOT EXISTS linear_autoimport_state (
+        owner_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_attempt_at TEXT,
+        last_success_at TEXT,
+        last_error TEXT,
+        last_error_at TEXT,
+        notified_at TEXT,
+        created_total INTEGER NOT NULL DEFAULT 0,
+        updated_total INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+  } },
 ];
 
 /**
