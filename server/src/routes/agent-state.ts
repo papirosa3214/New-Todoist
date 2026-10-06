@@ -49,6 +49,11 @@ import {
 } from "../agentState.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
+import {
+  blockedHelpError,
+  evaluateBlockedHelp,
+  type BlockedHelpDecision,
+} from "../lib/blockedHelp.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -717,6 +722,11 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       blocked_reason?: string;
       blocked_at?: string;
       block_notified?: boolean;
+      // Карточка cd10bf34: перед blocked агент обязан сказать, кого звал и
+      // что ответили (help_attempt) либо почему никто не решит
+      // (help_skip_reason). Проверка — lib/blockedHelp.ts.
+      help_attempt?: string;
+      help_skip_reason?: string;
       // Поля планировщика (шаг 4): он переводит карточку из blocked
       // обратно в todo и инкрементирует retry_count, либо ставит
       // новую machine_selected_role при переподборе.
@@ -856,6 +866,36 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       };
       if (!canTransition(from, state, who, "state")) {
         return reply.code(400).send({ error: "invalid transition" });
+      }
+
+      // Карточка cd10bf34, п. 2: blocked от агента по решаемой причине без
+      // отметки о вызове помощи не принимаем — 409 с подсказкой, кого
+      // позвать. Порядок важен: «нужен комментарий» (400) и "invalid
+      // transition" (400) проверены выше, сервисный триггер и владелец —
+      // вне гейта.
+      let blockedHelp: BlockedHelpDecision | null = null;
+      if (state === "blocked") {
+        const blockedCaller = db
+          .prepare("SELECT type, role_key FROM users WHERE id = ?")
+          .get(req.userId) as
+          | { type?: string; role_key?: string | null }
+          | undefined;
+        if (
+          blockedCaller?.type === "ai" &&
+          !isServiceUser(req.userId)
+        ) {
+          const decision = evaluateBlockedHelp({
+            reasonCode: typeof reasonCode === "string" ? reasonCode : null,
+            text: blockedReason || comment,
+            helpAttempt: req.body?.help_attempt,
+            helpSkipReason: req.body?.help_skip_reason,
+            roleKey: blockedCaller.role_key ?? null,
+          });
+          if (!decision.ok) {
+            return reply.code(409).send(blockedHelpError(decision));
+          }
+          blockedHelp = decision;
+        }
       }
 
       // Тот же случай, что self-reclaim в claim() — система замечает
@@ -1165,6 +1205,17 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           fromValue: from,
           toValue: state,
         });
+        // П. 3 карточки cd10bf34: событие ленты «вызвана помощь» /
+        // «заблокирован без вызова помощи» — для последующей статистики.
+        if (state === "blocked" && blockedHelp) {
+          logEvent({
+            taskId: task.id,
+            actorId: req.userId,
+            kind: blockedHelp.kind,
+            field: "help",
+            toValue: blockedHelp.detail,
+          });
+        }
         if (state === "review") {
           enqueueRoleRunJob({
             taskId: task.id,
@@ -1292,7 +1343,13 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   // alive; all other reasons close the current attempt and wait in blocked.
   app.post<{
     Params: { id: string };
-    Body: { reason_code?: string; comment?: string; window_kind?: string };
+    Body: {
+      reason_code?: string;
+      comment?: string;
+      window_kind?: string;
+      help_attempt?: string;
+      help_skip_reason?: string;
+    };
   }>("/api/tasks/:id/stop", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
@@ -1370,6 +1427,32 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           action: "wait_owner",
           retry_count: retry.n,
         });
+      }
+
+      // Карточка cd10bf34: если этим вызовом карточка реально уйдёт в
+      // blocked (не fallback на другую модель и не техповтор), агент обязан
+      // сказать, кого звал и что ответили. permission_or_owner и среда
+      // проходят по reason_code без нового поля (см. blockedHelp.ts).
+      let blockedHelp: BlockedHelpDecision | null = null;
+      if (!fallback && !policy.automaticRetry) {
+        const stopCaller = db
+          .prepare("SELECT type, role_key FROM users WHERE id = ?")
+          .get(req.userId) as
+          | { type?: string; role_key?: string | null }
+          | undefined;
+        if (stopCaller?.type === "ai" && !isServiceUser(req.userId)) {
+          const decision = evaluateBlockedHelp({
+            reasonCode,
+            text: comment,
+            helpAttempt: req.body?.help_attempt,
+            helpSkipReason: req.body?.help_skip_reason,
+            roleKey: stopCaller.role_key ?? null,
+          });
+          if (!decision.ok) {
+            return reply.code(409).send(blockedHelpError(decision));
+          }
+          blockedHelp = decision;
+        }
       }
 
       const stopTxn = db.transaction(() => {
@@ -1466,6 +1549,15 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             fromValue: task.agent_state ?? null,
             toValue: "blocked",
           });
+          if (blockedHelp) {
+            logEvent({
+              taskId: task.id,
+              actorId: req.userId,
+              kind: blockedHelp.kind,
+              field: "help",
+              toValue: blockedHelp.detail,
+            });
+          }
         }
 
         logEvent({
