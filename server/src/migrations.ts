@@ -3423,6 +3423,68 @@ const migrations: Migration[] = [
          AND task_id IN (SELECT id FROM tasks WHERE status = 'completed');
     `);
   } },
+  // Обратная синхронизация TaskFlow → Linear (карточка 20e30338, техрешение
+  // 532e39a2). Отдельный узкий путь записи: очередь фиксированных операций
+  // («state» и «comment»), запись выполняется только для задач, привязанных
+  // по линейной таблице соответствий. Здесь же — состояние службы с
+  // выключателем и кэш id статусов workflow команды Linear, чтобы не
+  // дёргать Linear на каждый проход.
+  { id: "105_linear_sync", description: "Обратная синхронизация Linear: очередь записи, выключатель и кэш статусов", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS linear_sync_queue (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        issue_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        operation TEXT NOT NULL CHECK(operation IN ('state','comment')),
+        payload TEXT,
+        desired_key TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(owner_id, workspace_id, task_id, desired_key)
+      );
+      CREATE TABLE IF NOT EXISTS linear_sync_tasks (
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        issue_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        last_state TEXT,
+        last_comment_key TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(owner_id, workspace_id, task_id)
+      );
+      CREATE TABLE IF NOT EXISTS linear_sync_state (
+        owner_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_pass_at TEXT,
+        last_success_at TEXT,
+        last_sent_at TEXT,
+        last_error TEXT,
+        last_error_at TEXT,
+        notified_at TEXT,
+        sent_total INTEGER NOT NULL DEFAULT 0,
+        failed_total INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS linear_sync_states_cache (
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        state_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        cached_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(owner_id, workspace_id, team_id, name)
+      );
+    `);
+  } },
 ];
 
 /**
