@@ -589,15 +589,20 @@ if (isMain) {
     resetAllOffline();
     // Durable worker стартует только в реальном process после listen.
     // buildApp() в unit tests остаётся полностью детерминированным.
-    stopRoleRuns = startRoleRunWorker();
+    // TASKFLOW_QA_SANDBOX=1 — копия приложения для живой проверки роли QA
+    // (scripts/qa/up.sh): на копии базы нельзя запускать роли, планировщик,
+    // сторож шагов, синхронизацию знаний и голосовой мост — они ушли бы в
+    // реальные модели и внешние сервисы. Остальные службы гасятся своими флагами.
+    const sandbox = process.env.TASKFLOW_QA_SANDBOX === "1";
+    if (!sandbox) stopRoleRuns = startRoleRunWorker();
     if(process.env.TASKFLOW_AUTO_PREPARATION!=="0") stopPreparation=startPreparationWorker();
     // Документация проектов → база знаний раз в сутки (lib/knowledgeSync.ts).
-    stopKnowledgeSync = startKnowledgeSyncSchedule();
+    if (!sandbox) stopKnowledgeSync = startKnowledgeSyncSchedule();
     // Планировщик доски раз в 5 минут — внутри сервера (runtime/scheduler.ts).
-    stopScheduler = startScheduler(app);
+    if (!sandbox) stopScheduler = startScheduler(app);
     // Сторож зависших шагов: пинг 10/авто-перезапуск 20/blocked 30+ минут без пульса.
     // Карточка 71651ad0; до этого всё чинил оркестратор руками (А30/А37/Г1-к/Г1-л).
-    stopStalledWatch = startStalledStepWatch();
+    if (!sandbox) stopStalledWatch = startStalledStepWatch();
     // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
     // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
     if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();
@@ -613,7 +618,7 @@ if (isMain) {
     } catch (error) {
       console.error("[plan] сдача завершённых планов не удалась:", error);
     }
-    void recoverInterruptedPlanSubtasks()
+    if (!sandbox) void recoverInterruptedPlanSubtasks()
       .then(({ resumed, blocked }) => {
         if (resumed || blocked) console.log(`[plan] после рестарта: продолжено ${resumed}, остановлено ${blocked}`);
       })
@@ -631,7 +636,7 @@ if (isMain) {
     } catch (error) {
       console.error("[tasks] проверка вложенности не удалась:", error);
     }
-    stopVoiceBridge = await startSecretaryVoiceBridge(app);
+    if (!sandbox) stopVoiceBridge = await startSecretaryVoiceBridge(app);
     console.log(`🚀 TaskFlow API running at ${addr}`);
   });
 }
