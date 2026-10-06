@@ -35,6 +35,7 @@ import {
   resultFromSubtasks,
 } from "../resultVersions.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
+import { ensurePlanTopic, setTaskTopicClosed } from "../lib/projectTopics.js";
 import { attemptLadderForTask } from "../lib/attemptLadder.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
@@ -1033,6 +1034,18 @@ export function registerTaskRoutes(app: FastifyInstance) {
       });
       createTaskTxn();
 
+      // Тема задачи заводится сразу при создании (карточка ca816271, п. 4),
+      // а не только на подготовке плана: пропущенная подготовка (гонка
+      // автоприёма) оставляла задачу без темы вовсе. Приватные проекты не
+      // трогаем — там темы не нужны. Ошибка темы не должна ронять создание.
+      if (!isPrivateProject) {
+        try {
+          ensurePlanTopic(id);
+        } catch (error) {
+          req.log?.warn?.({ err: String(error), taskId: id }, "не удалось завести тему задачи");
+        }
+      }
+
       // Первая запись ленты — «создал задачу»: до этого лента начиналась с
       // первого же изменения, и по ней нельзя было понять, кто и когда
       // задачу вообще завёл (просьба Максима 14.08.2026 — лента должна
@@ -1746,6 +1759,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
         db.prepare(`UPDATE tasks SET ${fields.join(", ")} WHERE id = ?`).run(
           ...values,
         );
+      }
+
+      // Тема задачи закрывается вместе с задачей и снова открывается при
+      // возврате в работу (карточка ca816271, п. 4). История остаётся.
+      if (body.status === "completed" && existing.status !== "completed") {
+        setTaskTopicClosed(id, true);
+      } else if (body.status === "active" && existing.status === "completed") {
+        setTaskTopicClosed(id, false);
       }
 
       // Гашение agent_state у самой задачи выше очищало только её колонку, а
