@@ -64,8 +64,10 @@ const KINDS: ActivityKind[] = [
   "attach",
 ];
 
-/** Сколько действий помним на задачу — хватает на раскрывающийся список. */
-const RING = 50;
+/** Сколько действий держим в памяти на задачу. Лимит только от разрастания памяти: владелец
+ *  06.10.2026 просил не резать список — по числу действий он видит, жив ли процесс. Сколько всего
+ *  действий было, считает отдельный счётчик `total`, он ничем не ограничен. */
+const RING = 500;
 /** Не чаще одного вещания в это окно: при массовом Read их десятки в секунду. */
 const EMIT_THROTTLE_MS = 2000;
 /** Буфер брошенной задачи умирает сам, без чьей-либо уборки. */
@@ -87,6 +89,8 @@ interface Action {
 
 interface Entry {
   actions: Action[];
+  /** Всего действий с начала работы над задачей (не ограничено кольцом). */
+  total?: number;
   lastEmitAt: number;
   lastText: string;
   /** Сколько действий уже отдавали наблюдателю (тикет ollama-observer) —
@@ -260,7 +264,7 @@ export function describeAction(a: Action): string {
 export function recentActivity(taskId: string) {
   const metrics = taskStopMetrics(taskId);
   const e = buffers.get(taskId);
-  if (!e) return { text: null, actions: [] as Action[], metrics };
+  if (!e) return { text: null, actions: [] as Action[], total: 0, metrics };
   // Каждому действию — ГОТОВАЯ формулировка, а не голый путь. Владелец
   // 25.08.2026, увидев раскрытый список на телефоне: «нахуя мне вот эта
   // сырая хуета». Он прав: наверху строка шла с глаголом, а внутри сыпались
@@ -268,9 +272,8 @@ export function recentActivity(taskId: string) {
   // которого всё и затевалось. Клиент печатает text как есть.
   return {
     text: e.lastText,
-    actions: e.actions
-      .slice(-20)
-      .map((a) => ({ ...a, text: describeAction(a) })),
+    total: Math.max(e.total ?? 0, e.actions.length),
+    actions: e.actions.map((a) => ({ ...a, text: describeAction(a) })),
     metrics,
   };
 }
@@ -613,6 +616,7 @@ export function registerActivityRoutes(app: FastifyInstance) {
         lastText: "",
       };
       entry.actions.push(action);
+      entry.total = (entry.total ?? entry.actions.length - 1) + 1;
       if (entry.actions.length > RING)
         entry.actions.splice(0, entry.actions.length - RING);
 
@@ -637,6 +641,7 @@ export function registerActivityRoutes(app: FastifyInstance) {
           target: action.target,
           actor_name: action.actor,
           session_id: sessionOf(req),
+          total: entry.total,
           at: now,
         });
       }
