@@ -18,7 +18,7 @@ const ROLE_LABEL: Record<string, string> = {
   critic_verifier: "Критик-проверяющий",
   architect: "Архитектор",
   builder: "Разработчик",
-  qa: "QA",
+  qa: "Лайф-тестировщик",
   designer: "Дизайнер интерфейсов",
 };
 

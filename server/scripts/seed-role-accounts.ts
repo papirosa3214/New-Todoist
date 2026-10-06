@@ -80,7 +80,7 @@ const roles = [
   },
   {
     role: "qa",
-    name: "QA",
+    name: "Лайф-тестировщик",
     email: "qa@taskflow.local",
     initials: "Q",
     color: "#E44332",

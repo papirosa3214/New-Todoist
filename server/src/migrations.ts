@@ -3687,6 +3687,11 @@ const migrations: Migration[] = [
         ON orchestrator_events(delivered_at, id);
     `);
   } },
+  { id: "114_qa_live_tester_name", description: "Роль QA переименована в «Лайф-тестировщик»: проверяет только живое приложение (владелец 07.10.2026). Ключ qa и id role_qa не меняются", up: () => {
+    // Только если название ещё прежнее — ручное переименование владельца не затираем.
+    db.prepare("UPDATE roles SET title = 'Лайф-тестировщик', summary = 'пройти сценарии в живом приложении и найти баги.' WHERE key = 'qa' AND title = 'QA'").run();
+    db.prepare("UPDATE users SET name = 'Лайф-тестировщик' WHERE id = 'role_qa' AND name = 'QA'").run();
+  } },
 ];
 
 /**

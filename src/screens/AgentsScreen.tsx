@@ -66,10 +66,10 @@ const PI_ROLE_META: Record<string, PiRoleMeta> = {
     specialization: "Bash · Git · тесты · отладка",
   },
   qa: {
-    label: "QA",
+    label: "Лайф-тестировщик",
     invocation: "--mcp-config ~/.pi/agent/taskflow-profiles/qa.json",
-    purpose: "Проверяет готовый результат и регрессии.",
-    specialization: "Тест-планы · логи · воспроизведение ошибок",
+    purpose: "Проходит готовый результат в живом приложении, как пользователь.",
+    specialization: "Браузер · сценарии · замеры экрана · ошибки консоли",
   },
   designer: {
     label: "Дизайнер интерфейсов",

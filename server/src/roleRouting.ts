@@ -31,7 +31,7 @@ export const DEFAULT_ROLES: ReadonlyArray<{ key: string; title: string; summary:
   { key: "critic_verifier", title: "Критик-проверяющий", summary: "проверить готовую работу и вынести вердикт." },
   { key: "architect", title: "Архитектор", summary: "продумать устройство системы до кода, когда решений несколько." },
   { key: "builder", title: "Разработчик", summary: "пишет и чинит код: сервер, приложение, веб. «Сделать, чтобы работало»." },
-  { key: "qa", title: "QA", summary: "прогнать сценарии и найти баги." },
+  { key: "qa", title: "Лайф-тестировщик", summary: "пройти сценарии в живом приложении и найти баги." },
   { key: "designer", title: "Дизайнер", summary: "как выглядит: макет, экран, отступы, цвета. Не пишет серверную логику." }
 ];
 
