@@ -116,6 +116,11 @@ describe("MAK-66 — статус узла плана и общая очеред
       `INSERT INTO users (id, name, email, password_hash, role, type)
        VALUES (?, 'MAK66 Owner', ?, '!', 'owner', 'human')`,
     ).run(ownerId, `${ownerId}@test`);
+    // MAK-66 писался под автоприём; MAK-67 добавил правило «Система»:
+    // при manual восстановление узла после рестарта не поднимает его.
+    // Фиксируем автоматический режим, чтобы MAK-66 контракт не
+    // смешивался с новым правилом MAK-67.
+    db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE id=?").run(ownerId);
   });
 
   afterAll(async () => {
@@ -264,6 +269,9 @@ describe("MAK-66 — статус узла плана и общая очеред
   it("восстановление in_progress узла плана при рестарте", async () => {
     // Делаем план через API, как в planSubtaskRecovery.test.ts — там
     // цепочка вызовов работает без ручной вёрстки SQL и миграций.
+    // Создаём задачу под manual, чтобы applyIntakeToNewTask не успел
+    // поставить свой план single_executor и не блокировал approve.
+    db.prepare("UPDATE users SET task_intake_mode='manual' WHERE id=?").run(ownerId);
     const ownerHeaders = { authorization: `Bearer ${app.jwt.sign({ id: ownerId })}` };
     const taskResp = await app.inject({ method: "POST", url: "/api/tasks", headers: ownerHeaders, payload: { title: "MAK-66 restart" } });
     const taskId = taskResp.json().task.id;
@@ -288,6 +296,9 @@ describe("MAK-66 — статус узла плана и общая очеред
       headers: ownerHeaders,
     });
     expect(approve.statusCode).toBeLessThan(300);
+    // Возвращаем automatic для recoverInterruptedPlanSubtasks —
+    // MAK-66 писался под автоприём; MAK-67 добавил гейт по intake_mode.
+    db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE id=?").run(ownerId);
 
     const subtaskRow = db.prepare("SELECT id, agent_state, current_attempt_id FROM subtasks WHERE task_id = ? AND plan_node_key = 'executor'").get(taskId) as { id: string; agent_state: string | null; current_attempt_id: string | null };
     expect(subtaskRow.agent_state).toBe("in_progress");
@@ -336,6 +347,9 @@ describe("MAK-66 — статус узла плана и общая очеред
     // `todo` и `blocked` — оба без живой попытки — и проверяем, что
     // recoverInterruptedPlanSubtasks сбрасывает agent_state в NULL, не
     // запуская новый ход (owner 05.10.2026, MAK-66).
+    // Создаём задачу под manual, чтобы applyIntakeToNewTask не успел
+    // поставить свой план single_executor и не блокировал approve.
+    db.prepare("UPDATE users SET task_intake_mode='manual' WHERE id=?").run(ownerId);
     const ownerHeaders = { authorization: `Bearer ${app.jwt.sign({ id: ownerId })}` };
     const taskResp = await app.inject({ method: "POST", url: "/api/tasks", headers: ownerHeaders, payload: { title: "MAK-66 restart-todo-blocked" } });
     const taskId = taskResp.json().task.id;
@@ -363,6 +377,9 @@ describe("MAK-66 — статус узла плана и общая очеред
       headers: ownerHeaders,
     });
     expect(approve.statusCode).toBeLessThan(300);
+    // Возвращаем automatic для recoverInterruptedPlanSubtasks —
+    // MAK-66 писался под автоприём; MAK-67 добавил гейт по intake_mode.
+    db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE id=?").run(ownerId);
 
     const todoRow = db.prepare("SELECT id FROM subtasks WHERE task_id = ? AND plan_node_key = 'todo_node'").get(taskId) as { id: string };
     const blockedRow = db.prepare("SELECT id FROM subtasks WHERE task_id = ? AND plan_node_key = 'blocked_node'").get(taskId) as { id: string };

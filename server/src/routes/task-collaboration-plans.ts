@@ -1,4 +1,5 @@
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
+import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
 import { ensureCardResponsible } from "../runtime/branchPlan.js";
 import {branchAssignmentRole} from "../runtime/branchPlan.js";
 import { branchRoot,branchCards,branchPresentation,approveBranch,editBranchDraft } from "../runtime/branchPlan.js";
@@ -221,6 +222,138 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }, taskId?: string)
 
 function planForTask(taskId: string, planId: string): Plan | undefined {
   return db.prepare("SELECT * FROM task_collaboration_plans WHERE id = ? AND task_id = ?").get(planId, taskId) as Plan | undefined;
+}
+
+/**
+ * Режим приёма задач владельца — источник правды (users.task_intake_mode,
+ * миграция 037). Реализация вынесена в `lib/ownerIntakeMode.ts` —
+ * оттуда же импортируется runtime-слоем admission. Здесь
+ * реэкспортируем для обратной совместимости.
+ */
+export { ownerIntakeMode };
+export type { IntakeMode };
+
+/**
+ * Признак «этот запуск — системный допуск, а не явное действие владельца».
+ * Используется MAK-67 правилом «Система»: при mode='manual' автоприём
+ * возвращает refusal, а явный вызов владельца проходит. Тот же режим
+ * источник — `users.task_intake_mode`; `opts.system===false` (явное
+ * действие) читается вызывающим кодом и доходит до сюда как `system=false`.
+ */
+export type StartPlanOutcome =
+  | { ok: true; planId: string; subtaskId: string; runId: string }
+  | { ok: false; code: number; error: string };
+
+/**
+ * MAK-67: одна внутренняя функция «план из одного шага» — по задаче и
+ * роли создаёт `single_executor`-план из одного узла, сразу утверждает его
+ * и стартует узел. Заменяет девять разрозненных входов запуска (карта
+ * вырезания — `docs/current/taskflow-flow.md`, раздел «Вырезание
+ * одиночного запуска»). Правило «Система»: при `system=true` и
+ * `task_intake_mode='manual'` возвращает 409 — автоматический допуск не
+ * запускает работу без владельца; при `system=false` (явное действие
+ * владельца) проходит независимо от режима.
+ *
+ * Не трогает готовые/утверждённые планы: при наличии у задачи активного
+ * плана возвращает 409 — владелец сначала отклоняет старый или
+ * переключает схему. Не запускает уже идущий узел: если у задачи
+ * назначен исполнитель или узел в работе — отказ, чтобы не сорвать
+ * чужую работу.
+ */
+export async function startSingleExecutorPlan(
+  taskId: string,
+  actorId: string,
+  opts: { roleKey: string; expectedResult?: string; rationale?: string; system?: boolean },
+): Promise<StartPlanOutcome> {
+  const role = String(opts.roleKey ?? "").trim();
+  if (!ROLE_NAMES.includes(role)) {
+    return { ok: false, code: 400, error: `неизвестная роль «${role}»` };
+  }
+  const task = db.prepare("SELECT id, status, assignee_id, agent_state FROM tasks WHERE id = ?").get(taskId) as
+    | { id: string; status: string; assignee_id: string | null; agent_state: string | null }
+    | undefined;
+  if (!task) return { ok: false, code: 404, error: "Задача не найдена" };
+  if (task.status !== "active") {
+    return { ok: false, code: 409, error: "Запустить можно только активную задачу" };
+  }
+  if (task.assignee_id) {
+    return { ok: false, code: 409, error: "У задачи уже есть исполнитель — гонка за запуск проиграна" };
+  }
+  if (task.agent_state) {
+    return { ok: false, code: 409, error: "Задача уже в работе — гонка за запуск проиграна" };
+  }
+  const activePlan = db.prepare(
+    "SELECT id, status FROM task_collaboration_plans WHERE task_id = ? AND status IN ('draft','approved') ORDER BY revision DESC LIMIT 1",
+  ).get(taskId) as { id: string; status: string } | undefined;
+  if (activePlan) {
+    return { ok: false, code: 409, error: "У задачи уже есть план совместной работы; явный запуск требует смены схемы" };
+  }
+
+  // Правило «Система» (MAK-67): автодопуск (system=true) запускает только
+  // при включённой Системе. Явное действие владельца (system=false) идёт
+  // всегда — без него владелец не сможет запустить ничего при выключенной
+  // Системе, что противоречит решению «явный запуск проходит» из приёмки.
+  if (opts.system === true) {
+    const mode = ownerIntakeMode();
+    if (mode !== "automatic") {
+      logEvent({ taskId, actorId, kind: "single_executor_plan_admission_refused", field: "manual", toValue: role });
+      return {
+        ok: false,
+        code: 409,
+        error: "Система выключена: автоприём не запускает задачи без явного действия владельца",
+      };
+    }
+  }
+
+  const expected = (opts.expectedResult ?? "").trim() || "Выполненный результат задачи";
+  const rationale = (opts.rationale ?? "single_executor: единый исполнитель через план").trim();
+  const graph = {
+    nodes: [{
+      slot_key: "executor",
+      role_key: role,
+      required: true,
+      expected_result: expected.slice(0, 1000),
+      output_artifact: null,
+      source_subtask_id: null,
+    } as Node],
+    edges: [] as Edge[],
+  };
+  const created = createDraftPlan(taskId, actorId, "single_executor", rationale.slice(0, 2000), null, graph);
+  db.prepare("UPDATE task_collaboration_plan_nodes SET origin='single_executor' WHERE plan_id=?").run(created.id);
+  logEvent({ taskId, actorId, kind: "single_executor_plan_proposed", field: `revision:${created.revision}`, toValue: role });
+
+  // Утверждение плана + материализация корневого узла. Тело утверждения —
+  // то же, что и в /approve, без HTTP-слоя: наша функция — внутренний
+  // эквивалент «Запустить исполнителя» через план.
+  const rootSubtask: { id: string; slotKey: string } | null = (() => {
+    try {
+      return db.transaction(() => {
+        const plan = db.prepare("SELECT id, status, version, task_id FROM task_collaboration_plans WHERE id = ?").get(created.id) as
+          | { id: string; status: string; version: number; task_id: string }
+          | undefined;
+        if (!plan || plan.status !== "draft") throw new Error("план изменился — старт не удался");
+        const existing = db.prepare("SELECT COUNT(*) AS n FROM subtasks WHERE collaboration_plan_id = ?").get(plan.id) as { n: number };
+        if (existing.n !== 0) throw new Error("узлы этой revision уже materialized");
+        const maxPos = (db.prepare("SELECT COALESCE(MAX(position), 0) AS m FROM subtasks WHERE task_id = ?").get(taskId) as { m: number }).m;
+        const subtaskId = crypto.randomUUID();
+        db.prepare("INSERT INTO subtasks (id, task_id, title, position, agent_id, collaboration_plan_id, plan_node_key) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(subtaskId, taskId, expected, maxPos + 1, roleUserId(role), plan.id, "executor");
+        db.prepare("UPDATE task_collaboration_plans SET status='superseded' WHERE task_id = ? AND status = 'approved'").run(taskId);
+        db.prepare("UPDATE task_collaboration_plans SET status='approved', approved_by=?, approved_at=datetime('now') WHERE id=?").run(actorId, plan.id);
+        ensurePlanTopic(taskId);
+        return { id: subtaskId, slotKey: "executor" };
+      })();
+    } catch (error) {
+      logEvent({ taskId, actorId, kind: "single_executor_plan_approve_failed", field: created.id, toValue: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
+  })();
+  if (!rootSubtask) return { ok: false, code: 409, error: "Не удалось утвердить план из одного шага" };
+
+  const started = await startPlanSubtaskRun(rootSubtask.id, actorId);
+  if (!started.ok) return { ok: false, code: 409, error: started.error };
+  logEvent({ taskId, actorId, kind: "single_executor_plan_started", field: created.id, toValue: role });
+  return { ok: true, planId: created.id, subtaskId: rootSubtask.id, runId: started.runId };
 }
 
 /** Гасит любой висящий draft этой карточки перед тем, как завести новый —
@@ -778,5 +911,35 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     db.prepare("UPDATE task_collaboration_plans SET status = 'superseded' WHERE id = ?").run(plan.id);
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_declined", field: `revision:${plan.revision}`, toValue: plan.profile });
     return { ok: true };
+  });
+
+  // MAK-67: явное действие владельца — создать план из одного шага и
+  // сразу стартовать. Проходит при ЛЮБОМ режиме приёма («Система»
+  // включена или нет) — это ручка владельца, не системный допуск. По
+  // семантике то же, что и POST /api/tasks/:id/run, но идёт через
+  // план: карточка получает видимый узел, отдельную ветку роли, журнал
+  // плана и обычный сценарий проверки. Используется владельцем, когда
+  // он хочет видеть шаги (а не просто «запустить»), и как общая точка
+  // входа для остальных запусков, которые будут переведены на
+  // `startSingleExecutorPlan()` в MAK-68.
+  app.post<{
+    Params: { id: string };
+    Body: { role_key?: unknown; expected_result?: unknown; rationale?: unknown };
+  }>("/api/tasks/:id/single-executor-plan", { preHandler: authOrApiToken }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "явный запуск плана из одного шага доступен только владельцу" });
+    const task = getTaskForRead(req.params.id, req.userId);
+    if (!task) return reply.code(404).send({ error: "Not found" });
+    const roleKey = String(req.body?.role_key ?? "").trim();
+    if (!roleKey) return reply.code(400).send({ error: "нужно поле role_key" });
+    const expected = req.body?.expected_result === undefined ? undefined : String(req.body.expected_result);
+    const rationale = req.body?.rationale === undefined ? undefined : String(req.body.rationale);
+    const outcome = await startSingleExecutorPlan(task.id, req.userId, {
+      roleKey,
+      expectedResult: expected,
+      rationale,
+      system: false,
+    });
+    if (!outcome.ok) return reply.code(outcome.code).send({ error: outcome.error });
+    return reply.code(201).send({ plan_id: outcome.planId, subtask_id: outcome.subtaskId, run_id: outcome.runId });
   });
 }

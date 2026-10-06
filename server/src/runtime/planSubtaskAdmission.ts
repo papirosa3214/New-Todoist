@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
+import { ownerIntakeMode } from "../lib/ownerIntakeMode.js";
 import { runRoleInProcess } from "./inProcessRun.js";
 import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
 import { currentResultVersion, ensureResultVersionForReview } from "../resultVersions.js";
@@ -184,15 +185,47 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string): P
 }
 
 /**
+ * MAK-67, правило «Система» для автоцепочек: гейт «может ли Система
+ * сама поднять узел». При `task_intake_mode='manual'` автоприём не
+ * запускает узлы — это явное действие владельца. Используется в
+ * `unlockReadyPlanSubtasks` и `recoverInterruptedPlanSubtasks`, чтобы
+ * правило действовало не только на входе `startSingleExecutorPlan`, но и
+ * на путях, перечисленных в плане как подлежащие правке.
+ *
+ * Явные вызовы старта узла (через HTTP `/start` владельцем, или
+ * корневой узел из `startSingleExecutorPlan`, где владелец только что
+ * нажал «Запустить») идут в обход этого гейта — там гейт уже стоит или
+ * не нужен.
+ */
+export function canSystemStartPlanSubtask(): boolean {
+  return ownerIntakeMode() === "automatic";
+}
+
+/**
  * Открывает по графу все узлы плана, чьи предшественники выполнены, и сразу
  * стартует роль в каждом — «роль сама впрягается в работу», без ручного
  * триггера. Неудача одного узла не должна ронять соседние независимые
  * ветки — try/catch на каждый отдельно.
+ *
+ * MAK-67: под `task_intake_mode='manual'` автостарт не идёт — узел
+ * остаётся в состоянии «готов, ждёт владельца», лог-событие
+ * `plan_subtask_manual_hold`. Владелец поднимет его явным действием
+ * (HTTP-ручка или утверждение следующего шага владельцем).
  */
 export async function unlockReadyPlanSubtasks(planId: string | null, taskId: string, actorId: string): Promise<void> {
   if (!planId) return;
   if (finishPlanIfComplete(planId, taskId, actorId)) return;
   const waiting = db.prepare("SELECT * FROM subtasks WHERE collaboration_plan_id = ? AND done = 0 AND agent_state IS NULL").all(planId) as PlanSubtask[];
+  if (waiting.length === 0) return;
+  if (!canSystemStartPlanSubtask()) {
+    // Система выключена: перечисляем, что висит готового, и в одну запись
+    // сообщаем владельцу — без старта, без попыток, без шума в ленте.
+    for (const next of waiting) {
+      if (!canPlanSubtaskBecomeReady(next)) continue;
+      logEvent({ taskId, actorId, kind: "plan_subtask_manual_hold", field: next.plan_node_key ?? next.id, toValue: "intake_mode=manual" });
+    }
+    return;
+  }
   for (const next of waiting) {
     if (!canPlanSubtaskBecomeReady(next)) continue;
     try {
@@ -241,14 +274,21 @@ const INTERRUPT_WINDOW = "-30 minutes";
  * в NULL и сообщаем в ленту, что узел снова свободен. Авто-старта не
  * делаем — `todo` сам подхватит worker, когда дойдёт очередь; `blocked`
  * владелец должен разморозить сам.
+ *
+ * MAK-67: под `task_intake_mode='manual'` восстановление НЕ поднимает
+ * узел заново (это был бы автостарт в обход владельца). Попытка
+ * закрывается как `interrupted`, но `startPlanSubtaskRun` не вызывается:
+ * узел остаётся свободным, владелец стартует его сам.
  */
-export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: number; blocked: number; freed: number }> {
+export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: number; blocked: number; freed: number; manual_hold: number }> {
   const rows = db.prepare(
     "SELECT * FROM subtasks WHERE collaboration_plan_id IS NOT NULL AND done = 0 AND agent_state IN ('in_progress','todo','blocked')",
   ).all() as PlanSubtask[];
   let resumed = 0;
   let blocked = 0;
   let freed = 0;
+  let manualHold = 0;
+  const intakeModeAtBoot = ownerIntakeMode();
   for (const row of rows) {
     const node = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
       .get(row.collaboration_plan_id, row.plan_node_key) as { role_key: string } | undefined;
@@ -279,6 +319,14 @@ export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: numbe
       });
       db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
       logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_interrupted", field: row.plan_node_key, toValue: roleTitle(node.role_key) });
+      if (intakeModeAtBoot !== "automatic") {
+        // MAK-67, manual: узел освобождён, но Система не поднимает его
+        // сама. Снимок остался «stopped» — следующий заход роли увидит
+        // причину и сможет продолжить с явного действия владельца.
+        manualHold += 1;
+        logEvent({ taskId: row.task_id, actorId: null, kind: "plan_subtask_manual_hold", field: row.plan_node_key, toValue: "intake_mode=manual" });
+        continue;
+      }
       const { n: interrupts } = db.prepare(
         `SELECT COUNT(*) AS n FROM attempts
           WHERE subtask_id = ? AND outcome = 'interrupted' AND ended_at >= datetime('now', '${INTERRUPT_WINDOW}')`,
@@ -321,7 +369,7 @@ export async function recoverInterruptedPlanSubtasks(): Promise<{ resumed: numbe
       `«${row.title}»: после рестарта сервера снят признак «${row.agent_state}» — узел снова свободен.`,
     );
   }
-  return { resumed, blocked, freed };
+  return { resumed, blocked, freed, manual_hold: manualHold };
 }
 
 /**

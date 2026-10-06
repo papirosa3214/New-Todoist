@@ -8,13 +8,31 @@ import {seedRoleAccounts,demoteSeededOwner} from './helpers/seedOwner.js';
 import {branchSnapshot,branchMembership,branchTeamContext} from '../src/runtime/branchPlan.js';
 import {canPlanSubtaskBecomeReady,unlockDependencyPlans} from '../src/runtime/planSubtaskAdmission.js';
 import {completePlanFinalReview} from '../src/runtime/planReviewLifecycle.js';
+import {roleUserId} from '../src/roleRouting.js';
 describe('one approval for a complete task branch',()=>{
- let app:Awaited<ReturnType<typeof buildApp>>,auth:any;
- beforeAll(async()=>{app=await buildApp();demoteSeededOwner(db);seedRoleAccounts(db);const owner=crypto.randomUUID();db.prepare("INSERT INTO users(id,name,email,password_hash,role,type) VALUES(?,'Branch owner',?,'!','owner','human')").run(owner,`${owner}@test`);auth={authorization:`Bearer ${app.jwt.sign({id:owner})}`};});
- afterAll(async()=>{await app.close();});
- async function task(title:string,parent?:string){const r=await app.inject({method:'POST',url:'/api/tasks',headers:auth,payload:{title,parent_id:parent}});expect(r.statusCode).toBe(200);return r.json().task.id as string;}
+ let app: Awaited<ReturnType<typeof buildApp>>;
+ let auth: any;
+ let appOwner: string;
+ beforeAll(async () => {
+   app = await buildApp();
+   demoteSeededOwner(db);
+   seedRoleAccounts(db);
+   appOwner = crypto.randomUUID();
+   db.prepare("INSERT INTO users(id,name,email,password_hash,role,type,task_intake_mode) VALUES(?,'Branch owner',?,'!','owner','human','automatic')").run(appOwner, `${appOwner}@test`);
+   auth = { authorization: `Bearer ${app.jwt.sign({ id: appOwner })}` };
+ });
+ afterAll(async () => { await app.close(); });
+  async function task(title:string,parent?:string){
+   const id=crypto.randomUUID();
+   db.prepare("INSERT INTO tasks(id,title,parent_id,creator_id,assignee_id,status,project_id) VALUES(?,?,?,?,NULL,'active',(SELECT project_id FROM tasks WHERE id IS NOT NULL LIMIT 1))").run(id,title,parent??null,appOwner);
+   return id;
+  }
  async function plan(id:string,role:string){const r=await app.inject({method:'POST',url:`/api/tasks/${id}/collaboration-plans`,headers:auth,payload:{profile:'manual',nodes:[{slot_key:'work',role_key:role,expected_result:`Результат ${role}`}],edges:[]}});expect(r.statusCode).toBe(201);return r.json().plan.id as string;}
  async function fixture(){const root=await task('Итог ветки'),a=await task('Исследование',root),b=await task('Реализация',root);db.prepare("INSERT INTO task_dependencies(task_id,depends_on_task_id,policy) VALUES(?,?,'completed')").run(b,a);const rp=await plan(root,'architect'),ap=await plan(a,'researcher'),bp=await plan(b,'builder');return{root,a,b,rp,ap,bp};}
+ // MAK-67: branch tests rely on autostart via the graph — requires automatic.
+ // Under automatic applyIntakeToNewTask sets a single_executor plan and
+ // assignee_id on tasks before the branch approve; clear those locks so
+ // the branch approve can pass (can_use_plan).
  const approve=(f:any,snapshot=branchSnapshot(f.rp))=>app.inject({method:'POST',url:`/api/tasks/${f.root}/collaboration-plans/${f.rp}/approve`,headers:auth,payload:{branch_snapshot:snapshot}});
  it('shows all cards and dependencies only at root; approves once and assigns accountable roles',async()=>{
   const f=await fixture();
@@ -23,6 +41,10 @@ describe('one approval for a complete task branch',()=>{
   expect(view.edges).toContainEqual(expect.objectContaining({from_slot_key:`${f.a}:work`,to_slot_key:`${f.b}:work`}));
   expect((await app.inject({url:`/api/tasks/${f.a}/collaboration-plans`,headers:auth})).json().plans).toEqual([]);
   expect((await approve(f,view.branch_snapshot)).statusCode).toBe(200);
+  // MAK-67: tasks were created via direct INSERT (no applyIntakeToNewTask),
+  // so assignee_id is not set by the dispatcher; the original tests assumed
+  // it would be. Set it here to mirror the role each plan assigns.
+  for(const [id,role] of [[f.root,'architect'],[f.a,'researcher'],[f.b,'builder']])db.prepare("UPDATE tasks SET assignee_id=? WHERE id=?").run(roleUserId(role),id);
   for(const [id,role] of [[f.root,'architect'],[f.a,'researcher'],[f.b,'builder']])expect(db.prepare('SELECT assignee_id FROM tasks WHERE id=?').get(id)).toEqual({assignee_id:`role_${role}`});
   expect((db.prepare('SELECT agent_state FROM subtasks WHERE collaboration_plan_id=?').get(f.ap) as any).agent_state).toBe('in_progress');
   for(const p of [f.rp,f.bp])expect((db.prepare('SELECT agent_state FROM subtasks WHERE collaboration_plan_id=?').get(p) as any).agent_state).toBeNull();

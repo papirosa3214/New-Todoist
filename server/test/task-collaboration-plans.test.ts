@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 
@@ -42,6 +42,17 @@ describe("collaboration plans", () => {
     builderAuth = `Bearer ${app.jwt.sign({ id: roleUserId("builder") })}`;
   });
 
+  // MAK-67: тесты по умолчанию идут под manual, чтобы фоновый
+  // applyIntakeToNewTask не подбирал план и не блокировал ручной approve.
+  // Отдельные тесты, которым нужен авто-старт по графу, переключают
+  // режим на automatic точечно (а afterEach всегда возвращает manual).
+  beforeEach(() => {
+    db.prepare("UPDATE users SET task_intake_mode='manual' WHERE role='owner'").run();
+  });
+  afterEach(() => {
+    db.prepare("UPDATE users SET task_intake_mode='manual' WHERE role='owner'").run();
+  });
+
   const planSubtasks = async (taskId: string): Promise<Record<string, PlanSubtask>> => {
     const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } })).json() as Array<PlanSubtask & { collaboration_plan_id: string | null }>;
     return Object.fromEntries(subtasks.filter((s) => s.collaboration_plan_id).map((s) => [s.plan_node_key, s]));
@@ -75,6 +86,11 @@ describe("collaboration plans", () => {
     // результат»; на subtasks нет отдельного промежуточного submitted-без-
     // accept состояния, edge start_condition="accepted" без артефактного
     // контракта схлопывается в done=1 (см. planSubtaskAdmission.ts).
+    // MAK-67 добавил гейт по task_intake_mode: при manual Система НЕ
+    // поднимает следующие узлы сама. Этот тест проверяет старую
+    // автоматическую цепочку — включаем Систему перед закрытием
+    // предшественника.
+    db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE role='owner'").run();
     expect((await app.inject({ method: "PATCH", url: `/api/subtasks/${subtasks.research.id}`, headers: { authorization: researcherAuth }, payload: { done: true, result: "Факты" } })).statusCode).toBe(200);
 
     // architecture открылся и сразу сам стартовал (unlockReadyPlanSubtasks
@@ -241,6 +257,12 @@ describe("collaboration plans", () => {
     });
     const plan = proposal.json().plan;
     expect((await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
+    // MAK-67: при manual unlockReadyPlanSubtasks НЕ поднимает
+    // successor-узлы сама — это противоречило бы правилу «Система».
+    // T03 «владелец утверждает только старт, дальше цепочка сама»
+    // описывает сценарий с включённой Системой. Включаем на время
+    // теста; afterEach вернёт manual.
+    db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE role='owner'").run();
 
     // Analysis — корневой, стартует сам при approve. Это и есть
     // единственное участие владельца во всём пути — сам approve плана.
