@@ -45,6 +45,7 @@ import { registerStructureRoutes } from "./routes/structure.js";
 import { registerReportRoutes } from "./routes/reports.js";
 import { registerResearchRoutes } from "./routes/research.js";
 import { registerChatsRoutes } from "./routes/chats.js";
+import { ensureCommonChat } from "./lib/chatCommon.js";
 import { registerWidgetsRoutes } from "./routes/widgets.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
@@ -322,6 +323,16 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Версионные миграции поверх — новые изменения схемы идут сюда, не в
   // migrate() (см. migrations.ts).
   runMigrations();
+  // Общий чат ролей (карточка ca816271, п. 2): идемпотентно завести
+  // комнату, состав и закреплённый регламент, если их ещё нет.
+  try {
+    ensureCommonChat();
+  } catch (error) {
+    console.warn(
+      "[index] общий чат не заведён:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 
   // Routes
   registerAuthRoutes(app);

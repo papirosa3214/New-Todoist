@@ -3243,6 +3243,141 @@ const migrations: Migration[] = [
       db.exec("ALTER TABLE projects ADD COLUMN is_private INTEGER DEFAULT 0");
     }
   } },
+
+  // Чаты (карточка ca816271, документ проектирования d748e4f4-f502-4002-b622-f070be0d8438).
+  // Пункты владельца: Секретарь — обычный личный чат, общий групповой чат
+  // ролей, чат задачи закрывается с задачей, только `@` будит.
+  //
+  // 1) Секретарь получает `role_key='secretary'`, оставаясь на фиксированной
+  //    учётке `u-secretary` (на неё ссылаются chat_messages, клиенты и
+  //    `roleUserId('secretary')`). Триггеры `users_role_key_*_guard` требуют
+  //    `id = 'role_' || role_key`; ослабляем их ровно одним исключением
+  //    `id='u-secretary' AND role_key='secretary'` — после этого Секретарь
+  //    проходит общий путь ролей без спецкода.
+  // 2) `chats.closed_at` — тема задачи закрывается вместе с задачей.
+  // 3) `chats.pinned_message_id` — закреплённый регламент общего чата.
+  // 4) `chat-common` — общий групповой чат: все активные роли, Секретарь,
+  //    владелец, оркестратор. Регламент строится из паспортов ролей.
+  // 5) Бэкфил: уже завершённые задачи получают закрытую тему.
+  { id: "103_chats_common_secretary_lifecycle", description: "Секретарь как роль, closed_at/pinned_message_id, общий чат", up: () => {
+    const chatCols = new Set(
+      (db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!chatCols.has("closed_at")) {
+      db.exec("ALTER TABLE chats ADD COLUMN closed_at TEXT");
+    }
+    if (!chatCols.has("pinned_message_id")) {
+      db.exec("ALTER TABLE chats ADD COLUMN pinned_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL");
+    }
+
+    // Ослабляем guard'ы только для пары u-secretary/secretary. Во всём
+    // остальном правило прежнее: role_key без канонической учётки запрещён.
+    db.exec(`
+      DROP TRIGGER IF EXISTS users_role_key_insert_guard;
+      DROP TRIGGER IF EXISTS users_role_key_update_guard;
+      CREATE TRIGGER users_role_key_insert_guard
+      BEFORE INSERT ON users
+      WHEN NEW.role_key IS NOT NULL AND (
+        NEW.type <> 'ai'
+        OR NEW.role <> 'agent'
+        OR COALESCE(NEW.is_system_bot, 0) <> 1
+        OR NOT (NEW.id = 'role_' || NEW.role_key OR (NEW.id = 'u-secretary' AND NEW.role_key = 'secretary'))
+        OR NOT EXISTS (SELECT 1 FROM roles WHERE key = NEW.role_key)
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'invalid users.role_key binding');
+      END;
+      CREATE TRIGGER users_role_key_update_guard
+      BEFORE UPDATE OF id, role, role_key, type, is_system_bot ON users
+      WHEN NEW.role_key IS NOT NULL AND (
+        NEW.type <> 'ai'
+        OR NEW.role <> 'agent'
+        OR COALESCE(NEW.is_system_bot, 0) <> 1
+        OR NOT (NEW.id = 'role_' || NEW.role_key OR (NEW.id = 'u-secretary' AND NEW.role_key = 'secretary'))
+        OR NOT EXISTS (SELECT 1 FROM roles WHERE key = NEW.role_key)
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'invalid users.role_key binding');
+      END;
+    `);
+    db.prepare(
+      `UPDATE users SET role_key = 'secretary'
+        WHERE id = 'u-secretary' AND role = 'agent' AND type = 'ai'
+          AND COALESCE(is_system_bot, 0) = 1
+          AND (role_key IS NULL OR role_key <> 'secretary')`,
+    ).run();
+
+    // Общий чат. Владелец — самый ранний владелец трекера.
+    const owner = (
+      db.prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1").get() as
+        | { id: string }
+        | undefined
+    )?.id;
+    if (owner) {
+      db.prepare(
+        `INSERT OR IGNORE INTO chats (id, title, kind, created_by, project_id, parent_chat_id, task_id)
+         VALUES ('chat-common', 'Общий чат', 'group', ?, NULL, NULL, NULL)`,
+      ).run(owner);
+      db.prepare(
+        "INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES ('chat-common', ?)",
+      ).run(owner);
+    }
+    // Участники — все активные роли (включая Секретаря) и оркестратор.
+    // Учётка роли = role_<key>, у Секретаря — u-secretary; включаем только
+    // роли с roles.enabled=1, чтобы состав совпадал с рабочим.
+    db.exec(`
+      INSERT OR IGNORE INTO chat_members (chat_id, member_id)
+      SELECT 'chat-common', u.id FROM users u
+       WHERE COALESCE(u.archived, 0) = 0 AND (
+         (u.type = 'ai' AND u.role = 'agent' AND u.role_key IN (SELECT key FROM roles WHERE enabled = 1))
+         OR (u.id = 'u-secretary')
+         OR u.role = 'orchestrator'
+       );
+    `);
+
+    // Закреплённый регламент — одно сообщение от системной учётки,
+    // собираемое из паспортов ролей. Обновляется только явным действием,
+    // поэтому здесь только первичный посев (если его ещё нет).
+    if (owner) {
+      const systemId = (
+        db.prepare("SELECT id FROM users WHERE id = 'taskflow_system'").get() as
+          | { id: string }
+          | undefined
+      )?.id;
+      if (systemId) {
+        const existing = db
+          .prepare("SELECT pinned_message_id FROM chats WHERE id = 'chat-common'")
+          .get() as { pinned_message_id: string | null } | undefined;
+        if (existing && !existing.pinned_message_id) {
+          const roles = db
+            .prepare("SELECT key, title, summary FROM roles WHERE enabled = 1 ORDER BY position, key")
+            .all() as Array<{ key: string; title: string; summary: string | null }>;
+          const text = [
+            "Регламент общего чата TaskFlow.",
+            "Здесь все роли, Секретарь и владелец. Сервер сюда не пишет — только человек и роль по своей команде.",
+            "Обращение к участнику — только через @; упоминание имени без @ никого не будит.",
+            "Кто за что отвечает:",
+            ...roles.map((r) => `@${r.key} — ${r.title}: ${r.summary ?? ""}`.trimEnd()),
+            "Секретарь — личный помощник владельца: разговор, вопросы, разбор надиктовки.",
+          ].join("\n");
+          const msgId = 'chat-common-regulator';
+          db.prepare(
+            `INSERT OR IGNORE INTO chat_messages (id, from_user_id, text, channel, chat_id, message_type)
+             VALUES (?, ?, ?, 'chat', 'chat-common', 'system')`,
+          ).run(msgId, systemId, text);
+          db.prepare("UPDATE chats SET pinned_message_id = ? WHERE id = 'chat-common'").run(msgId);
+        }
+      }
+    }
+
+    // Бэкфил закрытых тем: задача уже завершена — тема закрыта её временем.
+    db.exec(`
+      UPDATE chats SET closed_at = COALESCE(
+        (SELECT t.completed_at FROM tasks t WHERE t.id = chats.task_id), datetime('now'))
+       WHERE task_id IS NOT NULL AND parent_chat_id IS NOT NULL AND closed_at IS NULL
+         AND task_id IN (SELECT id FROM tasks WHERE status = 'completed');
+    `);
+  } },
 ];
 
 /**
