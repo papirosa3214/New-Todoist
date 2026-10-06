@@ -32,7 +32,7 @@ import { MicOverlay } from "./MicOverlay";
 import { useMicRecorder } from "../lib/useMicRecorder";
 import { useTranscribeAudio } from "../api/audio";
 import { combineDictatedText } from "../lib/dictationParser";
-import { ErrorBanner, Icon } from "./UI";
+import { Checkbox, ErrorBanner, Icon } from "./UI";
 import { MarkdownInline } from "./MarkdownInline";
 import { ActionsMenu } from "./ActionsMenu";
 import { TaskControlSheet, type TaskControlKind } from "./TaskControlSheet";
@@ -93,32 +93,15 @@ const VIEW: Record<
   review: { ring: "", text: "text-text", label: "на проверке" },
 };
 
-// ═══ DashedRing — «ждёт»/«в работе» ═══
-// Пятый заход (18.08.2026). Четвёртая версия (дуга 5 из 8 сегментов) была
-// на верной идее, но с багом: animation-delay назначался по ИНДЕКСУ path в
-// массиве Lucide, а индекс НЕ совпадает с угловым положением сегмента на
-// круге (пути в circle-dashed.mjs перечислены в порядке генерации SVG, не
-// по часовой стрелке) — волна зажигала сегменты вразнобой, «в трёх
-// абсолютно разных местах» вместо соседних. Никакого transform тут нет и
-// не было ни в одной версии DashedRing — 8 путей стоят на месте всегда,
-// меняется только их color, поэтому в принципе неоткуда взяться «сходу с
-// оси»: ось есть только у вращения группы (та самая забракованная комета),
-// не у смены цвета неподвижных штрихов.
-//
-// Исправление — не на глаз: посчитан скриптом (atan2 от центра 12,12 до
-// стартовой точки M каждого path) реальный угол каждого из 8 сегментов,
-// шаг подтверждён ровно 45° между соседями. DASH_ANGULAR_POSITION[i] —
-// позиция path[i] в этом угловом порядке по часовой стрелке (0..7), а не
-// его индекс в массиве. Задержка анимации назначается по этой позиции —
-// теперь горящая дуга физически идёт по соседним сегментам круга.
-//
-// Дуги короче оригинальных Lucide (14° вместо ~22°, тот же центр каждого
-// из 8 слотов на круге) — по прямой просьбе «побольше промежутков между
-// сегментами». Пересчитаны тем же скриптом (те же 8 угловых позиций, новый
-// span), не подрисованы на глаз — DASH_ANGULAR_POSITION ниже не поменялся,
-// потому что центр каждого сегмента остался тем же, поменялась только его
-// длина. Проверено покадрово (Playwright, 8 кадров одного цикла) перед
-// переносом сюда — дуга из 5 идёт по кругу без скачков.
+// ═══ DashedRing — «ожидает» ═══
+// Неподвижное пунктирное кольцо из 8 сегментов Lucide CircleDashed
+// (DESIGN-SYSTEM.md §2.6, нативный `DashedRing(active: false)` в
+// TFCheckbox.swift). Сегменты короче оригинальных (14° вместо ~22°, тот же
+// центр каждого из 8 слотов на круге) — по просьбе «побольше промежутков
+// между сегментами». До 06.10.2026 этот же компонент с `active` рисовал
+// ещё и «в работе» (волна цвета по кругу); теперь «в работе» — 12 точек
+// (DotsScaleRotate ниже), поэтому волна, пульсация и вращение обёртки
+// отсюда и из index.css убраны, здесь осталась только форма.
 const DASH_PATHS = [
   "M10.781 2.075a10 10 0 0 1 2.437 0",
   "M13.219 21.925a10 10 0 0 1 -2.437 0",
@@ -129,32 +112,9 @@ const DASH_PATHS = [
   "M4.120 5.843a10 10 0 0 1 1.723 -1.723",
   "M5.843 19.880a10 10 0 0 1 -1.723 -1.723",
 ];
-// угловой порядок по часовой (расчёт): [2,5,4,1,7,3,6,0] — инвертирован
-// в позицию по индексу массива ниже. Цветовая волна («змейка») идёт по
-// часовой (прямая просьба Максима 18.08.2026) — отдельно от физического
-// вращения всей обёртки (dash-spin в index.css), которое идёт против
-// часовой: это два независимых слоя движения в разные стороны, не опечатка.
-const DASH_ANGULAR_POSITION = [7, 3, 0, 5, 2, 1, 6, 4];
-// Цвет («змейка») быстрее, чем физическое вращение круга (0.8s vs 1.6s
-// у dash-spin в index.css, прямая просьба Максима 18.08.2026) — держать
-// оба числа согласованными при правке любого из двух мест.
-const DASH_GLOW_DURATION = 0.8;
-
-function DashedRing({ active }: { active: boolean }) {
-  // Вращение и пульсация — обе transform, поэтому на разных узлах: одна
-  // CSS-анимация transform на элементе перезаписывала бы другую, а не
-  // складывалась с ней. dash-spin — на обёртке (весь кружок физически
-  // крутится, против часовой), dash-pulse — на самом svg внутри неё
-  // (дышит размером). Обёртка ровно 21×21 без отступов, чтобы её
-  // transform-origin:center совпадал с геометрическим центром SVG —
-  // иначе вращение шло бы по орбите вокруг чужой точки, а не своей оси
-  // (та самая «пьяная стрелка», которую раскритиковали у кометы). Здесь
-  // риска нет: фигура симметрична (8 сегментов через равные 45°), а не
-  // как у кометы — разномастная группа капель.
+function DashedRing() {
   return (
-    <span
-      className={`inline-flex w-[21px] h-[21px] ${active ? "dash-spin" : ""}`}
-    >
+    <span className="inline-flex w-[21px] h-[21px] text-dim">
       <svg
         viewBox="0 0 24 24"
         width={21}
@@ -163,22 +123,46 @@ function DashedRing({ active }: { active: boolean }) {
         strokeWidth={3}
         strokeLinecap="round"
         aria-hidden="true"
-        className={active ? "dash-pulse" : undefined}
       >
         {DASH_PATHS.map((d, i) => (
-          <path
-            key={i}
-            d={d}
-            stroke="currentColor"
-            className={active ? "text-dim dash-glow" : "text-dim"}
-            style={
-              active
-                ? {
-                    animationDelay: `${(DASH_ANGULAR_POSITION[i] * DASH_GLOW_DURATION) / 8}s`,
-                  }
-                : undefined
-            }
-          />
+          <path key={i} d={d} stroke="currentColor" />
+        ))}
+      </svg>
+    </span>
+  );
+}
+
+// ═══ DotsScaleRotate — «в работе» ═══
+// §2.6: у состояния «выполняется» не пунктир, а 12 точек по кругу, у
+// которых голова волны полная и яркая, а хвост гаснет и уменьшается.
+// Нативный `DotsScaleRotate` (TFCheckbox.swift) заменил пунктир по просьбе
+// владельца 03.09.2026 — он назвал точную иконку icones/Iconify
+// `svg-spinners--12-dots-scale-rotate`. Числа 1:1 с нативом: период волны
+// 1.2s, точка 3.4 из 21 (здесь r≈1.9 при viewBox 24), смещение центра
+// 9 из 21 (≈9.4 здесь), scale 0.35+0.65·intensity, opacity 0.2+0.8·intensity,
+// где intensity = 1 − phase, phase — отставание точки от головы волны.
+// Зависимость линейная, поэтому кейфрейм в index.css линейный, а бег волны
+// по кругу задаётся отрицательным animation-delay по индексу точки.
+const DOTS_COUNT = 12;
+const DOTS_PERIOD = 1.2;
+
+function DotsScaleRotate() {
+  return (
+    <span className="inline-flex w-[21px] h-[21px] text-text">
+      <svg viewBox="0 0 24 24" width={21} height={21} aria-hidden="true">
+        {Array.from({ length: DOTS_COUNT }, (_, i) => (
+          <g key={i} transform={`rotate(${(i * 360) / DOTS_COUNT} 12 12)`}>
+            <circle
+              className="dots-scale-rotate"
+              cx={12}
+              cy={2.6}
+              r={1.9}
+              fill="currentColor"
+              style={{
+                animationDelay: `${(-i * DOTS_PERIOD) / DOTS_COUNT}s`,
+              }}
+            />
+          </g>
         ))}
       </svg>
     </span>
@@ -201,10 +185,10 @@ function StateMark({ state }: { state: SubtaskState }) {
           чтобы кружки визуально совпадали по размеру с готовым, а не
           выглядели мелкими точками в пустоте. */}
       {state === "done" && <Check size={12} className="text-white" />}
-      {/* Дуга — только у текущей, ничего не вращается физически (см.
-          DashedRing выше). Под prefers-reduced-motion гасится правилом
-          .dash-glow в index.css, сегменты остаются на месте, без цвета. */}
-      {state === "running" && <DashedRing active />}
+      {/* Точки — только у текущей; под prefers-reduced-motion волна
+          гасится правилом .dots-scale-rotate в index.css, точки остаются
+          неподвижным кольцом (см. DotsScaleRotate выше). */}
+      {state === "running" && <DotsScaleRotate />}
       {/* text-orange, не text-coral (18.08.2026, найден рассинхрон) —
           «заблокировано» и в AgentStatusRow (статус самой задачи наверху),
           и здесь должно быть ОДНИМ цветом. Coral — это «Агент пропал»
@@ -218,9 +202,9 @@ function StateMark({ state }: { state: SubtaskState }) {
           агент сдал шаг, ждёт вашего решения — принять (галочка) или
           вернуть на доработку (см. владельческие действия ниже). */}
       {state === "review" && <Eye size={21} className="text-blue" />}
-      {/* pending — тот же пунктирный кружок, неподвижный (см. DashedRing) —
-          не отдельная иконка. */}
-      {state === "pending" && <DashedRing active={false} />}
+      {/* pending — пунктирный кружок из 8 сегментов, неподвижный
+          (см. DashedRing) — не отдельная иконка. */}
+      {state === "pending" && <DashedRing />}
     </div>
   );
 }
@@ -525,17 +509,25 @@ function SubtaskRow({
             нажатия, что и раньше, случайным щелчком легко принять шаг,
             который на самом деле хотели отклонить. Приёмка теперь только
             явной кнопкой в раскрытом виде ниже. */}
-        {state === "review" ? (
+        {state === "review" && st.state !== undefined ? (
           <div className="shrink-0" aria-label={v.label}>
             <StateMark state={state} />
           </div>
         ) : (
+          // Тап-зона 44×44 (§2.6 / §Layout): сам кружок 21×21, но
+          // нажимаемая область — не меньше HIG. Отрицательные поля
+          // (44−21)/2 = 11.5 компенсируют её в потоке, поэтому кромка
+          // кружка и начало заголовка остаются на прежних местах.
           <button
             onClick={guardedToggle}
-            className="tap-scale shrink-0"
+            className="tap-scale -m-[11.5px] w-11 h-11 shrink-0 inline-flex items-center justify-center"
             aria-label={st.done ? "Снять отметку" : "Отметить сделанной"}
           >
-            <StateMark state={state} />
+            {st.state === undefined ? (
+              <Checkbox checked={st.done} />
+            ) : (
+              <StateMark state={state} />
+            )}
           </button>
         )}
 

@@ -1697,6 +1697,51 @@ export function IconButton({
   );
 }
 
+// Чекбокс — веб-аналог нативного `TFCheckbox` (§2.6): круг 21×21,
+// отмечен — залитый `green` с галочкой 12 (белой), не отмечен — контурное
+// кольцо `dim` 2px. Два режима, как в нативе:
+//   - `onToggle` задан — интерактивный контрол с тап-зоной 44×44 (§Layout)
+//     и обязательной `label` для VoiceOver;
+//   - без `onToggle` — чистый ИНДИКАТОР внутри строки: смысл несёт
+//     контейнер, поэтому от скринридера он скрыт.
+// Сама отметка остаётся 21×21 и в интерактивном режиме: тап-зону даёт
+// кнопка-обёртка (w-11 h-11), а не увеличенный кружок.
+export function Checkbox({
+  checked,
+  onToggle,
+  label,
+  className = "",
+}: {
+  checked: boolean;
+  onToggle?: () => void;
+  /** Подпись для скринридера — что именно переключает чекбокс. */
+  label?: string;
+  className?: string;
+}) {
+  const mark = (
+    <span
+      aria-hidden={onToggle ? true : undefined}
+      className={`w-[21px] h-[21px] rounded-full flex items-center justify-center shrink-0 ${
+        checked ? "bg-green border-2 border-green" : "border-2 border-dim"
+      }`}
+    >
+      {checked && <Check size={12} className="text-white" />}
+    </span>
+  );
+  if (!onToggle) return mark;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={label ?? "Отметить"}
+      aria-pressed={checked}
+      className={`tap-scale w-11 h-11 shrink-0 inline-flex items-center justify-center ${className}`}
+    >
+      {mark}
+    </button>
+  );
+}
+
 // ═══════════ LOADING ═══════════
 // Аудит дизайн-системы 20.08.2026, пункт 3: «Загрузка…» дословно
 // копипастилась в 13 экранах — inline-строка `<p className="px-1
