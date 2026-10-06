@@ -3243,6 +3243,37 @@ const migrations: Migration[] = [
       db.exec("ALTER TABLE projects ADD COLUMN is_private INTEGER DEFAULT 0");
     }
   } },
+  { id: "103_role_prompts_laconism", description: "Блок «Лаконичность» в начало промпта secretary (роль в БД перекрывает файл); c19c9460 (D2).", up: () => {
+    // roles.prompt для secretary задан миграцией 062 и перекрывает
+    // server/scripts/role-prompts/secretary.md. Без этой правки блок
+    // «Лаконичность» в файле для работающей системы не действует.
+    // Идемпотентно: если блок уже вставлен (маркер) — выходим; иначе
+    // дописываем его в начало существующего текста, не затирая правил 062.
+    const LACONISM_MARKER = "## Лаконичность\n";
+    const laconismBlock = [
+      "## Лаконичность",
+      "",
+      "Пиши коротко. Подробности оформляй документом (`taskflow_doc_write`) и давай ссылку.",
+      "",
+      "- Сообщение другой роли или в чат — **до 3 предложений**.",
+      "- Поле `result` шага — **1–2 предложения**.",
+      "- Комментарий в ленте — **статус + ссылка** на документ/артефакт.",
+      "- Не пересказывай задачу и свои прошлые шаги.",
+      "- Не вставляй в сообщения код и логи — указывай путь к файлу и коммит.",
+      "- Не рассуждай вслух в чате — итог и решение, без разбора хода мыслей.",
+      "",
+    ].join("\n");
+    const row = db.prepare("SELECT prompt FROM roles WHERE key = 'secretary'").get() as { prompt: string | null } | undefined;
+    if (!row || row.prompt == null) {
+      // Миграция 062 ещё не отработала (свежая БД): промпт проставит она,
+      // здесь ничего не пишем — иначе затрём её текст.
+      return;
+    }
+    if (row.prompt.includes(LACONISM_MARKER)) return;
+    db.prepare("UPDATE roles SET prompt = ? WHERE key = 'secretary'").run(
+      laconismBlock + row.prompt,
+    );
+  } },
 ];
 
 /**
