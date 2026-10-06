@@ -210,7 +210,7 @@ function importRelations(owner: string, snapshot: LinearSnapshot, ids: Map<strin
   ensureAcyclic(edges.map(e => [e.task_id, e.depends_on_task_id]));
 }
 
-export function commitLinearPreview(owner: string, previewId: string) {
+export function commitLinearPreview(owner: string, previewId: string, options: { proposePlans?: boolean } = {}) {
   return db.transaction(() => {
     const preview: any = db.prepare("SELECT * FROM linear_import_previews WHERE id=? AND owner_id=?").get(previewId, owner);
     if (!preview || preview.expires_at < Date.now()) throw new LinearSourceError("Предварительный просмотр устарел. Загрузите его заново.", 409);
@@ -255,7 +255,9 @@ export function commitLinearPreview(owner: string, previewId: string) {
     importRelations(owner, snapshot, ids);
     // All cards/parents/dependencies exist before proposing work. This is the
     // shared draft mechanism, not intake that re-creates source decomposition.
-    for (const item of result.task_ids) {
+    // Фоновый автоимпорт черновики планов НЕ ставит (`proposePlans:false`):
+    // приём работы остаётся в режиме владельца, а не предлагается сам.
+    if (options.proposePlans !== false) for (const item of result.task_ids) {
       const draft = autoProposeCollaborationPlanIfNeeded(item.task_id, { actorId: owner, imported: true });
       const visible = draft ?? db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=? AND status='draft' ORDER BY revision DESC LIMIT 1").get(item.task_id) as {id:string}|undefined;
       if (visible) item.draft_plan_id = visible.id;
