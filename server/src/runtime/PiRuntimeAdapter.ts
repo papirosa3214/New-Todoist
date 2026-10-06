@@ -1011,10 +1011,18 @@ export async function getAvailableModelIds(): Promise<Set<string>> {
   return new Set(catalog.map((m) => m.id));
 }
 
-/** Проверяет, что модель есть в каталоге Pi. */
-export async function modelExists(id: string): Promise<boolean> {
-  const ids = await getAvailableModelIds();
-  return ids.has(id);
+/** Проверяет, что модель есть в каталоге Pi. Принимает и «голый» id (`MiniMax-M3`), и ссылку
+ *  `провайдер/модель` (`opencode-go/deepseek-v4.1-flash`): именно так маршруты ролей хранят модели
+ *  не-основных провайдеров, иначе провайдер угадывался бы по имени и выходил MiniMax. */
+export async function modelExists(ref: string): Promise<boolean> {
+  const value = ref.trim();
+  const catalog = await loadModelCatalog();
+  if (catalog.some((m) => m.id === value)) return true;
+  const slash = value.indexOf("/");
+  if (slash <= 0) return false;
+  const provider = value.slice(0, slash);
+  const id = value.slice(slash + 1);
+  return catalog.some((m) => m.provider === provider && m.id === id);
 }
 
 // ===== Живая онлайн-сессия Пи для чата (Этап 2 плана от 21.09.2026) =====

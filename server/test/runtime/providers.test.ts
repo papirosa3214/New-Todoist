@@ -420,6 +420,24 @@ describe("runtime providers API", () => {
     expect((res.json() as { fallbacks: string[] }).fallbacks).toEqual(["gpt-5"]);
   });
 
+  it("основная модель задаётся ссылкой провайдер/модель; несуществующая пара → 422", async () => {
+    const ok = await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing/architect",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { primary: "minimax/minimax-m3" },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect((ok.json() as { primary: string }).primary).toBe("minimax/minimax-m3");
+    const bad = await app.inject({
+      method: "PUT",
+      url: "/api/runtime/routing/architect",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { primary: "anthropic/minimax-m3" },
+    });
+    expect(bad.statusCode).toBe(422);
+  });
+
   it("PUT /routing {primary} — основная модель сразу всем ролям, запасные не затираются", async () => {
     await app.inject({
       method: "PUT",
