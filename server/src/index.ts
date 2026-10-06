@@ -15,6 +15,7 @@ import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
 import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
+import { startProviderProbe } from "./runtime/providerProbe.js";
 import { startLinearAutoImport } from "./lib/linearAutoImport.js";
 import { startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
 import { startLinearSync } from "./lib/linearSync.js";
@@ -569,12 +570,14 @@ if (isMain) {
     let stopKnowledgeSync: (() => void) | null = null;
     let stopScheduler: (() => void) | null = null;
     let stopStalledWatch: (() => void) | null = null;
+    let stopProviderProbe: (() => void) | null = null;
     let stopLinearAutoImport: (() => void) | null = null;
     let stopLinearSync: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
       stopStalledWatch?.();
+      stopProviderProbe?.();
       stopLinearAutoImport?.();
       stopLinearSync?.();
       if (stopPreparation) await stopPreparation();
@@ -603,6 +606,9 @@ if (isMain) {
     // Сторож зависших шагов: пинг 10/авто-перезапуск 20/blocked 30+ минут без пульса.
     // Карточка 71651ad0; до этого всё чинил оркестратор руками (А30/А37/Г1-к/Г1-л).
     if (!sandbox) stopStalledWatch = startStalledStepWatch();
+    // Метка «провайдер в лимите» снимается по факту сброса: пробный запрос раз в 5 минут
+    // (runtime/providerProbe.ts), а не только по пятичасовому таймеру.
+    if (!sandbox) stopProviderProbe = startProviderProbe();
     // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
     // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
     if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();
