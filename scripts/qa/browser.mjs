@@ -15,9 +15,13 @@
 //   {"expect_text": "Задача создана"}        текст должен быть на странице, иначе шаг — дефект
 //   {"expect_no_text": "N мин. назад"}       текста быть не должно
 //   {"expect_visible": "css-селектор"}       элемент должен быть виден
-//   {"snap": "после-создания"}               скриншот + снимок структуры страницы (aria) + видимый текст
+//   {"measure": "css-селектор"}              цифры элемента: размер, позиция, цвет, шрифт, текст (QA не видит картинок — смотрит числа)
+//   {"snap": "после-создания"}               скриншот + структура страницы (aria) + видимый текст + автопроверки раскладки
 // После каждого шага без "snap" скриншот не делается; в конце всегда делается финальный.
 // Каждый шаг может нести "note" — человеческое описание, попадёт в отчёт.
+//
+// Автопроверки раскладки на каждом snap (модель QA не видит картинок, поэтому геометрию считает скрипт):
+// горизонтальный скролл страницы, элементы за краем экрана, кнопки/ссылки меньше 44×44 px, обрезанный текст.
 //
 // Выход: КАТАЛОГ/report.json и report.md (читать report.md), скриншоты PNG рядом.
 // Код возврата: 0 — все шаги прошли и в консоли нет ошибок; 1 — есть упавшие шаги или ошибки страницы.
@@ -92,7 +96,33 @@ async function snap(label) {
   let aria = "";
   try { aria = await page.locator("body").ariaSnapshot(); } catch { /* страница могла уйти */ }
   const text = (await page.evaluate(() => document.body.innerText).catch(() => "")).slice(0, 4000);
-  return { file: path.basename(file), aria: aria.slice(0, 6000), text };
+  const layout = await page.evaluate(() => {
+    const vw = window.innerWidth;
+    const out = { hscroll: document.documentElement.scrollWidth > vw + 1, offscreen: [], small: [], clipped: [] };
+    const label = (el) => `${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}${el.className && typeof el.className === "string" ? "." + el.className.split(" ").filter(Boolean).slice(0, 2).join(".") : ""} «${(el.innerText || el.getAttribute("aria-label") || "").trim().slice(0, 30)}»`;
+    for (const el of document.querySelectorAll("body *")) {
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      if (!r.width || !r.height || cs.visibility === "hidden" || cs.display === "none") continue;
+      if ((r.right > vw + 1 || r.left < -1) && out.offscreen.length < 8) out.offscreen.push(`${label(el)} x=${Math.round(r.left)}..${Math.round(r.right)}`);
+      if (el.matches("button, a, [role=button], input, select") && (r.width < 44 || r.height < 44) && out.small.length < 8) out.small.push(`${label(el)} ${Math.round(r.width)}×${Math.round(r.height)}`);
+      if ((cs.overflow !== "visible" || cs.textOverflow === "ellipsis") && el.scrollWidth > el.clientWidth + 1 && el.children.length === 0 && out.clipped.length < 8) out.clipped.push(`${label(el)} (обрезан: ${el.scrollWidth}>${el.clientWidth})`);
+    }
+    return out;
+  }).catch(() => null);
+  return { file: path.basename(file), aria: aria.slice(0, 6000), text, layout };
+}
+
+async function measure(selector) {
+  return page.locator(selector).first().evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return {
+      rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+      color: cs.color, background: cs.backgroundColor, fontSize: cs.fontSize, fontWeight: cs.fontWeight,
+      opacity: cs.opacity, display: cs.display, text: (el.innerText || "").trim().slice(0, 200),
+    };
+  }, undefined, { timeout: 8000 });
 }
 
 let failed = 0;
@@ -119,6 +149,7 @@ for (const [i, step] of steps.entries()) {
       }
       case "expect_visible": await page.locator(arg).first().waitFor({ state: "visible", timeout: 6000 }); break;
       case "snap": Object.assign(rec, await snap(String(arg))); break;
+      case "measure": rec.measure = await measure(arg); break;
       default: throw new Error(`неизвестный шаг «${kind}»`);
     }
   } catch (e) {
@@ -137,12 +168,21 @@ const noisy = problems.console.length + problems.pageerror.length;
 const report = { base, viewport: `${w}x${h}@${dpr}`, engine: flag("engine", "chromium"), failed_steps: failed, problems, steps: results, final };
 fs.writeFileSync(path.join(out, "report.json"), JSON.stringify(report, null, 1));
 
+function fmtLayout(l) {
+  const parts = [];
+  if (l.hscroll) parts.push("ГОРИЗОНТАЛЬНЫЙ СКРОЛЛ страницы");
+  if (l.offscreen.length) parts.push(`за краем экрана: ${l.offscreen.join("; ")}`);
+  if (l.small.length) parts.push(`мельче 44×44: ${l.small.join("; ")}`);
+  if (l.clipped.length) parts.push(`обрезано: ${l.clipped.join("; ")}`);
+  return parts.length ? parts.join(" | ") : "замечаний нет";
+}
+
 const md = [
   `# Отчёт живой проверки`,
   `Приложение: ${base} · экран ${w}×${h}@${dpr} · ${report.engine}`,
   `Шагов: ${results.length}, упало: ${failed}. Ошибок консоли: ${problems.console.length}, pageerror: ${problems.pageerror.length}, ответов ≥400: ${problems.network.length}.`,
   ``,
-  ...results.map((r) => `${r.ok ? "✅" : "❌"} ${r.n}. ${r.step} ${JSON.stringify(r.arg)}${r.note ? ` — ${r.note}` : ""}${r.error ? `\n   ошибка: ${r.error}` : ""}${r.file ? `\n   кадр: ${r.file}` : ""}`),
+  ...results.map((r) => `${r.ok ? "✅" : "❌"} ${r.n}. ${r.step} ${JSON.stringify(r.arg)}${r.note ? ` — ${r.note}` : ""}${r.error ? `\n   ошибка: ${r.error}` : ""}${r.file ? `\n   кадр: ${r.file}` : ""}${r.measure ? `\n   замер: ${JSON.stringify(r.measure)}` : ""}${r.layout ? `\n   раскладка: ${fmtLayout(r.layout)}` : ""}${r.file && r.text ? `\n   текст экрана: ${JSON.stringify(r.text.slice(0, 700))}` : ""}`),
   ``,
   `## Ошибки страницы`,
   ...(problems.pageerror.length ? problems.pageerror.map((e) => `- pageerror: ${e}`) : ["- pageerror: нет"]),
