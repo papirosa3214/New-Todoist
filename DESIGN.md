@@ -460,6 +460,43 @@ font-semibold uppercase tracking-wider` (12/600), что не ложилось �
 
 ## Components
 
+### Кнопки — TFButton / TFIconButton (2026-10-06, Linear MAK-49)
+
+Веб-аналоги нативных `TFButton` / `TFIconButton` (DESIGN-SYSTEM.md §2.1)
+живут в `src/components/UI.tsx` — своих копипаст кнопок быть не должно.
+
+**`Button` (TFButton)** — полноширинная кнопка, три варианта:
+
+- `primary` — `bg-[var(--color-red-solid)]` + белый текст (контраст
+  4.67:1; обычный `--color-red` дал бы 4.08 — мало для 15px/600, см.
+  §Colors);
+- `secondary` — `bg-card2` + рамка `border-stroke`, текст `text-text`;
+- `outline` — прозрачный фон + рамка `border-stroke`, текст `text-sub`.
+
+Геометрия — 48px (`h-control-md`) на всю ширину, радиус 12 (`r-control-lg`),
+подпись 15px/600 (`.tf-body font-semibold`), иконка 16px пропом `icon`,
+отклик `.tap-fade` (opacity .85, как `.auth-btn:active` в
+mockup-reference), `disabled` — opacity 0.5. Все места, где иконка раньше
+стояла вложенным `<Icon size={16}>` (TaskDetailScreen ×6,
+TaskJournal ×9, LabelsScreen ×1), переведены на проп `icon` — размер
+иконки задаётся в одном месте.
+
+**`IconButton` (TFIconButton)** — прозрачная кнопка-иконка, тап-зона
+44×44 (`w-11 h-11`), иконка 18px по умолчанию (`--icon-sm`), отклик
+`.tap-scale` (scale .94). `label` — ОБЯЗАТЕЛЬНЫЙ параметр (уходит в
+`aria-label`): у кнопки без текста VoiceOver/Voice Control читать
+нечего, поэтому API не даёт создать безымянную иконочную кнопку. Через
+неё уже работают крестик `SheetHeader` (обе формы — plain/filled),
+`BackButton`, `TaskFilterButton` (шапки «Входящие / Сегодня /
+Предстоящее / Активность») и «Ещё» в шапке «Сегодня». Остальные
+инлайновые `tap-scale`-кнопки переводятся по мере правки экранов.
+
+**Отклик на нажатие (§2.1)** — `.tap-scale` (scale .94) для иконочных и
+круглых кнопок; `.tap-fade` (opacity .85) для полноширинных CTA и
+текстовых ссылок; `.tap-row` (фон 4%) для строк списка; `.tap-menu`
+(фон 6%) для пунктов выпадающего меню. Все четыре — классы в
+`src/index.css`; форму выбирает форма элемента, а не экран.
+
 **Кнопка-действие в шапке** — только иконка 18px в зоне 44×44,
 `tap-scale`, без подписи и без своей плашки. Текстовых кнопок в шапке нет
 (единственное исключение — «Готово» в модальной форме задачи: это
