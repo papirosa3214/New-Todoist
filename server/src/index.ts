@@ -15,6 +15,7 @@ import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
 import { startLinearAutoImport } from "./lib/linearAutoImport.js";
+import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
@@ -565,10 +566,12 @@ if (isMain) {
     let stopKnowledgeSync: (() => void) | null = null;
     let stopScheduler: (() => void) | null = null;
     let stopLinearAutoImport: (() => void) | null = null;
+    let stopLinearSync: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
       stopLinearAutoImport?.();
+      stopLinearSync?.();
       if (stopPreparation) await stopPreparation();
       if (stopRoleRuns) await stopRoleRuns();
       if (stopVoiceBridge) await stopVoiceBridge();
@@ -590,6 +593,9 @@ if (isMain) {
     // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
     // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
     if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();
+    // Обратная синхронизация TaskFlow → Linear (карточка 20e30338): статусы
+    // привязанных карточек раз в минуту; сбой Linear не трогает карточку.
+    if (process.env.LINEAR_SYNC_DISABLED !== "1") stopLinearSync = startLinearSync();
     // Ходы ролей живут в процессе: узлы плана, брошенные прошлым процессом,
     // — в ленту и продолжить (runtime/planSubtaskAdmission.ts).
     try {
