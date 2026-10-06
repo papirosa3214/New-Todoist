@@ -41,6 +41,11 @@ import {
 } from "./attachments.js";
 import { registryRecord } from "../agentState.js";
 import { startDraftFromChat } from "../lib/ownerDraft.js";
+import {
+  CHAT_SHORT_LIMIT,
+  fullTextReference,
+  shortenChatMessage,
+} from "../lib/chatMessageShortening.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -474,7 +479,7 @@ export function registerChatRoutes(app: FastifyInstance) {
       source?: string;
     };
   }>("/api/chat", { preHandler: authPre }, async (req: any, reply) => {
-    const text = (req.body?.text || "").trim();
+    let text = (req.body?.text || "").trim();
     const attachmentIds: string[] = Array.isArray(req.body?.attachment_ids)
       ? req.body.attachment_ids
       : [];
@@ -483,7 +488,12 @@ export function registerChatRoutes(app: FastifyInstance) {
     // сообщение. Пустое совсем, без файлов, по-прежнему 400.
     if (!text && attachmentIds.length === 0)
       return reply.code(400).send({ error: "text required" });
-    if (text.length > TEXT_MAX)
+    // Жёсткий потолок остаётся только для владельца: его сообщения не
+    // сокращаются никогда, и «бесконечный» ввод ему отклоняем как раньше.
+    // Длинный текст АГЕНТА сервер больше не отклоняет (карточка c19c9460):
+    // он уходит документом, а в чат — выжимка (см. ниже).
+    const fromOwner = isOwner(req.userId);
+    if (fromOwner && text.length > TEXT_MAX)
       return reply.code(400).send({
         error: `text слишком длинный (${text.length}, предел ${TEXT_MAX})`,
       });
@@ -543,6 +553,26 @@ export function registerChatRoutes(app: FastifyInstance) {
         адресуй: "Оркестратор Claude",
         ваш_текст: text,
       });
+
+    // Длинное сообщение агента не отклоняем, а «разгружаем»: полный текст
+    // документом в папку задачи, в чат — короткая версия со ссылкой.
+    // Владельца это не касается — его текст уходит как есть.
+    let shortened: ReturnType<typeof shortenChatMessage> | null = null;
+    if (!fromOwner && text.length > CHAT_SHORT_LIMIT) {
+      const author = db
+        .prepare("SELECT name FROM users WHERE id = ?")
+        .get(req.userId) as { name?: string } | undefined;
+      const short = shortenChatMessage({
+        text,
+        taskId,
+        authorId: req.userId,
+        authorName: author?.name || req.userId,
+      });
+      if (short.shortened) {
+        text = short.text;
+        shortened = short;
+      }
+    }
 
     const id = uid();
     db.prepare(
@@ -699,6 +729,20 @@ export function registerChatRoutes(app: FastifyInstance) {
     // разговор про уже существующую.
     if (routed.channel === "owner" && !taskId) startDraftFromChat(message);
 
+    // Агенту в ответе на отправку — что текст сокращён и где полный. Это
+    // уходит в ответ вызова инструмента, а не в чат владельца.
+    if (shortened?.document) {
+      return {
+        ...message,
+        сокращено: true,
+        длина_полного: shortened.fullLength,
+        документ: shortened.document,
+        пояснение:
+          `Текст длиннее ${CHAT_SHORT_LIMIT} знаков: в чат ушла выжимка, ` +
+          `полный текст сохранён документом «${shortened.document.title}» ` +
+          `(${fullTextReference(shortened.document.title)}).`,
+      };
+    }
     return message;
   });
 
