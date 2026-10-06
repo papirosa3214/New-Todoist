@@ -4,6 +4,7 @@
 // событий хода). Нет потока — автоперезапуск (≤ 2 за окно), затем
 // blocked + снимок + уведомление (карточка 71651ad0, поправки
 // оркестратора 17:01–17:06).
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +34,12 @@ import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 // (TASKFLOW_RUNS_DIR/sessions) — так раскладка пути в тесте совпадает с
 // production, а не выдумана руками.
 const sessionsDir = path.join(process.env.TASKFLOW_RUNS_DIR ?? os.tmpdir(), "sessions");
+
+// Рабочая копия шага для снимка git: событие «шаг брошен» берёт git-снимок из
+// cwd из `slot_sessions`, поэтому в фикстуре нужен настоящий git-репозиторий.
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+}
 
 type Subtask = {
   id: string;
@@ -121,12 +128,18 @@ function cleanupFixture(taskId: string): void {
 describe("stalledStepWatcher", () => {
   let app: FastifyInstance;
   let fixture: { task: Task; subtaskId: string; auth: { authorization: string } };
+  let workRepo: string;
 
   beforeAll(async () => {
     // Подменяем путь к сессиям на временную папку, чтобы тест не
     // зависел от живого Pi-runtime и не загрязнял реальный кэш.
     process.env.TASKFLOW_SESSIONS_DIR = sessionsDir;
     fs.mkdirSync(sessionsDir, { recursive: true });
+    // Настоящий git-репозиторий: без него git_snapshot в событии был бы null,
+    // и критерий «в нём есть хвост и снимок git» не проверялся бы (MAK-97).
+    workRepo = fs.mkdtempSync(path.join(os.tmpdir(), "stalled-repo-"));
+    git(workRepo, ["init", "-b", "main"]);
+    git(workRepo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"]);
     app = await buildApp();
     demoteSeededOwner(db);
     seedRoleAccounts(db);
@@ -177,6 +190,7 @@ describe("stalledStepWatcher", () => {
   afterAll(async () => {
     await app.close();
     try { fs.rmSync(sessionsDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    try { fs.rmSync(workRepo, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
   it("живой поток (mtime 3 минуты) — сторож не трогает узел", async () => {
@@ -241,6 +255,32 @@ describe("stalledStepWatcher", () => {
     const snap = db.prepare("SELECT reason, blocker FROM slot_work_snapshots WHERE subtask_id = ? ORDER BY rowid DESC LIMIT 1").get(fixture.subtaskId) as { reason: string; blocker: string };
     expect(snap.reason).toBe("blocked");
     expect(snap.blocker).toMatch(/событий/);
+  });
+
+  // Живой прогон MAK-97: зависший ход (журнал молчит, перезапуски исчерпаны)
+  // оставляет в ленте событие «шаг брошен» с хвостом журнала хода и снимком
+  // git рабочей копии — получателю видно, где шаг остановился.
+  it("блок зависшего шага несёт событие «шаг брошен» с хвостом журнала и снимком git", async () => {
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 30);
+    // cwd шага → снимок git берётся из этой записи (как в боевом inProcessRun).
+    db.prepare("INSERT INTO slot_sessions(subtask_id, session_file, cwd, session_id) VALUES(?,?,?,?)")
+      .run(fixture.subtaskId, path.join(workRepo, "session.jsonl"), workRepo, "s1");
+    const ins = db.prepare(
+      `INSERT INTO attempts(id, task_id, subtask_id, executor_id, started_at, ended_at, outcome, reason)
+       VALUES(?, ?, ?, ?, datetime('now', ?), datetime('now', ?), 'auto_restarted', 'setup')`,
+    );
+    ins.run(`att_ab_a_${Date.now()}`, fixture.task.id, fixture.subtaskId, roleUserId("builder"), "-110 minutes", "-110 minutes");
+    ins.run(`att_ab_b_${Date.now()}`, fixture.task.id, fixture.subtaskId, roleUserId("builder"), "-60 minutes", "-60 minutes");
+    const report = await runStalledStepWatch();
+    expect(report.blocked).toBe(1);
+
+    const rows = db.prepare("SELECT to_value FROM task_events WHERE task_id = ? AND kind = 'step_abandoned'").all(fixture.task.id) as Array<{ to_value: string }>;
+    expect(rows).toHaveLength(1);
+    const payload = JSON.parse(rows[0].to_value) as { reason: string; journal_tail: string | null; git_snapshot: string | null; slot_key: string | null };
+    expect(payload.slot_key).toBe("executor");
+    expect(payload.reason).toMatch(/лимит автоперезапуска/);
+    expect(payload.journal_tail).toContain('"step":"test"');
+    expect(payload.git_snapshot).toMatch(/^main @ /);
   });
 
   it("журнал сессии ещё не создан (узел только что стартовал) — сторож ждёт", async () => {

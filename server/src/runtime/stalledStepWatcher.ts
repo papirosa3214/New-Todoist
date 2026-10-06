@@ -22,6 +22,7 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
+import { logStepAbandoned } from "./abandonedStep.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { startPlanSubtaskRun } from "./planSubtaskAdmission.js";
 
@@ -191,6 +192,9 @@ function blockAsStalled(subtask: StalledSubtask, role: string, reason: string): 
     role,
     `«${subtask.title}»: поток остановился, перезапуски исчерпаны — перевожу шаг в blocked. ${reason}`,
   );
+  // Шаг брошен (MAK-97): прикладываем хвост журнала хода и снимок git —
+  // получателю видно, где именно шаг встал.
+  logStepAbandoned({ taskId: subtask.task_id, subtaskId: subtask.id, role, reason });
   const heads = taskHeads(subtask.task_id);
   postOwnerNotification(
     subtask.task_id,

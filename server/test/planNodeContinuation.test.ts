@@ -75,7 +75,10 @@ describe("шаг плана без сдачи: продолжить или за�
 
   it("ошибка запуска — блокировка с причиной, а не вечное «в работе»", async () => {
     const { subtaskId, attemptId } = makeNode("fail");
-    const res = await settleStalledPlanNode({ subtaskId, madeProgress: true, failure: "429 rate limit" }, okStarter([]));
+    // Берём НЕПОВТОРЯЕМУЮ причину (доступ, MAK-97): временный сбой сервер
+    // теперь повторяет сам, а фатальный — сразу блокирует, и вечно «в работе»
+    // он не висит.
+    const res = await settleStalledPlanNode({ subtaskId, madeProgress: true, failure: "403 Forbidden: invalid api key" }, okStarter([]));
     expect(res).toBe("blocked");
     expect(state(subtaskId).agent_state).toBe("blocked");
     expect(outcome(attemptId)).toBe("failed");

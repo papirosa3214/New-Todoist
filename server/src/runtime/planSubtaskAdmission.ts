@@ -13,6 +13,9 @@ import { bumpContextVersion } from "./taskContextVersion.js";
 import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { getFullTask } from "../routes/subtasks.js";
 import { logStepOutcome } from "./stepOutcome.js";
+import { classifyFailureReason, failureReasonLabel, type FailureReasonCode } from "./failureReasons.js";
+import { decideFailureAction, failurePolicy } from "./failurePolicy.js";
+import { logStepAbandoned } from "./abandonedStep.js";
 
 /**
  * Узлы collaboration plan — обычные `subtasks` с `collaboration_plan_id` +
@@ -364,6 +367,9 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
       });
       db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
       logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "interrupted", code: "runtime_died", message: reason });
+      // Шаг брошен (MAK-97): ход умер вместе с процессом — к событию
+      // прикладываем хвост журнала и снимок git рабочей копии.
+      logStepAbandoned({ taskId: row.task_id, subtaskId: row.id, role: node.role_key, reason });
       const { n: interrupts } = db.prepare(
         `SELECT COUNT(*) AS n FROM attempts
           WHERE subtask_id = ? AND outcome = 'interrupted' AND ended_at >= datetime('now', '${INTERRUPT_WINDOW}')`,
@@ -425,6 +431,20 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
 /** Продолжений одного шага за окно, после которых он блокируется. */
 const MAX_NODE_CONTINUATIONS = 3;
 const NODE_CONTINUATION_WINDOW = "-120 minutes";
+/** Повторов временного сбоя за окно (по коду причины, MAK-97). */
+const TRANSIENT_RETRY_WINDOW = "-30 minutes";
+/** Потолок «сжали и продолжили» на случай, если сжатие не помогает. */
+const MAX_COMPRESS_CONTINUES = 2;
+
+/** Сколько раз этот шаг уже повторялся по данному коду причины в окне. */
+function transientRetryCount(subtaskId: string, code: FailureReasonCode): number {
+  const row = db.prepare(
+    `SELECT COUNT(*) AS n FROM attempts
+      WHERE subtask_id = ? AND outcome = 'transient_retry' AND reason LIKE ?
+        AND started_at >= datetime('now', '${TRANSIENT_RETRY_WINDOW}')`,
+  ).get(subtaskId, `${code}:%`) as { n: number };
+  return row.n;
+}
 
 /**
  * Ход роли по шагу плана закончился, а шаг не сдан (находка А30). Раньше узел
@@ -435,7 +455,7 @@ const NODE_CONTINUATION_WINDOW = "-120 minutes";
  * `starter` — подмена запуска в тестах.
  */
 export async function settleStalledPlanNode(
-  params: { subtaskId: string; madeProgress: boolean; failure?: string | null },
+  params: { subtaskId: string; madeProgress: boolean; failure?: string | null; failureCode?: FailureReasonCode | null },
   starter: typeof startPlanSubtaskRun = startPlanSubtaskRun,
 ): Promise<"skipped" | "continued" | "blocked"> {
   // Выключатель для тестов жизненного цикла, где подменённая роль заканчивает ход мгновенно.
@@ -457,11 +477,49 @@ export async function settleStalledPlanNode(
     db.prepare("UPDATE subtasks SET agent_state = 'blocked', agent_id = ?, current_attempt_id = NULL WHERE id = ?")
       .run(roleUserId(node.role_key), row.id);
     logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "blocked", error: why });
+    // Шаг брошен (MAK-97): к событию приложены хвост журнала и снимок git,
+    // чтобы получатель видел, где работа остановилась.
+    logStepAbandoned({ taskId: row.task_id, subtaskId: row.id, role: node.role_key, reason: why });
     roleNote(row.task_id, node.role_key, `«${row.title}»: ход закончился без сдачи шага. ${why} Шаг заблокирован: нужен перезапуск владельцем или оркестратором.`);
     return "blocked";
   };
 
-  if (params.failure) return block(`Запуск оборвался ошибкой: ${params.failure.slice(0, 120)}.`);
+  // Повтор по коду причины (MAK-97): временный сбой повторяем сами, пока не
+  // кончится потолок; переполнение контекста — сжать и продолжить; доступ,
+  // конфиг и отсутствие модели не повторяем вовсе. Смену модели делает
+  // failover в `inProcessRun`; если сюда дошли с `switch_model` — цепочка
+  // исчерпана, и это уже блок.
+  const retryAfterFailure = async (code: FailureReasonCode, reason: string, permanent: boolean): Promise<"continued"> => {
+    const total = transientRetryCount(row.id, code) + 1;
+    closeAttempt("transient_retry", `${code}: ${reason.slice(0, 180)}`);
+    db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
+    logEvent({
+      taskId: row.task_id,
+      actorId: null,
+      kind: permanent ? "plan_subtask_compress_continue" : "plan_subtask_transient_retry",
+      field: row.plan_node_key,
+      toValue: `${code}: ${permanent ? "сжатие и продолжение" : `повтор ${total} из ${failurePolicy(code).maxRetries}`}`,
+    });
+    const started = await starter(row.id, roleUserId(node.role_key));
+    if (!started.ok) {
+      logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "failed", error: started.error });
+    }
+    return "continued";
+  };
+
+  if (params.failure) {
+    const code = params.failureCode ?? classifyFailureReason(params.failure);
+    let decision = decideFailureAction(code, transientRetryCount(row.id, code));
+    if (decision === "compress_continue" && transientRetryCount(row.id, code) >= MAX_COMPRESS_CONTINUES) {
+      decision = "block";
+    }
+    if (decision === "retry") return retryAfterFailure(code, params.failure, false);
+    if (decision === "compress_continue") return retryAfterFailure(code, params.failure, true);
+    if (decision === "switch_model") {
+      return block(`Лимит провайдера, запасных моделей не осталось (${failureReasonLabel(code)}).`);
+    }
+    return block(`Запуск оборвался ошибкой (${failureReasonLabel(code)}): ${params.failure.slice(0, 120)}.`);
+  }
   const { n: continued } = db.prepare(
     `SELECT COUNT(*) AS n FROM attempts WHERE subtask_id = ? AND outcome = 'continued' AND started_at >= datetime('now', '${NODE_CONTINUATION_WINDOW}')`,
   ).get(row.id) as { n: number };
