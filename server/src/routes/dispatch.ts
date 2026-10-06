@@ -39,6 +39,7 @@ import { isServiceUser } from "./agent-state.js";
 import { ROLE_NAMES, roleTitle, roleUserId, type RoleName } from "../roleRouting.js";
 import { getTaskRow, hydrateTask } from "./tasks.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
+import { startSingleExecutorPlan } from "./task-collaboration-plans.js";
 
 const uid = () => crypto.randomUUID();
 
@@ -212,6 +213,85 @@ export function roleChoiceNoteRu(choice: RoleChoice): string {
       ? " Выбор неочевидный — рядом стояла другая роль, посмотрите, если важно."
       : "";
   return `Роль «${имя}» — подобрана автоматически.${спорно}`;
+}
+
+/**
+ * MAK-68: единая точка входа для запуска задачи через план из одного шага.
+ * Сводит девять прежних входов (флаг готовности, /dispatch, /run, «✓ Идёт»,
+ * автоприём, родитель-после-детей, следующая в очереди, диагностические
+ * карточки, повторная раздача после блокировки, запуск по расписанию) к
+ * одному пути — `startSingleExecutorPlan` из `task-collaboration-plans.ts`.
+ *
+ * Поведение по гейтам:
+ *  - `assignee_id` уже есть → `skipped-assignee`: чужую работу не трогаем,
+ *    «задача уже в работе»;
+ *  - у задачи уже есть draft/approved план → `skipped-plan`: смена схемы
+ *    через отдельные эндпоинты, не ломаем чужой draft;
+ *  - иначе подбираем роль (тот же `pickRole`, что и в `dispatchTaskToPi`)
+ *    и зовём `startSingleExecutorPlan(taskId, actorId, { roleKey, system })`.
+ *
+ * Возврат — `{ ok, reason, ... }`: `ok=true` только когда стартовали узел;
+ * `skipped-*` идемпотентны (вызывающий код не должен считать их ошибкой).
+ * `failed` означает отказ `startSingleExecutorPlan` (manual при system=true,
+ * 409 «гонка», 400 «неизвестная роль»); в ленте карточки остаётся след.
+ */
+export type TryStartOutcome =
+  | { ok: true; reason: "started"; role: string; planId: string; subtaskId: string; runId: string }
+  | { ok: true; reason: "skipped-assignee" | "skipped-plan" | "skipped-inactive" }
+  | { ok: false; reason: "failed"; code: number; error: string };
+
+export async function tryStartSingleExecutorPlan(
+  taskId: string,
+  actorId: string,
+  opts: { system?: boolean; manualStart?: boolean } = {},
+): Promise<TryStartOutcome> {
+  const task = db.prepare("SELECT id, status, assignee_id, agent_state FROM tasks WHERE id = ?").get(taskId) as
+    | { id: string; status: string; assignee_id: string | null; agent_state: string | null }
+    | undefined;
+  if (!task) return { ok: false, reason: "failed", code: 404, error: "Задача не найдена" };
+  if (task.status !== "active") return { ok: true, reason: "skipped-inactive" };
+  if (task.assignee_id) return { ok: true, reason: "skipped-assignee" };
+  if (task.agent_state) return { ok: true, reason: "skipped-assignee" };
+  const activePlan = db
+    .prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id = ? AND status IN ('draft','approved')")
+    .get(taskId);
+  if (activePlan) return { ok: true, reason: "skipped-plan" };
+
+  const full = db.prepare("SELECT owner_selected_role, machine_selected_role, role_exclusions FROM tasks WHERE id = ?").get(taskId) as
+    | { owner_selected_role: string | null; machine_selected_role: string | null; role_exclusions: string | null }
+    | undefined;
+  if (!full) return { ok: false, reason: "failed", code: 404, error: "Задача не найдена" };
+  const choice = await pickRole(
+    taskId,
+    full.owner_selected_role,
+    full.machine_selected_role,
+    parseRoleExclusions(full.role_exclusions),
+  );
+  if (choice.how === "dead" || choice.role === null) {
+    return {
+      ok: false,
+      reason: "failed",
+      code: 400,
+      error: "нет кандидатов: все роли либо не подошли, либо исключены",
+    };
+  }
+  const system = opts.system ?? !opts.manualStart;
+  const outcome = await startSingleExecutorPlan(taskId, actorId, {
+    roleKey: choice.role,
+    system,
+    rationale: `single_executor из tryStartSingleExecutorPlan (${opts.manualStart ? "manualStart" : "system"})`,
+  });
+  if (!outcome.ok) {
+    return { ok: false, reason: "failed", code: outcome.code, error: outcome.error };
+  }
+  return {
+    ok: true,
+    reason: "started",
+    role: choice.role,
+    planId: outcome.planId,
+    subtaskId: outcome.subtaskId,
+    runId: outcome.runId,
+  };
 }
 
 /** Чем кончилась попытка отдать карточку Pi. */
@@ -649,9 +729,17 @@ export async function applyIntakeToNewTask(
   }
   // Раздача (проставление исполнителя) — только когда будильник жив:
   // назначить агента, которого некому разбудить, смысла нет.
-  // Раздача — только для карточки без исполнителя: dispatchTaskToPi и сам
-  // откажется отдавать чужую работу, но звать его впустую незачем.
-  if (alarmOn && !assigneeAlreadySet) await dispatchTaskToPi(taskId, ownerId, { system: true });
+  // MAK-68: 9 входов сведены к одной функции `startSingleExecutorPlan`;
+  // автоприём идёт через `tryStartSingleExecutorPlan` — он же подбирает
+  // роль (тот же pickRole, что и в `dispatchTaskToPi`) и сам выставит
+  // assignee_id при старте узла, без отдельного `dispatchTaskToPi` и
+  // промежуточного `enqueueRoleRunJob` для причины `assigned`.
+  if (alarmOn && !assigneeAlreadySet) {
+    const outcome = await tryStartSingleExecutorPlan(taskId, ownerId, { system: true });
+    if (!outcome.ok) {
+      console.warn(`автоприём: ${taskId} не отдан:`, outcome.error);
+    }
+  }
 }
 
 /**
@@ -748,10 +836,13 @@ export async function admitParentAfterChildren(
 
   // Раздача — как при создании: только без исполнителя и при живом
   // будильнике (назначать агента, которого некому разбудить, незачем).
+  // MAK-68: 9 входов сведены к одной функции; родитель-после-детей идёт
+  // через `tryStartSingleExecutorPlan` — единая точка входа на план из
+  // одного шага с правилом «Система».
   if (!parent.assignee_id) {
     const { unitState } = await import("./agent-service.js");
     if ((await unitState()).active) {
-      const outcome = await dispatchTaskToPi(parentId, ownerRow.id, {
+      const outcome = await tryStartSingleExecutorPlan(parentId, ownerRow.id, {
         system: true,
       });
       if (!outcome.ok) {
@@ -802,12 +893,12 @@ export async function releaseQueuedSuccessors(
     if ((sibling.ready_for_pickup ?? 0) !== 1) continue;
     if (sibling.assignee_id) continue;
 
-    const outcome = await dispatchTaskToPi(sibling.id, actorId, {
+    const outcome = await tryStartSingleExecutorPlan(sibling.id, actorId, {
       system: true,
     });
-    if (outcome.ok) {
+    if (outcome.ok && outcome.reason === "started") {
       released += 1;
-    } else {
+    } else if (!outcome.ok) {
       // Не молчим: карточка осталась готовой и видимой на доске, но
       // причина, по которой её не удалось отдать, должна быть в журнале.
       console.warn(
@@ -826,6 +917,9 @@ export function registerDispatchRoutes(app: FastifyInstance): void {
   // POST /api/tasks/:id/dispatch — отдать готовую карточку без исполнителя
   // единственному Pi runtime с зафиксированной ролью. Атомарно: гейты,
   // фиксация роли, assignee, оба шва доставки и широковещание.
+  // MAK-68: 9 входов сведены к одной функции; явный запуск через /dispatch
+  // идёт через `tryStartSingleExecutorPlan` (`system: false` — действие
+  // владельца, проходит при любом режиме).
   app.post<{ Params: { id: string } }>(
     "/api/tasks/:id/dispatch",
     { preHandler: authPre },
@@ -835,8 +929,8 @@ export function registerDispatchRoutes(app: FastifyInstance): void {
       // ГЕЙТ 1: только владелец. Это единственный гейт, который живёт в
       // маршруте, — он про того, КТО нажимает. Гейты состояния карточки
       // (активна, поднят флаг, свободен исполнитель) живут в
-      // dispatchTaskToPi, потому что их обязан проходить и автоматический
-      // режим, который сюда по HTTP не ходит.
+      // tryStartSingleExecutorPlan, потому что их обязан проходить и
+      // автоматический режим, который сюда по HTTP не ходит.
       if (!isOwner(req.userId)) {
         return reply.code(403).send({
           error:
@@ -844,9 +938,18 @@ export function registerDispatchRoutes(app: FastifyInstance): void {
         });
       }
 
-      const outcome = await dispatchTaskToPi(id, req.userId, { manualStart: true });
+      const outcome = await tryStartSingleExecutorPlan(id, req.userId, { manualStart: true });
       if (!outcome.ok) {
         return reply.code(outcome.code).send({ error: outcome.error });
+      }
+      if (outcome.reason !== "started") {
+        // Идемпотентный пропуск: задача уже в работе, выбран план, или
+        // карточка не активна. Это не ошибка, но клиенту нужно знать, что
+        // новый запуск не создан.
+        return reply.code(409).send({
+          error: `Запуск пропущен: ${outcome.reason}`,
+          reason: outcome.reason,
+        });
       }
 
       return { task: hydrateTask(getTaskRow(id)) };

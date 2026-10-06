@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead, isOwner } from "../access.js";
@@ -6,8 +5,8 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES } from "../roleRouting.js";
 import { reviewPromptFor, runRoleInProcess } from "../runtime/inProcessRun.js";
-import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 import { taskExecutionState } from "../runtime/taskExecutionState.js";
+import { tryStartSingleExecutorPlan } from "./dispatch.js";
 import { isServiceUser } from "./agent-state.js";
 
 // Ручной разовый запуск агента на карточке — по команде владельца.
@@ -34,15 +33,23 @@ export async function registerManualRunRoutes(app: FastifyInstance): Promise<voi
       if (mode === "executor") {
         const state = taskExecutionState(task.id);
         if (!state.can_launch) return reply.code(409).send({error:"Запуск уже принят или выбрана другая схема работы", execution:state});
-        const role = (task.dispatched_role as string | null) ?? (task.owner_selected_role as string | null)
-          ?? (task.machine_selected_role as string | null) ?? (task.assignee_id?.startsWith("role_") ? task.assignee_id.slice(5) : null);
-        if (!role || !ROLE_NAMES.includes(role)) return reply.code(422).send({error:"Выберите доступную роль исполнителя перед запуском"});
-        db.transaction(() => {
-          db.prepare("UPDATE tasks SET assignee_id=?, ready_for_pickup=1, ready_set_at=datetime('now'), ready_set_by=?, updated_at=datetime('now') WHERE id=?").run(`role_${role}`,req.userId,task.id);
-          enqueueRoleRunJob({taskId:task.id,reason:"assigned",actorId:req.userId,dedupeKey:`manual:${task.id}:${crypto.randomUUID()}`,manualStart:true,maxAttempts:1});
-          logEvent({taskId:task.id,actorId:req.userId,kind:"run_requested",field:"executor",toValue:roleTitleOf(role)});
-        })();
-        return {ok:true,mode,execution:taskExecutionState(task.id)};
+        // MAK-68: 9 входов сведены к одной функции. Кнопка «Запустить
+        // исполнителя» идёт через `tryStartSingleExecutorPlan` — она
+        // сама подберёт роль (если владелец не выбрал её явно через
+        // `owner_selected_role`) и заведёт план single_executor с
+        // одним узлом. Прежняя ручная постановка `assignee_id=role_X`
+        // и отдельный `enqueueRoleRunJob(reason="assigned")` больше не
+        // нужны: план сам поднимет узел и направит туда же durable
+        // задание через `startPlanSubtaskRun`.
+        const outcome = await tryStartSingleExecutorPlan(task.id, req.userId, { manualStart: true });
+        if (!outcome.ok) {
+          return reply.code(outcome.code).send({ error: outcome.error, execution: state });
+        }
+        if (outcome.reason !== "started") {
+          return reply.code(409).send({ error: `Запуск пропущен: ${outcome.reason}`, execution: state, reason: outcome.reason });
+        }
+        logEvent({ taskId: task.id, actorId: req.userId, kind: "run_requested", field: "executor", toValue: outcome.role });
+        return { ok: true, mode, role: outcome.role, planId: outcome.planId, execution: taskExecutionState(task.id) };
       }
       // Проверка Критиком — тоже внутри сервера (этап C2).
       if (mode === "reviewer" && ROLE_NAMES.includes("critic_verifier")) {
@@ -94,9 +101,4 @@ export async function registerManualRunRoutes(app: FastifyInstance): Promise<voi
 }
 
 const REVIEWER_NAME = "Критик-проверяющий";
-
-function roleTitleOf(role: string): string {
-  const row = db.prepare("SELECT title FROM roles WHERE key = ?").get(role) as { title?: string } | undefined;
-  return row?.title ?? role;
-}
 const SERVICE_JOURNAL_KINDS = new Set(["reviewer_sent"]);

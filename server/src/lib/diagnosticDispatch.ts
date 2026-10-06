@@ -1,7 +1,7 @@
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { unitState } from "../routes/agent-service.js";
-import { dispatchTaskToPi } from "../routes/dispatch.js";
+import { tryStartSingleExecutorPlan } from "../routes/dispatch.js";
 
 // Отдельный автоматический допуск только заявок watcher'а. Глобальный
 // переключатель «Система» действует и здесь; обычные задачи не затрагиваются.
@@ -33,8 +33,16 @@ export async function dispatchPendingDiagnosticTasks(): Promise<void> {
         logEvent({ taskId: task.id, actorId: null, kind: "ready_flag_changed",
           field: "ready_for_pickup", fromValue: "0", toValue: "1" });
       }
-      const result = await dispatchTaskToPi(task.id, task.creator_id, { system: true });
+      // MAK-68: 9 входов сведены к одной функции. Допуск диагностических
+      // карточек идёт через `tryStartSingleExecutorPlan` — единая точка
+      // входа на план из одного шага с правилом «Система».
+      const result = await tryStartSingleExecutorPlan(task.id, task.creator_id, { system: true });
       if (!result.ok) throw new Error(result.error);
+      if (result.reason !== "started") {
+        // skipped-assignee / skipped-plan — задача уже в работе, не
+        // повторяем, бросать не нужно.
+        return;
+      }
       lastErrors.delete(task.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

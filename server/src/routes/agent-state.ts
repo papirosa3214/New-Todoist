@@ -1181,7 +1181,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // поднятым флагом оставалась ничьей, и роль не просыпалась (живая
       // проба C3 23.09.2026, карточка bad6799f). Раздаём заново — та же
       // роль берётся из owner_selected_role, запуск ставится в очередь
-      // в транзакции раздачи. Флаг не поднят — dispatchTaskToPi откажет сам.
+      // в транзакции раздачи. Флаг не поднят — tryStartSingleExecutorPlan
+      // откажет сам.
+      // MAK-68: 9 входов сведены к одной функции; повторная раздача после
+      // `blocked→null` тоже идёт через `tryStartSingleExecutorPlan`.
       if (
         from === "blocked" &&
         state === null &&
@@ -1189,8 +1192,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         task.assignee_id !== req.userId
       ) {
         try {
-          const { dispatchTaskToPi } = await import("./dispatch.js");
-          await dispatchTaskToPi(task.id, req.userId, { system: true });
+          const { tryStartSingleExecutorPlan } = await import("./dispatch.js");
+          await tryStartSingleExecutorPlan(task.id, req.userId, { system: true });
         } catch (err) {
           console.warn(`повторная раздача ${task.id} после ответа на блокировку:`, err);
         }

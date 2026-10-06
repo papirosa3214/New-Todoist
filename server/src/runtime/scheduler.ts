@@ -14,7 +14,7 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleTitle } from "../roleRouting.js";
 import { SCHEDULER_USER_ID } from "../serviceUser.js";
-import { runRoleInProcess } from "./inProcessRun.js";
+import { tryStartSingleExecutorPlan } from "../routes/dispatch.js";
 
 const RETRY_LIMIT = 3;
 const RETRY_DELAY_MIN = 5;
@@ -51,7 +51,13 @@ function makeApi(app: FastifyInstance): Api {
   };
 }
 
-/** Роль карточки и подъём её внутри сервера — вместо manual_run.sh --once. */
+/** Подъём карточки по расписанию — через единый вход MAK-68.
+ *  Раньше здесь был прямой `runRoleInProcess({ taskId, role })`, минуя
+ *  план. Теперь запуск идёт через `tryStartSingleExecutorPlan` с
+ *  `system: true` — это та же функция, которой пользуются автоприём,
+ *  ручной запуск владельца и раздача после блокировки. График MAK-68
+ *  не меняется: ветка 4 (`launchScheduled`) по-прежнему срабатывает
+ *  раз в 5 минут и не удаляется. */
 async function launchRole(taskId: string, why: string): Promise<boolean> {
   const t = db.prepare(
     "SELECT assignee_id, dispatched_role, owner_selected_role, machine_selected_role FROM tasks WHERE id = ?",
@@ -66,7 +72,16 @@ async function launchRole(taskId: string, why: string): Promise<boolean> {
     return false;
   }
   try {
-    await runRoleInProcess({ taskId, role });
+    const outcome = await tryStartSingleExecutorPlan(taskId, SCHEDULER_USER_ID, { system: true });
+    if (!outcome.ok) {
+      log(`  ⚠️ ${taskId.slice(0, 8)}: ${why} не поднялся — ${outcome.error}`);
+      return false;
+    }
+    if (outcome.reason !== "started") {
+      // skipped-assignee / skipped-plan — карточка уже в работе или
+      // выбрана другая схема; для расписания это нормальный «не мой ход».
+      return false;
+    }
     logEvent({ taskId, actorId: SCHEDULER_USER_ID, kind: "run_requested", field: "executor", toValue: roleTitle(role) });
     return true;
   } catch (error) {
