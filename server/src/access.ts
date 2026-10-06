@@ -172,6 +172,43 @@ export function seesEveryTask(userId: string): boolean {
 }
 
 /**
+ * Скрывает ли приватный проект (или задачу в приватном проекте) от
+ * вызывающего. Правило задачи 9d583c58…: «приватный проект и его задачи
+ * не отдаются через API никому, кроме владельца». Здесь «владелец» —
+ * `users.role = 'owner'` (в системе он один, u1); оркестратор, агенты и
+ * прочие люди идут в один круг «скрыто».
+ *
+ * Принимает уже прочитанную строку проекта, чтобы на одну проверку не
+ * гонять два SELECT (задача + проект): вызывающие достают проект ровно
+ * для этой строки задачи, и дополнительный поход в базу был бы лишним.
+ * Пустая строка / undefined / `is_private != 1` — `false`, не скрывает.
+ */
+export function privateProjectHides(
+  userId: string,
+  project: { is_private?: number | null } | null | undefined,
+): boolean {
+  if (!project) return false;
+  if ((project.is_private ?? 0) !== 1) return false;
+  // Скрыто от всех, кроме самого владельца трекера. Оркестратор и агенты —
+  // не владелец, поэтому у них `seesEveryTask` истина, а видеть приватное
+  // всё равно нельзя: это и есть «закрытое» в задаче, никаких слоёв к
+  // этому правилу не добавляется.
+  return !isOwner(userId);
+}
+
+/**
+ * Прочитать проект по id. Возвращает строку проекта или undefined, если
+ * его нет. Используется в воротах, чтобы не дублировать SELECT в каждом
+ * чтении задачи — задача приходит первой, проект за ней одним запросом.
+ */
+function getProjectRow(projectId: string | null | undefined): any | undefined {
+  if (!projectId) return undefined;
+  return db
+    .prepare("SELECT is_private FROM projects WHERE id = ?")
+    .get(projectId);
+}
+
+/**
  * Что видно вызывающему в списках справочников — проектов и меток.
  * Возвращает готовый кусок WHERE и параметры к нему, чтобы одно правило не
  * пришлось повторять в /api/projects, /api/labels и в поиске:
@@ -207,6 +244,33 @@ export function visibleScope(
   return { sql: `${ownerColumn} = ?`, params: [userId] };
 }
 
+/**
+ * Видимость проектов с учётом приватности (задача 9d583c58…): то же
+ * правило, что и `visibleScope`, плюс «приватный проект виден только
+ * владельцу трекера». `ownerColumn` — `p.owner_id` литералом (то же
+ * требование, что и у `visibleScope`).
+ */
+export function visibleProjectScope(
+  userId: string,
+  ownerColumn: string,
+): { sql: string; params: any[] } {
+  const caller = callerOf(userId);
+  if (caller?.role === "owner") {
+    return { sql: "1 = 1", params: [] };
+  }
+  const privacyClause = "(is_private = 0 OR is_private IS NULL)";
+  if (caller?.role === "orchestrator") {
+    return { sql: privacyClause, params: [] };
+  }
+  if (caller?.type === "ai") {
+    return {
+      sql: `${privacyClause} AND (${ownerColumn} = ? OR ${ownerColumn} IN (SELECT id FROM users WHERE role = 'owner'))`,
+      params: [userId],
+    };
+  }
+  return { sql: `${privacyClause} AND ${ownerColumn} = ?`, params: [userId] };
+}
+
 const taskById = () => db.prepare("SELECT * FROM tasks WHERE id = ?");
 
 /**
@@ -216,12 +280,24 @@ const taskById = () => db.prepare("SELECT * FROM tasks WHERE id = ?");
  * включая «лежит в моём проекте»: без третьего условия владелец проекта
  * терял бы задачу, которую сам переназначил другому исполнителю (найдено
  * живьём 17.08.2026).
+ *
+ * Приватный проект: даже у оркестратора и у агента прочитать задачу
+ * нельзя — это и есть «не отдавать через API никому, кроме владельца»
+ * (задача 9d583c58…). Возвращаем `undefined` ровно так же, как на
+ * «не существует», чтобы вызывающий ответил 404 без раскрытия факта
+ * существования. Проверка стоит ДО «видит всё»: иначе приватность
+ * работала бы только для прочих людей.
  */
 export function getTaskForRead(
   taskId: string,
   userId: string,
 ): any | undefined {
-  if (seesEveryTask(userId)) return taskById().get(taskId);
+  const row = taskById().get(taskId);
+  if (!row) return undefined;
+  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+    return undefined;
+  }
+  if (seesEveryTask(userId)) return row;
   return db
     .prepare(
       `SELECT * FROM tasks WHERE id = ? AND (
@@ -244,12 +320,21 @@ export function getTaskForRead(
  * исполнителя, поправить формулировку и добавить шаг в ЧУЖУЮ задачу — это
  * и есть его работа (задача af2107b2). Удаления это ему не открывает:
  * DELETE отсекается в authOrApiToken до любого роута.
+ *
+ * Приватный проект: даже оркестратор сюда не заходит (задача 9d583c58…):
+ * «не отдавать через API никому, кроме владельца». Владелец трекера — одна
+ * учётка, и она же проходит первой проверкой ниже.
  */
 export function getTaskForWrite(
   taskId: string,
   userId: string,
 ): any | undefined {
-  if (isOwner(userId) || isOrchestrator(userId)) return taskById().get(taskId);
+  const row = taskById().get(taskId);
+  if (!row) return undefined;
+  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+    return undefined;
+  }
+  if (isOwner(userId) || isOrchestrator(userId)) return row;
 
   const caller = callerOf(userId);
   if (caller?.type === "ai") {
@@ -279,9 +364,16 @@ export function getTaskForReview(
   userId: string,
 ): any | undefined {
   if (!isReviewer(userId)) return undefined;
-  return db
+  const row = db
     .prepare("SELECT * FROM tasks WHERE id = ? AND agent_state = 'review'")
     .get(taskId);
+  if (!row) return undefined;
+  // Приватный проект (задача 9d583c58…): ревьюер — не владелец, задачу
+  // приватного проекта он выносить не должен.
+  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+    return undefined;
+  }
+  return row;
 }
 
 /**
@@ -292,7 +384,15 @@ export function getTaskForOwnerDelete(
   taskId: string,
   userId: string,
 ): any | undefined {
-  if (isOwner(userId)) return taskById().get(taskId);
+  const row = taskById().get(taskId);
+  if (!row) return undefined;
+  // Приватный проект (задача 9d583c58…): только владелец трекера. Иначе
+  // агент-создатель по старому `creator_id = ?` вернул бы 200/404 и
+  // подтвердил существование скрытой задачи.
+  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+    return undefined;
+  }
+  if (isOwner(userId)) return row;
   return db
     .prepare("SELECT * FROM tasks WHERE id = ? AND creator_id = ?")
     .get(taskId, userId);
@@ -306,6 +406,12 @@ export function getTaskForOwnerDelete(
  * накрывает все DELETE разом, а проверять в каждом дочернем месте
  * отдельно значит держать два слоя одного правила. Владелец 05.10.2026:
  * «правило в одном месте».
+ *
+ * Приватный проект (задача 9d583c58…): виден только владельцу трекера.
+ * Через `getProjectForUser` идут удаление, прямой PATCH (если бы он
+ * не был под `getProjectForWrite`) и любой SELECT по id. Возвращаем
+ * `undefined` — вызывающий отвечает 404 без раскрытия факта
+ * существования приватного проекта.
  */
 export function getProjectForUser(
   projectId: string,
@@ -314,8 +420,14 @@ export function getProjectForUser(
   if (isOwner(userId)) {
     return db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId);
   }
+  // Приватный проект не виден никому, кроме владельца — даже тому, кто
+  // числится `owner_id` строки (это может быть любой человек, а не
+  // `users.role='owner'`). Прячем всю строку.
   return db
-    .prepare("SELECT * FROM projects WHERE id = ? AND owner_id = ?")
+    .prepare(
+      `SELECT * FROM projects WHERE id = ? AND owner_id = ?
+         AND (is_private = 0 OR is_private IS NULL)`,
+    )
     .get(projectId, userId);
 }
 
@@ -325,7 +437,15 @@ export function getProjectForWrite(
   userId: string,
 ): any | undefined {
   if (isOrchestrator(userId)) {
-    return db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId);
+    // Оркестратор видит любой проект, кроме приватного (задача 9d583c58…:
+    // «не отдавать через API никому, кроме владельца»). Удалять он всё
+    // равно не вправе — см. шапку getProjectForUser.
+    return db
+      .prepare(
+        `SELECT * FROM projects WHERE id = ?
+           AND (is_private = 0 OR is_private IS NULL)`,
+      )
+      .get(projectId);
   }
   return getProjectForUser(projectId, userId);
 }
@@ -355,6 +475,17 @@ export function getProjectForFiling(
 
   const caller = callerOf(userId);
   if (caller?.type !== "ai") return undefined;
+
+  // Приватный проект (задача 9d583c58…): агенту класть в него задачу
+  // нельзя ни при каких условиях — иначе «не отдавать через API никому,
+  // кроме владельца» нарушалось бы ещё на этапе создания. Сразу `undefined`,
+  // вызывающий ответит 400 «invalid project_id».
+  const isPrivate = (
+    db.prepare("SELECT is_private FROM projects WHERE id = ?").get(projectId) as
+      | { is_private?: number | null }
+      | undefined
+  )?.is_private;
+  if (isPrivate === 1) return undefined;
 
   if (assigneeId) {
     const forAssignee = db
@@ -440,7 +571,17 @@ export function allLabelsOwnedByUser(
 
 /** Commentary is narrower than editing a card: an assigned approved slot may report its work. */
 export function getTaskForComment(taskId:string,userId:string):any|undefined {
-  return getTaskForWrite(taskId,userId) ?? db.prepare(`SELECT t.* FROM tasks t WHERE t.id=? AND EXISTS (
+  const viaWrite = getTaskForWrite(taskId,userId);
+  if (viaWrite) return viaWrite;
+  // Даже при наличии «утверждённого слота» комментарий к приватной задаче
+  // — утечка: исполнитель слота агент, а приватный проект агенту закрыт.
+  // Режем сразу, иначе вторая ветка ниже отдала бы строку.
+  const row = taskById().get(taskId);
+  if (!row) return undefined;
+  if (privateProjectHides(userId, getProjectRow((row as any).project_id))) {
+    return undefined;
+  }
+  return db.prepare(`SELECT t.* FROM tasks t WHERE t.id=? AND EXISTS (
     SELECT 1 FROM subtasks s JOIN task_collaboration_plans p ON p.id=s.collaboration_plan_id
     WHERE s.task_id=t.id AND s.agent_id=? AND s.done=0 AND p.status='approved'
   )`).get(taskId,userId);

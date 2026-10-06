@@ -2,7 +2,7 @@ import { branchMembership } from "../runtime/branchPlan.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { deliverTopicToWork } from "../runtime/inProcessRun.js";
 import { topicContext } from "../lib/projectTopics.js";
-import { getProjectForWrite, getTaskForRead } from "../access.js";
+import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { renderInstruction } from "../lib/roleContextResolver.js";
 // Чаты с ролями-агентами (владелец 21.09.2026, план
@@ -101,6 +101,15 @@ function memberIds(chatId: string): string[] {
 
 function isMember(chatId: string, userId: string): boolean {
   const chat = db.prepare("SELECT project_id, parent_chat_id, task_id FROM chats WHERE id = ?").get(chatId) as any;
+  // Приватный проект (задача 9d583c58…): его чаты не видны никому, кроме
+  // владельца трекера — иначе утечка через название группового чата
+  // (оно равно имени проекта) и через task_title темы.
+  if (chat?.project_id && !isOwner(userId)) {
+    const priv = (db
+      .prepare("SELECT is_private FROM projects WHERE id = ?")
+      .get(chat.project_id) as { is_private?: number | null } | undefined)?.is_private;
+    if (priv === 1) return false;
+  }
   if (chat?.parent_chat_id) {
     const task=chat.task_id ? getTaskForRead(chat.task_id,userId) : null;
     if (!task || task.project_id !== chat.project_id) return false;

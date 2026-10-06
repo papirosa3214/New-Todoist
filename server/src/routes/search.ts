@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
-import { seesEveryTask, visibleScope } from "../access.js";
+import { isOwner, seesEveryTask, visibleProjectScope, visibleScope } from "../access.js";
 
 // SQLite's built-in LOWER() only folds ASCII — it does NOT lowercase Cyrillic
 // (verified on this machine: both the sqlite3 CLI and the better-sqlite3 build
@@ -41,7 +41,19 @@ export function registerSearchRoutes(app: FastifyInstance) {
       // (access.ts): владельцу и его агентам все, прочему человеку свои.
       // Раньше поиск жил по собственному, ещё более узкому предикату
       // (только creator/assignee) — и находил не то, что показывает доска.
+      //
+      // Приватный проект (задача 9d583c58…): ни в задачах, ни в проектах
+      // не должен всплыть. Фильтр по приватности применяется ко ВСЕМ,
+      // кроме владельца трекера (`isOwner`), — в том числе к агенту и
+      // оркестратору, которые иначе видят всё по `seesAll`.
       const seesAll = seesEveryTask(userId);
+      const asOwner = isOwner(userId);
+      const ownerBypass = seesAll
+        ? "1 = 1"
+        : "(t.creator_id = ? OR t.assignee_id = ?)";
+      const privacyClause = asOwner
+        ? "1 = 1"
+        : "(p.id IS NULL OR p.is_private = 0 OR p.is_private IS NULL)";
       const wordConditions: string[] = [];
       const params: any[] = seesAll ? [] : [userId, userId];
 
@@ -65,7 +77,8 @@ export function registerSearchRoutes(app: FastifyInstance) {
         FROM tasks t
         LEFT JOIN users u ON t.assignee_id = u.id
         LEFT JOIN projects p ON t.project_id = p.id
-        WHERE ${seesAll ? "1 = 1" : "(t.creator_id = ? OR t.assignee_id = ?)"}
+        WHERE ${ownerBypass}
+          AND ${privacyClause}
           AND ${wordConditions.join(" AND ")}
         ORDER BY t.created_at DESC
       `,
@@ -87,8 +100,10 @@ export function registerSearchRoutes(app: FastifyInstance) {
         subtasks: stmtSub.all(t.id).map((s: any) => ({ ...s, done: !!s.done })),
       }));
 
-      // Build project search conditions
-      const projectScope = visibleScope(userId, "p.owner_id");
+      // Build project search conditions. Проекты — через
+      // visibleProjectScope: приватный проект (задача 9d583c58…) не должен
+      // всплыть в поиске ни у кого, кроме владельца трекера.
+      const projectScope = visibleProjectScope(userId, "p.owner_id");
       const projectWordConditions: string[] = [];
       const projectParams: any[] = [...projectScope.params];
 

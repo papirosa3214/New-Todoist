@@ -3226,6 +3226,23 @@ const migrations: Migration[] = [
       db.exec("ALTER TABLE subtasks ADD COLUMN model TEXT");
     }
   } },
+
+  // Приватные проекты (задача 9d583c58…). Колонка `is_private` уже
+  // добавлена в `db.ts:migrate()` (аддитивно через PRAGMA table_info +
+  // ALTER TABLE — тот же приём, что и для projects.position/pinned), и
+  // свежая база получает её прямо в CREATE TABLE. Этой миграции здесь
+  // нечего делать: она нужна, только чтобы зафиксировать факт в
+  // schema_migrations, и для прогонов, в которых ALTER уже выполнен, но
+  // запись в schema_migrations ещё не сделана. Поэтому `up()` идемпотентен
+  // и просто проверяет наличие колонки.
+  { id: "102_private_projects", description: "Приватные проекты: projects.is_private, скрытие в API", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("is_private")) {
+      db.exec("ALTER TABLE projects ADD COLUMN is_private INTEGER DEFAULT 0");
+    }
+  } },
 ];
 
 /**

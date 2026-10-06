@@ -77,7 +77,11 @@ export function migrate() {
       name TEXT NOT NULL,
       color TEXT DEFAULT '#4A9FD8',
       owner_id TEXT REFERENCES users(id),
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now')),
+      -- Признак «приватный» (задача 9d583c58…): 1 — проект и его задачи
+      -- видны только владельцу трекера. По умолчанию 0, прежнее поведение
+      -- (видимость по visibleScope из access.ts) сохранено.
+      is_private INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS labels (
@@ -399,6 +403,14 @@ export function migrate() {
   }
   if (!projectCols.some((c) => c.name === "pinned")) {
     db.exec("ALTER TABLE projects ADD COLUMN pinned INTEGER DEFAULT 0");
+  }
+  // Приватный проект (задача 9d583c58…): флаг выставляется владельцем
+  // трекера; пока 1 — проект и его задачи не отдаются через API никому,
+  // кроме самого владельца (см. access.ts:privateProjectHides). В базовой
+  // схеме projects колонки нет (свежие инсталляции получают её через
+  // CREATE TABLE в migrate()), здесь — для уже существующих таблиц.
+  if (!projectCols.some((c) => c.name === "is_private")) {
+    db.exec("ALTER TABLE projects ADD COLUMN is_private INTEGER DEFAULT 0");
   }
 
   // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:

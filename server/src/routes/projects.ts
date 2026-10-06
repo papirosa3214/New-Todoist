@@ -8,7 +8,9 @@ import {
   getProjectForWrite,
   getLabelForUser,
   visibleScope,
+  visibleProjectScope,
   ownerForNewShared,
+  isOwner,
 } from "../access.js";
 
 const uid = () => crypto.randomUUID();
@@ -65,14 +67,18 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
         GROUP BY folder_id
       ) d ON d.folder_id = p.notes_folder_id`;
 
-    // Кому какие проекты видны — общее правило из access.ts (visibleScope):
-    // владельцу все, агенту свои и людские, прочему человеку только свои.
+    // Кому какие проекты видны — общее правило из access.ts
+    // (visibleProjectScope): владельцу все, агенту свои и людские,
+    // прочему человеку только свои. Приватный проект (задача 9d583c58…)
+    // виден только владельцу трекера — для этого и отдельный scope, а
+    // не `visibleScope` (тот про метки и projects, и `is_private` у
+    // меток нет).
     //
     // Решение Максима 14.08.2026: «это его личный трекер, один человек и его
     // же агенты — стена между ними смысла не имеет». Раньше агенту отдавался
     // пустой список, хотя положить задачу в проект человека он был вправе, —
     // приходилось угадывать идентификатор проекта.
-    const scope = visibleScope(req.userId, "p.owner_id");
+    const scope = visibleProjectScope(req.userId, "p.owner_id");
     // pinned сначала, дальше по position (NULL — «никогда не переставляли»
     // — уезжает в конец через SQLite'вский ASC NULLS LAST-эквивалент: сырой
     // ASC кладёт NULL первым, поэтому сортируем по «p.position IS NULL»
@@ -129,6 +135,10 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
        *  попросил разделять («мало ли специфический бизнесовый проект —
        *  не хотелось бы замешивать документацию не туда»). */
       knowledge_dataset_id?: string | null;
+      /** Создать проект приватным (задача 9d583c58…): 1 — проект и его
+       *  задачи будут видны только владельцу трекера. Принимается ТОЛЬКО
+       *  от владельца трекера; агенту и постороннему — 403. */
+      is_private?: boolean;
     };
   }>(
     "/api/projects",
@@ -140,6 +150,12 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
         if (!name) {
           return reply.code(400).send({ error: "Укажите название проекта" });
         }
+        const wantPrivate = req.body?.is_private === true;
+        if (wantPrivate && !isOwner(req.userId)) {
+          return reply
+            .code(403)
+            .send({ error: "сделать проект приватным может только владелец" });
+        }
         const id = uid();
         const { color } = req.body;
         const datasetId =
@@ -148,11 +164,19 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
             ? req.body.knowledge_dataset_id.trim()
             : null;
         db.prepare(
-          "INSERT INTO projects (id, name, color, owner_id, knowledge_dataset_id) VALUES (?,?,?,?,?)",
+          "INSERT INTO projects (id, name, color, owner_id, knowledge_dataset_id, is_private) VALUES (?,?,?,?,?,?)",
           // Проект — общий инструмент: агент заводит его для работы, а не
           // для себя. Записанный на агента, он не виден остальным (см.
-          // ownerForNewShared).
-        ).run(id, name, color || "#4A9FD8", ownerForNewShared(req.userId), datasetId);
+          // ownerForNewShared). `is_private` задан владельцем выше
+          // (проверка isOwner уже прошла).
+        ).run(
+          id,
+          name,
+          color || "#4A9FD8",
+          ownerForNewShared(req.userId),
+          datasetId,
+          wantPrivate ? 1 : 0,
+        );
 
         // Папка документации — по запросу (26.08.2026, для агентов).
         // Не по умолчанию: человек заводит проекты из интерфейса и пустая
@@ -191,6 +215,11 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       knowledge_dataset_id?: string | null;
       /** Согласие на переиндексацию при смене датасета (см. 409 ниже). */
       confirm_reindex?: boolean;
+      /** Признак «приватный» (задача 9d583c58…): 1 — проект и его задачи
+       *  видны только владельцу трекера. Принимается ТОЛЬКО от владельца
+       *  трекера. При включении (0 → 1) все задачи проекта с
+       *  исполнителем-не-владельцем переназначаются на владельца. */
+      is_private?: boolean;
     };
   }>("/api/projects/:id", {
     preHandler: authPre,
@@ -216,8 +245,14 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
               .get(req.userId) as { type?: string } | undefined
           )?.type === "ai";
         if (onlyFolder && isAgent) {
+          // Приватный проект (задача 9d583c58…) закрыт и от этой лазейки:
+          // без фильтра `is_private` агент выдал бы факт существования
+          // проекта (200 vs 404) и привязал бы к нему папку заметок.
           project = db
-            .prepare("SELECT * FROM projects WHERE id = ?")
+            .prepare(
+              `SELECT * FROM projects WHERE id = ?
+                 AND (is_private = 0 OR is_private IS NULL)`,
+            )
             .get(req.params.id);
         }
       }
@@ -261,6 +296,42 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       if (pinned !== undefined) {
         fields.push("pinned = ?");
         values.push(pinned ? 1 : 0);
+      }
+      // Приватность проекта (задача 9d583c58…): только владелец трекера.
+      // При включении (0 → 1) ВСЕ задачи проекта с исполнителем,
+      // отличным от владельца трекера, переназначаются на владельца —
+      // чтобы условие «задачи, попавшие в приватный проект, автоматически
+      // назначаются на владельца» выполнялось и для уже существующих
+      // задач. В обратную сторону (1 → 0) автоматика не нужна: проект
+      // открывается, исполнители остаются как есть — это работа владельца.
+      if (req.body?.is_private !== undefined) {
+        if (!isOwner(req.userId)) {
+          return reply.code(403).send({
+            error: "менять приватность проекта может только владелец",
+          });
+        }
+        const wantPrivate = req.body.is_private === true;
+        const wasPrivate = ((project as any).is_private ?? 0) === 1;
+        if (wantPrivate && !wasPrivate) {
+          // Идентификатор владельца трекера: единственный пользователь с
+          // role='owner' в системе, он же u1 Максим. Считываем здесь, а не
+          // используем req.userId, потому что PATCH теоретически может
+          // инициировать оркестратор (у него те же права на правку
+          // проекта, см. getProjectForWrite) — но приватность закрыта и
+          // от него, проверка isOwner выше отсекает такой запрос.
+          const ownerRow = db
+            .prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY id LIMIT 1")
+            .get() as { id?: string } | undefined;
+          const ownerId = ownerRow?.id ?? req.userId;
+          db.prepare(
+            `UPDATE tasks SET assignee_id = ?
+              WHERE project_id = ?
+                AND assignee_id IS NOT NULL
+                AND assignee_id <> ?`,
+          ).run(ownerId, req.params.id, ownerId);
+        }
+        fields.push("is_private = ?");
+        values.push(wantPrivate ? 1 : 0);
       }
       // Датасет базы знаний. Существование датасета здесь НЕ проверяется: он
       // живёт в RAGFlow, за пределами этой базы, и синхронный поход туда на
