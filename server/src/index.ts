@@ -14,6 +14,8 @@ import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
+import { startLinearAutoImport } from "./lib/linearAutoImport.js";
+import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
@@ -45,6 +47,7 @@ import { registerStructureRoutes } from "./routes/structure.js";
 import { registerReportRoutes } from "./routes/reports.js";
 import { registerResearchRoutes } from "./routes/research.js";
 import { registerChatsRoutes } from "./routes/chats.js";
+import { ensureCommonChat } from "./lib/chatCommon.js";
 import { registerWidgetsRoutes } from "./routes/widgets.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
 import { registerTranscribeRoutes } from "./routes/transcribe.js";
@@ -309,7 +312,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   setInProcessApp(app);
   await app.register(fastifyWebsocket);
   // global: false — лимит НЕ применяется автоматически ко всем маршрутам.
-  // Агенты и служба-будильник (taskflow-trigger) бьют по /api/tasks и
+  // Агенты и внутренняя автоматика сервера бьют по /api/tasks и
   // heartbeat раз в 90 секунд под одним и тем же LAN/localhost IP — общий
   // лимит по IP превратился бы в самопроизвольную блокировку рабочего
   // трафика. Ограничение включается точечно, через config.rateLimit на
@@ -322,6 +325,16 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Версионные миграции поверх — новые изменения схемы идут сюда, не в
   // migrate() (см. migrations.ts).
   runMigrations();
+  // Общий чат ролей (карточка ca816271, п. 2): идемпотентно завести
+  // комнату, состав и закреплённый регламент, если их ещё нет.
+  try {
+    ensureCommonChat();
+  } catch (error) {
+    console.warn(
+      "[index] общий чат не заведён:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 
   // Routes
   registerAuthRoutes(app);
@@ -387,7 +400,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   startActivityObserver();
   // Inbox-triage watcher: при появлении ticket'а в ~/Проекты/taskflow-уведомления/
   // inbox/*/_diagnostic/*.json создаёт карточку на диагностику прямо в БД.
-  // Никаких внешних HTTP/Hermes/timer'ов — всё внутри процесса сервера
+  // Никаких внешних HTTP/timer'ов — всё внутри процесса сервера
   // (правило Maksim 27.09.2026). Выключается через INBOX_TRIAGE_DISABLED=1.
   if (process.env.INBOX_TRIAGE_DISABLED !== "1") {
     startInboxTriageWatcher();
@@ -409,7 +422,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // «ничего не грузится». Владелец сидит с телефона, терминала у него нет.
   //
   // Отдаём то, по чему видно живость и свежесть, а не диагностический дамп:
-  // сколько работает, на каком коде, велика ли база, идёт ли будильник.
+  // сколько работает, на каком коде, велика ли база, включена ли «Система».
   app.get("/api/server-status", { preHandler: authOrApiToken }, async () => {
     const uptime = Math.round(process.uptime());
     let commit: string | null = null;
@@ -448,19 +461,20 @@ export async function buildApp(): Promise<FastifyInstance> {
       dbBytes = null;
     }
 
-    // Будильник — отдельная служба (taskflow-trigger.service): это она
-    // зовёт агентов в работу, и её молчание выглядит как «доска мёртвая».
+    // «Система» — единый переключатель серверной автоматики
+    // (task_intake_mode владельца). Раньше здесь опрашивалась системная автоматика
+    // taskflow-trigger.service; служба снята 05.10.2026, роли исполняет
+    // сервер. Поле trigger сохранено для совместимости с приложением.
     let trigger: string | null = null;
     try {
-      trigger = execFileSync(
-        "systemctl",
-        ["--user", "is-active", "taskflow-trigger.service"],
-        { encoding: "utf8", timeout: 3000 },
-      ).trim();
-    } catch (e: any) {
-      // is-active возвращает ненулевой код, когда служба не работает, —
-      // это ответ, а не ошибка.
-      trigger = (e?.stdout || "").toString().trim() || "unknown";
+      const owner = db
+        .prepare(
+          "SELECT task_intake_mode FROM users WHERE role='owner' ORDER BY created_at LIMIT 1",
+        )
+        .get() as { task_intake_mode?: string } | undefined;
+      trigger = owner?.task_intake_mode === "automatic" ? "active" : "inactive";
+    } catch {
+      trigger = "unknown";
     }
 
     // Проверка доступности локальной LLM (Ollama)
@@ -552,9 +566,13 @@ if (isMain) {
     let stopVoiceBridge: (() => Promise<void>) | null = null;
     let stopKnowledgeSync: (() => void) | null = null;
     let stopScheduler: (() => void) | null = null;
+    let stopLinearAutoImport: (() => void) | null = null;
+    let stopLinearSync: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
+      stopLinearAutoImport?.();
+      stopLinearSync?.();
       if (stopPreparation) await stopPreparation();
       if (stopRoleRuns) await stopRoleRuns();
       if (stopVoiceBridge) await stopVoiceBridge();
@@ -573,6 +591,12 @@ if (isMain) {
     stopKnowledgeSync = startKnowledgeSyncSchedule();
     // Планировщик доски раз в 5 минут — внутри сервера (runtime/scheduler.ts).
     stopScheduler = startScheduler(app);
+    // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
+    // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
+    if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();
+    // Обратная синхронизация TaskFlow → Linear (карточка 20e30338): статусы
+    // привязанных карточек раз в минуту; сбой Linear не трогает карточку.
+    if (process.env.LINEAR_SYNC_DISABLED !== "1") stopLinearSync = startLinearSync();
     // Ходы ролей живут в процессе: узлы плана, брошенные прошлым процессом,
     // — в ленту и продолжить (runtime/planSubtaskAdmission.ts).
     try {

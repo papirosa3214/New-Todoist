@@ -47,11 +47,8 @@ describe("обход доски внутри сервера", () => {
     app = await buildApp();
     demoteSeededOwner(db);
     seedRoleAccounts(db);
-    // Служебная учётка — как на .110: в архиве, без внешнего ключа.
-    db.prepare(
-      `INSERT OR IGNORE INTO users (id, name, email, password_hash, role, type, avatar_color, initials, status, archived)
-       VALUES (?, 'Pi Agent', 'pi@agent.test', 'x', 'agent', 'ai', '#888', 'P', 'offline', 1)`,
-    ).run(SCHEDULER_USER_ID);
+    // Служебная учётка — «Система» (taskflow_system), заведена миграцией 095;
+    // вход снаружи ей закрыт правилом в auth.ts, пропуск выдаёт сам сервер.
     const reg = await app.inject({ method: "POST", url: "/api/auth/register", payload: { name: "Sched owner", email: `sched-${Date.now()}@test`, password: "password123" } });
     ownerId = reg.json().user.id;
     db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(ownerId);
@@ -71,9 +68,14 @@ describe("обход доски внутри сервера", () => {
     return id;
   }
 
-  it("архивная служебная учётка не входит обычным JWT", () => {
+  it("служебная учётка «Система» не входит обычным JWT", () => {
     const token = app.jwt.sign({ id: SCHEDULER_USER_ID });
     expect(resolveUserIdFromToken(app, token)).toBeNull();
+  });
+
+  it("внутренний пропуск планировщика входит под «Системой»", () => {
+    const token = app.jwt.sign({ id: SCHEDULER_USER_ID, internalService: "scheduler" });
+    expect(resolveUserIdFromToken(app, token)).toBe(SCHEDULER_USER_ID);
   });
 
   it("явный предел серии отмечается без создания следующей карточки", async () => {

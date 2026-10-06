@@ -173,6 +173,16 @@ export function ChatRoomScreen() {
         </div>
       )}
 
+      {/* Закреплённое сообщение (регламент общего чата) — баром. */}
+      {chat?.pinned_message && (
+        <div className="mb-3 rounded-xl bg-card2 px-3.5 py-2.5 flex gap-2">
+          <Icon name="bell" size={16} className="text-sub shrink-0 mt-0.5" />
+ <p className="tf-caption text-sub whitespace-pre-wrap break-words">
+            {chat.pinned_message.text}
+          </p>
+        </div>
+      )}
+
       <div className="relative flex-1 min-h-0">
         <div
           ref={scrollRef}
@@ -234,13 +244,26 @@ export function ChatRoomScreen() {
       </div>
 
       {chat && (
-        <Composer
-          disabled={send.isPending || !chatId}
-          onSend={async (text) => {
-            if (!chatId) return;
-            await send.mutateAsync({ text });
-          }}
-        />
+        chat.closed_at ? (
+          <div className="pt-2">
+            <p className="tf-meta text-dim text-center py-3">
+              Чат закрыт вместе с задачей. История сохранена.
+            </p>
+          </div>
+        ) : (
+          <Composer
+            disabled={send.isPending || !chatId}
+            placeholder={
+              chat.kind === "group"
+                ? "Сообщение… Позовите роль через @"
+                : "Сообщение…"
+            }
+            onSend={async (text) => {
+              if (!chatId) return;
+              await send.mutateAsync({ text });
+            }}
+          />
+        )
       )}
       <ErrorBanner
         error={send.error}
@@ -321,9 +344,11 @@ function DaySeparator({ label }: { label: string }) {
 function Composer({
   onSend,
   disabled,
+  placeholder = "Сообщение…",
 }: {
   onSend: (text: string) => Promise<void> | void;
   disabled?: boolean;
+  placeholder?: string;
 }) {
   const [text, setText] = useState("");
   const send = async () => {
@@ -348,7 +373,7 @@ function Composer({
               void send();
             }
           }}
-          placeholder="Сообщение…"
+          placeholder={placeholder}
           rows={1}
  className="tf-body w-full bg-transparent text-text placeholder:text-dim outline-none resize-none max-h-32"
         />

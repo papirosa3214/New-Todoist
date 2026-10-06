@@ -81,7 +81,13 @@ export function migrate() {
       -- Признак «приватный» (задача 9d583c58…): 1 — проект и его задачи
       -- видны только владельцу трекера. По умолчанию 0, прежнее поведение
       -- (видимость по visibleScope из access.ts) сохранено.
-      is_private INTEGER DEFAULT 0
+      is_private INTEGER DEFAULT 0,
+      -- Архив проекта (карточка a1be7d63…): NULL — проект живой. Ненулевая
+      -- метка времени — проект удалён «в архив» вместе со всем содержимым:
+      -- задачи, документы, чаты и память остаются в базе, но нигде больше не
+      -- фигурируют. Окончательное удаление — только из архива (purge).
+      archived_at TEXT,
+      archived_by TEXT REFERENCES users(id)
     );
 
     CREATE TABLE IF NOT EXISTS labels (
@@ -205,7 +211,7 @@ export function migrate() {
 
   // Additive migration: users.is_system_bot may be missing on a DB created
   // before this column was added. This flag marks the seeded system agents
-  // (Claude_Bot, Hermes) — it is set only here and in seed.ts, never via
+  // — it is set only here and in seed.ts, never via
   // /api/auth/register, so a registered account can never grant itself
   // "system bot" status.
   if (!userCols.some((c) => c.name === "is_system_bot")) {
@@ -412,6 +418,16 @@ export function migrate() {
   if (!projectCols.some((c) => c.name === "is_private")) {
     db.exec("ALTER TABLE projects ADD COLUMN is_private INTEGER DEFAULT 0");
   }
+  // Архив проекта (карточка a1be7d63…). Как и is_private: свежая база
+  // получает колонки прямо из CREATE TABLE в migrate(), а для уже
+  // существующих таблиц добавляем аддитивно здесь. archived_by — учётка,
+  // которая отправила проект в архив (владелец трекера).
+  if (!projectCols.some((c) => c.name === "archived_at")) {
+    db.exec("ALTER TABLE projects ADD COLUMN archived_at TEXT");
+  }
+  if (!projectCols.some((c) => c.name === "archived_by")) {
+    db.exec("ALTER TABLE projects ADD COLUMN archived_by TEXT");
+  }
 
   // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:
   // there is no PATCH/DELETE endpoint for individual events, which is what
@@ -482,7 +498,7 @@ export function migrate() {
   // b6b57092, шаг 1). Идемпотентно: при перезапуске UPDATE проставит те же
   // значения, ничего не задвоится. Файл читается по id профиля: profiles.*.id
   // совпадает с users.id (проверено 11.09.2026 на живой базе), а в profile
-  // пишется ключ профиля (claude_bot / hermes / reviewer / ...), чтобы по
+  // пишется ключ профиля (строчный профиль исполнителя), чтобы по
   // нему доставать свойства из team_catalog.json в шаге 3.
   //
   // Файл может не найтись (dev-сборка без scripts/), JSON может быть

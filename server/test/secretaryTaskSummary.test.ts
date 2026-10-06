@@ -5,7 +5,6 @@ import { buildApp } from "../src/index.js";
 const model=vi.hoisted(()=>({reply:{} as any}));
 vi.mock("../src/routes/ai.js",async original=>({...await original<typeof import("../src/routes/ai.js")>(),callUnifiedAi:async()=>JSON.stringify(model.reply)}));
 import { collectTaskSummary, summaryClock, summaryPeriods, validateSummaryFilter, requestTaskSummary } from "../src/lib/secretaryTaskSummary.js";
-import { deliverSecretaryReply } from "../src/lib/secretaryReply.js";
 const base={is_summary:true,assignee_id:null,groups:["all"],from:null,to:null,date_field:"due_date",question:null};
 const now=new Date("2026-09-27T12:00:00Z");
 describe("единая фактическая сводка Секретаря",()=>{
@@ -67,11 +66,14 @@ describe("единая фактическая сводка Секретаря",(
   expect(count()).toBe(before+1);
   expect(db.prepare("SELECT from_user_id,chat_id,text FROM chat_messages WHERE id=?").get((sent as any).message_id)).toMatchObject({from_user_id:"u-secretary",chat_id:"chat-secretary",text:(sent as any).text});
  });
- it("чат использует тот же разбор и фактическую выборку",async()=>{
+ it("чат Секретаря — обычный путь роли; сводка собирается тем же инструментом",async()=>{
+  // Раньше Секретарь перехватывал сводку в отдельной функции
+  // deliverSecretaryReply. Теперь он идёт общим путём ролей, а сводку
+  // собирает инструмент taskflow_task_summary поверх того же разбора.
   model.reply={...base,assignee_id:"role_builder",groups:["stuck"]};
-  const id=await deliverSecretaryReply("Какие задачи зависли у разработчика?");
-  const row=db.prepare("SELECT text FROM chat_messages WHERE id=?").get(id) as any;
-  expect(row.text).toContain("Назначенная");expect(row.text).not.toContain("Стоп — QA");
+  const filter=await requestTaskSummary("u1","Какие задачи зависли у разработчика?");
+  expect((filter as any).text).toContain("Назначенная");
+  expect((filter as any).text).not.toContain("Стоп — QA");
  });
  it("неоднозначность даёт вопрос без отправки отчёта",async()=>{
   model.reply={...base,question:"Какого исполнителя выбрать?"};

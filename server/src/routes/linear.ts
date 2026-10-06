@@ -4,6 +4,8 @@ import { authOrApiToken } from "../auth.js";
 import { isOwner, getProjectForFiling } from "../access.js";
 import { listLinearIssues, fetchLinearSnapshot } from "../lib/linearSource.js";
 import { createLinearPreview, commitLinearPreview } from "../lib/linearImport.js";
+import { linearAutoImportState, setLinearAutoImportEnabled, runLinearAutoImportPass } from "../lib/linearAutoImport.js";
+import { linearSyncHealth, setLinearSyncEnabled, runLinearSyncPass } from "../lib/linearSync.js";
 import { LinearSourceError } from "../runtime/linearTransport.js";
 import { broadcastTaskEvent } from "../ws.js";
 import { getTaskRow, hydrateTask } from "./tasks.js";
@@ -55,5 +57,42 @@ export function registerLinearRoutes(app: FastifyInstance) {
       }
       return result;
     } catch (error) { return failure(reply, error); }
+  });
+
+  // Автоимпорт (карточка cc7caa43…): состояние службы и выключатель.
+  // Только владелец; служба сама ходит раз в 5 минут в процессе сервера.
+  app.get("/api/integrations/linear/autoimport", { preHandler: ownerOnly }, async (req: any) => {
+    const state = linearAutoImportState(req.userId);
+    return {
+      enabled: state.enabled === 1,
+      last_attempt_at: state.last_attempt_at,
+      last_success_at: state.last_success_at,
+      last_error: state.last_error,
+      last_error_at: state.last_error_at,
+      created_total: state.created_total,
+      updated_total: state.updated_total,
+    };
+  });
+  app.patch("/api/integrations/linear/autoimport", { preHandler: ownerOnly }, async (req: any, reply) => {
+    if (typeof req.body?.enabled !== "boolean") return reply.code(422).send({ error: "Нужно поле enabled (boolean)" });
+    const state = setLinearAutoImportEnabled(req.userId, req.body.enabled);
+    return { enabled: state.enabled === 1 };
+  });
+  // Ручной внеочередной проход — владельцу для проверки, той же службой.
+  app.post("/api/integrations/linear/autoimport/run", { preHandler: ownerOnly }, async (req: any, reply) => {
+    try { return await runLinearAutoImportPass(req.userId); } catch (error) { return failure(reply, error); }
+  });
+
+  // Обратная синхронизация TaskFlow → Linear (карточка 20e30338): состояние
+  // очереди записи и выключатель. Пишутся только привязанные задачи.
+  app.get("/api/integrations/linear/sync", { preHandler: ownerOnly }, async (req: any) => linearSyncHealth(req.userId));
+  app.patch("/api/integrations/linear/sync", { preHandler: ownerOnly }, async (req: any, reply) => {
+    if (typeof req.body?.enabled !== "boolean") return reply.code(422).send({ error: "Нужно поле enabled (boolean)" });
+    setLinearSyncEnabled(req.userId, req.body.enabled);
+    return linearSyncHealth(req.userId);
+  });
+  // Ручной внеочередной проход синхронизации — владельцу, без ожидания таймера.
+  app.post("/api/integrations/linear/sync/run", { preHandler: ownerOnly }, async (req: any, reply) => {
+    try { return await runLinearSyncPass(req.userId, { retryFailed: true }); } catch (error) { return failure(reply, error); }
   });
 }

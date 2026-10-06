@@ -35,6 +35,7 @@ import {
   resultFromSubtasks,
 } from "../resultVersions.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
+import { ensurePlanTopic, setTaskTopicClosed } from "../lib/projectTopics.js";
 import { attemptLadderForTask } from "../lib/attemptLadder.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 
@@ -477,17 +478,19 @@ export function registerTaskRoutes(app: FastifyInstance) {
       ? " AND " + extraFilters.join(" AND ")
       : "";
 
-    // Приватный проект (задача 9d583c58…): задачи такого проекта не должны
-    // попасть в список никому, кроме владельца трекера. `p` приходит из
-    // TASK_JOINS; `asOwner` — единственный обход. Владелец трекера видит
-    // всё и раньше, для него фильтр — `1 = 1`.
+    // Архивный проект (карточка a1be7d63…): при прямом запросе задачи по
+    // id из архивного проекта отдаём 404 всем, кроме владельца — проверка
+    // стоит в access.ts (getTaskForRead).
     const asOwner = isOwner(userId);
     const baseParent = includeChildren
       ? "1 = 1"
       : "(t.parent_id IS NULL OR t.project_id IS NOT NULL)";
+    // Архивный проект (карточка a1be7d63…) не должен попасть в список ни
+    // у кого, включая владельца — для архива есть отдельные ручки. Поэтому
+    // фильтр `p.archived_at IS NULL` есть в обеих ветках.
     const privacy = asOwner
-      ? "1 = 1"
-      : "(p.id IS NULL OR p.is_private = 0 OR p.is_private IS NULL)";
+      ? "(p.id IS NULL OR p.archived_at IS NULL)"
+      : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
 
     const tasks = (
       seesEveryTask(userId)
@@ -1032,6 +1035,18 @@ export function registerTaskRoutes(app: FastifyInstance) {
         if (preparation) persistPreparedPlan(id,req.userId,preparation);
       });
       createTaskTxn();
+
+      // Тема задачи заводится сразу при создании (карточка ca816271, п. 4),
+      // а не только на подготовке плана: пропущенная подготовка (гонка
+      // автоприёма) оставляла задачу без темы вовсе. Приватные проекты не
+      // трогаем — там темы не нужны. Ошибка темы не должна ронять создание.
+      if (!isPrivateProject) {
+        try {
+          ensurePlanTopic(id);
+        } catch (error) {
+          req.log?.warn?.({ err: String(error), taskId: id }, "не удалось завести тему задачи");
+        }
+      }
 
       // Первая запись ленты — «создал задачу»: до этого лента начиналась с
       // первого же изменения, и по ней нельзя было понять, кто и когда
@@ -1663,8 +1678,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // СМЕНА ИСПОЛНИТЕЛЯ — владелец или оркестратор трекера. Правило
       // AGENT-PROTOCOL.md «assignee_id не переписываем» защищает агента от
       // самоснятия, но заодно блокировало и владельца: он не мог
-      // переназначить зависшую задачу (например, карточка ушла на Claude_Bot
-      // по шаблону, а реально работает Pi Agent). Владелец системы и
+      // переназначить зависшую задачу (например, карточка ушла на
+      // постороннюю учётку по шаблону, а реально работает роль). Владелец системы и
       // оркестратор должны менять assignee_id в любой момент — это их
       // ручка, не агентская. Валидация «такой user существует» уже сделана выше
       // (вернёт 400 invalid assignee_id), здесь — только право на смену.
@@ -1746,6 +1761,14 @@ export function registerTaskRoutes(app: FastifyInstance) {
         db.prepare(`UPDATE tasks SET ${fields.join(", ")} WHERE id = ?`).run(
           ...values,
         );
+      }
+
+      // Тема задачи закрывается вместе с задачей и снова открывается при
+      // возврате в работу (карточка ca816271, п. 4). История остаётся.
+      if (body.status === "completed" && existing.status !== "completed") {
+        setTaskTopicClosed(id, true);
+      } else if (body.status === "active" && existing.status === "completed") {
+        setTaskTopicClosed(id, false);
       }
 
       // Гашение agent_state у самой задачи выше очищало только её колонку, а

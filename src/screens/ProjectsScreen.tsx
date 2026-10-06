@@ -120,18 +120,18 @@ function ProjectRow({
       className="relative overflow-hidden rounded-xl mb-[2px]"
       onPointerDown={swipe.onPointerDown}
     >
-      {/* Удалить — слева, открывается свайпом вправо */}
+      {/* В архив — слева, открывается свайпом вправо */}
       <button
         onClick={() => {
           swipe.close();
           onRequestDelete(project);
         }}
-        aria-label="Удалить проект"
+        aria-label="Убрать проект в архив"
         className="absolute inset-y-0 left-0 flex flex-col items-center justify-center gap-0.5 text-white"
         style={{ width: ROW_ACTION_W, background: "#FF3B30" }}
       >
-        <Icon name="trash" size={18} />
- <span className="tf-caption ">Удалить</span>
+        <Icon name="archive" size={18} />
+ <span className="tf-caption ">В архив</span>
       </button>
       {/* Изменить — справа, открывается свайпом влево */}
       <button
@@ -234,22 +234,19 @@ export function ProjectsScreen() {
     setShowCreate(false);
   });
 
-  // Server-verified (server/src/routes/projects.ts DELETE /api/projects/:id):
-  // it first runs `UPDATE tasks SET project_id = NULL WHERE project_id = ?`,
-  // THEN deletes the project row. So the project's tasks are NOT deleted —
-  // they survive as project-less tasks (same "detach, don't destroy" shape
-  // as label deletion). The confirm text below must say exactly that.
-  // task_count comes straight off the already-loaded project row (the
-  // GET /api/projects query computes it server-side), no extra fetch needed.
+  // Удаление проекта теперь архивация (карточка a1be7d63…): серверный
+  // DELETE /api/projects/:id не удаляет данные, а помещает проект в Архив
+  // вместе с задачами, документами, чатами и памятью. Оттуда его можно
+  // вернуть или удалить навсегда. task_count приходит с GET /api/projects.
   const handleDelete = async (project: ApiProject) => {
     const count = project.task_count;
     const ok = await confirm({
-      title: `Удалить проект «${project.name}»?`,
+      title: `Убрать проект «${project.name}» в архив?`,
       description:
         count > 0
-          ? `Задачи внутри (${count} ${taskWord(count)}) не удалятся — они останутся без проекта. Сам проект и его столбец на доске исчезнут без возможности отмены.`
-          : "В нём сейчас нет задач. Действие нельзя отменить.",
-      confirmLabel: "Удалить",
+          ? `Проект вместе с задачами (${count} ${taskWord(count)}) и документами уйдёт в Архив. Задачи и данные сохранятся, но в списках их больше не будет. Вернуть проект можно в разделе «Архив».`
+          : "Проект уйдёт в Архив вместе со своими документами. Вернуть его можно в разделе «Архив».",
+      confirmLabel: "В архив",
       danger: true,
     });
     if (!ok) return;
@@ -352,6 +349,15 @@ export function ProjectsScreen() {
             onOpen={() => navigate(`/projects/${p.id}`)}
           />
         ))}
+        {/* Вход в Архив (карточка a1be7d63…): удалённые проекты больше не
+            стираются насовсем, а лежат здесь. */}
+        <button
+          onClick={() => navigate("/projects/archive")}
+          className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-card text-left tap-row"
+        >
+          <Icon name="archive" size={18} className="text-sub" />
+          <span className="tf-body text-text">Архив</span>
+        </button>
         {!isLoading && !isError && projects.length === 0 && !showCreate && (
  <p className="tf-action px-1 text-dim">
             Проектов пока нет — удержите кнопку внизу, чтобы создать

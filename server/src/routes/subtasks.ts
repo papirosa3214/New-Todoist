@@ -6,6 +6,12 @@ import { planNodeAgentRefusal, unlockReadyPlanSubtasks } from "../runtime/planSu
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForRead, getTaskForWrite, getTaskForComment } from "../access.js";
+import { isServiceUser } from "../serviceUser.js";
+import {
+  blockedHelpError,
+  evaluateBlockedHelp,
+  type BlockedHelpDecision,
+} from "../lib/blockedHelp.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import {
   AGENT_RULES,
@@ -29,6 +35,7 @@ import {
   saveSlotSnapshot,
   slotSnapshotDto,
   technicalSlotSnapshot,
+  periodicSlotSnapshot,
 } from "../runtime/slotWorkSnapshot.js";
 
 const uid = () => crypto.randomUUID();
@@ -610,6 +617,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     Body: {
       state?: "in_progress" | "blocked" | "review" | null;
       result?: string;
+      // Карточка cd10bf34: чек-ин о вызове помощи перед blocked.
+      help_attempt?: string;
+      help_skip_reason?: string;
     };
   }>("/api/subtasks/:id/work", {
     preHandler: authPre,
@@ -668,6 +678,27 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       });
       if (refusal) {
         return reply.code(refusal.code).send({ error: refusal.error });
+      }
+
+      // Карточка cd10bf34: блокировка шага агентом тоже проходит через
+      // проверку «перед blocked позови помощь». Владельца и сервисный
+      // триггер гейт не касается — они блокируют не от своего имени.
+      let blockedHelp: BlockedHelpDecision | null = null;
+      if (state === "blocked" && caller?.type === "ai" && !isServiceUser(req.userId)) {
+        const decision = evaluateBlockedHelp({
+          text: (result ?? subtask.result ?? "") as string,
+          helpAttempt: req.body?.help_attempt,
+          helpSkipReason: req.body?.help_skip_reason,
+          roleKey:
+            (db
+              .prepare("SELECT role_key FROM users WHERE id = ?")
+              .get(req.userId) as { role_key?: string | null } | undefined)
+              ?.role_key ?? null,
+        });
+        if (!decision.ok) {
+          return reply.code(409).send(blockedHelpError(decision));
+        }
+        blockedHelp = decision;
       }
 
       // Выход из review агенту тоже открыт — вместе с отменой обязательной
@@ -785,6 +816,18 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         db.prepare(
           "UPDATE attempts SET heartbeat_at = datetime('now') WHERE subtask_id = ? AND executor_id = ? AND ended_at IS NULL",
         ).run(req.params.id, req.userId);
+        // ПЕРИОДИЧЕСКИЙ ТЕХСНИМОК (владелец 04.10.2026): пока слот жив, сервер
+        // сам, без модели, отмечает, где стояла работа, — вместе с продлением
+        // аренды. Чаще, чем раз в LEASE_MINUTES, не пишем и одинаковые подряд
+        // не дублируем (сам throttle живёт в periodicSlotSnapshot). Снимок не
+        // должен ронять продление аренды: не записался — работа продолжается.
+        if (subtask.collaboration_plan_id) {
+          try {
+            periodicSlotSnapshot(subtask.id);
+          } catch (error) {
+            console.warn(`[subtasks] периодический снимок слота ${subtask.id} не записался:`, error);
+          }
+        }
       }
 
       if (result !== undefined) {
@@ -817,6 +860,17 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           field: "subtask",
           toValue: subtask.title,
         });
+        // Карточка cd10bf34, п. 3: факт вызова помощи / блокировки без
+        // вызова виден в ленте для статистики.
+        if (state === "blocked" && blockedHelp) {
+          logEvent({
+            taskId: subtask.task_id,
+            actorId: req.userId,
+            kind: blockedHelp.kind,
+            field: "help",
+            toValue: blockedHelp.detail,
+          });
+        }
       }
 
       const fullTask = getFullTask(subtask.task_id);

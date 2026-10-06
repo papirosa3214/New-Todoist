@@ -8,6 +8,7 @@ import { ensureRoleHome } from "./roleHome.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { roleProjectContext,roleProjectSnapshot } from "./roleProjectContext.js";
 import { saveSlotSnapshot, slotSnapshotBlock, technicalSlotSnapshot } from "./slotWorkSnapshot.js";
+import { buildTaskHistory } from "./taskHistoryContext.js";
 import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
 import { renderInstruction, effectiveRules, registerInstructionBlock, instructionManifest } from "../lib/roleContextResolver.js";
 import { isOwner } from "../access.js";
@@ -339,15 +340,17 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       await asRole(role, "POST", subtaskId && p.id===taskId ? `/api/subtasks/${subtaskId}/work` : `/api/tasks/${p.id}/heartbeat`, {});
       return { "аренда продлена": p.id };
     }),
-    T("taskflow_state", "Сменить состояние работы: review — сдать на проверку, blocked — упёрся и жду владельца, in_progress — вернуться. Для review и blocked комментарий обязателен.",
-      Type.Object({ id: Type.String(), state: Type.String(), comment: Type.Optional(Type.String()) }),
+    T("taskflow_state", "Сменить состояние работы: review — сдать на проверку, blocked — упёрся и жду владельца, in_progress — вернуться. Для review и blocked комментарий обязателен. Перед blocked реши, может ли помочь другая роль или более сильная модель; если позвал — укажи help_attempt («кого звал, что ответили»), если никто не решит — help_skip_reason. Без этого сервер откажет 409 по решаемой причине (нужен владелец/доступ/секрет проходят без него).",
+      Type.Object({ id: Type.String(), state: Type.String(), comment: Type.Optional(Type.String()), help_attempt: Type.Optional(Type.String()), help_skip_reason: Type.Optional(Type.String()) }),
       async (p) => {
         if(subtaskId && p.id===taskId && ["in_progress","blocked","review"].includes(p.state)) {
-          await asRole(role,"POST",`/api/subtasks/${subtaskId}/work`,{state:p.state,...(p.comment ? {result:p.comment}:{})});
+          await asRole(role,"POST",`/api/subtasks/${subtaskId}/work`,{state:p.state,...(p.comment ? {result:p.comment}:{}),...(p.help_attempt ? {help_attempt:p.help_attempt}:{}),...(p.help_skip_reason ? {help_skip_reason:p.help_skip_reason}:{})});
           return {"состояние изменено":{task_id:taskId,subtask_id:subtaskId,состояние:p.state}};
         }
         const body: Json = { state: p.state };
         if (p.comment) body.comment = p.comment;
+        if (p.help_attempt) body.help_attempt = p.help_attempt;
+        if (p.help_skip_reason) body.help_skip_reason = p.help_skip_reason;
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
         return { "состояние изменено": short(unwrap(resp)) };
       }),
@@ -391,13 +394,15 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const s = await asRole(role, "POST", `/api/tasks/${p.task_id}/subtasks`, body);
         return { "шаг добавлен": s.title, id: s.id };
       }),
-    T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния.",
-      Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()), snapshot: Type.Optional(SNAPSHOT_SHAPE) }),
+    T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния. Перед blocked по решаемой причине укажи help_attempt (кого звал, что ответили) или help_skip_reason (почему никто не решит). Пока работа идёт, технический снимок сервер пишет сам; при прогрессе и сдаче снимок от тебя не нужен.",
+      Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()), snapshot: Type.Optional(SNAPSHOT_SHAPE), help_attempt: Type.Optional(Type.String()), help_skip_reason: Type.Optional(Type.String()) }),
       async (p) => {
         const body: Json = {};
         if (p.state !== undefined) body.state = p.state;
         if (p.result !== undefined) body.result = p.result;
         if (p.snapshot) body.snapshot = p.snapshot;
+        if (p.help_attempt) body.help_attempt = p.help_attempt;
+        if (p.help_skip_reason) body.help_skip_reason = p.help_skip_reason;
         const row = await asRole(role, "POST", `/api/subtasks/${p.id}/work`, body);
         if (p.state === "in_progress" && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: начал`);
         // Сдача и перевод шага — фактическая активность, обновляем метку для
@@ -405,7 +410,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (row?.task_id) touchTaskActivity(row.task_id);
         return { подзадача: row.title, состояние: STEP_STATE_RU[row.state] ?? "не в работе", итог: row.result ?? "—" };
       }),
-    T("taskflow_slot_snapshot", "Записать, где остановилась работа по текущему слоту: done (сделано), left (что осталось), blocker (текущий блок), next_step (следующий шаг), artifacts (ссылки на артефакты). Зови после значимого действия и перед сдачей или блокировкой — тогда следующий вызов роли продолжит с фактов, даже если этот ход оборвётся. Это запись о работе: прав и статусов не даёт.",
+    T("taskflow_slot_snapshot", "Записать, где остановилась работа по текущему слоту: done (сделано), left (что осталось), blocker (текущий блок), next_step (следующий шаг), artifacts (ссылки на артефакты). Нужен при блокировке: сфотографировал, на чём встал, — и засыпаешь. Пока ход идёт, технический снимок сервер пишет сам, без модели: при прогрессе и сдаче звать не нужно. Это запись о работе: прав и статусов не даёт.",
       SNAPSHOT_SHAPE, async (p) => {
         if (!subtaskId) throw new ToolError("Снимок относится к слоту — работать без узла плана нельзя");
         const result = await asRole(role, "POST", `/api/subtasks/${subtaskId}/snapshot`, { ...p, reason: "progress" });
@@ -413,7 +418,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) touchTaskActivity(taskId);
         return result;
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Приложи snapshot — что сделано, что осталось, следующий шаг, ссылки на артефакты: сервер сохранит снимок до закрытия шага, и следующий вызов роли будет знать, где работа остановилась. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
       Type.Object({
         id: Type.String(),
         result: Type.Optional(Type.String()),
@@ -572,7 +577,8 @@ const RUNS_BASE = process.env.TASKFLOW_RUNS_DIR || path.join(os.homedir(), ".loc
 export { LOCAL_EXECUTION_POLICY } from "./instructionDefaults.js";
 const LOCAL_EXECUTION_POLICY = INSTRUCTION_DEFAULTS.local_policy;
 
-/** Репозиторий проекта карточки — из того же файла, что читал будильник
+/** Репозиторий проекта карточки — из того же файла, что читала Система
+ *  (прежняя внешняя автоматика).
  *  (scripts/task-context-projects.json); не сопоставлен — репозиторий TaskFlow. */
 function projectRepo(taskId: string): string {
   const fallback = path.resolve(process.cwd(), "..");
@@ -936,6 +942,9 @@ async function runRoleInProcessUnserialized(input: {
     actor: { id: roleUserId(role), name: roleTitle(role) },
     dependency_context: dependencyContext,
     collaboration_context: collaborationContext,
+    // «Что уже было по этой карточке» (владелец 06.10.2026): сводка прошлых
+    // ходов собирается сервером без модели и входит в задание каждого шага.
+    task_history: buildTaskHistory({ taskId, subtaskId: input.subtaskId ?? null }),
   });
   if (mode === "work" && !resumed) {
     try {
@@ -1056,6 +1065,9 @@ try {
         await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
           state: "blocked",
           comment: `Запуск прервался: ${reason.slice(0, 300)}`,
+          // Технический сбой среды — не то, что снимет другая роль
+          // (карточка cd10bf34). Скажем это явно, а не полагаемся на слова.
+          help_skip_reason: "технический сбой запуска — другая роль его не снимет",
         });
       } catch {
         // карточку могли и не взять — тогда блокировать нечего
@@ -1183,8 +1195,8 @@ try {
 
 // ── Кто и когда будит роль (этап C2, 23.09.2026) ───────────────────────────
 //
-// Те же решения, что принимал будильник (trigger.py → decide), но в сервере:
-// он и так видит каждое изменение карточки. Будильник с флагом
+// Те же решения, что принимала Система (decide), но в сервере:
+// он и так видит каждое изменение карточки. При включённом флаге
 // TASKFLOW_ROLES_IN_SERVER=1 карточки ролей больше не берёт.
 
 export type KickReason = "assigned" | "commented" | "review" | "after_run";
@@ -1388,6 +1400,7 @@ async function continueOrHandOff(
         await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
           state: "blocked",
           comment: reason.slice(0, 400),
+          help_skip_reason: "нужно решение владельца — задача не продвигается без него",
         });
       } catch (error) {
         console.warn(`продолжение по ${taskId} не заблокировано:`, error);

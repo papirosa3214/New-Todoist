@@ -30,7 +30,7 @@
 - **Подзадачи и чек-листы:** Пошаговое ведение с отображением текущего исполнителя и результата.
 
 ### 🧠 AI Ассистент и Second Brain
-- **Мультимодельный AI-мозг:** Мгновенное переключение в «Настройках» между локальной моделью (Ollama), Claude Code, Hermes Agent, Antigravity (Gemini) и DeepSeek.
+- **Мультимодельный AI-мозг:** Мгновенное переключение в «Настройках» между локальной моделью (Ollama), Claude Code и другими облачными моделями.
 - **Недельная сводка (Second Brain):** Глубокий анализ побед, подсветка зависших хвостов и генерация ключевых приоритетов на неделю в разделе «Обзор».
 - **Умная структуризация диктовки:** Преобразование сырого потока мыслей в короткий заголовок действия, очищенное описание, чек-лист подзадач, приоритеты и дедлайны.
 
@@ -40,8 +40,8 @@
 - **Запасной серверный путь:** Автоматический fallback на Faster-Whisper и локальную LLM (Ollama) в домашней сети.
 
 ### 🤖 Протокол AI-агентов (Multi-Agent System)
-- **Поддержка множества моделей:** Claude (Opus/Sonnet), Hermes, DeepSeek, Antigravity и другие.
-- **Исполнение ролей внутри сервера:** сервер сам ставит запуск роли в очередь (`role_run_jobs`) и исполняет её в своём процессе; отдельной службы-будильника нет.
+- **Модели ролей:** выбор по роли и лесенка переключения при лимите провайдера.
+- **Исполнение ролей внутри сервера:** сервер сам ставит запуск роли в очередь (`role_run_jobs`) и исполняет её в своём процессе; отдельной внешней службы запуска нет.
 - **Аренда и Heartbeat:** Автоматическое продление аренды, контроль зависших процессов («Сторож тишины») и защита от конфликтов нескольких агентов.
 - **Единый протокол сдачи:** Агенты закрывают подзадачи галочками с фиксацией результатов, а финальный приём (`review` ➔ `completed`) остаётся за владельцем.
 
@@ -74,9 +74,7 @@ graph TD
     subgraph AIOrchestration["AI-инфраструктура"]
         RoleRuntime[Роли: очередь запусков и сессии внутри сервера]
         MCP[mcp_server.py: внешний MCP]
-        AgentClaude[Claude Bot]
-        AgentHermes[Hermes]
-        AgentDeepSeek[DeepSeek Agent]
+        AgentClaude[Claude Bot / внешние MCP-агенты]
     end
 
     UI <-->|REST / WS| FastifyServer
@@ -87,8 +85,6 @@ graph TD
     FastifyServer --> RoleRuntime
     MCP <-->|REST| FastifyServer
     AgentClaude --> MCP
-    AgentHermes --> MCP
-    AgentDeepSeek --> MCP
     SyncEngine <-->|Google REST API| GoogleCloud[Google Cloud Services]
 ```
 
@@ -109,7 +105,7 @@ TaskFlow/
 │   │   ├── routes/             # tasks, subtasks, agent-state, integrations, auth
 │   │   ├── migrations.ts       # Версионные миграции базы данных
 │   │   └── access.ts           # Разграничение прав (владелец vs агенты)
-│   ├── scripts/                # mcp_server.py (внешний MCP для Claude/Hermes/DeepSeek-Agent и ролевых чатов), сторожа, vault-run
+│   ├── scripts/                # mcp_server.py (внешний MCP для внешних агентов и ролевых чатов), сторожа, vault-run
 │   └── test/                   # Vitest тесты бэкенда и прав доступа
 ├── ios/                        # Нативный проект iOS (Capacitor + Xcode)
 │   └── App/
@@ -163,7 +159,7 @@ npm run dev
 
 > **Рабочая ветка iOS — `native-app`.** Перед любой правкой или сборкой
 > проверьте `git branch --show-current`; правила синхронизации и публикации
-> описаны в [канонической документации](docs/current/README.md). `main` не является
+> описаны в [канонической документации](docs/current/taskflow-flow.md). `main` не является
 > веткой текущей разработки нативного приложения.
 
 ### Сборка и деплой на физическое устройство за одну команду:
@@ -213,10 +209,11 @@ xcrun devicectl device process launch --device 00008150-001545400144401C \
 
 | Документ | Описание |
 | :--- | :--- |
-| [`docs/current/README.md`](docs/current/README.md) | **Единственная актуальная точка правды:** состояние агентской платформы, сверка с планом Manus и дальнейшие этапы. |
-| [`docs/current/taskflow-orchestrator.md`](docs/current/taskflow-orchestrator.md) | **Операционный регламент автономных исполнителей.** |
+| [`docs/current/taskflow-flow.md`](docs/current/taskflow-flow.md) | **Единственный актуальный источник:** как TaskFlow работает сейчас и что решено менять. |
+| [`docs/current/README.md`](docs/current/README.md) | **Указатель** на актуальные документы в `docs/current/`. |
+| [`docs/current/taskflow-orchestrator.md`](docs/current/taskflow-orchestrator.md) | **Регламент живого Оркестратора** TaskFlow. |
 | [`docs/current/taskflow-task-route-map.html`](docs/current/taskflow-task-route-map.html) | **Живая HTML-карта маршрута задачи.** |
-| [`docs/archive/2026-09-24-before-canonical/`](docs/archive/2026-09-24-before-canonical/) | **История:** прежние планы, ревью, handoff, спецификации и инженерные разборы. |
+| [`docs/archive/`](docs/archive/) | **История:** прежние планы, ревью, handoff, спецификации и инженерные разборы. |
 | [`AGENT-PROTOCOL.md`](AGENT-PROTOCOL.md) | **Правила агентов:** жизненный цикл задач, шаги, аренда, сдача работы. |
 | [`AGENT-API.md`](AGENT-API.md) | **API для агентов:** спецификация REST-эндпоинтов, токены, MCP. |
 | [`INTEGRATIONS.md`](INTEGRATIONS.md) | **Интеграции:** настройка Google Tasks, Apple Calendar и Reminders. |

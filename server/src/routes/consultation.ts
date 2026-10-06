@@ -15,7 +15,7 @@
 // consultant_model принимается в коротких алиасах (opus/sonnet/haiku)
 // или как явное имя провайдера — маппинг через CONSULTANT_MODEL_MAP.
 // Если алиас незнакомый, отдаём в claude как есть: модель может
-// оказаться в DSH_MODEL_ALIASES у trigger.py и вернуться через
+// оказаться в длинных алиасах провайдера и вернуться через
 // провайдерский fallback внутри callUnifiedAi.
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
@@ -32,9 +32,8 @@ import {
 const MAX_QUESTION_LENGTH = 4000;
 const MAX_CONTEXT_BYTES = 64 * 1024;
 
-// Короткие алиасы → пары для callUnifiedAi. Совпадает по смыслу с
-// ANTIGRAVITY_MODEL_ALIASES в trigger.py (там длинные имена) и с
-// дефолтами callUnifiedAi.
+// Короткие алиасы → пары для callUnifiedAi. Смысл — длинные алиасы
+// моделей провайдера и дефолты callUnifiedAi.
 const CONSULTANT_MODEL_MAP: Record<
   string,
   { provider: string; aiModel?: string; localModel?: string }
@@ -358,8 +357,8 @@ export function registerConsultationRoutes(app: FastifyInstance) {
   });
 
   // POST /api/tasks/:id/attempts/:attempt_id/suggest-consultation — спек
-  // 1.2, 1.2.7 (R7). trigger.py зовёт это после каждого действия агента,
-  // если сработал авто-триггер («>2 правок в файле без тестов» или
+  // 1.2, 1.2.7 (R7). Серверная автоматика зовёт это после каждого действия
+  // агента, если сработал авто-триггер («>2 правок в файле без тестов» или
   // «diff > 300 строк»). Сервер записывает причины в попытку и в ленту
   // задачи; агент видит их в context через GET /api/tasks/:id.
   //

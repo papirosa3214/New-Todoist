@@ -3243,7 +3243,7 @@ const migrations: Migration[] = [
       db.exec("ALTER TABLE projects ADD COLUMN is_private INTEGER DEFAULT 0");
     }
   } },
-  { id: "103_role_prompts_laconism", description: "Блок «Лаконичность» в начало промпта secretary (роль в БД перекрывает файл); c19c9460 (D2).", up: () => {
+  { id: "109_role_prompts_laconism", description: "Блок «Лаконичность» в начало промпта secretary (роль в БД перекрывает файл); c19c9460 (D2).", up: () => {
     // roles.prompt для secretary задан миграцией 062 и перекрывает
     // server/scripts/role-prompts/secretary.md. Без этой правки блок
     // «Лаконичность» в файле для работающей системы не действует.
@@ -3273,6 +3273,346 @@ const migrations: Migration[] = [
     db.prepare("UPDATE roles SET prompt = ? WHERE key = 'secretary'").run(
       laconismBlock + row.prompt,
     );
+  } },
+
+  // Автоимпорт из Linear (карточка cc7caa43…). Ручной импорт (085) уже умеет
+  // читать задачу, вести трёхсторонний merge по полям и хранить соответствия
+  // source_id → task_id. Автоимпорту нужны ещё две вещи:
+  //   • соответствие «проект Linear → родительская карточка», потому что
+  //     фоновая служба заводит проект как родителя, а задачи — его детьми;
+  //   • состояние службы: когда был последний успешный/неуспешный проход,
+  //     какая ошибка, когда владельцу последний раз говорили о простое, и
+  //     выключатель (по умолчанию включён).
+  // Состояние — отдельной таблицей, а не колонкой users: служба одна на
+  // владельца, но её служебные поля к учётке отношения не имеют.
+  { id: "103_linear_autoimport", description: "Автоимпорт Linear: проекты «Сейчас», состояние службы и выключатель", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS linear_autoimport_projects (
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+        snapshot TEXT NOT NULL,
+        imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(owner_id, workspace_id, project_id)
+      );
+      CREATE TABLE IF NOT EXISTS linear_autoimport_state (
+        owner_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_attempt_at TEXT,
+        last_success_at TEXT,
+        last_error TEXT,
+        last_error_at TEXT,
+        notified_at TEXT,
+        created_total INTEGER NOT NULL DEFAULT 0,
+        updated_total INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+  } },
+  // Чаты (карточка ca816271, документ проектирования d748e4f4-f502-4002-b622-f070be0d8438).
+  // Пункты владельца: Секретарь — обычный личный чат, общий групповой чат
+  // ролей, чат задачи закрывается с задачей, только `@` будит.
+  //
+  // 1) Секретарь получает `role_key='secretary'`, оставаясь на фиксированной
+  //    учётке `u-secretary` (на неё ссылаются chat_messages, клиенты и
+  //    `roleUserId('secretary')`). Триггеры `users_role_key_*_guard` требуют
+  //    `id = 'role_' || role_key`; ослабляем их ровно одним исключением
+  //    `id='u-secretary' AND role_key='secretary'` — после этого Секретарь
+  //    проходит общий путь ролей без спецкода.
+  // 2) `chats.closed_at` — тема задачи закрывается вместе с задачей.
+  // 3) `chats.pinned_message_id` — закреплённый регламент общего чата.
+  // 4) `chat-common` — общий групповой чат: все активные роли, Секретарь,
+  //    владелец, оркестратор. Регламент строится из паспортов ролей.
+  // 5) Бэкфил: уже завершённые задачи получают закрытую тему.
+  { id: "104_chats_common_secretary_lifecycle", description: "Секретарь как роль, closed_at/pinned_message_id, общий чат", up: () => {
+    const chatCols = new Set(
+      (db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!chatCols.has("closed_at")) {
+      db.exec("ALTER TABLE chats ADD COLUMN closed_at TEXT");
+    }
+    if (!chatCols.has("pinned_message_id")) {
+      db.exec("ALTER TABLE chats ADD COLUMN pinned_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL");
+    }
+
+    // Ослабляем guard'ы только для пары u-secretary/secretary. Во всём
+    // остальном правило прежнее: role_key без канонической учётки запрещён.
+    db.exec(`
+      DROP TRIGGER IF EXISTS users_role_key_insert_guard;
+      DROP TRIGGER IF EXISTS users_role_key_update_guard;
+      CREATE TRIGGER users_role_key_insert_guard
+      BEFORE INSERT ON users
+      WHEN NEW.role_key IS NOT NULL AND (
+        NEW.type <> 'ai'
+        OR NEW.role <> 'agent'
+        OR COALESCE(NEW.is_system_bot, 0) <> 1
+        OR NOT (NEW.id = 'role_' || NEW.role_key OR (NEW.id = 'u-secretary' AND NEW.role_key = 'secretary'))
+        OR NOT EXISTS (SELECT 1 FROM roles WHERE key = NEW.role_key)
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'invalid users.role_key binding');
+      END;
+      CREATE TRIGGER users_role_key_update_guard
+      BEFORE UPDATE OF id, role, role_key, type, is_system_bot ON users
+      WHEN NEW.role_key IS NOT NULL AND (
+        NEW.type <> 'ai'
+        OR NEW.role <> 'agent'
+        OR COALESCE(NEW.is_system_bot, 0) <> 1
+        OR NOT (NEW.id = 'role_' || NEW.role_key OR (NEW.id = 'u-secretary' AND NEW.role_key = 'secretary'))
+        OR NOT EXISTS (SELECT 1 FROM roles WHERE key = NEW.role_key)
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'invalid users.role_key binding');
+      END;
+    `);
+    db.prepare(
+      `UPDATE users SET role_key = 'secretary'
+        WHERE id = 'u-secretary' AND role = 'agent' AND type = 'ai'
+          AND COALESCE(is_system_bot, 0) = 1
+          AND (role_key IS NULL OR role_key <> 'secretary')`,
+    ).run();
+    // Сводка задач больше не перехватывается сервером «до модели» —
+    // Секретарь собирает её инструментом как обычная роль. Подсказываем
+    // ему инструмент прямо в промпте, чтобы просьба «пришли сводку»
+    // не осталась без ответа.
+    db.prepare(
+      `UPDATE roles SET prompt = COALESCE(prompt, '') || ?
+        WHERE key = 'secretary' AND COALESCE(prompt, '') NOT LIKE '%taskflow_task_summary%'`,
+    ).run(
+      "\n\nСводку задач по просьбе владельца собирай инструментом taskflow_task_summary — цифры не выдумывай.",
+    );
+
+    // Общий чат. Владелец — самый ранний владелец трекера.
+    const owner = (
+      db.prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1").get() as
+        | { id: string }
+        | undefined
+    )?.id;
+    if (owner) {
+      db.prepare(
+        `INSERT OR IGNORE INTO chats (id, title, kind, created_by, project_id, parent_chat_id, task_id)
+         VALUES ('chat-common', 'Общий чат', 'group', ?, NULL, NULL, NULL)`,
+      ).run(owner);
+      db.prepare(
+        "INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES ('chat-common', ?)",
+      ).run(owner);
+    }
+    // Участники — все активные роли (включая Секретаря) и оркестратор.
+    // Учётка роли = role_<key>, у Секретаря — u-secretary; включаем только
+    // роли с roles.enabled=1, чтобы состав совпадал с рабочим.
+    db.exec(`
+      INSERT OR IGNORE INTO chat_members (chat_id, member_id)
+      SELECT 'chat-common', u.id FROM users u
+       WHERE COALESCE(u.archived, 0) = 0 AND (
+         (u.type = 'ai' AND u.role = 'agent' AND u.role_key IN (SELECT key FROM roles WHERE enabled = 1))
+         OR (u.id = 'u-secretary')
+         OR u.role = 'orchestrator'
+       );
+    `);
+
+    // Закреплённый регламент — одно сообщение от системной учётки,
+    // собираемое из паспортов ролей. Обновляется только явным действием,
+    // поэтому здесь только первичный посев (если его ещё нет).
+    if (owner) {
+      const systemId = (
+        db.prepare("SELECT id FROM users WHERE id = 'taskflow_system'").get() as
+          | { id: string }
+          | undefined
+      )?.id;
+      if (systemId) {
+        const existing = db
+          .prepare("SELECT pinned_message_id FROM chats WHERE id = 'chat-common'")
+          .get() as { pinned_message_id: string | null } | undefined;
+        if (existing && !existing.pinned_message_id) {
+          const roles = db
+            .prepare("SELECT key, title, summary FROM roles WHERE enabled = 1 ORDER BY position, key")
+            .all() as Array<{ key: string; title: string; summary: string | null }>;
+          const text = [
+            "Регламент общего чата TaskFlow.",
+            "Здесь все роли, Секретарь и владелец. Сервер сюда не пишет — только человек и роль по своей команде.",
+            "Обращение к участнику — только через @; упоминание имени без @ никого не будит.",
+            "Кто за что отвечает:",
+            ...roles.map((r) => `@${r.key} — ${r.title}: ${r.summary ?? ""}`.trimEnd()),
+            "Секретарь — личный помощник владельца: разговор, вопросы, разбор надиктовки.",
+          ].join("\n");
+          const msgId = 'chat-common-regulator';
+          db.prepare(
+            `INSERT OR IGNORE INTO chat_messages (id, from_user_id, text, channel, chat_id, message_type)
+             VALUES (?, ?, ?, 'chat', 'chat-common', 'system')`,
+          ).run(msgId, systemId, text);
+          db.prepare("UPDATE chats SET pinned_message_id = ? WHERE id = 'chat-common'").run(msgId);
+        }
+      }
+    }
+
+    // Бэкфил закрытых тем: задача уже завершена — тема закрыта её временем.
+    db.exec(`
+      UPDATE chats SET closed_at = COALESCE(
+        (SELECT t.completed_at FROM tasks t WHERE t.id = chats.task_id), datetime('now'))
+       WHERE task_id IS NOT NULL AND parent_chat_id IS NOT NULL AND closed_at IS NULL
+         AND task_id IN (SELECT id FROM tasks WHERE status = 'completed');
+    `);
+  } },
+  { id: "105_secretary_room_ensure", description: "Комната чата Секретаря: личный чат владельца с u-secretary, если её нет (iOS открывает chat-secretary)", up: () => {
+    const owner = (db.prepare("SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1").get() as { id: string } | undefined)?.id;
+    if (!owner) return;
+    db.prepare("INSERT OR IGNORE INTO chats (id, title, kind, created_by, task_id) VALUES ('chat-secretary', 'Секретарь', 'direct', ?, NULL)").run(owner);
+    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES ('chat-secretary', ?)").run(owner);
+    db.prepare("INSERT OR IGNORE INTO chat_members (chat_id, member_id) VALUES ('chat-secretary', 'u-secretary')").run();
+  } },
+  // Обратная синхронизация TaskFlow → Linear (карточка 20e30338, техрешение
+  // 532e39a2). Отдельный узкий путь записи: очередь фиксированных операций
+  // («state» и «comment»), запись выполняется только для задач, привязанных
+  // по линейной таблице соответствий. Здесь же — состояние службы с
+  // выключателем и кэш id статусов workflow команды Linear, чтобы не
+  // дёргать Linear на каждый проход.
+  { id: "106_linear_sync", description: "Обратная синхронизация Linear: очередь записи, выключатель и кэш статусов", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS linear_sync_queue (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        issue_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        operation TEXT NOT NULL CHECK(operation IN ('state','comment')),
+        payload TEXT,
+        desired_key TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(owner_id, workspace_id, task_id, desired_key)
+      );
+      CREATE TABLE IF NOT EXISTS linear_sync_tasks (
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        issue_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        last_state TEXT,
+        last_comment_key TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(owner_id, workspace_id, task_id)
+      );
+      CREATE TABLE IF NOT EXISTS linear_sync_state (
+        owner_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_pass_at TEXT,
+        last_success_at TEXT,
+        last_sent_at TEXT,
+        last_error TEXT,
+        last_error_at TEXT,
+        notified_at TEXT,
+        sent_total INTEGER NOT NULL DEFAULT 0,
+        failed_total INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS linear_sync_states_cache (
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        state_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        cached_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(owner_id, workspace_id, team_id, name)
+      );
+    `);
+  } },
+
+  // Архив проектов (карточка a1be7d63…). Удаление проекта больше не
+  // уничтожает данные, а проставляет `archived_at`/`archived_by`.
+  // Колонки уже добавлены в `db.ts:migrate()` (аддитивно, как position/
+  // pinned/is_private), свежая база получает их прямо из CREATE TABLE.
+  // Эта миграция идемпотентна и нужна, чтобы зафиксировать факт в
+  // schema_migrations и дотянуть уже существующие базы.
+  { id: "107_project_archive", description: "Архив проектов: projects.archived_at/archived_by", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("archived_at")) {
+      db.exec("ALTER TABLE projects ADD COLUMN archived_at TEXT");
+    }
+    if (!cols.has("archived_by")) {
+      db.exec("ALTER TABLE projects ADD COLUMN archived_by TEXT");
+    }
+    // Журнал окончательных удалений из архива: фиксирует факт и числа до
+    // того, как данные будут стЁрты. Хранится вечно — единственный след
+    // проекта после purge, потому что `project_id` здесь без внешнего
+    // ключа (сам проект удаляется).
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS project_purge_log (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        project_name TEXT NOT NULL,
+        actor_id TEXT REFERENCES users(id),
+        tasks INTEGER NOT NULL DEFAULT 0,
+        documents INTEGER NOT NULL DEFAULT 0,
+        chats INTEGER NOT NULL DEFAULT 0,
+        memories INTEGER NOT NULL DEFAULT 0,
+        with_docs INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_project_purge_log_project
+        ON project_purge_log(project_id, created_at DESC);
+    `);
+  } },
+  { id: "108_remove_pi_agent_account", description:
+      "MAK-72: учётка «Pi Agent» (1fa09a0a-…) удалена. С 06.10.2026 планировщик " +
+      "и системная автоматика ходят учёткой «Система» (taskflow_system), а не " +
+      "исторической Pi Agent. Ссылки на удаляемую учётку переводятся на «Систему» " +
+      "(nullable-колонки — в NULL), затем строка users удаляется.", up: () => {
+    const LEGACY_IDS = ["1fa09a0a-0c41-4e7e-982a-a1c46570e5d2"]; // Pi Agent
+    const SYSTEM_ID = "taskflow_system";
+    const ph = LEGACY_IDS.map(() => "?").join(",");
+    const tables = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    ).map((r) => r.name);
+    for (const t of tables) {
+      let fks: Array<{ table: string; from: string }> = [];
+      try {
+        fks = db.prepare(`PRAGMA foreign_key_list("${t}")`).all() as Array<{ table: string; from: string }>;
+      } catch {
+        continue;
+      }
+      for (const fk of fks) {
+        if (fk.table !== "users") continue;
+        let notnull = false;
+        try {
+          const info = db.prepare(`PRAGMA table_info("${t}")`).all() as Array<{
+            name: string;
+            notnull: number;
+            pk: number;
+          }>;
+          const col = info.find((c) => c.name === fk.from);
+          notnull = Boolean(col?.notnull) || (col?.pk ?? 0) > 0;
+        } catch {
+          // нет сведений о колонке — считаем nullable
+        }
+        if (notnull && fk.from === "id") continue; // PK не переписать
+        try {
+          db.prepare(
+            `UPDATE "${t}" SET "${fk.from}" = ? WHERE "${fk.from}" IN (${ph})`,
+          ).run(notnull ? SYSTEM_ID : null, ...LEGACY_IDS);
+        } catch {
+          // колонку не перевести — падение на DELETE покажет остаток
+        }
+      }
+    }
+    for (const id of LEGACY_IDS) {
+      try {
+        db.prepare("DELETE FROM users WHERE id = ?").run(id);
+      } catch {
+        // остались ссылки из непокрытой таблицы — хотя бы не пускаем в работу
+        db.prepare("UPDATE users SET archived = 1 WHERE id = ?").run(id);
+      }
+    }
   } },
 ];
 

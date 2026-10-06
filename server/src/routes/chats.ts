@@ -15,8 +15,8 @@ import { renderInstruction } from "../lib/roleContextResolver.js";
 // Этап 2: при отправке сообщения в чат в дело вступает живая онлайн-сессия
 // Пи (без задачи). Роль-адресат определяется так:
 //   1) явная адресация в тексте (@architect, @qa, …) — приоритет;
-//   2) «Авто» — семантический подбор pickRoleForChat по тексту сообщения
-//      против ролевых эмбеддингов; ограничиваемся участниками чата.
+//   2) в личном чате с одной ролью — она отвечает и без @ (адресация
+//      неявная); в групповом и общем чате без @ никто не просыпается.
 // Если адресат не определился — просто ложим сообщение в ленту, авто-ответа
 // нет: молчание корректнее, чем ответ «не той» роли.
 //
@@ -34,10 +34,10 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { broadcastToUsers } from "../ws.js";
 import {
-  deliverSecretaryReply,
-  SECRETARY_CHAT_ID,
-  SECRETARY_USER_ID,
-} from "../lib/secretaryReply.js";
+  COMMON_CHAT_ID,
+  assertCommonChatWritable,
+  ensureCommonChat,
+} from "../lib/chatCommon.js";
 import {
   chatRunFailureText,
   liveTurnsOfChat,
@@ -88,6 +88,27 @@ function previewText(text: string): string {
     .trim();
 }
 
+/** Быстрые ответы (владелец 25.09.2026): модель заканчивает ответ строкой
+ *  `БЫСТРО: вариант1 | вариант2 | вариант3` — разбираем и убираем из
+ *  текста, который ложится в ленту. Раньше жило только у Секретаря,
+ *  теперь это общий формат ответа любой роли. */
+function extractQuickReplies(text: string): { clean: string; replies: string[] | null } {
+  const lines = text.split("\n");
+  let lastIdx = lines.length - 1;
+  while (lastIdx >= 0 && lines[lastIdx].trim() === "") lastIdx--;
+  if (lastIdx < 0) return { clean: text, replies: null };
+  const match = lines[lastIdx].trim().match(/^БЫСТРО:\s*(.+)$/i);
+  if (!match) return { clean: text, replies: null };
+  const replies = match[1]
+    .split("|")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  if (!replies.length) return { clean: text, replies: null };
+  const clean = lines.slice(0, lastIdx).join("\n").trimEnd();
+  return { clean, replies };
+}
+
 type ChatKind = "direct" | "group";
 const KINDS: ChatKind[] = ["direct", "group"];
 
@@ -105,10 +126,15 @@ function isMember(chatId: string, userId: string): boolean {
   // владельца трекера — иначе утечка через название группового чата
   // (оно равно имени проекта) и через task_title темы.
   if (chat?.project_id && !isOwner(userId)) {
-    const priv = (db
-      .prepare("SELECT is_private FROM projects WHERE id = ?")
-      .get(chat.project_id) as { is_private?: number | null } | undefined)?.is_private;
-    if (priv === 1) return false;
+    const meta = db
+      .prepare("SELECT is_private, archived_at FROM projects WHERE id = ?")
+      .get(chat.project_id) as
+      | { is_private?: number | null; archived_at?: string | null }
+      | undefined;
+    if (meta?.is_private === 1) return false;
+    // Архивный проект (карточка a1be7d63…): его чаты закрыты и с глаз
+    // убраны — для всех, кроме владельца.
+    if (meta?.archived_at) return false;
   }
   if (chat?.parent_chat_id) {
     const task=chat.task_id ? getTaskForRead(chat.task_id,userId) : null;
@@ -144,7 +170,19 @@ function chatRow(chatId: string) {
         WHERE cm.chat_id = ? ORDER BY cm.added_at`,
     )
     .all(chatId);
-  return { ...chat, members };
+  const pinnedMessageId = (chat as any).pinned_message_id as string | null | undefined;
+  const pinned = pinnedMessageId
+    ? (db.prepare("SELECT id FROM chat_messages WHERE id = ?").get(pinnedMessageId) as
+        | { id: string }
+        | undefined)
+    : undefined;
+  return {
+    ...chat,
+    members,
+    closed_at: (chat as any).closed_at ?? null,
+    pinned_message_id: pinnedMessageId ?? null,
+    pinned_message: pinned ? loadChatMessage(pinned.id) : null,
+  };
 }
 
 export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
@@ -260,6 +298,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // сообщение (см. POST /:id/messages), то есть чат с свежей перепиской
   // всегда наверху.
   app.get("/api/chats", { preHandler: authPre }, async (req: any) => {
+    const includeClosed = String(req.query?.include_closed ?? "") === "1";
     const rows = db
       .prepare(
         `SELECT c.* FROM chats c
@@ -267,9 +306,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           WHERE cm.member_id = ?
           ORDER BY c.updated_at DESC`,
       )
-      .all(req.userId) as Array<{ id: string; task_id: string | null }>;
+      .all(req.userId) as Array<{ id: string; task_id: string | null; closed_at: string | null }>;
     return {
-      chats: rows.filter((c) => isMember(c.id,req.userId)).map((c) => {
+      chats: rows.filter((c) => isMember(c.id,req.userId) && (includeClosed || !c.closed_at)).map((c) => {
         // Имя отправителя — превью группы идёт с ним («QA: проверка
         // прошла»), счётчики вложений — чтобы клиент мог показать
         // «Голосовое»/«Файл» вместо пустой строки (у голосового текста нет).
@@ -409,6 +448,38 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       });
       txn();
 
+      return { chat: chatRow(req.params.id) };
+    },
+  );
+
+  // Закрепить сообщение чата (создатель или владелец). Закреплённое
+  // показывается баром в шапке — в общем чате это регламент. Регламент
+  // обновляется только явным действием, а не серверным автообновлением.
+  app.post<{ Params: { id: string }; Body: { message_id?: string | null } }>(
+    "/api/chats/:id/pin",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isMember(req.params.id, req.userId))
+        return reply.code(404).send({ error: "Чат не найден" });
+      const messageId =
+        typeof req.body?.message_id === "string" && req.body.message_id
+          ? req.body.message_id
+          : null;
+      if (messageId) {
+        const message = db
+          .prepare("SELECT from_user_id FROM chat_messages WHERE id = ? AND chat_id = ?")
+          .get(messageId, req.params.id) as { from_user_id: string } | undefined;
+        if (!message) return reply.code(404).send({ error: "Сообщение не найдено" });
+        const chat = db.prepare("SELECT created_by FROM chats WHERE id = ?").get(req.params.id) as
+          | { created_by: string }
+          | undefined;
+        if (chat?.created_by !== req.userId && message.from_user_id !== req.userId)
+          return reply.code(403).send({ error: "закрепить чужое сообщение может создатель" });
+      }
+      db.prepare("UPDATE chats SET pinned_message_id = ? WHERE id = ?").run(
+        messageId,
+        req.params.id,
+      );
       return { chat: chatRow(req.params.id) };
     },
   );
@@ -578,11 +649,22 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // задачу у СВОЕГО чата; явный task_id в теле перекрывает её — этим
       // привязывается отдельное сообщение, когда чат живёт сам по себе.
       const chat = db
-        .prepare<[string], { task_id: string | null }>(
-          "SELECT task_id FROM chats WHERE id = ?",
+        .prepare<[string], { task_id: string | null; closed_at: string | null }>(
+          "SELECT task_id, closed_at FROM chats WHERE id = ?",
         )
         .get(chatId);
       if (!chat) return reply.code(404).send({ error: "Чат не найден" });
+      // Закрытая тема задачи — read-only: история остаётся, новые сообщения не принимаем.
+      if (chat.closed_at) return reply.code(409).send({ error: "Чат задачи закрыт" });
+      // Общий чат: сервер сюда не пишет. Владелец и роль через инструмент — можно.
+      try {
+        assertCommonChatWritable(
+          chatId,
+          roleFromUserId(req.userId) ? "role_tool" : "user",
+        );
+      } catch (error) {
+        return reply.code(403).send({ error: error instanceof Error ? error.message : "запись запрещена" });
+      }
       const chatTaskId = chat.task_id;
       const taskId =
         typeof req.body?.task_id === "string" && req.body.task_id
@@ -644,18 +726,14 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // через очередь: раньше второе сообщение подряд попадало на занятый
       // лок и молча терялось.
       try {
-        if (chatId === SECRETARY_CHAT_ID) {
-          void enqueueChatReply(chatId, SECRETARY_USER_ID, () => deliverSecretaryReply(text, mode));
-        } else {
-          await dispatchRoleReplies({
-            chatId,
-            messageId: id,
-            fromUserId: req.userId,
-            text,
-            hop: 0,
-            mode,
-          });
-        }
+        await dispatchRoleReplies({
+          chatId,
+          messageId: id,
+          fromUserId: req.userId,
+          text,
+          hop: 0,
+          mode,
+        });
       } catch (error) {
         console.warn(
           `[chats] постановка авто-ответа не удалась для chat=${chatId}:`,
@@ -758,10 +836,22 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const chatId = req.params.id;
       if (!isMember(chatId, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
+      if ((db.prepare("SELECT closed_at FROM chats WHERE id = ?").get(chatId) as { closed_at: string | null } | undefined)?.closed_at)
+        return reply.code(409).send({ error: "Чат задачи закрыт" });
       const roleId = typeof req.body?.role_id === "string" ? req.body.role_id : "";
       if (!roleId) return reply.code(400).send({ error: "role_id обязателен" });
       if (!isMember(chatId, roleId))
         return reply.code(400).send({ error: "role_id не участник этого чата" });
+      // Общий чат: маркер новой сессии — служебная запись серверного пути, а
+      // не команда роли через её инструмент. Инвариант п. 3: сюда такое не
+      // пишем (карточка ca816271).
+      try {
+        assertCommonChatWritable(chatId, "system");
+      } catch (error) {
+        return reply
+          .code(403)
+          .send({ error: error instanceof Error ? error.message : "запись запрещена" });
+      }
 
       db.prepare("DELETE FROM chat_sessions WHERE chat_id = ? AND role_id = ?").run(
         chatId,
@@ -1124,10 +1214,9 @@ export const MAX_AGENT_HOPS = 4;
  *  Сообщение человека:
  *    1) явные @упоминания участников — отвечают ВСЕ упомянутые, каждый в
  *       своей очереди (разные роли работают параллельно);
- *    2) без упоминаний — «Авто» (pickRoleForChat); если подбор ничего не
- *       дал (нет эмбеддингов, сеть), отвечает роль, которая говорила в
- *       чате последней: разговор продолжается с тем, с кем шёл, а не
- *       обрывается тишиной;
+ *    2) без упоминаний — в ЛИЧНОМ чате отвечает его роль (адресация
+ *       неявная), в групповом и общем никто не просыпается: сообщение
+ *       ложится в ленту как контекст (владелец 06.10.2026);
  *    3) упомянута роль, которой нет в чате, — молчание (не подменяем
  *       адресата).
  *
@@ -1172,10 +1261,15 @@ async function dispatchRoleReplies(args: {
     targets = mentioned;
   } else if (parseRoleMention(text)) {
     targets = [];
-  } else {
+  } else if (isDirectRoleChat(chatId)) {
+    // Личный чат — адресация неявная: @ каждый раз бессмысленен, роль
+    // отвечает и без него.
     const picked = await pickRoleForChat({ messageText: text, memberRoles: candidates });
-    const fallback = picked ?? lastSpeakingRole(chatId, candidates) ?? candidates[0];
-    targets = fallback ? [fallback] : [];
+    targets = picked ? [picked] : [];
+  } else {
+    // Групповой и общий чат: без @ никто не просыпается — сообщение
+    // ложится в ленту как контекст (владелец 06.10.2026).
+    targets = [];
   }
 
   const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
@@ -1208,21 +1302,13 @@ async function dispatchRoleReplies(args: {
   }
 }
 
-/** Роль из candidates, писавшая в чате последней, — продолжение разговора
- *  без явного адресата. */
-function lastSpeakingRole(chatId: string, candidates: RoleName[]): RoleName | null {
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT from_user_id FROM chat_messages
-        WHERE chat_id = ? AND COALESCE(is_session_marker, 0) = 0
-        ORDER BY created_at DESC, rowid DESC LIMIT 20`,
-    )
-    .all(chatId) as Array<{ from_user_id: string }>;
-  for (const row of rows) {
-    const role = roleFromUserId(row.from_user_id);
-    if (role && candidates.includes(role)) return role;
-  }
-  return null;
+/** Персональный чат с ролью (ровно один собеседник-роль). В нём адресация
+ *  неявная; во всех остальных чатах роль просыпается только по `@`. */
+function isDirectRoleChat(chatId: string): boolean {
+  const row = db.prepare("SELECT kind FROM chats WHERE id = ?").get(chatId) as
+    | { kind: string }
+    | undefined;
+  return row?.kind === "direct";
 }
 
 interface HistoryRow {
@@ -1449,6 +1535,28 @@ async function deliverAgentReply(args: {
       ? chatRunFailureText(failure)
       : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
 
+  // Быстрые ответы — общий формат ответа роли (раньше — частная логика
+  // Секретаря). Модель заканчивает ответ строкой `БЫСТРО: а | б | в` —
+  // разбираем и убираем из текста, который ложится в ленту.
+  let quickReplies: string[] | null = null;
+  if (replyText && !failure) {
+    const extracted = extractQuickReplies(replyText);
+    replyText = extracted.clean;
+    quickReplies = extracted.replies;
+  }
+  // Сообщение о сбое хода — не для общего чата (инвариант п. 3): сбой идёт
+  // в личную переписку роли, в общем чате ему места нет.
+  if (replyText && failure) {
+    try {
+      assertCommonChatWritable(chatId, "system");
+    } catch {
+      console.warn(
+        `[chats] сбой хода роли ${role} в общем чате — сообщение не публикуем в chat=${chatId}`,
+      );
+      replyText = "";
+    }
+  }
+
   // Никакой обрезки и никаких «перепиши»: ответ роли сохраняется ровно
   // таким, каким его написала модель (владелец 04.10.2026). Прежние правила
   // (лимит 800 символов на уровне БД и подмена/отмена ответа в коде) съедали
@@ -1458,9 +1566,9 @@ async function deliverAgentReply(args: {
   if (replyText) {
     replyId = uid();
     db.prepare(
-      `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id)
-       VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?)`,
-    ).run(replyId, roleUserId, replyText, chatId, steps ? JSON.stringify(steps) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null);
+      `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, quick_replies, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id)
+       VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(replyId, roleUserId, replyText, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(steps) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
   }

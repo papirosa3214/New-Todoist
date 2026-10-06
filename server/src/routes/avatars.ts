@@ -72,11 +72,8 @@ function canManageAvatar(actorId: string, targetId: string): boolean {
 export function registerAvatarRoutes(app: FastifyInstance) {
   fs.mkdirSync(AVATAR_DIR, { recursive: true });
 
-  app.post<{ Params: { id: string }; Querystring: { variant?: string } }>(
-    "/api/users/:id/avatar",
-    { preHandler: authOrApiToken },
-    async (req: any, reply) => {
-      if (!canManageAvatar(req.userId, req.params.id)) {
+  const uploadAvatar = async (req: any, reply: any, targetId: string) => {
+      if (!canManageAvatar(req.userId, targetId)) {
         return reply.code(404).send({ error: "Not found" });
       }
 
@@ -108,7 +105,7 @@ export function registerAvatarRoutes(app: FastifyInstance) {
       // (колонка в базе уже перезаписана на новый путь).
       const prev = db
         .prepare(`SELECT ${column} AS url FROM users WHERE id = ?`)
-        .get(req.params.id) as { url: string | null } | undefined;
+        .get(targetId) as { url: string | null } | undefined;
       if (prev?.url) {
         const prevName = path.basename(prev.url);
         const prevFull = path.join(AVATAR_DIR, prevName);
@@ -123,24 +120,19 @@ export function registerAvatarRoutes(app: FastifyInstance) {
       const avatarUrl = `/api/avatars/${storedName}`;
       db.prepare(`UPDATE users SET ${column} = ? WHERE id = ?`).run(
         avatarUrl,
-        req.params.id,
+        targetId,
       );
 
       return reply.code(201).send({ avatar_url: avatarUrl });
-    },
-  );
-
-  app.delete<{ Params: { id: string }; Querystring: { variant?: string } }>(
-    "/api/users/:id/avatar",
-    { preHandler: authOrApiToken },
-    async (req: any, reply) => {
-      if (!canManageAvatar(req.userId, req.params.id)) {
+  };
+  const removeAvatar = async (req: any, reply: any, targetId: string) => {
+      if (!canManageAvatar(req.userId, targetId)) {
         return reply.code(404).send({ error: "Not found" });
       }
       const column = avatarColumn(req.query?.variant);
       const row = db
         .prepare(`SELECT ${column} AS url FROM users WHERE id = ?`)
-        .get(req.params.id) as { url: string | null } | undefined;
+        .get(targetId) as { url: string | null } | undefined;
       if (row?.url) {
         const full = path.join(AVATAR_DIR, path.basename(row.url));
         try {
@@ -150,10 +142,33 @@ export function registerAvatarRoutes(app: FastifyInstance) {
         }
       }
       db.prepare(`UPDATE users SET ${column} = NULL WHERE id = ?`).run(
-        req.params.id,
+        targetId,
       );
       return { ok: true };
-    },
+  };
+
+  app.post<{ Params: { id: string }; Querystring: { variant?: string } }>(
+    "/api/users/:id/avatar",
+    { preHandler: authOrApiToken },
+    (req: any, reply) => uploadAvatar(req, reply, req.params.id),
+  );
+  app.delete<{ Params: { id: string }; Querystring: { variant?: string } }>(
+    "/api/users/:id/avatar",
+    { preHandler: authOrApiToken },
+    (req: any, reply) => removeAvatar(req, reply, req.params.id),
+  );
+  // Своя аватарка без id в пути: именно сюда ходит iOS-клиент
+  // (`APIClient.uploadAvatar` → POST /api/avatars). Раньше маршрута не было —
+  // загрузка из настроек всегда отвечала ошибкой (владелец, 06.10.2026).
+  app.post<{ Querystring: { variant?: string } }>(
+    "/api/avatars",
+    { preHandler: authOrApiToken },
+    (req: any, reply) => uploadAvatar(req, reply, req.userId),
+  );
+  app.delete<{ Querystring: { variant?: string } }>(
+    "/api/avatars",
+    { preHandler: authOrApiToken },
+    (req: any, reply) => removeAvatar(req, reply, req.userId),
   );
 
   // Публичная раздача — см. комментарий вверху файла про причину.

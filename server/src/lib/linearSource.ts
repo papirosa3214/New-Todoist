@@ -39,6 +39,62 @@ export async function listLinearIssues(owner: string, after: string | null = nul
   return { workspace: data.organization, issues: items.nodes, cursor: items.pageInfo.hasNextPage ? items.pageInfo.endCursor : null };
 }
 
+/** Проект Linear с метками — по ним служба автоимпорта отбирает «Сейчас». */
+export type LinearProjectInfo = {
+  id: string; name: string; url: string; state: string;
+  labels: Array<{ id: string; name: string }>;
+};
+
+/** Минимум задачи проекта, по которому служба понимает «новая или изменённая». */
+export type LinearProjectIssueInfo = {
+  id: string; identifier: string; title: string; description: string | null; url: string;
+  priority: number; dueDate: string | null; createdAt: string; updatedAt: string; archivedAt: string | null;
+  parent: { id: string } | null; state: { id: string; name: string; type: string };
+};
+
+/** Все проекты рабочего пространства с метками (первая страница в 50). */
+export async function listLinearProjects(owner: string, read: LinearRead = linearQuery) {
+  const data = await read(owner, `query TaskFlowLinearProjects {
+    organization { id name }
+    projects(first: 50) { nodes { id name url state labels(first: 20) { nodes { id name } } } ${PAGE} }
+  }`);
+  const items = connection(data.projects);
+  if (!data.organization?.id) throw new LinearSourceError("Linear не вернул рабочее пространство.");
+  // labels приходит соединением { nodes }; наружу отдаём плоский список.
+  const projects = (items.nodes as Array<Omit<LinearProjectInfo, "labels"> & { labels?: { nodes?: Array<{ id: string; name: string }> } }>).map(p => ({
+    id: p.id, name: p.name, url: p.url, state: p.state, labels: p.labels?.nodes ?? [],
+  }));
+  return { workspace: data.organization, projects, cursor: items.pageInfo.hasNextPage ? items.pageInfo.endCursor : null };
+}
+
+/** Проекты с конкретной меткой (по умолчанию «Сейчас») — только они в автоимпорте. */
+export async function findLinearProjectsByLabel(owner: string, labelName: string, read: LinearRead = linearQuery) {
+  const { workspace, projects } = await listLinearProjects(owner, read);
+  return { workspace, projects: projects.filter(p => (p.labels ?? []).some(l => l.name === labelName)) };
+}
+
+/** Задачи одного проекта Linear с пагинацией; архив отсекается на стороне Linear. */
+export async function listLinearProjectIssues(owner: string, projectId: string, read: LinearRead = linearQuery) {
+  const fields = "id identifier title description url priority dueDate createdAt updatedAt archivedAt parent { id } state { id name type }";
+  const issues: LinearProjectIssueInfo[] = [];
+  let after: string | null = null;
+  const seen = new Set<string>();
+  do {
+    const data = await read(owner, `query TaskFlowLinearProjectIssues($projectId: String!, $after: String) {
+      organization { id name }
+      issues(first: 50, after: $after, includeArchived: false, filter: { project: { id: { eq: $projectId } } }, orderBy: createdAt) { nodes { ${fields} } ${PAGE} }
+    }`, { projectId, after });
+    const items = connection(data.issues);
+    for (const node of items.nodes as LinearProjectIssueInfo[]) {
+      if (seen.has(node.id)) throw new LinearSourceError("Linear вернул дубли задач между страницами. Повторите загрузку.", 409);
+      seen.add(node.id);
+      issues.push(node);
+    }
+    after = items.pageInfo.hasNextPage ? items.pageInfo.endCursor : null;
+  } while (after);
+  return issues;
+}
+
 export async function fetchLinearSnapshot(owner: string, selected: string[], read: LinearRead = linearQuery): Promise<LinearSnapshot> {
   const started = Date.now();
   const withinDeadline = () => { if (Date.now() - started > 10 * 60_000) throw new LinearSourceError("Подготовка Linear заняла слишком долго. Выберите меньшую группу задач.", 422); };

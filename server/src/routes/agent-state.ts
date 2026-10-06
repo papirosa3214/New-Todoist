@@ -49,20 +49,23 @@ import {
 } from "../agentState.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
+import {
+  blockedHelpError,
+  evaluateBlockedHelp,
+  type BlockedHelpDecision,
+} from "../lib/blockedHelp.js";
 
 const uid = () => crypto.randomUUID();
 
 /**
  * Сервисные учётки, которым разрешено ставить state='blocked' на ЛЮБУЮ
  * задачу через этот endpoint — для фиксации технических падений
- * claim/launch_agent из trigger.py (см. taskflow-pipeline-head-plan.md,
- * шаг 2). Ролевой ключ мог и быть причиной падения, поэтому блокировку
- * обязательно писать служебной учёткой.
+ * claim/launch_agent со стороны системной автоматики (см.
+ * taskflow-pipeline-head-plan.md, шаг 2). Ролевой ключ мог и быть
+ * причиной падения, поэтому блокировку обязательно писать служебной учёткой.
  *
- * Сейчас сюда попадает Pi Agent (TASKFLOW_TOKEN) — он исторически
- * держит служебную дверь. Если владелец заведёт отдельного
- * trigger-service пользователя с ролью orchestrator, его id добавится
- * сюда без правок в триггере.
+ * Сейчас сюда попадает «Система» (taskflow_system) — единая служебная учётка
+ * серверной автоматики.
  */
 // Сам список — в serviceUser.ts (01.10.2026): им пользуется и проверка
 // пропуска (auth.ts), и внутренний планировщик.
@@ -112,9 +115,9 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   }));
 
   // ═══════ ЛЕСЕНКА МОДЕЛИ (спек 1.2, 1.2.2) ═══════
-  // GET /api/agent/attempt-policies — для trigger.py, чтобы он мог построить
-  // лесенку Haiku→Sonnet→Opus при reason_code=insufficient_capability.
-  // Триггер дёргает этот endpoint вместо прямого sqlite (как и для правил).
+  // GET /api/agent/attempt-policies — для внутренней автоматики сервера,
+  // чтобы она могла построить лесенку Haiku→Sonnet→Opus при
+  // reason_code=insufficient_capability. Ручка дёргается вместо прямого sqlite.
   app.get("/api/agent/attempt-policies", { preHandler: authPre }, async () => {
     const rows = db
       .prepare(
@@ -172,7 +175,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
     // работа разложена по ДОЧЕРНИМ ЗАДАЧАМ, а формальной связи с ними в
     // базе нет — оркестратор пишет её строкой «Часть координационной
     // задачи #id» в описание каждого куска (build_orchestrator_prompt).
-    // По этой же нити его теперь будит и будильник.
+    // По этой же нити его теперь будит и Система.
     //
     // Зачем ручке про них знать (28.08.2026, владелец: «как он мог
     // отключаться, если он не выполнил задачу?»): гейт пропускал такую
@@ -220,12 +223,12 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // состояния «не взята»). Сессия запиралась насмерть на работе, к
       // которой никто не притрагивался.
       //
-      // Прецедент: 12 карточек спека 2, назначенных на Claude_Bot заранее,
+      // Прецедент: 12 карточек спека 2, назначенных на общего бота заранее,
       // держали чужую сессию, занятую совершенно другой работой.
       //
       // «Ведёшь» — это след работы: задача взята (есть agent_state или
       // сессия) либо тронут хоть один шаг. Нетронутое назначение гейт
-      // отпускает: напоминать о нём — дело доски и будильника, а не
+      // отпускает: напоминать о нём — дело доски и Системы, а не
       // Stop-хука.
       const neverStarted =
         !state &&
@@ -547,7 +550,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         // его молча (не в лог) — это техническая метка «чей физически этот
         // claim», не событие, которое имеет смысл владельцу. Несколько
         // параллельных сессий делят один и тот же учётный аккаунт-агента
-        // (assignee_id/Claude_Bot), поэтому это единственное поле, по
+        // (общий assignee_id бота), поэтому это единственное поле, по
         // которому свой Stop-хук отличает «мою» незавершённую работу от
         // чужой под тем же ботом (миграция 004_agent_session_id).
         //
@@ -717,6 +720,11 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       blocked_reason?: string;
       blocked_at?: string;
       block_notified?: boolean;
+      // Карточка cd10bf34: перед blocked агент обязан сказать, кого звал и
+      // что ответили (help_attempt) либо почему никто не решит
+      // (help_skip_reason). Проверка — lib/blockedHelp.ts.
+      help_attempt?: string;
+      help_skip_reason?: string;
       // Поля планировщика (шаг 4): он переводит карточку из blocked
       // обратно в todo и инкрементирует retry_count, либо ставит
       // новую machine_selected_role при переподборе.
@@ -727,8 +735,8 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const { state } = req.body || {};
-      // Сервисная дверь для trigger.py: при state=blocked сервисный
-      // юзер (Pi Agent) может пометить любую задачу, даже если он не
+      // Сервисная дверь системной автоматики: при state=blocked служебная
+      // учётка («Система») может пометить любую задачу, даже если она не
       // assignee/creator. Это нужно, чтобы зафиксировать техническое
       // падение claim/launch_agent, когда ролевой ключ не сработал.
       let task =
@@ -793,7 +801,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // пустыми, и владелец не понимает, что именно сделано.
       //
       // Проверка живёт на СЕРВЕРЕ, а не в хуках клиента, потому что
-      // агентов несколько (Claude, Hermes, DeepSeek, любые субагенты) и
+      // агентов несколько (любые внешние исполнители и субагенты) и
       // чужие хуки нам не подчиняются.
       if (state === "review") {
         const caller = db
@@ -856,6 +864,36 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       };
       if (!canTransition(from, state, who, "state")) {
         return reply.code(400).send({ error: "invalid transition" });
+      }
+
+      // Карточка cd10bf34, п. 2: blocked от агента по решаемой причине без
+      // отметки о вызове помощи не принимаем — 409 с подсказкой, кого
+      // позвать. Порядок важен: «нужен комментарий» (400) и "invalid
+      // transition" (400) проверены выше, сервисный триггер и владелец —
+      // вне гейта.
+      let blockedHelp: BlockedHelpDecision | null = null;
+      if (state === "blocked") {
+        const blockedCaller = db
+          .prepare("SELECT type, role_key FROM users WHERE id = ?")
+          .get(req.userId) as
+          | { type?: string; role_key?: string | null }
+          | undefined;
+        if (
+          blockedCaller?.type === "ai" &&
+          !isServiceUser(req.userId)
+        ) {
+          const decision = evaluateBlockedHelp({
+            reasonCode: typeof reasonCode === "string" ? reasonCode : null,
+            text: blockedReason || comment,
+            helpAttempt: req.body?.help_attempt,
+            helpSkipReason: req.body?.help_skip_reason,
+            roleKey: blockedCaller.role_key ?? null,
+          });
+          if (!decision.ok) {
+            return reply.code(409).send(blockedHelpError(decision));
+          }
+          blockedHelp = decision;
+        }
       }
 
       // Тот же случай, что self-reclaim в claim() — система замечает
@@ -968,7 +1006,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         // ВЛАДЕЛЕЦ из браузера, у запроса нет ни заголовка X-Agent-Session,
         // ни session_id в теле — sessionOf() отдаёт null, и прежняя запись
         // затиралась. Связь с сессией агента терялась ровно в тот момент,
-        // когда она нужнее всего: будильник переставал понимать, куда
+        // когда она нужнее всего: Система переставала понимать, куда
         // возвращать работу, и поднял бы новую сессию с чистого листа.
         //
         // Живой прецедент 21.08.2026: Максим вернул карточку на доработку
@@ -1165,6 +1203,17 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           fromValue: from,
           toValue: state,
         });
+        // П. 3 карточки cd10bf34: событие ленты «вызвана помощь» /
+        // «заблокирован без вызова помощи» — для последующей статистики.
+        if (state === "blocked" && blockedHelp) {
+          logEvent({
+            taskId: task.id,
+            actorId: req.userId,
+            kind: blockedHelp.kind,
+            field: "help",
+            toValue: blockedHelp.detail,
+          });
+        }
         if (state === "review") {
           enqueueRoleRunJob({
             taskId: task.id,
@@ -1241,10 +1290,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // (см. AGENT-PROTOCOL.md, строка «review → in_progress»). У всех
       // остальных owner-переходов с заданием (ответ на blocked, снятие
       // с агента) комментарий идёт ВТОРЫМ отдельным POST на /comments,
-      // и именно ТОТ маршрут будит будильник (taskflow-trigger слушает
-      // строго notification:new, см. trigger.py::_on_message). У этой
+      // и именно ТОТ маршрут будит Систему (серверная автоматика слушает
+      // строго notification:new). У этой
       // атомарной ветки такого второго запроса нет и никогда не было —
-      // будильник не просыпался ни разу, задача просто зависала «в работе»
+      // Система не просыпалась ни разу, задача просто зависала «в работе»
       // без реального захода агента. Найдено 27.08.2026 при разборе
       // f381c5a1 (карточка про «баг сохранения подзадачи»): само действие
       // всегда отрабатывало 200 и без него, но внешний агент об этом
@@ -1292,7 +1341,13 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
   // alive; all other reasons close the current attempt and wait in blocked.
   app.post<{
     Params: { id: string };
-    Body: { reason_code?: string; comment?: string; window_kind?: string };
+    Body: {
+      reason_code?: string;
+      comment?: string;
+      window_kind?: string;
+      help_attempt?: string;
+      help_skip_reason?: string;
+    };
   }>("/api/tasks/:id/stop", {
     preHandler: authPre,
     handler: async (req: any, reply) => {
@@ -1370,6 +1425,32 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           action: "wait_owner",
           retry_count: retry.n,
         });
+      }
+
+      // Карточка cd10bf34: если этим вызовом карточка реально уйдёт в
+      // blocked (не fallback на другую модель и не техповтор), агент обязан
+      // сказать, кого звал и что ответили. permission_or_owner и среда
+      // проходят по reason_code без нового поля (см. blockedHelp.ts).
+      let blockedHelp: BlockedHelpDecision | null = null;
+      if (!fallback && !policy.automaticRetry) {
+        const stopCaller = db
+          .prepare("SELECT type, role_key FROM users WHERE id = ?")
+          .get(req.userId) as
+          | { type?: string; role_key?: string | null }
+          | undefined;
+        if (stopCaller?.type === "ai" && !isServiceUser(req.userId)) {
+          const decision = evaluateBlockedHelp({
+            reasonCode,
+            text: comment,
+            helpAttempt: req.body?.help_attempt,
+            helpSkipReason: req.body?.help_skip_reason,
+            roleKey: stopCaller.role_key ?? null,
+          });
+          if (!decision.ok) {
+            return reply.code(409).send(blockedHelpError(decision));
+          }
+          blockedHelp = decision;
+        }
       }
 
       const stopTxn = db.transaction(() => {
@@ -1466,6 +1547,15 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
             fromValue: task.agent_state ?? null,
             toValue: "blocked",
           });
+          if (blockedHelp) {
+            logEvent({
+              taskId: task.id,
+              actorId: req.userId,
+              kind: blockedHelp.kind,
+              field: "help",
+              toValue: blockedHelp.detail,
+            });
+          }
         }
 
         logEvent({

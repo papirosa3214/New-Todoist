@@ -39,6 +39,23 @@ export function ensurePlanTopic(taskId: string): string | null {
   })();
 }
 
+/** Тема задачи живёт и умирает вместе с задачей (карточка ca816271,
+ *  документ d748e4f4 п. 4). `closed=true` на переходе active→completed,
+ *  `closed=false` при возврате в работу. История при этом сохраняется,
+ *  закрытая тема только перестаёт быть «открытой» и становится read-only. */
+export function setTaskTopicClosed(taskId:string,closed:boolean):number {
+  const result=db.prepare(
+    "UPDATE chats SET closed_at = CASE WHEN ? THEN datetime('now') ELSE NULL END WHERE task_id = ? AND parent_chat_id IS NOT NULL",
+  ).run(closed?1:0,taskId);
+  return result.changes;
+}
+
+/** Закрыта ли тема задачи прямо сейчас. */
+export function isTaskTopicClosed(taskId:string):boolean {
+  const row=db.prepare("SELECT closed_at FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(taskId) as {closed_at:string|null}|undefined;
+  return Boolean(row?.closed_at);
+}
+
 export function topicContext(taskId:string): string {
   const topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(taskId) as {id:string}|undefined;
   if(!topic) return "";

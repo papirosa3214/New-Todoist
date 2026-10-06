@@ -33,7 +33,7 @@ function deleteForbidden(
 /**
  * Resolves a bearer token to a userId. Accepts either:
  *  - a JWT issued by /api/auth/register or /api/auth/login (web frontend), or
- *  - a static users.api_token (AI agents — Claude/Hermes/etc).
+ *  - a static users.api_token (AI agents / integraions).
  * Returns null if the token is missing/empty or matches neither.
  */
 export function resolveUserIdFromToken(
@@ -45,17 +45,19 @@ export function resolveUserIdFromToken(
   try {
     const decoded = (app as any).jwt.verify(token) as { id: string; internalService?: string };
     if (decoded?.id) {
+      // Служебная учётка («Система») снаружи не входит: её пропуск выписывает
+      // сам сервер для планировщика (internalService='scheduler'). Любой
+      // другой JWT под этим id — попытка выдать себя за системную автоматику.
+      if (isServiceUser(decoded.id)) {
+        return decoded.internalService === "scheduler" ? decoded.id : null;
+      }
       // Вход архивной учётки больше не действует (владелец 01.10.2026:
       // «Оркестратор Claude» из архива появился в карточке). api_token
-      // ниже не трогаем: им ходят службы трекера (taskflow-trigger).
+      // ниже не трогаем: им ходят службы трекера.
       const row = db.prepare("SELECT archived FROM users WHERE id = ?").get(decoded.id) as
         | { archived: number | null }
         | undefined;
-      // Служебная учётка в архиве, но её пропуск выписывает сам сервер
-      // (внутренний планировщик) — снаружи ей войти нечем: вход архивных
-      // закрыт, внешнего ключа у планировщика больше нет.
-      const internalScheduler = isServiceUser(decoded.id) && decoded.internalService === "scheduler";
-      return row?.archived && !internalScheduler ? null : decoded.id;
+      return row?.archived ? null : decoded.id;
     }
   } catch {
     // Not a valid/current JWT — fall through and try it as an api_token.
