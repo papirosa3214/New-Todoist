@@ -2,6 +2,7 @@
 // "what state can follow what, who's allowed to cause it, and is the lease
 // still alive" lives in this one file — routes/agent-state.ts and
 // routes/tasks.ts only call into it, they never re-derive the rules.
+import { queueOrchestratorEvent } from "./lib/orchestratorWebhook.js";
 import crypto from "crypto";
 import db from "./db.js";
 
@@ -354,6 +355,8 @@ export function logEvent(params: {
     params.fromValue ?? null,
     params.toValue ?? null,
   );
+  // Будим оркестратора (вебхук): только важные виды событий, ошибки глотаются.
+  queueOrchestratorEvent({ taskId: params.taskId, kind: params.kind, field: params.field, toValue: params.toValue });
 }
 
 /** Запись в реестр диспетчеризации (карточка 5f292e87, режим наблюдения).

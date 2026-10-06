@@ -3671,6 +3671,22 @@ const migrations: Migration[] = [
       )
     `);
   } },
+  { id: "113_orchestrator_events", description: "Очередь событий для вебхука оркестратора: сервер сам будит оркестратора (владелец 06.10.2026)", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        field TEXT,
+        detail TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        delivered_at TEXT,
+        expired INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_orchestrator_events_pending
+        ON orchestrator_events(delivered_at, id);
+    `);
+  } },
 ];
 
 /**

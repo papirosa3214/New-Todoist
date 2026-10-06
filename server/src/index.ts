@@ -16,6 +16,7 @@ import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
 import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
 import { startLinearAutoImport } from "./lib/linearAutoImport.js";
+import { startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
 import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
@@ -600,6 +601,7 @@ if (isMain) {
     // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
     // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
     if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();
+    if (process.env.ORCHESTRATOR_WEBHOOK_DISABLED !== "1") startOrchestratorWebhook();
     // Обратная синхронизация TaskFlow → Linear (карточка 20e30338): статусы
     // привязанных карточек раз в минуту; сбой Linear не трогает карточку.
     if (process.env.LINEAR_SYNC_DISABLED !== "1") stopLinearSync = startLinearSync();
