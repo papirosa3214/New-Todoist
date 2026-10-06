@@ -69,6 +69,11 @@ export function TaskDetailScreen() {
   const deleteTask = useDeleteTask();
   const updateSubtask = useUpdateSubtask();
   const subtaskWork = useSubtaskWork();
+  // «Прервать шаг» / «Сбросить попытку» (MAK-69) шлёт сама TaskControlSheet
+  // из SubtaskRow: она зовёт useCancelSubtask/useResetSubtask из
+  // src/api/control.ts. Здесь эти хуки поднимать не нужно — иначе
+  // будет два владельца кэша, и WS `task:updated` в одном месте
+  // отработает, в другом пропустит.
   const addComment = useAddComment(id || "");
   const { confirm, alert, dialog } = useDialog();
   const queryClient = useQueryClient();
@@ -653,7 +658,9 @@ export function TaskDetailScreen() {
             />
             <ErrorBanner
               error={
-                updateSubtask.error || addComment.error || subtaskWork.error
+                updateSubtask.error ||
+                addComment.error ||
+                subtaskWork.error
               }
               fallback="Не удалось обновить подзадачу"
               variant="block"
