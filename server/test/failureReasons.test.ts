@@ -59,12 +59,17 @@ describe("классификатор причин сбоя", () => {
       classifyFailureReason("This model's maximum context length is 128000 tokens. However, your messages resulted in 140000 tokens."),
     ).toBe("context_overflow");
     expect(classifyFailureReason("переполнение контекста: prompt is too long")).toBe("context_overflow");
+    // Открытый код провайдеров OpenAI/Anthropic (доработка 1 по ревью).
+    expect(classifyFailureReason("context_length_exceeded")).toBe("context_overflow");
   });
 
   it("недоступная модель и ошибка провайдера", () => {
     expect(classifyFailureReason("модель «opencode-go/qwen» недоступна")).toBe("model_unavailable");
     expect(classifyFailureReason("model_not_available: openai/gpt-5")).toBe("model_unavailable");
     expect(classifyFailureReason("502 Bad Gateway from upstream")).toBe("provider_server_error");
+    // Идентификатор модели провайдера перед «недоступна» (доработка 1).
+    expect(classifyFailureReason("модель openai/gpt-5 недоступна")).toBe("model_unavailable");
+    expect(classifyFailureReason("openai/gpt-5 недоступна")).toBe("model_unavailable");
   });
 
   it("застой шага, отмена и смерть рантайма", () => {
@@ -72,6 +77,8 @@ describe("классификатор причин сбоя", () => {
     expect(classifyFailureReason("запуск cancellation requested")).toBe("cancelled");
     expect(classifyFailureReason("ход оборвался перезапуском сервера")).toBe("runtime_died");
     expect(classifyFailureReason("socket hang up ECONNRESET")).toBe("runtime_died");
+    // «сервер перезапустился» — без слова «перезапуск» рядом (доработка 1).
+    expect(classifyFailureReason("сервер перезапустился")).toBe("runtime_died");
   });
 
   it("непонятный текст — unknown, пустой — тоже", () => {

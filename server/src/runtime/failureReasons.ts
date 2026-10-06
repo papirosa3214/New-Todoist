@@ -72,15 +72,15 @@ const RULES: Rule[] = [
   // 5xx и явные серверные ошибки апстрима.
   { code: "provider_server_error", re: /\b5\d{2}\b|server error|internal error|bad gateway|service unavailable|upstream[^\n]*error|провайдер[^\n]*ошибк/i },
   // Модели нет в каталоге/она отключена.
-  { code: "model_unavailable", re: /model[_ ]?not[_ ]?available|no such model|unknown model|model[^\n]*not found|модель[^\n]*недоступ|недоступна модель|модель[^\n]*не найдена/i },
+  { code: "model_unavailable", re: /model[_ ]?not[_ ]?available|no such model|unknown model|model[^\n]*not found|модель[^\n]*недоступ|(openai\/|anthropic\/|claude-|gpt-)[^\n]*недоступ|недоступна модель|модель[^\n]*не найдена/i },
   // Переполнение окна контекста модели.
-  { code: "context_overflow", re: /context (overflow|length|window)|maximum context|переполнени[ея] контекста|too many tokens|prompt is too long|exceeds?[^\n]*tokens|token limit/i },
+  { code: "context_overflow", re: /context[_ ]?(overflow|length_exceeded|length|window)|context_length_exceeded|maximum context|переполнени[ея] контекста|too many tokens|prompt is too long|exceeds?[^\n]*tokens|token limit/i },
   // Отмена/остановка владельцем или системой.
   { code: "cancelled", re: /cancel|aborted|\babort\b|прерван|отменен|отменён|остановлен владельц/i },
   // Ход шага кончился без сдачи: застой, тишина, лимит продолжений.
   { code: "step_stalled", re: /stalled|ход закончился без сдачи|тишина \d+ мин|без движения|лимит продолжений|шаг заблокирован|заблокирован владельц/i },
   // Рантайм умер, связь оборвалась, процесс перезапустился.
-  { code: "runtime_died", re: /runtime[_ ]?(died|unavailable|is unavailable)|econnreset|socket hang up|econnrefused|connection refused|process exited|out of memory|\boom\b|killed|перезапуск сервера|ход оборвался|рантайм[^\n]*(умер|недоступ)/i },
+  { code: "runtime_died", re: /runtime[_ ]?(died|unavailable|is unavailable)|econnreset|socket hang up|econnrefused|connection refused|process exited|out of memory|\boom\b|killed|перезапуск[а-я]* сервер|сервер[^\n]*перезапуст|перезапустил|ход оборвался|рантайм[^\n]*(умер|недоступ)/i },
 ];
 
 /** Один классификатор: текст ошибки → код из закрытого списка. */

@@ -121,7 +121,7 @@ async function afterLiveChange(planId: string, taskId: string, actorId: string):
   try {
     await unlockReadyPlanSubtasks(planId, taskId, actorId);
   } catch (error) {
-    logEvent({ taskId, actorId, kind: "plan_subtask_autostart_failed", field: planId, toValue: error instanceof Error ? error.message : String(error) });
+    logStepOutcome({ taskId, actorId, subtaskId: null, role: null, outcome: "failed", error: error instanceof Error ? error.message : String(error) });
   }
 }
 
