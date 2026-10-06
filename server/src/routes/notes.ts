@@ -269,12 +269,17 @@ export function registerNoteRoutes(app: FastifyInstance) {
       return {
         project: { id: project.id, name: project.name },
         folder: root ? { id: root.id, name: root.name } : null,
+        // Подпапки поддерева (папки задач) — клиент строит из них дерево «проект → папки → файлы».
+        folders: all
+          .filter((f) => ids.has(f.id) && f.id !== project.notes_folder_id)
+          .map((f) => ({ id: f.id, parent_id: f.parent_id, name: f.name })),
         notes: rows
           .filter((r) => r.folder_id !== null && ids.has(r.folder_id))
           .map((r) => ({
             id: r.id,
             title: r.title,
             папка: byId.get(r.folder_id as number)?.name ?? null,
+            folder_id: r.folder_id,
             preview: journalPreview(r.content),
             updated_at: r.updated_at,
           })),
