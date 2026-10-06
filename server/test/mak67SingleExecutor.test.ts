@@ -224,13 +224,12 @@ describe("MAK-67 план из одного шага с правилом «Си�
     setOwnerMode("automatic");
     const taskId = await postTask("Явный запуск при automatic уже разобранной карточки");
     // Дать фоновому applyIntakeToNewTask время поставить assignee_id.
+    // После MAK-68 фоновый допуск идёт через startSingleExecutorPlan: признак — план, а не assignee_id.
     for (let i = 0; i < 30; i++) {
-      const row = db.prepare("SELECT assignee_id FROM tasks WHERE id = ?").get(taskId) as { assignee_id: string | null };
-      if (row.assignee_id) break;
+      if (planRows(taskId).length > 0) break;
       await new Promise((r) => setTimeout(r, 80));
     }
-    const before = db.prepare("SELECT assignee_id FROM tasks WHERE id = ?").get(taskId) as { assignee_id: string | null };
-    expect(before.assignee_id).not.toBeNull();
+    expect(planRows(taskId).length).toBeGreaterThan(0);
     const r = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/single-executor-plan`,
@@ -238,7 +237,8 @@ describe("MAK-67 план из одного шага с правилом «Си�
       payload: { role_key: "builder", expected_result: "Запуск при automatic" },
     });
     expect(r.statusCode).toBe(409);
-    expect(planRows(taskId)).toHaveLength(0);
+    // Второй план не создан: остался только план фонового допуска.
+    expect(planRows(taskId)).toHaveLength(1);
   });
 
   it("системный допуск при manual отказывает: план не создан, узел не запущен", async () => {
@@ -282,8 +282,7 @@ describe("MAK-67 план из одного шага с правилом «Си�
     const taskId = await postTask("Системный допуск под automatic");
 
     for (let i = 0; i < 50; i++) {
-      const row = db.prepare("SELECT assignee_id FROM tasks WHERE id = ?").get(taskId) as { assignee_id: string | null };
-      if (row.assignee_id) break;
+      if (planRows(taskId).length > 0) break; // после MAK-68 фон создаёт план через startSingleExecutorPlan
       await new Promise((r) => setTimeout(r, 80));
     }
     db.prepare("UPDATE tasks SET assignee_id = NULL, agent_state = NULL, current_attempt_id = NULL, ready_for_pickup = 0 WHERE id = ?").run(taskId);
@@ -298,7 +297,8 @@ describe("MAK-67 план из одного шага с правилом «Си�
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) throw new Error(outcome.error);
     expect(outcome.planId).toMatch(/^tcp_/);
-    expect(planRows(taskId)).toHaveLength(1);
+    // В списке и вытесненный план фонового допуска, и новый.
+    expect(planRows(taskId).filter((p: { status: string }) => p.status !== "superseded")).toHaveLength(1);
     const steps = subtaskState(taskId);
     expect(steps).toHaveLength(1);
     expect(steps[0].agent_state).toBe("in_progress");
