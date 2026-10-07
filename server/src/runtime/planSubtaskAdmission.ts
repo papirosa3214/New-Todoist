@@ -77,6 +77,39 @@ const ARTIFACT_GATE_STATUSES: Record<string, Array<ArtifactVersion["status"]>> =
   submitted: ["submitted", "accepted"],
 };
 
+export type WaitingFor = { from_slot_key: string; artifact_key: string | null; reason: string };
+
+/**
+ * Чего именно ждёт узел плана: по каждому входящему ребру, которое ещё не выполнено, — от кого и почему
+ * («результат не сдан», «нет ссылок-доказательств», «предшественник не закрыт»). Нужен, чтобы в
+ * карточке ожидающий шаг не стоял молча (07.10.2026: Разработчик ждал результат Дизайнера, а увидеть
+ * это было нечем). Условия те же, что в `canPlanSubtaskBecomeReady`.
+ */
+export function waitingForPredecessors(row: PlanSubtask): WaitingFor[] {
+  if (!row.collaboration_plan_id || !row.plan_node_key) return [];
+  const edges = db.prepare("SELECT from_slot_key, start_condition, artifact_key FROM task_collaboration_plan_edges WHERE plan_id = ? AND to_slot_key = ?")
+    .all(row.collaboration_plan_id, row.plan_node_key) as Array<{ from_slot_key: string; start_condition: string; artifact_key: string | null }>;
+  const out: WaitingFor[] = [];
+  for (const edge of edges) {
+    const predecessor = db.prepare("SELECT * FROM subtasks WHERE collaboration_plan_id = ? AND plan_node_key = ?")
+      .get(row.collaboration_plan_id, edge.from_slot_key) as PlanSubtask | undefined;
+    if (!predecessor) { out.push({ from_slot_key: edge.from_slot_key, artifact_key: edge.artifact_key, reason: "шаг предшественника не создан" }); continue; }
+    if (edge.artifact_key) {
+      const artifact = latestArtifact(predecessor.id);
+      if (!artifact || artifact.artifact_key !== edge.artifact_key) {
+        out.push({ from_slot_key: edge.from_slot_key, artifact_key: edge.artifact_key, reason: predecessor.done ? "шаг закрыт, но результат не сдан" : "результат ещё не сдан" });
+      } else if (edge.start_condition === "artifact_ready" && !artifactHasEvidence(artifact)) {
+        out.push({ from_slot_key: edge.from_slot_key, artifact_key: edge.artifact_key, reason: "в результате нет ссылок-доказательств" });
+      } else if (!(ARTIFACT_GATE_STATUSES[edge.start_condition] ?? ["accepted"]).includes(artifact.status)) {
+        out.push({ from_slot_key: edge.from_slot_key, artifact_key: edge.artifact_key, reason: "результат ещё не принят" });
+      }
+    } else if (!predecessor.done) {
+      out.push({ from_slot_key: edge.from_slot_key, artifact_key: null, reason: "шаг ещё не закрыт" });
+    }
+  }
+  return out;
+}
+
 /**
  * Может ли узел плана открыться (перестать ждать предшественников).
  * `row` — сама подзадача-узел (ещё не начатая: agent_state IS NULL, done=0).

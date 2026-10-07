@@ -14,7 +14,7 @@ import { getTaskForRead, isOrchestrator, isOwner } from "../access.js";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleUserId } from "../roleRouting.js";
-import { canPlanSubtaskBecomeReady, startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { canPlanSubtaskBecomeReady, startPlanSubtaskRun, unlockReadyPlanSubtasks, waitingForPredecessors } from "../runtime/planSubtaskAdmission.js";
 import { logStepOutcome } from "../runtime/stepOutcome.js";
 import {
   applyPlanOps,
@@ -83,6 +83,8 @@ function presentSingle(plan: Plan) {
         if(step.agent_state==='in_progress') return 'active';
         if(step.agent_state==='blocked') return 'blocked';
         return canPlanSubtaskBecomeReady(step)?'ready':'waiting';})(),
+      waiting_for: (()=>{const step=db.prepare("SELECT * FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key=?").get(plan.id,node.slot_key) as any;
+        return step && !step.done && !step.agent_state ? waitingForPredecessors(step) : [];})(),
       role_key: node.role_key,
       required: node.required === 1,
       expected_result: node.expected_result,

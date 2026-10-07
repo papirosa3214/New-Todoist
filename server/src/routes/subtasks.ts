@@ -399,6 +399,22 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         // закрытого шага — одна строка или его вовсе не было (слот оборвался,
         // до закрытия не дошёл). Роль может принести свой снимок в теле
         // запроса; если не принесла — пишем техснимок с пометкой «неполный».
+        // Узел плана с контрактом на результат роль не закрывает простой отметкой: без сданного
+        // результата следующие шаги так и не получат вход и будут ждать молча (07.10.2026).
+        if (done === true && !subtask.done && subtask.collaboration_plan_id && subtask.plan_node_key) {
+          const actor = db.prepare("SELECT role_key FROM users WHERE id = ?").get(req.userId) as { role_key?: string | null } | undefined;
+          const node = actor?.role_key
+            ? db.prepare("SELECT output_artifact_json FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
+                .get(subtask.collaboration_plan_id, subtask.plan_node_key) as { output_artifact_json: string | null } | undefined
+            : undefined;
+          const contractKey = node?.output_artifact_json ? (JSON.parse(node.output_artifact_json) as { key?: unknown }).key : undefined;
+          if (typeof contractKey === "string" && contractKey && !db.prepare("SELECT 1 FROM subtask_artifact_versions WHERE subtask_id = ?").get(subtask.id)) {
+            const key = contractKey;
+            return reply.code(409).send({
+              error: `Шаг нельзя закрыть без сданного результата «${key}»: передай artifact (summary, payload с обязательными полями, evidence — ссылки на файлы или документы) в taskflow_subtask_done вместо простой отметки.`,
+            });
+          }
+        }
         if (done === true && subtask.collaboration_plan_id) {
           let body: ReturnType<typeof readSnapshotBody>;
           try {

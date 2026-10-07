@@ -44,6 +44,23 @@ function latestArtifact(subtaskId: string): ArtifactVersion | undefined {
   return db.prepare("SELECT * FROM subtask_artifact_versions WHERE subtask_id = ? ORDER BY version_no DESC LIMIT 1").get(subtaskId) as ArtifactVersion | undefined;
 }
 
+/**
+ * Доказательство результата. Раньше принималось только `{path: "..."}` — ссылка на файл, а роли,
+ * чей результат — документ (дизайнер, аналитик), сдавали идентификатор документа, получали отказ
+ * «нужны безопасные path-ссылки» и закрывали шаг без результата (07.10.2026, «Разработчик не стартовал»).
+ * Теперь строка и объект с `doc_id` / `document_id` / `document_ref` / `ref` / `url` / `id` тоже
+ * годятся: они приводятся к `{path}`, остальное хранение и проверки готовности — как прежде.
+ */
+function normalizeEvidenceItem(item: unknown): unknown {
+  if (typeof item === "string") return { path: item.trim() };
+  if (item && typeof item === "object" && !Array.isArray(item)) {
+    const o = item as Record<string, unknown>;
+    const ref = [o.path, o.doc_id, o.document_id, o.document_ref, o.ref, o.url, o.id].find((v) => typeof v === "string" && v.trim());
+    return ref ? { ...o, path: String(ref).trim() } : item;
+  }
+  return item;
+}
+
 export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
   app.post<{ Params: { id: string }; Body: { summary?: unknown; payload?: unknown; evidence?: unknown } }>("/api/subtasks/:id/artifact", { preHandler: authOrApiToken }, async (req: any, reply) => {
     const current = getSubtaskWithTaskForUser(req.params.id, req.userId);
@@ -55,14 +72,14 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     const summary = String(req.body?.summary ?? "").trim();
     const payload = req.body?.payload;
     const evidenceInput = req.body?.evidence;
-    const evidence = Array.isArray(evidenceInput) ? evidenceInput.slice(0, 8) : [];
+    const evidence = Array.isArray(evidenceInput) ? evidenceInput.slice(0, 8).map(normalizeEvidenceItem) : [];
     const validationFailure = (error: string) => {
       logEvent({ taskId: current.task_id, actorId: req.userId, kind: "plan_subtask_artifact_validation_failed", field: current.plan_node_key, toValue: error });
       return reply.code(400).send({ error });
     };
     if (!summary || !payload || typeof payload !== "object" || Array.isArray(payload)) return validationFailure("нужны summary и object payload");
     if (evidenceInput !== undefined && !Array.isArray(evidenceInput)) return validationFailure("evidence должен быть массивом");
-    if (evidence.some((item) => !item || typeof item !== "object" || typeof (item as Record<string, unknown>).path !== "string" || !(item as Record<string, string>).path.trim() || (item as Record<string, string>).path.length > 1024)) return validationFailure("evidence должен содержать безопасные path-ссылки");
+    if (evidence.some((item) => !item || typeof item !== "object" || typeof (item as Record<string, unknown>).path !== "string" || !(item as Record<string, string>).path.trim() || (item as Record<string, string>).path.length > 1024)) return validationFailure("evidence: каждая запись — ссылка на файл или документ (строка либо объект с path / doc_id / document_ref / url)");
     if (contract.required_fields.some((key) => { const value = (payload as Record<string, unknown>)[key]; return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0); })) return validationFailure("payload не содержит required_fields");
 
     const versionNo = (db.prepare("SELECT COALESCE(MAX(version_no), 0) AS n FROM subtask_artifact_versions WHERE subtask_id = ?").get(current.id) as { n: number }).n + 1;
