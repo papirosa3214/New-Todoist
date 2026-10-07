@@ -128,8 +128,9 @@ function isValidDuration(n: unknown): boolean {
  * Критик проверил и одобрил текущую сдачу — клиенты рисуют рядом с «На проверке» двойную
  * галочку (владелец 07.10.2026). Вердикт приходит двумя путями:
  *  - итоговая проверка: событие review_recorded «версия:вердикт» после последнего ухода в review;
- *  - Критик шагом плана: карточка доходит до review, только когда последний шаг согласованного
- *    плана закрыл он — при возврате план открыл бы доработку.
+ *  - Критик шагом плана: берётся его последний шаг в согласованном плане (он не обязан стоять
+ *    последним — после него бывает QA). Карточка на проверке, значит план сдан; шаг закрыт и
+ *    не возврат — Критик одобрил.
  */
 export function criticApproved(taskId: string): boolean {
   const verdict = db.prepare(
@@ -142,9 +143,9 @@ export function criticApproved(taskId: string): boolean {
     `SELECT n.role_key, s.done, s.result FROM subtasks s
        JOIN task_collaboration_plans p ON p.id = s.collaboration_plan_id AND p.status = 'approved'
        JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
-      WHERE s.task_id = ? AND n.skipped_at IS NULL ORDER BY s.position DESC LIMIT 1`,
+      WHERE s.task_id = ? AND n.skipped_at IS NULL AND n.role_key = 'critic_verifier' ORDER BY s.position DESC LIMIT 1`,
   ).get(taskId) as { role_key: string; done: number; result: string | null } | undefined;
-  return last?.role_key === "critic_verifier" && last.done === 1 && !/^(changes_requested|blocked)/.test(last.result ?? "");
+  return !!last && last.done === 1 && !/^(changes_requested|blocked)/.test(last.result ?? "");
 }
 
 export function withAgentStale(task: any, subtasks?: any[], children?: any[]) {

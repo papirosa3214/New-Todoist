@@ -26,7 +26,7 @@ describe("critic_approved", () => {
   const planWithLastStep = (taskId: string, role: string, result: string | null) => {
     const plan = `tcp_${crypto.randomUUID()}`;
     db.prepare("INSERT INTO task_collaboration_plans(id,task_id,revision,status,profile,created_by) VALUES(?,?,1,'approved','manual',?)").run(plan, taskId, owner);
-    for (const [i, [slot, r, res]] of ([["work", "builder", "Готово"], ["last", role, result]] as const).entries()) {
+    for (const [i, [slot, r, res]] of ([["work", "builder", "Готово"], ["check", role, result], ["after", "qa", "Проверено"]] as const).entries()) {
       db.prepare("INSERT INTO task_collaboration_plan_nodes(id,plan_id,slot_key,role_key,required,expected_result) VALUES(?,?,?,?,1,'x')").run(`tcpn_${crypto.randomUUID()}`, plan, slot, r);
       db.prepare("INSERT INTO subtasks(id,task_id,title,position,collaboration_plan_id,plan_node_key,done,result) VALUES(?,?,'x',?,?,?,1,?)").run(crypto.randomUUID(), taskId, i + 1, plan, slot, res);
     }
@@ -46,7 +46,7 @@ describe("critic_approved", () => {
     const c = task(); event(c, "review_recorded", "1:approved", "2026-10-07 09:00:00"); event(c, "state_changed", "review", "2026-10-07 10:00:00");
     expect(criticApproved(c)).toBe(false);
   });
-  it("Критик закрыл последний шаг согласованного плана — отмечена; последний шаг не его или он вернул — нет", () => {
+  it("Критик закрыл свой шаг согласованного плана (после него может идти QA) — отмечена; Критика в плане нет или он вернул — нет", () => {
     const a = task(); planWithLastStep(a, "critic_verifier", "approved: принято");
     expect(criticApproved(a)).toBe(true);
     const b = task(); planWithLastStep(b, "qa", "Проверено");
