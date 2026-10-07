@@ -564,7 +564,16 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!task) return reply.code(404).send({ error: "Not found" });
     if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan доступен владельцу или оркестратору" });
     const plans = db.prepare("SELECT * FROM task_collaboration_plans WHERE task_id = ? ORDER BY revision DESC").all(task.id) as Plan[];
-    return { plans: branchRoot(task.id)!==task.id ? [] : plans.map(present), branch_root_task_id:branchRoot(task.id)!==task.id ? branchRoot(task.id) : null };
+    // D-3.1 (Task 2b130833): child в ветке с собственным approved планом
+    // получает его, иначе план ветки остаётся в корне (см. branchPlan.ts:251)
+    // — инвариант «план ветки живёт в корневой карточке» сохраняется.
+    const rootId = branchRoot(task.id);
+    const hasOwnApproved = plans.some((plan) => plan.status === "approved");
+    const isChildInBranch = rootId !== task.id;
+    const plansForClient = hasOwnApproved ? plans.map(present)
+      : isChildInBranch ? []
+      : plans.map(present);
+    return { plans: plansForClient, branch_root_task_id: isChildInBranch ? rootId : null };
   });
 
   app.post<{ Params: { id: string }; Body: { profile?: unknown; rationale?: unknown; context_version?: unknown; nodes?: unknown; edges?: unknown } }>("/api/tasks/:id/collaboration-plans", { preHandler: authOrApiToken }, async (req: any, reply) => {
