@@ -1,4 +1,5 @@
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
+import { preparationBlocker } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
 import { ensureCardResponsible } from "../runtime/branchPlan.js";
 import {branchAssignmentRole} from "../runtime/branchPlan.js";
@@ -665,9 +666,8 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     const automatic=db.prepare("SELECT origin FROM task_collaboration_plan_nodes WHERE plan_id=? AND origin IN ('auto_preparation','auto_template','linear_import') LIMIT 1").get(plan.id);
     if(automatic){
       const latest=db.prepare("SELECT status,plan_id,snapshot FROM task_preparation_jobs WHERE task_id=? ORDER BY id DESC LIMIT 1").get(task.id) as any;
-      const snapshot=latest ? JSON.parse(latest.snapshot) : null;
-      if((latest || (automatic as {origin:string}).origin === "auto_preparation") && (latest?.status!=="ready" || latest.plan_id!==plan.id || snapshot?.title!==task.title || snapshot?.description!==task.description || snapshot?.project_id!==task.project_id))
-        return reply.code(409).send({error:"Постановка изменилась или подготовка ещё не завершена. Проверьте актуальный план."});
+      const blocker=preparationBlocker(latest,plan.id,task);
+      if(blocker) return reply.code(409).send({error:blocker});
     }
     const prepared=db.prepare("SELECT 1 FROM task_collaboration_plan_nodes WHERE plan_id=? AND origin='task_preparation'").get(plan.id);
     if (prepared && task.needs_clarification) return reply.code(409).send({error:"Перед утверждением плана нужно уточнить постановку",question:task.clarification_question});

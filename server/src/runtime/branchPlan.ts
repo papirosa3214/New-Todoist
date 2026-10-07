@@ -1,4 +1,5 @@
 import { materializeWorkChoices } from "../lib/planWorkSelection.js";
+import { preparationBlocker } from "../lib/preparationGate.js";
 import crypto from "node:crypto";
 import {getTaskForRead} from "../access.js";
 import {applyPlanOps,PlanOpError,type PlanOp} from "./planMutations.js";
@@ -103,8 +104,8 @@ export function approveBranch(rootPlanId:string,ownerId:string,snapshot:string):
       if(!planNodes(plan.id).length) throw new Error(`План «${card.title}» пуст`);
       responsibleRole(plan.id,card.id===root.task_id);
       const latest=db.prepare("SELECT status,plan_id,snapshot FROM task_preparation_jobs WHERE task_id=? ORDER BY id DESC LIMIT 1").get(card.id) as {status:string;plan_id:string|null;snapshot:string}|undefined;
-      const prepared=latest ? JSON.parse(latest.snapshot) : null;
-      if(latest && planNodes(plan.id).some(n=>['auto_preparation','auto_template','linear_import'].includes(n.origin)) && (latest.status!=="ready" || latest.plan_id!==plan.id || prepared?.title!==card.title || prepared?.description!==card.description || prepared?.project_id!==card.project_id)) throw new Error(`Подготовка «${card.title}» ещё не завершена`);
+      const blocker=latest && planNodes(plan.id).some(n=>['auto_preparation','auto_template','linear_import'].includes(n.origin)) ? preparationBlocker(latest,plan.id,card) : null;
+      if(blocker) throw new Error(`«${card.title}»: ${blocker}`);
     }
     const teamRoles=new Set(selected.flatMap(x=>planNodes(x.plan!.id).map(n=>n.role_key)));
     teamRoles.add('architect');teamRoles.add('critic_verifier');
