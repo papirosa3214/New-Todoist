@@ -24,6 +24,11 @@ if ! grep -q TASKFLOW_QA_SANDBOX "$SRC/server/src/index.ts"; then
   echo "ОТКАЗ: в $SRC/server/src/index.ts нет TASKFLOW_QA_SANDBOX — влей свежий main в ветку." >&2
   exit 3
 fi
+# Старая копия без защиты сдачи повторяет ошибку: роль сдаёт работу в песочницу.
+if ! grep -q sandboxSubmissionError "$SRC/server/src/routes/subtask-artifacts.ts"; then
+  echo "ОТКАЗ: ветка не содержит защиты сдачи QA-копии — влей свежий main." >&2
+  exit 3
+fi
 [ -e "$SRC/node_modules" ] || ln -s "$HOME/Проекты/New-Todoist/node_modules" "$SRC/node_modules"
 [ -e "$SRC/server/node_modules" ] || ln -s "$HOME/Проекты/New-Todoist/server/node_modules" "$SRC/server/node_modules"
 

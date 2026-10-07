@@ -1,3 +1,6 @@
+import { requireSubmissionReceipt, SUBMISSION_POLICY } from "../lib/submissionReceipt.js";
+import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
+import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { connectBuilderXcode } from "./builderXcode.js";
 import { branchMembership } from "./branchPlan.js";
@@ -207,6 +210,26 @@ async function callResearchTool(name: string, args: unknown): Promise<unknown> {
  *  чем достаточно». */
 /** `taskId` — карточка текущего хода: записанные `doc_write` документы
  *  привязываются к ней и попадают в её «Итог» (01.10.2026). */
+export const PLAN_REQUEST_DESCRIPTION = "Достроить план из своего шага. kind=add_step — работа после твоей части; kind=request_help — результат другой роли нужен до завершения твоего шага: помощник стартует, твой шаг ждёт и продолжится автоматически. kind=rework — QA/критик возвращает на доработку. role, expected_result, reason обязательны для добавления. Проверь итог: applied / proposed / ошибка; сообщение коллеге не создаёт шаг.";
+export const PLAN_REQUEST_PARAMETERS = Type.Object({
+  subtask_id: Type.String(), kind: Type.String({description:"add_step | request_help | rework"}), reason: Type.String(),
+  role: Type.Optional(Type.String()), expected_result: Type.Optional(Type.String()), instructions: Type.Optional(Type.String()), defects: Type.Optional(Type.String()),
+  after: Type.Optional(Type.Array(Type.String())), before: Type.Optional(Type.Array(Type.String())),
+});
+export async function requestPlanStep(role: string, p: any, currentSubtaskId?: string) {
+  const id = String(p.subtask_id ?? "").trim();
+  if (!id) throw new ToolError("subtask_id — твой шаг плана (он есть в задании)");
+  if (currentSubtaskId && id !== currentSubtaskId) throw new ToolError("Достраивай план только из назначенного текущего слота");
+  const body: Json = {};
+  for (const k of ["kind","role","expected_result","instructions","reason","after","before","defects"]) if(p[k]!=null) body[k]=p[k];
+  const resp = await asRole(role,"POST","/api/subtasks/"+id+"/plan-request",body);
+  const status = resp?.result?.status;
+  return {итог:status==="applied"?"применено":status==="proposed"?"ждёт решения владельца":status,
+    "почему ждёт":resp?.result?.reason,"новые шаги":resp?.result?.added,
+    ожидание:resp?.waiting_for_help?"Твой шаг ждёт помощника. Заверши ход без сдачи шага; сервер продолжит после результата.":undefined,
+    план:resp?.plan,связи:resp?.edges};
+}
+
 export function taskflowTools(role: string, model: string | null, taskId?: string, subtaskId?:string) {
   const T = (
     name: string,
@@ -247,6 +270,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
 
   let topicSends=0;
   const tools = [
+    T("taskflow_plan_request", PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, p => requestPlanStep(role,p,subtaskId)),
     T("taskflow_task_proposal", "По просьбе человека отправить настоящую карточку задачи для согласования. Для обычного упоминания используй текст со ссылкой. Доступно каждой роли.", Type.Object({chat_id:Type.String(),task_id:Type.String(),text:Type.String()}), async(p)=>asRole(role,"POST",`/api/chats/${p.chat_id}/messages`,{task_id:p.task_id,text:p.text,kind:"task_proposal",work_mode:"work"})),
     T("taskflow_topic_reply", "Ответить на конкретное сообщение темы своей задачи: message_id и короткий text. Сервер определяет автора вопроса и его этап; подходит для ответа человеку и коллеге.",Type.Object({message_id:Type.String(),text:Type.String()}),async(p)=>{
       if(!taskId)throw new ToolError("Нет текущей задачи");
@@ -358,8 +382,8 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
         return { "состояние изменено": short(unwrap(resp)) };
       }),
-    T("taskflow_review", "Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток.",
-      Type.Object({ id: Type.String(), verdict: Type.String(), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
+    T("taskflow_review", "Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
+      Type.Object({ id: Type.String(), verdict: Type.String(), report_markdown: Type.Optional(Type.String()), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
       async (p) => {
         const versions = await asRole(role, "GET", `/api/tasks/${p.id}/versions`);
         const current = (versions.versions ?? []).find((v: any) => v.is_current);
@@ -370,15 +394,20 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           criteria_version: "1", task_revision: current.task_revision, verdict: p.verdict,
         };
         if (findings) body.findings = findings;
+        if (p.report_markdown) body.report_markdown = p.report_markdown;
         if (p.rework_steps) body.rework_steps = p.rework_steps;
         if (p.verdict === "changes_requested") {
           if (!findings) throw new ToolError("для возврата нужен комментарий: что доработать");
           const review = await asRole(role, "POST", "/api/reviews", body);
           if (!review.handled_by_plan) await asRole(role, "POST", `/api/tasks/${p.id}/state`, { state: "in_progress", comment: findings });
-          return { вердикт: "возвращено на доработку", комментарий: findings };
+          if(subtaskId && !review.submission_receipt) throw new ToolError("Сдача проверяющего не подтверждена основным TaskFlow");
+          const receipt=review.submission_receipt ? requireSubmissionReceipt(await asRole(role,"GET", `/api/subtasks/${review.submission_receipt.subtask_id}/submission-receipt`),review.submission_receipt.subtask_id) : null;
+          return { вердикт: "возвращено на доработку", комментарий: findings, ...(receipt ? {submission_receipt:receipt}: {}) };
         }
         const resp = await asRole(role, "POST", "/api/reviews", body);
-        return { вердикт: resp.verdict, комментарий: resp.findings };
+        const receipt=resp.submission_receipt ? requireSubmissionReceipt(await asRole(role,"GET", `/api/subtasks/${resp.submission_receipt.subtask_id}/submission-receipt`),resp.submission_receipt.subtask_id) : null;
+        if(subtaskId && !receipt) throw new ToolError("Сдача проверяющего не подтверждена основным TaskFlow");
+        return { вердикт: resp.verdict, комментарий: resp.findings, ...(receipt ? {submission_receipt:receipt}: {}) };
       }),
     T("taskflow_comment", "Комментарий в ленту задачи.",
       Type.Object({ id: Type.String(), text: Type.String() }),
@@ -424,13 +453,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) touchTaskActivity(taskId);
         return result;
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
       Type.Object({
         id: Type.String(),
         result: Type.Optional(Type.String()),
+        report_markdown: Type.Optional(Type.String()),
         done: Type.Optional(Type.Boolean()),
         snapshot: Type.Optional(SNAPSHOT_SHAPE),
-        artifact: Type.Optional(Type.Object({ summary: Type.String(), payload: Type.Any(), evidence: Type.Optional(Type.Array(Type.Any())) })),
+        artifact: Type.Optional(Type.Object({ summary: Type.String(), payload: Type.Any(), report_markdown: Type.String(), evidence: Type.Optional(Type.Array(Type.Any())) })),
       }),
       async (p) => {
         if (p.artifact) {
@@ -438,15 +468,19 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           void activity(role, row.subtask?.task_id ?? "", "edit", `шаг «${row.subtask?.title ?? ""}»: сдал артефакт`);
           // Сдача артефакта — тоже движение роли (доработка MAK-66).
           if (row.subtask?.task_id) touchTaskActivity(row.subtask.task_id);
-          return { "артефакт сдан": p.id, версия: row.artifact?.version_no };
+          if(!row.artifact?.id) throw new ToolError("Сдача не подтверждена: сервер не вернул ID артефакта");
+          const receipt=requireSubmissionReceipt(await asRole(role,"GET", `/api/subtasks/${p.id}/submission-receipt`),p.id,row.artifact?.id);
+          return { "артефакт сдан": p.id, версия: row.artifact?.version_no, submission_receipt:receipt };
         }
         const done = p.done ?? true;
         const body: Json = { done };
         if (p.result) body.result = p.result;
+        if (p.report_markdown) body.report_markdown = p.report_markdown;
         if (p.snapshot) body.snapshot = p.snapshot;
         const row = await asRole(role, "PATCH", `/api/subtasks/${p.id}`, body);
         if (done && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: закрыл`);
-        return { [done ? "шаг отмечен" : "отметка снята"]: p.id };
+        const receipt=done ? requireSubmissionReceipt(await asRole(role,"GET", `/api/subtasks/${p.id}/submission-receipt`),p.id) : null;
+        return { [done ? "шаг отмечен" : "отметка снята"]: p.id, ...(receipt ? {submission_receipt:receipt} : {}) };
       }),
     T("taskflow_rules", "Правила ведения учёта.", Type.Object({}), async () => ({ правила: effectiveRules(role) })),
     T("taskflow_projects", "Проекты.", Type.Object({}), async () => ({
@@ -967,6 +1001,7 @@ async function runRoleInProcessUnserialized(input: {
       || rolePrompt(role)
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
+    ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, ROLE_REPORT_INSTRUCTION, SUBMISSION_POLICY] : []),
   ].join("\n\n");
   const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
 

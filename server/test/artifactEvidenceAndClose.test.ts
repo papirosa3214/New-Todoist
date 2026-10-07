@@ -1,3 +1,4 @@
+import { roleReport } from "./helpers/roleReport.js";
 // 07.10.2026, «Разработчик не стартовал»: дизайнер сдавал идентификатор документа как доказательство,
 // получал отказ «нужны path-ссылки» и закрывал шаг простой отметкой — следующий шаг ждал молча.
 // 1) ссылка на документ (строка или doc_id) принимается как доказательство;
@@ -62,13 +63,13 @@ describe("результат шага плана: доказательства �
   });
 
   it("мусорное доказательство по-прежнему отклоняется, понятным текстом", async () => {
-    const res = await app.inject({ method: "POST", url: `/api/subtasks/${analysisId}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Спека", payload: { scope: "в рамках" }, evidence: [{ note: "без ссылки" }] } });
+    const res = await app.inject({ method: "POST", url: `/api/subtasks/${analysisId}/artifact`, headers: { authorization: analystAuth }, payload: { report_markdown: roleReport, summary: "Спека", payload: { scope: "в рамках" }, evidence: [{ note: "без ссылки" }] } });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toContain("ссылка на файл или документ");
   });
 
   it("идентификатор документа принимается как доказательство и приводится к path", async () => {
-    const res = await app.inject({ method: "POST", url: `/api/subtasks/${analysisId}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Спека", payload: { scope: "в рамках" }, evidence: [{ doc_id: "22ff1691-aae0-40cc-9c16-00c80964de5f" }, "docs/spec.md"] } });
+    const res = await app.inject({ method: "POST", url: `/api/subtasks/${analysisId}/artifact`, headers: { authorization: analystAuth }, payload: { report_markdown: roleReport, summary: "Спека", payload: { scope: "в рамках" }, evidence: [{ doc_id: "22ff1691-aae0-40cc-9c16-00c80964de5f" }, "docs/spec.md"] } });
     expect(res.statusCode).toBe(201);
     const stored = JSON.parse((db.prepare("SELECT evidence_json FROM subtask_artifact_versions WHERE subtask_id = ?").get(analysisId) as { evidence_json: string }).evidence_json);
     expect(stored.map((e: { path: string }) => e.path)).toEqual(["22ff1691-aae0-40cc-9c16-00c80964de5f", "docs/spec.md"]);

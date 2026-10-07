@@ -1,3 +1,6 @@
+import { submissionReceipt } from "../lib/submissionReceipt.js";
+import { roleResultDocument } from "../lib/roleResultReport.js";
+import { normalizePlanStartCondition } from "../runtime/planArtifactGate.js";
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
@@ -77,6 +80,14 @@ function presentSingle(plan: Plan) {
     ...plan,
     nodes: nodes.map((node) => ({
       slot_key: node.slot_key,
+      submission_receipt: (() => {
+        const step=db.prepare("SELECT id FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key=?").get(plan.id,node.slot_key) as {id:string}|undefined;
+        return step ? submissionReceipt(step.id) : null;
+      })(),
+      result_document: (() => {
+        const step = db.prepare("SELECT id FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key=?").get(plan.id,node.slot_key) as {id:string}|undefined;
+        return step ? roleResultDocument(step.id) : null;
+      })(),
       execution_state: (()=>{const step=db.prepare("SELECT * FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key=?").get(plan.id,node.slot_key) as any;
         if(!step) return 'waiting';
         if(step.done) return step.result?.startsWith('changes_requested:')?'returned':'accepted';
@@ -192,7 +203,7 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }, taskId?: string)
   const edges = ((body.edges ?? []) as EdgeInput[]).map((raw) => ({
     from_slot_key: String(raw.from_slot_key ?? "").trim(),
     to_slot_key: String(raw.to_slot_key ?? "").trim(),
-    start_condition: String(raw.start_condition ?? "accepted").trim(),
+    start_condition: normalizePlanStartCondition(String(raw.start_condition ?? "submitted").trim()),
     artifact_key: raw.artifact_key === undefined ? null : String(raw.artifact_key).trim(),
   }));
   for (const edge of edges) {
@@ -379,7 +390,7 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
     const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
     for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id ?? null);
     const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
-    for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, edge.start_condition, edge.artifact_key);
+    for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
   })();
   ensureCardResponsible(taskId,id);
   return { id, revision };
@@ -493,7 +504,7 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
       : "single_executor")
     : requested;
   const node = (slot_key: string, role_key: string, expected_result: string): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact: null, source_subtask_id: null });
-  const edge = (from_slot_key: string, to_slot_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "accepted", artifact_key: null });
+  const edge = (from_slot_key: string, to_slot_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "submitted", artifact_key: null });
   const templates: Record<string, { nodes: Node[]; edges: Edge[]; rationale: string }> = {
     single_executor: { nodes: [node("executor", "builder", "Выполненный результат задачи")], edges: [], rationale: "Низкая неопределённость: достаточно основного исполнителя." },
     research: { nodes: [node("research", "researcher", "Факты, источники и ограничения"), node("analysis", "analyst", "Требования, выводы и критерии")], edges: [edge("research", "analysis")], rationale: "Сначала собрать факты, затем превратить их в проверяемые выводы." },
@@ -781,7 +792,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
         const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id);
         const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
-        for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, edge.from_slot_key, edge.to_slot_key, edge.start_condition, edge.artifact_key);
+        for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
       }
     })();
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_edited", field: `revision:${plan.revision}`, toValue: graph ? "graph+meta" : "meta" });
@@ -869,11 +880,16 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!node || roleUserId(node.role_key) !== req.userId) return reply.code(403).send({ error: "менять план можно только из своего шага" });
     const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
     const kind = String(req.body?.kind ?? "add_step");
-    const op: PlanOp = kind === "rework"
+    if (!["add_step","request_help","rework"].includes(kind)) return reply.code(400).send({error:"kind: add_step | request_help | rework"});
+    if (kind === "request_help" && req.body?.before !== undefined) return reply.code(400).send({error:"request_help сам добавляет помощника перед твоим шагом; before не задавай"});
+    if (!String(req.body?.reason ?? "").trim()) return reply.code(400).send({error:"reason обязателен: зачем менять план"});
+    const op: PlanOp = kind === "request_help"
+      ? {op:"request_help",from_slot:step.plan_node_key,role_key:String(req.body?.role ?? ""),expected_result:String(req.body?.expected_result ?? ""),
+          instructions:req.body?.instructions ? String(req.body.instructions) : undefined,after:list(req.body?.after)}
+      : kind === "rework"
       ? { op: "rework", from_slot: step.plan_node_key, role_key: req.body?.role ? String(req.body.role) : undefined, defects: String(req.body?.defects ?? req.body?.expected_result ?? "") }
       : { op: "add_step", role_key: String(req.body?.role ?? ""), expected_result: String(req.body?.expected_result ?? ""),
           instructions: req.body?.instructions ? String(req.body.instructions) : undefined, after: list(req.body?.after), before: list(req.body?.before) };
-    if (kind !== "rework" && kind !== "add_step") return reply.code(400).send({ error: "kind: add_step | rework" });
     try {
       const result = applyPlanOps(step.collaboration_plan_id, [op], { kind: "role", id: req.userId, roleKey: node.role_key, slotKey: step.plan_node_key }, {
         reason: typeof req.body?.reason === "string" ? req.body.reason : null,
@@ -885,6 +901,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       const view = present(plan);
       return {
         result,
+        waiting_for_help: kind === "request_help" && result.status === "applied",
         plan: view.nodes.map((n) => ({ slot_key: n.slot_key, role: n.role_key, expected_result: n.expected_result, skipped: Boolean(n.skipped_at) })),
         edges: view.edges.map((e) => `${e.from_slot_key} → ${e.to_slot_key}`),
       };

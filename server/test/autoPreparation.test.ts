@@ -30,6 +30,7 @@ describe("Автоматическая подготовка",()=>{
   expect(db.prepare("SELECT 1 FROM subtasks WHERE task_id=?").get(id)).toBeUndefined();expect(runs.start).not.toHaveBeenCalled();
   expect(db.prepare("SELECT 1 FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(id)).toBeTruthy();
   expect((db.prepare("SELECT artifact_key FROM task_collaboration_plan_edges WHERE plan_id=?").get(job(id).plan_id) as any).artifact_key).toBeTruthy();
+  expect((db.prepare("SELECT start_condition FROM task_collaboration_plan_edges WHERE plan_id=?").get(job(id).plan_id) as any).start_condition).toBe("submitted");
  });
  it("устаревший анализ не пишет новый план",async()=>{
   const id=await task();await process(async()=>{db.prepare("UPDATE tasks SET description='Новая версия' WHERE id=?").run(id);return result();});

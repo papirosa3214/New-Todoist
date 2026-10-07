@@ -1,8 +1,7 @@
+import { sandboxSubmissionError, submissionReceipt } from "../lib/submissionReceipt.js";
+import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
-import { markdownToTiptap } from "../lib/markdownToTiptap.js";
-import { recordTaskDocument } from "../lib/taskOutcome.js";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { isOwner, isOrchestrator } from "../access.js";
@@ -62,11 +61,17 @@ function normalizeEvidenceItem(item: unknown): unknown {
 }
 
 export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
-  app.post<{ Params: { id: string }; Body: { summary?: unknown; payload?: unknown; evidence?: unknown } }>("/api/subtasks/:id/artifact", { preHandler: authOrApiToken }, async (req: any, reply) => {
+  app.get<{Params:{id:string}}>("/api/subtasks/:id/submission-receipt",{preHandler:authOrApiToken},async(req:any,reply)=>{
+   if(!getSubtaskWithTaskForUser(req.params.id,req.userId)) return reply.code(404).send({error:"Not found"});
+   return submissionReceipt(req.params.id);
+  });
+  app.post<{ Params: { id: string }; Body: { summary?: unknown; payload?: unknown; evidence?: unknown; report_markdown?: unknown } }>("/api/subtasks/:id/artifact", { preHandler: authOrApiToken }, async (req: any, reply) => {
     const current = getSubtaskWithTaskForUser(req.params.id, req.userId);
     if (!current) return reply.code(404).send({ error: "Not found" });
     if (current.agent_id !== req.userId) return reply.code(403).send({ error: "это не ваш узел плана" });
     if (current.agent_state !== "in_progress") return reply.code(409).send({ error: "артефакт можно сдать только из узла в работе" });
+    const sandboxError=sandboxSubmissionError();
+    if(sandboxError) return reply.code(409).send(sandboxError);
     const contract = contractFor(current);
     if (!contract) return reply.code(409).send({ error: "у узла нет artifact contract" });
     const summary = String(req.body?.summary ?? "").trim();
@@ -82,16 +87,18 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     if (evidence.some((item) => !item || typeof item !== "object" || typeof (item as Record<string, unknown>).path !== "string" || !(item as Record<string, string>).path.trim() || (item as Record<string, string>).path.length > 1024)) return validationFailure("evidence: каждая запись — ссылка на файл или документ (строка либо объект с path / doc_id / document_ref / url)");
     if (contract.required_fields.some((key) => { const value = (payload as Record<string, unknown>)[key]; return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0); })) return validationFailure("payload не содержит required_fields");
 
+    let reportMarkdown: string;
+    try { reportMarkdown = validateRoleReport(req.body?.report_markdown); }
+    catch (error) { return validationFailure(error instanceof Error ? error.message : String(error)); }
+
     const versionNo = (db.prepare("SELECT COALESCE(MAX(version_no), 0) AS n FROM subtask_artifact_versions WHERE subtask_id = ?").get(current.id) as { n: number }).n + 1;
     const id = "sav_" + crypto.randomUUID();
     db.transaction(() => {
     db.prepare("INSERT INTO subtask_artifact_versions (id, subtask_id, version_no, artifact_key, artifact_type, artifact_format, summary, payload_json, evidence_json, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?)")
       .run(id, current.id, versionNo, contract.key, contract.type, contract.format, summary, JSON.stringify(payload), JSON.stringify(evidence), req.userId);
     const noteId="artifact_"+id;
-    const markdown=`# ${contract.key} · версия ${versionNo}\n\n${summary}\n\n## Данные\n\n\`\`\`json\n${JSON.stringify(payload,null,2)}\n\`\`\`\n\n## Источники\n\n${JSON.stringify(evidence,null,2)}`;
-    db.prepare("INSERT INTO user_notes(id,title,content,folder_id,updated_by) VALUES(?,?,?,?,?)").run(noteId,`${contract.key} · v${versionNo}`,JSON.stringify(markdownToTiptap(markdown)),ensureTaskArtifactFolder(current.task_id),req.userId);
+    saveRoleResultReport(current.id,reportMarkdown,req.userId,noteId);
     db.prepare("UPDATE subtask_artifact_versions SET note_id=? WHERE id=?").run(noteId,id);
-    recordTaskDocument(current.task_id,noteId,req.userId);
     // Сдача структурного артефакта — это и есть закрытие узла (владелец
     // 29.09.2026: «закрытие роли-подзадачи автоматическое, в тот же момент,
     // когда её артефакт открывает gate»). Отдельного PATCH done не будет.
@@ -116,7 +123,7 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     await unlockReadyPlanSubtasks(current.collaboration_plan_id, current.task_id, req.userId);
     const fullTask = getFullTask(current.task_id);
     broadcastTaskEvent([current.task_creator_id, current.task_assignee_id], { type: "task:updated", task: fullTask });
-    return reply.code(201).send({ artifact: latestArtifact(current.id), subtask: db.prepare("SELECT * FROM subtasks WHERE id = ?").get(current.id) });
+    return reply.code(201).send({ submission_receipt: submissionReceipt(current.id), artifact: latestArtifact(current.id), subtask: db.prepare("SELECT * FROM subtasks WHERE id = ?").get(current.id) });
   });
 
   app.post<{ Params: { id: string } }>("/api/subtasks/:id/artifact/accept", { preHandler: authOrApiToken }, async (req: any, reply) => {
@@ -127,7 +134,7 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     if (!artifact || artifact.status !== "submitted") return reply.code(409).send({ error: "no submitted artifact" });
     db.prepare("UPDATE subtask_artifact_versions SET status = 'accepted' WHERE id = ?").run(artifact.id);
     logEvent({ taskId: current.task_id, actorId: req.userId, kind: "plan_subtask_artifact_accepted", field: current.plan_node_key, toValue: artifact.artifact_key + " v" + artifact.version_no });
-    // accept — только запись факта для edges с start_condition='accepted';
+    // accept — запись факта приёмки; передача следующей роли открывается при submit.
     // done уже 1 с момента сдачи (submit), здесь его не трогаем.
     await unlockReadyPlanSubtasks(current.collaboration_plan_id, current.task_id, req.userId);
     const fullTask = getFullTask(current.task_id);

@@ -1,3 +1,5 @@
+import { artifactHasEvidence, artifactGateSatisfied } from "./planArtifactGate.js";
+export { artifactHasEvidence } from "./planArtifactGate.js";
 import { branchMembership } from "./branchPlan.js";
 import { unmetDependencyIds } from "../enricher.js";
 import { ensureBranchAssembler, ensurePlanFinalReviewer, isPlanFinalReviewStep, queuePlanFinalReview, FINAL_REVIEW_MARKER } from "./planReviewLifecycle.js";
@@ -32,7 +34,7 @@ import { logStepAbandoned } from "./abandonedStep.js";
  * состояния отдельно от галочки, и владелец 29.09.2026 решил не изобретать
  * его искусственно. Для узлов С контрактом (`output_artifact`) статус
  * версии артефакта (`subtask_artifact_versions.status`) по-прежнему
- * различает submitted/accepted — см. `canPlanSubtaskBecomeReady`.
+ * различает submitted/accepted для приёмки, но передача открывается после сдачи — см. `canPlanSubtaskBecomeReady`.
  */
 
 export type PlanSubtask = {
@@ -68,20 +70,6 @@ function latestArtifact(subtaskId: string): ArtifactVersion | undefined {
   return db.prepare("SELECT * FROM subtask_artifact_versions WHERE subtask_id = ? ORDER BY version_no DESC LIMIT 1").get(subtaskId) as ArtifactVersion | undefined;
 }
 
-export function artifactHasEvidence(artifact: ArtifactVersion): boolean {
-  // Результат, который сервер сам сохранил документом (note_id), и есть доказательство. Без этого
-  // Аналитик сдал feature_spec с пустым списком ссылок, шаг закрылся, а Дизайнер и Разработчик
-  // ждали «ссылок-доказательств» вечно и молча (07.10.2026, карточка 424de175).
-  if (artifact.note_id) return true;
-  try { return Array.isArray(JSON.parse(artifact.evidence_json)) && JSON.parse(artifact.evidence_json).length > 0; } catch { return false; }
-}
-
-const ARTIFACT_GATE_STATUSES: Record<string, Array<ArtifactVersion["status"]>> = {
-  accepted: ["accepted"],
-  artifact_ready: ["submitted", "accepted"],
-  submitted: ["submitted", "accepted"],
-};
-
 export type WaitingFor = { from_slot_key: string; artifact_key: string | null; reason: string };
 
 /**
@@ -105,8 +93,8 @@ export function waitingForPredecessors(row: PlanSubtask): WaitingFor[] {
         out.push({ from_slot_key: edge.from_slot_key, artifact_key: edge.artifact_key, reason: predecessor.done ? "шаг закрыт, но результат не сдан" : "результат ещё не сдан" });
       } else if (edge.start_condition === "artifact_ready" && !artifactHasEvidence(artifact)) {
         out.push({ from_slot_key: edge.from_slot_key, artifact_key: edge.artifact_key, reason: "в результате нет ссылок-доказательств" });
-      } else if (!(ARTIFACT_GATE_STATUSES[edge.start_condition] ?? ["accepted"]).includes(artifact.status)) {
-        out.push({ from_slot_key: edge.from_slot_key, artifact_key: edge.artifact_key, reason: "результат ещё не принят" });
+      } else if (!artifactGateSatisfied(edge.start_condition, artifact)) {
+        out.push({ from_slot_key: edge.from_slot_key, artifact_key: edge.artifact_key, reason: "результат отклонён или отправлен на доработку" });
       }
     } else if (!predecessor.done) {
       out.push({ from_slot_key: edge.from_slot_key, artifact_key: null, reason: "шаг ещё не закрыт" });
@@ -132,8 +120,7 @@ export function canPlanSubtaskBecomeReady(row: PlanSubtask): boolean {
     if (edge.artifact_key) {
       const artifact = latestArtifact(predecessor.id);
       if (!artifact || artifact.artifact_key !== edge.artifact_key) return false;
-      if (edge.start_condition === "artifact_ready") return artifactHasEvidence(artifact) && (ARTIFACT_GATE_STATUSES.artifact_ready).includes(artifact.status);
-      return (ARTIFACT_GATE_STATUSES[edge.start_condition] ?? ["accepted"]).includes(artifact.status);
+      return artifactGateSatisfied(edge.start_condition, artifact);
     }
     // Без артефактного контракта — done=1 закрывает узел вне зависимости
     // от заявленного start_condition (submitted/accepted/artifact_ready

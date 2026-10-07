@@ -18,7 +18,7 @@ export function persistPreparedPlan(taskId:string,actorId:string,raw:TaskPrepara
   const subtasks=db.prepare("SELECT id,title FROM subtasks WHERE task_id=? AND done=0 AND collaboration_plan_id IS NULL ORDER BY position,rowid").all(taskId) as Array<{id:string;title:string}>;
   if (subtasks.length!==preparation.workstreams.length || subtasks.some((s,i)=>s.title!==preparation.workstreams[i].title)) throw new Error("Подзадачи не совпадают с подготовленным планом");
   const nodes=preparation.workstreams.map((w,i)=>({slot_key:w.key,role_key:w.role!,required:true,expected_result:w.result,output_artifact:null,source_subtask_id:subtasks[i].id}));
-  const edges=preparation.workstreams.flatMap(w=>w.depends_on.map(dep=>({from_slot_key:dep,to_slot_key:w.key,start_condition:"accepted",artifact_key:null})));
+  const edges=preparation.workstreams.flatMap(w=>w.depends_on.map(dep=>({from_slot_key:dep,to_slot_key:w.key,start_condition:"submitted",artifact_key:null})));
   const plan=createDraftPlan(taskId,actorId,"manual",preparation.reason,null,{nodes,edges});
   for (const w of preparation.workstreams) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='task_preparation',instructions=? WHERE plan_id=? AND slot_key=?").run(JSON.stringify(w),plan.id,w.key);
 }

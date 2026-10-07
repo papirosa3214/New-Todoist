@@ -1,3 +1,4 @@
+import { roleReport } from "./helpers/roleReport.js";
 // Живой план совместной работы (владелец 01.10.2026): правки черновика и
 // запущенного плана операциями, роли достраивают граф в пределах лимита,
 // QA/критик отправляют на доработку, сданное и идущее не переписывается.
@@ -83,6 +84,81 @@ describe("живой план совместной работы", () => {
       | undefined;
   const edgesOf = (planId: string) =>
     (db.prepare("SELECT from_slot_key || '>' || to_slot_key AS e FROM task_collaboration_plan_edges WHERE plan_id = ? ORDER BY e").all(planId) as Array<{ e: string }>).map((r) => r.e);
+
+  it("помощь до сдачи: помощник стартует, автор ждёт и продолжает после результата", async () => {
+    const { taskId, planId } = await planWith("approved", [
+      { slot: "analysis", role: "analyst", state: "done" },
+      { slot: "delivery", role: "builder", state: "running" },
+      { slot: "qa", role: "qa" },
+    ], [["analysis", "delivery"], ["delivery", "qa"]]);
+    const own = stepOf(planId, "delivery")!.id;
+    const attempt=crypto.randomUUID();
+    db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at) VALUES(?,?,?,'role_builder',datetime('now'))").run(attempt,taskId,own);
+    db.prepare("UPDATE subtasks SET current_attempt_id=? WHERE id=?").run(attempt,own);
+    const { taskflowTools } = await import("../src/runtime/inProcessRun.js");
+    const tool = taskflowTools("builder",null,taskId,own).find(t=>t.name==="taskflow_plan_request")!;
+    const request:any = await tool.execute("help", {subtask_id:own,kind:"request_help",role:"researcher",expected_result:"Проверить совместимость библиотеки",reason:"Без исследования реализация невозможна"});
+    const answer=JSON.parse(request.content[0].text);
+    expect(answer.итог).toBe("применено");
+    expect(answer.ожидание).toContain("Заверши ход без сдачи");
+    const helperSlot = answer["новые шаги"][0];
+    const helper = stepOf(planId, helperSlot)!;
+    expect(edgesOf(planId)).toContain(helperSlot+">delivery");
+    expect(edgesOf(planId)).toContain("analysis>"+helperSlot);
+    expect(edgesOf(planId)).not.toContain("delivery>"+helperSlot);
+    expect(started).toContain(helper.id);
+    expect(stepOf(planId,"delivery")).toMatchObject({done:0,agent_state:"blocked"});
+    expect(db.prepare("SELECT ended_at,outcome FROM attempts WHERE id=?").get(attempt)).toMatchObject({ended_at:expect.any(String),outcome:"blocked"});
+    expect(db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='collaboration_plan_completed'").get(taskId)).toBeUndefined();
+    expect(started).not.toContain(stepOf(planId,"qa")!.id);
+    const early = await app.inject({method:"PATCH",url:"/api/subtasks/"+own,headers:as("role_builder"),payload:{done:true,report_markdown:roleReport,result:"Не моя работа"}});
+    expect(early.statusCode).toBe(400);
+    expect(stepOf(planId,"delivery")!.done).toBe(0);
+    started.length=0;
+    const done = await app.inject({method:"PATCH",url:"/api/subtasks/"+helper.id,headers:as("role_researcher"),payload:{done:true,report_markdown:roleReport,result:"Совместимость подтверждена"}});
+    expect(done.statusCode,done.body).toBe(200);
+    expect(started).toContain(own);
+    expect(stepOf(planId,"delivery")).toMatchObject({done:0,agent_state:"in_progress"});
+    expect(started).not.toContain(stepOf(planId,"qa")!.id);
+  });
+
+  it("помощь: цикл и чужой шаг отклоняются без изменения графа и состояния", async () => {
+    const {taskId,planId}=await planWith("approved",[
+      {slot:"delivery",role:"builder",state:"running"},{slot:"qa",role:"qa"}
+    ],[["delivery","qa"]]);
+    const own=stepOf(planId,"delivery")!.id;
+    const req=(who:string,payload:Record<string,unknown>)=>app.inject({method:"POST",url:"/api/subtasks/"+own+"/plan-request",headers:as(who),payload});
+    const fields={kind:"request_help",role:"researcher",expected_result:"Исследование",reason:"Нужна помощь"};
+    expect((await req("role_qa",fields)).statusCode).toBe(403);
+    const cycle=await req("role_builder",{...fields,after:["qa"]});
+    expect(cycle.statusCode).toBe(400);
+    expect(cycle.json().error).toContain("цикл");
+    const unknown=await req("role_builder",{...fields,role:"missing_role"});
+    expect(unknown.statusCode).toBe(400);
+    expect(edgesOf(planId)).toEqual(["delivery>qa"]);
+    expect(stepOf(planId,"delivery")).toMatchObject({done:0,agent_state:"in_progress"});
+    expect(started).toEqual([]);
+  });
+
+  it("помощь сверх лимита: предложение не блокирует автора, одобрение создаёт ожидание и запускает помощника", async () => {
+    const specs:Spec[]=[{slot:"delivery",role:"builder",state:"running"},
+      ...Array.from({length:11},(_,i)=>({slot:"finished_"+i,role:"analyst",state:"done" as const}))];
+    const {taskId,planId}=await planWith("approved",specs,[]);
+    const own=stepOf(planId,"delivery")!.id;
+    const request=await app.inject({method:"POST",url:"/api/subtasks/"+own+"/plan-request",headers:as("role_builder"),
+      payload:{kind:"request_help",role:"researcher",expected_result:"Помощь сверх лимита",reason:"Нужен исполнитель"}});
+    expect(request.statusCode,request.body).toBe(200);
+    expect(request.json().result.status).toBe("proposed");
+    expect(request.json().waiting_for_help).toBe(false);
+    expect(stepOf(planId,"delivery")).toMatchObject({done:0,agent_state:"in_progress"});
+    expect(started).toEqual([]);
+    const proposal=request.json().result.opId;
+    const approved=await app.inject({method:"POST",url:"/api/tasks/"+taskId+"/collaboration-plans/"+planId+"/proposals/"+proposal+"/approve",headers:owner});
+    expect(approved.statusCode,approved.body).toBe(200);
+    const helper=stepOf(planId,approved.json().result.added[0])!;
+    expect(started).toContain(helper.id);
+    expect(stepOf(planId,"delivery")).toMatchObject({done:0,agent_state:"blocked"});
+  });
 
   it("черновик: владелец добавляет, меняет и удаляет шаги, порядок не теряется", async () => {
     const { taskId, planId } = await planWith("draft", [

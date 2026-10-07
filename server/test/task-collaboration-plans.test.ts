@@ -1,3 +1,4 @@
+import { roleReport } from "./helpers/roleReport.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
@@ -91,7 +92,7 @@ describe("collaboration plans", () => {
     // автоматическую цепочку — включаем Систему перед закрытием
     // предшественника.
     db.prepare("UPDATE users SET task_intake_mode='automatic' WHERE role='owner'").run();
-    expect((await app.inject({ method: "PATCH", url: `/api/subtasks/${subtasks.research.id}`, headers: { authorization: researcherAuth }, payload: { done: true, result: "Факты" } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "PATCH", url: `/api/subtasks/${subtasks.research.id}`, headers: { authorization: researcherAuth }, payload: { done: true, report_markdown: roleReport, result: "Факты" } })).statusCode).toBe(200);
 
     // architecture открылся и сразу сам стартовал (unlockReadyPlanSubtasks
     // запускает runRoleInProcess для только что открытого узла) — заглушка
@@ -275,7 +276,7 @@ describe("collaboration plans", () => {
     // successor сам, без участия владельца. Сдача структурного артефакта
     // сама закрывает узел (done=1) — см. subtask-artifacts.ts.
     const submitArtifact = async (subtaskId: string, auth: string, summary: string, payload: Record<string, unknown>, evidence: unknown[]) => {
-      const submitted = await app.inject({ method: "POST", url: `/api/subtasks/${subtaskId}/artifact`, headers: { authorization: auth }, payload: { summary, payload, evidence } });
+      const submitted = await app.inject({ method: "POST", url: `/api/subtasks/${subtaskId}/artifact`, headers: { authorization: auth }, payload: { summary, payload, evidence, report_markdown: roleReport } });
       expect(submitted.statusCode).toBe(201);
     };
 
@@ -307,6 +308,7 @@ describe("collaboration plans", () => {
       method: "POST", url: `/api/subtasks/${subtasks.delivery.id}/artifact`, headers: { authorization: builderAuth },
       payload: {
         summary: "Реализовано и собрано",
+        report_markdown: roleReport,
         payload: { change_refs: ["src/feature.ts"], build_id: "b123", test_report: "unit зелёные", deployment_notes: "фиче-флаг выключен по умолчанию", known_limitations: "нет" },
         evidence: [{ path: "docs/build-log.txt" }],
       },

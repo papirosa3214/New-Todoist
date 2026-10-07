@@ -3749,6 +3749,10 @@ const migrations: Migration[] = [
         ON owner_command_log(started_at DESC);
     `);
   } },
+  { id: "118_plan_handoff_on_submission", description: "Role handoffs open on submission, acceptance remains a review status", up() {
+    db.exec("UPDATE task_collaboration_plan_edges SET start_condition='submitted' WHERE start_condition='accepted'");
+  } },
+
 ];
 
 /**

@@ -1,3 +1,4 @@
+import { normalizePlanStartCondition } from "./planArtifactGate.js";
 // Живой план совместной работы (владелец 01.10.2026: «граф живой, может
 // достраиваться сам в процессе, а состав я настраиваю хотя бы до старта»;
 // предложение — docs/2026-09-30-live-collaboration-plan-spec.md).
@@ -7,7 +8,8 @@
 // Инварианты:
 //   • сданный и идущий шаг не меняется и не удаляется; менять, пропускать и
 //     удалять можно только неначатый;
-//   • входящую связь можно добавить только неначатому шагу;
+//   • входящую связь можно добавить только неначатому шагу, кроме request_help:
+//     автор явно приостанавливает себя до результата нового помощника;
 //   • граф остаётся ациклическим, до MAX_PLAN_NODES узлов;
 //   • каждая применённая правка поднимает plan.version и ложится в журнал
 //     task_collaboration_plan_ops.
@@ -19,6 +21,7 @@
 //     применяется сразу, выше — ложится предложением владельцу.
 import crypto from "node:crypto";
 import db from "../db.js";
+import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleTitle, roleUserId } from "../roleRouting.js";
 import { broadcastToUsers } from "../ws.js";
@@ -36,6 +39,7 @@ const SLOT_KEY = /^[a-z][a-z0-9_]{1,63}$/;
 const CHECKER_ROLES = new Set(["qa", "critic_verifier"]);
 
 export type PlanOp =
+  | { op: "request_help"; from_slot: string; role_key: string; expected_result: string; instructions?: string; after?: string[] }
   | { op: "add_step"; slot_key?: string; role_key: string; expected_result: string; instructions?: string; after?: string[]; before?: string[] }
   | { op: "update_step"; slot_key: string; role_key?: string; expected_result?: string; instructions?: string; after?: string[] }
   | { op: "remove_step"; slot_key: string }
@@ -76,6 +80,7 @@ type Working = {
   nodes: Map<string, NodeRow>;
   edges: EdgeRow[];
   added: Set<string>;
+  waiting: Map<string,string>;
   changed: Set<string>;
   removed: Set<string>;
   skipped: Set<string>;
@@ -119,7 +124,7 @@ function edgeFrom(from: NodeRow, to: string): EdgeRow {
   const artifact = artifactKeyOf(from);
   return artifact
     ? { from_slot_key: from.slot_key, to_slot_key: to, start_condition: "artifact_ready", artifact_key: artifact }
-    : { from_slot_key: from.slot_key, to_slot_key: to, start_condition: "accepted", artifact_key: null };
+    : { from_slot_key: from.slot_key, to_slot_key: to, start_condition: "submitted", artifact_key: null };
 }
 
 function freshSlot(nodes: Map<string, NodeRow>, role: string): string {
@@ -169,6 +174,20 @@ function applyOne(op: PlanOp, w: Working, plan: PlanRow, steps: Map<string, Step
   };
 
   switch (op.op) {
+    case "request_help": {
+      const author=existing(op.from_slot);
+      const step=steps.get(op.from_slot);
+      if(plan.status!=="approved" || author.skipped_at || !step || step.done || !["in_progress","blocked"].includes(step.agent_state ?? "")) {
+        throw new PlanOpError("помощь можно запросить только для незавершённого начатого шага",409);
+      }
+      const after=op.after ?? w.edges.filter(e=>e.to_slot_key===op.from_slot).map(e=>e.from_slot_key);
+      const helper=freshSlot(w.nodes,requireRole(op.role_key));
+      applyOne({op:"add_step",slot_key:helper,role_key:op.role_key,expected_result:op.expected_result,instructions:op.instructions,after},w,plan,steps,actor,reason);
+      // Автор явно приостанавливает себя: исключение к запрету менять входы начатых шагов.
+      w.edges.push({from_slot_key:helper,to_slot_key:op.from_slot,start_condition:"submitted",artifact_key:null});
+      w.waiting.set(op.from_slot,reason || op.expected_result);
+      return;
+    }
     case "add_step": {
       const role = requireRole(op.role_key);
       const expected = clip(String(op.expected_result ?? ""), 1000);
@@ -189,7 +208,7 @@ function applyOne(op: PlanOp, w: Working, plan: PlanRow, steps: Map<string, Step
       for (const a of after) w.edges.push(edgeFrom(existing(a), slot));
       for (const b of op.before ?? []) {
         pending(b);
-        w.edges.push({ from_slot_key: slot, to_slot_key: b, start_condition: "accepted", artifact_key: null });
+        w.edges.push({ from_slot_key: slot, to_slot_key: b, start_condition: "submitted", artifact_key: null });
       }
       w.nodes.set(slot, node);
       w.added.add(slot);
@@ -326,7 +345,7 @@ function overRoleBudget(w: Working, actor: PlanActor): string | null {
 function roleCheck(ops: PlanOp[], actor: PlanActor): void {
   if (actor.kind !== "role") return;
   for (const op of ops) {
-    if (op.op === "add_step") continue;
+    if (op.op === "add_step" || (op.op === "request_help" && op.from_slot === actor.slotKey)) continue;
     if (op.op === "rework" && op.from_slot === actor.slotKey && CHECKER_ROLES.has(actor.roleKey)) continue;
     throw new PlanOpError(
       op.op === "rework"
@@ -355,7 +374,7 @@ function persist(plan: PlanRow, w: Working): void {
   const insertEdge = db.prepare(
     "INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)",
   );
-  for (const e of w.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, e.from_slot_key, e.to_slot_key, e.start_condition, e.artifact_key);
+  for (const e of w.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, e.from_slot_key, e.to_slot_key, normalizePlanStartCondition(e.start_condition), e.artifact_key);
 
   if (plan.status !== "approved") return;
   // Запущенный план: узлы — подзадачи, правим их вместе с графом.
@@ -367,6 +386,14 @@ function persist(plan: PlanRow, w: Working): void {
   for (const slot of w.added) {
     const n = w.nodes.get(slot)!;
     insertStep.run(crypto.randomUUID(), plan.task_id, n.expected_result, ++pos, roleUserId(n.role_key), plan.id, slot);
+  }
+  for (const [slot,reason] of w.waiting) {
+    const step=db.prepare("SELECT id,current_attempt_id,agent_id FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key=?")
+      .get(plan.id,slot) as {id:string;current_attempt_id:string|null;agent_id:string|null};
+    technicalSlotSnapshot(step.id,"blocked",{blocker:reason,attemptId:step.current_attempt_id});
+    if(step.current_attempt_id) db.prepare("UPDATE attempts SET ended_at=datetime('now'),outcome='blocked',reason=? WHERE id=? AND ended_at IS NULL").run(reason,step.current_attempt_id);
+    db.prepare("UPDATE subtasks SET agent_state='blocked',block_type='dependency',blocked_at=datetime('now'),current_attempt_id=NULL WHERE id=?").run(step.id);
+    logEvent({taskId:plan.task_id,actorId:step.agent_id,kind:"plan_help_requested",field:slot,toValue:reason});
   }
   for (const slot of w.changed) {
     const n = w.nodes.get(slot);
@@ -389,6 +416,7 @@ function describe(ops: PlanOp[], w: Working): string {
   return ops
     .map((op) => {
       switch (op.op) {
+        case "request_help": return "помощь для "+op.from_slot+": "+roleTitle(op.role_key)+" — "+clip(op.expected_result,120);
         case "add_step": return `+ ${roleTitle(op.role_key)}: ${clip(op.expected_result, 120)}`;
         case "update_step": return `✎ ${op.slot_key}`;
         case "remove_step": return `− ${op.slot_key}`;
@@ -474,6 +502,7 @@ export function applyPlanOps(
       nodes: new Map(nodes.map((n) => [n.slot_key, { ...n }])),
       edges: edges.map((e) => ({ ...e })),
       added: new Set(),
+      waiting: new Map(),
       changed: new Set(),
       removed: new Set(),
       skipped: new Set(),

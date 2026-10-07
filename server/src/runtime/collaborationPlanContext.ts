@@ -1,3 +1,4 @@
+import { artifactGateSatisfied } from "./planArtifactGate.js";
 import db from "../db.js";
 
 export type CollaborationArtifactRef = {
@@ -19,13 +20,7 @@ export type CollaborationPlanContext = {
 type SubtaskRow = { id: string; collaboration_plan_id: string | null; plan_node_key: string | null };
 type PlanRow = { id: string; revision: number };
 type EdgeRow = { from_slot_key: string; start_condition: string; artifact_key: string | null };
-type ArtifactRow = { artifact_key: string; summary: string; payload_json: string; evidence_json: string; status: string };
-
-const GATE_STATUSES: Record<string, string[]> = {
-  accepted: ["accepted"],
-  artifact_ready: ["submitted", "accepted"],
-  submitted: ["submitted", "accepted"],
-};
+type ArtifactRow = { artifact_key: string; summary: string; payload_json: string; evidence_json: string; status: string; note_id: string | null };
 
 function parseObject(text: string): Record<string, unknown> {
   try {
@@ -71,11 +66,10 @@ export function buildCollaborationPlanContext(subtaskId: string): CollaborationP
         .get(current.collaboration_plan_id, edge.from_slot_key) as { id: string } | undefined;
       if (!predecessor) continue;
       const artifact = db
-        .prepare("SELECT artifact_key, summary, payload_json, evidence_json, status FROM subtask_artifact_versions WHERE subtask_id = ? ORDER BY version_no DESC LIMIT 1")
+        .prepare("SELECT artifact_key, summary, payload_json, evidence_json, status, note_id FROM subtask_artifact_versions WHERE subtask_id = ? ORDER BY version_no DESC LIMIT 1")
         .get(predecessor.id) as ArtifactRow | undefined;
       if (!artifact || artifact.artifact_key !== edge.artifact_key) continue;
-      const allowedStatuses = GATE_STATUSES[edge.start_condition] ?? ["accepted"];
-      if (!allowedStatuses.includes(artifact.status)) continue;
+      if (!artifactGateSatisfied(edge.start_condition, artifact)) continue;
       predecessor_artifacts.push({
         slot_key: edge.from_slot_key,
         artifact_key: artifact.artifact_key,
