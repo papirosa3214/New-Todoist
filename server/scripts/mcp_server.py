@@ -2034,7 +2034,7 @@ TOOLS = [
         "description": (
             "Достроить план совместной работы из своего идущего шага. "
             "kind=add_step — нужен ещё шаг другой роли (role, expected_result, reason; "
-            "after/before — slot_key шагов, по умолчанию после твоего). kind=rework — "
+            "after/before — slot_key шагов, по умолчанию после твоего). kind=request_help — помощь до сдачи твоего шага: сервер создаёт помощника и продолжает твой шаг после результата. При applied заверши ход без сдачи шага. kind=rework — "
             "только QA/критик: отправить на доработку (defects — что исправить, role — "
             "кому, по умолчанию builder); после доработки встанет повторная проверка. "
             "Не делай чужую работу и не закрывай чужой шаг — попроси шаг здесь."
@@ -2043,7 +2043,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "subtask_id": {"type": "string", "description": "Твой шаг плана (id из задания)"},
-                "kind": {"type": "string", "description": "add_step | rework"},
+                "kind": {"type": "string", "description": "add_step | request_help | rework"},
                 "role": {"type": "string", "description": "Роль нового шага: researcher, analyst, architect, designer, builder, qa, critic_verifier"},
                 "expected_result": {"type": "string", "description": "Что должна сдать роль"},
                 "instructions": {"type": "string", "description": "Подробное задание"},

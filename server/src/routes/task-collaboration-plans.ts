@@ -869,11 +869,16 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!node || roleUserId(node.role_key) !== req.userId) return reply.code(403).send({ error: "менять план можно только из своего шага" });
     const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
     const kind = String(req.body?.kind ?? "add_step");
-    const op: PlanOp = kind === "rework"
+    if (!["add_step","request_help","rework"].includes(kind)) return reply.code(400).send({error:"kind: add_step | request_help | rework"});
+    if (kind === "request_help" && req.body?.before !== undefined) return reply.code(400).send({error:"request_help сам добавляет помощника перед твоим шагом; before не задавай"});
+    if (!String(req.body?.reason ?? "").trim()) return reply.code(400).send({error:"reason обязателен: зачем менять план"});
+    const op: PlanOp = kind === "request_help"
+      ? {op:"request_help",from_slot:step.plan_node_key,role_key:String(req.body?.role ?? ""),expected_result:String(req.body?.expected_result ?? ""),
+          instructions:req.body?.instructions ? String(req.body.instructions) : undefined,after:list(req.body?.after)}
+      : kind === "rework"
       ? { op: "rework", from_slot: step.plan_node_key, role_key: req.body?.role ? String(req.body.role) : undefined, defects: String(req.body?.defects ?? req.body?.expected_result ?? "") }
       : { op: "add_step", role_key: String(req.body?.role ?? ""), expected_result: String(req.body?.expected_result ?? ""),
           instructions: req.body?.instructions ? String(req.body.instructions) : undefined, after: list(req.body?.after), before: list(req.body?.before) };
-    if (kind !== "rework" && kind !== "add_step") return reply.code(400).send({ error: "kind: add_step | rework" });
     try {
       const result = applyPlanOps(step.collaboration_plan_id, [op], { kind: "role", id: req.userId, roleKey: node.role_key, slotKey: step.plan_node_key }, {
         reason: typeof req.body?.reason === "string" ? req.body.reason : null,
@@ -885,6 +890,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       const view = present(plan);
       return {
         result,
+        waiting_for_help: kind === "request_help" && result.status === "applied",
         plan: view.nodes.map((n) => ({ slot_key: n.slot_key, role: n.role_key, expected_result: n.expected_result, skipped: Boolean(n.skipped_at) })),
         edges: view.edges.map((e) => `${e.from_slot_key} → ${e.to_slot_key}`),
       };

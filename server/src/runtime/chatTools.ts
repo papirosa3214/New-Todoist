@@ -8,7 +8,7 @@
 // перенесены из `scripts/mcp_server.py` один в один.
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { asRole, asText, short, ToolError, unwrap } from "./inProcessRun.js";
+import { asRole, asText, short, ToolError, unwrap, PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, requestPlanStep } from "./inProcessRun.js";
 import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolver.js";
 import db from "../db.js";
 import { collectTaskSummary, parseSummaryRequest } from "../lib/secretaryTaskSummary.js";
@@ -271,24 +271,7 @@ export function chatTools(role: string) {
         const resp = await asRole(role, "POST", "/api/consult", body);
         return { совет: resp?.answer, модель: resp?.model };
       }),
-    T("taskflow_plan_request",
-      "Достроить план совместной работы из своего идущего шага. kind=add_step — нужен ещё шаг другой роли; kind=rework — только QA/критик: на доработку.",
-      Type.Object({
-        subtask_id: Type.String(), kind: Type.String(), reason: Type.String(),
-        role: S(), expected_result: S(), instructions: S(), defects: S(),
-        after: Type.Optional(Type.Array(Type.String())), before: Type.Optional(Type.Array(Type.String())),
-      }), async (p) => {
-        const subtaskId = String(p.subtask_id ?? "").trim();
-        if (!subtaskId) throw new ToolError("subtask_id — твой шаг плана (он есть в задании)");
-        const body: Record<string, unknown> = {};
-        for (const k of ["kind", "role", "expected_result", "instructions", "reason", "after", "before", "defects"]) if (p[k] != null) body[k] = p[k];
-        const resp = await asRole(role, "POST", `/api/subtasks/${subtaskId}/plan-request`, body);
-        const status = resp?.result?.status;
-        return {
-          итог: status === "applied" ? "применено" : status === "proposed" ? "ждёт решения владельца" : status,
-          "почему ждёт": resp?.result?.reason, "новые шаги": resp?.result?.added, план: resp?.plan, связи: resp?.edges,
-        };
-      }),
+    T("taskflow_plan_request", PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, p => requestPlanStep(role,p)),
     T("taskflow_weather",
       "Погода сейчас и на 4 дня для города — готовый блок виджета для ответа в чате. Блок из поля «виджет» вставить в ответ как есть, цифры не выдумывать.",
       Type.Object({ city: Type.String({ description: "Город, например «Москва»" }) }), async (p) => {

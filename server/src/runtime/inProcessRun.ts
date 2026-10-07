@@ -1,3 +1,4 @@
+import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { connectBuilderXcode } from "./builderXcode.js";
 import { branchMembership } from "./branchPlan.js";
@@ -207,6 +208,26 @@ async function callResearchTool(name: string, args: unknown): Promise<unknown> {
  *  чем достаточно». */
 /** `taskId` — карточка текущего хода: записанные `doc_write` документы
  *  привязываются к ней и попадают в её «Итог» (01.10.2026). */
+export const PLAN_REQUEST_DESCRIPTION = "Достроить план из своего шага. kind=add_step — работа после твоей части; kind=request_help — результат другой роли нужен до завершения твоего шага: помощник стартует, твой шаг ждёт и продолжится автоматически. kind=rework — QA/критик возвращает на доработку. role, expected_result, reason обязательны для добавления. Проверь итог: applied / proposed / ошибка; сообщение коллеге не создаёт шаг.";
+export const PLAN_REQUEST_PARAMETERS = Type.Object({
+  subtask_id: Type.String(), kind: Type.String({description:"add_step | request_help | rework"}), reason: Type.String(),
+  role: Type.Optional(Type.String()), expected_result: Type.Optional(Type.String()), instructions: Type.Optional(Type.String()), defects: Type.Optional(Type.String()),
+  after: Type.Optional(Type.Array(Type.String())), before: Type.Optional(Type.Array(Type.String())),
+});
+export async function requestPlanStep(role: string, p: any, currentSubtaskId?: string) {
+  const id = String(p.subtask_id ?? "").trim();
+  if (!id) throw new ToolError("subtask_id — твой шаг плана (он есть в задании)");
+  if (currentSubtaskId && id !== currentSubtaskId) throw new ToolError("Достраивай план только из назначенного текущего слота");
+  const body: Json = {};
+  for (const k of ["kind","role","expected_result","instructions","reason","after","before","defects"]) if(p[k]!=null) body[k]=p[k];
+  const resp = await asRole(role,"POST","/api/subtasks/"+id+"/plan-request",body);
+  const status = resp?.result?.status;
+  return {итог:status==="applied"?"применено":status==="proposed"?"ждёт решения владельца":status,
+    "почему ждёт":resp?.result?.reason,"новые шаги":resp?.result?.added,
+    ожидание:resp?.waiting_for_help?"Твой шаг ждёт помощника. Заверши ход без сдачи шага; сервер продолжит после результата.":undefined,
+    план:resp?.plan,связи:resp?.edges};
+}
+
 export function taskflowTools(role: string, model: string | null, taskId?: string, subtaskId?:string) {
   const T = (
     name: string,
@@ -247,6 +268,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
 
   let topicSends=0;
   const tools = [
+    T("taskflow_plan_request", PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, p => requestPlanStep(role,p,subtaskId)),
     T("taskflow_task_proposal", "По просьбе человека отправить настоящую карточку задачи для согласования. Для обычного упоминания используй текст со ссылкой. Доступно каждой роли.", Type.Object({chat_id:Type.String(),task_id:Type.String(),text:Type.String()}), async(p)=>asRole(role,"POST",`/api/chats/${p.chat_id}/messages`,{task_id:p.task_id,text:p.text,kind:"task_proposal",work_mode:"work"})),
     T("taskflow_topic_reply", "Ответить на конкретное сообщение темы своей задачи: message_id и короткий text. Сервер определяет автора вопроса и его этап; подходит для ответа человеку и коллеге.",Type.Object({message_id:Type.String(),text:Type.String()}),async(p)=>{
       if(!taskId)throw new ToolError("Нет текущей задачи");
@@ -967,6 +989,7 @@ async function runRoleInProcessUnserialized(input: {
       || rolePrompt(role)
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
+    ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY] : []),
   ].join("\n\n");
   const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
 
