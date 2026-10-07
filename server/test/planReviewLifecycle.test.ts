@@ -1,3 +1,4 @@
+import { roleReport } from "./helpers/roleReport.js";
 import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 vi.mock('../src/runtime/inProcessRun.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../src/runtime/inProcessRun.js')>(), runRoleInProcess: vi.fn(async () => ({ runId: 'plan-test-run', completion: Promise.resolve() })) }));
@@ -33,7 +34,7 @@ describe('visible final critic and actual rework graph', () => {
         const { task, plan, critic } = await fixture();
         const v1 = currentResultVersion(task)!;
         const criticAuth = { authorization: `Bearer ${app.jwt.sign({ id: 'role_critic_verifier' })}` };
-        const body = { task_id: task, version_id: v1.id, task_revision: v1.task_revision, artifact_hash: v1.artifact_hash, criteria_version: '1', verdict: 'changes_requested', findings: 'Нет документа с фактами', rework_steps: ['research'] };
+        const body = { report_markdown: roleReport, task_id: task, version_id: v1.id, task_revision: v1.task_revision, artifact_hash: v1.artifact_hash, criteria_version: '1', verdict: 'changes_requested', findings: 'Нет документа с фактами', rework_steps: ['research'] };
         const response = await app.inject({ method: 'POST', url: '/api/reviews', headers: criticAuth, payload: body });
         expect(response.statusCode).toBe(201);
         expect(response.json().handled_by_plan).toBe(true);

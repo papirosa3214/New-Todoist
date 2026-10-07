@@ -1,3 +1,4 @@
+import { roleReport } from "./helpers/roleReport.js";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
@@ -60,8 +61,8 @@ describe("CollaborationPlanContext builder", () => {
     const byKey = (key: string) => subtasks.find((s) => s.plan_node_key === key)!;
 
     // Сдача открывает передачу без предварительной приёмки владельца.
-    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("analysis").id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
-    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("architecture").id}/artifact`, headers: { authorization: architectAuth }, payload: { summary: "Решение принято", payload: { decision: "монолит" }, evidence: [] } });
+    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("analysis").id}/artifact`, headers: { authorization: analystAuth }, payload: { report_markdown: roleReport, summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
+    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("architecture").id}/artifact`, headers: { authorization: architectAuth }, payload: { report_markdown: roleReport, summary: "Решение принято", payload: { decision: "монолит" }, evidence: [] } });
 
     const context = buildCollaborationPlanContext(byKey("delivery").id);
 
@@ -97,7 +98,7 @@ describe("CollaborationPlanContext builder", () => {
     const delivery = subtasks.find((s) => s.plan_node_key === "delivery")!;
 
     // Старое ребро accepted тоже передаёт submitted-результат.
-    await app.inject({ method: "POST", url: `/api/subtasks/${analysis.id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Черновик", payload: { scope: "в рамках" }, evidence: [] } });
+    await app.inject({ method: "POST", url: `/api/subtasks/${analysis.id}/artifact`, headers: { authorization: analystAuth }, payload: { report_markdown: roleReport, summary: "Черновик", payload: { scope: "в рамках" }, evidence: [] } });
 
     const context = buildCollaborationPlanContext(delivery.id);
     expect(context.status).toBe("ok");

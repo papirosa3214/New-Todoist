@@ -1,3 +1,4 @@
+import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { completePlanFinalReview } from "../runtime/planReviewLifecycle.js";
 import { closeOpenCriticPlanNode, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import crypto from "crypto";
@@ -135,6 +136,12 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     const previous = db.prepare("SELECT * FROM reviews WHERE version_id=? AND reviewer_id=? AND verdict=? AND COALESCE(findings,'')=? ORDER BY created_at DESC LIMIT 1").get(version.id,req.userId,verdict,findings ?? "") as any;
     if (previous) return reply.code(201).send({...previous,review_id:previous.id,handled_by_plan:Boolean(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)),deduplicated:true});
     if (body.rework_steps !== undefined && (!Array.isArray(body.rework_steps) || body.rework_steps.some((slot:any)=>typeof slot!=="string"))) return reply.code(400).send({error:"rework_steps — список ключей этапов"});
+    let reportMarkdown: string | null = null;
+    const reportStep = reviewer ? db.prepare("SELECT s.id FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key JOIN task_collaboration_plans p ON p.id=n.plan_id WHERE s.task_id=? AND p.status='approved' AND n.role_key='critic_verifier' AND s.done=0 ORDER BY CASE WHEN s.agent_state='in_progress' THEN 0 ELSE 1 END,s.position DESC LIMIT 1").get(taskId) as {id:string}|undefined : undefined;
+    if (hasPlan) {
+      try { reportMarkdown = validateRoleReport(body.report_markdown); }
+      catch (error) { return reply.code(400).send({error:error instanceof Error ? error.message : String(error)}); }
+    }
     let planReturn:ReturnType<typeof completePlanFinalReview> = null;
     const reviewId = crypto.randomUUID();
     try {
@@ -148,6 +155,11 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
       version.artifact_hash, criteriaVersion, verdict, findings);
     logEvent({ taskId, actorId: req.userId, kind: "review_recorded", field: "result_version", toValue: `${version.version_no}:${verdict}` });
         if (reviewer) planReturn = completePlanFinalReview(taskId,req.userId,verdict,findings ?? "",body.rework_steps);
+        if (reportMarkdown) {
+          const step = reportStep ?? db.prepare("SELECT s.id FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key WHERE s.task_id=? AND n.role_key='critic_verifier' ORDER BY s.position DESC LIMIT 1").get(taskId) as {id:string}|undefined;
+          if (!step) throw new Error("Этап проверяющего не найден");
+          saveRoleResultReport(step.id,reportMarkdown,req.userId);
+        }
       })();
     } catch (error) {
       return reply.code(422).send({error:error instanceof Error ? error.message : String(error)});

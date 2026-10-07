@@ -1,3 +1,4 @@
+import { roleReport } from "./helpers/roleReport.js";
 // Живой план совместной работы (владелец 01.10.2026): правки черновика и
 // запущенного плана операциями, роли достраивают граф в пределах лимита,
 // QA/критик отправляют на доработку, сданное и идущее не переписывается.
@@ -110,11 +111,11 @@ describe("живой план совместной работы", () => {
     expect(db.prepare("SELECT ended_at,outcome FROM attempts WHERE id=?").get(attempt)).toMatchObject({ended_at:expect.any(String),outcome:"blocked"});
     expect(db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='collaboration_plan_completed'").get(taskId)).toBeUndefined();
     expect(started).not.toContain(stepOf(planId,"qa")!.id);
-    const early = await app.inject({method:"PATCH",url:"/api/subtasks/"+own,headers:as("role_builder"),payload:{done:true,result:"Не моя работа"}});
+    const early = await app.inject({method:"PATCH",url:"/api/subtasks/"+own,headers:as("role_builder"),payload:{done:true,report_markdown:roleReport,result:"Не моя работа"}});
     expect(early.statusCode).toBe(400);
     expect(stepOf(planId,"delivery")!.done).toBe(0);
     started.length=0;
-    const done = await app.inject({method:"PATCH",url:"/api/subtasks/"+helper.id,headers:as("role_researcher"),payload:{done:true,result:"Совместимость подтверждена"}});
+    const done = await app.inject({method:"PATCH",url:"/api/subtasks/"+helper.id,headers:as("role_researcher"),payload:{done:true,report_markdown:roleReport,result:"Совместимость подтверждена"}});
     expect(done.statusCode,done.body).toBe(200);
     expect(started).toContain(own);
     expect(stepOf(planId,"delivery")).toMatchObject({done:0,agent_state:"in_progress"});

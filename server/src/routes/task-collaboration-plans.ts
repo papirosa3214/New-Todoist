@@ -1,3 +1,4 @@
+import { roleResultDocument } from "../lib/roleResultReport.js";
 import { normalizePlanStartCondition } from "../runtime/planArtifactGate.js";
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
@@ -78,6 +79,10 @@ function presentSingle(plan: Plan) {
     ...plan,
     nodes: nodes.map((node) => ({
       slot_key: node.slot_key,
+      result_document: (() => {
+        const step = db.prepare("SELECT id FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key=?").get(plan.id,node.slot_key) as {id:string}|undefined;
+        return step ? roleResultDocument(step.id) : null;
+      })(),
       execution_state: (()=>{const step=db.prepare("SELECT * FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key=?").get(plan.id,node.slot_key) as any;
         if(!step) return 'waiting';
         if(step.done) return step.result?.startsWith('changes_requested:')?'returned':'accepted';

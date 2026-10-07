@@ -1,3 +1,4 @@
+import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
@@ -261,6 +262,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     Params: { id: string };
     Body: {
       done?: boolean;
+      report_markdown?: string;
       title?: string;
       position?: number;
       result?: string;
@@ -368,6 +370,17 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           }
         }
       }
+      let reportMarkdown: string | null = null;
+      const isRoleSubmission = done === true && !subtask.done && subtask.collaboration_plan_id &&
+        (db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as {type:string}|undefined)?.type === "ai";
+      if (isRoleSubmission) {
+        const node = db.prepare("SELECT output_artifact_json FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key=?").get(subtask.collaboration_plan_id,subtask.plan_node_key) as {output_artifact_json:string|null}|undefined;
+        const contractKey = node?.output_artifact_json ? JSON.parse(node.output_artifact_json)?.key : undefined;
+        if (typeof contractKey === "string" && contractKey && !db.prepare("SELECT 1 FROM subtask_artifact_versions WHERE subtask_id=?").get(subtask.id))
+          return reply.code(409).send({error:"Передай artifact (summary, payload, evidence, report_markdown) результата «" + contractKey + "» в taskflow_subtask_done: структурный результат нельзя закрыть галочкой."});
+        try { reportMarkdown = validateRoleReport(req.body?.report_markdown); }
+        catch (error) { return reply.code(400).send({error:error instanceof Error ? error.message : String(error)}); }
+      }
       if (result !== undefined) {
         db.prepare("UPDATE subtasks SET result = ? WHERE id = ?").run(
           result || null,
@@ -439,6 +452,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             technicalSlotSnapshot(subtask.id, "done");
           }
         }
+        if (reportMarkdown) saveRoleResultReport(subtask.id,reportMarkdown,req.userId);
         db.prepare("UPDATE subtasks SET done = ? WHERE id = ?").run(
           done ? 1 : 0,
           req.params.id,

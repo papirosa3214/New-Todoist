@@ -414,6 +414,8 @@ def t_review(args):
         "task_revision": current["task_revision"],
         "verdict": verdict,
     }
+    if args.get("report_markdown"):
+        body["report_markdown"] = args["report_markdown"]
     if findings:
         body["findings"] = findings
 
@@ -514,8 +516,13 @@ def t_comment(args):
 
 
 def t_subtask_done(args):
+    if isinstance(args.get("artifact"), dict):
+        row = api("POST", f"/api/subtasks/{args['id']}/artifact", args["artifact"])
+        return {"артефакт сдан": args["id"], "версия": row.get("artifact", {}).get("version_no")}
     done = args.get("done", True)
     body = {"done": bool(done)}
+    if args.get("report_markdown"):
+        body["report_markdown"] = args["report_markdown"]
     # Сервер требует result от агента при done=true (server/src/routes/
     # subtasks.ts, 20.08.2026) — без него 400 "result обязателен". Раньше
     # схема этого инструмента параметр не принимала вообще: любой агент,
@@ -1643,6 +1650,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "id": {"type": "string"},
+                "report_markdown": {"type": "string", "description": "Читаемый отчёт этапа проверки; обязателен для командного плана."},
                 "verdict": {"type": "string", "description": "approved | changes_requested"},
                 "findings": {"type": "string", "description": "комментарий к вердикту (обязателен)"},
             },
@@ -1670,12 +1678,14 @@ TOOLS = [
     },
     {
         "name": "taskflow_subtask_done",
-        "description": "Отметить шаг задачи сделанным (или снять отметку, done=false). При done=true передай result — что сделано (сервер требует его от агента).",
+        "description": "Отметить шаг задачи сделанным (или снять отметку, done=false). При done=true передай result — что сделано (сервер требует его от агента). При сдаче этапа обязателен report_markdown: Результат, Что сделано, Проверки, Ограничения, Материалы. Для структурного результата передай artifact с report_markdown.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "id": {"type": "string"},
                 "done": {"type": "boolean"},
+                "report_markdown": {"type": "string", "description": "Читаемый отчёт: Результат, Что сделано, Проверки, Ограничения, Материалы."},
+                "artifact": {"type": "object", "properties": {"summary": {"type": "string"}, "payload": {"type": "object"}, "evidence": {"type": "array"}, "report_markdown": {"type": "string"}}, "required": ["summary", "payload", "report_markdown"]},
                 "result": {
                     "type": "string",
                     "description": "Что сделано, одно-два предложения. Обязателен при done=true, если у шага ещё нет result.",

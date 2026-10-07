@@ -1,3 +1,4 @@
+import { roleReport } from "./helpers/roleReport.js";
 // Событие-исход запуска шага (MAK-96): любое завершение хода — сдача, блок,
 // сбой, прерывание — пишет одно типизированное событие `step_outcome` с кодом
 // из закрытого словаря. Проверяем каждое место записи сбоя и то, что исход
@@ -153,7 +154,7 @@ describe("событие-исход запуска шага", () => {
       method: "PATCH",
       url: `/api/subtasks/${subtaskId}`,
       headers: builderAuth,
-      payload: { done: true, result: "Шаг выполнен и сдан." },
+      payload: { done: true, report_markdown: roleReport, result: "Шаг выполнен и сдан." },
     });
     expect(res.statusCode).toBeLessThan(300);
 

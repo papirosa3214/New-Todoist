@@ -1,3 +1,4 @@
+import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { connectBuilderXcode } from "./builderXcode.js";
@@ -380,8 +381,8 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
         return { "состояние изменено": short(unwrap(resp)) };
       }),
-    T("taskflow_review", "Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток.",
-      Type.Object({ id: Type.String(), verdict: Type.String(), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
+    T("taskflow_review", "Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. " + ROLE_REPORT_INSTRUCTION,
+      Type.Object({ id: Type.String(), verdict: Type.String(), report_markdown: Type.Optional(Type.String()), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
       async (p) => {
         const versions = await asRole(role, "GET", `/api/tasks/${p.id}/versions`);
         const current = (versions.versions ?? []).find((v: any) => v.is_current);
@@ -392,6 +393,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           criteria_version: "1", task_revision: current.task_revision, verdict: p.verdict,
         };
         if (findings) body.findings = findings;
+        if (p.report_markdown) body.report_markdown = p.report_markdown;
         if (p.rework_steps) body.rework_steps = p.rework_steps;
         if (p.verdict === "changes_requested") {
           if (!findings) throw new ToolError("для возврата нужен комментарий: что доработать");
@@ -446,13 +448,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) touchTaskActivity(taskId);
         return result;
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence.",
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. " + ROLE_REPORT_INSTRUCTION,
       Type.Object({
         id: Type.String(),
         result: Type.Optional(Type.String()),
+        report_markdown: Type.Optional(Type.String()),
         done: Type.Optional(Type.Boolean()),
         snapshot: Type.Optional(SNAPSHOT_SHAPE),
-        artifact: Type.Optional(Type.Object({ summary: Type.String(), payload: Type.Any(), evidence: Type.Optional(Type.Array(Type.Any())) })),
+        artifact: Type.Optional(Type.Object({ summary: Type.String(), payload: Type.Any(), report_markdown: Type.String(), evidence: Type.Optional(Type.Array(Type.Any())) })),
       }),
       async (p) => {
         if (p.artifact) {
@@ -465,6 +468,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const done = p.done ?? true;
         const body: Json = { done };
         if (p.result) body.result = p.result;
+        if (p.report_markdown) body.report_markdown = p.report_markdown;
         if (p.snapshot) body.snapshot = p.snapshot;
         const row = await asRole(role, "PATCH", `/api/subtasks/${p.id}`, body);
         if (done && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: закрыл`);
@@ -989,7 +993,7 @@ async function runRoleInProcessUnserialized(input: {
       || rolePrompt(role)
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
-    ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY] : []),
+    ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, ROLE_REPORT_INSTRUCTION] : []),
   ].join("\n\n");
   const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
 
