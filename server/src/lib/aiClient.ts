@@ -37,6 +37,12 @@ export async function callUnifiedAi(opts: {
   const provider = (opts.provider || "local").toLowerCase();
   const requestedModel = opts.aiModel;
 
+  // 0. Обычная модель ролей (MiniMax-M3 и её цепочка), без локальной Ollama.
+  if (provider === "minimax") {
+    const { callRuntimeModel } = await import("./runtimeAi.js");
+    return callRuntimeModel({ systemPrompt: opts.systemPrompt, userPrompt: opts.userPrompt, maxTokens: opts.predictTokens });
+  }
+
   // 1. Claude Code / Anthropic
   if (provider === "claude" && process.env.ANTHROPIC_API_KEY) {
     const claudeModel =

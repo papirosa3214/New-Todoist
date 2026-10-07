@@ -64,7 +64,7 @@ export async function processOnePreparation(input:{workerId:string;analyze?:Anal
     const children=db.prepare("SELECT id FROM tasks WHERE parent_id=? LIMIT 1").get(task.id);
     const existing=db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=? AND status='draft' ORDER BY revision DESC LIMIT 1").get(task.id) as {id:string}|undefined;
     const recommendation=children ? null : await (input.analyze??prepareTask)(`${task.title}\n\n${task.description??""}`,[{id:project.id,name:project.name}],{
-      ownerId:project.owner_id,maxChars:12000,sourceRecordId:`auto:${job.id}`,context:"Это существующая карточка в указанном проекте. Сохрани её цель и границы. Проверь достаточность постановки, предложи участников и зависимости. Не выполняй работу, не меняй даты или проект. При недостатке данных задай конкретный вопрос.",
+      provider:"minimax",ownerId:project.owner_id,maxChars:12000,sourceRecordId:`auto:${job.id}`,context:"Это существующая карточка в указанном проекте. Сохрани её цель и границы. Проверь достаточность постановки, предложи участников и зависимости. Не выполняй работу, не меняй даты или проект. При недостатке данных задай конкретный вопрос.",
     });
     const notification=db.transaction(()=>{
       if(!current(job)) return;
