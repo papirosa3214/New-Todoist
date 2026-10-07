@@ -16,6 +16,7 @@ import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
 import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
 import { startProviderProbe } from "./runtime/providerProbe.js";
+import { startLinearAutoImport } from "./lib/linearAutoImport.js";
 import { startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
 import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
@@ -570,12 +571,14 @@ if (isMain) {
     let stopScheduler: (() => void) | null = null;
     let stopStalledWatch: (() => void) | null = null;
     let stopProviderProbe: (() => void) | null = null;
+    let stopLinearAutoImport: (() => void) | null = null;
     let stopLinearSync: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
       stopStalledWatch?.();
       stopProviderProbe?.();
+      stopLinearAutoImport?.();
       stopLinearSync?.();
       if (stopPreparation) await stopPreparation();
       if (stopRoleRuns) await stopRoleRuns();
@@ -606,8 +609,9 @@ if (isMain) {
     // Метка «провайдер в лимите» снимается по факту сброса: пробный запрос раз в 5 минут
     // (runtime/providerProbe.ts), а не только по пятичасовому таймеру.
     if (!sandbox) stopProviderProbe = startProviderProbe();
-    // Автоимпорта Linear по таймеру нет (владелец 07.10.2026): задачи из Linear
-    // заводит только сам владелец — экраном импорта.
+    // Автоимпорт Linear раз в 5 минут — внутри сервера (lib/linearAutoImport.ts):
+    // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
+    if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();
     if (process.env.ORCHESTRATOR_WEBHOOK_DISABLED !== "1") startOrchestratorWebhook();
     // Обратная синхронизация TaskFlow → Linear (карточка 20e30338): статусы
     // привязанных карточек раз в минуту; сбой Linear не трогает карточку.
