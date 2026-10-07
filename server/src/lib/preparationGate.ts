@@ -1,22 +1,15 @@
-// Когда подготовка плана мешает утвердить план (владелец 07.10.2026: «почему я не могу принять?»).
-// Раньше мешало ВСЁ, что не «ready», — в том числе упавшая фоновая подготовка, хотя план уже собран
-// (по шаблону) и от неё не зависит, а текст отказа не называл причину. Теперь блокируют только
-// случаи, где план действительно может быть не тем: подготовка ещё идёт, ждёт уточнения, или план
-// устарел относительно карточки.
-export type PreparationJob = { status: string; plan_id: string | null; snapshot: string };
-export type PreparedCard = { title: string; description: string | null; project_id: string | null };
+// Утверждение плана владельцем (владелец 07.10.2026: «нет блоков для меня, моё слово главное»).
+// Фоновая подготовка (модель предлагает подзадачи и роли) — помощник, а не шлагбаум: идёт она,
+// упала, ждёт уточнения или карточку правили после неё — утверждение всё равно проходит.
+// Чтобы запоздавший ответ модели потом не переписал утверждённое, при утверждении задания
+// подготовки, которые ещё идут, гасятся (статус superseded — финальная запись у них тогда
+// не выполняется, см. current() в runtime/autoPreparation.ts), а флаг «нужно уточнить»
+// снимается: владелец своим утверждением ответил на вопрос.
+import db from "../db.js";
 
-/** Текст причины отказа или null — утверждать можно. */
-export function preparationBlocker(job: PreparationJob | undefined | null, planId: string, card: PreparedCard): string | null {
-  if (!job) return null;
-  if (job.status === "queued" || job.status === "running") return "План ещё готовится — подождите, пока подготовка закончится.";
-  if (job.status === "needs_clarification") return "Подготовка ждёт уточнения постановки — ответьте на вопрос в карточке.";
-  if (job.status !== "ready") return null; // failed / skipped / superseded: плану не мешают
-  if (job.plan_id !== planId) return "Есть более свежий план подготовки — обновите карточку.";
-  let snap: Partial<PreparedCard> = {};
-  try { snap = JSON.parse(job.snapshot); } catch { /* повреждённый снимок — считаем, что менялось */ return "Не удалось сверить план с карточкой — обновите план."; }
-  if (snap.title !== card.title || snap.description !== card.description || snap.project_id !== card.project_id) {
-    return "Название, описание или проект изменились после подготовки плана — обновите план.";
-  }
-  return null;
+export function settlePreparationOnApproval(taskId: string): void {
+  db.prepare(
+    "UPDATE task_preparation_jobs SET status='superseded', worker_id=NULL, lease_until=NULL, updated_at=datetime('now') WHERE task_id=? AND status IN ('queued','running')",
+  ).run(taskId);
+  db.prepare("UPDATE tasks SET needs_clarification=0, clarification_question=NULL WHERE id=? AND needs_clarification=1").run(taskId);
 }

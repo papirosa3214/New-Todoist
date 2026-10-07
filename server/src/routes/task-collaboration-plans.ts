@@ -1,5 +1,5 @@
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
-import { preparationBlocker } from "../lib/preparationGate.js";
+import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
 import { ensureCardResponsible } from "../runtime/branchPlan.js";
 import {branchAssignmentRole} from "../runtime/branchPlan.js";
@@ -663,14 +663,8 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
         return {plan:present(planForTask(task.id,plan.id)!)};
       }catch(error){return reply.code(409).send({error:error instanceof Error ? error.message : String(error)});}
     }
-    const automatic=db.prepare("SELECT origin FROM task_collaboration_plan_nodes WHERE plan_id=? AND origin IN ('auto_preparation','auto_template','linear_import') LIMIT 1").get(plan.id);
-    if(automatic){
-      const latest=db.prepare("SELECT status,plan_id,snapshot FROM task_preparation_jobs WHERE task_id=? ORDER BY id DESC LIMIT 1").get(task.id) as any;
-      const blocker=preparationBlocker(latest,plan.id,task);
-      if(blocker) return reply.code(409).send({error:blocker});
-    }
-    const prepared=db.prepare("SELECT 1 FROM task_collaboration_plan_nodes WHERE plan_id=? AND origin='task_preparation'").get(plan.id);
-    if (prepared && task.needs_clarification) return reply.code(409).send({error:"Перед утверждением плана нужно уточнить постановку",question:task.clarification_question});
+    // Подготовка и вопрос модели владельца не блокируют: утверждение — его слово (см. lib/preparationGate.ts).
+    settlePreparationOnApproval(task.id);
     const nodes = db.prepare("SELECT slot_key, role_key, expected_result, source_subtask_id FROM task_collaboration_plan_nodes WHERE plan_id = ? ORDER BY slot_key").all(plan.id) as Array<{ slot_key: string; role_key: string; expected_result: string; source_subtask_id: string | null }>;
     const incoming = new Set((db.prepare("SELECT to_slot_key FROM task_collaboration_plan_edges WHERE plan_id = ?").all(plan.id) as Array<{ to_slot_key: string }>).map((edge) => edge.to_slot_key));
     // Корневые (без входящих рёбер) узлы плана собираем отдельно — их нужно

@@ -63,9 +63,9 @@ describe("Автоматическая подготовка",()=>{
   const status=await app.inject({method:"GET",url:`/api/tasks/${id}/preparation`,headers:auth});expect(status.json().preparation.error).toBe("Модель недоступна");
   expect((await app.inject({method:"POST",url:`/api/tasks/${id}/preparation/retry`,headers:auth,payload:{}})).statusCode).toBe(200);
  });
- it("старый автоматический план нельзя согласовать после изменения постановки",async()=>{
+ it("владелец согласует план и после изменения постановки — подготовка не блокирует",async()=>{
   const id=await task();await process();const plan=job(id).plan_id;db.prepare("UPDATE tasks SET description='Изменено' WHERE id=?").run(id);
-  const r=await app.inject({method:"POST",url:`/api/tasks/${id}/collaboration-plans/${plan}/approve`,headers:auth,payload:{}});expect(r.statusCode).toBe(409);expect(runs.start).not.toHaveBeenCalled();
+  const r=await app.inject({method:"POST",url:`/api/tasks/${id}/collaboration-plans/${plan}/approve`,headers:auth,payload:{}});expect(r.statusCode).toBe(200);
  });
  it("предложенные дочерние карточки ждут согласования и не создаются автоматически",async()=>{
   const id=await task();await process(async()=>{const r=result();r.card.preparation.representation="child_cards";return r;});

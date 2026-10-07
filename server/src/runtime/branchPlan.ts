@@ -1,5 +1,5 @@
 import { materializeWorkChoices } from "../lib/planWorkSelection.js";
-import { preparationBlocker } from "../lib/preparationGate.js";
+import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import crypto from "node:crypto";
 import {getTaskForRead} from "../access.js";
 import {applyPlanOps,PlanOpError,type PlanOp} from "./planMutations.js";
@@ -97,15 +97,11 @@ export function approveBranch(rootPlanId:string,ownerId:string,snapshot:string):
     if(cards.length>200) throw new Error("Ветка превышает 200 карточек");
     const selected=cards.map(card=>({card,plan:card.id===root.task_id ? root : selectedCardPlan(card.id)}));
     for(const {card,plan} of selected){
-      if(card.needs_clarification) throw new Error(`Для «${card.title}» требуется уточнение`);
       if(!plan) throw new Error(`Для «${card.title}» ещё не подготовлен план`);
       if(card.project_id!==cards.find(c=>c.id===root.task_id)!.project_id) throw new Error("Карточки ветки должны находиться в одном проекте");
       if(card.status!=="completed" && (card.agent_state || plan.status!=="draft" || db.prepare("SELECT 1 FROM role_run_jobs WHERE task_id=? AND status IN ('queued','running','retry_wait')").get(card.id))) throw new Error(`«${card.title}» уже работает отдельно — требуется явное объединение`);
       if(!planNodes(plan.id).length) throw new Error(`План «${card.title}» пуст`);
       responsibleRole(plan.id,card.id===root.task_id);
-      const latest=db.prepare("SELECT status,plan_id,snapshot FROM task_preparation_jobs WHERE task_id=? ORDER BY id DESC LIMIT 1").get(card.id) as {status:string;plan_id:string|null;snapshot:string}|undefined;
-      const blocker=latest && planNodes(plan.id).some(n=>['auto_preparation','auto_template','linear_import'].includes(n.origin)) ? preparationBlocker(latest,plan.id,card) : null;
-      if(blocker) throw new Error(`«${card.title}»: ${blocker}`);
     }
     const teamRoles=new Set(selected.flatMap(x=>planNodes(x.plan!.id).map(n=>n.role_key)));
     teamRoles.add('architect');teamRoles.add('critic_verifier');
@@ -116,6 +112,7 @@ export function approveBranch(rootPlanId:string,ownerId:string,snapshot:string):
     else if(responsibleRole(root.id)!=='architect') throw new Error("В общем плане нужен Архитектор, отвечающий за итог ветки");
     for(const {card,plan:maybePlan} of selected){
       const plan=maybePlan!;const role=responsibleRole(plan.id,card.id===root.task_id);
+      settlePreparationOnApproval(card.id); // подготовка и вопрос модели владельца не блокируют (lib/preparationGate.ts)
       db.prepare("INSERT INTO branch_plan_members(root_plan_id,task_id,plan_id,responsible_role,approved_snapshot) VALUES(?,?,?,?,?)").run(root.id,card.id,plan.id,role,snapshot);
       if(card.status==='completed') continue;
       db.prepare("UPDATE tasks SET current_revision=COALESCE(current_revision,1)+1 WHERE id=?").run(card.id);
