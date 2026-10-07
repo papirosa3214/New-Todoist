@@ -17,7 +17,6 @@ import { startScheduler } from "./runtime/scheduler.js";
 import { startStalledStepWatch } from "./runtime/stalledStepWatcher.js";
 import { startProviderProbe } from "./runtime/providerProbe.js";
 import { startOrchestratorWebhook } from "./lib/orchestratorWebhook.js";
-import { startLinearSync } from "./lib/linearSync.js";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
@@ -570,13 +569,11 @@ if (isMain) {
     let stopScheduler: (() => void) | null = null;
     let stopStalledWatch: (() => void) | null = null;
     let stopProviderProbe: (() => void) | null = null;
-    let stopLinearSync: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
       stopStalledWatch?.();
       stopProviderProbe?.();
-      stopLinearSync?.();
       if (stopPreparation) await stopPreparation();
       if (stopRoleRuns) await stopRoleRuns();
       if (stopVoiceBridge) await stopVoiceBridge();
@@ -609,9 +606,8 @@ if (isMain) {
     // Автоимпорта Linear по таймеру нет (владелец 07.10.2026): задачи из Linear
     // заводит только сам владелец — экраном импорта.
     if (process.env.ORCHESTRATOR_WEBHOOK_DISABLED !== "1") startOrchestratorWebhook();
-    // Обратная синхронизация TaskFlow → Linear (карточка 20e30338): статусы
-    // привязанных карточек раз в минуту; сбой Linear не трогает карточку.
-    if (process.env.LINEAR_SYNC_DISABLED !== "1") stopLinearSync = startLinearSync();
+    // Синхронизации статусов TaskFlow → Linear по таймеру нет (владелец 07.10.2026):
+    // проход запускает только владелец кнопкой (POST /api/integrations/linear/sync/run).
     // Ходы ролей живут в процессе: узлы плана, брошенные прошлым процессом,
     // — в ленту и продолжить (runtime/planSubtaskAdmission.ts).
     try {
