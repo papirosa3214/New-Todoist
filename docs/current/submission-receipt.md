@@ -34,3 +34,11 @@ iOS собран. Временный XCUITest прошёл: метка подт�
 
 Журналы на .110: `/tmp/submission-receipt-all.log`, `/tmp/submission-receipt-focused.log`, `/tmp/submission-receipt-final-focused.log`, `/tmp/submission-receipt-final-tsc.log`.
 iOS: `/tmp/submission-receipt-ios-build.log`, `/tmp/submission-receipt-ui.log`, `/tmp/submission-receipt-ui.xcresult`.
+
+## Выкладка 08.10.2026, 02:45 МСК
+
+После сброса QA владельцем: активных задач и этапов 0, очередь 0. Основной сервер обновлён до de82ac44, TypeScript скомпилирован, служба перезапущена. health OK, quick_check OK. Снимок БД: /home/maksim/backups/taskflow/submission-receipt-20261007T234459Z/taskflow.db.
+
+Живой API вернул для QA v3 confirmed=false, authority=primary; граф возвращает ту же квитанцию. Сдача QA не подменялась. Проверка новой живой сессии роли ещё не выполнена.
+
+Ветка роли roles/6be00089-10fd-4bfd-a017-416155550a47 на f9ab3692 требует обновления: предварительный merge-tree с main показал конфликт server/src/migrations.ts. Файлы ветки не менялись. Старую QA-копию новая up.sh не запускает без защиты сдачи. Разрешение конфликта ожидает согласования владельца; повторный запуск QA пока не рекомендован.

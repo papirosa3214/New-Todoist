@@ -32,3 +32,11 @@
 Серверная ветка: `codex/human-role-reports-20261008`, рабочая копия `/tmp/taskflow-human-role-reports` на .110.
 Серверные журналы: `/tmp/human-reports-final-all.log`, `/tmp/human-reports-focused-final.log`, `/tmp/human-reports-tsc.log`.
 iOS: `/tmp/human-reports-ios-build.log`, `/tmp/human-reports-ui-final.log`, `/tmp/human-role-report-ui.xcresult`.
+
+## Выкладка 08.10.2026, 02:45 МСК
+
+После сброса QA владельцем: активных задач и этапов 0, очередь 0. Основной сервер обновлён до de82ac44, TypeScript скомпилирован, служба перезапущена. health OK, quick_check OK. Снимок БД: /home/maksim/backups/taskflow/submission-receipt-20261007T234459Z/taskflow.db.
+
+Живой API вернул для QA v3 confirmed=false, authority=primary; граф возвращает ту же квитанцию. Сдача QA не подменялась. Проверка новой живой сессии роли ещё не выполнена.
+
+Ветка роли roles/6be00089-10fd-4bfd-a017-416155550a47 на f9ab3692 требует обновления: предварительный merge-tree с main показал конфликт server/src/migrations.ts. Файлы ветки не менялись. Старую QA-копию новая up.sh не запускает без защиты сдачи. Разрешение конфликта ожидает согласования владельца; повторный запуск QA пока не рекомендован.
