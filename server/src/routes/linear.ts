@@ -91,7 +91,7 @@ export function registerLinearRoutes(app: FastifyInstance) {
     setLinearSyncEnabled(req.userId, req.body.enabled);
     return linearSyncHealth(req.userId);
   });
-  // Проход синхронизации — только по кнопке владельца: таймера нет (07.10.2026).
+  // Ручной внеочередной проход синхронизации — владельцу, без ожидания таймера.
   app.post("/api/integrations/linear/sync/run", { preHandler: ownerOnly }, async (req: any, reply) => {
     try { return await runLinearSyncPass(req.userId, { retryFailed: true }); } catch (error) { return failure(reply, error); }
   });
