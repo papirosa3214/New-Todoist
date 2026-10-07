@@ -3,6 +3,7 @@
 // документация проекта, вердикт проверяющего (в приложении не виден вовсе),
 // ветка с кодом, отчёты. Итог собирает их и сам ложится заметкой в папку
 // документации проекта карточки — «как все документы сейчас туда сливаются».
+import { humanStepResult } from "./stepResults.js";
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import db from "../db.js";
@@ -14,7 +15,8 @@ import { markdownToTiptap } from "./markdownToTiptap.js";
 
 export type TaskOutcome = {
   verdict: { verdict: string; findings: string; reviewer_id: string; created_at: string } | null;
-  nodes: Array<{ slot_key: string | null; role: string | null; title: string; result: string | null; done: boolean }>;
+  /** human_title / human_result — то же, что сдала роль, человеческим языком для владельца (lib/stepResults.ts). */
+  nodes: Array<{ slot_key: string | null; role: string | null; title: string; result: string | null; done: boolean; human_title: string | null; human_result: string | null }>;
   documents: Array<{ id: string; title: string; updated_at: string | null; is_outcome: boolean }>;
   branch: { name: string; commit: string; subject: string; ahead: number } | null;
 };
@@ -70,7 +72,7 @@ export function buildTaskOutcome(taskId: string): TaskOutcome {
   ).get(taskId) as { id: string } | undefined;
   const nodeRows = plan
     ? db.prepare(
-        `SELECT s.plan_node_key AS slot_key, n.role_key AS role, s.title, s.result, s.done
+        `SELECT s.id AS subtask_id, s.plan_node_key AS slot_key, n.role_key AS role, s.title, s.result, s.done
            FROM subtasks s LEFT JOIN task_collaboration_plan_nodes n
              ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
           WHERE s.collaboration_plan_id = ? ORDER BY s.position`,
@@ -79,8 +81,11 @@ export function buildTaskOutcome(taskId: string): TaskOutcome {
         `SELECT NULL AS slot_key, NULL AS role, title, result, done FROM subtasks
           WHERE task_id = ? AND COALESCE(result, '') <> '' ORDER BY position`,
       ).all(taskId);
-  const nodes = (nodeRows as Array<{ slot_key: string | null; role: string | null; title: string; result: string | null; done: number }>)
-    .map((n) => ({ ...n, done: Boolean(n.done) }));
+  const nodes = (nodeRows as Array<{ subtask_id?: string; slot_key: string | null; role: string | null; title: string; result: string | null; done: number }>)
+    .map(({ subtask_id, ...n }) => {
+      const human = subtask_id ? humanStepResult(subtask_id) : null;
+      return { ...n, done: Boolean(n.done), human_title: human?.title ?? null, human_result: human?.body || null };
+    });
   return { verdict: verdict ?? null, nodes, documents: taskDocuments(taskId), branch: taskBranch(taskId) };
 }
 

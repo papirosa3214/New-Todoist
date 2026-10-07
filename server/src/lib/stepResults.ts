@@ -1,11 +1,10 @@
 import db from "../db.js";
-import { roleTitle } from "../roleRouting.js";
 
 /**
  * Результаты шагов плана — человеческим языком, для владельца (07.10.2026: «роль — результат
  * называется так-то; столько документов, сколько ролей участвовало; открыл и прочитал»).
  * То, чем пользуются роли (структурный результат, его ключи и документ с JSON), не меняется:
- * здесь только представление тех же данных для чтения человеком.
+ * здесь только представление тех же данных для чтения человеком — в секции «Итог» карточки.
  */
 const ARTIFACT_TITLES: Record<string, string> = {
   feature_spec: "Постановка задачи",
@@ -62,31 +61,10 @@ export function humanResultBody(summary: string | null, payloadJson: string | nu
   return parts.join("\n\n");
 }
 
-export type StepResult = {
-  subtask_id: string; role_key: string; role_title: string; title: string; body: string;
-  note_id: string | null; version_no: number | null; created_at: string | null;
-};
-
-/** Закрытые шаги плана задачи с их результатами, по порядку шагов. */
-export function taskStepResults(taskId: string): StepResult[] {
-  const rows = db.prepare(
-    `SELECT s.id, s.title, s.result, n.role_key, a.artifact_key, a.summary, a.payload_json, a.note_id, a.version_no, a.created_at
-       FROM subtasks s
-       JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
-       LEFT JOIN subtask_artifact_versions a ON a.id = (SELECT id FROM subtask_artifact_versions WHERE subtask_id = s.id ORDER BY version_no DESC LIMIT 1)
-      WHERE s.task_id = ? AND s.done = 1 AND n.skipped_at IS NULL
-      ORDER BY s.position`,
-  ).all(taskId) as Array<{ id: string; title: string; result: string | null; role_key: string; artifact_key: string | null; summary: string | null; payload_json: string | null; note_id: string | null; version_no: number | null; created_at: string | null }>;
-  return rows
-    .map((r) => ({
-      subtask_id: r.id,
-      role_key: r.role_key,
-      role_title: roleTitle(r.role_key as any),
-      title: (r.artifact_key && ARTIFACT_TITLES[r.artifact_key]) || (r.role_key === "critic_verifier" ? "Заключение Критика" : r.role_key === "qa" ? "Отчёт о проверке" : "Результат работы"),
-      body: humanResultBody(r.summary, r.payload_json, r.result),
-      note_id: r.note_id,
-      version_no: r.version_no,
-      created_at: r.created_at,
-    }))
-    .filter((r) => r.body);
+/** Человеческие название и текст результата одного шага; null — структурного результата нет. */
+export function humanStepResult(subtaskId: string): { title: string | null; body: string } | null {
+  const a = db.prepare("SELECT artifact_key, summary, payload_json FROM subtask_artifact_versions WHERE subtask_id = ? ORDER BY version_no DESC LIMIT 1")
+    .get(subtaskId) as { artifact_key: string; summary: string | null; payload_json: string | null } | undefined;
+  if (!a) return null;
+  return { title: ARTIFACT_TITLES[a.artifact_key] ?? null, body: humanResultBody(a.summary, a.payload_json, null) };
 }

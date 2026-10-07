@@ -11,8 +11,6 @@ import { broadcastTaskEvent } from "../ws.js";
 import { startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { saveSlotSnapshot } from "../runtime/slotWorkSnapshot.js";
 import { getFullTask, getSubtaskWithTaskForUser } from "./subtasks.js";
-import { getTaskForRead } from "../access.js";
-import { taskStepResults } from "../lib/stepResults.js";
 
 /**
  * Структурная сдача узла плана с output_artifact-контрактом
@@ -64,12 +62,6 @@ function normalizeEvidenceItem(item: unknown): unknown {
 }
 
 export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
-  // Результаты шагов плана для владельца: кто, что сдал, человеческим текстом (lib/stepResults.ts).
-  app.get<{ Params: { id: string } }>("/api/tasks/:id/step-results", { preHandler: authOrApiToken }, async (req: any, reply) => {
-    if (!getTaskForRead(req.params.id, req.userId)) return reply.code(404).send({ error: "Задача не найдена" });
-    return { results: taskStepResults(req.params.id) };
-  });
-
   app.post<{ Params: { id: string }; Body: { summary?: unknown; payload?: unknown; evidence?: unknown } }>("/api/subtasks/:id/artifact", { preHandler: authOrApiToken }, async (req: any, reply) => {
     const current = getSubtaskWithTaskForUser(req.params.id, req.userId);
     if (!current) return reply.code(404).send({ error: "Not found" });
