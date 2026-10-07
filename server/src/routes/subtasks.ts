@@ -1,3 +1,4 @@
+import { sandboxSubmissionError } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
@@ -374,6 +375,8 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       const isRoleSubmission = done === true && !subtask.done && subtask.collaboration_plan_id &&
         (db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as {type:string}|undefined)?.type === "ai";
       if (isRoleSubmission) {
+        const sandboxError=sandboxSubmissionError();
+        if(sandboxError) return reply.code(409).send(sandboxError);
         const node = db.prepare("SELECT output_artifact_json FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key=?").get(subtask.collaboration_plan_id,subtask.plan_node_key) as {output_artifact_json:string|null}|undefined;
         const contractKey = node?.output_artifact_json ? JSON.parse(node.output_artifact_json)?.key : undefined;
         if (typeof contractKey === "string" && contractKey && !db.prepare("SELECT 1 FROM subtask_artifact_versions WHERE subtask_id=?").get(subtask.id))
@@ -481,6 +484,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         // в ленте видно, кто именно отметил шаг сделанным (или снял
         // отметку). Пишем только при реальной смене, чтобы повторный
         // PATCH тем же значением не плодил одинаковые строки.
+        if (done === true && !subtask.done) logEvent({taskId:subtask.task_id,actorId:req.userId,kind:"subtask_submission_confirmed",field:subtask.id});
         if (!!subtask.done !== !!done) {
           logEvent({
             taskId: subtask.task_id,

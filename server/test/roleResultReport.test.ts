@@ -2,17 +2,17 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import crypto from "node:crypto";
 import fs from "node:fs";
 vi.mock("../src/runtime/inProcessRun.js", async original => ({...await original<any>(), runRoleInProcess: vi.fn(async()=>({runId:"report-test",completion:Promise.resolve()}))}));
-import { taskflowTools } from "../src/runtime/inProcessRun.js";
+import { taskflowTools, setInProcessApp } from "../src/runtime/inProcessRun.js";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { seedRoleAccounts, demoteSeededOwner } from "./helpers/seedOwner.js";
 import { buildCollaborationPlanContext } from "../src/runtime/collaborationPlanContext.js";
 const report = "# Отчёт о работе\n\n## Результат\nПроверка доступна владельцу.\n\n## Что сделано\nДобавлен документ с итогом этапа.\n\n## Проверки\nAPI проверен на временной базе, сценарий сдачи проходит.\n\n## Ограничения\nНа физическом телефоне не проверено.\n\n## Материалы\n[Спецификация](https://example.test/spec)\n";
-describe("Читаемый отчёт — часть результата роли",()=>{
+describe("Читаемый отчёт — часть результата роли",{timeout:15000},()=>{
  let app:any,owner:string,builder:string,critic:string,project:string;
  beforeAll(async()=>{
-  app=await buildApp();demoteSeededOwner(db);seedRoleAccounts(db);db.prepare("UPDATE users SET reviewer=1 WHERE id=?").run(roleUserId("critic_verifier"));
+  app=await buildApp();setInProcessApp(app);demoteSeededOwner(db);seedRoleAccounts(db);db.prepare("UPDATE users SET reviewer=1 WHERE id=?").run(roleUserId("critic_verifier"));
   const u=(await app.inject({method:"POST",url:"/api/auth/register",payload:{name:"Report owner",email:crypto.randomUUID()+"@test",password:"password123"}})).json();
   db.prepare("UPDATE users SET role='owner' WHERE id=?").run(u.user.id);
   owner="Bearer "+u.token;builder="Bearer "+app.jwt.sign({id:roleUserId("builder")});critic="Bearer "+app.jwt.sign({id:roleUserId("critic_verifier")});
@@ -39,9 +39,23 @@ describe("Читаемый отчёт — часть результата рол
   const folder=(db.prepare("SELECT artifact_folder_id FROM tasks WHERE id=?").get(f.task.id) as any).artifact_folder_id;expect(n.folder_id).toBe(folder);
   const g=(await app.inject({method:"GET",url:"/api/tasks/"+f.task.id+"/collaboration-plans",headers:{authorization:owner}})).json().plans.find((p:any)=>p.id===f.plan.id);
   expect(g.nodes.find((n:any)=>n.slot_key==="build").result_document.id).toBe(a.note_id);
+  const receipt=(await app.inject({method:"GET",url:"/api/subtasks/"+f.step.id+"/submission-receipt",headers:{authorization:builder}})).json();
+  expect(receipt).toMatchObject({confirmed:true,authority:"primary",subtask_id:f.step.id,artifact_id:a.id,document_id:a.note_id});
+  expect(receipt.confirmed_at).toBeTruthy();
+  try {
+   process.env.TASKFLOW_QA_SANDBOX="1";
+   expect((await app.inject({method:"GET",url:"/api/subtasks/"+f.step.id+"/submission-receipt",headers:{authorization:builder}})).json()).toMatchObject({confirmed:false,authority:"sandbox",artifact_id:null});
+  } finally {delete process.env.TASKFLOW_QA_SANDBOX;}
+
+  expect(g.nodes.find((n:any)=>n.slot_key==="build").submission_receipt).toEqual(receipt);
   expect(buildCollaborationPlanContext(f.qa.id).predecessor_artifacts[0].payload).toEqual({summary:"machine input",answer:42});
   const outcome=(await app.inject({method:"GET",url:"/api/tasks/"+f.task.id+"/outcome",headers:{authorization:owner}})).json();
   expect(outcome.documents.some((d:any)=>d.id===a.note_id)).toBe(true);
+  db.prepare("UPDATE subtask_artifact_versions SET status='revision_requested' WHERE id=?").run(a.id);
+  try {
+   expect((await app.inject({method:"GET",url:"/api/subtasks/"+f.step.id+"/submission-receipt",headers:{authorization:builder}})).json().confirmed).toBe(false);
+  } finally {db.prepare("UPDATE subtask_artifact_versions SET status='submitted' WHERE id=?").run(a.id);}
+
   if (process.env.TASKFLOW_REPORT_UI_FIXTURE) {
     const task=(await app.inject({method:"GET",url:"/api/tasks/"+f.task.id,headers:{authorization:owner}})).json();
     const plans=(await app.inject({method:"GET",url:"/api/tasks/"+f.task.id+"/collaboration-plans",headers:{authorization:owner}})).json();
@@ -79,13 +93,39 @@ describe("Читаемый отчёт — часть результата рол
   const review=(extra:any)=>app.inject({method:"POST",url:"/api/reviews",headers:{authorization:critic},payload:{...payload,...extra}});
   expect((await review({})).statusCode).toBe(400);
   expect(db.prepare("SELECT 1 FROM reviews WHERE version_id=?").get(v.id)).toBeUndefined();
-  expect((await review({report_markdown:report})).statusCode).toBe(201);
+  try {
+   process.env.TASKFLOW_QA_SANDBOX="1";
+   expect((await review({report_markdown:report})).statusCode).toBe(409);
+  } finally {delete process.env.TASKFLOW_QA_SANDBOX;}
+  const verdict=await review({report_markdown:report});expect(verdict.statusCode).toBe(201);
+  expect(verdict.json().submission_receipt).toMatchObject({confirmed:true,subtask_id:id});
   // Completion changed the current result version; repeating the stale verdict is rejected.
   expect((await review({report_markdown:report})).statusCode).toBe(409);
   const saved=db.prepare("SELECT to_value FROM task_events WHERE kind='role_result_report' AND field=?").all(id) as any[];
   expect(saved).toHaveLength(1);
   expect((db.prepare("SELECT done FROM subtasks WHERE id=?").get(id) as any).done).toBe(1);
  });
+
+ it("песочница не принимает сдачу ни артефактом, ни простым закрытием, ни квитанцией скопированной базы",async()=>{
+  const f=await fixture();const simple=await fixture(false);
+  try {
+   process.env.TASKFLOW_QA_SANDBOX="1";
+   const denied=await submit(f.step.id,{report_markdown:report});
+   expect(denied.statusCode).toBe(409);expect(denied.json().code).toBe("sandbox_submission_forbidden");
+   expect((await app.inject({method:"PATCH",url:"/api/subtasks/"+simple.step.id,headers:{authorization:builder},payload:{done:true,result:"Готово",report_markdown:report}})).statusCode).toBe(409);
+   expect((await app.inject({method:"GET",url:"/api/subtasks/"+f.step.id+"/submission-receipt",headers:{authorization:builder}})).json()).toMatchObject({confirmed:false,authority:"sandbox"});
+   expect((db.prepare("SELECT done FROM subtasks WHERE id=?").get(f.step.id) as any).done).toBe(0);
+  } finally {delete process.env.TASKFLOW_QA_SANDBOX;}
+ });
+
+ it("инструмент сдачи возвращает подтверждение основного сервера для артефакта и обычного этапа",async()=>{
+  const f=await fixture();const simple=await fixture(false);
+  const tool=(step:any,task:any)=>taskflowTools("builder",null,task.id,step.id).find(t=>t.name==="taskflow_subtask_done") as any;
+  const output=await tool(f.step,f.task).execute("receipt",{id:f.step.id,artifact:{summary:"Готово",payload:{summary:"machine input"},report_markdown:report}});
+  expect(JSON.parse(output.content[0].text).submission_receipt).toMatchObject({confirmed:true,authority:"primary",subtask_id:f.step.id});
+  const simpleOutput=await tool(simple.step,simple.task).execute("receipt",{id:simple.step.id,result:"Готово",report_markdown:report});
+  expect(JSON.parse(simpleOutput.content[0].text).submission_receipt).toMatchObject({confirmed:true,subtask_id:simple.step.id});
+ },15000);
 
  it.each(["analyst","architect","builder","designer","researcher","qa","critic_verifier","synthesizer"])("%s видит обязательный отчёт в инструменте сдачи",role=>{
   const tools=taskflowTools(role,null,"task","step");

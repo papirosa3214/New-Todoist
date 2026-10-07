@@ -422,13 +422,19 @@ def t_review(args):
     if verdict == "changes_requested":
         if not findings:
             raise TaskFlowError("для возврата нужен комментарий: что доработать")
-        api("POST", "/api/reviews", body)
-        api("POST", f"/api/tasks/{task_id}/state",
-            {"state": "in_progress", "comment": findings})
-        return {"вердикт": "возвращено на доработку", "комментарий": findings}
+        resp = api("POST", "/api/reviews", body)
+        if not resp.get("handled_by_plan"):
+            api("POST", f"/api/tasks/{task_id}/state", {"state": "in_progress", "comment": findings})
+        out = {"вердикт": "возвращено на доработку", "комментарий": findings}
+        if resp.get("submission_receipt"):
+            out["submission_receipt"] = confirmed_submission(resp["submission_receipt"]["subtask_id"])
+        return out
 
     resp = api("POST", "/api/reviews", body)
-    return {"вердикт": resp.get("verdict"), "комментарий": resp.get("findings")}
+    out = {"вердикт": resp.get("verdict"), "комментарий": resp.get("findings")}
+    if resp.get("submission_receipt"):
+        out["submission_receipt"] = confirmed_submission(resp["submission_receipt"]["subtask_id"])
+    return out
 
 
 def upload_file(task_id: str, path: str) -> dict:
@@ -515,10 +521,17 @@ def t_comment(args):
     return out
 
 
+def confirmed_submission(subtask_id, artifact_id=None):
+    receipt = api("GET", f"/api/subtasks/{subtask_id}/submission-receipt")
+    if not (receipt.get("confirmed") is True and receipt.get("authority") == "primary" and receipt.get("subtask_id") == subtask_id and receipt.get("confirmed_at") and (not artifact_id or receipt.get("artifact_id") == artifact_id)):
+        raise TaskFlowError("Сдача не подтверждена основным TaskFlow. Сохрани результат; не сообщай, что этап сдан.")
+    return receipt
+
+
 def t_subtask_done(args):
     if isinstance(args.get("artifact"), dict):
         row = api("POST", f"/api/subtasks/{args['id']}/artifact", args["artifact"])
-        return {"артефакт сдан": args["id"], "версия": row.get("artifact", {}).get("version_no")}
+        return {"артефакт сдан": args["id"], "версия": row.get("artifact", {}).get("version_no"), "submission_receipt": confirmed_submission(args["id"], row.get("artifact", {}).get("id"))}
     done = args.get("done", True)
     body = {"done": bool(done)}
     if args.get("report_markdown"):
@@ -542,6 +555,7 @@ def t_subtask_done(args):
     # инструкцию агент видит один раз в начале сессии, а спотыкается о
     # правило на сороковом ходу, закрывая последний шаг.
     if done:
+        out["submission_receipt"] = confirmed_submission(args["id"])
         out["дальше"] = (
             "остальные шаги — так же галочкой; когда закрыты все, ОДИН раз "
             "taskflow_state state=review на саму задачу"

@@ -1,3 +1,4 @@
+import { sandboxSubmissionError, submissionReceipt } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { completePlanFinalReview } from "../runtime/planReviewLifecycle.js";
 import { closeOpenCriticPlanNode, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
@@ -128,6 +129,8 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     }
 
     const hasPlan = reviewer && Boolean(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId));
+    const sandboxError=hasPlan ? sandboxSubmissionError() : null;
+    if(sandboxError) return reply.code(409).send(sandboxError);
     const recorded = hasPlan ? db.prepare("SELECT * FROM reviews WHERE version_id=? AND reviewer_id=? ORDER BY created_at DESC LIMIT 1").get(version.id,req.userId) as any : null;
     if (recorded) {
       if (recorded.verdict !== verdict) return reply.code(409).send({error:"По этой версии уже есть вердикт; повторная проверка требует новую версию результата"});
@@ -137,6 +140,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     if (previous) return reply.code(201).send({...previous,review_id:previous.id,handled_by_plan:Boolean(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)),deduplicated:true});
     if (body.rework_steps !== undefined && (!Array.isArray(body.rework_steps) || body.rework_steps.some((slot:any)=>typeof slot!=="string"))) return reply.code(400).send({error:"rework_steps — список ключей этапов"});
     let reportMarkdown: string | null = null;
+    let receiptStepId: string | null = null;
     const reportStep = reviewer ? db.prepare("SELECT s.id FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key JOIN task_collaboration_plans p ON p.id=n.plan_id WHERE s.task_id=? AND p.status='approved' AND n.role_key='critic_verifier' AND s.done=0 ORDER BY CASE WHEN s.agent_state='in_progress' THEN 0 ELSE 1 END,s.position DESC LIMIT 1").get(taskId) as {id:string}|undefined : undefined;
     if (hasPlan) {
       try { reportMarkdown = validateRoleReport(body.report_markdown); }
@@ -159,6 +163,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
           const step = reportStep ?? db.prepare("SELECT s.id FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key WHERE s.task_id=? AND n.role_key='critic_verifier' ORDER BY s.position DESC LIMIT 1").get(taskId) as {id:string}|undefined;
           if (!step) throw new Error("Этап проверяющего не найден");
           saveRoleResultReport(step.id,reportMarkdown,req.userId);
+          receiptStepId=step.id;
         }
       })();
     } catch (error) {
@@ -251,6 +256,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     }
 
     return reply.code(201).send({
+      ...(receiptStepId ? {submission_receipt:submissionReceipt(receiptStepId)} : {}),
       review_id: reviewId, task_id: taskId, version_id: version.id,
       task_revision: version.task_revision, reviewer_id: req.userId,
       artifact_hash: version.artifact_hash, criteria_version: criteriaVersion,

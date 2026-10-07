@@ -1,3 +1,4 @@
+import { sandboxSubmissionError, submissionReceipt } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
@@ -60,11 +61,17 @@ function normalizeEvidenceItem(item: unknown): unknown {
 }
 
 export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
+  app.get<{Params:{id:string}}>("/api/subtasks/:id/submission-receipt",{preHandler:authOrApiToken},async(req:any,reply)=>{
+   if(!getSubtaskWithTaskForUser(req.params.id,req.userId)) return reply.code(404).send({error:"Not found"});
+   return submissionReceipt(req.params.id);
+  });
   app.post<{ Params: { id: string }; Body: { summary?: unknown; payload?: unknown; evidence?: unknown; report_markdown?: unknown } }>("/api/subtasks/:id/artifact", { preHandler: authOrApiToken }, async (req: any, reply) => {
     const current = getSubtaskWithTaskForUser(req.params.id, req.userId);
     if (!current) return reply.code(404).send({ error: "Not found" });
     if (current.agent_id !== req.userId) return reply.code(403).send({ error: "это не ваш узел плана" });
     if (current.agent_state !== "in_progress") return reply.code(409).send({ error: "артефакт можно сдать только из узла в работе" });
+    const sandboxError=sandboxSubmissionError();
+    if(sandboxError) return reply.code(409).send(sandboxError);
     const contract = contractFor(current);
     if (!contract) return reply.code(409).send({ error: "у узла нет artifact contract" });
     const summary = String(req.body?.summary ?? "").trim();
@@ -116,7 +123,7 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     await unlockReadyPlanSubtasks(current.collaboration_plan_id, current.task_id, req.userId);
     const fullTask = getFullTask(current.task_id);
     broadcastTaskEvent([current.task_creator_id, current.task_assignee_id], { type: "task:updated", task: fullTask });
-    return reply.code(201).send({ artifact: latestArtifact(current.id), subtask: db.prepare("SELECT * FROM subtasks WHERE id = ?").get(current.id) });
+    return reply.code(201).send({ submission_receipt: submissionReceipt(current.id), artifact: latestArtifact(current.id), subtask: db.prepare("SELECT * FROM subtasks WHERE id = ?").get(current.id) });
   });
 
   app.post<{ Params: { id: string } }>("/api/subtasks/:id/artifact/accept", { preHandler: authOrApiToken }, async (req: any, reply) => {

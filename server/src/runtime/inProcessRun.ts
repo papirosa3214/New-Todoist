@@ -1,3 +1,4 @@
+import { requireSubmissionReceipt, SUBMISSION_POLICY } from "../lib/submissionReceipt.js";
 import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
@@ -381,7 +382,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
         return { "состояние изменено": short(unwrap(resp)) };
       }),
-    T("taskflow_review", "Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. " + ROLE_REPORT_INSTRUCTION,
+    T("taskflow_review", "Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
       Type.Object({ id: Type.String(), verdict: Type.String(), report_markdown: Type.Optional(Type.String()), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
       async (p) => {
         const versions = await asRole(role, "GET", `/api/tasks/${p.id}/versions`);
@@ -399,10 +400,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           if (!findings) throw new ToolError("для возврата нужен комментарий: что доработать");
           const review = await asRole(role, "POST", "/api/reviews", body);
           if (!review.handled_by_plan) await asRole(role, "POST", `/api/tasks/${p.id}/state`, { state: "in_progress", comment: findings });
-          return { вердикт: "возвращено на доработку", комментарий: findings };
+          if(subtaskId && !review.submission_receipt) throw new ToolError("Сдача проверяющего не подтверждена основным TaskFlow");
+          const receipt=review.submission_receipt ? requireSubmissionReceipt(await asRole(role,"GET", `/api/subtasks/${review.submission_receipt.subtask_id}/submission-receipt`),review.submission_receipt.subtask_id) : null;
+          return { вердикт: "возвращено на доработку", комментарий: findings, ...(receipt ? {submission_receipt:receipt}: {}) };
         }
         const resp = await asRole(role, "POST", "/api/reviews", body);
-        return { вердикт: resp.verdict, комментарий: resp.findings };
+        const receipt=resp.submission_receipt ? requireSubmissionReceipt(await asRole(role,"GET", `/api/subtasks/${resp.submission_receipt.subtask_id}/submission-receipt`),resp.submission_receipt.subtask_id) : null;
+        if(subtaskId && !receipt) throw new ToolError("Сдача проверяющего не подтверждена основным TaskFlow");
+        return { вердикт: resp.verdict, комментарий: resp.findings, ...(receipt ? {submission_receipt:receipt}: {}) };
       }),
     T("taskflow_comment", "Комментарий в ленту задачи.",
       Type.Object({ id: Type.String(), text: Type.String() }),
@@ -448,7 +453,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) touchTaskActivity(taskId);
         return result;
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. " + ROLE_REPORT_INSTRUCTION,
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
       Type.Object({
         id: Type.String(),
         result: Type.Optional(Type.String()),
@@ -463,7 +468,9 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           void activity(role, row.subtask?.task_id ?? "", "edit", `шаг «${row.subtask?.title ?? ""}»: сдал артефакт`);
           // Сдача артефакта — тоже движение роли (доработка MAK-66).
           if (row.subtask?.task_id) touchTaskActivity(row.subtask.task_id);
-          return { "артефакт сдан": p.id, версия: row.artifact?.version_no };
+          if(!row.artifact?.id) throw new ToolError("Сдача не подтверждена: сервер не вернул ID артефакта");
+          const receipt=requireSubmissionReceipt(await asRole(role,"GET", `/api/subtasks/${p.id}/submission-receipt`),p.id,row.artifact?.id);
+          return { "артефакт сдан": p.id, версия: row.artifact?.version_no, submission_receipt:receipt };
         }
         const done = p.done ?? true;
         const body: Json = { done };
@@ -472,7 +479,8 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (p.snapshot) body.snapshot = p.snapshot;
         const row = await asRole(role, "PATCH", `/api/subtasks/${p.id}`, body);
         if (done && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: закрыл`);
-        return { [done ? "шаг отмечен" : "отметка снята"]: p.id };
+        const receipt=done ? requireSubmissionReceipt(await asRole(role,"GET", `/api/subtasks/${p.id}/submission-receipt`),p.id) : null;
+        return { [done ? "шаг отмечен" : "отметка снята"]: p.id, ...(receipt ? {submission_receipt:receipt} : {}) };
       }),
     T("taskflow_rules", "Правила ведения учёта.", Type.Object({}), async () => ({ правила: effectiveRules(role) })),
     T("taskflow_projects", "Проекты.", Type.Object({}), async () => ({
@@ -993,7 +1001,7 @@ async function runRoleInProcessUnserialized(input: {
       || rolePrompt(role)
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
-    ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, ROLE_REPORT_INSTRUCTION] : []),
+    ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, ROLE_REPORT_INSTRUCTION, SUBMISSION_POLICY] : []),
   ].join("\n\n");
   const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
 
