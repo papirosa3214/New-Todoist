@@ -2,6 +2,7 @@ import { branchMembership } from "../runtime/branchPlan.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { deliverTopicToWork } from "../runtime/inProcessRun.js";
 import { topicContext, taskTopicClosedAt } from "../lib/projectTopics.js";
+import { nudgeTaskPlan } from "../runtime/taskNudge.js";
 import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { renderInstruction } from "../lib/roleContextResolver.js";
@@ -732,6 +733,11 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const message = loadChatMessage(id);
+      // Владелец написал в чат задачи — будим её план: готовые шаги стартуют, замолчавшие
+      // перезапускаются той же ролью (runtime/taskNudge.ts). Ответ на сообщение этим не задерживаем.
+      if (chatTaskId && chat.parent_chat_id && isOwner(req.userId)) {
+        void nudgeTaskPlan(chatTaskId, req.userId).catch((error) => req.log?.warn?.({ err: error, taskId: chatTaskId }, "не удалось разбудить план задачи"));
+      }
 
       // MAK-98: вопрос роли берём под срок жизни, ответ — снимаем с учёта.
       try {

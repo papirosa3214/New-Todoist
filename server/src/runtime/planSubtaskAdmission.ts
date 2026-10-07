@@ -57,6 +57,7 @@ type ArtifactVersion = {
   artifact_key: string;
   status: "submitted" | "accepted" | "revision_requested" | "rejected";
   evidence_json: string;
+  note_id?: string | null;
 };
 
 function subtask(subtaskId: string): PlanSubtask | undefined {
@@ -67,7 +68,11 @@ function latestArtifact(subtaskId: string): ArtifactVersion | undefined {
   return db.prepare("SELECT * FROM subtask_artifact_versions WHERE subtask_id = ? ORDER BY version_no DESC LIMIT 1").get(subtaskId) as ArtifactVersion | undefined;
 }
 
-function artifactHasEvidence(artifact: ArtifactVersion): boolean {
+export function artifactHasEvidence(artifact: ArtifactVersion): boolean {
+  // Результат, который сервер сам сохранил документом (note_id), и есть доказательство. Без этого
+  // Аналитик сдал feature_spec с пустым списком ссылок, шаг закрылся, а Дизайнер и Разработчик
+  // ждали «ссылок-доказательств» вечно и молча (07.10.2026, карточка 424de175).
+  if (artifact.note_id) return true;
   try { return Array.isArray(JSON.parse(artifact.evidence_json)) && JSON.parse(artifact.evidence_json).length > 0; } catch { return false; }
 }
 
@@ -672,7 +677,9 @@ export async function unlockDependencyPlans():Promise<void> {
   const plans=db.prepare(`SELECT DISTINCT p.id,p.task_id,p.approved_by FROM task_collaboration_plans p
     JOIN tasks t ON t.id=p.task_id
     WHERE p.status='approved' AND t.status='active'
-      AND (EXISTS(SELECT 1 FROM task_dependencies d WHERE d.task_id=t.id) OR EXISTS(SELECT 1 FROM branch_plan_members b WHERE b.plan_id=p.id))
+      AND (EXISTS(SELECT 1 FROM task_dependencies d WHERE d.task_id=t.id) OR EXISTS(SELECT 1 FROM branch_plan_members b WHERE b.plan_id=p.id)
+        -- цепочка уже идёт (есть закрытый шаг): если сервер сбился и не открыл следующий, открываем здесь
+        OR EXISTS(SELECT 1 FROM subtasks d WHERE d.collaboration_plan_id=p.id AND d.done=1))
       AND EXISTS(SELECT 1 FROM subtasks s WHERE s.collaboration_plan_id=p.id AND s.done=0 AND s.agent_state IS NULL)`).all() as Array<{id:string;task_id:string;approved_by:string}>;
   for(const plan of plans){
     if(unmetDependencyIds(plan.task_id).length) continue;

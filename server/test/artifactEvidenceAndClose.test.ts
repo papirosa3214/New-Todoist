@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { roleUserId } from "../src/roleRouting.js";
+import { artifactHasEvidence } from "../src/runtime/planSubtaskAdmission.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
 describe("результат шага плана: доказательства и закрытие", () => {
@@ -76,5 +77,14 @@ describe("результат шага плана: доказательства �
   it("после сдачи результата шаг больше ничего не ждёт", async () => {
     const node = await deliveryNode();
     expect(node.waiting_for).toEqual([]);
+  });
+
+  // 07.10.2026, карточка 424de175: Аналитик сдал результат с пустым списком ссылок, сервер сам
+  // сохранил его документом — следующие шаги ждали «ссылок-доказательств» вечно.
+  it("результат без ссылок, но сохранённый документом, считается доказанным; без документа — нет", () => {
+    const base = { subtask_id: "s", version_no: 1, artifact_key: "feature_spec", status: "submitted" as const };
+    expect(artifactHasEvidence({ ...base, evidence_json: "[]", note_id: null })).toBe(false);
+    expect(artifactHasEvidence({ ...base, evidence_json: "[]", note_id: "artifact_doc" })).toBe(true);
+    expect(artifactHasEvidence({ ...base, evidence_json: JSON.stringify([{ path: "docs/spec.md" }]), note_id: null })).toBe(true);
   });
 });
