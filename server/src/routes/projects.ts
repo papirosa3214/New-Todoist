@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
+import { purgeTasks } from "../lib/taskPurge.js";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { snapshotFor } from "../activeAgent.js";
@@ -597,26 +598,11 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       );
 
       const purge = db.transaction(() => {
-        // Сначала снимаем зависимости, которые foreign key НЕ удаляет
-        // каскадом и которые иначе заблокировали бы DELETE FROM tasks.
-        // Порядок: планы (внутри каскадом уходят узлы/рёбра и их ссылки на
-        // подзадачи) → журнальные и вспомогательные таблицы → сами задачи
-        // (далее каскад добирает подзадачи, попытки, комментарии, метки,
-        // вложения, отчёты и очередь ролей).
-        db.prepare(
-          "DELETE FROM task_collaboration_plans WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)",
-        ).run(req.params.id);
-        for (const table of [
-          "consultation_log",
-          "task_embeddings",
-          "task_events",
-          "notifications",
-        ]) {
-          db.prepare(
-            `DELETE FROM ${table} WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)`,
-          ).run(req.params.id);
-        }
-        db.prepare("DELETE FROM tasks WHERE project_id = ?").run(req.params.id);
+        // Карточки проекта со всем, что на них держится, — общей функцией:
+        // она разрывает кольцо ссылок «подзадача ↔ план» (lib/taskPurge.ts).
+        purgeTasks(
+          (db.prepare("SELECT id FROM tasks WHERE project_id = ?").all(req.params.id) as Array<{ id: string }>).map((r) => r.id),
+        );
         // Чаты и память проекта — каскадом от projects, но проект пока не
         // удаляем (он уйдёт ниже) — чистим явно, чтобы не зависеть от
         // порядка каскадов в SQLite.

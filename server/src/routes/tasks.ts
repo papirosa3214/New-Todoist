@@ -5,6 +5,7 @@ import { validatePreparation, type TaskPreparation } from "../lib/taskPreparatio
 import { persistPreparedPlan } from "../lib/taskPreparationPersistence.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
+import { purgeTasks } from "../lib/taskPurge.js";
 import db from "../db.js";
 import { autoProposeCollaborationPlanIfNeeded } from "./task-collaboration-plans.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
@@ -2065,21 +2066,9 @@ export function registerTaskRoutes(app: FastifyInstance) {
       const task = getTaskForOwnerDelete(req.params.id, req.userId);
       if (!task) return reply.code(404).send({ error: "Not found" });
 
-      db.prepare("DELETE FROM task_labels WHERE task_id = ?").run(
-        req.params.id,
-      );
-      db.prepare("DELETE FROM subtasks WHERE task_id = ?").run(req.params.id);
-      db.prepare("DELETE FROM comments WHERE task_id = ?").run(req.params.id);
-      db.prepare("DELETE FROM notifications WHERE task_id = ?").run(
-        req.params.id,
-      );
-      // Must run before DELETE FROM tasks — task_events.task_id references
-      // tasks(id) and foreign_keys = ON (db.ts), so deleting the parent row
-      // first would fail the FK check.
-      db.prepare("DELETE FROM task_events WHERE task_id = ?").run(
-        req.params.id,
-      );
-      db.prepare("DELETE FROM tasks WHERE id = ?").run(req.params.id);
+      // Карточка с планом совместной работы иначе не удалялась: кольцо ссылок
+      // «подзадача ↔ план» — см. lib/taskPurge.ts.
+      purgeTasks([req.params.id]);
 
       broadcastTaskEvent([task.creator_id, task.assignee_id], {
         type: "task:deleted",
