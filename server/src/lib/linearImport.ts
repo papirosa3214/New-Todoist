@@ -125,7 +125,8 @@ export function createLinearPreview(owner: string, snapshot: LinearSnapshot, pro
   const items = snapshot.issues.map(issue => {
     const mapping = existing.get(issue.id), current: any = mapping ? db.prepare("SELECT * FROM tasks WHERE id=?").get(mapping.task_id) : undefined;
     const merge = current ? mergeLinearFields(current, JSON.parse(mapping.applied_fields), fields(issue, ids, snapshot)) : null;
-    const conflicts = merge?.conflicts ?? [];
+    // Статус из Linear к заведённой карточке не применяется, поэтому и конфликтом не считается.
+    const conflicts = (merge?.conflicts ?? []).filter(key => key !== "status");
     for (const [kind, entries] of [["comment", issue.comments], ["history", issue.history], ["document", issue.documents]] as const) {
       for (const entry of entries) {
         const old = object(owner, snapshot.workspace.id, issue.id, kind, entry.id);
@@ -233,6 +234,14 @@ export function commitLinearPreview(owner: string, previewId: string, options: {
     for (const issue of snapshot.issues) {
       const task = ids.get(issue.id)!, mapping = existing.get(issue.id), current: any = db.prepare("SELECT * FROM tasks WHERE id=?").get(task), remote = fields(issue, ids, snapshot);
       const merged = mapping ? mergeLinearFields(current, JSON.parse(mapping.applied_fields), remote) : { applied: remote, updates: remote, conflicts: [] as string[] };
+      // Статус уже заведённой карточки ведёт только TaskFlow (владелец 07.10.2026: «с Linear
+      // нельзя влиять на движение задач»): из Linear приходят текст и структура, а «выполнено /
+      // не выполнено» уходит обратно в Linear через lib/linearSync.ts. Раньше закрытие в Linear
+      // закрывало карточку напрямую, мимо правила родителя-зонтика — родители висели активными.
+      if (mapping) {
+        delete merged.updates.status; merged.applied.status = JSON.parse(mapping.applied_fields).status;
+        merged.conflicts = merged.conflicts.filter(key => key !== "status");
+      }
       if (mapping && (current.agent_state || current.ready_for_pickup)) {
         for (const key of ["status", "parent_id"]) { delete merged.updates[key]; merged.applied[key] = JSON.parse(mapping.applied_fields)[key]; }
       }

@@ -69,6 +69,14 @@ describe("Linear import uses existing task semantics",()=>{
   a.parent=null;const p=createLinearPreview(owner,snapshot([a]),null);expect(()=>commitLinearPreview("u1",p.preview_id)).toThrow(/устарел/);
   db.prepare("UPDATE linear_import_previews SET expires_at=0 WHERE id=?").run(p.preview_id);expect(()=>commitLinearPreview(owner,p.preview_id)).toThrow(/устарел/);
  });
+ it("Linear never moves the status of an existing card, in either direction",()=>{
+  const a=issue(),source=snapshot([a]);const id=commitLinearPreview(owner,createLinearPreview(owner,source,null).preview_id).task_ids[0].task_id;
+  const status=()=>(db.prepare("SELECT status FROM tasks WHERE id=?").get(id) as any).status;
+  a.state.type="completed";a.title="Новый текст";let p=createLinearPreview(owner,source,null);expect(p.items[0].conflicts).not.toContain("status");commitLinearPreview(owner,p.preview_id);
+  expect(status()).toBe("active");expect((db.prepare("SELECT title FROM tasks WHERE id=?").get(id) as any).title).toBe("Новый текст");
+  db.prepare("UPDATE tasks SET status='completed' WHERE id=?").run(id);a.state.type="started";a.title="Ещё текст";
+  p=createLinearPreview(owner,source,null);expect(p.items[0].conflicts).not.toContain("status");commitLinearPreview(owner,p.preview_id);expect(status()).toBe("completed");
+ });
  it("active internal work keeps status, parent and role assignment",()=>{
   const a=issue(),source=snapshot([a]);const id=commitLinearPreview(owner,createLinearPreview(owner,source,null).preview_id).task_ids[0].task_id;
   db.prepare("UPDATE tasks SET ready_for_pickup=1 WHERE id=?").run(id);a.state.type="completed";
