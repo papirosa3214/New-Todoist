@@ -474,13 +474,7 @@ export function AgentOwnerActions({
             </Button>
           </>
         )}
-        {task.assignee_id && (
-          <Button
-            variant="secondary"
-            onClick={() => runAgent.mutate({ id: task.id, mode: "executor" })}
-            disabled={runAgent.isPending} icon="play">Запустить исполнителя
-          </Button>
-        )}
+        {/* Отдельной кнопки «Запустить исполнителя» нет (владелец 07.10.2026): запуск — планом. */}
         {task.agent_state === "review" && (
           <Button
             variant="secondary"
