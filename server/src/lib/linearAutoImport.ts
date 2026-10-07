@@ -145,7 +145,12 @@ function changedIssueIds(ownerId: string, workspaceId: string, issues: Array<{ i
     // Отменённые и архивные не импортируются и не обновляются.
     if (issue.state.type === "canceled" || issue.archivedAt) continue;
     const snapshot = stored.get(issue.id);
-    if (!snapshot) { changed.push(issue.id); continue; }
+    if (!snapshot) {
+      // Заводится только задача в работе (владелец 07.10.2026): выполненные,
+      // запланированные и лежащие в бэклоге новыми карточками не становятся.
+      if (issue.state.type === "started") changed.push(issue.id);
+      continue;
+    }
     let previous: { updatedAt?: string } = {};
     try { previous = JSON.parse(snapshot); } catch { /* повреждённый снимок — считаем изменённым */ }
     if (previous.updatedAt !== issue.updatedAt) changed.push(issue.id);
