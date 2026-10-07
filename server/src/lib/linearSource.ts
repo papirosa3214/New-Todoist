@@ -29,10 +29,12 @@ function connection(value: any) {
   return value;
 }
 
+/** Список для ручного импорта — тот же отбор, что у автоимпорта: только задачи в работе
+ * (владелец 07.10.2026); выполненные, отменённые, архивные, запланированные и бэклог не показываются. */
 export async function listLinearIssues(owner: string, after: string | null = null, read: LinearRead = linearQuery) {
   const data = await read(owner, `query TaskFlowLinearList($after: String) {
     organization { id name }
-    issues(first: 50, after: $after, includeArchived: true, orderBy: createdAt) { nodes { ${CORE} } ${PAGE} }
+    issues(first: 50, after: $after, filter: { state: { type: { eq: "started" } } }, orderBy: createdAt) { nodes { ${CORE} } ${PAGE} }
   }`, { after });
   const items = connection(data.issues);
   if (!data.organization?.id) throw new LinearSourceError("Linear не вернул рабочее пространство.");
