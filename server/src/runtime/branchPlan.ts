@@ -109,7 +109,8 @@ export function approveBranch(rootPlanId:string,ownerId:string,snapshot:string):
     // Parent assembly nodes are explicit architects in the agreed root plan.
     const rootNodes=planNodes(root.id).filter(n=>n.role_key!=="critic_verifier");
     if(rootNodes.length===1 && ['linear_import','auto_template','auto_preparation'].includes(rootNodes[0].origin)) db.prepare("UPDATE task_collaboration_plan_nodes SET role_key='architect' WHERE plan_id=? AND slot_key=?").run(root.id,rootNodes[0].slot_key);
-    else if(responsibleRole(root.id)!=='architect') throw new Error("В общем плане нужен Архитектор, отвечающий за итог ветки");
+    // Архитектора в плане корня может не быть: он подключается сам, когда вся работа ветки
+    // закрыта — как итоговый проверяющий (владелец 07.10.2026, planReviewLifecycle.ensureBranchAssembler).
     for(const {card,plan:maybePlan} of selected){
       const plan=maybePlan!;const role=responsibleRole(plan.id,card.id===root.task_id);
       settlePreparationOnApproval(card.id); // подготовка и вопрос модели владельца не блокируют (lib/preparationGate.ts)

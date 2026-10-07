@@ -1,6 +1,6 @@
 import { branchMembership } from "./branchPlan.js";
 import { unmetDependencyIds } from "../enricher.js";
-import { ensurePlanFinalReviewer, isPlanFinalReviewStep, queuePlanFinalReview, FINAL_REVIEW_MARKER } from "./planReviewLifecycle.js";
+import { ensureBranchAssembler, ensurePlanFinalReviewer, isPlanFinalReviewStep, queuePlanFinalReview, FINAL_REVIEW_MARKER } from "./planReviewLifecycle.js";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
@@ -601,6 +601,8 @@ export function finishPlanIfComplete(planId: string, taskId: string, actorId: st
   const already = db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'collaboration_plan_completed' AND field = ? LIMIT 1")
     .get(taskId, planId);
   if (already) return false;
+  // Корень ветки без Архитектора на выходе — он подключается сам и собирает итог.
+  if (ensureBranchAssembler(planId, taskId)) return false;
 
   const summary = [
     "План совместной работы сдан.",

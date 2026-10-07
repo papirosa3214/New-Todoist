@@ -6,7 +6,7 @@ import {buildApp} from '../src/index.js';
 import db from '../src/db.js';
 import {seedRoleAccounts,demoteSeededOwner} from './helpers/seedOwner.js';
 import {branchSnapshot,branchMembership,branchTeamContext} from '../src/runtime/branchPlan.js';
-import {canPlanSubtaskBecomeReady,unlockDependencyPlans} from '../src/runtime/planSubtaskAdmission.js';
+import {canPlanSubtaskBecomeReady,unlockDependencyPlans,finishPlanIfComplete} from '../src/runtime/planSubtaskAdmission.js';
 import {completePlanFinalReview} from '../src/runtime/planReviewLifecycle.js';
 import {roleUserId} from '../src/roleRouting.js';
 describe('one approval for a complete task branch',()=>{
@@ -72,6 +72,21 @@ describe('one approval for a complete task branch',()=>{
  it('does not guess accountability for parallel terminal workers',async()=>{
   const f=await fixture();db.prepare("INSERT INTO task_collaboration_plan_nodes(id,plan_id,slot_key,role_key,required,expected_result,origin) VALUES(?,?,'second','analyst',1,'Второй итог','owner')").run(crypto.randomUUID(),f.ap);
   const r=await approve(f);expect(r.statusCode).toBe(409);expect(r.json().error).toContain('конечных');
+ });
+ it('root plan without an architect is approved; the architect joins by itself once all work is done',async()=>{
+  const root=await task('Итог без архитектора'),a=await task('Часть',root);const rp=await plan(root,'builder'),ap=await plan(a,'researcher');
+  expect((await app.inject({method:'POST',url:`/api/tasks/${root}/collaboration-plans/${rp}/approve`,headers:auth,payload:{branch_snapshot:branchSnapshot(rp)}})).statusCode).toBe(200);
+  const close=(p:string)=>{db.prepare("UPDATE attempts SET ended_at=datetime('now') WHERE subtask_id IN (SELECT id FROM subtasks WHERE collaboration_plan_id=?)").run(p);db.prepare("UPDATE subtasks SET done=1,agent_state=NULL,result='Готово' WHERE collaboration_plan_id=?").run(p);};
+  const joined=()=>db.prepare("SELECT n.slot_key,s.done,s.agent_id FROM task_collaboration_plan_nodes n JOIN subtasks s ON s.collaboration_plan_id=n.plan_id AND s.plan_node_key=n.slot_key WHERE n.plan_id=? AND n.role_key='architect'").all(rp) as any[];
+  close(ap);completePlanFinalReview(a,'role_critic_verifier','approved','Принято');close(rp);
+  expect(joined()).toHaveLength(0);
+  expect(finishPlanIfComplete(rp,root,null)).toBe(false);
+  expect(joined()).toEqual([{slot_key:expect.stringMatching(/^assembly_/),done:0,agent_id:roleUserId('architect')}]);
+  expect(db.prepare("SELECT COUNT(*) n FROM task_collaboration_plan_edges WHERE plan_id=? AND from_slot_key='work' AND to_slot_key=?").get(rp,joined()[0].slot_key)).toEqual({n:1});
+  expect((db.prepare("SELECT agent_state FROM tasks WHERE id=?").get(root) as any).agent_state).not.toBe('review');
+  expect(finishPlanIfComplete(rp,root,null)).toBe(false);expect(joined()).toHaveLength(1);
+  close(rp);expect(finishPlanIfComplete(rp,root,null)).toBe(true);expect(joined()).toHaveLength(1);
+  expect((db.prepare("SELECT agent_state FROM tasks WHERE id=?").get(root) as any).agent_state).toBe('review');
  });
  it('replays rejected child and downstream assembly after global critique',async()=>{
   const f=await fixture();expect((await approve(f)).statusCode).toBe(200);

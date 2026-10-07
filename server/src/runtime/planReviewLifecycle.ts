@@ -71,6 +71,32 @@ export function ensurePlanFinalReviewer(planId: string, taskId: string): ReviewS
     ensurePlanTopic(taskId);
     return { id, task_id: taskId, collaboration_plan_id: planId, plan_node_key: slot, done: 0 };
 }
+/**
+ * Архитектор собирает итог ветки и подключается сам, как итоговый проверяющий (владелец
+ * 07.10.2026): в плане родителя его можно не ставить. Когда шаги корневого плана закрыты, а
+ * конечный исполнитель в нём не Архитектор, шаг сборки добавляется здесь и ждёт дочерних по
+ * общим правилам. true — шаг добавлен, план ещё не сдан.
+ */
+export function ensureBranchAssembler(planId: string, taskId: string): boolean {
+    const member = branchMembership(taskId);
+    if (!member || member.root_task_id !== taskId || member.root_plan_id !== planId || branchCards(taskId).length < 2) return false;
+    const work = nodes(planId).filter(n => !n.skipped_at && n.role_key !== "critic_verifier");
+    const graph = edges(planId);
+    const terminals = work.filter(n => !graph.some(e => e.from_slot_key === n.slot_key && work.some(x => x.slot_key === e.to_slot_key)));
+    if (terminals.length === 1 && terminals[0].role_key === "architect") return false;
+    return db.transaction(() => {
+        const slot = `assembly_${crypto.randomUUID().slice(0, 8)}`;
+        const actor = roleUserId("architect");
+        const title = (db.prepare("SELECT title FROM tasks WHERE id=?").get(taskId) as { title: string }).title;
+        const cycle = Math.max(0, ...work.map(n => n.iteration ?? 0));
+        const id = addNode(planId, taskId, { slot_key: slot, role_key: "architect", expected_result: `Собрать и проверить совместимость дочерних результатов: ${title}`, output_artifact_json: null, instructions: null, iteration: 0, skipped_at: null }, slot, "role", actor, "Архитектор присоединился к плану, чтобы собрать итог ветки", cycle, null);
+        db.prepare("UPDATE subtasks SET agent_id=? WHERE id=?").run(actor, id);
+        for (const n of terminals) addEdge(planId, n.slot_key, slot);
+        bump(planId, taskId, actor, "plan_assembler_joined", slot);
+        ensurePlanTopic(taskId);
+        return true;
+    })();
+}
 export function isPlanFinalReviewStep(subtaskId: string): boolean {
     return Boolean(db.prepare(`SELECT 1 FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key
  WHERE s.id=? AND n.instructions LIKE ?`).get(subtaskId, `${FINAL_REVIEW_MARKER}%`));
