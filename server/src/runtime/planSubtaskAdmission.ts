@@ -677,9 +677,11 @@ export async function unlockDependencyPlans():Promise<void> {
   const plans=db.prepare(`SELECT DISTINCT p.id,p.task_id,p.approved_by FROM task_collaboration_plans p
     JOIN tasks t ON t.id=p.task_id
     WHERE p.status='approved' AND t.status='active'
-      AND (EXISTS(SELECT 1 FROM task_dependencies d WHERE d.task_id=t.id) OR EXISTS(SELECT 1 FROM branch_plan_members b WHERE b.plan_id=p.id)
-        -- цепочка уже идёт (есть закрытый шаг): если сервер сбился и не открыл следующий, открываем здесь
-        OR EXISTS(SELECT 1 FROM subtasks d WHERE d.collaboration_plan_id=p.id AND d.done=1))
+      -- ВРЕМЕННО ВЫКЛЮЧЕНО 07.10.2026 (авария: в 19:43 живая база оказалась стёрта, когда этим правилом были
+      -- разбужены роли, работающие над кодом сервера; причина не установлена). Правило «цепочка уже идёт
+      -- (есть закрытый шаг) — открываем пропущенный шаг сами» вернуть после разбора:
+      --   OR EXISTS(SELECT 1 FROM subtasks d WHERE d.collaboration_plan_id=p.id AND d.done=1)
+      AND (EXISTS(SELECT 1 FROM task_dependencies d WHERE d.task_id=t.id) OR EXISTS(SELECT 1 FROM branch_plan_members b WHERE b.plan_id=p.id))
       AND EXISTS(SELECT 1 FROM subtasks s WHERE s.collaboration_plan_id=p.id AND s.done=0 AND s.agent_state IS NULL)`).all() as Array<{id:string;task_id:string;approved_by:string}>;
   for(const plan of plans){
     if(unmetDependencyIds(plan.task_id).length) continue;
