@@ -60,7 +60,7 @@ export function registerLinearRoutes(app: FastifyInstance) {
   });
 
   // Автоимпорт (карточка cc7caa43…): состояние службы и выключатель.
-  // Только владелец; служба сама ходит раз в 5 минут в процессе сервера.
+  // Только владелец; сама по таймеру служба больше не ходит (07.10.2026) — только ручной проход.
   app.get("/api/integrations/linear/autoimport", { preHandler: ownerOnly }, async (req: any) => {
     const state = linearAutoImportState(req.userId);
     return {
