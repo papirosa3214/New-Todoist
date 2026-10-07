@@ -15,12 +15,19 @@ import { useRoles } from "../api/roles";
 // и «кто сейчас активен». Дочерние в пульсе — кликабельные ссылки на
 // их карточки.
 //
-// Загрузка: на КАЖДОЙ дочерней параллельно один запрос
-// `/collaboration-plans` — состояние узла живёт в `nodes[].execution_state`
-// (см. `presentSingle` на сервере). Отдельного `/role-slots` нет (заменён
-// на `planSubtaskAdmission`); агрегацию строим прямо из плана. Данные
-// поднимаются в ParentPlanPulse и раздаются вниз, чтобы не гонять одни
-// и те же запросы дважды (метрики + прогресс-бары).
+// Загрузка по дочерней (Доработка 3, архитектурное решение D-3.0):
+// 1) `/collaboration-plans` на child — получаем либо её собственный
+//    approved план (если есть), либо `plans: []` и `branch_root_task_id`.
+// 2) Если своего нет — по `branch_root_task_id` идём за планом корня
+//    ветки и берём только узлы с `task_id === child.id` (на сервере
+//    узел плана ветки помечен `task_id` той дочерней, которой он
+//    соответствует). Так мы видим реальный прогресс дочерней, а не
+//    draft-план root'а целиком.
+// 3) Несколько дочерних одной ветки (типично: 13 на родительской
+//    1fe2d05c) идут в один и тот же кэш react-query — дублей запросов
+//    на root не будет. Данные поднимаются в ParentPlanPulse и
+//    раздаются вниз, чтобы не гонять одни и те же запросы дважды
+//    (метрики + прогресс-бары).
 
 const PROFILE_LABELS: Record<string, string> = {
   single_executor: "Один исполнитель",
@@ -109,31 +116,87 @@ export interface ParentPlanPulseProps {
 export function ParentPlanPulse({ parentId: _parentId, childList: children }: ParentPlanPulseProps) {
   const navigate = useNavigate();
 
-  // Параллельные запросы по дочерним: только планы. Состояния узлов
-  // (`execution_state`) уже внутри `ApiCollaborationPlanNode`, отдельного
-  // REST-запроса на слоты больше нет (бывший `/api/tasks/:id/role-slots`
-  // заменён на `planSubtaskAdmission`, см. реализацию `useRoleSlots`).
-  const planQueries = useQueries({
+  // Хуки должны вызываться безусловно и в одном порядке на каждом
+  // рендере. Сначала фиксируем список branch_root'ов, которые нужно
+  // догрузить (на пустом children — пустой массив, без сайд-эффектов
+  // в .map), затем — оба набора useQueries, и только потом ранний
+  // return. Иначе oxlint `rules-of-hooks` и React в рендере с
+  // переменным числом дочерних дадут неверный порядок хуков.
+
+  // Параллельные запросы по дочерним: сначала план самой child, затем
+  // (если своего approved нет) — план её branch_root. Два набора
+  // запросов склеиваем по индексу дочерней.
+  const childPlanQueries = useQueries({
     queries: children.map((c) => ({
       queryKey: ["tasks", c.id, "collaboration-plans"] as const,
       queryFn: () =>
-        api.get<{ plans: ApiCollaborationPlan[] }>(
+        api.get<{ plans: ApiCollaborationPlan[]; branch_root_task_id: string | null }>(
           `/api/tasks/${c.id}/collaboration-plans`,
         ),
       retry: 1,
     })),
   });
 
+  // Какие branch_root реально нужно догрузить: уникальные id, для
+  // которых у child нет своего approved плана. Считаем по уже
+  // загруженным ответам childPlanQueries — порядок дочерних фиксирован,
+  // id'ы дедуплицируются стабильно.
+  const branchRootsToFetch = (() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    children.forEach((c, i) => {
+      const resp = childPlanQueries[i]?.data;
+      if (!resp) return;
+      const ownApproved = resp.plans.find((p) => p.status === "approved");
+      if (ownApproved) return;
+      const root = resp.branch_root_task_id;
+      if (root && root !== c.id && !seen.has(root)) {
+        seen.add(root);
+        out.push(root);
+      }
+    });
+    return out;
+  })();
+  const rootByChild: (string | null)[] = children.map((c, i) => {
+    const resp = childPlanQueries[i]?.data;
+    if (!resp) return null;
+    const ownApproved = resp.plans.find((p) => p.status === "approved");
+    if (ownApproved) return null;
+    const root = resp.branch_root_task_id;
+    return root && root !== c.id ? root : null;
+  });
+
+  const rootPlanQueries = useQueries({
+    queries: branchRootsToFetch.map((root) => ({
+      queryKey: ["tasks", root, "collaboration-plans"] as const,
+      queryFn: () =>
+        api.get<{ plans: ApiCollaborationPlan[]; branch_root_task_id: string | null }>(
+          `/api/tasks/${root}/collaboration-plans`,
+        ),
+      retry: 1,
+    })),
+  });
+  const rootPlanByRoot: Record<string, ApiCollaborationPlan | null> = {};
+  branchRootsToFetch.forEach((root, i) => {
+    const plans = rootPlanQueries[i]?.data?.plans ?? [];
+    rootPlanByRoot[root] =
+      plans.find((p) => p.status === "approved") ?? null;
+  });
+
   if (!children || children.length === 0) return null;
 
-  const isLoading = planQueries.some((q) => q.isLoading);
+  const isLoading =
+    childPlanQueries.some((q) => q.isLoading) ||
+    rootPlanQueries.some((q) => q.isLoading);
   if (isLoading) {
     return <PulseSkeleton childCount={children.length} />;
   }
 
   // Любой упавший запрос — пульс не рисуем (как CollaborationPlanPanel
   // при ошибке возвращает null).
-  const hasError = planQueries.some((q) => q.isError);
+  const hasError =
+    childPlanQueries.some((q) => q.isError) ||
+    rootPlanQueries.some((q) => q.isError);
   if (hasError) {
     if (typeof console !== "undefined") {
       console.warn("ParentPlanPulse: ошибка загрузки, пульс скрыт");
@@ -142,8 +205,25 @@ export function ParentPlanPulse({ parentId: _parentId, childList: children }: Pa
   }
 
   const aggregated: ChildSnapshot[] = children.map((c, i) => {
-    const planList = planQueries[i]?.data?.plans ?? [];
-    const plan = planList.find((p) => p.status === "approved") ?? null;
+    const resp = childPlanQueries[i]?.data;
+    // 1) Свой approved план child — приоритет (КП №1 для child с own
+    //    approved вне ветки; на типичной дочерней в ветке такого нет).
+    let plan = resp?.plans.find((p) => p.status === "approved") ?? null;
+    // 2) Если своего нет — план корня ветки, отфильтрованный по child.id.
+    if (!plan) {
+      const rootId = rootByChild[i];
+      if (rootId) {
+        const rootPlan = rootPlanByRoot[rootId];
+        if (rootPlan) {
+          const childNodes = rootPlan.nodes.filter(
+            (n) => n.task_id === c.id,
+          );
+          if (childNodes.length > 0) {
+            plan = { ...rootPlan, nodes: childNodes };
+          }
+        }
+      }
+    }
     // Слоты — проекция execution_state в RoleSlotState; считается из
     // того же плана, без сети.
     const slots: ApiRoleSlot[] = plan
@@ -151,8 +231,8 @@ export function ParentPlanPulse({ parentId: _parentId, childList: children }: Pa
             const state = executionToSlotState(n.execution_state);
             if (!state) return [];
             return [{
-              id: `${plan.id}:${n.slot_key}`,
-              task_id: plan.task_id,
+              id: `${plan!.id}:${n.slot_key}`,
+              task_id: plan!.task_id,
               slot_key: n.slot_key,
               role_key: n.role_key,
               state,

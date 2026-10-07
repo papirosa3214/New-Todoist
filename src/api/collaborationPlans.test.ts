@@ -2,10 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as React from "react";
 
-// Хук внутри использует `useQueries` дважды (primary + optional followup
-// на branch_root). Мок `useQueries` ниже отдаёт срезы по `queryKey`.
-// Хук в тестах не рендерится — он вызывается только как функция внутри
-// прокси-компонента, который выводит `data?.plans.length` в DOM.
+// Хук после Доработки 3 — один запрос на `taskId`, без followup на
+// branch_root. Подмену child→branch_root убрали: D2'/D1'' (P0, QA-fix2).
+// Серверный контракт `task-collaboration-plans.ts:567` для child
+// намеренно возвращает `plans: []` + `branch_root_task_id` — это
+// правильное поведение, агрегацию делает ParentPlanPulse.
 
 const { dataByKey } = vi.hoisted(() => ({
   dataByKey: {} as Record<
@@ -15,11 +16,10 @@ const { dataByKey } = vi.hoisted(() => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQueries: (spec: { queries: Array<{ queryKey: readonly unknown[] }> }) =>
-    spec.queries.map((q) => {
-      const key = JSON.stringify(q.queryKey);
-      return dataByKey[key] ?? { isLoading: false, isError: false, data: undefined };
-    }),
+  useQuery: (spec: { queryKey: readonly unknown[] }) => {
+    const key = JSON.stringify(spec.queryKey);
+    return dataByKey[key] ?? { isLoading: false, isError: false, data: undefined };
+  },
 }));
 
 import { useCollaborationPlans } from "./collaborationPlans";
@@ -50,7 +50,7 @@ beforeEach(() => {
   for (const k of Object.keys(dataByKey)) delete dataByKey[k];
 });
 
-describe("useCollaborationPlans (Доработка 2 — fix D1' P0)", () => {
+describe("useCollaborationPlans (Доработка 3 — D-3.0)", () => {
   it("branch_root карточка: один запрос, возвращает свой план", () => {
     dataByKey[JSON.stringify(["tasks", "root1", "collaboration-plans"])] = {
       data: { plans: [rootPlan], branch_root_task_id: null },
@@ -68,30 +68,28 @@ describe("useCollaborationPlans (Доработка 2 — fix D1' P0)", () => {
     expect(html).toContain("0|_");
   });
 
-  // Главный сценарий: child карточка вернула `branch_root_task_id`. Хук
-  // должен автоматически догрузить план корня и отдать его как
-  // `data.plans` (а не пустой массив, как было до фикса — D1' P0).
-  it("child карточка с branch_root: догружает план корня и отдаёт его", () => {
+  it("child карточка с branch_root: НЕ подменяет план, отдаёт plans:[] + указатель", () => {
+    // Главный сценарий архитектурного решения D-3.0: хук больше не
+    // делает followup на branch_root. Это убирает D2' (обманчивые нули)
+    // и D1'' (CollaborationPlanPanel на child не получает draft-план
+    // root'а). Агрегацию берёт на себя ParentPlanPulse.
     dataByKey[JSON.stringify(["tasks", "c1", "collaboration-plans"])] = {
       data: { plans: [], branch_root_task_id: "root1" },
     };
-    dataByKey[JSON.stringify(["tasks", "root1", "collaboration-plans"])] = {
-      data: { plans: [rootPlan], branch_root_task_id: null },
-    };
     const html = renderToStaticMarkup(React.createElement(Probe, { taskId: "c1" }));
-    // data.plans — это план от root1, не пусто.
-    expect(html).toContain("1|");
-    // branch_root_task_id пробрасывается как null (т.к. root1 и есть
-    // branch_root, и для него это null).
-    expect(html).toContain("|_");
-    // sanity: НЕ показывает 0 планов
-    expect(html).not.toContain(">0|");
+    expect(html).toContain("0|root1");
   });
 
-  it("isLoading корректно отдаётся через мок, когда первичный ответ isLoading=true", () => {
-    // Мок useQueries поддерживает `isLoading` — это полезный сигнал для
-    // UI. Хук склеивает isLoading с обоих вызовов. Здесь у нас
-    // первичный ещё грузится — хук отдаёт isLoading=true.
+  it("child с собственным approved планом: возвращает его", () => {
+    const ownPlan = { ...rootPlan, id: "pc", task_id: "c1" };
+    dataByKey[JSON.stringify(["tasks", "c1", "collaboration-plans"])] = {
+      data: { plans: [ownPlan], branch_root_task_id: null },
+    };
+    const html = renderToStaticMarkup(React.createElement(Probe, { taskId: "c1" }));
+    expect(html).toContain("1|_");
+  });
+
+  it("isLoading корректно отдаётся через мок", () => {
     dataByKey[JSON.stringify(["tasks", "c1", "collaboration-plans"])] = {
       isLoading: true,
     };
@@ -99,7 +97,7 @@ describe("useCollaborationPlans (Доработка 2 — fix D1' P0)", () => {
     expect(html).toContain("loading");
   });
 
-it("ошибка в первичном запросе пробрасывается как isError", () => {
+  it("ошибка в запросе пробрасывается как isError", () => {
     dataByKey[JSON.stringify(["tasks", "c1", "collaboration-plans"])] = {
       isError: true,
     };

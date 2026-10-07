@@ -1,4 +1,4 @@
-import { useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "./client";
 
 // Граф совместной работы над задачей (server: task-collaboration-plans.ts,
@@ -18,14 +18,20 @@ import { api } from "./client";
 // тот же план, а не отдельный запрос. Это убирает D1 P0 и делает
 // `ParentPlanPulse` проверяемым на живой БД.
 //
-// 2026-10-07 (Доработка 2, fix D1' P0): сервер для **дочерней** карточки
-// возвращает `plans: []` + `branch_root_task_id: <root_id>`. UI должен
-// следовать этому указателю и догрузить план корня ветки — иначе
-// `ParentPlanPulse` на родительской рисует нули (у 13 дочерних карточки
-// 1fe2d05c план сидит на branch_root, до клиента не доходит). Ниже
-// `useCollaborationPlans` сам подменяет запрос на branch_root; остальные
-// хуки и компоненты остаются без изменений. Серверную часть не трогаем
-// (границы задачи).
+// 2026-10-07 (Доработка 3, архитектурное решение D-3.0): клиент **не**
+// подменяет план child на план branch_root. Серверный контракт
+// `task-collaboration-plans.ts:567` для child намеренно отдаёт
+// `plans: []` + `branch_root_task_id: <root_id>` — план ветки живёт в
+// корневой карточке (`branchPlan.ts:251`). Подмена child→root в Доработке 2
+// (fix D1') породила D2' и D1'' (P0 на живой копии, QA-fix2): все child
+// одной ветки получали один и тот же draft-план root'а, прогресс
+// дочерних скрывался. Решение: `useCollaborationPlans(taskId)` — один
+// запрос на `taskId`, без followup. Агрегирует по ветке только
+// `ParentPlanPulse`, который явно ходит за планом branch_root и
+// фильтрует узлы по `task_id === child.id`. `CollaborationPlanPanel` на
+// child с собственным approved планом (вне ветки) сейчас получит
+// `plans: []` — это известное ограничение, вопрос к владельцу в
+// документе архитектора doc 33a48ee4.
 
 export type CollaborationPlanStatus = "draft" | "approved" | "superseded";
 export type CollaborationPlanProfile =
@@ -51,6 +57,12 @@ export interface ApiCollaborationPlanNode {
   required: boolean;
   expected_result: string;
   execution_state?: PlanNodeExecutionState;
+  /** `task_id` дочерней, которой принадлежит узел плана ветки. Сервер
+   *  (`task-collaboration-plans.ts: presentSingle`) выдаёт это поле в
+   *  плане branch_root; на собственных approved планах child узел
+   *  соответствует самой карточке и поле можно игнорировать. Опциональное
+   *  — чтобы не ломать старые approved планы без него. */
+  task_id?: string;
 }
 
 export interface ApiCollaborationPlanEdge {
@@ -85,98 +97,27 @@ export interface ApiRoleSlot {
   plan_node_key: string | null;
 }
 
+export type CollaborationPlanResponse = {
+  plans: ApiCollaborationPlan[];
+  branch_root_task_id: string | null;
+};
+
 export function useCollaborationPlans(taskId: string | undefined) {
-  // Двухшаговая загрузка: сначала сам `taskId`. Если в ответе пришёл
-  // `branch_root_task_id` и он отличается от нашего `taskId` — делаем
-  // второй запрос на корень ветки и берём планы оттуда (сервер для child
-  // возвращает `plans: []`).
-  //
-  // Сделано через `useQueries` ради декларативности: оба ключа
-  // материализуются одинаково, и кэш react-query делит результат между
-  // всеми вызывающими (например, две дочерние карточки одного branch_root
-  // не сделают третий запрос — попадут в кэш). Статус `isLoading` и
-  // `isError` аккуратно склеиваются, чтобы UI показывал скелетон или
-  // скрывался так же, как раньше.
-  const enabled = !!taskId;
-  const initial = useQueries({
-    queries: [
-      {
-        queryKey: ["tasks", taskId, "collaboration-plans"] as const,
-        queryFn: () =>
-          api.get<{ plans: ApiCollaborationPlan[]; branch_root_task_id: string | null }>(
-            `/api/tasks/${taskId}/collaboration-plans`,
-          ),
-        enabled,
-        retry: 1,
-      },
-    ],
+  // Один запрос на `taskId`. Сервер сам отдаёт `branch_root_task_id` —
+  // он нужен только агрегатору `ParentPlanPulse`, который ходит за планом
+  // branch_root отдельно (один уникальный запрос на ветку, react-query
+  // кэширует). Здесь followup не делаем — иначе на дочерней карточке
+  // видим draft-план root'а вместо её собственного состояния (D2' P0,
+  // QA-fix2). См. комментарий в шапке файла.
+  return useQuery<CollaborationPlanResponse>({
+    queryKey: ["tasks", taskId, "collaboration-plans"] as const,
+    queryFn: () =>
+      api.get<CollaborationPlanResponse>(
+        `/api/tasks/${taskId}/collaboration-plans`,
+      ),
+    enabled: !!taskId,
+    retry: 1,
   });
-  const initialData = initial[0]?.data;
-  const branchRoot = initialData?.branch_root_task_id ?? null;
-  // Запрос на branch_root нужен только если:
-  //   - первичный запрос прошёл,
-  //   - сервер указал branch_root_task_id,
-  //   - этот id не совпадает с нашим (иначе мы и так branch_root).
-  const needFollowup =
-    enabled && !!branchRoot && branchRoot !== taskId;
-
-  const followup = useQueries({
-    queries: needFollowup
-      ? [
-          {
-            queryKey: ["tasks", branchRoot, "collaboration-plans"] as const,
-            queryFn: () =>
-              api.get<{ plans: ApiCollaborationPlan[]; branch_root_task_id: string | null }>(
-                `/api/tasks/${branchRoot}/collaboration-plans`,
-              ),
-            enabled: true,
-            retry: 1,
-          },
-        ]
-      : [],
-  });
-
-  const isLoading = initial.some((q) => q.isLoading) ||
-    followup.some((q) => q.isLoading);
-  const isError = initial.some((q) => q.isError) ||
-    followup.some((q) => q.isError);
-  const error = initial.find((q) => q.error)?.error ??
-    followup.find((q) => q.error)?.error ??
-    null;
-
-  // Склеиваем данные: если есть branch_root — он источник истины для
-  // планов этой карточки. Иначе — первичный ответ.
-  const data = (() => {
-    if (!enabled) return undefined;
-    if (needFollowup) {
-      const root = followup[0]?.data;
-      if (!root) return undefined;
-      return {
-        plans: root.plans,
-        branch_root_task_id: root.branch_root_task_id,
-      };
-    }
-    return initialData
-      ? {
-          plans: initialData.plans,
-          branch_root_task_id: initialData.branch_root_task_id,
-        }
-      : undefined;
-  })();
-
-  return {
-    data,
-    isLoading: enabled ? isLoading : false,
-    isError: enabled ? isError : false,
-    error,
-    // Совместимость с `useQuery` (вызывающий код не использует, но пусть
-    // будет — `ParentPlanPulse` работает через `useQueries` сам).
-    isSuccess: !!data && !isError,
-    refetch: () => {
-      initial.forEach((q) => q.refetch());
-      followup.forEach((q) => q.refetch());
-    },
-  } as const;
 }
 
 /** Источник состояний узлов плана. Возвращает тот же `useQuery`-совместимый

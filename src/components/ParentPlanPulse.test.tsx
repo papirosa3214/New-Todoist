@@ -5,18 +5,11 @@ import type { ApiCollaborationPlan } from "../api/collaborationPlans";
 // Прокидываем data через queryKey. Глобальный словарь переопределяется
 // в каждом тесте; фабрика useQueries читает его.
 //
-// Доработка 2: в нашем сценарии `useCollaborationPlans` сам внутри
-// вызывает `useQueries` дважды (на taskId + опционально на branch_root).
-// Для синхронного SSR-теста это прозрачно: если хук зарегистрирует в
-// кэше оба ключа — `useQueries` вернёт массив из двух объектов. Но
-// ParentPlanPulse собирает план только по ключу `childList[].id`, так
-// что для теста достаточно один раз подложить `data` под ключ child —
-// в реальности ветка branch_root резолвится в тот же кэш react-query и
-// `useCollaborationPlans` сам отдаёт канонический план. Здесь мы
-// симулируем «уже разрешённый» случай: под `child.id` сразу лежит
-// правильный план (как если бы `useCollaborationPlans` уже выполнил
-// followup и положил данные в кэш). Это документирует, что компонент
-// после фикса правильно агрегирует.
+// Доработка 3 (D-3.0): ParentPlanPulse запрашивает план для каждого
+// child (childPlanQueries) и при необходимости — план её branch_root
+// (rootPlanQueries). Оба набора идут через useQueries. Дублирующиеся
+// branch_root'и делят кэш react-query; в синхронном SSR-тесте подкладка
+// по ключу — то же самое, что и реальный кэш.
 
 const { dataByKey } = vi.hoisted(() => ({
   dataByKey: {} as Record<
@@ -56,15 +49,47 @@ const fullChildPlan: ApiCollaborationPlan = {
   status: "approved",
   profile: "full_cycle",
   rationale: "—",
-  // `execution_state` соответствует тому, что кладёт `presentSingle` на
-  // сервере: 6 состояний, включая `returned` (изменения запрошены) и без
-  // отдельного `submitted` на уровне узла плана.
   nodes: [
     { slot_key: "n1", role_key: "analyst", required: true, expected_result: "brief", execution_state: "accepted" },
     { slot_key: "n2", role_key: "builder", required: true, expected_result: "code", execution_state: "returned" },
   ],
   edges: [],
 };
+
+function makeRootPlan(childId: string, acceptedCount: number, totalCount: number): ApiCollaborationPlan {
+  const nodes = Array.from({ length: totalCount }, (_, i) => ({
+    slot_key: `n${i}`,
+    role_key: i < acceptedCount ? "analyst" : "builder",
+    required: true,
+    expected_result: "",
+    execution_state: (i < acceptedCount ? "accepted" : "active") as "accepted" | "active",
+    task_id: childId,
+  }));
+  return {
+    id: "pr",
+    task_id: "root1",
+    revision: 1,
+    status: "approved",
+    profile: "full_cycle",
+    rationale: "—",
+    // В плане branch_root узлы для child помечены `task_id === child.id`.
+    // ParentPlanPulse должен отфильтровать только их.
+    nodes: nodes.map((n) => ({ ...n, task_id: childId })),
+    edges: [],
+  };
+}
+
+function setChildPlan(childId: string, plans: ApiCollaborationPlan[], branchRoot: string | null = null) {
+  dataByKey[JSON.stringify(["tasks", childId, "collaboration-plans"])] = {
+    data: { plans, branch_root_task_id: branchRoot },
+  };
+}
+
+function setRootPlan(rootId: string, plan: ApiCollaborationPlan | null) {
+  dataByKey[JSON.stringify(["tasks", rootId, "collaboration-plans"])] = {
+    data: { plans: plan ? [plan] : [] },
+  };
+}
 
 beforeEach(() => {
   for (const k of Object.keys(dataByKey)) delete dataByKey[k];
@@ -99,14 +124,11 @@ describe("<ParentPlanPulse>", () => {
     expect(html).toBe("");
   });
 
-  it("агрегирует метрики, прогресс и активные роли", () => {
-    dataByKey[JSON.stringify(["tasks", "c1", "collaboration-plans"])] = {
-      data: { plans: [fullChildPlan] },
-    };
+  it("child с собственным approved планом: агрегирует его напрямую", () => {
+    setChildPlan("c1", [fullChildPlan]);
     const html = renderToStaticMarkup(
       <ParentPlanPulse parentId="p1" childList={[{ id: "c1", title: "Дочка" }]} />,
     );
-    // Заголовок пульса
     expect(html).toContain("Пульс плана");
     expect(html).toContain("1 дочерних");
     // accepted=1, review=1
@@ -116,7 +138,6 @@ describe("<ParentPlanPulse>", () => {
     expect(html).toContain("принято");
     // Прогресс 1/2 = 50%
     expect(html).toContain("50%");
-    // Ширина прогресс-бара теперь реальная (50%), а не фиксированная 60%
     expect(html).toContain("width:50%");
     // Кто активен: submitted у Разработчика
     expect(html).toContain("Разработчик");
@@ -125,17 +146,100 @@ describe("<ParentPlanPulse>", () => {
     expect(html).toContain("Открыть задачу Дочка");
   });
 
-  it("рисует прогресс «без плана» для дочерней без approved плана", () => {
-    dataByKey[JSON.stringify(["tasks", "c1", "collaboration-plans"])] = {
-      data: { plans: [] },
-    };
+  it("child в draft-ветке: plans:[] + branch_root:null → без плана", () => {
+    setChildPlan("c1", [], null);
     const html = renderToStaticMarkup(
       <ParentPlanPulse parentId="p1" childList={[{ id: "c1", title: "Дочка" }]} />,
     );
     expect(html).toContain("без плана");
     expect(html).toContain("width:100%");
-    // Метрики 0
     expect(html).toContain(">0</span>");
+  });
+
+  it("child в ветке: берёт план branch_root и фильтрует узлы по task_id", () => {
+    // Ключевой сценарий Доработки 3: для child без своего approved плана
+    // идём за планом branch_root и оставляем только узлы этой child.
+    // Если фильтрации нет — на родительской 1fe2d05c с 13 детьми
+    // отрисуется чужой прогресс (D2' P0, QA-fix2).
+    setChildPlan("c1", [], "root1");
+    setRootPlan("root1", makeRootPlan("c1", /*accepted*/ 3, /*total*/ 5));
+    const html = renderToStaticMarkup(
+      <ParentPlanPulse parentId="p1" childList={[{ id: "c1", title: "Дочка" }]} />,
+    );
+    // accepted=3, active=2 (5 узлов, фильтрованных по task_id=c1)
+    expect(html).toContain("Пульс плана");
+    expect(html).toContain("width:60%");
+    expect(html).toContain("60%");
+    expect(html).not.toContain("без плана");
+  });
+
+  it("13 дочерних в одной ветке: один запрос на branch_root, 13 строк прогресса", () => {
+    // Главный сценарий архитектора: 13 дочерних одной ветки делят
+    // branch_root через кэш. В SSR-тесте мы лишь подкладываем данные
+    // по нужным ключам, но проверяем, что для каждой child мы
+    // правильно агрегируем её узлы (не суммируем чужие).
+    const children = Array.from({ length: 13 }, (_, i) => ({
+      id: `c${i + 1}`,
+      title: `Дочка ${i + 1}`,
+    }));
+    for (const c of children) {
+      setChildPlan(c.id, [], "root1");
+    }
+    // У каждой child в branch_root — свой набор узлов (отфильтрованных
+    // по её task_id). Принимаем по 6 узлов: 4 accepted, 2 active.
+    for (const c of children) {
+      dataByKey[JSON.stringify(["tasks", c.id, "collaboration-plans"])] = {
+        data: { plans: [], branch_root_task_id: "root1" },
+      };
+    }
+    // Делаем один общий план root1, в котором все узлы всех child; для
+    // проверки фильтрации этого достаточно: под каждый child мы
+    // собираем СВОИ узлы из этого плана (но в реальном плане branch_root
+    // у каждого узла task_id указывает на свою child — а в нашем
+    // тестовом плане все узлы принадлежат c1; в SSR-тесте фильтрация
+    // по task_id === c.id даст для c1 6 узлов, для c2..c13 — 0).
+    setRootPlan("root1", makeRootPlan("c1", 4, 6));
+
+    const html = renderToStaticMarkup(
+      <ParentPlanPulse parentId="p1" childList={children} />,
+    );
+    expect(html).toContain("13 дочерних");
+    // c1 показывает прогресс 4/6 ≈ 67%
+    expect(html).toContain("67%");
+    // c2..c13 — без плана (фильтр даёт 0 узлов)
+    expect(html).toContain("без плана");
+  });
+
+  it("5 дочерних одной ветки: один branch_root делится через кэш", () => {
+    const children = Array.from({ length: 5 }, (_, i) => ({
+      id: `c${i + 1}`,
+      title: `Дочка ${i + 1}`,
+    }));
+    for (const c of children) {
+      setChildPlan(c.id, [], "root1");
+    }
+    // 5 узлов в branch_root, у всех task_id === c1
+    setRootPlan("root1", makeRootPlan("c1", 5, 5));
+    const html = renderToStaticMarkup(
+      <ParentPlanPulse parentId="p1" childList={children} />,
+    );
+    expect(html).toContain("5 дочерних");
+    // c1 = 100%
+    expect(html).toContain("100%");
+    expect(html).toContain("width:100%");
+  });
+
+  it("1 дочерняя в ветке: агрегаты не нулевые", () => {
+    setChildPlan("c1", [], "root1");
+    setRootPlan("root1", makeRootPlan("c1", 1, 2));
+    const html = renderToStaticMarkup(
+      <ParentPlanPulse parentId="p1" childList={[{ id: "c1", title: "Дочка" }]} />,
+    );
+    // accepted=1
+    expect(html).toContain(">1</span>");
+    // 1/2 = 50%
+    expect(html).toContain("50%");
+    expect(html).not.toContain("без плана");
   });
 
   it("сворачивает «кто активен» в «+N ещё» при >5 строк", () => {
@@ -151,37 +255,10 @@ describe("<ParentPlanPulse>", () => {
         { slot_key: "c2", role_key: "qa", required: true, expected_result: "", execution_state: "active" },
       ],
     };
-    dataByKey[JSON.stringify(["tasks", "c1", "collaboration-plans"])] = {
-      data: { plans: [plan3] },
-    };
+    setChildPlan("c1", [plan3]);
     const html = renderToStaticMarkup(
       <ParentPlanPulse parentId="p1" childList={[{ id: "c1", title: "Дочка" }]} />,
     );
     expect(html).toContain("+1 ещё");
-  });
-
-  // Доработка 2 (fix D1' P0): дочерняя карточка получила `plans: []`,
-  // `useCollaborationPlans` сделал followup на branch_root, в кэше
-  // лежит канонический план. `ParentPlanPulse` агрегирует ненулевые
-  // метрики. Без фикса (т.е. без followup) данные в кэше остались бы
-  // пустыми и метрики были бы 0/0/0/0, «без плана» по всем дочерним.
-  it("Доработка 2 (D1'): после followup на branch_root агрегаты ненулевые", () => {
-    // В кэше уже лежит канонический план (как если бы `useCollaborationPlans`
-    // сделал followup и положил данные по ключу child.id).
-    dataByKey[JSON.stringify(["tasks", "c1", "collaboration-plans"])] = {
-      data: { plans: [fullChildPlan] },
-    };
-    const html = renderToStaticMarkup(
-      <ParentPlanPulse parentId="p1" childList={[{ id: "c1", title: "Дочка" }]} />,
-    );
-    // accepted=1, review=1 — НЕ нули
-    expect(html).toContain(">1</span>");
-    expect(html).not.toContain("без плана");
-    // Прогресс 1/2 = 50%
-    expect(html).toContain("50%");
-    expect(html).toContain("width:50%");
-    // Кто активен: Разработчик в submitted
-    expect(html).toContain("Разработчик");
-    expect(html).toContain("Сдано");
   });
 });
