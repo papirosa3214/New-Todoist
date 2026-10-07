@@ -1,7 +1,7 @@
 import { branchMembership } from "../runtime/branchPlan.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { deliverTopicToWork } from "../runtime/inProcessRun.js";
-import { topicContext } from "../lib/projectTopics.js";
+import { topicContext, taskTopicClosedAt } from "../lib/projectTopics.js";
 import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
 import { renderInstruction } from "../lib/roleContextResolver.js";
@@ -185,7 +185,7 @@ function chatRow(chatId: string) {
   return {
     ...chat,
     members,
-    closed_at: (chat as any).closed_at ?? null,
+    closed_at: taskTopicClosedAt(chat as any),
     pinned_message_id: pinnedMessageId ?? null,
     pinned_message: pinned ? loadChatMessage(pinned.id) : null,
   };
@@ -230,8 +230,11 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   });
   app.get("/api/chats/:id/topics",{preHandler:authPre},async(req:any,reply)=>{
     if (!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
-    const rows=db.prepare("SELECT id FROM chats WHERE parent_chat_id=? ORDER BY updated_at DESC,id").all(req.params.id) as Array<{id:string}>;
-    return {chats:rows.filter(c=>isMember(c.id,req.userId)).map(c=>({
+    // Закрытые темы в списке проекта не копятся (владелец 07.10.2026); переписка остаётся
+    // доступной из карточки задачи, весь список — с include_closed=1.
+    const includeClosed = String(req.query?.include_closed ?? "") === "1";
+    const rows=db.prepare("SELECT id,task_id,parent_chat_id,closed_at FROM chats WHERE parent_chat_id=? ORDER BY updated_at DESC,id").all(req.params.id) as Array<{id:string;task_id:string|null;parent_chat_id:string|null;closed_at:string|null}>;
+    return {chats:rows.filter(c=>isMember(c.id,req.userId) && (includeClosed || !taskTopicClosedAt(c))).map(c=>({
       ...chatRow(c.id),
       unread_count:(db.prepare(`SELECT COUNT(*) AS n FROM chat_messages WHERE chat_id=? AND from_user_id != ? AND created_at > COALESCE((SELECT last_read_at FROM chat_members WHERE chat_id=? AND member_id=?),'1970-01-01')`).get(c.id,req.userId,c.id,req.userId) as {n:number}).n,
     }))};
@@ -312,9 +315,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           WHERE cm.member_id = ?
           ORDER BY c.updated_at DESC`,
       )
-      .all(req.userId) as Array<{ id: string; task_id: string | null; closed_at: string | null }>;
+      .all(req.userId) as Array<{ id: string; task_id: string | null; parent_chat_id: string | null; closed_at: string | null }>;
     return {
-      chats: rows.filter((c) => isMember(c.id,req.userId) && (includeClosed || !c.closed_at)).map((c) => {
+      chats: rows.filter((c) => isMember(c.id,req.userId) && (includeClosed || !taskTopicClosedAt(c))).map((c) => {
         // Имя отправителя — превью группы идёт с ним («QA: проверка
         // прошла»), счётчики вложений — чтобы клиент мог показать
         // «Голосовое»/«Файл» вместо пустой строки (у голосового текста нет).
@@ -655,13 +658,13 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // задачу у СВОЕГО чата; явный task_id в теле перекрывает её — этим
       // привязывается отдельное сообщение, когда чат живёт сам по себе.
       const chat = db
-        .prepare<[string], { task_id: string | null; closed_at: string | null }>(
-          "SELECT task_id, closed_at FROM chats WHERE id = ?",
+        .prepare<[string], { task_id: string | null; parent_chat_id: string | null; closed_at: string | null }>(
+          "SELECT task_id, parent_chat_id, closed_at FROM chats WHERE id = ?",
         )
         .get(chatId);
       if (!chat) return reply.code(404).send({ error: "Чат не найден" });
       // Закрытая тема задачи — read-only: история остаётся, новые сообщения не принимаем.
-      if (chat.closed_at) return reply.code(409).send({ error: "Чат задачи закрыт" });
+      if (taskTopicClosedAt(chat)) return reply.code(409).send({ error: "Чат задачи закрыт" });
       // Общий чат: сервер сюда не пишет. Владелец и роль через инструмент — можно.
       try {
         assertCommonChatWritable(
@@ -881,7 +884,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const chatId = req.params.id;
       if (!isMember(chatId, req.userId))
         return reply.code(404).send({ error: "Чат не найден" });
-      if ((db.prepare("SELECT closed_at FROM chats WHERE id = ?").get(chatId) as { closed_at: string | null } | undefined)?.closed_at)
+      if (taskTopicClosedAt(db.prepare("SELECT task_id, parent_chat_id, closed_at FROM chats WHERE id = ?").get(chatId) as any))
         return reply.code(409).send({ error: "Чат задачи закрыт" });
       const roleId = typeof req.body?.role_id === "string" ? req.body.role_id : "";
       if (!roleId) return reply.code(400).send({ error: "role_id обязателен" });

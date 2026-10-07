@@ -1,3 +1,4 @@
+import { criticApproved } from "./criticApproved.js";
 import { branchTeamContext, branchMembership } from "../runtime/branchPlan.js";
 import crypto from "node:crypto";
 import db from "../db.js";
@@ -48,6 +49,20 @@ export function setTaskTopicClosed(taskId:string,closed:boolean):number {
     "UPDATE chats SET closed_at = CASE WHEN ? THEN datetime('now') ELSE NULL END WHERE task_id = ? AND parent_chat_id IS NOT NULL",
   ).run(closed?1:0,taskId);
   return result.changes;
+}
+
+/**
+ * Когда тема задачи считается закрытой. Кроме явного закрытия вместе с задачей — ещё и пока
+ * карточка стоит на проверке с одобрением Критика (владелец 07.10.2026: «как только задание
+ * принимается со стороны Критика, чат должен закрыться, а не копиться»). Состояние вычисляется,
+ * а не хранится: вернули задачу в работу — тема сама открылась.
+ */
+export function taskTopicClosedAt(chat:{task_id?:string|null;parent_chat_id?:string|null;closed_at?:string|null}|undefined):string|null {
+  if(!chat) return null;
+  if(chat.closed_at) return chat.closed_at;
+  if(!chat.task_id || !chat.parent_chat_id) return null;
+  const task=db.prepare("SELECT status,agent_state,updated_at FROM tasks WHERE id=?").get(chat.task_id) as {status:string;agent_state:string|null;updated_at:string}|undefined;
+  return task && task.status==="active" && task.agent_state==="review" && criticApproved(chat.task_id) ? task.updated_at : null;
 }
 
 /** Закрыта ли тема задачи прямо сейчас. */
