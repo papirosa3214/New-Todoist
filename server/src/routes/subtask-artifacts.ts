@@ -127,7 +127,7 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     if (!artifact || artifact.status !== "submitted") return reply.code(409).send({ error: "no submitted artifact" });
     db.prepare("UPDATE subtask_artifact_versions SET status = 'accepted' WHERE id = ?").run(artifact.id);
     logEvent({ taskId: current.task_id, actorId: req.userId, kind: "plan_subtask_artifact_accepted", field: current.plan_node_key, toValue: artifact.artifact_key + " v" + artifact.version_no });
-    // accept — только запись факта для edges с start_condition='accepted';
+    // accept — запись факта приёмки; передача следующей роли открывается при submit.
     // done уже 1 с момента сдачи (submit), здесь его не трогаем.
     await unlockReadyPlanSubtasks(current.collaboration_plan_id, current.task_id, req.userId);
     const fullTask = getFullTask(current.task_id);

@@ -194,7 +194,7 @@ export function branchPresentation(rootPlan:any,base:any,presentOne:(p:any)=>any
   const links:Array<[string,string]>=cards.filter(c=>c.parent_id).map(c=>[c.id,c.parent_id!]);
   for(const card of cards)for(const dep of db.prepare("SELECT depends_on_task_id FROM task_dependencies WHERE task_id=?").all(card.id) as Array<{depends_on_task_id:string}>)links.push([dep.depends_on_task_id,card.id]);
   const cardRoots=new Map(cards.map(c=>[c.id,roots(c.id)])),cardEnds=new Map(cards.map(c=>[c.id,terminals(c.id)]));
-  for(const [from,to] of links)for(const a of cardEnds.get(from)??[])for(const b of cardRoots.get(to)??[])if(!edges.some((e:any)=>e.from_slot_key===a.slot_key&&e.to_slot_key===b.slot_key))edges.push({from_slot_key:a.slot_key,to_slot_key:b.slot_key,start_condition:'accepted',artifact_key:null});
+  for(const [from,to] of links)for(const a of cardEnds.get(from)??[])for(const b of cardRoots.get(to)??[])if(!edges.some((e:any)=>e.from_slot_key===a.slot_key&&e.to_slot_key===b.slot_key))edges.push({from_slot_key:a.slot_key,to_slot_key:b.slot_key,start_condition:'submitted',artifact_key:null});
   for(const link of db.prepare("SELECT from_slot,to_task_id,to_slot FROM branch_rework_links WHERE root_plan_id=?").all(rootPlan.id) as Array<{from_slot:string;to_task_id:string;to_slot:string}>) edges.push({from_slot_key:key(rootPlan.task_id,link.from_slot),to_slot_key:key(link.to_task_id,link.to_slot),start_condition:'submitted',artifact_key:null});
   const numbers=branchCardNumbers(rootPlan.task_id);
   const priority=['blocked','returned','active','review','ready','waiting','accepted','skipped'];

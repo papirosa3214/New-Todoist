@@ -1,3 +1,4 @@
+import { normalizePlanStartCondition } from "../runtime/planArtifactGate.js";
 import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib/planWorkSelection.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
@@ -192,7 +193,7 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }, taskId?: string)
   const edges = ((body.edges ?? []) as EdgeInput[]).map((raw) => ({
     from_slot_key: String(raw.from_slot_key ?? "").trim(),
     to_slot_key: String(raw.to_slot_key ?? "").trim(),
-    start_condition: String(raw.start_condition ?? "accepted").trim(),
+    start_condition: normalizePlanStartCondition(String(raw.start_condition ?? "submitted").trim()),
     artifact_key: raw.artifact_key === undefined ? null : String(raw.artifact_key).trim(),
   }));
   for (const edge of edges) {
@@ -379,7 +380,7 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
     const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
     for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id ?? null);
     const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
-    for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, edge.start_condition, edge.artifact_key);
+    for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
   })();
   ensureCardResponsible(taskId,id);
   return { id, revision };
@@ -493,7 +494,7 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
       : "single_executor")
     : requested;
   const node = (slot_key: string, role_key: string, expected_result: string): Node => ({ slot_key, role_key, required: true, expected_result, output_artifact: null, source_subtask_id: null });
-  const edge = (from_slot_key: string, to_slot_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "accepted", artifact_key: null });
+  const edge = (from_slot_key: string, to_slot_key: string): Edge => ({ from_slot_key, to_slot_key, start_condition: "submitted", artifact_key: null });
   const templates: Record<string, { nodes: Node[]; edges: Edge[]; rationale: string }> = {
     single_executor: { nodes: [node("executor", "builder", "Выполненный результат задачи")], edges: [], rationale: "Низкая неопределённость: достаточно основного исполнителя." },
     research: { nodes: [node("research", "researcher", "Факты, источники и ограничения"), node("analysis", "analyst", "Требования, выводы и критерии")], edges: [edge("research", "analysis")], rationale: "Сначала собрать факты, затем превратить их в проверяемые выводы." },
@@ -781,7 +782,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
         const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id);
         const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
-        for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, edge.from_slot_key, edge.to_slot_key, edge.start_condition, edge.artifact_key);
+        for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
       }
     })();
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_edited", field: `revision:${plan.revision}`, toValue: graph ? "graph+meta" : "meta" });

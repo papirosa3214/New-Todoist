@@ -11,6 +11,7 @@ vi.mock("../src/runtime/inProcessRun.js", async (importOriginal) => {
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { buildCollaborationPlanContext } from "../src/runtime/collaborationPlanContext.js";
+import { canPlanSubtaskBecomeReady, waitingForPredecessors, type PlanSubtask } from "../src/runtime/planSubtaskAdmission.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
@@ -52,18 +53,15 @@ describe("CollaborationPlanContext builder", () => {
     });
     expect(plan.statusCode).toBe(201);
     const planId = plan.json().plan.id as string;
+    expect(db.prepare("SELECT start_condition FROM task_collaboration_plan_edges WHERE plan_id=?").all(planId)).toEqual(expect.arrayContaining([{start_condition:"submitted"}]));
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: ownerAuth } });
 
     const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } })).json() as Array<{ id: string; plan_node_key: string }>;
     const byKey = (key: string) => subtasks.find((s) => s.plan_node_key === key)!;
 
-    // start_condition="accepted" требует статус artifact accepted — сдача
-    // сама закрывает узел (done=1), явный /accept владельца — отдельная
-    // запись поверх, как и раньше у slots.
+    // Сдача открывает передачу без предварительной приёмки владельца.
     await app.inject({ method: "POST", url: `/api/subtasks/${byKey("analysis").id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
-    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("analysis").id}/artifact/accept`, headers: { authorization: ownerAuth } });
     await app.inject({ method: "POST", url: `/api/subtasks/${byKey("architecture").id}/artifact`, headers: { authorization: architectAuth }, payload: { summary: "Решение принято", payload: { decision: "монолит" }, evidence: [] } });
-    await app.inject({ method: "POST", url: `/api/subtasks/${byKey("architecture").id}/artifact/accept`, headers: { authorization: ownerAuth } });
 
     const context = buildCollaborationPlanContext(byKey("delivery").id);
 
@@ -77,7 +75,7 @@ describe("CollaborationPlanContext builder", () => {
     expect(context.predecessor_artifacts.map((a) => a.slot_key)).not.toContain("unrelated");
   });
 
-  it("не открывает контекст, пока артефакт не достиг статуса gate-а edge", async () => {
+  it("передаёт submitted по старому ребру accepted без /accept", async () => {
     const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: "Collab context gate " + crypto.randomUUID() } });
     const taskId = created.json().task.id as string;
     const plan = await app.inject({
@@ -91,18 +89,31 @@ describe("CollaborationPlanContext builder", () => {
       },
     });
     const planId = plan.json().plan.id as string;
+    expect(db.prepare("SELECT start_condition FROM task_collaboration_plan_edges WHERE plan_id=?").all(planId)).toEqual(expect.arrayContaining([{start_condition:"submitted"}]));
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: ownerAuth } });
     const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } })).json() as Array<{ id: string; plan_node_key: string }>;
+    db.prepare("UPDATE task_collaboration_plan_edges SET start_condition='accepted' WHERE plan_id=?").run(planId);
     const analysis = subtasks.find((s) => s.plan_node_key === "analysis")!;
     const delivery = subtasks.find((s) => s.plan_node_key === "delivery")!;
 
-    // Сдача без accept — artifact.status остаётся "submitted", а edge этого
-    // теста требует "accepted": контекст остаётся пустым до явного accept.
+    // Старое ребро accepted тоже передаёт submitted-результат.
     await app.inject({ method: "POST", url: `/api/subtasks/${analysis.id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Черновик", payload: { scope: "в рамках" }, evidence: [] } });
 
     const context = buildCollaborationPlanContext(delivery.id);
-    expect(context.status).toBe("empty");
-    expect(context.predecessor_artifacts).toEqual([]);
+    expect(context.status).toBe("ok");
+    expect(context.predecessor_artifacts).toHaveLength(1);
+    const row = db.prepare("SELECT * FROM subtasks WHERE id=?").get(delivery.id) as PlanSubtask;
+    expect(canPlanSubtaskBecomeReady(row)).toBe(true);
+    expect(waitingForPredecessors(row)).toEqual([]);
+    expect((db.prepare("SELECT status FROM subtask_artifact_versions WHERE subtask_id=?").get(analysis.id) as {status:string}).status).toBe("submitted");
+    expect(runRoleInProcessMock.mock.calls.length).toBeGreaterThan(0);
+    for (const status of ["revision_requested", "rejected"]) {
+      db.prepare("UPDATE subtask_artifact_versions SET status=? WHERE subtask_id=?").run(status, analysis.id);
+      expect(canPlanSubtaskBecomeReady(row)).toBe(false);
+      expect(buildCollaborationPlanContext(delivery.id).status).toBe("empty");
+      expect(waitingForPredecessors(row)).toHaveLength(1);
+    }
+
   });
 
   it("возвращает unavailable для несуществующего узла", () => {

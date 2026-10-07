@@ -89,7 +89,7 @@ export async function processOnePreparation(input:{workerId:string;analyze?:Anal
           const key=(slot:string)=>keys.get(slot)!;
           const nodes=prep.workstreams.map(w=>({slot_key:w.key,role_key:w.role!,required:true,expected_result:w.result,source_subtask_id:null,
             output_artifact:consumed.has(w.key)?{key:key(w.key),type:"result_pack",format:"json" as const,required_fields:["summary","evidence","document_refs"]}:null}));
-          const edges=prep.workstreams.flatMap(w=>w.depends_on.map(from=>({from_slot_key:from,to_slot_key:w.key,start_condition:"accepted",artifact_key:key(from)})));
+          const edges=prep.workstreams.flatMap(w=>w.depends_on.map(from=>({from_slot_key:from,to_slot_key:w.key,start_condition:"submitted",artifact_key:key(from)})));
           const plan=createDraftPlan(task.id,project.owner_id,prep.workstreams.length===1?"single_executor":"manual",prep.reason,task.context_version??null,{nodes,edges});
           planId=plan.id;
           for(const w of prep.workstreams) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='auto_preparation',instructions=? WHERE plan_id=? AND slot_key=?").run(JSON.stringify(w),plan.id,w.key);

@@ -1,3 +1,4 @@
+import { normalizePlanStartCondition } from "./planArtifactGate.js";
 // Живой план совместной работы (владелец 01.10.2026: «граф живой, может
 // достраиваться сам в процессе, а состав я настраиваю хотя бы до старта»;
 // предложение — docs/2026-09-30-live-collaboration-plan-spec.md).
@@ -123,7 +124,7 @@ function edgeFrom(from: NodeRow, to: string): EdgeRow {
   const artifact = artifactKeyOf(from);
   return artifact
     ? { from_slot_key: from.slot_key, to_slot_key: to, start_condition: "artifact_ready", artifact_key: artifact }
-    : { from_slot_key: from.slot_key, to_slot_key: to, start_condition: "accepted", artifact_key: null };
+    : { from_slot_key: from.slot_key, to_slot_key: to, start_condition: "submitted", artifact_key: null };
 }
 
 function freshSlot(nodes: Map<string, NodeRow>, role: string): string {
@@ -183,7 +184,7 @@ function applyOne(op: PlanOp, w: Working, plan: PlanRow, steps: Map<string, Step
       const helper=freshSlot(w.nodes,requireRole(op.role_key));
       applyOne({op:"add_step",slot_key:helper,role_key:op.role_key,expected_result:op.expected_result,instructions:op.instructions,after},w,plan,steps,actor,reason);
       // Автор явно приостанавливает себя: исключение к запрету менять входы начатых шагов.
-      w.edges.push({from_slot_key:helper,to_slot_key:op.from_slot,start_condition:"accepted",artifact_key:null});
+      w.edges.push({from_slot_key:helper,to_slot_key:op.from_slot,start_condition:"submitted",artifact_key:null});
       w.waiting.set(op.from_slot,reason || op.expected_result);
       return;
     }
@@ -207,7 +208,7 @@ function applyOne(op: PlanOp, w: Working, plan: PlanRow, steps: Map<string, Step
       for (const a of after) w.edges.push(edgeFrom(existing(a), slot));
       for (const b of op.before ?? []) {
         pending(b);
-        w.edges.push({ from_slot_key: slot, to_slot_key: b, start_condition: "accepted", artifact_key: null });
+        w.edges.push({ from_slot_key: slot, to_slot_key: b, start_condition: "submitted", artifact_key: null });
       }
       w.nodes.set(slot, node);
       w.added.add(slot);
@@ -373,7 +374,7 @@ function persist(plan: PlanRow, w: Working): void {
   const insertEdge = db.prepare(
     "INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)",
   );
-  for (const e of w.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, e.from_slot_key, e.to_slot_key, e.start_condition, e.artifact_key);
+  for (const e of w.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, e.from_slot_key, e.to_slot_key, normalizePlanStartCondition(e.start_condition), e.artifact_key);
 
   if (plan.status !== "approved") return;
   // Запущенный план: узлы — подзадачи, правим их вместе с графом.
