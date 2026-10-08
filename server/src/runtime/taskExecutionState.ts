@@ -1,3 +1,4 @@
+import {hasOnlyBranchCoordination} from "./branchCoordination.js";
 import {branchRoot,branchCards} from "./branchPlan.js";
 import db from "../db.js";
 import { activeInProcessRun } from "./inProcessRun.js";
@@ -28,6 +29,6 @@ export function taskExecutionState(taskId: string) {
     branch_root_task_id:isChild ? rootId : null,
     can_launch: !isBranchRoot && !isChild && !busy && !team && !task?.agent_state && task?.status === 'active',
     can_change_executor: !isBranchRoot && !isChild && !busy && !team,
-    can_use_plan: !isChild && !busy,
+    can_use_plan: !isChild && (!busy || hasOnlyBranchCoordination(taskId)),
     error: canRetry ? job?.last_error ?? 'Запуск завершён без начала работы. Проверьте назначение исполнителя.' : null};
 }

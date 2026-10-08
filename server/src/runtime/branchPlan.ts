@@ -1,3 +1,4 @@
+import {hasOnlyBranchCoordination} from "./branchCoordination.js";
 import { materializeWorkChoices } from "../lib/planWorkSelection.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import crypto from "node:crypto";
@@ -99,7 +100,9 @@ export function approveBranch(rootPlanId:string,ownerId:string,snapshot:string):
     for(const {card,plan} of selected){
       if(!plan) throw new Error(`Для «${card.title}» ещё не подготовлен план`);
       if(card.project_id!==cards.find(c=>c.id===root.task_id)!.project_id) throw new Error("Карточки ветки должны находиться в одном проекте");
-      if(card.status!=="completed" && (card.agent_state || plan.status!=="draft" || db.prepare("SELECT 1 FROM role_run_jobs WHERE task_id=? AND status IN ('queued','running','retry_wait')").get(card.id))) throw new Error(`«${card.title}» уже работает отдельно — требуется явное объединение`);
+      const coordinating=card.id===root.task_id && hasOnlyBranchCoordination(card.id);
+      const queued=db.prepare("SELECT 1 FROM role_run_jobs WHERE task_id=? AND status IN ('queued','running','retry_wait')").get(card.id);
+      if(card.status!=="completed" && ((!coordinating && (card.agent_state || queued)) || plan.status!=="draft")) throw new Error(`«${card.title}» уже работает отдельно — требуется явное объединение`);
       if(!planNodes(plan.id).length) throw new Error(`План «${card.title}» пуст`);
       responsibleRole(plan.id,card.id===root.task_id);
     }
