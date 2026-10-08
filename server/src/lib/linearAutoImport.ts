@@ -39,12 +39,17 @@ import {
 } from "./linearSource.js";
 import { commitLinearPreview, createLinearPreview } from "./linearImport.js";
 
+// MAK-95: периоды приходят из реестра, чтобы владелец правил их из
+// Настройки → Сервер без перезапуска процесса. Значения перечитываются
+// на каждом проходе (см. tick()), а для INTERVAL_MS — отдельная
+// подписка, пересоздающая setInterval (см. startLinearAutoImport).
+import { getSetting } from "./serverSettings.js";
+import { onChange } from "./serverSettings.js";
+let LINEAR_AUTOIMPORT_INTERVAL_MS = getSetting("linear_autoimport_interval_ms");
+let LINEAR_AUTOIMPORT_STALE_MS = getSetting("linear_autoimport_stale_ms");
+
 /** Метка проекта Linear, по которой служба отбирает работу. */
 export const LINEAR_NOW_LABEL = "Сейчас";
-/** Период прохода. */
-export const LINEAR_AUTOIMPORT_INTERVAL_MS = 5 * 60 * 1000;
-/** Тишина дольше этого — владельцу уведомление. */
-export const LINEAR_AUTOIMPORT_STALE_MS = 30 * 60 * 1000;
 /** Не повторять одно и то же уведомление чаще раза в час. */
 const NOTIFY_REPEAT_MS = 60 * 60 * 1000;
 /** Первый проход — не сразу после старта, чтобы сервер встал. */
@@ -270,9 +275,18 @@ export function startLinearAutoImport(): () => void {
     }
   };
   const first = setTimeout(() => void tick(), FIRST_PASS_DELAY_MS);
-  const timer = setInterval(() => void tick(), LINEAR_AUTOIMPORT_INTERVAL_MS);
+  let timer = setInterval(() => void tick(), LINEAR_AUTOIMPORT_INTERVAL_MS);
+  // MAK-95: при смене интервала пересоздаём таймер, иначе остался бы
+  // старый и старый setInterval продолжал тикать по старому расписанию
+  // параллельно с новым.
+  const off = onChange("linear_autoimport_interval_ms", (v) => {
+    LINEAR_AUTOIMPORT_INTERVAL_MS = v;
+    clearInterval(timer);
+    timer = setInterval(() => void tick(), LINEAR_AUTOIMPORT_INTERVAL_MS);
+  });
   return () => {
     clearTimeout(first);
     clearInterval(timer);
+    off();
   };
 }

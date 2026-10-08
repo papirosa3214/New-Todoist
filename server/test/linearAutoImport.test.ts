@@ -8,8 +8,9 @@ import {
   notifyLinearAutoImportStale,
   setLinearAutoImportEnabled,
   linearAutoImportState,
-  LINEAR_AUTOIMPORT_STALE_MS,
 } from "../src/lib/linearAutoImport.js";
+import { getSetting } from "../src/lib/serverSettings.js";
+const LINEAR_AUTOIMPORT_STALE_MS = getSetting("linear_autoimport_stale_ms");
 import {
   fetchLinearSnapshot,
   findLinearProjectsByLabel,

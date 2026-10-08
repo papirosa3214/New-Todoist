@@ -180,6 +180,15 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
     },
   );
 
+  // ВАЖНО: GET остаётся источником правды о том, что показывается в
+  // SettingsScreen → Сервер → Режим приёма, чтобы не сломать существующий
+  // UI. Реестр — дополнительный слой: при первом запуске мигрирует значения
+  // из users (см. `migrateUserDefaultsToRegistry`). Прямой `setSetting` в
+  // PATCH ниже намеренно НЕ вызывается: вся правка через
+  // /api/admin/server-settings, а этот эндпоинт сохранён для backward
+  // compatibility и пишет в users. На следующей итерации — переключить
+  // SettingsScreen на новый эндпоинт и удалить этот блок.
+
   // PATCH — только владелец. Нераспознанный режим → 400, значение в БД
   // не трогается. CHECK в схеме страхует от гонки и от того, чтобы в БД
   // когда-либо лежало значение вне enum — хелпер snapshotIntakeMode

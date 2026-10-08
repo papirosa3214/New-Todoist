@@ -816,9 +816,18 @@ export async function _settleInProcessRunsForTests(): Promise<void> {
 }
 
 /** Сколько ждём резюме роли при остановке хода. Остановка не должна зависать
- *  в ожидании модели (владелец 04.10.2026): не ответила — пишем техснимок. */
-const STOP_SUMMARY_MS = Number(process.env.TASKFLOW_SLOT_STOP_SUMMARY_MS ?? 30_000);
-const STOP_SUMMARY_ON = process.env.TASKFLOW_SLOT_STOP_SUMMARY !== "0";
+ *  в ожидании модели (владелец 04.10.2026): не ответила — пишем техснимок.
+ *  MAK-95: значения из реестра `serverSettings`, подписка обновляет без
+ *  перезапуска процесса. */
+import { getSetting, onChange } from "../lib/serverSettings.js";
+let STOP_SUMMARY_MS = getSetting("slot_stop_summary_ms");
+let STOP_SUMMARY_ON = getSetting("slot_stop_summary");
+onChange("slot_stop_summary_ms", (v) => {
+  STOP_SUMMARY_MS = v;
+});
+onChange("slot_stop_summary", (v) => {
+  STOP_SUMMARY_ON = v;
+});
 
 /** Разбор короткого резюме, которое роль пишет в конце хода. Терпимый к
  *  формулировкам: годятся строки «Сделано:», «Осталось:», «Блок:»,

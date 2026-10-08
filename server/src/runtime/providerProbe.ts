@@ -13,7 +13,11 @@ import { getFailoverSettings } from "../lib/failoverSettings.js";
 export type ProbeResult = "ok" | "limited" | "unknown";
 export type ProbeFn = (modelRef: string) => Promise<ProbeResult>;
 
-const PROBE_INTERVAL_MS = Number(process.env.PROVIDER_PROBE_INTERVAL_MS) || 5 * 60_000;
+import { getSetting, onChange } from "../lib/serverSettings.js";
+// MAK-95: интервал пробы приходит из реестра и пересоздаётся при смене,
+// иначе остался бы старый setInterval и число проб не подстроилось под
+// новое значение.
+let PROBE_INTERVAL_MS = getSetting("provider_probe_interval_ms");
 const PROBE_FIRST_DELAY_MS = 60_000;
 const PROBE_TIMEOUT_MS = 30_000;
 
@@ -106,12 +110,26 @@ export function startProviderProbe(): () => void {
       }
     })();
   };
-  const first = setTimeout(tick, PROBE_FIRST_DELAY_MS);
-  const timer = setInterval(tick, PROBE_INTERVAL_MS);
+  let first = setTimeout(tick, PROBE_FIRST_DELAY_MS);
+  let timer = setInterval(tick, PROBE_INTERVAL_MS);
   first.unref?.();
   timer.unref?.();
+  // Пересоздаём таймер при смене интервала через реестр. ВАЖНО: каждый
+  // обработчик ровно один — повторный старт startProviderProbe() создаст
+  // ещё одну подписку и продублирует тики. Вызывающий код гарантирует
+  // единственный вызов (как и раньше с хардкодом).
+  const off = onChange("provider_probe_interval_ms", (v) => {
+    PROBE_INTERVAL_MS = v;
+    clearTimeout(first);
+    clearInterval(timer);
+    first = setTimeout(tick, PROBE_FIRST_DELAY_MS);
+    timer = setInterval(tick, PROBE_INTERVAL_MS);
+    first.unref?.();
+    timer.unref?.();
+  });
   return () => {
     clearTimeout(first);
     clearInterval(timer);
+    off();
   };
 }

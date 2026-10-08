@@ -3754,6 +3754,35 @@ const migrations: Migration[] = [
     db.exec("UPDATE task_collaboration_plan_edges SET start_condition='submitted' WHERE start_condition='accepted'");
   } },
 
+  // Единый реестр серверных параметров (MAK-95). Владелец правит значения
+  // через Настройки → Сервер, изменения публикуются через шину событий и
+  // подхватываются долгоживущими модулями без перезапуска процесса.
+  // Значение по умолчанию — это хардкод в `serverSettingsRegistry.ts`,
+  // здесь seed не нужен: ключ появляется в `server_settings` ровно когда
+  // владелец (или смоук-тест) записал туда первое значение. Пустая
+  // таблица = «всё по дефолту из кода», и это ожидаемое поведение.
+  { id: "119_server_settings_registry", description: "Реестр серверных параметров: server_settings + server_settings_log", up() {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS server_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_by TEXT REFERENCES users(id)
+      );
+      CREATE TABLE IF NOT EXISTS server_settings_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL,
+        old_value TEXT,
+        new_value TEXT NOT NULL,
+        reason TEXT,
+        actor_id TEXT REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_server_settings_log_key
+        ON server_settings_log(key, created_at DESC);
+    `);
+  } },
+
 ];
 
 /**

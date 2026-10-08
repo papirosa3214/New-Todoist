@@ -28,10 +28,19 @@ import { startPlanSubtaskRun } from "./planSubtaskAdmission.js";
 
 /** Возраст последнего события хода, после которого шаг считается
  *  зависшим и сервер сам перезапускает попытку. Один порог, без
- *  исключений (поправка владельца 17:05 от 06.10.2026). */
-const STALL_AFTER_MIN = Number(process.env.TASKFLOW_STALL_AFTER_MIN ?? 10);
+ *  исключений (поправка владельца 17:05 от 06.10.2026).
+ *  MAK-95: значения приходят из реестра `serverSettings` и обновляются
+ *  подпиской без перезапуска процесса. */
+import { getSetting, onChange } from "../lib/serverSettings.js";
+let STALL_AFTER_MIN = getSetting("stall_after_min");
 /** Сколько автоперезапусков на слот за окно — после этого blocked. */
-const MAX_RESTARTS_PER_WINDOW = 2;
+let MAX_RESTARTS_PER_WINDOW = getSetting("max_restarts_per_window");
+onChange("stall_after_min", (v) => {
+  STALL_AFTER_MIN = v;
+});
+onChange("max_restarts_per_window", (v) => {
+  MAX_RESTARTS_PER_WINDOW = v;
+});
 const RESTART_WINDOW = "-2 hours";
 /** Только плановые узлы: не-plan subtasks живут под своим контролем
  *  (поток ролей, heartbeat по задаче); путать с плановыми тут опасно. */
