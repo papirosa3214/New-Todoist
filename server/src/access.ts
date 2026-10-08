@@ -45,10 +45,10 @@
 import db from "./db.js";
 import { isServiceUser } from "./serviceUser.js";
 
-type Caller = { id?: string; role?: string; type?: string; reviewer?: number; profile?: string | null };
+type Caller = { id?: string; role?: string; type?: string; reviewer?: number; profile?: string | null; permissions?: string | null };
 
 function callerOf(userId: string): Caller | undefined {
-  return db.prepare("SELECT id, role, type, reviewer, profile FROM users WHERE id = ?").get(userId) as
+  return db.prepare("SELECT id, role, type, reviewer, profile, permissions FROM users WHERE id = ?").get(userId) as
     Caller | undefined;
 }
 
@@ -118,7 +118,11 @@ export function isOwner(userId: string): boolean {
  * выдаётся раньше роутов — в authOrApiToken (auth.ts), на любой DELETE.
  */
 export function isOrchestrator(userId: string): boolean {
-  return callerOf(userId)?.role === "orchestrator";
+  const caller = callerOf(userId);
+  if (caller?.role === "orchestrator") return true;
+  if (caller?.role !== "agent" || caller.type !== "ai") return false;
+  try { return JSON.parse(caller.permissions ?? "{}").orchestrate === true; }
+  catch { return false; }
 }
 
 /**

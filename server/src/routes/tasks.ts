@@ -843,7 +843,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // рядовых исполнителей: type='ai' И role НЕ orchestrator/owner.
       if (assignee_id) {
         const actorRow = db.prepare("SELECT type, role FROM users WHERE id=?").get(req.userId) as { type?: string; role?: string } | undefined;
-        if (actorRow?.type === "ai" && actorRow.role !== "orchestrator" && actorRow.role !== "owner") {
+        if (actorRow?.type === "ai" && !isOrchestrator(req.userId) && actorRow.role !== "owner") {
           return reply.code(403).send({error:"Назначения выполняет сервер"});
         }
       }
@@ -1307,7 +1307,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
         // организатор (role='orchestrator') в матрице прав имеет право
         // переназначать (задача b6b57092), и резать его этой проверкой —
         // значит ломать матрицу на ровном месте.
-        if (actorRow?.type === "ai" && actorRow.role !== "orchestrator" && actorRow.role !== "owner") {
+        if (actorRow?.type === "ai" && !isOrchestrator(req.userId) && actorRow.role !== "owner") {
           return reply.code(403).send({error:"Агенты не назначают исполнителей. Назначения выполняет сервер."});
         }
       }

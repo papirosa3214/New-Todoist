@@ -6,9 +6,9 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent } from "../ws.js";
 import { getTaskRow, hydrateTask } from "./tasks.js";
-import { isOwner } from "../access.js";
+import { isOwner, isOrchestrator } from "../access.js";
 
-const canManage = (userId: string) => isOwner(userId);
+const canManage = (userId: string) => isOwner(userId) || isOrchestrator(userId);
 
 // Зависимости задач. Здесь же раньше жили «доска объявлений»
 // (`GET /api/tasks/pool`), словарный подбор профиля (`POST /:id/enrich`) и

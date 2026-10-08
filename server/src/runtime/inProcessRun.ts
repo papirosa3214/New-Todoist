@@ -1,3 +1,4 @@
+import { orchestratorTools } from "./orchestratorTools.js";
 import { resolveReviewTaskId } from "../lib/reviewTaskId.js";
 import { beginTaskLiveTurn } from "./taskLiveTurn.js";
 import { broadcastToUsers } from "../ws.js";
@@ -77,7 +78,7 @@ export class ToolError extends Error {}
  *  на один вызов: наружу не уходит, храниться нигде не нужно. */
 export async function asRole(
   role: string,
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
   url: string,
   body?: unknown,
 ): Promise<any> {
@@ -85,7 +86,7 @@ export async function asRole(
   return asControlActor(roleUserId(role), method, url, body);
 }
 
-export async function asControlActor(actorId: string, method: "GET" | "POST" | "PATCH" | "DELETE", url: string, body?: unknown): Promise<any> {
+export async function asControlActor(actorId: string, method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", url: string, body?: unknown): Promise<any> {
   if (!app) throw new ToolError("сервер ещё не поднят");
   const token = app.jwt.sign({ id: actorId }, { expiresIn: "5m" });
   const res = await app.inject({
@@ -572,15 +573,15 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  return tools.filter(t => (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
+  return [...tools, ...orchestratorTools(role, T)].filter(t => (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const HEARTBEAT_MS = 90_000;
 
 /** Что агент роли получает на заходе внутри сервера — для экрана «Команда». */
-export function inProcessToolNames(): string[] {
-  return [...BUILTIN_TOOLS, ...taskflowTools("", null).map((t) => t.name)];
+export function inProcessToolNames(role = ""): string[] {
+  return [...BUILTIN_TOOLS, ...taskflowTools(role, null).map((t) => t.name)];
 }
 
 function rolePrompt(role: string): string {

@@ -47,7 +47,7 @@ function readRoleTools(role: RoleName): string[] {
   const fileName = path.join(ROLE_PROFILES_DIR, role + ".json");
   // Роль, заведённая с экрана «Команда», профиля Pi не имеет и работает
   // только внутри сервера — её инструменты те, что даёт заход внутри.
-  if (!fs.existsSync(fileName)) return inProcessToolNames();
+  if (!fs.existsSync(fileName)) return inProcessToolNames(role);
   const config = JSON.parse(fs.readFileSync(fileName, "utf8")) as ProfileConfig;
   const tools = config.mcpServers?.taskflow?.env?.TASKFLOW_MCP_TOOLS;
   if (!tools) throw new Error(`MCP-профиль роли ${role} не содержит allowlist`);
