@@ -126,9 +126,9 @@ export function asText(payload: unknown) {
 }
 
 /** Живая строка «чем занят агент» в карточке. Мягко: сбой не роняет инструмент. */
-async function activity(role: string, taskId: string, kind: string, target: string): Promise<void> {
+async function postActivity(role: string, taskId: string, kind: string, target: string, subtaskId?: string): Promise<void> {
   try {
-    await asRole(role, "POST", `/api/tasks/${taskId}/activity`, { kind, target });
+    await asRole(role, "POST", `/api/tasks/${taskId}/activity`, { kind, target, subtask_id: subtaskId });
   } catch {
     // активность — не работа
   }
@@ -231,6 +231,7 @@ export async function requestPlanStep(role: string, p: any, currentSubtaskId?: s
 }
 
 export function taskflowTools(role: string, model: string | null, taskId?: string, subtaskId?:string) {
+  const activity = (role: string, taskId: string, kind: string, target: string) => postActivity(role, taskId, kind, target, subtaskId);
   const T = (
     name: string,
     description: string,
@@ -1053,7 +1054,7 @@ try {
     if(!kind) return;
     const a = event.args ?? {};
     const target = String(a.path ?? a.file_path ?? a.command ?? a.pattern ?? event.toolName).slice(0, 200);
-    void activity(role, taskId, kind, target);
+    void postActivity(role, taskId, kind, target, input.subtaskId);
     // Любой реальный вызов инструмента — фактическая активность роли,
     // обновляем метку для sweeper тишины (taskflow-flow.md, п.9 части II).
     touchRunActivity(runId);

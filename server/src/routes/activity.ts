@@ -74,6 +74,8 @@ const EMIT_THROTTLE_MS = 2000;
 const TTL_MS = 30 * 60 * 1000;
 
 interface Action {
+  actor_id?: string;
+  subtask_id?: string;
   kind: ActivityKind;
   target: string;
   detail?: string;
@@ -91,6 +93,7 @@ interface Entry {
   actions: Action[];
   /** Всего действий с начала работы над задачей (не ограничено кольцом). */
   total?: number;
+  subtaskTotals?: Record<string, number>;
   lastEmitAt: number;
   lastText: string;
   /** Сколько действий уже отдавали наблюдателю (тикет ollama-observer) —
@@ -264,7 +267,7 @@ export function describeAction(a: Action): string {
 export function recentActivity(taskId: string) {
   const metrics = taskStopMetrics(taskId);
   const e = buffers.get(taskId);
-  if (!e) return { text: null, actions: [] as Action[], total: 0, metrics };
+  if (!e) return { text: null, actions: [] as Action[], total: 0, by_subtask: {}, metrics };
   // Каждому действию — ГОТОВАЯ формулировка, а не голый путь. Владелец
   // 25.08.2026, увидев раскрытый список на телефоне: «нахуя мне вот эта
   // сырая хуета». Он прав: наверху строка шла с глаголом, а внутри сыпались
@@ -274,6 +277,11 @@ export function recentActivity(taskId: string) {
     text: e.lastText,
     total: Math.max(e.total ?? 0, e.actions.length),
     actions: e.actions.map((a) => ({ ...a, text: describeAction(a) })),
+    by_subtask: Object.fromEntries(Object.entries(e.subtaskTotals ?? {}).map(([id, total]) => {
+      const actions = e.actions.filter(a => a.subtask_id === id);
+      return [id, { total, text: actions.length ? describeAction(actions[actions.length - 1]) : null,
+        actions: actions.map(a => ({ ...a, text: describeAction(a) })) }];
+    })),
     metrics,
   };
 }
@@ -561,6 +569,19 @@ export function registerActivityRoutes(app: FastifyInstance) {
       if (!rawTarget)
         return reply.code(400).send({ error: "target обязателен" });
 
+      // Не угадываем слот по роли: два builder могут работать одновременно.
+      let subtaskId: string | undefined;
+      if (req.body?.subtask_id) {
+        const slot = db.prepare("SELECT id FROM subtasks WHERE id=? AND task_id=? AND (agent_id=? OR id IN (SELECT subtask_id FROM attempts WHERE executor_id=?))")
+          .get(String(req.body.subtask_id), row.id, req.userId, req.userId) as {id: string} | undefined;
+        if (!slot) return reply.code(400).send({error: "Шаг активности не принадлежит исполнителю задачи"});
+        subtaskId = slot.id;
+      } else {
+        const slots = db.prepare("SELECT id FROM subtasks WHERE task_id=? AND agent_id=? AND done=0 AND agent_state='in_progress'")
+          .all(row.id, req.userId) as {id: string}[];
+        if (slots.length === 1) subtaskId = slots[0].id;
+      }
+
       const task = hydrateTask(getTaskRow(row.id));
       // Показывать нечего, если над задачей никто не работает: строка в
       // карточке — про «сейчас», а не про историю.
@@ -606,7 +627,9 @@ export function registerActivityRoutes(app: FastifyInstance) {
           ? shortCommand(String(req.body.detail))
           : undefined,
         diff: shortDiff(req.body?.diff),
-        actor: task.assignee_name || "агент",
+        actor: (db.prepare("SELECT name FROM users WHERE id=?").get(req.userId) as {name: string} | undefined)?.name || "агент",
+        actor_id: req.userId,
+        subtask_id: subtaskId,
         at: now,
       };
 
@@ -615,6 +638,10 @@ export function registerActivityRoutes(app: FastifyInstance) {
         lastEmitAt: 0,
         lastText: "",
       };
+      if (subtaskId) {
+        entry.subtaskTotals ??= {};
+        entry.subtaskTotals[subtaskId] = (entry.subtaskTotals[subtaskId] ?? 0) + 1;
+      }
       entry.actions.push(action);
       entry.total = (entry.total ?? entry.actions.length - 1) + 1;
       if (entry.actions.length > RING)
