@@ -1,3 +1,4 @@
+import { taskLiveTurns } from "../runtime/taskLiveTurn.js";
 // POST /api/tasks/:id/activity — живой поток действий агента.
 //
 // Максим 25.08.2026: «меня раздражает абсолютное непонимание, чем занимается
@@ -539,6 +540,15 @@ export function startActivityObserver(): void {
 }
 
 export function registerActivityRoutes(app: FastifyInstance) {
+  app.get<{ Params: { id: string } }>("/api/tasks/:id/live", {
+    preHandler: async (req, reply) => authOrApiToken(req, reply),
+    handler: async (req: any, reply) => {
+      if (!getTaskForActivity(req.params.id, req.userId))
+        return reply.code(404).send({ error: "Задача не найдена" });
+      return { turns: taskLiveTurns(req.params.id) };
+    },
+  });
+
   const authPre = authOrApiToken;
 
   app.get<{ Params: { id: string } }>("/api/tasks/:id/activity/metrics", {

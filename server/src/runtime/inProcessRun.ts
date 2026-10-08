@@ -1,3 +1,6 @@
+import { resolveReviewTaskId } from "../lib/reviewTaskId.js";
+import { beginTaskLiveTurn } from "./taskLiveTurn.js";
+import { broadcastToUsers } from "../ws.js";
 import { requireSubmissionReceipt, SUBMISSION_POLICY } from "../lib/submissionReceipt.js";
 import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
@@ -388,15 +391,18 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
         return { "состояние изменено": short(unwrap(resp)) };
       }),
-    T("taskflow_review", "Единственный способ сдать работу критика: текст changes_requested в отчёте не оформляет возврат. Всегда вызови этот инструмент; не закрывай шаг через subtask_done или artifact. Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
+    T("taskflow_review", "id — ID ВСЕЙ текущей задачи, не подзадачи. Единственный способ сдать работу критика: текст changes_requested в отчёте не оформляет возврат. Всегда вызови этот инструмент; не закрывай шаг через subtask_done или artifact. Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
       Type.Object({ id: Type.String(), verdict: Type.String(), report_markdown: Type.Optional(Type.String()), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
       async (p) => {
-        const versions = await asRole(role, "GET", `/api/tasks/${p.id}/versions`);
+        const step = db.prepare("SELECT task_id, agent_id FROM subtasks WHERE id=?").get(p.id) as
+          { task_id: string; agent_id: string | null } | undefined;
+        const reviewTaskId = taskId ? resolveReviewTaskId(p.id, taskId, roleUserId(role), step) : p.id;
+        const versions = await asRole(role, "GET", `/api/tasks/${reviewTaskId}/versions`);
         const current = (versions.versions ?? []).find((v: any) => v.is_current);
         if (!current) throw new ToolError("у задачи нет актуальной версии результата — проверять нечего");
         const findings = (p.findings ?? "").trim();
         const body: Json = {
-          task_id: p.id, version_id: current.id, artifact_hash: current.artifact_hash,
+          task_id: reviewTaskId, version_id: current.id, artifact_hash: current.artifact_hash,
           criteria_version: "1", task_revision: current.task_revision, verdict: p.verdict,
         };
         if (findings) body.findings = findings;
@@ -405,7 +411,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (p.verdict === "changes_requested") {
           if (!findings) throw new ToolError("для возврата нужен комментарий: что доработать");
           const review = await asRole(role, "POST", "/api/reviews", body);
-          if (!review.handled_by_plan) await asRole(role, "POST", `/api/tasks/${p.id}/state`, { state: "in_progress", comment: findings });
+          if (!review.handled_by_plan) await asRole(role, "POST", `/api/tasks/${reviewTaskId}/state`, { state: "in_progress", comment: findings });
           if(subtaskId && !review.submission_receipt) throw new ToolError("Сдача проверяющего не подтверждена основным TaskFlow");
           const receipt=review.submission_receipt ? requireSubmissionReceipt(await asRole(role,"GET", `/api/subtasks/${review.submission_receipt.subtask_id}/submission-receipt`),review.submission_receipt.subtask_id) : null;
           return { вердикт: "возвращено на доработку", комментарий: findings, ...(receipt ? {submission_receipt:receipt}: {}) };
@@ -1050,13 +1056,21 @@ try {
   const before = progressMark(taskId);
   const runControl: ActiveInProcessRun = { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now(), activityCount: 0 };
   activeRuns.set(runId, runControl);
+  const liveTurn = beginTaskLiveTurn({
+    taskId, subtaskId: input.subtaskId, runId, userId: roleUserId(role), name: roleTitle(role),
+    publish: snapshot => {
+      const task = db.prepare("SELECT creator_id, assignee_id FROM tasks WHERE id=?").get(taskId) as any;
+      if (task) broadcastToUsers([task.creator_id, task.assignee_id], { type: "tasks:live", ...snapshot });
+    },
+  });
 
   // Действия встроенных инструментов — строкой в карточке, как раньше делало
   // расширение Pi taskflow-activity.ts.
   const KIND: Record<string, string> = {
     read: "read", grep: "search", find: "search", ls: "read", edit: "edit", write: "write", bash: "run",
   };
-  session.subscribe((event: any) => {
+  const unsubscribeLive = session.subscribe((event: any) => {
+    liveTurn.onEvent(event);
     if (event?.type !== "tool_execution_start") return;
     const kind=KIND[event.toolName] ?? (event.toolName?.startsWith("mcp__xcode__") ? (event.toolName.includes("write") ? "write" : event.toolName.includes("read") ? "read" : event.toolName.includes("test") ? "test" : "run") : undefined);
     if(!kind) return;
@@ -1125,6 +1139,8 @@ try {
       }
     } finally {
       clearInterval(beat);
+      unsubscribeLive();
+      liveTurn.finish();
       const runActivity = activeRuns.get(runId)?.activityCount ?? 0;
       activeRuns.delete(runId);
       // Снимок остановки (владелец 04.10.2026, пункт 2 и 3 плана). Слот не

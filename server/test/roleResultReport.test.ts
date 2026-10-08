@@ -106,6 +106,19 @@ describe("Читаемый отчёт — часть результата рол
   expect((db.prepare("SELECT done FROM subtasks WHERE id=?").get(id) as any).done).toBe(1);
  });
 
+ it("критик со своим ID шага сдаёт вердикт по всей задаче вместо 404",async()=>{
+  const f=await fixture(false);
+  db.prepare("UPDATE subtasks SET done=1,agent_state=NULL,result='Готово.' WHERE task_id=?").run(f.task.id);
+  const key="critic_id"; const id=crypto.randomUUID();
+  db.prepare("INSERT INTO task_collaboration_plan_nodes(id,plan_id,slot_key,role_key,required,expected_result,instructions) VALUES(?,?,?,?,1,?,?)").run(crypto.randomUUID(),f.plan.id,key,"critic_verifier","Вердикт","[taskflow:final-review]");
+  db.prepare("INSERT INTO subtasks(id,task_id,title,done,position,agent_state,agent_id,collaboration_plan_id,plan_node_key) VALUES(?,?,?,0,99,'in_progress',?,?,?)").run(id,f.task.id,"Вердикт",roleUserId("critic_verifier"),f.plan.id,key);
+  await app.inject({method:"POST",url:"/api/tasks/"+f.task.id+"/versions",headers:{authorization:owner},payload:{result:"Готово."}});
+  const tool=taskflowTools("critic_verifier",null,f.task.id,id).find(t=>t.name==="taskflow_review") as any;
+  const output=await tool.execute("wrong-slot-id",{id,verdict:"approved",findings:"Проверено на временной базе.",report_markdown:report});
+  expect(JSON.parse(output.content[0].text).submission_receipt).toMatchObject({confirmed:true,authority:"primary",subtask_id:id});
+  expect((db.prepare("SELECT task_id FROM reviews WHERE task_id=?").get(f.task.id) as any).task_id).toBe(f.task.id);
+ },15000);
+
  it("песочница не принимает сдачу ни артефактом, ни простым закрытием, ни квитанцией скопированной базы",async()=>{
   const f=await fixture();const simple=await fixture(false);
   try {

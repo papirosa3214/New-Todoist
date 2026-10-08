@@ -314,6 +314,7 @@ export class LiveTurn {
   readonly userId: string;
   readonly name: string;
   private readonly audience: () => string[];
+  private readonly publish?: (turn: LiveTurnSnapshot | null) => void;
   private readonly startedAt = new Date();
   private items: LiveItem[] = [];
   /** Идущее размышление; null — роль сейчас не думает. */
@@ -332,11 +333,13 @@ export class LiveTurn {
     name: string;
     audience: () => string[];
     detached?: boolean;
+    publish?: (turn: LiveTurnSnapshot | null) => void;
   }) {
     this.chatId = args.chatId;
     this.userId = args.userId;
     this.name = args.name;
     this.audience = args.audience;
+    this.publish = args.publish;
     this.detached = args.detached ?? false;
     if (this.detached) this.closed = true;
   }
@@ -471,6 +474,7 @@ export class LiveTurn {
       this.timer = null;
     }
     if (this.closed) return;
+    if (this.publish) { this.publish(this.snapshot()); return; }
     broadcastToUsers(this.audience(), {
       type: "chats:live",
       chat_id: this.chatId,
@@ -494,7 +498,7 @@ export class LiveTurn {
     this.endThinking();
     this.closed = true;
     this.dispose();
-    liveTurns.delete(keyOf(this.chatId, this.userId));
+    if (!this.publish) liveTurns.delete(keyOf(this.chatId, this.userId));
     if (!opts.deferAnnounce) this.broadcastEnd(null);
     else this.endPending = true;
     const items = this.snapshot().items;
@@ -520,6 +524,7 @@ export class LiveTurn {
   }
 
   private broadcastEnd(messageId: string | null): void {
+    if (this.publish) { this.publish(null); return; }
     broadcastToUsers(this.audience(), {
       type: "chats:live",
       chat_id: this.chatId,
