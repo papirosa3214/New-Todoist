@@ -40,6 +40,7 @@ import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerMergeMarkerRoutes } from "./routes/merge-marker.js";
 import { registerOwnerControlRoutes } from "./routes/owner-controls.js";
 import { reloadServerSettings } from "./lib/serverSettings.js";
+import { registerOwnerCommandRoutes } from "./routes/owner-commands.js";
 import { registerAdminServerSettingsRoutes } from "./routes/admin-server-settings.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
@@ -367,6 +368,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerMergeMarkerRoutes(app);
   registerOwnerControlRoutes(app);
   registerAdminServerSettingsRoutes(app);
+  registerOwnerCommandRoutes(app);
   registerSubtaskArtifactRoutes(app);
   // Ручки «прервать шаг», «сбросить попытку», «отменить задание» —
   // MAK-69, владелец и оркестратор останавливают живой запуск через

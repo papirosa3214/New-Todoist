@@ -3783,6 +3783,49 @@ const migrations: Migration[] = [
     `);
   } },
 
+  { id: "121_owner_command_log", description:
+      "MAK-82 / карточка d9dee6f8 «Сервер: выполнение команд владельца на .110»: " +
+      "журнал вызовов /api/owner-command/run — кто/что/когда/чем кончилось. " +
+      "request_id (UUID) связывает вызов с лентой и журналом; who (FK users) — " +
+      "кто звал; action — какое действие из белого списка или произвольное; " +
+      "command — конкретная команда (systemctl/journalctl/sqlite3), " +
+      "params — параметры (имя сервиса, N строк журнала и т.п.), confirm — " +
+      "передано ли подтверждение для не-белых действий. " +
+      "started_at/finished_at (UTC), duration_ms, exit_code, " +
+      "outcome ∈ (ok|rejected|timeout|error|backup_failed), stdout/stderr " +
+      "(TEXT — лимит 64 KiB, обрезка хвостом), backup_path — путь к автобэкапу " +
+      "(NULL если действие его не требует). " +
+      "error — текстовая причина отказа/ошибки (NULL при ok). " +
+      "Идемпотентно: CREATE TABLE IF NOT EXISTS + индексы IF NOT EXISTS.", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS owner_command_log (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL UNIQUE,
+        who TEXT NOT NULL REFERENCES users(id),
+        action TEXT NOT NULL,
+        command TEXT NOT NULL,
+        params TEXT NOT NULL DEFAULT '{}',
+        confirm INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT,
+        duration_ms INTEGER,
+        exit_code INTEGER,
+        outcome TEXT NOT NULL
+          CHECK (outcome IN ('ok','rejected','timeout','error','backup_failed')),
+        stdout TEXT,
+        stderr TEXT,
+        backup_path TEXT,
+        error TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_owner_command_log_who
+        ON owner_command_log(who, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_owner_command_log_outcome
+        ON owner_command_log(outcome, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_owner_command_log_started
+        ON owner_command_log(started_at DESC);
+    `);
+    db.prepare("UPDATE roles SET prompt=prompt || ? WHERE length(trim(coalesce(prompt,'')))>0 AND instr(prompt,'Команды владельцу — формат выдачи')=0").run("\n\n## Команды владельцу — формат выдачи\nКоманды для сервера .110 выдавай отдельным закрытым блоком bash: одна команда на блок, без приглашения $ и без ожидаемого вывода. Это позволяет владельцу подтвердить запуск кнопкой Play в iOS. Для команд Mac/iPhone явно укажи другую машину и используй блок с меткой zsh, чтобы не предлагать запуск на .110.\n");
+  } },
 ];
 
 /**
