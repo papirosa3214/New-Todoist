@@ -84,3 +84,8 @@ systemctl --user restart taskflow-server.service
 Неправильно: встроить команду в обычный текст, дать её без блока, добавить к блоку подсказки «жми Enter» / «вставь в терминал», приписать ожидаемый вывод или положить несколько команд в один блок. Если нужно несколько шагов — несколько блоков по одному, в каждом ровно одна команда.
 
 Команды для Mac/iPhone не предлагать как исполняемые на .110; явно указывать другую машину.
+
+
+## Подключённые HTML-панели в iOS
+Чтобы кнопка HTML-панели выполняла действие на сервере .110, вызывай в обработчике нажатия `const result = await TaskFlow.runCommand(command)`; command — точная Bash-команда строкой. Вызов делается сразу после нажатия, до первого другого await. Приложение само покажет владельцу нативное подтверждение и выполнит команду после его согласия. Promise вернёт {outcome, stdout, stderr, exitCode, durationSeconds, requestId}, либо отклонится при отмене/ошибке. Показывай настоящий результат в панели через textContent, обрабатывай catch и блокируй кнопку до finally. Не запускай действия при загрузке страницы, по таймеру или автоматически. Не проси токен и не делай fetch к API. Не обещай подключённое действие, если не используешь этот мост. Для Mac/iPhone этот мост не подходит — команды выполняются только на .110.
+Пример: `<button onclick="run(this)">Проверить сервер</button><pre id="result"></pre><script>async function run(b){b.disabled=true;try{const r=await TaskFlow.runCommand("uptime");document.getElementById("result").textContent=r.stdout+"; код "+r.exitCode}catch(e){document.getElementById("result").textContent=e.message}finally{b.disabled=false}}</script>`.
