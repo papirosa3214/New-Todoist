@@ -1562,6 +1562,7 @@ async function deliverAgentReply(args: {
   try {
     reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:live.onEvent}) : await startChatRun({
       mode: args.mode,
+      messageId: trigger.id,
       chatId,
       role,
       roleId: roleUserId,

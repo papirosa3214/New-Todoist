@@ -79,7 +79,12 @@ export async function asRole(
   body?: unknown,
 ): Promise<any> {
   if (!app) throw new ToolError("сервер ещё не поднят");
-  const token = app.jwt.sign({ id: roleUserId(role) }, { expiresIn: "5m" });
+  return asControlActor(roleUserId(role), method, url, body);
+}
+
+export async function asControlActor(actorId: string, method: "GET" | "POST" | "PATCH" | "DELETE", url: string, body?: unknown): Promise<any> {
+  if (!app) throw new ToolError("сервер ещё не поднят");
+  const token = app.jwt.sign({ id: actorId }, { expiresIn: "5m" });
   const res = await app.inject({
     method,
     url,
@@ -687,7 +692,7 @@ function progressMark(taskId: string): string {
  *  продлевается таймером): sweeper сравнивает это поле с now и прерывает
  *  заход, если роль зависла, не двигаясь. Владелец 05.10.2026, п.9 части II
  *  taskflow-flow.md. */
-type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void>; steer: (text:string)=>Promise<void>; lastActivityAt: number ; /** Сколько раз роль проявила активность (вызовы инструментов): отличает ход с работой от пустого. */ activityCount: number};
+type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void>; steer: (text:string)=>Promise<void>; lastActivityAt: number ; /** Сколько раз роль проявила активность (вызовы инструментов): отличает ход с работой от пустого. */ activityCount: number; replacementRequested?: boolean; completion?: Promise<void>};
 const activeRuns = new Map<string, ActiveInProcessRun>();
 
 /** Сколько минут тишины (без tool call / snapshot / комментария) сервер
@@ -925,6 +930,7 @@ async function runRoleInProcessUnserialized(input: {
   /** Узел collaboration plan — запуск роли на конкретной подзадаче плана,
    *  а не на задаче целиком (изолированный сеанс/сессия на этот узел). */
   subtaskId?: string;
+  freshSession?: boolean;
   /** Сколько раз ход уже переехал на запасную модель из-за лимита провайдера. */
   failoverDepth?: number;
 }): Promise<{ runId: string; completion: Promise<void> }> {
@@ -995,7 +1001,7 @@ async function runRoleInProcessUnserialized(input: {
     }
   }
   fs.mkdirSync(sessionDir(taskId, role, input.subtaskId), { recursive: true });
-  const manager=input.subtaskId ? openSlotSession(taskId,role,input.subtaskId,cwd) : SessionManager.continueRecent(cwd,sessionDir(taskId,role));
+  const manager=input.subtaskId ? openSlotSession(taskId,role,input.subtaskId,cwd,input.freshSession) : SessionManager.continueRecent(cwd,sessionDir(taskId,role));
   cwd=manager.getCwd();
   const systemPrompt = [
     composeLayer(role, "role.prompt")?.effective
@@ -1041,7 +1047,8 @@ try {
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
   logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
-  activeRuns.set(runId, { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now(), activityCount: 0 });
+  const runControl: ActiveInProcessRun = { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now(), activityCount: 0 };
+  activeRuns.set(runId, runControl);
 
   // Действия встроенных инструментов — строкой в карточке, как раньше делало
   // расширение Pi taskflow-activity.ts.
@@ -1103,7 +1110,7 @@ try {
       const reason = error instanceof Error ? error.message : String(error);
       if (isProviderLimitText(reason)) limitHit = reason;
       else runFailure = error instanceof Error ? error : new Error(reason);
-      if (!limitHit) try {
+      if (!limitHit && !runControl.replacementRequested) try {
         await asRole(role, "POST", `/api/tasks/${taskId}/state`, {
           state: "blocked",
           block_type: "transient",
@@ -1129,6 +1136,8 @@ try {
           const closed = (db.prepare("SELECT done FROM subtasks WHERE id = ?").get(input.subtaskId) as { done: number } | undefined)?.done === 1;
           if (closed) {
             // Слот сдан: снимок уже записан на пути сдачи, второй раз не пишем.
+          } else if (runControl.replacementRequested) {
+            technicalSlotSnapshot(input.subtaskId, "stopped", { blocker: "владелец запросил свежую попытку в том же слоте" });
           } else if (runFailure) {
             technicalSlotSnapshot(input.subtaskId, "failed", {
               blocker: (runFailure as Error).message.slice(0, 300),
@@ -1160,7 +1169,7 @@ try {
       // Шаг плана закончил ход без сдачи: сервер сам продолжает его при прогрессе
       // (до 3 раз) или видимо блокирует. Раньше такой шаг молча оставался
       // «в работе» без запуска (находка А30, 06.10.2026).
-      if (input.subtaskId && mode === "work" && !limitHit) {
+      if (input.subtaskId && mode === "work" && !limitHit && !runControl.replacementRequested) {
         try {
           const { settleStalledPlanNode } = await import("./planSubtaskAdmission.js");
           await settleStalledPlanNode({
@@ -1190,9 +1199,10 @@ try {
   void work.finally(() => pending.delete(work));
 
   const completion = work.then(() => {
-    if (limitHit) scheduleProviderFailover();
+    if (limitHit && !runControl.replacementRequested) scheduleProviderFailover();
     if (runFailure) throw runFailure;
   });
+  runControl.completion = completion;
   /** Лимит: помечаем провайдера, берём следующую модель цепочки и перезапускаем ход. */
   function scheduleProviderFailover(): void {
     const depth = input.failoverDepth ?? 0;

@@ -24,6 +24,7 @@
 // `to_value` с фактами (что прервалось / что снято). `actor_id` —
 // вызывающий (владелец или оркестратор), не null: это их решение и должно
 // так читаться в ленте.
+import { restartOccupiedSlot } from "../runtime/slotRestart.js";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
@@ -247,6 +248,19 @@ function isCancellationActor(userId: string): boolean {
 
 export function registerControlRoutes(app: FastifyInstance): void {
   const authPre = authOrApiToken;
+
+  app.post<{ Params: {id:string}; Body: {role:string;reason:string} }>("/api/subtasks/:id/restart", {preHandler:authPre}, async (req:any,reply) => {
+    if (!isCancellationActor(req.userId)) return reply.code(403).send({error:"перезапуск доступен владельцу или оркестратору"});
+    const row=getSubtaskWithTaskForUser(req.params.id,req.userId);
+    if (!row) return reply.code(404).send({error:"Not found"});
+    if (typeof req.body?.role!=="string" || typeof req.body?.reason!=="string" || !req.body.reason.trim() || req.body.reason.length>1000) return reply.code(400).send({error:"укажите роль и причину (до 1000 символов)"});
+    try {
+      const result=await restartOccupiedSlot(row.id,req.body.role,req.userId,req.body.reason.trim());
+      broadcastTaskEvent([row.task_creator_id,row.task_assignee_id],{type:"task:updated",task:getFullTask(row.task_id)});
+      if (!result.ok) return reply.code(409).send(result);
+      return result;
+    } catch(error) { return reply.code(409).send({error:error instanceof Error ? error.message : String(error)}); }
+  });
 
   // ── Прервать шаг ──────────────────────────────────────────────────────
   //

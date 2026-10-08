@@ -11,6 +11,7 @@ import { Type } from "typebox";
 import { asRole, asText, short, ToolError, unwrap, PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, requestPlanStep } from "./inProcessRun.js";
 import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolver.js";
 import db from "../db.js";
+import { restartSlotFromOwnerChat } from "./slotRestart.js";
 import { collectTaskSummary, parseSummaryRequest } from "../lib/secretaryTaskSummary.js";
 
 const TO_ALL_WORDS = new Set(["all", "всем", "*"]);
@@ -27,7 +28,7 @@ function asTasks(payload: any): any[] {
 
 /** Набор инструментов чата для роли. Описания — из реестра инструкций
  *  (`tool.runtime.<имя>`), владелец правит их на экране «Команда». */
-export function chatTools(role: string) {
+export function chatTools(role: string, ownerContext?: {chatId:string;messageId:string}) {
   const T = (name: string, description: string, parameters: any, run: (p: any) => Promise<unknown>) => {
     const key = "tool.runtime." + name;
     registerInstructionBlock({
@@ -271,6 +272,9 @@ export function chatTools(role: string) {
         const resp = await asRole(role, "POST", "/api/consult", body);
         return { совет: resp?.answer, модель: resp?.model };
       }),
+    ...(ownerContext ? [T("taskflow_slot_restart",
+      "По прямой просьбе владельца заменить зависшего исполнителя свежим агентом ТОЙ ЖЕ роли в существующем слоте и запустить. Не добавляет узлы и не меняет связи. Перед вызовом прочитай карточку; укажи точный subtask_id и неизменную роль. Если слотов несколько — уточни у владельца. Не вызывай для обычного сообщения, консультации или простого назначения. Сохраняет историю и передаёт снимок работы в новую сессию.",
+      Type.Object({subtask_id:Type.String(),role:Type.String(),reason:Type.String()}),p=>restartSlotFromOwnerChat(ownerContext.chatId,ownerContext.messageId,p))] : []),
     T("taskflow_plan_request", PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, p => requestPlanStep(role,p)),
     T("taskflow_weather",
       "Погода сейчас и на 4 дня для города — готовый блок виджета для ответа в чате. Блок из поля «виджет» вставить в ответ как есть, цифры не выдумывать.",

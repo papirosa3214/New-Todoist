@@ -31,13 +31,13 @@ export function slotSessionDirectory(taskId:string,role:string,subtaskId:string)
   return path.join(root,"sessions",`${taskId}-${role}-${subtaskId}`);
 }
 /** Adopt the original work file, regardless of its cwd; never fork to a chat session. */
-export function openSlotSession(taskId:string,role:string,subtaskId:string,fallbackCwd:string):SessionManager {
+export function openSlotSession(taskId:string,role:string,subtaskId:string,fallbackCwd:string,fresh=false):SessionManager {
   const dir=slotSessionDirectory(taskId,role,subtaskId);
   fs.mkdirSync(dir,{recursive:true});
   const saved=db.prepare("SELECT session_file FROM slot_sessions WHERE subtask_id=?").get(subtaskId) as {session_file:string}|undefined;
   const candidates=fs.readdirSync(dir).filter(name=>name.endsWith(".jsonl")).map(name=>path.join(dir,name)).sort((a,b)=>fs.statSync(b).mtimeMs-fs.statSync(a).mtimeMs);
   const file=saved && path.dirname(saved.session_file)===dir && fs.existsSync(saved.session_file) ? saved.session_file : candidates[0];
-  const manager=file ? SessionManager.open(file,dir) : SessionManager.create(fallbackCwd,dir);
+  const manager=!fresh && file ? SessionManager.open(file,dir) : SessionManager.create(fallbackCwd,dir);
   rememberSlotSession(subtaskId,manager);
   return manager;
 }

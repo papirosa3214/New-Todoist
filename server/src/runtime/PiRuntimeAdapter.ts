@@ -1045,6 +1045,7 @@ export async function modelExists(ref: string): Promise<boolean> {
 export interface StartChatRunInput {
   mode?: ChatWorkMode;
   chatId: string;
+  messageId?: string;
   role: RoleName;
   /** id ролевой учётки (role_<role>) — будет автором сообщения-ответа. */
   roleId: string;
@@ -1249,7 +1250,7 @@ export async function startChatRun(
       .filter((t) => allowed(t.name))
       .map((t) => ({ ...t, description: composeLayer(role, "tool.builtin." + t.name)?.effective ?? t.description }));
     const custom = new Map<string, any>();
-    for (const tool of [...taskflowTools(role, resolvedModel), ...chatTools(role), ...composio.tools] as any[]) {
+    for (const tool of [...taskflowTools(role, resolvedModel), ...chatTools(role,input.messageId ? {chatId:input.chatId,messageId:input.messageId} : undefined), ...composio.tools] as any[]) {
       if (allowed(tool.name) && !custom.has(tool.name)) custom.set(tool.name, tool);
     }
 

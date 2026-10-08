@@ -166,7 +166,7 @@ export function planNodeAgentRefusal(subtaskId: string, userId: string, starting
  * `/approve` и для узлов, открывшихся по графу через
  * `unlockReadyPlanSubtasks`.
  */
-export async function startPlanSubtaskRun(subtaskId: string, actorId: string): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
+export async function startPlanSubtaskRun(subtaskId: string, actorId: string, options: { freshSession?: boolean } = {}): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
   const current = subtask(subtaskId);
   if (!current || !current.collaboration_plan_id || !current.plan_node_key) return { ok: false, error: "подзадача не узел плана" };
   if (current.done || current.agent_state) return { ok: false, error: "узел плана уже начат или закрыт" };
@@ -179,7 +179,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string): P
   if (!canPlanSubtaskBecomeReady(current)) return { ok: false, error: "Узел ждёт зависимостей задачи или результатов предшествующих этапов" };
 
   const terminalCritic = node.role_key === "critic_verifier" && !db.prepare("SELECT 1 FROM task_collaboration_plan_edges WHERE plan_id=? AND from_slot_key=?").get(current.collaboration_plan_id,current.plan_node_key);
-  if (terminalCritic || isPlanFinalReviewStep(current.id)) {
+  if ((terminalCritic || isPlanFinalReviewStep(current.id)) && !options.freshSession) {
     db.prepare("UPDATE task_collaboration_plan_nodes SET instructions=? WHERE plan_id=? AND slot_key=?").run(FINAL_REVIEW_MARKER,current.collaboration_plan_id,current.plan_node_key);
     return queuePlanFinalReview(current.id,actorId);
   }
@@ -197,7 +197,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string): P
   if(!acquired)return {ok:false,error:"Слот уже запущен или его входные данные изменились"};
 
   try {
-    const run = await runRoleInProcess({ taskId: current.task_id, role: node.role_key, subtaskId: current.id, mode: "work", model: current.model || undefined });
+    const run = await runRoleInProcess({ taskId: current.task_id, role: node.role_key, subtaskId: current.id, mode: node.role_key === "critic_verifier" ? "review" : "work", prompt: node.role_key === "critic_verifier" ? (await import("./inProcessRun.js")).reviewPromptFor(current.task_id) + "\n\n" + (await import("./planReviewLifecycle.js")).planReviewRouteContext(current.task_id) : undefined, freshSession: options.freshSession, model: current.model || undefined });
     logEvent({ taskId: current.task_id, actorId, kind: "plan_subtask_started", field: current.plan_node_key, toValue: roleTitle(node.role_key) });
     return { ok: true, runId: run.runId };
   } catch (error) {
