@@ -263,6 +263,13 @@ export interface ApiTask {
   // taskOwner.ts, где Pick<ApiTask, "status"|"agent_state"|"creator_id"|"parent_id">
   // требует поле обязательно.
   parent_id: string | null;
+  // Архив задачи (карточка 57c69735…): NULL/отсутствует — живая. Метка
+  // ставится при DELETE /api/tasks/:id (создатель) или POST /api/tasks/:id/
+  // archive (владелец). Снимается POST /api/tasks/:id/restore. Сама по себе
+  // задача всё равно доступна владельцу через GET /api/tasks?archived=true
+  // — общий список архив не отдаёт, фильтр на сервере.
+  archived_at?: string | null;
+  archived_by?: string | null;
   // Дочерние задачи (parent_task_id = this.id). Сервер отдаёт в GET /api/tasks/:id
   // рядом с subtasks. TaskDetailScreen переключает таб по наличию.
   // Добавлено 30.08.2026 — старый код ссылался на .children, которого не было в типе.

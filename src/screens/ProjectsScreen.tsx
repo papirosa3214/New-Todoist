@@ -222,8 +222,14 @@ export function ProjectsScreen() {
   const [name, setName] = useState("");
   const [color, setColor] = useState(PROJECT_COLORS[0]);
   const [deleteError, setDeleteError] = useState<unknown>(null);
+  // Сервер уже фильтрует архивные карточки в useTasks (tasks.ts WHERE
+  // archived_at IS NULL), а task_count/active_count в проектах считаются
+  // только по живым. Здесь — двойная страховка: если вдруг в кэше оказался
+  // архивный список (не должно быть, но при сбое реактивности возможно),
+  // счётчик «Без проекта» не вырастет за счёт архивных.
   const noProjectCount = allTasks.filter(
-    (t) => t.project_id == null && t.status === "active",
+    (t) =>
+      t.project_id == null && t.status === "active" && t.archived_at == null,
   ).length;
 
   const handleCreate = useGuardedCallback(async (e: FormEvent) => {
@@ -349,14 +355,24 @@ export function ProjectsScreen() {
             onOpen={() => navigate(`/projects/${p.id}`)}
           />
         ))}
-        {/* Вход в Архив (карточка a1be7d63…): удалённые проекты больше не
-            стираются насовсем, а лежат здесь. */}
+        {/* Вход в Архив проектов (карточка a1be7d63…): удалённые проекты
+            больше не стираются насовсем, а лежат здесь. */}
         <button
           onClick={() => navigate("/projects/archive")}
           className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-card text-left tap-row"
         >
           <Icon name="archive" size={18} className="text-sub" />
-          <span className="tf-body text-text">Архив</span>
+          <span className="tf-body text-text">Архив проектов</span>
+        </button>
+        {/* Вход в Архив задач (карточка 57c69735…): удалённые свайпом
+            задачи лежат здесь — не в Архиве проектов, потому что у задачи
+            могло не быть проекта вовсе. */}
+        <button
+          onClick={() => navigate("/tasks/archive")}
+          className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-card text-left tap-row"
+        >
+          <Icon name="archive" size={18} className="text-sub" />
+          <span className="tf-body text-text">Архив задач</span>
         </button>
         {!isLoading && !isError && projects.length === 0 && !showCreate && (
  <p className="tf-action px-1 text-dim">

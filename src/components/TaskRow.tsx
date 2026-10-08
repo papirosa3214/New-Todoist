@@ -252,7 +252,9 @@ export function TaskRow({
     hasLabels;
 
   // ── Плавный нативный iOS свайп ────────────────────────────────────────────
-  // Влево → синяя «Изменить»; вправо → красная «Удалить».
+  // Влево → синяя «Изменить»; вправо → красная «В архив» (карточка
+  // 57c69735…: обычное «удалить» теперь означает архивирование — сервер
+  // сам разводит «архивировать»/«purge» по владельцу и состоянию).
   // Та же физика, те же пороги, тот же rubber-band.
   //
   // Значения (Linear MAK-52, DESIGN-SYSTEM.md §2.5) — единая шкала с
@@ -495,7 +497,11 @@ export function TaskRow({
         style={{ position: "relative", overflow: "hidden" }}
         className="-mx-4 border-b border-stroke/50"
       >
-        {/* Красная кнопка «Удалить» — слева, появляется при свайпе вправо */}
+        {/* Красная кнопка «В архив» — слева, появляется при свайпе вправо
+            (карточка 57c69735…): обычное удаление заменили архивированием,
+            иконка та же красная корзина как у удаления, чтобы привычный
+            жест остался. Семантика кнопки и подтверждения — «отправить в
+            архив», см. setConfirmDelete ниже. */}
         <button
           ref={deleteActionRef}
           onClick={(e) => {
@@ -509,7 +515,7 @@ export function TaskRow({
             hapticDrop();
             setConfirmDelete(true);
           }}
-          aria-label="Удалить задачу"
+          aria-label="Отправить задачу в архив"
           style={{
             position: "absolute",
             left: 0,
@@ -528,7 +534,7 @@ export function TaskRow({
             overflow: "hidden",
           }}
         >
-          <Icon name="trash" size={22} className="text-white" />
+          <Icon name="archive" size={22} className="text-white" />
         </button>
 
         {/* Синяя кнопка «Изменить» — справа, появляется при свайпе влево */}
@@ -836,7 +842,7 @@ export function TaskRow({
                     marginBottom: 4,
                   }}
                 >
-                  Удалить задачу?
+                  Отправить в архив?
                 </div>
                 <div
                   style={{
@@ -845,7 +851,7 @@ export function TaskRow({
                     lineHeight: 1.4,
                   }}
                 >
-                  «{task.title}» будет удалена безвозвратно
+                  «{task.title}» можно вернуть из Архива задач
                 </div>
               </div>
               <button
@@ -862,10 +868,13 @@ export function TaskRow({
                 onClick={() => {
                   setConfirmDelete(false);
                   hapticDrop();
+                  // DELETE /api/tasks/:id теперь архивирует (карточка
+                  // 57c69735…): владелец увидит запись в Архиве задач и
+                  // сможет вернуть или удалить навсегда. Данные сохраняются.
                   deleteTask.mutate(task.id);
                 }}
               >
-                Удалить
+                В архив
               </button>
             </div>
 

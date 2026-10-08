@@ -31,6 +31,7 @@ import { AgentsScreen } from "./screens/AgentsScreen";
 import { AgentWorkScreen } from "./screens/AgentWorkScreen";
 import { ProjectsScreen } from "./screens/ProjectsScreen";
 import { ProjectArchiveScreen } from "./screens/ProjectArchiveScreen";
+import { TaskArchiveScreen } from "./screens/TaskArchiveScreen";
 import { LabelsScreen } from "./screens/LabelsScreen";
 import { ProjectTasksScreen } from "./screens/ProjectTasksScreen";
 import { LabelTasksScreen } from "./screens/LabelTasksScreen";
@@ -166,6 +167,11 @@ export default function App() {
             <Route path="/projects" element={<ProjectsScreen />} />
             <Route path="/projects/archive" element={<ProjectArchiveScreen />} />
             <Route path="/projects/:id" element={<ProjectTasksScreen />} />
+            {/* Архив задач (карточка 57c69735…): удалённые задачи живут
+              здесь, отсюда их можно вернуть или удалить навсегда. Обычный
+              путь «удалить» в строке/карточке отправляет задачу сюда же
+              (через серверный DELETE). Доступ — только владельцу. */}
+            <Route path="/tasks/archive" element={<TaskArchiveScreen />} />
             <Route path="/labels" element={<LabelsScreen />} />
             <Route path="/labels/:id" element={<LabelTasksScreen />} />
             <Route path="/search" element={<SearchScreen />} />
