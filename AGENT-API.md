@@ -326,6 +326,42 @@ curl -sS -X POST http://localhost:3001/api/chat \
 `кому` (кого нагружают), `от_кого` (кто пишет), `пары` (кто именно к кому ходит);
 у «всем» в разрезах `id: null` и имя `Всем`.
 
+### Координация: почему узел не двигается
+
+Серверный контракт V2 «resolver причин движения/ожидания» (документ
+`docs/server/coordination-resolver.md`, снимок V2 в TaskFlow — NewTodoist
+под id `a8bfa7ea-…`). Возвращает одно `Resolution` — закрытый словарь
+из 20 кодов причин (`ready_to_start`, `waiting_predecessor`,
+`blocked_dependency`, `waiting_owner`, `waiting_human`, `waiting_transient`,
+`active_run`, `durable_queued_wake`, `recovery_pending`,
+`stalled_manual_review`, `provider_limit`, `permission_or_owner`,
+`missing_config`, `context_overflow`, `step_stalled`, `review`,
+`branch_rework`, `awaiting_final_review`, `completed_pending_review`,
+`unknown`) и 14 действий. Сам резолвер только объясняет — действия
+выполняются через существующие маршруты (`/api/subtasks/:id/restart`,
+`/api/tasks/:id/retry`, `/api/tasks/:id/lift-dependency-blocks`,
+`/api/subtasks/:id/cancel`).
+
+```bash
+# Одна подзадача
+curl -sS http://localhost:3001/api/coordination/subtasks/<subtask_id>/resolve \
+  -H "Authorization: Bearer tf_xxxxxxxx..."
+# Все подзадачи карточки
+curl -sS http://localhost:3001/api/coordination/tasks/<task_id>/resolve \
+  -H "Authorization: Bearer tf_xxxxxxxx..."
+# Что случилось с конкретной попыткой
+curl -sS http://localhost:3001/api/coordination/attempts/<attempt_id>/resolve \
+  -H "Authorization: Bearer tf_xxxxxxxx..."
+# Метрики за час/сутки
+curl -sS "http://localhost:3001/api/coordination/_metrics?window=hour" \
+  -H "Authorization: Bearer tf_xxxxxxxx..."
+```
+
+Поле `contract_version` ответа — `"2.0.0"`. Каждое обращение пишет
+событие `kind='resolution'` в `task_events` (payload ≤ 600 байт) для
+агрегата `/api/coordination/_metrics`; `unknown` — слабый сигнал, что
+словарь причин надо пополнить.
+
 ### Health
 
 ```bash
