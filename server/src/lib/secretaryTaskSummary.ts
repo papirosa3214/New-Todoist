@@ -86,7 +86,9 @@ export function collectTaskSummary(ownerId:string, filter:SummaryFilter, now = n
     u.name AS assignee_name,u.role_key AS assignee_role,
     (SELECT c.text FROM comments c WHERE c.task_id=t.id ORDER BY c.created_at DESC,c.rowid DESC LIMIT 1) AS last_comment,
     (SELECT j.last_error FROM role_run_jobs j WHERE j.task_id=t.id ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1) AS queue_error
-    FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id ORDER BY t.due_date,t.created_at,t.id`).all() as any[];
+    FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
+    WHERE t.archived_at IS NULL
+    ORDER BY t.due_date,t.created_at,t.id`).all() as any[];
   const mode=(db.prepare("SELECT task_intake_mode FROM users WHERE id=?").get(ownerId) as any).task_intake_mode;
   const localDate=(value:string|null) => value ? (value.includes("T") ? summaryClock(new Date(value.endsWith("Z")||/[+-]\d\d:\d\d$/.test(value) ? value : value+"Z")).today : value.length>10 ? summaryClock(new Date(value.replace(" ","T")+"Z")).today : value) : null;
   const selected=tasks.filter(t=>{

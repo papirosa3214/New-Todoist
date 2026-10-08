@@ -92,7 +92,7 @@ export function startInboxResultsWriter(): () => void {
     // Это нужно чтобы перезапуск сервера не терял состояние.
     try {
       const rows = db.prepare(
-        `SELECT id, description, created_at FROM tasks WHERE description LIKE ?`,
+        `SELECT id, description, created_at FROM tasks WHERE description LIKE ? AND archived_at IS NULL`,
       ).all(`%${WATCHER_MARK}%`) as Array<{
         id: string;
         description: string;

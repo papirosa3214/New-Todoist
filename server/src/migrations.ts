@@ -3707,6 +3707,49 @@ const migrations: Migration[] = [
       )
     `);
   } },
+
+  // Архив задач вместо удаления (карточка 57c69735…). Зеркало миграции
+  // 107_project_archive, но для задач. Колонки `tasks.archived_at` /
+  // `tasks.archived_by` уже добавлены в `db.ts:migrate()` (аддитивно, как
+  // проекты), эта миграция их фиксирует в schema_migrations и дотягивает
+  // уже существующие базы. Никакого бэкфила `archived_at` задним числом
+  // и никакого переноса существующего проекта «Архив»: решение о
+  // миграции — за владельцем.
+  //
+  // Журнал `task_purge_log` — единый след карточки после purge. По
+  // образцу `project_purge_log`: фиксированный набор полей (id, task_id,
+  // task_title, project_id, actor_id, subtasks, comments, attachments,
+  // events, created_at), индекс `(task_id, created_at DESC)`. project_id
+  // хранится без внешнего ключа: на момент purge проект может быть уже
+  // purged (другая операция), и ON DELETE CASCADE не нужен.
+  { id: "117_task_archive", description: "Архив задач: tasks.archived_at/archived_by + task_purge_log", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("archived_at")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN archived_at TEXT");
+    }
+    if (!cols.has("archived_by")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN archived_by TEXT REFERENCES users(id)");
+    }
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS task_purge_log (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        task_title TEXT NOT NULL,
+        project_id TEXT,
+        actor_id TEXT REFERENCES users(id),
+        subtasks INTEGER NOT NULL DEFAULT 0,
+        comments INTEGER NOT NULL DEFAULT 0,
+        attachments INTEGER NOT NULL DEFAULT 0,
+        events INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_purge_log_task
+        ON task_purge_log(task_id, created_at DESC);
+    `);
+  } },
+
   { id: "118_plan_handoff_on_submission", description: "Role handoffs open on submission, acceptance remains a review status", up() {
     db.exec("UPDATE task_collaboration_plan_edges SET start_condition='submitted' WHERE start_condition='accepted'");
   } },

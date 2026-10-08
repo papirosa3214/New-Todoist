@@ -47,6 +47,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
                MAX(updated_at)                             AS last_activity_at
         FROM tasks
         WHERE project_id IS NOT NULL
+          AND archived_at IS NULL
         GROUP BY project_id
       ) t ON t.project_id = p.id`;
 
@@ -110,6 +111,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
            FROM tasks t
            JOIN users u ON u.id = t.assignee_id AND u.type = 'ai'
           WHERE t.status = 'active' AND t.project_id IS NOT NULL
+            AND t.archived_at IS NULL
           GROUP BY t.project_id, u.id
           ORDER BY tasks DESC, u.name`,
       )

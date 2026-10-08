@@ -109,7 +109,16 @@ export function migrate() {
       status TEXT DEFAULT 'active' CHECK(status IN ('active','completed')),
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
-      parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE
+      parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+      -- Архив задачи (карточка 57c69735…): NULL — живая, ненулевая метка —
+      -- в архиве. По образцу projects.archived_at / projects.archived_by:
+      -- свежая база получает колонки здесь, существующая — аддитивно
+      -- ниже, через PRAGMA. Дочерние задачи при архивировании родителя
+      -- НЕ идут автоматически (архивируется только запрошенная карточка;
+      -- сироты остаются живыми). Окончательное удаление — только из
+      -- архива, и только владелец (см. §3 контракта).
+      archived_at TEXT,
+      archived_by TEXT REFERENCES users(id)
     );
 
     CREATE TABLE IF NOT EXISTS task_labels (
@@ -428,6 +437,29 @@ export function migrate() {
   if (!projectCols.some((c) => c.name === "archived_by")) {
     db.exec("ALTER TABLE projects ADD COLUMN archived_by TEXT");
   }
+
+  // Архив задачи (карточка 57c69735…). Зеркало проекта: NULL — живая,
+  // ненулевая метка — в архиве. Семантика status='active'/'completed'
+  // НЕ меняется: завершённые задачи автоматическому архивированию не
+  // подлежат (граница карточки). Жизненный цикл подробно — в контракте
+  // §2/§3, здесь только схема. Колонки добавлены в CREATE TABLE для
+  // свежей базы, поэтому тут — только ALTER для существующих.
+  const taskColsArchive = db
+    .prepare("PRAGMA table_info(tasks)")
+    .all() as Array<{ name: string }>;
+  if (!taskColsArchive.some((c) => c.name === "archived_at")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN archived_at TEXT");
+  }
+  if (!taskColsArchive.some((c) => c.name === "archived_by")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN archived_by TEXT REFERENCES users(id)");
+  }
+  // Индекс под частые фильтры: GET /api/tasks (живой список) и
+  // GET /api/tasks?archived=true (архив) — оба сортируют/отбирают по
+  // (archived_at, ...), без индекса это скан по всей tasks. Тот же
+  // приём, что и idx_subtasks_heartbeat в migrations.ts:110.
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_tasks_archived_at ON tasks(archived_at, created_at DESC)`,
+  );
 
   // Fresh table — the agent-work journal. Only ever INSERTed and SELECTed:
   // there is no PATCH/DELETE endpoint for individual events, which is what

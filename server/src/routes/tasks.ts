@@ -6,6 +6,7 @@ import { persistPreparedPlan } from "../lib/taskPreparationPersistence.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import { purgeTasks } from "../lib/taskPurge.js";
+import { archiveTask, restoreTask, purgeArchivedTask, listArchivedTasks } from "../lib/taskArchive.js";
 import db from "../db.js";
 import { autoProposeCollaborationPlanIfNeeded } from "./task-collaboration-plans.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
@@ -439,8 +440,40 @@ export function registerTaskRoutes(app: FastifyInstance) {
     return { week: period(7), month: period(30) };
   });
 
-  app.get("/api/tasks", { preHandler: authPre }, async (req: any) => {
+  app.get("/api/tasks", { preHandler: authPre }, async (req: any, reply) => {
     const userId = req.userId;
+
+    // Архивный список (карточка 57c69735…): GET /api/tasks?archived=true
+    // открыт только владельцу трекера. Это НЕ «снять фильтр
+    // archived_at IS NULL» в общем списке, а отдельная ветка — архивные
+    // карточки не светятся в обычных списках ни у кого. Возвращаем
+    // «живой» формат карточки (TASK_COLUMNS/JOINS/hydrateTask через
+    // getTaskRow), чтобы клиент мог рендерить экран Архива без второго
+    // запроса на каждую карточку. include_children=true добавляет
+    // subtask_count, чтобы iOS-чип «есть подзадачи» работал (контракт
+    // §3.2).
+    if (req.query.archived === "true") {
+      if (!isOwner(userId)) {
+        return reply.code(403).send({ error: "архив доступен только владельцу" });
+      }
+      const includeChildrenFlag = req.query.include_children === "true";
+      const rows = listArchivedTasks({
+        projectId: typeof req.query.project_id === "string" ? req.query.project_id : null,
+        assigneeId:
+          typeof req.query.assignee_id === "string" ? req.query.assignee_id : null,
+        limit: 200,
+      });
+      const items = rows.map((r) => {
+        const row = getTaskRow(r.id) as any;
+        const hydrated = hydrateTask(row) as any;
+        if (includeChildrenFlag) {
+          hydrated.subtask_count = r.subtask_count;
+        }
+        return hydrated;
+      });
+      return items;
+    }
+
     const includeChildren = req.query.include_children === "true";
     const parentFilter = includeChildren ? "" : "t.parent_id IS NULL AND ";
     const columns = TASK_COLUMNS;
@@ -502,6 +535,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
             .prepare(
               `SELECT ${columns} ${joins}
       WHERE ${baseParent}
+        AND t.archived_at IS NULL
         AND ${privacy}
         ${extraWhere}
       ORDER BY t.created_at DESC`,
@@ -511,6 +545,7 @@ export function registerTaskRoutes(app: FastifyInstance) {
             .prepare(
               `SELECT ${columns} ${joins}
       WHERE ${baseParent}
+        AND t.archived_at IS NULL
         AND (t.creator_id = ? OR t.assignee_id = ?
            OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))
         AND ${privacy}
@@ -2058,23 +2093,193 @@ export function registerTaskRoutes(app: FastifyInstance) {
     },
   });
 
-  // Delete task — creator only (assignees complete tasks, they don't delete them).
+  // Delete task — карточка 57c69735…: одна ручка, два поведения по
+  // состоянию. Создателю (== существующее право getTaskForOwnerDelete)
+  // удалять теперь значит «отправить в архив» — это и есть требование
+  // карточки «все удаления должны идти в архив». Владельцу трекера на
+  // АРХИВНОЙ карточке тот же DELETE значит «удалить навсегда» —
+  // физическая чистка с журналом `task_purge_log`.
+  //
+  // Разводка ответов для чужой (не-создатель, не-владелец) карточки:
+  //   - несуществующая → 404 (как раньше);
+  //   - живая чужая  → 404 (как раньше: «ваша» — это создатель);
+  //   - архивная чужая → 403 «удалить навсегда может только владелец».
+  // Это поведение контракта §3.2: «403 если карточка архивная, но
+  // запрашивающий не владелец». Проверка существования карточки идёт
+  // напрямую (одна строка из tasks), чтобы различить «не существует» от
+  // «чужая архивная».
   app.delete<{ Params: { id: string } }>(
     "/api/tasks/:id",
     { preHandler: authPre },
     async (req: any, reply) => {
+      const isOwnerCaller = isOwner(req.userId);
       const task = getTaskForOwnerDelete(req.params.id, req.userId);
-      if (!task) return reply.code(404).send({ error: "Not found" });
+      if (!task) {
+        // Точно различаем 404 и 403: 403 уходит только архивной чужой.
+        const probe = db
+          .prepare("SELECT id, archived_at, creator_id FROM tasks WHERE id = ?")
+          .get(req.params.id) as
+          | { id: string; archived_at: string | null; creator_id: string }
+          | undefined;
+        if (!probe) return reply.code(404).send({ error: "Not found" });
+        if (probe.archived_at && !isOwnerCaller) {
+          return reply
+            .code(403)
+            .send({ error: "удалить навсегда может только владелец" });
+        }
+        // Живая чужая карточка: getTaskForOwnerDelete уже отбил
+        // права, и 404 здесь — «для вас нет доступа» без раскрытия
+        // существования (тот же приём, что и в приватном проекте).
+        return reply.code(404).send({ error: "Not found" });
+      }
 
-      // Карточка с планом совместной работы иначе не удалялась: кольцо ссылок
-      // «подзадача ↔ план» — см. lib/taskPurge.ts.
-      purgeTasks([req.params.id]);
+      if (task.archived_at) {
+        // Архивная — только владелец может удалить навсегда. Для
+        // создателя (он же НЕ владелец) — идемпотентный «архивировано
+        // уже» через archiveTask.
+        if (!isOwnerCaller) {
+          // Создатель на своей архивной: archiveTask идемпотентен.
+          const outcome = archiveTask(req.params.id, req.userId);
+          const refreshed = getTaskRow(req.params.id) as any;
+          const hydrated = hydrateTask(refreshed) as any;
+          broadcastTaskEvent([task.creator_id, task.assignee_id], {
+            type: "task:archived",
+            task_id: req.params.id,
+            archived_at: outcome.archived_at,
+            archived_by: outcome.archived_by,
+            already_archived: outcome.already_archived,
+            task: hydrated,
+          });
+          return { task: hydrated };
+        }
+        const outcome = purgeArchivedTask(req.params.id, req.userId);
+        if (!outcome.ok) {
+          if (outcome.reason === "not_archived") {
+            return reply
+              .code(409)
+              .send({ error: "карточка уже не в архиве" });
+          }
+          if (outcome.reason === "has_children") {
+            return reply.code(409).send({
+              error:
+                "у карточки есть дочерние задачи; сначала разберитесь с ними",
+              child_count: outcome.child_count,
+            });
+          }
+          if (outcome.reason === "still_running") {
+            return reply.code(409).send({
+              error: "карточка ещё в работе; сначала остановите её",
+              running_subtask: outcome.running_subtask,
+            });
+          }
+          return reply
+            .code(409)
+            .send({ error: "не удалось удалить карточку", reason: outcome.reason });
+        }
+        broadcastTaskEvent([task.creator_id, task.assignee_id], {
+          type: "task:deleted",
+          id: req.params.id,
+          task_id: req.params.id,
+        });
+        return {
+          deleted: true,
+          task_id: req.params.id,
+          title: outcome.title,
+          counts: outcome.counts,
+        };
+      }
 
+      // Живая карточка — архивирование. Идемпотентно по уже-архивной,
+      // но обычный путь сюда не доходит: ветка выше перехватывает
+      // архивную.
+      const outcome = archiveTask(req.params.id, req.userId);
+      const refreshed = getTaskRow(req.params.id) as any;
+      const hydrated = hydrateTask(refreshed) as any;
       broadcastTaskEvent([task.creator_id, task.assignee_id], {
-        type: "task:deleted",
-        id: req.params.id,
+        type: "task:archived",
+        task_id: req.params.id,
+        archived_at: outcome.archived_at,
+        archived_by: outcome.archived_by,
+        already_archived: outcome.already_archived,
+        task: hydrated,
       });
-      return { ok: true };
+      return { task: hydrated };
+    },
+  );
+
+  // Явное архивирование (карточка 57c69735…, §3.2): отдельная ручка для
+  // клиентов, которым неудобно пользоваться DELETE (iOS, веб-кнопка).
+  // Тело запроса пустое. Только владелец. Идемпотентно: архивная на
+  // входе → 200 + та же карточка. Чужая/несуществующая → 404.
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/archive",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "архивировать явно может только владелец" });
+      }
+      // На чужой/несуществующей карточке сначала убеждаемся, что она
+      // существует — без этого archiveTask бросит, и тест потеряет
+      // различимость 404/403. Здесь же прячем её от постороннего:
+      // getTaskForRead прячет архивные от постороннего, но владельцу как
+      // раз их и нужно видеть. Поэтому читаем напрямую.
+      const exists = db
+        .prepare("SELECT id, archived_at FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id: string; archived_at: string | null } | undefined;
+      if (!exists) return reply.code(404).send({ error: "Not found" });
+
+      const outcome = archiveTask(req.params.id, req.userId);
+      const refreshed = getTaskRow(req.params.id) as any;
+      const hydrated = hydrateTask(refreshed) as any;
+      broadcastTaskEvent([hydrated.creator_id, hydrated.assignee_id], {
+        type: "task:archived",
+        task_id: req.params.id,
+        archived_at: outcome.archived_at,
+        archived_by: outcome.archived_by,
+        already_archived: outcome.already_archived,
+        task: hydrated,
+      });
+      return { task: hydrated };
+    },
+  );
+
+  // Восстановление (карточка 57c69735…, §3.2). Только владелец.
+  // 409 not_archived на живой, 409 project_archived на архивном
+  // проекте — иначе клиент прочтёт «прошло», а карточка останется в
+  // архиве.
+  app.post<{ Params: { id: string } }>(
+    "/api/tasks/:id/restore",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId)) {
+        return reply.code(403).send({ error: "восстанавливать может только владелец" });
+      }
+      const exists = db
+        .prepare("SELECT id FROM tasks WHERE id = ?")
+        .get(req.params.id) as { id: string } | undefined;
+      if (!exists) return reply.code(404).send({ error: "Not found" });
+
+      const outcome = restoreTask(req.params.id, req.userId);
+      if ((outcome as any).project_archived) {
+        return reply.code(409).send({
+          error: "project_archived",
+          message: "Сначала восстановите проект",
+        });
+      }
+      if ((outcome as any).reason === "not_archived") {
+        return reply.code(409).send({
+          error: "карточка не в архиве",
+        });
+      }
+      const refreshed = getTaskRow(req.params.id) as any;
+      const hydrated = hydrateTask(refreshed) as any;
+      broadcastTaskEvent([hydrated.creator_id, hydrated.assignee_id], {
+        type: "task:restored",
+        task_id: req.params.id,
+        restored_by: req.userId,
+        task: hydrated,
+      });
+      return { task: hydrated };
     },
   );
 }
