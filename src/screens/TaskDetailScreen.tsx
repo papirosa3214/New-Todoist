@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { TaskRow } from "../components/TaskRow";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { useTask, useUpdateTask, useDeleteTask, useStartResearch } from "../api/tasks";
+import { useTask, useUpdateTask, useDeleteTask, useStartResearch, useRestoreTask } from "../api/tasks";
 import { useProjects } from "../api/projects";
 import { useCurrentUser } from "../api/auth";
 import { useUpdateSubtask, useSubtaskWork } from "../api/subtasks";
@@ -35,6 +35,7 @@ import { MicKeyboardBar } from "../components/MicKeyboardBar";
 import { MicOverlay } from "../components/MicOverlay";
 import { isTaskOwner } from "../lib/taskOwner";
 import { formatDueLabel, formatTimeRange } from "../lib/date";
+import { taskWord } from "../lib/pluralize";
 import { useDialog } from "../components/Dialog";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { useMicRecorder } from "../lib/useMicRecorder";
@@ -67,6 +68,13 @@ export function TaskDetailScreen() {
   const { data: currentUser } = useCurrentUser();
   const updateTask = useUpdateTask();
   const deleteTask = useDeleteTask();
+  // Архивирование и восстановление — владельческие ручки (карточка
+  // 57c69735…). Создатель архивирует через DELETE (см. handleDelete),
+  // там сервер сам разводит «архивировать»/«purge» по владельцу и
+  // состоянию. useRestoreTask нужен здесь на случай, если владелец
+  // открыл архивную карточку по прямому URL и хочет вернуть её не
+  // уходя в Архив задач.
+  const restoreTaskMutation = useRestoreTask();
   const updateSubtask = useUpdateSubtask();
   const subtaskWork = useSubtaskWork();
   // «Прервать шаг» / «Сбросить попытку» (MAK-69) шлёт сама TaskControlSheet
@@ -164,27 +172,94 @@ export function TaskDetailScreen() {
   // just can't be skipped structurally.
   const handleDelete = useGuardedCallback(async () => {
     if (!task) return;
+    // «Удалить» в карточке = «В архив» (карточка 57c69735…): обычное
+    // действие пользователя — отправить задачу в архив, а не стирать её.
+    // Данные сохраняются, вернуть можно из Архива задач. Если карточка
+    // попала сюда уже архивной (например, прямой URL) — для владельца
+    // есть отдельный сценарий handleDeleteArchived ниже, а здесь мы
+    // держим только один путь, чтобы не смешивать действия в одном
+    // диалоге.
     const ok = await confirm({
-      title: "Удалить задачу без возможности отмены?",
-      confirmLabel: "Удалить",
+      title: "Отправить задачу в архив?",
+      description:
+        "Задача исчезнет из обычных списков, но данные сохранятся — вернуть её можно из раздела «Архив задач».",
+      confirmLabel: "В архив",
       cancelLabel: "Отмена",
       danger: true,
     });
     if (!ok) return;
     try {
-      // Only the creator may delete (server enforces this with a 404, same
-      // as "not found", so an assignee-only task shows this rather than a
-      // 403).
-      // Задачи не станет — снимаем и карточку из островка, и пометку
-      // «эту вывели руками», иначе автозапуск будет считать, что владелец
-      // всё ещё смотрит на удалённую задачу.
+      // Архивирование: сервер ставит метку, чистит активную аренду и
+      // снимает задачу с очереди. Создатель и владелец получают 200
+      // (идемпотентно), остальные — 404 (useDeleteTask обрабатывает через
+      // существующий поток ошибок).
+      // Задача пропала из обычных списков — снимаем её из островка Live
+      // Activity и пометку «эту вывели руками», иначе автозапуск будет
+      // считать, что владелец всё ещё смотрит на удалённую карточку.
       setManualIslandTask(null);
       await stopTaskLiveActivity(task.id);
       await deleteTask.mutateAsync(task.id);
       navigate(-1);
     } catch {
       await alert(
-        "Не удалось удалить задачу — возможно, вы не создатель этой задачи.",
+        "Не удалось отправить задачу в архив — возможно, вы не создатель этой задачи.",
+      );
+    }
+  });
+
+  // «Вернуть» из Архива (карточка 57c69735…): используем тот же поток,
+  // что и обычная карточка в Архиве задач. 409 на сервере обрабатывается
+  // через restoreTask.error: при project_archived и not_archived —
+  // сообщения уже понятные владельцу.
+  const handleRestore = useGuardedCallback(async () => {
+    if (!task) return;
+    const ok = await confirm({
+      title: `Вернуть задачу «${task.title}»?`,
+      description:
+        "Задача снова появится в обычных списках. Если её проект сейчас в архиве, сервер не даст восстановить — сначала верните проект.",
+      confirmLabel: "Вернуть",
+      cancelLabel: "Отмена",
+    });
+    if (!ok) return;
+    try {
+      await restoreTaskMutation.mutateAsync(task.id);
+    } catch (err) {
+      const reason =
+        err instanceof ApiError
+          ? err.message
+          : null;
+      await alert(
+        reason === "project_archived"
+          ? "Проект этой задачи в архиве — сначала верните проект."
+          : "Не удалось вернуть задачу.",
+      );
+    }
+  });
+
+  // «Удалить навсегда» для архивной карточки: только владелец трекера
+  // (иначе сервер сделает 404/403). Здесь useDeleteTask идёт на
+  // DELETE /api/tasks/:id, а сервер сам разводит «архивировать» vs
+  // «purge» по владельцу и состоянию. Раз владелец архивной —
+  // будет purge.
+  const handlePurgeForCard = useGuardedCallback(async () => {
+    if (!task) return;
+    const subtasks = task.subtasks ?? [];
+    const ok = await confirm({
+      title: `Удалить задачу «${task.title}» навсегда?`,
+      description:
+        `Будут уничтожены: задача и ${subtasks.length} ${taskWord(subtasks.length)}. ` +
+        "Это действие нельзя отменить.",
+      confirmLabel: "Удалить навсегда",
+      cancelLabel: "Отмена",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await deleteTask.mutateAsync(task.id);
+      navigate(-1);
+    } catch {
+      await alert(
+        "Не удалось удалить задачу навсегда. Возможно, у неё есть дочерние карточки или активная работа агента.",
       );
     }
   });
@@ -411,13 +486,39 @@ export function TaskDetailScreen() {
             >
               <Icon name="bookmark" size={18} />
             </button>
-            <button
-              onClick={handleDelete}
-              className="tap-scale w-[40px] h-[44px] flex items-center justify-center"
-              aria-label="Удалить задачу"
-            >
-              <Icon name="trash" size={18} className="text-coral" />
-            </button>
+            {/* Архивная карточка (карточка 57c69735…): кнопки меняются
+                на «Вернуть» и «Удалить навсегда». Для живой — обычная
+                «В архив» (handleDelete). Островок и шаблон на архивной
+                карточке недоступны: задача неактивна, выводить её в
+                Dynamic Island и шаблонизировать не имеет смысла. */}
+            {task.archived_at ? (
+              <>
+                <button
+                  onClick={handleRestore}
+                  className="tap-scale w-[40px] h-[44px] flex items-center justify-center text-dim active:text-blue"
+                  aria-label="Вернуть из архива"
+                  title="Вернуть из архива"
+                >
+                  <Icon name="restore" size={18} className="text-blue" />
+                </button>
+                <button
+                  onClick={handlePurgeForCard}
+                  className="tap-scale w-[40px] h-[44px] flex items-center justify-center"
+                  aria-label="Удалить задачу навсегда"
+                  title="Удалить задачу навсегда"
+                >
+                  <Icon name="trash" size={18} className="text-coral" />
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleDelete}
+                className="tap-scale w-[40px] h-[44px] flex items-center justify-center"
+                aria-label="Отправить задачу в архив"
+              >
+                <Icon name="trash" size={18} className="text-coral" />
+              </button>
+            )}
           </div>
         }
       />
@@ -449,6 +550,20 @@ export function TaskDetailScreen() {
           >
             <Icon name="hash" size={10} className="shrink-0" />
             <span className="truncate max-w-[220px]">{taskProject.name}</span>
+          </span>
+        </div>
+      )}
+
+      {/* Архивная карточка (карточка 57c69735…): сразу под шапкой —
+          бейджик, чтобы владелец, попавший сюда по прямому URL, понял
+          состояние. На живой карточке этого блока нет — обычные кнопки
+          и счётчики уже говорят сами за себя. */}
+      {task.archived_at && (
+        <div className="mb-3 px-3 py-2 rounded-xl bg-card2 text-sub tf-meta flex items-center gap-2">
+          <Icon name="archive" size={14} className="text-sub" />
+          <span>
+            Задача в архиве. Действия в шапке: вернуть в обычные списки
+            или стереть навсегда.
           </span>
         </div>
       )}

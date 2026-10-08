@@ -77,7 +77,9 @@ export function registerNotificationRoutes(app: FastifyInstance) {
       LEFT JOIN tasks t ON n.task_id = t.id
       LEFT JOIN projects p ON t.project_id = p.id
       LEFT JOIN users a ON n.actor_id = a.id
-      WHERE n.user_id = ? AND ${privacyClause} AND NOT (n.type IN ('assigned','commented','reviewed','agent_state') AND EXISTS (SELECT 1 FROM users owner WHERE owner.id=n.user_id AND owner.role='owner'))
+      WHERE n.user_id = ? AND ${privacyClause}
+        AND (n.task_id IS NULL OR t.archived_at IS NULL)
+        AND NOT (n.type IN ('assigned','commented','reviewed','agent_state') AND EXISTS (SELECT 1 FROM users owner WHERE owner.id=n.user_id AND owner.role='owner'))
       ORDER BY n.created_at DESC
     `,
       )

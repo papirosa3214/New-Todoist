@@ -388,7 +388,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
         return { "состояние изменено": short(unwrap(resp)) };
       }),
-    T("taskflow_review", "Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
+    T("taskflow_review", "Единственный способ сдать работу критика: текст changes_requested в отчёте не оформляет возврат. Всегда вызови этот инструмент; не закрывай шаг через subtask_done или artifact. Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
       Type.Object({ id: Type.String(), verdict: Type.String(), report_markdown: Type.Optional(Type.String()), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
       async (p) => {
         const versions = await asRole(role, "GET", `/api/tasks/${p.id}/versions`);
@@ -566,7 +566,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  return subtaskId ? tools.filter(t => t.name !== "taskflow_claim") : tools;
+  return tools.filter(t => (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];

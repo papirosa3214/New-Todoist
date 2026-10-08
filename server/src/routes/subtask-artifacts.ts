@@ -70,6 +70,10 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     if (!current) return reply.code(404).send({ error: "Not found" });
     if (current.agent_id !== req.userId) return reply.code(403).send({ error: "это не ваш узел плана" });
     if (current.agent_state !== "in_progress") return reply.code(409).send({ error: "артефакт можно сдать только из узла в работе" });
+    if (current.collaboration_plan_id && current.plan_node_key) {
+        const reviewNode = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key=?").get(current.collaboration_plan_id, current.plan_node_key) as { role_key: string } | undefined;
+        if (reviewNode?.role_key === "critic_verifier") return reply.code(409).send({ error: "Критик сдаёт только настоящий вердикт через taskflow_review: approved или changes_requested с findings, rework_steps и report_markdown. Закрытие шага не оформляет возврат на доработку." });
+    }
     const sandboxError=sandboxSubmissionError();
     if(sandboxError) return reply.code(409).send(sandboxError);
     const contract = contractFor(current);

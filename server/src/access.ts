@@ -241,6 +241,21 @@ function getProjectRow(projectId: string | null | undefined): any | undefined {
 }
 
 /**
+ * Дополнительные признаки задачи, нужные воротам для одной строки:
+ * архивный статус. Читается отдельным SELECT перед getTaskFor*, чтобы
+ * ворота могли отсечь архивную карточку от постороннего тем же
+ * «undefined», что и приватный/архивный проект.
+ */
+function getTaskArchivedFlag(
+  taskId: string,
+): string | null | undefined {
+  const row = db
+    .prepare("SELECT archived_at FROM tasks WHERE id = ?")
+    .get(taskId);
+  return row ? (row as { archived_at?: string | null }).archived_at : undefined;
+}
+
+/**
  * Проект скрыт от вызывающего по любому из признаков: приватный
  * (`privateProjectHides`, задача 9d583c58…) или архивный
  * (`archivedProjectHides`, карточка a1be7d63…). Единая точка для прямых
@@ -252,6 +267,27 @@ function projectHiddenFrom(userId: string, project: any): boolean {
     privateProjectHides(userId, project) ||
     archivedProjectHides(userId, project)
   );
+}
+
+/**
+ * Скрывает ли архивная задача от вызывающего (карточка 57c69735…).
+ *
+ * Зеркало `archivedProjectHides`: архивная задача не фигурирует нигде,
+ * кроме прямого запроса владельца (экрану Архива нужны restore/purge).
+ * Всем прочим — 404, как если бы карточки не было.
+ *
+ * Принимает уже прочитанную строку задачи, чтобы не гонять второй SELECT:
+ * вызывающие и так её читают для остальных проверок (getProjectRow идёт
+ * следом, и здесь — две строки на одну задачу). Это та же техника, что и
+ * у `privateProjectHides`/`archivedProjectHides` для проекта.
+ */
+function archivedTaskHides(
+  userId: string,
+  task: { archived_at?: string | null } | null | undefined,
+): boolean {
+  if (!task) return false;
+  if (!task.archived_at) return false;
+  return !isOwner(userId);
 }
 
 /**
@@ -346,6 +382,11 @@ export function getTaskForRead(
   if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
+  // Архивная задача (карточка 57c69735…): прячем от всех, кроме владельца.
+  // Владельцу нужен экран Архива и ручки restore/purge — для него это
+  // исключение. Стоит ДО «видит всё», иначе прочие пользователи читали
+  // бы архивную чужую задачу по видимости «agent видит всё».
+  if (archivedTaskHides(userId, row as any)) return undefined;
   if (seesEveryTask(userId)) return row;
   return db
     .prepare(
@@ -383,6 +424,11 @@ export function getTaskForWrite(
   if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
+  // Карточка 57c69735…: даже оркестратору/агенту не править архивную
+  // чужую задачу — пишущему пользователю мы отдаём 404 как на «не
+  // существует» (а не 403 на «существует, но нельзя»), потому что иначе
+  // существование архивной чужой задачи утекает по факту ответа.
+  if (archivedTaskHides(userId, row as any)) return undefined;
   if (isOwner(userId) || isOrchestrator(userId)) return row;
 
   const caller = callerOf(userId);
@@ -422,6 +468,9 @@ export function getTaskForReview(
   if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
+  // Архивная задача (карточка 57c69735…): ревьюеру нечего ревьюировать —
+  // работа снята при архивировании, шаги плана не возобновляются.
+  if (archivedTaskHides(userId, row as any)) return undefined;
   return row;
 }
 
@@ -441,10 +490,17 @@ export function getTaskForOwnerDelete(
   if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
+  // Карточка 57c69735…: эта функция — единая точка для архивирования и
+  // purge. Архивная карточка видна владельцу и создателю (для
+  // идемпотентного archive). Чужой человек (не владелец, не создатель)
+  // идёт в `undefined` — роут ниже превращает это в 403/404 согласно
+  // контракту. Сам факт «архивная» из этой функции наружу не утекает:
+  // поведение «живая+чужая» и «архивная+чужая» для постороннего
+  // одинаковы, чтобы существование чужой архивной карточки не
+  // подтверждалось.
   if (isOwner(userId)) return row;
-  return db
-    .prepare("SELECT * FROM tasks WHERE id = ? AND creator_id = ?")
-    .get(taskId, userId);
+  if ((row as { creator_id: string }).creator_id === userId) return row;
+  return undefined;
 }
 
 /**
@@ -639,6 +695,10 @@ export function getTaskForComment(taskId:string,userId:string):any|undefined {
   if (projectHiddenFrom(userId, getProjectRow((row as any).project_id))) {
     return undefined;
   }
+  // Карточка 57c69735…: комментарии к архивной задаче не пишут — работа
+  // снята, активности нет, обсуждать нечего. Владельцу на экране Архива
+  // это тоже не нужно: restore или purge делаются явным действием.
+  if (archivedTaskHides(userId, row as any)) return undefined;
   return db.prepare(`SELECT t.* FROM tasks t WHERE t.id=? AND EXISTS (
     SELECT 1 FROM subtasks s JOIN task_collaboration_plans p ON p.id=s.collaboration_plan_id
     WHERE s.task_id=t.id AND s.agent_id=? AND s.done=0 AND p.status='approved'

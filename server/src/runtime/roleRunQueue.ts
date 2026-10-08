@@ -103,6 +103,11 @@ export function recoverExpiredRoleRunJobs(): number {
 /**
  * Атомарно взять один готовый job. Пока по задаче уже есть живой running job,
  * следующий повод той же задачи не claim-ится и сохраняет порядок.
+ *
+ * Архивные задачи (карточка 57c69735…) сразу отбрасываются на этом шаге —
+ * даже если у них ещё висит pending job, worker её не подхватит. Дополнительно
+ * `archiveTask` отменяет queued/retry_wait job’и при архивировании, но
+ * гонку между archive и race здесь ловит именно JOIN на tasks.
  */
 export function claimNextRoleRunJob(input: {
   workerId: string;
@@ -113,10 +118,12 @@ export function claimNextRoleRunJob(input: {
     recoverExpiredRoleRunJobs();
     const candidate = db
       .prepare(
-        `SELECT id
+        `SELECT candidate.id
            FROM role_run_jobs AS candidate
+           JOIN tasks t ON t.id = candidate.task_id
           WHERE candidate.status IN ('queued', 'retry_wait')
             AND candidate.available_at <= datetime('now')
+            AND t.archived_at IS NULL
             AND NOT EXISTS (
               SELECT 1
                 FROM role_run_jobs AS active

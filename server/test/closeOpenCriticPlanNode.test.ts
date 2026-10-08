@@ -67,6 +67,19 @@ describe("closeOpenCriticPlanNode (Г1-л)", () => {
     await app.close();
   });
 
+  it("critic cannot close a textual changes_requested through generic done or artifact", async () => {
+    const headers = { authorization: `Bearer ${app.jwt.sign({ id: "role_critic_verifier" })}` };
+    for (const [method, url, payload] of [
+      ["PATCH", `/api/subtasks/${criticNode.id}`, { done: true, result: "changes_requested: вернуть executor на доработку" }],
+      ["POST", `/api/subtasks/${criticNode.id}/artifact`, { summary: "changes_requested", payload: {} }],
+    ] as const) {
+      const res = await app.inject({ method, url, headers, payload });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toContain("taskflow_review");
+      expect(db.prepare("SELECT done FROM subtasks WHERE id=?").get(criticNode.id)).toEqual({ done: 0 });
+    }
+  });
+
   it("changes_requested: закрывает critic-узел и помечает результат вердикта", () => {
     const before = db.prepare("SELECT done, agent_state, result FROM subtasks WHERE id=?").get(criticNode.id) as { done: number; agent_state: string | null; result: string | null };
     expect(before.done).toBe(0);

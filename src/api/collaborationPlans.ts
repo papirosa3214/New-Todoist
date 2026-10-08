@@ -20,6 +20,7 @@ export interface ApiCollaborationPlanNode {
   role_key: string;
   required: boolean;
   expected_result: string;
+  execution_state?: string;
 }
 
 export interface ApiCollaborationPlanEdge {

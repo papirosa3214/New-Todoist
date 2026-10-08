@@ -303,6 +303,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           .prepare("SELECT type FROM users WHERE id = ?")
           .get(req.userId) as { type?: string } | undefined;
         if (caller?.type === "ai") {
+          if (subtask.collaboration_plan_id && subtask.plan_node_key) {
+        const reviewNode = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key=?").get(subtask.collaboration_plan_id, subtask.plan_node_key) as { role_key: string } | undefined;
+        if (reviewNode?.role_key === "critic_verifier") return reply.code(409).send({ error: "Критик сдаёт только настоящий вердикт через taskflow_review: approved или changes_requested с findings, rework_steps и report_markdown. Закрытие шага не оформляет возврат на доработку." });
+          }
           // ШАГ ЗАКРЫВАЕТСЯ ТОЛЬКО ИЗ РАБОТЫ — прогресс нельзя пропустить.
           //
           // Максим 10.09.2026, второй раз за сессию: «опять же, прогресс не

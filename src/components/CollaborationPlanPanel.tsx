@@ -1,4 +1,4 @@
-import { useCollaborationPlans, useRoleSlots } from "../api/collaborationPlans";
+import { useCollaborationPlans } from "../api/collaborationPlans";
 import { useRoles } from "../api/roles";
 
 // Краткий граф совместной работы над задачей — этап 10 плана
@@ -22,6 +22,9 @@ const STATE_LABELS: Record<string, string> = {
   active: "В работе",
   submitted: "Сдано",
   accepted: "Принято",
+  returned: "На доработку",
+  blocked: "Заблокирован",
+  skipped: "Пропущен",
 };
 
 const STATE_TONE: Record<string, string> = {
@@ -34,20 +37,13 @@ const STATE_TONE: Record<string, string> = {
 
 export function CollaborationPlanPanel({ taskId }: { taskId: string }) {
   const { data: plansData } = useCollaborationPlans(taskId);
-  const { data: slotsData } = useRoleSlots(taskId);
   const { data: rolesData } = useRoles();
 
-  const plan = plansData?.plans.find((p) => p.status === "approved");
+  const plan = (plansData?.plans ?? []).find((p) => p.status === "approved");
   if (!plan) return null;
 
   const roleTitle = (roleKey: string) =>
-    rolesData?.roles.find((r) => r.role === roleKey)?.title ?? roleKey;
-
-  const slotByNode = new Map(
-    (slotsData?.slots ?? [])
-      .filter((s) => s.plan_node_key)
-      .map((s) => [s.plan_node_key as string, s]),
-  );
+    (rolesData ?? []).find((r) => r.role === roleKey)?.title ?? roleKey;
 
   // Для waiting-узла — кто именно ещё не сдал (человеку понятнее, чем
   // "ждёт своей очереди").
@@ -69,8 +65,7 @@ export function CollaborationPlanPanel({ taskId }: { taskId: string }) {
       </div>
       <div className="flex flex-col gap-1.5">
         {plan.nodes.map((node) => {
-          const slot = slotByNode.get(node.slot_key);
-          const state = slot?.state ?? "waiting";
+          const state = node.execution_state ?? "waiting";
           const blockers = state === "waiting" ? predecessorsOf(node.slot_key) : [];
           return (
             <div

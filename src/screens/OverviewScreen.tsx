@@ -217,6 +217,29 @@ export function OverviewScreen() {
           <Icon name="chevron" size={16} className="text-dim" />
         </button>
 
+        {/* Архив задач (карточка 57c69735…): задачи, которые владелец
+            убрал свайпом/кнопкой «В архив» или которые пришли в архив из
+            удалённого проекта. Отсюда их можно вернуть или стереть
+            навсегда. Архив проектов — внутри «Проектов» снизу, эта
+            карточка стоит рядом, а не там. */}
+        <button
+          onClick={() => navigate("/tasks/archive")}
+          className="tap-row w-full flex items-center justify-between bg-card rounded-2xl p-4"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-[32px] h-[32px] rounded-xl bg-red/15 flex items-center justify-center text-red">
+              <Icon name="archive" size={18} />
+            </div>
+            <div className="text-left">
+ <div className="tf-body text-text">Архив задач</div>
+ <div className="tf-meta text-sub">
+                Восстановить или удалить навсегда
+              </div>
+            </div>
+          </div>
+          <Icon name="chevron" size={16} className="text-dim" />
+        </button>
+
         <button
           onClick={() => navigate("/notifications")}
           className="tap-row w-full flex items-center justify-between bg-card rounded-2xl p-4"

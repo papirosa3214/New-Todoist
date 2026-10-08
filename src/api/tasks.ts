@@ -135,9 +135,94 @@ export function useDeleteTask() {
   return useMutation({
     mutationFn: (id: string) => {
       AppleIntegrations.deleteTaskFromApple(id);
-      return api.delete<{ ok: boolean }>(`/api/tasks/${id}`);
+      // DELETE /api/tasks/:id — разводка по владельцу (карточка 57c69735…):
+      // создатель архивирует (идемпотентно), владелец архивной — purge.
+      // В обоих случаях общий список задач больше не показывает запись:
+      // архивная скрыта фильтром `archived_at IS NULL`, после purge строки
+      // физически нет. Кэш чистится отдельными ключами ниже.
+      return api.delete<{ ok: boolean; archived?: boolean }>(`/api/tasks/${id}`);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      // После архивирования владелец должен видеть запись в Архиве; после
+      // purge — наоборот, её там быть не должно. Архивный список живёт под
+      // отдельным ключом, и общий invalidate его не покрывает.
+      qc.invalidateQueries({ queryKey: ["tasks", "archive"] });
+      // Счётчик «Без проекта»/задач проекта берётся из useProjects();
+      // архив уже не входит в task_count/active_count на сервере, но
+      // кэш надо дёрнуть, чтобы UI не показывал старое число до следующего
+      // mount.
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      if (data?.archived === false) {
+        // purge прошёл, но archived=false приходит не от сервера — оставляем
+        // как способ включить дополнительные ключи, если понадобится.
+      }
+    },
+  });
+}
+
+/**
+ * Архивирование задачи «владельческим» путём — POST /api/tasks/:id/archive.
+ * Права проверяет сервер: 403 если не владелец. Используется в TaskDetailScreen,
+ * когда карточка попала к владельцу как неархивная и тот хочет отправить её
+ * в архив «отдельной» командой (например, из контекстного меню, где
+ * создательская «удалить» отсутствует).
+ *
+ * Для владельца-архивной карточки обычный useDeleteTask → purge; этот хук
+ * применяется только для живой карточки, чтобы поведение совпадало с
+ * сетью ручек и не дублировать разводку на вебе.
+ */
+export function useArchiveTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{
+        ok: boolean;
+        type: "task:archived";
+        archived_at: string;
+        archived_by: string;
+        already_archived: boolean;
+      }>(`/api/tasks/${id}/archive`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["tasks", "archive"] });
+      qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+/**
+ * Восстановление из архива — POST /api/tasks/:id/restore. Сервер отдаёт
+ * 409 если карточка живая (`not_archived`) или если её проект в архиве
+ * (`project_archived`) — в обоих случаях restore бессмыслен. На вебе
+ * ошибка показывается пользователю, как и для других 409.
+ */
+export function useRestoreTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ ok: boolean; type: "task:restored" }>(
+        `/api/tasks/${id}/restore`,
+        {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["tasks", "archive"] });
+      qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+/**
+ * Список архивных задач — GET /api/tasks?archived=true. На сервере ручка
+ * только для владельца (403); useQuery здесь просто ключ кэша, проверка
+ * прав — на сервере. Иначе бы пришлось тащить isOwner через весь фронт.
+ */
+export function useArchivedTasks() {
+  return useQuery({
+    queryKey: ["tasks", "archive"],
+    queryFn: () =>
+      api.get<ApiTask[]>("/api/tasks?archived=true&include_children=true"),
   });
 }
 

@@ -81,6 +81,7 @@ export function registerSearchRoutes(app: FastifyInstance) {
         LEFT JOIN projects p ON t.project_id = p.id
         WHERE ${ownerBypass}
           AND ${privacyClause}
+          AND t.archived_at IS NULL
           AND ${wordConditions.join(" AND ")}
         ORDER BY t.created_at DESC
       `,
