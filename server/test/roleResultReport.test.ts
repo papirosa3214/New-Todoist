@@ -130,9 +130,13 @@ describe("Читаемый отчёт — часть результата рол
  it.each(["analyst","architect","builder","designer","researcher","qa","critic_verifier","synthesizer"])("%s видит обязательный отчёт в инструменте сдачи",role=>{
   const tools=taskflowTools(role,null,"task","step");
   const submit=tools.find(t=>t.name==="taskflow_subtask_done") as any;
-  expect(submit.parameters.properties.artifact.properties.report_markdown.type).toBe("string");
-  expect(submit.parameters.properties.artifact.required).toContain("report_markdown");
-  expect(submit.description).toContain("## Проверки");
+  if (role === "critic_verifier") {
+    expect(submit).toBeUndefined();
+  } else {
+    expect(submit.parameters.properties.artifact.properties.report_markdown.type).toBe("string");
+    expect(submit.parameters.properties.artifact.required).toContain("report_markdown");
+    expect(submit.description).toContain("## Проверки");
+  }
   const review=tools.find(t=>t.name==="taskflow_review") as any;
   expect(review.parameters.properties.report_markdown.type).toBe("string");
  });

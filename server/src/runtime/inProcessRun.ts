@@ -1008,7 +1008,8 @@ async function runRoleInProcessUnserialized(input: {
       || rolePrompt(role)
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
-    ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, ROLE_REPORT_INSTRUCTION, SUBMISSION_POLICY] : []),
+    ROLE_REPORT_INSTRUCTION,
+    ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, SUBMISSION_POLICY] : []),
   ].join("\n\n");
   const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
 
