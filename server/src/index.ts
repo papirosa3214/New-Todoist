@@ -39,6 +39,8 @@ import { registerProjectLabelRoutes } from "./routes/projects.js";
 import { registerSubtaskCommentRoutes } from "./routes/subtasks.js";
 import { registerMergeMarkerRoutes } from "./routes/merge-marker.js";
 import { registerOwnerControlRoutes } from "./routes/owner-controls.js";
+import { reloadServerSettings } from "./lib/serverSettings.js";
+import { registerAdminServerSettingsRoutes } from "./routes/admin-server-settings.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerSearchRoutes } from "./routes/search.js";
@@ -328,6 +330,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Версионные миграции поверх — новые изменения схемы идут сюда, не в
   // migrate() (см. migrations.ts).
   runMigrations();
+  reloadServerSettings();
   // Общий чат ролей (карточка ca816271, п. 2): идемпотентно завести
   // комнату, состав и закреплённый регламент, если их ещё нет.
   try {
@@ -363,6 +366,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerSubtaskCommentRoutes(app);
   registerMergeMarkerRoutes(app);
   registerOwnerControlRoutes(app);
+  registerAdminServerSettingsRoutes(app);
   registerSubtaskArtifactRoutes(app);
   // Ручки «прервать шаг», «сбросить попытку», «отменить задание» —
   // MAK-69, владелец и оркестратор останавливают живой запуск через

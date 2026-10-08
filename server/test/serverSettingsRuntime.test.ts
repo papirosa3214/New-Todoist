@@ -1,0 +1,31 @@
+import { beforeAll, afterAll, afterEach, it, expect, vi } from "vitest";
+import { buildApp } from "../src/index.js";
+import { setSetting, resetSetting } from "../src/lib/serverSettings.js";
+import { startLinearSync } from "../src/lib/linearSync.js";
+import { summarizeForChat } from "../src/lib/chatMessageShortening.js";
+let app: Awaited<ReturnType<typeof buildApp>>;
+beforeAll(async () => { app = await buildApp(); });
+afterAll(async () => { await app.close(); });
+afterEach(() => { vi.restoreAllMocks(); resetSetting("linear_sync_interval_min", null); resetSetting("chat_short_limit", null); });
+it("смена периода Linear заменяет старый таймер, остановка снимает подписку", () => {
+  const timers = new Map<any, number>(); let next = 0;
+  vi.spyOn(globalThis, "setInterval").mockImplementation(((_fn: any, delay: number) => {const id = ++next; timers.set(id,delay); return id;}) as any);
+  vi.spyOn(globalThis, "clearInterval").mockImplementation(((id: any) => {timers.delete(id);}) as any);
+  const stop = startLinearSync();
+  expect([...timers.values()]).toEqual([60000]);
+  setSetting("linear_sync_interval_min", 2 as never, null);
+  expect([...timers.values()]).toEqual([120000]);
+  resetSetting("linear_sync_interval_min", null);
+  expect([...timers.values()]).toEqual([60000]);
+  stop(); expect(timers.size).toBe(0);
+  setSetting("linear_sync_interval_min", 3 as never, null);
+  expect(timers.size).toBe(0);
+});
+it("порог сокращения применяется к реальному тексту без рестарта", () => {
+ const text = "слово ".repeat(100).trim();
+ expect(summarizeForChat(text).length).toBeGreaterThan(100);
+ setSetting("chat_short_limit", 100 as never, null);
+ expect(summarizeForChat(text).length).toBeLessThanOrEqual(101);
+ resetSetting("chat_short_limit", null);
+ expect(summarizeForChat(text).length).toBeGreaterThan(100);
+});

@@ -13,6 +13,8 @@
 // датасетов RAGFlow идёт через другое имя (`bge-m3-gpu@Ollama`) —
 // специально оставлено, чтобы не ломать то, что на нём держится.
 
+import { getSetting } from "./serverSettings.js";
+
 export const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || "http://192.168.1.110:11434"
 ).replace(/\/+$/, "");
@@ -108,7 +110,7 @@ export async function getEmbeddings(
   } = {},
 ): Promise<EmbeddingResult> {
   const model = opts.model ?? DEFAULT_EMBEDDING_MODEL;
-  const timeoutMs = opts.timeoutMs ?? EMBEDDING_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? getSetting("embedding_timeout_ms");
   const maxBatch = opts.maxBatch ?? EMBEDDING_MAX_BATCH;
 
   const inputs = Array.isArray(input) ? input : [input];

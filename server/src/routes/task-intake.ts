@@ -17,6 +17,7 @@
 
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
+import { setSetting } from "../lib/serverSettings.js";
 import { authOrApiToken } from "../auth.js";
 
 export type IntakeMode = "manual" | "automatic";
@@ -180,6 +181,7 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
     },
   );
 
+  // Старый экран и новый реестр меняют одни параметры владельца.
   // PATCH — только владелец. Нераспознанный режим → 400, значение в БД
   // не трогается. CHECK в схеме страхует от гонки и от того, чтобы в БД
   // когда-либо лежало значение вне enum — хелпер snapshotIntakeMode
@@ -209,10 +211,7 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
             error: `mode должен быть одним из: ${INTAKE_MODES.join(", ")}`,
           });
         }
-        db.prepare("UPDATE users SET task_intake_mode = ? WHERE id = ?").run(
-          raw,
-          owner,
-        );
+        setSetting("task_intake_mode", raw as never, owner);
       }
       if (hasReviewer) {
         const raw = req.body?.reviewer_first_default;
@@ -221,10 +220,7 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
             .code(400)
             .send({ error: "reviewer_first_default должен быть boolean" });
         }
-        db.prepare("UPDATE users SET reviewer_first_default = ? WHERE id = ?").run(
-          raw ? 1 : 0,
-          owner,
-        );
+        setSetting("reviewer_first_default", raw as never, owner);
       }
       const row = db
         .prepare("SELECT task_intake_mode, reviewer_first_default FROM users WHERE id = ?")

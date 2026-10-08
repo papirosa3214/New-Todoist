@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { getSetting } from "../lib/serverSettings.js";
 
 export type LaunchContextInput = {
   task: Record<string, unknown>;
@@ -27,8 +28,8 @@ async function runPythonContext(input: LaunchContextInput): Promise<string> {
     const errors: Buffer[] = [];
     const timeout = setTimeout(() => {
       process.kill();
-      reject(new Error("сборка TaskContext v1 превысила 15 секунд"));
-    }, 15_000);
+      reject(new Error("сборка TaskContext v1 превысила заданный таймаут"));
+    }, getSetting("task_context_timeout_ms"));
     process.stdout!.on("data", (chunk: Buffer) => output.push(chunk));
     process.stderr!.on("data", (chunk: Buffer) => errors.push(chunk));
     process.on("error", (error) => {

@@ -19,6 +19,11 @@ import {
   useTaskIntakeSettings,
   useToggleAgentService,
 } from "../api/agents";
+import {
+  useServerSettings,
+  useUpdateServerSetting,
+  useResetServerSetting,
+} from "../api/serverSettings";
 import { useUploadAvatar, useDeleteAvatar } from "../api/avatars";
 import { getErrorMessage } from "../lib/errors";
 import { useAppStore } from "../store";
@@ -440,6 +445,382 @@ function ServerSection() {
   );
 }
 
+/** MAK-95: реестр серверных параметров. Рисуется отдельным разделом «Сервер:
+ *  параметры» — под диагностикой (ServerSection выше). Группы — в порядке,
+ *  заданном сервером (`SETTING_GROUP_ORDER`); внутри группы — строки по
+ *  ключу. Для каждой строки кнопка «Сбросить» возвращает дефолт.
+ *  Ошибки PUT от сервера показываются под полем красным. */
+function ServerSettingsSection() {
+  const { data, isLoading, error } = useServerSettings();
+  const update = useUpdateServerSetting();
+  const reset = useResetServerSetting();
+  const [errorByKey, setErrorByKey] = useState<Record<string, string>>({});
+
+  if (error) {
+    return (
+      <FieldGroup>
+        <InfoRow
+          icon="x"
+          iconColor="#FF6B6B"
+          label="Параметры сервера"
+          value="недоступны — раздел только для владельца"
+        />
+      </FieldGroup>
+    );
+  }
+  if (isLoading || !data) {
+    return (
+      <FieldGroup>
+        <InfoRow icon="activity" label="Параметры сервера" value="загружаю…" />
+      </FieldGroup>
+    );
+  }
+
+  // Группировка по группам в порядке из payload; UI следует порядку,
+  // заданному сервером, чтобы добавить параметр было достаточно в
+  // serverSettingsRegistry.ts.
+  const groups = new Map<string, typeof data.settings>();
+  for (const s of data.settings) {
+    const list = groups.get(s.group) ?? [];
+    list.push(s);
+    groups.set(s.group, list);
+  }
+  const groupOrder = Array.from(groups.keys());
+
+  const handleApply = async (
+    key: string,
+    value: number | boolean | string,
+  ) => {
+    try {
+      await update.mutateAsync({ key, value });
+      setErrorByKey((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      setErrorByKey((prev) => ({ ...prev, [key]: getErrorMessage(err) }));
+    }
+  };
+  const handleReset = async (key: string) => {
+    try {
+      await reset.mutateAsync({ key });
+      setErrorByKey((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      setErrorByKey((prev) => ({ ...prev, [key]: getErrorMessage(err) }));
+    }
+  };
+
+  return (
+    <>
+      {groupOrder.map((groupName) => {
+        const rows = groups.get(groupName) ?? [];
+        return (
+          <div key={groupName} className="mb-3">
+            <SectionHeader className="mb-2">{groupNameLabel(groupName)}</SectionHeader>
+            <FieldGroup>
+              {rows.map((s) => {
+                const current = data.values[s.key];
+                const isDefault =
+                  JSON.stringify(current) === JSON.stringify(s.default);
+                return (
+                  <SettingRow
+                    key={s.key}
+                    setting={s}
+                    value={current}
+                    isDefault={isDefault}
+                    errorMessage={errorByKey[s.key]}
+                    onApply={(v) => handleApply(s.key, v)}
+                    onReset={() => handleReset(s.key)}
+                  />
+                );
+              })}
+            </FieldGroup>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+const GROUP_LABELS: Record<string, string> = {
+  "тишина": "Тишина и автореакции",
+  "перезапуски": "Перезапуски",
+  "расписания": "Расписания",
+  "снимки": "Снимки состояния",
+  "автоимпорт": "Автоимпорт Linear",
+  "linear": "Запись в Linear",
+  "таймауты": "Таймауты",
+  "лимиты": "Лимиты",
+  "режим_приёма": "Режим приёма",
+};
+function groupNameLabel(g: string): string {
+  return GROUP_LABELS[g] ?? g;
+}
+
+function SettingRow({
+  setting,
+  value,
+  isDefault,
+  errorMessage,
+  onApply,
+  onReset,
+}: {
+  setting: import("../api/serverSettings").ServerSetting;
+  value: number | boolean | string;
+  isDefault: boolean;
+  errorMessage?: string;
+  onApply: (value: number | boolean | string) => void;
+  onReset: () => void;
+}) {
+  const suffix = suffixForKind(setting);
+  const helper = helperForSetting(setting);
+  const dirty = !isDefault;
+  // Bool — ToggleRow, числовые — числовое поле с суффиксом и валидацией
+  // на границы; enum — сегмент.
+  if (setting.kind === "bool") {
+    return (
+      <>
+        <ToggleRow
+          icon="sliders"
+          iconColor="#FF9500"
+          label={setting.label}
+          valueLabel={String(value)}
+          checked={Boolean(value)}
+          onChange={() => onApply(!Boolean(value))}
+        />
+        {errorMessage ? (
+          <Row icon="alert-circle" label={errorMessage} />
+        ) : null}
+      </>
+    );
+  }
+  if (setting.kind === "enum") {
+    const options = setting.options ?? [];
+    return (
+      <>
+        <EnumRow
+          icon="sliders"
+          label={setting.label}
+          options={options}
+          value={String(value)}
+          onChange={(v) => onApply(v)}
+        />
+        {errorMessage ? (
+          <Row icon="alert-circle" label={errorMessage} />
+        ) : null}
+        {!isDefault ? (
+          <Row
+            icon="rotate-ccw"
+            label="Сбросить к дефолту"
+            onClick={onReset}
+          />
+        ) : null}
+      </>
+    );
+  }
+  return (
+    <NumberRow
+      icon="sliders"
+      label={setting.label}
+      value={typeof value === "number" ? value : Number(value)}
+      suffix={suffix}
+      min={setting.min}
+      max={setting.max}
+      helper={helper}
+      dirty={dirty}
+      onApply={(v) => onApply(v)}
+      onReset={onReset}
+      errorMessage={errorMessage}
+    />
+  );
+}
+
+function suffixForKind(s: import("../api/serverSettings").ServerSetting): string {
+  switch (s.kind) {
+    case "duration_min":
+      return "мин";
+    case "duration_sec":
+      return "сек";
+    case "duration_ms":
+    case "interval_ms":
+      return "мс";
+    case "int":
+      return "";
+    default:
+      return "";
+  }
+}
+
+function helperForSetting(
+  s: import("../api/serverSettings").ServerSetting,
+): string | null {
+  if (s.min === undefined && s.max === undefined) return null;
+  if (s.min !== undefined && s.max !== undefined) {
+    return `от ${s.min} до ${s.max}`;
+  }
+  if (s.min !== undefined) return `не меньше ${s.min}`;
+  return `не больше ${s.max}`;
+}
+
+/** Поле ввода числа с суффиксом единицы, валидацией по границам и кнопкой
+ *  «Сохранить». Локальный state — чтобы текстовый ввод не дёргал API на
+ *  каждом нажатии клавиши. На «Сохранить» или Enter отправляем PUT. */
+function NumberRow({
+  icon,
+  label,
+  value,
+  suffix,
+  min,
+  max,
+  helper,
+  dirty,
+  onApply,
+  onReset,
+  errorMessage,
+}: {
+  icon: string;
+  label: string;
+  value: number;
+  suffix: string;
+  min?: number;
+  max?: number;
+  helper: string | null;
+  dirty: boolean;
+  onApply: (v: number) => void;
+  onReset: () => void;
+  errorMessage?: string;
+}) {
+  const [draft, setDraft] = useState<string>(String(value));
+  const [localError, setLocalError] = useState<string | null>(null);
+  // Синхронизируем черновик с серверным значением, когда оно меняется
+  // (например, после сброса к дефолту).
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+  const commit = () => {
+    const n = Number(draft);
+    if (!Number.isFinite(n)) {
+      setLocalError("не число");
+      return;
+    }
+    if (min !== undefined && n < min) {
+      setLocalError(`минимум ${min}`);
+      return;
+    }
+    if (max !== undefined && n > max) {
+      setLocalError(`максимум ${max}`);
+      return;
+    }
+    setLocalError(null);
+    onApply(n);
+  };
+  const displayHelper = localError ?? errorMessage ?? helper;
+  return (
+    <div className="px-4 py-3 border-b border-white/5 last:border-b-0">
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <div className="flex items-center gap-3 min-w-0">
+          <Icon name={icon} className="text-[#FF9500] shrink-0" />
+          <div className="min-w-0">
+            <div className="text-sm text-white truncate">{label}</div>
+            {displayHelper ? (
+              <div className={`text-xs ${localError || errorMessage ? "text-[#FF6B6B]" : "text-white/50"}`}>
+                {displayHelper}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <input
+            type="text"
+            inputMode="numeric"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+            }}
+            className="w-24 bg-white/5 rounded px-2 py-1 text-right text-sm outline-none focus:bg-white/10"
+          />
+          {suffix ? (
+            <span className="text-xs text-white/50 w-6">{suffix}</span>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2 mt-1">
+        <button
+          type="button"
+          onClick={commit}
+          disabled={!dirty && draft === String(value)}
+          className="text-xs text-[#0A84FF] disabled:text-white/30"
+        >
+          Сохранить
+        </button>
+        {!isDefaultTrue(dirty) ? (
+          <button
+            type="button"
+            onClick={onReset}
+            className="text-xs text-white/50"
+          >
+            Сбросить
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// Просто чтобы TS не ругался на неиспользуемый параметр в одном из
+// путей рендера; функция читается яснее, чем `!isDefault` с двойным
+// отрицанием.
+function isDefaultTrue(dirty: boolean): boolean {
+  return !dirty;
+}
+
+function EnumRow({
+  icon,
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  icon: string;
+  label: string;
+  options: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="px-4 py-3 border-b border-white/5 last:border-b-0">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="flex items-center gap-3 min-w-0">
+          <Icon name={icon} className="text-[#FF9500] shrink-0" />
+          <div className="text-sm text-white truncate">{label}</div>
+        </div>
+      </div>
+      <div className="flex gap-1 bg-white/5 p-1 rounded-lg">
+        {options.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => onChange(opt)}
+            className={`flex-1 px-2 py-1.5 rounded-md text-xs ${
+              opt === value
+                ? "bg-[#0A84FF] text-white"
+                : "text-white/70 hover:bg-white/10"
+            }`}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function SettingsScreen() {
   const navigate = useNavigate();
   const { data: user, error } = useCurrentUser();
@@ -587,6 +968,14 @@ export function SettingsScreen() {
       <SectionHeader className="mb-2">Сервер</SectionHeader>
       <div className="mb-4">
         <ServerSection />
+      </div>
+
+      {/* Сервер: параметры (MAK-95) — отдельный раздел с группами
+          из реестра. Рисуется ниже статуса, чтобы не путать «что сейчас
+          происходит» и «как это настроено». */}
+      <SectionHeader className="mb-2">Сервер: параметры</SectionHeader>
+      <div className="mb-4">
+        <ServerSettingsSection />
       </div>
 
       {/* Session */}

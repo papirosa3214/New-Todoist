@@ -16,12 +16,18 @@ import { ROLE_NAMES, roleTitle } from "../roleRouting.js";
 import { SCHEDULER_USER_ID } from "../serviceUser.js";
 import { tryStartSingleExecutorPlan } from "../routes/dispatch.js";
 import { expireRoleQuestions } from "./roleMessageWait.js";
+// MAK-95: RETRY_LIMIT, RETRY_DELAY_MIN, SCHEDULER_INTERVAL_MS приходят из
+// реестра. Подписки здесь намеренно нет: значения перечитываются на
+// каждом проходе (как у stalledStepWatcher), а интервал меняется редко и
+// в момент правки всё равно стоит перезапустить процесс — обновление
+// таймера делается на следующем цикле после истечения текущего.
+import { getSetting, onChange } from "../lib/serverSettings.js";
 
-const RETRY_LIMIT = 3;
-const RETRY_DELAY_MIN = 5;
+let RETRY_LIMIT = getSetting("retry_limit");
+let RETRY_DELAY_MIN = getSetting("retry_delay_min");
+let SCHEDULER_INTERVAL_MS = getSetting("scheduler_interval_ms");
 /** Окно догона: давно прошедшее время запуска не воскрешаем. */
 const RUN_CATCH_HOURS = 24;
-export const SCHEDULER_INTERVAL_MS = 5 * 60 * 1000;
 
 export function schedulerHeartbeatPath(): string {
   return process.env.TASKFLOW_SCHEDULER_HEARTBEAT || path.join(os.homedir(), ".local", "state", "taskflow-scheduler", "last-run.json");
@@ -288,22 +294,43 @@ export async function runSchedulerPass(app: FastifyInstance, now: Date = new Dat
   return counts;
 }
 
-/** Раз в 5 минут; первый обход — через полминуты после старта. */
+/** Раз в 5 минут; первый обход — через полминуты после старта.
+ *  MAK-95: интервал и задержка повтора приходят из реестра, таймер
+ *  пересоздаётся при смене интервала — иначе остался бы старый setInterval
+ *  и новое значение легло бы мёртвым грузом до перезапуска. RETRY_LIMIT
+ *  и RETRY_DELAY_MIN перечитываются на каждом проходе, отдельная подписка
+ *  не нужна. */
 export function startScheduler(app: FastifyInstance): () => void {
   let busy = false;
   const tick = async () => {
     if (busy) return;
     busy = true;
     try {
+      // Свежие значения на каждый проход — для параметров, не связанных
+      // с долгоживущими таймерами, этого достаточно.
+      RETRY_LIMIT = getSetting("retry_limit");
+      RETRY_DELAY_MIN = getSetting("retry_delay_min");
       await runSchedulerPass(app);
     } finally {
       busy = false;
     }
   };
-  const first = setTimeout(() => void tick(), 30_000);
-  const timer = setInterval(() => void tick(), SCHEDULER_INTERVAL_MS);
+  let first = setTimeout(() => void tick(), 30_000);
+  let timer = setInterval(() => void tick(), SCHEDULER_INTERVAL_MS);
+  first.unref?.();
+  timer.unref?.();
+  const off = onChange("scheduler_interval_ms", () => {
+    SCHEDULER_INTERVAL_MS = getSetting("scheduler_interval_ms");
+    clearTimeout(first);
+    clearInterval(timer);
+    first = setTimeout(() => void tick(), 30_000);
+    timer = setInterval(() => void tick(), SCHEDULER_INTERVAL_MS);
+    first.unref?.();
+    timer.unref?.();
+  });
   return () => {
     clearTimeout(first);
     clearInterval(timer);
+    off();
   };
 }

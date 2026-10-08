@@ -13,6 +13,7 @@
 // Сообщения владельца сюда не попадают: его текст не сокращается никогда
 // (см. routes/chat.ts — вызов делается только для не-владельца).
 import crypto from "node:crypto";
+import { getSetting } from "./serverSettings.js";
 import db from "../db.js";
 import { deriveTitleFromMarkdown, markdownToTiptap } from "./markdownToTiptap.js";
 import { ensureTaskArtifactFolder } from "./taskArtifactFolder.js";
@@ -58,14 +59,14 @@ export function summarizeForChat(text: string): string {
   let out = "";
   for (let i = 0; i < sentences.length && i < 2; i++) {
     const candidate = out ? `${out} ${sentences[i]}` : sentences[i];
-    if (candidate.length <= CHAT_SHORT_LIMIT) {
+    if (candidate.length <= getSetting("chat_short_limit")) {
       out = candidate;
       continue;
     }
-    if (!out) out = cutAtWord(sentences[i], CHAT_SHORT_LIMIT);
+    if (!out) out = cutAtWord(sentences[i], getSetting("chat_short_limit"));
     break;
   }
-  return out || cutAtWord(text, CHAT_SHORT_LIMIT);
+  return out || cutAtWord(text, getSetting("chat_short_limit"));
 }
 
 /**
@@ -82,7 +83,7 @@ export function shortenChatMessage(opts: {
   authorName: string;
 }): ShortenedChatMessage {
   const { text, taskId, authorId } = opts;
-  if (text.length <= CHAT_SHORT_LIMIT || !text.trim()) {
+  if (text.length <= getSetting("chat_short_limit") || !text.trim()) {
     return { text, shortened: false, fullLength: text.length };
   }
 

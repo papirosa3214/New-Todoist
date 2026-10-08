@@ -20,6 +20,7 @@
 // получает уведомление. Выключатель — в linear_sync_state.
 
 import crypto from "node:crypto";
+import { getSetting, onChange, setSetting } from "./serverSettings.js";
 import db from "../db.js";
 import * as linearWrite from "../runtime/linearWrite.js";
 import { LinearWriteError } from "../runtime/linearWrite.js";
@@ -96,7 +97,7 @@ export function isLinearSyncEnabled(ownerId: string): boolean {
 
 export function setLinearSyncEnabled(ownerId: string, enabled: boolean): LinearSyncState {
   linearSyncState(ownerId);
-  db.prepare("UPDATE linear_sync_state SET enabled = ? WHERE owner_id = ?").run(enabled ? 1 : 0, ownerId);
+  setSetting("linear_sync_enabled", enabled as never, ownerId);
   return linearSyncState(ownerId);
 }
 
@@ -274,7 +275,7 @@ export async function runLinearSyncPass(ownerId?: string, options: { writer?: Li
   if (!owner) throw new LinearWriteError("Владелец не найден.", 404);
   const result: LinearSyncResult = { owner_id: owner.id, mappings: 0, queued: 0, sent: 0, failed: 0, errors: [] };
   const state = linearSyncState(owner.id);
-  if (state.enabled !== 1) return { ...result, skipped: "disabled" };
+  if (state.enabled !== 1 || !getSetting("linear_sync_enabled")) return { ...result, skipped: "disabled" };
   const now = options.now ?? Date.now();
   const writer = options.writer ?? defaultWriter;
   // Ручной внеочередной проход — единственный способ вернуть постоянные
@@ -333,7 +334,7 @@ export function notifyLinearSyncStale(ownerId?: string, now = Date.now()): boole
   const owner = ownerRow(ownerId);
   if (!owner) return false;
   const state = linearSyncState(owner.id);
-  if (state.enabled !== 1) return false;
+  if (state.enabled !== 1 || !getSetting("linear_sync_enabled")) return false;
   const oldest = db.prepare("SELECT MIN(created_at) t FROM linear_sync_queue WHERE owner_id=? AND status='pending'").get(owner.id) as { t: string | null };
   if (!oldest.t) return false;
   if (now - parseUtc(oldest.t) <= LINEAR_SYNC_STALE_MS) return false;
@@ -356,7 +357,7 @@ export function notifyLinearSyncStale(ownerId?: string, now = Date.now()): boole
 export function startLinearSync(): () => void {
   let busy = false;
   const tick = async () => {
-    if (busy) return;
+    if (busy || !getSetting("linear_sync_enabled")) return;
     busy = true;
     try {
       if (linearWrite.linearWriteConfigured()) {
@@ -375,8 +376,13 @@ export function startLinearSync(): () => void {
     }
   };
   const first = setTimeout(() => void tick(), FIRST_PASS_DELAY_MS);
-  const timer = setInterval(() => void tick(), LINEAR_SYNC_INTERVAL_MS);
+  let timer = setInterval(() => void tick(), getSetting("linear_sync_interval_min") * 60_000);
+  const off = onChange("linear_sync_interval_min", () => {
+    clearInterval(timer);
+    timer = setInterval(() => void tick(), getSetting("linear_sync_interval_min") * 60_000);
+  });
   return () => {
+    off();
     clearTimeout(first);
     clearInterval(timer);
   };

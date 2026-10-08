@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { getSetting } from "../lib/serverSettings.js";
 import {
   claimNextRoleRunJob,
   completeRoleRunJob,
@@ -113,7 +114,7 @@ export function startRoleRunWorker(options?: {
   // проверки стояли в очереди за длинными задачами). Каждая «полоса» берёт
   // задание через claimNextRoleRunJob — он атомарен и не даёт одной задаче
   // два параллельных запуска. Число полос — ROLE_RUN_CONCURRENCY.
-  const lanes = Math.max(1, Math.min(8, Math.floor(Number(process.env.ROLE_RUN_CONCURRENCY ?? 3)) || 3));
+  const lanes = 8;
   const loops: Array<Promise<void> | null> = Array.from({ length: lanes }, () => null);
 
   recoverExpiredRoleRunJobs();
@@ -136,10 +137,10 @@ export function startRoleRunWorker(options?: {
   const tick = (): void => {
     if (stopping) return;
     void staleSweep();
-    for (let lane = 0; lane < lanes; lane++) {
+    for (let lane = 0; lane < getSetting("role_run_concurrency"); lane++) {
       if (loops[lane]) continue;
       loops[lane] = (async () => {
-        while (!stopping) {
+        while (!stopping && lane < getSetting("role_run_concurrency")) {
           const handled = await processOneRoleRunJob({
             workerId: lanes > 1 ? `${workerId}-${lane}` : workerId,
             executor: options?.executor,

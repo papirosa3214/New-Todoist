@@ -374,8 +374,13 @@ function sweep(now: number) {
 // появились НОВЫЕ действия с прошлого раза, и спрашивает у локальной
 // модели одну короткую фразу вместо них — «читает JournalScreen.tsx» →
 // «разбирается, почему тап не попадает в contenteditable».
-const OBSERVER_ENABLED =
-  (process.env.ACTIVITY_OBSERVER_ENABLED ?? "true") !== "false";
+// MAK-95: bool приходит из реестра. Включение через веб подхватывается
+// следующим тиком без перезапуска.
+import { getSetting, onChange } from "../lib/serverSettings.js";
+let OBSERVER_ENABLED = getSetting("activity_observer_enabled");
+onChange("activity_observer_enabled", (v) => {
+  OBSERVER_ENABLED = v;
+});
 // Свой URL/модель, не общие с server/src/routes/ai.ts (там свой сценарий —
 // разбивка задачи на подзадачи): наблюдателя должно быть можно выключить
 // или переключить на другую модель одной строкой конфига, не трогая тот
@@ -531,7 +536,7 @@ let observerTimer: ReturnType<typeof setInterval> | null = null;
 /** Поднимает таймер слоя 3. Отдельно от registerActivityRoutes: регистрация
  * роутов не должна зависеть от того, включён ли наблюдатель. */
 export function startActivityObserver(): void {
-  if (!OBSERVER_ENABLED || observerTimer) return;
+  if (observerTimer) return;
   observerTimer = setInterval(() => {
     interpretOnce().catch((e) => console.warn("[activity-observer]", e));
   }, OBSERVER_INTERVAL_MS);

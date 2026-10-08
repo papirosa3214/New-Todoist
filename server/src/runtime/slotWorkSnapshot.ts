@@ -21,6 +21,7 @@
 //     снимка ею не подменяется: снимок могли записать секунду назад поверх
 //     работы, которая шла два часа назад.
 import crypto from "node:crypto";
+import { getSetting } from "../lib/serverSettings.js";
 import db from "../db.js";
 import { roleTitle } from "../roleRouting.js";
 
@@ -206,7 +207,7 @@ export function saveSlotSnapshot(input: SnapshotInput): { snapshot: SlotSnapshot
 /** Держим на слот только последние SNAPSHOT_KEEP снимков. Читатели всё
  *  равно видят лишь последние HISTORY_MAX (`slotSnapshotHistory`), а таблица
  *  без предела росла бы от каждого тика сервера. */
-export function pruneSlotSnapshots(subtaskId: string, keep = SNAPSHOT_KEEP): number {
+export function pruneSlotSnapshots(subtaskId: string, keep = getSetting("snapshot_keep")): number {
   const info = db
     .prepare(
       `DELETE FROM slot_work_snapshots
@@ -401,7 +402,7 @@ export function periodicSlotSnapshot(subtaskId: string, opts: { now?: number } =
   const last = lastSnapshotRow(subtaskId);
   if (last) {
     const age = ageMs(last.created_at, now);
-    if (age !== null && age < LEASE_MINUTES * 60_000) return { written: false, skipped: "fresh" };
+    if (age !== null && age < getSetting("snapshot_interval_min") * 60_000) return { written: false, skipped: "fresh" };
   }
 
   const candidate: SnapshotInput = {
