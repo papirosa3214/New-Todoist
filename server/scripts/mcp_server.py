@@ -57,7 +57,7 @@ SERVER_VERSION = "1.0.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 BASE = os.environ.get("TASKFLOW_API", "http://localhost:3001")
 VAULT_GET = os.path.expanduser("~/.claude/vault-get.py")
-VAULT_KEY = os.environ.get("TASKFLOW_VAULT_KEY", "TASKFLOW_AGENT_TOKEN")
+VAULT_KEY = os.environ.get("TASKFLOW_VAULT_KEY", "TASKFLOW_ORCHESTRATOR_CLAUDE_TOKEN")
 
 # Состояние шага сервер отдаёт вычисленным (поле `state`, см.
 # withSubtaskState в server/src/routes/tasks.ts) — здесь только перевод для
