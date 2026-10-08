@@ -1,0 +1,70 @@
+From: Разработчик (builder, slot: builder_fix_166862c1)
+Subject: iOS-экран «Параметры сервера» — аддитивные правки навигации и SettingsScreen
+Branch: codex/developer-mac
+HEAD: 7792e9aa
+Task: f19cf729-62be-43d3-a696-84083026f50d (MAK-95 / родитель 581957c9)
+
+Этот diff приложен в карточку f19cf729 как артефакт (по замечанию критика D2 —
+«iOS-код физически только на MacBook»). Сам код лежит в выделенной копии
+Разработчика на MacBook (`/Users/max/Проекты/TaskFlowDeveloper`); здесь — копия
+diff-а, чтобы критик мог прочитать три аддитивные правки без сетевого доступа.
+
+==== Файл 1: Sources/App/Navigation/AppRoute.swift ====
+
+@@ enum AppRoute: Hashable @@
+     /// LOCK-183: профиль роли из плоского списка «Команды» (`id` — role).
+     case agentProfile(id: String)
++    /// MAK-95 / задача `f19cf729` — нативный пульт управления сервером из
++    /// «Настройки → Сервер». Содержимое — реестр параметров из
++    /// `GET /admin/server-settings` (метаданные + текущие значения) и журнал
++    /// изменений из `GET /admin/server-settings/log`. Доступен только
++    /// владельцу (на сервере 403 для остальных — отдельный баннер показывает
++    /// причину, если кто-то открыл экран не из владельца).
++    case serverParameters
+ }
+
+==== Файл 2: Sources/App/Navigation/RouteDestinationView.swift ====
+
+@@ func routeContent(_ route: AppRoute) -> some View @@
+     case .secretaryVoiceCall:
+         SecretaryVoiceScreen()
++    case .serverParameters:
++        ServerParametersScreen()
+     }
+ }
+
+==== Файл 3: Sources/Features/Settings/SettingsScreen.swift ====
+
+@@ private var serverSection: some View @@
+-    /// LOCK-180/181: к серверным строкам добавлены «Pi Runtime» (статус
+-    /// рантайма) и «Service Accounts» (переехавшая из «Команды» механика
+-    /// ApiUser/токена).
++    /// LOCK-180/181: к серверным строкам добавлены «Pi Runtime» (статус
++    /// рантайма) и «Service Accounts» (переехавшая из «Команды» механика
++    /// ApiUser/токена).
++    ///
++    /// MAK-95 / задача `f19cf729`: для владельца добавлена строка «Параметры
++    /// сервера» — нативный пульт управления (`ServerParametersScreen`).
++    /// Маршрут существует только для владельца; `isOwner` проверяется
++    /// отдельно на сервере (`isOwner(req.userId)` → 403 для остальных).
+     private var serverSection: some View {
+         section(title: "Сервер", isExpanded: $serverExpanded) {
++            if session.currentUser?.role == .owner {
++                navRow(icon: "slider.horizontal.3", title: "Параметры сервера", route: .serverParameters)
++                TFDivider(inset: rowDividerInset)
++            }
+             ServerStatusSection()
+             TFDivider(inset: rowDividerInset)
+             RuntimeStatusRow()
+             TFDivider(inset: rowDividerInset)
+             navRow(icon: "person.badge.key", title: "Сервер MCP", route: .serviceAccounts)
+         }
+     }
+
+КОНЕЦ DIFF.
+
+Что в diff-е НЕ показано (но есть в исходниках):
+— два новых файла: `01-client.swift` (APIClient+ServerSettings) и
+  `02-screen-full.swift` (ServerParametersScreen + ServerParameterRow +
+  ReasonSheet + ServerParametersViewModel). Они лежат рядом с этим diff-ом.
+— комментарий в `AppRoute.swift` о маршруте (включён в diff).
