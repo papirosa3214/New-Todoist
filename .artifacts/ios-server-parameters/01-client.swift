@@ -105,18 +105,59 @@ public struct ServerSettingsResponse: Decodable, Sendable {
     }
 }
 
+/// Запись журнала изменений. Сервер отдаёт «сырые» snake_case-имена
+/// столбцов (`old_value` / `new_value` / `actor_id` / `created_at`) —
+/// см. `getServerSettingsLog` в `server/src/lib/serverSettings.ts`
+/// и `GET /api/admin/server-settings/log` в
+/// `server/src/routes/admin-server-settings.ts`. Декодер маппит их
+/// на camelCase-swift-имена через `CodingKeys` с алиасами; обратные
+/// camelCase-ключи (`before` / `after` / `actor` / `createdAt`)
+/// оставлены на случай, если веб-экран передаёт через общий прокси
+/// уже переименованный JSON — тогда `Decodable` найдёт ключ в любом
+/// из вариантов (Swift `KeyedDecodingContainer.decode(_:forKey:)`
+/// бросит `keyNotFound` только если нет ни одного из имён в `keys`).
 public struct ServerSettingsLogEntry: Decodable, Sendable, Identifiable {
     public let id: Int
     public let key: String
-    public let before: ServerSettingValue?
-    public let after: ServerSettingValue?
-    public let actor: String?
+    public let oldValue: ServerSettingValue?
+    public let newValue: ServerSettingValue?
+    public let actorId: String?
     public let reason: String?
     public let createdAt: String
 
     enum CodingKeys: String, CodingKey {
-        case id, key, before, after, actor, reason
+        case id, key, reason
+        // Сервер (`server/src/routes/admin-server-settings.ts`, GET /log)
+        // отдаёт эти имена в snake_case.
+        case oldValue = "old_value"
+        case newValue = "new_value"
+        case actorId = "actor_id"
         case createdAt = "created_at"
+        // Совместимость: если в будущем эндпоинт начнёт отдавать camelCase
+        // (например, общий прокси web → iOS), эти ключи тоже подойдут.
+        case oldValueCamel = "oldValue"
+        case newValueCamel = "newValue"
+        case actorIdCamel = "actorId"
+        case createdAtCamel = "createdAt"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        key = try container.decode(String.self, forKey: .key)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        // Поля, которые сервер отдаёт по-разному (snake/camel), пробуем
+        // в обоих вариантах: сначала то, что фактически шлёт сервер,
+        // потом — обратная совместимость.
+        oldValue = try container.decodeIfPresent(ServerSettingValue.self, forKey: .oldValue)
+            ?? container.decodeIfPresent(ServerSettingValue.self, forKey: .oldValueCamel)
+        newValue = try container.decodeIfPresent(ServerSettingValue.self, forKey: .newValue)
+            ?? container.decodeIfPresent(ServerSettingValue.self, forKey: .newValueCamel)
+        actorId = try container.decodeIfPresent(String.self, forKey: .actorId)
+            ?? container.decodeIfPresent(String.self, forKey: .actorIdCamel)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+            ?? container.decodeIfPresent(String.self, forKey: .createdAtCamel)
+            ?? ""
     }
 }
 

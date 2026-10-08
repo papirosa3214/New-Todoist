@@ -305,15 +305,15 @@ struct ServerParametersScreen: View {
                     .foregroundStyle(Color.tfSub)
             }
             HStack(spacing: TFSpacing.sm) {
-                valueChip(label: "было", value: entry.before)
+                valueChip(label: "было", value: entry.oldValue)
                 Image(systemName: "arrow.right")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.tfDim)
-                valueChip(label: "стало", value: entry.after)
+                valueChip(label: "стало", value: entry.newValue)
                 Spacer(minLength: 0)
             }
-            if let actor = entry.actor {
-                Text(actor)
+            if let actorId = entry.actorId, !actorId.isEmpty {
+                Text(actorId)
                     .tfText(.caption)
                     .foregroundStyle(Color.tfDim)
             }
