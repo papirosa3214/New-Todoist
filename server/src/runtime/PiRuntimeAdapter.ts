@@ -110,6 +110,29 @@ export function resetModelRuntime(): void {
   modelRuntime = null;
 }
 
+/** Какой уровень размышлений сервер передаёт в `createAgentSession` по
+ *  фактической capability модели.
+ *
+ *  - reasoning модель → `null` (не передаём опцию): SDK сам возьмёт
+ *    `medium` из defaults и для новой сессии запишет в jsonl; для
+ *    resumed с persisted `"off"` миграция ниже (setThinkingLevel +
+ *    persist) поднимет до `medium` и обновит jsonl.
+ *  - не-reasoning → `"off"` explicit: SDK запишет в jsonl и для
+ *    resumed, и для новой. Даже если persisted в чужой сессии был
+ *    `"medium"`, мы фиксируем `"off"` и провайдер не получит
+ *    `reasoning.effort`.
+ *
+ *  Владелец 02.10.2026: жёсткое `"off"` для всех моделей гасило
+ *  thinking в чате. MAK-121 (chat/work расхождение): inProcessRun раньше
+ *  ставил `"off"` для ЛЮБОЙ модели, PiRuntimeAdapter чата — только
+ *  для deep_research, и resumed-сессии с persisted `"off"` оставались
+ *  без размышлений.
+ */
+export function resolveThinkingLevel(model: { reasoning?: boolean } | null | undefined): "off" | "medium" | null {
+  if (!model) return "off";
+  return model.reasoning ? null : "off";
+}
+
 /** Полный каталог моделей Pi (все модели, независимо от того,
  *  авторизован провайдер или нет). Именно каталог — источник правды для
  *  «модель существует» (спека §10, §14). Если каталог недоступен —
@@ -1278,6 +1301,15 @@ export async function startChatRun(
       resourceLoader.disposeResources();
       await composio.close().catch(() => {});
       throw error;
+    }
+
+    // MAK-121: persisted "off" у reasoning модели в resumed чат-сессии.
+    // Мигрируем на уровень, который провайдер реально умеет, и пишем в
+    // jsonl, чтобы следующий resume открылся с размышлениями. Без миграции
+    // чат продолжал бы работать без thinking под persisted "off".
+    if (piModel?.reasoning && (session as any)?.thinkingLevel === "off" && typeof (session as any).setThinkingLevel === "function") {
+      try { (session as any).setThinkingLevel("medium", { persist: true }); }
+      catch { /* persist не прошёл — следующий resume сам поднимет */ }
     }
 
     const run: ActiveChatRun = {
