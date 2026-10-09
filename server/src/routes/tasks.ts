@@ -1,3 +1,4 @@
+import { registerIntegrationResponsibilityRoutes } from '../lib/integrationResponsibility.js';
 import { taskExecutionState } from "../runtime/taskExecutionState.js";
 import { ROLE_NAMES as PREPARATION_ROLES } from "../roleRouting.js";
 import { hierarchyRefusal } from "../lib/taskHierarchy.js";
@@ -339,6 +340,7 @@ function agentStartedAt(task: any): string | null {
 // ═══════ TASKS CRUD ═══════
 
 export function registerTaskRoutes(app: FastifyInstance) {
+  registerIntegrationResponsibilityRoutes(app);
   const authPre = authOrApiToken;
 
   // Список задач. Кому что видно — правило в access.ts (шапка файла):

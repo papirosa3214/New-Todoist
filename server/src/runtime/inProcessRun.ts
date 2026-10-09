@@ -1,3 +1,4 @@
+import {integrationResponsibilityPrompt} from '../lib/integrationResponsibility.js';
 import { orchestratorTools } from "./orchestratorTools.js";
 import { resolveReviewTaskId } from "../lib/reviewTaskId.js";
 import { beginTaskLiveTurn } from "./taskLiveTurn.js";
@@ -607,7 +608,7 @@ function taskForLaunchContext(taskId: string): Record<string, unknown> {
 /** Задание по умолчанию — когда вызывающий не собрал своё (ручной запуск). */
 export function defaultTaskPrompt(taskId: string, role: string): string {
   const task = db.prepare("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title?: string } | undefined;
-  return renderInstruction(role, "task.start", { roleTitle: roleTitle(role), taskId, title: task?.title ?? "", rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
+  return renderInstruction(role, "task.start", { roleTitle: roleTitle(role), taskId, title: (task?.title ?? "") + "\n" + integrationResponsibilityPrompt(taskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 /**
@@ -620,7 +621,7 @@ export function defaultTaskPrompt(taskId: string, role: string): string {
  */
 function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): string {
   const subtask = db.prepare("SELECT title FROM subtasks WHERE id = ?").get(subtaskId) as { title?: string } | undefined;
-  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: subtask?.title ?? "", rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
+  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: (subtask?.title ?? "") + "\n" + integrationResponsibilityPrompt(taskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 // ── Папка проекта, справка, продолжение разговора (этап C3) ──────────────

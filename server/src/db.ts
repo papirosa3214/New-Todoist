@@ -682,6 +682,11 @@ export function migrate() {
     CREATE INDEX IF NOT EXISTS idx_enrichment_escalations_status
       ON enrichment_escalations(status);
   `);
+// Additive task metadata, shared by every intake source. No submission gate.
+const integrationColumns = new Set((db.prepare('PRAGMA table_info(tasks)').all() as {name:string}[]).map(c=>c.name));
+if (!integrationColumns.has('integration_mode')) db.exec("ALTER TABLE tasks ADD COLUMN integration_mode TEXT NOT NULL DEFAULT 'auto'");
+if (!integrationColumns.has('integration_owner_id')) db.exec("ALTER TABLE tasks ADD COLUMN integration_owner_id TEXT REFERENCES users(id)");
+
 }
 
 export default db;
