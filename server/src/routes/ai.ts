@@ -1,3 +1,4 @@
+import { structureTaskDraft } from "../lib/taskStructure.js";
 import { callUnifiedAi, OllamaError, parseJsonObject } from "../lib/aiClient.js";
 export { callUnifiedAi } from "../lib/aiClient.js";
 export { buildDictationSystemPrompt, getUserPrompt } from "../lib/taskPreparation.js";
@@ -726,12 +727,7 @@ export function registerAiRoutes(app: FastifyInstance) {
       }
 
       try {
-        const scope=visibleProjectScope(req.userId,"owner_id");
-        const projects=db.prepare(`SELECT id,name FROM projects WHERE ${scope.sql}`).all(...scope.params) as Array<{id:string;name:string}>;
-        const prepared=await prepareTask(text,projects,{ownerId:req.userId,provider,localModel,aiModel});
-        if (!prepared.card) return reply.code(422).send({error:prepared.question || "В сообщении нет поручения",...prepared});
-        const c=prepared.card;
-        return {title:c.title,description:c.description,subtasks:c.subtasks,dueDate:c.dueDate,priority:c.priority,preparation:c.preparation,question:c.question,children:c.children};
+        return await structureTaskDraft(text,{provider,localModel,aiModel});
       } catch (err: any) {
         return reply
           .code(502)
