@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
 import { planNodeAgentRefusal, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { closeStaleInboxForSubtask } from "../runtime/topicInbox.js";
 import { logStepOutcome } from "../runtime/stepOutcome.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
@@ -616,6 +617,16 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           if (subtask.collaboration_plan_id) {
             await unlockReadyPlanSubtasks(subtask.collaboration_plan_id, subtask.task_id, req.userId);
           }
+          // ЗАКРЫВАЕМ ЗАВИСШИЙ ИНБОКС ТЕМЫ (карточка 6f180f38, шаг 3).
+          //
+          // До правки хвосты `slot_topic_inbox` с `delivered_at IS NULL`
+          // оставались на закрытом слоте: `deliverTopicToWork` ставил их
+          // при «нет активного хода, но слот ещё может стартовать», и
+          // если слот закрывался до старта — строки висели в БД навечно.
+          // Здесь же гарантируем: слот сдан → его инбокс закрыт. Идемпотентно
+          // (UPDATE … WHERE delivered_at IS NULL), повторный вызов и
+          // конкурентный с `steer()` не делают ничего лишнего.
+          closeStaleInboxForSubtask(subtask.id);
         }
       }
       if (title) {

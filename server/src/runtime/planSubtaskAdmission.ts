@@ -18,6 +18,7 @@ import { logStepOutcome } from "./stepOutcome.js";
 import { classifyFailureReason, failureReasonLabel, type FailureReasonCode } from "./failureReasons.js";
 import { decideFailureAction, failurePolicy } from "./failurePolicy.js";
 import { logStepAbandoned } from "./abandonedStep.js";
+import { closeStaleInboxForSubtask } from "./topicInbox.js";
 
 /**
  * Узлы collaboration plan — обычные `subtasks` с `collaboration_plan_id` +
@@ -421,6 +422,7 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
       }
       db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
       resetRoleRunJobsForTask(row.task_id);
+      closeStaleInboxForSubtask(row.id);
       freed += 1;
       continue;
     }
@@ -439,6 +441,14 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
         attemptId: row.current_attempt_id,
       });
       db.prepare("UPDATE subtasks SET agent_state = NULL, current_attempt_id = NULL WHERE id = ?").run(row.id);
+      // ХВОСТ ИНБОКСА ТЕМЫ НА ОБРЫВЕ (карточка 6f180f38, шаг 3).
+      //
+      // До правки сообщения владельца, попавшие в `slot_topic_inbox` через
+      // `deliverTopicToWork` сразу после старта, оставались `delivered_at
+      // IS NULL` и после прерывания: попытка закрылась, новый запуск начнёт
+      // с нуля и не прочитает «доставленное», а прежняя строка останется
+      // висеть. Гасим её здесь, идемпотентно.
+      closeStaleInboxForSubtask(row.id);
       logStepOutcome({ taskId: row.task_id, actorId: null, subtaskId: row.id, outcome: "interrupted", code: "runtime_died", message: reason });
       // Шаг брошен (MAK-97): ход умер вместе с процессом — к событию
       // прикладываем хвост журнала и снимок git рабочей копии.
@@ -489,6 +499,10 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
     // Снимаем `succeeded`/`dead` задания этой задачи в `role_run_jobs`,
     // чтобы worker не подобрал прошлый dedupe_key, когда дойдёт очередь.
     resetRoleRunJobsForTask(row.task_id);
+    // Тот же хвост инбокса темы, что выше для `in_progress`: если слот
+    // висел в `todo`/`blocked` и его аренду снимают на рестарте, незакрытые
+    // строки `slot_topic_inbox` ему больше не нужны — никто их не прочитает.
+    closeStaleInboxForSubtask(row.id);
     freed += 1;
     roleNote(
       row.task_id,
