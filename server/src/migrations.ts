@@ -3830,8 +3830,21 @@ const migrations: Migration[] = [
     db.prepare("UPDATE roles SET prompt=prompt || ? WHERE length(trim(coalesce(prompt,'')))>0 AND instr(prompt,'## Подключённые HTML-панели в iOS')=0").run("\n\n## Подключённые HTML-панели в iOS\nЧтобы кнопка HTML-панели выполняла действие на сервере .110, вызывай в обработчике нажатия `const result = await TaskFlow.runCommand(command)`; command — точная Bash-команда строкой. Вызов делается сразу после нажатия, до первого другого await. Приложение само покажет владельцу нативное подтверждение и выполнит команду после его согласия. Promise вернёт {outcome, stdout, stderr, exitCode, durationSeconds, requestId}, либо отклонится при отмене/ошибке. Показывай настоящий результат в панели через textContent, обрабатывай catch и блокируй кнопку до finally. Не запускай действия при загрузке страницы, по таймеру или автоматически. Не проси токен и не делай fetch к API. Не обещай подключённое действие, если не используешь этот мост. Для Mac/iPhone этот мост не подходит — команды выполняются только на .110.\nПример: `<button onclick=\"run(this)\">Проверить сервер</button><pre id=\"result\"></pre><script>async function run(b){b.disabled=true;try{const r=await TaskFlow.runCommand(\"uptime\");document.getElementById(\"result\").textContent=r.stdout+\"; код \"+r.exitCode}catch(e){document.getElementById(\"result\").textContent=e.message}finally{b.disabled=false}}</script>`.\n");
   } },
 
-];
+  { id: "123_consultation_chain_log",
+    description:
+      "Карточка 412f89f4 (MAK-…): журнал фактических провайдера/модели и список попыток fallback-цепочки по консультации",
+    up: () => {
+      // Идемпотентно добавляем колонки — на свежей БД их нет, на существующей уже могут быть.
+      const cols = db.prepare("PRAGMA table_info(consultation_log)").all() as Array<{ name: string }>;
+      const have = new Set(cols.map((c) => c.name));
+      if (!have.has("actual_provider")) db.exec("ALTER TABLE consultation_log ADD COLUMN actual_provider TEXT");
+      if (!have.has("actual_model"))    db.exec("ALTER TABLE consultation_log ADD COLUMN actual_model TEXT");
+      if (!have.has("chain_attempts"))  db.exec("ALTER TABLE consultation_log ADD COLUMN chain_attempts TEXT");
+    },
+  },
 
+
+];
 /**
  * Опции прогона миграций.
  *
