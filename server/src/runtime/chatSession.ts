@@ -1,3 +1,22 @@
+// Карточка ebc4d338 (queue, 09.10.2026): подложим под in-memory
+// очередь durable лог в chat_message_queue. Хелпер ниже даёт
+// минимальный интерфейс записи, которую зовёт существующая
+// очередь enqueueChatReply. ВАЖНО: этот модуль — единственное место,
+// где in-memory очередь обязана синхронизироваться с БД. Остальные
+// модули (routes/chats.ts, runtime/inProcessRun.ts) могут писать в
+// durable таблицу сами, когда им нужен только учёт без запуска Pi.
+import {
+  enqueueMessageDelivery as durableEnqueue,
+  claimMessageDelivery,
+  finishMessageDelivery,
+  fenceMessageDelivery,
+  pendingMessageDeliveries,
+  bumpChatGeneration,
+  type MessageDelivery,
+} from "./chatQueue.js";
+import { currentChatGeneration } from "./chatQueue.js";
+import { logEvent } from "../agentState.js";
+
 // Хранилище живых онлайн-сессий Пи: одна строка на (чат, роль).
 //
 // Назначение: на чате может быть несколько ролей-участниц; каждая держит
@@ -21,6 +40,7 @@
 import db from "../db.js";
 
 const uid = () => crypto.randomUUID();
+
 
 interface ChatSessionRow {
   chat_id: string;
@@ -173,6 +193,62 @@ function queueKey(chatId: string, roleId: string): string {
  *  пробрасываем её ошибки в returned promise; внутри fn должна сама
  *  решить, что делать (наш deliverAgentReply логирует и идёт дальше,
  *  чтобы не ломать HTTP-ответ пользователя). */
+/** Карточка ebc4d338: обёртки над chatQueue для существующих вызовов.
+ *  Запись в durable-лог делегируется chatQueue — этот модуль только
+ *  навешивает логирование и сшивает in-memory очередь с БД. */
+
+export {
+  bumpChatGeneration,
+  currentChatGeneration,
+  finishMessageDelivery as completeDurableDelivery,
+  fenceMessageDelivery as fenceStaleDeliveries,
+} from "./chatQueue.js";
+
+export type { MessageDelivery } from "./chatQueue.js";
+
+/** Подложить durable-запись ДО постановки в in-memory очередь. Если
+ *  запись уже есть (тот же delivery_id) — это идемпотентный повтор, и
+ *  мы возвращаем прежний id без нового хода.
+ *
+ *  Вызывающий код (например, deliverAgentReply) сам решает, что
+ *  делать с дублем (обычно — повторно ответить, не запуская Pi снова).
+ *  Возвращаемое значение — намёк на сценарий:
+ *    `created=true`   — первая запись; in-memory очередь обязана
+ *                        реально исполнить fn.
+ *    `created=false`  — повтор; можно либо проигнорировать, либо
+ *                        дать короткий «уже в работе» ответ.
+ *
+ *  payload — произвольные данные, которые прикладной код сможет
+ *  прочитать при recovery (например, текст сообщения и trigger_id). */
+export function recordDurableDelivery(input: {
+  chatId: string;
+  roleId: string;
+  deliveryId: string;
+  messageId?: string | null;
+  payload: unknown;
+}) {
+  return durableEnqueue({
+    chatId: input.chatId,
+    roleId: input.roleId,
+    deliveryId: input.deliveryId,
+    messageId: input.messageId ?? null,
+    payload: input.payload,
+  });
+}
+
+/** Пометить ход в работе — вызывается непосредственно перед запуском
+ *  Pi. Это синхронизация, не fence: fence приходит через fenceStaleDeliveries
+ *  при bumpChatGeneration. */
+export function pickDurableDelivery(deliveryId: string): boolean {
+  return claimMessageDelivery(deliveryId);
+}
+
+/** Снимок pending-холдов для пары — для recovery после рестарта
+ *  in-memory очереди. */
+export function listPendingDeliveries(chatId: string, roleId: string) {
+  return pendingMessageDeliveries({ chatId, roleId });
+}
+
 export function enqueueChatReply<T>(
   chatId: string,
   roleId: string,

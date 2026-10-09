@@ -58,7 +58,15 @@ import {
 import {
   enqueueChatReply,
   getChatSessionId,
+  recordDurableDelivery,
+  pickDurableDelivery,
+  completeDurableDelivery,
+  bumpChatGeneration,
 } from "../runtime/chatSession.js";
+import {
+  currentChatGeneration,
+  fenceMessageDelivery,
+} from "../runtime/chatQueue.js";
 import {
   cancelChatRunsFor,
   startChatRun,
@@ -787,6 +795,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           text,
           hop: 0,
           mode,
+          idempotencyKey: readIdempotencyKey(req),
         });
       } catch (error) {
         console.warn(
@@ -911,6 +920,13 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         chatId,
         roleId,
       );
+
+      // Карточка ebc4d338: fence ответа от старой сессии. Любые
+      // pending в chat_message_queue со старым generation уходят в
+      // superseded — поздний ответ прежней Pi-сессии НЕ попадёт в
+      // новую. Это критично, когда в чате висит ответ старой
+      // модели и пользователь нажал «новая сессия».
+      bumpChatGeneration({ chatId, roleId, reason: "owner_new_session" });
 
       const id = uid();
       db.prepare(
@@ -1038,6 +1054,131 @@ function roleFromUserId(userId: string): RoleName | null {
   if (row.type !== "ai" || row.role !== "agent") return null;
   if (!row.role_key || !VALID_ROLES.has(row.role_key as RoleName)) return null;
   return row.role_key as RoleName;
+}
+
+/** Прочитать Idempotency-Key из HTTP-заголовков. HTTP-стандарт — `Idempotency-Key`,
+ *  наш внутренний псевдоним — `x-delivery-id`. Приоритет у HTTP-стандарта;
+ *  если заданы оба — берём `Idempotency-Key`. Возвращаем null, если оба
+ *  пустые или заданы не как непустые строки. Клиент контролирует дедуп:
+ *  повторная отправка с тем же ключом даст ровно одну доставку и один
+ *  ответ, даже если `message_id` у двух запросов разные (важно для
+ *  случая «упала сеть ДО того, как message_id вернулся в ответ»). */
+export function readIdempotencyKey(req: { headers: Record<string, unknown> }): string | null {
+  const headers = req.headers ?? {};
+  const candidates: string[] = [];
+  const idem = headers["idempotency-key"];
+  if (typeof idem === "string" && idem.trim()) candidates.push(idem.trim());
+  const xDelivery = headers["x-delivery-id"];
+  if (typeof xDelivery === "string" && xDelivery.trim()) candidates.push(xDelivery.trim());
+  return candidates[0] ?? null;
+}
+
+/** Проверить, не устарел ли ход по поколению; если устарел — поставить fence.
+ *  Возвращаем true, если запись была fence-нута (т.е. дальше её брать в
+ *  работу не надо). Используется в двух точках: до постановки в in-memory
+ *  очередь (холодный fence) и после Pi-ответа (горячий fence — пока
+ *  готовили, generation уже могла уехать через `/new-session`). */
+export function fenceDeliveryIfStale(deliveryId: string, expectedGeneration: number): boolean {
+  const row = db
+    .prepare(
+      `SELECT chat_id, role_id FROM chat_message_queue WHERE id = ?`,
+    )
+    .get(deliveryId) as
+    | { chat_id: string; role_id: string }
+    | undefined;
+  if (!row) return false;
+  const currentGen = currentChatGeneration(row.chat_id, row.role_id);
+  if (currentGen <= expectedGeneration) return false;
+  // pending или picked — fence-им обоих (chatQueue.fenceMessageDelivery это умеет).
+  fenceMessageDelivery(deliveryId);
+  return true;
+}
+
+/** Восстановление pending хода после рестарта процесса. Делает ТО ЖЕ,
+ *  что живой маршрут: pick до очереди, fence если поколение уже не то,
+ *  реальный Pi-вызов через deliverAgentReply, finally-close с разделением
+ *  success/failure. Возвращает `replyId` сохранённого ответа либо null,
+ *  если ход был fenced, Pi не выполнился, или роль дала сбой. */
+export async function recoverAgentDelivery(input: {
+  chatId: string;
+  roleId: string;
+  deliveryId: string;
+}): Promise<{ status: "done" | "failed" | "fenced" | "skipped"; replyId: string | null }> {
+  const { chatId, roleId, deliveryId } = input;
+  const row = db
+    .prepare(
+      `SELECT message_id, session_generation, status FROM chat_message_queue
+         WHERE id = ? AND chat_id = ? AND role_id = ?`,
+    )
+    .get(deliveryId, chatId, roleId) as
+    | { message_id: string | null; session_generation: number; status: string }
+    | undefined;
+  if (!row) return { status: "skipped", replyId: null };
+  if (row.status === "done" || row.status === "superseded" || row.status === "failed") {
+    return { status: "skipped", replyId: null };
+  }
+  // Fence: generation уже другая — не делаем Pi.
+  const currentGen = currentChatGeneration(chatId, roleId);
+  if (currentGen > row.session_generation) {
+    fenceMessageDelivery(deliveryId);
+    return { status: "fenced", replyId: null };
+  }
+  // message_id обязателен: без триггерного сообщения в БД Pi-вызов
+  // нечего формировать.
+  if (!row.message_id) {
+    fenceMessageDelivery(deliveryId);
+    return { status: "fenced", replyId: null };
+  }
+  const role = roleFromUserId(roleId);
+  if (!role) {
+    // Роль убрали из чата (или переименовали) — fence, а не
+    // вечный picked. Нечего отвечать, отправитель не существует.
+    fenceMessageDelivery(deliveryId);
+    return { status: "fenced", replyId: null };
+  }
+  // Уже «в работе» (picked) — второй раз не дёргаем Pi,
+  // иначе получим второй ответ. Recovery-sweep вызывается
+  // ДО того, как живые маршруты начали обрабатывать
+  // новые ходы; in-memory очередь пересоздана, поэтому
+  // pick ещё не выставлялся. Если всё же picked — пишем
+  // диагностику и пропускаем: пусть висит, дожмёт другой
+  // гонщик при следующем старте.
+  if (row.status === "picked") {
+    return { status: "skipped", replyId: null };
+  }
+  // pick ДО постановки в очередь: так БД честно показывает,
+  // что ход в работе, а значит — рестарт в этот момент не
+  // приведёт к двойному Pi-вызову.
+  pickDurableDelivery(deliveryId);
+  let replyId: string | null = null;
+  try {
+    replyId = await enqueueChatReply(chatId, roleId, () =>
+      deliverAgentReply({
+        chatId,
+        role,
+        triggerMessageId: row.message_id!,
+        hop: 0,
+      }),
+    );
+    // Двойная проверка fence: пока готовили ответ, generation
+    // могла уехать. Тогда закрываем как superseded и не светится
+    // как success.
+    if (fenceDeliveryIfStale(deliveryId, row.session_generation)) {
+      return { status: "fenced", replyId: null };
+    }
+    // Pi не выдал ответа — ход закрываем как failed, чтобы
+    // он не висел picked-вечно.
+    const ok = replyId !== null;
+    completeDurableDelivery(deliveryId, ok);
+    return { status: ok ? "done" : "failed", replyId };
+  } catch (error) {
+    console.warn(
+      `[chats] recovery ход ${deliveryId} chat=${chatId} role=${role} не закрыт успешно:`,
+      error instanceof Error ? error.message : error,
+    );
+    completeDurableDelivery(deliveryId, false);
+    return { status: "failed", replyId: null };
+  }
 }
 
 /** Распарсить явное @упоминание роли в тексте. Возвращает первую
@@ -1297,6 +1438,10 @@ async function dispatchRoleReplies(args: {
   text: string;
   hop: number;
   mode?: ChatWorkMode;
+  /** HTTP-Idempotency-Key из заголовков POST /messages.
+   *  Приоритет над `messageId` как deliveryId — повторная отправка
+   *  с тем же ключом даст ровно один durable ход и один Pi-вызов. */
+  idempotencyKey?: string | null;
 }): Promise<void> {
   const { chatId, text } = args;
   const senderRole = roleFromUserId(args.fromUserId);
@@ -1343,16 +1488,86 @@ async function dispatchRoleReplies(args: {
     if (!accountId) continue;
     // Очередь на (chat_id, role_id): два быстрых сообщения подряд одной
     // роли отвечаются по порядку, контекст сессии не перемешивается.
-    void enqueueChatReply(chatId, accountId, () =>
-      deliverAgentReply({
-        chatId,
-        role,
+    //
+    // Карточка ebc4d338 (queue): перед постановкой в in-memory очередь
+    // обязательно фиксируем durable-лог в chat_message_queue. Без этого
+    // рестарт процесса между POST и Pi-ответом съест ход.
+    // delivery_id — обычно id сообщения (сохраняет однократность даже
+    // при сетевом retry POST). Если клиент прислал свой
+    // Idempotency-Key, используем его как deliveryId
+    // (HTTP-заголовок `x-delivery-id` или `Idempotency-Key` —
+    // клиент контролирует дедуп сам, в т.ч. если messageId ещё
+    // не вернулся в ответ). Сообщение же продолжаем привязывать
+    // по messageId — это ключ для триггера `reply_to_message_id`
+    // и history.
+    const idempotencyKey = args.idempotencyKey ?? null;
+    const deliveryKey = idempotencyKey ?? args.messageId;
+    const durableRecord = recordDurableDelivery({
+      chatId,
+      roleId: accountId,
+      deliveryId: deliveryKey,
+      messageId: args.messageId,
+      payload: {
         triggerMessageId: args.messageId,
+        text,
         subtaskId: selectedSlot,
         hop: args.hop,
         mode: args.mode,
-      }),
-    );
+      },
+    });
+    // Идемпотентный повтор: тот же delivery_id уже в работе. Не
+    // дублируем in-memory очередь — это бы создало второй ответ. Но и
+    // не молчим: «уже принято» — нормальный сценарий повторной отправки
+    // при сетке.
+    if (!durableRecord.created) continue;
+    pickDurableDelivery(durableRecord.id);
+    // Перед постановкой в очередь проверяем generation fence: ход
+    // мог устареть, пока ждал durable-записи (например, пришёл
+    // `/new-session` ровно в этот момент). Если generation уже
+    // другая — fence-им до постановки в in-memory очередь, и
+    // никакого Pi-вызова не будет.
+    if (fenceDeliveryIfStale(durableRecord.id, durableRecord.generation)) continue;
+    void enqueueChatReply(chatId, accountId, async () => {
+      try {
+        const replyId = await deliverAgentReply({
+          chatId,
+          role,
+          triggerMessageId: args.messageId,
+          subtaskId: selectedSlot,
+          hop: args.hop,
+          mode: args.mode,
+        });
+        // Повторная проверка fence ПОСЛЕ Pi-ответа: пока мы
+        // готовили ответ, generation могла измениться (пользователь
+        // успел нажать /new-session). Ответ из старого run'а
+        // публиковать нельзя — он пойдёт старой сессии.
+        // Закрываем ход как superseded и не светится в
+        // result: finishDelivery тут уже не вызываем.
+        if (fenceDeliveryIfStale(durableRecord.id, durableRecord.generation)) {
+          return null;
+        }
+        // Pi не выдал ответа (Pi-сбой, общий чат и т.п.) —
+        // ход закрываем как failed, чтобы он не висел
+        // picked-вечно и попал под recovery / обработку
+        // ошибки владельцем.
+        const ok = replyId !== null;
+        completeDurableDelivery(durableRecord.id, ok);
+        return replyId;
+      } catch (error) {
+        // Pi-исполнение должно было вернуть null и обработать
+        // ошибку внутри (deliverAgentReply ловит Pi-сбои и
+        // шлёт сообщение «Ой, что-то пошло не так…»), но если
+        // что-то пошло не так снаружи — фиксируем failed,
+        // чтобы ход не висел picked вечно и попал под
+        // следующий recovery-sweep.
+        console.warn(
+          `[chats] ход ${durableRecord.id} chat=${chatId} role=${role} не закрыт успешно:`,
+          error instanceof Error ? error.message : error,
+        );
+        completeDurableDelivery(durableRecord.id, false);
+        return null;
+      }
+    });
   }
 }
 
@@ -1640,6 +1855,10 @@ async function deliverAgentReply(args: {
         text: replyText,
         hop: args.hop + 1,
         mode: args.mode,
+        // При передаче слова клиентского ключа уже нет; на
+        // стороне сервера используем replyId, чтобы сеть
+        // дублей между Pi-ретраями не плодила Pi.
+        idempotencyKey: replyId,
       });
     } catch (error) {
       console.warn(
