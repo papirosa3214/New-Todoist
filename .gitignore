@@ -107,6 +107,10 @@ server/agent-watch.state.json
 # Локальная БД разработки (SQLite, регенерируется миграциями)
 server/dev.db
 
+# Артефактные БД тестов vitest, которые tsc иногда оставляет в test/. Регенерируются.
+server/test/test.db*
+server/test/*.db-journal
+
 # Кэш инкрементальной компиляции TypeScript — регенерируется tsc
 *.tsbuildinfo
 

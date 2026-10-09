@@ -50,7 +50,38 @@ export type PlanSubtask = {
   plan_node_key: string | null;
   /** MAK-77: модель шага («провайдер/модель»); NULL — по настройкам роли. */
   model?: string | null;
+  /** Карточка 8aa95906 (admission): durable fingerprint текущего gate. NULL
+   *  означает «нет активной попытки — можно открыть в новом цикле»; иначе
+   *  сравнивается при claim через UPDATE WHERE admission_fingerprint=?. */
+  admission_fingerprint?: string | null;
+  /** Номер текущего цикла доработки. Увеличивается при changes_requested,
+   *  чтобы старые попытки из прежнего цикла не активировали узел заново. */
+  admission_cycle?: number;
 };
+
+/** Сравнить узел с ранее сохранённым fingerprint. Возвращает true, если
+ *  либо fingerprint ещё не задан (первая попытка цикла), либо совпадает с
+ *  ожидаемым (та же идентичность — повторный вызов после сбоя). */
+function fingerprintMatches(row: PlanSubtask, expected: string | null): boolean {
+  if (row.admission_fingerprint === undefined) {
+    // старая схема без поля — для обратной совместимости считаем «совпадает»
+    return true;
+  }
+  return row.admission_fingerprint === null || row.admission_fingerprint === expected;
+}
+
+/** Построить fingerprint текущего gate: task_id|plan_id|slot|cycle|cycle_of_predecessors. */
+function computeAdmissionFingerprint(input: {
+  taskId: string;
+  planId: string | null;
+  slotKey: string | null;
+  cycle: number;
+  predecessorFingerprint?: string | null;
+}): string {
+  const hash = crypto.createHash("sha256");
+  hash.update(`${input.taskId}|${input.planId ?? ""}|${input.slotKey ?? ""}|${input.cycle}|${input.predecessorFingerprint ?? ""}`);
+  return hash.digest("hex").slice(0, 32);
+}
 
 type ArtifactVersion = {
   id: string;
@@ -190,8 +221,25 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
     if(!latest||latest.done||latest.agent_state||!canPlanSubtaskBecomeReady(latest))return false;
     if(db.prepare("SELECT 1 FROM attempts WHERE subtask_id=? AND ended_at IS NULL").get(current.id))return false;
     db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at,heartbeat_at) VALUES(?,?,?,?,datetime('now'),datetime('now'))").run(attemptId,current.task_id,current.id,roleUserId(node.role_key));
-    const changed=db.prepare("UPDATE subtasks SET agent_state='in_progress',agent_id=?,current_attempt_id=?,agent_heartbeat_at=datetime('now') WHERE id=? AND done=0 AND agent_state IS NULL").run(roleUserId(node.role_key),attemptId,current.id);
-    if(changed.changes!==1)throw new Error("Слот уже запущен");
+    // Карточка 8aa95906 (admission): durable fingerprint.
+    // Сравниваем по (agent_state IS NULL AND done=0 AND
+    // (admission_fingerprint IS NULL OR admission_fingerprint = ?)).
+    // Fingerprint остаётся ненулевым до конца попытки, чтобы повторный
+    // claim для той же subtask_id упирался в UNIQUE-индекс attempts
+    // (см. db.ts, idx_attempts_one_active_per_subtask) и в фильтр
+    // fingerprint. На новый цикл fingerprint сбрасывается в
+    // closeOpenCriticPlanNode(changes_requested) рядом с инкрементом
+    // admission_cycle.
+    const expectedFingerprint = latest.admission_fingerprint ?? null;
+    const newFingerprint = computeAdmissionFingerprint({
+      taskId: current.task_id,
+      planId: current.collaboration_plan_id,
+      slotKey: current.plan_node_key,
+      cycle: (latest.admission_cycle ?? 0) + 1,
+      predecessorFingerprint: expectedFingerprint,
+    });
+    const changed=db.prepare(`UPDATE subtasks SET agent_state='in_progress',agent_id=?,current_attempt_id=?,agent_heartbeat_at=datetime('now'),admission_cycle=COALESCE(admission_cycle,0)+1,admission_fingerprint=? WHERE id=? AND done=0 AND agent_state IS NULL AND (admission_fingerprint IS NULL OR admission_fingerprint = ?)`).run(roleUserId(node.role_key),attemptId,newFingerprint,current.id,expectedFingerprint);
+    if(changed.changes!==1)throw new Error("Слот уже запущен или его входные данные изменились");
     return true;
   })();
   if(!acquired)return {ok:false,error:"Слот уже запущен или его входные данные изменились"};
@@ -742,6 +790,16 @@ export function closeOpenCriticPlanNode(
   // привязывается только к нему, и предшествующие рабочие узлы не
   // попадают в `currentSegment` → `planReworkGraph` кидает ошибку).
   if (verdict === "changes_requested") {
+    // Карточка 8aa95906 (admission): новый цикл доработки. Прежний
+    // admission_fingerprint, если он остался на узлах этого плана, уже не
+    // отражает актуальный gate — вердикт изменил ожидания. Сбрасываем
+    // fingerprint и инкрементируем admission_cycle у узлов, которые ещё
+    // не закрыты и ждут повторной попытки. Уже сданные (`done=1`) узлы
+    // не трогаем — им не нужно нольле работы, и их предыдущие attempt'ы
+    // остаются привязанными к своим циклам. Rework-узлы (только что
+    // созданные) получат fingerprint естественным путём при первом
+    // startPlanSubtaskRun.
+    db.prepare(`UPDATE subtasks SET admission_cycle = COALESCE(admission_cycle, 0) + 1, admission_fingerprint = NULL WHERE collaboration_plan_id = ? AND done = 0`).run(plan.id);
     try {
       openReworkFromCritic(taskId, plan.id, row, findings, requestedTargets ?? []);
     } catch (error) {

@@ -3830,6 +3830,18 @@ const migrations: Migration[] = [
     db.prepare("UPDATE roles SET prompt=prompt || ? WHERE length(trim(coalesce(prompt,'')))>0 AND instr(prompt,'## Подключённые HTML-панели в iOS')=0").run("\n\n## Подключённые HTML-панели в iOS\nЧтобы кнопка HTML-панели выполняла действие на сервере .110, вызывай в обработчике нажатия `const result = await TaskFlow.runCommand(command)`; command — точная Bash-команда строкой. Вызов делается сразу после нажатия, до первого другого await. Приложение само покажет владельцу нативное подтверждение и выполнит команду после его согласия. Promise вернёт {outcome, stdout, stderr, exitCode, durationSeconds, requestId}, либо отклонится при отмене/ошибке. Показывай настоящий результат в панели через textContent, обрабатывай catch и блокируй кнопку до finally. Не запускай действия при загрузке страницы, по таймеру или автоматически. Не проси токен и не делай fetch к API. Не обещай подключённое действие, если не используешь этот мост. Для Mac/iPhone этот мост не подходит — команды выполняются только на .110.\nПример: `<button onclick=\"run(this)\">Проверить сервер</button><pre id=\"result\"></pre><script>async function run(b){b.disabled=true;try{const r=await TaskFlow.runCommand(\"uptime\");document.getElementById(\"result\").textContent=r.stdout+\"; код \"+r.exitCode}catch(e){document.getElementById(\"result\").textContent=e.message}finally{b.disabled=false}}</script>`.\n");
   } },
 
+  { id: "123_plan_subtask_admission_fingerprint", description: "Admission: durable fingerprint и admission_cycle на узлах плана. Идемпотентный claim через атомарный compare-and-swap по fingerprint; различение нового цикла доработки (changes_requested) от старого. Карточка 8aa95906 (admission).", up() {
+    const info = db.prepare("PRAGMA table_info(subtasks)").all() as Array<{ name: string }>;
+    const has = (name: string) => info.some((c) => c.name === name);
+    if (!has("admission_fingerprint")) {
+      db.exec("ALTER TABLE subtasks ADD COLUMN admission_fingerprint TEXT");
+    }
+    if (!has("admission_cycle")) {
+      db.exec("ALTER TABLE subtasks ADD COLUMN admission_cycle INTEGER NOT NULL DEFAULT 0");
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_subtasks_plan_admission_cycle ON subtasks(collaboration_plan_id, admission_cycle) WHERE collaboration_plan_id IS NOT NULL");
+  } },
+
 ];
 
 /**
