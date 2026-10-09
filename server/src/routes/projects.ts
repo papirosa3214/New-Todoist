@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
-import { purgeTasks } from "../lib/taskPurge.js";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { snapshotFor } from "../activeAgent.js";
@@ -602,9 +601,30 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       const purge = db.transaction(() => {
         // Карточки проекта со всем, что на них держится, — общей функцией:
         // она разрывает кольцо ссылок «подзадача ↔ план» (lib/taskPurge.ts).
-        purgeTasks(
-          (db.prepare("SELECT id FROM tasks WHERE project_id = ?").all(req.params.id) as Array<{ id: string }>).map((r) => r.id),
-        );
+        // Владелец 10.10.2026: проект — пустая оболочка, все данные живут
+        // в карточках. Поэтому удаление проекта НЕ стирает задачи, а
+        // складывает их в архив; имя проекта остаётся в карточке как
+        // исторический снимок. Стирание остаётся только явным шагом по
+        // отдельным задачам в самом архиве.
+        db.prepare(
+          `UPDATE tasks
+              SET project_name_snapshot = COALESCE(project_name_snapshot, ?),
+                  archived_at = COALESCE(archived_at, datetime('now')),
+                  archived_by = COALESCE(archived_by, ?)
+            WHERE project_id = ? AND archived_at IS NULL`,
+        ).run(project.name, req.userId, req.params.id);
+        // Снимаем запущенные роли и снимаем блокировки: задача уходит в
+        // архив, а не зависает с живым агентом.
+        db.prepare(
+          `UPDATE tasks SET agent_state = NULL, agent_heartbeat_at = NULL
+            WHERE project_id = ? AND agent_state IS NOT NULL`,
+        ).run(req.params.id);
+        // Ссылку на папку снимаем: у tasks внешний ключ на projects с
+        // NO ACTION, без этого удаление папки падает. Имя уже лежит в
+        // снимке выше, так что карточка ничего не теряет.
+        db.prepare(
+          "UPDATE tasks SET project_id = NULL WHERE project_id = ?",
+        ).run(req.params.id);
         // Чаты и память проекта — каскадом от projects, но проект пока не
         // удаляем (он уйдёт ниже) — чистим явно, чтобы не зависеть от
         // порядка каскадов в SQLite.
