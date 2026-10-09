@@ -36,6 +36,20 @@ export function purgeTasks(taskIds: string[]): number {
     // подзадачи на этих планах и чужие шаги на этих подзадачах.
     db.exec(`UPDATE subtasks SET collaboration_plan_id = NULL WHERE task_id IN ${SET} OR collaboration_plan_id IN ${PLANS}`);
     db.exec(`UPDATE task_collaboration_plan_nodes SET source_subtask_id = NULL WHERE source_subtask_id IN (SELECT id FROM subtasks WHERE task_id IN ${SET})`);
+    // Сначала удалить ноды и эджи планов задач из SET. Их AFTER-триггеры
+    // tf_realtime_task_collaboration_plan_{nodes,edges}_DELETE (см.
+    // lib/realtimeInvalidation.ts) берут task_id плана через подзапрос
+    // (SELECT task_id FROM task_collaboration_plans WHERE id=ROW.plan_id).
+    // Если сначала удалить сам план (следующий DELETE) — каскад снесёт
+    // ноды/эджи и подзапрос вернёт NULL → COALESCE даст '', а две разные
+    // таблицы для одного (topic,'') дают UNIQUE-конфликт в
+    // tf_realtime_dirty. Удаляя ноды/эджи заранее, мы успеваем снять
+    // dirty по реальному task_id плана, а сам план потом при своём DELETE
+    // повторяет запись (она идемпотентна). Сценарий-источник — purge
+    // grandchild с планом совместной работы в архивном дереве
+    // (parent→child→grandchild), карточка 57c69735, P0 server 2026-10-09.
+    db.exec(`DELETE FROM task_collaboration_plan_edges WHERE plan_id IN ${PLANS}`);
+    db.exec(`DELETE FROM task_collaboration_plan_nodes WHERE plan_id IN ${PLANS}`);
     db.exec(`DELETE FROM task_collaboration_plans WHERE task_id IN ${SET}`);
     db.exec(`DELETE FROM consultation_log WHERE task_id IN ${SET} OR attempt_id IN (SELECT id FROM attempts WHERE task_id IN ${SET})`);
     for (const table of ["task_embeddings", "task_events", "notifications"]) {
