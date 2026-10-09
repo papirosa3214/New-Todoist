@@ -794,10 +794,14 @@ export type WakeCommandRunner = (threadId: string, message: string) => Promise<W
  *  пишем рядом с `tf_webhook_proto.py`. В тестах заменяем через
  *  dependency injection. */
 async function defaultRunner(threadId: string, message: string): Promise<WakeCommandResult> {
+  // defaultRunner живёт в server/src/lib/, скрипт — в корне репозитория
+  // (`scripts/orchestrator/tf_wake_dispatch.py` рядом с `tf_webhook_proto.py`).
+  // Три `..` поднимаются до корня worktree, а не до `server/`.
   const scriptPath = path.join(
     process.env.TASKFLOW_CODEX_WAKE_SCRIPT ||
       path.resolve(
         path.dirname(fileURLToPath(import.meta.url)),
+        "..",
         "..",
         "..",
         "scripts",
