@@ -23,6 +23,7 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForWrite } from "../access.js";
 import { callUnifiedAi } from "./ai.js";
+import { runConsultationChain } from "../lib/consultationChain.js";
 import {
   CONSULTATION_REASONS,
   recordConsultationSuggestion,
@@ -54,6 +55,22 @@ function resolveConsultant(
   return { provider: "claude", aiModel: name };
 }
 
+/** Карточка 412f89f4: явное указание «auto» или любое нераспознанное имя
+ *  консультанта, начинающееся с известного префикса ступени (opus, gpt, go)
+ *  включает серверную fallback-цепочку Opus→SOL→OpenCode-Go.
+ *  Короткие алиасы CONSULTANT_MODEL_MAP — обратная совместимость и НЕ
+ *  триггерят цепочку: они ходят в callUnifiedAi, как раньше. */
+function consultationShouldUseChain(name: string): boolean {
+  const k = name.trim().toLowerCase();
+  if (!k) return true; // пусто == дефолт
+  if (k === "auto") return true;
+  if (CONSULTANT_MODEL_MAP[k]) return false;
+  // Явное имя модели провайдера claude — обратная совместимость через
+  // callUnifiedAi. Иначе пробуем цепочку (например «opus» в нижнем регистре
+  // совпадает с CONSULTANT_MODEL_MAP — цепочки не будет).
+  return k !== "claude";
+}
+
 type ConsultTask = { id: string; title: string; description?: string | null; status: string; assignee_id?: string | null };
 type ConsultAttempt = { id: string; consultation_count: number; model: string | null; runner: string | null };
 
@@ -67,8 +84,8 @@ export async function performConsultation(args: {
   agentContext: unknown;
   triggeredBy: string;
 }): Promise<
-  | { ok: true; success: { consultation_id: string; answer: string; duration_ms: number; model: string; consultation_count: number } }
-  | { ok: false; failure: { error: string; consultation_id: string; duration_ms: number; consultation_count: number } }
+  | { ok: true; success: { consultation_id: string; answer: string; duration_ms: number; model: string; consultation_count: number; actual_provider?: string | null; actual_model?: string | null; chain_attempts?: Array<{ stepKey: string; provider: string; model: string; outcome: string; message?: string; durationMs: number }> } }
+  | { ok: false; failure: { error: string; consultation_id: string; duration_ms: number; consultation_count: number; chain_attempts?: Array<{ stepKey: string; provider: string; model: string; outcome: string; message?: string; durationMs: number }> } }
 > {
   const { task, attempt, consultantModel, question, triggeredBy } = args;
   const used = attempt.consultation_count;
@@ -103,28 +120,61 @@ export async function performConsultation(args: {
   const startedAt = Date.now();
   let answer = "";
   let errorMsg: string | null = null;
-  try {
-    answer = await callUnifiedAi({
+  let chainSummary: Array<{ stepKey: string; provider: string; model: string; outcome: string; message?: string; durationMs: number }> = [];
+  let actualProvider: string | null = null;
+  let actualModel: string | null = null;
+  if (consultationShouldUseChain(consultantModel)) {
+    // Карточка 412f89f4: серверная fallback-цепочка Opus→SOL→OpenCode-Go.
+    const chainResult = await runConsultationChain({
       systemPrompt: CONSULTANT_SYSTEM_PROMPT,
       userPrompt: JSON.stringify(contextPayload, null, 2),
-      provider: route.provider,
-      aiModel: route.aiModel,
-      localModel: route.localModel,
-      temperature: 0.2,
       predictTokens: 1500,
+      temperature: 0.2,
     });
-  } catch (e) {
-    errorMsg = e instanceof Error ? e.message : String(e);
+    chainSummary = chainResult.attempts.map((a) => ({
+      stepKey: a.stepKey,
+      provider: a.provider,
+      model: a.model,
+      outcome: a.outcome,
+      message: a.message,
+      durationMs: a.durationMs,
+    }));
+    if (chainResult.ok && chainResult.winner) {
+      answer = chainResult.answer!;
+      actualProvider = chainResult.winner.provider;
+      actualModel = chainResult.winner.model;
+    } else {
+      errorMsg = chainResult.error ?? "все ступени цепочки недоступны";
+    }
+  } else {
+    // Прежнее поведение — одиночный callUnifiedAi. Используется только для
+    // совместимости (старые алиасы sonnet/haiku и тесты на них).
+    try {
+      answer = await callUnifiedAi({
+        systemPrompt: CONSULTANT_SYSTEM_PROMPT,
+        userPrompt: JSON.stringify(contextPayload, null, 2),
+        provider: route.provider,
+        aiModel: route.aiModel,
+        localModel: route.localModel,
+        temperature: 0.2,
+        predictTokens: 1500,
+      });
+      actualProvider = route.provider;
+      actualModel = route.aiModel ?? route.localModel ?? null;
+    } catch (e) {
+      errorMsg = e instanceof Error ? e.message : String(e);
+    }
   }
   const durationMs = Date.now() - startedAt;
 
   // Логируем ВСЕГДА (включая неудачные), чтобы аудит видел причины
-  // отказов провайдера.
+  // отказов провайдера. Карточка 412f89f4: actual_provider/actual_model/
+  // chain_attempts фиксируют фактический путь.
   db.prepare(
     `INSERT INTO consultation_log
        (id, attempt_id, task_id, consultant_model, question, context_json,
-        answer, duration_ms, triggered_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        answer, duration_ms, triggered_by, actual_provider, actual_model, chain_attempts)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     consultationId,
     attempt.id,
@@ -135,6 +185,9 @@ export async function performConsultation(args: {
     answer || null,
     durationMs,
     errorMsg ? `error:${triggeredBy}` : triggeredBy,
+    actualProvider,
+    actualModel,
+    chainSummary.length ? JSON.stringify(chainSummary) : null,
   );
 
   // Счётчик — только при успешном вызове: отказ провайдера не съедает лимит.
@@ -144,12 +197,29 @@ export async function performConsultation(args: {
     ).run(attempt.id);
     return {
       ok: true,
-      success: { consultation_id: consultationId, answer, duration_ms: durationMs, model: consultantModel, consultation_count: used + 1 },
+      success: {
+        consultation_id: consultationId,
+        answer,
+        duration_ms: durationMs,
+        model: consultantModel,
+        consultation_count: used + 1,
+        // Карточка 412f89f4: возвращаем фактические провайдер/модель и
+        // список попыток, чтобы агент сразу видел, кто ответил.
+        actual_provider: actualProvider,
+        actual_model: actualModel,
+        chain_attempts: chainSummary,
+      },
     };
   }
   return {
     ok: false,
-    failure: { error: `consultant model error: ${errorMsg}`, consultation_id: consultationId, duration_ms: durationMs, consultation_count: used },
+    failure: {
+      error: `consultant model error: ${errorMsg}`,
+      consultation_id: consultationId,
+      duration_ms: durationMs,
+      consultation_count: used,
+      chain_attempts: chainSummary,
+    },
   };
 }
 
