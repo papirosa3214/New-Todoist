@@ -3966,6 +3966,28 @@ const migrations: Migration[] = [
   },
 
 
+{ id: "124_plan_subtask_admission_fingerprint", description: "Admission: durable fingerprint и admission_cycle на узлах плана. Идемпотентный claim через атомарный compare-and-swap по fingerprint; различение нового цикла доработки (changes_requested) от старого. Карточка 8aa95906 (admission).", up() {
+    const info = db.prepare("PRAGMA table_info(subtasks)").all() as Array<{ name: string }>;
+    const has = (name: string) => info.some((c) => c.name === name);
+    if (!has("admission_fingerprint")) {
+      db.exec("ALTER TABLE subtasks ADD COLUMN admission_fingerprint TEXT");
+    }
+    if (!has("admission_cycle")) {
+      db.exec("ALTER TABLE subtasks ADD COLUMN admission_cycle INTEGER NOT NULL DEFAULT 0");
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_subtasks_plan_admission_cycle ON subtasks(collaboration_plan_id, admission_cycle) WHERE collaboration_plan_id IS NOT NULL");
+  } },
+  { id: "125_task_project_name_snapshot", description: "Снимок имени проекта в задаче. Удаление проекта складывает его задачи в архив вместо безвозвратного стирания (владелец 10.10.2026: проект — пустая оболочка, восстанавливать нечего, проще создать новый). Имя остаётся в карточке историческим следом.", up() {
+    const info = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!info.some((c) => c.name === "project_name_snapshot")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN project_name_snapshot TEXT");
+    }
+    // Заполняем снимок у живых задач, чтобы переименование папки не стирало
+    // прежнее имя в уже сохранённой истории.
+    db.exec(`UPDATE tasks SET project_name_snapshot = (
+      SELECT p.name FROM projects p WHERE p.id = tasks.project_id
+    ) WHERE project_id IS NOT NULL AND project_name_snapshot IS NULL`);
+  } },
 ];
 /**
  * Опции прогона миграций.
@@ -4038,18 +4060,7 @@ function runMigrationsInner(options?: RunMigrationsOptions): void {
 
   for (let i = 0; i < migrations.length; i++) {
     if (stopIndex >= 0 && i > stopIndex) break;
-    const m = migrations[i{ id: "124_plan_subtask_admission_fingerprint", description: "Admission: durable fingerprint и admission_cycle на узлах плана. Идемпотентный claim через атомарный compare-and-swap по fingerprint; различение нового цикла доработки (changes_requested) от старого. Карточка 8aa95906 (admission).", up() {
-    const info = db.prepare("PRAGMA table_info(subtasks)").all() as Array<{ name: string }>;
-    const has = (name: string) => info.some((c) => c.name === name);
-    if (!has("admission_fingerprint")) {
-      db.exec("ALTER TABLE subtasks ADD COLUMN admission_fingerprint TEXT");
-    }
-    if (!has("admission_cycle")) {
-      db.exec("ALTER TABLE subtasks ADD COLUMN admission_cycle INTEGER NOT NULL DEFAULT 0");
-    }
-    db.exec("CREATE INDEX IF NOT EXISTS idx_subtasks_plan_admission_cycle ON subtasks(collaboration_plan_id, admission_cycle) WHERE collaboration_plan_id IS NOT NULL");
-  } }
-];
+    const m = migrations[i];
     if (applied.has(m.id)) continue;
     if (m.noTransaction) {
       // Транзакцию такая миграция держит внутри себя — см. Migration.noTransaction.

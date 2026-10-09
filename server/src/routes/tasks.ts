@@ -204,7 +204,7 @@ export function withSubtaskState(s: any) {
 // разбор надиктовки.
 export const TASK_COLUMNS = `t.*, u.name as assignee_name, u.type as assignee_type, u.role as assignee_role, u.avatar_color as assignee_color, u.avatar_url as assignee_avatar_url, u.initials as assignee_initials,
              c.name as creator_name, c.type as creator_type, c.role as creator_role, c.avatar_color as creator_color, c.avatar_url as creator_avatar_url, c.initials as creator_initials,
-             p.name as project_name, p.color as project_color,
+             COALESCE(t.project_name_snapshot, p.name) as project_name, p.color as project_color,
              (SELECT COUNT(*) FROM tasks ch WHERE ch.parent_id = t.id) as children_count,
              EXISTS(SELECT 1 FROM task_collaboration_plans cp WHERE cp.task_id = t.id AND cp.status = 'approved') as has_collaboration_plan,
              (SELECT 'role_' || n.role_key FROM subtasks s
