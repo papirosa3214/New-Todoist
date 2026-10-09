@@ -58,6 +58,10 @@ import {
 import {
   enqueueChatReply,
   getChatSessionId,
+  recordDurableDelivery,
+  pickDurableDelivery,
+  completeDurableDelivery,
+  bumpChatGeneration,
 } from "../runtime/chatSession.js";
 import {
   cancelChatRunsFor,
@@ -912,6 +916,13 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         roleId,
       );
 
+      // Карточка ebc4d338: fence ответа от старой сессии. Любые
+      // pending в chat_message_queue со старым generation уходят в
+      // superseded — поздний ответ прежней Pi-сессии НЕ попадёт в
+      // новую. Это критично, когда в чате висит ответ старой
+      // модели и пользователь нажал «новая сессия».
+      bumpChatGeneration({ chatId, roleId, reason: "owner_new_session" });
+
       const id = uid();
       db.prepare(
         `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, is_session_marker)
@@ -1343,6 +1354,32 @@ async function dispatchRoleReplies(args: {
     if (!accountId) continue;
     // Очередь на (chat_id, role_id): два быстрых сообщения подряд одной
     // роли отвечаются по порядку, контекст сессии не перемешивается.
+    //
+    // Карточка ebc4d338 (queue): перед постановкой в in-memory очередь
+    // обязательно фиксируем durable-лог в chat_message_queue. Без этого
+    // рестарт процесса между POST и Pi-ответом съест ход.
+    // delivery_id — обычно id сообщения (сохраняет однократность даже
+    // при сетевом retry POST). Если клиент прислал свой
+    // Idempotency-Key через x-delivery-id, его подхватит fastify-pre.
+    const durableRecord = recordDurableDelivery({
+      chatId,
+      roleId: accountId,
+      deliveryId: args.messageId,
+      messageId: args.messageId,
+      payload: {
+        triggerMessageId: args.messageId,
+        text,
+        subtaskId: selectedSlot,
+        hop: args.hop,
+        mode: args.mode,
+      },
+    });
+    // Идемпотентный повтор: тот же delivery_id уже в работе. Не
+    // дублируем in-memory очередь — это бы создало второй ответ. Но и
+    // не молчим: «уже принято» — нормальный сценарий повторной отправки
+    // при сетке.
+    if (!durableRecord.created) continue;
+    pickDurableDelivery(durableRecord.id);
     void enqueueChatReply(chatId, accountId, () =>
       deliverAgentReply({
         chatId,
@@ -1352,7 +1389,11 @@ async function dispatchRoleReplies(args: {
         hop: args.hop,
         mode: args.mode,
       }),
-    );
+    ).finally(() => {
+      // Отметка о завершении хода. err сам обработан внутри
+      // deliverAgentReply, а нам важен сам факт «ход закрыт».
+      completeDurableDelivery(durableRecord.id, true);
+    });
   }
 }
 

@@ -3826,6 +3826,55 @@ const migrations: Migration[] = [
     `);
     db.prepare("UPDATE roles SET prompt=prompt || ? WHERE length(trim(coalesce(prompt,'')))>0 AND instr(prompt,'Команды владельцу — формат выдачи')=0").run("\n\n## Команды владельцу — формат выдачи\nКоманды для сервера .110 выдавай отдельным закрытым блоком bash: одна команда на блок, без приглашения $ и без ожидаемого вывода. Это позволяет владельцу подтвердить запуск кнопкой Play в iOS. Для команд Mac/iPhone явно укажи другую машину и используй блок с меткой zsh, чтобы не предлагать запуск на .110.\n");
   } },
+  // ebc4d338 (queue, 09.10.2026): durable очередь сообщений роли +
+  // generation fence. in-memory Map в chatSession.ts после рестарта
+  // теряет неотработанные ходы на (chat_id, role_id); повторная
+  // доставка POST и хвост старой Pi-сессии пропускаются насквозь.
+  //
+  // Два слоя:
+  //   1. `chat_message_queue` — pending/picked ход на пару (chat, role):
+  //      переживает рестарт, дедуп по `(chat_id, role_id, delivery_id)`,
+  //      хранит `session_generation` на момент принятия.
+  //   2. `chat_session_generation` — текущий generation пары: инкремент
+  //      при `/new-session` или при фактическом крахе Pi. Ход из старой
+  //      generation не применяется, а помечается `superseded` с записью
+  //      в `task_events`.
+  //
+  // Внешние ключи: chat_id → chats(id) ON DELETE CASCADE; role_id →
+  // users(id) ON DELETE CASCADE. delivery_id — текстовый ключ дедупа
+  // (по умолчанию message_id, но клиент может прислать свой
+  // `Idempotency-Key` через x-delivery-id).
+  { id: "123_chat_message_queue_and_generation", description: "Карточка ebc4d338-…: durable очередь ходов роли + generation fence для пар (chat, role)", up: () => {
+    db.exec(`CREATE TABLE IF NOT EXISTS chat_message_queue(
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      delivery_id TEXT NOT NULL,
+      message_id TEXT REFERENCES chat_messages(id) ON DELETE CASCADE,
+      session_generation INTEGER NOT NULL DEFAULT 1,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','picked','done','failed','superseded')),
+      picked_at TEXT,
+      finished_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_message_queue_dedupe
+      ON chat_message_queue(chat_id, role_id, delivery_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_message_queue_ready
+      ON chat_message_queue(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_chat_message_queue_session
+      ON chat_message_queue(chat_id, role_id, status, session_generation);
+
+    CREATE TABLE IF NOT EXISTS chat_session_generation(
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      role_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      generation INTEGER NOT NULL DEFAULT 1,
+      bumped_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (chat_id, role_id)
+    );`);
+  } },
+
   { id: "122_html_panel_command_contract", description: "Подключённые HTML-панели: контракт TaskFlow.runCommand в непустых DB-инструкциях ролей", up() {
     db.prepare("UPDATE roles SET prompt=prompt || ? WHERE length(trim(coalesce(prompt,'')))>0 AND instr(prompt,'## Подключённые HTML-панели в iOS')=0").run("\n\n## Подключённые HTML-панели в iOS\nЧтобы кнопка HTML-панели выполняла действие на сервере .110, вызывай в обработчике нажатия `const result = await TaskFlow.runCommand(command)`; command — точная Bash-команда строкой. Вызов делается сразу после нажатия, до первого другого await. Приложение само покажет владельцу нативное подтверждение и выполнит команду после его согласия. Promise вернёт {outcome, stdout, stderr, exitCode, durationSeconds, requestId}, либо отклонится при отмене/ошибке. Показывай настоящий результат в панели через textContent, обрабатывай catch и блокируй кнопку до finally. Не запускай действия при загрузке страницы, по таймеру или автоматически. Не проси токен и не делай fetch к API. Не обещай подключённое действие, если не используешь этот мост. Для Mac/iPhone этот мост не подходит — команды выполняются только на .110.\nПример: `<button onclick=\"run(this)\">Проверить сервер</button><pre id=\"result\"></pre><script>async function run(b){b.disabled=true;try{const r=await TaskFlow.runCommand(\"uptime\");document.getElementById(\"result\").textContent=r.stdout+\"; код \"+r.exitCode}catch(e){document.getElementById(\"result\").textContent=e.message}finally{b.disabled=false}}</script>`.\n");
   } },
