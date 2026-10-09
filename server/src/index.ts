@@ -67,6 +67,8 @@ import { registerTaskOutcomeRoutes } from "./routes/taskOutcome.js";
 import { registerNoteRoutes } from "./routes/notes.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerAgentInboxRoutes } from "./routes/agent-inbox.js";
+import { registerWebhookRoutes } from "./routes/webhooks.js";
+import { startWebhookDeliveryLoop, startWakeDeliveryLoop } from "./lib/webhookSubscriptions.js";
 import {
   registerActivityRoutes,
   startActivityObserver,
@@ -402,6 +404,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerNoteRoutes(app);
   registerChatRoutes(app);
   await registerAgentInboxRoutes(app);
+  registerWebhookRoutes(app);
   registerActivityRoutes(app);
   // Тикет ollama-observer: слой 3 живой строки — необязательное улучшение
   // поверх уже рабочих слоёв 1-2, включается/выключается на лету через
@@ -579,6 +582,8 @@ if (isMain) {
     let stopProviderProbe: (() => void) | null = null;
     let stopLinearAutoImport: (() => void) | null = null;
     let stopLinearSync: (() => void) | null = null;
+    let stopWebhookDelivery: (() => void) | null = null;
+    let stopWakeDelivery: (() => void) | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
@@ -586,6 +591,8 @@ if (isMain) {
       stopProviderProbe?.();
       stopLinearAutoImport?.();
       stopLinearSync?.();
+      stopWebhookDelivery?.();
+      stopWakeDelivery?.();
       if (stopPreparation) await stopPreparation();
       if (stopRoleRuns) await stopRoleRuns();
       if (stopVoiceBridge) await stopVoiceBridge();
@@ -619,6 +626,12 @@ if (isMain) {
     // проекты с меткой «Сейчас», без подтверждения владельца, план не ставит.
     if (process.env.LINEAR_AUTOIMPORT_DISABLED !== "1") stopLinearAutoImport = startLinearAutoImport();
     if (process.env.ORCHESTRATOR_WEBHOOK_DISABLED !== "1") startOrchestratorWebhook();
+    // Подписочный мост: durable delivery iOS-подпискам + wake-очередь
+    // для пробуждения Codex-чата. Карточка c3c0c199… (hook_server).
+    if (process.env.WEBHOOK_DELIVERY_DISABLED !== "1") {
+      stopWebhookDelivery = startWebhookDeliveryLoop();
+      stopWakeDelivery = startWakeDeliveryLoop();
+    }
     // Обратная синхронизация TaskFlow → Linear (карточка 20e30338): статусы
     // привязанных карточек раз в минуту; сбой Linear не трогает карточку.
     if (process.env.LINEAR_SYNC_DISABLED !== "1") stopLinearSync = startLinearSync();

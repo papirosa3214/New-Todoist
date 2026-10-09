@@ -1,0 +1,7 @@
+{
+  "comment": "Ответ 400 при попытке создать подписку на чужой project_id.",
+  "status": 400,
+  "body": {
+    "error": "project_id должен быть c2fcbcdb-951f-449f-a1bd-123ea2a46a58 (TaskFlow - NewTodoist) или null"
+  }
+}

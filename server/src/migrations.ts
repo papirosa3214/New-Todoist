@@ -3827,7 +3827,80 @@ const migrations: Migration[] = [
     db.prepare("UPDATE roles SET prompt=prompt || ? WHERE length(trim(coalesce(prompt,'')))>0 AND instr(prompt,'Команды владельцу — формат выдачи')=0").run("\n\n## Команды владельцу — формат выдачи\nКоманды для сервера .110 выдавай отдельным закрытым блоком bash: одна команда на блок, без приглашения $ и без ожидаемого вывода. Это позволяет владельцу подтвердить запуск кнопкой Play в iOS. Для команд Mac/iPhone явно укажи другую машину и используй блок с меткой zsh, чтобы не предлагать запуск на .110.\n");
   } },
   { id: "122_html_panel_command_contract", description: "Подключённые HTML-панели: контракт TaskFlow.runCommand в непустых DB-инструкциях ролей", up() {
-    db.prepare("UPDATE roles SET prompt=prompt || ? WHERE length(trim(coalesce(prompt,'')))>0 AND instr(prompt,'## Подключённые HTML-панели в iOS')=0").run("\n\n## Подключённые HTML-панели в iOS\nЧтобы кнопка HTML-панели выполняла действие на сервере .110, вызывай в обработчике нажатия `const result = await TaskFlow.runCommand(command)`; command — точная Bash-команда строкой. Вызов делается сразу после нажатия, до первого другого await. Приложение само покажет владельцу нативное подтверждение и выполнит команду после его согласия. Promise вернёт {outcome, stdout, stderr, exitCode, durationSeconds, requestId}, либо отклонится при отмене/ошибке. Показывай настоящий результат в панели через textContent, обрабатывай catch и блокируй кнопку до finally. Не запускай действия при загрузке страницы, по таймеру или автоматически. Не проси токен и не делай fetch к API. Не обещай подключённое действие, если не используешь этот мост. Для Mac/iPhone этот мост не подходит — команды выполняются только на .110.\nПример: `<button onclick=\"run(this)\">Проверить сервер</button><pre id=\"result\"></pre><script>async function run(b){b.disabled=true;try{const r=await TaskFlow.runCommand(\"uptime\");document.getElementById(\"result\").textContent=r.stdout+\"; код \"+r.exitCode}catch(e){document.getElementById(\"result\").textContent=e.message}finally{b.disabled=false}}</script>`.\n");
+    db.prepare("UPDATE roles SET prompt=prompt || ? WHERE length(trim(coalesce(prompt,'')))>0 AND instr(prompt,'## Подключённые HTML-панели в iOS')=0").run("\n\n## Подключённые HTML-панели в iOS\nЧтобы кнопка HTML-панели выполняла действие на сервере .110, вызывай в обработчике нажатия `const result = await TaskFlow.runCommand(command)`; command — точная Bash-команда строкой. Вызов делается сразу после нажатия, до первого другого await. Приложение само покажет владельцу нативное подтверждение и выполнит команду после его согласия. Promise вернёт {outcome, stdout, stderr, exitCode, durationSeconds, requestId}, либо отклонится при отмене/ошибке. Показывай настоящий результат в панели через textContent, обрабай catch и блокируй кнопку до finally. Не запускай действия при загрузке страницы, по таймеру или автоматически. Не проси токен и не делай fetch к API. Не обещай подключённое действие, если не используешь этот мост. Для Mac/iPhone этот мост не подходит — команды выполняются только на .110.\nПример: `<button onclick=\"run(this)\">Проверить сервер</button><pre id=\"result\"></pre><script>async function run(b){b.disabled=true;try{const r=await TaskFlow.runCommand(\"uptime\");document.getElementById(\"result\").textContent=r.stdout+\"; код \"+r.exitCode}catch(e){document.getElementById(\"result\").textContent=e.message}finally{b.disabled=false}}</script>`.\n");
+  } },
+  { id: "123_webhook_subscriptions", description: "iOS-подписки на события TaskFlow (CRUD, секрет write-only, project+kind фильтры) + durable delivery и wake-очередь для пробуждения Codex-чата (карточка c3c0c199…)", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+        id TEXT PRIMARY KEY,
+        owner_user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        secret_hash TEXT NOT NULL,
+        secret_preview TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        event_kinds TEXT NOT NULL,
+        project_id TEXT,
+        codex_thread_id TEXT,
+        delivery_count INTEGER NOT NULL DEFAULT 0,
+        wake_count INTEGER NOT NULL DEFAULT 0,
+        last_delivery_at TEXT,
+        last_delivery_status INTEGER,
+        last_error TEXT,
+        last_wake_at TEXT,
+        last_wake_error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_webhook_subs_enabled
+        ON webhook_subscriptions(enabled, id);
+      CREATE INDEX IF NOT EXISTS idx_webhook_subs_project
+        ON webhook_subscriptions(project_id);
+
+      CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        event_id TEXT NOT NULL,
+        subscription_id TEXT NOT NULL,
+        delivered_at TEXT NOT NULL DEFAULT (datetime('now')),
+        status INTEGER,
+        error TEXT,
+        PRIMARY KEY (event_id, subscription_id),
+        FOREIGN KEY (subscription_id) REFERENCES webhook_subscriptions(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_sub
+        ON webhook_deliveries(subscription_id, delivered_at DESC);
+
+      CREATE TABLE IF NOT EXISTS webhook_delivery_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL,
+        subscription_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        ran_at TEXT NOT NULL DEFAULT (datetime('now')),
+        next_retry_at TEXT,
+        status INTEGER,
+        error TEXT,
+        success INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_webhook_delivery_attempts_sub
+        ON webhook_delivery_attempts(subscription_id, event_id, attempt);
+      CREATE INDEX IF NOT EXISTS idx_webhook_delivery_attempts_pending
+        ON webhook_delivery_attempts(success, next_retry_at);
+
+      CREATE TABLE IF NOT EXISTS webhook_wake_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL,
+        subscription_id TEXT NOT NULL,
+        codex_thread_id TEXT NOT NULL,
+        message TEXT NOT NULL,
+        enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
+        delivered_at TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        UNIQUE (event_id, subscription_id),
+        FOREIGN KEY (subscription_id) REFERENCES webhook_subscriptions(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_webhook_wake_pending
+        ON webhook_wake_queue(delivered_at, id);
+    `);
   } },
 
 ];
