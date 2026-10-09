@@ -21,7 +21,7 @@ export function integrationResponsibility(taskId:string) {
  SELECT DISTINCT n.role_key FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id JOIN tree ON tree.id=p.task_id
  WHERE p.id=(SELECT pp.id FROM task_collaboration_plans pp WHERE pp.task_id=p.task_id AND pp.status IN ('draft','approved') ORDER BY CASE pp.status WHEN 'draft' THEN 0 ELSE 1 END,pp.created_at DESC,pp.rowid DESC LIMIT 1) AND n.skipped_at IS NULL AND n.role_key<>'critic_verifier'`).all(scopeId) as {role_key:string}[];
  const candidates:Choice[]=[];
- for(const {role_key} of roles){const u=db.prepare("SELECT u.id,COALESCE(r.title,u.name) title FROM users u LEFT JOIN roles r ON r.key=? WHERE u.id=? AND COALESCE(u.archived,0)=0").get(role_key,'role_'+role_key) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:role_key});}
+ for(const {role_key} of roles){const u=db.prepare("SELECT u.id,COALESCE(r.title,u.name) title FROM users u LEFT JOIN roles r ON r.key=? WHERE u.id=? AND COALESCE(u.archived,0)=0").get(role_key,role_key==='secretary'?'u-secretary':'role_'+role_key) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:role_key});}
  if(!candidates.length){const u=db.prepare("SELECT u.id,u.name title FROM users u JOIN tasks t ON t.assignee_id=u.id WHERE t.id=? AND COALESCE(u.archived,0)=0").get(scopeId) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:'executor'});}
  candidates.sort((a,b)=>a.title.localeCompare(b.title));
  const suggested=candidates.find(c=>c.role==='code_orchestrator'||c.role==='orchestrator')??candidates.find(c=>c.role==='architect')??(candidates.length===1?candidates[0]:null);
