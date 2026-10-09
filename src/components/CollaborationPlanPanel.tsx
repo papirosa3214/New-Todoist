@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import { useCollaborationPlans } from "../api/collaborationPlans";
 import { useRoles } from "../api/roles";
 
@@ -38,6 +39,7 @@ const STATE_TONE: Record<string, string> = {
 export function CollaborationPlanPanel({ taskId }: { taskId: string }) {
   const { data: plansData } = useCollaborationPlans(taskId);
   const { data: rolesData } = useRoles();
+  const navigate = useNavigate();
 
   const plan = (plansData?.plans ?? []).find((p) => p.status === "approved");
   if (!plan) return null;
@@ -81,12 +83,24 @@ export function CollaborationPlanPanel({ taskId }: { taskId: string }) {
                   </span>
                 )}
               </span>
-              <span
- className={`tf-caption shrink-0 rounded-full border px-2 py-0.5 ${
-                  STATE_TONE[state] ?? STATE_TONE.waiting
-                }`}
-              >
-                {STATE_LABELS[state] ?? state}
+              <span className="flex shrink-0 items-center gap-2">
+                {node.result_document && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/notes/${node.result_document!.id}`)}
+                    className="tf-caption text-sub underline-offset-2 hover:underline"
+                    title={node.result_document.title}
+                  >
+                    Отчёт о работе
+                  </button>
+                )}
+                <span
+ className={`tf-caption rounded-full border px-2 py-0.5 ${
+                    STATE_TONE[state] ?? STATE_TONE.waiting
+                  }`}
+                >
+                  {STATE_LABELS[state] ?? state}
+                </span>
               </span>
             </div>
           );

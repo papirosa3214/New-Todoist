@@ -21,6 +21,10 @@ export interface ApiCollaborationPlanNode {
   required: boolean;
   expected_result: string;
   execution_state?: string;
+  // Ссылка на заметку с человекочитаемым отчётом роли (server:
+  // lib/roleResultReport.ts, roleResultDocument). Доступна только после
+  // сдачи этапа; владелец открывает заметку через /notes/:id.
+  result_document?: { id: string; title: string } | null;
 }
 
 export interface ApiCollaborationPlanEdge {
