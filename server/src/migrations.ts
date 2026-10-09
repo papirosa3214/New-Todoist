@@ -4038,7 +4038,18 @@ function runMigrationsInner(options?: RunMigrationsOptions): void {
 
   for (let i = 0; i < migrations.length; i++) {
     if (stopIndex >= 0 && i > stopIndex) break;
-    const m = migrations[i];
+    const m = migrations[i{ id: "124_plan_subtask_admission_fingerprint", description: "Admission: durable fingerprint и admission_cycle на узлах плана. Идемпотентный claim через атомарный compare-and-swap по fingerprint; различение нового цикла доработки (changes_requested) от старого. Карточка 8aa95906 (admission).", up() {
+    const info = db.prepare("PRAGMA table_info(subtasks)").all() as Array<{ name: string }>;
+    const has = (name: string) => info.some((c) => c.name === name);
+    if (!has("admission_fingerprint")) {
+      db.exec("ALTER TABLE subtasks ADD COLUMN admission_fingerprint TEXT");
+    }
+    if (!has("admission_cycle")) {
+      db.exec("ALTER TABLE subtasks ADD COLUMN admission_cycle INTEGER NOT NULL DEFAULT 0");
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_subtasks_plan_admission_cycle ON subtasks(collaboration_plan_id, admission_cycle) WHERE collaboration_plan_id IS NOT NULL");
+  } }
+];
     if (applied.has(m.id)) continue;
     if (m.noTransaction) {
       // Транзакцию такая миграция держит внутри себя — см. Migration.noTransaction.
