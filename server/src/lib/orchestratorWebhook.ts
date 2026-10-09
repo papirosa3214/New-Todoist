@@ -14,15 +14,23 @@ import os from "node:os";
 import path from "node:path";
 import db from "../db.js";
 
-/** События, ради которых оркестратора стоит будить. */
+/** События, ради которых оркестратора стоит будить.
+ *  Расширено в карточке c3c0c199 (hook_server): раньше iOS-подписки не
+ *  видели `plan_subtask_started` и `plan_rework_created`, из-за чего вся
+ *  затея с вебхуками на старт шага не работала. Полный список видов
+ *  синхронизирован с `WEBHOOK_EVENT_KINDS` в webhookSubscriptions.ts:
+ *  подписки iOS читают события из той же `orchestrator_events`, что и
+ *  оркестраторский вебхук. */
 export const WATCHED_KINDS = new Set([
-  "step_outcome",          // любое завершение запуска шага (MAK-96)
-  "review_recorded",       // вердикт Критика
-  "branch_card_accepted",  // карточка ветки принята и закрыта
-  "test_budget_blocked",   // роль упёрлась в лимит полных прогонов
-  "subtask_blocked",       // шаг заблокирован ролью
+  "plan_subtask_started",
+  "step_outcome",
+  "review_recorded",
+  "branch_card_accepted",
+  "plan_rework_created",
+  "subtask_blocked",
   "plan_subtask_stalled_blocked",
-  "model_failover",        // смена модели из-за лимита
+  "model_failover",
+  "test_budget_blocked",
 ]);
 
 export const REGISTRY_FILE =

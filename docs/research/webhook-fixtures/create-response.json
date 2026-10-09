@@ -1,0 +1,29 @@
+{
+  "webhook": {
+    "id": "01c8d2c4-4b50-4d9e-8e90-3a54cfabcde1",
+    "name": "iPhone-владелец",
+    "url": "https://example.com/hook",
+    "enabled": true,
+    "event_kinds": [
+      "plan_subtask_started",
+      "step_outcome",
+      "review_recorded"
+    ],
+    "project_id": "c2fcbcdb-951f-449f-a1bd-123ea2a46a58",
+    "delivery_count": 0,
+    "wake_count": 0,
+    "last_delivery_at": null,
+    "last_delivery_status": null,
+    "last_error": null,
+    "last_wake_at": null,
+    "last_wake_error": null,
+    "secret_preview": "****7890",
+    "wake": {
+      "codex_thread_id": "01a120f9-1266-7331-a4ca-81f6da2a698b",
+      "has_thread": true
+    },
+    "created_at": "2026-10-09T15:30:00Z",
+    "updated_at": "2026-10-09T15:30:00Z"
+  },
+  "secret": "fixture-secret-1234567890"
+}
