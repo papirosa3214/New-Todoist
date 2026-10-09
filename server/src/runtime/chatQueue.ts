@@ -317,6 +317,27 @@ export function bumpChatGeneration(input: {
   return { generation: next, superseded };
 }
 
+/** Прочитать доставку по `id` (для recovery-sweep). */
+export function getMessageDelivery(id: string): MessageDelivery | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM chat_message_queue WHERE id = ?`,
+    )
+    .get(id) as MessageDelivery | undefined;
+}
+
+/** Generation, зафиксированный в `chat_message_queue.session_generation`
+ *  для конкретного хода. Это то поколение, на котором ход был принят;
+ *  его нельзя «освежить» — оно фиксируется на момент enqueue. */
+export function deliverySessionGeneration(id: string): number | null {
+  const row = db
+    .prepare(
+      `SELECT session_generation FROM chat_message_queue WHERE id = ?`,
+    )
+    .get(id) as { session_generation: number } | undefined;
+  return row?.session_generation ?? null;
+}
+
 /** Тестовая утилита. В проде не нужна — задача живёт в БД. */
 export function _resetChatQueueForTests(): void {
   db.prepare("DELETE FROM chat_message_queue").run();

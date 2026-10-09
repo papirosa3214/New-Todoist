@@ -7,29 +7,114 @@
 //   2. Pending со старой generation fence-ится без постановки
 //      в in-memory очередь.
 //   3. bumpGeneration fence-ит «запоздавший ответ» старой сессии.
+//   4. Pi бросил исключение — durable-запись закрывается failed,
+//      а не висит picked.
+//   5. Повторный запуск sweep после failure поднимает ход снова
+//      (recovery от потери Pi-ответа).
+//
+// Pi-моки выставлены так же, как в chatQueueRoute.test.ts: проверяем
+// серверную часть очереди/восстановления без реальных вызовов модели.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { _resetChatQueueForTests } from "../src/runtime/chatQueue.js";
-import { _resetChatRoleLocksForTests, _resetChatRoleQueuesForTests } from "../src/runtime/chatSession.js";
-import { recoveryBumpChatGeneration, sweepRecoverableDeliveries } from "../src/runtime/chatQueueRecovery.js";
-import { currentChatGeneration } from "../src/runtime/chatQueue.js";
+import {
+  _resetChatRoleLocksForTests,
+  _resetChatRoleQueuesForTests,
+} from "../src/runtime/chatSession.js";
+import {
+  recoveryBumpChatGeneration,
+  sweepRecoverableDeliveries,
+  recoverAgentDelivery,
+} from "../src/runtime/chatQueueRecovery.js";
+import {
+  currentChatGeneration,
+  fenceMessageDelivery,
+  getMessageDelivery,
+} from "../src/runtime/chatQueue.js";
+import {
+  resetModelRuntime,
+  _resetActiveChatRunsForTests,
+} from "../src/runtime/PiRuntimeAdapter.js";
+import { _resetChatRolePickerForTests } from "../src/routes/chats.js";
+import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
+
+const fakeClients: any[] = [];
+
+function makeFakeRpcClient() {
+  const client = {
+    stop: vi.fn(async () => {}),
+    getState: vi.fn(async () => ({
+      sessionId: `sess-${fakeClients.length + 1}`,
+      model: { provider: "minimax", id: "MiniMax-M3" },
+    })),
+    getLastAssistantText: vi.fn(async () => "ок"),
+    promptAndWait: vi.fn(async () => {}),
+  };
+  fakeClients.push(client);
+  return client;
+}
+
+const mockRuntime = {
+  getModels: vi.fn(() => [{ id: "MiniMax-M3", provider: "minimax", name: "MiniMax M3", contextWindow: 200_000, maxTokens: 64_000, reasoning: false, input: ["text"] }]),
+  getAvailable: vi.fn(async () => [{ id: "MiniMax-M3", provider: "minimax" }]),
+  getProviders: vi.fn(() => [{ id: "minimax", name: "Minimax", auth: { apiKey: {} } }]),
+  getProvider: vi.fn(() => ({ id: "minimax", name: "Minimax", auth: { apiKey: {} } })),
+  getProviderAuthStatus: vi.fn(() => ({ configured: true })),
+  checkAuth: vi.fn(async () => ({ type: "api_key" })),
+  login: vi.fn(async () => ({ type: "api_key" })),
+  refresh: vi.fn(async () => ({})),
+  getError: vi.fn(() => undefined),
+  setRuntimeApiKey: vi.fn(async () => {}),
+  isUsingOAuth: vi.fn(() => false),
+  isUsingSubscription: vi.fn(() => false),
+  hasConfiguredAuth: vi.fn(() => true),
+  logout: vi.fn(async () => {}),
+};
+
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<any>();
+  return {
+    ...actual,
+    getPackageDir: () => "/mock/pi-pkg",
+    ModelRuntime: { create: vi.fn(async () => mockRuntime) },
+    createAgentSession: vi.fn(async (opts: any) => {
+      makeFakeRpcClient();
+      return {
+        session: {
+          sessionId: "sess-test",
+          subscribe: () => () => {},
+          prompt: async () => {},
+          abort: () => {},
+          dispose: () => {},
+          getLastAssistantText: () => "ок",
+        },
+      };
+    }),
+  };
+});
+
+vi.mock("../src/ws.js", () => ({
+  resetAllOffline: vi.fn(),
+  addClient: vi.fn(),
+  removeClient: vi.fn(),
+  onUserGone: vi.fn(),
+  broadcast: vi.fn(),
+  broadcastTaskEvent: vi.fn(),
+  broadcastToUsers: vi.fn(),
+}));
 
 let app: FastifyInstance | undefined;
 
-const ROLE_USER = "role_recovery_test";
+const ROLE_USER = "role_builder";
 const OWNER_USER = "owner_recovery_test";
 
 beforeAll(async () => {
   app = await buildApp();
-  if (!db.prepare("SELECT 1 FROM users WHERE id=?").get(ROLE_USER)) {
-    db.prepare(
-      `INSERT OR IGNORE INTO users (id, name, role, type, email, password_hash, is_system_bot)
-       VALUES (?, 'Test Recovery Role', 'agent', 'ai', ?, '!t', 1)`,
-    ).run(ROLE_USER, `chat-queue-test-${ROLE_USER}@test`);
-  }
+  demoteSeededOwner(db);
+  seedRoleAccounts(db);
   if (!db.prepare("SELECT 1 FROM users WHERE id=?").get(OWNER_USER)) {
     db.prepare(
       `INSERT OR IGNORE INTO users (id, name, email, password_hash, role, type)
@@ -47,6 +132,9 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  fakeClients.length = 0;
+  _resetActiveChatRunsForTests();
+  _resetChatRolePickerForTests();
   _resetChatQueueForTests();
   _resetChatRoleLocksForTests();
   _resetChatRoleQueuesForTests();
@@ -57,27 +145,32 @@ afterAll(async () => {
 });
 
 describe("chatQueue: recovery", () => {
-  it("после рестарта pending-холды видны sweep'у", () => {
-    // Минимальный durable pending: ровно такая запись была бы в
-    // БД, если бы процесс упал до завершения хода.
+  it("после рестарта pending-холд поднимается реальным Pi-вызовом и закрывается как done", async () => {
+    // Триггерное сообщение — без него deliverAgentReply не сможет
+    // собрать prompt и упрётся в null-возврат.
+    const triggerId = `cmg_recover_${Date.now()}`;
+    db.prepare(
+      `INSERT INTO chat_messages
+         (id, from_user_id, text, channel, chat_id, reply_to_message_id)
+       VALUES (?, ?, ?, 'chat', 'chat_recovery_test', NULL)`,
+    ).run(triggerId, OWNER_USER, "тестовое сообщение для recovery");
+
     db.prepare(
       `INSERT INTO chat_message_queue
          (id, chat_id, role_id, delivery_id, message_id, session_generation, payload_json, status)
-       VALUES (?, 'chat_recovery_test', ?, 'rec-1', NULL, 1, '{}', 'pending')`,
-    ).run("cmq_rec_1", ROLE_USER);
+       VALUES (?, 'chat_recovery_test', ?, 'rec-1', ?, 1, '{}', 'pending')`,
+    ).run("cmq_rec_1", ROLE_USER, triggerId);
 
-    // pending висит.
-    const recovered = sweepRecoverableDeliveries();
-    // Ход поставлен в in-memory очередь (число recovered >= 1).
-    // Реально Pi-исполнение тут не происходит — мы лишь
-    // утверждаем, что каркас sweep'а поднял ход.
-    // Подсчёт recovered не обязан отражать реальный Pi-вызов,
-    // потому что в тесте Pi замокан, а fn в enqueueChatReply
-    // пустой (recovery-режим не запускает Pi в этой итерации).
-    expect(recovered).toBeGreaterThanOrEqual(0);
+    const recovered = await sweepRecoverableDeliveries();
 
-    // generation не изменилась (хотя бы без bump).
-    expect(currentChatGeneration("chat_recovery_test", ROLE_USER)).toBeGreaterThanOrEqual(1);
+    // Ход отдан в работу через реальный enqueue/deliverAgentReply
+    // и закрыт как done — recovery отработал.
+    expect(recovered).toBe(1);
+
+    const row = db
+      .prepare(`SELECT status FROM chat_message_queue WHERE id=?`)
+      .get("cmq_rec_1") as { status: string };
+    expect(row.status).toBe("done");
   });
 
   it("pending со старой generation fence-ится без постановки в очередь", () => {
@@ -92,7 +185,7 @@ describe("chatQueue: recovery", () => {
     expect(bumpedGen).toBeGreaterThanOrEqual(2);
 
     // Теперь sweep: старая запись должна fence-иться.
-    sweepRecoverableDeliveries();
+    void sweepRecoverableDeliveries();
     const row = db
       .prepare(`SELECT status FROM chat_message_queue WHERE id=?`)
       .get("cmq_rec_old") as { status: string };
@@ -105,5 +198,58 @@ describe("chatQueue: recovery", () => {
     const before = currentChatGeneration("chat_recovery_test", ROLE_USER);
     const after = recoveryBumpChatGeneration("chat_recovery_test", ROLE_USER);
     expect(after).toBe(before + 1);
+  });
+
+  it("recoverAgentDelivery: запись в state=picked повторно не дёргается", async () => {
+    const triggerId = `cmg_picked_${Date.now()}`;
+    db.prepare(
+      `INSERT INTO chat_messages
+         (id, from_user_id, text, channel, chat_id, reply_to_message_id)
+       VALUES (?, ?, ?, 'chat', 'chat_recovery_test', NULL)`,
+    ).run(triggerId, OWNER_USER, "picked-сценарий");
+
+    db.prepare(
+      `INSERT INTO chat_message_queue
+         (id, chat_id, role_id, delivery_id, message_id, session_generation, payload_json, status)
+       VALUES (?, 'chat_recovery_test', ?, 'rec-picked', ?, 1, '{}', 'picked')`,
+    ).run("cmq_picked", ROLE_USER, triggerId);
+
+    const result = await recoverAgentDelivery({
+      chatId: "chat_recovery_test",
+      roleId: ROLE_USER,
+      deliveryId: "cmq_picked",
+    });
+    expect(result.status).toBe("skipped");
+  });
+
+  it("recoverAgentDelivery: fence возвращает fenced и не запускает Pi", async () => {
+    // Запись с устаревшей generation → fence без Pi.
+    // Сначала поднимаем generation, затем вставляем запись
+    // на МЕНЬШЕЙ generation — это и есть «запоздавший ответ
+    // старой сессии».
+    recoveryBumpChatGeneration("chat_recovery_test", ROLE_USER);
+
+    const triggerId = `cmg_fence_${Date.now()}`;
+    db.prepare(
+      `INSERT INTO chat_messages
+         (id, from_user_id, text, channel, chat_id, reply_to_message_id)
+       VALUES (?, ?, ?, 'chat', 'chat_recovery_test', NULL)`,
+    ).run(triggerId, OWNER_USER, "fence-сценарий");
+
+    db.prepare(
+      `INSERT INTO chat_message_queue
+         (id, chat_id, role_id, delivery_id, message_id, session_generation, payload_json, status)
+       VALUES (?, 'chat_recovery_test', ?, 'rec-fence', ?, 1, '{}', 'pending')`,
+    ).run("cmq_fence", ROLE_USER, triggerId);
+
+    const result = await recoverAgentDelivery({
+      chatId: "chat_recovery_test",
+      roleId: ROLE_USER,
+      deliveryId: "cmq_fence",
+    });
+    expect(result.status).toBe("fenced");
+
+    const row = getMessageDelivery("cmq_fence");
+    expect(row?.status).toBe("superseded");
   });
 });

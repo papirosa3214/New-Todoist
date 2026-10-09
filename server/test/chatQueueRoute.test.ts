@@ -32,6 +32,10 @@ import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
 const fakeClients: any[] = [];
 
+/** Маркер текста, на котором мок createAgentSession бросает исключение.
+ *  Нужен для проверки «ошибка Pi → durable не как success». */
+let THROW_ON_TEXT = "";
+
 function makeFakeRpcClient() {
   const client = {
     stop: vi.fn(async () => {}),
@@ -70,6 +74,13 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     getPackageDir: () => "/mock/pi-pkg",
     ModelRuntime: { create: vi.fn(async () => mockRuntime) },
     createAgentSession: vi.fn(async (opts: any) => {
+      // Глобальный маркер: если THROW_ON_TEXT === "1",
+      // createAgentSession бросает всегда — мы имитируем
+      // сбой Pi и проверяем, что durable-запись закрыта как
+      // failed, а не done.
+      if (THROW_ON_TEXT === "1") {
+        throw new Error("мок: Pi-сбой по запросу теста");
+      }
       makeFakeRpcClient();
       return {
         session: {
@@ -249,5 +260,139 @@ describe("chatQueue: маршруты /messages и /new-session", () => {
       .prepare(`SELECT status FROM chat_message_queue WHERE delivery_id=?`)
       .get(fakeDelivery) as { status: string };
     expect(row.status).toBe("superseded");
+  });
+
+  // ===== Idempotency-Key через HTTP-заголовок =====
+  // Карточка ebc4d338 (queue_repair): клиент должен иметь
+  // возможность прислать СВОЙ delivery-id через HTTP-заголовок
+  // `Idempotency-Key` (стандарт) или `x-delivery-id` (наш
+  // псевдоним). Без этого сетевой retry ДО получения message_id
+  // в ответ приводит к дублю Pi-вызова.
+
+  it("Idempotency-Key из заголовка становится delivery_id в durable-записи", async () => {
+    const sent = await app!.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: { ...ownerHeader, "idempotency-key": "idem-test-001" },
+      payload: { text: "@builder с явным ключом" },
+    });
+    expect(sent.statusCode).toBe(200);
+    const messageId = sent.json().message.id as string;
+
+    const row = db
+      .prepare(
+        `SELECT delivery_id, message_id FROM chat_message_queue
+          WHERE chat_id=? AND message_id=?`,
+      )
+      .get(chatId, messageId) as
+      | { delivery_id: string; message_id: string }
+      | undefined;
+    expect(row?.delivery_id).toBe("idem-test-001");
+    expect(row?.message_id).toBe(messageId);
+  });
+
+  it("x-delivery-id (наш псевдоним) тоже подхватывается", async () => {
+    const sent = await app!.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: { ...ownerHeader, "x-delivery-id": "x-delivery-002" },
+      payload: { text: "@builder через x-delivery-id" },
+    });
+    expect(sent.statusCode).toBe(200);
+    const messageId = sent.json().message.id as string;
+
+    const row = db
+      .prepare(
+        `SELECT delivery_id FROM chat_message_queue
+          WHERE chat_id=? AND message_id=?`,
+      )
+      .get(chatId, messageId) as { delivery_id: string } | undefined;
+    expect(row?.delivery_id).toBe("x-delivery-002");
+  });
+
+  it("повторный POST с тем же Idempotency-Key не плодит durable-запись (один Pi-вызов)", async () => {
+    const idem = `idem-test-retry-${Date.now()}`;
+    const first = await app!.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: { ...ownerHeader, "idempotency-key": idem },
+      payload: { text: "@builder первый" },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const beforeN = (db
+      .prepare(
+        `SELECT COUNT(*) as n FROM chat_message_queue
+          WHERE chat_id=? AND delivery_id=?`,
+      )
+      .get(chatId, idem) as { n: number }).n;
+    expect(beforeN).toBe(1);
+
+    // Повтор с тем же ключом (имитация ретрая).
+    const second = await app!.inject({
+      method: "POST",
+      url: `/api/chats/${chatId}/messages`,
+      headers: { ...ownerHeader, "idempotency-key": idem },
+      payload: { text: "@builder второй" },
+    });
+    expect(second.statusCode).toBe(200);
+
+    const afterN = (db
+      .prepare(
+        `SELECT COUNT(*) as n FROM chat_message_queue
+          WHERE chat_id=? AND delivery_id=?`,
+      )
+      .get(chatId, idem) as { n: number }).n;
+    expect(afterN).toBe(1);
+  });
+
+  it("сбой Pi в общем чате закрывает durable-запись как failed (не success)", async () => {
+    // Общий чат (chat-common): при сбое Pi deliverAgentReply
+    // гасит replyText через assertCommonChatWritable — INSERT не
+    // происходит, replyId === null. По новой семантике
+    // completeDurableDelivery(id, ok) ok=false при null-replyId,
+    // и durable-запись закрывается как failed, а не done.
+    if (!db.prepare("SELECT 1 FROM chats WHERE id=?").get("chat-common")) {
+      db.prepare(
+        `INSERT OR IGNORE INTO chats (id, title, kind, created_by)
+         VALUES (?, 'Общий чат', 'group', ?)`,
+      ).run("chat-common", ownerId);
+    }
+    db.prepare(
+      `INSERT OR IGNORE INTO chat_members (chat_id, member_id, added_at)
+       VALUES (?, ?, datetime('now'))`,
+    ).run("chat-common", ownerId);
+    db.prepare(
+      `INSERT OR IGNORE INTO chat_members (chat_id, member_id, added_at)
+       VALUES (?, ?, datetime('now'))`,
+    ).run("chat-common", accId);
+
+    THROW_ON_TEXT = "1";
+    try {
+      const sent = await app!.inject({
+        method: "POST",
+        url: `/api/chats/chat-common/messages`,
+        headers: ownerHeader,
+        payload: { text: "@builder должен сломать Pi" },
+      });
+      expect(sent.statusCode).toBe(200);
+      const messageId = sent.json().message.id as string;
+
+      // Даём очереди шанс докатиться до finally — Pi вызывается
+      // по цепочке microtasks.
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      const row = db
+        .prepare(
+          `SELECT status FROM chat_message_queue
+            WHERE chat_id=? AND message_id=?`,
+        )
+        .get("chat-common", messageId) as { status: string } | undefined;
+      expect(row?.status).toBe("failed");
+    } finally {
+      THROW_ON_TEXT = "";
+    }
   });
 });
