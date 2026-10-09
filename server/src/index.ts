@@ -88,6 +88,7 @@ import { registerSubtaskArtifactRoutes } from "./routes/subtask-artifacts.js";
 import { registerRuntimeContextRoutes } from "./routes/runtime-context.js";
 import { registerLinearRoutes } from "./routes/linear.js";
 import { registerComposioRoutes } from "./routes/composio.js";
+import { registerCoordinationRoutes } from "./routes/coordination.js";
 
 /**
  * Собирает и возвращает готовый Fastify-инстанс — регистрирует плагины,
@@ -378,6 +379,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerRuntimeContextRoutes(app);
   registerComposioRoutes(app);
   registerLinearRoutes(app);
+  // Диагностика координации (V2 контракт, документ a8bfa7ea-…):
+  // четыре эндпоинта под `/api/coordination/*`. Сам резолвер — чистая
+  // функция в `runtime/coordinationResolver.ts`, чтение фактов — в
+  // `runtime/coordinationResolver.read.ts`. Наблюдательный, без
+  // побочных эффектов; действия делают существующие маршруты.
+  registerCoordinationRoutes(app);
   registerNotificationRoutes(app);
   registerLiveActivityRoutes(app);
   registerSearchRoutes(app);
