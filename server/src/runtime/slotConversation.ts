@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { createAgentSession,createReadOnlyTools,SettingsManager } from "@earendil-works/pi-coding-agent";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot,topicSlots } from "./slotSession.js";
 import { taskflowTools,deliverTopicToWork,slotWorkspace } from "./inProcessRun.js";
-import { getModelRuntime } from "./PiRuntimeAdapter.js";
+import { getModelRuntime, resolveThinkingLevel } from "./PiRuntimeAdapter.js";
 import { createTaskResourceLoader } from "./instructionResources.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
 import { loadRoleRouting,providerOfModel,roleTitle,roleUserId } from "../roleRouting.js";
@@ -49,9 +49,15 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
     resources=await createTaskResourceLoader(input.role,cwd,[composeLayer(input.role,"role.prompt")?.effective ?? `Ты — ${roleTitle(input.role)}.`,policy].join("\n\n"));
     const builtin=createReadOnlyTools(cwd).filter(tool=>["read","grep","find","ls"].includes(tool.name));
     const custom=slotConversationTools(input.role,model.id??modelId,input.taskId,input.subtaskId);
-    ({session}=await createAgentSession({cwd,model,thinkingLevel:"off",modelRuntime:runtime,resourceLoader:resources,
+    ({session}=await createAgentSession({cwd,model,thinkingLevel:resolveThinkingLevel(model as any) ?? undefined,modelRuntime:runtime,resourceLoader:resources,
       tools:[...builtin.map(tool=>tool.name),...custom.map(tool=>tool.name)],customTools:[...builtin,...custom],sessionManager:manager,
       settingsManager:SettingsManager.inMemory({compaction:{enabled:true},retry:{enabled:true,maxRetries:2}})} as any));
+    // Тот же resumed-migration: старая persisted "off" у reasoning модели
+    // → включаем размышления и пишем обратно. MAK-121.
+    if ((model as any)?.reasoning && (session as any)?.thinkingLevel === "off" && typeof (session as any).setThinkingLevel === "function") {
+      try { (session as any).setThinkingLevel("medium", { persist: true }); }
+      catch { /* не критично: следующий resume сам разберётся */ }
+    }
     let timedOut=false;let lastAssistant:any;
     session.subscribe((event:any)=>{
       input.onEvent?.(event);

@@ -40,7 +40,7 @@ import db from "../db.js";
 import { AGENT_RULES, logEvent } from "../agentState.js";
 import { loadRoleRouting, providerOfModel, rolePromptText, roleTitle, roleUserId, ROLE_NAMES } from "../roleRouting.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
-import { getModelRuntime } from "./PiRuntimeAdapter.js";
+import { getModelRuntime, resolveThinkingLevel } from "./PiRuntimeAdapter.js";
 import { parseModelRef, recordAttemptModel } from "../lib/attemptModel.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { buildInProcessTaskContext } from "./taskContextBridge.js";
@@ -1049,7 +1049,16 @@ try {
   const { session } = await createAgentSession({
     cwd,
     model,
-    thinkingLevel: "off",
+    // Уровень размышлений по реальной capability модели, а не жёсткое
+    // "off". reasoning модель получает "medium" — провайдер пришлёт
+    // thinking_start/delta/end, task-live их отрисует. Не-reasoning —
+    // "off" (SDK всё равно выключит, но фиксируем заранее). Для resumed
+    // сессий с persisted "off" миграция на уровень ниже через
+    // setThinkingLevel(..., { persist: true }) — SDK применит и запишет
+    // thinking_level_change, чтобы следующий resume уже открывался с
+    // размышлениями. MAK-121: до этого было "off" для всех, и в работе
+    // агентов thinking не было вообще.
+    thinkingLevel: resolveThinkingLevel(model as any) ?? undefined,
     modelRuntime: runtime,
     resourceLoader,
     // `tools` у SDK — список ИМЁН. Раньше сюда шли объекты, и роль на задаче
@@ -1060,6 +1069,17 @@ try {
     sessionManager: manager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
   } as any).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await xcode.close(); throw error; });
+
+  // Миграция persisted thinkingLevel: старая сессия записала "off", а
+  // модель теперь reasoning — включим размышления и запишем обратно в
+  // jsonl, чтобы следующий resume уже не возвращался к "off". Делаем
+  // только для reasoning моделей и только если SDK реально применил off
+  // (то есть persisted был "off", а не пустая запись). setThinkingLevel
+  // сам вызывает sessionManager.appendThinkingLevelChange().
+  if ((model as any)?.reasoning && (session as any)?.thinkingLevel === "off" && typeof (session as any).setThinkingLevel === "function") {
+    try { (session as any).setThinkingLevel("medium", { persist: true }); }
+    catch { /* без persist — следующий resume сам поднимет */ }
+  }
 
   const runId = `inproc_${crypto.randomUUID()}`;
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
