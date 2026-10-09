@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { ApiSubtask } from "./types";
 
@@ -64,5 +64,48 @@ export function useDeleteSubtask() {
     mutationFn: (id: string) =>
       api.delete<{ ok: boolean }>(`/api/subtasks/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
+  });
+}
+
+// Квитанция о сдаче этапа основным TaskFlow (server/src/lib/submissionReceipt.ts
+// и GET /api/subtasks/:id/submission-receipt в routes/subtask-artifacts.ts).
+// Тот же контракт, что использует iOS по docs/current/submission-receipt.md:
+// { confirmed, authority, task_id, subtask_id, artifact_id, document_id, confirmed_at }.
+//
+// Подтягиваем ТОЛЬКО для сданных шагов: confirmed имеет смысл только когда
+// шаг реально закрыт (done=true). Владелец карточки увидит результат в
+// SubtaskFeed — отдельный компонент SubmissionReceiptBadge использует
+// authority, чтобы отличить primary (основной сервер) от sandbox (QA-копия);
+// не-подтверждённый шаг без confirmed_at показывает пометку «Сдача не
+// подтверждена» и не считается раньше времени.
+//
+// Документ отчёта роли лежит в user_notes и открывается через /notes/:id
+// (NoteEditorScreen). document_id — это id заметки, созданной saveRoleResultReport
+// (server/src/lib/roleResultReport.ts), префикс «artifact_…» либо «report_…».
+export interface ApiSubmissionReceipt {
+  confirmed: boolean;
+  authority: "primary" | "sandbox";
+  task_id: string | null;
+  subtask_id: string;
+  artifact_id: string | null;
+  document_id: string | null;
+  confirmed_at: string | null;
+}
+
+export function useSubmissionReceipt(
+  subtaskId: string | null | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ["subtasks", subtaskId, "submission-receipt"],
+    queryFn: () =>
+      api.get<ApiSubmissionReceipt>(
+        `/api/subtasks/${subtaskId}/submission-receipt`,
+      ),
+    enabled: !!subtaskId && enabled,
+    // Квитанция меняется только при сдаче; кэшируем надолго, чтобы не
+    // дёргать на каждый ререндер ленты. Обновление — после invalidate
+    // на task:updated в ws.ts и в мутациях выше.
+    staleTime: 5 * 60 * 1000,
   });
 }

@@ -36,6 +36,8 @@ import { Checkbox, ErrorBanner, Icon } from "./UI";
 import { MarkdownInline } from "./MarkdownInline";
 import { ActionsMenu } from "./ActionsMenu";
 import { TaskControlSheet, type TaskControlKind } from "./TaskControlSheet";
+import { useSubmissionReceipt } from "../api/subtasks";
+import { SubmissionReceiptBadge } from "./SubmissionReceiptBadge";
 
 /** Вложение, уже загруженное на сервер — минимум полей, нужных здесь для
     превью-чипа (не тащим сюда весь ApiAttachment ради имени файла). */
@@ -445,6 +447,17 @@ function SubtaskRow({
   const guardedToggle = useGuardedCallback(onToggle);
   const state = stateOf(st);
   const v = VIEW[state];
+  // «Сдача основным TaskFlow» — отдельная строка под result, чтобы статус
+  // подтверждения читался независимо от текста исполнителя (карточка
+  // 8aa62aea, шаг receipt_web). Тянем за subtask.id, общий на всё дерево.
+  // enabled=false для шагов без done: receipt.confirmed имеет смысл только
+  // когда сервер уже готов признать закрытие, чтобы не плодить лишние
+  // 404-запросы на черновиках.
+  const showReceipt = state === "done";
+  const receiptQuery = useSubmissionReceipt(showReceipt ? st.id : null);
+  const receipt = receiptQuery.data;
+  const receiptError = receiptQuery.error;
+  const receiptLoading = receiptQuery.isLoading;
   // blocked без result всё равно должен раскрываться — там форма ответа,
   // а не итог: агент не обязан передавать result вместе с blocked (только
   // review требует его на сервере).
@@ -634,6 +647,17 @@ function SubtaskRow({
  <p className="tf-action text-sub whitespace-pre-wrap">
               {st.result}
             </p>
+          )}
+          {/* Квитанция сдачи основным TaskFlow — отдельно от result, чтобы
+              статус подтверждения не зависел от того, что написал исполнитель
+              (карточка 8aa62aea, шаг receipt_web). Рисуем у закрытых шагов:
+              черновикам квитанция не нужна. */}
+          {showReceipt && (
+            <SubmissionReceiptBadge
+              receipt={receipt}
+              error={receiptError}
+              loading={receiptLoading}
+            />
           )}
           {/* Приёмка шага владельцем — обе кнопки рядом, в одной строке
               (18.08.2026, прямое указание): кружок выше больше не кликается
