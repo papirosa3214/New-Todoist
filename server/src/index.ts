@@ -11,6 +11,7 @@ import fastifyJwt from "@fastify/jwt";
 import { setRoleTokenSigner } from "./runtime/roleRunAccess.js";
 import { setInProcessApp } from "./runtime/inProcessRun.js";
 import { startRoleRunWorker } from "./runtime/roleRunWorker.js";
+import { startChatQueueRecovery } from "./runtime/chatQueueRecovery.js";
 import { finishCompletedPlans, recoverInterruptedPlanSubtasks } from "./runtime/planSubtaskAdmission.js";
 import { startKnowledgeSyncSchedule } from "./lib/knowledgeSync.js";
 import { startScheduler } from "./runtime/scheduler.js";
@@ -604,6 +605,17 @@ if (isMain) {
     // реальные модели и внешние сервисы. Остальные службы гасятся своими флагами.
     const sandbox = process.env.TASKFLOW_QA_SANDBOX === "1";
     if (!sandbox) stopRoleRuns = startRoleRunWorker();
+    // Карточка ebc4d338: восстановление durable-очереди чата при
+    // рестарте. Делается ПОСЛЕ listen, чтобы не мешать runRoleInProcess
+    // в тестах. Периодический sweep отключён: оживление
+    // идёт через живой /messages, который кладёт delivery_id в
+    // pending и поднимает in-memory очередь сам.
+    if (!sandbox && process.env.TASKFLOW_QUEUE_RECOVERY !== "off") {
+      const queueRecovery = startChatQueueRecovery();
+      if (queueRecovery.recovered > 0) {
+        console.log(`[chatQueue] recovered ${queueRecovery.recovered} pending deliveries`);
+      }
+    }
     if(process.env.TASKFLOW_AUTO_PREPARATION!=="0") stopPreparation=startPreparationWorker();
     // Документация проектов → база знаний раз в сутки (lib/knowledgeSync.ts).
     if (!sandbox) stopKnowledgeSync = startKnowledgeSyncSchedule();
