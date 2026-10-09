@@ -184,20 +184,48 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
         // Не по умолчанию: человек заводит проекты из интерфейса и пустая
         // папка на каждый из них засорила бы дерево заметок. Агент же
         // просит явно и сразу складывает туда документацию.
+        // 08.10.2026: создаём под Library/Projects, не top-level — иначе
+        // мультишумные top-level папки засоряют корень. Если Library/Projects
+        // ещё не создан (bootstrap не прогоняли) — fallback на старую схему.
         if (req.body?.with_docs === true) {
-          const pos = db
+          const projectsRoot = db
             .prepare(
-              "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM journal_folders WHERE parent_id IS NULL",
+              "SELECT f.id FROM journal_folders f " +
+                "JOIN journal_folders lib ON lib.id = f.parent_id " +
+                "WHERE lib.is_kb_root = 1 AND f.name = 'Projects'",
             )
-            .get() as { p: number };
-          const res = db
-            .prepare(
-              "INSERT INTO journal_folders (parent_id, name, position) VALUES (NULL, ?, ?)",
-            )
-            .run(name, pos.p);
-          db.prepare(
-            "UPDATE projects SET notes_folder_id = ? WHERE id = ?",
-          ).run(res.lastInsertRowid, id);
+            .get() as { id: number } | undefined;
+          if (projectsRoot) {
+            const pos = db
+              .prepare(
+                "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM journal_folders WHERE parent_id = ?",
+              )
+              .get(projectsRoot.id) as { p: number };
+            const res = db
+              .prepare(
+                "INSERT INTO journal_folders (parent_id, name, position, is_kb_root) VALUES (?, ?, ?, 0)",
+              )
+              .run(projectsRoot.id, name, pos.p);
+            db.prepare(
+              "UPDATE projects SET notes_folder_id = ? WHERE id = ?",
+            ).run(res.lastInsertRowid, id);
+          } else {
+            // Fallback: Library/Projects не инициализирован — создаём как
+            // раньше (top-level), чтобы не ломать процесс создания проекта.
+            const pos = db
+              .prepare(
+                "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM journal_folders WHERE parent_id IS NULL",
+              )
+              .get() as { p: number };
+            const res = db
+              .prepare(
+                "INSERT INTO journal_folders (parent_id, name, position) VALUES (NULL, ?, ?)",
+              )
+              .run(name, pos.p);
+            db.prepare(
+              "UPDATE projects SET notes_folder_id = ? WHERE id = ?",
+            ).run(res.lastInsertRowid, id);
+          }
         }
         return db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
       },

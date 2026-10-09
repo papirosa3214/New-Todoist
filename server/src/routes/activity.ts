@@ -24,7 +24,7 @@ import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForWrite } from "../access.js";
-import { broadcastToUsers } from "../ws.js";
+import { broadcastTaskEvent } from "../ws.js";
 import { hydrateTask, getTaskRow } from "./tasks.js";
 
 /** Telemetry access belongs to the active step executor as well as card owner. */
@@ -111,6 +111,7 @@ interface Entry {
 }
 
 const buffers = new Map<string, Entry>();
+const pendingEmits = new Map<string, {timer: ReturnType<typeof setTimeout>; event: unknown; users: Array<string | null | undefined>}>();
 
 /**
  * Маскирование секретов — ДО того, как строка ляжет в буфер.
@@ -353,13 +354,16 @@ export function taskStopMetrics(taskId: string) {
 
 /** Задачу отдали или аренда протухла — строка должна погаснуть. */
 export function clearActivity(taskId: string) {
+  const pending = pendingEmits.get(taskId);
+  if (pending) clearTimeout(pending.timer);
+  pendingEmits.delete(taskId);
   buffers.delete(taskId);
 }
 
 function sweep(now: number) {
   for (const [id, e] of buffers) {
     const last = e.actions[e.actions.length - 1];
-    if (!last || now - last.at > TTL_MS) buffers.delete(id);
+    if (!last || now - last.at > TTL_MS) clearActivity(id);
   }
 }
 
@@ -513,7 +517,7 @@ async function interpretOnce(): Promise<void> {
     if (!phrase || phrase.length > OBSERVER_MAX_CHARS) return;
 
     entry.lastText = phrase;
-    broadcastToUsers([task.creator_id, task.assignee_id], {
+    broadcastTaskEvent([task.creator_id, task.assignee_id], {
       type: "task:activity",
       task_id: taskId,
       text: phrase,
@@ -666,26 +670,34 @@ export function registerActivityRoutes(app: FastifyInstance) {
       entry.lastText = text;
 
       // Троттлинг только на ВЕЩАНИЕ: буфер всегда актуален, а в браузер
-      // уходит не чаще раза в EMIT_THROTTLE_MS. Пропущенное действие не
-      // теряется — следующее вещание покажет уже свёрнутую картину.
+      // уходит не чаще раза в EMIT_THROTTLE_MS. Последнее действие серии
+      // обязательно уходит отдельным trailing-событием: клиент больше не опрашивает буфер.
+      const event = {
+        type: "task:activity", task_id: row.id, text,
+        diff: action.diff, kind: action.kind, target: action.target,
+        actor_name: action.actor, session_id: sessionOf(req),
+        total: entry.total, at: now,
+      };
+      const users = [task.creator_id, task.assignee_id];
       const due = now - entry.lastEmitAt >= EMIT_THROTTLE_MS;
+      const pending = pendingEmits.get(row.id);
       if (due) {
+        if (pending) { clearTimeout(pending.timer); pendingEmits.delete(row.id); }
         entry.lastEmitAt = now;
-        broadcastToUsers([task.creator_id, task.assignee_id], {
-          type: "task:activity",
-          task_id: row.id,
-          text,
-          // Кусок правки едет вместе со строкой: модель ЖИВЁТ НА ТЕЛЕФОНЕ,
-          // и запрашивать материал отдельным GET на каждое действие значило
-          // бы удваивать трафик ради того, что уже собрано здесь.
-          diff: action.diff,
-          kind: action.kind,
-          target: action.target,
-          actor_name: action.actor,
-          session_id: sessionOf(req),
-          total: entry.total,
-          at: now,
-        });
+        broadcastTaskEvent(users, event);
+      } else if (pending) {
+        pending.event = event;
+        pending.users = users;
+      } else {
+        const timer = setTimeout(() => {
+          const latest = pendingEmits.get(row.id);
+          pendingEmits.delete(row.id);
+          if (!latest || buffers.get(row.id) !== entry) return;
+          entry.lastEmitAt = Date.now();
+          broadcastTaskEvent(latest.users, latest.event);
+        }, Math.max(1, EMIT_THROTTLE_MS - (now - entry.lastEmitAt)));
+        timer.unref();
+        pendingEmits.set(row.id, { timer, event, users });
       }
       buffers.set(row.id, entry);
 
