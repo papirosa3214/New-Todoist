@@ -516,8 +516,13 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       const n = await asRole(role, "GET", `/api/notes/${p.id}?format=markdown`);
       return { название: n.title || "без названия", текст: n.markdown ?? "" };
     }),
-    T("taskflow_doc_write", "Записать в документацию проекта: новая заметка (project_id) или дописать в существующую (id).",
-      Type.Object({ markdown: Type.String(), id: Type.Optional(Type.String()), project_id: Type.Optional(Type.String()) }),
+    T("taskflow_doc_write", "Записать в документацию: новая заметка (project_id, library_subfolder или taskId) или дописать в существующую (id).",
+      Type.Object({
+        markdown: Type.String(),
+        id: Type.Optional(Type.String()),
+        project_id: Type.Optional(Type.String()),
+        library_subfolder: Type.Optional(Type.String()),
+      }),
       async (p) => {
         if (!String(p.markdown).trim()) throw new ToolError("нечего записывать: markdown пуст");
         if (p.id) {
@@ -529,8 +534,14 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         }
         let folderId: number;
         if(taskId) folderId=ensureTaskArtifactFolder(taskId);
+        else if (p.library_subfolder) {
+          const lib = await asRole(role, "GET", "/api/library") as any;
+          const sub = (lib?.subfolders ?? []).find((s: any) => s.name === p.library_subfolder);
+          if (!sub) throw new ToolError(`в Library нет подпапки «${p.library_subfolder}»; есть: ${(lib?.subfolders ?? []).map((s: any) => s.name).join(", ")}`);
+          folderId = sub.id;
+        }
         else {
-          if (!p.project_id) throw new ToolError("нужна задача, project_id или id заметки");
+          if (!p.project_id) throw new ToolError("нужна задача, project_id, library_subfolder или id заметки");
           const d=await asRole(role,"GET",`/api/projects/${p.project_id}/docs`);
           if(!d.folder) throw new ToolError("у проекта нет папки документации");
           folderId=d.folder.id;
@@ -544,6 +555,20 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       async (p) => {
         const d = await asRole(role, "GET", `/api/knowledge/search?q=${encodeURIComponent(p.query)}&top_k=${p.top_k ?? 5}`);
         return { запрос: p.query, куски: (d.results ?? []).map((r: any) => ({ текст: String(r.text ?? "").slice(0, 1500), id_заметки: r.doc_id })) };
+      }),
+    T("taskflow_library", "Корневая библиотека знаний TaskFlow: список подпапок (Roles, Workflows, Norms, Knowledge Base, Projects) и заметок в каждой.",
+      Type.Object({ subfolder: Type.Optional(Type.String()) }),
+      async (p) => {
+        const lib = await asRole(role, "GET", "/api/library") as any;
+        if (!lib?.subfolders) return { ошибка: "Library не инициализирована" };
+        if (p.subfolder) {
+          const notes = await asRole(role, "GET", `/api/notes?folder_id=${encodeURIComponent(p.subfolder)}`);
+          return { папка: p.subfolder, заметки: (notes?.notes ?? []).map((n: any) => ({ id: n.id, название: n.title })) };
+        }
+        return {
+          корень: lib.root?.name,
+          подпапки: lib.subfolders.map((s: any) => ({ название: s.name, заметок: s.notes_count })),
+        };
       }),
   ];
 

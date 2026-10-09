@@ -3,6 +3,7 @@
 // module cycle — index.ts registers the routes and starts the listener).
 
 import db from "./db.js";
+import { installRealtimeInvalidation } from "./lib/realtimeInvalidation.js";
 import { queueLiveActivityPush } from "./apns.js";
 
 type Socket = { readyState: number; send: (data: string) => void };
@@ -28,7 +29,16 @@ export function resetAllOffline() {
   ).run();
 }
 
+let invalidationInstalled = false;
 export function addClient(userId: string, socket: Socket) {
+  if (!invalidationInstalled) {
+    installRealtimeInvalidation(db, (taskID, topic) => {
+      if (topic === "task:changed" && !taskID) return;
+      const task = taskID ? db.prepare("SELECT creator_id,assignee_id FROM tasks WHERE id=?").get(taskID) as {creator_id:string;assignee_id:string}|undefined : undefined;
+      broadcastTaskEvent(task ? [task.creator_id,task.assignee_id] : [], {type:topic,task_id:taskID || undefined});
+    });
+    invalidationInstalled = true;
+  }
   if (!clients.has(userId)) clients.set(userId, new Set());
   clients.get(userId)!.add(socket);
   setStatus(userId, "online");

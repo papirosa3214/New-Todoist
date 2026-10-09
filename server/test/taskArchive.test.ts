@@ -737,4 +737,108 @@ describe("Архив задач вместо удаления (карточка 
     const occurrences = items.filter((t) => t.id === grandParentId).length;
     expect(occurrences).toBe(1);
   });
+
+  // Замечание лайф-тестировщика 2026-10-09, карточка 57c69735, P0 server.
+  // Сценарий: в дереве parent→child→grandchild у grandchild есть свой
+  // task_collaboration_plans; при архивировании всего дерева и последующем
+  // DELETE архивной grandchild (лист без своих дочерних) раньше падало
+  // 500 на UNIQUE tf_realtime_dirty — каскадный DELETE нод/эджей
+  // плана в `purgeTasks` давал (task:changed, '') от двух таблиц.
+  // Фикс в taskPurge.ts: явно удалить ноды и эджи планов ДО удаления
+  // самих планов, чтобы их AFTER-триггеры записали dirty по
+  // существующему task_id. Тест ставит AFTER-триггеры с INSERT OR IGNORE
+  // (как в обновлённом lib/realtimeInvalidation.ts); на старых runtime-
+  // копиях без OR IGNORE поведение починит обновление файла на проде
+  // (это ответственность интеграции, см. отчёт).
+  it("DELETE архивного grandchild с планом в дереве → 200, карточка уходит, task_purge_log записан", async () => {
+    db.exec(`CREATE TEMP TABLE IF NOT EXISTS tf_realtime_dirty(topic TEXT NOT NULL, task_id TEXT NOT NULL, PRIMARY KEY(topic,task_id))`);
+    db.exec(`DROP TRIGGER IF EXISTS tf_realtime_task_collaboration_plans_DELETE`);
+    db.exec(`DROP TRIGGER IF EXISTS tf_realtime_task_collaboration_plan_nodes_DELETE`);
+    db.exec(`DROP TRIGGER IF EXISTS tf_realtime_task_collaboration_plan_edges_DELETE`);
+    db.exec(`CREATE TEMP TRIGGER tf_realtime_task_collaboration_plans_DELETE AFTER DELETE ON main.task_collaboration_plans BEGIN
+      INSERT OR IGNORE INTO tf_realtime_dirty VALUES ('task:changed', COALESCE(OLD.task_id,''));
+    END;`);
+    db.exec(`CREATE TEMP TRIGGER tf_realtime_task_collaboration_plan_nodes_DELETE AFTER DELETE ON main.task_collaboration_plan_nodes BEGIN
+      INSERT OR IGNORE INTO tf_realtime_dirty VALUES ('task:changed', COALESCE((SELECT task_id FROM task_collaboration_plans WHERE id=OLD.plan_id),''));
+    END;`);
+    db.exec(`CREATE TEMP TRIGGER tf_realtime_task_collaboration_plan_edges_DELETE AFTER DELETE ON main.task_collaboration_plan_edges BEGIN
+      INSERT OR IGNORE INTO tf_realtime_dirty VALUES ('task:changed', COALESCE((SELECT task_id FROM task_collaboration_plans WHERE id=OLD.plan_id),''));
+    END;`);
+
+    try {
+      // Шаг 1. Создаём дерево parent→child→grandchild.
+      const grandId = await makeTask(null, "P0: grandchild");
+      const childId = await makeTask(null, "P0: child");
+      const parentId = await makeTask(null, "P0: parent");
+      db.prepare("UPDATE tasks SET parent_id = ? WHERE id = ?").run(childId, grandId);
+      db.prepare("UPDATE tasks SET parent_id = ? WHERE id = ?").run(parentId, childId);
+
+      // Шаг 2. У grandchild заводим план с двумя узлами и одним ребром —
+      // этого достаточно, чтобы каскад дал и ноды, и эджи в момент purge.
+      const planId = `pln_p0_${Date.now()}`;
+      db.prepare(
+        "INSERT INTO task_collaboration_plans(id, task_id, revision, status, profile, created_by) VALUES (?,?,?,?,?,?)",
+      ).run(planId, grandId, 1, "approved", "single_executor", owner.id);
+      db.prepare(
+        "INSERT INTO task_collaboration_plan_nodes(id, plan_id, slot_key, role_key, required) VALUES (?,?,?,?,1)",
+      ).run(`pln_node_a_${Date.now()}`, planId, "executor", "builder");
+      db.prepare(
+        "INSERT INTO task_collaboration_plan_nodes(id, plan_id, slot_key, role_key, required) VALUES (?,?,?,?,1)",
+      ).run(`pln_node_b_${Date.now()}`, planId, "verifier", "qa");
+      db.prepare(
+        "INSERT INTO task_collaboration_plan_edges(id, plan_id, from_slot_key, to_slot_key, start_condition) VALUES (?,?,?,?, 'submitted')",
+      ).run(`pln_edge_${Date.now()}`, planId, "executor", "verifier");
+
+      // Шаг 3. Архивируем корень — политика B уводит всё поддерево.
+      const archive = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${parentId}/archive`,
+        headers: bearer(owner.jwt),
+      });
+      expect(archive.statusCode).toBe(200);
+      const archived = db.prepare("SELECT archived_at FROM tasks WHERE id = ?").get(grandId) as
+        | { archived_at: string | null }
+        | undefined;
+      expect(archived?.archived_at).not.toBeNull();
+
+      // Шаг 4. Purge grandchild (он лист) — раньше возвращал 500 на
+      // UNIQUE tf_realtime_dirty. Сейчас ожидаем 200 и физическое удаление.
+      const purgeGrand = await app.inject({
+        method: "DELETE",
+        url: `/api/tasks/${grandId}`,
+        headers: bearer(owner.jwt),
+      });
+      expect(purgeGrand.statusCode).toBe(200);
+
+      // Карточка ушла из БД, task_purge_log записан.
+      const stillThere = db.prepare("SELECT id FROM tasks WHERE id = ?").get(grandId);
+      expect(stillThere).toBeUndefined();
+      const log = db
+        .prepare("SELECT * FROM task_purge_log WHERE task_id = ?")
+        .get(grandId) as
+        | { task_id: string; actor_id: string }
+        | undefined;
+      expect(log?.task_id).toBe(grandId);
+      expect(log?.actor_id).toBe(owner.id);
+
+      // Шаг 5. Снимаем оставшееся дерево.
+      const purgeChild = await app.inject({
+        method: "DELETE",
+        url: `/api/tasks/${childId}`,
+        headers: bearer(owner.jwt),
+      });
+      expect(purgeChild.statusCode).toBe(200);
+      const purgeParent = await app.inject({
+        method: "DELETE",
+        url: `/api/tasks/${parentId}`,
+        headers: bearer(owner.jwt),
+      });
+      expect(purgeParent.statusCode).toBe(200);
+    } finally {
+      db.exec(`DROP TRIGGER IF EXISTS tf_realtime_task_collaboration_plans_DELETE`);
+      db.exec(`DROP TRIGGER IF EXISTS tf_realtime_task_collaboration_plan_nodes_DELETE`);
+      db.exec(`DROP TRIGGER IF EXISTS tf_realtime_task_collaboration_plan_edges_DELETE`);
+      db.exec(`DELETE FROM tf_realtime_dirty`);
+    }
+  });
 });

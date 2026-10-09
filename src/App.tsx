@@ -42,6 +42,7 @@ import { ProvidersScreen } from "./screens/ProvidersScreen";
 import { TemplatesScreen } from "./screens/TemplatesScreen";
 import { NotesScreen } from "./screens/NotesScreen";
 import { NoteEditorScreen } from "./screens/NoteEditorScreen";
+import { LibraryScreen } from "./screens/LibraryScreen";
 import { Icon } from "./components/UI";
 
 // Catch-all for unknown routes: without this a bad/typo'd URL renders the
@@ -186,6 +187,7 @@ export default function App() {
               на месте, как в Obsidian. */}
             <Route path="/notes" element={<NotesScreen />} />
             <Route path="/notes/:id" element={<NoteEditorScreen />} />
+            <Route path="/library" element={<LibraryScreen />} />
             <Route
               path="/settings/voice-models"
               element={<VoiceModelsScreen />}

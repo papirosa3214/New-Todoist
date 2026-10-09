@@ -192,6 +192,7 @@ const BLOCK_META: Record<string, [string, string, RunMode[], string[]]> = {
   "task.review": ["Проверка результата", "Ревью", ["review"], ["roleTitle", "taskId", "title"]],
   "task.plan": ["Узел плана", "План", ["subtask"], ["roleTitle", "taskId", "subtaskId", "subtaskTitle", "rules"]],
   "task.documentation": ["Поиск документации", "Задача", ["work", "resume", "subtask"], []],
+  "task.knowledge": ["Библиотека TaskFlow", "База знаний", ["work", "resume", "subtask", "review"], []],
   "chat.wrapper": ["Чат роли", "Чат", ["chat"], ["roleInstruction", "localPolicy", "roleTitle", "role", "participants", "history", "userText"]],
   "chat.followup": ["Продолжение чата роли", "Чат", ["chat"], ["roleTitle", "role", "history", "userText"]],
   "secretary.chat": ["Чат и быстрые ответы Секретаря", "Чат", ["chat"], ["roleInstruction", "history", "userText"]],
@@ -215,6 +216,7 @@ const META: Record<string, [string,string]> = {
  "plan.role_node": ["Данные узла плана", "Контекст"], "chat.submission": ["История чата", "Контекст"],
  "chat.voice_intake": ["Голосовые данные", "Контекст"], "intake.summary": ["Память и база знаний", "Контекст"],
  "subtask.run_prompt": ["Загрузка внешних инструкций", "Контекст"],
+ "task.knowledge": ["Библиотека TaskFlow", "База знаний"],
 };
 for (const spec of LAYER_CATALOG) {
  if (META[spec.key]) [spec.title, spec.group] = META[spec.key];
