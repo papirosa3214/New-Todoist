@@ -83,3 +83,84 @@
    `planReviewLifecycle` отдельным шагом реструктуризации).
 3. Согласовать дизайн видимого уведомления: тип, текст, действия
    (`approve`/`reject`), колонки в `notifications`.
+
+## Что сделано в реализации (коммит после расширения границ)
+
+Владелец 09.10.2026 разрешил правку `finishPlanIfComplete` и согласовал
+видимый тип `plan_approval_request` с идентификаторами `task/plan/op`.
+Сделано точечно, в трёх местах, остальные файлы плана и координации
+(planSubtaskAdmission/dispatch, очередь, slotConversation) не тронуты.
+
+### 1. `finishPlanIfComplete` (planSubtaskAdmission.ts) — гард pending proposal
+
+Перед переводом карточки в `agent_state='review'` функция проверяет наличие
+открытого предложения плана:
+
+```sql
+SELECT 1 FROM task_collaboration_plan_ops
+ WHERE plan_id = ? AND status = 'proposed' LIMIT 1
+```
+
+Если proposal открыт — функция логирует событие `plan_completion_deferred`
+(видно в ленте карточки) и возвращает `false`. Карточка остаётся активной,
+никакая ложная сдача не регистрируется. Сдача произойдёт штатно после
+`approve`/`reject` владельцем и после `setDone` оставшихся узлов.
+
+### 2. Уведомление `plan_approval_request` (planMutations.ts)
+
+Раньше `notifyOwner` слал скрытый `agent_state`, который глушился триггером
+`notifications_owner_no_activity` (миграции 068/069). Теперь для proposed
+вызывается отдельный помощник `notifyPlanApprovalRequest`:
+
+- тип `plan_approval_request` — НЕ входит в IN-список триггера 068/069,
+  проходит до владельца;
+- текст содержит явные идентификаторы `[op:tcpo_… plan:tcp_… task:…]`
+  (отдельных колонок в `notifications` пока нет — фронт парсит префикс);
+- `broadcastToUsers` шлёт `notification:new` по вебсокету.
+
+Серверная доставка: запись в `notifications` + `notification:new` по
+вебсокету `server/src/ws.ts`. APNs не настроен (ключ отсутствует, см.
+логи запуска `[apns] ключ не настроен — островок будет обновляться только
+при открытом приложении`); обещать push-доставку нельзя.
+
+### 3. Возобновление авторского subtask после `approve` (planMutations.ts)
+
+В `decidePlanProposal` после успешного `applyPlanOps(..., bypassBudget)`
+и пометки `applied` добавлен снятие блокировки с авторов `request_help`,
+которые входят в применённые ops. До approve `w.waiting` блокирует автора
+через `plan_help_requested` (subtask.agent_state='blocked',
+block_type='dependency'); после approve — `agent_state='todo'`, чтобы роль
+продолжила с того места, где остановилась.
+
+Гард на состояние карточки: если `tasks.agent_state='review'`, возобновление
+не срабатывает (защита от гонки, когда проверяющий уже принял работу).
+
+### Что проверено
+
+`test/planOwnerApproval.test.ts` (4 сценария, 4/4 зелёных):
+- pending proposal удерживает карточку: `finishPlanIfComplete` возвращает
+  `false`, уведомление `plan_approval_request` создаётся с корректным
+  префиксом `[op:… plan:… task:…]`, `pendingPlanProposals` отдаёт запись;
+- approve с выполненными узлами → карточка уходит на review;
+- reject → повторный reject/approve → 409 (защита от дубля, общий
+  контракт `decidePlanProposal` не тронут);
+- approve без выполненных узлов → карточка остаётся активной.
+
+`planComplete.test.ts` (4/4) и `planReviewLifecycle.test.ts` (2/4 —
+те же флаки что на main, до моих правок) — без регрессий.
+`tsc --noEmit` — чисто.
+
+### Ограничения
+
+- Колонки `action_url`/`action_kind` в `notifications` не добавлены:
+  минимально достаточно текстового префикса, фронт парсит его при показе.
+  Если владелец захочет явные `approve_url`/`reject_url` — это отдельная
+  миграция и расширение роута.
+- Возобновление через `request_help` покрывает основной путь; другие
+  сценарии (например, `add_step` + ручная блокировка) требуют отдельного
+  прохода, потому что гард «subtask.block_type='dependency'» срабатывает
+  только для помощников.
+- `finishPlanIfComplete` теперь логирует `plan_completion_deferred` каждый
+  раз, пока proposal открыт и кто-то закрыл последний узел; в плотных
+  циклах это даст много записей в `task_events` — при необходимости
+  добавим rate-limit на стороне логирования.

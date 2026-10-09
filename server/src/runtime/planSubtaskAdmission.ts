@@ -595,6 +595,16 @@ export function finishPlanIfComplete(planId: string, taskId: string, actorId: st
   if (already) return false;
   // Корень ветки без Архитектора на выходе — он подключается сам и собирает итог.
   if (ensureBranchAssembler(planId, taskId)) return false;
+  // tcpo_791b4519: согласование владельца ещё открыто — не закрывать план,
+  // не переводить карточку в review, не оставлять ложного успеха. Возвращаем
+  // false и оставляем задачу активной; очередь согласования уже создала
+  // видимое уведомление plan_approval_request через notifyPlanApprovalRequest.
+  const pendingProposal = db.prepare("SELECT id FROM task_collaboration_plan_ops WHERE plan_id = ? AND status = 'proposed' LIMIT 1")
+    .get(planId) as { id: string } | undefined;
+  if (pendingProposal) {
+    logEvent({ taskId, actorId, kind: "plan_completion_deferred", field: planId, toValue: pendingProposal.id });
+    return false;
+  }
 
   const summary = [
     "План совместной работы сдан.",

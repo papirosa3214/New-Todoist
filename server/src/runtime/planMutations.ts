@@ -452,6 +452,25 @@ function notifyOwner(taskId: string, actorId: string, text: string): void {
   broadcastToUsers([owner], { type: "notification:new", notificationId: id, taskId });
 }
 
+/**
+ * Видимое уведомление владельцу о предложении плана, ждущем решения.
+ * Тип plan_approval_request не входит в IN-список триггера
+ * notifications_owner_no_activity, поэтому проходит до пользователя
+ * (миграции 068/069). Владелец 09.10.2026: видимое, устойчивое, с
+ * идентификаторами task/plan/op и явными approve/reject.
+ * opId/planId передаются в тексте — отдельных колонок в notifications пока
+ * нет, фронт парсит префикс [op:tcpo_… plan:tcp_…] при показе.
+ */
+function notifyPlanApprovalRequest(taskId: string, planId: string, opId: string, actorId: string, summary: string, reason: string): void {
+  const owner = ownerId();
+  if (!owner) return;
+  const text = `[op:${opId} plan:${planId} task:${taskId}] Роль предлагает изменить план: ${summary}. Причина: ${reason}. Решите: approve/reject в карточке задачи.`;
+  const id = crypto.randomUUID();
+  db.prepare("INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'plan_approval_request', ?, ?, ?)")
+    .run(id, owner, taskId, text, actorId);
+  broadcastToUsers([owner], { type: "notification:new", notificationId: id, taskId });
+}
+
 function roleNote(taskId: string, roleKey: string, text: string): void {
   db.prepare("INSERT INTO comments (id, task_id, user_id, text) VALUES (?, ?, ?, ?)")
     .run(crypto.randomUUID(), taskId, roleUserId(roleKey), text);
@@ -527,7 +546,7 @@ export function applyPlanOps(
     if (over) {
       const opId = logOp(plan.id, actor, plan.version, null, ops, "proposed", reason);
       logEvent({ taskId: plan.task_id, actorId: actor.id, kind: "collaboration_plan_change_proposed", field: opId, toValue: clip(describe(ops, w), 500) });
-      notifyOwner(plan.task_id, actor.id, `${actor.kind === "role" ? roleTitle(actor.roleKey) : "Роль"} просит изменить план: ${clip(describe(ops, w), 200)}. ${over}`);
+      notifyPlanApprovalRequest(plan.task_id, plan.id, opId, actor.id, clip(describe(ops, w), 200), over);
       return { status: "proposed", opId, reason: over };
     }
 
@@ -568,6 +587,23 @@ export function decidePlanProposal(opId: string, ownerIdValue: string, approve: 
     db.prepare("UPDATE task_collaboration_plan_nodes SET origin = 'role', added_by = ? WHERE plan_id = ? AND slot_key IN (" +
       result.added.map(() => "?").join(",") + ")").run(row.actor_id, row.plan_id, ...result.added);
     mark("applied");
+    // Владелец одобрил — снимаем блокировку ожидания с авторов, чьи request_help
+    // входили в применённые ops. request_help блокирует автора через
+    // plan_help_requested (subtask.agent_state='blocked', block_type='dependency');
+    // после apply предшественник добавлен, и сдача помощника вернёт автора
+    // в работу. Возобновляем только в плане, по которому было решение, и
+    // только если задача ещё не на проверке.
+    const authorSlots = ops.filter((o) => o.op === "request_help").map((o) => (o as { from_slot: string }).from_slot);
+    if (authorSlots.length) {
+      const taskRow = db.prepare("SELECT agent_state FROM tasks WHERE id = (SELECT task_id FROM task_collaboration_plans WHERE id = ?)")
+        .get(row.plan_id) as { agent_state: string | null } | undefined;
+      if (taskRow && taskRow.agent_state !== "review") {
+        const placeholders = authorSlots.map(() => "?").join(",");
+        db.prepare(`UPDATE subtasks SET agent_state='todo', block_type=NULL, blocked_at=NULL
+ WHERE collaboration_plan_id=? AND plan_node_key IN (${placeholders})
+   AND agent_state='blocked' AND block_type='dependency'`).run(row.plan_id, ...authorSlots);
+      }
+    }
   }
   return result;
 }
