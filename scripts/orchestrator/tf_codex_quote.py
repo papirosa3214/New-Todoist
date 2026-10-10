@@ -11,14 +11,19 @@
   • `shlex_quote_argv(argv)` — POSIX-safe экранирование списка (для
     `subprocess.run(["ssh", mac, " ".join(quoted)])`).
   • `validate_codex_thread(thread_uuid)` — UUID regex; иначе exit 64.
-  • `strip_control(message)` — убирает \\x00..\\x1f (включая \\n/\\r);
-    сообщение приходит от роли TaskFlow и может содержать что угодно,
-    в т.ч. переводы строк из заголовков задач.
+  • `strip_control(message)` — убирает \\x00..\\x1f, КРОМЕ \\n (0x0A),
+    \\r (0x0D) и \\t (0x09). Сообщение приходит от роли TaskFlow и
+    может содержать переводы строк и кавычки, которые должны доходить
+    до Codex-чата буквально (уточнение ведущего 2026-10-10
+    в комментарии 97d9b075; требование V2 карточки 905db3e3-…: «Перевод
+    строки, backslash проходят на receiver ровно как на стороне сервера»).
+    POSIX `shlex.quote` корректно передаёт \\n/\\r внутри одинарных
+    кавычек, поэтому truncation был лишним.
 
-Переводы строк и кавычки должны передаваться БУКВАЛЬНО: поэтому
-strip_control режет их, а не пытается «экранировать» в shell. Получатель
-видит усечённый текст без управляющих символов — это безопаснее, чем
-ломать shell-quoting в попытке сохранить байт-в-байт.
+Переводы строк и кавычки передаются БУКВАЛЬНО: strip_control не режет
+\\n/\\r/\\t, а только опасные control-символы (NUL, BEL и т.п.). Кавычки
+(`'`, `"`, `\``) и backslash проходят как есть и безопасно экранируются
+`shlex_quote_argv` дальше по стеку.
 """
 import re
 import shlex
@@ -40,10 +45,15 @@ def validate_codex_thread(thread_uuid: str) -> str:
 
 
 def strip_control(message: str) -> str:
-    """Убирает управляющие символы U+0000..U+001F (включая \\n, \\r, \\t)."""
+    """Убирает опасные control-символы U+0000..U+001F, КРОМЕ \\n (0x0A),
+    \\r (0x0D) и \\t (0x09). Переводы строк и табы проходят буквально —
+    POSIX `shlex.quote` корректно обрабатывает их внутри одинарных кавычек
+    (уточнение ведущего 2026-10-10 в комментарии 97d9b075: «Переводы
+    строк и кавычки должны передаваться буквально, не truncation»).
+    """
     if message is None:
         return ""
-    return "".join(ch for ch in message if ord(ch) >= 0x20 or ch == "\t")
+    return "".join(ch for ch in message if ord(ch) >= 0x20 or ch in "\n\r\t")
 
 
 def shlex_quote_argv(argv: Iterable[str]) -> List[str]:

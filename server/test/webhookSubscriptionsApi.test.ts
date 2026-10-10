@@ -293,4 +293,102 @@ describe("webhooks API: CRUD, секрет write-only, фильтры", () => {
     expect((body as any).wake_queued).toBeUndefined();
     expect((body as any).wake_thread_id).toBeUndefined();
   });
+
+  // D-5 DTO (rework 2026-10-10): last_wake_ack раньше всегда был
+  // { codex_followup_id: null, acked: false, acked_at: null, kind: null }
+  // из-за чтения несуществующей колонки `last_wake_followup_id`. Теперь
+  // подтягиваем из webhook_wake_queue по LIMIT 1 ORDER BY id DESC.
+  it("last_wake_ack подтягивается из webhook_wake_queue (D-5 DTO rework)", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/integrations/webhooks",
+      headers: token(apiToken),
+      payload: {
+        name: "ack-dto",
+        url: `http://127.0.0.1:${port}/hook`,
+        secret: VALID_SECRET,
+        event_kinds: ["plan_subtask_started"],
+        codex_thread_id: "01a120f9-1266-7331-a4ca-81f6da2a698b",
+      },
+    });
+    const id = created.json().webhook.id;
+    // Свежая подписка — wake_queue пуст, last_wake_ack «нейтральный».
+    const fresh = await app.inject({
+      method: "GET",
+      url: `/api/integrations/webhooks/${id}`,
+      headers: token(apiToken),
+    });
+    expect(fresh.json().webhook.last_wake_ack).toEqual({
+      codex_followup_id: null,
+      acked: false,
+      acked_at: null,
+      kind: null,
+    });
+
+    // Прямая вставка строки wake_queue с followup_id и wake_acked_at —
+    // имитация постановки в очередь + ack через chat callback.
+    db.prepare(
+      `INSERT INTO webhook_wake_queue
+         (event_id, subscription_id, codex_thread_id, message,
+          delivered_at, attempts, codex_followup_id, wake_acked_at, wake_acked_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "ev-ack-dto",
+      id,
+      "01a120f9-1266-7331-a4ca-81f6da2a698b",
+      "тест",
+      new Date().toISOString(),
+      1,
+      "feed0000-0000-4000-8000-000000000abc",
+      new Date().toISOString(),
+      "codex_chat_callback",
+    );
+
+    // Подписка с подтверждённым ack теперь видна в DTO как acked=true.
+    const acked = await app.inject({
+      method: "GET",
+      url: `/api/integrations/webhooks/${id}`,
+      headers: token(apiToken),
+    });
+    expect(acked.json().webhook.last_wake_ack.acked).toBe(true);
+    expect(acked.json().webhook.last_wake_ack.codex_followup_id).toBe(
+      "feed0000-0000-4000-8000-000000000abc",
+    );
+    expect(acked.json().webhook.last_wake_ack.kind).toBe("codex_chat_callback");
+    expect(acked.json().webhook.last_wake_ack.acked_at).toBeTruthy();
+
+    // Проверяем и list-эндпоинт.
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/integrations/webhooks",
+      headers: token(apiToken),
+    });
+    const found = (listed.json().webhooks as any[]).find((w) => w.id === id);
+    expect(found.last_wake_ack.acked).toBe(true);
+
+    // Добавляем свежую строку БЕЗ ack — должна выигрывать по id DESC.
+    db.prepare(
+      `INSERT INTO webhook_wake_queue
+         (event_id, subscription_id, codex_thread_id, message,
+          delivered_at, attempts, codex_followup_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "ev-later",
+      id,
+      "01a120f9-1266-7331-a4ca-81f6da2a698b",
+      "свежий wake",
+      new Date().toISOString(),
+      1,
+      "feed0000-0000-4000-8000-00000000ffff",
+    );
+    const refreshed = await app.inject({
+      method: "GET",
+      url: `/api/integrations/webhooks/${id}`,
+      headers: token(apiToken),
+    });
+    expect(refreshed.json().webhook.last_wake_ack.codex_followup_id).toBe(
+      "feed0000-0000-4000-8000-00000000ffff",
+    );
+    expect(refreshed.json().webhook.last_wake_ack.acked).toBe(false);
+  });
 });

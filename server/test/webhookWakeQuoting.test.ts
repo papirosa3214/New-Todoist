@@ -65,14 +65,19 @@ describe("D-4 POSIX-safe shell quoting через tf_codex_quote", () => {
       expectContains: ["`pwd`", "\\"],
     },
     {
-      name: "перевод строки: strip_control режет его",
+      // D-4 #2 (уточнение ведущего 2026-10-10, комментарий 97d9b075):
+      // strip_control сохраняет \n — POSIX `shlex.quote` корректно
+      // оборачивает перевод строки в одинарные кавычки, truncation
+      // был лишним и ломал критерий приёмки V2 №4.
+      name: "перевод строки проходит буквально в shell quoting",
       message: "first\nsecond",
-      expectContains: ["firstsecond"],
+      expectContains: ["first\nsecond"],
     },
     {
-      name: "CR и табы",
-      message: "a\rb\tc",
-      expectContains: ["a", "b\tc"],
+      // CRLF и табы тоже проходят буквально.
+      name: "CRLF и табы сохраняются",
+      message: "a\r\nb\tc",
+      expectContains: ["a\r\nb\tc"],
     },
   ];
 

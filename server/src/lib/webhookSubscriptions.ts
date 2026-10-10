@@ -131,6 +131,35 @@ interface SubscriptionRow {
   updated_at: string;
 }
 
+interface WakeQueueRow {
+  codex_followup_id: string | null;
+  wake_acked_at: string | null;
+  wake_acked_kind: string | null;
+}
+
+/** Самая свежая строка wake-очереди для подписки (по `id DESC LIMIT 1`).
+ *  Колонки webhook_subscriptions под подтверждение ack не заведены — данные
+ *  лежат в webhook_wake_queue, поэтому DTO подписки подтягивает их оттуда.
+ *  Возвращает null, если для подписки ещё не было wake (новая подписка
+ *  без codex_thread_id, либо очередь пуста).
+ *
+ *  Statement готовится лениво: в момент импорта модуля таблица
+ *  webhook_wake_queue может ещё не существовать (in-memory SQLite для
+ *  тестов, поэтапные миграции), а migration 128_webhook_durable_secret_and_wake_ack
+ *  поднимает её до первого обращения через rowToDto. */
+function latestWakeForSubscription(subscriptionId: string): WakeQueueRow | null {
+  const row = db
+    .prepare(
+      `SELECT codex_followup_id, wake_acked_at, wake_acked_kind
+         FROM webhook_wake_queue
+        WHERE subscription_id = ?
+        ORDER BY id DESC
+        LIMIT 1`,
+    )
+    .get(subscriptionId) as WakeQueueRow | undefined;
+  return row ?? null;
+}
+
 function rowToDto(r: SubscriptionRow): WebhookDTO {
   let kinds: string[] = [];
   try {
@@ -139,6 +168,15 @@ function rowToDto(r: SubscriptionRow): WebhookDTO {
   } catch {
     kinds = [];
   }
+  // D-5 DTO (rework 2026-10-10): last_wake_ack подтягивается из
+  // webhook_wake_queue, а не из webhook_subscriptions — поля
+  // `last_wake_followup_id` там нет. Если для подписки ещё нет строк
+  // в очереди (новая подписка, либо wake ещё не проходил), DTO
+  // возвращает полностью «нейтральный» ack: codex_followup_id/acked_at/
+  // kind все null, acked=false. Это согласовано с контрактом V2:
+  // queued ≠ acked, ack выставляется только через /_wake_ack или
+  // будущий turn_started callback.
+  const wake = latestWakeForSubscription(r.id);
   return {
     id: r.id,
     name: r.name,
@@ -158,10 +196,10 @@ function rowToDto(r: SubscriptionRow): WebhookDTO {
       ? { codex_thread_id: r.codex_thread_id, has_thread: true }
       : { codex_thread_id: null, has_thread: false },
     last_wake_ack: {
-      codex_followup_id: (r as any).last_wake_followup_id ?? null,
-      acked: false,
-      acked_at: null,
-      kind: null,
+      codex_followup_id: wake?.codex_followup_id ?? null,
+      acked: wake?.wake_acked_at != null,
+      acked_at: wake?.wake_acked_at ?? null,
+      kind: wake?.wake_acked_kind ?? null,
     },
     created_at: r.created_at,
     updated_at: r.updated_at,
