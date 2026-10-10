@@ -767,12 +767,24 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   // assigning a task to one is how a new user forms their first connection.
   // Email is intentionally never selected: the frontend doesn't use it
   // (see src/screens/AgentsScreen.tsx, src/screens/TaskFormScreen.tsx).
+  // 10.10.2026: возраст отметки в секундах. Отметка лежит в базе (общая для
+  // всех инстансов), а отпечаток активности — в памяти процесса. Отдельное
+  // выражение, а не литерал внутри шаблонной строки: одинарные кавычки в
+  // SQL там съедает TypeScript.
+  const SEEN_AGE_SEC =
+    "(CASE WHEN last_seen_at IS NULL THEN NULL ELSE " +
+    "(julianday('now') - julianday(replace(replace(last_seen_at,'T',' '),'Z',''))) * 86400.0 " +
+    "END)";
   app.get("/api/agents", { preHandler: authPre }, async (req: any) => {
     const rows = db
       .prepare(
         `SELECT id, name, role, type, avatar_color, avatar_url,
                 avatar_url_working, avatar_url_blocked, initials, status,
                 last_seen_at,
+                -- Признак «на связи» считаем из базы, а не из памяти:
+                -- инстансов сервера несколько, и агент, работающий в одном,
+                -- из другого не виден. Из памяти берём только подпись действия.
+                ${SEEN_AGE_SEC} AS seen_age_sec,
                 -- «Живая» аватарка (27.08.2026): что сейчас держит агент как
                 -- исполнитель (assignee_id) — blocked приоритетнее working,
                 -- застрять важнее показать, чем «просто работает». NULL —
@@ -802,6 +814,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       .all(req.userId, req.userId, req.userId, req.userId) as Array<{
         id: string;
         last_seen_at: string | null;
+        seen_age_sec: number | null;
       }>;
 
     // Отпечаток активности (29.08.2026, задача 31f2759e): в памяти
@@ -811,9 +824,12 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     // Для людей модуль возвращает null — у них и так online не нужен.
     return rows.map((row) => {
       const snap = snapshotFor(row.id);
+      // Порог тот же, что в activeAgent.ts (STALE_AFTER_MS = 60с): минута
+      // тишины — и агент уже не на связи.
+      const online = row.seen_age_sec !== null && row.seen_age_sec >= 0 && row.seen_age_sec <= 60;
       return {
         ...row,
-        online: snap?.online ?? false,
+        online,
         last_action: snap?.lastAction ?? null,
         last_action_title: snap?.lastActionTitle ?? null,
       };
