@@ -95,6 +95,7 @@ import { registerLinearRoutes } from "./routes/linear.js";
 import { registerComposioRoutes } from "./routes/composio.js";
 import { registerCoordinationRoutes } from "./routes/coordination.js";
 import { logServerEvent, normalizeServerError } from "./lib/serverEvents.js";
+import { registerServerEventsRoutes } from "./routes/serverEvents.js";
 
 /**
  * Собирает и возвращает готовый Fastify-инстанс — регистрирует плагины,
@@ -415,6 +416,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerMergeMarkerRoutes(app);
   registerOwnerControlRoutes(app);
   registerAdminServerSettingsRoutes(app);
+  registerServerEventsRoutes(app);
   registerOwnerCommandRoutes(app);
   registerSubtaskArtifactRoutes(app);
   // Ручки «прервать шаг», «сбросить попытку», «отменить задание» —
