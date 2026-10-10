@@ -66,6 +66,7 @@ import { registerJournalFolderRoutes } from "./routes/journalFolders.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 import { registerTaskOutcomeRoutes } from "./routes/taskOutcome.js";
 import { registerNoteRoutes } from "./routes/notes.js";
+import { registerLibraryRoutes } from "./routes/library.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerAgentInboxRoutes } from "./routes/agent-inbox.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
@@ -411,6 +412,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerKnowledgeRoutes(app);
   registerTaskOutcomeRoutes(app);
   registerNoteRoutes(app);
+  registerLibraryRoutes(app);
   registerChatRoutes(app);
   await registerAgentInboxRoutes(app);
   registerWebhookRoutes(app);

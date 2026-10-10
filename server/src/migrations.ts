@@ -3753,6 +3753,25 @@ const migrations: Migration[] = [
   { id: "118_plan_handoff_on_submission", description: "Role handoffs open on submission, acceptance remains a review status", up() {
     db.exec("UPDATE task_collaboration_plan_edges SET start_condition='submitted' WHERE start_condition='accepted'");
   } },
+  {
+    id: "119_kb_root_folder",
+    description:
+      "Пометка корневой папки библиотеки знаний (08.10.2026, решение владельца: роли должны читать контекст из единой корневой папки «TaskFlow Library» через taskflow_kb_search в первую очередь, и сами пополнять её находками). Колонка is_kb_root в journal_folders — ровно одна корневая папка (по соглашению «TaskFlow Library»), не привязанная к проекту. Индекс — частичный, чтобы быстро находить корень при запросах обогатителя и при суточном RAGFlow-синке. Существующие папки получают is_kb_root=0 по умолчанию.",
+    up: () => {
+      const cols = db.prepare("PRAGMA table_info(journal_folders)").all() as Array<{
+        name: string;
+      }>;
+      if (!cols.some((c) => c.name === "is_kb_root")) {
+        db.exec(
+          `ALTER TABLE journal_folders ADD COLUMN is_kb_root INTEGER NOT NULL DEFAULT 0;`,
+        );
+      }
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_journal_folders_kb_root
+           ON journal_folders(is_kb_root) WHERE is_kb_root = 1;`,
+      );
+    },
+  },
 
   // Единый реестр серверных параметров (MAK-95). Владелец правит значения
   // через Настройки → Сервер, изменения публикуются через шину событий и

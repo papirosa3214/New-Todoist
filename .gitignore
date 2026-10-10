@@ -118,3 +118,6 @@ server/test/*.db-journal
 server/scheduler-watch.state.json
 server/agents/secretary-voice/__pycache__/
 server/secretary-voice-watch.state.json
+
+# Superdesign временные файлы (HTML-шаблоны компонентов)
+.superdesign/tmp/

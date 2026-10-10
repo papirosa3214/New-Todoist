@@ -40,24 +40,32 @@ export function registerNoteRoutes(app: FastifyInstance) {
   // Список для экранов папок: без полного контента — только превью.
   // Контент тянется отдельным запросом при открытии заметки, иначе
   // список из сотни заметок вёз бы мегабайты TipTap-JSON.
-  app.get("/api/notes", { preHandler: authPre }, async () => {
-    const rows = db
-      .prepare(
-        `SELECT id, title, content, folder_id, created_at, updated_at
-         FROM user_notes ORDER BY updated_at DESC, created_at DESC`,
-      )
-      .all() as NoteRow[];
-    return {
-      notes: rows.map((r) => ({
-        id: r.id,
-        title: r.title,
-        folder_id: r.folder_id,
-        preview: journalPreview(r.content),
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-      })),
-    };
-  });
+  // folder_id (08.10.2026) — фильтр по папке; без параметра — все.
+  app.get<{ Querystring: { folder_id?: string } }>(
+    "/api/notes",
+    { preHandler: authPre },
+    async (req: any) => {
+      const folderId = req.query?.folder_id;
+      const where = folderId ? "WHERE folder_id = ?" : "";
+      const params = folderId ? [Number(folderId)] : [];
+      const rows = db
+        .prepare(
+          `SELECT id, title, content, folder_id, created_at, updated_at
+           FROM user_notes ${where} ORDER BY updated_at DESC, created_at DESC`,
+        )
+        .all(...params) as NoteRow[];
+      return {
+        notes: rows.map((r) => ({
+          id: r.id,
+          title: r.title,
+          folder_id: r.folder_id,
+          preview: journalPreview(r.content),
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+        })),
+      };
+    },
+  );
 
   // ?format=markdown — для АГЕНТОВ (26.08.2026). Они читают и пишут
   // markdown, а хранение — TipTap JSON; без перевода агент получал бы

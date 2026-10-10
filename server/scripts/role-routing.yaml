@@ -1,6 +1,3 @@
-# Role routing для TaskFlow. Сгенерировано автоматически Pi
-# runtime (карточка be9cf712, фаза 2). При правке руками — не
-# забывайте порядок: defaults, fallbacks, models.
 defaults:
   researcher: pi_runtime
   analyst: pi_runtime
@@ -10,31 +7,33 @@ defaults:
   qa: pi_runtime
   designer: pi_runtime
   secretary: pi_runtime
+  code_orchestrator: pi_runtime
 fallbacks:
   researcher:
-    - opencode-go/deepseek-v4.1-flash
-    - opencode/space-bunny-free
+  - opencode-go/deepseek-v4.1-flash
+  - opencode/space-bunny-free
   analyst:
-    - opencode-go/deepseek-v4.1-flash
-    - opencode/space-bunny-free
+  - opencode-go/deepseek-v4.1-flash
+  - opencode/space-bunny-free
   critic_verifier:
-    - opencode-go/minimax-m3
-    - opencode/space-bunny-free
+  - opencode-go/minimax-m3
+  - opencode/space-bunny-free
   architect:
-    - opencode-go/deepseek-v4.1-flash
-    - opencode/space-bunny-free
+  - opencode-go/deepseek-v4.1-flash
+  - opencode/space-bunny-free
   builder:
-    - opencode-go/deepseek-v4.1-flash
-    - opencode/space-bunny-free
+  - opencode-go/deepseek-v4.1-flash
+  - opencode/space-bunny-free
   qa:
-    - opencode-go/minimax-m3
-    - opencode/space-bunny-free
+  - opencode-go/minimax-m3
+  - opencode/space-bunny-free
   designer:
-    - opencode-go/deepseek-v4.1-flash
-    - opencode/space-bunny-free
+  - opencode-go/deepseek-v4.1-flash
+  - opencode/space-bunny-free
   secretary:
-    - opencode-go/deepseek-v4.1-flash
-    - opencode/space-bunny-free
+  - opencode-go/deepseek-v4.1-flash
+  - opencode/space-bunny-free
+  code_orchestrator: []
 models:
   researcher: MiniMax-M3
   analyst: MiniMax-M3
@@ -44,3 +43,4 @@ models:
   qa: MiniMax-M3
   designer: MiniMax-M3
   secretary: MiniMax-M3
+  code_orchestrator: MiniMax-M3
