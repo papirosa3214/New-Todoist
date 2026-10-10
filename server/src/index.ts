@@ -75,6 +75,7 @@ import {
   startActivityObserver,
 } from "./routes/activity.js";
 import { startInboxTriageWatcher } from "./lib/inboxTriageWatcher.js";
+import { startNoteAccessWatcher } from "./lib/noteAccessWatcher.js";
 import { startInboxResultsWriter } from "./lib/inboxResultsWriter.js";
 import { registerSeedRoutes } from "./seed.js";
 import { registerEnrichmentRoutes } from "./routes/enrichment.js";
@@ -424,6 +425,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   // (правило Maksim 27.09.2026). Выключается через INBOX_TRIAGE_DISABLED=1.
   if (process.env.INBOX_TRIAGE_DISABLED !== "1") {
     startInboxTriageWatcher();
+    // Сторож прибора «учёт обращений к заметкам»: без счётчиков схема базы
+    // знаний слепнет (заметка cfa5cdcd, шаг 1 из 4).
+    startNoteAccessWatcher();
   }
   // Результаты: при закрытии карточки на диагностику/устранение дописывает
   // блок в файл уведомления (Phase 4, правило Maksim 27.09.2026 — внутри
