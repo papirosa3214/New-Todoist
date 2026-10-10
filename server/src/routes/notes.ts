@@ -71,6 +71,20 @@ export function registerNoteRoutes(app: FastifyInstance) {
         .prepare("SELECT * FROM user_notes WHERE id = ?")
         .get(req.params.id) as NoteRow | undefined;
       if (!row) return reply.code(404).send({ error: "Заметка не найдена" });
+      // Учёт обращения: по нему Секретарь проверяет свою пометку «мусор».
+      // Модель открыла — значит заметка пригодилась, даже если не как
+      // переиспользуемое знание, а просто чтобы держать контекст. Если не
+      // открывала — мусор подтверждается (10.10.2026, схема базы знаний).
+      try {
+        db.prepare(
+          "UPDATE user_notes SET access_count = access_count + 1, last_accessed_at = datetime('now') WHERE id = ?",
+        ).run(req.params.id);
+        db.prepare(
+          "INSERT INTO note_accesses (id, note_id, actor_id) VALUES (?,?,?)",
+        ).run(randomUUID(), req.params.id, req.userId);
+      } catch {
+        // Учёт — вспомогательный: его поломка не должна ронять чтение заметки.
+      }
       if (req.query?.format === "markdown") {
         return { ...row, markdown: tiptapToMarkdown(row.content) };
       }
