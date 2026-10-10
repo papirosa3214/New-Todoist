@@ -65,7 +65,7 @@ function token(token: string) {
 }
 
 describe("webhooks API: CRUD, секрет write-only, фильтры", () => {
-  it("POST создаёт подписку, отдаёт полный секрет ОДИН РАЗ", async () => {
+  it("POST создаёт подписку и НЕ возвращает секрет (write-only)", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/integrations/webhooks",
@@ -79,7 +79,9 @@ describe("webhooks API: CRUD, секрет write-only, фильтры", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.secret).toBe(VALID_SECRET);
+    // уточнение ведущего 2026-10-10: секрет строго write-only во ВСЕХ
+    // ответах, включая создание. Владелец знает секрет — он его прислал.
+    expect((body as any).secret).toBeUndefined();
     expect(body.webhook.id).toBeTruthy();
     expect(body.webhook.secret_preview).toBe("****7890");
   });
@@ -131,7 +133,7 @@ describe("webhooks API: CRUD, секрет write-only, фильтры", () => {
     expect(res.json().secret).toBeUndefined();
   });
 
-  it("PATCH с новым секретом возвращает полное значение ОДИН РАЗ", async () => {
+  it("PATCH с новым секретом НЕ возвращает секрет даже при ротации", async () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/integrations/webhooks",
@@ -151,7 +153,7 @@ describe("webhooks API: CRUD, секрет write-only, фильтры", () => {
       headers: token(apiToken),
       payload: { secret: NEW_SECRET },
     });
-    expect(res.json().secret).toBe(NEW_SECRET);
+    expect(res.json().secret).toBeUndefined();
   });
 
   it("DELETE снимает подписку", async () => {
@@ -256,7 +258,7 @@ describe("webhooks API: CRUD, секрет write-only, фильтры", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("POST /:id/test возвращает http_status и wake_queued раздельно", async () => {
+  it("POST /:id/test возвращает nested wake DTO и разделяет http/wake", async () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/integrations/webhooks",
@@ -270,9 +272,6 @@ describe("webhooks API: CRUD, секрет write-only, фильтры", () => {
       },
     });
     const id = created.json().webhook.id;
-    // Подменим runner на mock через глобальный registry — делаем это через
-    // подмену url на заведомо несуществующий — test вернёт http_status=0
-    // и wake_queued без подмены runner (зависит от SSH наличия).
     receiverStatus = 503;
     const r = await app.inject({
       method: "POST",
@@ -283,7 +282,15 @@ describe("webhooks API: CRUD, секрет write-only, фильтры", () => {
     expect(r.statusCode).toBe(200);
     const body = r.json();
     expect(body.http_status).toBe(503);
-    expect(typeof body.wake_queued).toBe("boolean");
-    expect(typeof body.wake_thread_id).toBe("string");
+    // D-3: wake — nested объект, совместимый по shape с WebhookDTO.wake.
+    expect(body.wake).toBeTruthy();
+    expect(body.wake.codex_thread_id).toBe("01a120f9-1266-7331-a4ca-81f6da2a698b");
+    expect(body.wake.has_thread).toBe(true);
+    expect(typeof body.wake.queued).toBe("boolean");
+    expect(typeof body.wake.acked).toBe("boolean");
+    expect(body.wake.acked).toBe(false);
+    // плоские поля wake_queued/wake_thread_id удалены
+    expect((body as any).wake_queued).toBeUndefined();
+    expect((body as any).wake_thread_id).toBeUndefined();
   });
 });

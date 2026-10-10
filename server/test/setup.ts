@@ -31,6 +31,14 @@ process.env.TASKFLOW_ALLOW_REGISTRATION = "1";
 process.env.JWT_SECRET =
   "test-secret-" + crypto.randomBytes(16).toString("hex");
 
+// Карточка 905db3e3-…: durable HMAC секрет. Без ключа
+// TASKFLOW_WEBHOOK_SECRET_KEY createSubscription fail-closed (D-1).
+// Тесты задают ключ здесь, чтобы createSubscription и processWakePass
+// могли отработать.
+process.env.TASKFLOW_WEBHOOK_SECRET_KEY =
+  process.env.TASKFLOW_WEBHOOK_SECRET_KEY ||
+  Buffer.from(crypto.randomBytes(32)).toString("base64");
+
 // Вложения кладутся на диск рядом с базой (UPLOAD_DIR в
 // routes/attachments.ts, вычисляется при импорте модуля) — на прогон свой
 // временный каталог, чтобы тестовые файлы не оседали в server/uploads
