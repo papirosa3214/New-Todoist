@@ -231,7 +231,7 @@ async function prepareTaskCardAttempt(
   const autoContext=opts?.sourceRecordId?.startsWith("auto:")
     ? "\nЭто подготовка существующей карточки: описание с разделами Работа/Результат/Критерии приёмки/Границы является поручением, а не вопросом о создании новой карточки. Выбери подходящую структуру по контракту сам; не спрашивай форму представления ради формальности. Уточнение требуется только при существенной нехватке данных для исполнения." : "";
   const systemPrompt = buildDictationSystemPrompt(ownerLayer) + "\n\n" + PREPARATION_CONTRACT
-    + "\nДопустимые ключи включённых ролей: " + JSON.stringify(ROLE_NAMES)
+    + "\nДопустимые ключи включённых ролей — с описанием, чем каждая занимается:\n" + rolesPromptBlock()
     + autoContext
     + (repairHint ? "\nПредыдущий ответ не прошёл проверку: " + repairHint + "\nИсправь указанное поле. Верни один полный JSON с preparation на верхнем уровне, без внешнего card/result, сохрани исходное поручение. Не придумывай роли и данные." : "");
   const labels = db.prepare("SELECT id,name FROM labels ORDER BY name").all() as Array<{id:string;name:string}>;
