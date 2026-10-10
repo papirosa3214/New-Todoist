@@ -289,3 +289,34 @@ describe("GET /api/coordination/role-load", () => {
     expect(body.open_slots.find((s) => s.task_title === "role-load archived")).toBeUndefined();
   });
 });
+describe("роль фактического исполнителя старых заходов", () => {
+  it("восстанавливает роль по executor, сохраняет routing snapshot и не берёт нынешнего assignee", async () => {
+    const taskId = uid();
+    db.prepare("INSERT INTO tasks(id,title,status,creator_id,assignee_id,agent_state) VALUES(?,?,'active',?,'role_qa','in_progress')").run(taskId,"legacy role history",ownerId);
+    const rows = [
+      { id: uid(), executor: "role_builder", routing: null, expected: "builder" },
+      { id: uid(), executor: "role_builder", routing: "architect", expected: "architect" },
+      { id: uid(), executor: ownerId, routing: null, expected: null },
+    ];
+    try {
+      for (const row of rows) {
+        db.prepare("INSERT INTO attempts(id,task_id,executor_id,routing_role,started_at,ended_at) VALUES(?,?,?,?,datetime('now','-10 minutes'),datetime('now','-5 minutes'))").run(row.id,taskId,row.executor,row.routing);
+      }
+      const result = await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()});
+      expect(result.statusCode).toBe(200);
+      for (const row of rows) {
+        expect(result.json().attempts.find((a: any) => a.id === row.id)?.routing_role).toBe(row.expected);
+      }
+      expect(db.prepare("SELECT routing_role FROM attempts WHERE id=?").get(rows[0].id)).toEqual({routing_role:null});
+    } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
+  });
+  it("текущий task-level заход без routing_role остаётся у фактического исполнителя после переназначения", async () => {
+    const taskId = uid(), attemptId = uid();
+    db.prepare("INSERT INTO tasks(id,title,status,creator_id,assignee_id,agent_state) VALUES(?,?,'active',?,'role_qa','in_progress')").run(taskId,"active executor role",ownerId);
+    try {
+      db.prepare("INSERT INTO attempts(id,task_id,executor_id,started_at) VALUES(?,?,?,datetime('now','-2 minutes'))").run(attemptId,taskId,"role_builder");
+      const result = await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()});
+      expect(result.json().active_now.find((a: any) => a.id === taskId)?.role_key).toBe("builder");
+    } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
+  });
+});

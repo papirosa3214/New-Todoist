@@ -330,6 +330,7 @@ describe("живой план совместной работы", () => {
     const results=await Promise.all([startPlanSubtaskRun(step.id,ownerId),startPlanSubtaskRun(step.id,ownerId)]);
     expect(results.filter(r=>r.ok)).toHaveLength(1);
     expect((db.prepare("SELECT COUNT(*) n FROM attempts WHERE subtask_id=? AND ended_at IS NULL").get(step.id) as any).n).toBe(1);
+    expect(db.prepare("SELECT routing_role FROM attempts WHERE subtask_id=? AND ended_at IS NULL").get(step.id)).toEqual({ routing_role: "builder" });
   });
   it("исполнитель слота не захватывает карточку и не меняет назначение",async()=>{
     const f=await planWith("approved",[{slot:"work",role:"builder",state:"running"}],[]);

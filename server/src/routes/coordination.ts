@@ -329,15 +329,21 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
       // 5.2 Заходы (attempts) в окне. task_title тянем JOIN'ом, чтобы
       // клиенту не ходить за /api/tasks на каждую полосу; routing_role —
       // ключ роли, которой заходили (для группировки на Ганте).
+      // У старых in-process заходов routing_role не записывался.
+      // Восстанавливаем по фактическому executor_id, не по текущему
+      // assignee задачи или изменяемому узлу плана. Записанная роль
+      // захода всегда имеет приоритет. Историческую БД не меняем.
       // subtask_id нужен, чтобы отличать task-level attempt от шага
       // collaboration-плана; рендер один и тот же, но отображение
       // контекста пригодится в следующих инкрементах.
       const attemptRows = db
         .prepare(
-          `SELECT a.id, a.task_id, a.subtask_id, a.executor_id, a.routing_role,
+          `SELECT a.id, a.task_id, a.subtask_id, a.executor_id,
+                  COALESCE(NULLIF(a.routing_role, ''), u.role_key) AS routing_role,
                   a.started_at, a.ended_at, a.outcome, a.reason,
                   t.title AS task_title
              FROM attempts a
+             LEFT JOIN users u ON u.id = a.executor_id
              JOIN tasks t ON t.id = a.task_id
             WHERE datetime(a.started_at) < datetime(?)
               AND (a.ended_at IS NULL OR datetime(a.ended_at) > datetime(?))
@@ -381,7 +387,8 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
         .prepare(
           `SELECT s.id, s.task_id, s.title, s.agent_id, s.agent_state,
                   s.agent_heartbeat_at,
-                  (SELECT a.routing_role FROM attempts a
+                  (SELECT COALESCE(NULLIF(a.routing_role, ''), u.role_key)
+                     FROM attempts a LEFT JOIN users u ON u.id = a.executor_id
                     WHERE a.subtask_id = s.id AND a.ended_at IS NULL
                     LIMIT 1) AS attempt_role,
                   (SELECT a.started_at FROM attempts a
@@ -413,7 +420,8 @@ export function registerCoordinationRoutes(app: FastifyInstance): void {
       const activeTaskRows = db
         .prepare(
           `SELECT t.id, t.title AS task_title, t.assignee_id,
-                  (SELECT a.routing_role FROM attempts a
+                  (SELECT COALESCE(NULLIF(a.routing_role, ''), u.role_key)
+                     FROM attempts a LEFT JOIN users u ON u.id = a.executor_id
                     WHERE a.task_id = t.id AND a.ended_at IS NULL
                       AND a.subtask_id IS NULL
                     LIMIT 1) AS attempt_role,

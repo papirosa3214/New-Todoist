@@ -221,7 +221,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
     const latest=subtask(current.id);
     if(!latest||latest.done||latest.agent_state||!canPlanSubtaskBecomeReady(latest))return false;
     if(db.prepare("SELECT 1 FROM attempts WHERE subtask_id=? AND ended_at IS NULL").get(current.id))return false;
-    db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at,heartbeat_at) VALUES(?,?,?,?,datetime('now'),datetime('now'))").run(attemptId,current.task_id,current.id,roleUserId(node.role_key));
+    db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,routing_role,started_at,heartbeat_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now'))").run(attemptId,current.task_id,current.id,roleUserId(node.role_key),node.role_key);
     // Карточка 8aa95906 (admission): durable fingerprint.
     // Сравниваем по (agent_state IS NULL AND done=0 AND
     // (admission_fingerprint IS NULL OR admission_fingerprint = ?)).
