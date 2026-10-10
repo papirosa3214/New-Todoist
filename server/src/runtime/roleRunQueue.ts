@@ -58,8 +58,10 @@ export function enqueueRoleRunJob(input: {
   const result = db
     .prepare(
       `INSERT INTO role_run_jobs
-         (id, task_id, reason, actor_id, dedupe_key, max_attempts, chain_depth, manual_start)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         (id, task_id, reason, actor_id, dedupe_key, max_attempts, chain_depth, manual_start, status, finished_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+         CASE WHEN (SELECT archived_at FROM tasks WHERE id = ?) IS NOT NULL THEN 'cancelled' ELSE 'queued' END,
+         CASE WHEN (SELECT archived_at FROM tasks WHERE id = ?) IS NOT NULL THEN datetime('now') ELSE NULL END)
        ON CONFLICT(dedupe_key) DO NOTHING`,
     )
     .run(
@@ -71,15 +73,18 @@ export function enqueueRoleRunJob(input: {
       input.maxAttempts ?? 3,
       input.chainDepth ?? 0,
       input.manualStart ? 1 : 0,
+      input.taskId,
+      input.taskId,
     );
   if (result.changes > 0) {
+    const cancelled = getRoleRunJob(id)?.status === "cancelled";
     logServerEvent({
       scope: "queue",
-      kind: "queue_enqueued",
+      kind: cancelled ? "queue_cancelled" : "queue_enqueued",
       taskId: input.taskId,
       actorId: input.actorId ?? null,
       subtype: input.reason,
-      message: `роль встала в очередь: ${input.reason}`,
+      message: cancelled ? "запуск отменён: задача архивирована" : `роль встала в очередь: ${input.reason}`,
       data: {
         job_id: id,
         reason: input.reason,
@@ -165,6 +170,13 @@ export function claimNextRoleRunJob(input: {
   const leaseSeconds = Math.max(0, Math.floor(input.leaseSeconds ?? 120));
   const claim = db.transaction(() => {
     recoverExpiredRoleRunJobs();
+    // Archive can precede enqueue or recovery. Keep the audit rows, but
+    // terminate pending work that can never be claimed.
+    db.prepare(`UPDATE role_run_jobs SET status='cancelled',
+      lease_owner=NULL, lease_expires_at=NULL, finished_at=datetime('now'),
+      updated_at=datetime('now'), last_error='task archived'
+      WHERE status IN ('queued','retry_wait') AND task_id IN
+        (SELECT id FROM tasks WHERE archived_at IS NOT NULL)`).run();
     const candidate = db
       .prepare(
         `SELECT candidate.id

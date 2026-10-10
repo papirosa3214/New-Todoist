@@ -53,6 +53,17 @@ describe("durable role-run queue", () => {
     await app.close();
   });
 
+  it("архивный enqueue сразу terminal; старые pending отменяются при claim", () => {
+    const taskId = makeTask("archived");
+    const old = enqueueRoleRunJob({taskId, reason: "after_run", dedupeKey: dedupe(taskId, "old")});
+    db.prepare("UPDATE tasks SET archived_at=datetime('now') WHERE id=?").run(taskId);
+    const fresh = enqueueRoleRunJob({taskId, reason: "review", dedupeKey: dedupe(taskId, "fresh")});
+    expect(getRoleRunJob(fresh.id)?.status).toBe("cancelled");
+    expect(claimNextRoleRunJob({workerId: "archive-test"})).toBeNull();
+    expect(getRoleRunJob(old.id)?.status).toBe("cancelled");
+    expect(getRoleRunJob(old.id)?.attempts).toBe(0);
+  });
+
   it("enqueue коммитится вместе с породившей транзакцией и дедуплицируется", () => {
     const taskId = makeTask("atomic");
     const key = dedupe(taskId, "assigned");

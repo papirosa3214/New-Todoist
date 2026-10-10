@@ -65,7 +65,8 @@ function loadStalledSteps(): StalledSubtask[] {
   return db.prepare(
     `SELECT id, task_id, title, agent_state, current_attempt_id, agent_heartbeat_at, agent_id, collaboration_plan_id, plan_node_key
        FROM subtasks
-      WHERE agent_state = 'in_progress'
+      WHERE EXISTS (SELECT 1 FROM tasks t WHERE t.id = subtasks.task_id AND t.archived_at IS NULL)
+        AND agent_state = 'in_progress'
         AND done = 0
         AND (collaboration_plan_id IS NOT NULL AND plan_node_key IS NOT NULL) = ?`,
   ).all(PLAN_STEP_ONLY ? 1 : 0) as StalledSubtask[];

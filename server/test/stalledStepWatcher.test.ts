@@ -193,6 +193,16 @@ describe("stalledStepWatcher", () => {
     try { fs.rmSync(workRepo, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
+  it("архивный зависший шаг не создаёт перезапуск и не меняет состояние", async () => {
+    db.prepare("UPDATE tasks SET archived_at=datetime('now') WHERE id=?").run(fixture.task.id);
+    const before = db.prepare("SELECT agent_state,current_attempt_id FROM subtasks WHERE id=?").get(fixture.subtaskId);
+    const count = db.prepare("SELECT count(*) n FROM role_run_jobs WHERE task_id=?").get(fixture.task.id);
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
+    await runStalledStepWatch();
+    expect(db.prepare("SELECT agent_state,current_attempt_id FROM subtasks WHERE id=?").get(fixture.subtaskId)).toEqual(before);
+    expect(db.prepare("SELECT count(*) n FROM role_run_jobs WHERE task_id=?").get(fixture.task.id)).toEqual(count);
+  });
+
   it("живой поток (mtime 3 минуты) — сторож не трогает узел", async () => {
     seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 3);
     const before = comments(fixture.task.id).length;
