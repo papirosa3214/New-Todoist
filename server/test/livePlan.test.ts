@@ -311,4 +311,32 @@ describe("живой план совместной работы", () => {
     expect(third.statusCode).toBe(409);
     expect(third.json().error).toContain("решение за владельцем");
   });
+  it("повтор одинаковой работы от другой роли возвращает существующий слот", async()=>{
+    const fixture=await planWith("approved",[{slot:"research",role:"researcher",state:"running"}],[]);
+    const planId=(fixture as any).planId;
+    const {applyPlanOps}=await import("../src/runtime/planMutations.js");
+    const actor={kind:"owner" as const,id:ownerId};
+    const op={op:"add_step" as const,role_key:"analyst",expected_result:"Один результат",instructions:"Найти данные",after:["research"]};
+    const first:any=applyPlanOps(planId,[op],actor);
+    const second:any=applyPlanOps(planId,[{...op,role_key:"builder",expected_result:"  ОДИН   результат ",instructions:"найти данные"}],actor);
+    expect(second.added).toEqual(first.added);
+    expect(second.version).toBe(first.version);
+  });
+
+  it("два старта создают одну активную попытку",async()=>{
+    const f=await planWith("approved",[{slot:"work",role:"builder",state:"pending"}],[]);
+    const step=stepOf(f.planId,"work")!;
+    const {startPlanSubtaskRun}=await import("../src/runtime/planSubtaskAdmission.js");
+    const results=await Promise.all([startPlanSubtaskRun(step.id,ownerId),startPlanSubtaskRun(step.id,ownerId)]);
+    expect(results.filter(r=>r.ok)).toHaveLength(1);
+    expect((db.prepare("SELECT COUNT(*) n FROM attempts WHERE subtask_id=? AND ended_at IS NULL").get(step.id) as any).n).toBe(1);
+  });
+  it("исполнитель слота не захватывает карточку и не меняет назначение",async()=>{
+    const f=await planWith("approved",[{slot:"work",role:"builder",state:"running"}],[]);
+    const claim=await app.inject({method:"POST",url:`/api/tasks/${f.taskId}/claim`,headers:as("role_builder")});
+    expect(claim.statusCode).toBe(403);
+    const assign=await app.inject({method:"PATCH",url:`/api/tasks/${f.taskId}`,headers:as("role_builder"),payload:{assignee_id:"role_builder"}});
+    expect([403,404]).toContain(assign.statusCode);
+  });
+
 });
