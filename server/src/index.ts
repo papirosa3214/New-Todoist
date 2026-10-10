@@ -481,7 +481,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   // (правило Maksim 27.09.2026). Выключается через INBOX_TRIAGE_DISABLED=1.
   if (process.env.INBOX_TRIAGE_DISABLED !== "1") {
     startInboxTriageWatcher();
-    startWebhookWakeWatcher();
     // Сторож прибора «учёт обращений к заметкам»: без счётчиков схема базы
     // знаний слепнет (заметка cfa5cdcd, шаг 1 из 4).
     startNoteAccessWatcher();
