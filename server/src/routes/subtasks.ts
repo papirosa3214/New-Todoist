@@ -1,3 +1,4 @@
+import { readWorkPlan, saveWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
 import { sandboxSubmissionError } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { effectiveRules } from "../lib/roleContextResolver.js";
@@ -139,6 +140,39 @@ export function getSubtaskWithTaskForUser(
 
 export function registerSubtaskCommentRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
+
+  app.get("/api/subtasks/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
+    const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
+    if (!subtask) return reply.code(404).send({error:"Not found"});
+    return {plan:readWorkPlan(subtask.id)};
+  });
+  app.put("/api/subtasks/:id/work-plan", { preHandler: authPre }, async (req: any, reply) => {
+    const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
+    if (!subtask) return reply.code(404).send({error:"Not found"});
+    if (subtask.agent_id !== req.userId || subtask.agent_state !== "in_progress" || subtask.done)
+      return reply.code(403).send({error:"План обновляет только текущий исполнитель работающего слота"});
+    const session = sessionOf(req);
+    if (session && subtask.agent_session_id && session !== subtask.agent_session_id)
+      return reply.code(409).send({error:"Сессия исполнителя уже сменилась"});
+    const claimed = readAttemptId(req);
+    if (claimed) {
+      const attempt = db.prepare("SELECT id FROM attempts WHERE subtask_id=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1").get(subtask.id) as any;
+      if (claimed !== attempt?.id) return reply.code(409).send({error:"Попытка исполнителя уже сменилась"});
+    }
+    const revision = req.body?.base_revision;
+    if (!Number.isSafeInteger(revision) || revision < 0) return reply.code(400).send({error:"Нужен base_revision из последнего ответа (0 для нового плана)"});
+    let items;
+    try { items = validateWorkPlan(req.body?.items); }
+    catch (error) { return reply.code(400).send({error: String((error as Error).message)}); }
+    try {
+      const plan = saveWorkPlan(subtask.id, req.userId, revision, items);
+      broadcastTaskEvent([subtask.task_creator_id, subtask.task_assignee_id], {type:"task:updated", task:getFullTask(subtask.task_id)});
+      return {plan};
+    } catch (error) {
+      if ((error as Error).message === "revision_conflict") return reply.code(409).send({error:"План изменился — перечитай перед записью", plan:readWorkPlan(subtask.id)});
+      throw error;
+    }
+  });
 
   // ── Subtasks ── all scoped to a task the caller may access (creator or assignee).
   app.get<{ Params: { taskId: string } }>(

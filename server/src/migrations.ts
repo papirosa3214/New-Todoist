@@ -4114,6 +4114,14 @@ const migrations: Migration[] = [
       `);
     },
   },
+  { id: "129_subtask_work_plans", description: "Рабочий чек-лист исполнителя внутри подзадачи, без смены жизненного цикла", up() {
+    db.exec(`CREATE TABLE IF NOT EXISTS subtask_work_plans (
+      subtask_id TEXT PRIMARY KEY REFERENCES subtasks(id) ON DELETE CASCADE,
+      revision INTEGER NOT NULL, items_json TEXT NOT NULL,
+      author_id TEXT NOT NULL REFERENCES users(id), updated_at TEXT NOT NULL
+    )`);
+  } },
+
 ];
 /**
  * Опции прогона миграций.

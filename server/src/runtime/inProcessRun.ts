@@ -1,3 +1,4 @@
+import { WORK_PLAN_INSTRUCTION } from "../lib/subtaskWorkPlan.js";
 import {integrationResponsibilityPrompt} from '../lib/integrationResponsibility.js';
 import { orchestratorTools } from "./orchestratorTools.js";
 import { resolveReviewTaskId } from "../lib/reviewTaskId.js";
@@ -483,6 +484,13 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (p.after_id) body.after_id = p.after_id;
         const s = await asRole(role, "POST", `/api/tasks/${p.task_id}/subtasks`, body);
         return { "шаг добавлен": s.title, id: s.id };
+      }),
+    T("taskflow_work_plan", WORK_PLAN_INSTRUCTION + "\nПрочитать или обновить свой внутренний рабочий чек-лист. Без items — чтение. Для записи: весь список items {id,title,state: pending|in_progress|done} и base_revision из последнего ответа. Обычно 3–7 конкретных этапов; только один in_progress. Сохраняй id этапов при обновлении. Это отображение твоего плана, оно не меняет состояние и сдачу подзадачи.",
+      Type.Object({base_revision:Type.Optional(Type.Number()), items:Type.Optional(Type.Array(Type.Object({id:Type.String(),title:Type.String(),state:Type.Union([Type.Literal("pending"),Type.Literal("in_progress"),Type.Literal("done")])})))}),
+      async (p) => {
+        if (!subtaskId) throw new ToolError("Рабочий план относится к текущему слоту подзадачи");
+        return await asRole(role, p.items === undefined ? "GET" : "PUT", `/api/subtasks/${subtaskId}/work-plan`,
+          p.items === undefined ? undefined : {base_revision:p.base_revision,items:p.items});
       }),
     T("taskflow_subtask_work", "Состояние шага: in_progress перед началом, blocked с причиной; result — итог. blocked принимается только с block_type: dependency | needs_input | capability | transient; для needs_input укажи changes_result=true, если меняет «Результат», «Критерии приёмки» или «Границы». При blocked приложи snapshot: что сделано, что осталось, блок и следующий шаг — сервер сохранит это ДО смены состояния. Перед blocked по решаемой причине укажи help_attempt (кого звал, что ответили) или help_skip_reason (почему никто не решит). Пока работа идёт, технический снимок сервер пишет сам; при прогрессе и сдаче снимок от тебя не нужен.",
       Type.Object({ id: Type.String(), state: Type.Optional(Type.String()), result: Type.Optional(Type.String()), block_type: Type.Optional(Type.String()), changes_result: Type.Optional(Type.Boolean()), snapshot: Type.Optional(SNAPSHOT_SHAPE), help_attempt: Type.Optional(Type.String()), help_skip_reason: Type.Optional(Type.String()) }),
@@ -1245,7 +1253,8 @@ try {
       const snapshot=input.subtaskId ? slotSnapshotBlock(input.subtaskId) : null;
       const prompt = `${task}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
       for(const m of queued)db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id=?").run(m.id,input.subtaskId);
-      await session.prompt(mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt);
+      const workPlanPrompt = input.subtaskId ? "\n\n" + (composeLayer(role, "tool.runtime.taskflow_work_plan")?.effective ?? WORK_PLAN_INSTRUCTION) : "";
+      await session.prompt((mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt) + workPlanPrompt);
       // Лимит провайдера библиотека не бросает: ход молча кончается ответом с ошибкой 429
       // (находка А36). Ловим здесь и уходим на запасную модель.
       limitHit = lastAssistantLimitError(session);
