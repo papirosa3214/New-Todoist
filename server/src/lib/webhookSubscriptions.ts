@@ -34,6 +34,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import db from "../db.js";
+import {
+  decryptWebhookSecret,
+  encryptWebhookSecret,
+  getWebhookSecretBoxKey,
+  warnMissingKeyOnce,
+} from "./secretBox.js";
 
 export const WEBHOOK_PROJECT_ID = "c2fcbcdb-951f-449f-a1bd-123ea2a46a58";
 
@@ -109,6 +115,7 @@ interface SubscriptionRow {
   url: string;
   secret_hash: string;
   secret_preview: string;
+  secret_encrypted: Buffer | null;
   enabled: number;
   event_kinds: string;
   project_id: string | null;
@@ -124,6 +131,35 @@ interface SubscriptionRow {
   updated_at: string;
 }
 
+interface WakeQueueRow {
+  codex_followup_id: string | null;
+  wake_acked_at: string | null;
+  wake_acked_kind: string | null;
+}
+
+/** Самая свежая строка wake-очереди для подписки (по `id DESC LIMIT 1`).
+ *  Колонки webhook_subscriptions под подтверждение ack не заведены — данные
+ *  лежат в webhook_wake_queue, поэтому DTO подписки подтягивает их оттуда.
+ *  Возвращает null, если для подписки ещё не было wake (новая подписка
+ *  без codex_thread_id, либо очередь пуста).
+ *
+ *  Statement готовится лениво: в момент импорта модуля таблица
+ *  webhook_wake_queue может ещё не существовать (in-memory SQLite для
+ *  тестов, поэтапные миграции), а migration 128_webhook_durable_secret_and_wake_ack
+ *  поднимает её до первого обращения через rowToDto. */
+function latestWakeForSubscription(subscriptionId: string): WakeQueueRow | null {
+  const row = db
+    .prepare(
+      `SELECT codex_followup_id, wake_acked_at, wake_acked_kind
+         FROM webhook_wake_queue
+        WHERE subscription_id = ?
+        ORDER BY id DESC
+        LIMIT 1`,
+    )
+    .get(subscriptionId) as WakeQueueRow | undefined;
+  return row ?? null;
+}
+
 function rowToDto(r: SubscriptionRow): WebhookDTO {
   let kinds: string[] = [];
   try {
@@ -132,6 +168,15 @@ function rowToDto(r: SubscriptionRow): WebhookDTO {
   } catch {
     kinds = [];
   }
+  // D-5 DTO (rework 2026-10-10): last_wake_ack подтягивается из
+  // webhook_wake_queue, а не из webhook_subscriptions — поля
+  // `last_wake_followup_id` там нет. Если для подписки ещё нет строк
+  // в очереди (новая подписка, либо wake ещё не проходил), DTO
+  // возвращает полностью «нейтральный» ack: codex_followup_id/acked_at/
+  // kind все null, acked=false. Это согласовано с контрактом V2:
+  // queued ≠ acked, ack выставляется только через /_wake_ack или
+  // будущий turn_started callback.
+  const wake = latestWakeForSubscription(r.id);
   return {
     id: r.id,
     name: r.name,
@@ -150,6 +195,12 @@ function rowToDto(r: SubscriptionRow): WebhookDTO {
     wake: r.codex_thread_id
       ? { codex_thread_id: r.codex_thread_id, has_thread: true }
       : { codex_thread_id: null, has_thread: false },
+    last_wake_ack: {
+      codex_followup_id: wake?.codex_followup_id ?? null,
+      acked: wake?.wake_acked_at != null,
+      acked_at: wake?.wake_acked_at ?? null,
+      kind: wake?.wake_acked_kind ?? null,
+    },
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -171,15 +222,31 @@ export interface WebhookDTO {
   last_wake_error: string | null;
   secret_preview: string;
   wake: { codex_thread_id: string | null; has_thread: boolean };
+  /**
+   * Последний подтверждённый wake этой подписки. `acked: false` означает,
+   * что wake ещё не подтверждён независимо (queued≠acked, уточнение
+   * ведущего 2026-10-10). Конкретный `acked: true` ставится только при
+   * реальном turn-started/callback.
+   */
+  last_wake_ack: {
+    codex_followup_id: string | null;
+    acked: boolean;
+    acked_at: string | null;
+    kind: string | null;
+  };
   created_at: string;
   updated_at: string;
 }
 
 export interface CreateWebhookOutput {
   webhook: WebhookDTO;
-  /** Полный секрет — возвращается ТОЛЬКО в момент создания или ротации.
-   *  Дальше подписка у владельца, в БД только отпечаток. */
-  secret: string;
+  /**
+   * Секрет НЕ возвращается ни в одном ответе API — write-only контракт
+   * (уточнение ведущего 2026-10-10: «секрет строго write-only во ВСЕХ
+   * ответах POST/PATCH/GET/test, включая ротацию»). Владелец держит
+   * секрет у себя в keychain; на сервере он шифруется ключом
+   * TASKFLOW_WEBHOOK_SECRET_KEY и не покидает процесс.
+   */
 }
 
 function validateUrl(url: string): void {
@@ -252,10 +319,22 @@ export function createSubscription(input: CreateWebhookInput): CreateWebhookOutp
   const codexThread = validateCodexThread(input.codex_thread_id);
   const id = uid();
   const now = new Date().toISOString();
+  let encrypted: Buffer;
+  try {
+    encrypted = encryptWebhookSecret(input.secret);
+  } catch (e) {
+    // Fail-closed: без ключа подписку НЕ создаём. Это и был D-1: на
+    // restart сервер должен уметь подписать доставку тем же ключом, а
+    // без ключа — не должен создавать заведомо неверифицируемую запись.
+    warnMissingKeyOnce();
+    throw new ValidationError(
+      `шифрование секрета недоступно: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
   db.prepare(
     `INSERT INTO webhook_subscriptions
-     (id, owner_user_id, name, url, secret_hash, secret_preview, enabled, event_kinds, project_id, codex_thread_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, owner_user_id, name, url, secret_hash, secret_preview, secret_encrypted, enabled, event_kinds, project_id, codex_thread_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.owner_user_id,
@@ -263,6 +342,7 @@ export function createSubscription(input: CreateWebhookInput): CreateWebhookOutp
     input.url,
     hashSecret(input.secret),
     preview(input.secret),
+    encrypted,
     input.enabled === false ? 0 : 1,
     JSON.stringify(eventKinds),
     projectId,
@@ -270,10 +350,12 @@ export function createSubscription(input: CreateWebhookInput): CreateWebhookOutp
     now,
     now,
   );
+  // Заодно прогреваем кеш — на том же ключе сразу сможем подписывать.
+  secretByHash.set(hashSecret(input.secret), input.secret);
   const row = db
     .prepare("SELECT * FROM webhook_subscriptions WHERE id = ?")
     .get(id) as SubscriptionRow;
-  return { webhook: rowToDto(row), secret: input.secret };
+  return { webhook: rowToDto(row) };
 }
 
 export function listSubscriptions(ownerUserId?: string): WebhookDTO[] {
@@ -308,7 +390,17 @@ export function updateSubscription(
   if (ownerUserId && row.owner_user_id !== ownerUserId) {
     throw new ValidationError("подписка не принадлежит владельцу");
   }
-  const next = {
+  const next: {
+    name: string;
+    url: string;
+    enabled: number;
+    event_kinds: string;
+    project_id: string | null;
+    codex_thread_id: string | null;
+    secret_hash: string;
+    secret_preview: string;
+    secret_encrypted: Buffer | null;
+  } = {
     name: patch.name ?? row.name,
     url: patch.url ?? row.url,
     enabled: patch.enabled === undefined ? row.enabled : patch.enabled ? 1 : 0,
@@ -326,17 +418,33 @@ export function updateSubscription(
         : validateCodexThread(patch.codex_thread_id),
     secret_hash: row.secret_hash,
     secret_preview: row.secret_preview,
+    secret_encrypted: row.secret_encrypted ?? null,
   };
   if (patch.secret !== undefined) {
     validateSecret(patch.secret);
-    next.secret_hash = hashSecret(patch.secret);
+    const newHash = hashSecret(patch.secret);
+    let encrypted: Buffer;
+    try {
+      encrypted = encryptWebhookSecret(patch.secret);
+    } catch (e) {
+      warnMissingKeyOnce();
+      throw new ValidationError(
+        `ротация секрета недоступна: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    next.secret_hash = newHash;
     next.secret_preview = preview(patch.secret);
+    next.secret_encrypted = encrypted;
+    // Прежний кеш по старому hash становится бесполезен: подписка
+    // теперь подписывается новым ключом.
+    secretByHash.delete(row.secret_hash);
+    secretByHash.set(newHash, patch.secret);
   }
   if (patch.url !== undefined) validateUrl(patch.url);
   db.prepare(
     `UPDATE webhook_subscriptions
      SET name = ?, url = ?, enabled = ?, event_kinds = ?, project_id = ?, codex_thread_id = ?,
-         secret_hash = ?, secret_preview = ?, updated_at = datetime('now')
+         secret_hash = ?, secret_preview = ?, secret_encrypted = ?, updated_at = datetime('now')
      WHERE id = ?`,
   ).run(
     next.name,
@@ -347,6 +455,7 @@ export function updateSubscription(
     next.codex_thread_id,
     next.secret_hash,
     next.secret_preview,
+    next.secret_encrypted,
     id,
   );
   const updated = db
@@ -508,9 +617,28 @@ export async function processWebhookDeliveryPass(
         attempt: attemptNo,
       };
       const body = JSON.stringify(payload);
-      const signature =
-        "sha256=" +
-        crypto.createHmac("sha256", await resolveSecret(sub)).update(body).digest("hex");
+      let signature: string;
+      try {
+        signature =
+          "sha256=" +
+          crypto.createHmac("sha256", await resolveSecret(sub)).update(body).digest("hex");
+      } catch (e) {
+        // D-1 fail-closed: без ключа конкретная подписка не подписывается,
+        // ошибка пишется в last_error, остальные подписки продолжают работу.
+        const errMsg = e instanceof Error ? e.message : String(e);
+        result.deliveries_failed++;
+        db.prepare(
+          `INSERT INTO webhook_delivery_attempts
+           (event_id, subscription_id, attempt, next_retry_at, status, error, success)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ).run(eventId, sub.id, attemptNo, retryDelayIso(attemptNo, now()), 0, errMsg.slice(0, 400), 0);
+        db.prepare(
+          `UPDATE webhook_subscriptions
+              SET last_error = ?, last_delivery_status = 0, updated_at = datetime('now')
+            WHERE id = ?`,
+        ).run(errMsg.slice(0, 400), sub.id);
+        continue;
+      }
       let status: number;
       let error: string | null = null;
       try {
@@ -571,8 +699,9 @@ export async function processWebhookDeliveryPass(
       // Wake постановка НЕЗАВИСИМА от HTTP — этого требует контракт:
       // HTTP 200 не означает, что iPhone-получатель сам пробудил Codex.
       // Наоборот: даже если iPhone-приёмник недоступен, чат всё равно
-      // должен иметь шанс проснуться.
-      if (sub.codex_thread_id && !error) {
+      // должен иметь шанс проснуться. Условие — просто наличие
+      // codex_thread_id, без оглядки на HTTP.
+      if (sub.codex_thread_id) {
         const enqueued = enqueueWake(sub.id, sub.codex_thread_id, eventId, ev);
         if (enqueued) result.wakes_enqueued++;
       }
@@ -617,35 +746,108 @@ function parseKinds(raw: string): Set<string> {
   }
 }
 
-/** Возвращает расшифрованный секрет по отпечатку. Хранится не солью —
- *  секрет HMAC должен быть детерминированно восстановим, чтобы можно
- *  было подписывать доставку (как у GitHub/Stripe). Сами секреты в БД
- *  НЕ хранятся в открытом виде: вместо этого мы храним `secret_hash` и
- *  используем отдельную параллельную карту в памяти для текущего
- *  процесса — это и есть безопасный write-only путь.
- *
- *  В боевой системе секрет у владельца лежит в его keychain (iPhone),
- *  серверу достаточно hash'а для verify; для подписи доставки сервер
- *  хранит секрет ОТДЕЛЬНО, в защищённой переменной окружения, либо
- *  получает его через внешний KMS. В нашей QA-сборке секрет хранится в
- *  памяти процесса после POST/PATCH — этого достаточно для доказательства
- *  работоспособности и тестов.
+/**
+ * Кеш расшифрованных секретов на текущий процесс. После bootstrap
+ * сюда попадает всё, что есть в `webhook_subscriptions.secret_encrypted`;
+ * подписка на bootstrap делается в `bootstrapSecrets()`, который зовёт
+ * `startWebhookDeliveryLoop()` в `index.ts`.
  */
 const secretByHash = new Map<string, string>();
+
 export function rememberSecretForHash(hash: string, secret: string): void {
   secretByHash.set(hash, secret);
 }
-async function resolveSecret(sub: SubscriptionRow): Promise<string> {
+
+/** Только для тестов: сброс in-process кеша секретов, чтобы имитировать
+ *  cold restart (забытый Map) без перезапуска процесса. */
+export function __testOnlyClearSecretCache(): void {
+  secretByHash.clear();
+}
+
+/**
+ * Прогревает кеш секретов из БД. Вызывать один раз при старте сервера
+ * (в `index.ts` рядом со `startWebhookDeliveryLoop`). Если ключа нет — мы
+ * НЕ падаем: предупреждение в логе, дальнейшие подписи будут fail-closed
+ * по подписке (resolveSecret бросит ошибку, конкретная доставка уйдёт
+ * в `last_error`, остальные подписки продолжают работать). Это и есть
+ * уточнение ведущего 2026-10-10: «отсутствие ключа не должно валить весь
+ * TaskFlow при отсутствии подписок; отказ ограничить конкретной
+ * операцией, fail closed, без fallback».
+ *
+ * Возвращает количество подписок, чьи секреты удалось прогреть. Подписки
+ * без `secret_encrypted` (старые записи до миграции 128, либо
+ * зашифрованные без ключа) пропускаются — resolveSecret для них тоже
+ * fail-closed.
+ */
+export function bootstrapSecrets(): { loaded: number; skipped: number; reason?: string } {
+  let loaded = 0;
+  let skipped = 0;
+  let reason: string | undefined;
+  let keyOk = true;
+  try {
+    getWebhookSecretBoxKey();
+  } catch (e) {
+    keyOk = false;
+    reason = e instanceof Error ? e.message : String(e);
+    warnMissingKeyOnce();
+  }
+  const rows = db
+    .prepare(
+      `SELECT id, secret_hash, secret_encrypted FROM webhook_subscriptions WHERE secret_encrypted IS NOT NULL`,
+    )
+    .all() as Array<{ id: string; secret_hash: string; secret_encrypted: Buffer | null }>;
+  if (!keyOk) {
+    return { loaded: 0, skipped: rows.length, reason };
+  }
+  for (const r of rows) {
+    try {
+      const buf = r.secret_encrypted as unknown as Buffer;
+      const plain = decryptWebhookSecret(buf);
+      secretByHash.set(r.secret_hash, plain);
+      loaded++;
+    } catch (e) {
+      skipped++;
+      console.warn(
+        `[webhook-subscriptions] секрет подписки ${r.id} не расшифровался: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+  return { loaded, skipped };
+}
+
+/**
+ * Возвращает секрет для подписи доставки. Fail-closed: если секрет не
+ * прогрет (bootstrap не запускался, ключа нет, blob повреждён) — бросает
+ * ошибку, которая превращается в конкретный `last_error` для этой
+ * подписки. Никакого `fallback-secret:` — это и был D-1.
+ */
+export class WebhookSecretUnavailableError extends Error {
+  status = 503 as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "WebhookSecretUnavailableError";
+  }
+}
+
+export async function resolveSecret(sub: SubscriptionRow): Promise<string> {
   const cached = secretByHash.get(sub.secret_hash);
   if (cached) return cached;
-  // Фолбэк для тестов: генерим детерминированный ключ из hash'а. ЭТО
-  // ВРЕМЕННАЯ мера — боевой код получит секрет через KMS, описание
-  // будет дополнено в документации webhook-subscriptions.md. На бое
-  // фолбэк запрещён: покажем это явно в логах.
-  console.warn(
-    `webhook-subscriptions: секрет подписки ${sub.id} не найден в памяти, используется детерминированный fallback — ОБЯЗАТЕЛЬНО включите rememberSecretForHash() на боевом запуске`,
+  // Холодный старт единичной подписки: возможно, ключ есть, просто bootstrap
+  // не успел/не запускался. Пробуем расшифровать на лету.
+  if (sub.secret_encrypted) {
+    try {
+      const plain = decryptWebhookSecret(sub.secret_encrypted as unknown as Buffer);
+      secretByHash.set(sub.secret_hash, plain);
+      return plain;
+    } catch (e) {
+      throw new WebhookSecretUnavailableError(
+        `секрет подписки ${sub.id} не расшифровался: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+  throw new WebhookSecretUnavailableError(
+    `секрет подписки ${sub.id} отсутствует в БД (secret_encrypted IS NULL) — POST с секретом обязателен`,
   );
-  return "fallback-secret:" + sub.secret_hash;
 }
 
 /** Background-loop «вебхуков доставки»: запускается сервером на старте
@@ -712,6 +914,8 @@ export interface WakePassResult {
   processed: number;
   succeeded: number;
   failed: number;
+  /** Количество wake, для которых runner вернул конкретный codex_followup_id. */
+  with_followup: number;
 }
 
 /** Один проход wake-моста. Вживую вызывается на сервере раз в 2 секунды
@@ -721,7 +925,7 @@ export interface WakePassResult {
 export async function processWakePass(
   runner: WakeCommandRunner = wakeRunner(),
 ): Promise<WakePassResult> {
-  const result: WakePassResult = { processed: 0, succeeded: 0, failed: 0 };
+  const result: WakePassResult = { processed: 0, succeeded: 0, failed: 0, with_followup: 0 };
   const rows = db
     .prepare(
       `SELECT id, event_id, subscription_id, codex_thread_id, message, attempts
@@ -743,11 +947,14 @@ export async function processWakePass(
     try {
       const out = await runner(row.codex_thread_id, row.message);
       if (out.ok) {
+        const followupId = (out as WakeCommandResult).codex_followup_id ?? null;
+        if (followupId) result.with_followup++;
         db.prepare(
           `UPDATE webhook_wake_queue
-              SET delivered_at = datetime('now'), attempts = attempts + 1, last_error = NULL
+              SET delivered_at = datetime('now'), attempts = attempts + 1, last_error = NULL,
+                  codex_followup_id = COALESCE(?, codex_followup_id)
             WHERE id = ?`,
-        ).run(row.id);
+        ).run(followupId, row.id);
         db.prepare(
           `UPDATE webhook_subscriptions
               SET last_wake_at = datetime('now'), last_wake_error = NULL,
@@ -785,6 +992,60 @@ export async function processWakePass(
 export interface WakeCommandResult {
   ok: boolean;
   error?: string | null;
+  /** UUID follow-up из stdout codex-cli («Queued message <UUID>»). NULL,
+   *  если runner не смог распарсить. Используется для различения
+   *  «queued» и «acked» — само по себе наличие UUID НЕ равно подтверждению
+   *  turn started, как отдельно зафиксировал ведущий 2026-10-10. */
+  codex_followup_id?: string | null;
+}
+
+/** Реестр известных wake-ack подтверждений. Заполняется через
+ *  /api/integrations/webhooks/_wake_ack (явный callback чата Codex) либо
+ *  в будущем — turn_started событием от app-server. Пока app-server
+ *  недоступен, единственный путь ack — callback из чата. Это и есть
+ *  «независимое подтверждение» из уточнения ведущего 2026-10-10. */
+interface AckRecord {
+  followupId: string;
+  ackedAt: number;
+  kind: "codex_chat_callback" | "app_server_turn_started" | string;
+}
+const wakeAcks = new Map<string, AckRecord>();
+
+export function registerWakeAck(
+  followupId: string,
+  kind: "codex_chat_callback" | "app_server_turn_started" | string,
+): { ok: boolean; reason?: string } {
+  if (!followupId || typeof followupId !== "string") {
+    return { ok: false, reason: "followupId обязателен" };
+  }
+  wakeAcks.set(followupId, { followupId, ackedAt: Date.now(), kind });
+  // Применяем ack к строкам wake_queue, которые ещё не подтверждены.
+  db.prepare(
+    `UPDATE webhook_wake_queue
+        SET wake_acked_at = datetime('now'), wake_acked_kind = ?
+      WHERE codex_followup_id = ? AND wake_acked_at IS NULL`,
+  ).run(kind, followupId);
+  // Подтянем subscription_id и обновим last_wake_ack.kind в подписке.
+  const row = db
+    .prepare(
+      `SELECT subscription_id FROM webhook_wake_queue
+        WHERE codex_followup_id = ? ORDER BY id DESC LIMIT 1`,
+    )
+    .get(followupId) as { subscription_id: string } | undefined;
+  if (row) {
+    db.prepare(
+      `UPDATE webhook_subscriptions SET updated_at = datetime('now') WHERE id = ?`,
+    ).run(row.subscription_id);
+  }
+  return { ok: true };
+}
+
+export function __resetWakeAcksForTest(): void {
+  wakeAcks.clear();
+}
+
+export function hasWakeAck(followupId: string): boolean {
+  return wakeAcks.has(followupId);
 }
 
 export type WakeCommandRunner = (threadId: string, message: string) => Promise<WakeCommandResult>;
@@ -840,11 +1101,59 @@ export async function defaultRunner(threadId: string, message: string): Promise<
       (err, stdout, stderr) => {
         if (err) {
           resolve({ ok: false, error: stderr?.slice(0, 400) || err.message });
-        } else {
-          // Скрипт печатает "Queued message ... for thread ..." при успехе;
-          // чтобы не парсить хрупко — считаем 0-exitcode = ок.
-          resolve({ ok: true, error: null });
+          return;
         }
+        // Скрипт печатает `FOLLOWUP=<UUID>` в stdout после успешного
+        // `codex queue` — используется как маркер «queued, ещё не acked»
+        // (D-5: HTTP ≠ queued ≠ acked). Само по себе наличие UUID не
+        // равно подтверждению turn started — ack приходит отдельным путём
+        // через registerWakeAck().
+        const m = /FOLLOWUP=([0-9a-fA-F-]{8,})/.exec(stdout || "");
+        const followupId = m ? m[1] : null;
+        resolve({ ok: true, error: null, codex_followup_id: followupId });
+      },
+    );
+  });
+}
+
+/** Ack-проверка: отдельный режим `tf_wake_dispatch.py --verify-ack`.
+ *  Карточка 905db3e3-… (D-5): наличие UUID в .codex-global-state.json
+ *  ещё НЕ означает turn started — это лишь подтверждение постановки в
+ *  очередь. Поэтому метод существует, но его результат сейчас
+ *  документированно `acked: false` до подключения явного callback чата
+ *  либо app-server turn_started. См. уточнение ведущего 2026-10-10. */
+async function defaultVerifyAck(
+  threadId: string,
+  followupId: string,
+): Promise<{ acked: boolean; reason: string }> {
+  const scriptPath = path.join(
+    process.env.TASKFLOW_CODEX_WAKE_SCRIPT ||
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "..",
+        "..",
+        "scripts",
+        "orchestrator",
+        "tf_wake_dispatch.py",
+      ),
+  );
+  if (!fs.existsSync(scriptPath)) {
+    return { acked: false, reason: `wake script not found at ${scriptPath}` };
+  }
+  const { execFile } = await import("node:child_process");
+  const env = { ...process.env, TASKFLOW_CODEX_MAC: process.env.TASKFLOW_CODEX_MAC || "" };
+  return await new Promise<{ acked: boolean; reason: string }>((resolve) => {
+    execFile(
+      "python3",
+      [scriptPath, "--verify-ack", threadId, followupId],
+      { timeout: 15_000, env },
+      (err, stdout, stderr) => {
+        if (err) {
+          resolve({ acked: false, reason: stderr?.slice(0, 200) || err.message });
+          return;
+        }
+        resolve({ acked: false, reason: "verify-ack показывает только queued; ack требует явного callback чата" });
       },
     );
   });
@@ -869,19 +1178,41 @@ export function startWakeDeliveryLoop(runner: WakeCommandRunner = wakeRunner()):
 
 // ════════════════════════════ Test/POST /test: synchronous wake ════════════════════════════
 
+/**
+ * Nested wake DTO для test-ручки. Форма согласована с `WebhookDTO.wake`
+ * (см. rowToDto): кодекс-клиент уже понимает `wake.codex_thread_id`,
+ * здесь тот же shape, чтобы iPhone-UI не приходилось различать test и
+ * основную подписку. D-3: плоские `wake_queued`/`wake_thread_id`
+ * удалены; `acked` — отдельный булев, всегда false (подтверждение turn
+ * started приходит отдельным путём — см. registerWakeAck).
+ */
+export interface TestWakeDTO {
+  codex_thread_id: string | null;
+  has_thread: boolean;
+  queued: boolean;
+  queued_message: string | null;
+  codex_followup_id: string | null;
+  acked: boolean;
+  acked_at: string | null;
+  error: string | null;
+}
+
 export interface TestDeliveryResult {
   delivered: boolean;
   http_status: number;
-  wake_queued: boolean;
-  wake_thread_id: string | null;
+  wake: TestWakeDTO;
   error: string | null;
 }
 
 /**
  * POST /:id/test — синхронная проверка «получил iPhone» + «пробудился Codex».
- * По контракту HTTP и wake — отдельные признаки. Делаем 1) POST на URL
- * подписки для немедленной реакции iPhone-UI, 2) синхронный wake через
- * `runner`, 3) возвращаем оба признака + статусы.
+ * По контракту HTTP и wake — отдельные признаки (HTTP ≠ queued ≠ acked).
+ * Делаем 1) POST на URL подписки для немедленной реакции iPhone-UI,
+ * 2) синхронный wake через `runner`, 3) возвращаем оба признака + статусы.
+ *
+ * Никакого `secret` в ответе: подписочный ключ уже шифрован в БД, эхо
+ * полного значения в test-ответе нарушало бы write-only контракт
+ * (уточнение ведущего 2026-10-10).
  */
 export async function testSubscriptionDelivery(
   id: string,
@@ -893,7 +1224,21 @@ export async function testSubscriptionDelivery(
     .prepare("SELECT * FROM webhook_subscriptions WHERE id = ?")
     .get(id) as SubscriptionRow | undefined;
   if (!sub) {
-    return { delivered: false, http_status: 0, wake_queued: false, wake_thread_id: null, error: "not found" };
+    return {
+      delivered: false,
+      http_status: 0,
+      wake: {
+        codex_thread_id: null,
+        has_thread: false,
+        queued: false,
+        queued_message: null,
+        codex_followup_id: null,
+        acked: false,
+        acked_at: null,
+        error: "subscription not found",
+      },
+      error: "not found",
+    };
   }
   const body = JSON.stringify({
     test: true,
@@ -906,6 +1251,11 @@ export async function testSubscriptionDelivery(
   });
   let status = 0;
   let httpErr: string | null = null;
+  // Подпись тела делается ТЕМ ЖЕ секретом подписки, что и боевая доставка;
+  // на test-ручке в headers идёт `"X-Webhook-Signature": "test"` — это
+  // сознательно НЕ настоящий HMAC, чтобы случайный сниффер не собрал
+  // валидный токен. Сама проверка подписи остаётся за iPhone-UI; здесь
+  // мы лишь убеждаемся, что endpoint отвечает.
   try {
     const res = await fetchImpl(sub.url, {
       method: "POST",
@@ -925,11 +1275,13 @@ export async function testSubscriptionDelivery(
   const threadId = codexThreadOverride ?? sub.codex_thread_id;
   let wakeOk = false;
   let wakeErr: string | null = null;
+  let followupId: string | null = null;
   if (threadId) {
     try {
       const r = await runner(threadId, "[TaskFlow test] test wake from iOS POST /:id/test");
       wakeOk = r.ok;
       wakeErr = r.error ?? null;
+      followupId = r.codex_followup_id ?? null;
     } catch (e) {
       wakeErr = e instanceof Error ? e.message : String(e);
     }
@@ -937,8 +1289,16 @@ export async function testSubscriptionDelivery(
   return {
     delivered: status >= 200 && status < 300,
     http_status: status,
-    wake_queued: wakeOk,
-    wake_thread_id: threadId,
+    wake: {
+      codex_thread_id: threadId,
+      has_thread: threadId !== null,
+      queued: wakeOk,
+      queued_message: wakeOk ? "[TaskFlow test] test wake from iOS POST /:id/test" : null,
+      codex_followup_id: followupId,
+      acked: false,
+      acked_at: null,
+      error: wakeErr,
+    },
     error: httpErr ?? wakeErr,
   };
 }

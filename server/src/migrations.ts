@@ -4151,6 +4151,36 @@ const migrations: Migration[] = [
     }
   } },
 
+  // Карточка 905db3e3-…: durable секрет + раздельные wake_queued/wake_acked.
+  // Контракт архитектора V2 (документ d8c9973a в проекте, коммит 429be23a).
+  // Уточнения ведущего (комментарий 2026-10-10):
+  //  - секрет строго write-only во всех ответах POST/PATCH/GET/test;
+  //  - ack только по независимому подтверждению turn started или явному
+  //    callback чата; grep очереди не считается подтверждением;
+  //  - отсутствие ключа не валит весь сервер — только конкретные
+  //    операции (подпись, расшифровка, bootstrap).
+  { id: "128_webhook_durable_secret_and_wake_ack", description: "Webhooks V2: колонка secret_encrypted (AES-256-GCM) + раздельные codex_followup_id / wake_acked_at / wake_acked_kind в webhook_wake_queue. Карточка 905db3e3-…", up: () => {
+    const subInfo = db.prepare("PRAGMA table_info(webhook_subscriptions)").all() as Array<{ name: string }>;
+    const subHas = (name: string) => subInfo.some((c) => c.name === name);
+    if (!subHas("secret_encrypted")) {
+      db.exec("ALTER TABLE webhook_subscriptions ADD COLUMN secret_encrypted BLOB");
+    }
+
+    const wakeInfo = db.prepare("PRAGMA table_info(webhook_wake_queue)").all() as Array<{ name: string }>;
+    const wakeHas = (name: string) => wakeInfo.some((c) => c.name === name);
+    if (!wakeHas("codex_followup_id")) {
+      db.exec("ALTER TABLE webhook_wake_queue ADD COLUMN codex_followup_id TEXT");
+    }
+    if (!wakeHas("wake_acked_at")) {
+      db.exec("ALTER TABLE webhook_wake_queue ADD COLUMN wake_acked_at TEXT");
+    }
+    if (!wakeHas("wake_acked_kind")) {
+      db.exec("ALTER TABLE webhook_wake_queue ADD COLUMN wake_acked_kind TEXT");
+    }
+
+    db.exec("CREATE INDEX IF NOT EXISTS idx_webhook_wake_followup ON webhook_wake_queue(codex_followup_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_webhook_wake_ack_pending ON webhook_wake_queue(wake_acked_at) WHERE wake_acked_at IS NULL");
+  } },
 ];
 /**
  * Опции прогона миграций.

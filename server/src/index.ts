@@ -71,7 +71,11 @@ import { registerLibraryRoutes } from "./routes/library.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerAgentInboxRoutes } from "./routes/agent-inbox.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
-import { startWebhookDeliveryLoop, startWakeDeliveryLoop } from "./lib/webhookSubscriptions.js";
+import {
+  bootstrapSecrets,
+  startWebhookDeliveryLoop,
+  startWakeDeliveryLoop,
+} from "./lib/webhookSubscriptions.js";
 import {
   registerActivityRoutes,
   startActivityObserver,
@@ -79,6 +83,7 @@ import {
 import { startInboxTriageWatcher } from "./lib/inboxTriageWatcher.js";
 import { startNoteAccessWatcher } from "./lib/noteAccessWatcher.js";
 import { startKbTriageWatcher } from "./lib/kbTriageWatcher.js";
+import { startWebhookWakeWatcher } from "./lib/webhookWakeWatcher.js";
 import { startInboxResultsWriter } from "./lib/inboxResultsWriter.js";
 import { registerSeedRoutes } from "./seed.js";
 import { registerEnrichmentRoutes } from "./routes/enrichment.js";
@@ -476,6 +481,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // (правило Maksim 27.09.2026). Выключается через INBOX_TRIAGE_DISABLED=1.
   if (process.env.INBOX_TRIAGE_DISABLED !== "1") {
     startInboxTriageWatcher();
+    startWebhookWakeWatcher();
     // Сторож прибора «учёт обращений к заметкам»: без счётчиков схема базы
     // знаний слепнет (заметка cfa5cdcd, шаг 1 из 4).
     startNoteAccessWatcher();
@@ -483,6 +489,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     app.addHook("onClose", async () => stopWorkPlanWatcher());
     // Порог разбора заметок: набралось — заводим задачу Секретарю.
     startKbTriageWatcher();
+    // Wake-канал вебхуков: пробный ход на старте + каждые 30 минут
+    // (карточка 905db3e3-…). Изолированная проба, не будит живой чат.
+    startWebhookWakeWatcher();
   }
   // Результаты: при закрытии карточки на диагностику/устранение дописывает
   // блок в файл уведомления (Phase 4, правило Maksim 27.09.2026 — внутри
@@ -773,7 +782,15 @@ if (isMain) {
     if (process.env.ORCHESTRATOR_WEBHOOK_DISABLED !== "1") startOrchestratorWebhook();
     // Подписочный мост: durable delivery iOS-подпискам + wake-очередь
     // для пробуждения Codex-чата. Карточка c3c0c199… (hook_server).
+    // Карточка 905db3e3-… (webhook V2): секреты HMAC обязаны переживать
+    // restart, поэтому до запуска цикла прогреваем кеш расшифрованных
+    // секретов из БД. Без ключа (TASKFLOW_WEBHOOK_SECRET_KEY) bootstrap
+    // fail-closed только для этой подсистемы — остальной сервер работает.
     if (process.env.WEBHOOK_DELIVERY_DISABLED !== "1") {
+      const boot = bootstrapSecrets();
+      console.error(
+        `[webhook] bootstrap секретов: loaded=${boot.loaded} skipped=${boot.skipped}${boot.reason ? ` reason=${boot.reason}` : ""}`,
+      );
       stopWebhookDelivery = startWebhookDeliveryLoop();
       stopWakeDelivery = startWakeDeliveryLoop();
     }

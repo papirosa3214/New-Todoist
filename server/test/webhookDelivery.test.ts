@@ -109,7 +109,7 @@ describe("durable webhook delivery", () => {
     const r2 = await processWebhookDeliveryPass(fetchMock);
     expect(r2.skips.already_delivered).toBeGreaterThanOrEqual(1);
     expect(receivedBodies.length).toBe(0);
-    expect(sub.secret).toBe(SECRET); // тихо: контракт result-а
+    expect((sub as any).secret).toBeUndefined(); // секрет строго write-only (карточка 905db3e3-…)
   });
 
   it("фильтр event_kinds отбрасывает «чужой» вид", async () => {

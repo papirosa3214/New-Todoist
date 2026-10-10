@@ -2,6 +2,13 @@
 // Контракт зафиксирован в docs/research/2026-10-09-webhook-codex-wake-contract.md
 // и реализован в server/src/lib/webhookSubscriptions.ts. Здесь — только
 // тонкий слой Fastify: валидация, преобразование ошибок, авторизация.
+//
+// Уточнение ведущего 2026-10-10: секрет строго write-only во ВСЕХ
+// ответах POST/PATCH/GET/test, включая ротацию. Владелец держит секрет
+// у себя в keychain; на сервере он шифруется ключом
+// TASKFLOW_WEBHOOK_SECRET_KEY и не покидает процесс. Поэтому ниже
+// `secret` НЕ возвращается ни в одном `publicDto(...)`/ответ — только
+// `secret_preview` для UI.
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
@@ -9,11 +16,13 @@ import { isOwner } from "../access.js";
 import {
   ValidationError,
   WEBHOOK_PROJECT_ID,
+  bootstrapSecrets,
   createSubscription,
   deleteSubscription,
   getSubscription,
   listSubscriptions,
   processWakePass,
+  registerWakeAck,
   testSubscriptionDelivery,
   updateSubscription,
   type WebhookDTO,
@@ -67,7 +76,9 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
         project_id: body.project_id === undefined ? WEBHOOK_PROJECT_ID : body.project_id,
         codex_thread_id: body.codex_thread_id,
       });
-      return { webhook: publicDto(out.webhook), secret: out.secret };
+      // write-only: секрет НЕ возвращается ни в одном ответе (см. уточнение
+      // ведущего 2026-10-10). Владелец его уже знает — он его прислал.
+      return { webhook: publicDto(out.webhook) };
     } catch (e) {
       return errorFromValidation(reply, e);
     }
@@ -99,12 +110,10 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
       const onlyMine = !isOwner(userId);
       try {
         const dto = updateSubscription(id, req.body ?? {}, onlyMine ? userId : undefined);
-        // Если меняли секрет — пробросим полное значение ОДИН РАЗ.
-        const incoming = (req.body ?? {}) as { secret?: unknown };
-        return {
-          webhook: publicDto(dto),
-          secret: typeof incoming.secret === "string" && incoming.secret.length >= 16 ? incoming.secret : undefined,
-        };
+        // write-only: секрет НЕ возвращается ни при создании, ни при
+        // ротации. Владелец прислал новое значение в PATCH — значит, он
+        // его уже знает; эхо в ответе не нужно и опасно.
+        return { webhook: publicDto(dto) };
       } catch (e) {
         return errorFromValidation(reply, e);
       }
@@ -157,6 +166,46 @@ export function registerWebhookRoutes(app: FastifyInstance): void {
     async (req: any, reply) => {
       if (!isOwner(req.userId)) return reply.code(403).send({ error: "только владелец" });
       const r = await processWakePass();
+      return r;
+    },
+  );
+
+  /**
+   * Явный callback подтверждения wake от чата Codex (D-5: ack только
+   * по независимому подтверждению turn started или явному callback чата).
+   * Тело: { codex_followup_id: string, kind?: string }. Открыт по
+   * api_token — ожидаемо, что звонит desktop-bound Codex, а не
+   * произвольный клиент. Возвращает { ok: true }.
+   *
+   * kind сейчас фиксируется в `wake_acked_kind` для последующего аудита
+   * (например, различать app_server_turn_started и codex_chat_callback);
+   * реальная маршрутизация «что считать acked» — будущая работа.
+   */
+  app.post<{ Body: { codex_followup_id?: string; kind?: string } }>(
+    "/api/integrations/webhooks/_wake_ack",
+    { preHandler: authOrApiToken },
+    async (req: any, reply) => {
+      const body = req.body ?? {};
+      const followupId = typeof body.codex_followup_id === "string" ? body.codex_followup_id : "";
+      const kind = typeof body.kind === "string" && body.kind ? body.kind : "codex_chat_callback";
+      const r = registerWakeAck(followupId, kind);
+      if (!r.ok) return reply.code(400).send({ error: r.reason });
+      return { ok: true };
+    },
+  );
+
+  /**
+   * Bootstrap секретов (вызывается из server/src/index.ts на старте
+   * сервера). Делает явный прогрев, чтобы владелец видел в логе, сколько
+   * подписок удалось поднять. Не выдаёт никаких секретов наружу.
+   * Защищён владельцем, чтобы посторонний не дёргал.
+   */
+  app.post(
+    "/api/integrations/webhooks/_bootstrap_secrets",
+    { preHandler: authOrApiToken },
+    async (_req: any, reply) => {
+      if (!isOwner(_req.userId)) return reply.code(403).send({ error: "только владелец" });
+      const r = bootstrapSecrets();
       return r;
     },
   );
