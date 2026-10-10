@@ -14,6 +14,34 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import db from "../db.js";
+
+/**
+ * Постоянные категории базы знаний TaskFlow (схема cfa5cdcd).
+ *
+ * Две половины, смешивать нельзя: первые три — про нас, четвёртая — про
+ * внешний мир. Разделение нужно, чтобы можно было сравнивать «как у нас»
+ * и «как в мире», а не получать кашу.
+ *
+ * Помеченное как мусор сюда не входит: у мусора есть отдельная пометка,
+ * и решение об удалении принимается по факту обращений ролей, а не
+ * жёстким списком.
+ */
+export const KB_CATEGORIES = [
+  "Workflows",
+  "Norms",
+  "Roles",
+  "Knowledge Base",
+  "Исследования",
+];
+
+/** Пометка «на удаление» — решение принимает свод по обращениям. */
+export const KB_DROP_MARK = "мусор";
+
+export const KB_COLUMNS = [
+  "kb_temp_category",
+  "kb_category",
+  "kb_source_task_id",
+];
 import { authOrApiToken } from "../auth.js";
 import { journalPreview } from "../lib/tiptapPlaintext.js";
 import { tiptapToMarkdown } from "../lib/tiptapToMarkdown.js";
@@ -109,6 +137,10 @@ export function registerNoteRoutes(app: FastifyInstance) {
       /** Для агентов: текст в markdown, сервер сам переведёт в TipTap. */
       markdown?: string;
       folder_id?: number | null;
+      /** Схема базы знаний (cfa5cdcd). */
+      kb_temp_category?: string | null;
+      kb_category?: string | null;
+      kb_source_task_id?: string | null;
     };
   }>(
     "/api/notes",
@@ -175,6 +207,10 @@ export function registerNoteRoutes(app: FastifyInstance) {
       /** Для агентов: markdown вместо TipTap JSON. */
       markdown?: string;
       folder_id?: number | null;
+      /** Схема базы знаний (cfa5cdcd). Разбор ведёт Секретарь. */
+      kb_temp_category?: string | null;
+      kb_category?: string | null;
+      kb_source_task_id?: string | null;
     };
   }>("/api/notes/:id", { preHandler: authPre }, async (req: any, reply) => {
     const { id } = req.params;
@@ -187,6 +223,29 @@ export function registerNoteRoutes(app: FastifyInstance) {
     const params: unknown[] = [];
     const has = (k: string) =>
       req.body && Object.prototype.hasOwnProperty.call(req.body, k);
+
+    // Схема базы знаний (cfa5cdcd): категории ставит разбор Секретаря.
+    // Значение приводится к ограниченному списку — чтобы в базу не попало
+    // что попало: мусор с чужой пометкой хуже, чем отсутствие категории.
+    for (const k of KB_COLUMNS) {
+      if (!has(k)) continue;
+      const raw = (req.body as any)[k];
+      if (raw === null || raw === undefined || raw === "") {
+        sets.push(`${k} = NULL`);
+        continue;
+      }
+      const v = String(raw).trim().slice(0, 120);
+      // Списком проверяется ТОЛЬКО постоянная категория. Временная метка —
+      // свободная форма ("Из задачи: …"), и источник задачи тоже произвольный.
+      if (k === "kb_category" && !KB_CATEGORIES.includes(v)) {
+        return reply.code(400).send({
+          error: `неизвестная категория «${v}»`,
+          допустимые: KB_CATEGORIES,
+        });
+      }
+      sets.push(`${k} = ?`);
+      params.push(v);
+    }
 
     if (has("title")) {
       sets.push("title = ?");
