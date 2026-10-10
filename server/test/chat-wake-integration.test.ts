@@ -11,7 +11,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 
-import db from "../src/db.js";
+import db, { hashApiToken } from "../src/db.js";
 import { buildApp } from "../src/index.js";
 import {
   setRuntimeDefaultRunner,
@@ -77,6 +77,9 @@ afterEach(async () => {
   db.prepare("DELETE FROM chat_messages").run();
   db.prepare("DELETE FROM agent_inbox").run();
   db.prepare("DELETE FROM task_events").run();
+  // POST /api/chat/read заводит строку chat_reads на читателя (FK на users),
+  // без этой чистки DELETE users ниже падает на FOREIGN KEY.
+  db.prepare("DELETE FROM chat_reads").run();
   db.prepare("DELETE FROM webhook_subscriptions").run();
   db.prepare("DELETE FROM attachments").run();
   db.prepare(
@@ -100,6 +103,22 @@ function makeAgent(name: string): string {
      VALUES (?, ?, ?, 'x', 'agent', 'ai', 'offline')`,
   ).run(id, name, `${id}@test`);
   return id;
+}
+
+/** Свежий last_seen_at — адресат считается online (порог 60 с). */
+function markOnline(userId: string): void {
+  db.prepare("UPDATE users SET last_seen_at = datetime('now') WHERE id = ?").run(
+    userId,
+  );
+}
+
+/** Статический api_token агенту: читаем чат от его имени, чтобы проверить
+ *  ACK получателя (POST /api/chat/read). */
+function setApiToken(userId: string, token: string): void {
+  db.prepare("UPDATE users SET api_token = ? WHERE id = ?").run(
+    hashApiToken(token),
+    userId,
+  );
 }
 
 function makeProject(id: string): void {
@@ -267,6 +286,74 @@ describe("POST /api/chat → этап A: пробуждение idle-агент�
     // конкретной задаче, в которой адресат не отвечает. Тест держим
     // строго с task_id ниже.
     expect(evs.length).toBe(0);
+  });
+
+  it("general_wake: адресат онлайн без слота → wake по общему каналу, delivery_state='wake_queued'", async () => {
+    const addrId = makeAgent("delta");
+    markOnline(addrId);
+    // Общий канал — подписка без привязки к проекту.
+    makeSubscription({
+      id: "sub-general",
+      enabled: true,
+      threadId: "01a120f9-0000-4000-8000-0000000000bb",
+      projectId: null,
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      headers: bearer(ownerToken),
+      payload: {
+        text: "проснись, общий канал",
+        to_user_id: addrId,
+        channel: "agents",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.delivery_state).toBe("wake_queued");
+    expect(fakeState.calls.length).toBe(1);
+    expect(fakeState.calls[0].threadId).toBe(
+      "01a120f9-0000-4000-8000-0000000000bb",
+    );
+  });
+
+  it("delivered: получатель читает ленту → адресованное сообщение становится 'delivered'", async () => {
+    const addrId = makeAgent("epsilon");
+    markOnline(addrId);
+    setApiToken(addrId, "tf-epsilon-token");
+    makeSubscription({
+      id: "sub-delivered",
+      enabled: true,
+      threadId: "01a120f9-0000-4000-8000-0000000000cc",
+      projectId: null,
+    });
+
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      headers: bearer(ownerToken),
+      payload: {
+        text: "прочти меня",
+        to_user_id: addrId,
+        channel: "agents",
+      },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().delivery_state).toBe("wake_queued");
+
+    // Получатель читает ленту: taskflow_chat_read делает GET + POST /read.
+    const read = await app.inject({
+      method: "POST",
+      url: "/api/chat/read",
+      headers: { authorization: "Bearer tf-epsilon-token" },
+    });
+    expect(read.statusCode).toBe(200);
+
+    const row = db
+      .prepare("SELECT delivery_state FROM chat_messages WHERE id = ?")
+      .get(sent.json().id) as { delivery_state: string };
+    expect(row.delivery_state).toBe("delivered");
   });
 
   it("сообщение 'всем' (to_user_id=all) НЕ запускает wake", async () => {

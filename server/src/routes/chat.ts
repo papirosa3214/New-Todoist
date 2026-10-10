@@ -950,11 +950,29 @@ export function registerChatRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/chat/read", { preHandler: authPre }, async (req: any) => {
+    // Этап A (карточка d3a628eb-…): отметка прочтения = ACK получателя.
+    // Критерий приёмки требует `chat_messages.delivery_state='delivered'`,
+    // когда адресат реально получил и прочитал сообщение. Агент читает ленту
+    // инструментом `taskflow_chat_read`: тот после GET /api/chat сам зовёт
+    // этот маршрут. Значит здесь и наступает «доставлено» — все ещё не
+    // доставленные сообщения, адресованные этому пользователю, переводим в
+    // 'delivered'. Обновляем и 'unreachable': если адресат потом всё же
+    // прочитал, в текущем состоянии он доставлен (событие unreachable_role
+    // остаётся в истории как было).
+    const marked = db
+      .prepare(
+        `UPDATE chat_messages
+            SET delivery_state = 'delivered'
+          WHERE channel = 'agents'
+            AND to_user_id = ?
+            AND delivery_state != 'delivered'`,
+      )
+      .run(req.userId);
     db.prepare(
       `INSERT INTO chat_reads (user_id, last_read_at) VALUES (?, datetime('now'))
        ON CONFLICT(user_id) DO UPDATE SET last_read_at = datetime('now')`,
     ).run(req.userId);
-    return { ok: true };
+    return { ok: true, delivered_marked: marked.changes };
   });
 
   // Очистить ленту канала — владелец 21.09.2026: «должна быть возможность
