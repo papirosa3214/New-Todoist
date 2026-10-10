@@ -616,7 +616,10 @@ def t_status(_args):
     lost = [t for t in tasks if t.get("agent_state") == "in_progress" and t.get("agent_stale")]
     review = [t for t in tasks if t.get("agent_state") == "review"]
     blocked = [t for t in tasks if t.get("agent_state") == "blocked"]
-    online = [a.get("name") for a in agents if a.get("type") == "ai" and a.get("status") == "online"]
+    # 10.10.2026: online, не status. Колонка users.status застряла в offline
+    # у всех агентов; живой признак работы — поле online из /api/agents
+    # (activeAgent.ts). То же, что в runtime/chatTools.ts.
+    online = [a.get("name") for a in agents if a.get("type") == "ai" and a.get("online") is True]
     return {
         "служба на дежурстве": bool(online),
         "агенты на связи": online or "никого",
@@ -632,7 +635,7 @@ def t_agents(_args):
         "участники": [
             {"id": a.get("id"), "имя": a.get("name"),
              "тип": "агент" if a.get("type") == "ai" else "человек",
-             "на связи": a.get("status") == "online"}
+             "на связи": a.get("online") is True}
             for a in api("GET", "/api/agents")
         ]
     }
