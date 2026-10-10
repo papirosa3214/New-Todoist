@@ -176,6 +176,34 @@ export function registerNoteRoutes(app: FastifyInstance) {
         `INSERT INTO user_notes (id, title, content, folder_id, updated_by)
          VALUES (?, ?, ?, ?, ?)`,
       ).run(id, title, content, folderId, req.userId);
+
+      // Схема базы знаний (cfa5cdcd): заметка, рождённая в папке задачи,
+      // сразу получает ВРЕМЕННУЮ метку «Из задачи: …» и источник. Иначе
+      // цепочка рвётся на первом же шаге: метку не поставил никто, триггер
+      // разбора видел ноль, категории не появлялись, срез оставался пустым.
+      // Постоянную категорию проставляет Секретарь — не мы и не роль.
+      try {
+        if (folderId) {
+          const owner = db
+            .prepare(
+              `SELECT id, title FROM tasks WHERE artifact_folder_id = ?
+                 AND archived_at IS NULL LIMIT 1`,
+            )
+            .get(folderId) as { id: string; title: string } | undefined;
+          if (owner) {
+            db.prepare(
+              "UPDATE user_notes SET kb_temp_category = ?, kb_source_task_id = ? WHERE id = ?",
+            ).run(
+              `Из задачи: ${String(owner.title ?? "").slice(0, 90)}`,
+              owner.id,
+              id,
+            );
+          }
+        }
+      } catch {
+        // Метка — вспомогательная: её отсутствие не должно ронять запись.
+      }
+
       return db.prepare("SELECT * FROM user_notes WHERE id = ?").get(id);
     },
   );
