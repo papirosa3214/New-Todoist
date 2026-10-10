@@ -4181,6 +4181,31 @@ const migrations: Migration[] = [
     db.exec("CREATE INDEX IF NOT EXISTS idx_webhook_wake_followup ON webhook_wake_queue(codex_followup_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_webhook_wake_ack_pending ON webhook_wake_queue(wake_acked_at) WHERE wake_acked_at IS NULL");
   } },
+  // All submission paths persist done=1, including artifacts and final review.
+  // Keep checklist finalization in the same SQLite transaction; no new gate.
+  { id: "131_work_plan_submission_tail", description: "Подтверждённая сдача закрывает последний пункт рабочего чек-листа", up() {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS work_plan_submission_tail
+      AFTER UPDATE OF done ON subtasks WHEN NEW.done = 1
+      BEGIN
+        UPDATE subtask_work_plans
+           SET items_json = json_set(items_json, '$[#-1].state', 'done'),
+               revision = revision + 1,
+               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE subtask_id = NEW.id AND json_valid(items_json)
+           AND json_array_length(items_json) > 0
+           AND json_extract(items_json, '$[#-1].state') IN ('pending','in_progress');
+      END;
+      UPDATE subtask_work_plans
+         SET items_json = json_set(items_json, '$[#-1].state', 'done'),
+             revision = revision + 1,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       WHERE subtask_id IN (SELECT id FROM subtasks WHERE done = 1)
+         AND json_valid(items_json) AND json_array_length(items_json) > 0
+         AND json_extract(items_json, '$[#-1].state') IN ('pending','in_progress');
+    `);
+  } },
+
 ];
 /**
  * Опции прогона миграций.
