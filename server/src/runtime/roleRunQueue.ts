@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import db from "../db.js";
+import { logServerEvent } from "../lib/serverEvents.js";
 
 export const ROLE_RUN_REASONS = [
   "assigned",
@@ -71,7 +72,24 @@ export function enqueueRoleRunJob(input: {
       input.chainDepth ?? 0,
       input.manualStart ? 1 : 0,
     );
-  if (result.changes > 0) return { id, created: true };
+  if (result.changes > 0) {
+    logServerEvent({
+      scope: "queue",
+      kind: "queue_enqueued",
+      taskId: input.taskId,
+      actorId: input.actorId ?? null,
+      subtype: input.reason,
+      message: `роль встала в очередь: ${input.reason}`,
+      data: {
+        job_id: id,
+        reason: input.reason,
+        dedupe_key: input.dedupeKey,
+        max_attempts: input.maxAttempts ?? 3,
+        manual_start: input.manualStart ? 1 : 0,
+      },
+    });
+    return { id, created: true };
+  }
 
   const existing = db
     .prepare("SELECT id FROM role_run_jobs WHERE dedupe_key = ?")
@@ -81,7 +99,20 @@ export function enqueueRoleRunJob(input: {
 
 /** Вернуть просроченные claims в очередь после падения/рестарта worker. */
 export function recoverExpiredRoleRunJobs(): number {
-  return db
+  // Серверный журнал: считаем, сколько вернулось, и каждую строку помечаем
+  // отдельным событием — без этого нельзя понять, «почему очередь дёрнулась»
+  // (карточка e87cd93f). Читаем «до» список, чтобы записать именно те id,
+  // которые мы и восстановили, а не свежие рекавери за прошлые тики.
+  const expired = db
+    .prepare(
+      `SELECT id, task_id, attempts, max_attempts
+         FROM role_run_jobs
+        WHERE status = 'running'
+          AND lease_expires_at <= datetime('now')`,
+    )
+    .all() as Array<{ id: string; task_id: string; attempts: number; max_attempts: number }>;
+  if (expired.length === 0) return 0;
+  const changed = db
     .prepare(
       `UPDATE role_run_jobs
           SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
@@ -98,6 +129,24 @@ export function recoverExpiredRoleRunJobs(): number {
           AND lease_expires_at <= datetime('now')`,
     )
     .run().changes;
+  for (const row of expired) {
+    logServerEvent({
+      scope: "queue",
+      kind: "queue_expired",
+      taskId: row.task_id,
+      subtype: row.attempts >= row.max_attempts ? "dead" : "requeued",
+      message: `job ${row.id} просрочен (${
+        row.attempts >= row.max_attempts ? "лимит исчерпан — dead" : "возврат в очередь"
+      })`,
+      data: {
+        job_id: row.id,
+        attempts: row.attempts,
+        max_attempts: row.max_attempts,
+      },
+      outcome: row.attempts >= row.max_attempts ? "err" : "ok",
+    });
+  }
+  return changed;
 }
 
 /**

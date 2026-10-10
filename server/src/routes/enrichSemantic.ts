@@ -22,6 +22,11 @@ import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { getTaskForRead } from "../access.js";
 import { getEmbeddings } from "../lib/embeddingClient.js";
+import {
+  logServerEvent,
+  normalizeServerError,
+  recordServerOperation,
+} from "../lib/serverEvents.js";
 
 const DEFAULT_TOP_K = 3;
 
@@ -89,7 +94,21 @@ export function registerEnrichSemanticRoutes(app: FastifyInstance) {
 
       const startedAt = Date.now();
       const text = `${task.title ?? ""}\n${task.description ?? ""}`.trim();
+      // Обвязка серверного журнала (карточка e87cd93f). Сама операция
+      // ходит к embedding-сервису и к SQLite: нас интересует один
+      // сквозной operation_id, чтобы можно было связать «медленный
+      // матчинг → 502 от эмбеддинга» по одной строке.
+      const op = recordServerOperation({
+        scope: "enricher",
+        kind: "enricher_call",
+        subtype: "semantic_match",
+        actorId: req.userId,
+        taskId: task.id,
+        message: `семантический обогатитель для задачи ${task.id}`,
+        data: { top_k: 0, with_tags: taskTags.length > 0 ? 1 : 0 },
+      });
       if (!text) {
+        op.cancel({ message: "пустые title/description, обогащение пропущено" });
         return reply.code(400).send({
           error: "у задачи пустые title и description — нечего векторизовать",
         });
@@ -114,6 +133,10 @@ export function registerEnrichSemanticRoutes(app: FastifyInstance) {
           // Ничего не прошло грубый фильтр — возвращаем пустой результат
           // без вызова модели (дешевле, и на таком входе матчинг всё равно
           // не поможет).
+          op.ok({
+            message: "грубый фильтр оставил 0 кандидатов",
+            data: { stage: "tag_filter", kept: 0 },
+          });
           return {
             matched: [],
             top_k: topK,
@@ -128,8 +151,26 @@ export function registerEnrichSemanticRoutes(app: FastifyInstance) {
 
       // Запрос вектора для задачи. Роли уже векторизованы (см.
       // scripts/seed-role-embeddings.ts).
-      const { embeddings, dim } = await getEmbeddings(text);
+      let embeddings: number[];
+      let dim: number;
+      try {
+        const out = await getEmbeddings(text);
+        embeddings = out.embeddings as number[];
+        dim = out.dim;
+      } catch (err) {
+        const norm = normalizeServerError(err, "embedding_call_err");
+        op.err({
+          message: `embedding-сервис недоступен: ${norm.message || norm.code}`,
+          errorCode: norm.code,
+          errorMessage: norm.message,
+        });
+        throw err;
+      }
       if (!Array.isArray(embeddings) || dim === 0) {
+        op.err({
+          message: "embedding-сервис вернул пустой результат",
+          errorCode: "embedding_empty",
+        });
         return reply
           .code(502)
           .send({ error: "embedding service returned empty result" });
@@ -152,6 +193,10 @@ export function registerEnrichSemanticRoutes(app: FastifyInstance) {
       });
       scored.sort((a, b) => b.score - a.score || a.role.localeCompare(b.role));
 
+      op.ok({
+        message: `семантический матчинг готов: ${scored.length} кандидатов`,
+        data: { top_k: topK, candidates: scored.length, dim, stages: ["tag_filter", "cosine"] },
+      });
       return {
         matched: scored.slice(0, topK),
         top_k: topK,

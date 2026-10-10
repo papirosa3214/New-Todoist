@@ -94,6 +94,7 @@ import { registerRuntimeContextRoutes } from "./routes/runtime-context.js";
 import { registerLinearRoutes } from "./routes/linear.js";
 import { registerComposioRoutes } from "./routes/composio.js";
 import { registerCoordinationRoutes } from "./routes/coordination.js";
+import { logServerEvent, normalizeServerError } from "./lib/serverEvents.js";
 
 /**
  * Собирает и возвращает готовый Fastify-инстанс — регистрирует плагины,
@@ -221,8 +222,47 @@ export async function buildApp(): Promise<FastifyInstance> {
       };
       if (reply.statusCode >= 500) req.log.error(entry, "ответ с ошибкой");
       else req.log.warn(entry, "ответ с ошибкой");
+      // Структурированная запись в общий серверный журнал (карточка
+      // e87cd93f). Только 5xx — 4xx это нормальная работа API и в общий
+      // журнал не пишется, чтобы не размывать сигнал.
+      if (reply.statusCode >= 500) {
+        logServerEvent({
+          scope: "http_error",
+          kind: "route_error",
+          message: `${req.method} ${redactSensitiveQuery(req.url || "")} → ${reply.statusCode}`,
+          data: {
+            request_id: id,
+            method: req.method,
+            url: redactSensitiveQuery(req.url || ""),
+            status_code: reply.statusCode,
+            body_preview: errorBodyPreview(payload),
+          },
+          outcome: "err",
+          errorCode: `http_${reply.statusCode}`,
+        });
+      }
     }
     return payload;
+  });
+
+  // Необработанные сбои всего процесса: только что поднятый Fastify сам
+  // не отдаёт их в нормальный обработчик, и без этого хука они уходят
+  // «в никуда» — событие есть, а в журнале его нет.
+  app.addHook("onError", async (req, reply, err) => {
+    const norm = normalizeServerError(err, "fastify_route_error");
+    logServerEvent({
+      scope: "http_error",
+      kind: "route_throw",
+      message: `${req.method} ${redactSensitiveQuery(req.url || "")}: ${norm.message}`,
+      data: {
+        method: req.method,
+        url: redactSensitiveQuery(req.url || ""),
+        request_id: (req as any).id,
+      },
+      outcome: "err",
+      errorCode: norm.code,
+      errorMessage: norm.message,
+    });
   });
 
   // Сырые байты audio/* (запись из MediaRecorder на фронтенде) — не JSON,
@@ -588,6 +628,62 @@ const isMain =
 if (isMain) {
   const PORT = Number(process.env.PORT) || 3001;
   const HOST = process.env.HOST || "0.0.0.0";
+
+  // Серверный журнал жизни процесса (карточка e87cd93f). Стартовая и
+  // финальные точки ставятся один раз — этого достаточно, чтобы понять
+  // «что было при загрузке и при выходе». unhandledRejection/Exception —
+  // обвязка всего процесса, чтобы стек не уходил молча в никуда.
+  {
+    const startedAt = new Date().toISOString();
+    let dbPath = "";
+    try {
+      dbPath = path.basename(DB_PATH);
+    } catch {}
+    logServerEvent({
+      scope: "lifecycle",
+      kind: "process_boot",
+      message: `TaskFlow API стартует (port=${PORT}, host=${HOST})`,
+      data: {
+        port: PORT,
+        host: HOST,
+        node: process.version,
+        pid: process.pid,
+        db_file: dbPath,
+        started_at: startedAt,
+      },
+    });
+    process.on("unhandledRejection", (reason) => {
+      const norm = normalizeServerError(reason, "unhandled_rejection");
+      logServerEvent({
+        scope: "system",
+        kind: "unhandled_error",
+        message: `unhandledRejection: ${norm.message || "(no message)"}`,
+        outcome: "err",
+        errorCode: norm.code,
+        errorMessage: norm.message,
+      });
+    });
+    process.on("uncaughtException", (err) => {
+      const norm = normalizeServerError(err, "uncaught_exception");
+      logServerEvent({
+        scope: "system",
+        kind: "unhandled_error",
+        message: `uncaughtException: ${norm.message || "(no message)"}`,
+        outcome: "err",
+        errorCode: norm.code,
+        errorMessage: norm.message,
+      });
+    });
+    process.on("beforeExit", (code) => {
+      logServerEvent({
+        scope: "lifecycle",
+        kind: "process_shutdown",
+        message: `процесс завершается (code=${code})`,
+        data: { exit_code: code },
+        outcome: "ok",
+      });
+    });
+  }
 
   buildApp().then(async (app) => {
     let stopPreparation: (() => Promise<void>) | null = null;

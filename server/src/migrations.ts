@@ -4058,6 +4058,62 @@ const migrations: Migration[] = [
     db.exec(`CREATE INDEX IF NOT EXISTS idx_user_notes_kb_unreviewed
       ON user_notes(updated_at DESC) WHERE kb_category IS NULL`);
   } },
+
+  // Общий серверный журнал событий (карточка e87cd93f). Заменяет
+  // разрозненные console.* и добавляет привязку к операциям: одна операция
+  // (например, запуск роли или вызов MCP-инструмента) порождает цепочку
+  // событий, связанных общим operation_id, и завершается одним терминальным
+  // событием с duration_ms и outcome.
+  //
+  // Без FK на tasks/subtasks: событие должно переживать удаление карточки,
+  // иначе разбор «что было перед сбоем» станет невозможен как раз тогда,
+  // когда он нужен. task_id/subtask_id — справочные поля, не обязательные.
+  //
+  // scope — широкая категория для фильтрации и хранения; kind — точное
+  // имя события внутри scope. outcome NULL допустим для стартовых и
+  // промежуточных событий (например, 'role_run_started'), терминальные
+  // ('role_run_succeeded', 'mcp_call_err') всегда его заполняют.
+  {
+    id: "128_server_events",
+    description: "Общий серверный журнал событий с привязкой к операциям (карточка e87cd93f).",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS server_events (
+          id TEXT PRIMARY KEY,
+          operation_id TEXT,
+          scope TEXT NOT NULL CHECK (scope IN
+            ('lifecycle','queue','role_run','mcp','enricher','http_error','system')),
+          kind TEXT NOT NULL,
+          -- actor_id, task_id, subtask_id — справочные поля БЕЗ FK:
+          -- журнал должен переживать удаление пользователей и карточек,
+          -- иначе событие о работе пропадёт ровно тогда, когда оно
+          -- нужно для разбора. Связь с пользователем сохраняется как
+          -- «кто тогда это делал», а не как обязательство схемы.
+          actor_id TEXT,
+          task_id TEXT,
+          subtask_id TEXT,
+          subtype TEXT,
+          message TEXT,
+          data_json TEXT,
+          duration_ms INTEGER,
+          outcome TEXT CHECK (outcome IN ('ok','err','timeout','skipped','cancelled') OR outcome IS NULL),
+          error_code TEXT,
+          error_message TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_server_events_created
+          ON server_events(created_at);
+        CREATE INDEX IF NOT EXISTS idx_server_events_operation
+          ON server_events(operation_id) WHERE operation_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_server_events_scope_kind
+          ON server_events(scope, kind, created_at);
+        CREATE INDEX IF NOT EXISTS idx_server_events_task
+          ON server_events(task_id, created_at) WHERE task_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_server_events_subtask
+          ON server_events(subtask_id, created_at) WHERE subtask_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 /**
  * Опции прогона миграций.

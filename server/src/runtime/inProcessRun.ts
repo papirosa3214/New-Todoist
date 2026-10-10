@@ -53,6 +53,11 @@ import { recordTaskDocument } from "../lib/taskOutcome.js";
 import { isProviderLimitText, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 import { logStepOutcome } from "./stepOutcome.js";
 import { withTestRunBudget } from "./testRunBudget.js";
+import {
+  logServerEvent,
+  normalizeServerError,
+  recordServerOperation,
+} from "../lib/serverEvents.js";
 
 /**
  * Агент — часть TaskFlow, как профили у Гермеса (владелец 23.09.2026:
@@ -174,6 +179,16 @@ const RESEARCH_TOOL_TIMEOUT_MS = 90_000; // web_get/youtube/ocr реально �
  * дочерние процессы, в том числе этот, подхватят его сами, без своей копии.
  */
 async function callResearchTool(name: string, args: unknown): Promise<unknown> {
+  // Обвязка серверного журнала (карточка e87cd93f). Даже при тайм-ауте и
+  // нестарте подпроцесса финальное событие записывается — без этого
+  // operation_id висит без терминального исхода и цепочка вызовов рвётся.
+  const op = recordServerOperation({
+    scope: "mcp",
+    kind: "mcp_call",
+    subtype: name,
+    message: `MCP-инструмент ${name}`,
+    data: { tool: name, args_keys: args && typeof args === "object" ? Object.keys(args as object) : [] },
+  });
   let stdout: string;
   try {
     // execFile (промисифицированный) не понимает опцию input, как
@@ -200,15 +215,42 @@ async function callResearchTool(name: string, args: unknown): Promise<unknown> {
     // execFile бросает и на ненулевой exit code — наш --call всегда пишет
     // JSON в stdout ДО exit(1), так что содержательная ошибка обычно там же.
     stdout = err?.stdout ?? "";
-    if (!stdout) throw new ToolError(`research-инструмент ${name} не запустился: ${err?.message ?? String(err)}`);
+    const timedOut = err?.code === "ETIMEDOUT" || err?.killed === true;
+    const norm = normalizeServerError(err, "mcp_call_err");
+    if (!stdout) {
+      if (timedOut) {
+        op.timeout({ message: `MCP ${name}: процесс превысил ${RESEARCH_TOOL_TIMEOUT_MS}мс` });
+      } else {
+        op.err({
+          message: `MCP ${name}: процесс не запустился`,
+          errorCode: norm.code,
+          errorMessage: norm.message,
+        });
+      }
+      throw new ToolError(`research-инструмент ${name} не запустился: ${err?.message ?? String(err)}`);
+    }
+    op.ok({ message: `MCP ${name}: ответ получен через stderr, но stdout не пуст` });
   }
   let parsed: { result?: unknown; error?: string };
   try {
     parsed = JSON.parse(stdout);
   } catch {
+    op.err({
+      message: `MCP ${name}: вернул не JSON`,
+      data: { stdout_preview: stdout.slice(0, 200) },
+      errorCode: "mcp_invalid_json",
+    });
     throw new ToolError(`research-инструмент ${name} вернул не JSON: ${stdout.slice(0, 500)}`);
   }
-  if (parsed.error) throw new ToolError(parsed.error);
+  if (parsed.error) {
+    op.err({
+      message: `MCP ${name}: ${parsed.error}`,
+      errorCode: "mcp_call_err",
+      errorMessage: typeof parsed.error === "string" ? parsed.error : null,
+    });
+    throw new ToolError(parsed.error);
+  }
+  op.ok({ message: `MCP ${name}: готово` });
   return parsed.result;
 }
 
@@ -1400,6 +1442,63 @@ export type KickRoleTaskResult =
  * retry/dead, а не считать технический сбой успешной обработкой job.
  */
 export async function kickRoleTaskStrict(
+  taskId: string,
+  reason: KickReason,
+  actorId?: string | null,
+  options?: { durableHandoff?: boolean; chainDepth?: number; manualStart?: boolean },
+): Promise<KickRoleTaskResult> {
+  // Журнал серверных событий (карточка e87cd93f): одна операция —
+  // один operation_id, терминальное событие пишется всегда. Ловим и
+  // нештатные сбои, и обычные «skipped» — без терминального события
+  // цепочка рвётся, и по operation_id нельзя понять, чем кончилось.
+  const op = recordServerOperation({
+    scope: "role_run",
+    kind: "role_run",
+    actorId: actorId ?? null,
+    taskId,
+    message: `kick role task: ${reason}`,
+    data: {
+      reason,
+      chain_depth: options?.chainDepth ?? 0,
+      manual_start: options?.manualStart === true ? 1 : 0,
+    },
+  });
+  let result: KickRoleTaskResult;
+  try {
+    result = await kickRoleTaskStrictImpl(taskId, reason, actorId, options);
+  } catch (kickErr) {
+    const norm = normalizeServerError(kickErr, "role_run_failed");
+    op.err({
+      taskId,
+      message: `kickRoleTaskStrict: ${norm.message || norm.code}`,
+      errorCode: norm.code,
+      errorMessage: norm.message,
+    });
+    throw kickErr;
+  }
+  // Перевод исхода в финальное событие. Результат функции не зависит
+  // от того, что мы тут записали: durable worker всё равно движется
+  // по своему контракту.
+  const skipReason =
+    "reason" in result && typeof result.reason === "string" ? result.reason : null;
+  if (result.outcome === "started") {
+    op.ok({ taskId, message: skipReason ? `started: ${skipReason}` : "started" });
+  } else if (result.outcome === "skipped") {
+    op.cancel({ taskId, message: skipReason ? `skipped: ${skipReason}` : "skipped" });
+  } else {
+    // 'deferred' — отдельный путь: worker сам сделает новую попытку.
+    op.cancel({
+      taskId,
+      message: skipReason ? `deferred: ${skipReason}` : "deferred",
+      data: { delay_seconds: result.delaySeconds ?? null },
+    });
+  }
+  return result;
+}
+
+/** Внутренняя реализация kickRoleTaskStrict — без журнала, ради чистого
+ *  flow с return'ами. Обвязка журналом живёт в kickRoleTaskStrict выше. */
+async function kickRoleTaskStrictImpl(
   taskId: string,
   reason: KickReason,
   actorId?: string | null,
