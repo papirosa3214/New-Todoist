@@ -3,6 +3,7 @@ import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { snapshotFor } from "../activeAgent.js";
+import { roleKeyHealth } from "./roles.js";
 import {
   getProjectForUser,
   getProjectForWrite,
@@ -767,12 +768,23 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   // assigning a task to one is how a new user forms their first connection.
   // Email is intentionally never selected: the frontend doesn't use it
   // (see src/screens/AgentsScreen.tsx, src/screens/TaskFormScreen.tsx).
+  // 10.10.2026: возраст отметки в секундах. Отметка лежит в базе (общая для
+  // всех инстансов), а отпечаток активности — в памяти процесса. Отдельное
+  // выражение, а не литерал внутри шаблонной строки: одинарные кавычки в
+  // SQL там съедает TypeScript.
+    "END)";
   app.get("/api/agents", { preHandler: authPre }, async (req: any) => {
     const rows = db
       .prepare(
         `SELECT id, name, role, type, avatar_color, avatar_url,
                 avatar_url_working, avatar_url_blocked, initials, status,
                 last_seen_at,
+                -- 10.10.2026: online = роль готова к пробуждению (Pi жив,
+                -- модель и профиль на месте), а НЕ «работала в последнюю
+                -- минуту». Обе величины живут в этом процессе, в отличие от
+                -- отпечатка активности из памяти — тот не переживает
+                -- несколько инстансов сервера. Считается в roleKeyHealth().
+                role_key,
                 -- «Живая» аватарка (27.08.2026): что сейчас держит агент как
                 -- исполнитель (assignee_id) — blocked приоритетнее working,
                 -- застрять важнее показать, чем «просто работает». NULL —
@@ -802,6 +814,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       .all(req.userId, req.userId, req.userId, req.userId) as Array<{
         id: string;
         last_seen_at: string | null;
+        role_key: string | null;
       }>;
 
     // Отпечаток активности (29.08.2026, задача 31f2759e): в памяти
@@ -811,9 +824,13 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     // Для людей модуль возвращает null — у них и так online не нужен.
     return rows.map((row) => {
       const snap = snapshotFor(row.id);
+      // Присутствие здесь — «можно ли его разбудить», а не «стучился ли он
+      // в последнюю минуту»: остановившегося исполнителя не должно быть видно
+      // как офлайн. Источник — roleKeyHealth (см. roles.ts).
+      const online = row.role_key ? roleKeyHealth(row.role_key) : false;
       return {
         ...row,
-        online: snap?.online ?? false,
+        online,
         last_action: snap?.lastAction ?? null,
         last_action_title: snap?.lastActionTitle ?? null,
       };
