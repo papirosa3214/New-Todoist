@@ -202,6 +202,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
   const current = subtask(subtaskId);
   if (!current || !current.collaboration_plan_id || !current.plan_node_key) return { ok: false, error: "подзадача не узел плана" };
   if (current.done || current.agent_state) return { ok: false, error: "узел плана уже начат или закрыт" };
+  if (!db.prepare("SELECT 1 FROM tasks WHERE id=? AND archived_at IS NULL").get(current.task_id)) return {ok:false,error:"Задача в архиве — запуск запрещён"};
   const node = db.prepare("SELECT role_key FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?")
     .get(current.collaboration_plan_id, current.plan_node_key) as { role_key: string } | undefined;
   if (!node) return { ok: false, error: "узел плана не найден в DAG" };
@@ -219,6 +220,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
   const attemptId = crypto.randomUUID();
   const acquired=db.transaction(()=>{
     const latest=subtask(current.id);
+    if (!db.prepare("SELECT 1 FROM tasks WHERE id=? AND archived_at IS NULL").get(current.task_id)) return false;
     if(!latest||latest.done||latest.agent_state||!canPlanSubtaskBecomeReady(latest))return false;
     if(db.prepare("SELECT 1 FROM attempts WHERE subtask_id=? AND ended_at IS NULL").get(current.id))return false;
     db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,routing_role,started_at,heartbeat_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now'))").run(attemptId,current.task_id,current.id,roleUserId(node.role_key),node.role_key);
@@ -405,7 +407,7 @@ export async function recoverInterruptedPlanSubtasks(opts: RecoverOptions = {}):
   const byServerRestart = !opts.reason;
   const reason = opts.reason ?? "перезапуск сервера";
   const rows = (db.prepare(
-    "SELECT * FROM subtasks WHERE collaboration_plan_id IS NOT NULL AND done = 0 AND agent_state IN ('in_progress','todo','blocked')",
+    "SELECT * FROM subtasks WHERE collaboration_plan_id IS NOT NULL AND done = 0 AND agent_state IN ('in_progress','todo','blocked') AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=subtasks.task_id AND t.archived_at IS NULL)",
   ).all() as PlanSubtask[]).filter((row) => !opts.skip?.(row));
   let resumed = 0;
   let blocked = 0;

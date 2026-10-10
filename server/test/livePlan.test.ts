@@ -323,6 +323,22 @@ describe("живой план совместной работы", () => {
     expect(second.version).toBe(first.version);
   });
 
+  it("архивный план не запускается напрямую и не восстанавливается после рестарта", async () => {
+    const { taskId, planId } = await planWith("approved", [{slot:"work",role:"builder"}], []);
+    const step = stepOf(planId, "work")!;
+    db.prepare("UPDATE tasks SET archived_at=datetime('now') WHERE id=?").run(taskId);
+    const {startPlanSubtaskRun,recoverInterruptedPlanSubtasks} = await import("../src/runtime/planSubtaskAdmission.js");
+    const count = started.length;
+    expect((await startPlanSubtaskRun(step.id,"role_builder")).ok).toBe(false);
+    expect(started.length).toBe(count);
+    db.prepare("UPDATE subtasks SET agent_state='todo' WHERE id=?").run(step.id);
+    const before = db.prepare("SELECT * FROM subtasks WHERE id=?").get(step.id);
+    await recoverInterruptedPlanSubtasks({skip:row=>row.id!==step.id});
+    expect(db.prepare("SELECT * FROM subtasks WHERE id=?").get(step.id)).toEqual(before);
+    expect(started.length).toBe(count);
+    expect(db.prepare("SELECT count(*) n FROM attempts WHERE subtask_id=?").get(step.id)).toEqual({n:0});
+  });
+
   it("два старта создают одну активную попытку",async()=>{
     const f=await planWith("approved",[{slot:"work",role:"builder",state:"pending"}],[]);
     const step=stepOf(f.planId,"work")!;
