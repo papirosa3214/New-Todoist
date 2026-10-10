@@ -29,8 +29,13 @@
  *  - сдохший job → queue.queue_dead
  *
  * Журнал append-only по замыслу: ни один маршрут не правит и не стирает
- * строки `server_events`. Ротация — отдельная задача (карточка,
- * шаг «Настройка ротации логов»).
+ * строки `server_events`. Очистка старых строк — отдельная задача модуля
+ * (`pruneServerEvents`, шаг «Настройка ротации логов и ограничения
+ * хранения» карточки e87cd93f). Эту функцию вызывает периодический
+ * планировщик, поднимаемый из `index.ts` через
+ * `startServerEventsRetention()`. Удаление идёт по `created_at`; на
+ * операционные индексы это не влияет, потому что строки удаляются
+ * пакетом и за один проход таблица не перегружается.
  */
 import crypto from "node:crypto";
 import db from "../db.js";
@@ -415,3 +420,261 @@ export function normalizeServerError(
   }
   return { code: fallbackCode, message: "" };
 }
+
+// ───────────────────────── ротация и лимит хранения ─────────────────────────
+//
+// Лимит хранения (по возрасту) — отдельная задача: ни одна запись в
+// `server_events` сама себя не вычищает, чистку делает
+// `pruneServerEvents`. Без неё таблица будет расти, и `byKind` за
+// длинный период однажды станет дорогим.
+//
+// Управление:
+//
+//  - `DEFAULT_SERVER_EVENTS_RETENTION_DAYS` — дефолтный срок хранения
+//    (дней). Переопределяется переменной окружения
+//    `TASKFLOW_SERVER_EVENTS_RETENTION_DAYS` (положительное целое).
+//  - `DEFAULT_SERVER_EVENTS_ROTATION_INTERVAL_MS` — дефолтный интервал
+//    запуска чистки (мс). Переопределяется переменной окружения
+//    `TASKFLOW_SERVER_EVENTS_ROTATION_INTERVAL_MS`. Можно отключить
+//    (`=0`) — полезно для тестов, в проде интервал меньше минуты не
+//    имеет смысла.
+//  - `setServerEventsRetentionDays(value)` /
+//    `setServerEventsRotationIntervalMs(value)` — программное
+//    переопределение (используется в тестах и в проде, если в будущем
+//    появится настройка через `server_settings`).
+//
+// Решения, которые здесь зафиксированы осознанно:
+//
+//  - чистка по `created_at`, а не по `id` или размеру файла: это
+//    ровно тот критерий, который нужен владельцу («не старше N
+//    дней»);
+//  - порог округляется до целой секунды (SQLite хранит `created_at` в
+//    формате `datetime('now')` без миллисекунд), но сравнение идёт по
+//    ISO-строке — формат совпадает с точностью до секунды;
+//  - `prune` возвращает число удалённых строк и порог; это полезно
+//    и для диагностики, и для тестов;
+//  - планировщик поднимается отдельной функцией
+//    `startServerEventsRetention()` и не запускается из модуля
+//    сам по себе — иначе unit-тесты на каждый `import` плагина
+//    получили бы сторонний `setInterval`.
+
+/** Сколько дней хранить записи `server_events` по умолчанию. */
+export const DEFAULT_SERVER_EVENTS_RETENTION_DAYS = 180;
+
+/** С какой периодичностью по умолчанию запускается чистка (мс). */
+export const DEFAULT_SERVER_EVENTS_ROTATION_INTERVAL_MS = 60 * 60_000;
+
+const SERVER_EVENTS_RETENTION_OVERRIDE = { value: undefined as number | undefined };
+const SERVER_EVENTS_ROTATION_OVERRIDE = { value: undefined as number | undefined };
+
+function envInt(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.trunc(n);
+}
+
+/** Текущий эффективный срок хранения (дней). */
+export function getServerEventsRetentionDays(): number {
+  const programmatic = SERVER_EVENTS_RETENTION_OVERRIDE.value;
+  if (typeof programmatic === "number" && Number.isFinite(programmatic)) {
+    return Math.max(0, Math.trunc(programmatic));
+  }
+  const fromEnv = envInt("TASKFLOW_SERVER_EVENTS_RETENTION_DAYS");
+  if (typeof fromEnv === "number") {
+    return Math.max(0, fromEnv);
+  }
+  return DEFAULT_SERVER_EVENTS_RETENTION_DAYS;
+}
+
+/** Текущий эффективный интервал ротации (мс). */
+export function getServerEventsRotationIntervalMs(): number {
+  const programmatic = SERVER_EVENTS_ROTATION_OVERRIDE.value;
+  if (typeof programmatic === "number" && Number.isFinite(programmatic)) {
+    return Math.max(0, Math.trunc(programmatic));
+  }
+  const fromEnv = envInt("TASKFLOW_SERVER_EVENTS_ROTATION_INTERVAL_MS");
+  if (typeof fromEnv === "number") {
+    return Math.max(0, fromEnv);
+  }
+  return DEFAULT_SERVER_EVENTS_ROTATION_INTERVAL_MS;
+}
+
+/**
+ * Программно переопределить срок хранения (дней). Используется в
+ * тестах. Передача `null` сбрасывает override и возвращает к
+ * дефолту/env.
+ */
+export function setServerEventsRetentionDays(value: number | null): void {
+  if (value === null || value === undefined) {
+    SERVER_EVENTS_RETENTION_OVERRIDE.value = undefined;
+    return;
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("server_events retention_days должен быть неотрицательным целым");
+  }
+  SERVER_EVENTS_RETENTION_OVERRIDE.value = Math.trunc(value);
+}
+
+/**
+ * Программно переопределить интервал ротации (мс). `0` — отключить
+ * планировщик (тестам это удобно). `null` — к дефолту.
+ */
+export function setServerEventsRotationIntervalMs(value: number | null): void {
+  if (value === null || value === undefined) {
+    SERVER_EVENTS_ROTATION_OVERRIDE.value = undefined;
+    return;
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("server_events rotation_interval_ms должен быть неотрицательным целым");
+  }
+  SERVER_EVENTS_ROTATION_OVERRIDE.value = Math.trunc(value);
+}
+
+export type ServerEventsPruneResult = {
+  removed: number;
+  remaining: number;
+  retentionDays: number;
+  /** ISO-строка, ниже которой строки считались устаревшими. */
+  threshold: string;
+  /** Реальное время запуска (для диагностики). */
+  ranAt: string;
+};
+
+/**
+ * Удаляет записи `server_events` старше указанного срока. По умолчанию
+ * использует текущее значение `getServerEventsRetentionDays()`. Если
+ * срок = 0 — удаляются ВСЕ строки (используется только в тестах/
+ * разовых разовых чистках; в проде не выставляйте 0).
+ *
+ * Возвращает счётчик удалённых и оставшихся строк. Если во время
+ * удаления БД недоступна — пробрасывает ошибку наверх: ротация —
+ * фоновая операция, без отказа она бы тихо сидела «вечно».
+ */
+export function pruneServerEvents(options: {
+  retentionDays?: number;
+  now?: Date;
+} = {}): ServerEventsPruneResult {
+  const ranAt = (options.now ?? new Date()).toISOString();
+  const retentionDays =
+    options.retentionDays !== undefined
+      ? Math.max(0, Math.trunc(options.retentionDays))
+      : getServerEventsRetentionDays();
+  const baseTime = (options.now ?? new Date()).getTime();
+  const threshold = new Date(baseTime - retentionDays * 24 * 60 * 60_000);
+  const thresholdIso = threshold.toISOString();
+  // SQLite хранит `created_at` как `datetime('now')` с секундной
+  // точностью; ISO-строка миллисекундной точности сравнивается со
+  // строковым форматом «лексикографически» — `2026-10-10T12:00:00`
+  // меньше `2026-10-10T12:00:00.123Z`, итого сравнение работает
+  // корректно и с миллисекундами, и без.
+  const tx = db.transaction(() => {
+    const info = db
+      .prepare("DELETE FROM server_events WHERE created_at < ?")
+      .run(thresholdIso);
+    const remaining =
+      (db.prepare("SELECT COUNT(*) AS n FROM server_events").get() as { n: number }).n ?? 0;
+    return { removed: Number(info.changes ?? 0), remaining };
+  });
+  const { removed, remaining } = tx();
+  return {
+    removed,
+    remaining,
+    retentionDays,
+    threshold: thresholdIso,
+    ranAt,
+  };
+}
+
+export type ServerEventsRetentionHandle = {
+  /** Остановить периодическую чистку. Идемпотентно. */
+  stop: () => void;
+  /** Какой интервал сейчас актуален (мс). */
+  intervalMs: number;
+  /** Полная последняя сводка чистки (или null, если ещё не было). */
+  lastResult: ServerEventsPruneResult | null;
+};
+
+const ACTIVE_RETENTION = new Set<ServerEventsRetentionHandle>();
+
+/**
+ * Поднять периодическую чистку. По умолчанию — раз в час, интервал
+ * переопределяется через env/override. `intervalMs = 0` — планировщик
+ * НЕ запускается, выполнится одна синхронная чистка и вернётся
+ * «выключенный» handle. Это удобно для тестов: запустили прогон,
+ * дёрнули `pruneServerEvents` руками и проверили результат без
+ * интервалов.
+ *
+ * Любые ошибки `pruneServerEvents` глушатся в `console.warn`, чтобы
+ * поломанная БД не валила процесс; следующий тик через час попробует
+ * снова.
+ */
+export function startServerEventsRetention(options: {
+  intervalMs?: number;
+  retentionDays?: number;
+  now?: Date;
+} = {}): ServerEventsRetentionHandle {
+  const intervalMs =
+    options.intervalMs !== undefined
+      ? Math.max(0, Math.trunc(options.intervalMs))
+      : getServerEventsRotationIntervalMs();
+  let lastResult: ServerEventsPruneResult | null = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const handle: ServerEventsRetentionHandle = {
+    intervalMs,
+    get lastResult() {
+      return lastResult;
+    },
+    stop: () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+      ACTIVE_RETENTION.delete(handle);
+    },
+  };
+  // Первая чистка — сразу, чтобы запись «200 дней назад» не лежала
+  // до следующего тика. Если ротация выключена (`intervalMs = 0`) —
+  // всё равно делаем первый прогон, иначе ручной запуск без
+  // планировщика был бы бесполезен.
+  try {
+    lastResult = pruneServerEvents({
+      retentionDays: options.retentionDays,
+      now: options.now,
+    });
+  } catch (error) {
+    console.warn(
+      "[serverEvents] первичная чистка не удалась:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+  if (intervalMs > 0 && typeof setInterval === "function") {
+    timer = setInterval(() => {
+      try {
+        lastResult = pruneServerEvents();
+      } catch (error) {
+        console.warn(
+          "[serverEvents] чистка по таймеру не удалась:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }, intervalMs);
+    // Ротация — не критическая работа; разрешаем процессу уйти без
+    // висящего таймера.
+    if (typeof (timer as { unref?: () => void }).unref === "function") {
+      (timer as { unref: () => void }).unref();
+    }
+    ACTIVE_RETENTION.add(handle);
+  }
+  return handle;
+}
+
+/** Остановить все активные планировщики ротации. Используется в
+ *  тестах, чтобы интервал не висел между прогонами. */
+export function stopAllServerEventsRetention(): void {
+  for (const handle of Array.from(ACTIVE_RETENTION)) {
+    handle.stop();
+  }
+}
+

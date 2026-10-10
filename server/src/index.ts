@@ -94,7 +94,12 @@ import { registerRuntimeContextRoutes } from "./routes/runtime-context.js";
 import { registerLinearRoutes } from "./routes/linear.js";
 import { registerComposioRoutes } from "./routes/composio.js";
 import { registerCoordinationRoutes } from "./routes/coordination.js";
-import { logServerEvent, normalizeServerError } from "./lib/serverEvents.js";
+import {
+  logServerEvent,
+  normalizeServerError,
+  startServerEventsRetention,
+  type ServerEventsRetentionHandle,
+} from "./lib/serverEvents.js";
 import { registerServerEventsRoutes } from "./routes/serverEvents.js";
 
 /**
@@ -699,6 +704,7 @@ if (isMain) {
     let stopLinearSync: (() => void) | null = null;
     let stopWebhookDelivery: (() => void) | null = null;
     let stopWakeDelivery: (() => void) | null = null;
+    let stopEventsRetention: ServerEventsRetentionHandle | null = null;
     app.addHook("onClose", async () => {
       stopKnowledgeSync?.();
       stopScheduler?.();
@@ -708,6 +714,7 @@ if (isMain) {
       stopLinearSync?.();
       stopWebhookDelivery?.();
       stopWakeDelivery?.();
+      stopEventsRetention?.stop();
       if (stopPreparation) await stopPreparation();
       if (stopRoleRuns) await stopRoleRuns();
       if (stopVoiceBridge) await stopVoiceBridge();
@@ -718,6 +725,15 @@ if (isMain) {
     // не может: иначе статус, оставшийся с прошлого запуска, врал бы до
     // первого подключения того же пользователя.
     resetAllOffline();
+
+    // Карточка e87cd93f, шаг «Настройка ротации логов»: периодическая
+    // чистка старых строк `server_events` по `created_at`. Интервал и
+    // срок хранения — из serverEvents.ts (override/env, дефолт 1ч /
+    // 180 дней). В QA-песочнице ротацию всё равно держим — она
+    // работает локально и не трогает внешние сервисы.
+    if (process.env.TASKFLOW_SERVER_EVENTS_ROTATION !== "off") {
+      stopEventsRetention = startServerEventsRetention();
+    }
     // Durable worker стартует только в реальном process после listen.
     // buildApp() в unit tests остаётся полностью детерминированным.
     // TASKFLOW_QA_SANDBOX=1 — копия приложения для живой проверки роли QA
