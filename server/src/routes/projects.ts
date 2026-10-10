@@ -3,6 +3,7 @@ import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { snapshotFor } from "../activeAgent.js";
+import { roleKeyHealth } from "./roles.js";
 import {
   getProjectForUser,
   getProjectForWrite,
@@ -771,9 +772,6 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   // всех инстансов), а отпечаток активности — в памяти процесса. Отдельное
   // выражение, а не литерал внутри шаблонной строки: одинарные кавычки в
   // SQL там съедает TypeScript.
-  const SEEN_AGE_SEC =
-    "(CASE WHEN last_seen_at IS NULL THEN NULL ELSE " +
-    "(julianday('now') - julianday(replace(replace(last_seen_at,'T',' '),'Z',''))) * 86400.0 " +
     "END)";
   app.get("/api/agents", { preHandler: authPre }, async (req: any) => {
     const rows = db
@@ -781,10 +779,12 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
         `SELECT id, name, role, type, avatar_color, avatar_url,
                 avatar_url_working, avatar_url_blocked, initials, status,
                 last_seen_at,
-                -- Признак «на связи» считаем из базы, а не из памяти:
-                -- инстансов сервера несколько, и агент, работающий в одном,
-                -- из другого не виден. Из памяти берём только подпись действия.
-                ${SEEN_AGE_SEC} AS seen_age_sec,
+                -- 10.10.2026: online = роль готова к пробуждению (Pi жив,
+                -- модель и профиль на месте), а НЕ «работала в последнюю
+                -- минуту». Обе величины живут в этом процессе, в отличие от
+                -- отпечатка активности из памяти — тот не переживает
+                -- несколько инстансов сервера. Считается в roleKeyHealth().
+                role_key,
                 -- «Живая» аватарка (27.08.2026): что сейчас держит агент как
                 -- исполнитель (assignee_id) — blocked приоритетнее working,
                 -- застрять важнее показать, чем «просто работает». NULL —
@@ -814,7 +814,7 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
       .all(req.userId, req.userId, req.userId, req.userId) as Array<{
         id: string;
         last_seen_at: string | null;
-        seen_age_sec: number | null;
+        role_key: string | null;
       }>;
 
     // Отпечаток активности (29.08.2026, задача 31f2759e): в памяти
@@ -824,9 +824,10 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
     // Для людей модуль возвращает null — у них и так online не нужен.
     return rows.map((row) => {
       const snap = snapshotFor(row.id);
-      // Порог тот же, что в activeAgent.ts (STALE_AFTER_MS = 60с): минута
-      // тишины — и агент уже не на связи.
-      const online = row.seen_age_sec !== null && row.seen_age_sec >= 0 && row.seen_age_sec <= 60;
+      // Присутствие здесь — «можно ли его разбудить», а не «стучился ли он
+      // в последнюю минуту»: остановившегося исполнителя не должно быть видно
+      // как офлайн. Источник — roleKeyHealth (см. roles.ts).
+      const online = row.role_key ? roleKeyHealth(row.role_key) : false;
       return {
         ...row,
         online,

@@ -281,6 +281,14 @@ async function piAlive(): Promise<boolean> {
   }
 }
 
+/** Кэш готовности роли: roleKey -> готов к пробуждению. Обновляется при
+ *  каждом /api/roles, чтобы /api/agents не делал свой обход ролей.
+ *  Присутствие агента = «его можно разбудить», а не «стучался минуту назад». */
+const roleReadiness = new Map<string, boolean>();
+export function roleKeyHealth(roleKey: string): boolean {
+  return roleReadiness.get(roleKey) ?? false;
+}
+
 /** Register the role catalog, role prompts, and account-role lookup routes. */
 export function registerRoleRoutes(app: FastifyInstance): void {
   const authPre = authOrApiToken;
@@ -292,6 +300,11 @@ export function registerRoleRoutes(app: FastifyInstance): void {
       // Здоровье исполнителя спрашивается ОДИН раз на запрос, а не на
       // каждую из восьми ролей: за ответом стоит вызов systemctl.
       const alive = await piAlive();
+      // Зеркалим готовность в кэш для /api/agents: там своя выборка
+      // пользователей, обходить роли ещё раз — лишний вызов systemctl.
+      for (const role of allRoles().map((r) => r.key)) {
+        roleReadiness.set(role, roleDetails(role, alive).status !== "unavailable");
+      }
       // ?all=1 — вместе с отключёнными: экрану «Команда» их надо показать,
       // чтобы было что включить обратно. Без него — только рабочие роли.
       const keys = req.query.all === "1" ? allRoles().map((r) => r.key) : ROLE_NAMES;
