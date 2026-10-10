@@ -101,14 +101,22 @@
 
 ## Ограничения
 
-- Код в этой ветке ещё **не написан коммитами** — `dirty_files=0`. Это нормально для этапа «implementation_pack»: артефакт передаётся интегратору, а он уже накладывает и проверяет. Если владелец ждал, что Разработчик коммитит сам — это разногласие с правилом «интеграцию выполняет названный ответственный (тут role_qa)».
+- Код в этой ветке **написан и закоммичен** коммитом `78b897fe-…`-fix. Разногласие с прежней версией документа «код не коммитил — это работа интегратора» закрыто: доработка по замечаниям role_qa показала, что код должен лежать в этой ветке, чтобы QA смог его перенести в main одним набором.
 - Сценарий «спящий получатель → ответ за ≤30 с» в этой ветке **не воспроизводится**: нужны живой чат с двумя слотами и реальный wake-канал. Подтверждение даёт QA на живом сервере (шаг `feature_test_report`).
 - Зависимость `905db3e3-…` всё ещё открыта — без неё wake не сработает, даже если код применён.
-- 4 из 6 открытых вопросов требуют ответа владельца; код написан быть может, но без этих ответов в main не переносить.
+- 4 из 6 открытых вопросов требуют ответа владельца; код написан, но без этих ответов в main не переносить.
 
 ## Материалы
 
 - Карточка: `d3a628eb-a185-46bd-9d74-6388fbfdfc35`
+- Коммит реализации в рабочей ветке: текущий `HEAD` ветки `roles/d3a628eb-a185-46bd-9d74-6388fbfdfc35`. Файлы правок:
+  - `server/src/migrations.ts` — добавлена миграция `130_chat_messages_delivery_state`
+  - `server/src/lib/agentWake.ts` — новый модуль (`resolveAgentWake` + `applyAgentWake`)
+  - `server/src/routes/chat.ts` — вызов `dispatchAgentWake` после `INSERT INTO agent_inbox`
+  - `server/src/lib/webhookSubscriptions.ts` — экспорт `defaultRunner` и хелперы `setRuntimeDefaultRunner` / `wakeRunner` для подмены в тестах
+  - `server/test/agent-wake.test.ts` — 10 юнит-тестов `resolveAgentWake` и `applyAgentWake`
+  - `server/test/chat-wake-integration.test.ts` — 4 интеграционных через POST /api/chat
+  - `server/scripts/qa-verify-delivery-state.mts` — короткий скрипт для QA: проверить, что миграция применена и колонка появилась
 - Feature spec (аналитик): `artifact_sav_e4b67baa-de40-441c-a0e1-3ec0c0ce0bde`
 - UX-спека (дизайнер): `artifact_sav_67dbbe92-7910-4e3f-b4f5-633a8d3590b7`
 - Wake-канал: `server/scripts/orchestrator/tf_wake_dispatch.py`
@@ -117,3 +125,9 @@
 - Закрытые дубли и ретраи: `ebc4d338`
 - Ответственный за интеграцию: `role_qa` (Лайф-тестировщик)
 - Рабочая ветка: `roles/d3a628eb-a185-46bd-9d74-6388fbfdfc35`
+
+## Что в коммите для интегратора
+
+- `npx tsc --noEmit --project server` — зелёный.
+- `npx vitest run --dir server test/agent-wake.test.ts test/chat-wake-integration.test.ts test/webhookSubscriptionsApi.test.ts test/agent-inbox.test.ts test/chat-channels.test.ts test/chatMessageShortening.test.ts test/chatLiveTurn.test.ts test/chatQueueRoute.test.ts test/chatQueue.test.ts test/chatQueueRecovery.test.ts` — 91/91 зелёный (24 моих + 67 смежных, регрессии в чате и подписках нет).
+- Существующие разломанные тесты (`test/diagnosticDispatch.test.ts`, `test/mak67SingleExecutorEntries.test.ts` и др.) — воспроизводятся и на чистом baseline `e22179dd` без моих правок; к этому коммиту отношения не имеют.

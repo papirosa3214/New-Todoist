@@ -40,6 +40,7 @@ import {
   UploadRejected,
 } from "./attachments.js";
 import { registryRecord } from "../agentState.js";
+import { dispatchAgentWake } from "../lib/agentWake.js";
 import { startDraftFromChat } from "../lib/ownerDraft.js";
 import {
   CHAT_SHORT_LIMIT,
@@ -654,6 +655,44 @@ export function registerChatRoutes(app: FastifyInstance) {
         // ловил любой UNIQUE). Прочие конфликты пробрасываем.
         if (!String(e?.message || "").includes("agent_inbox.chat_message_id"))
           throw e;
+      }
+    }
+
+    // Этап A (10.10.2026, карточка d3a628eb-…): пробуждение idle-агента
+    // по адресному сообщению. Сторож мягче, чем у agent_inbox: задача
+    // НЕ обязательна (general_wake и offline-разбор работают и для
+    // чата без привязки к карточке). Нужны только: явный адресат И
+    // канал агентов. Владелец-надиктовка и сообщения собственной
+    // карточки сюда не попадают и сами себя не будят.
+    //
+    // ВАЖНО: этот блок НЕ ломает маршрут — agentWake внутри сам делает
+    // try/catch вокруг runner'а и БД-записей, но на всякий случай
+    // оборачиваем целиком: если случится что-то совсем неожиданное
+    // (например, БД-файл заблокирован), сообщение уже в чате и в
+    // agent_inbox (если была задача), исполнитель прочтёт при
+    // первом heartbeat.
+    if (
+      toUserId &&
+      routed.channel === AGENT_CHANNEL &&
+      routed.toUserId
+    ) {
+      try {
+        dispatchAgentWake(
+          { toUserId: routed.toUserId, taskId, chatMessageId: id },
+          routed.toUserId,
+          taskId,
+        );
+      } catch (e) {
+        // Доставка в спящего — не критический путь. На этапе
+        // feature_test_report QA увидит ситуацию через
+        // `chat_messages.delivery_state IS NULL` или отсутствие
+        // wake_dispatched. Само сообщение при этом уже в БД и в
+        // agent_inbox, исполнитель прочтёт при первом heartbeat.
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[chat] agentWake dispatch failed:",
+          e instanceof Error ? e.message : String(e),
+        );
       }
     }
 

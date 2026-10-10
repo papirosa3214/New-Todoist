@@ -719,7 +719,7 @@ export interface WakePassResult {
  *  «настоящий» SSH+codex queue через TF-скрипт; в тестах подменяем
  *  через executor (раннер exec). */
 export async function processWakePass(
-  runner: WakeCommandRunner = defaultRunner,
+  runner: WakeCommandRunner = wakeRunner(),
 ): Promise<WakePassResult> {
   const result: WakePassResult = { processed: 0, succeeded: 0, failed: 0 };
   const rows = db
@@ -789,11 +789,29 @@ export interface WakeCommandResult {
 
 export type WakeCommandRunner = (threadId: string, message: string) => Promise<WakeCommandResult>;
 
-/** Реальный SSH+codex queue через отдельный мини-скрипт (уже
- *  подтверждённый на Маке в карточке). Скрипт `tf_wake_dispatch.py`
- *  пишем рядом с `tf_webhook_proto.py`. В тестах заменяем через
- *  dependency injection. */
-async function defaultRunner(threadId: string, message: string): Promise<WakeCommandResult> {
+/** Реальный раннер по умолчанию (SSH+codex queue через tf_wake_dispatch.py).
+ *  Экспортируется на случай, если другой модуль захочет звать wake напрямую,
+ *  без очереди (например, agentWake из этапа A карточки d3a628eb-…). Для
+ *  подмены в тестах служит `setRuntimeDefaultRunner()` — обходит
+ *  ESM-ограничение «только геттер» через индирекцию. */
+let runtimeDefaultRunner: WakeCommandRunner | null = null;
+/** Подмена для тестов: ставь свой раннер на время прогона, снимай в
+ *  afterEach. На проде `runtimeDefaultRunner` всегда null, и индирекция
+ *  пропускается: реальный SSH-скрипт вызывается напрямую. */
+export function setRuntimeDefaultRunner(
+  runner: WakeCommandRunner | null,
+): void {
+  runtimeDefaultRunner = runner;
+}
+/** Актуальный раннер, которым пользуется wake-инфраструктура
+ *  (processWakePass, testSubscriptionDelivery и т.п.). По умолчанию —
+ *  `defaultRunner` (SSH+codex). В тестах можно поставить свою
+ *  реализацию. */
+export function wakeRunner(): WakeCommandRunner {
+  return runtimeDefaultRunner ?? defaultRunner;
+}
+
+export async function defaultRunner(threadId: string, message: string): Promise<WakeCommandResult> {
   // defaultRunner живёт в server/src/lib/, скрипт — в корне репозитория
   // (`scripts/orchestrator/tf_wake_dispatch.py` рядом с `tf_webhook_proto.py`).
   // Три `..` поднимаются до корня worktree, а не до `server/`.
@@ -832,7 +850,7 @@ async function defaultRunner(threadId: string, message: string): Promise<WakeCom
   });
 }
 
-export function startWakeDeliveryLoop(runner: WakeCommandRunner = defaultRunner): () => void {
+export function startWakeDeliveryLoop(runner: WakeCommandRunner = wakeRunner()): () => void {
   let busy = false;
   const timer = setInterval(async () => {
     if (busy) return;
@@ -868,7 +886,7 @@ export interface TestDeliveryResult {
 export async function testSubscriptionDelivery(
   id: string,
   fetchImpl: typeof fetch = fetch,
-  runner: WakeCommandRunner = defaultRunner,
+  runner: WakeCommandRunner = wakeRunner(),
   codexThreadOverride?: string | null,
 ): Promise<TestDeliveryResult> {
   const sub = db
