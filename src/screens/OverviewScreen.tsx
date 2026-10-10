@@ -303,6 +303,29 @@ export function OverviewScreen() {
           <Icon name="chevron" size={16} className="text-dim" />
         </button>
 
+        {/* Гант загрузки ролей (карточка 1117d06c…): кому и когда
+            можно ставить задачу без чтения логов. Идёт сразу под
+            «Активностью» — оба про «кто чем занят». */}
+        <button
+          onClick={() => navigate("/role-load")}
+          className="tap-row w-full flex items-center justify-between bg-card rounded-2xl p-4"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-[32px] h-[32px] rounded-xl bg-blue-500/15 flex items-center justify-center text-blue-400">
+              <Icon name="chart" size={18} />
+            </div>
+            <div className="text-left">
+ <div className="tf-body text-text">
+                Загрузка ролей
+              </div>
+ <div className="tf-meta text-sub">
+                Гант по факту: заходы, текущая занятость, открытые слоты
+              </div>
+            </div>
+          </div>
+          <Icon name="chevron" size={16} className="text-dim" />
+        </button>
+
         {/* Настройки — обычной строкой, а не шестерёнкой в углу шапки
             (Максим 26.08.2026: «не маленькую шестеренку, чтобы тянуться
             до нее далеко было, а просто кнопку такую же самую под

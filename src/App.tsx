@@ -43,6 +43,7 @@ import { TemplatesScreen } from "./screens/TemplatesScreen";
 import { NotesScreen } from "./screens/NotesScreen";
 import { NoteEditorScreen } from "./screens/NoteEditorScreen";
 import { LibraryScreen } from "./screens/LibraryScreen";
+import { RoleLoadScreen } from "./screens/RoleLoadScreen";
 import { Icon } from "./components/UI";
 
 // Catch-all for unknown routes: without this a bad/typo'd URL renders the
@@ -163,6 +164,10 @@ export default function App() {
             {/* Drill-down, not a tab — see Layout.tsx's TAB_ROUTES allowlist.
               Deliberately absent from it, so no bottom nav / FAB here. */}
             <Route path="/activity" element={<ActivityScreen />} />
+            {/* Гант загрузки ролей по факту (карточка 1117d06c…).
+                Drill-down из «Обзора» рядом с «Активностью», не своя
+                вкладка — по аналогии с /activity выше. */}
+            <Route path="/role-load" element={<RoleLoadScreen />} />
             <Route path="/agents" element={<AgentsScreen />} />
             <Route path="/agent-work" element={<AgentWorkScreen />} />
             <Route path="/projects" element={<ProjectsScreen />} />
