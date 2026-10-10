@@ -4031,6 +4031,33 @@ const migrations: Migration[] = [
     // таблица заметок сканируется целиком на каждом запуске роли.
     db.exec("CREATE INDEX IF NOT EXISTS idx_user_notes_author ON user_notes(updated_by, updated_at DESC)");
   } },
+
+{ id: "127_kb_note_categories", description: "Категории заметок для схемы базы знаний (заметка cfa5cdcd). kb_temp_category — временная метка, пока заметка не разобрана; kb_category — постоянная категория, только такие индексируются и попадают в срез роли; kb_source_task_id — задача-источник, связь не теряется; kb_reviewed_by — кем размечено. Правило: секретарь помечает мусор, но не удаляет — решение принимается по факту обращений (server/src/lib/noteAccessWatcher.ts).", up() {
+    const info = db.prepare("PRAGMA table_info(user_notes)").all() as Array<{ name: string }>;
+    const has = (name: string) => info.some((c) => c.name === name);
+    if (!has("kb_temp_category")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN kb_temp_category TEXT");
+    }
+    if (!has("kb_category")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN kb_category TEXT");
+    }
+    if (!has("kb_source_task_id")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN kb_source_task_id TEXT");
+    }
+    if (!has("kb_reviewed_by")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN kb_reviewed_by TEXT");
+    }
+    // Срез роли строится на каждом запуске: заметки с постоянной категорией,
+    // по автору, свежие сверху. Без составного индекса таблица сканируется
+    // целиком.
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_user_notes_kb_category
+      ON user_notes(kb_category, updated_at DESC)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_user_notes_kb_pending
+      ON user_notes(kb_temp_category) WHERE kb_temp_category IS NOT NULL`);
+    // Разбор накопившегося: сколько заметок ждут разбора.
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_user_notes_kb_unreviewed
+      ON user_notes(updated_at DESC) WHERE kb_category IS NULL`);
+  } },
 ];
 /**
  * Опции прогона миграций.

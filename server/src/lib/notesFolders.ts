@@ -8,6 +8,7 @@
  * Здесь собраны чистые хелперы: запрос факта и пути. Никаких побочных
  * эффектов и операций записи — это библиотечная функция, а не API.
  */
+import type Database from "better-sqlite3";
 import db from "../db.js";
 
 export interface FolderRow {
@@ -21,8 +22,8 @@ export interface FolderRow {
 // Prepared statements — ленивые. На module-level таблица journal_folders
 // может ещё не быть создана (тесты вызывают migrate()/runMigrations() после
 // импорта модуля). Подготовка запроса триггерится при первом обращении.
-let rootStmt: ReturnType<typeof db.prepare> | null = null;
-let folderStmt: ReturnType<typeof db.prepare> | null = null;
+let rootStmt: Database.Statement | null = null;
+let folderStmt: Database.Statement | null = null;
 
 function stmtsReady() {
   if (!rootStmt) {
