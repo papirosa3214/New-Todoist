@@ -14,37 +14,45 @@ export class NonTaskInputError extends Error {
     super(question || "В сообщении нет однозначного поручения; карточка не создана.");
   }
 }
+export class PreparationResponseError extends Error {
+  constructor(message:string) { super(message); this.name="PreparationResponseError"; }
+}
 const text = (v:unknown, label:string):string => {
-  if (typeof v!=="string" || !v.trim() || v.length>4000) throw new Error(`Некорректное поле ${label}`);
+  if (typeof v!=="string" || !v.trim() || v.length>4000) throw new PreparationResponseError(`Некорректное поле ${label}`);
   return v.trim();
 };
 const refs = (v:unknown):string[] => {
-  if (!Array.isArray(v) || v.length>12 || v.some(x=>typeof x!=="string") || new Set(v).size!==v.length) throw new Error("Некорректные ссылки потоков");
+  if (!Array.isArray(v) || v.length>12 || v.some(x=>typeof x!=="string") || new Set(v).size!==v.length) throw new PreparationResponseError("Некорректные ссылки потоков");
   return v;
 };
 export function validatePreparation(raw:any, enabledRoles:readonly string[]):TaskPreparation {
-  if (!raw || typeof raw!=="object" || Array.isArray(raw)) throw new Error("Отсутствует контракт подготовки задачи");
+  if (!raw || typeof raw!=="object" || Array.isArray(raw)) throw new PreparationResponseError("Отсутствует контракт подготовки задачи");
   if (["informational_question","ambiguous_problem_report","no_action"].includes(raw.intent)) {
     throw new NonTaskInputError(raw.intent,typeof raw.question==="string" ? raw.question.trim() || null : null);
   }
-  if (raw.intent!=="executable_task" || !["checklist","role_plan","child_cards"].includes(raw.representation)) throw new Error("Некорректное намерение/представление задачи");
-  if (raw.question!==null && typeof raw.question!=="string") throw new Error("question должна быть строкой или null");
-  if (!Array.isArray(raw.workstreams) || raw.workstreams.length<1 || raw.workstreams.length>12) throw new Error("Нужны от 1 до 12 результатов");
-  const workstreams:Workstream[]=raw.workstreams.map((w:any)=> {
-    if (!w || !/^[a-z][a-z0-9_]{1,63}$/.test(w.key)) throw new Error("Некорректный ключ потока");
-    if (w.role!==null && !enabledRoles.includes(w.role)) throw new Error("Неизвестная или выключенная роль");
-    if (raw.representation==="role_plan" && !w.role) throw new Error("Для узла плана нужна существующая роль");
+  if (raw.intent!=="executable_task" || !["checklist","role_plan","child_cards"].includes(raw.representation)) throw new PreparationResponseError("Некорректное намерение/представление задачи");
+  if (raw.question!==null && typeof raw.question!=="string") throw new PreparationResponseError("question должна быть строкой или null");
+  if (!Array.isArray(raw.workstreams) || raw.workstreams.length<1 || raw.workstreams.length>12) throw new PreparationResponseError("Нужны от 1 до 12 результатов");
+  const workstreams:Workstream[]=raw.workstreams.map((w:any,index:number)=> {
+    if (!w || !/^[a-z][a-z0-9_]{1,63}$/.test(w.key)) throw new PreparationResponseError("Некорректный ключ потока");
+    const field=`preparation.workstreams[${index}].role`;
+    if (w.role===undefined) throw new PreparationResponseError(`${field}: поле отсутствует; нужен ключ включённой роли или null.`);
+    if (w.role!==null && (typeof w.role!=="string" || !enabledRoles.includes(w.role))) {
+      const value=typeof w.role==="string" ? JSON.stringify(w.role.slice(0,80)) : `тип ${typeof w.role}`;
+      throw new PreparationResponseError(`${field}: неизвестная или выключенная роль ${value}. Допустимые ключи: ${enabledRoles.join(", ")}.`);
+    }
+    if (raw.representation==="role_plan" && !w.role) throw new PreparationResponseError(`preparation.workstreams[${index}].role: для узла плана нужна существующая роль, null не допускается.`);
     return {key:w.key,title:text(w.title,"title"),result:text(w.result,"result"),role:w.role,depends_on:refs(w.depends_on),parallel_with:refs(w.parallel_with)};
   });
-  if (raw.representation==="checklist" && workstreams.length!==1) throw new Error("Чек-лист должен описывать один общий результат");
+  if (raw.representation==="checklist" && workstreams.length!==1) throw new PreparationResponseError("Чек-лист должен описывать один общий результат");
   const byKey=new Map(workstreams.map(w=>[w.key,w]));
-  if (byKey.size!==workstreams.length) throw new Error("Повторные ключи результатов");
+  if (byKey.size!==workstreams.length) throw new PreparationResponseError("Повторные ключи результатов");
   for (const w of workstreams) for (const key of [...w.depends_on,...w.parallel_with]) {
-    if (key===w.key || !byKey.has(key)) throw new Error("Некорректная ссылка потока");
+    if (key===w.key || !byKey.has(key)) throw new PreparationResponseError("Некорректная ссылка потока");
   }
   const visiting=new Set<string>(), visited=new Set<string>();
   const visit=(key:string):void=> {
-    if (visiting.has(key)) throw new Error("Обнаружен цикл зависимостей");
+    if (visiting.has(key)) throw new PreparationResponseError("Обнаружен цикл зависимостей");
     if (visited.has(key)) return;
     visiting.add(key); for (const dep of byKey.get(key)!.depends_on) visit(dep);
     visiting.delete(key); visited.add(key);
@@ -56,8 +64,8 @@ export function validatePreparation(raw:any, enabledRoles:readonly string[]):Tas
     const a=workstreams[i],b=workstreams[j];
     const linked=reaches(a.key,b.key)||reaches(b.key,a.key);
     const ab=a.parallel_with.includes(b.key),ba=b.parallel_with.includes(a.key);
-    if (ab!==ba) throw new Error("Совместимость должна быть взаимной");
-    if (linked && ab) throw new Error("Зависимые потоки нельзя выполнять одновременно");
+    if (ab!==ba) throw new PreparationResponseError("Совместимость должна быть взаимной");
+    if (linked && ab) throw new PreparationResponseError("Зависимые потоки нельзя выполнять одновременно");
     if (!linked && !ab) unknown=true;
   }
   const compatibilityQuestion="Уточните совместимость независимых результатов: можно ли выполнять их одновременно или нужен порядок из-за общего ресурса?";
@@ -145,7 +153,31 @@ function cleanTitles(raw: unknown, limit: number): string[] {
     .slice(0, limit);
 }
 
-export async function prepareTaskCard(
+export function parsePreparationResponse(content:string, roles:readonly string[]) {
+  let parsed:any;
+  try { parsed=parseJsonObject(content); }
+  catch { throw new PreparationResponseError("Ответ модели: не удалось разобрать JSON; требуется объект с полем preparation."); }
+  if (!parsed || typeof parsed!=="object" || Array.isArray(parsed) || !parsed.preparation) {
+    const fields=parsed && typeof parsed==="object" ? Object.keys(parsed).slice(0,20).map(k=>k.slice(0,80)).join(", ") : "нет";
+    throw new PreparationResponseError(`Ответ модели: отсутствует объект preparation на верхнем уровне. Полученные поля: ${fields || "нет"}.`);
+  }
+  return {parsed,preparation:validatePreparation(parsed.preparation,roles)};
+}
+
+/** Один ограниченный повтор только для некорректного ответа, не для сетевых сбоев. */
+export async function prepareTaskCard(rawText:string, projects:Array<{id:string;name:string}>, opts?:Parameters<typeof prepareTaskCardAttempt>[2]):Promise<DictationCards> {
+  try { return await prepareTaskCardAttempt(rawText,projects,opts); }
+  catch (error) {
+    if (!(error instanceof PreparationResponseError)) throw error;
+    try { return await prepareTaskCardAttempt(rawText,projects,opts,error.message); }
+    catch (second) {
+      if (second instanceof PreparationResponseError) throw new PreparationResponseError(`Первый ответ: ${error.message} Повторный ответ: ${second.message}`);
+      throw second;
+    }
+  }
+}
+
+async function prepareTaskCardAttempt(
   rawText: string,
   projects: Array<{ id: string; name: string }>,
   opts?: {
@@ -162,6 +194,7 @@ export async function prepareTaskCard(
     context?: string;
     sourceRecordId?: string;
   },
+  repairHint?:string,
 ): Promise<DictationCards> {
   const limit = opts?.maxChars ?? 6000;
   if (!rawText.trim() || rawText.length > limit || (opts?.context?.length ?? 0) > 6000) throw new Error(`Нужен непустой текст до ${limit} символов и контекст до 6000.`);
@@ -188,7 +221,12 @@ export async function prepareTaskCard(
   const ownerLayer = opts?.ownerId
     ? await getUserPrompt(opts.ownerId, "task_intake")
     : "";
-  const systemPrompt = buildDictationSystemPrompt(ownerLayer) + "\n\n" + PREPARATION_CONTRACT;
+  const autoContext=opts?.sourceRecordId?.startsWith("auto:")
+    ? "\nЭто подготовка существующей карточки: описание с разделами Работа/Результат/Критерии приёмки/Границы является поручением, а не вопросом о создании новой карточки. Выбери подходящую структуру по контракту сам; не спрашивай форму представления ради формальности. Уточнение требуется только при существенной нехватке данных для исполнения." : "";
+  const systemPrompt = buildDictationSystemPrompt(ownerLayer) + "\n\n" + PREPARATION_CONTRACT
+    + "\nДопустимые ключи включённых ролей: " + JSON.stringify(ROLE_NAMES)
+    + autoContext
+    + (repairHint ? "\nПредыдущий ответ не прошёл проверку: " + repairHint + "\nИсправь указанное поле. Верни один полный JSON с preparation на верхнем уровне, без внешнего card/result, сохрани исходное поручение. Не придумывай роли и данные." : "");
   const labels = db.prepare("SELECT id,name FROM labels ORDER BY name").all() as Array<{id:string;name:string}>;
   const fieldContract = `Дополнительные поля того же JSON, только из явных слов владельца:
 ` +
@@ -224,8 +262,7 @@ export async function prepareTaskCard(
     numCtx: 16384,
   });
 
-  const parsed = parseJsonObject(content);
-  const preparation = validatePreparation(parsed?.preparation, ROLE_NAMES);
+  const {parsed,preparation} = parsePreparationResponse(content, ROLE_NAMES);
 
   const title =
     typeof parsed?.title === "string" && parsed.title.trim()
