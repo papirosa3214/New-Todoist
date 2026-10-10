@@ -82,7 +82,11 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
       None, async () => {
         const agents = (await asRole(role, "GET", "/api/agents")) as any[];
         const tasks = asTasks(await asRole(role, "GET", "/api/tasks")).filter((t) => t.status === "active");
-        const online = agents.filter((a) => a.type === "ai" && a.status === "online").map((a) => a.name);
+        // 10.10.2026: колонка users.status застарела и навсегда offline.
+        // Живой признак работы агента — поле online из отпечатка активности
+        // (/api/agents -> activeAgent.ts). Читать status здесь значило вечно
+        // показывать «никого» и никого не будить.
+        const online = agents.filter((a) => a.type === "ai" && a.online === true).map((a) => a.name);
         return {
           "служба на дежурстве": online.length > 0,
           "агенты на связи": online.length ? online : "никого",
@@ -94,7 +98,8 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
       }),
     T("taskflow_agents", "Кто есть в команде и кто сейчас на связи.", None, async () => ({
       участники: ((await asRole(role, "GET", "/api/agents")) as any[]).map((a) => ({
-        id: a.id, имя: a.name, тип: a.type === "ai" ? "агент" : "человек", "на связи": a.status === "online",
+        // 10.10.2026: online, не status — см. taskflow_status выше.
+        id: a.id, имя: a.name, тип: a.type === "ai" ? "агент" : "человек", "на связи": a.online === true,
       })),
     })),
     T("taskflow_chat_send",
