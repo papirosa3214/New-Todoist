@@ -3988,6 +3988,30 @@ const migrations: Migration[] = [
       SELECT p.name FROM projects p WHERE p.id = tasks.project_id
     ) WHERE project_id IS NOT NULL AND project_name_snapshot IS NULL`);
   } },
+
+{ id: "126_note_access_counters", description: "Учёт обращений к заметкам. Нужен, чтобы помечалковое решение Секретаря можно было проверять фактом: если к заметке, помеченной как мусор, роль так и не обратилась — мусор подтверждён; обратилась — Секретарь ошибся и заметку надо вернуть в ценное (10.10.2026, схема базы знаний, заметка cfa5cdcd).", up() {
+    const info = db.prepare("PRAGMA table_info(user_notes)").all() as Array<{ name: string }>;
+    const has = (name: string) => info.some((c) => c.name === name);
+    if (!has("access_count")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!has("last_accessed_at")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN last_accessed_at TEXT");
+    }
+    // Отдельная таблица, а не только счётчик: видно, КТО обращался — по
+    // этому решается, чей опыт пометки «мусор» опровергает.
+    db.exec(`CREATE TABLE IF NOT EXISTS note_accesses (
+      id TEXT PRIMARY KEY,
+      note_id TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      accessed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_note_accesses_note ON note_accesses(note_id, accessed_at DESC)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_note_accesses_actor ON note_accesses(actor_id, accessed_at DESC)");
+    // Срез по роли строится по автору заметки и по дате — без этого индекса
+    // таблица заметок сканируется целиком на каждом запуске роли.
+    db.exec("CREATE INDEX IF NOT EXISTS idx_user_notes_author ON user_notes(updated_by, updated_at DESC)");
+  } },
 ];
 /**
  * Опции прогона миграций.
