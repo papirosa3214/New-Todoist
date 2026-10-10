@@ -74,7 +74,13 @@ function withAttachments(message: any) {
   return { ...message, attachments: attachmentsOf.all(message.id) };
 }
 
-const CHAT_KINDS = new Set(["совещание", "делегирование", "находка"]);
+// Сообщения-объявления правил (Этап B) отделены от человеческих видов:
+// chat_send с kind='rule' без rule_ref закрыт серверной валидацией
+// (rule_publication_requires_rule_ref), а сама публикация идёт через
+// /api/agent/rules/publish. На этом маршруте 'rule' допустим, чтобы
+// старый код, явно помечающий сообщение как «объявление правила», мог
+// доехать до сервера и получить понятный 400.
+const CHAT_KINDS = new Set(["совещание", "делегирование", "находка", "rule"]);
 
 // Адресат обязателен (28.08.2026, владелец: «как я должен догадаться, что ты
 // мне написал, не упомянув ни слова обо мне»). Молчаливый пропуск поля
@@ -504,6 +510,20 @@ export function registerChatRoutes(app: FastifyInstance) {
         error: `kind должен быть одним из: ${[...CHAT_KINDS].join(", ")}`,
       });
 
+    // AC-3 из спецификации Этапа B: правила публикуются через
+    // `taskflow_rule_publish`, а не через обычный чат. На случай, если
+    // внешний код (или старый клиент) попытается пометить сообщение как
+    // `kind='rule'` без `rule_ref`, отвергаем здесь и не пишем ни в чат,
+    // ни в манифест. Без этого закрытия остаётся исходный дефект
+    // «объявление в общий канал без ссылки».
+    const ruleRef = typeof req.body?.rule_ref === "string" ? req.body.rule_ref.trim() : null;
+    if (kind === "rule" && !ruleRef) {
+      return reply.code(400).send({
+        error: "rule_publication_requires_rule_ref",
+        hint: "используй taskflow_rule_publish(rule_id, version, content) — он сам свяжет правило и chat_messages по rule_ref",
+      });
+    }
+
     const taskId = req.body?.task_id || null;
     if (taskId) {
       const task = db.prepare("SELECT id FROM tasks WHERE id = ?").get(taskId);
@@ -576,9 +596,9 @@ export function registerChatRoutes(app: FastifyInstance) {
 
     const id = uid();
     db.prepare(
-      `INSERT INTO chat_messages (id, from_user_id, to_user_id, task_id, kind, text, channel)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, req.userId, routed.toUserId, taskId, kind, text, routed.channel);
+      `INSERT INTO chat_messages (id, from_user_id, to_user_id, task_id, kind, text, channel, rule_ref)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, req.userId, routed.toUserId, taskId, kind, text, routed.channel, ruleRef);
 
     // Сообщение по задаче — признак жизни её исполнителя (карточка 5de557a5,
     // разбор случая с внешним агентом, правка внесена 29.08.2026). До неё аренду

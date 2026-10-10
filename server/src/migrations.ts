@@ -4122,6 +4122,124 @@ const migrations: Migration[] = [
     )`);
   } },
 
+  // 130_agent_rules_manifests — Этап B «надёжная координация»: правила
+  // становятся версионированными записями, агенты обязаны их подтверждать при
+  // старте шага. Реализовано отдельной миграцией, чтобы не править уже
+  // применённые 015_chat и не раздувать 022–129. Колонки:
+  //
+  //   agent_rules_manifests(rule_id, version, content_markdown,
+  //     published_at, published_by, status, role_scope, superseded_by).
+  //   Пара (rule_id, version) уникальна; индексы по status и (rule_id,
+  //   status). role_scope хранится как TEXT — массив ключей через запятую
+  //   или '*' (по решению архитектора, не отдельная таблица ради одной строки
+  //   на правило). Содержимое markdown UTF-8, ≤ 64 КБ — поле TEXT без
+  //   отдельного CHECK ограничения, проверка размера — в коде (память и сеть
+  //   дороже, чем простой `text.length` в publish).
+  //
+  //   rule_acknowledgements(role, rule_id, version, session_id, acknowledged_at).
+  //   Уникальный ключ (role, rule_id, version) — идемпотентность на уровне
+  //   БД и одна и та же строка на повторный acknowledge. session_id —
+  //   из tasks.agent_session_id конкретного шага: позволяет серверу не
+  //   перетряхивать «кто именно подтвердил» при перезапуске, при этом
+  //   хранит контекст, в котором подтверждение было сделано.
+  //
+  //   chat_messages.rule_ref — отдельная колонка рядом с `kind` и
+  //   `message_type`, чтобы клиент мог сразу нарисовать иконку/чип версии
+  //   правила без парсинга текста. Без CHECK-ограничения: значение живёт
+  //   как маркер, ссылочной целостности здесь не нужно.
+  { id: "130_agent_rules_manifests", description: "Версионированный manifest правил и подтверждения (этап B)", up() {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_rules_manifests (
+        rule_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        content_markdown TEXT NOT NULL,
+        published_at TEXT NOT NULL DEFAULT (datetime('now')),
+        published_by TEXT NOT NULL REFERENCES users(id),
+        status TEXT NOT NULL DEFAULT 'active'
+          CHECK (status IN ('active', 'superseded')),
+        role_scope TEXT NOT NULL DEFAULT '*',
+        superseded_by TEXT,
+        PRIMARY KEY (rule_id, version)
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_rules_manifests_status
+        ON agent_rules_manifests(status);
+      CREATE INDEX IF NOT EXISTS idx_agent_rules_manifests_rule_status
+        ON agent_rules_manifests(rule_id, status);
+    `);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS rule_acknowledgements (
+        role TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        session_id TEXT,
+        acknowledged_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (role, rule_id, version)
+      );
+      CREATE INDEX IF NOT EXISTS idx_rule_acknowledgements_role
+        ON rule_acknowledgements(role);
+    `);
+
+    // chat_messages.rule_ref — расширяем CHECK на 'kind', чтобы старый путь
+    // taskflow_chat_send мог пометить сообщение как «объявление правила» (а
+    // серверная валидация — отвергнуть без rule_ref). Тип-маркер message_type
+    // уже умеет принимать 'rule_…' через отдельные ручки, kind здесь —
+    // исключительно для пользовательской разметки.
+    const chatDdl = (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_messages'")
+        .get() as { sql?: string } | undefined
+    )?.sql ?? "";
+    if (chatDdl && !chatDdl.includes("'rule'")) {
+      const oldCheck = "CHECK (kind IS NULL OR kind IN ('совещание', 'делегирование', 'находка'))";
+      const newCheck = "CHECK (kind IS NULL OR kind IN ('совещание', 'делегирование', 'находка', 'rule'))";
+      if (!chatDdl.includes(oldCheck)) {
+        throw new Error(
+          "130_agent_rules_manifests: не нашёл ожидаемый CHECK на chat_messages.kind, схема разошлась — миграция остановлена",
+        );
+      }
+      const newDdl = chatDdl
+        .replace(oldCheck, newCheck)
+        .replace(/CREATE TABLE\s+"?chat_messages"?/i, 'CREATE TABLE "chat_messages_new"');
+      if (newDdl === chatDdl || !newDdl.includes('CREATE TABLE "chat_messages_new"')) {
+        throw new Error("130_agent_rules_manifests: не удалось подготовить пересборку chat_messages");
+      }
+      const rowsBefore = (
+        db.prepare("SELECT COUNT(*) AS n FROM chat_messages").get() as { n: number }
+      ).n;
+      db.pragma("foreign_keys = OFF");
+      try {
+        const rebuild = db.transaction(() => {
+          db.exec(newDdl);
+          db.exec('INSERT INTO "chat_messages_new" SELECT * FROM chat_messages');
+          db.exec("DROP TABLE chat_messages");
+          db.exec('ALTER TABLE "chat_messages_new" RENAME TO chat_messages');
+        });
+        rebuild();
+        const rowsAfter = (
+          db.prepare("SELECT COUNT(*) AS n FROM chat_messages").get() as { n: number }
+        ).n;
+        if (rowsAfter !== rowsBefore) {
+          throw new Error(
+            `130_agent_rules_manifests: пересборка chat_messages потеряла строки (было ${rowsBefore}, стало ${rowsAfter})`,
+          );
+        }
+      } finally {
+        db.pragma("foreign_keys = ON");
+      }
+    }
+
+    const chatCols = (
+      db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    if (!chatCols.includes("rule_ref")) {
+      db.exec("ALTER TABLE chat_messages ADD COLUMN rule_ref TEXT");
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_chat_messages_rule_ref ON chat_messages(rule_ref)",
+      );
+    }
+  } },
+
 ];
 /**
  * Опции прогона миграций.

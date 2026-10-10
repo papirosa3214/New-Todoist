@@ -110,6 +110,7 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         task_id: S("Задача, к которой относится сообщение — без неё никого не будит."),
         kind: S("совещание | делегирование | находка"),
       }), async (p) => {
+
         const to = await resolveAddressee(p.to);
         const body: Record<string, unknown> = { text: p.text, to_user_id: to };
         if (p.task_id) body.task_id = p.task_id;
@@ -119,6 +120,56 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           await asRole(role, "POST", `/api/tasks/${p.task_id}/activity`, { kind: "edit", target: "чат: написал по задаче" }).catch(() => {});
         }
         return { отправлено: msg?.text, кому: to === "all" ? "всем" : p.to, id: msg?.id };
+      }),
+    T("taskflow_chat_typing",
+      "Зажечь в чате отметку «печатает…» — ПЕРЕД тем, как сочинять ответ. Одного вызова хватает на весь ответ. state='stop' — передумал отвечать.",
+      Type.Object({ state: S("stop — снять отметку") }), async (p) => {
+        const resp = await asRole(role, "POST", "/api/chat/typing", p.state === "stop" ? { state: "stop" } : {});
+        return {
+          печатает: resp?.["печатает"],
+          "гаснет через": resp?.["печатает"] ? `${Math.floor((resp?.["гаснет_через_мс"] ?? 0) / 1000)} с` : "—",
+        };
+      }),
+    T("taskflow_rule_publish",
+      "Опубликовать новую версию правила в манифест. Только владелец или оркестратор (для других ролей сервер вернёт 403). rule_id — латиница/точки/подчёркивания/дефисы (3..64), version — целое ≥ 1, content — непустой Markdown до 64 КБ, role_scope — массив ключей ролей или '*' (по умолчанию). Идемпотентен по (rule_id, version): повтор того же объявления вернёт existed=true. Старая active-версия того же rule_id переводится в superseded, в журнале task_events появится rule_superseded.",
+      Type.Object({
+        rule_id: Type.String({ description: "латиница, нижний регистр, точки/подчёркивания/дефисы; 3..64 символа" }),
+        version: Type.Integer({ minimum: 1, maximum: 9999 }),
+        content: Type.String({ description: "полный текст правила в Markdown, до 64 КБ" }),
+        role_scope: Type.Optional(Type.Array(Type.String(), { description: "массив ключей ролей; '*' для широковещательной рассылки" })),
+      }), async (p) => {
+        const body: Record<string, unknown> = {
+          rule_id: p.rule_id,
+          version: p.version,
+          content: p.content,
+        };
+        if (p.role_scope && p.role_scope.length) body.role_scope = p.role_scope;
+        const resp = await asRole(role, "POST", "/api/agent/rules/publish", body);
+        return {
+          итог: resp?.existed ? "уже было опубликовано" : "опубликовано",
+          ref: resp?.ref,
+          в_чате: resp?.chat_message_id,
+        };
+      }),
+    T("taskflow_rule_acknowledge",
+      "Подтвердить активную версию правила от имени своей роли. Сервер записывает факт подтверждения, пишет в чат строку kind='rule_acknowledged' и убирает правило из блока rules.pending_acknowledgement следующего snapshot. Идемпотентен: повтор того же (rule_id, version) вернёт тот же acknowledged_at без новой строки. На superseded-версии — 409 rule_version_superseded.",
+      Type.Object({
+        rule_id: Type.String(),
+        version: Type.Integer({ minimum: 1, maximum: 9999 }),
+        session_id: S("текущая сессия шага — для трассировки и без неё"),
+      }), async (p) => {
+        const body: Record<string, unknown> = {
+          rule_id: p.rule_id,
+          version: p.version,
+          role: role,
+        };
+        if (p.session_id) body.session_id = p.session_id;
+        const resp = await asRole(role, "POST", "/api/agent/rules/acknowledge", body);
+        return {
+          ref: resp?.ref,
+          acknowledged_at: resp?.acknowledged_at,
+          в_чате: resp?.chat_message_id,
+        };
       }),
     T("taskflow_chat_typing",
       "Зажечь в чате отметку «печатает…» — ПЕРЕД тем, как сочинять ответ. Одного вызова хватает на весь ответ. state='stop' — передумал отвечать.",

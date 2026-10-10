@@ -70,6 +70,7 @@ import { registerNoteRoutes } from "./routes/notes.js";
 import { registerLibraryRoutes } from "./routes/library.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerAgentInboxRoutes } from "./routes/agent-inbox.js";
+import { registerAgentRulesRoutes } from "./routes/agent-rules.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { startWebhookDeliveryLoop, startWakeDeliveryLoop } from "./lib/webhookSubscriptions.js";
 import {
@@ -464,6 +465,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerLibraryRoutes(app);
   registerChatRoutes(app);
   await registerAgentInboxRoutes(app);
+  await registerAgentRulesRoutes(app);
   registerWebhookRoutes(app);
   registerActivityRoutes(app);
   // Тикет ollama-observer: слой 3 живой строки — необязательное улучшение

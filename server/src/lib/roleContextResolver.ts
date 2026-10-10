@@ -1,4 +1,5 @@
 import {taskBriefInstruction} from "./taskBrief.js";
+import { pendingRulesForRole } from "./agentRules.js";
 /**
  * Каталог слоёв контекста запуска ролей и единый resolver
  * (`compose(role, mode)`). Карточка `15c2db1f-521f-4fae-8e47-6ac18458c966`,
@@ -183,6 +184,20 @@ export const LAYER_CATALOG: LayerSpec[] = [
     originRef: "server/skills/<role>/run_prompt.md",
     readOnly: true,
   },
+  // Этап B карточки 51763de5-…: неподтверждённые активные правила манифеста.
+  // readOnly=true, чтобы владелец не пытался править через
+  // /api/runtime/context — содержимое пересобирается сервером на каждый старт
+  // шага по `agent_rules_manifests`/`rule_acknowledgements`. modes включают
+  // `work`/`resume`/`subtask`/`reply`/`review`, потому что контракт «применил =
+  // подтверждение» завязан на любую попытку что-то делать от имени роли.
+  {
+    key: "rules.pending_acknowledgement",
+    scope: "role",
+    modes: ["work", "resume", "reply", "review", "subtask"],
+    sourceKind: "db",
+    originRef: "agent_rules_manifests ⊖ rule_acknowledgements",
+    readOnly: true,
+  },
 ];
 
 const BLOCK_META: Record<string, [string, string, RunMode[], string[]]> = {
@@ -216,6 +231,7 @@ const META: Record<string, [string,string]> = {
  "plan.role_node": ["Данные узла плана", "Контекст"], "chat.submission": ["История чата", "Контекст"],
  "chat.voice_intake": ["Голосовые данные", "Контекст"], "intake.summary": ["Память и база знаний", "Контекст"],
  "subtask.run_prompt": ["Загрузка внешних инструкций", "Контекст"],
+ "rules.pending_acknowledgement": ["Требуется подтверждение правил", "Правила"],
  "task.knowledge": ["Библиотека TaskFlow", "База знаний"],
 };
 for (const spec of LAYER_CATALOG) {
@@ -339,6 +355,12 @@ function readOriginal(layer: LayerSpec, role: string, ownerId?: string): string 
     case "chat.voice_intake": return "Расшифровка и история текущего звонка Gemini Live; голосовые инструменты вызывают общий серверный разбор постановки и сводки.";
     case "intake.summary": return "taskContextBridge → task_context.py: карточка, KB, Mnemosyne, dependency_context и collaboration_context. Факты извлекаются при запуске; ошибки и источники включаются в TaskContext. Это данные, а не редактируемая инструкция.";
     case "subtask.run_prompt": return "Задачи используют явный ResourceLoader: auto AGENTS/skills/extensions не загружаются. Чат использует Pi DefaultResourceLoader и глобальные/локальные AGENTS, skills, extensions, SYSTEM.md и APPEND_SYSTEM.md. Upstream compaction и tool schema меняются через SDK/файлы, не через текст TaskFlow.";
+    case "rules.pending_acknowledgement": {
+      // Содержимое собирается в composeLayer поверх динамики; сюда попадаем,
+      // если резолвер запросил оригинал (например, для UI «Команда» без
+      // роли). Возвращаем пустую строку: пустой блок означает «правил нет».
+      return "";
+    }
     default:
       // Неизвестный слой — структурная ошибка каталога. Бросаем, иначе
       // пустой слой скрыл бы проблему от UI и от ревью.
@@ -357,6 +379,32 @@ export function composeLayer(role: string, layerKey: string, ownerId?:string): C
  const roleRow = readActiveOverride("role", layerKey.startsWith("owner.")?"owner:"+ownerPromptKey(ownerId):role, layerKey);
  const commandRow = spec.scope === "command" ? readActiveOverride("command", "*", layerKey) : null;
  const row = roleRow ?? commandRow;
+ // Этап B: блок правил собирается динамически. composeLayer для этой
+ // клавиши возвращает effective из pendingRulesForRole(role), а если
+ // правил нет — возвращает null, чтобы compose() убрал блок из снимка
+ // (UX-контракт: пустой блок в инструкцию не идёт).
+ if (layerKey === "rules.pending_acknowledgement") {
+   const pending = pendingRulesForRole(role);
+   if (pending.length === 0) return null;
+   const body = pending
+     .map((p) => `- ${p.ref}: ${p.preview}`)
+     .join("\n");
+   const text = [
+     "## Требуется подтверждение правил",
+     "required_for_step_start: true",
+     "",
+     body,
+   ].join("\n");
+   return {
+     layer: layerKey, title: spec.title, group: spec.group, defaultText: original,
+     effective: text,
+     source: "original",
+     origin: {kind: spec.sourceKind, ref: spec.originRef},
+     version: 0, roleVersion: 0, commandVersion: 0,
+     updatedAt: null, updatedBy: null,
+     readOnly: spec.readOnly, modes: spec.modes, placeholders: spec.placeholders ?? [],
+   };
+ }
  return {layer: layerKey, title: spec.title, group: spec.group, defaultText: original,
   effective: taskBriefInstruction(layerKey, (layerKey === "role.prompt" || layerKey.startsWith("owner.")) ? original : (row?.text ?? original)),
   source: row ? (roleRow ? "override" : "command_default") : "original",
@@ -435,5 +483,18 @@ export function effectiveRules(role: string): string[] {
  return composeLayer(role,"rules")!.effective.split("\n").filter(Boolean).map(x => x.replace(/^- /,""));
 }
 export function instructionManifest(role: string, mode: RunMode) {
- return compose(role,mode).filter(x => !x.readOnly).map(x => ({blockId:x.layer,scope:x.source,version:x.source === "command_default" ? x.commandVersion : x.version,source:x.origin.ref,sha256:crypto.createHash("sha256").update(x.effective).digest("hex")}));
+ // compose() уже отбросил пустой `rules.pending_acknowledgement` через
+ // composeLayer → null. Теперь фильтруем readOnly: это данные, не
+ // редактируемые инструкции. Само правило из Этапа B нужно включить в
+ // снимок (required_for_step_start), поэтому для него делаем исключение.
+ const includeRulesBlock = composeLayer(role, "rules.pending_acknowledgement");
+ return compose(role, mode)
+   .filter((x) => !x.readOnly || (x.layer === "rules.pending_acknowledgement" && includeRulesBlock))
+   .map((x) => ({
+     blockId: x.layer,
+     scope: x.source,
+     version: x.source === "command_default" ? x.commandVersion : x.version,
+     source: x.origin.ref,
+     sha256: crypto.createHash("sha256").update(x.effective).digest("hex"),
+   }));
 }
