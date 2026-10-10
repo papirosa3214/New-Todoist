@@ -18,6 +18,7 @@ import { roleProjectContext,roleProjectSnapshot } from "./roleProjectContext.js"
 import { saveSlotSnapshot, slotSnapshotBlock, technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { buildTaskHistory } from "./taskHistoryContext.js";
 import { INSTRUCTION_DEFAULTS } from "./instructionDefaults.js";
+import { buildRoleSliceText, collectRoleSlice } from "./roleSlice.js";
 import { renderInstruction, effectiveRules, registerInstructionBlock, instructionManifest } from "../lib/roleContextResolver.js";
 import { isOwner } from "../access.js";
 import crypto from "node:crypto";
@@ -653,6 +654,31 @@ function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): str
 
 const PROJECTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-projects.json");
 const RUNS_BASE = process.env.TASKFLOW_RUNS_DIR || path.join(os.homedir(), ".local", "state", "taskflow-runs");
+/**
+ * Блок «твоё состояние» для промта роли. Заметки задачи исключаются: срез
+ * это прошлое, настоящее роль берёт из контекста хода. Любая ошибка здесь
+ * не должна ронять запуск роли — при неисправности блок просто не вставится.
+ */
+function roleSliceBlock(role: string, taskId: string): string | null {
+  try {
+    const exclude: string[] = [];
+    const row = db
+      .prepare("SELECT artifact_folder_id AS f FROM tasks WHERE id = ?")
+      .get(taskId) as { f: number | null } | undefined;
+    if (row?.f) {
+      const notes = db
+        .prepare("SELECT id FROM user_notes WHERE folder_id = ?")
+        .all(row.f) as Array<{ id: string }>;
+      for (const n of notes) exclude.push(n.id);
+    }
+    const actorId = role.startsWith("role_") ? role : `role_${role}`;
+    const slice = collectRoleSlice(actorId, exclude);
+    return buildRoleSliceText(slice, roleTitle(role)) || null;
+  } catch {
+    return null;
+  }
+}
+
 export { LOCAL_EXECUTION_POLICY } from "./instructionDefaults.js";
 const LOCAL_EXECUTION_POLICY = INSTRUCTION_DEFAULTS.local_policy;
 
@@ -1052,6 +1078,10 @@ async function runRoleInProcessUnserialized(input: {
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
     ROLE_REPORT_INSTRUCTION,
     ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, SUBMISSION_POLICY] : []),
+    // Срез знаний роли (шаг 4 схемы базы знаний, заметка cfa5cdcd): чтобы
+    // роль не просыпалась в вакуум. Только заметки с постоянной категорией
+    // и без текущей задачи; пустой срез не вставляется.
+    roleSliceBlock(role, taskId),
   ].join("\n\n");
   const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
 
