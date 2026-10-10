@@ -3753,6 +3753,25 @@ const migrations: Migration[] = [
   { id: "118_plan_handoff_on_submission", description: "Role handoffs open on submission, acceptance remains a review status", up() {
     db.exec("UPDATE task_collaboration_plan_edges SET start_condition='submitted' WHERE start_condition='accepted'");
   } },
+  {
+    id: "119_kb_root_folder",
+    description:
+      "Пометка корневой папки библиотеки знаний (08.10.2026, решение владельца: роли должны читать контекст из единой корневой папки «TaskFlow Library» через taskflow_kb_search в первую очередь, и сами пополнять её находками). Колонка is_kb_root в journal_folders — ровно одна корневая папка (по соглашению «TaskFlow Library»), не привязанная к проекту. Индекс — частичный, чтобы быстро находить корень при запросах обогатителя и при суточном RAGFlow-синке. Существующие папки получают is_kb_root=0 по умолчанию.",
+    up: () => {
+      const cols = db.prepare("PRAGMA table_info(journal_folders)").all() as Array<{
+        name: string;
+      }>;
+      if (!cols.some((c) => c.name === "is_kb_root")) {
+        db.exec(
+          `ALTER TABLE journal_folders ADD COLUMN is_kb_root INTEGER NOT NULL DEFAULT 0;`,
+        );
+      }
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_journal_folders_kb_root
+           ON journal_folders(is_kb_root) WHERE is_kb_root = 1;`,
+      );
+    },
+  },
 
   // Единый реестр серверных параметров (MAK-95). Владелец правит значения
   // через Настройки → Сервер, изменения публикуются через шину событий и
@@ -4011,6 +4030,33 @@ const migrations: Migration[] = [
     // Срез по роли строится по автору заметки и по дате — без этого индекса
     // таблица заметок сканируется целиком на каждом запуске роли.
     db.exec("CREATE INDEX IF NOT EXISTS idx_user_notes_author ON user_notes(updated_by, updated_at DESC)");
+  } },
+
+{ id: "127_kb_note_categories", description: "Категории заметок для схемы базы знаний (заметка cfa5cdcd). kb_temp_category — временная метка, пока заметка не разобрана; kb_category — постоянная категория, только такие индексируются и попадают в срез роли; kb_source_task_id — задача-источник, связь не теряется; kb_reviewed_by — кем размечено. Правило: секретарь помечает мусор, но не удаляет — решение принимается по факту обращений (server/src/lib/noteAccessWatcher.ts).", up() {
+    const info = db.prepare("PRAGMA table_info(user_notes)").all() as Array<{ name: string }>;
+    const has = (name: string) => info.some((c) => c.name === name);
+    if (!has("kb_temp_category")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN kb_temp_category TEXT");
+    }
+    if (!has("kb_category")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN kb_category TEXT");
+    }
+    if (!has("kb_source_task_id")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN kb_source_task_id TEXT");
+    }
+    if (!has("kb_reviewed_by")) {
+      db.exec("ALTER TABLE user_notes ADD COLUMN kb_reviewed_by TEXT");
+    }
+    // Срез роли строится на каждом запуске: заметки с постоянной категорией,
+    // по автору, свежие сверху. Без составного индекса таблица сканируется
+    // целиком.
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_user_notes_kb_category
+      ON user_notes(kb_category, updated_at DESC)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_user_notes_kb_pending
+      ON user_notes(kb_temp_category) WHERE kb_temp_category IS NOT NULL`);
+    // Разбор накопившегося: сколько заметок ждут разбора.
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_user_notes_kb_unreviewed
+      ON user_notes(updated_at DESC) WHERE kb_category IS NULL`);
   } },
 ];
 /**
