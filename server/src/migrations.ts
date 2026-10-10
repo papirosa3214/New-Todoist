@@ -4122,6 +4122,35 @@ const migrations: Migration[] = [
     )`);
   } },
 
+  // Этап A (10.10.2026, карточка d3a628eb-…): пробуждение idle-агента по
+  // адресному сообщению. Колонка chat_messages.delivery_state фиксирует,
+  // что произошло с доставкой конкретного сообщения получателю:
+  //   'pending' — только записано в чат, доставка ещё не разбиралась;
+  //   'sent' — в agent_inbox есть запись, но wake-канал не дёргался
+  //            (исполнитель сам прочтёт при следующем heartbeat);
+  //   'delivered' — wake-канал подтвердил пробуждение, и iPhone-UI/чат
+  //                  отметили ACK (см. WebSocket `chat:delivered`,
+  //                  зависит от ответа на В1 в feature_spec);
+  //   'unreachable' — адресат не на слоте и офлайн, либо регламент
+  //                    (channel='owner', задача своя) запрещает будить;
+  //   'wake_queued' — wake_runner принял задание, фактическая отправка
+  //                    пойдёт через webhook_wake_queue / processWakePass.
+  //
+  // CHECK идемпотентен через PRAGMA table_info: ADD COLUMN с тем же
+  // ограничением на уже-применённой БД упадёт на «duplicate column name»,
+  // поэтому обёрнуто в проверку. Значения, которых ещё нет в новой
+  // таблице (исторические строки до внедрения миграции), получат DEFAULT
+  // 'pending' и далее дозаписываются по факту обработки.
+  { id: "130_chat_messages_delivery_state", description: "Колонка chat_messages.delivery_state: доставка адресного сообщения адресату", up() {
+    const cols = db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "delivery_state")) {
+      db.exec(
+        `ALTER TABLE chat_messages ADD COLUMN delivery_state TEXT NOT NULL DEFAULT 'pending' ` +
+          `CHECK (delivery_state IN ('pending','sent','delivered','unreachable','wake_queued'))`,
+      );
+    }
+  } },
+
 ];
 /**
  * Опции прогона миграций.
