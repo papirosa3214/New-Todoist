@@ -14,11 +14,11 @@
 //       * `slot_wake` — адресат на слоте этой задачи и `agent_state IN
 //         ('in_progress','review')` (см. В3 в feature_spec: «спящий =
 //         in_progress/review»). Возвращаем найденный `codex_thread_id`.
-//       * `general_wake` — адресат не на слоте, но `online=true`. Сейчас
-//         требовать broadcast режим `tf_wake_dispatch` (см. В6) — флаг ещё
-//         не реализован в скрипте; без него шаг провалится и попадёт в
-//         `unreachable, reason='no_slot'`. Это сознательный fallback из
-//         implementation_pack до ответа владельца.
+//       * `general_wake` — адресат не на слоте, но `online=true`.
+//         Пробуждаем по ОБЩЕМУ каналу: отдельный wake-тред без привязки к
+//         проекту (`webhook_subscriptions.project_id IS NULL`), иначе —
+//         самая свежая включённая подписка с thread_id. Если ни одного
+//         wake-канала нет, честно `unreachable, reason='no_slot'`.
 //       * `unreachable` — `online=false`, пользователя нет, либо
 //         thread_id для wake не найден.
 //
@@ -41,12 +41,16 @@
 //
 // Открытые вопросы (наследуются из feature_spec, до ответа владельца
 // сохраняем fallback-ы из implementation_pack):
-//   В1 — момент фиксации 'delivered': сейчас НЕ фиксируем, оставляем
-//        максимум 'wake_queued' до того, как WebSocket `chat:delivered`
-//        или ACK раннера будет приходить явно.
+//   В1 — момент фиксации 'delivered' (закрыт по критерию приёмки карточки):
+//        получатель отмечает прочтение (POST /api/chat/read — его зовёт
+//        инструмент `taskflow_chat_read`), и все адресованные ему ещё не
+//        доставленные сообщения переходят в 'delivered'. Это и есть ACK
+//        от получателя: прочитал — значит доставлено.
 //   В4 — формат payload_json: `{chat_message_id, to_user_id, reason}`.
 //   В5 — отдельная колонка `delivery_state`: введена миграцией 130.
-//   В6 — broadcast режим: пока НЕ реализован, general_wake → unreachable.
+//   В6 — общий канал wake: `general_wake` отправляет wake через общий
+//        (не привязанный к проекту) thread_id в ту же очередь
+//        `webhook_wake_queue` / `tf_wake_dispatch`.
 
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
@@ -147,6 +151,25 @@ function pickThreadIdForProject(projectId: string | null): string | null {
   return row?.codex_thread_id ?? null;
 }
 
+/** Общий (не привязанный к проекту) wake-тред — для `general_wake`, когда
+ *  адресат онлайн, но не на слоте конкретной задачи (закрытие В6).
+ *  Приоритет — подписке с `project_id IS NULL`: это и есть «общий канал».
+ *  Если такой нет, берём самую свежую включённую подписку с thread_id —
+ *  лучше разбудить через неё, чем не будить вовсе. `null` означает, что
+ *  wake-канал не настроен и пробуждать нечем. */
+function pickGeneralThreadId(): string | null {
+  const row = db
+    .prepare(
+      `SELECT codex_thread_id
+         FROM webhook_subscriptions
+        WHERE enabled = 1 AND codex_thread_id IS NOT NULL
+        ORDER BY (project_id IS NULL) DESC, created_at DESC
+        LIMIT 1`,
+    )
+    .get() as { codex_thread_id: string } | undefined;
+  return row?.codex_thread_id ?? null;
+}
+
 /** Главная функция этапа. Возвращает решение без записи в БД — запись
  *  делает `applyAgentWake`, чтобы не получить side-effect в чистой
  *  функции и не разъезжать с тестами, подменяющими раннер. */
@@ -197,9 +220,19 @@ export function resolveAgentWake(input: ResolveAgentWakeInput): WakeDecision {
     return { action: "unreachable", reason: "offline", chatMessageId };
   }
 
-  // general_wake без broadcast флага сейчас фолбэкается: документ
-  // implementation_pack и В6 требуют broadcast, без него мы НЕ
-  // бастуем тестовыми «общими» пробуждениями и помечаем недоставленным.
+  // Онлайн, но без слота этой задачи — пробуждаем по общему каналу
+  // (карточка: «если не на слоте — пробудить по общему каналу при
+  // online=true»). Общий канал — подписка без project_id, иначе самая
+  // свежая включённая. Нет ни одного wake-треда — честно недоставлено.
+  const generalThreadId = pickGeneralThreadId();
+  if (generalThreadId) {
+    return {
+      action: "general_wake",
+      threadId: generalThreadId,
+      message: wakeMessage(chatMessageId, ""),
+      chatMessageId,
+    };
+  }
   return { action: "unreachable", reason: "no_slot", chatMessageId };
 }
 

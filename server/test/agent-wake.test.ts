@@ -259,18 +259,40 @@ describe("resolveAgentWake: общий online (для general_wake В6)", () => 
     }
   });
 
-  it("адресат online, но без задачи/слота — fallback no_slot (В6 ещё нет broadcast)", () => {
+  it("адресат online, без слота, есть общий wake-тред — general_wake по общему каналу (В6 закрыт)", () => {
     makeOwner();
     const freshIso = new Date().toISOString();
     makeUser({ id: "u-fresh", lastSeenAt: freshIso, role: "agent", type: "ai" });
+    makeSubscription({
+      id: "s-general",
+      enabled: true,
+      threadId: "01a120f9-0000-4000-8000-0000000000aa",
+      projectId: null,
+    });
     const decision = resolveAgentWake({
       toUserId: "u-fresh",
       taskId: null,
       chatMessageId: "m-fresh",
     });
-    // По implementation_pack до ответа на В6 general_wake фолбэкается в
-    // unreachable, reason='no_slot'. Когда В6 закроют — здесь станет
-    // general_wake (см. обновление тестов тогда же).
+    expect(decision.action).toBe("general_wake");
+    if (decision.action === "general_wake") {
+      expect(decision.threadId).toBe(
+        "01a120f9-0000-4000-8000-0000000000aa",
+      );
+      expect(decision.message.startsWith("[wake]")).toBe(true);
+      expect(decision.chatMessageId).toBe("m-fresh");
+    }
+  });
+
+  it("адресат online, но wake-канала нет — no_slot (пробуждать нечем)", () => {
+    makeOwner();
+    const freshIso = new Date().toISOString();
+    makeUser({ id: "u-fresh2", lastSeenAt: freshIso, role: "agent", type: "ai" });
+    const decision = resolveAgentWake({
+      toUserId: "u-fresh2",
+      taskId: null,
+      chatMessageId: "m-fresh2",
+    });
     expect(decision.action).toBe("unreachable");
     if (decision.action === "unreachable") {
       expect(decision.reason).toBe("no_slot");

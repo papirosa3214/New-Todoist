@@ -10,6 +10,15 @@
 
 > **Главное ограничение:** 6 открытых вопросов аналитика остаются открытыми (см. ниже). Pack описывает и реализуемое ядро, и мосты «что не делаем без ответа владельца». Без ответа хотя бы на вопросы 1 и 4 код в main не переносить — будут ложные срабатывания.
 
+> **Обновление после второго ревью (10.10.2026).** Ревьюер вернул работу с двумя
+> блокирующими отклонениями от карточки: `delivery_state='delivered'` не наступал,
+> и общий канал wake не был активирован (В6). Обе точки закрыты согласно карточке:
+> `delivered` ставится по ACK получателя (отметка прочтения), `general_wake`
+> отправляет wake через общий (не привязанный к проекту) thread_id. Более не считать
+> вопросы 1 и 6 блокерами переноса. Описание ниже оставлено как история первой
+> версии, актуальное поведение — в коммите после `f317b3f8` и в отчёте роли
+> «Разработчик».
+
 ## Что меняется (changes)
 
 ### Файлы и строки
@@ -26,10 +35,14 @@
 
 3. **`server/src/routes/chat.ts`** (после `INSERT INTO agent_inbox`, около строки 622) — вызвать `resolveAgentWake`, выполнить действие, записать `delivery_state` и при необходимости событие в `task_events`:
    - `slot_wake` → `tf_wake_dispatch`-раннер (см. п. 4), `delivery_state='wake_queued'`, событие `wake_dispatched`.
-   - `general_wake` → POST на общий webhook-канал (см. `tf_wake_dispatch.py --channel general`, **зависит от ответа на вопрос 6**), `delivery_state='wake_queued'`.
+   - `general_wake` → wake через ОБЩИЙ (не привязанный к проекту) thread_id
+     существующей очереди `webhook_wake_queue` / `tf_wake_dispatch`, `delivery_state='wake_queued'`.
+     Если ни одного wake-треда нет — `delivery_state='unreachable', reason='no_slot'`.
    - `unreachable` → `delivery_state='unreachable'` (или `'sent'` — **зависит от ответа на вопрос 5**), событие `task_events.kind='unreachable_role'`, **без ретрая**, **без broadcast** в чат.
    - **Не делать** при сообщениях владельца (channel='owner') и при надиктовке — только для `channel='agents'` и `to_user_id` ≠ null. Это совпадает с существующим `if (taskId && toUserId && routed.channel === AGENT_CHANNEL)` стражем.
-   - Фиксация `delivery_state='delivered'` — на успешный ACK от wake-раннера или от iPhone-UI через WebSocket `chat:delivered` (см. существующий `chat:new`) (**зависит от ответа на вопрос 1**).
+   - Фиксация `delivery_state='delivered'` — по ACK получателя: отметка прочтения
+     `POST /api/chat/read` (её зовёт инструмент `taskflow_chat_read`) переводит все
+     адресованные этому пользователю ещё не доставленные сообщения в `'delivered'`.
 
 4. **`server/src/lib/webhookSubscriptions.ts`** — переиспользовать уже существующий `defaultRunner` (`tf_wake_dispatch.py`) без правок скрипта. В новом `agentWake.ts` использовать `WakeCommandRunner` через DI, как в существующих тестах. Если выяснится, что нужен `broadcast=true` (**вопрос 6**), добавить флаг `--broadcast` в скрипт; сейчас по умолчанию скрипт уже адресный (`tf_wake_dispatch.py <thread_uuid> <message_text>`), см. `scripts/orchestrator/tf_wake_dispatch.py:5`.
 
@@ -58,7 +71,7 @@
 1. **`tests/server/agent-wake.test.ts`** — новый файл. Юнит-тесты `resolveAgentWake` на трёх сценариях с подменой доступа к БД через in-memory `better-sqlite3` (как в `tests/server/db.test.ts`):
    - «адресат на слоте этой задачи in_progress» → `action='slot_wake'`.
    - «адресат офлайн (last_seen_at старше 60 с назад)» → `action='unreachable', reason='offline'`.
-   - «адресат онлайн, но не на слоте этой задачи» → `action='general_wake'` (если вопрос 6 закрыт положительно; иначе — `action='unreachable', reason='no_slot'`).
+   - «адресат онлайн, но не на слоте этой задачи» → `action='general_wake'` (если есть wake-тред; иначе — `action='unreachable', reason='no_slot'`).
 
 2. **`tests/server/chat-wake-integration.test.ts`** — новый файл. Через DI `WakeCommandRunner` (`{ok: true}` / `{ok: false, error: 'timeout'}`):
    - Успех wake → `delivery_state='wake_queued'`.
@@ -92,12 +105,12 @@
 
 Без владельца код в main не переносить. Из шести вопросов половину можно снять прямо сейчас из кода:
 
-- **Вопрос 1** — момент фиксации `delivery_state='delivered'`: предлагаю **после `chat:delivered` ACK от WebSocket или `{ok:true}` от wake-раннера в течение 5 с** (состояние `wake_queued` до этого). Без ответа — фиксируем `'wake_queued'` как максимум, `'delivered'` не трогаем.
+- **Вопрос 1** — момент фиксации `delivery_state='delivered'` (закрыт по критерию приёмки карточки): `delivered` ставится по отметке прочтения получателя (`POST /api/chat/read`). Состояние `wake_queued` живёт до этого.
 - **Вопрос 2** — частично недоступный broadcast: считаем всю рассылку провалом при `ok=false` хотя бы у одного получателя; плодить `unreachable_role` по каждому нельзя, фиксируем одно событие по `chat_message_id`.
 - **Вопрос 3** — «спящий» = `agent_state IN ('in_progress','review')` (оба пробуждаются). `('blocked','free')` — всегда `unreachable` без wake. Это техническое сужение, согласовать с владельцем.
 - **Вопрос 4** — формат `task_events`: `{ chat_message_id, to_user_id, reason }`, `reason ∈ {'offline','no_user','no_slot'}`.
 - **Вопрос 5** — отдельная колонка в `chat_messages` нужна (текущие статусы `agent_inbox` — про доставку в очередь роли, не про факт доставки получателю). Если владелец против — вернуть на доработку аналитику, без колонки критерии приёмки не измерить.
-- **Вопрос 6** — режим broadcast для `tf_wake_dispatch.py`: текущий скрипт адресный; общий канал для `general_wake` либо добавляет флаг `--broadcast`, либо ходит через `webhook_subscriptions` с новым типом подписки. Без ответа — `general_wake` заменяем на `unreachable, reason='no_slot'`, чтобы не разрастаться.
+- **Вопрос 6** — общий канал для `general_wake` (закрыт по карточке): wake отправляется через общий (не привязанный к проекту) `thread_id` той же очереди `webhook_wake_queue` / `tf_wake_dispatch`. Флаг `--broadcast` в скрипт не добавлялся — хватает выбора общего треда.
 
 ## Ограничения
 
