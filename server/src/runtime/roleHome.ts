@@ -5,6 +5,8 @@ import crypto from "node:crypto";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { roleTitle } from "../roleRouting.js";
 
+export const DELIVERY_STANDARD_NOTE_ID = "0f503d69-bf61-4482-b285-ec388d7d1e3a";
+
 /** Постоянный инструментарий роли, отдельно от живого API и проектов задач. */
 export function roleHome(role: string) {
   // В старом реестре встречаются дефисы; новые ключи API используют underscore.
@@ -33,6 +35,9 @@ export function roleHomeInstruction(role: string): string {
     `Общие скрипты этой роли храни в ${home.scripts}. Указывай абсолютный путь, когда работаешь из проекта задачи.`,
     `Рабочие файлы чата храни в ${home.workspace}. В задаче работай в указанной папке проекта; инструментарий роли остаётся в ${home.dir}.`,
     "Не создавай инструментарий роли в исходниках API или в глобальной папке Pi. Доступ к TaskFlow и выбор модели настраивает сервер.",
+    "Общий обязательный стандарт: Регламент сдачи работы ролями TaskFlow — Library → Norms.",
+    `Перед работой прочитай taskflow_doc_read(id="${DELIVERY_STANDARD_NOTE_ID}"); документ: https://192.168.1.110:5180/notes/${DELIVERY_STANDARD_NOTE_ID}.`,
+    "Сразу сохраняй человекочитаемый отчёт в документации задачи и передавай report_markdown вместе с result. Итоговый коммит и интеграцию выполняет ответственный из карточки; включай только изменения этой карточки. Не используй git add . / git add -A / git commit -a в общем грязном каталоге, чужие изменения сохраняй. Полный порядок и материалы передачи — в регламенте.",
   ].join("\n");
 }
 
