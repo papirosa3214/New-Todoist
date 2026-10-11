@@ -23,7 +23,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
 
-import db from "../db.js";
+import db, { DB_PATH } from "../db.js";
 import { logEvent } from "../agentState.js";
 import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
 import { dispatchPendingDiagnosticTasks } from "./diagnosticDispatch.js";
@@ -234,6 +234,20 @@ export function startInboxTriageWatcher(): () => void {
       ).run(id, title, description, PRIORITY, OWNER_ID, serverNotificationsProjectId(OWNER_ID));
     });
     txn();
+
+    // READ-AFTER-WRITE. Вставка идёт напрямую в SQLite, минуя API, поэтому
+    // единственный способ убедиться, что карточка появилась, — перечитать её
+    // самому у себя. 11.10.2026 три тикета подряд получили ссылку в .md, за
+    // которой в базе ничего не было: приложение уводило владельца на экран
+    // «Задача не найдена», и ни строки, ни события в базе не осталось. Раньше
+    // этот случай был полностью немым. Теперь — громкая ошибка в лог, тикет
+    // помечается .failed (его можно переиграть), а ссылка в .md не пишется.
+    if (!db.prepare(`SELECT 1 FROM tasks WHERE id = ?`).get(id)) {
+      const reason = `карточка не появилась после INSERT (db=${DB_PATH}, id=${id})`;
+      console.error(`[inbox-triage] ${reason}`);
+      markFailed(p, reason);
+      return false;
+    }
 
     // Лог события в tasks_events (чтобы лента активности увидела).
     try {

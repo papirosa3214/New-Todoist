@@ -51,6 +51,7 @@ export interface LiveTurnSnapshot {
   user_id: string;
   name: string;
   started_at: string;
+  trigger_message_id?: string;
   items: LiveItem[];
   /** Роль сейчас думает (28.09.2026): последняя законченная фраза её
    *  размышлений, "" — думает, но фразы ещё нет; null — не думает. */
@@ -313,6 +314,7 @@ export class LiveTurn {
   readonly chatId: string;
   readonly userId: string;
   readonly name: string;
+  private readonly triggerMessageId?: string;
   private readonly audience: () => string[];
   private readonly publish?: (turn: LiveTurnSnapshot | null) => void;
   private readonly startedAt = new Date();
@@ -331,6 +333,7 @@ export class LiveTurn {
     chatId: string;
     userId: string;
     name: string;
+    triggerMessageId?: string;
     audience: () => string[];
     detached?: boolean;
     publish?: (turn: LiveTurnSnapshot | null) => void;
@@ -338,6 +341,7 @@ export class LiveTurn {
     this.chatId = args.chatId;
     this.userId = args.userId;
     this.name = args.name;
+    this.triggerMessageId = args.triggerMessageId;
     this.audience = args.audience;
     this.publish = args.publish;
     this.detached = args.detached ?? false;
@@ -451,6 +455,7 @@ export class LiveTurn {
       user_id: this.userId,
       name: this.name,
       started_at: this.startedAt.toISOString(),
+      ...(this.triggerMessageId ? { trigger_message_id: this.triggerMessageId } : {}),
       items,
       thinking: this.thinkingItem
         ? lastThinkingPhrase(this.thinkingItem.text.slice(-THINKING_BUF_MAX))
@@ -555,6 +560,7 @@ export function startLiveTurn(args: {
   chatId: string;
   userId: string;
   name: string;
+  triggerMessageId?: string;
   audience: () => string[];
 }): LiveTurn {
   const key = keyOf(args.chatId, args.userId);

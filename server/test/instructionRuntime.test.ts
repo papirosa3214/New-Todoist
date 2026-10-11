@@ -4,12 +4,28 @@ import os from 'node:os';
 import path from 'node:path';
 import db,{migrate} from '../src/db.js';
 import {runMigrations} from '../src/migrations.js';
-import {chatInstructionArgs} from '../src/runtime/instructionResources.js';
+import {chatInstructionArgs,chatSystemPrompt,createTaskResourceLoader} from '../src/runtime/instructionResources.js';
+import {ensureRoleHome} from "../src/runtime/roleHome.js";
 import {applyOverride,composeLayer} from '../src/lib/roleContextResolver.js';
 
 migrate();runMigrations();
 
 describe('Pi instruction snapshot',()=>{
+ it('keeps the common delivery regulation with custom role instructions and system prompt',async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'taskflow-delivery-'));
+  const previous=process.env.TASKFLOW_ROLES_DIR; process.env.TASKFLOW_ROLES_DIR=dir;
+  try {
+   const home=ensureRoleHome('builder');
+   fs.writeFileSync(home.system,'CUSTOM_SYSTEM');fs.writeFileSync(home.agents,'CUSTOM_AGENTS');
+   const prompt=await chatSystemPrompt('builder','work',home.workspace);
+   expect(prompt).toContain('CUSTOM_SYSTEM');expect(prompt).toContain('CUSTOM_AGENTS');
+   expect(prompt).toContain('Регламент сдачи работы ролями TaskFlow');
+   expect(prompt).toContain('taskflow_doc_read');
+   const loader=await createTaskResourceLoader('builder',home.workspace,'CUSTOM_OVERRIDE');
+   try {expect(loader.getSystemPrompt()).toContain('CUSTOM_OVERRIDE');expect(loader.getSystemPrompt()).toContain('Регламент сдачи работы ролями TaskFlow');} finally {loader.disposeResources();}
+   expect(fs.readFileSync(home.agents,'utf8')).toBe('CUSTOM_AGENTS');
+  } finally {if(previous===undefined) delete process.env.TASKFLOW_ROLES_DIR;else process.env.TASKFLOW_ROLES_DIR=previous;fs.rmSync(dir,{recursive:true,force:true});}
+ });
  it('registers all seven original builtin tools with effective descriptions',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'taskflow-instruction-'));
   try {
