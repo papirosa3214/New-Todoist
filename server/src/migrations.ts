@@ -1,3 +1,4 @@
+import { installReviewHistory } from "./lib/reviewHistory.js";
 // Версионные миграции — поверх базовой схемы из `db.ts:migrate()`.
 //
 // Правило разделения (одно и то же в обеих шапках — здесь и в db.ts):
@@ -4206,6 +4207,7 @@ const migrations: Migration[] = [
     `);
   } },
 
+  { id: "132_review_history", description: "Review facts survive permanent task deletion", up: installReviewHistory },
 ];
 /**
  * Опции прогона миграций.

@@ -1,3 +1,4 @@
+import { startReviewHistoryWatcher } from "./lib/reviewHistory.js";
 import { startWorkPlanWatcher } from "./lib/workPlanWatcher.js";
 import { registerPreparationRoutes, startPreparationWorker } from "./runtime/autoPreparation.js";
 import { startSecretaryVoiceBridge } from "./runtime/secretaryVoiceBridge.js";
@@ -484,6 +485,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Сторож прибора «учёт обращений к заметкам»: без счётчиков схема базы
     // знаний слепнет (заметка cfa5cdcd, шаг 1 из 4).
     startNoteAccessWatcher();
+    const stopReviewHistoryWatcher = startReviewHistoryWatcher();
+    app.addHook("onClose", async () => stopReviewHistoryWatcher());
     const stopWorkPlanWatcher = startWorkPlanWatcher();
     app.addHook("onClose", async () => stopWorkPlanWatcher());
     // Порог разбора заметок: набралось — заводим задачу Секретарю.

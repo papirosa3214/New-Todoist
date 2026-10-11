@@ -1,3 +1,4 @@
+import { readReviewHistory } from "../lib/reviewHistory.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
@@ -18,6 +19,10 @@ const uid = () => crypto.randomUUID();
 
 export function registerProjectLabelRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
+  app.get("/api/stats/review-history", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) return reply.code(403).send({error:"Owner only"});
+    return { entries: readReviewHistory() };
+  });
 
   // ── Projects ──
   app.get("/api/projects", { preHandler: authPre }, async (req: any) => {    // Считаются только АКТИВНЫЕ задачи. Раньше считались все, вместе с

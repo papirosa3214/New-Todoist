@@ -122,3 +122,7 @@
 
 - Карточка 905db3e3-…: контракт V2 (документ `d8c9973a` в «TaskFlow - NewTodoist»), коммит `429be23a`.
 - Уточнения ведущего 2026-10-10: секрет write-only во всех ответах; ack только по независимому turn started, не grep; ключ отсутствует — fail-closed конкретной операции; сторож не будит живой чат, не хардкодит UUID.
+
+## Durable review history
+
+Code: server/src/lib/reviewHistory.ts; migration132_review_history. Startup and every15 minutes: transactional probe creates task, submits review, repeats event, purges task/event and checks exactly one retained fact; rolls all probe data back. Failure creates at most one daily alert in Server notifications. Statistical ledger has no FK to tasks. Tests: reviewHistory.test.ts.
