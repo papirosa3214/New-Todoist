@@ -42,6 +42,7 @@ export function formatChatMessage(message: any) {
   });
   return {
     ...message,
+    sequence: (db.prepare("SELECT rowid AS sequence FROM chat_messages WHERE id=?").get(message.id) as {sequence:number}|undefined)?.sequence ?? null,
     kind:event?'system':message.message_type ?? message.kind,
     ...(event?{from_user_id:'taskflow_system',from_user_name:'Система',from_user_initials:'С',from_user_avatar_url:null}:{}),
     reply_to_sender_name: message.reply_to_message_id ? (db.prepare("SELECT u.name FROM chat_messages m JOIN users u ON u.id=m.from_user_id WHERE m.id=?").get(message.reply_to_message_id) as {name:string}|undefined)?.name : null,

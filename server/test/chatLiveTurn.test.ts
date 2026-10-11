@@ -56,6 +56,13 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("живой ход", () => {
+  it("REST snapshot and live event identify the triggering message", () => {
+    const turn = startLiveTurn({chatId:"c1", userId:"role_qa", name:"QA", audience:()=>["u1"], triggerMessageId:"question-1"});
+    turn.onEvent(toolStart("step-1", "read", {path:"a"}));
+    expect(liveTurnsOfChat("c1")[0].trigger_message_id).toBe("question-1");
+    expect(sent.at(-1)?.event.turn.trigger_message_id).toBe("question-1");
+  });
+
   it("склеивает текст по словам и рассылает пачкой, а шаг — сразу", async () => {
     vi.useFakeTimers();
     const turn = newTurn();

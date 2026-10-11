@@ -1565,6 +1565,16 @@ async function dispatchRoleReplies(args: {
           error instanceof Error ? error.message : error,
         );
         completeDurableDelivery(durableRecord.id, false);
+        // Context/persistence failures must leave a visible result too.
+        try {
+          assertCommonChatWritable(chatId, "system");
+          const failureId = uid();
+          db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id) VALUES(?,?,?,'chat',?,?)")
+            .run(failureId, accountId, chatRunFailureText(error), chatId, args.messageId);
+          broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(failureId) });
+        } catch {
+          console.warn(`[chats] failure notification unavailable chat=${chatId}`);
+        }
         return null;
       }
     });
@@ -1768,12 +1778,16 @@ async function deliverAgentReply(args: {
     chatId,
     userId: roleUserId,
     name: roleName,
+    triggerMessageId: trigger.id,
     audience: () => memberIds(chatId),
   });
 
+  let replyId: string | null = null;
+  let replyText = "";
   let reply: { sessionId: string | null; text: string } | null = null;
   let failure: unknown = null;
-  typing(true);
+  try {
+    typing(true);
   try {
     reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:live.onEvent}) : await startChatRun({
       mode: args.mode,
@@ -1799,11 +1813,17 @@ async function deliverAgentReply(args: {
   const steps: SavedSteps | null = live.finish({ deferAnnounce: true });
 
   const cancelled = (failure as { code?: string } | null)?.code === "CHAT_RUN_CANCELLED";
-  let replyText = cancelled && partial
+  replyText = cancelled && partial
     ? `${partial}\n\n_Остановлено._`
     : failure
       ? chatRunFailureText(failure)
       : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
+
+  // A terminal run must leave a visible result even if the provider returned no final text.
+  if (!replyText && !failure) {
+    replyText = partial || "Ход завершился без текста ответа. Отправьте сообщение ещё раз.";
+    if (!partial) failure = Object.assign(new Error("модель завершила ход без текста ответа"), { code: "CHAT_RUN_EMPTY" });
+  }
 
   // Быстрые ответы — общий формат ответа роли (раньше — частная логика
   // Секретаря). Модель заканчивает ответ строкой `БЫСТРО: а | б | в` —
@@ -1813,6 +1833,10 @@ async function deliverAgentReply(args: {
     const extracted = extractQuickReplies(replyText);
     replyText = extracted.clean;
     quickReplies = extracted.replies;
+  }
+  if (!replyText && !failure) {
+    replyText = "Ход завершился без текста ответа. Отправьте сообщение ещё раз.";
+    failure = Object.assign(new Error("модель завершила ход без текста ответа"), { code: "CHAT_RUN_EMPTY" });
   }
   // Сообщение о сбое хода — не для общего чата (инвариант п. 3): сбой идёт
   // в личную переписку роли, в общем чате ему места нет.
@@ -1832,7 +1856,6 @@ async function deliverAgentReply(args: {
   // (лимит 800 символов на уровне БД и подмена/отмена ответа в коде) съедали
   // сообщения целиком — в чате не появлялось ничего. Ограничивать длину
   // должен не сервер, а сама роль; сервер обязан доставить то, что написали.
-  let replyId: string | null = null;
   if (replyText) {
     replyId = uid();
     db.prepare(
@@ -1842,8 +1865,11 @@ async function deliverAgentReply(args: {
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
   }
-  live.announceEnd(replyId);
-  typing(false);
+  } finally {
+    live.finish({ deferAnnounce: true });
+    live.announceEnd(replyId);
+    typing(false);
+  }
 
   // Передача слова коллеге по чату: роль позвала кого-то через @имя.
   if (replyId && !failure) {

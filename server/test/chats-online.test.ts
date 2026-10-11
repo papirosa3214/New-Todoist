@@ -286,7 +286,7 @@ function chatMessageCount(chatId: string): number {
 function messagesByAuthor(chatId: string, fromUserId: string) {
   return db
     .prepare(
-      `SELECT id, text, channel, chat_id FROM chat_messages
+      `SELECT id, text, channel, chat_id, reply_to_message_id FROM chat_messages
         WHERE chat_id = ? AND from_user_id = ? ORDER BY created_at ASC`,
     )
     .all(chatId, fromUserId) as Array<{
@@ -294,6 +294,7 @@ function messagesByAuthor(chatId: string, fromUserId: string) {
       text: string;
       channel: string;
       chat_id: string;
+      reply_to_message_id: string | null;
     }>;
 }
 
@@ -588,6 +589,45 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     expect(typeof reply.steps.duration_ms).toBe("number");
   });
 
+  it("persistence failure clears live/typing and leaves an explained reply", async () => {
+    const chatId = (await createChat({kind:"direct", member_ids:["role_architect"]})).json().chat.id;
+    const original = db.prepare.bind(db);
+    let injected = false;
+    const spy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      if (!injected && sql.includes("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, quick_replies")) {
+        injected = true;
+        throw new Error("temporary reply write failure");
+      }
+      return original(sql);
+    });
+    try {
+      const trigger = await send(chatId, "Ответь");
+      await tick(100);
+      expect(injected).toBe(true);
+      const replies = messagesByAuthor(chatId, "role_architect");
+      expect(replies).toHaveLength(1);
+      expect(replies[0].text).toContain("temporary reply write failure");
+      expect(replies[0].reply_to_message_id).toBe(trigger.id);
+      const live = await app.inject({method:"GET",url:`/api/chats/${chatId}/live`,headers:ownerAuth});
+      expect(live.json().turns).toEqual([]);
+      expect(broadcastCalls.some(c => c.event?.type === "chats:typing" && c.event.active === false)).toBe(true);
+    } finally { spy.mockRestore(); }
+  });
+
+  it.each(["", "БЫСТРО: Да | Нет"])("пустой ответ модели (%s) не исчезает молча и снимает статус работы", async (answer) => {
+    const chatId = (await createChat({ kind: "direct", member_ids: ["role_architect"] })).json().chat.id;
+    replyTextFor = () => answer;
+    const trigger = await send(chatId, "Ответь на мой вопрос");
+    await tick(100);
+    const replies = messagesByAuthor(chatId, "role_architect");
+    expect(replies).toHaveLength(1);
+    expect(replies[0].text).toContain("без текста");
+    expect(replies[0].reply_to_message_id).toBe(trigger.id);
+    const live = await app.inject({ method: "GET", url: `/api/chats/${chatId}/live`, headers: ownerAuth });
+    expect(live.json().turns).toEqual([]);
+    expect(broadcastCalls.some(c => c.event?.type === "chats:typing" && c.event.active === false)).toBe(true);
+  });
+
   it("сорванный ход — в чат ложится сообщение с причиной, а не тишина", async () => {
     const chat = await createChat({
       title: "Обрыв",
@@ -879,6 +919,9 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     const message = broadcastCalls[newIdx].event.message;
     expect(broadcastCalls[endIdx].event.message_id).toBe(message.id);
     // Формат тот же, что у истории: шаги объектом, флаги булевы, вложения массивом.
+    expect(Number.isInteger(message.sequence)).toBe(true);
+    const history = await app.inject({method:"GET", url:`/api/chats/${chatId}/messages`, headers:ownerAuth});
+    expect(history.json().messages.find((m:any)=>m.id===message.id).sequence).toBe(message.sequence);
     expect(message.is_session_marker).toBe(false);
     expect(message.steps.items[0]).toMatchObject({ kind: "step", tool: "read" });
     expect(message.attachments).toEqual([]);
