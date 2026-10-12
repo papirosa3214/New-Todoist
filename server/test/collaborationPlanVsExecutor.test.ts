@@ -148,8 +148,8 @@ describe("План совместной работы vs единственный
       url: "/api/tasks",
       headers: ownerAuth,
       payload: {
-        title: "Починить падение при открытии карточки",
-        description: "Приложение падает, если открыть карточку без описания. Нужно исправить ошибку.",
+        title: "Обновить зависимости в package.json",
+        description: "Прогнать npm audit fix и поднять минорные версии библиотек до актуальных.",
       },
     });
     const taskId = created.json().task.id as string;
