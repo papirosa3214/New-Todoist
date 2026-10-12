@@ -25,7 +25,7 @@ import * as crypto from "node:crypto";
 
 import db, { DB_PATH } from "../db.js";
 import { logEvent } from "../agentState.js";
-import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
+import { INCIDENT_NOTIFICATION_TYPE, openIncidentTaskId } from "./incidents.js";
 import { dispatchPendingDiagnosticTasks } from "./diagnosticDispatch.js";
 
 export const NOTIF_ROOT =
@@ -84,14 +84,6 @@ export function startInboxTriageWatcher(): () => void {
   let dispatchBusy = false;
   let lastDispatchAttempt = 0;
   const knownDirs = new Set<string>(scanDayDirs());
-  // Проект заводится сразу при старте — Максим видит его, не дожидаясь первой
-  // тревоги (27.09.2026).
-  try {
-    serverNotificationsProjectId(OWNER_ID);
-  } catch (error) {
-    console.warn("[inbox-triage] проект «Серверные уведомления»:", error);
-  }
-
   const pollHandle = setInterval(() => {
     if (stopped) return;
     try {
@@ -206,6 +198,22 @@ export function startInboxTriageWatcher(): () => void {
       return false;
     }
 
+    // Одна поломка — одна карточка (12.10.2026): пока диагностика по этому
+    // источнику открыта, новый тикет привязывается к ней, а не плодит дубль.
+    // Ежедневная сводка с тревожными строками раньше каждый день в 06:00
+    // давала новую карточку.
+    const incidentKey = `inbox:${ticket.source}`;
+    const openId = openIncidentTaskId(incidentKey);
+    if (openId) {
+      try {
+        linkCardInMd(p, openId);
+      } catch (e: any) {
+        console.warn(`[inbox-triage] не удалось дописать ссылку в .md: ${e?.message ?? e}`);
+      }
+      renameProcessed(p);
+      return false;
+    }
+
     const id = crypto.randomUUID();
     const title = `[Диагностика] ${ticket.title} (${ticket.source})`;
     const description =
@@ -229,9 +237,10 @@ export function startInboxTriageWatcher(): () => void {
     const txn = db.transaction(() => {
       db.prepare(
         `INSERT INTO tasks (
-          id, title, description, priority, creator_id, status, agent_state, project_id
-        ) VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)`,
-      ).run(id, title, description, PRIORITY, OWNER_ID, serverNotificationsProjectId(OWNER_ID));
+          id, title, description, priority, creator_id, status, agent_state,
+          project_id, service_hidden, incident_key
+        ) VALUES (?, ?, ?, ?, ?, 'active', NULL, NULL, 1, ?)`,
+      ).run(id, title, description, PRIORITY, OWNER_ID, incidentKey);
     });
     txn();
 
@@ -270,9 +279,9 @@ export function startInboxTriageWatcher(): () => void {
       ).run(
         crypto.randomUUID(),
         OWNER_ID,
-        "auto_diagnostic_card",
+        INCIDENT_NOTIFICATION_TYPE,
         id,
-        `Авто-создана карточка на диагностику: ${title.slice(0, 100)}`,
+        `${ticket.title} (${ticket.source})`.slice(0, 200),
         OWNER_ID,
       );
     } catch {

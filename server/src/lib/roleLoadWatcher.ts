@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import db from "../db.js";
 import {readRoleLoad} from "../routes/coordination.js";
-import {serverNotificationsProjectId} from "./serverNotificationsProject.js";
+import {raiseIncident} from "./incidents.js";
 
 export function checkRoleLoad(): {ok:boolean;reason?:string} {
   const rolledBack=new Error("successful role-load probe rollback");
@@ -36,12 +36,8 @@ export function checkRoleLoad(): {ok:boolean;reason?:string} {
 export function startRoleLoadWatcher(){
   const check=()=>{
     const result=checkRoleLoad();if(result.ok)return;
-    const owner=db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as {id:string}|undefined;if(!owner)return;
-    const id="role-load-alert-"+new Date().toISOString().slice(0,10);
-    db.prepare("INSERT OR IGNORE INTO tasks(id,title,description,creator_id,project_id) VALUES(?,?,?,?,?)").run(id,
-      "Гант учитывает завершённую работу как текущую нагрузку",
-      "## Работа\nПроба readRoleLoad не прошла: "+result.reason+"\n## Результат\nГант отражает фактическое состояние работы.\n## Критерии приёмки\ncheckRoleLoad успешен; completed и done исключены.\n## Границы\nНе удалять карточки и журнал запусков.",
-      owner.id,serverNotificationsProjectId(owner.id));
+    raiseIncident({key:"role-load-alert",title:"Гант учитывает завершённую работу как текущую нагрузку",description:
+      "## Работа\nПроба readRoleLoad не прошла: "+result.reason+"\n## Результат\nГант отражает фактическое состояние работы.\n## Критерии приёмки\ncheckRoleLoad успешен; completed и done исключены.\n## Границы\nНе удалять карточки и журнал запусков."});
   };
   check();const timer=setInterval(check,15*60*1000);timer.unref();return()=>clearInterval(timer);
 }

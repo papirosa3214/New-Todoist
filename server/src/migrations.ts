@@ -4301,6 +4301,19 @@ const migrations: Migration[] = [
       );
     }
   } },
+
+  { id: "134_service_incident_tasks", description: "Служебные карточки починки: tasks.service_hidden и tasks.incident_key (поломка — уведомление, а не задача в проекте)", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("service_hidden")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN service_hidden INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!cols.has("incident_key")) {
+      db.exec("ALTER TABLE tasks ADD COLUMN incident_key TEXT");
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_incident_key ON tasks(incident_key) WHERE incident_key IS NOT NULL");
+  } },
 ];
 /**
  * Опции прогона миграций.

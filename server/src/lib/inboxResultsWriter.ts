@@ -31,7 +31,6 @@ import * as os from "node:os";
 import * as crypto from "node:crypto";
 
 import db from "../db.js";
-import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
 
 export const NOTIF_ROOT =
   process.env.TASKFLOW_NOTIF_ROOT ||
@@ -342,9 +341,12 @@ export function startInboxResultsWriter(): () => void {
         subId = crypto.randomUUID();
         try {
           db.prepare(
-            // Устранение — туда же, куда диагностика: проект «Серверные уведомления».
-            `INSERT INTO tasks (id, title, description, priority, creator_id, status, agent_state, parent_id, project_id)
-             VALUES (?, ?, ?, ?, ?, 'active', 'todo', ?, ?)`,
+            // Устранение — такая же служебная карточка, как диагностика
+            // (12.10.2026): без проекта, скрыта из списков. agent_state NULL,
+            // а не 'todo': с 'todo' диспетчер считал её уже взятой и не
+            // раздавал никому — починка не начиналась.
+            `INSERT INTO tasks (id, title, description, priority, creator_id, status, agent_state, parent_id, project_id, service_hidden, incident_key)
+             VALUES (?, ?, ?, ?, ?, 'active', NULL, ?, NULL, 1, ?)`,
           ).run(
             subId,
             subTitlePrefix,
@@ -357,7 +359,7 @@ export function startInboxResultsWriter(): () => void {
             2,
             "u1",
             fixParent,
-            serverNotificationsProjectId("u1"),
+            `fix:${task.id}`,
           );
         } catch {
           // уже существует другая карточка на устранение? — пропустим INSERT

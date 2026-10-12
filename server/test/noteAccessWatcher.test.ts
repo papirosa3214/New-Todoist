@@ -15,11 +15,11 @@ describe("сторож счётчика обращений", () => {
   beforeEach(() => {
     __resetWatchState();
     before = (
-      db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id LIKE 'note-access-watch-%'").get() as any
+      db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE incident_key = 'note-access-watch'").get() as any
     ).n;
   });
   afterEach(() => {
-    db.prepare("DELETE FROM tasks WHERE id LIKE 'note-access-watch-%'").run();
+    db.prepare("DELETE FROM tasks WHERE incident_key = 'note-access-watch'").run();
     __resetWatchState();
   });
 
@@ -27,7 +27,7 @@ describe("сторож счётчика обращений", () => {
     const r = checkNoteAccessInstrument();
     expect(r.ok, `прибор жив: ${r.reason}`).toBe(true);
     const after = (
-      db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id LIKE 'note-access-watch-%'").get() as any
+      db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE incident_key = 'note-access-watch'").get() as any
     ).n;
     expect(after, "живой прибор не должен плодить тревоги").toBe(before);
   });

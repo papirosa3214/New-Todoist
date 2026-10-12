@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import db from "../db.js";
-import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
+import { raiseIncident } from "./incidents.js";
 
 // Deliberately no FK to tasks: statistical facts outlive task purge.
 export const REVIEW_HISTORY_SCHEMA = `
@@ -61,14 +61,9 @@ export function checkReviewHistory(): {ok:boolean;reason?:string} {
 export function startReviewHistoryWatcher() {
  const check=()=>{
   const result=checkReviewHistory();if(result.ok)return;
-  const owner=db.prepare("SELECT id FROM users WHERE role='owner' LIMIT 1").get() as any;
-  if(!owner)return;
-  const id="review-history-alert-"+new Date().toISOString().slice(0,10);
-  db.prepare("INSERT OR IGNORE INTO tasks(id,title,description,creator_id,project_id) VALUES(?,?,?,?,?)").run(
-   id,"История сдачи задач не сохраняется",
+  raiseIncident({key:"review-history-alert",title:"История сдачи задач не сохраняется",description:
    "## Работа\nПроба записи review и удаления задачи не прошла: "+result.reason+
-   "\nПроверить миграцию132_review_history, триггеры review_history_* и checkReviewHistory.\n## Результат\nСтатистика переживает удаление карточки.\n## Критерии приёмки\nПроба записи и удаления успешна; история не дублируется.\n## Границы\nНе возвращать удалённые задачи в работу.",
-   owner.id,serverNotificationsProjectId(owner.id));
+   "\nПроверить миграцию132_review_history, триггеры review_history_* и checkReviewHistory.\n## Результат\nСтатистика переживает удаление карточки.\n## Критерии приёмки\nПроба записи и удаления успешна; история не дублируется.\n## Границы\nНе возвращать удалённые задачи в работу."});
  };
  check();const timer=setInterval(check,15*60*1000);timer.unref();return()=>clearInterval(timer);
 }

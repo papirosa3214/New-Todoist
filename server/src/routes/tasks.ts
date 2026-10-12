@@ -517,9 +517,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
       );
       extraParams.push(`-${filterBlockedOlderMin} minutes`);
     }
-    const extraWhere = extraFilters.length
-      ? " AND " + extraFilters.join(" AND ")
-      : "";
+    // Служебные карточки починки (incidents.ts) в общий список не попадают:
+    // владелец видит поломку уведомлением, а карточку — по ссылке из него.
+    // `?service=true` возвращает их в выдачу (для отладки и сторожей).
+    const serviceWhere =
+      req.query.service === "true" ? "" : " AND COALESCE(t.service_hidden, 0) = 0";
+    const extraWhere =
+      (extraFilters.length ? " AND " + extraFilters.join(" AND ") : "") + serviceWhere;
 
     // Архивный проект (карточка a1be7d63…): при прямом запросе задачи по
     // id из архивного проекта отдаём 404 всем, кроме владельца — проверка

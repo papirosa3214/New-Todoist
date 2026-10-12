@@ -82,6 +82,7 @@ export function registerSearchRoutes(app: FastifyInstance) {
         WHERE ${ownerBypass}
           AND ${privacyClause}
           AND t.archived_at IS NULL
+          AND COALESCE(t.service_hidden, 0) = 0
           AND ${wordConditions.join(" AND ")}
         ORDER BY t.created_at DESC
       `,

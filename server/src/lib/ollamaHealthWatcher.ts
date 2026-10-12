@@ -16,8 +16,7 @@
 // порт слушается и /api/tags отвечает — поэтому проба идёт именно за
 // эмбеддингом, тем самым запросом, который реально нужен прибору.
 
-import db from "../db.js";
-import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
+import { raiseIncident } from "./incidents.js";
 import {
   OLLAMA_BASE_URL,
   DEFAULT_EMBEDDING_MODEL,
@@ -91,7 +90,6 @@ function raise(reason: string, details?: Record<string, unknown>) {
   const now = Date.now();
   if (now - lastRaisedAt < DAY_MS) return;
   lastRaisedAt = now;
-  const id = `ollama-health-${Date.now().toString(36)}`;
   const title = `Локальная модель (Ollama) недоступна: ${reason}`;
   const description = [
     "## Что случилось",
@@ -112,14 +110,7 @@ function raise(reason: string, details?: Record<string, unknown>) {
     "- Если «server busy, maximum pending requests exceeded» — очередь исчерпана: найти, кто держит её открытым запросом, и снять его.",
     "- Проверить, что модель `bge-m3-embed:latest` вообще выкачена: `ollama list`.",
   ].join("\n");
-  const txn = db.transaction(() => {
-    db.prepare(
-      `INSERT INTO tasks (
-        id, title, description, priority, creator_id, status, agent_state, project_id
-      ) VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)`,
-    ).run(id, title, description, PRIORITY, "u1", serverNotificationsProjectId("u1"));
-  });
-  txn();
+  raiseIncident({ key: "ollama-health", title, description, priority: PRIORITY });
 }
 
 export function startOllamaHealthWatcher(): void {

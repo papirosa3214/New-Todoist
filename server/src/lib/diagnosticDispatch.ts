@@ -16,7 +16,8 @@ export async function dispatchPendingDiagnosticTasks(): Promise<void> {
     FROM tasks t JOIN users u ON u.id = t.creator_id
     WHERE t.status = 'active' AND t.assignee_id IS NULL
       AND (t.agent_state IS NULL OR t.agent_state = 'todo')
-      AND u.role = 'owner' AND instr(t.description, ?) > 0
+      AND u.role = 'owner'
+      AND (instr(t.description, ?) > 0 OR t.incident_key IS NOT NULL)
     ORDER BY t.created_at, t.id LIMIT 10
   `).all(marker) as Array<{ id: string; creator_id: string }>;
 

@@ -48,5 +48,5 @@ it('probe exercises writes and leaves no rows; alert deduplicates',()=>{
  expect(checkWorkPlanStore()).toEqual({ok:true});
  expect((db.prepare("SELECT COUNT(*) n FROM tasks WHERE id LIKE 'work-plan-probe-%'").get() as any).n).toBe(0);
  raiseWorkPlanAlert('Пробная ошибка');raiseWorkPlanAlert('Та же ошибка');
- expect((db.prepare("SELECT COUNT(*) n FROM tasks WHERE id LIKE 'work-plan-watch-%'").get() as any).n).toBe(1);
+ expect((db.prepare("SELECT COUNT(*) n FROM tasks WHERE incident_key = 'work-plan-watch'").get() as any).n).toBe(1);
 });

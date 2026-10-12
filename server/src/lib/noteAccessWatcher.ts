@@ -1,5 +1,5 @@
 import db from "../db.js";
-import { serverNotificationsProjectId } from "./serverNotificationsProject.js";
+import { raiseIncident } from "./incidents.js";
 
 /**
  * Сторож прибора «учёт обращений к заметкам» (шаг 1 схемы базы знаний,
@@ -83,13 +83,10 @@ function raise(reason: string) {
   if (now - lastRaisedAt < DAY_MS) return;
   lastRaisedAt = now;
   const title = `Счётчик обращений к заметкам не работает: ${reason}`;
-  const id = `note-access-watch-${Date.now().toString(36)}`;
-  const txn = db.transaction(() => {
-    db.prepare(
-      `INSERT INTO tasks (
-        id, title, description, priority, creator_id, status, agent_state, project_id
-      ) VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)`,
-    ).run(id, title,
+  raiseIncident({
+    key: "note-access-watch",
+    title,
+    description:
     [
       "## Что случилось",
       "Сторож прибора «учёт обращений к заметкам» не смог выполнить пробный ход.",
@@ -107,12 +104,9 @@ function raise(reason: string) {
       "- Проверить, что GET /api/notes/:id увеличивает access_count.",
       "- Проверить, что таблица note_accesses существует и доступна на запись.",
     ].join("\n"),
-      PRIORITY,
-      OWNER_ID,
-      serverNotificationsProjectId(OWNER_ID),
-    );
+    priority: PRIORITY,
+    ownerId: OWNER_ID,
   });
-  txn();
   console.error(`[note-access-watch] ПРИБОР НЕ РАБОТАЕТ: ${reason}`);
 }
 
