@@ -1,4 +1,5 @@
 import { branchMembership } from "../runtime/branchPlan.js";
+import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { deliverTopicToWork, deliverChatToWork } from "../runtime/inProcessRun.js";
 import { topicContext, taskTopicClosedAt } from "../lib/projectTopics.js";
@@ -1812,6 +1813,8 @@ async function deliverAgentReply(args: {
   const chatProject = (db.prepare(
     "SELECT COALESCE(c.project_id,t.project_id) project_id FROM chats c LEFT JOIN tasks t ON t.id = c.task_id WHERE c.id = ?",
   ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
+  // Чат задачи: первым блоком — сама задача и место роли в ней (lib/taskChatBrief.ts).
+  if (topic) { const brief = taskChatBrief(topic.task_id, role); if (brief) prompt = `${brief}\n\n${prompt}`; }
   const memory = await roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text });
   if (memory) prompt = `${prompt}\n\n${memory}`;
   // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
