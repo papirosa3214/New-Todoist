@@ -75,6 +75,7 @@ describe('one approval for a complete task branch',()=>{
  });
  it('root plan without an architect is approved; the architect joins by itself once all work is done',async()=>{
   const root=await task('Итог без архитектора'),a=await task('Часть',root);const rp=await plan(root,'builder'),ap=await plan(a,'researcher');
+  expect((await app.inject({method:'PATCH',url:`/api/tasks/${root}/integration-responsibility`,headers:auth,payload:{mode:'manual',owner_id:roleUserId('builder')}})).statusCode).toBe(200);
   expect((await app.inject({method:'POST',url:`/api/tasks/${root}/collaboration-plans/${rp}/approve`,headers:auth,payload:{branch_snapshot:branchSnapshot(rp)}})).statusCode).toBe(200);
   const close=(p:string)=>{db.prepare("UPDATE attempts SET ended_at=datetime('now') WHERE subtask_id IN (SELECT id FROM subtasks WHERE collaboration_plan_id=?)").run(p);db.prepare("UPDATE subtasks SET done=1,agent_state=NULL,result='Готово' WHERE collaboration_plan_id=?").run(p);};
   const joined=()=>db.prepare("SELECT n.slot_key,s.done,s.agent_id FROM task_collaboration_plan_nodes n JOIN subtasks s ON s.collaboration_plan_id=n.plan_id AND s.plan_node_key=n.slot_key WHERE n.plan_id=? AND n.role_key='architect'").all(rp) as any[];

@@ -367,7 +367,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       const claimCaller = db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as any;
       if (claimCaller?.type === "ai") {
         const assigned = db.prepare("SELECT assignee_id FROM tasks WHERE id=?").get(req.params.id) as any;
-        const plan = db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved')").get(req.params.id);
+        const plan = db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved') AND profile <> 'single_executor'").get(req.params.id);
         if (plan || assigned?.assignee_id !== req.userId) return reply.code(403).send({error:"Агент не назначает себя и не захватывает командную карточку. Назначения выполняет сервер; работай в своём слоте."});
       }
       let task =
@@ -1304,6 +1304,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       if (
         from === "blocked" &&
         state === null &&
+        task.ready_for_pickup === 1 &&
         String(task.assignee_id ?? "").startsWith("role_") &&
         task.assignee_id !== req.userId
       ) {

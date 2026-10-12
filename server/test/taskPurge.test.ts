@@ -44,14 +44,19 @@ describe("Удаление карточки с планом: кольцо «по
     const reg = await app.inject({ method: "POST", url: "/api/auth/register", payload: { name: "Владелец", email: `purge-${uid()}@example.com`, password: "password123" } });
     expect(reg.statusCode).toBe(200);
     token = reg.json().token; userId = reg.json().user.id;
+    db.prepare("UPDATE users SET role='owner' WHERE id=?").run(userId);
   });
   afterAll(async () => { await app.close(); });
 
-  it("корзина удаляет карточку с планом и не трогает соседнюю", async () => {
+  it("корзина сохраняет план; явное удаление архивной карточки не трогает соседнюю", async () => {
     const victim = await makeTask("с планом"), neighbour = await makeTask("соседняя");
     const a = ring(victim), b = ring(neighbour);
     const res = await app.inject({ method: "DELETE", url: `/api/tasks/${victim}`, headers: { authorization: `Bearer ${token}` } });
     expect(res.statusCode).toBe(200);
+    expect((db.prepare("SELECT archived_at FROM tasks WHERE id=?").get(victim) as any).archived_at).toBeTruthy();
+    expect(exists("task_collaboration_plans", a.planId)).toBe(true);
+    const purge=await app.inject({method:"DELETE",url:`/api/tasks/${victim}`,headers:{authorization:`Bearer ${token}`}});
+    expect(purge.statusCode).toBe(200);
     expect(exists("tasks", victim)).toBe(false);
     expect(exists("task_collaboration_plans", a.planId)).toBe(false);
     expect(exists("subtasks", a.subtaskId)).toBe(false);

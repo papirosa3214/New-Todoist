@@ -14,5 +14,10 @@ export default defineConfig({
     // теста НЕ сработает: `import` в ES-модулях поднимается наверх при
     // разборе файла, раньше любого кода теста, который стоял бы над ним.
     setupFiles: ["./test/setup.ts"],
+    // Server fixtures migrate a fresh DB and import the complete app.
+    // Bound concurrency and allow that setup without competing with live work.
+    maxWorkers: 4,
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });

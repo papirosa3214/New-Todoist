@@ -173,6 +173,8 @@ describe("collaboration plans", () => {
     expect(plan.nodes.find((n: { slot_key: string }) => n.slot_key === "delivery").output_artifact).toMatchObject({ key: "implementation_pack" });
     expect(plan.edges).toEqual([{ from_slot_key: "analysis", to_slot_key: "delivery", start_condition: "artifact_ready", artifact_key: "feature_spec" }]);
 
+    const responsibility=await app.inject({method:"PATCH",url:`/api/tasks/${task.json().task.id}/integration-responsibility`,headers:{authorization:ownerAuth},payload:{mode:"manual",owner_id:"role_builder"}});
+    expect(responsibility.statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
     const subtasks = await planSubtasks(task.json().task.id);
     expect(subtasks.analysis.agent_state).toBe("in_progress");
@@ -213,6 +215,8 @@ describe("collaboration plans", () => {
     expect(plan2.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "delivery", "qa"]);
     expect(plan2.edges.map((e: { from_slot_key: string; to_slot_key: string }) => `${e.from_slot_key}->${e.to_slot_key}`).sort()).toEqual(["analysis->delivery", "delivery->qa"]);
 
+    const responsibility=await app.inject({method:"PATCH",url:`/api/tasks/${task.json().task.id}/integration-responsibility`,headers:{authorization:ownerAuth},payload:{mode:"manual",owner_id:"role_builder"}});
+    expect(responsibility.statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: ownerAuth } })).json().plan.status).toBe("approved");
     const subtasks = await planSubtasks(task.json().task.id);
     expect(Object.keys(subtasks)).toHaveLength(5);
@@ -343,7 +347,7 @@ describe("collaboration plans", () => {
     expect(approveOld.statusCode).toBe(409);
   });
 
-  it("PATCH редактирует draft (нельзя редактировать approved/чужой профиль)", async () => {
+  it("PATCH сохраняет разрешённое редактирование согласованного плана владельцем", async () => {
     const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `Правка черновика ${crypto.randomUUID()}` } });
     const taskId = task.json().task.id as string;
     const created = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans`, headers: { authorization: ownerAuth }, payload: {
@@ -376,7 +380,8 @@ describe("collaboration plans", () => {
 
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: ownerAuth } });
     const afterApprove = await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}/collaboration-plans/${planId}`, headers: { authorization: ownerAuth }, payload: { rationale: "поздно" } });
-    expect(afterApprove.statusCode).toBe(409);
+    expect(afterApprove.statusCode).toBe(200);
+    expect(afterApprove.json().plan.rationale).toBe("поздно");
   });
 
   it("source_subtask_id: approve занимает уже существующую подзадачу вместо дубля (умная параллелизация)", async () => {

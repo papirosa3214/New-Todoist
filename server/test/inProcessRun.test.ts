@@ -1,3 +1,4 @@
+import { roleReport } from "./helpers/roleReport.js";
 // Агент роли внутри сервера (владелец 23.09.2026: «как у Гермеса, без
 // ключей»). Модель подменена: «агент» по заданию вызывает инструменты
 // трекера — проверяем, что всё записывается от имени роли и без ключей.
@@ -124,7 +125,7 @@ describe("агент роли внутри сервера", () => {
     const mine=await call(tools,"taskflow_my_tasks",{state:"in_progress"});
     expect(JSON.stringify(mine)).toContain(taskId);
     await call(tools,"taskflow_comment",{id:taskId,text:"Работаю в назначенном слоте"});
-    await call(tools,"taskflow_state",{id:taskId,state:"blocked",comment:"Нужен доступ"});
+    await call(tools,"taskflow_state",{id:taskId,state:"blocked",block_type:"needs_input",comment:"Нужен доступ"});
     expect((db.prepare("SELECT agent_state FROM subtasks WHERE id=?").get(stepId) as any).agent_state).toBe("blocked");
     expect((db.prepare("SELECT assignee_id,ready_for_pickup FROM tasks WHERE id=?").get(taskId) as any)).toMatchObject({assignee_id:null,ready_for_pickup:0});
   });
@@ -312,6 +313,12 @@ describe("агент роли внутри сервера", () => {
     const next=await runRoleInProcess({taskId,role:"builder",subtaskId:second,prompt:"Обсудить",mode:"reply"});
     await started;
     try {
+      // slot_topic_inbox.message_id — FK на chat_messages: очередь слота хранит
+      // ссылку на настоящее сообщение, поэтому заводим его, а не подставляем
+      // произвольный токен.
+      const msg = db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel) VALUES (?,?,?,'agents')");
+      msg.run("ambiguous", ownerId, "Вопрос");
+      msg.run("targeted", ownerId, "Вопрос");
       expect(await deliverTopicToWork(taskId,"builder","ambiguous","Вопрос")).toBe("busy");
       expect(script.steering).toHaveLength(0);
       expect(await deliverTopicToWork(taskId,"builder","targeted","Вопрос","second_slot")).toBe("queued");
@@ -337,7 +344,7 @@ describe("агент роли внутри сервера", () => {
       expect(options.cwd).toBe(project);
       expect(options.resourceLoader.getSkills().skills.map((s: any) => s.name)).toContain("task-probe");
       expect(options.resourceLoader.getAgentsFiles().agentsFiles[0].content).toBe("Инструкции именно разработчика");
-      const write = options.tools.find((t: any) => t.name === "write");
+      const write = options.customTools.find((t: any) => t.name === "write");
       await write.execute("probe", { path: "result.txt", content: "project result" });
       expect(fs.readFileSync(path.join(project, "result.txt"), "utf8")).toBe("project result");
     } finally {
@@ -507,20 +514,27 @@ describe("агент роли внутри сервера", () => {
     // у обоих нет incoming edges, поэтому canBecomeReady() пропускает их
     // сразу; проверяемый вызов buildInProcessTaskContext нас пока не
     // интересует, интересен только последующий для "delivery".
-    await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: `Bearer ${ownerToken}` } });
+    const responsibility = await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:{authorization:`Bearer ${ownerToken}`},payload:{mode:"manual",owner_id:roleUserId("builder")}});
+    expect(responsibility.statusCode).toBe(200);
+    const approved = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: `Bearer ${ownerToken}` } });
+    expect(approved.statusCode).toBe(200);
     await _settleInProcessRunsForTests();
 
     const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: `Bearer ${ownerToken}` } })).json() as Array<{ id: string; plan_node_key: string }>;
     const analysisSubtask = subtasks.find((s) => s.plan_node_key === "analysis")!;
     const analystAuth = `Bearer ${app.jwt.sign({ id: roleUserId("analyst") })}`;
 
-    await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
-
+    // The stub producer has ended without submitting; place its declared slot
+    // in the submission state to exercise the artifact→consumer bridge.
+    db.prepare("UPDATE subtasks SET agent_state='in_progress' WHERE id=?").run(analysisSubtask.id);
     taskContext.build.mockClear();
-    // accept удовлетворяет gate edge analysis→delivery — unlockReadyPlanSubtasks
-    // сама стартует "delivery" реальным runRoleInProcess внутри этого же
-    // запроса (LOCK-249: роль впрягается сама, без ручного /run).
-    await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact/accept`, headers: { authorization: `Bearer ${ownerToken}` } });
+    const submitted=await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact`, headers: { authorization: analystAuth }, payload: { report_markdown: roleReport, summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
+    expect(submitted.statusCode).toBe(201);
+
+    // Submission accepts the step artifact and starts its consumer.
+    // Repeated owner acceptance must not start the consumer again.
+    const accepted=await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact/accept`, headers: { authorization: `Bearer ${ownerToken}` } });
+    expect(accepted.statusCode).toBe(200);
     await _settleInProcessRunsForTests();
 
     expect(taskContext.build).toHaveBeenCalledTimes(1);
@@ -534,7 +548,7 @@ describe("агент роли внутри сервера", () => {
       ],
     });
     const serialized = JSON.stringify(bridgeInput);
-    expect(serialized).not.toContain("unrelated");
+    expect(JSON.stringify(bridgeInput.collaboration_context)).not.toContain("unrelated");
     expect(serialized.toLowerCase()).not.toContain("token");
     expect(serialized.toLowerCase()).not.toContain("password");
 

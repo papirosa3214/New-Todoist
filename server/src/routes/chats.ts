@@ -251,6 +251,31 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     }))};
   });
 
+  // Reopen the real owner↔role conversation, including a conversation the
+  // role created earlier. Keeping the same room preserves history and receipts.
+  app.post<{Body:{role_id?:unknown}}>("/api/chats/with-role",{preHandler:authPre},async(req:any,reply)=>{
+    const me=db.prepare("SELECT role FROM users WHERE id=?").get(req.userId) as {role:string}|undefined;
+    if(me?.role!=="owner")return reply.code(403).send({error:"Личный чат роли открывает владелец"});
+    const roleId=typeof req.body?.role_id==="string"?req.body.role_id.trim():"";
+    const active=db.prepare("SELECT 1 FROM users WHERE id=? AND COALESCE(archived,0)=0").get(roleId);
+    if(!active || !roleFromUserId(roleId))return reply.code(400).send({error:"Нужна действующая роль"});
+    const id=db.transaction(()=>{
+      const existing=db.prepare(`SELECT c.id FROM chats c WHERE c.kind='direct'
+        AND c.parent_chat_id IS NULL AND c.closed_at IS NULL
+        AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
+        AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
+        AND (SELECT COUNT(*) FROM chat_members WHERE chat_id=c.id)=2
+        ORDER BY c.created_at,c.id LIMIT 1`).get(req.userId,roleId) as {id:string}|undefined;
+      if(existing)return existing.id;
+      const id=uid();
+      db.prepare("INSERT INTO chats(id,kind,created_by) VALUES(?,'direct',?)").run(id,req.userId);
+      const member=db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)");
+      member.run(id,req.userId);member.run(id,roleId);
+      return id;
+    })();
+    return {chat:chatRow(id)};
+  });
+
   // Создать чат. member_ids — роли-агенты (или любые существующие учётки).
   // Создатель добавляется участником автоматически: он — сторона разговора.
   app.post<{

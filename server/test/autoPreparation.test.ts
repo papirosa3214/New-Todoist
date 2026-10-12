@@ -66,6 +66,7 @@ describe("Автоматическая подготовка",()=>{
  });
  it("владелец согласует план и после изменения постановки — подготовка не блокирует",async()=>{
   const id=await task();await process();const plan=job(id).plan_id;db.prepare("UPDATE tasks SET description='Изменено' WHERE id=?").run(id);
+  const responsibility=await app.inject({method:"PATCH",url:`/api/tasks/${id}/integration-responsibility`,headers:auth,payload:{mode:"manual",owner_id:"role_builder"}});expect(responsibility.statusCode).toBe(200);
   const r=await app.inject({method:"POST",url:`/api/tasks/${id}/collaboration-plans/${plan}/approve`,headers:auth,payload:{}});expect(r.statusCode).toBe(200);
  });
  it("предложенные дочерние карточки ждут согласования и не создаются автоматически",async()=>{

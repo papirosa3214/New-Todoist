@@ -5,11 +5,13 @@
 // state=null обнулил assignee_id, флаг готовности остался поднятым,
 // а раздачу никто не позвал. Роль не проснулась, задача осталась ничьей.
 import crypto from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { seedRoleAccounts } from "./helpers/seedOwner.js";
+
+vi.mock("../src/runtime/inProcessRun.js",async original=>({...await original<typeof import("../src/runtime/inProcessRun.js")>(),runRoleInProcess:async()=>({runId:"isolated-launch",completion:Promise.resolve()})}));
 
 const ownerId = `unblock-owner-${crypto.randomUUID()}`;
 const created: string[] = [];

@@ -123,7 +123,9 @@ describe("умная параллелизация подзадач (subtaskRoleF
     const subtasksBefore = await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth });
     expect(subtasksBefore.json()).toHaveLength(3); // ещё draft — дубля нет
 
-    await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.id}/approve`, headers: ownerAuth });
+    expect((await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:ownerAuth,payload:{mode:"manual",owner_id:"role_builder"}})).statusCode).toBe(200);
+    const approved=await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.id}/approve`, headers: ownerAuth });
+    expect(approved.statusCode).toBe(200);
     const subtasksAfter = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth })).json() as Array<{ collaboration_plan_id: string | null }>;
     expect(subtasksAfter).toHaveLength(3); // approve тоже не создал дублей — те же 3 строки
     expect(subtasksAfter.filter((s) => s.collaboration_plan_id).length).toBe(2); // ровно 2 стали узлами плана

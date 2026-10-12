@@ -1,3 +1,6 @@
+import {vi} from "vitest";
+const quota=vi.hoisted(()=>({known:false,limited:false,resetAt:null}));
+vi.mock("../src/lib/providerQuota.js",()=>({readProviderQuota:async()=>quota}));
 // Возврат на основную модель после лимита (владелец 07.10.2026):
 //  • провайдер работал и упёрся — пять часов от этого момента + 5 минут, без прощупываний (timer);
 //  • упёрлись сразу при старте — остаток неизвестен, метку снимает пробный запрос (probe).
@@ -60,7 +63,7 @@ describe("Лимит провайдера: работал → таймер, уп
     expect(providerWorkedRecently("minimax")).toBe(true);
   });
 
-  it("работал и упёрся → режим timer: 5 часов 5 минут, проба его не трогает", async () => {
+  it("работал и упёрся → timer хранит страховку, но успешная проба снимает лимит", async () => {
     attemptAt(40);
     pickFailoverModel(routing, "builder", "MiniMax-M3", "429 rate limit");
     const row = db.prepare("SELECT mode FROM provider_limits WHERE provider = 'minimax'").get() as { mode: string };
@@ -70,8 +73,8 @@ describe("Лимит провайдера: работал → таймер, уп
 
     let calls = 0;
     await runProviderProbe(async () => { calls++; return "ok"; }, routing);
-    expect(calls).toBe(0);
-    expect(providerAvailable("minimax")).toBe(false);
+    expect(calls).toBe(1);
+    expect(providerAvailable("minimax")).toBe(true);
   });
 
   it("упёрся сразу при старте → режим probe: лимит сброшен — метка снята, основная модель вернулась", async () => {
@@ -110,8 +113,11 @@ describe("Лимит провайдера: работал → таймер, уп
     attemptAt(40);
     pickFailoverModel(routing, "builder", "MiniMax-M3", "429 rate limit");
     expect(untilMinutes("minimax")).toBeGreaterThan(60 * 24 * 365);
-    expect(await runProviderProbe(async () => "ok", routing)).toEqual([]);
-    expect(providerAvailable("minimax")).toBe(false);
-    expect(getFailoverSettings().autoReturn).toBe(false);
+    quota.known=true;
+    try{
+      expect(await runProviderProbe(async () => "ok", routing)).toEqual([]);
+      expect(providerAvailable("minimax")).toBe(false);
+      expect(getFailoverSettings().autoReturn).toBe(false);
+    }finally{quota.known=false;}
   });
 });

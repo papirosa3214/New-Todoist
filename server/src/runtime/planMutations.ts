@@ -587,23 +587,9 @@ export function decidePlanProposal(opId: string, ownerIdValue: string, approve: 
     db.prepare("UPDATE task_collaboration_plan_nodes SET origin = 'role', added_by = ? WHERE plan_id = ? AND slot_key IN (" +
       result.added.map(() => "?").join(",") + ")").run(row.actor_id, row.plan_id, ...result.added);
     mark("applied");
-    // Владелец одобрил — снимаем блокировку ожидания с авторов, чьи request_help
-    // входили в применённые ops. request_help блокирует автора через
-    // plan_help_requested (subtask.agent_state='blocked', block_type='dependency');
-    // после apply предшественник добавлен, и сдача помощника вернёт автора
-    // в работу. Возобновляем только в плане, по которому было решение, и
-    // только если задача ещё не на проверке.
-    const authorSlots = ops.filter((o) => o.op === "request_help").map((o) => (o as { from_slot: string }).from_slot);
-    if (authorSlots.length) {
-      const taskRow = db.prepare("SELECT agent_state FROM tasks WHERE id = (SELECT task_id FROM task_collaboration_plans WHERE id = ?)")
-        .get(row.plan_id) as { agent_state: string | null } | undefined;
-      if (taskRow && taskRow.agent_state !== "review") {
-        const placeholders = authorSlots.map(() => "?").join(",");
-        db.prepare(`UPDATE subtasks SET agent_state='todo', block_type=NULL, blocked_at=NULL
- WHERE collaboration_plan_id=? AND plan_node_key IN (${placeholders})
-   AND agent_state='blocked' AND block_type='dependency'`).run(row.plan_id, ...authorSlots);
-      }
-    }
+    // Approval creates the helper, not its result. Dependency admission resumes
+    // the requesting author only after the helper has submitted that result.
+
   }
   return result;
 }

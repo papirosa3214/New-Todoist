@@ -1,3 +1,5 @@
+import {vi as runtimeVi} from "vitest";
+runtimeVi.mock("../src/runtime/inProcessRun.js",async original=>({...await original<any>(),runRoleInProcess:runtimeVi.fn(async()=>({runId:"isolated-contract-test",completion:Promise.resolve()}))}));
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";

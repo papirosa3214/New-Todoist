@@ -305,7 +305,7 @@ function readOriginal(layer: LayerSpec, role: string, ownerId?: string): string 
       // AGENT_RULES — массив строк; для слоя контекста склеиваем в один
       // текст с буллет-точкой, как это делал сам AGENT_RULES.map раньше
       // (см. inProcessRun.ts:438, 461 в дизайне).
-      return AGENT_RULES.map((line) => `- ${line}`).join("\n");
+      return AGENT_RULES.flatMap((rule) => rule.split("\n")).map((line) => `- ${line}`).join("\n");
     }
     case "local_policy": {
       // LOCAL_EXECUTION_POLICY — уже склеенный через .join("\n") текст.

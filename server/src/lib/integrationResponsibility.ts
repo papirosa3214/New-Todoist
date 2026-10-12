@@ -25,7 +25,8 @@ export function integrationResponsibility(taskId:string) {
  if(!candidates.length){const u=db.prepare("SELECT u.id,u.name title FROM users u JOIN tasks t ON t.assignee_id=u.id WHERE t.id=? AND COALESCE(u.archived,0)=0").get(scopeId) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:'executor'});}
  candidates.sort((a,b)=>a.title.localeCompare(b.title));
  const suggested=candidates.find(c=>c.role==='code_orchestrator'||c.role==='orchestrator')??candidates.find(c=>c.role==='architect')??(candidates.length===1?candidates[0]:null);
- const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?candidates.find(c=>c.id===task.integration_owner_id)??null:suggested;
+ const assigned=candidates.find(c=>c.id===task.integration_owner_id)??null;
+ const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?assigned:(assigned??suggested);
  return {scope_task_id:scopeId,mode:task.integration_mode,owner_id:owner?.id??null,owner_title:owner?.title??null,candidates,suggested_owner_id:suggested?.id??null,valid:task.integration_mode==='not_required'||!!owner};
 }
 export function requireIntegrationResponsibility(taskId:string):void {

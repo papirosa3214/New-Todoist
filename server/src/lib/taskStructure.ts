@@ -1,3 +1,4 @@
+import { NonTaskInputError } from "./taskPreparation.js";
 import { parseIntakeMetadata } from "./taskIntakeMetadata.js";
 import { callUnifiedAi, parseJsonObject } from "./aiClient.js";
 
@@ -15,6 +16,10 @@ function text(value:unknown,name:string,max=12000):string {
 }
 export function parseStructuredDraft(raw:string):StructuredDraft {
  const p=parseJsonObject(raw);
+ if(p.preparation && ["informational_question","ambiguous_problem_report","no_action"].includes(p.preparation.intent)){
+   const q=typeof p.preparation.question==="string"?p.preparation.question.trim()||null:null;
+   throw new NonTaskInputError(p.preparation.intent,q);
+ }
  const title=text(p.title,"title",180);
  const sections=[text(p.work,"work"),text(p.result,"result"),text(p.acceptance,"acceptance"),text(p.boundaries,"boundaries")];
  if(!Array.isArray(p.subtasks)||p.subtasks.length>12) throw new Error("invalid_steps");
@@ -34,7 +39,7 @@ export async function structureTaskDraft(rawText:string, options:{provider?:stri
  let formatFailure=false;
  for(let attempt=0;attempt<2;attempt++){
   const raw=await callUnifiedAi({...options,systemPrompt:SYSTEM,userPrompt:JSON.stringify({text:input,today,timezone:"Europe/Moscow"})+(formatFailure?'\nПредыдущий ответ не соответствовал JSON-схеме. Верни все поля из схемы, без пояснений и без preparation.':""),temperature:0.2,predictTokens:4096,numCtx:16384});
-  try{return parseStructuredDraft(raw);}catch{formatFailure=true;}
+  try{return parseStructuredDraft(raw);}catch(error){if(error instanceof NonTaskInputError)throw error;formatFailure=true;}
  }
  throw new Error("AI не смог оформить поручение. Исходный текст сохранён — попробуйте ещё раз.");
 }

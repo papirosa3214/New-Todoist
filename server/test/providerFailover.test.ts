@@ -1,3 +1,4 @@
+import { ROLE_NAMES } from "../src/roleRouting.js";
 // Автопереключение провайдера при лимите (владелец 06.10.2026): ошибка 429 в ответе модели
 // узнаётся, провайдер помечается занятым, запуск идёт на запасную модель цепочки роли,
 // а после окончания метки возвращается на основную.
@@ -68,7 +69,7 @@ describe("Автопереключение провайдера при лими�
 
   it("боевой role-routing.yaml читается: основной MiniMax; Критик и QA уходят на minimax-m3, остальные на DeepSeek, последний запас — бесплатный space-bunny", () => {
     const live = loadRoleRouting(path.resolve(__dirname, "../scripts/role-routing.yaml"));
-    for (const role of Object.keys(live.models)) {
+    for (const role of ROLE_NAMES) {
       expect(live.models[role as keyof typeof live.models]).toBe("MiniMax-M3");
       const chain = live.fallbacks[role as keyof typeof live.fallbacks];
       if (role === "critic_verifier" || role === "qa") {

@@ -1,3 +1,5 @@
+vi.mock("../src/runtime/inProcessRun.js",async original=>({...await original<typeof import("../src/runtime/inProcessRun.js")>(),runRoleInProcess:async()=>({runId:"isolated-launch",completion:Promise.resolve()})}));
+
 // Мост «владелец → 8-роль → план из одного шага».
 //
 // MAK-71: старая ручка POST /api/tasks/:id/dispatch снесена. Теперь

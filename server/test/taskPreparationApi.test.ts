@@ -38,6 +38,9 @@ describe("общая подготовка через реальные серве
     const task=db.prepare("SELECT ready_for_pickup FROM tasks WHERE id=?").get(result.parentId) as any;expect(task.ready_for_pickup).toBe(0);
     const subs=db.prepare("SELECT id FROM subtasks WHERE task_id=? ORDER BY position").all(result.parentId) as any[];
     const plan=db.prepare("SELECT id,status FROM task_collaboration_plans WHERE task_id=?").get(result.parentId) as any;expect(plan.status).toBe("draft");
+    // Multiple non-priority roles require an explicit integration owner.
+    const assigned=await app.inject({method:"PATCH",url:`/api/tasks/${result.parentId}/integration-responsibility`,headers:{authorization:auth},payload:{mode:"manual",owner_id:"role_builder"}});
+    expect(assigned.statusCode).toBe(200);
     const approved=await app.inject({method:"POST",url:`/api/tasks/${result.parentId}/collaboration-plans/${plan.id}/approve`,headers:{authorization:auth}});expect(approved.statusCode).toBe(200);
     expect(db.prepare("SELECT id FROM subtasks WHERE task_id=? ORDER BY position").all(result.parentId)).toEqual(subs);
   });

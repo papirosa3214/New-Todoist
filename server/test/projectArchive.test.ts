@@ -332,9 +332,10 @@ describe("Архив проектов: архивация, скрытие, resto
     expect(
       (db.prepare("SELECT COUNT(*) AS n FROM projects WHERE id = ?").get(projectId) as { n: number }).n,
     ).toBe(0);
-    expect(
-      (db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id = ?").get(taskId) as { n: number }).n,
-    ).toBe(0);
+    const preserved=db.prepare("SELECT archived_at,project_id,project_name_snapshot FROM tasks WHERE id=?").get(taskId) as any;
+    expect(preserved.archived_at).toBeTruthy();
+    expect(preserved.project_id).toBeNull();
+    expect(preserved.project_name_snapshot).toBeTruthy();
     expect(
       (db.prepare("SELECT COUNT(*) AS n FROM memories WHERE id = ?").get(memoryId) as { n: number }).n,
     ).toBe(0);

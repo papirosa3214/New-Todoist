@@ -1,3 +1,4 @@
+import { ROLE_NAMES } from "../../src/roleRouting.js";
 import { afterAll, beforeAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { buildApp } from "../../src/index.js";
 import db, { hashApiToken } from "../../src/db.js";
@@ -481,7 +482,7 @@ describe("runtime providers API", () => {
       headers: { authorization: `Bearer ${ownerToken}` },
     });
     const { routing } = read.json() as { routing: { models: Record<string, string>; fallbacks: Record<string, string[]> } };
-    expect(Object.values(routing.models).every((m) => m === "claude-sonnet-5")).toBe(true);
+    expect(ROLE_NAMES.every((role) => routing.models[role] === "claude-sonnet-5")).toBe(true);
     expect(routing.fallbacks.architect).toEqual(["gpt-5"]);
   });
 

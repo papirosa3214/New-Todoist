@@ -4209,7 +4209,7 @@ const migrations: Migration[] = [
 
   { id: "132_review_history", description: "Review facts survive permanent task deletion", up: installReviewHistory },
 
-  { id: "133_agent_rules_manifests", description: "Версионированный manifest правил и подтверждения (этап B)", up() {
+  { id: "133_agent_rules_manifests", description: "Версионированный manifest правил и подтверждения (этап B)", noTransaction: true, up() {
     db.exec(`
       CREATE TABLE IF NOT EXISTS agent_rules_manifests (
         rule_id TEXT NOT NULL,

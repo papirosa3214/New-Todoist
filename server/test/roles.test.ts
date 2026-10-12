@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
+import { loadRoleRouting } from "../src/roleRouting.js";
 import { markReadyForPickup } from "./helpers.js";
 
 describe("role catalog API", () => {
@@ -105,7 +106,7 @@ describe("role catalog API", () => {
       // всегда 'runtime:pi'. default_shell сохранён как legacy-alias для UI.
       runtime_id: "runtime:pi",
       default_shell: "pi_runtime",
-      fallbacks: [],
+      fallbacks: loadRoleRouting().fallbacks.architect,
     });
     expect(details.json().skills).toEqual([
       { skill_name: "architecture", description: "Проектирование систем" },

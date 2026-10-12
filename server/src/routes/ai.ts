@@ -1,3 +1,4 @@
+import { NonTaskInputError } from "../lib/taskPreparation.js";
 import { structureTaskDraft } from "../lib/taskStructure.js";
 import { callUnifiedAi, OllamaError, parseJsonObject } from "../lib/aiClient.js";
 export { callUnifiedAi } from "../lib/aiClient.js";
@@ -729,6 +730,7 @@ export function registerAiRoutes(app: FastifyInstance) {
       try {
         return await structureTaskDraft(text,{provider,localModel,aiModel});
       } catch (err: any) {
+        if(err instanceof NonTaskInputError)return reply.code(422).send({intent:err.intent,error:err.message});
         return reply
           .code(502)
           .send({ error: err?.message || "Не удалось структурировать задачу" });

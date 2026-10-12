@@ -19,3 +19,6 @@ it('not required is an explicit choice; clearing manual choice rejects launch',a
 it('orchestrator precedes architect',async()=>{const f=await fixture(['builder','architect','analyst']);db.prepare("UPDATE task_collaboration_plan_nodes SET role_key='code_orchestrator' WHERE plan_id=? AND role_key='analyst'").run(f.plan);expect(integrationResponsibility(f.id).owner_id).toBe('role_code_orchestrator');});
 
 it('legacy secretary account is a valid single executor',async()=>{const f=await fixture(['builder']);db.prepare("UPDATE task_collaboration_plan_nodes SET role_key='secretary' WHERE plan_id=?").run(f.plan);expect(integrationResponsibility(f.id).owner_id).toBe('u-secretary');});
+
+it('auto mode preserves the existing assigned integration owner while they remain a participant',async()=>{const f=await fixture(['builder','architect']);db.prepare("UPDATE tasks SET integration_owner_id='role_builder' WHERE id=?").run(f.id);expect(integrationResponsibility(f.id).owner_id).toBe('role_builder');});
+it('auto mode never authorizes a stored non-participant integration owner',async()=>{const f=await fixture(['builder','researcher']);db.prepare("UPDATE tasks SET integration_owner_id=? WHERE id=?").run(owner,f.id);expect(integrationResponsibility(f.id).valid).toBe(false);});

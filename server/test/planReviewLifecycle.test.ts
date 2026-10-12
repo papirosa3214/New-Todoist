@@ -16,7 +16,10 @@ describe('visible final critic and actual rework graph', () => {
         const task = (await app.inject({ method: 'POST', url: '/api/tasks', headers: auth, payload: { title: 'Cycle demo' } })).json().task.id as string;
         db.prepare("UPDATE tasks SET assignee_id='role_researcher',requires_reviewer_review=1 WHERE id=?").run(task);
         const plan = (await app.inject({ method: 'POST', url: `/api/tasks/${task}/collaboration-plans`, headers: auth, payload: { profile: 'manual', nodes: [{ slot_key: 'research', role_key: 'researcher', expected_result: 'Документ с фактами' }, { slot_key: 'analysis', role_key: 'analyst', expected_result: 'Проверенные выводы' }], edges: parallel ? [] : [{ from_slot_key: 'research', to_slot_key: 'analysis', start_condition: 'submitted' }] } })).json().plan.id as string;
-        await app.inject({ method: 'POST', url: `/api/tasks/${task}/collaboration-plans/${plan}/approve`, headers: auth });
+        const responsibility = await app.inject({ method: 'PATCH', url: `/api/tasks/${task}/integration-responsibility`, headers: auth, payload: { mode: 'manual', owner_id: 'role_researcher' } });
+        expect(responsibility.statusCode).toBe(200);
+        const approved = await app.inject({ method: 'POST', url: `/api/tasks/${task}/collaboration-plans/${plan}/approve`, headers: auth });
+        expect(approved.statusCode).toBe(200);
         db.prepare("UPDATE subtasks SET done=1,agent_state=NULL,result='initial result' WHERE collaboration_plan_id=?").run(plan);
         expect(finishPlanIfComplete(plan, task, owner)).toBe(true);
         const critic = ensurePlanFinalReviewer(plan, task);

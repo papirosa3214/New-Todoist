@@ -362,6 +362,7 @@ describe("MAK-67 план из одного шага с правилом «Си�
     });
     expect(created.statusCode).toBe(201);
     const planId = (created.json() as { plan: { id: string } }).plan.id;
+    expect((await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:ownerAuth,payload:{mode:"manual",owner_id:"role_builder"}})).statusCode).toBe(200);
     const approve = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`,
@@ -406,6 +407,7 @@ describe("MAK-67 план из одного шага с правилом «Си�
       },
     });
     const planId = (created.json() as { plan: { id: string } }).plan.id;
+    expect((await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:ownerAuth,payload:{mode:"manual",owner_id:"role_builder"}})).statusCode).toBe(200);
     const approve = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`,
@@ -493,6 +495,7 @@ describe("MAK-67 план из одного шага с правилом «Си�
     });
     expect(created.statusCode).toBe(201);
     const planId = (created.json() as { plan: { id: string } }).plan.id;
+    expect((await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:ownerAuth,payload:{mode:"manual",owner_id:"role_builder"}})).statusCode).toBe(200);
     const approve = await app.inject({
       method: "POST",
       url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`,

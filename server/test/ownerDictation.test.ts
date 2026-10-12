@@ -3,7 +3,7 @@
 //
 //   1) наговорил в окно — получил карточку с шагами, дочерними и порядком;
 //   2) ни один агент на это сообщение не разбужен;
-//   3) карточка лежит БЕЗ флага готовности, и взять её нельзя;
+//   3) карточка лежит БЕЗ флага готовности и автоматического назначения;
 //   4) локальная модель недоступна — сообщение цело, причина видна;
 //   5) повторная доставка того же сообщения не плодит вторую карточку.
 //
@@ -36,6 +36,10 @@ vi.mock("../src/routes/ai.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../src/runtime/inProcessRun.js", async original => ({
+  ...await original<any>(),
+  runRoleInProcess: vi.fn(async () => ({runId:"dictation-test",completion:Promise.resolve()})),
+}));
 const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
 const { demoteSeededOwner, seedRoleAccounts } = await import("./helpers/seedOwner.js");
@@ -225,7 +229,13 @@ describe("Окно постановки задач (карточка 4396f8c9)",
     expect(steps(children[1].id)).toEqual(["Купить", "Поставить"]);
   });
 
-  it("карточка лежит без флага готовности — взять её нельзя, пока владелец не поднимет", async () => {
+  it("карточка лежит без флага готовности и без исполнителя — взять её пока некому", async () => {
+    // Декрет МАК-71 (коммит 508cb612 «роль раньше флага»): назначенную
+    // карточку агент берёт без флага, иначе было бы «устаревшее» требование
+    // из миграции 026. Здесь проверяем только то, что остаётся верным:
+    // машина в ручном режиме не поднимает флаг и не назначает исполнителя.
+    // Собственно взятие назначенной карточки без флага уже зафиксировано
+    // зелёным в test/readyFlag.test.ts.
     model.impl = async () => ({
       title: "Черновик",
       description: "",
@@ -247,26 +257,6 @@ describe("Окно постановки задач (карточка 4396f8c9)",
     expect(row.ready_for_pickup).toBe(0);
     // Исполнителя машина не назначает — кому делать, решает владелец.
     expect(row.assignee_id).toBeNull();
-
-    // Назначаем исполнителя руками, как это сделал бы владелец, — чтобы в
-    // отказе на claim осталась ровно одна причина: флага нет. Без назначения
-    // агент упёрся бы раньше, в «карточка не твоя», и про флаг тест ничего
-    // бы не доказал.
-    const assigned = await app.inject({
-      method: "PATCH",
-      url: `/api/tasks/${draft.task_id}`,
-      headers: { authorization: ownerAuth },
-      payload: { assignee_id: agentId },
-    });
-    expect(assigned.statusCode).toBe(200);
-
-    const claim = await app.inject({
-      method: "POST",
-      url: `/api/tasks/${draft.task_id}/claim`,
-      headers: { authorization: agentAuth },
-    });
-    expect(claim.statusCode).toBe(400);
-    expect(claim.json().error).toMatch(/готова к самозахвату/);
   });
 
   it("ни один агент не разбужен: адресата нет, поручение не записано", async () => {

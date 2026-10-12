@@ -20,5 +20,8 @@ export function persistPreparedPlan(taskId:string,actorId:string,raw:TaskPrepara
   const nodes=preparation.workstreams.map((w,i)=>({slot_key:w.key,role_key:w.role!,required:true,expected_result:w.result,output_artifact:null,source_subtask_id:subtasks[i].id}));
   const edges=preparation.workstreams.flatMap(w=>w.depends_on.map(dep=>({from_slot_key:dep,to_slot_key:w.key,start_condition:"submitted",artifact_key:null})));
   const plan=createDraftPlan(taskId,actorId,"manual",preparation.reason,null,{nodes,edges});
+  // These rows were generated from this very preparation and must match its
+  // titles above. Approving the prepared plan chooses its described work.
+  if (!preparation.question) db.prepare("UPDATE task_collaboration_plan_nodes SET work_choice='planned' WHERE plan_id=? AND source_subtask_id IS NOT NULL").run(plan.id);
   for (const w of preparation.workstreams) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='task_preparation',instructions=? WHERE plan_id=? AND slot_key=?").run(JSON.stringify(w),plan.id,w.key);
 }

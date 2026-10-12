@@ -55,6 +55,7 @@ describe("CollaborationPlanContext builder", () => {
     expect(plan.statusCode).toBe(201);
     const planId = plan.json().plan.id as string;
     expect(db.prepare("SELECT start_condition FROM task_collaboration_plan_edges WHERE plan_id=?").all(planId)).toEqual(expect.arrayContaining([{start_condition:"submitted"}]));
+    expect((await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:{authorization:ownerAuth},payload:{mode:"manual",owner_id:"role_builder"}})).statusCode).toBe(200);
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: ownerAuth } });
 
     const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } })).json() as Array<{ id: string; plan_node_key: string }>;
@@ -91,6 +92,7 @@ describe("CollaborationPlanContext builder", () => {
     });
     const planId = plan.json().plan.id as string;
     expect(db.prepare("SELECT start_condition FROM task_collaboration_plan_edges WHERE plan_id=?").all(planId)).toEqual(expect.arrayContaining([{start_condition:"submitted"}]));
+    expect((await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:{authorization:ownerAuth},payload:{mode:"manual",owner_id:"role_builder"}})).statusCode).toBe(200);
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: ownerAuth } });
     const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } })).json() as Array<{ id: string; plan_node_key: string }>;
     db.prepare("UPDATE task_collaboration_plan_edges SET start_condition='accepted' WHERE plan_id=?").run(planId);

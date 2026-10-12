@@ -177,12 +177,12 @@ describe("MAK-58/59: живой сценарий (критерий приёмк�
     expect(body.task?.assignee_id).toBe(agentAId);
   });
 
-  it("(б-control) /api/tasks рядовым агентом с assignee_id → 403 (политика сохранена)", async () => {
+  it("(б-control) рядовой агент не назначает другую роль при создании карточки", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/tasks",
       headers: auth(agentAToken),
-      payload: { title: "MAK-58/59 control", assignee_id: agentAId },
+      payload: { title: "MAK-58/59 control", assignee_id: "role_qa" },
     });
     expect(res.statusCode).toBe(403);
   });

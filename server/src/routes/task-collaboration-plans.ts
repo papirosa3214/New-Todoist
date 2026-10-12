@@ -446,6 +446,9 @@ export async function startSingleExecutorPlan(
 
   const started = await startPlanSubtaskRun(rootSubtask.id, actorId);
   if (!started.ok) return { ok: false, code: 409, error: started.error };
+  db.prepare(`UPDATE tasks SET assignee_id=?,dispatched_role=?,dispatched_at=datetime('now'),
+    dispatched_by=?,updated_at=datetime('now') WHERE id=? AND assignee_id IS NULL`)
+    .run(roleUserId(role),role,actorId,taskId);
   logEvent({ taskId, actorId, kind: "single_executor_plan_started", field: created.id, toValue: role });
   return { ok: true, planId: created.id, subtaskId: rootSubtask.id, runId: started.runId };
 }

@@ -92,16 +92,30 @@ describe("Команда в теме задачи",()=>{
   ensurePlanTopic(taskId);expect(count()).toBe(before+1);
  });
 
- it("автоматический шаблон не обходит незавершённую подготовку через меню",async()=>{
+ it("auto_template утверждается владельцем и гасит идущую подготовку",async()=>{
+  // Решение владельца 07.10.2026 «нет блоков для меня, моё слово главное»:
+  // origin узла плана — это метка происхождения, а не «можно ли
+  // утверждать». Правка в lib/preparationGate.ts и код approve гонят
+  // именно эту семантику: готовит план кто угодно, а право утвердить —
+  // у владельца. Утверждение гасит идущую подготовку и снимает
+  // ожидающий вопрос модели.
   const projectId=(db.prepare("SELECT project_id FROM tasks WHERE id=?").get(taskId) as any).project_id;
   const id=(await app.inject({method:"POST",url:"/api/tasks",headers:auth,payload:{title:"Подготовка в очереди",project_id:projectId}})).json().task.id;
   const created=(await app.inject({method:"POST",url:`/api/tasks/${id}/collaboration-plans`,headers:auth,payload:{profile:"manual",rationale:"Шаблон",nodes:[{slot_key:"work",role_key:"researcher",expected_result:"Документ"}],edges:[]}})).json();
   const plan=created.plan?.id??created.id;
   db.prepare("UPDATE task_collaboration_plan_nodes SET origin='auto_template' WHERE plan_id=?").run(plan);
+  // Запускаем «идущую подготовку», чтобы проверить, что approve её гасит.
+  // Триггер enqueue_new_task_preparation уже завёл джобу на input_version=1;
+  // поднимаем её, чтобы approve точно встретил идущий «running».
+  const iv=(db.prepare("SELECT COALESCE(MAX(input_version),0)+1 AS v FROM task_preparation_jobs WHERE task_id=?").get(id) as any).v;
+  db.prepare(
+    "INSERT INTO task_preparation_jobs (task_id, input_version, snapshot, attempts, status, available_at) VALUES (?, ?, '{}', 0, 'running', datetime('now'))",
+  ).run(id, iv);
   const approve=()=>app.inject({method:"POST",url:`/api/tasks/${id}/collaboration-plans/${plan}/approve`,headers:auth});
-  expect((await approve()).statusCode).toBe(409);
-  db.prepare("UPDATE task_collaboration_plan_nodes SET origin='owner' WHERE plan_id=?").run(plan);
   expect((await approve()).statusCode).toBe(200);
+  // Никакой подготовки не осталось: идущая погашена.
+  const running=(db.prepare("SELECT COUNT(*) n FROM task_preparation_jobs WHERE task_id=? AND status IN ('queued','running')").get(id) as any).n;
+  expect(running).toBe(0);
  });
 
 });

@@ -1,3 +1,5 @@
+import {vi as runtimeVi} from "vitest";
+runtimeVi.mock("../src/runtime/inProcessRun.js",async original=>({...await original<any>(),runRoleInProcess:runtimeVi.fn(async()=>({runId:"isolated-contract-test",completion:Promise.resolve()}))}));
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";

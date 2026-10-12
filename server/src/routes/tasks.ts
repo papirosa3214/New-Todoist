@@ -848,7 +848,8 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // type='ai') — живая роль, и ему разрешено класть задачу в любой
       // проект и назначать исполнителя (b6b57092). Запрет стоит для
       // рядовых исполнителей: type='ai' И role НЕ orchestrator/owner.
-      if (assignee_id) {
+      // Creating one's own card is not assigning a colleague or launching a team.
+      if (assignee_id && assignee_id !== req.userId) {
         const actorRow = db.prepare("SELECT type, role FROM users WHERE id=?").get(req.userId) as { type?: string; role?: string } | undefined;
         if (actorRow?.type === "ai" && !isOrchestrator(req.userId) && actorRow.role !== "owner") {
           return reply.code(403).send({error:"Назначения выполняет сервер"});
