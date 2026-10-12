@@ -304,8 +304,19 @@ function readOriginal(layer: LayerSpec, role: string, ownerId?: string): string 
     case "rules": {
       // AGENT_RULES — массив строк; для слоя контекста склеиваем в один
       // текст с буллет-точкой, как это делал сам AGENT_RULES.map раньше
-      // (см. inProcessRun.ts:438, 461 в дизайне).
-      return AGENT_RULES.map((line) => `- ${line}`).join("\n");
+      // (см. inProcessRun.ts:438, 461 в дизайне). Один элемент массива
+      // (ROLE_REPORT_INSTRUCTION) сам хранит \n-переносы внутри — иначе
+      // после префикса "- " правило развалится на голые абзацы: тест
+      // «composeLayer для rules возвращает текст с буллет-точкой для
+      // AGENT_RULES» проверяет, что каждая непустая строка начинается с
+      // "- ". Поэтому сначала разворачиваем вложенные \n до построчного
+      // списка, затем каждой строке добавляем префикс.
+      const flat: string[] = [];
+      for (const item of AGENT_RULES) {
+        const lines = String(item).split("\n");
+        for (const line of lines) flat.push(line);
+      }
+      return flat.map((line) => `- ${line}`).join("\n");
     }
     case "local_policy": {
       // LOCAL_EXECUTION_POLICY — уже склеенный через .join("\n") текст.

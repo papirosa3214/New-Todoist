@@ -62,7 +62,12 @@ describe("шаг плана — только своей роли", () => {
       payload: { state: "in_progress" },
     });
     expect(work.statusCode).toBe(403);
-    expect(work.json().error).toContain("QA");
+    // Текст отказа называет роль её ТЕКУЩИМ названием («Лайф-тестировщик»
+    // после переименования 07.10.2026, миграция 114). Сверяем по названию
+    // из справочника ролей, а не по старому литералу: переименование роли
+    // — решение владельца, а не повод ронять гейт доступа.
+    const qaTitle = (db.prepare("SELECT title FROM roles WHERE key = 'qa'").get() as { title: string }).title;
+    expect(work.json().error).toContain(qaTitle);
 
     const close = await app.inject({
       method: "PATCH",
