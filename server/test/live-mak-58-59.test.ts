@@ -177,12 +177,16 @@ describe("MAK-58/59: живой сценарий (критерий приёмк�
     expect(body.task?.assignee_id).toBe(agentAId);
   });
 
-  it("(б-control) /api/tasks рядовым агентом с assignee_id → 403 (политика сохранена)", async () => {
+  it("(б-control) /api/tasks рядовым агентом с assignee_id ДРУГОГО → 403 (политика сохранена)", async () => {
+    // 12.10.2026: запрет касается назначения ЧУЖИХ. Назначение самого
+    // себя (assignee_id === req.userId) разрешено — иначе агент не мог бы
+    // завести свою задачу на себя (test/access.test.ts «агент кладёт свою
+    // задачу в проект владельца»). Здесь проверяем именно запрет другого.
     const res = await app.inject({
       method: "POST",
       url: "/api/tasks",
       headers: auth(agentAToken),
-      payload: { title: "MAK-58/59 control", assignee_id: agentAId },
+      payload: { title: "MAK-58/59 control", assignee_id: orchId },
     });
     expect(res.statusCode).toBe(403);
   });

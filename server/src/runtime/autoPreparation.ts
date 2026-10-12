@@ -96,6 +96,9 @@ export async function processOnePreparation(input:{workerId:string;analyze?:Anal
         const proposal=proposalFor(task.id,'auto');
         planId=createDraftPlan(task.id,project.owner_id,proposal.profile,proposal.rationale,task.context_version??null,{nodes:proposal.nodes,edges:proposal.edges}).id;
         db.prepare("UPDATE task_collaboration_plan_nodes SET origin='auto_preparation' WHERE plan_id=?").run(planId);
+        const ownerRoles=db.prepare(`SELECT DISTINCT role_key FROM task_collaboration_plan_nodes WHERE plan_id=?`).all(planId) as Array<{role_key:string}>;
+        const pick=ownerRoles.find(r=>r.role_key==='code_orchestrator'||r.role_key==='architect')??(ownerRoles[0]??null);
+        if(pick) db.prepare("UPDATE tasks SET integration_owner_id=? WHERE id=?").run(pick.role_key==='secretary'?'u-secretary':'role_'+pick.role_key,task.id);
       }
       let status="ready",question=recommendation?.question??(children && existing && task.needs_clarification ? task.clarification_question : null);
       if(recommendation && !recommendation.card) question=question||"Уточните поручение и ожидаемый результат.";
@@ -116,6 +119,14 @@ export async function processOnePreparation(input:{workerId:string;analyze?:Anal
           const plan=createDraftPlan(task.id,project.owner_id,prep.workstreams.length===1?"single_executor":"manual",prep.reason,task.context_version??null,{nodes,edges});
           planId=plan.id;
           for(const w of prep.workstreams) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='auto_preparation',instructions=? WHERE plan_id=? AND slot_key=?").run(JSON.stringify(w),plan.id,w.key);
+          // Авто-назначение ответственного за интеграцию в репозиторий —
+          // чтобы approve плана не падал с 409 «Назначьте ответственного…»
+          // для типовых задач auto-preparation (5 красных тестов Intake,
+          // 12.10.2026). Создатель плана знает роли узлов; выбираем
+          // code_orchestrator/architect, иначе первого исполнителя.
+          const ownerRoles=db.prepare(`SELECT DISTINCT role_key FROM task_collaboration_plan_nodes WHERE plan_id=?`).all(plan.id) as Array<{role_key:string}>;
+          const pick=ownerRoles.find(r=>r.role_key==='code_orchestrator'||r.role_key==='architect')??(ownerRoles[0]??null);
+          if(pick) db.prepare("UPDATE tasks SET integration_owner_id=? WHERE id=?").run(pick.role_key==='secretary'?'u-secretary':'role_'+pick.role_key,task.id);
         }
       }
       if(question){
