@@ -116,6 +116,7 @@ export async function callUnifiedAi(opts: {
     opts.localModel || process.env.OLLAMA_MODEL || "qwen3.6-27b-iq4-16k:latest";
   let res: Response;
   try {
+  try {
     res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -170,6 +171,34 @@ export async function callUnifiedAi(opts: {
     throw new OllamaError("Модель вернула пустой ответ. Попробуйте ещё раз.");
   }
   return content;
+  } catch (localErr) {
+    // Локальная Ollama на .110 периодически залипает и отвечает
+    // «server busy (maximum pending requests exceeded)» на ЛЮБУЮ модель: из-за
+    // этого голос Секретаря не мог ни составить задачу, ни найти сводку
+    // (владелец 12.10.2026). При таком отказе уходим в облако MiniMax —
+    // он быстрый и от локальной машины не зависит.
+    if (process.env.CLOUD_FALLBACK === "0") throw localErr;
+    const ref = process.env.CLOUD_FALLBACK_MODEL || "minimax/MiniMax-M2.7-highspeed";
+    try {
+      const { callRuntimeModel } = await import("./runtimeAi.js");
+      const text = await callRuntimeModel({
+        systemPrompt: `${opts.systemPrompt}\nРассуждай кратко. Верни СТРОГО результат.`,
+        userPrompt: opts.userPrompt,
+        maxTokens: opts.predictTokens ?? 2048,
+        modelRef: ref,
+      });
+      if (text && text.trim()) {
+        console.warn(`Локальная модель не ответила (${(localErr as Error)?.message ?? localErr}) — ответил ${ref}`);
+        return text;
+      }
+      throw new Error("облако вернуло пустой ответ");
+    } catch (cloudErr) {
+      console.warn("Локальная модель не ответила, и облачный запасной путь тоже:", cloudErr);
+      throw localErr instanceof OllamaError
+        ? localErr
+        : new OllamaError("Локальная модель не ответила, и облачный запасной путь не сработал.");
+    }
+  }
 }
 
 export function parseJsonObject(rawContent: string): any {

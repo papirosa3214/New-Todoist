@@ -33,7 +33,9 @@ fallbacks:
   secretary:
   - opencode-go/deepseek-v4.1-flash
   - opencode/space-bunny-free
-  code_orchestrator: []
+  code_orchestrator:
+  - opencode-go/deepseek-v4.1-flash
+  - opencode/space-bunny-free
 models:
   researcher: MiniMax-M3
   analyst: MiniMax-M3

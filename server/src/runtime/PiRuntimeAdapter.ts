@@ -2,6 +2,8 @@ import { chatModeInstruction, PLANNING_TOOLS, DISCUSSION_TOOLS, type ChatWorkMod
 import { chatInstructionArgs, chatSystemPrompt, createTaskResourceLoader } from "./instructionResources.js";
 import { chatTools } from "./chatTools.js";
 import { taskflowTools } from "./inProcessRun.js";
+import { parseModelRef } from "../lib/attemptModel.js";
+import { providerAvailable } from "../lib/modelLadder.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { ensureRoleHome, prepareChatSessionDirectory } from "./roleHome.js";
 import crypto from "node:crypto";
@@ -1125,7 +1127,16 @@ const activeChatRuns = new Map<string, ActiveChatRun>();
 // работы (в журнале — «Timeout collecting events» у Секретаря и QA), причём
 // молча. Теперь ход живёт, пока роль что-то делает: обрыв — только по
 // тишине (idle) или по общему потолку (ceiling), и о нём пишется в чат.
-export const CHAT_RUN_IDLE_MS = 3 * 60_000;
+// Сторож тишины ВЫКЛЮЧЕН по умолчанию (0) — владелец 12.10.2026: «если
+// агент долго занимается, его вырубает с чата… такой инструмент здесь
+// точно не нужен». Живой пример: 11.10 23:16 в чат упало «Остановил ход:
+// 3 мин не было никаких действий», хотя роль работала. Тишина в чате
+// неотличима от работы: пока идёт долгий вызов инструмента или модель
+// думает, событий может не быть минутами. Общий потолок CEILING (30 мин)
+// остаётся единственной границей — он ловит и зависшие ходы, но не
+// мешает длинной работе. Вернуть сторож можно переменной окружения
+// TASKFLOW_CHAT_RUN_IDLE_MS, если понадобится.
+export const CHAT_RUN_IDLE_MS = 0;
 export const CHAT_RUN_CEILING_MS = 30 * 60_000;
 
 function resolveChatRunTimeout(override?: number): number {
@@ -1136,10 +1147,13 @@ function resolveChatRunTimeout(override?: number): number {
   return Math.min(raw, CHAT_RUN_CEILING_MS);
 }
 
+/** 0 — сторож тишины выключен (дефолт), см. CHAT_RUN_IDLE_MS. */
 function resolveChatRunIdle(override?: number): number {
-  return override && override > 0
-    ? override
-    : Number(process.env.TASKFLOW_CHAT_RUN_IDLE_MS) || CHAT_RUN_IDLE_MS;
+  if (override && override > 0) return override;
+  const raw = process.env.TASKFLOW_CHAT_RUN_IDLE_MS;
+  if (raw === undefined || raw === "") return CHAT_RUN_IDLE_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : CHAT_RUN_IDLE_MS;
 }
 
 /** Ход оборван сторожем: code = CHAT_RUN_IDLE (тишина) или
@@ -1225,10 +1239,23 @@ export async function startChatRun(
     const provider = providerOfModel(model);
 
     const catalog = await loadModelCatalog();
-    const match =
-      catalog.find(
-        (m) => m.id === model && m.provider === provider,
-      ) ?? catalog.find((m) => m.id === model);
+    const findInCatalog = (id: string) => {
+      const p = providerOfModel(id);
+      return catalog.find((m) => m.id === id && m.provider === p) ?? catalog.find((m) => m.id === id);
+    };
+    // Владелец 12.10.2026: «у нас должен был быть настроен запасной провайдер…
+      // лимиты кончились и не переключаются». ХОД ЧАТА вообще не смотрел на
+    // цепочку: бралась только основная модель роли, поэтому в чате не
+    // переключался НИКТО — ни Секретарь (у которого цепочка была настроена),
+    // ни кто-либо ещё. `pickFailoverModel` живёт в ветке шагов задачи и в чат
+    // не заходит. Теперь идём по цепочке [основная, ...запасные] и берём
+    // первую модель, чей провайдер сейчас не помечен как упёршийся в лимит.
+    const chain = [model, ...(routing.fallbacks[role] ?? [])].filter(Boolean) as string[];
+    const match = chain.map(findInCatalog).find((m): m is NonNullable<typeof m> => {
+      if (!m) return false;
+      const ref = parseModelRef(m.id);
+      return providerAvailable(ref.provider || m.provider);
+    });
     if (!match) {
       throw new ModelNotAvailableError(model, provider);
     }
@@ -1378,7 +1405,7 @@ export async function startChatRun(
     });
     ceiling.catch(() => {});
     const idleTimer = setInterval(() => {
-      if (watchdogFired || runningTools.size > 0) return;
+      if (idleMs <= 0 || watchdogFired || runningTools.size > 0) return;
       if (Date.now() - lastActivity < idleMs) return;
       watchdogFired = new ChatRunTimeoutError("CHAT_RUN_IDLE", idleMs);
       session.abort().catch(() => {});

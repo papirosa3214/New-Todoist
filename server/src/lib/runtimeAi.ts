@@ -7,10 +7,12 @@ import { parseModelRef } from "./attemptModel.js";
 
 const TIMEOUT_MS = 90_000;
 
-export async function callRuntimeModel(opts: { systemPrompt: string; userPrompt: string; maxTokens?: number }): Promise<string> {
+export async function callRuntimeModel(opts: { systemPrompt: string; userPrompt: string; maxTokens?: number; modelRef?: string }): Promise<string> {
   const { getModelRuntime } = await import("../runtime/PiRuntimeAdapter.js");
   const { pickStartModel } = await import("../runtime/providerFailover.js");
-  const ref = pickStartModel(loadRoleRouting(), "analyst");
+  // Явная модель — запасной путь, когда локальная Ollama отвечает 503
+  // (поручение владельца 12.10.2026). Без неё берётся цепочка роли «аналитик».
+  const ref = opts.modelRef || pickStartModel(loadRoleRouting(), "analyst");
   const { provider, id } = parseModelRef(ref);
   const rt: any = await getModelRuntime();
   const model = rt.getModel?.(provider, id) ?? ((await rt.getAvailable?.()) ?? []).find((m: any) => m.id === id);

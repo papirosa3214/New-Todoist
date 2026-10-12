@@ -3,12 +3,17 @@
 // такому провайдеру (provider_limits.mode = 'probe') уходит крошечный запрос. Ответил без ошибки
 // лимита — метка снимается и новые запуски снова берут основную модель. Ответил лимитом — метка
 // остаётся; пять часов по таймеру — страховка, если проба недоступна. Провайдеры, которые до
-// лимита работали (mode = 'timer'), не прощупываются: у них возврат через 5 ч 5 мин.
+// Владелец 12.10.2026: «лимиты восстановились, а эта страховка душит». Раньше
+// прощупывался ТОЛЬКО режим 'probe', а провайдеры, которые до лимита работали ('timer'),
+// ждали свои 5 часов вслепую — именно на них «базарит пять часов». Теперь проба идёт по всем
+// помеченным: ответил провайдер без ошибки лимита — метка снята, возврат по ФАКТУ, а не по
+// расписанию. Пятичасовое окно остаётся страховкой на случай, если проба недоступна.
 import db from "../db.js";
 import { loadRoleRouting, type RoleRouting } from "../roleRouting.js";
 import { parseModelRef } from "../lib/attemptModel.js";
 import { isProviderLimitText } from "./providerFailover.js";
 import { getFailoverSettings } from "../lib/failoverSettings.js";
+import { readProviderQuota } from "../lib/providerQuota.js";
 
 export type ProbeResult = "ok" | "limited" | "unknown";
 export type ProbeFn = (modelRef: string) => Promise<ProbeResult>;
@@ -26,7 +31,7 @@ function limitedProviders(): string[] {
   return (
     db
       .prepare(
-        "SELECT provider FROM provider_limits WHERE mode = 'probe' AND unavailable_until IS NOT NULL AND unavailable_until > datetime('now')",
+        "SELECT provider FROM provider_limits WHERE unavailable_until IS NOT NULL AND unavailable_until > datetime('now')",
       )
       .all() as { provider: string }[]
   ).map((r) => r.provider);
@@ -68,14 +73,75 @@ export const realProbe: ProbeFn = async (modelRef) => {
 };
 
 /** Один проход: снимает метки у провайдеров, чей лимит уже сброшен. Возвращает снятые. */
+/** Провайдеры, у которых стоит спрашивать остаток: все, что встречаются в
+ *  моделях ролей. */
+function quotaAwareProviders(routing: RoleRouting): string[] {
+  const providers = new Set<string>();
+  for (const ref of Object.values(routing.models ?? {})) {
+    if (!ref) continue;
+    const p = parseModelRef(ref as string).provider;
+    if (p) providers.add(p);
+  }
+  for (const p of limitedProviders()) providers.add(p);
+  return [...providers];
+}
+
+/** Окно по умолчанию, когда провайдер не назвал время сброса. */
+function defaultWindowEnd(): string {
+  return new Date(Date.now() + 5 * 60 * 60_000).toISOString().replace("T", " ").slice(0, 19);
+}
+
 export async function runProviderProbe(
   probe: ProbeFn = realProbe,
   routing: RoleRouting = loadRoleRouting(),
 ): Promise<string[]> {
   const restored: string[] = [];
+
+  // Владелец 12.10.2026: «почему лимиты не считаются». Метка ставилась только
+  // ПОСЛЕ упавшего запроса, поэтому система вела себя так: лимит кончился —
+  // ход упал с 429, и только потом появилась метка. Теперь остаток спрашивается
+  // у каждого провайдера, который его отдаёт, на каждом проходе: лимит виден
+  // ДО того, как упёрлись, а метка сразу ставится с его собственным временем
+  // сброса. Раньше помеченным это делалось только для тех, кто уже помечен.
+  for (const provider of quotaAwareProviders(routing)) {
+    const quota = await readProviderQuota(provider);
+    if (!quota.known) continue;
+    if (quota.limited) {
+      db.prepare(
+        `UPDATE provider_limits SET unavailable_until = ?, reason = ?, updated_at = datetime('now'), mode = 'probe'
+           WHERE provider = ? AND (unavailable_until IS NULL OR unavailable_until <= datetime('now') OR unavailable_until <> ?)`,
+      ).run(quota.resetAt?.toISOString().replace("T", " ").slice(0, 19) ?? defaultWindowEnd(), quota.detail ?? "лимит по остатку провайдера", provider, quota.resetAt?.toISOString().replace("T", " ").slice(0, 19) ?? defaultWindowEnd());
+      if (quota.resetAt) {
+        console.log(`[provider-probe] ${provider}: лимит, сброс ${quota.resetAt.toISOString()}`);
+      }
+    } else {
+      // Провайдер жив — снимаем возможную протухшую метку.
+      db.prepare(
+        "UPDATE provider_limits SET unavailable_until = datetime('now'), reason = 'лимит сброшен (остаток от провайдера)', updated_at = datetime('now') WHERE provider = ? AND unavailable_until IS NOT NULL AND unavailable_until > datetime('now')",
+      ).run(provider);
+      restored.push(provider);
+    }
+  }
   // Автовозврат выключен — сами метки не снимаем, это делает владелец кнопкой.
   if (!getFailoverSettings().autoReturn) return restored;
   for (const provider of limitedProviders()) {
+    // Владелец 12.10.2026: сперва спрашиваем у провайдера сам остаток. Он и
+    // снимает метку, и ставит её с его собственным временем сброса. Реальный
+    // запрос к модели — только когда провайдер остаток не отдаёт.
+    const quota = await readProviderQuota(provider);
+    if (quota.known) {
+      if (!quota.limited) {
+        db.prepare(
+          "UPDATE provider_limits SET unavailable_until = datetime('now'), reason = 'лимит сброшен (остаток от провайдера)', updated_at = datetime('now') WHERE provider = ?",
+        ).run(provider);
+        restored.push(provider);
+      } else if (quota.resetAt) {
+        db.prepare(
+          "UPDATE provider_limits SET unavailable_until = ?, reason = ?, updated_at = datetime('now'), mode = 'probe' WHERE provider = ?",
+        ).run(quota.resetAt.toISOString().replace("T", " ").slice(0, 19), quota.detail ?? null, provider);
+      }
+      continue;
+    }
     const ref = modelForProvider(routing, provider);
     if (!ref) continue;
     let result: ProbeResult = "unknown";

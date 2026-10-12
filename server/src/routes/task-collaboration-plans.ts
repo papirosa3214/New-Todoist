@@ -536,8 +536,16 @@ function resolveAutoProposalActorId(): string | null {
 /** Import can request a visible draft even for a single executor. Existing
  * plans are owner work: neither imports nor retries replace their revisions. */
 export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: { actorId: string; imported: true }): { id: string; profile: string; revision: number } | null {
-  const task = db.prepare("SELECT title,status,agent_state,ready_for_pickup,context_version FROM tasks WHERE id=?").get(taskId) as any;
+  const task = db.prepare("SELECT title,status,agent_state,ready_for_pickup,context_version,parent_id FROM tasks WHERE id=?").get(taskId) as any;
   if (options && (!task || task.status === "completed" || task.agent_state || task.ready_for_pickup || db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? LIMIT 1").get(taskId))) return null;
+  // Владелец 12.10.2026: «дочерняя задача принудительно… план формируется не тот,
+  // который был». Дочерняя карточка — часть декомпозиции родителя: её состав и
+  // исполнители задаёт план родителя (или ручное решение владельца), а шаблон
+  // из четырёх ролей поверх неё только мешает. Поэтому дочерним карточкам
+  // план не предлагается — это первый старт, дальше всё руками. Автопредложение
+  // при создании обычной (не дочерней) задачи остаётся: это была осознанная
+  // договорённость 28.09.2026.
+  if (task?.parent_id) return null;
   let proposal = proposalFor(taskId, "auto");
   if (!options && proposal.profile === "single_executor" && !db.prepare("SELECT 1 FROM tasks WHERE parent_id=?").get(taskId)) return null;
   const actorId = options?.actorId ?? resolveAutoProposalActorId();

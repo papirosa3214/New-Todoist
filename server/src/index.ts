@@ -86,7 +86,6 @@ import {
 import { startInboxTriageWatcher } from "./lib/inboxTriageWatcher.js";
 import { startNoteAccessWatcher } from "./lib/noteAccessWatcher.js";
 import { startKbTriageWatcher } from "./lib/kbTriageWatcher.js";
-import { startWebhookWakeWatcher } from "./lib/webhookWakeWatcher.js";
 import { startOllamaHealthWatcher } from "./lib/ollamaHealthWatcher.js";
 import { startInboxResultsWriter } from "./lib/inboxResultsWriter.js";
 import { registerSeedRoutes } from "./seed.js";
@@ -497,9 +496,6 @@ export async function buildApp(): Promise<FastifyInstance> {
     app.addHook("onClose", async () => stopWorkPlanWatcher());
     // Порог разбора заметок: набралось — заводим задачу Секретарю.
     startKbTriageWatcher();
-    // Wake-канал вебхуков: пробный ход на старте + каждые 30 минут
-    // (карточка 905db3e3-…). Изолированная проба, не будит живой чат.
-    startWebhookWakeWatcher();
     // Локальная модель: молчит, пока отвечает; забитая очередь или
     // упавший Ollama — задача Секретарю (владелец 12.10.2026).
     startOllamaHealthWatcher();

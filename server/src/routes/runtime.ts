@@ -10,6 +10,7 @@ import {
 } from "../runtime/errors.js";
 import {
   ROLE_NAMES,
+  providerOfModel,
   loadRoleRouting,
   writeRuntimeConfig,
   type RoleName,
@@ -17,6 +18,8 @@ import {
 import { modelExists } from "../runtime/PiRuntimeAdapter.js";
 import db from "../db.js";
 import { getFailoverSettings, setFailoverSettings } from "../lib/failoverSettings.js";
+import { readProviderQuota } from "../lib/providerQuota.js";
+import { parseModelRef } from "../lib/attemptModel.js";
 import { pickStartModel } from "../runtime/providerFailover.js";
 
 /** Единый маппинг ошибок runtime-слоя в HTTP. Ключевое различие
@@ -317,9 +320,32 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
       return { role, primary, fallbacks: routing.fallbacks[role] ?? [], current, on_fallback: !!primary && current !== primary };
     });
     const s = getFailoverSettings();
+    // Остаток лимитов у провайдеров, которые его отдают (владелец 12.10.2026:
+    // «почему он у нас не отображается, когда в лёгкую видно остатки на панели
+    // провайдера»). Провайдер берём из ПРЕФИКСА модели: providerOfModel — грубая
+    // эвристика, и opencode-go/... сводила ею к minimax, из-за чего провайдер
+    // в ответ не попадал вовсе.
+    const providers = Array.from(new Set(
+      [
+        ...(Object.values(routing.models) as string[]),
+        // и запасные: opencode-go живёт именно в цепочке, а не в основной модели
+        ...Object.values(routing.fallbacks).flat(),
+      ].filter(Boolean).map((m) => parseModelRef(m as string).provider).filter(Boolean),
+    ));
+    const quota = await Promise.all(providers.map(async (provider) => {
+      const q = await readProviderQuota(provider);
+      return {
+        provider,
+        known: q.known,
+        limited: q.limited,
+        reset_at: q.resetAt ? q.resetAt.toISOString() : null,
+        detail: q.detail ?? null,
+      };
+    }));
     return {
       auto_switch: s.autoSwitch,
       auto_return: s.autoReturn,
+      quota,
       limits: limits.map((l) => ({
         provider: l.provider,
         until: l.unavailable_until,
