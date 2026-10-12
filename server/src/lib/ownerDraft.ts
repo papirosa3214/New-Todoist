@@ -547,6 +547,9 @@ export async function startDraftTree(
     .prepare("SELECT id, status, parent_id FROM tasks WHERE id = ?")
     .get(parentId) as { id: string; status: string; parent_id: string | null } | undefined;
   if (!parent || parent.status !== "active") return null;
+  // Работа, подготовленная ролью из разговора (runtime/chatWork.ts): этой же
+  // кнопкой владелец утверждает её план, исполнители стартуют сразу.
+  if (await (await import("../runtime/chatWork.js")).startChatWorkCard(parentId, owner)) return {started:1,queued:0};
   if (db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='draft'").get(parentId)) return {started:0,queued:1};
 
   type Row = {

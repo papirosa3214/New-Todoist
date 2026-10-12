@@ -14,6 +14,7 @@ import { asRole, asText, short, ToolError, unwrap, PLAN_REQUEST_DESCRIPTION, PLA
 import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolver.js";
 import db from "../db.js";
 import { restartSlotFromOwnerChat } from "./slotRestart.js";
+import { proposeWork } from "./chatWork.js";
 import { collectTaskSummary, parseSummaryRequest } from "../lib/secretaryTaskSummary.js";
 
 
@@ -176,6 +177,19 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           дальше: "id подставлять в taskflow_create_task(project_id=...) и taskflow_doc_write(project_id=...)",
         };
       }),
+    ...(ownerContext ? [T("taskflow_work_start",
+      "Запустить работу прямо из разговора с владельцем. Когда вы с владельцем решили, что нужно сделать, не уходи из чата и не описывай план словами: вызови этот инструмент — сервер заведёт ОДНУ рабочую карточку разговора (без дочерних), положит в неё шаги по ролям и сам отправит её в чат готовой карточкой с кнопкой «Запустить». По нажатию владельца исполнители начнут работать. Если работа по этому разговору уже идёт, новые шаги добавляются в ту же карточку и стартуют сами — кнопка не нужна. steps: role — ключ роли-исполнителя; result — какой результат от неё нужен; key — короткий ключ шага латиницей; after — ключи шагов, которых этот ждёт. Шаги без after идут параллельно, с after — последовательно. Сам работу исполнителя не делай: ты ведёшь разговор и раздаёшь шаги.",
+      Type.Object({
+        title: S("Название работы — так будет называться карточка. Для добавления шагов в идущую работу не нужно"),
+        description: S("Суть и границы работы из разговора"),
+        project_id: S(),
+        steps: Type.Array(Type.Object({
+          key: S("короткий ключ латиницей, например build"),
+          role: Type.String({ description: "ключ роли: researcher, analyst, architect, designer, builder, qa" }),
+          result: Type.String({ description: "какой результат нужен от роли" }),
+          after: Type.Optional(Type.Array(Type.String(), { description: "ключи шагов, которых этот ждёт" })),
+        })),
+      }), async (p) => proposeWork(role, ownerContext.chatId, p))] : []),
     T("taskflow_create_task",
       "Завести задачу. Для плана ролей передай preparation и card.subtasks из taskflow_structure_dictation; план сохраняется черновиком без запуска.",
       Type.Object({

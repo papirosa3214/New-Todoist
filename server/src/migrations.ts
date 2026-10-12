@@ -4324,6 +4324,23 @@ const migrations: Migration[] = [
       );
     `);
   } },
+  { id: "136_chat_work_launches", description: "Работа по разговору: запуск исполнителей из чата виджетом с кнопкой", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_work_launches (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        plan_id TEXT,
+        title TEXT NOT NULL,
+        steps_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'started', 'cancelled')),
+        role_key TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        started_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_work_launches_chat ON chat_work_launches(chat_id, created_at);
+    `);
+  } },
 ];
 /**
  * Опции прогона миграций.

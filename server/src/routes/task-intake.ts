@@ -149,7 +149,15 @@ export function registerTaskIntakeRoutes(app: FastifyInstance): void {
       }
       // Отложенный импорт: ownerDraft сам зависит от этого модуля.
       const { startDraftTree } = await import("../lib/ownerDraft.js");
-      const result = await startDraftTree(req.params.id, owner);
+      let result: Awaited<ReturnType<typeof startDraftTree>>;
+      try {
+        result = await startDraftTree(req.params.id, owner);
+      } catch (error) {
+        // Отказ запуска работы по разговору (план не утвердился) — причиной
+        // на карточку, а не пятисотой.
+        if ((error as any)?.constructor?.name === "ToolError") return reply.code(409).send({ error: (error as Error).message });
+        throw error;
+      }
       if (!result) return reply.code(404).send({ error: "черновик не найден" });
       return { ok: true, ...result };
     },
