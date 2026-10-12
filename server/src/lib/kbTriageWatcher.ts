@@ -1,4 +1,7 @@
 import db from "../db.js";
+import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { dirname, join } from "path";
 
 /**
  * Сторож порога разбора заметок (шаг 3 схемы базы знаний, cfa5cdcd).
@@ -26,7 +29,77 @@ const TRIAGE_THRESHOLD = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 let pollHandle: NodeJS.Timeout | null = null;
-let lastRaisedAt = 0;
+
+/**
+ * Отметка сторожа на ДИСКЕ, а не только в памяти — по образцу планировщика
+ * (`~/.local/state/taskflow-scheduler/last-run.json`).
+ *
+ * Зачем: «не чаще раза в сутки» держалось в переменной `lastRaisedAt`. При
+ * перезапуске сервера она обнулялась, и сторож заводил задачу заново. На
+ * живых данных 12.10.2026 это дало семь одинаковых карточек «Разобрать
+ * накопившиеся заметки» с 18:25 до 19:23 — семь перезапусков подряд.
+ *
+ * Плюс эта же отметка нужна экрану «Состояние системы»: клиент показывает
+ * лампу сторожа и последнюю проверку, как у «Расписания».
+ */
+const STATE_DIR = join(homedir(), ".local/state/taskflow-kb-triage");
+const STATE_FILE = join(STATE_DIR, "state.json");
+/** Интервал проверки — столько же, сколько у таймера ниже. */
+const INTERVAL_MS_STATE = INTERVAL_MS;
+
+type TriageState = {
+  checked_at_epoch?: number;
+  raised_at_epoch?: number;
+  raised_task_id?: string;
+  pending?: number;
+};
+
+function readState(): TriageState {
+  try {
+    return JSON.parse(readFileSync(STATE_FILE, "utf8")) as TriageState;
+  } catch {
+    return {};
+  }
+}
+
+function writeState(patch: TriageState): void {
+  // Слияние, а не перезапись: проверка обновляет свои поля, поднятие — свои,
+  // и они не должны затирать друг друга.
+  const next = { ...readState(), ...patch };
+  try {
+    mkdirSync(dirname(STATE_FILE), { recursive: true });
+    writeFileSync(STATE_FILE, JSON.stringify(next), "utf8");
+  } catch (error) {
+    // Отметка не критична для самой задачи: хуже молча потерять состояние,
+    // чем уронить сторож на записи файла.
+    console.error(`[kb-triage-watch] не удалось записать состояние: ${String(error)}`);
+  }
+}
+
+// Восстанавливаем суточный интервал с диска, а не начинаем с нуля:
+// перезапуск сервера больше не означает «пора заводить ещё одну».
+let lastRaisedAt = readState().raised_at_epoch ?? 0;
+
+/** Состояние сторожа для экрана «Состояние системы» (образец — планировщик).
+ *  `active` — сторож не молчит: проверка была не позже двух интервалов назад. */
+export function kbTriageState(): {
+  active: boolean;
+  last_check_at: string | null;
+  last_raised_at: string | null;
+  pending: number;
+  threshold: number;
+} {
+  const state = readState();
+  const checked = state.checked_at_epoch;
+  const raised = state.raised_at_epoch;
+  return {
+    active: typeof checked === "number" && Date.now() - checked < INTERVAL_MS_STATE * 2,
+    last_check_at: typeof checked === "number" ? new Date(checked).toISOString() : null,
+    last_raised_at: typeof raised === "number" ? new Date(raised).toISOString() : null,
+    pending: pendingCount(),
+    threshold: TRIAGE_THRESHOLD,
+  };
+}
 
 function pendingCount(): number {
   const row = db
@@ -47,6 +120,9 @@ function triageProjectId(): string | null {
 }
 
 function raise(count: number) {
+  // Отметку «проверяли» пишем ВСЕГДА, ещё до порога: экрану «Состояние
+  // системы» нужно знать, что сторож жив, даже когда разбирать нечего.
+  writeState({ checked_at_epoch: Date.now(), pending: count });
   // Порог проверяется ЗДЕСЬ, а не в вызывающем коде: иначе любой путь,
   // минуя таймер, мог бы завести задачу на пять заметок.
   if (count < TRIAGE_THRESHOLD) return;
@@ -57,7 +133,8 @@ function raise(count: number) {
   }
   const now = Date.now();
   // Не чаще раза в сутки: иначе каждая следующая проверка заведёт новую
-  // задачу и проект забьётся одинаковыми карточками.
+  // задачу и проект забьётся одинаковыми карточками. Отметка — с диска,
+  // поэтому перезапуск сервера это правило больше не обнуляет.
   if (now - lastRaisedAt < DAY_MS) return;
   lastRaisedAt = now;
 
@@ -94,6 +171,9 @@ function raise(count: number) {
     );
   });
   txn();
+  // Отметка о поднятии — на диск, чтобы суточный интервал пережил перезапуск
+  // и чтобы экран показал, когда задача заводилась в последний раз.
+  writeState({ raised_at_epoch: now, raised_task_id: id, pending: count });
   console.error(`[kb-triage-watch] набралось ${count} заметок, заведена задача на разбор`);
 }
 

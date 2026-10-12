@@ -7,6 +7,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { authOrApiToken } from "../auth.js";
 import db from "../db.js";
+import { kbTriageState } from "../lib/kbTriageWatcher.js";
 import { isOwner, isOrchestrator } from "../access.js";
 
 const run = promisify(execFile);
@@ -84,7 +85,15 @@ export function registerAgentServiceRoutes(app: FastifyInstance) {
   app.get(
     "/api/agent-service",
     { preHandler: authOrApiToken },
-    async () => ({ ...(await unitState()), scheduler: await schedulerState() }),
+    async () => ({
+      ...(await unitState()),
+      scheduler: await schedulerState(),
+      // Разбор заметок — такой же фоновый автомат, как планировщик: сторож
+      // порога в `lib/kbTriageWatcher.ts`. Строка на экране «Состояние
+      // системы» показывает его лампу и последнюю проверку (владелец
+      // 12.10.2026: «точно так же организуй»).
+      kb_triage: kbTriageState(),
+    }),
   );
 
   // Завершённые повторяющиеся карточки, по которым ещё не создано
