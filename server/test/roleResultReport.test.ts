@@ -21,6 +21,11 @@ describe("Читаемый отчёт — часть результата рол
  async function fixture(contract=true){
   const task=(await app.inject({method:"POST",url:"/api/tasks",headers:{authorization:owner},payload:{title:"Понятный результат "+crypto.randomUUID(),project_id:project}})).json().task;
   const p=(await app.inject({method:"POST",url:"/api/tasks/"+task.id+"/collaboration-plans",headers:{authorization:owner},payload:{profile:"manual",nodes:[{slot_key:"build",role_key:"builder",expected_result:"Результат работы",...(contract?{output_artifact:{key:"implementation_pack",type:"result_pack",format:"json",required_fields:["summary"]}}:{})},{slot_key:"verify",role_key:"qa",expected_result:"Проверка"}],edges:[{from_slot_key:"build",to_slot_key:"verify",start_condition:"submitted",...(contract?{artifact_key:"implementation_pack"}:{})}]}})).json().plan;
+  // Фикстура не про интеграцию, но план содержит builder (код) — владельцу
+  // нужен явный ответственный за перенос. Без него approve упирается в 409
+  // (карточка be9b61cf), потому что авто-выбор знает только про
+  // code_orchestrator/architect (см. также фикс в карточке 39fe9350).
+  await app.inject({method:"PATCH",url:"/api/tasks/"+task.id+"/integration-responsibility",headers:{authorization:owner},payload:{mode:"manual",owner_id:roleUserId("builder")}});
   await app.inject({method:"POST",url:"/api/tasks/"+task.id+"/collaboration-plans/"+p.id+"/approve",headers:{authorization:owner},payload:{}});
   const rows=db.prepare("SELECT * FROM subtasks WHERE task_id=?").all(task.id) as any[];
   return {task,plan:p,step:rows.find(s=>s.plan_node_key==="build"),qa:rows.find(s=>s.plan_node_key==="verify")};

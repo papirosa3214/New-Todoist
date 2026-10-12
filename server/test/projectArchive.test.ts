@@ -328,13 +328,20 @@ describe("Архив проектов: архивация, скрытие, resto
     expect(body.counts.chats).toBeGreaterThanOrEqual(1);
     expect(body.counts.memories).toBe(1);
 
-    // Проект, задача, память и чат уничтожены.
+  // Проект уничтожен, память и чат тоже. Задача НЕ стирается: она уходит
+  // в архив с именем проекта-снимком (владелец 10.10.2026, см.
+  // projectDeleteArchivesTasks.test.ts — «проект — пустая оболочка, все
+  // данные живут в карточках»). До этого тест ожидал физического удаления,
+  // это поведение отменено.
     expect(
       (db.prepare("SELECT COUNT(*) AS n FROM projects WHERE id = ?").get(projectId) as { n: number }).n,
     ).toBe(0);
-    expect(
-      (db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id = ?").get(taskId) as { n: number }).n,
-    ).toBe(0);
+    const keptTask = db.prepare("SELECT archived_at, project_name_snapshot, project_id FROM tasks WHERE id = ?").get(taskId) as
+      | { archived_at: string | null; project_name_snapshot: string | null; project_id: string | null }
+      | undefined;
+    expect(keptTask?.archived_at, "задача осталась и в архиве").toBeTruthy();
+    expect(keptTask?.project_name_snapshot).toBe("Удалить навсегда");
+    expect(keptTask?.project_id, "ссылка на удалённый проект снята").toBeNull();
     expect(
       (db.prepare("SELECT COUNT(*) AS n FROM memories WHERE id = ?").get(memoryId) as { n: number }).n,
     ).toBe(0);
