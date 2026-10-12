@@ -47,6 +47,7 @@ import { reloadServerSettings } from "./lib/serverSettings.js";
 import { registerOwnerCommandRoutes } from "./routes/owner-commands.js";
 import { registerAdminServerSettingsRoutes } from "./routes/admin-server-settings.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
+import { registerEscalationRoutes } from "./routes/escalation.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
@@ -447,6 +448,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // побочных эффектов; действия делают существующие маршруты.
   registerCoordinationRoutes(app);
   registerNotificationRoutes(app);
+  registerEscalationRoutes(app);
   registerLiveActivityRoutes(app);
   registerSearchRoutes(app);
   registerAttachmentRoutes(app);
