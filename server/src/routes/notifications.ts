@@ -10,6 +10,81 @@ const uid = () => crypto.randomUUID();
 export function registerNotificationRoutes(app: FastifyInstance) {
   const authPre = authOrApiToken;
 
+  // GET /api/system-state?from=<ISO начала дня клиента> — сводка «Состояние
+  // системы» (владелец 12.10.2026): поломки за день и все ещё не починенные,
+  // починено или нет, кто работал и сколько. Источник — служебные карточки
+  // починки (incidents.ts). Только владельцу.
+  app.get("/api/system-state", { preHandler: authPre }, async (req: any, reply) => {
+    if (!isOwner(req.userId)) {
+      return reply.code(403).send({ error: "состояние системы доступно только владельцу" });
+    }
+    const raw = typeof req.query.from === "string" ? req.query.from : "";
+    const parsed = raw ? new Date(raw) : new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+    if (Number.isNaN(parsed.getTime())) return reply.code(400).send({ error: "from: ожидается дата ISO" });
+    const from = parsed.toISOString();
+
+    const rows = db
+      .prepare(
+        `SELECT t.id, t.incident_key, t.title, t.status, t.agent_state, t.created_at, t.completed_at,
+                u.name AS assignee_name
+           FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
+          WHERE t.incident_key IS NOT NULL AND t.archived_at IS NULL
+            AND (t.status = 'active'
+                 OR datetime(t.created_at) >= datetime(?)
+                 OR datetime(t.completed_at) >= datetime(?))
+          ORDER BY (t.status = 'active') DESC, t.created_at DESC`,
+      )
+      .all(from, from) as Array<{
+        id: string; incident_key: string; title: string; status: string; agent_state: string | null;
+        created_at: string; completed_at: string | null; assignee_name: string | null;
+      }>;
+
+    // Время работы — по заходам исполнителей. У незавершённого захода конец
+    // берём по последнему признаку жизни, а не «сейчас»: зависший заход не
+    // должен рисовать часы работы, которой не было.
+    const workStmt = db.prepare(
+      `SELECT a.executor_id AS id, COALESCE(x.name, a.executor_id) AS name,
+              CAST(SUM(MAX(0, (julianday(COALESCE(a.ended_at, a.heartbeat_at, a.started_at))
+                               - julianday(a.started_at)) * 86400)) AS INTEGER) AS seconds
+         FROM attempts a LEFT JOIN users x ON x.id = a.executor_id
+        WHERE a.task_id = ?
+        GROUP BY a.executor_id`,
+    );
+    const totals = new Map<string, { id: string; name: string; seconds: number }>();
+    const incidents = rows.map((r) => {
+      const workers = workStmt.all(r.id) as Array<{ id: string; name: string; seconds: number }>;
+      for (const w of workers) {
+        const t = totals.get(w.id) ?? { id: w.id, name: w.name, seconds: 0 };
+        t.seconds += w.seconds;
+        totals.set(w.id, t);
+      }
+      return {
+        id: r.id,
+        key: r.incident_key,
+        title: r.title,
+        fixed: r.status !== "active",
+        state: r.agent_state,
+        assignee_name: r.assignee_name,
+        created_at: r.created_at,
+        completed_at: r.completed_at,
+        work_seconds: workers.reduce((n, w) => n + w.seconds, 0),
+        workers,
+      };
+    });
+    const open = incidents.filter((i) => !i.fixed).length;
+    return {
+      from,
+      counts: {
+        total: incidents.length,
+        open,
+        fixed: incidents.length - open,
+        in_work: incidents.filter((i) => !i.fixed && (i.assignee_name || i.work_seconds > 0)).length,
+      },
+      incidents,
+      workers: [...totals.values()].sort((a, b) => b.seconds - a.seconds),
+    };
+  });
+
   // POST /api/notifications — служебная дверь для планировщика (шаг 5).
   // Только service user. Создаёт уведомление для указанного user_id
   // (как правило, владельца) с типом task_dead и текстом причины.

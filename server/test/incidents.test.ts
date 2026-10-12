@@ -47,6 +47,28 @@ describe("поломка → уведомление → скрытая карт�
     expect(direct.statusCode).toBe(200);
   });
 
+  it("сводка «Состояние системы» показывает открытую поломку и время работы", async () => {
+    const id = openIncidentTaskId(KEY)!;
+    db.prepare(
+      "INSERT INTO attempts(id, task_id, executor_id, started_at, ended_at) VALUES(?, ?, ?, datetime('now','-10 minutes'), datetime('now','-4 minutes'))",
+    ).run("attempt-" + id, id, owner());
+    const res = await app.inject({ method: "GET", url: "/api/system-state", headers: headers() });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as any;
+    const mine = body.incidents.find((i: any) => i.id === id);
+    expect(mine).toMatchObject({ key: KEY, fixed: false });
+    expect(mine.work_seconds).toBeGreaterThanOrEqual(359);
+    expect(mine.work_seconds).toBeLessThanOrEqual(361);
+    expect(body.counts.open).toBeGreaterThanOrEqual(1);
+    expect(body.workers.some((w: any) => w.id === owner())).toBe(true);
+
+    const stranger = await app.inject({
+      method: "GET", url: "/api/system-state",
+      headers: { authorization: "Bearer " + app.jwt.sign({ id: "no-such-user" }) },
+    });
+    expect([401, 403]).toContain(stranger.statusCode);
+  });
+
   it("после закрытия карточки та же поломка заводится заново", () => {
     const id = openIncidentTaskId(KEY)!;
     db.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(id);

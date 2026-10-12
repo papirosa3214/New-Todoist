@@ -375,7 +375,8 @@ const attemptRows = db
      SELECT a.id, a.task_id, a.subtask_id, a.executor_id,
             COALESCE(NULLIF(a.routing_role, ''), u.role_key) AS routing_role,
             a.started_at, a.work_end AS ended_at, a.outcome, a.reason,
-            t.title AS task_title
+            t.title AS task_title,
+            COALESCE(t.service_hidden, 0) AS service
        FROM work_intervals a
        LEFT JOIN users u ON u.id = a.executor_id
        JOIN tasks t ON t.id = a.task_id
@@ -409,12 +410,16 @@ const attemptRows = db
     outcome: string | null;
     reason: string | null;
     task_title: string;
+    service: number;
   }>;
 
 const attemptsOut = attemptRows.map((a) => ({
   id: a.id,
   task_id: a.task_id,
   task_title: a.task_title,
+  // Служебная карточка починки поломки (incidents.ts) — клиент красит её
+  // на Ганте отдельным цветом.
+  service: a.service === 1,
   subtask_id: a.subtask_id,
   executor_id: a.executor_id,
   routing_role: a.routing_role,
