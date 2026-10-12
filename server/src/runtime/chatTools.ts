@@ -188,8 +188,9 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           role: Type.String({ description: "ключ роли: researcher, analyst, architect, designer, builder, qa" }),
           result: Type.String({ description: "какой результат нужен от роли" }),
           after: Type.Optional(Type.Array(Type.String(), { description: "ключи шагов, которых этот ждёт" })),
+          report: S("Заполняй ТОЛЬКО если владелец в разговоре сам попросил сообщить о выполнении или что-то прислать: что именно исполнитель должен прислать в этот чат, когда закончит (например: «отчёт одним абзацем и ссылку на документ»). Без такой просьбы не указывай — исполнитель сдаёт работу обычным порядком"),
         })),
-      }), async (p) => proposeWork(role, ownerContext.chatId, p))] : []),
+      }), async (p) => proposeWork(role, ownerContext.chatId, p, ownerContext.messageId))] : []),
     T("taskflow_create_task",
       "Завести задачу. Для плана ролей передай preparation и card.subtasks из taskflow_structure_dictation; план сохраняется черновиком без запуска.",
       Type.Object({

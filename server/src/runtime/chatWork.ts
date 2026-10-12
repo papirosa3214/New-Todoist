@@ -24,8 +24,9 @@ import { purgeTasks } from "../lib/taskPurge.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { asControlActor, ToolError } from "./inProcessRun.js";
 
-export type WorkStepInput = { key?: string; role?: string; result?: string; after?: string[] };
-type StoredStep = { key: string; slot: string; role_key: string; result: string; after: string[] };
+export type WorkStepInput = { key?: string; role?: string; result?: string; after?: string[]; report?: string };
+/** report + message_id — просьба владельца из разговора: отбивка в чат по завершении шага (lib/chatWorkRequests.ts). */
+type StoredStep = { key: string; slot: string; role_key: string; result: string; after: string[]; report?: string; message_id?: string };
 type LaunchRow = {
   id: string; chat_id: string; task_id: string; plan_id: string | null; title: string;
   steps_json: string; status: "proposed" | "started" | "cancelled"; role_key: string;
@@ -56,7 +57,8 @@ function normalizeSteps(input: WorkStepInput[]): Array<Omit<StoredStep, "slot">>
     if (!enabled.has(role)) throw new ToolError(`steps[${i}].role: нет включённой роли «${role}». Доступны: ${[...enabled].join(", ")}`);
     const result = String(s.result ?? "").trim().slice(0, 1000);
     if (!result) throw new ToolError(`steps[${i}].result: опиши, какой результат нужен от роли`);
-    return { key: slug(String(s.key ?? ""), i), role_key: role, result, after: (s.after ?? []).map((a, j) => slug(String(a), j)) };
+    const report = String(s.report ?? "").trim().slice(0, 500);
+    return { key: slug(String(s.key ?? ""), i), role_key: role, result, after: (s.after ?? []).map((a, j) => slug(String(a), j)), ...(report ? { report } : {}) };
   });
   const keys = steps.map((s) => s.key);
   if (new Set(keys).size !== keys.length) throw new ToolError("steps: ключи шагов должны быть разными");
@@ -95,9 +97,11 @@ export async function proposeWork(
   role: string,
   chatId: string,
   input: { title?: string; description?: string; project_id?: string; steps?: WorkStepInput[] },
+  /** Сообщение владельца, на которое исполнитель ответит, если его об этом попросили. */
+  messageId?: string,
 ): Promise<{ launch_id: string; task_id: string; started: boolean; note: string }> {
   const owner = ownerId();
-  const steps = normalizeSteps(input.steps ?? []);
+  const steps = normalizeSteps(input.steps ?? []).map((s) => (s.report && messageId ? { ...s, message_id: messageId } : s));
   const running = runningWork(chatId);
 
   // Работа уже идёт — шаги добавляются в ту же карточку и стартуют сами.

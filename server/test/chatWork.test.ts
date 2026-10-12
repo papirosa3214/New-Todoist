@@ -4,6 +4,7 @@ import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { purgeTasks } from "../src/lib/taskPurge.js";
 import { proposeWork } from "../src/runtime/chatWork.js";
+import { chatWorkRequests } from "../src/lib/chatWorkRequests.js";
 
 // Владелец 12.10.2026: роль из чата готовит работу одной карточкой с шагами
 // по ролям, владелец запускает её привычной кнопкой «Запустить» на карточке,
@@ -92,13 +93,30 @@ describe("работа по разговору: чат запускает исп
     expect((db.prepare("SELECT COUNT(*) AS n FROM subtasks WHERE task_id = ? AND collaboration_plan_id IS NOT NULL").get(row.task_id) as any).n).toBe(1);
   });
 
+  it("отбивка в чат — только по просьбе владельца и только названному шагу", async () => {
+    const [a] = roles();
+    const running = db.prepare("SELECT task_id FROM chat_work_launches WHERE chat_id = ? AND status = 'started'").get(CHAT) as any;
+    // Запущенная работа без просьб: исполнителю ничего сверх обычного не говорится.
+    expect(chatWorkRequests(running.task_id)).toEqual([]);
+    await proposeWork(a, CHAT, { steps: [
+      { key: "quiet", role: a, result: "Обычный шаг", after: ["only"] },
+      { key: "loud", role: a, result: "Шаг с отчётом", after: ["only"], report: "отчёт одним абзацем" },
+    ] }, "msg-owner-1");
+    const lines = chatWorkRequests(running.task_id);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain("слот loud");
+    expect(lines[1]).toContain('message_id="msg-owner-1"');
+    expect(lines[1]).toContain("отчёт одним абзацем");
+    expect(lines.join("\n")).not.toContain("слот quiet");
+  });
+
   it("пока работа идёт, новые шаги добавляются в ту же карточку без кнопки", async () => {
     const [a] = roles();
     const running = db.prepare("SELECT task_id FROM chat_work_launches WHERE chat_id = ? AND status = 'started'").get(CHAT) as any;
     const res = await proposeWork(a, CHAT, { steps: [{ key: "more", role: a, result: "Ещё один результат", after: ["only"] }] });
     expect(res.started).toBe(true);
     expect(res.task_id).toBe(running.task_id);
-    expect((db.prepare("SELECT COUNT(*) AS n FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id = n.plan_id WHERE p.task_id = ? AND p.status = 'approved'").get(running.task_id) as any).n).toBe(2);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id = n.plan_id WHERE p.task_id = ? AND p.status = 'approved'").get(running.task_id) as any).n).toBe(4);
     expect((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE parent_id = ?").get(running.task_id) as any).n).toBe(0);
   });
 });
