@@ -153,3 +153,7 @@ _(пусто)_
 ## Durable review history
 
 Code: server/src/lib/reviewHistory.ts; migration132_review_history. Startup and every15 minutes: transactional probe creates task, submits review, repeats event, purges task/event and checks exactly one retained fact; rolls all probe data back. Failure creates at most one daily alert in Server notifications. Statistical ledger has no FK to tasks. Tests: reviewHistory.test.ts.
+
+## Гант загрузки ролей: завершённая работа не активна
+
+`server/src/lib/roleLoadWatcher.ts`: при старте и каждые 15 минут создаёт временную completed-карточку с in_progress шагом и незакрытым запуском; вызывает тот же readRoleLoad, что API, проверяет отсутствие во всех слоях. Затем пробует active-карточку со сданным шагом. Все пробные записи откатываются транзакцией. При сбое — карточка в «Серверных уведомлениях», не чаще одной в сутки. Тесты roleLoad.test.ts и roleLoadWatcher.test.ts. Инцидент 12.10.2026: 202 незакрытых запуска на 65 completed-карточках рисовались текущей работой.

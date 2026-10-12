@@ -320,3 +320,52 @@ describe("роль фактического исполнителя старых 
     } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
   });
 });
+
+
+describe("статус карточки и работы важнее незакрытого запуска", () => {
+  it("completed исключается из всех слоёв даже при in_progress и NULL ended_at", async () => {
+    const taskId=uid(), stepId=uid();
+    try {
+      db.prepare("INSERT INTO tasks(id,title,status,creator_id,agent_state) VALUES(?,?,'completed',?,'in_progress')").run(taskId,"completed ghost",ownerId);
+      db.prepare("INSERT INTO subtasks(id,task_id,title,done,agent_state,agent_id) VALUES(?,?,?,0,'in_progress','role_builder')").run(stepId,taskId,"ghost step");
+      db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at) VALUES(?,?,?,'role_builder',datetime('now','-7 days'))").run(uid(),taskId,stepId);
+      const body=(await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()})).json();
+      expect(body.attempts.filter((a:any)=>a.task_id===taskId)).toEqual([]);
+      expect(body.active_now.filter((a:any)=>a.task_id===taskId)).toEqual([]);
+      expect(body.open_slots.filter((a:any)=>a.id===taskId)).toEqual([]);
+    } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
+  });
+  it("сданный шаг на открытой карточке не продолжает работать из-за NULL ended_at", async () => {
+    const taskId=uid(),stepId=uid();
+    try {
+      db.prepare("INSERT INTO tasks(id,title,status,creator_id) VALUES(?,?,'active',?)").run(taskId,"submitted step",ownerId);
+      db.prepare("INSERT INTO subtasks(id,task_id,title,done,agent_state,agent_id) VALUES(?,?,?,1,'in_progress','role_builder')").run(stepId,taskId,"already done");
+      db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at) VALUES(?,?,?,'role_builder',datetime('now','-5 days'))").run(uid(),taskId,stepId);
+      const body=(await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()})).json();
+      expect(body.attempts.filter((a:any)=>a.task_id===taskId)).toEqual([]);
+      expect(body.active_now.filter((a:any)=>a.task_id===taskId)).toEqual([]);
+    } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
+  });
+  it("работающий агент виден по состоянию даже без записи запуска", async () => {
+    const taskId=uid();
+    try {
+      db.prepare("INSERT INTO tasks(id,title,status,creator_id,assignee_id,agent_state) VALUES(?,?,'active',?,'role_builder','in_progress')").run(taskId,"state only",ownerId);
+      const body=(await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()})).json();
+      expect(body.active_now.find((a:any)=>a.task_id===taskId)?.role_key).toBe("builder");
+    } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
+  });
+  it("после завершения агентом работа исчезает без правки attempts", async () => {
+    const taskId=uid(),attemptId=uid();
+    try {
+      db.prepare("INSERT INTO tasks(id,title,status,creator_id,assignee_id,agent_state) VALUES(?,?,'active',?,'role_builder','in_progress')").run(taskId,"agent finishes",ownerId);
+      db.prepare("INSERT INTO attempts(id,task_id,executor_id,started_at) VALUES(?,?,'role_builder',datetime('now','-5 minutes'))").run(attemptId,taskId);
+      db.prepare("UPDATE tasks SET current_attempt_id=? WHERE id=?").run(attemptId,taskId);
+      const read=async()=>(await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()})).json();
+      expect((await read()).active_now.some((a:any)=>a.task_id===taskId)).toBe(true);
+      db.prepare("UPDATE tasks SET agent_state='review' WHERE id=?").run(taskId);
+      const body=await read();
+      expect(body.active_now.some((a:any)=>a.task_id===taskId)).toBe(false);
+      expect(body.attempts.some((a:any)=>a.id===attemptId)).toBe(false);
+    } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
+  });
+});

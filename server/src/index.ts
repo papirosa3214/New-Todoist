@@ -1,3 +1,4 @@
+import { startRoleLoadWatcher } from "./lib/roleLoadWatcher.js";
 import { startReviewHistoryWatcher } from "./lib/reviewHistory.js";
 import { startWorkPlanWatcher } from "./lib/workPlanWatcher.js";
 import { registerPreparationRoutes, startPreparationWorker } from "./runtime/autoPreparation.js";
@@ -488,6 +489,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Сторож прибора «учёт обращений к заметкам»: без счётчиков схема базы
     // знаний слепнет (заметка cfa5cdcd, шаг 1 из 4).
     startNoteAccessWatcher();
+    const stopRoleLoadWatcher = startRoleLoadWatcher();
+    app.addHook("onClose", async()=>stopRoleLoadWatcher());
     const stopReviewHistoryWatcher = startReviewHistoryWatcher();
     app.addHook("onClose", async () => stopReviewHistoryWatcher());
     const stopWorkPlanWatcher = startWorkPlanWatcher();
