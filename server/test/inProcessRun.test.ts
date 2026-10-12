@@ -124,7 +124,7 @@ describe("агент роли внутри сервера", () => {
     const mine=await call(tools,"taskflow_my_tasks",{state:"in_progress"});
     expect(JSON.stringify(mine)).toContain(taskId);
     await call(tools,"taskflow_comment",{id:taskId,text:"Работаю в назначенном слоте"});
-    await call(tools,"taskflow_state",{id:taskId,state:"blocked",comment:"Нужен доступ"});
+    await call(tools,"taskflow_state",{id:taskId,state:"blocked",block_type:"needs_input",comment:"Нужен доступ"});
     expect((db.prepare("SELECT agent_state FROM subtasks WHERE id=?").get(stepId) as any).agent_state).toBe("blocked");
     expect((db.prepare("SELECT assignee_id,ready_for_pickup FROM tasks WHERE id=?").get(taskId) as any)).toMatchObject({assignee_id:null,ready_for_pickup:0});
   });
@@ -312,6 +312,12 @@ describe("агент роли внутри сервера", () => {
     const next=await runRoleInProcess({taskId,role:"builder",subtaskId:second,prompt:"Обсудить",mode:"reply"});
     await started;
     try {
+      // slot_topic_inbox.message_id — FK на chat_messages: очередь слота хранит
+      // ссылку на настоящее сообщение, поэтому заводим его, а не подставляем
+      // произвольный токен.
+      const msg = db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel) VALUES (?,?,?,'agents')");
+      msg.run("ambiguous", ownerId, "Вопрос");
+      msg.run("targeted", ownerId, "Вопрос");
       expect(await deliverTopicToWork(taskId,"builder","ambiguous","Вопрос")).toBe("busy");
       expect(script.steering).toHaveLength(0);
       expect(await deliverTopicToWork(taskId,"builder","targeted","Вопрос","second_slot")).toBe("queued");
@@ -337,7 +343,7 @@ describe("агент роли внутри сервера", () => {
       expect(options.cwd).toBe(project);
       expect(options.resourceLoader.getSkills().skills.map((s: any) => s.name)).toContain("task-probe");
       expect(options.resourceLoader.getAgentsFiles().agentsFiles[0].content).toBe("Инструкции именно разработчика");
-      const write = options.tools.find((t: any) => t.name === "write");
+      const write = options.customTools.find((t: any) => t.name === "write");
       await write.execute("probe", { path: "result.txt", content: "project result" });
       expect(fs.readFileSync(path.join(project, "result.txt"), "utf8")).toBe("project result");
     } finally {
