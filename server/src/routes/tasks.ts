@@ -39,6 +39,7 @@ import {
 } from "../resultVersions.js";
 import { ROLE_NAMES, type RoleName } from "../roleRouting.js";
 import { ensurePlanTopic, setTaskTopicClosed } from "../lib/projectTopics.js";
+import { closeTaskTree } from "../lib/taskCloseCascade.js";
 import { criticApproved } from "../lib/criticApproved.js";
 export { criticApproved };
 import { attemptLadderForTask } from "../lib/attemptLadder.js";
@@ -1827,6 +1828,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // заново открытая задача сразу выглядела занятой.
       if (releasesAgentWork) {
         releaseSubtaskWork(id);
+      }
+
+      // Закрыли карточку — закрываем и всё под ней: активные дочерние
+      // карточки и неотмеченные шаги (владелец 12.10.2026).
+      if (body.status === "completed" && existing.status !== "completed") {
+        closeTaskTree(id, req.userId);
       }
 
       // Карточку закрыли — значит следующая в очереди дождалась своей
