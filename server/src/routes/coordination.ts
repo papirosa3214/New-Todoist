@@ -356,7 +356,8 @@ const attemptRows = db
         AND (a.ended_at IS NULL OR datetime(a.ended_at) > datetime(?))
         AND t.archived_at IS NULL
         AND t.status = 'active'
-        AND (a.ended_at IS NOT NULL OR
+        AND a.ended_at IS NULL
+  AND (
           (a.subtask_id IS NULL AND t.agent_state = 'in_progress'
            AND a.id = COALESCE(t.current_attempt_id,
              (SELECT a2.id FROM attempts a2 WHERE a2.task_id=t.id

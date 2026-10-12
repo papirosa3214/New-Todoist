@@ -210,7 +210,7 @@ describe("GET /api/coordination/role-load", () => {
     expect(activeSlot!.kind).toBe("task");
   });
 
-  it("закрытый заход виден в attempts, но НЕ в active_now", async () => {
+  it("работа завершена агентом: закрытый интервал не остаётся в загрузке", async () => {
     const res = await serverApp.inject({
       method: "GET",
       url: "/api/coordination/role-load?window=24h",
@@ -223,8 +223,7 @@ describe("GET /api/coordination/role-load", () => {
     const closedAttempt = body.attempts.find(
       (a) => a.task_title === "role-load done",
     );
-    expect(closedAttempt).toBeTruthy();
-    expect(closedAttempt!.active).toBe(false);
+    expect(closedAttempt).toBeUndefined();
     const inActive = body.active_now.find((s) => s.task_title === "role-load done");
     expect(inActive).toBeUndefined();
   });
@@ -305,7 +304,7 @@ describe("роль фактического исполнителя старых 
       const result = await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()});
       expect(result.statusCode).toBe(200);
       for (const row of rows) {
-        expect(result.json().attempts.find((a: any) => a.id === row.id)?.routing_role).toBe(row.expected);
+        expect(result.json().attempts.find((a: any) => a.id === row.id)).toBeUndefined();
       }
       expect(db.prepare("SELECT routing_role FROM attempts WHERE id=?").get(rows[0].id)).toEqual({routing_role:null});
     } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
