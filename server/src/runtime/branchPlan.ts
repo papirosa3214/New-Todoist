@@ -1,4 +1,5 @@
 import {requireIntegrationResponsibility} from '../lib/integrationResponsibility.js';
+import { beforeSlots, parentPrepResults } from "./branchPhase.js";
 import {hasOnlyBranchCoordination} from "./branchCoordination.js";
 import { materializeWorkChoices } from "../lib/planWorkSelection.js";
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
@@ -155,6 +156,7 @@ export function branchTeamContext(taskId:string):string {
       return `${card.id}: ${card.title}; ответственный: ${responsible}; состояние: ${card.agent_state??card.status}; тема: ${topic?.id??"ещё не создана"}\n`+
         (plan ? planNodes(plan.id).map(n=>`@${n.role_key} [slot: ${n.slot_key}] — ${n.expected_result}`).join("\n") : "План готовится");
     }),
+    ...(()=>{const prep=parentPrepResults(taskId);return prep.length ? ["Вводные от родительской карточки (её подготовительные шаги уже сделаны):\n"+prep.map(p=>`@${p.role_key} — ${p.expected_result}: ${(p.result??"результат не записан").slice(0,1500)}`).join("\n")] : [];})(),
     "Недостающий документ запроси у исполнителя предыдущего этапа в его теме, с указанием task_id и slot_key. Ответственный карточки собирает её результат; противоречия между карточками адресуй Архитектору. Переписка и консультации не заменяют сдачу и приёмку артефактов."].join("\n");
 }
 
@@ -199,7 +201,18 @@ export function branchPresentation(rootPlan:any,base:any,presentOne:(p:any)=>any
   const links:Array<[string,string]>=cards.filter(c=>c.parent_id).map(c=>[c.id,c.parent_id!]);
   for(const card of cards)for(const dep of db.prepare("SELECT depends_on_task_id FROM task_dependencies WHERE task_id=?").all(card.id) as Array<{depends_on_task_id:string}>)links.push([dep.depends_on_task_id,card.id]);
   const cardRoots=new Map(cards.map(c=>[c.id,roots(c.id)])),cardEnds=new Map(cards.map(c=>[c.id,terminals(c.id)]));
-  for(const [from,to] of links)for(const a of cardEnds.get(from)??[])for(const b of cardRoots.get(to)??[])if(!edges.some((e:any)=>e.from_slot_key===a.slot_key&&e.to_slot_key===b.slot_key))edges.push({from_slot_key:a.slot_key,to_slot_key:b.slot_key,start_condition:'submitted',artifact_key:null});
+  // Подготовительные шаги родителя (branchPhase.ts) стоят ПЕРЕД дочерними:
+  // от них идут связи в начало каждой дочерней, а дочерние сходятся уже в
+  // итоговые шаги родителя, не в подготовительные.
+  const rootId=rootPlan.task_id,before=beforeSlots(rootPlan.id);
+  const isPrep=(n:any)=>n.task_id===rootId&&before.has(n.source_slot_key);
+  const rootLive=nodes.filter((n:any)=>n.task_id===rootId&&!n.skipped_at);
+  const prepPool=rootLive.filter(isPrep),finalPool=rootLive.filter((n:any)=>!isPrep(n));
+  const prepEnds=prepPool.filter((n:any)=>!edges.some((e:any)=>e.from_slot_key===n.slot_key&&prepPool.some((p:any)=>p.slot_key===e.to_slot_key)));
+  const finalRoots=finalPool.filter((n:any)=>!edges.some((e:any)=>e.to_slot_key===n.slot_key&&finalPool.some((p:any)=>p.slot_key===e.from_slot_key)));
+  const link=(a:any,b:any)=>{if(!edges.some((e:any)=>e.from_slot_key===a.slot_key&&e.to_slot_key===b.slot_key))edges.push({from_slot_key:a.slot_key,to_slot_key:b.slot_key,start_condition:'submitted',artifact_key:null});};
+  for(const [from,to] of links)for(const a of cardEnds.get(from)??[])for(const b of (before.size&&to===rootId ? finalRoots : cardRoots.get(to)??[]))link(a,b);
+  if(before.size)for(const card of cards.filter(c=>c.parent_id===rootId))for(const a of prepEnds)for(const b of cardRoots.get(card.id)??[])link(a,b);
   for(const link of db.prepare("SELECT from_slot,to_task_id,to_slot FROM branch_rework_links WHERE root_plan_id=?").all(rootPlan.id) as Array<{from_slot:string;to_task_id:string;to_slot:string}>) edges.push({from_slot_key:key(rootPlan.task_id,link.from_slot),to_slot_key:key(link.to_task_id,link.to_slot),start_condition:'submitted',artifact_key:null});
   const numbers=branchCardNumbers(rootPlan.task_id);
   const priority=['blocked','returned','active','review','ready','waiting','accepted','skipped'];

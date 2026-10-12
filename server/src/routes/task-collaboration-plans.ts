@@ -6,6 +6,7 @@ import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
 import { ensureCardResponsible } from "../runtime/branchPlan.js";
+import { beforeSlots, setNodePhase, BranchPhaseError, type BranchPhase } from "../runtime/branchPhase.js";
 import {branchAssignmentRole} from "../runtime/branchPlan.js";
 import { branchRoot,branchCards,branchPresentation,approveBranch,editBranchDraft } from "../runtime/branchPlan.js";
 import { unmetDependencyIds } from "../enricher.js";
@@ -120,7 +121,80 @@ function presentSingle(plan: Plan) {
   };
 }
 
-function present(plan:Plan):ReturnType<typeof presentSingle> { return branchPresentation(plan,presentSingle(plan),presentSingle); }
+function present(plan:Plan):ReturnType<typeof presentSingle> { return finalizePresentation(plan, branchPresentation(plan,presentSingle(plan),presentSingle)); }
+
+/**
+ * Последний проход по ответу (владелец 12.10.2026): состояние узла считает
+ * только сервер, клиент его показывает. Раньше «на проверке» и «готов к
+ * старту» клиент досчитывал сам, и один шаг назывался по-разному в общем
+ * графе ветки и в графе одной карточки. Здесь же — группа шага родителя
+ * (до/после дочерних) и номер порядка: одинаковый номер — идут параллельно,
+ * следующий — ждёт предыдущий.
+ */
+function finalizePresentation(plan: Plan, view: any): any {
+  const before = beforeSlots(plan.id);
+  const stepOf = db.prepare("SELECT * FROM subtasks WHERE collaboration_plan_id = ? AND plan_node_key = ?");
+  const planStatus = new Map<string, string>([[plan.id, plan.status]]);
+  const statusOf = (id: string) => {
+    if (!planStatus.has(id)) planStatus.set(id, (db.prepare("SELECT status FROM task_collaboration_plans WHERE id = ?").get(id) as { status: string } | undefined)?.status ?? "");
+    return planStatus.get(id)!;
+  };
+  const nodes = (view.nodes as any[]).map((n) => {
+    const planId = n.source_plan_id ?? plan.id;
+    const slot = n.source_slot_key ?? n.slot_key;
+    const step = stepOf.get(planId, slot) as any;
+    let state = "waiting";
+    if (n.skipped_at) state = "skipped";
+    else if (step?.done) state = String(step.result ?? "").startsWith("changes_requested:") ? "returned" : "accepted";
+    else if (step?.agent_state === "in_progress") state = "active";
+    else if (step?.agent_state === "blocked") state = "blocked";
+    else if (step?.agent_state === "review") state = "review";
+    else if (step && statusOf(planId) === "approved" && canPlanSubtaskBecomeReady(step)) state = "ready";
+    const isRootCard = !n.task_id || n.task_id === plan.task_id;
+    return { ...n, execution_state: state, branch_phase: isRootCard && before.has(slot) ? "before" : "after" };
+  });
+
+  // Номер порядка — уровень в графе по прямым связям; возвраты на доработку
+  // (связь в шаг более ранней попытки) порядок не задают.
+  const iteration = new Map(nodes.map((n) => [n.slot_key, n.iteration ?? 0]));
+  const incoming = new Map<string, string[]>();
+  for (const e of view.edges as any[]) {
+    if ((iteration.get(e.to_slot_key) ?? 0) < (iteration.get(e.from_slot_key) ?? 0)) continue;
+    incoming.set(e.to_slot_key, [...(incoming.get(e.to_slot_key) ?? []), e.from_slot_key]);
+  }
+  const memo = new Map<string, number>();
+  const level = (slot: string, path: Set<string>): number => {
+    if (memo.has(slot)) return memo.get(slot)!;
+    if (path.has(slot)) return 1;
+    const preds = incoming.get(slot) ?? [];
+    const value = preds.length ? Math.max(...preds.map((p) => level(p, new Set([...path, slot])))) + 1 : 1;
+    memo.set(slot, value);
+    return value;
+  };
+  const ordered = nodes.map((n) => ({ ...n, order: level(n.slot_key, new Set()) }));
+
+  const out: any = { ...view, nodes: ordered };
+  if (Array.isArray(view.branch_team)) {
+    const priority = ["blocked", "returned", "active", "review", "ready", "waiting", "accepted", "skipped"];
+    out.branch_team = view.branch_team.map((member: any) => {
+      const states = ordered.filter((n) => member.slot_keys.includes(n.slot_key)).map((n) => n.execution_state);
+      return { ...member, execution_state: priority.find((s) => states.includes(s)) ?? "waiting" };
+    });
+  }
+  if (Array.isArray(view.branch_cards)) {
+    // «Ждёт №…» — зависимости между карточками ветки, номерами закладок.
+    const number = new Map<string, number>(view.branch_cards.map((c: any) => [c.id, c.tab_number]));
+    const deps = db.prepare("SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?");
+    out.branch_cards = view.branch_cards.map((c: any) => ({
+      ...c,
+      waits_for_numbers: (deps.all(c.id) as Array<{ depends_on_task_id: string }>)
+        .map((d) => number.get(d.depends_on_task_id))
+        .filter((x): x is number => typeof x === "number")
+        .sort((a, b) => a - b),
+    }));
+  }
+  return out;
+}
 
 /** Ответ на ошибку правки плана — со статусом, который она несёт. */
 function planOpFailure(reply: any, error: unknown) {
@@ -581,6 +655,28 @@ export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: {
 }
 
 export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void {
+  // PUT …/nodes/:slot/phase — отнести шаг родителя к подготовке («до
+  // дочерних») или к итогу («после дочерних»). Владелец или оркестратор.
+  app.put<{ Params: { id: string; planId: string; slot: string }; Body: { phase?: unknown } }>(
+    "/api/tasks/:id/collaboration-plans/:planId/nodes/:slot/phase",
+    { preHandler: authOrApiToken },
+    async (req: any, reply) => {
+      if (!mayManage(req.userId)) return reply.code(403).send({ error: "группу шага меняет владелец или оркестратор" });
+      const task = getTaskForRead(req.params.id, req.userId);
+      const plan = db.prepare("SELECT * FROM task_collaboration_plans WHERE id = ?").get(req.params.planId) as Plan | undefined;
+      if (!task || !plan || plan.task_id !== task.id) return reply.code(404).send({ error: "Not found" });
+      try {
+        setNodePhase(plan.id, req.params.slot, req.body?.phase as BranchPhase);
+      } catch (error) {
+        if (error instanceof BranchPhaseError) return reply.code(error.status).send({ error: error.message });
+        throw error;
+      }
+      await afterLiveChange(plan.id, task.id, req.userId);
+      const fresh = db.prepare("SELECT * FROM task_collaboration_plans WHERE id = ?").get(plan.id) as Plan;
+      return { plan: present(fresh) };
+    },
+  );
+
   app.get<{ Params: { id: string } }>("/api/tasks/:id/collaboration-plans", { preHandler: authOrApiToken }, async (req: any, reply) => {
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });

@@ -4314,6 +4314,16 @@ const migrations: Migration[] = [
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_incident_key ON tasks(incident_key) WHERE incident_key IS NOT NULL");
   } },
+  { id: "135_plan_node_phases", description: "Группа шага родителя ветки: до дочерних (подготовка) или после (итог)", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS plan_node_phases (
+        plan_id TEXT NOT NULL REFERENCES task_collaboration_plans(id) ON DELETE CASCADE,
+        slot_key TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('before', 'after')),
+        PRIMARY KEY (plan_id, slot_key)
+      );
+    `);
+  } },
 ];
 /**
  * Опции прогона миграций.

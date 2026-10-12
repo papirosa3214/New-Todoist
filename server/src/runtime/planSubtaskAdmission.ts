@@ -1,6 +1,7 @@
 import { artifactHasEvidence, artifactGateSatisfied } from "./planArtifactGate.js";
 export { artifactHasEvidence } from "./planArtifactGate.js";
 import { branchMembership } from "./branchPlan.js";
+import { nodePhase, parentPrepPending } from "./branchPhase.js";
 import { unmetDependencyIds } from "../enricher.js";
 import { ensureBranchAssembler, ensurePlanFinalReviewer, isPlanFinalReviewStep, queuePlanFinalReview, FINAL_REVIEW_MARKER } from "./planReviewLifecycle.js";
 import crypto from "node:crypto";
@@ -142,7 +143,11 @@ export function waitingForPredecessors(row: PlanSubtask): WaitingFor[] {
 export function canPlanSubtaskBecomeReady(row: PlanSubtask): boolean {
   if (!row.collaboration_plan_id || !row.plan_node_key) return true;
   if (unmetDependencyIds(row.task_id).length) return false;
-  if(db.prepare("SELECT 1 FROM tasks WHERE parent_id=? AND status<>'completed'").get(row.task_id)) return false;
+  // Итоговый шаг родителя ждёт закрытия всех дочерних; подготовительный
+  // («до дочерних», branchPhase.ts) — нет, он и есть начало ветки.
+  if(nodePhase(row.collaboration_plan_id,row.plan_node_key)!=='before' && db.prepare("SELECT 1 FROM tasks WHERE parent_id=? AND status<>'completed'").get(row.task_id)) return false;
+  // Дочерняя ждёт, пока родитель закончит подготовку и раздаст вводные.
+  if(parentPrepPending(row.task_id)) return false;
   const edges = db.prepare("SELECT from_slot_key, start_condition, artifact_key FROM task_collaboration_plan_edges WHERE plan_id = ? AND to_slot_key = ?")
     .all(row.collaboration_plan_id, row.plan_node_key) as Array<{ from_slot_key: string; start_condition: string; artifact_key: string | null }>;
   return edges.every((edge) => {
