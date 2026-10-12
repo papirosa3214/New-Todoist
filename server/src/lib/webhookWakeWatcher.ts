@@ -109,6 +109,14 @@ export async function checkWebhookWakeInstrument(opts?: {
     db.prepare(
       "INSERT OR IGNORE INTO tasks (id, title, project_id, creator_id) VALUES (?, ?, ?, ?)",
     ).run(taskId, "wake watcher probe", WEBHOOK_PROJECT_ID, ownerId);
+    // Синтетическая проба — служебная карточка, а не работа для авто-подготовки.
+    // Триггер enqueue_new_task_preparation (задача «активный + проект») иначе
+    // кладёт пробную карточку в общую очередь подготовки, и любой
+    // processOnePreparation() разбирает чужой job прежде настоящей задачи.
+    // Это и валит тесты группы «Intake / preparation» (12.10.2026).
+    db.prepare(
+      "UPDATE task_preparation_jobs SET status='skipped' WHERE task_id=? AND status='queued'",
+    ).run(taskId);
 
     const evRow = db
       .prepare(
@@ -207,6 +215,11 @@ function raise(reason: string, details?: Record<string, unknown>) {
         id, title, description, priority, creator_id, status, agent_state, project_id
       ) VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)`,
     ).run(id, title, description, PRIORITY, OWNER_ID, serverNotificationsProjectId(OWNER_ID));
+    // Это карточка-уведомление владельцу, не поручение работе: не пускаем её
+    // в очередь авто-подготовки (тот же триггер, что у пробной карточки).
+    db.prepare(
+      "UPDATE task_preparation_jobs SET status='skipped' WHERE task_id=? AND status='queued'",
+    ).run(id);
   });
   txn();
   console.error(`[webhook-wake-watch] ПРИБОР НЕ РАБОТАЕТ: ${reason}`);

@@ -4209,7 +4209,15 @@ const migrations: Migration[] = [
 
   { id: "132_review_history", description: "Review facts survive permanent task deletion", up: installReviewHistory },
 
-  { id: "133_agent_rules_manifests", description: "Версионированный manifest правил и подтверждения (этап B)", up() {
+  { id: "133_agent_rules_manifests", description: "Версионированный manifest правил и подтверждения (этап B)",
+    // Пересобирает chat_messages (12-шаговая процедура SQLite). Ей нужен
+    // PRAGMA foreign_keys=OFF ВНЕ транзакции — иначе DROP TABLE
+    // chat_messages каскадно стирает chat_task_drafts черновики (та же
+    // причина, по которой 053 помечена noTransaction). Без этого флага
+    // 133 теряла intake_mode-строки 037 (5 красных «Intake / preparation»,
+    // 12.10.2026).
+    noTransaction: true,
+    up() {
     db.exec(`
       CREATE TABLE IF NOT EXISTS agent_rules_manifests (
         rule_id TEXT NOT NULL,
