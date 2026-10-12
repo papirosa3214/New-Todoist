@@ -170,6 +170,19 @@ export async function checkWebhookWakeInstrument(opts?: {
     // Подчищаем: каскад по webhook_subscriptions(id) ON DELETE CASCADE
     // снимет webhook_deliveries/attempts/wake_queue.
     if (subId) deleteSubscription(subId);
+    // Синтетическая задача пробы — только декорация для доставки/пробуждения.
+    // Если её не удалить, каждый старт сервера (и каждый плановый заход
+    // сторожа) оставляет в главном проекте задачу «wake watcher probe» —
+    // она видна владельцу и засоряет список задач, хотя не является работой.
+    // `orchestrator_events.task_id` — TEXT без FK, поэтому event от неё не
+    // зависит; его мы отдельно помечаем expired ниже.
+    if (taskId) {
+      try {
+        db.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
+      } catch {
+        /* схема недоступна — не повод поднимать тревогу */
+      }
+    }
     // Синтетический event — помечаем expired, чтобы повторный прогон
     // увидел чистый state.
     if (probeEventId) {
