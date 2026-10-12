@@ -123,7 +123,8 @@ describe("умная параллелизация подзадач (subtaskRoleF
     const subtasksBefore = await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth });
     expect(subtasksBefore.json()).toHaveLength(3); // ещё draft — дубля нет
 
-    expect((await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:ownerAuth,payload:{mode:"manual",owner_id:"role_builder"}})).statusCode).toBe(200);
+    const irState=(await app.inject({method:"GET",url:`/api/tasks/${taskId}/integration-responsibility`,headers:ownerAuth})).json();
+    expect((await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:ownerAuth,payload:{mode:"manual",owner_id:irState.candidates[0].id}})).statusCode).toBe(200);
     const approved=await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.id}/approve`, headers: ownerAuth });
     expect(approved.statusCode).toBe(200);
     const subtasksAfter = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth })).json() as Array<{ collaboration_plan_id: string | null }>;

@@ -114,8 +114,9 @@ export async function runProviderProbe(
       if (quota.resetAt) {
         console.log(`[provider-probe] ${provider}: лимит, сброс ${quota.resetAt.toISOString()}`);
       }
-    } else {
-      // Провайдер жив — снимаем возможную протухшую метку.
+    } else if (getFailoverSettings().autoReturn) {
+      // Провайдер жив — снимаем возможную протухшую метку. При выключенном
+      // автовозврате метку снимает только владелец кнопкой.
       db.prepare(
         "UPDATE provider_limits SET unavailable_until = datetime('now'), reason = 'лимит сброшен (остаток от провайдера)', updated_at = datetime('now') WHERE provider = ? AND unavailable_until IS NOT NULL AND unavailable_until > datetime('now')",
       ).run(provider);

@@ -25,7 +25,7 @@ describe("Linear source completeness",()=>{
   await expect(fetchLinearSnapshot("owner",["root"],async(_,q)=>q.includes("Collection")?{issue:{comments:conn([{id:"same"}])}}:{organization:{id:"W"},issue:structuredClone(root)})).rejects.toThrow(/дубли/);
  });
  it("list exposes pagination cursor and never changes source",async()=>{
-  const r=await listLinearIssues("owner","previous",async(_,q,v)=>{expect(v).toEqual({after:"previous"});expect(q).toMatch(/includeArchived: true/);return{organization:{id:"W"},issues:conn([{id:"issue"}],"next")};});expect(r.cursor).toBe("next");
+  const r=await listLinearIssues("owner","previous",async(_,q,v)=>{expect(v).toEqual({after:"previous"});expect(q).not.toMatch(/includeArchived: true/);expect(q).toMatch(/started/);return{organization:{id:"W"},issues:conn([{id:"issue"}],"next")};});expect(r.cursor).toBe("next");
  });
 });
 

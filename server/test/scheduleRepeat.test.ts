@@ -13,6 +13,7 @@
 //      продуктовый код не меняется.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "child_process";
+import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import type { FastifyInstance } from "fastify";
@@ -269,8 +270,12 @@ const probePath = path.join(
   "fixtures",
   "scheduler_probe.py",
 );
+// 05.10.2026 scripts/scheduler.py снят: планировщик живёт внутри сервера
+// (src/runtime/scheduler.ts, покрыт test/scheduler.test.ts). Без скрипта
+// блок пропускается, а не падает.
 const hasPython =
-  spawnSync("python3", ["--version"], { encoding: "utf8" }).status === 0;
+  spawnSync("python3", ["--version"], { encoding: "utf8" }).status === 0 &&
+  existsSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "scheduler.py"));
 
 describe.skipIf(!hasPython)("scheduler.py: ветки расписания и повтора", () => {
   const probe = hasPython
