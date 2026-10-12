@@ -169,7 +169,18 @@ export function loadRuntimeConfig(fileName = ROLE_ROUTING_FILE): RoleRouting {
     if (typeof m === "string" && m.trim()) counts.set(m, (counts.get(m) ?? 0) + 1);
   }
   const defaultModel = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "MiniMax-M3";
-  for (const role of ROLE_NAMES) {
+  // Все роли из файла плюс ROLE_NAMES (БД): code_orchestrator может быть в
+  // role-routing.yaml до того, как роль заведена в БД (миграция 056), и
+  // при чтении конфига её fallbacks всё равно должны быть видны; обратное
+  // тоже верно — 'writer' в БД, но не в yaml, должен получить fallbacks=[]
+  // (как раньше при обходе только по ROLE_NAMES).
+  const fileRoles = new Set<string>([
+    ...Object.keys(defaults),
+    ...Object.keys(rawFallbacks),
+    ...Object.keys(models),
+    ...ROLE_NAMES,
+  ]);
+  for (const role of fileRoles) {
     if (defaults[role] === undefined) defaults[role] = "pi_runtime";
     if (models[role] === undefined) models[role] = defaultModel;
     if (rawFallbacks[role] === undefined) rawFallbacks[role] = [];

@@ -106,6 +106,12 @@ export async function checkWebhookWakeInstrument(opts?: {
     db.prepare(
       "INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)",
     ).run(WEBHOOK_PROJECT_ID, "TaskFlow - NewTodoist");
+    // Пробный anchor-таск: оригинальный код вставляет с дефолтным
+    // status='active', и триггер enqueue_new_task_preparation всё равно
+    // ставит его в очередь. processOnePreparation теперь фильтрует
+    // project_id=server-notifications, и сам task удаляется в finally
+    // ниже; старый ёт STATUS='system' тут не работает — CHECK-инвариант
+    // tasks.status IN ('active','completed') его не пропустит.
     db.prepare(
       "INSERT OR IGNORE INTO tasks (id, title, project_id, creator_id) VALUES (?, ?, ?, ?)",
     ).run(taskId, "wake watcher probe", WEBHOOK_PROJECT_ID, ownerId);
@@ -173,6 +179,18 @@ export async function checkWebhookWakeInstrument(opts?: {
         /* таблица недоступна — не повод поднимать тревогу */
       }
     }
+    // Подчищаем пробную задачу и её место в очереди авто-подготовки:
+    // task_preparation_jobs.task_id имеет ON DELETE CASCADE, так что
+    // удаление задачи снимает и сам queued-джоб. Без этого пробный
+    // anchor оставался бы в начале FIFO и раньше пользовательских задач
+    // забивал processOnePreparation в autoPreparation.test.ts (MAK-… 12.10.2026).
+    if (taskId) {
+      try {
+        db.prepare("DELETE FROM tasks WHERE id = ?").run(taskId);
+      } catch {
+        /* таблица недоступна — не повод поднимать тревогу */
+      }
+    }
   }
 }
 
@@ -229,6 +247,16 @@ export function startWebhookWakeWatcher() {
     for (const s of stale) deleteSubscription(s.id);
   } catch {
     /* не смогли — не повод поднимать тревогу */
+  }
+  // Снять осиротевшие anchor-задачи и их место в очереди авто-подготовки
+  // (task_preparation_jobs.task_id с ON DELETE CASCADE): если предыдущий
+  // заход упал между INSERT и DELETE в finally, старый пробный task мог
+  // остаться в tasks со статусом 'active' и забивать processOnePreparation
+  // раньше пользовательских задач (MAK-… 12.10.2026).
+  try {
+    db.prepare("DELETE FROM tasks WHERE id LIKE 'probe-%'").run();
+  } catch {
+    /* таблица tasks недоступна — не повод поднимать тревогу */
   }
 
   // Первая проверка — сразу при старте, чтобы поймать регрессы до того,

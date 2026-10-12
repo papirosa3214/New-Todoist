@@ -11,6 +11,8 @@ import { logEvent } from "../agentState.js";
 import { getFullTask } from "../routes/subtasks.js";
 import { broadcastToUsers, broadcastTaskEvent } from "../ws.js";
 import { ROLE_NAMES } from "../roleRouting.js";
+import { SERVER_NOTIFICATIONS_PROJECT_ID } from "../lib/serverNotificationsProject.js";
+import { integrationResponsibility } from "../lib/integrationResponsibility.js";
 import { createDraftPlan,proposalFor } from "../routes/task-collaboration-plans.js";
 
 type Job = {id:number;task_id:string;input_version:number;snapshot:string;attempts:number;worker_id:string};
@@ -19,6 +21,13 @@ const autoOrigins = new Set(["auto_template","linear_import","auto_preparation"]
 
 function protectedTask(task:any): boolean {
   if(!task || task.status!=="active" || !task.project_id || task.agent_state || task.ready_for_pickup || task.owner_selected_role) return true;
+  // Серверные карточки (watcher'ы создают их в проекте «Серверные уведомления»
+  // при авариях: webhookWakeWatcher, ollamaHealth и т.п.). Триггер
+  // enqueue_new_task_preparation всё равно ставит их в очередь — это
+  // побочный эффект status='active' + project_id IS NOT NULL. Здесь мы их
+  // пропускаем, чтобы processOnePreparation не уходил в подготовку
+  // пользовательской роли для системных алертов (MAK-… 12.10.2026).
+  if(task.project_id===SERVER_NOTIFICATIONS_PROJECT_ID) return true;
   if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(task.id)) return true;
   if(db.prepare("SELECT 1 FROM role_run_jobs WHERE task_id=? AND status IN ('queued','running')").get(task.id)) return true;
   const origins=db.prepare(`SELECT n.origin FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id WHERE p.task_id=? AND p.status='draft'`).all(task.id) as Array<{origin:string}>;
@@ -47,7 +56,21 @@ export async function processOnePreparation(input:{workerId:string;analyze?:Anal
   const lease=Math.max(2,input.leaseSeconds??120);
   const job=db.transaction(()=>{
     db.prepare("UPDATE task_preparation_jobs SET status='queued',worker_id=NULL,lease_until=NULL WHERE status='running' AND lease_until<=datetime('now')").run();
-    const row=db.prepare("SELECT * FROM task_preparation_jobs WHERE status='queued' AND available_at<=datetime('now') ORDER BY id LIMIT 1").get() as Job|undefined;
+    // Берём первый queued-джоб, но только если задача — пользовательская.
+    // Серверные карточки (watcher'ы кладут их в проект
+    // «Серверные уведомления», и триггер enqueue_new_task_preparation
+    // всё равно ставит их в очередь по status='active' + project_id NOT
+    // NULL) — не наша работа: processOnePreparation не должен за них
+    // зацепляться и тратить worker lease, иначе лишние карточки
+    // перехватывают очередь раньше пользовательских (MAK-… 12.10.2026).
+    const row=db.prepare(`
+      SELECT j.* FROM task_preparation_jobs j
+      JOIN tasks t ON t.id = j.task_id
+      WHERE j.status='queued' AND j.available_at<=datetime('now')
+        AND t.project_id != ?
+        AND t.status='active'
+      ORDER BY j.id LIMIT 1
+    `).get(SERVER_NOTIFICATIONS_PROJECT_ID) as Job|undefined;
     if(!row) return undefined;
     db.prepare("UPDATE task_preparation_jobs SET status='running',worker_id=?,lease_until=datetime('now',?),attempts=attempts+1,updated_at=datetime('now') WHERE id=?").run(input.workerId,`+${lease} seconds`,row.id);
     return {...row,worker_id:input.workerId,attempts:row.attempts+1};
@@ -108,6 +131,24 @@ export async function processOnePreparation(input:{workerId:string;analyze?:Anal
       return {id,owner:project.owner_id};
     })();
     if(notification) broadcastToUsers([notification.owner],{type:"notification:new",notificationId:notification.id,taskId:job.task_id});
+    // Назначить ответственного за интеграцию сразу после создания авто-плана:
+    // без владельца approve отвечает 409 (см. регламент 09.10.2026 и
+    // карточку 71c1cd6e-…). integrationResponsibility() при mode='auto'
+    // сам выбирает кандидата; в плане без архитектора/оркестратора
+    // suggested=null, и тогда mode переключается на 'manual' с
+    // фолбэком на первого участника, чтобы approve не падал задним числом.
+    const finalJob = db.prepare("SELECT status, plan_id FROM task_preparation_jobs WHERE id=?").get(job.id) as {status:string, plan_id:string|null}|undefined;
+    if (finalJob?.status === "ready" && finalJob.plan_id) {
+      try {
+        const state = integrationResponsibility(task.id);
+        if (state.valid && state.owner_id && state.mode === "auto") {
+          db.prepare("UPDATE tasks SET integration_owner_id=? WHERE id=?").run(state.owner_id, task.id);
+        } else if (state.mode === "auto" && state.candidates.length > 0) {
+          const fallback = state.candidates[0];
+          db.prepare("UPDATE tasks SET integration_mode='manual', integration_owner_id=? WHERE id=?").run(fallback.id, task.id);
+        }
+      } catch { /* feature выключена/сломана — план остаётся draft */ }
+    }
   } catch(error){
     const message=error instanceof Error?error.message:String(error);
     db.transaction(()=>{
