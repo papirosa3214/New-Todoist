@@ -105,3 +105,9 @@ it("recipient change fences the old receipt",()=>{
  db.prepare("UPDATE tasks SET integration_owner_id=NULL WHERE id=?").run(f.id);
  expect(integrationHandoffContext(a.messageId,a.roleId)).toBeNull();
 });
+it("two approval receipts for the same accepted version do not duplicate integration",()=>{
+ const f=fixture(), a=enqueueIntegrationHandoff(f.review)!;
+ const second=crypto.randomUUID();
+ db.prepare("INSERT INTO reviews(id,task_id,version_id,task_revision,reviewer_id,artifact_hash,criteria_version,verdict,findings) VALUES (?,?,?,?,?, ?,1,'approved','Checked again')").run(second,f.id,f.v.id,f.v.task_revision,owner,f.v.artifact_hash);
+ expect(enqueueIntegrationHandoff(second)!.deliveryId).toBe(a.deliveryId);
+});

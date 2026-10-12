@@ -18,6 +18,12 @@ export function enqueueIntegrationHandoff(reviewId:string):Handoff|null {
   if(!version || version.id!==review.version_id)return null;
   const recipient=db.prepare("SELECT id,role_key,type FROM users WHERE id=? AND COALESCE(archived,0)=0").get(responsibility.owner_id) as any;
   if(!recipient?.role_key || recipient.type!=="ai")return null;
+  // Multiple reviewers may approve the same version: one continuation per
+  // accepted version and designated owner, not merely per review HTTP receipt.
+  const previous=db.prepare(`SELECT q.id,q.chat_id,q.role_id,q.message_id FROM chat_message_queue q
+    JOIN chat_messages m ON m.id=q.message_id JOIN reviews r ON m.id='integration-review:'||r.id
+    WHERE r.version_id=? AND r.verdict='approved' AND q.role_id=? ORDER BY q.rowid LIMIT 1`).get(version.id,recipient.id) as any;
+  if(previous)return {chatId:previous.chat_id,roleId:previous.role_id,deliveryId:previous.id,messageId:previous.message_id};
   // A single channel per integrator serializes accepted versions across cards.
   const chatId="integration:"+recipient.id, messageId=PREFIX+review.id;
   db.prepare("INSERT OR IGNORE INTO chats(id,title,kind,created_by) VALUES (?,'Передача принятых изменений','direct',?)").run(chatId,task.creator_id);
