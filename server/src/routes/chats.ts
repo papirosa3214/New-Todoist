@@ -1,3 +1,4 @@
+import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
@@ -1157,6 +1158,15 @@ export async function recoverAgentDelivery(input: {
     fenceMessageDelivery(deliveryId);
     return { status: "fenced", replyId: null };
   }
+  if(isIntegrationHandoff(row.message_id) && !integrationHandoffContext(row.message_id,roleId)){
+    fenceMessageDelivery(deliveryId);return {status:"fenced",replyId:null};
+  }
+  // Compare-and-set before the first await: two recoverers cannot run the
+  // same accepted-version continuation. Existing forwarded work acknowledges it.
+  if(isIntegrationHandoff(row.message_id)){
+    const claimed=db.prepare("UPDATE chat_message_queue SET status='picked',picked_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status='pending'").run(deliveryId);
+    if(!claimed.changes)return {status:"skipped",replyId:null};
+  }
   const role = roleFromUserId(roleId);
   if (!role) {
     // Роль убрали из чата (или переименовали) — fence, а не
@@ -1167,13 +1177,17 @@ export async function recoverAgentDelivery(input: {
   if(!isMember(chatId,roleId)){fenceMessageDelivery(deliveryId);return {status:"fenced",replyId:null};}
   const trigger=db.prepare("SELECT text,recipient_subtask_id FROM chat_messages WHERE id=?").get(row.message_id) as {text:string;recipient_subtask_id:string|null}|undefined;
   const saved=JSON.parse(row.payload_json);
+  const integrationText=integrationHandoffContext(row.message_id,roleId);
   const recipientSlot=saved.subtaskId ?? trigger?.recipient_subtask_id ?? undefined;
   const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
   const slot=topic && trigger ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),recipientSlot) : null;
   const activeDelivery=slot ? await deliverTopicToWork(slot.task_id,role,row.message_id,trigger!.text,slot.plan_node_key)
-    : trigger ? await deliverChatToWork(role,chatId,row.message_id,trigger.text,recipientSlot) : "idle";
+    : trigger ? await deliverChatToWork(role,chatId,row.message_id,integrationText ? integrationText+"\n"+trigger.text : trigger.text,recipientSlot) : "idle";
   if(activeDelivery!=="idle"){
-    if(activeDelivery==="busy")messengerAmbiguityNotice(chatId,roleId,row.message_id);
+    if(activeDelivery==="busy"){
+      if(isIntegrationHandoff(row.message_id))retainForwardedDelivery(deliveryId);
+      messengerAmbiguityNotice(chatId,roleId,row.message_id);
+    }
     return {status:"skipped",replyId:null};
   }
   // Уже «в работе» (picked) — второй раз не дёргаем Pi,
@@ -1744,9 +1758,11 @@ async function deliverAgentReply(args: {
     .get(args.triggerMessageId) as HistoryRow | undefined;
   // Сообщение удалили, пока ход ждал в очереди, — отвечать не на что.
   if (!trigger) return null;
+  const integrationContext=integrationHandoffContext(trigger.id,roleUserId);
+  if(isIntegrationHandoff(trigger.id) && !integrationContext)return null;
   const triggerTask = trigger.task_id ? `\nКонтекст задачи: ${trigger.task_id}` : "";
   const triggerFiles = trigger.attachments ? `\n[вложения: ${trigger.attachments}]` : "";
-  const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}`;
+  const userText = `${integrationContext ? integrationContext+"\n" : ""}${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}`;
 
   const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
   const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;
@@ -1830,6 +1846,8 @@ async function deliverAgentReply(args: {
   prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Отчёты сохраняй инструментом doc_write в документах задачи, здесь дай ссылку. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
   if(topic) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 
+  if(integrationContext) prompt = integrationContext+"\n\n"+prompt;
+
   const roleName =
     (db.prepare("SELECT name FROM users WHERE id = ?").get(roleUserId) as
       | { name?: string }
@@ -1864,7 +1882,7 @@ async function deliverAgentReply(args: {
     typing(true);
   try {
     reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:live.onEvent}) : await startChatRun({
-      mode: roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
+      mode: integrationContext ? "work" : roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
       messageId: trigger.id,
       chatId,
       role,

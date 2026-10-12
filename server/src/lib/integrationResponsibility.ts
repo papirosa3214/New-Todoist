@@ -35,7 +35,7 @@ export function requireIntegrationResponsibility(taskId:string):void {
 }
 export function integrationResponsibilityPrompt(taskId:string):string {
  const state=integrationResponsibility(taskId);
- return state.mode==='not_required'?'Интеграция в репозиторий: явно не требуется.':`Ответственный за интеграцию: ${state.owner_title??'не назначен'} (${state.owner_id??'нет'}), карточка ${state.scope_task_id}. Передайте ему точные коммиты и проверки. После положительного ревью он переносит изменения в main и проверяет совместный результат. Не считайте рабочую ветку интегрированной.`;
+ return state.mode==='not_required'?'Интеграция в репозиторий: явно не требуется.':`Ответственный за интеграцию: ${state.owner_title??'не назначен'} (${state.owner_id??'нет'}), карточка ${state.scope_task_id}. Передайте ему точные коммиты и проверки. После положительного ревью он переносит изменения в main и проверяет совместный результат. Не считайте рабочую ветку интегрированной. После положительного ревью сервер передаёт принятую версию ответственному отдельным сообщением через устойчивую очередь чата. Подтвердите получение; не создавайте второго ответственного или новый обязательный слот. Укажите настоящий SHA main и проверки, либо конкретную причину ожидания.`;
 }
 export function registerIntegrationResponsibilityRoutes(app:FastifyInstance):void {
  app.get<{Params:{id:string}}>('/api/tasks/:id/integration-responsibility',{preHandler:authOrApiToken},async(req:any,reply)=>{
