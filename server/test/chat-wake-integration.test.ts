@@ -82,6 +82,8 @@ afterEach(async () => {
   db.prepare("DELETE FROM chat_reads").run();
   db.prepare("DELETE FROM webhook_subscriptions").run();
   db.prepare("DELETE FROM attachments").run();
+  // Уведомления ссылаются на задачу без каскада — убрать раньше tasks.
+  db.prepare("DELETE FROM notifications").run();
   db.prepare(
     "DELETE FROM tasks WHERE id NOT IN (SELECT id FROM tasks WHERE id LIKE 'seed-%')",
   ).run();

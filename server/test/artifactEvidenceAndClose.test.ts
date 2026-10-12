@@ -39,6 +39,8 @@ describe("результат шага плана: доказательства �
         edges: [{ from_slot_key: "analysis", to_slot_key: "delivery", start_condition: "artifact_ready", artifact_key: "feature_spec" }],
       },
     });
+    const ir = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/integration-responsibility`, headers: { authorization: ownerAuth } })).json();
+    await app.inject({ method: "PATCH", url: `/api/tasks/${taskId}/integration-responsibility`, headers: { authorization: ownerAuth }, payload: { mode: "manual", owner_id: ir.candidates[0].id } });
     await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${plan.json().plan.id}/approve`, headers: { authorization: ownerAuth } });
     const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: ownerAuth } })).json() as Array<{ id: string; plan_node_key: string }>;
     analysisId = subtasks.find((s) => s.plan_node_key === "analysis")!.id;

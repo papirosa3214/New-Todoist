@@ -135,6 +135,7 @@ describe("MAK-66 — статус узла плана и общая очеред
       db.prepare("DELETE FROM task_collaboration_plans WHERE task_id = ?").run(id);
       db.prepare("DELETE FROM task_events WHERE task_id = ?").run(id);
       db.prepare("DELETE FROM role_run_jobs WHERE task_id = ?").run(id);
+      db.prepare("DELETE FROM notifications WHERE task_id = ?").run(id);
     }
     db.prepare("DELETE FROM tasks WHERE creator_id = ?").run(ownerId);
     db.prepare("DELETE FROM task_collaboration_plans WHERE created_by = ? AND task_id NOT IN (SELECT id FROM tasks)").run(ownerId);
