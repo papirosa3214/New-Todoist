@@ -112,7 +112,7 @@ beforeAll(async () => {
         started_at, heartbeat_at, ended_at, outcome, reason)
      VALUES (?, ?, NULL, ?, 'in-process', 'gpt-x', 'builder',
              datetime('now', '-2 days'), datetime('now', '-2 days'),
-             datetime('now', '-2 days'), 'done', NULL)`,
+             datetime('now', '-47 hours'), 'done', NULL)`,
   ).run(`att_arch_${uid()}`, archivedTaskId, "role_builder");
 });
 
@@ -197,7 +197,7 @@ describe("GET /api/coordination/role-load", () => {
     expect(activeSlot!.kind).toBe("task");
   });
 
-  it("работа завершена агентом: закрытый интервал не остаётся в загрузке", async () => {
+  it("завершённая работа видна в истории, но не в текущей загрузке", async () => {
     const res = await serverApp.inject({
       method: "GET",
       url: "/api/coordination/role-load?window=24h",
@@ -210,7 +210,8 @@ describe("GET /api/coordination/role-load", () => {
     const closedAttempt = body.attempts.find(
       (a) => a.task_title === "role-load done",
     );
-    expect(closedAttempt).toBeUndefined();
+    expect(closedAttempt).toBeTruthy();
+    expect(closedAttempt!.active).toBe(false);
     const inActive = body.active_now.find((s) => s.task_title === "role-load done");
     expect(inActive).toBeUndefined();
   });
@@ -259,7 +260,7 @@ describe("GET /api/coordination/role-load", () => {
     expect(badBody.window).toBe("24h");
   });
 
-  it("задача в архиве не попадает ни в attempts, ни в open_slots, ни в active_now", async () => {
+  it("архивная история не превращается в текущую загрузку", async () => {
     const res = await serverApp.inject({
       method: "GET",
       url: "/api/coordination/role-load?window=week",
@@ -270,13 +271,13 @@ describe("GET /api/coordination/role-load", () => {
       active_now: Array<{ task_title: string }>;
       open_slots: Array<{ task_title: string }>;
     };
-    expect(body.attempts.find((a) => a.task_title === "role-load archived")).toBeUndefined();
+    expect(body.attempts.find((a) => a.task_title === "role-load archived")?.active).toBe(false);
     expect(body.active_now.find((s) => s.task_title === "role-load archived")).toBeUndefined();
     expect(body.open_slots.find((s) => s.task_title === "role-load archived")).toBeUndefined();
   });
 });
 describe("роль фактического исполнителя старых заходов", () => {
-  it("не показывает завершённые интервалы и сохраняет снимок роли в БД", async () => {
+  it("показывает завершённое рабочее время с фактической ролью и сохраняет снимок в БД", async () => {
     const taskId = uid();
     db.prepare("INSERT INTO tasks(id,title,status,creator_id,assignee_id,agent_state) VALUES(?,?,'active',?,'role_qa','in_progress')").run(taskId,"legacy role history",ownerId);
     const rows = [
@@ -291,7 +292,7 @@ describe("роль фактического исполнителя старых 
       const result = await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()});
       expect(result.statusCode).toBe(200);
       for (const row of rows) {
-        expect(result.json().attempts.find((a: any) => a.id === row.id)).toBeUndefined();
+        expect(result.json().attempts.find((a: any) => a.id === row.id)?.routing_role).toBe(row.expected);
       }
       expect(db.prepare("SELECT routing_role FROM attempts WHERE id=?").get(rows[0].id)).toEqual({routing_role:null});
     } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
@@ -354,4 +355,52 @@ describe("статус карточки и работы важнее незак�
       expect(body.attempts.some((a:any)=>a.id===attemptId)).toBe(false);
     } finally { db.prepare("DELETE FROM tasks WHERE id=?").run(taskId); }
   });
+});
+
+
+describe("подтверждённая история рабочего времени",()=>{
+  it("время сданного шага заканчивается сдачей, а не ожиданием закрытия карточки",async()=>{
+    const taskId=uid(),stepId=uid(),attemptId=uid();
+    try{
+      db.prepare("INSERT INTO tasks(id,title,status,creator_id) VALUES(?,?,'completed',?)").run(taskId,"closed with work",ownerId);
+      db.prepare("INSERT INTO subtasks(id,task_id,title,done,agent_id) VALUES(?,?,?,1,'role_builder')").run(stepId,taskId,"unique submitted work");
+      db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at,ended_at) VALUES(?,?,?,'role_builder',datetime('now','-2 hours'),datetime('now'))").run(attemptId,taskId,stepId);
+      db.prepare("INSERT INTO task_events(id,task_id,actor_id,kind,field,to_value,created_at) VALUES(?,?,'role_builder','subtask_done','subtask',?,datetime('now','-90 minutes'))").run(uid(),taskId,"unique submitted work");
+      const res=await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()});const body=res.json();
+      const work=body.attempts.find((a:any)=>a.id===attemptId);
+      expect(work).toBeTruthy();expect(work.active).toBe(false);
+      expect(new Date(work.ended_at).getTime()-new Date(work.started_at).getTime()).toBe(30*60*1000);
+      expect(body.active_now.some((a:any)=>a.task_id===taskId)).toBe(false);
+      db.prepare("UPDATE attempts SET ended_at=NULL WHERE id=?").run(attemptId);
+      const recovered=(await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()})).json().attempts.find((a:any)=>a.id===attemptId);
+      expect(recovered.ended_at).toBe(work.ended_at);expect(recovered.active).toBe(false);
+      expect((db.prepare("SELECT ended_at FROM attempts WHERE id=?").get(attemptId) as any).ended_at).toBeNull();
+    }finally{db.prepare("DELETE FROM task_events WHERE task_id=?").run(taskId);db.prepare("DELETE FROM tasks WHERE id=?").run(taskId);}
+  });
+  it("не приписывает интервалу сдачу чужого исполнителя",async()=>{
+    const taskId=uid(),stepId=uid(),attemptId=uid();
+    try{
+      db.prepare("INSERT INTO tasks(id,title,status,creator_id) VALUES(?,?,'completed',?)").run(taskId,"ambiguous finish",ownerId);
+      db.prepare("INSERT INTO subtasks(id,task_id,title,done) VALUES(?,?,?,1)").run(stepId,taskId,"different worker");
+      db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at) VALUES(?,?,?,'role_builder',datetime('now','-2 hours'))").run(attemptId,taskId,stepId);
+      db.prepare("INSERT INTO task_events(id,task_id,actor_id,kind,to_value,created_at) VALUES(?,?,'role_qa','subtask_done',?,datetime('now','-90 minutes'))").run(uid(),taskId,"different worker");
+      const body=(await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()})).json();
+      expect(body.attempts.some((a:any)=>a.id===attemptId)).toBe(false);
+    }finally{db.prepare("DELETE FROM task_events WHERE task_id=?").run(taskId);db.prepare("DELETE FROM tasks WHERE id=?").run(taskId);}
+  });
+});
+
+it("перезапуск даёт отдельные неперекрывающиеся интервалы, не время между ними",async()=>{
+ const taskId=uid(),stepId=uid(),first=uid(),second=uid();
+ try{
+  db.prepare("INSERT INTO tasks(id,title,status,creator_id) VALUES(?,?,'completed',?)").run(taskId,"restart history",ownerId);
+  db.prepare("INSERT INTO subtasks(id,task_id,title,done,plan_node_key) VALUES(?,?,?,1,'unique-restart')").run(stepId,taskId,"restart work");
+  for(const [id,offset] of [[first,'-2 hours'],[second,'-100 minutes']])db.prepare("INSERT INTO attempts(id,task_id,subtask_id,executor_id,started_at,ended_at) VALUES(?,?,?,'role_builder',datetime('now',?),CASE WHEN ? THEN datetime('now','-100 minutes') ELSE NULL END)").run(id,taskId,stepId,offset,id===first?1:0);
+  db.prepare("INSERT INTO task_events(id,task_id,kind,field,created_at) VALUES(?,?,'plan_subtask_interrupted','unique-restart',datetime('now','-100 minutes'))").run(uid(),taskId);
+  db.prepare("INSERT INTO task_events(id,task_id,actor_id,kind,to_value,created_at) VALUES(?,?,'role_builder','subtask_done','restart work',datetime('now','-90 minutes'))").run(uid(),taskId);
+  const work=(await serverApp.inject({method:"GET",url:"/api/coordination/role-load",headers:bearer()})).json().attempts;
+  const a=work.find((a:any)=>a.id===first),b=work.find((a:any)=>a.id===second);
+  expect(a.ended_at).toBe(b.started_at);expect(a.active).toBe(false);expect(b.active).toBe(false);
+  expect(new Date(b.ended_at).getTime()-new Date(b.started_at).getTime()).toBe(10*60*1000);
+ }finally{db.prepare("DELETE FROM task_events WHERE task_id=?").run(taskId);db.prepare("DELETE FROM tasks WHERE id=?").run(taskId);}
 });

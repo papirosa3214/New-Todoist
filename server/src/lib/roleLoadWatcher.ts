@@ -22,6 +22,12 @@ export function checkRoleLoad(): {ok:boolean;reason?:string} {
       db.prepare("UPDATE tasks SET status='active',agent_state=NULL WHERE id=?").run(taskId);
       db.prepare("UPDATE subtasks SET done=1 WHERE id=?").run(stepId);
       absent();
+      db.prepare("UPDATE tasks SET status='completed' WHERE id=?").run(taskId);
+      db.prepare("UPDATE attempts SET started_at=datetime('now','-2 minutes'),ended_at=datetime('now','-1 minute') WHERE task_id=?").run(taskId);
+      const history=readRoleLoad("24h");
+      const finished=history.attempts.find(a=>a.task_id===taskId);
+      if(!finished || finished.active || history.active_now.some(a=>a.task_id===taskId))
+        throw new Error("Confirmed finished work lost or treated as current");
       throw rolledBack;
     })();
   }catch(e){return e===rolledBack?{ok:true}:{ok:false,reason:String((e as Error).message)};}

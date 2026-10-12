@@ -344,30 +344,58 @@ const rolesOut = roleRows.map((r) => ({
 // контекста пригодится в следующих инкрементах.
 const attemptRows = db
   .prepare(
-    `SELECT a.id, a.task_id, a.subtask_id, a.executor_id,
-            COALESCE(NULLIF(a.routing_role, ''), u.role_key) AS routing_role,
-            a.started_at, a.ended_at, a.outcome, a.reason,
-            t.title AS task_title
+    `WITH work_evidence AS (
+       SELECT a.*,
+         CASE WHEN a.subtask_id IS NOT NULL THEN (
+           SELECT MIN(e.created_at) FROM task_events e
+           JOIN subtasks step ON step.id=a.subtask_id
+           WHERE e.task_id=a.task_id AND (
+             (e.kind='subtask_done' AND e.actor_id=a.executor_id AND e.to_value=step.title
+              AND (SELECT COUNT(*) FROM subtasks same WHERE same.task_id=a.task_id AND same.title=step.title)=1)
+             OR (e.kind='plan_subtask_interrupted' AND e.field=step.plan_node_key
+              AND (SELECT COUNT(*) FROM subtasks same WHERE same.task_id=a.task_id AND same.plan_node_key=step.plan_node_key)=1)
+           ) AND datetime(e.created_at)>datetime(a.started_at)
+         ) ELSE (
+           SELECT MIN(e.created_at) FROM task_events e
+           WHERE e.task_id=a.task_id AND e.kind='state_changed'
+             AND e.actor_id=a.executor_id AND e.field='agent_state'
+             AND e.from_value='in_progress'
+             AND (e.to_value IS NULL OR e.to_value<>'in_progress')
+             AND datetime(e.created_at)>datetime(a.started_at)
+         ) END AS observed_end
        FROM attempts a
+     ), work_intervals AS (
+       SELECT *, CASE
+         WHEN ended_at IS NULL THEN observed_end
+         WHEN observed_end IS NULL THEN ended_at
+         WHEN datetime(observed_end)<datetime(ended_at) THEN observed_end
+         ELSE ended_at END AS work_end
+       FROM work_evidence
+     )
+     SELECT a.id, a.task_id, a.subtask_id, a.executor_id,
+            COALESCE(NULLIF(a.routing_role, ''), u.role_key) AS routing_role,
+            a.started_at, a.work_end AS ended_at, a.outcome, a.reason,
+            t.title AS task_title
+       FROM work_intervals a
        LEFT JOIN users u ON u.id = a.executor_id
        JOIN tasks t ON t.id = a.task_id
        LEFT JOIN subtasks s ON s.id = a.subtask_id
-      WHERE datetime(a.started_at) < datetime(?)
-        AND (a.ended_at IS NULL OR datetime(a.ended_at) > datetime(?))
-        AND t.archived_at IS NULL
-        AND t.status = 'active'
-        AND a.ended_at IS NULL
-  AND (
-          (a.subtask_id IS NULL AND t.agent_state = 'in_progress'
-           AND a.id = COALESCE(t.current_attempt_id,
-             (SELECT a2.id FROM attempts a2 WHERE a2.task_id=t.id
-              AND a2.subtask_id IS NULL AND a2.ended_at IS NULL
-              ORDER BY a2.started_at DESC, a2.rowid DESC LIMIT 1))) OR
-          (s.done = 0 AND s.agent_state = 'in_progress'
-           AND a.id = COALESCE(s.current_attempt_id,
-             (SELECT a2.id FROM attempts a2 WHERE a2.subtask_id=s.id
-              AND a2.ended_at IS NULL
-              ORDER BY a2.started_at DESC, a2.rowid DESC LIMIT 1))))
+      WHERE datetime(a.started_at)<datetime(?)
+        AND (
+          (a.work_end IS NOT NULL AND datetime(a.work_end)>datetime(?)
+           AND datetime(a.work_end)>datetime(a.started_at))
+          OR (a.work_end IS NULL AND t.status='active' AND t.archived_at IS NULL AND (
+            (a.subtask_id IS NULL AND t.agent_state='in_progress'
+             AND a.id=COALESCE(t.current_attempt_id,
+               (SELECT a2.id FROM attempts a2 WHERE a2.task_id=t.id
+                AND a2.subtask_id IS NULL AND a2.ended_at IS NULL
+                ORDER BY a2.started_at DESC,a2.rowid DESC LIMIT 1)))
+            OR (s.done=0 AND s.agent_state='in_progress'
+             AND a.id=COALESCE(s.current_attempt_id,
+               (SELECT a2.id FROM attempts a2 WHERE a2.subtask_id=s.id
+                AND a2.ended_at IS NULL ORDER BY a2.started_at DESC,a2.rowid DESC LIMIT 1)))
+          ))
+        )
       ORDER BY a.started_at`,
   )
   .all(toIso, fromIso) as Array<{
