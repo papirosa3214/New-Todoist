@@ -157,9 +157,13 @@ function finalizePresentation(plan: Plan, view: any): any {
   // Номер порядка — уровень в графе по прямым связям; возвраты на доработку
   // (связь в шаг более ранней попытки) порядок не задают.
   const iteration = new Map(nodes.map((n) => [n.slot_key, n.iteration ?? 0]));
+  const cardOf = new Map(nodes.map((n) => [n.slot_key, n.task_id ?? plan.task_id]));
   const incoming = new Map<string, string[]>();
   for (const e of view.edges as any[]) {
-    if ((iteration.get(e.to_slot_key) ?? 0) < (iteration.get(e.from_slot_key) ?? 0)) continue;
+    // Возврат — только внутри одной карточки. Связь из шага-доработки дочерней
+    // в шаг родителя — обычный порядок «дочерняя → итог», а не возврат.
+    if (cardOf.get(e.to_slot_key) === cardOf.get(e.from_slot_key)
+      && (iteration.get(e.to_slot_key) ?? 0) < (iteration.get(e.from_slot_key) ?? 0)) continue;
     incoming.set(e.to_slot_key, [...(incoming.get(e.to_slot_key) ?? []), e.from_slot_key]);
   }
   const memo = new Map<string, number>();
