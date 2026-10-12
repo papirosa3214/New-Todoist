@@ -14,7 +14,7 @@ import {
   roleUserId,
   type RoleName,
 } from "../roleRouting.js";
-import { inProcessToolNames, sweepPendingReviews } from "../runtime/inProcessRun.js";
+import { inProcessToolNames, sweepPendingReviews, taskflowTools } from "../runtime/inProcessRun.js";
 
 type ProfileConfig = {
   mcpServers?: {
@@ -162,6 +162,21 @@ const STATUS_TITLES_RU: Record<RoleStatus, string> = {
  * Раньше отсутствие одного файла профиля обрушивало весь список — экран
  * «Команда» оставался пустым вместо одной проблемной строки.
  */
+/** Инструмент роли для экрана «Команда»: имя плюс текст, который видит
+ *  сама модель. Источник — определение тула в runtime, а не список имён из
+ *  MCP-профиля: у ролей, работающих внутри сервера, MCP нет вовсе, а список
+ *  имён не объясняет ничего (владелец 12.10.2026: «чтобы у меня на айфоне
+ *  все это отображалось… что какой инструмент, что делает»). */
+function roleToolDetails(role: RoleName, names: string[]): Array<{ name: string; description: string | null }> {
+  let descriptions = new Map<string, string>();
+  try {
+    descriptions = new Map(taskflowTools(role, null).map((t) => [t.name, String(t.description ?? "")]));
+  } catch {
+    // Определения не собрались — отдаём имена без описаний, а не роняем экран.
+  }
+  return names.map((name) => ({ name, description: descriptions.get(name) ?? null }));
+}
+
 function roleDetails(role: RoleName, piAlive: boolean) {
   const routing = loadRoleRouting();
   const problems: string[] = [];
@@ -242,6 +257,7 @@ function roleDetails(role: RoleName, piAlive: boolean) {
     prompt,
     skills,
     tools,
+    tools_detail: roleToolDetails(role, tools),
     permissions: account?.permissions ?? null,
     model,
     default_shell: routing.defaults[role],
