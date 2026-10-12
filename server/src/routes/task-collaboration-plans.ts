@@ -6,7 +6,7 @@ import { workChoices, validateWorkChoices, materializeWorkChoices } from "../lib
 import { settlePreparationOnApproval } from "../lib/preparationGate.js";
 import { ownerIntakeMode, type IntakeMode } from "../lib/ownerIntakeMode.js";
 import { ensureCardResponsible } from "../runtime/branchPlan.js";
-import { beforeSlots, setNodePhase, BranchPhaseError, type BranchPhase } from "../runtime/branchPhase.js";
+import { beforeSlots, setNodePhase, markBranchPrep, BranchPhaseError, BRANCH_PREP_SLOT, BRANCH_PREP_RESULT, type BranchPhase } from "../runtime/branchPhase.js";
 import {branchAssignmentRole} from "../runtime/branchPlan.js";
 import { branchRoot,branchCards,branchPresentation,approveBranch,editBranchDraft } from "../runtime/branchPlan.js";
 import { unmetDependencyIds } from "../enricher.js";
@@ -464,6 +464,7 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
                 VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, taskId, revision, profile, rationale, contextVersion, createdBy);
     const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
     for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id ?? null);
+    markBranchPrep(id);
     const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
     for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
   })();
@@ -555,7 +556,13 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
   if(db.prepare("SELECT 1 FROM tasks WHERE parent_id=?").get(taskId)){
     const root=branchRoot(taskId)===taskId, role=root?'architect':'analyst';
     const task=db.prepare("SELECT title FROM tasks WHERE id=?").get(taskId) as {title:string};
-    return {profile:'single_executor',rationale:'Сборка результатов существующей ветки; запуск всего процесса согласуется в корневой карточке.',nodes:[{slot_key:'summary',role_key:role,required:true,expected_result:`Собрать и проверить совместимость дочерних результатов: ${task.title}`,output_artifact:null,source_subtask_id:null}] as Node[],edges:[] as Edge[]};
+    const assembly = {profile:'single_executor',rationale:'Сборка результатов существующей ветки; запуск всего процесса согласуется в корневой карточке.',nodes:[{slot_key:'summary',role_key:role,required:true,expected_result:`Собрать и проверить совместимость дочерних результатов: ${task.title}`,output_artifact:null,source_subtask_id:null}] as Node[],edges:[] as Edge[]};
+    // Стандартный цикл ветки: у родителя перед сборкой итога — подготовка
+    // (branchPhase.ts). Дочерние ждут её и получают её результат вводными.
+    if(!root) return assembly;
+    return {...assembly,profile:'manual' as const,
+      nodes:[{slot_key:BRANCH_PREP_SLOT,role_key:'architect',required:true,expected_result:BRANCH_PREP_RESULT,output_artifact:null,source_subtask_id:null} as Node,...assembly.nodes],
+      edges:[{from_slot_key:BRANCH_PREP_SLOT,to_slot_key:'summary',start_condition:'submitted',artifact_key:null} as Edge]};
   }
   if(requested==='auto' && branchRoot(taskId)!==taskId){
     const card=db.prepare("SELECT title,description FROM tasks WHERE id=?").get(taskId) as {title:string;description:string|null};

@@ -112,3 +112,23 @@ export function setNodePhase(planId: string, slotKey: string, phase: BranchPhase
     db.prepare("UPDATE task_collaboration_plans SET version = version + 1 WHERE id = ?").run(planId);
   })();
 }
+
+/**
+ * Стандартный цикл ветки (владелец 12.10.2026): работа всегда начинается с
+ * подготовки — план, архитектура, документы, окружение, вводные каждому, —
+ * и только потом расходится по дочерним. Это норма, а не то, о чём владелец
+ * должен вспомнить в постановке. Шаг с этим слотом сервер сам кладёт в
+ * черновик плана родителя ветки (proposalFor) и относит к подготовке.
+ * Владелец может пропустить его обычным skip_step или перенести в итог.
+ */
+export const BRANCH_PREP_SLOT = "branch_prep";
+export const BRANCH_PREP_RESULT =
+  "Подготовка ветки: продуманный план и архитектура, оформленные документы, подготовленное окружение и вводные для каждой дочерней карточки";
+
+/** Вызывать после записи узлов нового плана: шаг подготовки сразу в группе «до дочерних». */
+export function markBranchPrep(planId: string): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO plan_node_phases(plan_id, slot_key, phase)
+     SELECT plan_id, slot_key, 'before' FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ?`,
+  ).run(planId, BRANCH_PREP_SLOT);
+}
