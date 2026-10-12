@@ -1,19 +1,6 @@
-// e2e: GET /api/coordination/role-load — Гант загрузки ролей по факту
-// (карточка 1117d06c…). Минимальные данные: одна роль, один закрытый
-// заход, одна активная попытка, одна задача без исполнителя. Проверяем:
-//
-//   1. Без токена — 401.
-//   2. Со токеном — 200, ответ содержит ровно те поля, что обещает
-//      контракт (roles/attempts/active_now/open_slots + времена окна).
-//   3. Активная попытка попадает и в attempts, и в active_now.
-//   4. Закрытый заход виден в attempts, в active_now его нет.
-//   5. Открытый слот (assignee_id=NULL, status='active') попадает в
-//      open_slots.
-//   6. Окно по умолчанию — 24h; окно 3d шире и захватывает тот же
-//      закрытый заход.
-//   7. Задача в архиве не попадает никуда.
-//
-// Контракт read-only, поэтому других проверок не делаем.
+// GET /api/coordination/role-load: только фактическая работа на открытых карточках.
+// Завершённые карточки, сданные шаги и старые интервалы не создают нагрузку.
+// Состояние агента важнее наличия записи запуска; история в БД не переписывается.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import crypto from "node:crypto";
@@ -289,7 +276,7 @@ describe("GET /api/coordination/role-load", () => {
   });
 });
 describe("роль фактического исполнителя старых заходов", () => {
-  it("восстанавливает роль по executor, сохраняет routing snapshot и не берёт нынешнего assignee", async () => {
+  it("не показывает завершённые интервалы и сохраняет снимок роли в БД", async () => {
     const taskId = uid();
     db.prepare("INSERT INTO tasks(id,title,status,creator_id,assignee_id,agent_state) VALUES(?,?,'active',?,'role_qa','in_progress')").run(taskId,"legacy role history",ownerId);
     const rows = [
