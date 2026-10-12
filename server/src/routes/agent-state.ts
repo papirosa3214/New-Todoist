@@ -1306,8 +1306,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // поднятым флагом оставалась ничьей, и роль не просыпалась (живая
       // проба C3 23.09.2026, карточка bad6799f). Раздаём заново — та же
       // роль берётся из owner_selected_role, запуск ставится в очередь
-      // в транзакции раздачи. Флаг не поднят — tryStartSingleExecutorPlan
-      // откажет сам.
+      // в транзакции раздачи.
       // MAK-68: 9 входов сведены к одной функции; повторная раздача после
       // `blocked→null` тоже идёт через `tryStartSingleExecutorPlan`.
       // Это явное действие владельца (снять блок и ответить роли), поэтому
@@ -1315,9 +1314,15 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // При system: true выключенная «Система» глушила раздачу, и карточка
       // с поднятым флагом снова оставалась ничьей — тот же сбой C3, от
       // которого защищает эта ветка.
+      // Флаг проверяем явно: `tryStartSingleExecutorPlan` его не смотрит
+      // (он же обслуживает ручной /run, где флаг не нужен), поэтому без
+      // этого условия снятие блока при опущенном флаге запускало бы роль
+      // вопреки решению владельца — «флаг не поднят, никто не назначается»
+      // (test/ownerUnblockRedispatch.test.ts).
       if (
         from === "blocked" &&
         state === null &&
+        task.ready_for_pickup === 1 &&
         String(task.assignee_id ?? "").startsWith("role_") &&
         task.assignee_id !== req.userId
       ) {
