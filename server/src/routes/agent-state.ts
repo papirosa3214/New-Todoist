@@ -367,8 +367,22 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       const claimCaller = db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as any;
       if (claimCaller?.type === "ai") {
         const assigned = db.prepare("SELECT assignee_id FROM tasks WHERE id=?").get(req.params.id) as any;
-        const plan = db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved')").get(req.params.id);
-        if (plan || assigned?.assignee_id !== req.userId) return reply.code(403).send({error:"Агент не назначает себя и не захватывает командную карточку. Назначения выполняет сервер; работай в своём слоте."});
+        // Single-executor план — это «задача назначена ровно одному
+        // исполнителю» (auto on create или явный старт владельца). Он не
+        // делает карточку командной: у неё один узел, и владелец уже
+        // утвердил исполнителя. Защита от самозахвата здесь — это
+        // `assigned?.assignee_id !== req.userId`; командная же карточка
+        // (multi-role план) должна блокироваться отдельным условием, чтобы
+        // исполнитель с правильным assignee_id не упирался в self-claim gate
+        // раньше проверки зависимостей (карточка b41b0aca, D1/D2:
+        // unmetDeps должна срабатывать и писать audit-событие
+        // dependency_context_blocked).
+        const teamPlan = db
+          .prepare(
+            "SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved') AND profile != 'single_executor'",
+          )
+          .get(req.params.id);
+        if (teamPlan || assigned?.assignee_id !== req.userId) return reply.code(403).send({error:"Агент не назначает себя и не захватывает командную карточку. Назначения выполняет сервер; работай в своём слоте."});
       }
       let task =
         getTaskForWrite(req.params.id, req.userId) ??
