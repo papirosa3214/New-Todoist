@@ -259,6 +259,13 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     expect(fakeSessions).toHaveLength(0);
   });
 
+  it("обсуждение разрешает вопросы коллегам без рабочих команд и мутаций",async()=>{
+    await startChatRun({chatId:"chat-direct",role:"architect",roleId:"role_architect",prompt:"Спроси коллегу",mode:"discussion" as any});
+    const names=fakeSessions.at(-1)!.options.tools as string[];
+    for(const name of ["read","taskflow_chat_send","taskflow_chat_reply","taskflow_chat_read"])expect(names).toContain(name);
+    for(const name of ["bash","write","edit","taskflow_claim","taskflow_subtask_done","taskflow_plan_request","taskflow_create_task","taskflow_doc_write"])expect(names).not.toContain(name);
+  });
+
   it("параллельный запуск на ту же (chat, role) → второй отказ", async () => {
     blockPromptFor(0);
     const first = startChatRun({ chatId: "chat-direct", role: "architect", roleId: "role_architect", prompt: "долгий" });

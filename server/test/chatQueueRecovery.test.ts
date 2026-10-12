@@ -25,6 +25,7 @@ import {
   _resetChatRoleQueuesForTests,
 } from "../src/runtime/chatSession.js";
 import {
+  startChatQueueRecovery,
   recoveryBumpChatGeneration,
   sweepRecoverableDeliveries,
   recoverAgentDelivery,
@@ -145,6 +146,16 @@ afterAll(async () => {
 });
 
 describe("chatQueue: recovery", () => {
+  it("cold recovery возвращает picked предыдущего процесса, не трогая свежий pickup",async()=>{
+    for(const [id,date] of [["old-pick","2000-01-01 00:00:00"],["new-pick","2099-01-01 00:00:00"]]){
+      db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,'Пробный вопрос','chat','chat_recovery_test')").run(id,OWNER_USER);
+      db.prepare("INSERT INTO chat_message_queue(id,chat_id,role_id,delivery_id,message_id,session_generation,payload_json,status,updated_at) VALUES(?,'chat_recovery_test',?,?,?,1,'{}','picked',?)").run(id,ROLE_USER,id,id,date);
+    }
+    startChatQueueRecovery(new Date("2001-01-01T00:00:00Z"));
+    await vi.waitFor(()=>expect(db.prepare("SELECT status FROM chat_message_queue WHERE id='old-pick'").get()).toMatchObject({status:"done"}));
+    expect(db.prepare("SELECT status FROM chat_message_queue WHERE id='new-pick'").get()).toMatchObject({status:"picked"});
+  });
+
   it("после рестарта pending-холд поднимается реальным Pi-вызовом и закрывается как done", async () => {
     // Триггерное сообщение — без него deliverAgentReply не сможет
     // собрать prompt и упрётся в null-возврат.

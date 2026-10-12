@@ -1,6 +1,6 @@
 import { branchMembership } from "../runtime/branchPlan.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
-import { deliverTopicToWork } from "../runtime/inProcessRun.js";
+import { deliverTopicToWork, deliverChatToWork } from "../runtime/inProcessRun.js";
 import { topicContext, taskTopicClosedAt } from "../lib/projectTopics.js";
 import { nudgeTaskPlan } from "../runtime/taskNudge.js";
 import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
@@ -696,16 +696,16 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const inTopicBranch=(stageTask:string)=>stageTask===chatTaskId || (!!chatTaskId && !!branchMembership(chatTaskId) && branchMembership(stageTask)?.root_plan_id===branchMembership(chatTaskId)?.root_plan_id);
       if(sourceSlot){
         const source=db.prepare("SELECT task_id FROM subtasks WHERE id=? AND agent_id=?").get(sourceSlot,req.userId) as {task_id:string}|undefined;
-        if(!source || !inTopicBranch(source.task_id))return reply.code(403).send({error:"Отправитель не назначен на этап этой ветки"});
+        if(!source || (chat.parent_chat_id && !inTopicBranch(source.task_id)))return reply.code(403).send({error:"Отправитель не назначен на этап этой ветки"});
       }
       if(recipientSlot){
-        const recipient=db.prepare("SELECT task_id FROM subtasks WHERE id=?").get(recipientSlot) as {task_id:string}|undefined;
-        if(!recipient || !inTopicBranch(recipient.task_id))return reply.code(400).send({error:"Этап адресата не относится к согласованной ветке"});
+        const recipient=db.prepare("SELECT task_id,agent_id FROM subtasks WHERE id=?").get(recipientSlot) as {task_id:string;agent_id:string}|undefined;
+        if(!recipient || (chat.parent_chat_id ? !inTopicBranch(recipient.task_id) : !isMember(chatId,recipient.agent_id)))return reply.code(400).send({error:"Этап адресата не относится к согласованной ветке"});
       }
       // MAK-98: быстрый отказ, когда адресата некому исполнить — лучше
       // сказать сразу с кодом причины, чем отправить вопрос в пустоту.
       const senderRole = roleFromUserId(req.userId);
-      if (senderRole && recipientSlot) {
+      if (senderRole && recipientSlot && chat.parent_chat_id) {
         const availability = evaluateRecipientAvailability({
           recipientSubtaskId: recipientSlot,
         });
@@ -715,11 +715,31 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
             .send({ error: availability.error, code: availability.code });
         }
       }
+      const parentMessage=typeof req.body?.coordination_parent_message_id==="string" ? req.body.coordination_parent_message_id : replyTo;
+      let coordinationHop=0;
+      if(senderRole && parentMessage){
+        const parent=db.prepare("SELECT q.payload_json,q.status,m.chat_id FROM chat_message_queue q JOIN chat_messages m ON m.id=q.message_id WHERE q.message_id=? AND q.role_id=?").get(parentMessage,req.userId) as {payload_json:string;status:string;chat_id:string}|undefined;
+        if(parent){
+          if(parent.status==="superseded" || !isMember(parent.chat_id,req.userId))return reply.code(409).send({error:"Исходная переписка больше недоступна"});
+          coordinationHop=Number(JSON.parse(parent.payload_json).hop??0)+1;
+        }
+      }
+      if(coordinationHop>MAX_AGENT_HOPS)return reply.code(409).send({error:"Лимит цепочки вопросов коллегам достигнут; продолжи работу или зафиксируй препятствие"});
+      const outstanding=replyTo ? db.prepare("SELECT id,session_generation,status,payload_json FROM chat_message_queue WHERE message_id=? AND role_id=? AND chat_id=?").get(replyTo,req.userId,chatId) as {id:string;session_generation:number;status:string;payload_json:string}|undefined : undefined;
+      const addressedSlot=outstanding ? JSON.parse(outstanding.payload_json).subtaskId ?? (replyTo ? (db.prepare("SELECT recipient_subtask_id FROM chat_messages WHERE id=?").get(replyTo) as {recipient_subtask_id:string|null}|undefined)?.recipient_subtask_id : null) : null;
+      if(outstanding && addressedSlot && sourceSlot && addressedSlot!==sourceSlot)return reply.code(403).send({error:"Ответ должен исходить из адресованного этапа"});
+      if(outstanding && (outstanding.status==="superseded" || fenceDeliveryIfStale(outstanding.id,outstanding.session_generation)))return reply.code(409).send({error:"Вопрос относится к предыдущему поколению сессии"});
       const id = uid();
+      db.transaction(()=>{
       db.prepare(
         `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,message_type,reply_to_message_id,subtask_id,recipient_subtask_id)
          VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?)`,
       ).run(id, req.userId, text, chatId, taskId, mode,req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
+      if(outstanding && ["pending","picked"].includes(outstanding.status)){
+        pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
+        db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);
+      }
+      })();
       db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(
         chatId,
       );
@@ -793,7 +813,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
           messageId: id,
           fromUserId: req.userId,
           text,
-          hop: 0,
+          hop: coordinationHop,
           mode,
           idempotencyKey: readIdempotencyKey(req),
         });
@@ -1099,6 +1119,13 @@ export function fenceDeliveryIfStale(deliveryId: string, expectedGeneration: num
  *  реальный Pi-вызов через deliverAgentReply, finally-close с разделением
  *  success/failure. Возвращает `replyId` сохранённого ответа либо null,
  *  если ход был fenced, Pi не выполнился, или роль дала сбой. */
+class MessageForwardedToWork extends Error {
+  constructor(readonly busy:boolean){super("Message forwarded to existing work");}
+}
+function retainForwardedDelivery(deliveryId:string):void {
+  db.prepare("UPDATE chat_message_queue SET status='pending',picked_at=NULL,updated_at=datetime('now') WHERE id=? AND status='picked'").run(deliveryId);
+}
+
 export async function recoverAgentDelivery(input: {
   chatId: string;
   roleId: string;
@@ -1107,11 +1134,11 @@ export async function recoverAgentDelivery(input: {
   const { chatId, roleId, deliveryId } = input;
   const row = db
     .prepare(
-      `SELECT message_id, session_generation, status FROM chat_message_queue
+      `SELECT message_id, session_generation, status, payload_json FROM chat_message_queue
          WHERE id = ? AND chat_id = ? AND role_id = ?`,
     )
     .get(deliveryId, chatId, roleId) as
-    | { message_id: string | null; session_generation: number; status: string }
+    | { message_id: string | null; session_generation: number; status: string; payload_json:string }
     | undefined;
   if (!row) return { status: "skipped", replyId: null };
   if (row.status === "done" || row.status === "superseded" || row.status === "failed") {
@@ -1136,6 +1163,18 @@ export async function recoverAgentDelivery(input: {
     fenceMessageDelivery(deliveryId);
     return { status: "fenced", replyId: null };
   }
+  if(!isMember(chatId,roleId)){fenceMessageDelivery(deliveryId);return {status:"fenced",replyId:null};}
+  const trigger=db.prepare("SELECT text,recipient_subtask_id FROM chat_messages WHERE id=?").get(row.message_id) as {text:string;recipient_subtask_id:string|null}|undefined;
+  const saved=JSON.parse(row.payload_json);
+  const recipientSlot=saved.subtaskId ?? trigger?.recipient_subtask_id ?? undefined;
+  const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
+  const slot=topic && trigger ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),recipientSlot) : null;
+  const activeDelivery=slot ? await deliverTopicToWork(slot.task_id,role,row.message_id,trigger!.text,slot.plan_node_key)
+    : trigger ? await deliverChatToWork(role,chatId,row.message_id,trigger.text,recipientSlot) : "idle";
+  if(activeDelivery!=="idle"){
+    if(activeDelivery==="busy")messengerAmbiguityNotice(chatId,roleId,row.message_id);
+    return {status:"skipped",replyId:null};
+  }
   // Уже «в работе» (picked) — второй раз не дёргаем Pi,
   // иначе получим второй ответ. Recovery-sweep вызывается
   // ДО того, как живые маршруты начали обрабатывать
@@ -1157,7 +1196,9 @@ export async function recoverAgentDelivery(input: {
         chatId,
         role,
         triggerMessageId: row.message_id!,
-        hop: 0,
+        subtaskId:recipientSlot,
+        hop: saved.hop ?? 0,
+        mode: saved.mode,
       }),
     );
     // Двойная проверка fence: пока готовили ответ, generation
@@ -1172,6 +1213,7 @@ export async function recoverAgentDelivery(input: {
     completeDurableDelivery(deliveryId, ok);
     return { status: ok ? "done" : "failed", replyId };
   } catch (error) {
+    if(error instanceof MessageForwardedToWork){retainForwardedDelivery(deliveryId);if(error.busy)messengerAmbiguityNotice(chatId,roleId,row.message_id!);return {status:"skipped",replyId:null};}
     console.warn(
       `[chats] recovery ход ${deliveryId} chat=${chatId} role=${role} не закрыт успешно:`,
       error instanceof Error ? error.message : error,
@@ -1431,6 +1473,14 @@ function slotChoiceNotice(chatId:string,taskId:string,role:RoleName,replyTo:stri
   db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,task_id,reply_to_message_id,quick_replies) VALUES(?,?,?,'chat',?,?,?,?)").run(id,roleId,text,chatId,taskId,replyTo,slots.length ? JSON.stringify(slots.slice(0,4).map(slot=>`@${name} [этап: ${slot.title}]`)) : null);
   broadcastToUsers(memberIds(chatId),{type:"chat:new",message:loadChatMessage(id)});
 }
+/** Visible but not dispatched: the original delivery remains pending until its slot is selected. */
+function messengerAmbiguityNotice(chatId:string,roleId:string,messageId:string):void {
+  if(db.prepare("SELECT 1 FROM chat_messages WHERE chat_id=? AND from_user_id=? AND reply_to_message_id=? AND message_type='system'").get(chatId,roleId,messageId))return;
+  const id=uid();
+  db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id,reply_to_message_id,message_type) VALUES(?,?,?,'chat',?,?,'system')").run(id,roleId,"У адресата несколько работающих этапов. Укажите конкретный этап в теме задачи; исходное сообщение сохранено и ожидает доставки.",chatId,messageId);
+  broadcastToUsers(memberIds(chatId),{type:"chat:new",message:loadChatMessage(id)});
+}
+
 async function dispatchRoleReplies(args: {
   chatId: string;
   messageId: string;
@@ -1448,6 +1498,9 @@ async function dispatchRoleReplies(args: {
   const candidates = chatMemberRoles(chatId).filter((r) => r !== senderRole || /\[slot:\s*[a-z][a-z0-9_]{1,63}\]/.test(text));
   if (candidates.length === 0) return;
 
+  const message=db.prepare("SELECT reply_to_message_id,recipient_subtask_id FROM chat_messages WHERE id=? AND chat_id=?").get(args.messageId,chatId) as {reply_to_message_id:string|null;recipient_subtask_id:string|null}|undefined;
+  const original=message?.reply_to_message_id ? db.prepare("SELECT from_user_id,reply_to_message_id FROM chat_messages WHERE id=? AND chat_id=?").get(message.reply_to_message_id,chatId) as {from_user_id:string;reply_to_message_id:string|null}|undefined : undefined;
+  const authorRole=original ? roleFromUserId(original.from_user_id) : null;
   const mentioned = parseRoleMentions(text).filter((r) => candidates.includes(r));
   let targets: RoleName[];
   if (args.mode === "plan" && senderRole) return;
@@ -1455,7 +1508,11 @@ async function dispatchRoleReplies(args: {
     targets = candidates.includes("researcher") ? ["researcher"] : [];
   } else if (senderRole) {
     if (args.hop > MAX_AGENT_HOPS) return;
-    targets = mentioned.slice(0, 2);
+    // Replies return to the question author once. An answer to that answer
+    // remains context unless the role explicitly asks another question via @.
+    targets = mentioned.length ? mentioned.slice(0,2)
+      : authorRole && !original?.reply_to_message_id && candidates.includes(authorRole) ? [authorRole]
+      : isDirectRoleChat(chatId) && candidates.length===1 && !message?.reply_to_message_id ? candidates : [];
   } else if (mentioned.length) {
     targets = mentioned;
   } else if (parseRoleMention(text)) {
@@ -1480,8 +1537,6 @@ async function dispatchRoleReplies(args: {
       if(!slot && (recipient || topicSlotKey(text))){slotChoiceNotice(chatId,topic.task_id,role,args.messageId);continue;}
       if(slot){
         selectedSlot=slot.id;
-        const delivery=await deliverTopicToWork(slot.task_id,role,args.messageId,text,slot.plan_node_key);
-        if(delivery!=="idle") continue;
       }
     }
     const accountId = roleAccountId(role);
@@ -1510,7 +1565,7 @@ async function dispatchRoleReplies(args: {
       payload: {
         triggerMessageId: args.messageId,
         text,
-        subtaskId: selectedSlot,
+        subtaskId: selectedSlot ?? message?.recipient_subtask_id,
         hop: args.hop,
         mode: args.mode,
       },
@@ -1520,6 +1575,16 @@ async function dispatchRoleReplies(args: {
     // не молчим: «уже принято» — нормальный сценарий повторной отправки
     // при сетке.
     if (!durableRecord.created) continue;
+    if(fenceDeliveryIfStale(durableRecord.id,durableRecord.generation))continue;
+    const selected=selectedSlot ? resolveTopicSlot(topic!.task_id,role,undefined,selectedSlot) : null;
+    const delivery=selected ? await deliverTopicToWork(selected.task_id,role,args.messageId,text,selected.plan_node_key)
+      : await deliverChatToWork(role,chatId,args.messageId,text,message?.recipient_subtask_id ?? undefined);
+    if(delivery!=="idle"){
+      // Pending survives a process crash. The recipient's linked reply (or
+      // persisted processing of an answer) completes the obligation.
+      if(delivery==="busy") messengerAmbiguityNotice(chatId,accountId,args.messageId);
+      continue;
+    }
     pickDurableDelivery(durableRecord.id);
     // Перед постановкой в очередь проверяем generation fence: ход
     // мог устареть, пока ждал durable-записи (например, пришёл
@@ -1554,6 +1619,7 @@ async function dispatchRoleReplies(args: {
         completeDurableDelivery(durableRecord.id, ok);
         return replyId;
       } catch (error) {
+        if(error instanceof MessageForwardedToWork){retainForwardedDelivery(durableRecord.id);if(error.busy)messengerAmbiguityNotice(chatId,accountId,args.messageId);return null;}
         // Pi-исполнение должно было вернуть null и обработать
         // ошибку внутри (deliverAgentReply ловит Pi-сбои и
         // шлёт сообщение «Ой, что-то пошло не так…»), но если
@@ -1599,9 +1665,10 @@ interface HistoryRow {
   attachments: string | null;
   recipient_subtask_id: string | null;
   subtask_id: string | null;
+  task_id: string | null;
 }
 
-const HISTORY_SELECT = `SELECT m.id, m.from_user_id, m.text, m.created_at, m.recipient_subtask_id, m.subtask_id, f.name as from_name,
+const HISTORY_SELECT = `SELECT m.task_id, m.id, m.from_user_id, m.text, m.created_at, m.recipient_subtask_id, m.subtask_id, f.name as from_name,
         (SELECT group_concat(a.file_name, ', ') FROM attachments a
           WHERE a.chat_message_id = m.id) as attachments
    FROM chat_messages m
@@ -1676,13 +1743,16 @@ async function deliverAgentReply(args: {
     .get(args.triggerMessageId) as HistoryRow | undefined;
   // Сообщение удалили, пока ход ждал в очереди, — отвечать не на что.
   if (!trigger) return null;
+  const triggerTask = trigger.task_id ? `\nКонтекст задачи: ${trigger.task_id}` : "";
   const triggerFiles = trigger.attachments ? `\n[вложения: ${trigger.attachments}]` : "";
-  const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerFiles}`;
+  const userText = `${trigger.from_name || trigger.from_user_id}: ${unwrapRoleEnvelope(trigger.text)}${triggerTask}${triggerFiles}`;
 
   const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
   const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;
   if(topic && !slot && (args.subtaskId || trigger.recipient_subtask_id || topicSlotKey(trigger.text))){slotChoiceNotice(chatId,topic.task_id,role,args.triggerMessageId);return null;}
-  if(topic && slot && await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)!=="idle") return null;
+  const activeDelivery=topic && slot ? await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)
+    : !topic ? await deliverChatToWork(role,chatId,args.triggerMessageId,userText,args.subtaskId??trigger.recipient_subtask_id??undefined) : "idle";
+  if(activeDelivery!=="idle")throw new MessageForwardedToWork(activeDelivery==="busy");
   const roleTitle = titleOfRole(role);
   const previousSessionId = slot ? null : getChatSessionId(chatId, roleUserId);
   let prompt: string;
@@ -1742,7 +1812,7 @@ async function deliverAgentReply(args: {
   const chatProject = (db.prepare(
     "SELECT COALESCE(c.project_id,t.project_id) project_id FROM chats c LEFT JOIN tasks t ON t.id = c.task_id WHERE c.id = ?",
   ).get(chatId) as { project_id?: string | null } | undefined)?.project_id ?? null;
-  const memory = await roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id, query: trigger.text });
+  const memory = await roleProjectContext({ role, projectId: chatProject, taskId:topic?.task_id ?? trigger.task_id ?? undefined, query: trigger.text });
   if (memory) prompt = `${prompt}\n\n${memory}`;
   // Снимки работы слотов (владелец 04.10.2026, пункт 5 плана: «подмешивать
   // последний снимок в общий контекст роли — и для чата, и для работы»).
@@ -1753,6 +1823,7 @@ async function deliverAgentReply(args: {
     ? roleSlotSnapshotsBlock({ role, taskId: slot.task_id, subtaskId: slot.id })
     : roleSlotSnapshotsBlock({ role, taskId: topic?.task_id ?? null, projectId: topic ? null : chatProject });
   if (snapshots) prompt = `${prompt}\n\n${snapshots}`;
+  prompt += `\nОтвечаешь на сообщение ${trigger.id}; сервер свяжет итоговый текст с этим вопросом. Не отправляй тот же ответ повторно инструментом. Для отдельного нового вопроса коллеге используй taskflow_chat_send.`;
   prompt += "\nМессенджер: максимум 100 слов. Блок — максимум 50 слов: причина и нужное действие. Отчёты сохраняй инструментом doc_write в документах задачи, здесь дай ссылку. Обращение: адресат, задача, этап и один конкретный вопрос по специализации адресата. Ответ адресуй автору вопроса, без повторного отчёта.";
   if(topic) prompt += `\n\n${topicContext(topic.task_id)}\nЭтот ход — обсуждение той же роли в проекте. Не запускай этап автоматически; рабочие операции выполняются только в назначенном сервером слоте.`;
 
@@ -1790,7 +1861,7 @@ async function deliverAgentReply(args: {
     typing(true);
   try {
     reply = topic && slot ? await startSlotConversation({taskId:slot.task_id,subtaskId:slot.id,role,chatId,messageId:trigger.id,prompt,onStep:(tool)=>typing(true,tool),onEvent:live.onEvent}) : await startChatRun({
-      mode: args.mode,
+      mode: roleFromUserId(trigger.from_user_id) ? "discussion" : args.mode,
       messageId: trigger.id,
       chatId,
       role,
@@ -1800,7 +1871,9 @@ async function deliverAgentReply(args: {
       onStep: (tool) => typing(true, tool),
       onEvent: live.onEvent,
     });
+    if((reply as {forwarded?:boolean})?.forwarded)throw new MessageForwardedToWork(false);
   } catch (error) {
+    if(error instanceof MessageForwardedToWork)throw error;
     // Онлайн-сессия не роняет HTTP-запрос, но и молчать нельзя (владелец
     // 27.09.2026): о сорванном ходе в чат ложится сообщение с причиной.
     console.warn(
@@ -1894,7 +1967,7 @@ async function deliverAgentReply(args: {
     }
   }
 
-  return replyId;
+  return failure ? null : replyId;
 }
 
 /** Тестовая утилита: сбросить кэш эмбеддингов ролей. Используется в

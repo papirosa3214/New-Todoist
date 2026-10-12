@@ -175,6 +175,130 @@ describe("агент роли внутри сервера", () => {
     } finally {release();await run.completion;script.steps=null;}
   });
 
+  it("личный вопрос из другой задачи доставляется работающему коллеге; его ответ возвращается в исходный чат",async()=>{
+    const {taskId,stepId}=builderTask("Коллега занят другой задачей");
+    db.prepare("UPDATE subtasks SET agent_id='role_builder' WHERE id=?").run(stepId);
+    const source=builderTask("Вопрос архитектора"),other=source.taskId;
+    db.prepare("UPDATE subtasks SET agent_id='role_architect' WHERE id=?").run(source.stepId);
+    const chat=(await app.inject({method:"POST",url:"/api/chats",headers:{authorization:`Bearer ${app.jwt.sign({id:'role_architect'})}`},payload:{kind:"direct",member_ids:["role_builder"]}})).json().chat.id;
+    let entered!:()=>void,release!:()=>void;
+    const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+    let starts=0;
+    script.steering=[];script.steps=async()=>{if(++starts===2)entered();await gate;};
+    const run=await runRoleInProcess({taskId,role:"builder",subtaskId:stepId,prompt:"Обсудить",mode:"reply"});
+    const author=await runRoleInProcess({taskId:other,role:"architect",subtaskId:source.stepId,prompt:"Обсудить",mode:"reply"});
+    await started;
+    try{
+      const count=script.sessions.length;
+      const sent=await app.inject({method:"POST",url:`/api/chats/${chat}/messages`,headers:{authorization:`Bearer ${app.jwt.sign({id:'role_architect'})}`},payload:{text:"Какой формат сохранять?",task_id:other,subtask_id:source.stepId}});
+      expect(sent.statusCode).toBe(200);
+      expect(script.steering).toHaveLength(1);
+      expect(script.steering[0]).toContain(sent.json().message.id);
+      expect(script.sessions).toHaveLength(count);
+      expect(db.prepare("SELECT status FROM chat_message_queue WHERE message_id=? AND role_id='role_builder'").get(sent.json().message.id)).toMatchObject({status:"pending"});
+      expect(db.prepare("SELECT delivered_at FROM slot_topic_inbox WHERE message_id=? AND subtask_id=?").get(sent.json().message.id,stepId)).toMatchObject({delivered_at:null});
+      const tools=new Map(taskflowTools("builder",null,taskId,stepId).map((t:any)=>[t.name,t]));
+      const result=await call(tools,"taskflow_chat_reply",{message_id:sent.json().message.id,text:"Сохраняй JSON"});
+      const response=JSON.parse(result.content[0].text);
+      expect(db.prepare("SELECT from_user_id,reply_to_message_id,subtask_id FROM chat_messages WHERE id=?").get(response.id)).toMatchObject({from_user_id:"role_builder",reply_to_message_id:sent.json().message.id,subtask_id:stepId});
+      expect((db.prepare("SELECT * FROM subtasks WHERE id=?").get(stepId) as any).done).toBe(0);
+      expect(script.steering).toHaveLength(2);
+      expect(script.steering[1]).toContain(response.id);
+      expect(db.prepare("SELECT status FROM chat_message_queue WHERE message_id=? AND role_id='role_builder'").get(sent.json().message.id)).toMatchObject({status:"done"});
+      const manager=script.sessions.at(-1).sessionManager;
+      manager.appendMessage({role:"user",content:script.steering[1],timestamp:Date.now()});
+      manager.appendMessage({role:"assistant",content:[{type:"text",text:"Учёл ответ и продолжил работу"}],timestamp:Date.now()});
+      script.emit?.({type:"message_end",message:{role:"assistant",content:[]}});
+      await Promise.resolve();
+      expect(db.prepare("SELECT status FROM chat_message_queue WHERE message_id=? AND role_id='role_architect'").get(response.id)).toMatchObject({status:"done"});
+      expect(script.sessions).toHaveLength(count);
+    }finally{release();await Promise.all([run.completion,author.completion]);script.steps=null;}
+  });
+
+  it("личный мессенджер не выбирает произвольный этап при двух работающих сессиях роли",async()=>{
+    const firstTask=builderTask("Первый этап мессенджера"),secondTask=builderTask("Второй этап мессенджера");
+    let entered!:()=>void,release!:()=>void,starts=0;
+    const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+    script.steering=[];script.steps=async()=>{if(++starts===2)entered();await gate;};
+    const first=await runRoleInProcess({taskId:firstTask.taskId,role:"builder",subtaskId:firstTask.stepId,prompt:"Обсудить",mode:"reply"});
+    const second=await runRoleInProcess({taskId:secondTask.taskId,role:"builder",subtaskId:secondTask.stepId,prompt:"Обсудить",mode:"reply"});
+    await started;
+    try{
+      const before=(db.prepare("SELECT count(*) n FROM chat_messages").get() as any).n;
+      const messenger=new Map(taskflowTools("qa",null).map((t:any)=>[t.name,t]));
+      await expect(call(messenger,"taskflow_chat_send",{to:"builder",text:"Который этап сейчас?"})).rejects.toThrow("несколько работающих этапов");
+      expect((db.prepare("SELECT count(*) n FROM chat_messages").get() as any).n).toBe(before);
+      expect(script.steering).toHaveLength(0);
+    }finally{release();await Promise.all([first.completion,second.completion]);script.steps=null;}
+  });
+
+  it("групповой вопрос двум работающим ролям сохраняет отдельный адрес каждого ответа",async()=>{
+    const a=builderTask("Работа билдера в группе"),b=builderTask("Работа архитектора в группе");
+    db.prepare("UPDATE subtasks SET agent_id='role_builder' WHERE id=?").run(a.stepId);
+    db.prepare("UPDATE subtasks SET agent_id='role_architect' WHERE id=?").run(b.stepId);
+    const headers={authorization:`Bearer ${ownerToken}`};
+    const chat=(await app.inject({method:"POST",url:"/api/chats",headers,payload:{kind:"group",member_ids:["role_builder","role_architect"]}})).json().chat.id;
+    let entered!:()=>void,release!:()=>void,starts=0;
+    const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+    script.steps=async()=>{if(++starts===2)entered();await gate;};
+    const first=await runRoleInProcess({taskId:a.taskId,role:"builder",subtaskId:a.stepId,prompt:"Обсудить",mode:"reply"});
+    const second=await runRoleInProcess({taskId:b.taskId,role:"architect",subtaskId:b.stepId,prompt:"Обсудить",mode:"reply"});
+    await started;
+    try{
+      const sent=await app.inject({method:"POST",url:`/api/chats/${chat}/messages`,headers,payload:{text:"@builder @architect Уточните формат"}});
+      expect(sent.statusCode).toBe(200);
+      for(const [role,t] of [["builder",a],["architect",b]] as const){
+        const tools=new Map(taskflowTools(role,null,t.taskId,t.stepId).map((x:any)=>[x.name,x]));
+        await call(tools,"taskflow_chat_reply",{message_id:sent.json().message.id,text:"Формат JSON"});
+      }
+      const rows=db.prepare("SELECT status FROM chat_message_queue WHERE message_id=?").all(sent.json().message.id) as any[];
+      expect(rows).toHaveLength(2);expect(rows.every(q=>q.status==='done')).toBe(true);
+    }finally{release();await Promise.all([first.completion,second.completion]);script.steps=null;}
+  });
+
+  it("работа начавшаяся во время ожидания чата получает вопрос без ложного failed",async()=>{
+    const {enqueueChatReply}=await import("../src/runtime/chatSession.js");
+    const a=builderTask("Работа стартует после приёма сообщения");
+    db.prepare("UPDATE subtasks SET agent_id='role_builder' WHERE id=?").run(a.stepId);
+    const headers={authorization:`Bearer ${ownerToken}`};
+    const chat=(await app.inject({method:"POST",url:"/api/chats",headers,payload:{kind:"direct",member_ids:["role_builder"]}})).json().chat.id;
+    let releaseQueue!:()=>void;
+    const queueGate=new Promise<void>(r=>releaseQueue=r);
+    const occupied=enqueueChatReply(chat,"role_builder",async()=>{await queueGate;return null;});
+    const sent=await app.inject({method:"POST",url:`/api/chats/${chat}/messages`,headers,payload:{text:"Вопрос перед запуском работы"}});
+    let entered!:()=>void,releaseWork!:()=>void;
+    const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>releaseWork=r);
+    script.steering=[];script.steps=async()=>{entered();await gate;};
+    const run=await runRoleInProcess({taskId:a.taskId,role:"builder",subtaskId:a.stepId,prompt:"Обсудить",mode:"reply"});
+    await started;
+    try{
+      releaseQueue();await occupied;
+      await vi.waitFor(()=>expect(script.steering).toHaveLength(1));
+      await vi.waitFor(()=>expect(db.prepare("SELECT status FROM chat_message_queue WHERE message_id=?").get(sent.json().message.id)).toMatchObject({status:"pending"}));
+    }finally{releaseQueue();releaseWork();await run.completion;script.steps=null;}
+  });
+
+  it("recovery не доставляет работающей роли сообщение после отзыва доступа к чату",async()=>{
+    const {recoverAgentDelivery}=await import("../src/routes/chats.js");
+    const {enqueueMessageDelivery:recordDurableDelivery}=await import("../src/runtime/chatQueue.js");
+    const a=builderTask("Отзыв доступа к переписке");
+    const headers={authorization:`Bearer ${ownerToken}`};
+    const chat=(await app.inject({method:"POST",url:"/api/chats",headers,payload:{kind:"direct",member_ids:["role_builder"]}})).json().chat.id;
+    const message=a.taskId+'-message';
+    db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,'Вопрос до восстановления','chat',?)").run(message,ownerId,chat);
+    const queued=recordDurableDelivery({chatId:chat,roleId:'role_builder',deliveryId:message,messageId:message,payload:{text:'Вопрос до восстановления'}});
+    let entered!:()=>void,release!:()=>void;
+    const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+    script.steering=[];script.steps=async()=>{entered();await gate;};
+    const run=await runRoleInProcess({taskId:a.taskId,role:"builder",prompt:"Обсудить",mode:"reply"});
+    await started;
+    try{
+      expect((await app.inject({method:"DELETE",url:`/api/chats/${chat}/members/role_builder`,headers})).statusCode).toBe(200);
+      expect(await recoverAgentDelivery({chatId:chat,roleId:'role_builder',deliveryId:queued.id})).toMatchObject({status:'fenced'});
+      expect(script.steering).toHaveLength(0);
+    }finally{release();await run.completion;script.steps=null;}
+  });
+
   it("два слота одной роли требуют адресации конкретного слота",async()=>{
     const {taskId,stepId}=builderTask("Две ветки");
     const second=`${taskId}-s2`;

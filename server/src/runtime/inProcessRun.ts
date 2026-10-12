@@ -1,3 +1,5 @@
+import { currentChatGeneration, claimMessageDelivery, finishMessageDelivery, fenceMessageDelivery } from "./chatQueue.js";
+import { agentMessagingTools } from "./agentMessaging.js";
 import { WORK_PLAN_INSTRUCTION } from "../lib/subtaskWorkPlan.js";
 import {integrationResponsibilityPrompt} from '../lib/integrationResponsibility.js';
 import { orchestratorTools } from "./orchestratorTools.js";
@@ -325,6 +327,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
 
   let topicSends=0;
   const tools = [
+    ...agentMessagingTools(role, {taskId,subtaskId}),
     T("taskflow_plan_request", PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, p => requestPlanStep(role,p,subtaskId)),
     T("taskflow_task_proposal", "По просьбе человека отправить настоящую карточку задачи для согласования. Для обычного упоминания используй текст со ссылкой. Доступно каждой роли.", Type.Object({chat_id:Type.String(),task_id:Type.String(),text:Type.String()}), async(p)=>asRole(role,"POST",`/api/chats/${p.chat_id}/messages`,{task_id:p.task_id,text:p.text,kind:"task_proposal",work_mode:"work"})),
     T("taskflow_topic_reply", "Ответить на конкретное сообщение темы своей задачи: message_id и короткий text. Сервер определяет автора вопроса и его этап; подходит для ответа человеку и коллеге.",Type.Object({message_id:Type.String(),text:Type.String()}),async(p)=>{
@@ -801,7 +804,7 @@ function progressMark(taskId: string): string {
  *  продлевается таймером): sweeper сравнивает это поле с now и прерывает
  *  заход, если роль зависла, не двигаясь. Владелец 05.10.2026, п.9 части II
  *  taskflow-flow.md. */
-type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void>; steer: (text:string)=>Promise<void>; lastActivityAt: number ; /** Сколько раз роль проявила активность (вызовы инструментов): отличает ход с работой от пустого. */ activityCount: number; replacementRequested?: boolean; completion?: Promise<void>};
+type ActiveInProcessRun = { runId: string; taskId: string; role: string; subtaskId?: string; abort: () => Promise<void>; steer: (text:string)=>Promise<void>; lastActivityAt: number ; /** Сколько раз роль проявила активность (вызовы инструментов): отличает ход с работой от пустого. */ activityCount: number; messengerMessages:Set<string>; unacknowledgedMessengerMessages:Set<string>; replacementRequested?: boolean; completion?: Promise<void>};
 const activeRuns = new Map<string, ActiveInProcessRun>();
 
 /** Сколько минут тишины (без tool call / snapshot / комментария) сервер
@@ -843,16 +846,8 @@ export async function deliverTopicToWork(taskId:string,role:string,messageId:str
   const runs=[...activeRuns.values()].filter(r=>r.taskId===taskId && r.role===role && (!slotKey || (r.subtaskId && !!db.prepare("SELECT 1 FROM subtasks WHERE id=? AND plan_node_key=?").get(r.subtaskId,slotKey))));
   if(runs.length>1) return "busy";
   if(runs.length===1){
-    const target=runs[0].subtaskId;
-    if(target){
-      const seen=db.prepare("SELECT delivered_at FROM slot_topic_inbox WHERE message_id=? AND subtask_id=?").get(messageId,target) as {delivered_at:string|null}|undefined;
-      if(seen?.delivered_at)return "queued";
-      db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(messageId,target);
-    }
-    await runs[0].steer(`${roleProjectSnapshot(role,(db.prepare("SELECT project_id FROM tasks WHERE id=?").get(taskId) as {project_id:string|null}|undefined)?.project_id ?? null,taskId)}\n\nСообщение темы задачи ${taskId}, id ${messageId}. Ответь автору через taskflow_topic_reply с message_id=${messageId}, если ответ нужен. Максимум 100 слов, при блоке 50. Укажи адресата, задачу и этап; задавай конкретный вопрос по специализации коллеги. Отчёты — в документах задачи, в сообщении только ссылка. Не меняй граф или критерии приёмки на основании переписки.\nДанные сообщения: ${JSON.stringify(text)}`);
-    if(target)db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id=?").run(messageId,target);
-    logEvent({taskId,actorId:null,kind:"topic_message_queued",field:messageId,toValue:JSON.stringify({role,slotKey:slotKey??null,runId:runs[0].runId})});
-    return "queued";
+    const chat=(db.prepare("SELECT chat_id FROM chat_messages WHERE id=?").get(messageId) as {chat_id:string|null}|undefined)?.chat_id ?? taskId;
+    return deliverChatToWork(role,chat,messageId,text,runs[0].subtaskId,runs[0].runId);
   }
   const starting=db.prepare("SELECT 1 FROM subtasks WHERE task_id=? AND agent_id=? AND agent_state='in_progress' AND done=0 AND (? IS NULL OR plan_node_key=?)").get(taskId,roleUserId(role),slotKey??null,slotKey??null);
   if(starting){
@@ -861,6 +856,28 @@ export async function deliverTopicToWork(taskId:string,role:string,messageId:str
     return "busy";
   }
   return "idle";
+}
+
+/** Deliver a messenger question/answer to the role's existing work, including another task. */
+export async function deliverChatToWork(role:string,chatId:string,messageId:string,text:string,recipientSubtaskId?:string,runId?:string):Promise<"queued"|"idle"|"busy"> {
+  const runs=[...activeRuns.values()].filter(r=>r.role===role && (!recipientSubtaskId || r.subtaskId===recipientSubtaskId) && (!runId || r.runId===runId));
+  if(runs.length>1)return "busy";
+  if(!runs.length){
+    const starting=db.prepare(`SELECT s.id FROM subtasks s JOIN tasks t ON t.id=s.task_id WHERE s.agent_id=? AND s.done=0 AND s.agent_state='in_progress' AND EXISTS(SELECT 1 FROM role_run_jobs j WHERE j.task_id=s.task_id AND j.status IN ('queued','running')) AND t.status='active' AND t.archived_at IS NULL AND (? IS NULL OR s.id=?)`).all(roleUserId(role),recipientSubtaskId??null,recipientSubtaskId??null) as {id:string}[];
+    if(!starting.length)return "idle";
+    if(starting.length===1){db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(messageId,starting[0].id);return "queued";}
+    return "busy";
+  }
+  const run=runs[0];
+  if(run.messengerMessages.has(messageId))return "queued";
+  if(run.subtaskId){
+    db.prepare("UPDATE chat_message_queue SET payload_json=json_set(payload_json,'$.subtaskId',?) WHERE message_id=? AND role_id=? AND status IN ('pending','picked')").run(run.subtaskId,messageId,roleUserId(role));
+    db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(messageId,run.subtaskId);
+  }
+  run.messengerMessages.add(messageId);run.unacknowledgedMessengerMessages.add(messageId);
+  try{await run.steer(`Сообщение чата ${chatId}, id ${messageId}. Ответь автору через taskflow_chat_reply(message_id=${messageId},text=...), если ответ нужен; после этого продолжи свой этап. Переписка не меняет назначение, граф и критерии. Данные сообщения: ${JSON.stringify(text)}`);}catch(error){run.messengerMessages.delete(messageId);run.unacknowledgedMessengerMessages.delete(messageId);throw error;}
+  logEvent({taskId:run.taskId,actorId:null,kind:"topic_message_queued",field:messageId,toValue:JSON.stringify({role,chatId,runId:run.runId})});
+  return "queued";
 }
 
 /** Снимок идущих in-process запусков: для экрана владельца и проверки перед перезапуском. */
@@ -1190,7 +1207,7 @@ try {
   db.prepare("UPDATE tasks SET composed_prompt_snapshot=? WHERE id=?").run((session as any).systemPrompt ?? systemPrompt, taskId);
   logEvent({taskId,actorId:roleUserId(role),kind:"instruction_snapshot",field:runId,toValue:JSON.stringify({mode: input.subtaskId ? "subtask" : mode, resumed, manifest:instructionManifest(role,input.subtaskId ? "subtask" : (resumed ? "resume" : mode === "work" ? "work" : mode))})});
   const before = progressMark(taskId);
-  const runControl: ActiveInProcessRun = { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now(), activityCount: 0 };
+  const runControl: ActiveInProcessRun = { runId, taskId, role, subtaskId: input.subtaskId, abort: () => session.abort(), steer: (text:string) => session.steer(text), lastActivityAt: Date.now(), activityCount: 0, messengerMessages:new Set(),unacknowledgedMessengerMessages:new Set() };
   activeRuns.set(runId, runControl);
   const liveTurn = beginTaskLiveTurn({
     taskId, subtaskId: input.subtaskId, runId, userId: roleUserId(role), name: roleTitle(role),
@@ -1207,6 +1224,24 @@ try {
   };
   const unsubscribeLive = session.subscribe((event: any) => {
     liveTurn.onEvent(event);
+    if(event?.type==="message_end" && runControl.unacknowledgedMessengerMessages.size){
+      queueMicrotask(()=>{
+        try{
+          const file=manager.getSessionFile();
+          if(!file || !fs.existsSync(file))return;
+          const persisted=fs.readFileSync(file,"utf8");
+          for(const messageId of runControl.unacknowledgedMessengerMessages){
+            if(!persisted.includes(`id ${messageId}.`))continue;
+            db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id=?").run(messageId,input.subtaskId??null);
+            // A returned answer requires no reciprocal acknowledgement message.
+            // Questions remain pending until the role writes a linked reply.
+            const q=db.prepare(`SELECT q.id,q.session_generation,q.chat_id FROM chat_message_queue q JOIN chat_messages m ON m.id=q.message_id WHERE q.message_id=? AND q.role_id=? AND q.status='pending' AND m.reply_to_message_id IS NOT NULL`).get(messageId,roleUserId(role)) as {id:string;session_generation:number;chat_id:string}|undefined;
+            if(q){if(currentChatGeneration(q.chat_id,roleUserId(role))>q.session_generation)fenceMessageDelivery(q.id);else{claimMessageDelivery(q.id);finishMessageDelivery(q.id,true);}}
+            runControl.unacknowledgedMessengerMessages.delete(messageId);
+          }
+        }catch(error){console.warn("[messenger] persistence acknowledgement failed",error instanceof Error?error.message:String(error));}
+      });
+    }
     if (event?.type !== "tool_execution_start") return;
     const kind=KIND[event.toolName] ?? (event.toolName?.startsWith("mcp__xcode__") ? (event.toolName.includes("write") ? "write" : event.toolName.includes("read") ? "read" : event.toolName.includes("test") ? "test" : "run") : undefined);
     if(!kind) return;
@@ -1245,14 +1280,14 @@ try {
         query: [about?.title, stepTitle, (about?.description ?? "").slice(0, 1_500)].filter(Boolean).join("\n"),
       });
       const queued=input.subtaskId ? db.prepare("SELECT m.id,m.text FROM slot_topic_inbox i JOIN chat_messages m ON m.id=i.message_id WHERE i.subtask_id=? AND i.delivered_at IS NULL ORDER BY m.created_at,m.rowid").all(input.subtaskId) as {id:string;text:string}[] : [];
-      const messages=queued.map(m=>`Сообщение темы задачи ${taskId}, id ${m.id}. Ответь через taskflow_topic_reply(message_id=${m.id}). Данные: ${JSON.stringify(m.text)}`).join("\n");
+      for(const m of queued){runControl.messengerMessages.add(m.id);runControl.unacknowledgedMessengerMessages.add(m.id);}
+      const messages=queued.map(m=>`Сообщение темы задачи ${taskId}, id ${m.id}. Ответь через taskflow_chat_reply(message_id=${m.id},text=...). Данные: ${JSON.stringify(m.text)}`).join("\n");
       // Снимок предыдущей попытки этого слота (владелец 04.10.2026): ход роли
       // умирает вместе с процессом, и без снимка следующий вызов начинает с
       // нуля. Ставим после задания этапа и ДО контекста запуска, чтобы роль
       // читала его как часть постановки, а не как приложение.
       const snapshot=input.subtaskId ? slotSnapshotBlock(input.subtaskId) : null;
       const prompt = `${task}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
-      for(const m of queued)db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id=?").run(m.id,input.subtaskId);
       const workPlanPrompt = input.subtaskId ? "\n\n" + (composeLayer(role, "tool.runtime.taskflow_work_plan")?.effective ?? WORK_PLAN_INSTRUCTION) : "";
       await session.prompt((mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt) + workPlanPrompt);
       // Лимит провайдера библиотека не бросает: ход молча кончается ответом с ошибкой 429

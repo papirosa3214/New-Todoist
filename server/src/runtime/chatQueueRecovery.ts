@@ -1,3 +1,4 @@
+import db from "../db.js";
 // Recovery worker для durable-очереди сообщений роли.
 //
 // Карточка ebc4d338 (queue_repair, 09.10.2026): после рестарта процесса
@@ -64,7 +65,10 @@ export async function sweepRecoverableDeliveries(now?: number): Promise<number> 
 /** Обертка: зарегистрировать recovery-sweep на старте процесса.
  *  Fire-and-forget: старт сервера не должен ждать Pi, иначе
  *  восстановление задержит приём первого сообщения. */
-export function startChatQueueRecovery(): RecovererHandle {
+export function startChatQueueRecovery(processStartedAt = new Date(Date.now()-process.uptime()*1000)): RecovererHandle {
+  // Only leases from before this process. Fresh pickups are never stolen.
+  const cutoff=new Date(Math.floor(processStartedAt.getTime()/1000)*1000-1000).toISOString();
+  db.prepare("UPDATE chat_message_queue SET status='pending',picked_at=NULL,updated_at=datetime('now') WHERE status='picked' AND julianday(updated_at)<julianday(?)").run(cutoff);
   let recovered = 0;
   void sweepRecoverableDeliveries().then((n) => {
     recovered = n;

@@ -1,4 +1,4 @@
-import { chatModeInstruction, PLANNING_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
+import { chatModeInstruction, PLANNING_TOOLS, DISCUSSION_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
 import { chatInstructionArgs, chatSystemPrompt, createTaskResourceLoader } from "./instructionResources.js";
 import { chatTools } from "./chatTools.js";
 import { taskflowTools } from "./inProcessRun.js";
@@ -1261,11 +1261,11 @@ export async function startChatRun(
 
     const systemPrompt = await chatSystemPrompt(role, mode, cwd);
     const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
-    const composio = await connectRoleComposio(role, mode, input.chatId).catch((error) => {
+    const composio = mode === "discussion" ? {tools:[] as any[],close:async()=>{}} : await connectRoleComposio(role, mode, input.chatId).catch((error) => {
       console.warn(`[chats] Composio для ${role} не подключился:`, error);
       return { tools: [] as any[], close: async () => {} };
     });
-    const allowed = (name: string) =>
+    const allowed = (name: string) => mode === "discussion" ? DISCUSSION_TOOLS.includes(name) :
       mode !== "plan" ||
       PLANNING_TOOLS.includes(name) ||
       ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_GET_TOOL_SCHEMAS"].some((n) => name.endsWith(n));
@@ -1273,7 +1273,10 @@ export async function startChatRun(
       .filter((t) => allowed(t.name))
       .map((t) => ({ ...t, description: composeLayer(role, "tool.builtin." + t.name)?.effective ?? t.description }));
     const custom = new Map<string, any>();
-    for (const tool of [...taskflowTools(role, resolvedModel), ...chatTools(role,input.messageId ? {chatId:input.chatId,messageId:input.messageId} : undefined), ...composio.tools] as any[]) {
+    const messagingNames=new Set(["taskflow_chat_send","taskflow_chat_reply","taskflow_chat_read"]);
+    const workingTools=taskflowTools(role,resolvedModel);
+    const conversationalTools=chatTools(role,input.messageId ? {chatId:input.chatId,messageId:input.messageId} : undefined);
+    for (const tool of [...workingTools.filter(t=>!messagingNames.has(t.name)), ...conversationalTools, ...workingTools.filter(t=>messagingNames.has(t.name)), ...composio.tools] as any[]) {
       if (allowed(tool.name) && !custom.has(tool.name)) custom.set(tool.name, tool);
     }
 

@@ -1,3 +1,4 @@
+import { agentMessagingTools } from "./agentMessaging.js";
 import { orchestratorTools } from "./orchestratorTools.js";
 // Инструменты роли в чате — внутри сервера (владелец 02.10.2026: «у нас всё
 // должно быть на сервере», чаты легли на `Unknown option: --mcp-config`).
@@ -15,7 +16,6 @@ import db from "../db.js";
 import { restartSlotFromOwnerChat } from "./slotRestart.js";
 import { collectTaskSummary, parseSummaryRequest } from "../lib/secretaryTaskSummary.js";
 
-const TO_ALL_WORDS = new Set(["all", "всем", "*"]);
 
 function qs(params: Record<string, string | undefined>): string {
   const q = new URLSearchParams();
@@ -54,18 +54,9 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
   const S = (description?: string) => Type.Optional(Type.String(description ? { description } : {}));
   const None = Type.Object({});
 
-  const resolveAddressee = async (who: string | undefined): Promise<string> => {
-    const raw = (who ?? "").trim();
-    if (!raw) throw new ToolError('кому? укажи to: имя участника или "всем". Пустое поле больше не значит «всем» — это должен быть явный выбор');
-    if (TO_ALL_WORDS.has(raw.toLowerCase())) return "all";
-    const people = (await asRole(role, "GET", "/api/agents")) as any[];
-    const hit = people.find((a) => a.id === raw.toLowerCase() || String(a.name ?? "").trim().toLowerCase() === raw.toLowerCase());
-    if (hit) return hit.id;
-    throw new ToolError(`адресат «${raw}» не найден. Можно назвать: ${people.map((a) => a.name || a.id).join(", ")} — или "всем"`);
-  };
-
   return [
     ...orchestratorTools(role, T),
+    ...agentMessagingTools(role, {chatId: ownerContext?.chatId,messageId:ownerContext?.messageId}),
     T("taskflow_runtime", "Что реально доступно сейчас в runtime Pi: подключённые провайдеры и их доступные модели. Только факт, без всего каталога.",
       None, async () => {
         const providers = ((await asRole(role, "GET", "/api/runtime/providers"))?.providers ?? []) as any[];
@@ -102,34 +93,6 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         id: a.id, имя: a.name, тип: a.type === "ai" ? "агент" : "человек", "на связи": a.online === true,
       })),
     })),
-    T("taskflow_chat_send",
-      "Написать в рабочий канал координации агентов. МАКСИМУ НАПРЯМУЮ НЕ ПИШУТ: вопрос неси оркестратору. КОМУ — ОБЯЗАТЕЛЬНО: `to` = имя участника или слово «всем». Без task_id сообщение никого не будит. kind: совещание | делегирование | находка. Разговор закрывает молчание.",
-      Type.Object({
-        text: Type.String(),
-        to: Type.String({ description: "Кому — ОБЯЗАТЕЛЬНО: имя участника, его id или слово «всем»." }),
-        task_id: S("Задача, к которой относится сообщение — без неё никого не будит."),
-        kind: S("совещание | делегирование | находка"),
-      }), async (p) => {
-
-        const to = await resolveAddressee(p.to);
-        const body: Record<string, unknown> = { text: p.text, to_user_id: to };
-        if (p.task_id) body.task_id = p.task_id;
-        if (p.kind) body.kind = p.kind;
-        const msg = await asRole(role, "POST", "/api/chat", body);
-        if (p.task_id) {
-          await asRole(role, "POST", `/api/tasks/${p.task_id}/activity`, { kind: "edit", target: "чат: написал по задаче" }).catch(() => {});
-        }
-        return { отправлено: msg?.text, кому: to === "all" ? "всем" : p.to, id: msg?.id };
-      }),
-    T("taskflow_chat_typing",
-      "Зажечь в чате отметку «печатает…» — ПЕРЕД тем, как сочинять ответ. Одного вызова хватает на весь ответ. state='stop' — передумал отвечать.",
-      Type.Object({ state: S("stop — снять отметку") }), async (p) => {
-        const resp = await asRole(role, "POST", "/api/chat/typing", p.state === "stop" ? { state: "stop" } : {});
-        return {
-          печатает: resp?.["печатает"],
-          "гаснет через": resp?.["печатает"] ? `${Math.floor((resp?.["гаснет_через_мс"] ?? 0) / 1000)} с` : "—",
-        };
-      }),
     T("taskflow_rule_publish",
       "Опубликовать новую версию правила в манифест. Только владелец или оркестратор (для других ролей сервер вернёт 403). rule_id — латиница/точки/подчёркивания/дефисы (3..64), version — целое ≥ 1, content — непустой Markdown до 64 КБ, role_scope — массив ключей ролей или '*' (по умолчанию). Идемпотентен по (rule_id, version): повтор того же объявления вернёт existed=true. Старая active-версия того же rule_id переводится в superseded, в журнале task_events появится rule_superseded.",
       Type.Object({
@@ -178,30 +141,6 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
         return {
           печатает: resp?.["печатает"],
           "гаснет через": resp?.["печатает"] ? `${Math.floor((resp?.["гаснет_через_мс"] ?? 0) / 1000)} с` : "—",
-        };
-      }),
-    T("taskflow_chat_read",
-      "История канала координации, свежие сообщения. Заодно отмечает прочитанным. channel: owner | agents, пусто — всё видимое.",
-      Type.Object({
-        limit: Type.Optional(Type.Integer({ description: "по умолчанию 20" })),
-        task_id: S("только переписка по этой задаче"),
-        channel: S("owner | agents"),
-      }), async (p) => {
-        const resp = await asRole(role, "GET", "/api/chat?" + qs({ limit: String(p.limit ?? 20), task_id: p.task_id, channel: p.channel }));
-        const names = Object.fromEntries(((await asRole(role, "GET", "/api/chat/participants")) as any[]).map((a) => [a.id, a.name]));
-        await asRole(role, "POST", "/api/chat/read").catch(() => {});
-        return {
-          сообщения: ((resp?.messages ?? []) as any[]).map((m) => ({
-            когда: m.created_at,
-            канал: m.channel === "owner" ? "с владельцем" : "рабочий",
-            от: m.from_user_name,
-            кому: m.to_user_id ? (names[m.to_user_id] ?? "всем") : "всем",
-            тип: m.kind || "—",
-            задача: m.task_title,
-            task_id: m.task_id,
-            текст: m.text,
-          })),
-          "ещё есть": resp?.has_more ?? false,
         };
       }),
     T("taskflow_project_tasks",

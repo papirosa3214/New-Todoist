@@ -10,7 +10,7 @@ import db from "../db.js";
 
 type ConversationInput={taskId:string;subtaskId:string;role:string;chatId:string;messageId:string;prompt:string;onEvent?:(event:unknown)=>void;onStep?:(tool:string)=>void};
 const active=new Map<string,{chatId:string;roleId:string;abort:()=>Promise<void>}>();
-const DISCUSSION_TOOLS=new Set(["taskflow_task","taskflow_my_tasks","taskflow_projects","taskflow_topic_read","taskflow_topic_send","taskflow_rules","taskflow_status","taskflow_agents","taskflow_docs","taskflow_doc_read","taskflow_doc_write","taskflow_kb_search","taskflow_consult","taskflow_task_proposal","taskflow_comment"]);
+const DISCUSSION_TOOLS=new Set(["taskflow_task","taskflow_my_tasks","taskflow_projects","taskflow_topic_read","taskflow_topic_send","taskflow_topic_reply","taskflow_chat_send","taskflow_chat_reply","taskflow_chat_read","taskflow_rules","taskflow_status","taskflow_agents","taskflow_docs","taskflow_doc_read","taskflow_doc_write","taskflow_kb_search","taskflow_consult","taskflow_task_proposal","taskflow_comment"]);
 export function slotConversationTools(role:string,model:string,taskId:string,subtaskId:string){
   return taskflowTools(role,model,taskId,subtaskId).filter(tool=>DISCUSSION_TOOLS.has(tool.name));
 }
