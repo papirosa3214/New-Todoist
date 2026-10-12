@@ -391,7 +391,10 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
         return sendRuntimeError(reply, err);
       }
       const config = loadRoleRouting();
-      for (const role of ROLE_NAMES as RoleName[]) {
+      // Идём по ключам из yaml, а не по ROLE_NAMES: code_orchestrator в файле
+      // может быть ещё до того, как роль заведена в БД, и его модель тоже
+      // должна переключиться на новую основную.
+      for (const role of Object.keys(config.models)) {
         config.models[role] = model;
         config.fallbacks[role] = (config.fallbacks[role] ?? []).filter((m) => m !== model);
       }
@@ -401,7 +404,7 @@ export function registerRuntimeRoutes(app: FastifyInstance): void {
         const msg = err instanceof Error ? err.message : String(err);
         return reply.code(500).send({ error: `write failed: ${msg}` });
       }
-      return { primary: model, roles: ROLE_NAMES };
+      return { primary: model, roles: Object.keys(config.models) };
     },
   );
 }
