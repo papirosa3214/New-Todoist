@@ -44,12 +44,22 @@ describe("Удаление карточки с планом: кольцо «по
     const reg = await app.inject({ method: "POST", url: "/api/auth/register", payload: { name: "Владелец", email: `purge-${uid()}@example.com`, password: "password123" } });
     expect(reg.statusCode).toBe(200);
     token = reg.json().token; userId = reg.json().user.id;
+    // Контракт архива (57c69735): DELETE живой карточки = архив, а удалить
+    // навсегда (purge с разрывом кольца) может только владелец. Тест
+    // проверяет именно purge, поэтому учётка — владелец.
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(userId);
   });
   afterAll(async () => { await app.close(); });
 
   it("корзина удаляет карточку с планом и не трогает соседнюю", async () => {
     const victim = await makeTask("с планом"), neighbour = await makeTask("соседняя");
     const a = ring(victim), b = ring(neighbour);
+    // Контракт архива (57c69735): первый DELETE живой карточки — это
+    // архивирование (кольцо не мешает); физически удаляет повторный
+    // DELETE уже архивной карточки владельцем.
+    const archived = await app.inject({ method: "DELETE", url: `/api/tasks/${victim}`, headers: { authorization: `Bearer ${token}` } });
+    expect(archived.statusCode).toBe(200);
+    expect(exists("tasks", victim)).toBe(true);
     const res = await app.inject({ method: "DELETE", url: `/api/tasks/${victim}`, headers: { authorization: `Bearer ${token}` } });
     expect(res.statusCode).toBe(200);
     expect(exists("tasks", victim)).toBe(false);
