@@ -41,6 +41,7 @@ import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 import { commitGuardError } from "../lib/roleCommitCheck.js";
+import { isIntegrationPlanStep } from "../runtime/integrationHandoff.js";
 import {
   SNAPSHOT_REASONS,
   saveSlotSnapshot,
@@ -404,7 +405,8 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           // Проверяем только для репозитория самого сервера: для чужого
           // проекта (живущего вне `server/..`) у сервера нет ни ветки, ни
           // понятия, как туда коммитить — там гард дал бы ложный отказ.
-          const guardError = commitGuardError(subtask.task_id);
+          // Шаг интеграции сам вливает ветку в main: после этого поверх main коммитов нет.
+          const guardError = isIntegrationPlanStep(subtask.id) ? null : commitGuardError(subtask.task_id);
           if (guardError) {
             return reply.code(400).send({ error: guardError });
           }

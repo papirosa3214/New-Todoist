@@ -9,6 +9,7 @@ import db from "../db.js";
 import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { runRoleInProcess } from "./inProcessRun.js";
+import { INTEGRATION_STEP_MARKER } from "./integrationHandoff.js";
 import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
 import { currentResultVersion, ensureResultVersionForReview } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
@@ -654,6 +655,9 @@ export function finishPlanIfComplete(planId: string, taskId: string, actorId: st
     "SELECT title, done, result, plan_node_key FROM subtasks WHERE collaboration_plan_id = ? ORDER BY position",
   ).all(planId) as Array<{ title: string; done: number; result: string | null; plan_node_key: string | null }>;
   if (nodes.length === 0 || nodes.some((n) => !n.done)) return false;
+  // Последним закрыт шаг интеграции — план уже был сдан и принят, второй сдачи нет.
+  const lastKey = nodes[nodes.length - 1].plan_node_key;
+  if (lastKey && db.prepare("SELECT 1 FROM task_collaboration_plan_nodes WHERE plan_id = ? AND slot_key = ? AND instructions LIKE ?").get(planId, lastKey, INTEGRATION_STEP_MARKER + "%")) return false;
   const task = db.prepare("SELECT id, title, status, agent_state, creator_id, assignee_id, current_attempt_id FROM tasks WHERE id = ?")
     .get(taskId) as
     | { id: string; title: string; status: string; agent_state: string | null; creator_id: string | null; assignee_id: string | null; current_attempt_id: string | null }

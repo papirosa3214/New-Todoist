@@ -1,5 +1,5 @@
 import {loadChatMessage} from "../lib/chatMessages.js";
-import {enqueueIntegrationHandoff} from "../runtime/integrationHandoff.js";
+import {enqueueIntegrationHandoff, ensureIntegrationPlanStep} from "../runtime/integrationHandoff.js";
 import { sandboxSubmissionError, submissionReceipt } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { completePlanFinalReview } from "../runtime/planReviewLifecycle.js";
@@ -162,7 +162,8 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
       version.artifact_hash, criteriaVersion, verdict, findings);
     logEvent({ taskId, actorId: req.userId, kind: "review_recorded", field: "result_version", toValue: `${version.version_no}:${verdict}` });
         if (reviewer) planReturn = completePlanFinalReview(taskId,req.userId,verdict,findings ?? "",body.rework_steps);
-        if (verdict === "approved") handoff = enqueueIntegrationHandoff(reviewId);
+        // План есть — интеграция встаёт в него шагом; без плана — прежняя передача через чат.
+        if (verdict === "approved" && !(planReturn && ensureIntegrationPlanStep(reviewId))) handoff = enqueueIntegrationHandoff(reviewId);
         if (reportMarkdown) {
           const step = reportStep ?? db.prepare("SELECT s.id FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key WHERE s.task_id=? AND n.role_key='critic_verifier' ORDER BY s.position DESC LIMIT 1").get(taskId) as {id:string}|undefined;
           if (!step) throw new Error("Этап проверяющего не найден");

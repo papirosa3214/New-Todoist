@@ -8,6 +8,7 @@ import { beginTaskLiveTurn } from "./taskLiveTurn.js";
 import { broadcastToUsers } from "../ws.js";
 import { requireSubmissionReceipt, SUBMISSION_POLICY } from "../lib/submissionReceipt.js";
 import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
+import { integrationStepContext } from "./integrationHandoff.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { connectBuilderXcode } from "./builderXcode.js";
@@ -717,7 +718,7 @@ function artifactContractNote(subtaskId: string): string {
 
 function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): string {
   const subtask = db.prepare("SELECT title FROM subtasks WHERE id = ?").get(subtaskId) as { title?: string } | undefined;
-  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: (subtask?.title ?? "") + "\n" + integrationResponsibilityPrompt(taskId), artifactContract: artifactContractNote(subtaskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
+  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: (subtask?.title ?? "") + "\n" + (integrationStepContext(subtaskId) ?? integrationResponsibilityPrompt(taskId)), artifactContract: artifactContractNote(subtaskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 // ── Папка проекта, справка, продолжение разговора (этап C3) ──────────────
