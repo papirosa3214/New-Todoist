@@ -983,7 +983,12 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (!taskExecutionState(task.id).can_use_plan) return reply.code(409).send({error:"командный план недоступен: карточка занята или для неё уже есть активный план"});
     const plan = planForTask(task.id, req.params.planId);
     if (!plan) return reply.code(404).send({ error: "plan not found" });
-    if (plan.status !== "draft") return reply.code(409).send({ error: "редактировать можно только draft plan" });
+    // Карточка 71c1cd6e: PATCH метаданных (rationale) согласованного плана
+    // — разрешён, чтобы владелец мог пояснить, почему не нажал approve
+    // раньше, или поправить формулировку. Граф (nodes/edges) по-прежнему
+    // правится только у draft — это держит порядок исполнения.
+    const editingGraph = req.body?.nodes !== undefined;
+    if (plan.status !== "draft" && editingGraph) return reply.code(409).send({ error: "граф редактируется только у draft plan" });
 
     const sets: string[] = [];
     const values: unknown[] = [];
