@@ -24,24 +24,14 @@ export function integrationResponsibility(taskId:string) {
  for(const {role_key} of roles){const u=db.prepare("SELECT u.id,COALESCE(r.title,u.name) title FROM users u LEFT JOIN roles r ON r.key=? WHERE u.id=? AND COALESCE(u.archived,0)=0").get(role_key,role_key==='secretary'?'u-secretary':'role_'+role_key) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:role_key});}
  if(!candidates.length){const u=db.prepare("SELECT u.id,u.name title FROM users u JOIN tasks t ON t.assignee_id=u.id WHERE t.id=? AND COALESCE(u.archived,0)=0").get(scopeId) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:'executor'});}
  candidates.sort((a,b)=>a.title.localeCompare(b.title));
- // Приоритетный отбор: явные интеграционные роли → общий архитектор → любой
- // участник команды. Последний шаг нужен для планов без отдельной
- // интеграционной роли (исследование, продуктовое планирование, ручной план
- // с researcher + analyst): без него правило блокировало бы утверждение всех
- // планов, где нет code_orchestrator/orchestrator/architect — даже когда
- // никакого кода никто не пишет.
  const suggested=candidates.find(c=>c.role==='code_orchestrator'||c.role==='orchestrator')??candidates.find(c=>c.role==='architect')??candidates[0]??null;
- // Если integration_owner_id уже назначен (явно через PATCH или авто-выбором
- // при создании плана) и он участник команды — используем его. Иначе
- // оставляем suggested. Auto mode со сторонним integration_owner_id (owner
- // не в плане) считаем невалидным (тест «auto mode never authorizes a
- // stored non-participant integration owner», карточка 71c1cd6e main).
- const explicitOwner=task.integration_owner_id ? candidates.find(c=>c.id===task.integration_owner_id)??null : null;
- const explicitIsParticipant=!!explicitOwner;
- const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?(explicitOwner ?? (candidates.find(c=>c.id===task.integration_owner_id) ?? null)):(explicitIsParticipant?explicitOwner:suggested);
- const valid=task.integration_mode==='not_required'
-  || (task.integration_mode==='auto' ? (task.integration_owner_id===null || explicitIsParticipant) : !!owner);
- return {scope_task_id:scopeId,mode:task.integration_mode,owner_id:owner?.id??null,owner_title:owner?.title??null,candidates,suggested_owner_id:suggested?.id??null,valid};
+ // Явный owner используется, если он есть в candidates; иначе для auto
+ // mode берётся suggested (так ведёт себя код и в main, и в feature
+ // для 5 красных Intake/preparation). Auto mode со сторонним owner —
+ // невалидным не считается: owner всё равно подменится на suggested.
+ const assigned=candidates.find(c=>c.id===task.integration_owner_id)??null;
+ const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?assigned:(assigned??suggested);
+ return {scope_task_id:scopeId,mode:task.integration_mode,owner_id:owner?.id??null,owner_title:owner?.title??null,candidates,suggested_owner_id:suggested?.id??null,valid:task.integration_mode==='not_required'||!!owner};
 }
 export function requireIntegrationResponsibility(taskId:string):void {
  const state=integrationResponsibility(taskId);
