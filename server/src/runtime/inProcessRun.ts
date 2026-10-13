@@ -440,7 +440,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const resp = await asRole(role, "POST", `/api/tasks/${p.id}/state`, body);
         return { "состояние изменено": short(unwrap(resp)) };
       }),
-    T("taskflow_review", "id — ID ВСЕЙ текущей задачи, не подзадачи. Единственный способ сдать работу критика: текст changes_requested в отчёте не оформляет возврат. Всегда вызови этот инструмент; не закрывай шаг через subtask_done или artifact. Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
+    T("taskflow_review", "id — ID ВСЕЙ текущей задачи, не подзадачи. Единственный способ сдать работу критика: текст changes_requested в отчёте не оформляет возврат. Всегда вызови этот инструмент; не закрывай шаг через subtask_done или artifact. Вердикт по сданной задаче: approved или changes_requested (с комментарием). Только для проверяющего. Для возврата плана rework_steps — ключи первых дефектных этапов текущего цикла; несколько только для независимых параллельных веток. report_markdown — отчёт для владельца с разделами ## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы; правила отчёта — в системной инструкции. " + SUBMISSION_POLICY,
       Type.Object({ id: Type.String(), verdict: Type.String(), report_markdown: Type.Optional(Type.String()), findings: Type.Optional(Type.String()), rework_steps: Type.Optional(Type.Array(Type.String())) }),
       async (p) => {
         const step = db.prepare("SELECT task_id, agent_id FROM subtasks WHERE id=?").get(p.id) as
@@ -521,7 +521,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) touchTaskActivity(taskId);
         return result;
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. " + ROLE_REPORT_INSTRUCTION + " " + SUBMISSION_POLICY,
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. report_markdown — отчёт для владельца с разделами ## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы; правила отчёта — в системной инструкции. " + SUBMISSION_POLICY,
       Type.Object({
         id: Type.String(),
         result: Type.Optional(Type.String()),
@@ -698,9 +698,26 @@ export function defaultTaskPrompt(taskId: string, role: string): string {
  * `taskflow_claim` здесь не нужен — узел плана уже назначен этой роли
  * (`agent_id`) и уже in_progress, работа начинается сразу с самого шага.
  */
+/** Контракт результата шага — прямо в задании, чтобы роль не угадывала поля. */
+function artifactContractNote(subtaskId: string): string {
+  const row = db.prepare(`SELECT n.output_artifact_json AS json FROM subtasks s
+      JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+     WHERE s.id = ?`).get(subtaskId) as { json?: string | null } | undefined;
+  let contract: { key?: string; required_fields?: string[] } | null = null;
+  try { contract = row?.json ? JSON.parse(row.json) : null; } catch { contract = null; }
+  if (!contract?.key) return "- У этого шага нет контракта результата: artifact не передавай.";
+  const fields = (contract.required_fields ?? []).join(", ");
+  return [
+    `- У этого шага контракт результата «${contract.key}»: вместо отдельного report_markdown передай artifact.`,
+    "- artifact: {summary — строка, payload — объект, evidence — массив, report_markdown — отчёт внутри artifact}.",
+    `- В payload обязательны непустые поля: ${fields}.`,
+    "- evidence: до 8 записей, каждая — строка-путь либо объект с path / doc_id / document_ref / url.",
+  ].join("\n");
+}
+
 function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): string {
   const subtask = db.prepare("SELECT title FROM subtasks WHERE id = ?").get(subtaskId) as { title?: string } | undefined;
-  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: (subtask?.title ?? "") + "\n" + integrationResponsibilityPrompt(taskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
+  return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: (subtask?.title ?? "") + "\n" + integrationResponsibilityPrompt(taskId), artifactContract: artifactContractNote(subtaskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 
 // ── Папка проекта, справка, продолжение разговора (этап C3) ──────────────
