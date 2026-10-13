@@ -89,7 +89,8 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
     if (!summary || !payload || typeof payload !== "object" || Array.isArray(payload)) return validationFailure("нужны summary и object payload");
     if (evidenceInput !== undefined && !Array.isArray(evidenceInput)) return validationFailure("evidence должен быть массивом");
     if (evidence.some((item) => !item || typeof item !== "object" || typeof (item as Record<string, unknown>).path !== "string" || !(item as Record<string, string>).path.trim() || (item as Record<string, string>).path.length > 1024)) return validationFailure("evidence: каждая запись — ссылка на файл или документ (строка либо объект с path / doc_id / document_ref / url)");
-    if (contract.required_fields.some((key) => { const value = (payload as Record<string, unknown>)[key]; return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0); })) return validationFailure("payload не содержит required_fields");
+    const missingFields = contract.required_fields.filter((key) => { const value = (payload as Record<string, unknown>)[key]; return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0); });
+    if (missingFields.length) return validationFailure("в payload нет обязательных полей (пропущены или пустые): " + missingFields.join(", ") + ". Контракт «" + contract.key + "» требует: " + contract.required_fields.join(", "));
 
     let reportMarkdown: string;
     try { reportMarkdown = validateRoleReport(req.body?.report_markdown); }
