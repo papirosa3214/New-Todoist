@@ -66,6 +66,20 @@ export async function POST(req: Request) {
     let duplicates = 0;
     const errors = [...parsed.summary.errors];
     const now = new Date().toISOString();
+    // Валюта операции наследуется от счёта (раздел 5, правило 4). Если файл
+    // объявил другую — пишем предупреждение, а не молча пишем чужую валюту:
+    // иначе остаток счёта считается в единицах, которых в нём нет.
+    const foreignInFile = new Set(
+      parsed.operations
+        .map((o) => o.currency)
+        .filter((c): c is string => Boolean(c) && c !== account.currency),
+    );
+    if (foreignInFile.size > 0) {
+      parsed.warnings.push(
+        `Файл указывает валюту ${[...foreignInFile].join(", ")}, а счёт — ${account.currency}. ` +
+          `Операции записаны в валюте счёта; другой счёт в этой валюте даст честный остаток.`,
+      );
+    }
 
     for (const raw of parsed.operations) {
       const externalId =
@@ -96,7 +110,7 @@ export async function POST(req: Request) {
           accountId,
           date: raw.date,
           amount: raw.amount,
-          currency: raw.currency || account.currency,
+          currency: account.currency,
           description: raw.description,
           merchant: raw.merchant ?? null,
           categoryId: null,

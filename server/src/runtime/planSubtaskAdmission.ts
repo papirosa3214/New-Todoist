@@ -1,3 +1,4 @@
+import { wakeAndDeliver } from "./orchestratorWake.js";
 import { artifactHasEvidence, artifactGateSatisfied } from "./planArtifactGate.js";
 export { artifactHasEvidence } from "./planArtifactGate.js";
 import { branchMembership } from "./branchPlan.js";
@@ -10,6 +11,7 @@ import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { runRoleInProcess } from "./inProcessRun.js";
 import { INTEGRATION_STEP_MARKER } from "./integrationHandoff.js";
+import { planDelivered } from "./planMutations.js";
 import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
 import { currentResultVersion, ensureResultVersionForReview } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
@@ -256,6 +258,8 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
   try {
     const run = await runRoleInProcess({ taskId: current.task_id, role: node.role_key, subtaskId: current.id, mode: node.role_key === "critic_verifier" ? "review" : "work", prompt: node.role_key === "critic_verifier" ? (await import("./inProcessRun.js")).reviewPromptFor(current.task_id) + "\n\n" + (await import("./planReviewLifecycle.js")).planReviewRouteContext(current.task_id) : undefined, freshSession: options.freshSession, model: current.model || undefined });
     logEvent({ taskId: current.task_id, actorId, kind: "plan_subtask_started", field: current.plan_node_key, toValue: roleTitle(node.role_key) });
+    // Режим «Оркестратор»: повторная попытка того же шага — повод взглянуть.
+    if ((subtask(current.id)?.admission_cycle ?? 0) > 1) wakeAndDeliver(current.id, actorId, "retry", null);
     return { ok: true, runId: run.runId };
   } catch (error) {
     db.prepare("UPDATE subtasks SET agent_state = NULL, agent_id = NULL, current_attempt_id = NULL WHERE id = ?").run(current.id);
@@ -663,9 +667,7 @@ export function finishPlanIfComplete(planId: string, taskId: string, actorId: st
     | { id: string; title: string; status: string; agent_state: string | null; creator_id: string | null; assignee_id: string | null; current_attempt_id: string | null }
     | undefined;
   if (!task || task.status !== "active" || task.agent_state === "review") return false;
-  const already = db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'collaboration_plan_completed' AND field = ? LIMIT 1")
-    .get(taskId, planId);
-  if (already) return false;
+  if (planDelivered(taskId, planId)) return false;
   // Корень ветки без Архитектора на выходе — он подключается сам и собирает итог.
   if (ensureBranchAssembler(planId, taskId)) return false;
   // tcpo_791b4519: согласование владельца ещё открыто — не закрывать план,

@@ -356,4 +356,65 @@ describe("живой план совместной работы", () => {
     expect([403,404]).toContain(assign.statusCode);
   });
 
+  // Владелец 13.10.2026: сданный план не заперт — новый шаг возвращает карточку в работу.
+  it("сданный план переоткрывается новым шагом: с проверки, из закрытых и ролью из сданного шага", async () => {
+    const { finishPlanIfComplete, unlockReadyPlanSubtasks } = await import("../src/runtime/planSubtaskAdmission.js");
+    const task = (id: string) => db.prepare("SELECT status, agent_state, completed_at FROM tasks WHERE id = ?").get(id) as { status: string; agent_state: string | null; completed_at: string | null };
+    const delivered = async (review = false) => {
+      const f = await planWith("approved", [
+        { slot: "analysis", role: "analyst", state: "done" },
+        { slot: "delivery", role: "builder", state: "done" },
+      ], [["analysis", "delivery"]]);
+      db.prepare("UPDATE tasks SET requires_reviewer_review = ? WHERE id = ?").run(review ? 1 : 0, f.taskId);
+      expect(finishPlanIfComplete(f.planId, f.taskId, ownerId)).toBe(true);
+      expect(task(f.taskId).agent_state).toBe("review");
+      return f;
+    };
+
+    // Карточка на проверке: шаг добавлен, стартовал, карточка снова в работе, после шага — вторая сдача.
+    const a = await delivered();
+    const added = await ops(a.taskId, a.planId, { ops: [{ op: "add_step", slot_key: "designer_pass", role_key: "designer", expected_result: "Пройтись по сделанному", after: ["delivery"] }] });
+    expect(added.statusCode).toBe(200);
+    expect(added.json().result.status).toBe("applied");
+    expect(task(a.taskId)).toMatchObject({ status: "active", agent_state: null });
+    const pass = stepOf(a.planId, "designer_pass")!;
+    expect(started).toContain(pass.id);
+    expect(finishPlanIfComplete(a.planId, a.taskId, ownerId)).toBe(false);
+    db.prepare("UPDATE subtasks SET done = 1, agent_state = NULL, result = 'Готово' WHERE id = ?").run(pass.id);
+    expect(finishPlanIfComplete(a.planId, a.taskId, ownerId)).toBe(true);
+    expect(task(a.taskId).agent_state).toBe("review");
+
+    // Закрытая карточка возвращается в активные.
+    const b = await delivered();
+    db.prepare("UPDATE tasks SET status = 'completed', agent_state = NULL, completed_at = datetime('now') WHERE id = ?").run(b.taskId);
+    const reopened = await ops(b.taskId, b.planId, { ops: [{ op: "add_step", role_key: "qa", expected_result: "Перепроверить", after: ["delivery"] }] });
+    expect(reopened.statusCode).toBe(200);
+    expect(task(b.taskId)).toMatchObject({ status: "active", agent_state: null, completed_at: null });
+
+    // Итоговая проверка ещё не сдана: она ждёт новый шаг и встаёт в очередь после него, второй сдачи нет.
+    db.prepare("UPDATE users SET reviewer_first_default = 1 WHERE id = ?").run(ownerId);
+    const d = await delivered(true);
+    const review = db.prepare("SELECT plan_node_key k FROM subtasks WHERE collaboration_plan_id = ? AND plan_node_key LIKE 'final_review_%'").get(d.planId) as { k: string };
+    expect(stepOf(d.planId, review.k)).toMatchObject({ done: 0, agent_state: "todo" });
+    expect((await ops(d.taskId, d.planId, { ops: [{ op: "add_step", slot_key: "qa_extra", role_key: "qa", expected_result: "Допроверить", after: ["delivery"] }] })).statusCode).toBe(200);
+    expect(edgesOf(d.planId)).toContain("qa_extra>" + review.k);
+    expect(stepOf(d.planId, review.k)!.agent_state).toBeNull();
+    expect(task(d.taskId).agent_state).toBeNull();
+    db.prepare("UPDATE subtasks SET done = 1, agent_state = NULL, result = 'Готово' WHERE id = ?").run(stepOf(d.planId, "qa_extra")!.id);
+    expect(finishPlanIfComplete(d.planId, d.taskId, ownerId)).toBe(false);
+    await unlockReadyPlanSubtasks(d.planId, d.taskId, ownerId);
+    expect(stepOf(d.planId, review.k)!.agent_state).toBe("todo");
+    expect(task(d.taskId).agent_state).toBe("review");
+    expect((db.prepare("SELECT COUNT(*) n FROM subtasks WHERE collaboration_plan_id = ? AND plan_node_key LIKE 'final_review_%'").get(d.planId) as { n: number }).n).toBe(1);
+
+    // Роль достраивает сданный план из своего сданного шага.
+    const c = await delivered();
+    const own = stepOf(c.planId, "delivery")!.id;
+    const byRole = await app.inject({ method: "POST", url: `/api/subtasks/${own}/plan-request`, headers: as("role_builder"),
+      payload: { kind: "add_step", role: "qa", expected_result: "Проверить по просьбе владельца", reason: "Владелец попросил проверку после сдачи" } });
+    expect(byRole.statusCode).toBe(200);
+    expect(byRole.json().result.status).toBe("applied");
+    expect(task(c.taskId).agent_state).toBeNull();
+  });
+
 });

@@ -36,6 +36,12 @@ export function integrationResponsibility(taskId:string) {
  // участника (тест main «auto mode never authorizes a stored non-participant
  // integration owner»).
  const assigned=candidates.find(c=>c.id===task.integration_owner_id)??null;
+// Режим «Оркестратор» (владелец 13.10.2026): итог и вливание в main делает
+ // шаг сборки самого Оркестратора, отдельный автоинтегратор после него —
+ // дубль работы. Пока у карточки действующий план orchestrated, интеграция
+ // считается «не требуется», и сервер не добавляет шаг «Интеграция».
+ if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND profile='orchestrated' AND status IN ('draft','approved') LIMIT 1").get(scopeId))
+  return {scope_task_id:scopeId,mode:'not_required' as const,owner_id:null,owner_title:null,candidates,suggested_owner_id:null,valid:true};
  const stored=task.integration_owner_id?db.prepare('SELECT type FROM users WHERE id=?').get(task.integration_owner_id) as {type:string}|undefined:undefined;
  const stray=task.integration_mode==='auto'&&!!task.integration_owner_id&&!assigned&&!!stored&&stored.type!=='ai';
  const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?assigned:(assigned??suggested);

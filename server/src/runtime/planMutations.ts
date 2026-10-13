@@ -1,3 +1,4 @@
+import { wakeAndDeliver } from "./orchestratorWake.js";
 import { normalizePlanStartCondition } from "./planArtifactGate.js";
 // Живой план совместной работы (владелец 01.10.2026: «граф живой, может
 // достраиваться сам в процессе, а состав я настраиваю хотя бы до старта»;
@@ -25,6 +26,8 @@ import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { logEvent } from "../agentState.js";
 import { ROLE_NAMES, roleTitle, roleUserId } from "../roleRouting.js";
 import { broadcastToUsers } from "../ws.js";
+import { bumpContextVersion } from "./taskContextVersion.js";
+import { FINAL_REVIEW_MARKER } from "./planReviewLifecycle.js";
 
 /** Жёсткий потолок узлов (тот же, что у parseGraph). */
 export const MAX_PLAN_NODES = 16;
@@ -100,6 +103,17 @@ function loadPlan(planId: string): PlanRow {
   if (!plan) throw new PlanOpError("план не найден", 404);
   if (plan.status === "superseded") throw new PlanOpError("это старая версия плана — править можно текущую", 409);
   return plan;
+}
+
+/** План сдан целиком и с тех пор не переоткрыт: последнее из двух событий — сдача.
+ *  Переоткрытие (владелец 13.10.2026) — новый шаг в уже сданном плане: карточка
+ *  возвращается в работу, после шага план сдаётся заново. */
+export function planDelivered(taskId: string, planId: string): boolean {
+  const last = db.prepare(
+    `SELECT kind FROM task_events WHERE task_id = ? AND field = ?
+       AND kind IN ('collaboration_plan_completed','collaboration_plan_reopened') ORDER BY rowid DESC LIMIT 1`,
+  ).get(taskId, planId) as { kind: string } | undefined;
+  return last?.kind === "collaboration_plan_completed";
 }
 
 function loadSteps(planId: string): Map<string, StepRow> {
@@ -412,6 +426,39 @@ function persist(plan: PlanRow, w: Working): void {
   }
 }
 
+/** Несданная итоговая проверка сданного плана: новые шаги встают перед ней, она ждёт их. */
+function pendingFinalReview(w: Working, steps: Map<string, StepRow>): string | null {
+  const review = [...w.nodes.values()].find((n) => !w.added.has(n.slot_key) && !n.skipped_at
+    && (n.instructions ?? "").startsWith(FINAL_REVIEW_MARKER) && steps.get(n.slot_key)?.done === 0);
+  if (!review) return null;
+  for (const slot of w.added) {
+    if (!w.edges.some((e) => e.from_slot_key === slot)) w.edges.push({ from_slot_key: slot, to_slot_key: review.slot_key, start_condition: "submitted", artifact_key: null });
+  }
+  validate(w);
+  return review.slot_key;
+}
+
+/** Новый шаг в сданном плане: карточка возвращается в работу (и из «на проверке», и из закрытых),
+ *  после сдачи шага finishPlanIfComplete сдаёт план заново — с новой версией результата.
+ *  Если итоговая проверка ещё не сдана, план остаётся сданным: проверка сама ждёт новый шаг,
+ *  а вторая сдача приставила бы второго проверяющего. */
+function reopenDeliveredPlan(plan: PlanRow, actor: PlanActor, w: Working, openReview: string | null): void {
+  const task = db.prepare("SELECT status, agent_state FROM tasks WHERE id = ?").get(plan.task_id) as { status: string; agent_state: string | null };
+  db.prepare("UPDATE tasks SET status = 'active', completed_at = NULL, agent_state = NULL, current_attempt_id = NULL, updated_at = datetime('now') WHERE id = ?")
+    .run(plan.task_id);
+  if (openReview) {
+    // Проверка, ещё не начатая проверяющим, снимается с очереди и откроется снова после нового шага.
+    db.prepare("UPDATE subtasks SET agent_state = NULL WHERE collaboration_plan_id = ? AND plan_node_key = ? AND done = 0 AND agent_state = 'todo'")
+      .run(plan.id, openReview);
+    db.prepare(`UPDATE role_run_jobs SET status='cancelled', lease_owner=NULL, lease_expires_at=NULL, finished_at=datetime('now'),
+      updated_at=datetime('now'), last_error='план переоткрыт' WHERE task_id = ? AND reason = 'review' AND status IN ('queued','retry_wait')`).run(plan.task_id);
+  }
+  bumpContextVersion(plan.task_id);
+  if (!openReview) logEvent({ taskId: plan.task_id, actorId: actor.id, kind: "collaboration_plan_reopened", field: plan.id, toValue: [...w.added].join(",") });
+  if (task.status !== "active") logEvent({ taskId: plan.task_id, actorId: actor.id, kind: "state_changed", field: "status", fromValue: task.status, toValue: "active" });
+  if (task.agent_state) logEvent({ taskId: plan.task_id, actorId: actor.id, kind: "state_changed", field: "agent_state", fromValue: task.agent_state, toValue: null });
+}
+
 function describe(ops: PlanOp[], w: Working): string {
   return ops
     .map((op) => {
@@ -498,11 +545,8 @@ export function applyPlanOps(
     if (opts.baseVersion != null && opts.baseVersion !== plan.version) {
       throw new PlanOpError(`план уже изменён (версия ${plan.version}, у вас ${opts.baseVersion}) — обновите и повторите`, 409);
     }
-    if (plan.status === "approved") {
-      const completed = db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'collaboration_plan_completed' AND field = ? LIMIT 1")
-        .get(plan.task_id, plan.id);
-      if (completed) throw new PlanOpError("план уже сдан целиком — новую работу заведите отдельным планом или задачей", 409);
-    }
+    // Сданный план не заперт: новый шаг переоткрывает его (см. reopenDeliveredPlan).
+    const delivered = plan.status === "approved" && planDelivered(plan.task_id, plan.id);
     const nodes = db.prepare(
       `SELECT slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions, origin,
               added_by, added_reason, iteration, rework_of_key, skipped_at, skip_reason
@@ -513,7 +557,8 @@ export function applyPlanOps(
     const steps = loadSteps(plan.id);
     if (actor.kind === "role") {
       const own = steps.get(actor.slotKey);
-      if (plan.status !== "approved" || !own || own.done || own.agent_state !== "in_progress") {
+      // В сданном плане идущих шагов нет — роль достраивает его из своего сданного шага.
+      if (plan.status !== "approved" || !own || (!delivered && (own.done || own.agent_state !== "in_progress"))) {
         throw new PlanOpError("менять план роль может только из своего идущего шага", 403);
       }
     }
@@ -546,11 +591,20 @@ export function applyPlanOps(
     if (over) {
       const opId = logOp(plan.id, actor, plan.version, null, ops, "proposed", reason);
       logEvent({ taskId: plan.task_id, actorId: actor.id, kind: "collaboration_plan_change_proposed", field: opId, toValue: clip(describe(ops, w), 500) });
-      notifyPlanApprovalRequest(plan.task_id, plan.id, opId, actor.id, clip(describe(ops, w), 200), over);
+      // Режим «Оркестратор»: согласует Оркестратор, а не владелец.
+      const orchestrated = (db.prepare("SELECT profile FROM task_collaboration_plans WHERE id = ?").get(plan.id) as { profile: string }).profile === "orchestrated";
+      const askerStep = actor.kind === "role" ? steps.get(actor.slotKey) : undefined;
+      if (orchestrated && askerStep) {
+        const detail = `op_id=${opId}, plan_id=${plan.id}, task_id=${plan.task_id}. Предлагает: ${clip(describe(ops, w), 300)}. Причина: ${over}${reason ? `; ${reason}` : ""}`;
+        setImmediate(() => wakeAndDeliver(askerStep.id, actor.id, "approval", detail));
+      } else notifyPlanApprovalRequest(plan.task_id, plan.id, opId, actor.id, clip(describe(ops, w), 200), over);
       return { status: "proposed", opId, reason: over };
     }
 
+    const reopen = delivered && w.added.size > 0;
+    const openReview = reopen ? pendingFinalReview(w, steps) : null;
     persist(plan, w);
+    if (reopen) reopenDeliveredPlan(plan, actor, w, openReview);
     const version = plan.version + 1;
     db.prepare("UPDATE task_collaboration_plans SET version = ? WHERE id = ?").run(version, plan.id);
     const opId = logOp(plan.id, actor, plan.version, version, ops, "applied", reason);
@@ -559,6 +613,12 @@ export function applyPlanOps(
     if (actor.kind === "role") {
       roleNote(plan.task_id, actor.roleKey, `Изменил план совместной работы: ${summary}${reason ? `. Причина: ${reason}` : ""}`);
       notifyOwner(plan.task_id, actor.id, `${roleTitle(actor.roleKey)} изменил план: ${clip(summary, 200)}`);
+    }
+    // Режим «Оркестратор»: возврат проверяющим будит Оркестратора после
+    // коммита — без блока роли могут по кругу сжечь попытки.
+    for (const op of ops) if (op.op === "rework") {
+      const from = steps.get(op.from_slot);
+      if (from) setImmediate(() => wakeAndDeliver(from.id, actor.id, "returned", clip(String(op.defects ?? ""), 600)));
     }
     return { status: "applied", version, opId, added: [...w.added] };
   })();

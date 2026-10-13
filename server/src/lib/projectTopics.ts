@@ -5,6 +5,17 @@ import crypto from "node:crypto";
 import db from "../db.js";
 import { roleUserId } from "../roleRouting.js";
 
+/**
+ * Карточку перенесли в другой проект, а её тема осталась в группе старого:
+ * пустую тему (без сообщений) переносим в группу нового проекта. Тему с
+ * перепиской не трогаем — молча переселять историю нельзя (защита 04.10.2026),
+ * там по-прежнему ошибка «Тема относится к прежнему проекту задачи».
+ */
+export function rehomeEmptyTopic(topicId:string,projectId:string,groupId:string):boolean{
+  if(db.prepare("SELECT 1 FROM chat_messages WHERE chat_id=? LIMIT 1").get(topicId)) return false;
+  return db.prepare("UPDATE chats SET project_id=?,parent_chat_id=? WHERE id=?").run(projectId,groupId,topicId).changes===1;
+}
+
 /** Transactional, idempotent membership. Chat participation never grants task access. */
 export function ensurePlanTopic(taskId: string): string | null {
   const task=db.prepare("SELECT title,project_id FROM tasks WHERE id=?").get(taskId) as {title:string;project_id:string|null}|undefined;
@@ -18,6 +29,7 @@ export function ensurePlanTopic(taskId: string): string | null {
       db.prepare("INSERT INTO chats(id,title,kind,created_by,project_id) VALUES (?,?,'group',?,?)").run(group.id,project.name,project.owner_id,task.project_id);
     }
     let topic=db.prepare("SELECT id,project_id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(taskId) as {id:string;project_id:string}|undefined;
+    if(topic && topic.project_id!==task.project_id && rehomeEmptyTopic(topic.id,task.project_id!,group.id)) topic.project_id=task.project_id!;
     if(topic && topic.project_id!==task.project_id) throw new Error("Тема относится к прежнему проекту задачи");
     if(!topic){
       topic={id:crypto.randomUUID(),project_id:task.project_id!};

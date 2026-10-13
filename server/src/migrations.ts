@@ -220,6 +220,59 @@ function addBugRegressionProfile(): void {
 }
 
 /**
+ * Добавить 'orchestrated' в закрытый CHECK task_collaboration_plans.profile —
+ * режим «Оркестратор» (владелец 13.10.2026): Оркестратор раскладывает работу
+ * по ролям в живом плане и сам собирает итог. Тот же rebuild, что у 137.
+ */
+function addOrchestratedProfile(): void {
+  const ddl =
+    (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='task_collaboration_plans'",
+        )
+        .get() as { sql?: string } | undefined
+    )?.sql ?? "";
+  if (!ddl || ddl.includes("'orchestrated'")) {
+    return;
+  }
+
+  const newDdl = ddl
+    .replace(/CHECK\s*\(\s*profile\s+IN\s*\(([^)]*)\)\s*\)/i, (_match, list: string) => `CHECK (profile IN (${list},'orchestrated'))`)
+    .replace(/CREATE TABLE\s+"?task_collaboration_plans"?/i, 'CREATE TABLE "task_collaboration_plans_new"');
+  if (newDdl === ddl || !newDdl.includes('CREATE TABLE "task_collaboration_plans_new"') || !newDdl.includes("'orchestrated'")) {
+    throw new Error(
+      "140_collaboration_plan_orchestrated_profile: не удалось безопасно подготовить task_collaboration_plans с orchestrated",
+    );
+  }
+
+  db.pragma("foreign_keys = OFF");
+  try {
+    const rebuild = db.transaction(() => {
+      db.exec(newDdl);
+      db.exec('INSERT INTO "task_collaboration_plans_new" SELECT * FROM task_collaboration_plans');
+      db.exec("DROP TABLE task_collaboration_plans");
+      db.exec('ALTER TABLE "task_collaboration_plans_new" RENAME TO task_collaboration_plans');
+      // DROP TABLE забирает с собой отдельно объявленный (не inline UNIQUE)
+      // индекс idx_task_collaboration_plans_task — пересоздаём его на новой таблице.
+      db.exec("CREATE INDEX IF NOT EXISTS idx_task_collaboration_plans_task ON task_collaboration_plans(task_id, revision DESC)");
+    });
+    rebuild();
+
+    const broken = (
+      db.pragma("foreign_key_check") as Array<{ parent?: string }>
+    ).filter((row) => row.parent === "task_collaboration_plans");
+    if (broken.length > 0) {
+      throw new Error(
+        `140_collaboration_plan_orchestrated_profile: после пересборки task_collaboration_plans осталось ${broken.length} битых ссылок`,
+      );
+    }
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
+/**
  * Добавить 'product_feature' в закрытый CHECK task_collaboration_plans.profile
  * (T03). SQLite не умеет ALTER CHECK — тот же rebuild-паттерн, что и в
  * removeUsersRoleCheck: читаем живой DDL, дописываем значение в список CHECK,
@@ -4462,6 +4515,65 @@ const migrations: Migration[] = [
         added_by TEXT REFERENCES users(id),
         added_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
+    `);
+  } },
+  {
+    id: "140_collaboration_plan_orchestrated_profile",
+    description: "Разрешить profile='orchestrated' (режим «Оркестратор») в task_collaboration_plans.profile.",
+    noTransaction: true,
+    up: () => addOrchestratedProfile(),
+  },
+  // Внешний доступ iPhone к TaskFlow (карточка b5a16110, документ решения
+  // a91ac9a1-…, §11.1). Номер 141, а не 140: 140 уже занята
+  // collaboration_plan_orchestrated_profile, и вставить вторую миграцию с
+  // тем же id нельзя — schema_migrations по id уникальна, вторая молча
+  // считалась бы уже применённой и таблиц не создала бы.
+  //
+  // Главное свойство схемы: НИ ОТКРЫТЫЙ QR-КОД, НИ ТОКЕН УСТРОЙСТВА В БАЗЕ
+  // НЕ ЛЕЖАТ. Только sha256 (hashApiToken из db.ts) и короткий префикс
+  // токена для показа в списке устройств — по нему человек узнаёт свой
+  // телефон, но он к доступу не ведёт.
+  { id: "141_device_pairing", description: "Привязка телефона по QR: одноразовый код, токен устройства, отзыв и журнал", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS pairing_codes (
+        id TEXT PRIMARY KEY,
+        code_hash TEXT NOT NULL UNIQUE,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        source_ip TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_pairing_codes_hash ON pairing_codes(code_hash);
+      CREATE INDEX IF NOT EXISTS idx_pairing_codes_owner ON pairing_codes(created_by, used_at, created_at);
+
+      CREATE TABLE IF NOT EXISTS devices (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        install_id TEXT NOT NULL,
+        name TEXT,
+        model TEXT,
+        os TEXT,
+        app_version TEXT,
+        token_hash TEXT NOT NULL UNIQUE,
+        token_prefix TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT,
+        revoked_at TEXT,
+        revoke_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_devices_token ON devices(token_hash);
+      CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id, install_id);
+
+      CREATE TABLE IF NOT EXISTS device_events (
+        id TEXT PRIMARY KEY,
+        device_id TEXT,
+        user_id TEXT,
+        kind TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        data TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_device_events_device ON device_events(device_id, created_at);
     `);
   } },
 ];

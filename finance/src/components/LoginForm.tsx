@@ -1,14 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import * as React from "react";
 import { useRouter } from "next/navigation";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ErrorBanner } from "@/components/ErrorBanner";
 
 export function LoginForm() {
   const router = useRouter();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const [username, setUsername] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+  const [pending, setPending] = React.useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -23,47 +28,47 @@ export function LoginForm() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setError(body?.error?.message ?? "Не удалось войти");
-        setPending(false);
         return;
       }
       router.push("/dashboard");
       router.refresh();
-    } catch (err) {
-      setError("Сетевая ошибка");
+    } catch {
+      setError("Нет связи с сервером. Проверьте подключение и повторите.");
+    } finally {
       setPending(false);
     }
   }
 
   return (
     <form onSubmit={onSubmit} className="space-y-4">
-      <label className="block">
-        <span className="text-sm text-ink-700">Имя пользователя</span>
-        <input
+      <div className="space-y-1">
+        <Label htmlFor="login-user">Имя пользователя</Label>
+        <Input
+          id="login-user"
+          name="username"
           autoFocus
+          autoComplete="username"
           required
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          className="mt-1 w-full border border-ink-300 rounded-md px-3 py-2 text-sm"
         />
-      </label>
-      <label className="block">
-        <span className="text-sm text-ink-700">Пароль</span>
-        <input
-          required
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="login-pass">Пароль</Label>
+        <Input
+          id="login-pass"
+          name="password"
           type="password"
+          autoComplete="current-password"
+          required
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="mt-1 w-full border border-ink-300 rounded-md px-3 py-2 text-sm"
         />
-      </label>
-      {error ? <p className="text-sm text-danger-500">{error}</p> : null}
-      <button
-        type="submit"
-        disabled={pending}
-        className="w-full bg-accent-600 text-white rounded-md py-2 text-sm font-medium hover:bg-accent-700 disabled:opacity-60"
-      >
+      </div>
+      {error ? <ErrorBanner message={error} /> : null}
+      <Button type="submit" disabled={pending} className="w-full">
         {pending ? "Входим…" : "Войти"}
-      </button>
+      </Button>
     </form>
   );
 }

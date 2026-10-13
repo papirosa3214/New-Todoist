@@ -123,6 +123,48 @@ export const balanceSnapshots = sqliteTable(
 );
 
 /**
+ * Накопления и вклады: сумма, ставка, срок и капитализация.
+ * Итоговая сумма к концу срока не хранится — она считается в lib/savings.ts,
+ * чтобы одна и та же формула работала для списка и для сценария «а если положу».
+ */
+export const savings = sqliteTable("savings", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  kind: text("kind", { enum: ["deposit", "savings", "certificate", "other"] }).notNull(),
+  currency: text("currency").notNull().default("RUB"),
+  principal: real("principal").notNull(),
+  annualRate: real("annual_rate").notNull(),
+  compounding: text("compounding", {
+    enum: ["monthly", "quarterly", "yearly", "none"],
+  })
+    .notNull()
+    .default("monthly"),
+  startDate: text("start_date").notNull(),
+  months: integer("months").notNull(),
+  note: text("note"),
+  archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at").notNull(),
+});
+
+/**
+ * Последние котировки из открытых источников для справочника.
+ * symbol — первичный ключ, value может быть NULL, если источник не ответил:
+ * тогда показываем сохранённое ранее значение вместе с его датой.
+ */
+export const marketQuotes = sqliteTable("market_quotes", {
+  symbol: text("symbol").primaryKey(),
+  kind: text("kind").notNull(),
+  label: text("label").notNull(),
+  value: real("value"),
+  unit: text("unit").notNull(),
+  source: text("source").notNull(),
+  sourceUrl: text("source_url").notNull(),
+  fetchedAt: text("fetched_at").notNull(),
+  ok: integer("ok", { mode: "boolean" }).notNull().default(false),
+  note: text("note"),
+});
+
+/**
  * Пользователи (для MVP — один владелец, но таблица готова к расширению).
  */
 export const users = sqliteTable("users", {
@@ -140,5 +182,7 @@ export const sessions = sqliteTable("sessions", {
 });
 
 export type Account = typeof accounts.$inferSelect;
+export type Savings = typeof savings.$inferSelect;
+export type MarketQuote = typeof marketQuotes.$inferSelect;
 export type Operation = typeof operations.$inferSelect;
 export type Category = typeof categories.$inferSelect;

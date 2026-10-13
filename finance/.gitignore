@@ -15,5 +15,11 @@ data/
 
 # coverage
 coverage/
+
+# артефакты Playwright (e2e)
+test-results/
+playwright-report/
+blob-report/
+.playwright/
 # next-env.d.ts генерируется Next.js автоматически
 next-env.d.ts
