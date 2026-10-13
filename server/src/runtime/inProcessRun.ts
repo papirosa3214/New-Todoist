@@ -9,6 +9,7 @@ import { broadcastToUsers } from "../ws.js";
 import { requireSubmissionReceipt, SUBMISSION_POLICY } from "../lib/submissionReceipt.js";
 import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
 import { integrationStepContext } from "./integrationHandoff.js";
+import { searchNotes } from "../lib/noteSearch.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { connectBuilderXcode } from "./builderXcode.js";
@@ -605,12 +606,9 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) recordTaskDocument(taskId, n.id, roleUserId(role));
         return { готово: "заметка создана", id: n.id };
       }),
-    T("taskflow_kb_search", "Поиск по документации проектов.",
+    T("taskflow_kb_search", "Поиск по внутренней базе знаний TaskFlow: заметки и документация всех проектов. Отвечает отрывками с id заметки; целиком заметку читает taskflow_doc_read. Не нашлось — повтори короче, ключевыми словами.",
       Type.Object({ query: Type.String(), top_k: Type.Optional(Type.Number()) }),
-      async (p) => {
-        const d = await asRole(role, "GET", `/api/knowledge/search?q=${encodeURIComponent(p.query)}&top_k=${p.top_k ?? 5}`);
-        return { запрос: p.query, куски: (d.results ?? []).map((r: any) => ({ текст: String(r.text ?? "").slice(0, 1500), id_заметки: r.doc_id })) };
-      }),
+      async (p) => ({ запрос: p.query, куски: searchNotes(String(p.query ?? ""), p.top_k ?? 5).map((r) => ({ название: r.title, папка: r.folder, обновлена: r.updated_at, текст: r.text, id_заметки: r.id })) })),
     T("taskflow_library", "Корневая библиотека знаний TaskFlow: список подпапок (Roles, Workflows, Norms, Knowledge Base, Projects) и заметок в каждой.",
       Type.Object({ subfolder: Type.Optional(Type.String()) }),
       async (p) => {
