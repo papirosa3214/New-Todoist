@@ -3,6 +3,8 @@
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useTransition } from "react";
 
+import { cn } from "@/lib/utils";
+
 const periods: Array<{ id: string; label: string }> = [
   { id: "week", label: "Неделя" },
   { id: "month", label: "Месяц" },
@@ -10,6 +12,7 @@ const periods: Array<{ id: string; label: string }> = [
   { id: "year", label: "Год" },
 ];
 
+/** Раздел 7.2 — выбор периода сегментами; подпись периода ставит страница. */
 export function PeriodSelector() {
   const router = useRouter();
   const pathname = usePathname();
@@ -26,15 +29,25 @@ export function PeriodSelector() {
   }
 
   return (
-    <div className="inline-flex rounded-md border border-ink-200 overflow-hidden text-sm bg-white">
+    <div
+      role="radiogroup"
+      aria-label="Период"
+      className="flex w-full overflow-hidden rounded-lg border border-ink-200 bg-white sm:w-auto"
+    >
       {periods.map((p) => (
         <button
           key={p.id}
-          onClick={() => set(p.id)}
-          className={`px-3 py-1.5 ${
-            current === p.id ? "bg-accent-500 text-white" : "text-ink-700 hover:bg-ink-100"
-          }`}
+          type="button"
+          role="radio"
+          aria-checked={current === p.id}
           disabled={pending}
+          onClick={() => set(p.id)}
+          className={cn(
+            "min-h-11 flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors sm:flex-none",
+            current === p.id
+              ? "border-accent-600 bg-accent-50 text-accent-700"
+              : "border-ink-200 bg-white text-ink-700 hover:bg-ink-100",
+          )}
         >
           {p.label}
         </button>

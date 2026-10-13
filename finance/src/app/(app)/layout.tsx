@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { currentUser } from "@/lib/session";
-import { Sidebar } from "@/components/Sidebar";
+import { AppShell } from "@/components/AppShell";
+import { SuccessToastProvider } from "@/components/SuccessToast";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export default async function AppLayout({
   children,
@@ -10,9 +12,10 @@ export default async function AppLayout({
   const user = await currentUser();
   if (!user) redirect("/login");
   return (
-    <div className="min-h-screen flex bg-ink-50">
-      <Sidebar username={user.username} />
-      <main className="flex-1 min-w-0">{children}</main>
-    </div>
+    <AppShell username={user.username}>
+      <SuccessToastProvider>
+        <TooltipProvider delayDuration={200}>{children}</TooltipProvider>
+      </SuccessToastProvider>
+    </AppShell>
   );
 }

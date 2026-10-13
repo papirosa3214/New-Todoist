@@ -1,7 +1,9 @@
 import { db } from "@/db";
 import { accounts } from "@/db/schema";
 import { eq } from "drizzle-orm";
+
 import { ImportClient } from "@/components/ImportClient";
+import { PageHeader } from "@/components/PageHeader";
 
 export default async function ImportPage() {
   const list = await db
@@ -10,14 +12,11 @@ export default async function ImportPage() {
     .where(eq(accounts.archived, false))
     .orderBy(accounts.name);
   return (
-    <div className="px-6 py-6 max-w-3xl">
-      <h1 className="text-2xl font-semibold mb-2">Импорт операций</h1>
-      <p className="text-sm text-ink-600 mb-6">
-        Загрузите выписку из личного кабинета банка в формате CSV (1СClientBankExchange,
-        Сбербанк или generic CSV с колонками date,amount,description) или OFX/QFX.
-        Приложение определит формат автоматически, дедупликация по
-        external_id / хешу (source, account_id, date, amount, description).
-      </p>
+    <div className="mx-auto max-w-3xl px-4 py-6 md:px-6">
+      <PageHeader
+        title="Импорт операций"
+        description="Выписка из личного кабинета банка: CSV или OFX/QFX. Дубли отбрасываются автоматически."
+      />
       <ImportClient
         accounts={list.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))}
       />
