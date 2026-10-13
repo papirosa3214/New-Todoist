@@ -15,3 +15,5 @@ data/
 
 # coverage
 coverage/
+# next-env.d.ts генерируется Next.js автоматически
+next-env.d.ts
