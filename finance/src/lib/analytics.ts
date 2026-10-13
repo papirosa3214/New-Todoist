@@ -12,6 +12,7 @@ import { and, eq, gte, lte, sql } from "drizzle-orm";
 export type BalanceByAccount = {
   accountId: string;
   accountName: string;
+  accountType: string;
   currency: string;
   openingBalance: number;
   net: number;
@@ -35,6 +36,7 @@ export async function loadBalances(): Promise<BalanceByAccount[]> {
     return {
       accountId: a.id,
       accountName: a.name,
+      accountType: a.type,
       currency: a.currency,
       openingBalance: a.openingBalance,
       net,
@@ -172,4 +174,32 @@ export function periodRange(period: "week" | "month" | "quarter" | "year" | stri
       from.setMonth(today.getMonth() - 1);
   }
   return { from: from.toISOString().slice(0, 10), to };
+}
+/**
+ * Итоги за период по валютам: суммы разных валют не складываются
+ * (раздел 5.6 и 4.8 дизайн-системы).
+ */
+export async function loadPeriodTotals(args: {
+  from: string;
+  to: string;
+}): Promise<Array<{ currency: string; income: number; expense: number }>> {
+  const rows = await db
+    .select({
+      currency: operations.currency,
+      income: sql<number>`COALESCE(SUM(CASE WHEN ${operations.amount} > 0 THEN ${operations.amount} ELSE 0 END), 0)`.as(
+        "income",
+      ),
+      expense: sql<number>`COALESCE(SUM(CASE WHEN ${operations.amount} < 0 THEN -${operations.amount} ELSE 0 END), 0)`.as(
+        "expense",
+      ),
+    })
+    .from(operations)
+    .where(and(gte(operations.date, args.from), lte(operations.date, args.to)))
+    .groupBy(operations.currency);
+
+  return rows.map((r) => ({
+    currency: r.currency,
+    income: Number(r.income) || 0,
+    expense: Number(r.expense) || 0,
+  }));
 }

@@ -10,21 +10,35 @@ import {
   CartesianGrid,
 } from "recharts";
 
+import { formatMoneyCompact } from "@/lib/format";
+
 export type NetWorthPoint = { month: string; amount: number };
 
-export function NetWorthChart({ data }: { data: NetWorthPoint[] }) {
+/** Раздел 2.4: линия #0f766e, сетка #e2e8f0. */
+export function NetWorthChart({
+  data,
+  currency = "RUB",
+}: {
+  data: NetWorthPoint[];
+  currency?: string;
+}) {
   return (
-    <ResponsiveContainer width="100%" height={220}>
-      <LineChart data={data}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-        <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-        <YAxis tick={{ fontSize: 11 }} />
-        <Tooltip
-          formatter={(v: number) =>
-            new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(v)
-          }
+    <ResponsiveContainer width="100%" height={180} className="md:h-[220px]">
+      <LineChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+        <XAxis dataKey="month" tick={{ fontSize: 12, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+        <YAxis
+          tick={{ fontSize: 12, fill: "#94a3b8" }}
+          axisLine={false}
+          tickLine={false}
+          width={64}
+          tickFormatter={(v: number) => formatMoneyCompact(v, currency)}
         />
-        <Line type="monotone" dataKey="amount" stroke="#0d9488" strokeWidth={2} dot />
+        <Tooltip
+          formatter={(v: number) => formatMoneyCompact(v, currency)}
+          labelFormatter={(l: string) => l}
+        />
+        <Line type="monotone" dataKey="amount" stroke="#0f766e" strokeWidth={2} dot />
       </LineChart>
     </ResponsiveContainer>
   );
