@@ -27,20 +27,16 @@ import {
 import {
   _resetChatRoleLocksForTests,
 } from "../src/runtime/chatSession.js";
+import { liveModelOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
 // === Замоканный Pi SDK ===
 
-const CATALOG = [
-  {
-    id: "MiniMax-M3",
-    provider: "minimax",
-    name: "MiniMax M3",
-    contextWindow: 200_000,
-    maxTokens: 64_000,
-    reasoning: false,
-    input: ["text"],
-  },
-];
+// Каталог моделей — из боевого role-routing.yaml (helpers/liveRoutingModels):
+// подделка Pi не должна знать про смену основной модели ролей (13.10.2026 —
+// MiniMax-M3.1-Flash-Preview валила 11 тестов этого файла с
+// model_not_available).
+const CATALOG = liveRoutingCatalog();
+const PROVIDERS = liveRoutingProviders();
 
 // Ход чата идёт внутри сервера (createAgentSession), без процесса Pi и
 // MCP (владелец 02.10.2026). Подменяем сессию SDK: записываем, с чем её
@@ -113,8 +109,8 @@ function makeFakeSession(options: any): FakeSession {
 const mockRuntime = {
   getModels: vi.fn(() => CATALOG),
   getAvailable: vi.fn(async () => CATALOG),
-  getProviders: vi.fn(() => [{ id: "minimax", name: "MiniMax", auth: { apiKey: {} } }]),
-  getProvider: vi.fn(() => ({ id: "minimax", name: "MiniMax", auth: { apiKey: {} } })),
+  getProviders: vi.fn(() => PROVIDERS),
+  getProvider: vi.fn(() => PROVIDERS[0]),
   getProviderAuthStatus: vi.fn(() => ({ configured: true })),
   checkAuth: vi.fn(async () => ({ type: "api_key" })),
   login: vi.fn(async () => ({ type: "api_key" })),
@@ -189,7 +185,7 @@ describe("startChatRun (ход чата внутри сервера)", () => {
     expect(fakeSessions).toHaveLength(1);
     const session = fakeSessions[0];
     expect(session.options.cwd).toBe(ensureRoleHome("architect").workspace);
-    expect(session.options.model.id).toBe("MiniMax-M3");
+    expect(session.options.model.id).toBe(liveModelOf("architect"));
     // Инструменты трекера и чата — внутри сервера, отдельного процесса нет.
     // `tools` — имена (иначе SDK отключает все инструменты), каждое имя
     // разрешённого инструмента есть среди определений.

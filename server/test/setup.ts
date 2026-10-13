@@ -17,6 +17,14 @@ process.env.DB_PATH = dbPath;
 // Роли в тестах не заводят git worktree живого репозитория
 // (runtime/roleWorkspace.ts); свой тест включает их на временной папке.
 process.env.TASKFLOW_ROLE_WORKTREES ??= "off";
+// Сторож локальной модели (lib/ollamaHealthWatcher.ts) ходит настоящим
+// запросом в Ollama машины и при отказе заводит карточку в «Серверные
+// уведомления». В тестах это внешняя зависимость: 13.10.2026 локальная
+// Ollama отвечает 503 «server busy», и карточка падала в тестовой БД —
+// красным был taskPreparationApi («анализ не пишет БД»). Тесты проверяют
+// сервер, а не локальную модель владельца, поэтому сторож на прогоне выключен
+// (такой же предохранитель, как TASKFLOW_ROLE_WORKTREES выше).
+process.env.OLLAMA_HEALTH_WATCHER_DISABLED ??= "1";
 // Выгрузка в базу знаний пишет состояние в свою папку — в тестах временную,
 // и старое состояние скрипта ~/kb не подхватывает (lib/knowledgeSync.ts).
 process.env.TASKFLOW_KB_SYNC_DIR ??= path.join(os.tmpdir(), `taskflow-kb-sync-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);

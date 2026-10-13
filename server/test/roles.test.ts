@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { markReadyForPickup } from "./helpers.js";
+import { liveModelOf } from "./helpers/liveRoutingModels.js";
 
 describe("role catalog API", () => {
   let app: FastifyInstance;
@@ -100,7 +101,11 @@ describe("role catalog API", () => {
     expect(details.statusCode).toBe(200);
     expect(details.json()).toMatchObject({
       role: "architect",
-      model: "MiniMax-M3",
+      // Основная модель роли — из боевого scripts/role-routing.yaml: её
+      // написание меняет владелец (13.10.2026 — MiniMax-M3 →
+      // MiniMax-M3.1-Flash-Preview), и карточка роли обязана отдавать то же,
+      // что в конфиге. Проверяем согласие, а не имя модели.
+      model: liveModelOf("architect"),
       // 18.09.2026 (карточка f3108dcc): новое runtime_id — фасадное поле,
       // всегда 'runtime:pi'. default_shell сохранён как legacy-alias для UI.
       runtime_id: "runtime:pi",

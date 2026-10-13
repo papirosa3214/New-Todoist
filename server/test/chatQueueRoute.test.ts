@@ -29,8 +29,15 @@ import {
 import { _resetChatQueueForTests } from "../src/runtime/chatQueue.js";
 import { _resetChatRolePickerForTests } from "../src/routes/chats.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
+import { liveCatalogEntryOf, liveRoutingCatalog, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
 const fakeClients: any[] = [];
+
+/** Каталог и провайдеры — из боевого role-routing.yaml (helpers/liveRoutingModels):
+ *  подделка не должна знать про смену основной модели ролей. */
+const CATALOG = liveRoutingCatalog();
+const PROVIDERS = liveRoutingProviders();
+const PRIMARY = liveCatalogEntryOf("qa");
 
 /** Маркер текста, на котором мок createAgentSession бросает исключение.
  *  Нужен для проверки «ошибка Pi → durable не как success». */
@@ -41,7 +48,7 @@ function makeFakeRpcClient() {
     stop: vi.fn(async () => {}),
     getState: vi.fn(async () => ({
       sessionId: `sess-${fakeClients.length + 1}`,
-      model: { provider: "minimax", id: "MiniMax-M3" },
+      model: { provider: PRIMARY.provider, id: PRIMARY.id },
     })),
     getLastAssistantText: vi.fn(async () => "ок"),
     promptAndWait: vi.fn(async () => {}),
@@ -51,10 +58,10 @@ function makeFakeRpcClient() {
 }
 
 const mockRuntime = {
-  getModels: vi.fn(() => [{ id: "MiniMax-M3", provider: "minimax", name: "MiniMax M3", contextWindow: 200_000, maxTokens: 64_000, reasoning: false, input: ["text"] }]),
-  getAvailable: vi.fn(async () => [{ id: "MiniMax-M3", provider: "minimax" }]),
-  getProviders: vi.fn(() => [{ id: "minimax", name: "MiniMax", auth: { apiKey: {} } }]),
-  getProvider: vi.fn(() => ({ id: "minimax", name: "MiniMax", auth: { apiKey: {} } })),
+  getModels: vi.fn(() => CATALOG),
+  getAvailable: vi.fn(async () => CATALOG),
+  getProviders: vi.fn(() => PROVIDERS),
+  getProvider: vi.fn(() => PROVIDERS[0]),
   getProviderAuthStatus: vi.fn(() => ({ configured: true })),
   checkAuth: vi.fn(async () => ({ type: "api_key" })),
   login: vi.fn(async () => ({ type: "api_key" })),

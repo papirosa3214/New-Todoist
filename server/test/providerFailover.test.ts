@@ -67,16 +67,23 @@ describe("Автопереключение провайдера при лими�
     expect(pickStartModel(routing, "builder", "opencode-go/qwen3.8-flash")).toBe("opencode-go/qwen3.8-flash");
   });
 
-  it("боевой role-routing.yaml читается: основной MiniMax; Критик и QA уходят на minimax-m3, остальные на DeepSeek, последний запас — бесплатный space-bunny", () => {
+  it("боевой role-routing.yaml читается: одна основная модель на все роли; у Критика и QA запасной minimax-m3, у остальных DeepSeek, последний запас — бесплатный space-bunny", () => {
     const live = loadRoleRouting(path.resolve(__dirname, "../scripts/role-routing.yaml"));
+    // Имя основной модели владелец меняет (13.10.2026 — MiniMax-M3 →
+    // MiniMax-M3.1-Flash-Preview), поэтому канон здесь — одна общая
+    // основная модель у всех ролей и заданные цепочки запасных, а не
+    // написание модели.
+    const primaries = new Set(ROLE_NAMES.map((role) => live.models[role as keyof typeof live.models]));
+    expect(primaries.size).toBe(1);
     for (const role of ROLE_NAMES) {
-      expect(live.models[role as keyof typeof live.models]).toBe("MiniMax-M3");
+      expect(live.models[role as keyof typeof live.models]).toBeTruthy();
       const chain = live.fallbacks[role as keyof typeof live.fallbacks];
       if (role === "critic_verifier" || role === "qa") {
         expect(chain).toEqual(["opencode-go/minimax-m3", "opencode/space-bunny-free"]);
       } else {
         expect(chain).toEqual(["opencode-go/deepseek-v4.1-flash", "opencode/space-bunny-free"]);
       }
+      expect(chain[chain.length - 1]).toBe("opencode/space-bunny-free");
     }
   });
 });

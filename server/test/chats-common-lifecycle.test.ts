@@ -15,14 +15,17 @@ import {
 } from "../src/runtime/chatSession.js";
 import { _resetChatRolePickerForTests } from "../src/routes/chats.js";
 import { COMMON_CHAT_ID, COMMON_REGULATOR_MESSAGE_ID, assertCommonChatWritable } from "../src/lib/chatCommon.js";
+import { liveCatalogEntryOf, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
+// Модели ролей — из боевого role-routing.yaml (helpers/liveRoutingModels):
+// подделка каталога не должна знать про смену основной модели (13.10.2026).
 const CATALOG = [
   { id: "claude-sonnet-5", provider: "anthropic", name: "Sonnet 5", contextWindow: 1_000_000, maxTokens: 128_000, reasoning: true, input: ["text", "image"] },
-  { id: "MiniMax-M3", provider: "minimax", name: "MiniMax M3", contextWindow: 200_000, maxTokens: 64_000, reasoning: false, input: ["text"] },
+  liveCatalogEntryOf("qa"),
 ];
 const PROVIDERS = [
   { id: "anthropic", name: "Anthropic", auth: { oauth: {}, apiKey: {} } },
-  { id: "minimax", name: "MiniMax", auth: { apiKey: {} } },
+  ...liveRoutingProviders(),
 ];
 
 const fakeClients: Array<{ options: any; getLastAssistantText: ReturnType<typeof vi.fn>; promptAndWait: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }> = [];

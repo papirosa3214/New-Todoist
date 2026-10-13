@@ -39,6 +39,7 @@ import {
   _resetChatRoleQueuesForTests,
 } from "../src/runtime/chatSession.js";
 import { _resetChatRolePickerForTests } from "../src/routes/chats.js";
+import { liveCatalogEntryOf, liveRoutingProviders } from "./helpers/liveRoutingModels.js";
 
 // === Замоканный Pi SDK ===
 //
@@ -58,22 +59,17 @@ const CATALOG = [
     input: ["text", "image"],
   },
   {
-    // В role-routing.yaml модель ролей именно «MiniMax-M3» — имя с
-    // большой буквы. Каталог замокирован под это имя, иначе startChatRun
-    // упадёт на model_not_available.
-    id: "MiniMax-M3",
-    provider: "minimax",
-    name: "MiniMax M3",
-    contextWindow: 200_000,
-    maxTokens: 64_000,
-    reasoning: false,
-    input: ["text"],
+    // Основная модель ролей приходит из боевого role-routing.yaml
+    // (helpers/liveRoutingModels): подделка каталога не должна знать про
+    // смену модели (13.10.2026 — MiniMax-M3.1-Flash-Preview валила 20
+    // тестов этого файла с model_not_available).
+    ...liveCatalogEntryOf("qa"),
   },
 ];
 
 const PROVIDERS = [
   { id: "anthropic", name: "Anthropic", auth: { oauth: {}, apiKey: {} } },
-  { id: "minimax", name: "MiniMax", auth: { apiKey: {} } },
+  ...liveRoutingProviders(),
 ];
 
 interface FakeRpcClient {

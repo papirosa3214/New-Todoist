@@ -69,6 +69,21 @@ describe("эскалация просроченных задач — карто�
     return id;
   }
 
+  // Сброс карточек владельца перед сценарием. Порядок важен: notifications и
+  // task_events ссылаются на tasks без ON DELETE CASCADE, поэтому при
+  // удалении задач они должны уйти раньше — иначе DELETE падает на FOREIGN
+  // KEY (13.10.2026, красными были оба сценария этого файла).
+  function resetOwnerTasks(): void {
+    db.prepare(
+      `DELETE FROM notifications WHERE task_id IN (SELECT id FROM tasks WHERE creator_id = ?)`,
+    ).run(ownerId);
+    db.prepare(
+      `DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE creator_id = ?)`,
+    ).run(ownerId);
+    db.prepare("DELETE FROM escalation_events").run();
+    db.prepare("DELETE FROM tasks WHERE creator_id = ?").run(ownerId);
+  }
+
   function localYmd(d: Date): string {
     const parts = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
     const v = (k: string) => parts.find((p) => p.type === k)!.value;
@@ -156,7 +171,7 @@ describe("эскалация просроченных задач — карто�
     // Чужие задачи из предыдущих тестов (rec-1, rec-2) тоже триггерят
     // эскалацию (priority=1, due_date=today) — сбрасываем все задачи этого
     // владельца, чтобы ассерты смотрели только на посеянные в этом тесте.
-    db.prepare("DELETE FROM tasks WHERE creator_id = ?").run(ownerId);
+    resetOwnerTasks();
 
     // Берём now как UTC, дающий под TZ Europe/Moscow 4 октября 2026, 10:30.
     const now = new Date("2026-10-04T07:30:00Z");
@@ -265,8 +280,7 @@ describe("эскалация просроченных задач — карто�
   });
 
   it("GET /api/escalation/recent возвращает свежие события по убыванию sent_at", async () => {
-    db.prepare("DELETE FROM escalation_events").run();
-    db.prepare("DELETE FROM tasks WHERE creator_id = ?").run(ownerId);
+    resetOwnerTasks();
     const today = new Date().toISOString().slice(0, 10);
     const ids = [crypto.randomUUID(), crypto.randomUUID()];
     db.prepare(
