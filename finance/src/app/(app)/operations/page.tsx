@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { MoneyValue } from "@/components/MoneyValue";
 import { Button } from "@/components/ui/button";
 import { plural } from "@/lib/format";
+import { amountsByCurrency } from "@/lib/series";
 
 const LIMIT = 50;
 
@@ -71,18 +72,24 @@ export default async function OperationsPage({
     .limit(LIMIT)
     .offset(offset);
 
+  // Итоги по валютам: суммы разных валют не складываются (раздел 5.6).
   const summary = await db
     .select({
+      currency: operations.currency,
       total: sql<number>`COUNT(*)`.as("total"),
       amount: sql<number>`COALESCE(SUM(${operations.amount}), 0)`.as("amount"),
     })
     .from(operations)
-    .where(whereExpr);
+    .where(whereExpr)
+    .groupBy(operations.currency);
 
-  const total = Number(summary[0]?.total ?? 0);
-  const sampleAmount = Number(summary[0]?.amount ?? 0);
-  const pageAmount = rows.reduce((acc, r) => acc + r.amount, 0);
-  const pageCurrency = rows[0]?.currency ?? allAccs[0]?.currency ?? "RUB";
+  const selectionTotals = summary
+    .map((s) => ({ currency: s.currency, amount: Number(s.amount) || 0 }))
+    .sort((a, b) => a.currency.localeCompare(b.currency));
+  const pageTotals = amountsByCurrency(
+    rows.map((r) => ({ currency: r.currency, value: r.amount })),
+  ).map((r) => ({ currency: r.currency, amount: r.value }));
+  const total = summary.reduce((acc, s) => acc + Number(s.total || 0), 0);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-6">
@@ -106,15 +113,9 @@ export default async function OperationsPage({
 
       {rows.length > 0 ? (
         <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-0.5 text-sm text-ink-600">
-            <p>
-              Итого по выборке:{" "}
-              <MoneyValue amount={sampleAmount} currency={pageCurrency} size="sm" signed className="font-medium text-ink-900" />
-            </p>
-            <p>
-              Итого на странице:{" "}
-              <MoneyValue amount={pageAmount} currency={pageCurrency} size="sm" signed className="font-medium text-ink-900" />
-            </p>
+          <div className="space-y-2 text-sm text-ink-600">
+            <TotalsLine label="Итого по выборке" rows={selectionTotals} />
+            <TotalsLine label="Итого на странице" rows={pageTotals} />
             <p className="text-xs text-ink-500">
               {total} {plural(total, ["запись", "записи", "записей"])} · страница {page} из{" "}
               {Math.max(1, Math.ceil(total / LIMIT))}
@@ -123,6 +124,35 @@ export default async function OperationsPage({
           <Pagination page={page} total={total} filters={filters} />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** Раздел 5, правило 5: две подписи итогов, каждая — по строке на валюту. */
+function TotalsLine({
+  label,
+  rows,
+}: {
+  label: string;
+  rows: Array<{ currency: string; amount: number }>;
+}) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2">
+      <span className="shrink-0">{label}:</span>
+      {rows.length === 0 ? (
+        <MoneyValue amount={0} currency="RUB" size="sm" signed className="font-medium text-ink-900" />
+      ) : (
+        rows.map((r) => (
+          <MoneyValue
+            key={r.currency}
+            amount={r.amount}
+            currency={r.currency}
+            size="sm"
+            signed
+            className="font-medium text-ink-900"
+          />
+        ))
+      )}
     </div>
   );
 }

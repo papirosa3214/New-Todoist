@@ -157,24 +157,22 @@ export function OperationRowDesktop({
   return (
     <>
       <tr className="border-b border-ink-100 hover:bg-ink-50">
-        <td className="num whitespace-nowrap px-3 py-2 text-sm text-ink-900">
+        <td className="num whitespace-nowrap px-2 py-2 text-sm text-ink-900 xl:px-3">
           {formatDate(row.date)}
         </td>
-        <td className="px-3 py-2 text-sm text-ink-700">{row.accountName ?? "—"}</td>
-        <td className="px-3 py-2 text-sm text-ink-700">
+        <td className="truncate px-2 py-2 text-sm text-ink-700 xl:px-3">{row.accountName ?? "—"}</td>
+        <td className="truncate px-2 py-2 text-sm text-ink-700 xl:px-3">
           {row.categoryIcon ? `${row.categoryIcon} ` : ""}
           {row.categoryName ?? "Без категории"}
         </td>
-        <td className="max-w-xs truncate px-3 py-2 text-sm text-ink-900">
-          {row.description}
-        </td>
-        <td className="whitespace-nowrap px-3 py-2 text-right text-sm">
+        <td className="truncate px-2 py-2 text-sm text-ink-900 xl:px-3">{row.description}</td>
+        <td className="whitespace-nowrap px-2 py-2 text-right text-sm xl:px-3">
           <MoneyValue amount={row.amount} currency={row.currency} size="sm" signed />
         </td>
-        <td className="whitespace-nowrap px-3 py-2 text-sm text-ink-500">
+        <td className="hidden truncate whitespace-nowrap px-2 py-2 text-sm text-ink-500 lg:table-cell xl:px-3">
           {sourceLabel(row.source)}
         </td>
-        <td className="whitespace-nowrap px-3 py-2 text-right">
+        <td className="whitespace-nowrap px-2 py-2 text-right xl:px-3">
           <Button variant="ghost" size="icon" asChild aria-label="Изменить операцию">
             <Link href={`/operations/${row.id}/edit`}>
               <Pencil className="h-4 w-4" aria-hidden="true" />

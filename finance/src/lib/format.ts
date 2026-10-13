@@ -191,6 +191,16 @@ function periodRangeMsk(period: string): { from: Date; to: Date } {
   return { from, to: today };
 }
 
+/**
+ * Границы периода по московскому времени — единственный источник истины.
+ * «Неделя» = 7 дней (правило раздела 5), произвольный диапазон — «YYYY-MM-DD_YYYY-MM-DD».
+ * Подпись периода и запросы аналитики берут границы отсюда, иначе они разъезжаются.
+ */
+export function periodRange(period: string): { from: string; to: string } {
+  const { from, to } = periodRangeMsk(period);
+  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+}
+
 /** «Неделя · 06–12 октября», «Месяц · 13 сентября – 13 октября». */
 export function periodLabel(period: string, range?: { from: string; to: string }): string {
   const names: Record<string, string> = {
@@ -200,11 +210,8 @@ export function periodLabel(period: string, range?: { from: string; to: string }
     year: "Год",
   };
   const name = names[period] ?? "Период";
-  if (range) {
-    return `${name} · ${dayMonth(parseIsoDate(range.from))} – ${dayMonth(
-      parseIsoDate(range.to),
-    )}`;
-  }
-  const { from, to } = periodRangeMsk(period);
-  return `${name} · ${dayMonth(from)} – ${dayMonth(to)}`;
+  const edges = range ?? periodRange(period);
+  return `${name} · ${dayMonth(parseIsoDate(edges.from))} – ${dayMonth(
+    parseIsoDate(edges.to),
+  )}`;
 }

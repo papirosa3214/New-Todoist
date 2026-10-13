@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { PieChart, BarChart3, TrendingUp, Wallet } from "lucide-react";
+import { PieChart, BarChart3, TrendingUp, Wallet, TriangleAlert } from "lucide-react";
 
 import {
   loadBalances,
@@ -7,9 +7,9 @@ import {
   loadCashflow,
   loadNetWorth,
   loadPeriodTotals,
-  periodRange,
 } from "@/lib/analytics";
-import { formatMoney, periodLabel, plural } from "@/lib/format";
+import { amountsByCurrency, isZeroAmount, sortCurrencies } from "@/lib/series";
+import { formatMoney, periodLabel, periodRange, plural } from "@/lib/format";
 import { accountTypeLabel } from "@/lib/dictionaries";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/PageHeader";
@@ -21,33 +21,45 @@ import { CategoryChart } from "@/components/CategoryChart";
 import { CashflowChart } from "@/components/CashflowChart";
 import { NetWorthChart } from "@/components/NetWorthChart";
 import { PeriodSelector } from "@/components/PeriodSelector";
+import { CurrencySelector } from "@/components/CurrencySelector";
 
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string }>;
+  searchParams: Promise<{ period?: string; currency?: string }>;
 }) {
   const sp = await searchParams;
   const period = sp?.period ?? "month";
   const range = periodRange(period);
 
-  const [balances, expenses, cashflow, networth, totals] = await Promise.all([
-    loadBalances(),
-    loadCategoryFlow({ from: range.from, to: range.to, sign: "negative" }),
-    loadCashflow(range),
-    loadNetWorth(range),
-    loadPeriodTotals(range),
+  const [balances, totals] = await Promise.all([loadBalances(), loadPeriodTotals(range)]);
+
+  // Аналитика всегда в одной валюте: валюты не складываются (раздел 5.6).
+  // Список — из счетов и операций периода, чтобы переключатель не прятал данные.
+  const currencies = sortCurrencies([
+    ...balances.map((b) => b.currency),
+    ...totals.map((t) => t.currency),
+  ]);
+  const requested = sp?.currency ?? "";
+  const currency = currencies.includes(requested)
+    ? requested
+    : (currencies[0] ?? "RUB");
+  const mixed = currencies.length > 1;
+
+  const [expenses, cashflow, networth] = await Promise.all([
+    loadCategoryFlow({ from: range.from, to: range.to, sign: "negative", currency }),
+    loadCashflow({ from: range.from, to: range.to, currency }),
+    loadNetWorth({ from: range.from, to: range.to, currency }),
   ]);
 
-  // Разные валюты не складываются: показываем список строк, а не одну сумму.
-  const byCurrency = new Map<string, number>();
-  for (const b of balances) {
-    byCurrency.set(b.currency, (byCurrency.get(b.currency) ?? 0) + b.current);
-  }
-  const moneyNow = [...byCurrency.entries()].map(([currency, value]) => ({ currency, value }));
-  const mixed = totals.length > 1;
-  const mainCurrency = totals[0]?.currency ?? moneyNow[0]?.currency ?? "RUB";
+  const moneyNow = amountsByCurrency(
+    balances.map((b) => ({ currency: b.currency, value: b.current })),
+  );
+  const selectedTotal = totals.find((t) => t.currency === currency);
+  const spent = selectedTotal && !isZeroAmount(selectedTotal.expense) ? selectedTotal.expense : 0;
+  const earned = selectedTotal ? selectedTotal.income : 0;
   const label = periodLabel(period, range);
+  const foreignTotal = balances.reduce((acc, b) => acc + b.foreign, 0);
 
   const card = (children: React.ReactNode) => (
     <section className="rounded-xl border border-ink-200 bg-white p-4 md:p-5">{children}</section>
@@ -56,7 +68,15 @@ export default async function DashboardPage({
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-6">
-      <PageHeader title="Дашборд" actions={<PeriodSelector />}>
+      <PageHeader
+        title="Дашборд"
+        actions={
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            {mixed ? <CurrencySelector currencies={currencies} value={currency} /> : null}
+            <PeriodSelector />
+          </div>
+        }
+      >
         <p className="text-xs text-ink-500">{label}</p>
       </PageHeader>
 
@@ -69,28 +89,40 @@ export default async function DashboardPage({
         />
         <MetricCard
           label="Потрачено за период"
-          amounts={totals.map((t) => ({ currency: t.currency, value: -t.expense }))}
+          amount={-spent}
+          currency={currency}
           footnote={label}
         />
         <MetricCard
           label="Заработано за период"
-          amounts={totals.map((t) => ({ currency: t.currency, value: t.income }))}
+          amount={earned}
+          currency={currency}
           footnote={
-            mixed || totals.length === 0 ? (
-              <span>{label}</span>
-            ) : (
-              <span className="num">
-                Чистыми: {formatMoney(totals[0].income - totals[0].expense, totals[0].currency)}
-              </span>
-            )
+            <span className="num">
+              Чистыми: {formatMoney(earned - spent, currency)}
+            </span>
           }
         />
       </div>
 
       {mixed ? (
         <Alert variant="warning" className="mb-6">
-          За период операции в нескольких валютах. Приложение не переводит валюты, поэтому
-          разбор по категориям и графики скрыты — итог по ним был бы неверным.
+          Приложение не переводит валюты, поэтому разбор, графики и накопления показаны в
+          одной валюте — сейчас в {currency}. Полный остаток по всем счетам — в блоке «Денег
+          сейчас» и «Счета». Выбрать другую валюту — в переключателе рядом с периодом.
+        </Alert>
+      ) : null}
+
+      {foreignTotal > 0 ? (
+        <Alert variant="warning" className="mb-6">
+          <span className="inline-flex items-start gap-2">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>
+              {foreignTotal} {plural(foreignTotal, ["операция", "операции", "операций"])} на
+              счетах записана в валюте, отличной от валюты счёта, и не вошла в остаток.
+              Откройте операцию и сохраните заново — валюта подставится от счёта.
+            </span>
+          </span>
         </Alert>
       ) : null}
 
@@ -98,20 +130,14 @@ export default async function DashboardPage({
         {card(
           <>
             {h2("Куда уходят деньги")}
-            {mixed ? (
-              <EmptyState
-                icon={PieChart}
-                title="Разбор по категориям недоступен"
-                description="Операции за период в нескольких валютах — суммы не складываются в один итог"
-              />
-            ) : expenses.length === 0 ? (
+            {expenses.length === 0 ? (
               <EmptyState
                 icon={PieChart}
                 title="Расходов за период нет"
                 description="Здесь появится разбор, куда уходят деньги"
               />
             ) : (
-              <CategoryChart items={expenses} currency={mainCurrency} />
+              <CategoryChart items={expenses} currency={currency} />
             )}
           </>,
         )}
@@ -119,13 +145,7 @@ export default async function DashboardPage({
         {card(
           <>
             {h2("Движение денег")}
-            {mixed ? (
-              <EmptyState
-                icon={BarChart3}
-                title="График недоступен"
-                description="Операции за период в нескольких валютах"
-              />
-            ) : cashflow.length === 0 ? (
+            {cashflow.length === 0 ? (
               <EmptyState
                 icon={BarChart3}
                 title="Операций за период нет"
@@ -137,7 +157,7 @@ export default async function DashboardPage({
                 }
               />
             ) : (
-              <CashflowChart data={cashflow} currency={mainCurrency} />
+              <CashflowChart data={cashflow} currency={currency} />
             )}
           </>,
         )}
@@ -147,13 +167,7 @@ export default async function DashboardPage({
         {card(
           <>
             {h2("Накопления на конец периода")}
-            {mixed ? (
-              <EmptyState
-                icon={TrendingUp}
-                title="График недоступен"
-                description="Операции за период в нескольких валютах"
-              />
-            ) : networth.length === 0 ? (
+            {networth.length === 0 ? (
               <EmptyState
                 icon={TrendingUp}
                 title="Пока недостаточно данных"
@@ -165,7 +179,7 @@ export default async function DashboardPage({
                 }
               />
             ) : (
-              <NetWorthChart data={networth} currency={mainCurrency} />
+              <NetWorthChart data={networth} currency={currency} />
             )}
           </>,
         )}
@@ -192,6 +206,7 @@ export default async function DashboardPage({
                       <span className="block truncate text-base text-ink-900">{b.accountName}</span>
                       <span className="block text-xs text-ink-500">
                         {accountTypeLabel(b.accountType)} · {b.currency}
+                        {b.foreign > 0 ? ` · ${b.foreign} ${plural(b.foreign, ["операция в чужой валюте", "операции в чужой валюте", "операций в чужой валюте"])} не учтено` : ""}
                       </span>
                     </span>
                     <MoneyValue amount={b.current} currency={b.currency} size="md" />

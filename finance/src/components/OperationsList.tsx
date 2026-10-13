@@ -72,16 +72,32 @@ export function OperationsList({
   return (
     <div className="rounded-xl border border-ink-200 bg-white">
       <div className="hidden md:block">
-        <table className="w-full">
+        {/* Раздел 6: таблица не прокручивается горизонтально. Колонка «Источник»
+            появляется с 1024 px, на 768 px остальные ужимаются и обрезают текст
+            штатно, а не уезжают за край. */}
+        <table className="w-full table-fixed">
+          <colgroup>
+            <col className="w-24" />
+            <col className="w-28" />
+            <col className="w-32" />
+            <col />
+            <col className="w-36" />
+            <col className="hidden w-28 lg:table-column" />
+            <col className="w-24" />
+          </colgroup>
           <thead className="bg-ink-100 text-ink-700">
             <tr>
-              <th className="px-3 py-2 text-left text-sm font-medium">Дата</th>
-              <th className="px-3 py-2 text-left text-sm font-medium">Счёт</th>
-              <th className="px-3 py-2 text-left text-sm font-medium">Категория</th>
-              <th className="px-3 py-2 text-left text-sm font-medium">Описание</th>
-              <th className="px-3 py-2 text-right text-sm font-medium">Сумма</th>
-              <th className="px-3 py-2 text-left text-sm font-medium">Источник</th>
-              <th className="px-3 py-2" />
+              <th className="truncate px-2 py-2 text-left text-sm font-medium xl:px-3">Дата</th>
+              <th className="truncate px-2 py-2 text-left text-sm font-medium xl:px-3">Счёт</th>
+              <th className="truncate px-2 py-2 text-left text-sm font-medium xl:px-3">Категория</th>
+              <th className="px-2 py-2 text-left text-sm font-medium xl:px-3">Описание</th>
+              <th className="whitespace-nowrap px-2 py-2 text-right text-sm font-medium xl:px-3">
+                Сумма
+              </th>
+              <th className="hidden truncate px-2 py-2 text-left text-sm font-medium lg:table-cell xl:px-3">
+                Источник
+              </th>
+              <th className="px-2 py-2 xl:px-3" />
             </tr>
           </thead>
           <tbody>

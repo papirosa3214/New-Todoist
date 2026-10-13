@@ -11,6 +11,7 @@ import {
   formatPercent,
   formatSignedMoney,
   periodLabel,
+  periodRange,
   plural,
   todayIso,
 } from "@/lib/format";
@@ -69,7 +70,24 @@ describe("период", () => {
     expect(label).toBe(`Неделя · 06${NBSP}октября – 12${NBSP}октября`);
   });
 
+  it("подпись и границы периода считаются одним способом", () => {
+    const range = periodRange("week");
+    expect(dayCount(range)).toBe(7);
+    // Подпись без переданного диапазона должна совпасть с границами из periodRange.
+    expect(periodLabel("week")).toBe(periodLabel("week", range));
+    expect(periodLabel("month")).toBe(periodLabel("month", periodRange("month")));
+  });
+
+  it("произвольный диапазон берётся из строки периода", () => {
+    expect(periodRange("2026-01-01_2026-03-31")).toEqual({ from: "2026-01-01", to: "2026-03-31" });
+  });
+
   it("сегодня по московскому времени, не по UTC", () => {
     expect(todayIso()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
+
+function dayCount({ from, to }: { from: string; to: string }): number {
+  const ms = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`);
+  return Math.round(ms / 86_400_000) + 1;
+}
