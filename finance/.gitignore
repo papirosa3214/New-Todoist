@@ -1,0 +1,19 @@
+# зависимости
+node_modules/
+/.next/
+
+# БД (локальная)
+data/
+
+# env
+.env
+.env.local
+
+# build artefacts
+.DS_Store
+*.log
+
+# coverage
+coverage/
+# next-env.d.ts генерируется Next.js автоматически
+next-env.d.ts
