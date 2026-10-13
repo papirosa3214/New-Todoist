@@ -94,6 +94,34 @@ CREATE TABLE IF NOT EXISTS balance_snapshots (
 CREATE UNIQUE INDEX IF NOT EXISTS balance_snapshots_account_date
   ON balance_snapshots(account_id, date);
 
+CREATE TABLE IF NOT EXISTS savings (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'deposit',
+  currency TEXT NOT NULL DEFAULT 'RUB',
+  principal REAL NOT NULL DEFAULT 0,
+  annual_rate REAL NOT NULL DEFAULT 0,
+  compounding TEXT NOT NULL DEFAULT 'monthly',
+  start_date TEXT NOT NULL,
+  months INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS market_quotes (
+  symbol TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  label TEXT NOT NULL,
+  value REAL,
+  unit TEXT NOT NULL,
+  source TEXT NOT NULL,
+  source_url TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  ok INTEGER NOT NULL DEFAULT 0,
+  note TEXT
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,

@@ -15,6 +15,8 @@ import {
   Tags,
   LogOut,
   ArrowLeft,
+  PiggyBank,
+  BookOpen,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -42,6 +44,8 @@ const PRIMARY: NavItem[] = [
 const SECONDARY: NavItem[] = [
   { href: "/import", label: "Импорт", icon: Upload },
   { href: "/categories", label: "Категории", icon: Tags },
+  { href: "/savings", label: "Накопления", icon: PiggyBank },
+  { href: "/instruments", label: "Справочник", icon: BookOpen },
 ];
 
 const SCREEN_TITLES: Array<[string, string]> = [
@@ -51,6 +55,8 @@ const SCREEN_TITLES: Array<[string, string]> = [
   ["/accounts", "Счета"],
   ["/categories", "Категории"],
   ["/import", "Импорт"],
+  ["/savings", "Накопления"],
+  ["/instruments", "Справочник"],
 ];
 
 /**
@@ -108,6 +114,9 @@ export function AppShell({
           ))}
         </nav>
         <div className="border-t border-ink-200 px-5 py-3">
+          <p className="mb-3 text-[11px] leading-snug text-ink-500">
+            Расчёты и данные справочные, а не инвестиционная рекомендация.
+          </p>
           <Button variant="ghost" size="sm" className="w-full justify-start px-0" onClick={logout}>
             Выйти
           </Button>
@@ -198,7 +207,10 @@ export function AppShell({
                 type="button"
                 className={cn(
                   "flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium",
-                  pathname === "/import" || pathname === "/categories"
+                  pathname === "/import" ||
+                  pathname === "/categories" ||
+                  pathname === "/savings" ||
+                  pathname === "/instruments"
                     ? "text-accent-700"
                     : "text-ink-500",
                 )}

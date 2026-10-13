@@ -14,7 +14,17 @@ export default async function AppLayout({
   return (
     <AppShell username={user.username}>
       <SuccessToastProvider>
-        <TooltipProvider delayDuration={200}>{children}</TooltipProvider>
+        <TooltipProvider delayDuration={200}>
+          <div className="flex min-h-full flex-col">
+            <div className="flex-1">{children}</div>
+            <footer className="border-t border-ink-200 bg-white px-6 py-3">
+              <p className="text-xs text-ink-500">
+                Расчёты и данные справочные, а не инвестиционная рекомендация. Решение о
+                вложениях принимаете вы сами.
+              </p>
+            </footer>
+          </div>
+        </TooltipProvider>
       </SuccessToastProvider>
     </AppShell>
   );
