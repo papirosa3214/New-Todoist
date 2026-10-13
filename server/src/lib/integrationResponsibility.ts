@@ -25,13 +25,22 @@ export function integrationResponsibility(taskId:string) {
  if(!candidates.length){const u=db.prepare("SELECT u.id,u.name title FROM users u JOIN tasks t ON t.assignee_id=u.id WHERE t.id=? AND COALESCE(u.archived,0)=0").get(scopeId) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:'executor'});}
  candidates.sort((a,b)=>a.title.localeCompare(b.title));
  const suggested=candidates.find(c=>c.role==='code_orchestrator'||c.role==='orchestrator')??candidates.find(c=>c.role==='architect')??candidates[0]??null;
- // Явный owner используется, если он есть в candidates; иначе для auto
- // mode берётся suggested (так ведёт себя код и в main, и в feature
- // для 5 красных Intake/preparation). Auto mode со сторонним owner —
- // невалидным не считается: owner всё равно подменится на suggested.
+ // Ответственным за интеграцию может быть только участник команды. Если в
+ // карточке сохранён владелец, которого среди участников плана нет, в auto
+ // mode он авторизует интеграцию только если это агент: прежний агент после
+ // замены плана и авто-выбор при подготовке (id может не существовать) — не
+ // посторонние, для них действует assigned ?? suggested, то есть первый
+ // кандидат (карточка 39fe9350, группа Intake/preparation). Сохранённый
+ // человек — например, владелец карточки — авторизацию не даёт: показываем
+ // suggested, но valid=false, approve плана и серверная передача ждут выбора
+ // участника (тест main «auto mode never authorizes a stored non-participant
+ // integration owner»).
  const assigned=candidates.find(c=>c.id===task.integration_owner_id)??null;
+ const stored=task.integration_owner_id?db.prepare('SELECT type FROM users WHERE id=?').get(task.integration_owner_id) as {type:string}|undefined:undefined;
+ const stray=task.integration_mode==='auto'&&!!task.integration_owner_id&&!assigned&&!!stored&&stored.type!=='ai';
  const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?assigned:(assigned??suggested);
- return {scope_task_id:scopeId,mode:task.integration_mode,owner_id:owner?.id??null,owner_title:owner?.title??null,candidates,suggested_owner_id:suggested?.id??null,valid:task.integration_mode==='not_required'||!!owner};
+ const valid=task.integration_mode==='not_required'||(!stray&&!!owner);
+ return {scope_task_id:scopeId,mode:task.integration_mode,owner_id:owner?.id??null,owner_title:owner?.title??null,candidates,suggested_owner_id:suggested?.id??null,valid};
 }
 export function requireIntegrationResponsibility(taskId:string):void {
  const state=integrationResponsibility(taskId);
