@@ -28,9 +28,11 @@ import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
 import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
-import { resolveUserIdFromToken, authOrApiToken } from "./auth.js";
+import { resolveUserId, resolveUserIdFromToken, authOrApiToken } from "./auth.js";
 import { addClient, removeClient, resetAllOffline } from "./ws.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerPairingRoutes } from "./routes/pairing.js";
+import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
 import { registerManualRunRoutes } from "./routes/manual-run.js";
@@ -408,6 +410,8 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // Routes
   registerAuthRoutes(app);
+  registerPairingRoutes(app);
+  registerDeviceRoutes(app);
   registerTaskRoutes(app);
   registerAgentStateRoutes(app);
   await registerManualRunRoutes(app);
@@ -614,14 +618,19 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.register(async function (fastify) {
     fastify.get("/ws", { websocket: true }, (socket, req) => {
       const token = (req.query as any)?.token;
-      const userId = resolveUserIdFromToken(app, token);
-      if (!userId) {
+      // resolveUserId, а не resolveUserIdFromToken: сокету нужно знать, ЧЕМ
+      // вошёл клиент. Токен устройства при отзыве закрывается кодом 4401,
+      // а не обычным закрытием — иначе телефон решит, что пропала сеть, и
+      // будет переподключаться до бесконечности.
+      const resolved = resolveUserId(app, token);
+      if (!resolved) {
         socket.send(JSON.stringify({ type: "error", error: "unauthorized" }));
         socket.close();
         return;
       }
+      const { userId, deviceId } = resolved;
 
-      addClient(userId, socket as any);
+      addClient(userId, socket as any, deviceId ?? null);
       socket.on("close", () => removeClient(userId, socket as any));
       socket.on("message", (msg: Buffer) => {
         try {

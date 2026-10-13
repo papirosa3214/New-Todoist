@@ -41,15 +41,32 @@ export function resolveUserIdFromToken(
   token: string | undefined | null,
 ): string | null {
   if (!token) return null;
+  const resolved = resolveUserId(app, token);
+  return resolved ? resolved.userId : null;
+}
+
+/** То же, что resolveUserIdFromToken, но с указанием, ЧЕМ именно вошедший.
+ *  Нужно там, где важно различать способы входа: сокету `/ws` по этому
+ *  признаку решает, закрывать ли соединение отзывом устройства (код 4401)
+ *  или обычным закрытием. Всем остальным хватает userId — поэтому
+ *  resolveUserIdFromToken остаётся прежним и ничего не меняет для
+ *  существующих вызовов. */
+export function resolveUserId(
+  app: FastifyInstance,
+  token: string | undefined | null,
+): { userId: string; via: "jwt" | "api_token" | "device"; deviceId?: string } | null {
+  if (!token) return null;
 
   try {
     const decoded = (app as any).jwt.verify(token) as { id: string; internalService?: string };
     if (decoded?.id) {
       // Служебная учётка («Система») снаружи не входит: её пропуск выписывает
       // сам сервер для планировщика (internalService='scheduler'). Любой
-      // другой JWT под этим id — попытка выдать себя за системную автоматику.
+      // другой JWT под этом id — попытка выдать себя за системную автоматику.
       if (isServiceUser(decoded.id)) {
-        return decoded.internalService === "scheduler" ? decoded.id : null;
+        return decoded.internalService === "scheduler"
+          ? { userId: decoded.id, via: "jwt" }
+          : null;
       }
       // Вход архивной учётки больше не действует (владелец 01.10.2026:
       // «Оркестратор Claude» из архива появился в карточке). api_token
@@ -57,7 +74,7 @@ export function resolveUserIdFromToken(
       const row = db.prepare("SELECT archived FROM users WHERE id = ?").get(decoded.id) as
         | { archived: number | null }
         | undefined;
-      return row?.archived ? null : decoded.id;
+      return row?.archived ? null : { userId: decoded.id, via: "jwt" };
     }
   } catch {
     // Not a valid/current JWT — fall through and try it as an api_token.
@@ -71,7 +88,62 @@ export function resolveUserIdFromToken(
       "SELECT id FROM users WHERE api_token = ? AND api_token IS NOT NULL AND api_token != ''",
     )
     .get(hashApiToken(token)) as { id: string } | undefined;
-  return row?.id ?? null;
+  if (row?.id) return { userId: row.id, via: "api_token" };
+
+  // Токен устройства (привязка телефона по QR, карточка b5a16110). Третий и
+  // последний способ входа: телефон снаружи ходит только им.
+  //
+  // Условие `revoked_at IS NULL` — не украшение, а весь смысл отзыва.
+  // Проверка идёт на КАЖДЫЙ запрос и на каждый апгрейд сокета, поэтому
+  // отзыв действует мгновенно и для офлайн-телефона тоже: тот узнает о нём
+  // первым же своим запросом. Кэша прав нет — «замёрзшая» сессия с правами
+  // невозможна by design.
+  //
+  // Таблицы devices может ещё не быть: task-intake.test.ts поднимает БД до
+  // миграции 036, а 141 — позже. Без try/catch такая база роняла бы
+  // авторизацию целиком (500 на каждом запросе с ключом). Отсутствующая
+  // таблица означает ровно одно: устройства в этой базе ещё не заводились.
+  if (devicesTableMissing) return null;
+  try {
+    const device = db
+      .prepare(
+        "SELECT id, user_id, last_seen_at FROM devices WHERE token_hash = ? AND revoked_at IS NULL",
+      )
+      .get(hashApiToken(token)) as
+      | { id: string; user_id: string; last_seen_at: string | null }
+      | undefined;
+    if (!device) return null;
+    touchDevice(device.id, device.last_seen_at);
+    return { userId: device.user_id, via: "device", deviceId: device.id };
+  } catch {
+    // Таблицы нет — токена устройства тут быть не может. Проверяем один раз
+    // на процесс, а не на каждый запрос: «нет таблицы» и «нет такой строки»
+    // для авторизации одно и то же (входа нет).
+    devicesTableMissing = true;
+    return null;
+  }
+}
+
+let devicesTableMissing = false;
+
+/**
+ * Отметка «когда устройство видели» пишется не на каждый запрос.
+ *
+ * Телефон с включённой локальной базой дёргает сервер десятками запросов в
+ * минуту, а `last_seen_at` нужен в списке устройств, чтобы человек отличал
+ * «работает» от «лежит сутки». Точность до секунды тут ничего не решает, а
+ * лишняя запись на каждом запросе — это запись в БД на каждом запросе.
+ * Минута — с запасом и всё же заметно реже.
+ */
+const DEVICE_TOUCH_INTERVAL_MS = 60_000;
+function touchDevice(deviceId: string, lastSeenAt: string | null): void {
+  const now = Date.now();
+  const last = lastSeenAt ? Date.parse(lastSeenAt) : 0;
+  if (last && now - last < DEVICE_TOUCH_INTERVAL_MS) return;
+  db.prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?").run(
+    new Date(now).toISOString(),
+    deviceId,
+  );
 }
 
 function extractBearer(req: FastifyRequest): string | undefined {
@@ -153,6 +225,23 @@ function looksLikeBrowser(req: FastifyRequest): boolean {
  * со всеми вытекающими запретами.
  */
 export function lanOwnerId(req: FastifyRequest): string | null {
+  // ⛔ ТРАФИК РЕТРАНСЛЯТОРА — НИКОГДА (карточка b5a16110, документ решения
+  // §4). Внешний телефон приходит к нам через туннель, который проксирует
+  // nginx на .110:5181. Тот ставит заголовок X-TaskFlow-Relay и ВЫРЕЗАЕТ
+  // входящие X-Forwarded-For/X-Real-IP, подделать которые снаружи нельзя.
+  //
+  // Проверка стоит ПЕРВОЙ строкой и до всего остального не случайно.
+  // Ретранслятор подключается к нам локально (петля 127.0.0.1), поэтому
+  // без этой строки его трафик прошёл бы isLanRequest() как домашний и
+  // получил бы вход владельца БЕЗ ПАРОЛЯ — то есть тот, кто знает публичный
+  // адрес VPS, получил бы полный доступ к трекеру.
+  //
+  // Почему безопасно подделать сам заголовок: подделать его можно только
+  // тем, чтобы ПОТЕРЯТЬ свой доступ без пароля. Обратного пути нет — маркер
+  // не добавляет прав, он их снимает. Поэтому конкретное значение неважно,
+  // важно лишь наличие.
+  if (req.headers["x-taskflow-relay"]) return null;
+
   if (process.env.TASKFLOW_LAN_NO_AUTH !== "1") return null;
   if (!isLanRequest(req)) return null;
   if (!looksLikeBrowser(req)) return null;
@@ -207,12 +296,39 @@ export async function authOrApiToken(req: FastifyRequest, reply: FastifyReply) {
     (req as any).userId = owner;
     return;
   }
+  // Отозванное устройство — ОТДЕЛЬНЫМ текстом, а не общим «Invalid token».
+  // Телефон после отзыва должен уйти на экран привязки (стереть токен из
+  // Keychain и показать «отсканируйте QR заново»), а не бесконечно
+  // повторять вход с токеном, который заведомо больше не работает
+  // (документ решения §8, §11.4).
+  if (token && isRevokedDeviceToken(token)) {
+    return reply.code(401).send({ error: "device_revoked" });
+  }
   return reply.code(401).send({
     error: token
       ? "Invalid token"
       : "нужен ключ: агент ходит своим api_token (Authorization: Bearer …), " +
         "вход без пароля из домашней сети работает только в браузере",
   });
+}
+
+/** Предъявленный токен принадлежит ОТОЗВАННОМУ устройству?
+ *
+ * Отдельный запрос по devices с точным попаданием: различать «токена нет»,
+ * «токен чужой» и «устройство отозвали» можно только так. Вызывается
+ * лишь на пути 401 — то есть когда вход уже не состоялся, поэтому лишний
+ * SELECT на успешном пути не стоит ничего. */
+function isRevokedDeviceToken(token: string): boolean {
+  if (devicesTableMissing) return false;
+  try {
+    const row = db
+      .prepare("SELECT 1 AS hit FROM devices WHERE token_hash = ? AND revoked_at IS NOT NULL")
+      .get(hashApiToken(token));
+    return !!row;
+  } catch {
+    devicesTableMissing = true;
+    return false;
+  }
 }
 
 export async function optionalAuth(req: FastifyRequest, _reply: FastifyReply) {
