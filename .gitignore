@@ -133,3 +133,4 @@ server/test_*_tmp.ts
 server/backups/
 *.db-shm
 *.db-wal
+scripts/orchestrator/__pycache__/
