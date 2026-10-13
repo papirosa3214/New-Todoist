@@ -117,7 +117,23 @@ export async function manageAccounts(composio, userId, toolkit, action, input) {
     if (action === "mail-read") {
       const data = await run("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", { message_id: String(input.message_id ?? ""), format: "full" });
       if (!data) return { error: "mail_failed" };
-      return { account: used, own, message: { ...brief(data), text: String(data.messageText ?? data.preview?.body ?? "").slice(0, 20_000) } };
+      return { account: used, own, attachments: (data.attachmentList ?? []).map(a => ({ id: a.attachmentId, name: clip(a.filename, 200), type: clip(a.mimeType, 100) })), message: { ...brief(data), text: String(data.messageText ?? data.preview?.body ?? "").slice(0, 20_000) } };
+    }
+    if (action === "mail-attachment") {
+      // Кому можно отдавать вложение, решает сервер (белый список); здесь только скачивание.
+      const data = await run("GMAIL_GET_ATTACHMENT", { message_id: String(input.message_id ?? ""), attachment_id: String(input.attachment_id ?? ""), file_name: String(input.name ?? "attachment") });
+      const url = data?.file?.s3url;
+      if (!url) return { error: "mail_failed" };
+      const response = await fetch(url);
+      if (!response.ok) return { error: "mail_failed" };
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length > 15 * 1024 * 1024) return { error: "attachment_too_large" };
+      const dir = path.join(os.homedir(), ".local", "state", "taskflow", "mail-attachments");
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      const safe = String(input.name ?? data.file.name ?? "attachment").replace(/[^\p{L}\p{N}._-]+/gu, "_").slice(-120) || "attachment";
+      const file = path.join(dir, Date.now() + "-" + safe);
+      await fs.writeFile(file, bytes, { mode: 0o600 });
+      return { ok: true, account: used, path: file, name: safe, type: clip(data.file.mimetype, 100), size: bytes.length };
     }
     if (action === "mail-draft") {
       const data = await run("GMAIL_CREATE_EMAIL_DRAFT", { recipient_email: clip(input.to, 320), subject: clip(input.subject, 300), body: String(input.body ?? "").slice(0, 50_000),
@@ -160,7 +176,7 @@ export async function main() {
     process.stdout.write(JSON.stringify({ url: connection.redirectUrl }));
     return;
   }
-  for (const action of ["accounts", "account-link", "account-delete", "mail-list", "mail-read", "mail-draft", "mail-archive", "mail-spam", "mail-send"]) {
+  for (const action of ["accounts", "account-link", "account-delete", "mail-list", "mail-read", "mail-attachment", "mail-draft", "mail-archive", "mail-spam", "mail-send"]) {
     if (!process.argv.includes("--" + action)) continue;
     process.stdout.write(JSON.stringify(await manageAccounts(composio, userId, process.env.TASKFLOW_COMPOSIO_TOOLKIT, action, await readJsonInput())));
     return;

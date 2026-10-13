@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { composioCommand } from "./composioPolicy.js";
 
 export type ComposioAccount = { id: string; address: string | null; alias: string | null; status: string; created_at: string | null };
-export type ComposioAccountAction = "accounts" | "account-link" | "account-delete" | "mail-list" | "mail-read" | "mail-draft" | "mail-archive" | "mail-spam" | "mail-send";
+export type ComposioAccountAction = "accounts" | "account-link" | "account-delete" | "mail-list" | "mail-read" | "mail-attachment" | "mail-draft" | "mail-archive" | "mail-spam" | "mail-send";
 
 /** Один вызов моста Composio для аккаунтов сервиса: вход — JSON в stdin, выход — JSON. */
 export function composioAccountsCall(ownerId: string, toolkit: string, action: ComposioAccountAction, input: Record<string, unknown> = {}): Promise<any> {
@@ -32,4 +32,5 @@ export const MAIL_ERRORS: Record<string, string> = {
   account_not_found: "Такого подключённого адреса нет.",
   recipient_not_allowed: "Отправлять можно только на адреса владельца, подключённые в «Интеграциях». Для остальных получателей готовь черновик.",
   mail_failed: "Gmail не выполнил операцию.",
+  attachment_too_large: "Вложение больше 15 МБ — не скачиваю.",
 };
