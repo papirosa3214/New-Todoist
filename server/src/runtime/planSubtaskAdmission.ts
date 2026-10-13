@@ -10,6 +10,7 @@ import { logEvent } from "../agentState.js";
 import { roleTitle, roleUserId } from "../roleRouting.js";
 import { runRoleInProcess } from "./inProcessRun.js";
 import { INTEGRATION_STEP_MARKER } from "./integrationHandoff.js";
+import { planDelivered } from "./planMutations.js";
 import { broadcastTaskEvent, broadcastToUsers } from "../ws.js";
 import { currentResultVersion, ensureResultVersionForReview } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
@@ -663,9 +664,7 @@ export function finishPlanIfComplete(planId: string, taskId: string, actorId: st
     | { id: string; title: string; status: string; agent_state: string | null; creator_id: string | null; assignee_id: string | null; current_attempt_id: string | null }
     | undefined;
   if (!task || task.status !== "active" || task.agent_state === "review") return false;
-  const already = db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND kind = 'collaboration_plan_completed' AND field = ? LIMIT 1")
-    .get(taskId, planId);
-  if (already) return false;
+  if (planDelivered(taskId, planId)) return false;
   // Корень ветки без Архитектора на выходе — он подключается сам и собирает итог.
   if (ensureBranchAssembler(planId, taskId)) return false;
   // tcpo_791b4519: согласование владельца ещё открыто — не закрывать план,
