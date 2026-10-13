@@ -124,6 +124,43 @@ async def summary_via_api(text: str, socket_path: str, owner_id: str, send_to_ch
             return body
 
 
+async def lookup_via_api(path: str, socket_path: str, owner_id: str, text: str = "") -> dict:
+    connector = aiohttp.UnixConnector(path=socket_path)
+    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=30)) as http:
+        async with http.post(f"http://localhost/secretary/{path}", json={"text": text, "owner_id": owner_id}) as resp:
+            body = await resp.json()
+            if resp.status != 200:
+                raise RuntimeError(f"TaskFlow отказал: {body.get('error', resp.status)}")
+            return body
+
+
+async def shared_tools_via_api(socket_path: str, owner_id: str) -> list:
+    """Общие инструменты Секретаря (те же, что в чате) — как инструменты звонка."""
+    connector = aiohttp.UnixConnector(path=socket_path)
+    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
+        async with http.get("http://localhost/secretary/tools") as response:
+            if response.status != 200:
+                raise RuntimeError("Не удалось получить список инструментов")
+            specs = (await response.json()).get("tools", [])
+
+    def build(spec: dict):
+        async def call(raw_arguments: dict[str, object]) -> str:
+            inner = aiohttp.UnixConnector(path=socket_path)
+            try:
+                async with aiohttp.ClientSession(connector=inner, timeout=aiohttp.ClientTimeout(total=120)) as http:
+                    async with http.post("http://localhost/secretary/tool",
+                                         json={"owner_id": owner_id, "name": spec["name"], "arguments": raw_arguments}) as resp:
+                        body = await resp.json()
+            except (aiohttp.ClientError, TimeoutError) as exc:
+                return f"Инструмент недоступен: {exc}"
+            if body.get("ok"):
+                return body.get("result", "")
+            return f"Инструмент отказал: {body.get('error', 'неизвестная ошибка')}"
+        return function_tool(call, raw_schema={"name": spec["name"], "description": spec["description"], "parameters": spec["parameters"]})
+
+    return [build(spec) for spec in specs]
+
+
 async def instructions_via_api(socket_path: str) -> dict:
     connector = aiohttp.UnixConnector(path=socket_path)
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
@@ -137,8 +174,8 @@ async def instructions_via_api(socket_path: str) -> dict:
 
 
 class Assistant(Agent):
-    def __init__(self, owner_id: str, instructions: str = SECRETARY_INSTRUCTIONS, greeting: str = "поздоровайся коротко и спроси, чем помочь") -> None:
-        super().__init__(instructions=instructions)
+    def __init__(self, owner_id: str, instructions: str = SECRETARY_INSTRUCTIONS, greeting: str = "поздоровайся коротко и спроси, чем помочь", tools: list | None = None) -> None:
+        super().__init__(instructions=instructions, tools=tools or [])
         self.owner_id = owner_id
         self.greeting = greeting
 
@@ -176,6 +213,44 @@ class Assistant(Agent):
             return f"Не удалось получить сводку: {exc}"
         return json.dumps(result, ensure_ascii=False)
 
+    @function_tool
+    async def task_details(self, context: RunContext, text: str) -> str:
+        """Всё об одной задаче: состояние, шаги плана и кто их делал, вердикт проверки, интеграция, последние комментарии.
+
+        Args:
+            text: Название задачи или слова из него, как их назвал владелец.
+        """
+        cfg = load_config()
+        try:
+            result = await lookup_via_api("task", cfg.taskflow_socket_path, self.owner_id, text)
+        except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+            return f"Не удалось посмотреть задачу: {exc}"
+        return json.dumps(result, ensure_ascii=False)
+
+    @function_tool
+    async def send_to_owner_chat(self, context: RunContext, text: str) -> str:
+        """Написать владельцу в его чат с Секретарём: всё, что он просит прислать текстом.
+
+        Args:
+            text: Полный текст сообщения, готовый к чтению.
+        """
+        cfg = load_config()
+        try:
+            result = await lookup_via_api("owner-chat", cfg.taskflow_socket_path, self.owner_id, text)
+        except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+            return f"Не удалось написать в чат: {exc}"
+        return json.dumps(result, ensure_ascii=False)
+
+    @function_tool
+    async def role_load(self, context: RunContext) -> str:
+        """Загрузка ролей: чем сейчас занята каждая роль, что в очереди и что заблокировано."""
+        cfg = load_config()
+        try:
+            result = await lookup_via_api("roles", cfg.taskflow_socket_path, self.owner_id)
+        except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+            return f"Не удалось посмотреть загрузку ролей: {exc}"
+        return json.dumps(result, ensure_ascii=False)
+
 
 # LiveKit SDK ignores NO_PROXY when it takes HTTPS_PROXY implicitly.
 # Its signaling route is configured separately from the Gemini route.
@@ -200,7 +275,13 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
     snapshot = await instructions_via_api(cfg.taskflow_socket_path)
-    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=snapshot["greeting"]), room=ctx.room)
+    try:
+        shared = await shared_tools_via_api(cfg.taskflow_socket_path, owner.identity)
+    except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+        # Звонок важнее полного набора: без общих инструментов остаются базовые.
+        logger.warning("общие инструменты Секретаря недоступны: %s", exc)
+        shared = []
+    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=snapshot["greeting"], tools=shared), room=ctx.room)
 
     # Тап по анимации на телефоне — перебить Секретаря на полуслове.
     @ctx.room.local_participant.register_rpc_method("interrupt")

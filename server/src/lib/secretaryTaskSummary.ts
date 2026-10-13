@@ -8,6 +8,7 @@ import { isOwner } from "../access.js";
 import { callUnifiedAi } from "../routes/ai.js";
 import { broadcastToUsers } from "../ws.js";
 import { SECRETARY_USER_ID } from "./secretaryReply.js";
+import { roleTitle } from "../roleRouting.js";
 
 const GROUPS = ["assigned_waiting", "blocked", "in_progress", "review", "completed", "overdue", "future", "stuck", "unassigned", "all"] as const;
 type Group = typeof GROUPS[number];
@@ -84,6 +85,8 @@ export function collectTaskSummary(ownerId:string, filter:SummaryFilter, now = n
   const tasks=db.prepare(`SELECT t.id,t.title,t.status,t.agent_state,t.assignee_id,t.due_date,t.start_time,
     t.completed_at,t.run_at,t.ready_for_pickup,t.blocked_reason,t.block_type,t.blocked_at,
     u.name AS assignee_name,u.role_key AS assignee_role,
+    (SELECT group_concat(DISTINCT n.role_key) FROM task_collaboration_plans p JOIN task_collaboration_plan_nodes n ON n.plan_id=p.id
+      WHERE p.task_id=t.id AND p.status='approved' AND n.skipped_at IS NULL) AS plan_roles,
     (SELECT c.text FROM comments c WHERE c.task_id=t.id ORDER BY c.created_at DESC,c.rowid DESC LIMIT 1) AS last_comment,
     (SELECT j.last_error FROM role_run_jobs j WHERE j.task_id=t.id ORDER BY j.created_at DESC,j.rowid DESC LIMIT 1) AS queue_error
     FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
@@ -103,10 +106,10 @@ export function collectTaskSummary(ownerId:string, filter:SummaryFilter, now = n
     in_progress:t=>active(t)&&t.agent_state==="in_progress", review:t=>active(t)&&t.agent_state==="review",
     completed:t=>t.status==="completed", overdue:t=>active(t)&&!!t.due_date&&t.due_date.slice(0,10)<today,
     future:t=>active(t)&&!!t.due_date&&t.due_date.slice(0,10)>today,
-    unassigned:t=>active(t)&&!t.assignee_id,
+    unassigned:t=>active(t)&&!t.assignee_id&&!t.plan_roles,
     stuck:t=>waiting(t)||(active(t)&&t.agent_state==="blocked"), all:()=>true,
   };
-  const describe=(t:any)=>({id:t.id,title:t.title,status:t.status,agent_state:t.agent_state,assignee:t.assignee_name??"Не назначен",role:t.assignee_role,
+  const describe=(t:any)=>({id:t.id,title:t.title,status:t.status,agent_state:t.agent_state,assignee:t.assignee_name??(t.plan_roles ? "Команда по плану: "+String(t.plan_roles).split(",").map(roleTitle).join(", ") : "Не назначен"),role:t.assignee_role,
     due_date:t.due_date,start_time:t.start_time,completed_at:t.completed_at,run_at:t.run_at,
     reason:t.agent_state==="blocked" ? (stopReasonPolicy(t.blocked_reason)?.label || t.blocked_reason || (t.last_comment ? `Причина блокировки не записана; последний комментарий: ${t.last_comment}` : "Причина блокировки не записана")) : waiting(t) ?
       (t.queue_error || (t.run_at&&new Date(t.run_at.replace(" ","T")+(t.run_at.includes("Z")?"":"Z"))>now ? `Запуск запланирован: ${t.run_at}` :

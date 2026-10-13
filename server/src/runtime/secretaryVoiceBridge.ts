@@ -9,6 +9,8 @@ import { dirname, join } from "node:path";
 import db from "../db.js";
 import { requestTaskSummary } from "../lib/secretaryTaskSummary.js";
 import { submitOwnerTaskText } from "../lib/ownerDraft.js";
+import { VOICE_TOOLS_GUIDE, lookupTaskDetails, roleLoadNow, voiceToolManifest, runVoiceTool } from "../lib/secretaryVoiceTools.js";
+import { sendSummaryToSecretaryChat } from "../lib/secretaryTaskSummary.js";
 
 export const secretaryVoiceSocket = () => join(
   process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid!()}`,
@@ -28,9 +30,13 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       res.end(JSON.stringify(body));
     };
     if (req.method === "GET" && req.url === "/secretary/instructions") {
-      send(200,{instructions:composeLayer("secretary","secretary.voice")!.effective,greeting:composeLayer("secretary","secretary.greeting")!.effective,manifest:instructionManifest("secretary","voice")}); return;
+      send(200,{instructions:composeLayer("secretary","secretary.voice")!.effective+"\n\n"+VOICE_TOOLS_GUIDE,greeting:composeLayer("secretary","secretary.greeting")!.effective,manifest:instructionManifest("secretary","voice")}); return;
     }
-    if (req.method !== "POST" || !["/secretary/tasks", "/secretary/summary"].includes(req.url || "")) {
+    if (req.method === "GET" && req.url === "/secretary/tools") {
+      try { send(200,{tools:await voiceToolManifest()}); } catch (error) { app.log.error({err:error},"не собран список инструментов голосового Секретаря"); send(500,{error:"сбой списка инструментов"}); }
+      return;
+    }
+    if (req.method !== "POST" || !["/secretary/tasks", "/secretary/summary", "/secretary/task", "/secretary/roles", "/secretary/tool", "/secretary/owner-chat"].includes(req.url || "")) {
       send(404, { error: "неизвестный инструмент" }); return;
     }
     try {
@@ -45,10 +51,17 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       if (!owner || body.owner_id !== owner.id) {
         send(403, {error:"только владелец голосовой комнаты"}); return;
       }
+      if (req.url === "/secretary/roles") { send(200,roleLoadNow(owner.id)); return; }
+      if (req.url === "/secretary/tool") {
+        if (typeof body.name !== "string") { send(400,{error:"нужно имя инструмента"}); return; }
+        send(200,await runVoiceTool(owner.id,body.name,body.arguments)); return;
+      }
       const text = body.text;
       if (typeof text !== "string" || !text.trim() || text.length > 6000) {
         send(400,{error:"нужен полный текст поручения, до 6000 символов"}); return;
       }
+      if (req.url === "/secretary/task") { send(200,lookupTaskDetails(owner.id,text)); return; }
+      if (req.url === "/secretary/owner-chat") { send(200,{message_id:sendSummaryToSecretaryChat(owner.id,text)}); return; }
       if (req.url === "/secretary/summary") {
         if (body.send_to_chat !== undefined && typeof body.send_to_chat !== "boolean") {
           send(400,{error:"send_to_chat должен быть boolean"}); return;
