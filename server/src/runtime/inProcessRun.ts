@@ -10,6 +10,7 @@ import { requireSubmissionReceipt, SUBMISSION_POLICY } from "../lib/submissionRe
 import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
 import { integrationStepContext } from "./integrationHandoff.js";
 import { searchNotes } from "../lib/noteSearch.js";
+import { secretaryMailTools } from "./secretaryMailTools.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { connectBuilderXcode } from "./builderXcode.js";
@@ -652,7 +653,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  return [...tools, ...orchestratorTools(role, T)].filter(t => (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
+  return [...tools, ...orchestratorTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])].filter(t => (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];

@@ -53,6 +53,92 @@ export async function readLinearComposio(composio, userId, input) {
     } else { return { data: result.data.data }; }
 }
 
+async function readJsonInput() {
+  let raw = "";
+  for await (const chunk of process.stdin) {
+    raw += chunk;
+    if (raw.length > 100_000) throw new Error("input_too_large");
+  }
+  return raw.trim() ? JSON.parse(raw) : {};
+}
+
+// Аккаунты одного сервиса у владельца: список, ссылка на новый, удаление, письмо.
+// Токены и прочие данные подключения наружу не отдаются.
+export async function manageAccounts(composio, userId, toolkit, action, input) {
+  if (!/^[a-z0-9_\-]{1,100}$/.test(toolkit ?? "")) throw new Error("invalid_toolkit");
+  const all = async () => (await composio.connectedAccounts.list({ userIds: [userId], toolkitSlugs: [toolkit], limit: 50 })).items;
+  const address = a => (/@/.test(String(a.data?.displayName ?? "")) ? String(a.data.displayName) : null);
+  const view = a => ({ id: a.id, address: address(a), alias: a.alias ?? null, status: a.status, created_at: a.createdAt ?? null });
+  if (action === "accounts") return { items: (await all()).map(view) };
+  if (action === "account-link") {
+    const alias = typeof input.alias === "string" && input.alias.trim() ? input.alias.trim().slice(0, 100) : undefined;
+    const configs = await composio.authConfigs.list({ toolkit });
+    const config = configs.items.find(c => c.status === "ENABLED") ?? configs.items[0];
+    if (!config) {
+      const session = await composio.create(userId, { mcp: true, manageConnections: { enable: false } });
+      return { url: (await session.authorize(toolkit)).redirectUrl };
+    }
+    try {
+      const request = await composio.connectedAccounts.link(userId, config.id, alias ? { alias } : {});
+      return { url: request.redirectUrl, id: request.id ?? null };
+    } catch (error) {
+      if (alias && /alias/i.test(String(error?.message ?? ""))) return { error: "alias_taken" };
+      throw error;
+    }
+  }
+  if (action === "account-delete") {
+    if (!(await all()).some(a => a.id === input.id)) return { error: "not_found" };
+    await composio.connectedAccounts.delete(input.id);
+    return { ok: true };
+  }
+  // Почта: только перечисленные операции. Удаления, пересылки, ответов и отправки
+  // посторонним здесь нет, и добавлять их нельзя без решения владельца.
+  if (action.startsWith("mail-")) {
+    const active = (await all()).filter(a => a.status === "ACTIVE");
+    if (!active.length) return { error: "not_connected" };
+    const names = a => [a.id, a.alias, address(a)].filter(Boolean).map(v => String(v).toLowerCase());
+    const own = [...new Set(active.flatMap(a => [a.alias, address(a)]).filter(v => v && /@/.test(v)).map(v => String(v).toLowerCase()))];
+    const wanted = String(input.account ?? "").trim().toLowerCase();
+    const account = wanted ? active.find(a => names(a).includes(wanted)) : active[0];
+    if (!account) return { error: "account_not_found", accounts: own };
+    const run = async (slug, args) => {
+      const result = await composio.tools.execute(slug, { userId, connectedAccountId: account.id, version: "20261010_00", arguments: args });
+      return result.successful && !result.error ? result.data ?? {} : null;
+    };
+    const used = address(account) ?? account.alias;
+    const clip = (value, max) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+    const brief = m => ({ id: m.messageId ?? m.id ?? null, thread_id: m.threadId ?? null, from: clip(m.sender ?? m.from, 200), to: clip(m.to, 200),
+      subject: clip(m.subject ?? m.preview?.subject, 300), date: m.messageTimestamp ?? m.date ?? null, labels: m.labelIds ?? [] });
+    if (action === "mail-list") {
+      const data = await run("GMAIL_FETCH_EMAILS", { query: clip(input.query, 300) || "in:inbox", max_results: Math.max(1, Math.min(20, Number(input.limit) || 10)), include_payload: true, verbose: false });
+      if (!data) return { error: "mail_failed" };
+      return { account: used, messages: (data.messages ?? []).map(m => ({ ...brief(m), preview: clip(m.preview?.body ?? m.messageText, 300) })) };
+    }
+    if (action === "mail-read") {
+      const data = await run("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", { message_id: String(input.message_id ?? ""), format: "full" });
+      if (!data) return { error: "mail_failed" };
+      return { account: used, message: { ...brief(data), text: String(data.messageText ?? data.preview?.body ?? "").slice(0, 20_000) } };
+    }
+    if (action === "mail-draft") {
+      const data = await run("GMAIL_CREATE_EMAIL_DRAFT", { recipient_email: clip(input.to, 320), subject: clip(input.subject, 300), body: String(input.body ?? "").slice(0, 50_000),
+        ...(input.thread_id ? { thread_id: String(input.thread_id) } : {}) });
+      return data ? { ok: true, account: used, draft_id: data.id ?? data.draft?.id ?? null } : { error: "mail_failed" };
+    }
+    if (action === "mail-archive" || action === "mail-spam") {
+      const data = await run("GMAIL_ADD_LABEL_TO_EMAIL", { message_id: String(input.message_id ?? ""),
+        ...(action === "mail-spam" ? { add_label_ids: ["SPAM"], remove_label_ids: ["INBOX"] } : { remove_label_ids: ["INBOX"] }) });
+      return data ? { ok: true, account: used } : { error: "mail_failed" };
+    }
+    if (action === "mail-send") {
+      const to = String(input.to ?? "").trim().toLowerCase();
+      if (!own.includes(to)) return { error: "recipient_not_allowed", allowed: own };
+      const data = await run("GMAIL_SEND_EMAIL", { recipient_email: to, subject: clip(input.subject, 300), body: String(input.body ?? "").slice(0, 50_000) });
+      return data ? { ok: true, account: used, to } : { error: "mail_failed" };
+    }
+  }
+  throw new Error("unknown_action");
+}
+
 export async function main() {
   const options = JSON.parse(process.env.TASKFLOW_COMPOSIO_OPTIONS ?? "{}");
   const userId = process.env.TASKFLOW_COMPOSIO_USER_ID;
@@ -72,6 +158,11 @@ export async function main() {
     const session = await composio.create(userId, { ...options, toolkits: undefined });
     const connection = await session.authorize(process.env.TASKFLOW_COMPOSIO_TOOLKIT);
     process.stdout.write(JSON.stringify({ url: connection.redirectUrl }));
+    return;
+  }
+  for (const action of ["accounts", "account-link", "account-delete", "mail-list", "mail-read", "mail-draft", "mail-archive", "mail-spam", "mail-send"]) {
+    if (!process.argv.includes("--" + action)) continue;
+    process.stdout.write(JSON.stringify(await manageAccounts(composio, userId, process.env.TASKFLOW_COMPOSIO_TOOLKIT, action, await readJsonInput())));
     return;
   }
   if (process.argv.includes("--linear-read")) {

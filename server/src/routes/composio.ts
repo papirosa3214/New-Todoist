@@ -4,6 +4,7 @@ import { isOwner } from "../access.js";
 import { ROLE_NAMES } from "../roleRouting.js";
 import { composioCredentialConfigured, roleComposioPolicy, saveComposioPolicy } from "../runtime/composioPolicy.js";
 import { inspectComposio } from "../runtime/composioRuntime.js";
+import { composioAccountsCall } from "../runtime/composioAccounts.js";
 
 export function registerComposioRoutes(app: FastifyInstance) {
   const authorize = async (req: any, reply: any) => {
@@ -36,5 +37,33 @@ export function registerComposioRoutes(app: FastifyInstance) {
     if (typeof toolkit !== "string" || !/^[a-z0-9_\-]{1,100}$/.test(toolkit)) return reply.code(422).send({ error: "Укажите toolkit" });
     try { return await inspectComposio(roleComposioPolicy(req.params.role, req.userId), "authorize", toolkit); }
     catch (error) { return reply.code(502).send({ error: (error as Error).message }); }
+  });
+  // Аккаунты сервиса у владельца («Интеграции»): несколько адресов одного сервиса.
+  const ownerToolkit = async (req: any, reply: any) => {
+    await authOrApiToken(req, reply);
+    if (reply.sent) return;
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "Подключения доступны владельцу" });
+    if (!/^[a-z0-9_\-]{1,100}$/.test(req.params.toolkit)) return reply.code(422).send({ error: "Укажите сервис" });
+  };
+  app.get("/api/integrations/composio/:toolkit/accounts", { preHandler: ownerToolkit }, async (req: any, reply) => {
+    try { return await composioAccountsCall(req.userId, req.params.toolkit, "accounts"); }
+    catch (error) { return reply.code(502).send({ error: (error as Error).message }); }
+  });
+  app.post("/api/integrations/composio/:toolkit/accounts", { preHandler: ownerToolkit }, async (req: any, reply) => {
+    const alias = req.body?.alias;
+    if (alias !== undefined && (typeof alias !== "string" || alias.trim().length > 100)) return reply.code(422).send({ error: "Подпись аккаунта — до 100 символов" });
+    try {
+      const result = await composioAccountsCall(req.userId, req.params.toolkit, "account-link", { alias });
+      if (result?.error === "alias_taken") return reply.code(409).send({ error: "Такой адрес уже добавлен" });
+      if (!result?.url) return reply.code(502).send({ error: "Composio не выдал ссылку авторизации" });
+      return { url: result.url };
+    } catch (error) { return reply.code(502).send({ error: (error as Error).message }); }
+  });
+  app.delete("/api/integrations/composio/:toolkit/accounts/:id", { preHandler: ownerToolkit }, async (req: any, reply) => {
+    try {
+      const result = await composioAccountsCall(req.userId, req.params.toolkit, "account-delete", { id: req.params.id });
+      if (result?.error === "not_found") return reply.code(404).send({ error: "Аккаунт не найден" });
+      return { ok: true };
+    } catch (error) { return reply.code(502).send({ error: (error as Error).message }); }
   });
 }

@@ -18,7 +18,7 @@ export const VOICE_TOOLS_GUIDE = [
   "Для краткого ответа бери spoken_text; подробности — из остальных полей.",
   "Остальные инструменты taskflow_* — те же, что у тебя в чате. Команда и кто на связи — taskflow_agents. База знаний — твоя зона как библиотекаря: taskflow_kb_search ищет по смыслу во всей документации, taskflow_library и taskflow_docs показывают папки, taskflow_doc_read читает заметку целиком, taskflow_recall — память команды. Ищи сам и настойчиво: не нашёл с первого запроса — переформулируй, прежде чем сказать, что данных нет.",
   "Написать роли или в группу — taskflow_chat_send (to — имя или ключ роли). Ответ роли приходит не сразу: скажи, что передал, а когда спросят — прочитай taskflow_chat_read и перескажи ответ. Написать владельцу в его чат — send_to_owner_chat: туда же шли всё, что он просит прислать текстом.",
-  "Отправлять письма на почту ты пока не умеешь: почта не подключена. Скажи это прямо и предложи прислать в чат.",
+  "Почта — инструменты taskflow_mail_*: посмотреть письма и прочитать, подготовить черновик, убрать в архив или спам, отправить письмо владельцу на его подключённый адрес. Посторонним ты писем не отправляешь — только черновик, отправит владелец. Удалять письма ты не можешь. Не говори «отправил» или «убрал», пока инструмент не ответил ok.",
 ].join("\n");
 
 const STOP = new Set(["задача", "задачи", "задачу", "задаче", "покажи", "расскажи", "скажи", "посмотри", "найди", "статус", "состояние", "что", "как", "там", "про", "для", "или", "это", "эта", "этой", "кто", "где", "когда", "почему", "последняя", "последнюю", "последней"]);
@@ -117,7 +117,8 @@ export function roleLoadNow(ownerId: string) {
 const VOICE_SHARED_TOOLS = ["taskflow_task", "taskflow_my_tasks", "taskflow_projects", "taskflow_project_tasks", "taskflow_status", "taskflow_agents",
   "taskflow_chat_send", "taskflow_chat_read", "taskflow_chat_reply", "taskflow_comment",
   "taskflow_kb_search", "taskflow_library", "taskflow_docs", "taskflow_doc_read", "taskflow_doc_write", "taskflow_recall", "taskflow_remember",
-  "taskflow_weather", "taskflow_my_stats", "taskflow_runtime"];
+  "taskflow_weather", "taskflow_my_stats", "taskflow_runtime",
+  "taskflow_mail_accounts", "taskflow_mail_list", "taskflow_mail_read", "taskflow_mail_draft", "taskflow_mail_archive", "taskflow_mail_spam", "taskflow_mail_send_to_owner"];
 
 async function sharedTools(): Promise<any[]> {
   const [{ taskflowTools }, { chatTools }] = await Promise.all([import("../runtime/inProcessRun.js"), import("../runtime/chatTools.js")]);
