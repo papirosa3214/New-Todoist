@@ -206,6 +206,8 @@ const BLOCK_META: Record<string, [string, string, RunMode[], string[]]> = {
   "task.reply": ["Ответ владельцу", "Задача", ["reply"], ["roleTitle", "taskId", "title"]],
   "task.review": ["Проверка результата", "Ревью", ["review"], ["roleTitle", "taskId", "title"]],
   "task.plan": ["Узел плана", "План", ["subtask"], ["roleTitle", "taskId", "subtaskId", "subtaskTitle", "artifactContract", "rules"]],
+  "task.orchestrate": ["Оркестратор: разложить работу", "План", ["subtask"], ["roleTitle", "taskId", "subtaskId", "planId", "selfSlot", "assembleSlot", "rules"]],
+  "task.orchestrate_assemble": ["Оркестратор: принять и собрать итог", "План", ["subtask"], ["roleTitle", "taskId", "subtaskId", "planId", "rules"]],
   "task.documentation": ["Поиск документации", "Задача", ["work", "resume", "subtask"], []],
   "task.knowledge": ["Библиотека TaskFlow", "База знаний", ["work", "resume", "subtask", "review"], []],
   "chat.wrapper": ["Чат роли", "Чат", ["chat"], ["roleInstruction", "localPolicy", "roleTitle", "role", "participants", "history", "userText"]],
