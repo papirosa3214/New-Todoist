@@ -1288,8 +1288,13 @@ try {
       // читала его как часть постановки, а не как приложение.
       const snapshot=input.subtaskId ? slotSnapshotBlock(input.subtaskId) : null;
       const prompt = `${task}\n\n${messages}\n\nПереписка: до 100 слов, сообщение о блоке до 50. Адресат, задача, конкретный этап и вопрос по специализации коллеги. В ответе укажи адресата и reply_to_message_id. Полные отчёты сохраняй через taskflow_doc_write в папке задачи, в чат и комментарии дай короткую суть и ссылку.${snapshot ? `\n\n${snapshot}` : ""}\n\n${launchContext.prompt}\n\n${topicContext(taskId)}${memory ? `\n\n${memory}` : ""}`;
+      // Чек-лист идёт ПЕРЕД задачей (13.10.2026, владелец: «подсунуть ему
+      // промп поближе»). В хвосте промпта, после задачи, переписки, контекста
+      // запуска и памяти, инструкция о плане терялась: модель к этому месту
+      // уже увлечена задачей и 89% плановых слотов оставались без плана.
+      // Перед постановкой — первое, что агент читает, поэтому и заполняет.
       const workPlanPrompt = input.subtaskId ? "\n\n" + (composeLayer(role, "tool.runtime.taskflow_work_plan")?.effective ?? WORK_PLAN_INSTRUCTION) : "";
-      await session.prompt((mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt) + workPlanPrompt);
+      await session.prompt(workPlanPrompt + (mode === "work" ? `${prompt}\n\n${repoNote(cwd)}\n${renderInstruction(role, "task.documentation", {})}` : prompt));
       // Лимит провайдера библиотека не бросает: ход молча кончается ответом с ошибкой 429
       // (находка А36). Ловим здесь и уходим на запасную модель.
       limitHit = lastAssistantLimitError(session);
