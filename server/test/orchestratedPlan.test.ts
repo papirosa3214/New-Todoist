@@ -99,3 +99,23 @@ describe("режим «Оркестратор»", () => {
     expect((db.prepare("SELECT text FROM chat_messages WHERE id=?").get(ask!.messageId) as { text: string }).text).toContain("taskflow_plan_proposal_decide");
   });
 });
+
+describe("перенос карточки в другой проект", () => {
+  it("пустая тема переезжает в группу нового проекта, план утверждается", async () => {
+    const app = await buildApp();
+    const reg = await app.inject({ method: "POST", url: "/api/auth/register", payload: { name: "Move owner", email: `move-${Date.now()}@test`, password: "password123" } });
+    db.prepare("UPDATE users SET role='owner' WHERE id=?").run(reg.json().user.id);
+    const auth = { authorization: `Bearer ${reg.json().token}` };
+    const p1 = (await app.inject({ method: "POST", url: "/api/projects", headers: auth, payload: { name: "Старый" } })).json();
+    const p2 = (await app.inject({ method: "POST", url: "/api/projects", headers: auth, payload: { name: "Новый" } })).json();
+    const t = (await app.inject({ method: "POST", url: "/api/tasks", headers: auth, payload: { title: "Переезд", project_id: p1.id } })).json().task;
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${t.id}/topic`, headers: auth, payload: {} })).statusCode).toBe(200);
+    await app.inject({ method: "PATCH", url: `/api/tasks/${t.id}`, headers: auth, payload: { project_id: p2.id } });
+    const plan = (await app.inject({ method: "POST", url: `/api/tasks/${t.id}/collaboration-plans/propose`, headers: auth, payload: { profile: "research" } })).json().plan;
+    const ap = await app.inject({ method: "POST", url: `/api/tasks/${t.id}/collaboration-plans/${plan.id}/approve`, headers: auth, payload: {} });
+    expect(ap.statusCode).toBe(200);
+    const topic = db.prepare("SELECT project_id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(t.id) as { project_id: string };
+    expect(topic.project_id).toBe(p2.id);
+    await app.close();
+  });
+});

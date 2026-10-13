@@ -3,7 +3,7 @@ import { branchMembership } from "../runtime/branchPlan.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
 import { startSlotConversation,cancelSlotConversationsFor,resolveTopicSlot,topicSlots } from "../runtime/slotConversation.js";
 import { deliverTopicToWork, deliverChatToWork } from "../runtime/inProcessRun.js";
-import { topicContext, taskTopicClosedAt } from "../lib/projectTopics.js";
+import { topicContext, taskTopicClosedAt, rehomeEmptyTopic } from "../lib/projectTopics.js";
 import { nudgeTaskPlan } from "../runtime/taskNudge.js";
 import { getProjectForWrite, getTaskForRead, isOwner } from "../access.js";
 import { parseChatWorkMode, type ChatWorkMode } from "../runtime/chatWorkMode.js";
@@ -227,9 +227,12 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     const project=getProjectForWrite(task.project_id,req.userId);
     if (!project) return reply.code(403).send({error:"Нет доступа к группе проекта"});
     const previous=db.prepare("SELECT project_id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as any;
-    if (previous && previous.project_id !== task.project_id) return reply.code(409).send({error:"Тема относится к прежнему проекту задачи"});
     const id=db.transaction(()=>{
       const parent=ensureProjectGroup(project,req.userId);
+      if (previous && previous.project_id !== task.project_id) {
+        const moving=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as {id:string};
+        if (!rehomeEmptyTopic(moving.id,task.project_id,parent)) return null;
+      }
       let topic=db.prepare("SELECT id FROM chats WHERE task_id=? AND parent_chat_id IS NOT NULL").get(task.id) as any;
       if (!topic) {
         topic={id:uid()};
@@ -238,6 +241,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       db.prepare("INSERT OR IGNORE INTO chat_members (chat_id,member_id) VALUES (?,?)").run(topic.id,req.userId);
       return topic.id;
     })();
+    if (!id) return reply.code(409).send({error:"Тема относится к прежнему проекту задачи"});
     return {chat:chatRow(id)};
   });
   app.get("/api/chats/:id/topics",{preHandler:authPre},async(req:any,reply)=>{
