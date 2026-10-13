@@ -14,13 +14,14 @@
 3. Резервная копия базы → `tsc --noEmit` (ошибка — выкладки нет, сервер
    работает на старом) → сборка `dist` → `systemctl --user restart` →
    `/api/health` = 200.
-4. Итог — владельцу в Telegram; поломка — ещё и задачей в «Серверные
-   уведомления». Одна тревога на коммит; «висит больше суток» — раз в сутки.
+4. Итог — владельцу в «Состояние системы» (уведомление deploy_watch), НЕ
+   карточкой. Сервер не поднялся — ещё и Telegram (приложение тогда молчит).
+   Одна тревога на коммит; «висит больше суток» — раз в сутки.
 
 Состояние: ~/.local/state/taskflow-deploy/ (deployed — выложенный коммит).
 Реестр: docs/watchers.md, раздел «Отложенная выкладка сервера».
 """
-import json, os, sqlite3, subprocess, sys, time, urllib.request
+import os, sqlite3, subprocess, time, urllib.request, uuid
 from datetime import datetime
 
 REPO = os.path.expanduser("~/Проекты/New-Todoist")
@@ -48,32 +49,28 @@ def state(name, value=None):
         f.write(value)
 
 
-def notify(text):
+def telegram(text):
+    """Только когда сервер лёг: приложение тогда ничего не покажет."""
     try:
         sh("bash", SEND, text, timeout=60)
-    except Exception as e:  # уведомление не должно ронять сторожа
+    except Exception as e:
         log(f"Telegram не ушёл: {e}")
 
 
-def alarm_card(title, body):
-    """Задача в «Серверные уведомления», если сервер жив; иначе — только Telegram."""
+def notify(text):
+    """Владельцу в «Состояние системы» (notifications, тип deploy_watch) —
+    не карточкой: тревоги сторожей не засоряют доску (владелец 13.10.2026)."""
     try:
-        key = os.environ.get("TASKFLOW_VAULT_KEY", "TASKFLOW_ORCHESTRATOR_CLAUDE_TOKEN")
-        tok = sh("python3", os.path.expanduser("~/.claude/vault-get.py"), "--raw", key, timeout=30).stdout.strip()
-        con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-        row = con.execute("SELECT id FROM projects WHERE name='Серверные уведомления' AND archived_at IS NULL").fetchone()
+        con = sqlite3.connect(DB, timeout=30)
+        owner = con.execute("SELECT id FROM users WHERE role='owner' AND COALESCE(archived,0)=0 ORDER BY created_at LIMIT 1").fetchone()
+        if owner:
+            con.execute("INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?,?,?,?,?,NULL)",
+                        (str(uuid.uuid4()), owner[0], "deploy_watch", None, text))
+            con.commit()
         con.close()
-        if not tok or not row:
-            return
-        desc = (f"## Работа\n\n{body}\n\n## Результат\n\nСервер работает на актуальном main.\n\n"
-                "## Критерии приёмки\n\nСторож выложил коммит: в ~/.local/state/taskflow-deploy/deployed стоит HEAD main.\n\n"
-                "## Границы\n\nСторож: server/scripts/deploy-when-idle.py, лог ~/.local/state/taskflow-deploy/deploy.log.")
-        req = urllib.request.Request("http://127.0.0.1:3001/api/tasks", method="POST",
-                                     data=json.dumps({"title": title, "description": desc, "project_id": row[0]}).encode(),
-                                     headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=15)
     except Exception as e:
-        log(f"карточка тревоги не создана: {e}")
+        log(f"уведомление не записано: {e}")
+        telegram(text)
 
 
 def busy():
@@ -152,7 +149,6 @@ def main():
         err = (check.stdout + check.stderr).strip().splitlines()[:5]
         log("ошибка типов, выкладка отменена:\n" + "\n".join(err))
         notify(f"TaskFlow: выкладка {head[:8]} отменена — ошибка сборки. Сервер работает на старом коде.\n" + "\n".join(err))
-        alarm_card(f"Выкладка сервера {head[:8]} не собирается", "Сторож отложенной выкладки не смог собрать main:\n\n```\n" + "\n".join(err) + "\n```")
         return
     build = sh(tsc, "-p", "tsconfig.json", cwd=SERVER)
     if build.returncode != 0:
@@ -168,7 +164,9 @@ def main():
     else:
         state("failed", head)
         log("после перезапуска /api/health не отвечает")
-        notify(f"⚠️ TaskFlow: после выкладки {head[:8]} сервер НЕ отвечает. Резервная копия базы: {backup}")
+        msg = f"⚠️ TaskFlow: после выкладки {head[:8]} сервер НЕ отвечает. Резервная копия базы: {backup}"
+        notify(msg)
+        telegram(msg)
 
 
 if __name__ == "__main__":
