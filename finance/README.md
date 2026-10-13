@@ -30,10 +30,19 @@ npm run dev
 ```bash
 npm run typecheck    # tsc --noEmit
 npm run test         # vitest run
+npm run test:e2e     # Playwright: вход и cookie сессии настоящим браузером
 npm run build        # production build
 ```
 
 Юнит-тесты покрывают парсеры CSV (1С, Сбербанк, generic) и OFX, а также дедупликацию по хешу (см. `tests/`).
+
+E2E поднимает приложение в production-режиме на порту 3931 и ещё раз — за
+https-прокси на 3932, после чего прогоняет вход в WebKit и Chromium. База
+тестовая (`data/e2e.sqlite`), живая не затрагивается. Тесты ходят по сетевому
+адресу хоста, а не по `127.0.0.1`: браузер считает loopback безопасным
+контекстом и хранит Secure-cookie по http, из-за чего часть проверок там
+не проявляется. Нужен Playwright и браузеры из корневого `node_modules`
+репозитория.
 
 ## Структура
 

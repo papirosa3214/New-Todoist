@@ -2,7 +2,7 @@
  * Простая серверная сессия: 32-байтный токен в HTTP-only куке,
  * строка в таблице `sessions`. argon2id для пароля.
  */
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import argon2 from "argon2";
 import { eq } from "drizzle-orm";
 import { ulid } from "ulid";
@@ -13,6 +13,38 @@ const COOKIE_NAME = "finance_session";
 const SESSION_TTL_DAYS = 30;
 
 export type SessionUser = { id: string; username: string };
+
+/**
+ * Разбор значения x-forwarded-proto в булев флаг Secure.
+ *
+ * Заголовок может прийти списком («https,http») — левее стоит схема
+ * исходного клиента, её и берём. Чего-то отличного от https не считаем
+ * безопасным: неизвестная схема безопаснее для входа, чем Secure-cookie,
+ * которую браузер на http молча выбросит.
+ */
+export function isSecureProto(proto: string | null | undefined): boolean {
+  if (!proto) return false;
+  return proto.split(",")[0]!.trim().toLowerCase() === "https";
+}
+
+/**
+ * Флаг Secure у cookie сессии — по фактической схеме ТЕКУЩЕГО запроса.
+ *
+ * Раньше здесь стояло `process.env.NODE_ENV === "production"`, и это ломало
+ * вход: `next start` даёт NODE_ENV=production и по http, а браузер
+ * Secure-cookie на http не хранит — после входа владелец возвращался на
+ * форму логина. NODE_ENV про сборку, а не про то, как владелец открыл
+ * приложение.
+ *
+ * Next.js проставляет x-forwarded-proto сам (base-server): если заголовок
+ * пришёл от прокси — берёт его, иначе определяет схему по TLS соединения.
+ * Поэтому один этот заголовок покрывает и прямой http/https, и https за
+ * обратным прокси.
+ */
+async function shouldUseSecureCookie(): Promise<boolean> {
+  const jar = await headers();
+  return isSecureProto(jar.get("x-forwarded-proto"));
+}
 
 export async function hashPassword(plain: string): Promise<string> {
   return argon2.hash(plain, { type: argon2.argon2id });
@@ -48,7 +80,7 @@ export async function login(username: string, password: string): Promise<Session
   jar.set(COOKIE_NAME, sid, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: await shouldUseSecureCookie(),
     path: "/",
     expires: new Date(expiresAt),
   });
