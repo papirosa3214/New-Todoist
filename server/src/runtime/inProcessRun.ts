@@ -3,6 +3,7 @@ import { agentMessagingTools } from "./agentMessaging.js";
 import { WORK_PLAN_INSTRUCTION } from "../lib/subtaskWorkPlan.js";
 import {integrationResponsibilityPrompt} from '../lib/integrationResponsibility.js';
 import { orchestratorTools } from "./orchestratorTools.js";
+import { ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT } from "./orchestratedPlan.js";
 import { resolveReviewTaskId } from "../lib/reviewTaskId.js";
 import { beginTaskLiveTurn } from "./taskLiveTurn.js";
 import { broadcastToUsers } from "../ws.js";
@@ -726,8 +727,19 @@ function artifactContractNote(subtaskId: string): string {
   ].join("\n");
 }
 
-function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): string {
+export function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): string {
   const subtask = db.prepare("SELECT title FROM subtasks WHERE id = ?").get(subtaskId) as { title?: string } | undefined;
+  // Режим «Оркестратор»: два его шага получают регламент координации вместо
+  // инструкции исполнителя («делай свой шаг сам»).
+  const orch = db.prepare(`SELECT p.id AS plan_id, s.plan_node_key AS slot FROM subtasks s
+      JOIN task_collaboration_plans p ON p.id = s.collaboration_plan_id
+     WHERE s.id = ? AND p.profile = 'orchestrated'`).get(subtaskId) as { plan_id: string; slot: string } | undefined;
+  if (orch && (orch.slot === ORCHESTRATE_SLOT || orch.slot === ORCHESTRATE_ASSEMBLE_SLOT)) {
+    const rules = effectiveRules(role).map(r => `- ${r}`).join("\n");
+    return orch.slot === ORCHESTRATE_SLOT
+      ? renderInstruction(role, "task.orchestrate", { roleTitle: roleTitle(role), taskId, subtaskId, planId: orch.plan_id, selfSlot: ORCHESTRATE_SLOT, assembleSlot: ORCHESTRATE_ASSEMBLE_SLOT, rules })
+      : renderInstruction(role, "task.orchestrate_assemble", { roleTitle: roleTitle(role), taskId, subtaskId, planId: orch.plan_id, rules });
+  }
   return renderInstruction(role, "task.plan", { roleTitle: roleTitle(role), taskId, subtaskId, subtaskTitle: (subtask?.title ?? "") + "\n" + (integrationStepContext(subtaskId) ?? integrationResponsibilityPrompt(taskId)), artifactContract: artifactContractNote(subtaskId), rules: effectiveRules(role).map(r => `- ${r}`).join("\n") });
 }
 

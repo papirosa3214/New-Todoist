@@ -1,3 +1,4 @@
+import { wakeAndDeliver } from "./orchestratorWake.js";
 import { artifactHasEvidence, artifactGateSatisfied } from "./planArtifactGate.js";
 export { artifactHasEvidence } from "./planArtifactGate.js";
 import { branchMembership } from "./branchPlan.js";
@@ -257,6 +258,8 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
   try {
     const run = await runRoleInProcess({ taskId: current.task_id, role: node.role_key, subtaskId: current.id, mode: node.role_key === "critic_verifier" ? "review" : "work", prompt: node.role_key === "critic_verifier" ? (await import("./inProcessRun.js")).reviewPromptFor(current.task_id) + "\n\n" + (await import("./planReviewLifecycle.js")).planReviewRouteContext(current.task_id) : undefined, freshSession: options.freshSession, model: current.model || undefined });
     logEvent({ taskId: current.task_id, actorId, kind: "plan_subtask_started", field: current.plan_node_key, toValue: roleTitle(node.role_key) });
+    // Режим «Оркестратор»: повторная попытка того же шага — повод взглянуть.
+    if ((subtask(current.id)?.admission_cycle ?? 0) > 1) wakeAndDeliver(current.id, actorId, "retry", null);
     return { ok: true, runId: run.runId };
   } catch (error) {
     db.prepare("UPDATE subtasks SET agent_state = NULL, agent_id = NULL, current_attempt_id = NULL WHERE id = ?").run(current.id);

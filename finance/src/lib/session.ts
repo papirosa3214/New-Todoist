@@ -94,3 +94,20 @@ export async function requireUser(): Promise<SessionUser> {
   if (!user) throw new Error("UNAUTHORIZED");
   return user;
 }
+/** Есть ли уже владелец: пустое состояние первого запуска. */
+export async function hasOwner(): Promise<boolean> {
+  const rows = await db.select({ id: users.id }).from(users).limit(1);
+  return rows.length > 0;
+}
+
+/** Создаёт единственного владельца. Возвращает false, если владелец уже есть. */
+export async function createOwner(username: string, password: string): Promise<boolean> {
+  if (await hasOwner()) return false;
+  await db.insert(users).values({
+    id: ulid(),
+    username,
+    passwordHash: await hashPassword(password),
+    createdAt: new Date().toISOString(),
+  });
+  return true;
+}

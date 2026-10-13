@@ -1,3 +1,4 @@
+import { wakeAndDeliver } from "../runtime/orchestratorWake.js";
 import { readWorkPlan, saveWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
 import { sandboxSubmissionError } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
@@ -1051,6 +1052,11 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         } catch (err) {
           console.warn(`[subtasks] сигнал по блоку ${subtask.id} не ушёл:`, err);
         }
+      }
+      // Режим «Оркестратор»: блок шага команды будит Оркестратора, а не
+      // только кладёт уведомление (orchestratorWake.ts).
+      if (state === "blocked" && state !== subtask.agent_state) {
+        wakeAndDeliver(subtask.id, req.userId, "blocked", (result ?? subtask.result ?? null) as string | null);
       }
 
       const fullTask = getFullTask(subtask.task_id);

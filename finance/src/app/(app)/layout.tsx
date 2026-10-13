@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { currentUser } from "@/lib/session";
-import { Sidebar } from "@/components/Sidebar";
+import { AppShell } from "@/components/AppShell";
+import { SuccessToastProvider } from "@/components/SuccessToast";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export default async function AppLayout({
   children,
@@ -10,9 +12,20 @@ export default async function AppLayout({
   const user = await currentUser();
   if (!user) redirect("/login");
   return (
-    <div className="min-h-screen flex bg-ink-50">
-      <Sidebar username={user.username} />
-      <main className="flex-1 min-w-0">{children}</main>
-    </div>
+    <AppShell username={user.username}>
+      <SuccessToastProvider>
+        <TooltipProvider delayDuration={200}>
+          <div className="flex min-h-full flex-col">
+            <div className="flex-1">{children}</div>
+            <footer className="border-t border-ink-200 bg-white px-6 py-3">
+              <p className="text-xs text-ink-500">
+                Расчёты и данные справочные, а не инвестиционная рекомендация. Решение о
+                вложениях принимаете вы сами.
+              </p>
+            </footer>
+          </div>
+        </TooltipProvider>
+      </SuccessToastProvider>
+    </AppShell>
   );
 }

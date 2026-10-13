@@ -30,6 +30,12 @@ export function integrationResponsibility(taskId:string) {
  // для 5 красных Intake/preparation). Auto mode со сторонним owner —
  // невалидным не считается: owner всё равно подменится на suggested.
  const assigned=candidates.find(c=>c.id===task.integration_owner_id)??null;
+ // Режим «Оркестратор» (владелец 13.10.2026): итог и вливание в main делает
+ // шаг сборки самого Оркестратора, отдельный автоинтегратор после него —
+ // дубль работы. Пока у карточки действующий план orchestrated, интеграция
+ // считается «не требуется», и сервер не добавляет шаг «Интеграция».
+ if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND profile='orchestrated' AND status IN ('draft','approved') LIMIT 1").get(scopeId))
+  return {scope_task_id:scopeId,mode:'not_required' as const,owner_id:null,owner_title:null,candidates,suggested_owner_id:null,valid:true};
  const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?assigned:(assigned??suggested);
  return {scope_task_id:scopeId,mode:task.integration_mode,owner_id:owner?.id??null,owner_title:owner?.title??null,candidates,suggested_owner_id:suggested?.id??null,valid:task.integration_mode==='not_required'||!!owner};
 }

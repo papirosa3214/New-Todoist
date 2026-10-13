@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { operations } from "@/db/schema";
+import { accounts, operations } from "@/db/schema";
 import { currentUser } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+/** Валюта в правку не принимается: она наследуется от счёта (раздел 5, правило 4). */
 const updateSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
   amount: z.number().refine((v) => v !== 0).optional(),
@@ -31,15 +32,45 @@ export async function PATCH(
   try {
     const body = await req.json();
     const parsed = updateSchema.parse(body);
-    const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    const current = await db
+      .select({ accountId: operations.accountId })
+      .from(operations)
+      .where(eq(operations.id, id))
+      .limit(1);
+    if (!current[0]) {
+      return NextResponse.json(
+        { error: { code: "NOT_FOUND", message: "Операция не найдена" } },
+        { status: 404 },
+      );
+    }
+    // Валюта пересчитывается при каждой правке — так записи, созданные
+    // старым кодом в валюте по умолчанию, чинятся из интерфейса без отдельного
+    // инструмента (FIN-03).
+    const targetAccountId = parsed.accountId ?? current[0].accountId;
+    const target = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, targetAccountId))
+      .limit(1);
+    if (!target[0]) {
+      return NextResponse.json(
+        { error: { code: "NOT_FOUND", message: "Счёт не найден" } },
+        { status: 404 },
+      );
+    }
+
+    const patch: Record<string, unknown> = {
+      accountId: targetAccountId,
+      currency: target[0].currency,
+      updatedAt: new Date().toISOString(),
+    };
     if (parsed.date) patch.date = parsed.date.slice(0, 10);
     if (parsed.amount !== undefined) patch.amount = parsed.amount;
     if (parsed.description) patch.description = parsed.description;
-    if (parsed.accountId) patch.accountId = parsed.accountId;
     if (parsed.categoryId !== undefined)
       patch.categoryId = parsed.categoryId || null;
     await db.update(operations).set(patch).where(eq(operations.id, id));
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, currency: target[0].currency });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return NextResponse.json(

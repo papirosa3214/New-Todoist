@@ -31,7 +31,8 @@ import {
 } from "../runtime/planMutations.js";
 import { suggestFanoutFromSubtasks } from "../runtime/subtaskRoleFanout.js";
 
-const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual", "product_feature", "bug_regression"]);
+import { ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT } from "../runtime/orchestratedPlan.js";
+const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual", "product_feature", "bug_regression", "orchestrated"]);
 const CONDITIONS = new Set(["submitted", "accepted", "artifact_ready"]);
 const SLOT_KEY = /^[a-z][a-z0-9_]{1,63}$/;
 
@@ -701,6 +702,10 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
     research: { nodes: [node("research", "researcher", "Факты, источники и ограничения"), node("analysis", "analyst", "Требования, выводы и критерии")], edges: [edge("research", "analysis")], rationale: "Сначала собрать факты, затем превратить их в проверяемые выводы." },
     delivery: { nodes: [node("architecture", "architect", "Техническое решение и риски"), node("executor", "builder", "Реализация"), node("qa", "qa", "Проверенные сценарии и дефекты"), node("critic", "critic_verifier", "Итоговый вердикт")], edges: [edge("architecture", "executor"), edge("executor", "qa"), edge("qa", "critic")], rationale: "Нужны техническое решение, реализация и независимая проверка." },
     full_cycle: { nodes: [node("research", "researcher", "Факты, источники и ограничения"), node("analysis", "analyst", "Требования и критерии"), node("architecture", "architect", "Техническое решение"), node("design", "designer", "Пользовательский сценарий и UX-решение"), node("executor", "builder", "Реализация"), node("qa", "qa", "Проверка сценариев"), node("critic", "critic_verifier", "Итоговый вердикт")], edges: [edge("research", "analysis"), edge("analysis", "architecture"), edge("analysis", "design"), edge("architecture", "executor"), edge("design", "executor"), edge("executor", "qa"), edge("qa", "critic")], rationale: "Высокая неопределённость: исследование, анализ, техническая и UX-ветки, реализация и две проверки." },
+    // Режим «Оркестратор» (владелец 13.10.2026): сам код не пишет — первым
+    // шагом раскладывает работу по ролям в этом же плане, вторым принимает
+    // их результаты, вливает в main и собирает итог. Инструкции — task.orchestrate.
+    orchestrated: { nodes: [node(ORCHESTRATE_SLOT, "code_orchestrator", "Разложить работу по ролям и запустить команду"), node(ORCHESTRATE_ASSEMBLE_SLOT, "code_orchestrator", "Принять результаты команды, влить в main и собрать итог")], edges: [edge(ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT)], rationale: "Режим оркестратора: декомпозиция, назначение ролей, приёмка и сборка итога — за Оркестратором." },
   };
   return { profile, ...templates[profile] };
 }
@@ -1066,11 +1071,14 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       `/api/tasks/:id/collaboration-plans/:planId/proposals/:opId/${decision}`,
       { preHandler: authOrApiToken },
       async (req: any, reply) => {
-        if (!isOwner(req.userId)) return reply.code(403).send({ error: "по предложениям ролей решает владелец" });
+        const owner = isOwner(req.userId);
+        if (!owner && !isOrchestrator(req.userId)) return reply.code(403).send({ error: "по предложениям ролей решает владелец" });
         const task = getTaskForRead(req.params.id, req.userId);
         if (!task) return reply.code(404).send({ error: "Not found" });
         const plan = planForTask(task.id, req.params.planId);
         if (!plan) return reply.code(404).send({ error: "plan not found" });
+        // Режим «Оркестратор»: в таком плане по предложениям ролей решает и он.
+        if (!owner && plan.profile !== "orchestrated") return reply.code(403).send({ error: "по предложениям ролей решает владелец" });
         const owned = db.prepare("SELECT 1 FROM task_collaboration_plan_ops WHERE id = ? AND plan_id = ?").get(req.params.opId, plan.id);
         if (!owned) return reply.code(404).send({ error: "предложение не найдено" });
         try {
