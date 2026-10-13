@@ -1,7 +1,6 @@
 import { NonTaskInputError } from "./taskPreparation.js";
 import { parseIntakeMetadata } from "./taskIntakeMetadata.js";
 import { callUnifiedAi, parseJsonObject } from "./aiClient.js";
-import { NonTaskInputError } from "./taskPreparation.js";
 
 export type StructuredDraft = { title:string; description:string; subtasks:string[]; dueDate:string|null; priority:number|null; question:string|null };
 const SYSTEM = `Ты редактор поручений владельца. Пользователь наговаривает мысли в названии карточки. Преврати их в понятную постановку для последующей подготовки команды, а не в сам план команды.
