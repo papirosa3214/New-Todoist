@@ -28,11 +28,12 @@ import fastifyRateLimit from "@fastify/rate-limit";
 import { ensureJwtSecret } from "./env.js";
 import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
-import { resolveUserId, resolveUserIdFromToken, authOrApiToken } from "./auth.js";
+import { resolveUserId, resolveUserIdFromToken, authOrApiToken, isRevokedDeviceToken } from "./auth.js";
 import { addClient, removeClient, resetAllOffline } from "./ws.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerPairingRoutes } from "./routes/pairing.js";
 import { registerDeviceRoutes } from "./routes/devices.js";
+import { startDeviceEventCleanup } from "./lib/deviceEvents.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
 import { registerManualRunRoutes } from "./routes/manual-run.js";
@@ -412,6 +413,14 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAuthRoutes(app);
   registerPairingRoutes(app);
   registerDeviceRoutes(app);
+  // Журнал привязок живёт 30 дней (§11.1): чистим при старте и раз в
+  // 6 часов, иначе таблица растёт бесконечно, а на ней же считаются
+  // лимиты попыток обмена. Таймер unref'ится и снимается при закрытии
+  // приложения — тесты не должны висеть из-за него.
+  {
+    const stopDeviceEventCleanup = startDeviceEventCleanup();
+    app.addHook("onClose", async () => stopDeviceEventCleanup());
+  }
   registerTaskRoutes(app);
   registerAgentStateRoutes(app);
   await registerManualRunRoutes(app);
@@ -624,7 +633,18 @@ export async function buildApp(): Promise<FastifyInstance> {
       // будет переподключаться до бесконечности.
       const resolved = resolveUserId(app, token);
       if (!resolved) {
-        socket.send(JSON.stringify({ type: "error", error: "unauthorized" }));
+        // Отозванное устройство — СВОИМ текстом, как и на HTTP (§11.2).
+        // resolveUserId отбрасывает отозванные (revoked_at IS NULL), и без
+        // этой проверки телефон после отзыва получал общий unauthorized:
+        // приложение решило бы, что токен сломан, и ушло бы в бесконечное
+        // переподключение вместо возврата на экран привязки (§10 п. 7).
+        const отозван = !!token && isRevokedDeviceToken(token);
+        socket.send(
+          JSON.stringify({
+            type: "error",
+            error: отозван ? "device_revoked" : "unauthorized",
+          }),
+        );
         socket.close();
         return;
       }

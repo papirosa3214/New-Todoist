@@ -21,11 +21,17 @@ export function registerDeviceRoutes(app: FastifyInstance) {
   // Список устройств владельца. Секретов в нём нет и быть не должно: в
   // базе лежит только sha256 токена, наружу отдаём префикс (tfd_ab12…),
   // по которому человек узнаёт свой телефон в списке.
+  //
+  // Состав полей — ровно перечень «без секретов» из документа решения §8:
+  // id, имя, модель, ОС, префикс токена, когда создано, когда видели, когда
+  // отозвано. `install_id` в этот перечень не входит и наружу не отдаётся:
+  // это устойчивый ключ привязки телефона, по нему можно отличить
+  // «тот же телефон» от «нового», а владельцу в списке он ничего не даёт.
   app.get("/api/devices", { preHandler: authOrApiToken }, async (req, reply) => {
     const userId = (req as any).userId as string;
     const devices = db
       .prepare(
-        `SELECT id, name, model, os, app_version, install_id, token_prefix,
+        `SELECT id, name, model, os, app_version, token_prefix,
                 created_at, last_seen_at, revoked_at, revoke_reason
            FROM devices
           WHERE user_id = ?

@@ -11,6 +11,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import db, { hashApiToken } from "../src/db.js";
+import {
+  pruneDeviceEvents,
+  startDeviceEventCleanup,
+  DEVICE_EVENTS_CLEANUP_INTERVAL_MS,
+  DEVICE_EVENTS_RETENTION_MS,
+} from "../src/lib/deviceEvents.js";
 
 describe("Привязка телефона по QR и токен устройства", () => {
   let app: FastifyInstance;
@@ -429,6 +435,163 @@ describe("Привязка телефона по QR и токен устройс
       ответы.filter((s) => s === 200).length,
       "код обменён больше одного раза",
     ).toBe(1);
+  });
+
+  // Сокет без ожидания рукопожатия: нужен там, где connected ПРИЙТИ НЕ
+  // ДОЛЖЕН — иначе открытьСокет упадёт с «сервер не прислал connected»
+  // и замаскирует то, что проверяем.
+  async function открытьСокетБезОжидания(токен: string) {
+    const пришли: string[] = [];
+    let кодЗакрытия: number | null = null;
+
+    const ws = await (app as any).injectWS("/ws?token=" + encodeURIComponent(токен), {}, {
+      onInit: (клиент: any) => {
+        клиент.on("message", (m: any) => пришли.push(String(m)));
+        клиент.on("close", (code: number) => {
+          кодЗакрытия = code;
+        });
+        клиент.on("error", (e: any) => пришли.push("ERR " + e.message));
+      },
+    });
+    // Ждём первого события: сервер обязан либо ответить, либо закрыться.
+    const первыйОтвет = withTimeout(
+      (async () => {
+        while (!пришли.length && кодЗакрытия === null) {
+          await new Promise((r) => setTimeout(r, 10));
+        }
+      })(),
+      "сервер не ответил и не закрыл сокет",
+    );
+    return { ws, пришли, первыйОтвет, кодЗакрытия: () => кодЗакрытия };
+  }
+
+  // ── Доработка по вердикту критика: отзыв виден и на сокете ──
+  // Главный сценарий: телефон был офлайн, его отозвали, он вернулся в сеть.
+  // Раньше сервер отвечал общим «unauthorized», приложение принимало это за
+  // «токен сломан» и переподключалось бесконечно вместо возврата на экран
+  // привязки (документ решения §10 п. 7, §11.2).
+  it("12. отозванный телефон на сокете получает device_revoked, а не unauthorized", async () => {
+    const свой = await отдельныйВладелец("ws-revoked");
+    const код = await app.inject({ method: "POST", url: "/api/pairing/code", headers: свой() });
+    expect(код.statusCode, код.body).toBe(200);
+
+    const обмен = await app.inject({
+      method: "POST",
+      url: "/api/pairing/exchange",
+      remoteAddress: "203.0.113.77",
+      payload: { code: код.json().code, install_id: "install-ws-revoked" },
+    });
+    expect(обмен.statusCode, обмен.body).toBe(200);
+    const токен = обмен.json().token as string;
+    const deviceId = обмен.json().device_id as string;
+
+    // Живой сокет ДО отзыва работает.
+    const живой = await открытьСокет(токен);
+    expect(живой.пришли.some((m) => m.includes('"connected"'))).toBe(true);
+    живой.ws.close();
+
+    const отзыв = await app.inject({
+      method: "DELETE",
+      url: `/api/devices/${deviceId}`,
+      headers: свой(),
+    });
+    expect(отзыв.statusCode, отзыв.body).toBe(200);
+
+    // Офлайн-телефон вернулся: сервер обязан назвать отзыв своим именем.
+    const после = await открытьСокетБезОжидания(токен);
+    await после.первыйОтвет;
+    const ответ = JSON.parse(после.пришли[0] || "{}");
+    expect(ответ.type).toBe("error");
+    expect(ответ.error, JSON.stringify(после.пришли)).toBe("device_revoked");
+    expect(после.пришли.join(" ")).not.toContain("connected");
+    после.ws.close();
+
+    // Неверный токен остаётся общим «unauthorized»: различать надо отзыв,
+    // а не угадывать, почему не вышло.
+    const чужой = await открытьСокетБезОжидания("tfd_" + "0".repeat(64));
+    await чужой.первыйОтвет;
+    expect(JSON.parse(чужой.пришли[0] || "{}").error).toBe("unauthorized");
+    чужой.ws.close();
+  });
+
+  // ── Доработка по вердикту критика: в списке нет install_id (§8) ──
+  it("13. список устройств отдаёт ровно поля §8, без install_id и токена", async () => {
+    const свой = await отдельныйВладелец("devices-list");
+    const код = await app.inject({ method: "POST", url: "/api/pairing/code", headers: свой() });
+    expect(код.statusCode, код.body).toBe(200);
+    const обмен = await app.inject({
+      method: "POST",
+      url: "/api/pairing/exchange",
+      remoteAddress: "203.0.113.78",
+      payload: {
+        code: код.json().code,
+        install_id: "install-secret-install-id",
+        name: "iPhone в списке",
+      },
+    });
+    expect(обмен.statusCode, обмен.body).toBe(200);
+
+    const список = await app.inject({ method: "GET", url: "/api/devices", headers: свой() });
+    expect(список.statusCode, список.body).toBe(200);
+    const устройство = список
+      .json()
+      .find((d: any) => d.id === обмен.json().device_id) as Record<string, unknown>;
+    expect(устройство, "устройства нет в своём списке").toBeTruthy();
+
+    // Перечень «без секретов» из §8 — целиком, и ничего сверх него.
+    expect(Object.keys(устройство).sort()).toEqual(
+      [
+        "app_version",
+        "created_at",
+        "id",
+        "last_seen_at",
+        "model",
+        "name",
+        "os",
+        "revoke_reason",
+        "revoked_at",
+        "token_prefix",
+      ].sort(),
+    );
+    // Устойчивый ключ привязки наружу не отдаётся.
+    expect(JSON.stringify(список.json())).not.toContain("install-secret-install-id");
+    expect(устройство.token_prefix).toBe((обмен.json().token as string).slice(0, 8));
+    expect(JSON.stringify(список.json())).not.toContain(обмен.json().token);
+  });
+
+  // ── Доработка по вердикту критика: журнал живёт 30 дней (§11.1) ──
+  it("14. журнал привязок чистится при старте, срок 30 дней", async () => {
+    const старая = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const свежая = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const вставить = db.prepare(
+      "INSERT INTO device_events(id, device_id, user_id, kind, created_at, data) VALUES (?,?,?,?,?,?)",
+    );
+    вставить.run("evt-old", null, null, "pairing_exchange_attempt", старая, "{}");
+    вставить.run("evt-fresh", null, null, "pairing_exchange_attempt", свежая, "{}");
+
+    // При старте: старше 30 дней — прочь, свежее остаётся.
+    const stop = startDeviceEventCleanup();
+    try {
+      const осталось = db
+        .prepare("SELECT id FROM device_events WHERE id IN ('evt-old','evt-fresh') ORDER BY id")
+        .all() as { id: string }[];
+      expect(осталось.map((r) => r.id)).toEqual(["evt-fresh"]);
+
+      // Повторная чистка не должна уносить свежие строки.
+      expect(pruneDeviceEvents()).toBe(0);
+      expect(
+        db.prepare("SELECT COUNT(*) AS n FROM device_events WHERE id = 'evt-fresh'").get() as {
+          n: number;
+        },
+      ).toEqual({ n: 1 });
+    } finally {
+      stop();
+      db.prepare("DELETE FROM device_events WHERE id IN ('evt-old','evt-fresh')").run();
+    }
+
+    // Расписание зафиксировано решением: раз в 6 часов (§11.1).
+    expect(DEVICE_EVENTS_CLEANUP_INTERVAL_MS).toBe(6 * 60 * 60 * 1000);
+    expect(DEVICE_EVENTS_RETENTION_MS).toBe(30 * 24 * 60 * 60 * 1000);
   });
 
   // ── §12.7: лимиты ──

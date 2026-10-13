@@ -316,9 +316,14 @@ export async function authOrApiToken(req: FastifyRequest, reply: FastifyReply) {
  *
  * Отдельный запрос по devices с точным попаданием: различать «токена нет»,
  * «токен чужой» и «устройство отозвали» можно только так. Вызывается
- * лишь на пути 401 — то есть когда вход уже не состоялся, поэтому лишний
- * SELECT на успешном пути не стоит ничего. */
-function isRevokedDeviceToken(token: string): boolean {
+ * лишь на пути отказа — когда вход уже не состоялся (HTTP 401 и обработчик
+ * `/ws`), поэтому лишний SELECT на успешном пути не стоит ничего.
+ *
+ * Экспортируется ради `/ws` (server/src/index.ts): там отказ тоже должен
+ * называть отзыв своим именем, иначе телефон после отзыва решит, что
+ * «сломался токен», и будет переподключаться до бесконечности (документ
+ * решения §8, §10 п. 7, §11.2). */
+export function isRevokedDeviceToken(token: string): boolean {
   if (devicesTableMissing) return false;
   try {
     const row = db
