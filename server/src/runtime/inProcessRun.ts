@@ -11,6 +11,8 @@ import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
 import { integrationStepContext } from "./integrationHandoff.js";
 import { searchNotes } from "../lib/noteSearch.js";
 import { secretaryMailTools } from "./secretaryMailTools.js";
+import { openMidPlanCritic } from "./planSubtaskAdmission.js";
+import { ensureResultVersionForReview } from "../resultVersions.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { connectBuilderXcode } from "./builderXcode.js";
@@ -450,7 +452,16 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           { task_id: string; agent_id: string | null } | undefined;
         const reviewTaskId = taskId ? resolveReviewTaskId(p.id, taskId, roleUserId(role), step) : p.id;
         const versions = await asRole(role, "GET", `/api/tasks/${reviewTaskId}/versions`);
-        const current = (versions.versions ?? []).find((v: any) => v.is_current);
+        let current = (versions.versions ?? []).find((v: any) => v.is_current);
+        // Промежуточная проверка идёт до сдачи плана, версии результата ещё нет:
+        // заводим её из уже сданных шагов, иначе вердикт сдать нечем.
+        if (!current && subtaskId && openMidPlanCritic(reviewTaskId)?.subtaskId === subtaskId) {
+          const done = db.prepare("SELECT title, result FROM subtasks WHERE task_id = ? AND done = 1 AND result IS NOT NULL ORDER BY position").all(reviewTaskId) as Array<{ title: string; result: string }>;
+          if (done.length) {
+            ensureResultVersionForReview(reviewTaskId, roleUserId(role), done.map(n => `${n.title}: ${n.result}`).join("\n"));
+            current = ((await asRole(role, "GET", `/api/tasks/${reviewTaskId}/versions`)).versions ?? []).find((v: any) => v.is_current);
+          }
+        }
         if (!current) throw new ToolError("у задачи нет актуальной версии результата — проверять нечего");
         const findings = (p.findings ?? "").trim();
         const body: Json = {

@@ -3,7 +3,7 @@ import {enqueueIntegrationHandoff, ensureIntegrationPlanStep} from "../runtime/i
 import { sandboxSubmissionError, submissionReceipt } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
 import { completePlanFinalReview } from "../runtime/planReviewLifecycle.js";
-import { closeOpenCriticPlanNode, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
+import { closeOpenCriticPlanNode, openMidPlanCritic, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import crypto from "crypto";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -149,6 +149,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
       catch (error) { return reply.code(400).send({error:error instanceof Error ? error.message : String(error)}); }
     }
     let planReturn:ReturnType<typeof completePlanFinalReview> = null;
+    const midCritic = reviewer && hasPlan ? openMidPlanCritic(taskId) : null;
     const reviewId = crypto.randomUUID();
     let handoff:ReturnType<typeof enqueueIntegrationHandoff> = null;
     try {
@@ -161,9 +162,10 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     ).run(reviewId, taskId, version.id, version.task_revision, req.userId,
       version.artifact_hash, criteriaVersion, verdict, findings);
     logEvent({ taskId, actorId: req.userId, kind: "review_recorded", field: "result_version", toValue: `${version.version_no}:${verdict}` });
-        if (reviewer) planReturn = completePlanFinalReview(taskId,req.userId,verdict,findings ?? "",body.rework_steps);
+        // Промежуточная проверка закрывает свой шаг ниже; итоговую проверку и передачу на интеграцию она не запускает.
+        if (reviewer && !midCritic) planReturn = completePlanFinalReview(taskId,req.userId,verdict,findings ?? "",body.rework_steps);
         // План есть — интеграция встаёт в него шагом; без плана — прежняя передача через чат.
-        if (verdict === "approved" && !(planReturn && ensureIntegrationPlanStep(reviewId))) handoff = enqueueIntegrationHandoff(reviewId);
+        if (verdict === "approved" && !midCritic && !(planReturn && ensureIntegrationPlanStep(reviewId))) handoff = enqueueIntegrationHandoff(reviewId);
         if (reportMarkdown) {
           const step = reportStep ?? db.prepare("SELECT s.id FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key WHERE s.task_id=? AND n.role_key='critic_verifier' ORDER BY s.position DESC LIMIT 1").get(taskId) as {id:string}|undefined;
           if (!step) throw new Error("Этап проверяющего не найден");
@@ -189,7 +191,9 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     // `final-review` есть только у финального проверяющего. Закрываем
     // такой узел сами и при `changes_requested` открываем доработки.
     if (!managedPlan) {
-      closeOpenCriticPlanNode(taskId, verdict as "approved" | "changes_requested" | "blocked", findings ?? "", Array.isArray(body.rework_steps) ? body.rework_steps : null);
+      const closed = closeOpenCriticPlanNode(taskId, verdict as "approved" | "changes_requested" | "blocked", findings ?? "", Array.isArray(body.rework_steps) ? body.rework_steps : null);
+      // После промежуточной проверки план идёт дальше: открываем следующие шаги.
+      if (closed && midCritic) await unlockReadyPlanSubtasks(midCritic.planId, taskId, req.userId);
     }
     // Итог карточки — заметкой в документацию проекта (владелец 01.10.2026).
     try {

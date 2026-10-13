@@ -774,6 +774,25 @@ export async function unlockDependencyPlans():Promise<void> {
  * пустыми; тогда `completePlanFinalReviewAtomic` подберёт дефолт).
  * Возвращает `true`, если узел был закрыт этим вызовом.
  */
+/**
+ * Промежуточная проверка: открытый узел проверяющего, после которого в плане
+ * ещё есть шаги. Итоговая проверка сюда не относится — у неё свой маркер.
+ * Возвращает id плана и шага либо null.
+ */
+export function openMidPlanCritic(taskId: string): { planId: string; subtaskId: string } | null {
+  const row = db.prepare(
+    `SELECT s.id AS subtaskId, s.collaboration_plan_id AS planId
+       FROM subtasks s
+       JOIN task_collaboration_plans p ON p.id = s.collaboration_plan_id AND p.status = 'approved'
+       JOIN task_collaboration_plan_nodes n ON n.plan_id = s.collaboration_plan_id AND n.slot_key = s.plan_node_key
+      WHERE s.task_id = ? AND s.done = 0 AND n.role_key = 'critic_verifier'
+        AND (n.instructions IS NULL OR n.instructions NOT LIKE ?)
+        AND EXISTS (SELECT 1 FROM task_collaboration_plan_edges e WHERE e.plan_id = n.plan_id AND e.from_slot_key = n.slot_key)
+      ORDER BY s.position DESC LIMIT 1`,
+  ).get(taskId, "%taskflow:final-review%") as { planId: string; subtaskId: string } | undefined;
+  return row ?? null;
+}
+
 export function closeOpenCriticPlanNode(
   taskId: string,
   verdict: "approved" | "changes_requested" | "blocked",
