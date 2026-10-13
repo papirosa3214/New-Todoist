@@ -4455,6 +4455,15 @@ const migrations: Migration[] = [
       `);
     },
   },
+  { id: "139_mail_trusted_senders", description: "Белый список отправителей почты: их письма Секретарь читает напрямую, без пересказа", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS mail_trusted_senders (
+        address TEXT PRIMARY KEY,
+        added_by TEXT REFERENCES users(id),
+        added_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+  } },
 ];
 /**
  * Опции прогона миграций.

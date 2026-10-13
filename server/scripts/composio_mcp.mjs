@@ -112,12 +112,12 @@ export async function manageAccounts(composio, userId, toolkit, action, input) {
     if (action === "mail-list") {
       const data = await run("GMAIL_FETCH_EMAILS", { query: clip(input.query, 300) || "in:inbox", max_results: Math.max(1, Math.min(20, Number(input.limit) || 10)), include_payload: true, verbose: false });
       if (!data) return { error: "mail_failed" };
-      return { account: used, messages: (data.messages ?? []).map(m => ({ ...brief(m), preview: clip(m.preview?.body ?? m.messageText, 300) })) };
+      return { account: used, own, messages: (data.messages ?? []).map(m => ({ ...brief(m), preview: clip(m.preview?.body ?? m.messageText, 300) })) };
     }
     if (action === "mail-read") {
       const data = await run("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", { message_id: String(input.message_id ?? ""), format: "full" });
       if (!data) return { error: "mail_failed" };
-      return { account: used, message: { ...brief(data), text: String(data.messageText ?? data.preview?.body ?? "").slice(0, 20_000) } };
+      return { account: used, own, message: { ...brief(data), text: String(data.messageText ?? data.preview?.body ?? "").slice(0, 20_000) } };
     }
     if (action === "mail-draft") {
       const data = await run("GMAIL_CREATE_EMAIL_DRAFT", { recipient_email: clip(input.to, 320), subject: clip(input.subject, 300), body: String(input.body ?? "").slice(0, 50_000),

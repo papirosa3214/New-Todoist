@@ -5,6 +5,7 @@ import { ROLE_NAMES } from "../roleRouting.js";
 import { composioCredentialConfigured, roleComposioPolicy, saveComposioPolicy } from "../runtime/composioPolicy.js";
 import { inspectComposio } from "../runtime/composioRuntime.js";
 import { composioAccountsCall } from "../runtime/composioAccounts.js";
+import db from "../db.js";
 
 export function registerComposioRoutes(app: FastifyInstance) {
   const authorize = async (req: any, reply: any) => {
@@ -65,5 +66,23 @@ export function registerComposioRoutes(app: FastifyInstance) {
       if (result?.error === "not_found") return reply.code(404).send({ error: "Аккаунт не найден" });
       return { ok: true };
     } catch (error) { return reply.code(502).send({ error: (error as Error).message }); }
+  });
+  // Белый список отправителей почты: их письма Секретарь читает напрямую.
+  const ownerOnly = async (req: any, reply: any) => {
+    await authOrApiToken(req, reply);
+    if (reply.sent) return;
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "Белый список доступен владельцу" });
+  };
+  const trusted = () => ({ items: db.prepare("SELECT address, added_at FROM mail_trusted_senders ORDER BY added_at").all() });
+  app.get("/api/integrations/mail/trusted", { preHandler: ownerOnly }, async () => trusted());
+  app.post("/api/integrations/mail/trusted", { preHandler: ownerOnly }, async (req: any, reply) => {
+    const address = String(req.body?.address ?? "").trim().toLowerCase();
+    if (!/^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/.test(address) || address.length > 320) return reply.code(422).send({ error: "Укажите адрес почты" });
+    db.prepare("INSERT OR IGNORE INTO mail_trusted_senders(address, added_by) VALUES (?, ?)").run(address, req.userId);
+    return trusted();
+  });
+  app.delete("/api/integrations/mail/trusted/:address", { preHandler: ownerOnly }, async (req: any) => {
+    db.prepare("DELETE FROM mail_trusted_senders WHERE address = ?").run(String(req.params.address).trim().toLowerCase());
+    return trusted();
   });
 }
