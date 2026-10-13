@@ -6,9 +6,40 @@ import db from "./db.js";
 import { installRealtimeInvalidation } from "./lib/realtimeInvalidation.js";
 import { queueLiveActivityPush } from "./apns.js";
 
-type Socket = { readyState: number; send: (data: string) => void };
+type Socket = { readyState: number; send: (data: string) => void; close?: (code?: number, reason?: string) => void };
 
 const clients = new Map<string, Set<Socket>>();
+
+// Сокеты, открытые токеном УСТРОЙСТВА, отдельно от сокетов пользователя
+// (карточка b5a16110, отзыв устройства §8).
+//
+// Хранятся оба среза: в clients — чтобы слать события по userId (как раньше),
+// здесь — чтобы по отзыву закрыть ИМЕННО сокеты этого телефона. Закрывать
+// все сокеты пользователя нельзя: у Максима одновременно открыт браузер на
+// маке и телефон, и отзыв телефона не должен вышибать браузер.
+//
+// Ключ — device_id, а не токен: токена в памяти процесса нет и быть не
+// должно (в базе лежит только его sha256).
+const deviceSockets = new Map<string, Set<Socket>>();
+
+/** Закрыть все живые сокеты отозванного устройства кодом 4401.
+ *
+ * 4401, а не обычное закрытие — это сигнал для приложения: значит
+ * «устройство отозвали», а не «сеть моргнула». Приложение по нему чистит
+ * токен из Keychain и возвращает экран привязки (документ решения §10 п.7),
+ * а не переподключается в бесконечном цикле. */
+export function closeDeviceSockets(deviceId: string) {
+  const set = deviceSockets.get(deviceId);
+  if (!set) return;
+  for (const socket of set) {
+    try {
+      socket.close?.(4401, "device_revoked");
+    } catch {
+      // Сокет мог умереть между сборомset и закрытием — тогда делать нечего.
+    }
+  }
+  deviceSockets.delete(deviceId);
+}
 
 // users.status показывался на экране агентов, но никто его никогда не
 // менял — все трое (Максим, Клод, Гермес) вечно висели «offline». Живой
@@ -30,7 +61,7 @@ export function resetAllOffline() {
 }
 
 let invalidationInstalled = false;
-export function addClient(userId: string, socket: Socket) {
+export function addClient(userId: string, socket: Socket, deviceId?: string | null) {
   if (!invalidationInstalled) {
     installRealtimeInvalidation(db, (taskID, topic) => {
       if (topic === "task:changed" && !taskID) return;
@@ -41,11 +72,23 @@ export function addClient(userId: string, socket: Socket) {
   }
   if (!clients.has(userId)) clients.set(userId, new Set());
   clients.get(userId)!.add(socket);
+  if (deviceId) {
+    if (!deviceSockets.has(deviceId)) deviceSockets.set(deviceId, new Set());
+    deviceSockets.get(deviceId)!.add(socket);
+  }
   setStatus(userId, "online");
 }
 
 export function removeClient(userId: string, socket: Socket) {
   const set = clients.get(userId);
+  // Убираем из среза устройств ТОЖЕ: иначе отозванное устройство держало бы
+  // в памяти сокеты, которых уже нет, и closeDeviceSockets() закрывала бы
+  // их по второму разу при каждом отзыве.
+  for (const [deviceId, socketsOfOne] of deviceSockets) {
+    if (socketsOfOne.delete(socket) && socketsOfOne.size === 0) {
+      deviceSockets.delete(deviceId);
+    }
+  }
   if (!set) return;
   set.delete(socket);
   if (set.size === 0) {
