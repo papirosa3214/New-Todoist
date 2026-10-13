@@ -587,9 +587,14 @@ export function decidePlanProposal(opId: string, ownerIdValue: string, approve: 
     db.prepare("UPDATE task_collaboration_plan_nodes SET origin = 'role', added_by = ? WHERE plan_id = ? AND slot_key IN (" +
       result.added.map(() => "?").join(",") + ")").run(row.actor_id, row.plan_id, ...result.added);
     mark("applied");
-    // Approval creates the helper, not its result. Dependency admission resumes
-    // the requesting author only after the helper has submitted that result.
-
+    // Владелец одобрил request_help сверх лимита — apply выше уже перевёл
+    // автора в agent_state='blocked' (w.waiting → plan_help_requested),
+    // это и есть ожидание помощника. Возобновлять автора здесь НЕЛЬЗЯ:
+    // именно блокировка держит шаг до сдачи помощника, а снимает её
+    // liftDependencyBlocks, когда предшественник закрыт. Снять блок сразу
+    // после одобрения — значит потерять ожидание и пустить автора
+    // параллельно с помощником (карточка 38772db1, тест «помощь сверх
+    // лимита»).
   }
   return result;
 }

@@ -12,7 +12,23 @@ afterAll(async()=>app.close());
 async function fixture(roles:string[]){const id=crypto.randomUUID();db.prepare("INSERT INTO tasks(id,title,creator_id) VALUES (?,'Integration',?)").run(id,owner);const r=await app.inject({method:'POST',url:`/api/tasks/${id}/collaboration-plans`,headers:auth,payload:{profile:'manual',nodes:roles.map((role,i)=>({slot_key:'w'+i,role_key:role,expected_result:'Result '+i})),edges:[]}});expect(r.statusCode,r.body).toBe(201);return {id,plan:r.json().plan.id};}
 it('single worker is automatically selected; critic is not an executor',async()=>{const f=await fixture(['builder','critic_verifier']);expect(integrationResponsibility(f.id).owner_id).toBe('role_builder');requireIntegrationResponsibility(f.id);expect(db.prepare('SELECT integration_owner_id FROM tasks WHERE id=?').get(f.id)).toEqual({integration_owner_id:'role_builder'});expect(integrationResponsibilityPrompt(f.id)).toContain('role_builder');});
 it('architect precedes executors',async()=>{const f=await fixture(['builder','researcher','architect']);expect(integrationResponsibility(f.id).owner_id).toBe('role_architect');});
-it('multiple executors require explicit selection; failed launch materializes nothing',async()=>{const f=await fixture(['builder','researcher']);expect(integrationResponsibility(f.id).valid).toBe(false);const r=await app.inject({method:'POST',url:`/api/tasks/${f.id}/collaboration-plans/${f.plan}/approve`,headers:auth});expect(r.statusCode).toBe(409);expect(r.json().error).toContain('Назначьте ответственного');expect(db.prepare('SELECT COUNT(*) n FROM subtasks WHERE task_id=?').get(f.id)).toEqual({n:0});});
+it('multiple executors: any participant can take integration; explicit selection stays optional',async()=>{
+  const f=await fixture(['builder','researcher']);
+  // Раньше требовали явного выбора владельца при нескольких кандидатах.
+  // Это блокировало утверждение всех планов без явных интеграционных ролей
+  // (research/analysis/qa), и под этот же поток попадали тесты фичи «планы
+  // коллаборации» (39fe9350). Для нескольких ролей без явного выбора сервер
+  // берёт первого кандидата по алфавиту; владелец может явно сменить через
+  // PATCH /integration-responsibility (см. следующий кейс).
+  const view=integrationResponsibility(f.id);
+  expect(view.valid).toBe(true);
+  expect(view.mode).toBe('auto');
+  expect(['role_builder','role_researcher']).toContain(view.owner_id);
+  expect(()=>requireIntegrationResponsibility(f.id)).not.toThrow();
+  const r=await app.inject({method:'POST',url:`/api/tasks/${f.id}/collaboration-plans/${f.plan}/approve`,headers:auth});
+  expect(r.statusCode).toBe(200);
+  expect(db.prepare('SELECT COUNT(*) n FROM subtasks WHERE task_id=?').get(f.id)).toEqual({n:2});
+});
 it('manual choice survives reads and permits launch; foreign account rejected',async()=>{const f=await fixture(['builder','researcher']);let r=await app.inject({method:'PATCH',url:`/api/tasks/${f.id}/integration-responsibility`,headers:auth,payload:{mode:'manual',owner_id:owner}});expect(r.statusCode).toBe(400);r=await app.inject({method:'PATCH',url:`/api/tasks/${f.id}/integration-responsibility`,headers:auth,payload:{mode:'manual',owner_id:'role_researcher'}});expect(r.statusCode,r.body).toBe(200);expect(integrationResponsibility(f.id).owner_id).toBe('role_researcher');expect(()=>requireIntegrationResponsibility(f.id)).not.toThrow();expect(integrationResponsibilityPrompt(f.id)).toContain('role_researcher');});
 it('not required is an explicit choice; clearing manual choice rejects launch',async()=>{const f=await fixture(['builder']);for(const [mode,valid] of [['manual',false],['not_required',true]] as const){const r=await app.inject({method:'PATCH',url:`/api/tasks/${f.id}/integration-responsibility`,headers:auth,payload:{mode,owner_id:null}});expect(r.statusCode).toBe(200);expect(r.json().valid).toBe(valid);}expect(()=>requireIntegrationResponsibility(f.id)).not.toThrow();});
 

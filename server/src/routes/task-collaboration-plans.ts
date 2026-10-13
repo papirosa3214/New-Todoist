@@ -446,9 +446,19 @@ export async function startSingleExecutorPlan(
 
   const started = await startPlanSubtaskRun(rootSubtask.id, actorId);
   if (!started.ok) return { ok: false, code: 409, error: started.error };
-  db.prepare(`UPDATE tasks SET assignee_id=?,dispatched_role=?,dispatched_at=datetime('now'),
-    dispatched_by=?,updated_at=datetime('now') WHERE id=? AND assignee_id IS NULL`)
-    .run(roleUserId(role),role,actorId,taskId);
+  // MAK-68: раньше assignee_id и dispatched_role выставлял dispatchTaskToPi,
+  // который при переходе на план из одного шага вырезан. Без них карточка
+  // остаётся «ничьей»: hydrateTask не отдаёт роль (tasks.ts: role =
+  // dispatched_role || owner_selected_role), а экран «чем роль занята»
+  // (roles.ts: currentWorkOf) читает именно dispatched_role. Поэтому запуск
+  // узла фиксирует исполнителя здесь — ровно то, что обещает комментарий в
+  // dispatch.ts «сам выставит assignee_id при старте узла».
+  db.prepare(
+    `UPDATE tasks
+        SET assignee_id = ?, dispatched_role = ?, dispatched_at = datetime('now'),
+            dispatched_by = ?, updated_at = datetime('now')
+      WHERE id = ? AND assignee_id IS NULL`,
+  ).run(roleUserId(role), role, actorId, taskId);
   logEvent({ taskId, actorId, kind: "single_executor_plan_started", field: created.id, toValue: role });
   return { ok: true, planId: created.id, subtaskId: rootSubtask.id, runId: started.runId };
 }

@@ -20,8 +20,40 @@ export function persistPreparedPlan(taskId:string,actorId:string,raw:TaskPrepara
   const nodes=preparation.workstreams.map((w,i)=>({slot_key:w.key,role_key:w.role!,required:true,expected_result:w.result,output_artifact:null,source_subtask_id:subtasks[i].id}));
   const edges=preparation.workstreams.flatMap(w=>w.depends_on.map(dep=>({from_slot_key:dep,to_slot_key:w.key,start_condition:"submitted",artifact_key:null})));
   const plan=createDraftPlan(taskId,actorId,"manual",preparation.reason,null,{nodes,edges});
-  // These rows were generated from this very preparation and must match its
-  // titles above. Approving the prepared plan chooses its described work.
-  if (!preparation.question) db.prepare("UPDATE task_collaboration_plan_nodes SET work_choice='planned' WHERE plan_id=? AND source_subtask_id IS NOT NULL").run(plan.id);
+  // Умная параллелизация (30.09.2026): «наша» подзадача становится слотом
+  // плана. По умолчанию используем planned_work (новое описание работы
+  // из постановки), а не original (старое название подзадачи) — иначе
+  // validateWorkChoices() блокирует approve 409 «Выберите исходную или
+  // плановую работу для каждой подзадачи» (5 красных в группе
+  // «Intake / preparation», 12.10.2026).
+  //
+  // Но если у подготовки остался вопрос (например, про совместимость
+  // независимых потоков) — default «planned» обходит 409 approve там,
+  // где владелец ещё не разрешил уточнение. Поэтому работает выбор
+  // «planned» ТОЛЬКО когда вопросов нет.
+  if(!preparation.question){
+    db.prepare("UPDATE task_collaboration_plan_nodes SET work_choice='planned' WHERE plan_id=? AND source_subtask_id IS NOT NULL").run(plan.id);
+  }
   for (const w of preparation.workstreams) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='task_preparation',instructions=? WHERE plan_id=? AND slot_key=?").run(JSON.stringify(w),plan.id,w.key);
+  // Авто-назначение ответственного за интеграцию в репозиторий:
+  // approve плана требует integration_owner_id (см. lib/integrationResponsibility).
+  // Создатель плана знает роли узлов — назначаем code_orchestrator/architect,
+  // иначе первого исполнителя (задача 12.10.2026, 5 красных «Intake / preparation»).
+  // Не назначаем, если у плана остался вопрос — владелец ещё не разрешил,
+  // а значит решение по интеграции преждевременно.
+  if(!preparation.question){
+    const roles=db.prepare(`SELECT DISTINCT role_key FROM task_collaboration_plan_nodes WHERE plan_id=?`).all(plan.id) as Array<{role_key:string}>;
+    const userIdForRole=(role:string):string|null=>{
+      if(role==='secretary')return 'u-secretary';
+      return 'role_'+role;
+    };
+    // Берём code_orchestrator/architect, иначе первого исполнителя —
+    // approve плана требует integration_owner_id. Явный выбор владельца
+    // перебивает через PATCH /integration-responsibility в любой момент
+    // до approve.
+    const pick=roles.find(r=>r.role_key==='code_orchestrator'||r.role_key==='architect')??(roles[0]??null);
+    if(pick){
+      db.prepare("UPDATE tasks SET integration_owner_id=? WHERE id=?").run(userIdForRole(pick.role_key),taskId);
+    }
+  }
 }

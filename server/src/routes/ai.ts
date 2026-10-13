@@ -1,5 +1,6 @@
 import { NonTaskInputError } from "../lib/taskPreparation.js";
 import { structureTaskDraft } from "../lib/taskStructure.js";
+import { NonTaskInputError } from "../lib/taskPreparation.js";
 import { callUnifiedAi, OllamaError, parseJsonObject } from "../lib/aiClient.js";
 export { callUnifiedAi } from "../lib/aiClient.js";
 export { buildDictationSystemPrompt, getUserPrompt } from "../lib/taskPreparation.js";
@@ -730,7 +731,11 @@ export function registerAiRoutes(app: FastifyInstance) {
       try {
         return await structureTaskDraft(text,{provider,localModel,aiModel});
       } catch (err: any) {
-        if(err instanceof NonTaskInputError)return reply.code(422).send({intent:err.intent,error:err.message});
+        // «Вопрос без задачи» — это валидный исход (intent=informational_question).
+        // Маршрут /api/task-preparation/prepare возвращает 200 с card=null, а
+        // этот адаптер — 422 с intent, чтобы UI мог отличить от системной
+        // ошибки и не считать ввод некорректным.
+        if(err instanceof NonTaskInputError) return reply.code(422).send({intent:err.intent,error:err.message});
         return reply
           .code(502)
           .send({ error: err?.message || "Не удалось структурировать задачу" });

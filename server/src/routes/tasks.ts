@@ -848,7 +848,13 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // type='ai') — живая роль, и ему разрешено класть задачу в любой
       // проект и назначать исполнителя (b6b57092). Запрет стоит для
       // рядовых исполнителей: type='ai' И role НЕ orchestrator/owner.
-      // Creating one's own card is not assigning a colleague or launching a team.
+      //
+      // Назначение САМОГО СЕБЯ (assignee_id === req.userId) под запрет не
+      // попадает: агент заводит свою задачу на себя, и без этого правило
+      // «задача агента обязана лежать в проекте» невыполнимо — см.
+      // getProjectForFiling в access.ts и test/access.test.ts «агент
+      // кладёт свою задачу в проект владельца». Запрет остаётся на
+      // назначение ДРУГИХ исполнителей: это работа сервера, а не агента.
       if (assignee_id && assignee_id !== req.userId) {
         const actorRow = db.prepare("SELECT type, role FROM users WHERE id=?").get(req.userId) as { type?: string; role?: string } | undefined;
         if (actorRow?.type === "ai" && !isOrchestrator(req.userId) && actorRow.role !== "owner") {

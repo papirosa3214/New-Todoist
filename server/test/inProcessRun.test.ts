@@ -1,4 +1,3 @@
-import { roleReport } from "./helpers/roleReport.js";
 // Агент роли внутри сервера (владелец 23.09.2026: «как у Гермеса, без
 // ключей»). Модель подменена: «агент» по заданию вызывает инструменты
 // трекера — проверяем, что всё записывается от имени роли и без ключей.
@@ -494,6 +493,14 @@ describe("агент роли внутри сервера", () => {
   });
 
   it("T03: V1 получает в runtime только declared collaboration_context A1, без чужого slot-а и чата", async () => {
+    // Подменённый агент заканчивает ход мгновенно, без прогресса. Без этого
+    // выключателя сервер закрыл бы узел анализа как «брошенный» (MAK-97,
+    // settleStalledPlanNode) и внешняя сдача артефакта ниже получила бы 409
+    // «артефакт можно сдать только из узла в работе» — а тест проверяет
+    // мост контекста, а не жизненный цикл брошенного узла.
+    const prevSettle = process.env.TASKFLOW_SETTLE_STALLED_NODES;
+    process.env.TASKFLOW_SETTLE_STALLED_NODES = "off";
+    try {
     const created = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: `Bearer ${ownerToken}` }, payload: { title: "T03 runtime context " + Date.now() } });
     const taskId = created.json().task.id as string;
     const plan = await app.inject({
@@ -514,27 +521,25 @@ describe("агент роли внутри сервера", () => {
     // у обоих нет incoming edges, поэтому canBecomeReady() пропускает их
     // сразу; проверяемый вызов buildInProcessTaskContext нас пока не
     // интересует, интересен только последующий для "delivery".
-    const responsibility = await app.inject({method:"PATCH",url:`/api/tasks/${taskId}/integration-responsibility`,headers:{authorization:`Bearer ${ownerToken}`},payload:{mode:"manual",owner_id:roleUserId("builder")}});
-    expect(responsibility.statusCode).toBe(200);
-    const approved = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: `Bearer ${ownerToken}` } });
-    expect(approved.statusCode).toBe(200);
+    await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/${planId}/approve`, headers: { authorization: `Bearer ${ownerToken}` } });
     await _settleInProcessRunsForTests();
 
     const subtasks = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: { authorization: `Bearer ${ownerToken}` } })).json() as Array<{ id: string; plan_node_key: string }>;
     const analysisSubtask = subtasks.find((s) => s.plan_node_key === "analysis")!;
     const analystAuth = `Bearer ${app.jwt.sign({ id: roleUserId("analyst") })}`;
 
-    // The stub producer has ended without submitting; place its declared slot
-    // in the submission state to exercise the artifact→consumer bridge.
-    db.prepare("UPDATE subtasks SET agent_state='in_progress' WHERE id=?").run(analysisSubtask.id);
+    // Передача следующему узлу открывается В МОМЕНТ СДАЧИ артефакта
+    // (routes/subtask-artifacts.ts, submit → unlockReadyPlanSubtasks),
+    // а не при отдельной приёмке. Поэтому интересующий нас запуск "delivery"
+    // и его buildInProcessTaskContext случатся на этом запросе — очищаем
+    // счётчик заранее, чтобы не поймать запуск корневого узла анализa.
     taskContext.build.mockClear();
-    const submitted=await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact`, headers: { authorization: analystAuth }, payload: { report_markdown: roleReport, summary: "Согласован scope", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
-    expect(submitted.statusCode).toBe(201);
+    const submitted = await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact`, headers: { authorization: analystAuth }, payload: { summary: "Согласован scope", report_markdown: "## Результат\nСогласован scope для этапа delivery.\n\n## Что сделано\nЗафиксированы границы работы.\n\n## Проверки\nПроверено на тестовой задаче.\n\n## Ограничения\nНет.\n\n## Материалы\ndocs/spec.json", payload: { scope: "в рамках" }, evidence: [{ path: "docs/spec.json" }] } });
+    expect(submitted.statusCode, submitted.body).toBe(201);
 
-    // Submission accepts the step artifact and starts its consumer.
-    // Repeated owner acceptance must not start the consumer again.
-    const accepted=await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact/accept`, headers: { authorization: `Bearer ${ownerToken}` } });
-    expect(accepted.statusCode).toBe(200);
+    // accept — запись факта приёмки; узел delivery уже стартовал на сдаче.
+    const accepted = await app.inject({ method: "POST", url: `/api/subtasks/${analysisSubtask.id}/artifact/accept`, headers: { authorization: `Bearer ${ownerToken}` } });
+    expect(accepted.statusCode, accepted.body).toBe(200);
     await _settleInProcessRunsForTests();
 
     expect(taskContext.build).toHaveBeenCalledTimes(1);
@@ -547,10 +552,14 @@ describe("агент роли внутри сервера", () => {
         { slot_key: "analysis", artifact_key: "feature_spec", summary: "Согласован scope", payload: { scope: "в рамках" } },
       ],
     });
-    const serialized = JSON.stringify(bridgeInput);
-    expect(JSON.stringify(bridgeInput.collaboration_context)).not.toContain("unrelated");
-    expect(serialized.toLowerCase()).not.toContain("token");
-    expect(serialized.toLowerCase()).not.toContain("password");
+    // collaboration_context — только объявленный предшественник A1: чужой
+    // слот «unrelated» в него не попадает. task_history — отдельный блок
+    // «что уже было по карточке», он перечисляет все прошлые шаги законно.
+    const serialized = JSON.stringify(bridgeInput.collaboration_context);
+    expect(serialized).not.toContain("unrelated");
+    const whole = JSON.stringify(bridgeInput);
+    expect(whole.toLowerCase()).not.toContain("token");
+    expect(whole.toLowerCase()).not.toContain("password");
 
     const used = db
       .prepare("SELECT field, to_value FROM task_events WHERE task_id = ? AND kind = 'collaboration_context_used'")
@@ -558,6 +567,10 @@ describe("агент роли внутри сервера", () => {
     expect(used).toBeTruthy();
     expect(used!.field).toBe("delivery");
     expect(JSON.parse(used!.to_value)).toMatchObject({ plan_id: planId, artifacts: ["analysis:feature_spec"] });
+    } finally {
+      if (prevSettle === undefined) delete process.env.TASKFLOW_SETTLE_STALLED_NODES;
+      else process.env.TASKFLOW_SETTLE_STALLED_NODES = prevSettle;
+    }
   });
 
   it("сбой запуска — карточка заблокирована с причиной", async () => {

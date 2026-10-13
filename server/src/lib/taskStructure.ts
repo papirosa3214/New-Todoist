@@ -1,6 +1,7 @@
 import { NonTaskInputError } from "./taskPreparation.js";
 import { parseIntakeMetadata } from "./taskIntakeMetadata.js";
 import { callUnifiedAi, parseJsonObject } from "./aiClient.js";
+import { NonTaskInputError } from "./taskPreparation.js";
 
 export type StructuredDraft = { title:string; description:string; subtasks:string[]; dueDate:string|null; priority:number|null; question:string|null };
 const SYSTEM = `Ты редактор поручений владельца. Пользователь наговаривает мысли в названии карточки. Преврати их в понятную постановку для последующей подготовки команды, а не в сам план команды.
@@ -16,6 +17,10 @@ function text(value:unknown,name:string,max=12000):string {
 }
 export function parseStructuredDraft(raw:string):StructuredDraft {
  const p=parseJsonObject(raw);
+ // AI иногда отвечает форматом TaskPreparation (informational_question и т.п.),
+ // когда по входному тексту работы нет — вопрос, размышление или наблюдение.
+ // Это не парсинг-ошибка, а валидный маршрут «вопрос остаётся без карточки»
+ // (5 красных в группе «Intake / preparation», 12.10.2026).
  if(p.preparation && ["informational_question","ambiguous_problem_report","no_action"].includes(p.preparation.intent)){
    const q=typeof p.preparation.question==="string"?p.preparation.question.trim()||null:null;
    throw new NonTaskInputError(p.preparation.intent,q);
@@ -39,7 +44,13 @@ export async function structureTaskDraft(rawText:string, options:{provider?:stri
  let formatFailure=false;
  for(let attempt=0;attempt<2;attempt++){
   const raw=await callUnifiedAi({...options,systemPrompt:SYSTEM,userPrompt:JSON.stringify({text:input,today,timezone:"Europe/Moscow"})+(formatFailure?'\nПредыдущий ответ не соответствовал JSON-схеме. Верни все поля из схемы, без пояснений и без preparation.':""),temperature:0.2,predictTokens:4096,numCtx:16384});
-  try{return parseStructuredDraft(raw);}catch(error){if(error instanceof NonTaskInputError)throw error;formatFailure=true;}
+  try{return parseStructuredDraft(raw);}catch(error){
+   // NonTaskInputError — это не «ответ не по схеме», а валидный маршрут
+   // «текст — это вопрос, не задача». Пробрасываем дальше, чтобы
+   // вызывающий route вернул 422, а не 502 «AI не смог оформить поручение».
+   if(error instanceof NonTaskInputError) throw error;
+   formatFailure=true;
+  }
  }
  throw new Error("AI не смог оформить поручение. Исходный текст сохранён — попробуйте ещё раз.");
 }

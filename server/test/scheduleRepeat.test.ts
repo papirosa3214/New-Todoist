@@ -13,7 +13,7 @@
 //      продуктовый код не меняется.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "child_process";
-import { existsSync } from "fs";
+import fs from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import type { FastifyInstance } from "fastify";
@@ -270,15 +270,22 @@ const probePath = path.join(
   "fixtures",
   "scheduler_probe.py",
 );
-// 05.10.2026 scripts/scheduler.py снят: планировщик живёт внутри сервера
-// (src/runtime/scheduler.ts, покрыт test/scheduler.test.ts). Без скрипта
-// блок пропускается, а не падает.
 const hasPython =
-  spawnSync("python3", ["--version"], { encoding: "utf8" }).status === 0 &&
-  existsSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "scheduler.py"));
+  spawnSync("python3", ["--version"], { encoding: "utf8" }).status === 0;
+// 18ff0065 убрал внешний воркер scheduler.py из рабочего дерева (расписание и
+// повтор с 01.10.2026 живут внутри сервера, см. runtime/scheduler.ts). Пока
+// файла нет, пробе нечего импортировать: блок пропускаем, а не падаем на
+// коллекции тестов. Если воркер вернётся, проба снова начнёт выполняться.
+const schedulerPath = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "scripts",
+  "scheduler.py",
+);
+const hasScheduler = fs.existsSync(schedulerPath);
 
-describe.skipIf(!hasPython)("scheduler.py: ветки расписания и повтора", () => {
-  const probe = hasPython
+describe.skipIf(!hasPython || !hasScheduler)("scheduler.py: ветки расписания и повтора", () => {
+  const probe = hasPython && hasScheduler
     ? spawnSync("python3", [probePath], { encoding: "utf8" })
     : { status: 0, stdout: "{}" };
   if (probe.status !== 0) {

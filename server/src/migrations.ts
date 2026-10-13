@@ -158,68 +158,6 @@ function removeUsersRoleCheck(): void {
 }
 
 /**
- * Добавить 'bug_regression' в закрытый CHECK task_collaboration_plans.profile
- * (T05). Прямая копия паттерна 077 (product_feature) — повторять текст
- * функции addProductFeatureProfile здесь нельзя: rebuild делает замену
- * regex-ом по DDL, и если две миграции побегут подряд в одной транзакции,
- * они могут столкнуться на этапе `DROP TABLE task_collaboration_plans`. Здесь
- * проверка идемпотентности своя, по `'bug_regression'` в DDL.
- *
- * Зарегистрирована как 080: под 095/095 уже занято (`079_plan_node_source_subtask`,
- * задача 30.09.2026), а WIP-дифф в `docs/2026-09-30-collaboration-plan-editable/
- * t05-bug-regression-migration-wip.diff.txt` описывал её под номером 079.
- * Сдвиг номера — административный: код миграции и её эффект не меняются,
- * schema_migrations получит запись `137_collaboration_plan_bug_regression_profile`.
- */
-function addBugRegressionProfile(): void {
-  const ddl =
-    (
-      db
-        .prepare(
-          "SELECT sql FROM sqlite_master WHERE type='table' AND name='task_collaboration_plans'",
-        )
-        .get() as { sql?: string } | undefined
-    )?.sql ?? "";
-  if (!ddl || ddl.includes("'bug_regression'")) {
-    return;
-  }
-
-  const newDdl = ddl
-    .replace(/CHECK\s*\(\s*profile\s+IN\s*\(([^)]*)\)\s*\)/i, (_match, list: string) => `CHECK (profile IN (${list},'bug_regression'))`)
-    .replace(/CREATE TABLE\s+"?task_collaboration_plans"?/i, 'CREATE TABLE "task_collaboration_plans_new"');
-  if (newDdl === ddl || !newDdl.includes('CREATE TABLE "task_collaboration_plans_new"') || !newDdl.includes("'bug_regression'")) {
-    throw new Error(
-      "137_collaboration_plan_bug_regression_profile: не удалось безопасно подготовить task_collaboration_plans с bug_regression",
-    );
-  }
-
-  db.pragma("foreign_keys = OFF");
-  try {
-    const rebuild = db.transaction(() => {
-      db.exec(newDdl);
-      db.exec('INSERT INTO "task_collaboration_plans_new" SELECT * FROM task_collaboration_plans');
-      db.exec("DROP TABLE task_collaboration_plans");
-      db.exec('ALTER TABLE "task_collaboration_plans_new" RENAME TO task_collaboration_plans');
-      // DROP TABLE забирает с собой отдельно объявленный (не inline UNIQUE)
-      // индекс idx_task_collaboration_plans_task — пересоздаём его на новой таблице.
-      db.exec("CREATE INDEX IF NOT EXISTS idx_task_collaboration_plans_task ON task_collaboration_plans(task_id, revision DESC)");
-    });
-    rebuild();
-
-    const broken = (
-      db.pragma("foreign_key_check") as Array<{ parent?: string }>
-    ).filter((row) => row.parent === "task_collaboration_plans");
-    if (broken.length > 0) {
-      throw new Error(
-        `137_collaboration_plan_bug_regression_profile: после пересборки task_collaboration_plans осталось ${broken.length} битых ссылок`,
-      );
-    }
-  } finally {
-    db.pragma("foreign_keys = ON");
-  }
-}
-
-/**
  * Добавить 'product_feature' в закрытый CHECK task_collaboration_plans.profile
  * (T03). SQLite не умеет ALTER CHECK — тот же rebuild-паттерн, что и в
  * removeUsersRoleCheck: читаем живой DDL, дописываем значение в список CHECK,
@@ -4271,7 +4209,15 @@ const migrations: Migration[] = [
 
   { id: "132_review_history", description: "Review facts survive permanent task deletion", up: installReviewHistory },
 
-  { id: "133_agent_rules_manifests", description: "Версионированный manifest правил и подтверждения (этап B)", noTransaction: true, up() {
+  { id: "133_agent_rules_manifests", description: "Версионированный manifest правил и подтверждения (этап B)",
+    // Пересобирает chat_messages (12-шаговая процедура SQLite). Ей нужен
+    // PRAGMA foreign_keys=OFF ВНЕ транзакции — иначе DROP TABLE
+    // chat_messages каскадно стирает chat_task_drafts черновики (та же
+    // причина, по которой 053 помечена noTransaction). Без этого флага
+    // 133 теряла intake_mode-строки 037 (5 красных «Intake / preparation»,
+    // 12.10.2026).
+    noTransaction: true,
+    up() {
     db.exec(`
       CREATE TABLE IF NOT EXISTS agent_rules_manifests (
         rule_id TEXT NOT NULL,
@@ -4362,107 +4308,6 @@ const migrations: Migration[] = [
         "CREATE INDEX IF NOT EXISTS idx_chat_messages_rule_ref ON chat_messages(rule_ref)",
       );
     }
-  } },
-
-  { id: "134_service_incident_tasks", description: "Служебные карточки починки: tasks.service_hidden и tasks.incident_key (поломка — уведомление, а не задача в проекте)", up: () => {
-    const cols = new Set(
-      (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name),
-    );
-    if (!cols.has("service_hidden")) {
-      db.exec("ALTER TABLE tasks ADD COLUMN service_hidden INTEGER NOT NULL DEFAULT 0");
-    }
-    if (!cols.has("incident_key")) {
-      db.exec("ALTER TABLE tasks ADD COLUMN incident_key TEXT");
-    }
-    db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_incident_key ON tasks(incident_key) WHERE incident_key IS NOT NULL");
-  } },
-  { id: "135_plan_node_phases", description: "Группа шага родителя ветки: до дочерних (подготовка) или после (итог)", up: () => {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS plan_node_phases (
-        plan_id TEXT NOT NULL REFERENCES task_collaboration_plans(id) ON DELETE CASCADE,
-        slot_key TEXT NOT NULL,
-        phase TEXT NOT NULL CHECK (phase IN ('before', 'after')),
-        PRIMARY KEY (plan_id, slot_key)
-      );
-    `);
-  } },
-  { id: "136_chat_work_launches", description: "Работа по разговору: запуск исполнителей из чата виджетом с кнопкой", up: () => {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS chat_work_launches (
-        id TEXT PRIMARY KEY,
-        chat_id TEXT NOT NULL,
-        task_id TEXT NOT NULL,
-        plan_id TEXT,
-        title TEXT NOT NULL,
-        steps_json TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'started', 'cancelled')),
-        role_key TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        started_at TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_chat_work_launches_chat ON chat_work_launches(chat_id, created_at);
-    `);
-  } },
-  {
-    // Перенос T05 (a5de2628, 30.09.2026) в main 13.10.2026: исходный номер 080
-    // занят, миграция идёт следующей по порядку. Идемпотентна по DDL.
-    id: "137_collaboration_plan_bug_regression_profile",
-    description: "Разрешить profile='bug_regression' (T05) в task_collaboration_plans.profile.",
-    noTransaction: true,
-    up: () => addBugRegressionProfile(),
-  },
-  {
-    // Перенос e21d678b (04.10.2026) в main 13.10.2026: исходный номер 088 занят.
-    id: "138_escalation_rules",
-    description:
-      "Умные напоминания о просроченных задачах (карточка 615095f4-…): таблица правил эскалации (по одной записи на владельца) + таблица фактов отправки для дедупа по (task, step) на сутки. Шаги лежат в steps_json — не отдельная таблица, потому что правил всегда один набор на пользователя, читается целиком, форма правит «своими» шагами без миграции БД. UNIQUE-индекс по выражению date(sent_at) (SQLite 3.31+) гасит повторный INSERT в ту же дату.",
-    up: () => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS escalation_rules (
-          user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-          enabled INTEGER NOT NULL DEFAULT 1,
-          quiet_from TEXT NOT NULL DEFAULT '22:00',
-          quiet_to TEXT NOT NULL DEFAULT '08:00',
-          weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
-          steps_json TEXT NOT NULL DEFAULT '[
-            {"after_hours": 1,  "priority_max": 1, "channels": ["inapp","apns"]},
-            {"after_hours": 4,  "priority_max": 2, "channels": ["inapp","apns"]},
-            {"after_hours": 24, "priority_max": 3, "channels": ["inapp"]},
-            {"after_hours": 72, "priority_max": 4, "channels": ["inapp"]}
-          ]',
-          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS escalation_events (
-          id TEXT PRIMARY KEY,
-          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          -- Формат: "p<priority>_h<after_hours>", напр. "p1_h1", "p2_h4".
-          -- Тот же префикс, что у notifications.type = "escalation_p<priority>_h<after_hours>".
-          step_key TEXT NOT NULL,
-          sent_at TEXT NOT NULL DEFAULT (datetime('now')),
-          notification_id TEXT REFERENCES notifications(id) ON DELETE SET NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_escalation_events_task
-          ON escalation_events(task_id);
-        CREATE INDEX IF NOT EXISTS idx_escalation_events_user_sent
-          ON escalation_events(user_id, sent_at);
-        -- Дедуп: один (task_id, step_key) на date(sent_at). date(sent_at)
-        -- — выражение, поддерживается SQLite 3.31+; ON CONFLICT в INSERT
-        -- OR IGNORE сошлётся на этот индекс и тихо проглотит дубль.
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_escalation_event_day
-          ON escalation_events(task_id, step_key, date(sent_at));
-      `);
-    },
-  },
-  { id: "139_mail_trusted_senders", description: "Белый список отправителей почты: их письма Секретарь читает напрямую, без пересказа", up: () => {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS mail_trusted_senders (
-        address TEXT PRIMARY KEY,
-        added_by TEXT REFERENCES users(id),
-        added_at TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `);
   } },
 ];
 /**

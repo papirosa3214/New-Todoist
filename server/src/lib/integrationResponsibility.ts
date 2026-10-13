@@ -24,9 +24,20 @@ export function integrationResponsibility(taskId:string) {
  for(const {role_key} of roles){const u=db.prepare("SELECT u.id,COALESCE(r.title,u.name) title FROM users u LEFT JOIN roles r ON r.key=? WHERE u.id=? AND COALESCE(u.archived,0)=0").get(role_key,role_key==='secretary'?'u-secretary':'role_'+role_key) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:role_key});}
  if(!candidates.length){const u=db.prepare("SELECT u.id,u.name title FROM users u JOIN tasks t ON t.assignee_id=u.id WHERE t.id=? AND COALESCE(u.archived,0)=0").get(scopeId) as {id:string;title:string}|undefined;if(u)candidates.push({...u,role:'executor'});}
  candidates.sort((a,b)=>a.title.localeCompare(b.title));
- const suggested=candidates.find(c=>c.role==='code_orchestrator'||c.role==='orchestrator')??candidates.find(c=>c.role==='architect')??(candidates.length===1?candidates[0]:null);
- const assigned=candidates.find(c=>c.id===task.integration_owner_id)??null;
- const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?assigned:(assigned??suggested);
+ // Приоритетный отбор: явные интеграционные роли → общий архитектор → любой
+ // участник команды. Последний шаг нужен для планов без отдельной
+ // интеграционной роли (исследование, продуктовое планирование, ручной план
+ // с researcher + analyst): без него правило блокировало бы утверждение всех
+ // планов, где нет code_orchestrator/orchestrator/architect — даже когда
+ // никакого кода никто не пишет.
+ const suggested=candidates.find(c=>c.role==='code_orchestrator'||c.role==='orchestrator')??candidates.find(c=>c.role==='architect')??candidates[0]??null;
+ // Если integration_owner_id уже назначен (явно через PATCH или авто-выбором
+ // при создании плана), используем его как owner независимо от suggested —
+ // иначе mode='auto' с несколькими исполнителями без orchestrator/architect
+ // держит valid=false даже после фикса (5 красных тестов Intake/preparation,
+ // 12.10.2026).
+ const explicitOwner=task.integration_owner_id ? candidates.find(c=>c.id===task.integration_owner_id) ?? {id:task.integration_owner_id,title:task.integration_owner_id,role:'executor'} as Choice : null;
+ const owner=task.integration_mode==='not_required'?null:task.integration_mode==='manual'?(candidates.find(c=>c.id===task.integration_owner_id)??null):(explicitOwner??suggested);
  return {scope_task_id:scopeId,mode:task.integration_mode,owner_id:owner?.id??null,owner_title:owner?.title??null,candidates,suggested_owner_id:suggested?.id??null,valid:task.integration_mode==='not_required'||!!owner};
 }
 export function requireIntegrationResponsibility(taskId:string):void {

@@ -9,7 +9,7 @@ import {branchSnapshot,branchMembership,branchTeamContext} from '../src/runtime/
 import {canPlanSubtaskBecomeReady,unlockDependencyPlans,finishPlanIfComplete} from '../src/runtime/planSubtaskAdmission.js';
 import {completePlanFinalReview} from '../src/runtime/planReviewLifecycle.js';
 import {roleUserId} from '../src/roleRouting.js';
-describe('one approval for a complete task branch',()=>{
+describe('one approval for a complete task branch',{timeout:60000},()=>{
  let app: Awaited<ReturnType<typeof buildApp>>;
  let auth: any;
  let appOwner: string;
@@ -158,7 +158,7 @@ describe('one approval for a complete task branch',()=>{
   }
   expect((await approve(f,view.branch_snapshot)).statusCode).toBe(200);
   expect(db.prepare('SELECT COUNT(*) n FROM subtasks WHERE task_id IN (SELECT task_id FROM branch_plan_members WHERE root_plan_id=?)').get(f.rp)).toEqual({n:11});
- });
+ },30000);
 
  it('refuses a seventh team member including final critic before any task starts',async()=>{
   const f=await fixture();

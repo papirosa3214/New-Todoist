@@ -367,8 +367,22 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       const claimCaller = db.prepare("SELECT type FROM users WHERE id=?").get(req.userId) as any;
       if (claimCaller?.type === "ai") {
         const assigned = db.prepare("SELECT assignee_id FROM tasks WHERE id=?").get(req.params.id) as any;
-        const plan = db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved') AND profile <> 'single_executor'").get(req.params.id);
-        if (plan || assigned?.assignee_id !== req.userId) return reply.code(403).send({error:"Агент не назначает себя и не захватывает командную карточку. Назначения выполняет сервер; работай в своём слоте."});
+        // Single-executor план — это «задача назначена ровно одному
+        // исполнителю» (auto on create или явный старт владельца). Он не
+        // делает карточку командной: у неё один узел, и владелец уже
+        // утвердил исполнителя. Защита от самозахвата здесь — это
+        // `assigned?.assignee_id !== req.userId`; командная же карточка
+        // (multi-role план) должна блокироваться отдельным условием, чтобы
+        // исполнитель с правильным assignee_id не упирался в self-claim gate
+        // раньше проверки зависимостей (карточка b41b0aca, D1/D2:
+        // unmetDeps должна срабатывать и писать audit-событие
+        // dependency_context_blocked).
+        const teamPlan = db
+          .prepare(
+            "SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved') AND profile != 'single_executor'",
+          )
+          .get(req.params.id);
+        if (teamPlan || assigned?.assignee_id !== req.userId) return reply.code(403).send({error:"Агент не назначает себя и не захватывает командную карточку. Назначения выполняет сервер; работай в своём слоте."});
       }
       let task =
         getTaskForWrite(req.params.id, req.userId) ??
@@ -1292,8 +1306,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // поднятым флагом оставалась ничьей, и роль не просыпалась (живая
       // проба C3 23.09.2026, карточка bad6799f). Раздаём заново — та же
       // роль берётся из owner_selected_role, запуск ставится в очередь
-      // в транзакции раздачи. Флаг не поднят — tryStartSingleExecutorPlan
-      // откажет сам.
+      // в транзакции раздачи.
       // MAK-68: 9 входов сведены к одной функции; повторная раздача после
       // `blocked→null` тоже идёт через `tryStartSingleExecutorPlan`.
       // Это явное действие владельца (снять блок и ответить роли), поэтому
@@ -1301,6 +1314,11 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       // При system: true выключенная «Система» глушила раздачу, и карточка
       // с поднятым флагом снова оставалась ничьей — тот же сбой C3, от
       // которого защищает эта ветка.
+      // Флаг проверяем явно: `tryStartSingleExecutorPlan` его не смотрит
+      // (он же обслуживает ручной /run, где флаг не нужен), поэтому без
+      // этого условия снятие блока при опущенном флаге запускало бы роль
+      // вопреки решению владельца — «флаг не поднят, никто не назначается»
+      // (test/ownerUnblockRedispatch.test.ts).
       if (
         from === "blocked" &&
         state === null &&
