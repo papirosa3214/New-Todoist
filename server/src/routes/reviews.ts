@@ -195,6 +195,13 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
       // После промежуточной проверки план идёт дальше: открываем следующие шаги.
       if (closed && midCritic) await unlockReadyPlanSubtasks(midCritic.planId, taskId, req.userId);
     }
+    // Поломка, одобренная Критиком, закрывается сама (владелец 14.10.2026):
+    // принимать починки владелец не хочет. Возврат на доработку идёт как обычно.
+    const incidentKey = (db.prepare("SELECT incident_key FROM tasks WHERE id = ?").get(taskId) as { incident_key: string | null } | undefined)?.incident_key;
+    if (incidentKey && verdict === "approved") {
+      const closed = db.prepare("UPDATE tasks SET status = 'completed', agent_state = NULL, completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND status = 'active'").run(taskId);
+      if (closed.changes) logEvent({ taskId, actorId: req.userId, kind: "status_changed", field: "status", fromValue: "active", toValue: "completed" });
+    }
     // Итог карточки — заметкой в документацию проекта (владелец 01.10.2026).
     try {
       writeOutcomeNote(taskId, req.userId);
@@ -253,7 +260,8 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
         }
       }
       // Владельцу — только если он не сам вынес вердикт (свой вердикт не шлём).
-      if (task.creator_id && task.creator_id !== req.userId) {
+      // По поломкам вердикт не шлём: они закрываются без владельца.
+      if (task.creator_id && task.creator_id !== req.userId && !incidentKey) {
         const notifId = crypto.randomUUID();
         db.prepare(
           "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?, ?, 'reviewed', ?, ?, ?)",

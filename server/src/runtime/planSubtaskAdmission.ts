@@ -710,7 +710,11 @@ export function finishPlanIfComplete(planId: string, taskId: string, actorId: st
     if(member && member.root_task_id!==taskId && (!reviewEnabled || ownerReviewDefault!==1)){
       db.prepare("UPDATE tasks SET status='completed',agent_state=NULL,completed_at=datetime('now') WHERE id=?").run(taskId);
     }
-    if (reviewEnabled && ownerReviewDefault === 1) {
+    // Поломки «Состояния системы» проверяет Критик всегда (владелец 14.10.2026):
+    // владелец такие карточки принимать не хочет, после одобрения они
+    // закрываются сами (routes/reviews.ts).
+    const incident = Boolean((db.prepare("SELECT incident_key FROM tasks WHERE id=?").get(taskId) as {incident_key:string|null}|undefined)?.incident_key);
+    if ((reviewEnabled && ownerReviewDefault === 1) || incident) {
       const reviewer = ensurePlanFinalReviewer(planId,taskId);
       queuePlanFinalReview(reviewer.id,actorId ?? task.assignee_id ?? task.creator_id ?? "");
     }
