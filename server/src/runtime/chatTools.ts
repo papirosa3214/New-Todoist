@@ -162,7 +162,7 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           attachmentId = saveUploadedFile({ body: built.body, name: fileName, mime: built.mime }, (f) =>
             db.prepare(`INSERT INTO attachments
                (id, task_id, comment_id, chat_message_id, kind, user_id, file_name, mime, size, stored_name)
-               VALUES (?, NULL, NULL, NULL, comment, ?, ?, ?, ?, ?)`)
+               VALUES (?, NULL, NULL, NULL, 'comment', ?, ?, ?, ?, ?)`)
               .run(f.id, roleUserId(role), f.fileName, f.mime, f.size, f.storedName));
         } catch (e) { throw new ToolError(e instanceof UploadRejected ? e.message : String(e)); }
         const resp = await asRole(role, "POST", `/api/chats/${ownerContext.chatId}/messages`, {
