@@ -124,17 +124,63 @@ export async function asControlActor(actorId: string, method: "GET" | "POST" | "
   return data;
 }
 
+// В датах «ГГГГ-ММ-ДД» месяц с единицы, а Date.UTC — с нуля: без «-1»
+// весь период уезжал на месяц вперёд.
+function eachDate(from: string, to: string, limit: number): string[] {
+  const [fy, fm, fd] = from.split("-").map(Number) as [number, number, number];
+  const [ty, tm, td] = to.split("-").map(Number) as [number, number, number];
+  const out: string[] = [];
+  for (
+    let d = Date.UTC(fy, fm - 1, fd);
+    d <= Date.UTC(ty, tm - 1, td) && out.length < limit;
+    d += 86_400_000
+  ) {
+    out.push(new Date(d).toISOString().slice(0, 10));
+  }
+  return out;
+}
+
 export function unwrap(d: any): any {
   return d && typeof d === "object" && "task" in d ? d.task : d;
 }
 
 export function short(t: any): Json {
+  // due_date и priority — необязательные: у задачи их может не быть, и тогда
+  // ключей в ответе просто нет (проверка 'in' на undefined безопасна). Без них
+  // роль не могла нарисовать timeline, календарь и просрочки по дням и
+  // выдумывала даты — см. shortTaskDates.
+  const dates = shortTaskDates(t);
   return {
     id: t?.id,
     название: t?.title,
     статус: t?.status,
     работа: t?.agent_state ?? "не взята",
+    ...(dates.due_date ? { срок: dates.due_date } : {}),
+    ...(dates.priority != null ? { приоритет: dates.priority } : {}),
   };
+}
+
+/** Срок и приоритет задачи в виде, пригодном для виджета. В БД due_date —
+ *  текст "YYYY-MM-DD", start_time — "ЧЧ:ММ" (см. routes/tasks.ts). Даты вне
+ *  календаря («2026-02-30») и пустые строки отбрасываются: секретарь получит
+ *  прочерк и нарисует пустую ячейку, а не выдуманную дату. */
+export function shortTaskDates(t: any): { due_date?: string; priority?: number } {
+  const out: { due_date?: string; priority?: number } = {};
+  const raw = typeof t?.due_date === "string" ? t.due_date.trim() : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split("-").map(Number);
+    const parsed = new Date(Date.UTC(y, m - 1, d));
+    if (
+      parsed.getUTCFullYear() === y &&
+      parsed.getUTCMonth() === m - 1 &&
+      parsed.getUTCDate() === d
+    ) {
+      out.due_date = raw;
+    }
+  }
+  const pr = Number(t?.priority);
+  if (Number.isInteger(pr) && pr >= 1 && pr <= 4) out.priority = pr;
+  return out;
 }
 
 const STEP_STATE_RU: Record<string, string> = {
@@ -400,6 +446,51 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (p.state === "free") tasks = tasks.filter((t) => !t.agent_state);
         else if (p.state) tasks = tasks.filter((t) => t.agent_state === p.state || ownSteps.some(s=>s.task_id===t.id && s.agent_state===p.state));
         return { всего: tasks.length, задачи: tasks.map(t=>({...short(t), рабочие_слоты:ownSteps.filter(s=>s.task_id===t.id).map(s=>({id:s.id,состояние:s.agent_state,название:s.title}))})) };
+      }),
+    T("taskflow_task_daily", "Счёт по дням за период — готовые ячейки для heatmap и calendar_grid. bucket: due (сроки) | created (создано) | completed (закрыто). Считает сервер, роль складывает числа только сама.",
+      Type.Object({ from: Type.String(), to: Type.String(), bucket: Type.Optional(Type.String()) }),
+      async (p) => {
+        const q = new URLSearchParams({ from: p.from, to: p.to });
+        if (p.bucket) q.set("bucket", p.bucket);
+        const d = await asRole(role, "GET", `/api/tasks/summary?${q.toString()}`);
+        // Даты уже пришли валидными (маршрут их проверяет) — отдаём как есть.
+        return { ...d, _подсказка: "каждый день периода приходит ячейкой, value — счётчик" };
+      }),
+    T("taskflow_calendar_events", "События календаря Google на дату (ГГГГ-ММ-ДД) или на период (from/to). Если календарь не подключён — придёт пустой список, это не ошибка.",
+      Type.Object({ date: Type.Optional(Type.String()), from: Type.Optional(Type.String()), to: Type.Optional(Type.String()) }),
+      async (p) => {
+        const dates: string[] = [];
+        if (p.from && p.to) {
+          dates.push(...eachDate(p.from, p.to, 31)); // месяц за запрос — иначе блок не влезет
+        } else if (p.date) {
+          dates.push(p.date);
+        } else {
+          return { ошибка: "нужен date (ГГГГ-ММ-ДД) либо from и to" };
+        }
+        const byDate: Record<string, any[]> = {};
+        for (const date of dates) {
+          const d = (await asRole(role, "GET", `/api/integrations/google/calendar-events?date=${date}`)) as any;
+          const events = (d?.events ?? []) as any[];
+          // Дату события приводим к «ГГГГ-ММ-ДД»: Google отдаёт для
+          // событий на весь день start.date, а для timed — дату со временем.
+          for (const ev of events) {
+            const day = String(ev.startDate ?? "").slice(0, 10);
+            (byDate[day] ??= []).push({
+              название: ev.title,
+              начало: ev.startDate,
+              конец: ev.endDate,
+              весь_день: !!ev.allDay,
+              где: ev.location,
+              календарь: ev.calendarTitle,
+            });
+          }
+        }
+        return {
+          дней: dates.length,
+          событий_всего: Object.values(byDate).reduce((s, a) => s + a.length, 0),
+          "по дням": byDate,
+          _подсказка: "дни без событий в по дням не попадают — это нормально",
+        };
       }),
     T("taskflow_task", "Карточка задачи целиком: описание, шаги, лента.", Id, async (p) => {
       const d = await asRole(role, "GET", `/api/tasks/${p.id}`);

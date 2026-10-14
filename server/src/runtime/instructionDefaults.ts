@@ -1,4 +1,30 @@
 // Исходные шаблоны TaskFlow; динамические значения подставляет renderInstruction.
+import { newWidgetTypesEnabled } from "../lib/widgetFeatureFlag.js";
+
+// Строки про восемь новых типов попадают в инструкцию роли только при
+// включённом фиче-флаге: пока нативный клиент их не рисует, роль не должна
+// предлагать их в чате (сервер такие блоки принимает всегда — см.
+// lib/widgetFeatureFlag.ts).
+const NEW_WIDGET_TYPES_PROSE: string[] = [
+  "Новые типы (14.10.2026), выбирай по смыслу темы, а не по привычке:",
+  "status_board (groups: label, value, tone, share?) — сводка по статусам;",
+  "bars_list (items: label, value, max, tone) — список, где у строки своя доля;",
+  "chain (links: label, state) — цепочка шагов, где видно, где остановка;",
+  "ladder (steps: label, value, state) — этапы разной величины;",
+  "timeline (items: date, label, state) — что за чем и когда;",
+  "calendar_grid (month, cells: date, count) — что в какой день;",
+  "heatmap (weeks, cells: date, value, max) — когда было busiest;",
+  "compare (left/right: label, value, verdict?) — ровно два значения.",
+  "tone/state — из списка: done, inprog, over, future, block, review, free.",
+  "У новых типов в корне не должно быть ключей metrics, chart или checklists:",
+  "нормализатор примет такой блок за старый формат и потеряет имя типа.",
+  "Данные для календаря, сетки и тепловой карты бери инструментами",
+  "taskflow_calendar_events и taskflow_task_daily, а не по памяти.",
+];
+
+function newTypeLines(): string[] {
+  return newWidgetTypesEnabled() ? [...NEW_WIDGET_TYPES_PROSE] : [];
+}
 export const PLAN_ROLE_HELP_POLICY = [
   "ПРАВИЛО НЕХВАТАЮЩЕЙ РОЛИ В ЗАПУЩЕННОМ ПЛАНЕ (сильнее общего совета вернуть чужую работу):",
   "Нужен исполнитель, которого нет в графе — сначала taskflow_plan_request из своего subtask_id.",
@@ -227,7 +253,9 @@ export const INSTRUCTION_DEFAULTS: Record<string, string> = {
     "progress (title, items: label, value 0–100, note); checklist (title,",
     "items: text, done); card (title, subtitle, body, rows: label/value,",
     "link: title/url); chart (title, kind bar|line, unit, points: x/y);",
-    "weather — только готовый блок из taskflow_weather. Виджет дополняет",
+    "weather — только готовый блок из taskflow_weather.",
+    ...newTypeLines(),
+    "Виджет дополняет",
     "ответ, а не заменяет его; цифры в нём — только настоящие.",
     "",
     "Интерактив (как артефакт, прямо в окне чата): блок кода с языком html —",
@@ -276,8 +304,10 @@ export const INSTRUCTION_DEFAULTS: Record<string, string> = {
     "",
     "Оформление — Markdown, таблицы можно. Погода — вызови taskflow_weather",
     "и вставь блок виджета из ответа как есть. Когда нагляднее карточкой —",
-    "блок ```widget с JSON (metrics, progress, checklist, card, chart);",
-    "сервер понимает и старый формат без type (title + metrics[] + chart{type,data[]} + checklists[]),",
+    "блок ```widget с JSON (metrics, progress, checklist, card, chart",
+    ...newTypeLines(),
+    "сервер понимает и старый формат без type",
+    "(title + metrics[] + chart{type,data[]} + checklists[]),",
     "так что свои шаблоны пересобирать не нужно — нормализация отработает",
     "когда полезна живая интерактивная штука (калькулятор, график, таймер) —",
     "блок ```html с самодостаточной страницей под экран телефона.",

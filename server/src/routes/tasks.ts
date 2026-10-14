@@ -621,6 +621,91 @@ export function registerTaskRoutes(app: FastifyInstance) {
     });
   });
 
+  // Агрегат по дням — данные для виджетов heatmap и calendar_grid (галерея
+  // компоновок карточки 3e27dafe, раздел 5). Считает по трём источникам:
+  // сроки задач (due_date), дни создания и дни закрытия. Ответ — готовые
+  // ячейки: роль не складывает счётчики сама и не выдумывает даты.
+  //
+  // from/to — «ГГГГ-ММ-ДД», границы включительные. bucket по умолчанию due.
+  app.get("/api/tasks/summary", { preHandler: authPre }, async (req: any, reply) => {
+    const { from, to, bucket } = req.query as {
+      from?: string;
+      to?: string;
+      bucket?: string;
+    };
+    if (!from || !to) {
+      return reply.code(400).send({
+        error: "Параметры from и to обязательны (ГГГГ-ММ-ДД)",
+      });
+    }
+    if (!isValidDateStr(from) || !isValidDateStr(to)) {
+      return reply.code(400).send({ error: "from/to должны быть датами ГГГГ-ММ-ДД" });
+    }
+    if (from > to) {
+      return reply.code(400).send({ error: "from позже to" });
+    }
+    const source = bucket === "created" ? "created_at" : bucket === "completed" ? "completed_at" : "due_date";
+    // Границы периода в пределах одного года — иначе ответ не поместится
+    // в блок виджета, а клиент всё равно рисует не больше 112 ячеек.
+    // Даты в сплите «ГГГГ-ММ-ДД», а Date.UTC ждёт нумерацию месяца с нуля —
+    // без «-1» весь ряд уезжал на месяц вперёд.
+    const fromUtc = (s: string) => {
+      const [y, m, d] = s.split("-").map(Number) as [number, number, number];
+      return Date.UTC(y, m - 1, d);
+    };
+    const spanDays = (fromUtc(to) - fromUtc(from)) / 86_400_000;
+    if (spanDays > 366) {
+      return reply.code(400).send({ error: "Период длиннее года не считается" });
+    }
+
+    const userId = req.userId;
+    const asOwner = isOwner(userId);
+    const privacy = asOwner
+      ? "(p.id IS NULL OR p.archived_at IS NULL)"
+      : "(p.id IS NULL OR ((p.is_private = 0 OR p.is_private IS NULL) AND p.archived_at IS NULL))";
+    const serviceHidden =
+      bucket === "created"
+        ? " AND COALESCE(t.service_hidden, 0) = 0"
+        : "";
+
+    // Права на видимость — те же, что у списка: либо агент видит всё, либо
+    // только свои и свои проекты. Иначе по дням утекала бы чужая работа.
+    const scopeSql = seesEveryTask(userId)
+      ? "1 = 1"
+      : "(t.creator_id = ? OR t.assignee_id = ? OR t.project_id IN (SELECT id FROM projects WHERE owner_id = ?))";
+    const scopeParams = seesEveryTask(userId) ? [] : [userId, userId, userId];
+
+    const rows = db
+      .prepare(
+        `SELECT substr(t.${source}, 1, 10) AS day, COUNT(*) AS n
+         FROM tasks t LEFT JOIN projects p ON t.project_id = p.id
+         WHERE t.${source} IS NOT NULL AND t.${source} != ''
+           AND substr(t.${source}, 1, 10) >= ? AND substr(t.${source}, 1, 10) <= ?
+           AND t.archived_at IS NULL AND ${privacy}${serviceHidden}
+           AND ${scopeSql}
+         GROUP BY day ORDER BY day`,
+      )
+      .all(from, to, ...scopeParams) as Array<{ day: string; n: number }>;
+
+    const byDay = new Map(rows.map((r) => [r.day, Number(r.n)]));
+    // Каждый день периода отдаём ячейкой, даже пустым: heatmap рисует сетку
+    // целиком, и отсутствие дня читалось бы как «нет данных», а не как ноль.
+    const days: Array<{ date: string; value: number }> = [];
+    for (let d = fromUtc(from); d <= fromUtc(to); d += 86_400_000) {
+      const date = new Date(d).toISOString().slice(0, 10);
+      days.push({ date, value: byDay.get(date) ?? 0 });
+    }
+
+    return {
+      from,
+      to,
+      bucket,
+      days,
+      total: days.reduce((s, x) => s + x.value, 0),
+      max: days.reduce((m, x) => Math.max(m, x.value), 0),
+    };
+  });
+
   // Get single task — must be creator or assignee.
   app.get<{ Params: { id: string } }>(
     "/api/tasks/:id",
