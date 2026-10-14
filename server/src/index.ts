@@ -30,9 +30,34 @@ import db, { migrate, DB_PATH } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { resolveUserId, resolveUserIdFromToken, authOrApiToken, isRevokedDeviceToken } from "./auth.js";
 import { addClient, removeClient, resetAllOffline } from "./ws.js";
+import {
+  attachHostSocket,
+  detachHostSocket,
+  handleHostMessage,
+  isMachineOnline,
+  resetHostGatewaysForTests,
+  runOperation,
+  sendToHost,
+  startHostHeartbeat,
+} from "./host/gateway.js";
+import {
+  HOST_DEFAULT_TIMEOUT_MS,
+  HOST_MAX_OUTPUT_BYTES,
+  HOST_PING_MS,
+  HOST_PROTOCOL_VERSION,
+  intersectRoots,
+  parseHostMessage,
+  type ServerToHost,
+} from "./host/protocol.js";
+import {
+  findMachineByToken,
+  getMachine,
+  markAllMachinesOffline,
+} from "./host/machines.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerPairingRoutes } from "./routes/pairing.js";
 import { registerDeviceRoutes } from "./routes/devices.js";
+import { registerHostRoutes } from "./routes/hosts.js";
 import { startDeviceEventCleanup } from "./lib/deviceEvents.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerAgentStateRoutes } from "./routes/agent-state.js";
@@ -152,6 +177,40 @@ export function errorBodyPreview(payload: unknown): string | undefined {
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/g, "$1•••");
 }
 
+/** Параметры строки запроса, значение которых не попадает в журнал. */
+const SENSITIVE_QUERY_KEYS = [
+  "token",
+  "access_token",
+  "api_key",
+  "secret",
+  "password",
+  "key",
+];
+
+/**
+ * Замена секретов в строке запроса.
+ *
+ * Вынесено наружу, чтобы это можно было проверить тестом: внутри buildApp
+ * функция была замыканием, и единственным способом её проверить оставалось
+ * перехватывать журнал целиком.
+ *
+ * Параметр называется не одним способом: ключ машины-хоста приходит как
+ * `key` (шлюз /host-ws, тикет 1), пользовательский токен — как `token`.
+ */
+export function redactSensitiveQueryForTest(url: string): string {
+  const cut = url.indexOf("?");
+  if (cut === -1) return url;
+  const params = new URLSearchParams(url.slice(cut + 1));
+  let touched = false;
+  for (const key of SENSITIVE_QUERY_KEYS) {
+    if (params.has(key)) {
+      params.set(key, "***");
+      touched = true;
+    }
+  }
+  return touched ? url.slice(0, cut) + "?" + params.toString() : url;
+}
+
 export async function buildApp(): Promise<FastifyInstance> {
   // До всего остального — секрет подписи JWT должен быть в process.env
   // раньше, чем fastifyJwt.register() ниже его прочитает (см. env.ts).
@@ -165,21 +224,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // браузера не умеет слать заголовок Authorization, и токен приходит строкой
   // запроса. Сам протокол это не меняет — режется только то, что попадает в
   // лог (08.09.2026: в dev-server.log лежало 2637 строк с живыми токенами).
-  const SENSITIVE_QUERY_KEYS = ["token", "access_token", "api_key", "secret", "password"];
-
-  const redactSensitiveQuery = (url: string): string => {
-    const cut = url.indexOf("?");
-    if (cut === -1) return url;
-    const params = new URLSearchParams(url.slice(cut + 1));
-    let touched = false;
-    for (const key of SENSITIVE_QUERY_KEYS) {
-      if (params.has(key)) {
-        params.set(key, "***");
-        touched = true;
-      }
-    }
-    return touched ? url.slice(0, cut) + "?" + params.toString() : url;
-  };
+  const redactSensitiveQuery = redactSensitiveQueryForTest;
 
   const app = Fastify({
     logger: {
@@ -413,6 +458,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerAuthRoutes(app);
   registerPairingRoutes(app);
   registerDeviceRoutes(app);
+  // Реестр машин-хостов (тикет 1): список для приложения, заведение машины,
+  // отзыв ключа и проверочный вызов операции.
+  registerHostRoutes(app);
   // Журнал привязок живёт 30 дней (§11.1): чистим при старте и раз в
   // 6 часов, иначе таблица растёт бесконечно, а на ней же считаются
   // лимиты попыток обмена. Таймер unref'ится и снимается при закрытии
@@ -663,6 +711,70 @@ export async function buildApp(): Promise<FastifyInstance> {
     });
   });
 
+  // Шлюз хостов: сюда подключается программа на маке (тикет 1, план
+  // taskflow-host D3). ОТДЕЛЬНЫЙ путь, а не второй вход в /ws, потому что
+  // клиент тут другой: ключ машины, а не токен пользователя; и логика другая
+  // — операции и отмена вместо событий доски. Смешанный сокет означал бы, что
+  // и приложение, и хост живут в одной таблице клиентов и одними правами.
+  app.register(async function (fastify) {
+    fastify.get("/host-ws", { websocket: true }, (socket, req) => {
+      const key = (req.query as any)?.key as string | undefined;
+      // Ключ проверяется здесь, в единственном месте: findMachineByToken
+      // отбрасывает и неизвестные, и отозванные одинаково. Снаружи различие
+      // не выдаётся — иначе перебором можно выяснить, какие ключи выдавали.
+      const machine = key ? findMachineByToken(key) : null;
+      if (!machine) {
+        socket.send(JSON.stringify({ type: "error", error: "unauthorized" }));
+        socket.close();
+        return;
+      }
+
+      // Корни хост присылает в hello, но welcome уходит сразу после проверки
+      // ключа: иначе хост, который молча ждёт welcome, повесил бы соединение
+      // на своём таймауте. Первое, что делает хост, — шлёт hello.
+      if (!attachHostSocket(machine, socket as any)) {
+        socket.send(JSON.stringify({ type: "error", error: "unauthorized" }));
+        socket.close();
+        return;
+      }
+      socket.on("close", () => detachHostSocket(machine.id, socket as any));
+      socket.on("message", (msg: Buffer) => {
+        if (!handleHostMessage(machine.id, msg)) return;
+        // hello несёт корни и версию: ответить пересечением корней, чтобы хост
+        // знал, где ему разрешено работать, и не пытался за пределами.
+        const сообщение = parseHostMessage(msg);
+        if (сообщение?.type === "hello") {
+          const машина = getMachine(machine.id);
+          sendToHost(machine.id, {
+            type: "welcome",
+            protocolVersion: HOST_PROTOCOL_VERSION,
+            machineId: machine.id,
+            machineName: machine.name,
+            allowedRoots: intersectRoots(машина?.allowed_roots ?? [], сообщение.roots),
+            pingMs: HOST_PING_MS,
+            maxOutputBytes: HOST_MAX_OUTPUT_BYTES,
+            defaultTimeoutMs: HOST_DEFAULT_TIMEOUT_MS,
+          });
+          startHostHeartbeat();
+        }
+      });
+      // Первое сообщение — welcome: хост по нему узнаёт свою машину и правила.
+      socket.send(
+        JSON.stringify({
+          type: "welcome",
+          protocolVersion: HOST_PROTOCOL_VERSION,
+          machineId: machine.id,
+          machineName: machine.name,
+          allowedRoots: machine.allowed_roots,
+          pingMs: HOST_PING_MS,
+          maxOutputBytes: HOST_MAX_OUTPUT_BYTES,
+          defaultTimeoutMs: HOST_DEFAULT_TIMEOUT_MS,
+        } satisfies ServerToHost),
+      );
+      startHostHeartbeat();
+    });
+  });
+
   return app;
 }
 
@@ -775,6 +887,10 @@ if (isMain) {
     // не может: иначе статус, оставшийся с прошлого запуска, врал бы до
     // первого подключения того же пользователя.
     resetAllOffline();
+    // Машины-хосты — те же «сокеты после рестарта нет ни у кого»: оставшийся
+    // с прошлого запуска machines.online = 1 врал бы приложению и заставил бы
+    // роль стартовать на машине, к которой и подключиться не к кому.
+    markAllMachinesOffline();
 
     // Карточка e87cd93f, шаг «Настройка ротации логов»: периодическая
     // чистка старых строк `server_events` по `created_at`. Интервал и

@@ -4576,6 +4576,51 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_device_events_device ON device_events(device_id, created_at);
     `);
   } },
+
+  // Тикет 1 «Сервер: реестр машин и шлюз хостов», план taskflow-host (D4, D7).
+  //
+  // Хранение ключа повторяет devices (миграция 141): только sha256 и
+  // префикс для показа. Сам ключ уходит на машину один раз и в базе не
+  // остаётся — поэтому восстановить его нельзя, можно только отозвать и
+  // выпустить новый.
+  //
+  // Имя машины уникально СРЕДИ ЖИВЫХ: роль спрашивает «машина mac», и две
+  // живые машины с одним именем сделали бы такой вопрос неоднозначным.
+  // Частичный индекс (revoked_at IS NULL) оставляет имя свободным после
+  // отзыва — иначе пришлось бы придумывать mac-2.
+  { id: "142_machine_registry", description: "Реестр машин-хостов: ключ, разрешённые корни, версия, онлайн, журнал событий", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS machines (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        platform TEXT,
+        token_hash TEXT NOT NULL UNIQUE,
+        token_prefix TEXT NOT NULL,
+        allowed_roots TEXT NOT NULL,
+        host_version TEXT,
+        created_by TEXT REFERENCES users(id),
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT,
+        online INTEGER NOT NULL DEFAULT 0,
+        revoked_at TEXT,
+        revoke_reason TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_machines_live_name
+        ON machines(name) WHERE revoked_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_machines_token ON machines(token_hash);
+
+      CREATE TABLE IF NOT EXISTS machine_events (
+        id TEXT PRIMARY KEY,
+        machine_id TEXT,
+        kind TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        data TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_machine_events_machine
+        ON machine_events(machine_id, created_at);
+    `);
+  } },
+
   // Ветка от сообщения (владелец 14.10.2026): отдельный чат с теми же
   // участниками и своей сессией роли — основной разговор её контекстом не
   // засоряется. Номер 143: 142 занят реестром машин в соседней ветке.
@@ -4584,6 +4629,8 @@ const migrations: Migration[] = [
     if (!cols.has("branch_of_chat_id")) db.exec("ALTER TABLE chats ADD COLUMN branch_of_chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL");
     if (!cols.has("branch_of_message_id")) db.exec("ALTER TABLE chats ADD COLUMN branch_of_message_id TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_chat_branches ON chats(branch_of_chat_id)");
+  } },
+
   } },
 ];
 /**
