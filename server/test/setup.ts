@@ -14,6 +14,47 @@ const dbPath = path.join(
   `taskflow-test-${process.pid}-${crypto.randomBytes(4).toString("hex")}.db`,
 );
 process.env.DB_PATH = dbPath;
+// Живые роли в тестах (14.10.2026: после прогона inProcessRun.test.ts воркер
+// vitest продолжил жить, поднял настоящую модель в рабочей папке репозитория
+// и сделал коммиты от автора «test», один дошёл до main).
+// 1) Флаг запуска ролей не переживает файл: setup выполняется перед КАЖДЫМ
+//    файлом, а тест, которому запуск нужен, ставит флаг у себя заново.
+delete process.env.TASKFLOW_KICK_IN_TESTS;
+// 2) Папка проекта по умолчанию — временная, не репозиторий TaskFlow
+//    (runtime/inProcessRun.ts, projectRepo).
+const testProjectDir = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-project");
+fs.mkdirSync(testProjectDir, { recursive: true });
+process.env.TASKFLOW_TEST_PROJECT_DIR = testProjectDir;
+// 3) Ключей настоящих моделей у прогона нет: каталог агента Pi (auth.json,
+//    models.json) — пустая временная папка. Даже если тест забыл подменить
+//    createAgentSession, модель не авторизуется и в сеть не пойдёт.
+const piAgentDir = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-pi-agent");
+fs.mkdirSync(piAgentDir, { recursive: true });
+process.env.PI_CODING_AGENT_DIR = piAgentDir;
+// 4) Коммит и слияние в живом репозитории TaskFlow (и любом его worktree)
+//    отклоняются хуком git: переменные GIT_CONFIG_* наследует каждый
+//    дочерний процесс прогона. Временные репозитории тестов не затронуты.
+{
+  const liveRepo = path.resolve(process.cwd(), "..");
+  const hooksDir = path.join(os.tmpdir(), path.basename(dbPath, ".db") + "-git-hooks");
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const guard = `#!/bin/sh
+common=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
+live=$(cd "$(git -C '${liveRepo}' rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)
+if [ -n "$live" ] && [ "$common" = "$live" ]; then
+  echo "taskflow tests: commit into the live repository is forbidden" >&2
+  exit 1
+fi
+exit 0
+`;
+  for (const hook of ["pre-commit", "pre-merge-commit", "commit-msg", "pre-push"]) {
+    fs.writeFileSync(path.join(hooksDir, hook), guard, { mode: 0o755 });
+  }
+  const n = Number(process.env.GIT_CONFIG_COUNT ?? 0);
+  process.env.GIT_CONFIG_COUNT = String(n + 1);
+  process.env[`GIT_CONFIG_KEY_${n}`] = "core.hooksPath";
+  process.env[`GIT_CONFIG_VALUE_${n}`] = hooksDir;
+}
 // Роли в тестах не заводят git worktree живого репозитория
 // (runtime/roleWorkspace.ts); свой тест включает их на временной папке.
 process.env.TASKFLOW_ROLE_WORKTREES ??= "off";

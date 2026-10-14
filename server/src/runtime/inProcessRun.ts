@@ -892,6 +892,8 @@ const LOCAL_EXECUTION_POLICY = INSTRUCTION_DEFAULTS.local_policy;
  *  (scripts/task-context-projects.json); не сопоставлен — репозиторий TaskFlow. */
 function projectRepo(taskId: string): string {
   const fallback = path.resolve(process.cwd(), "..");
+  // В тестах роль никогда не получает рабочей папкой живой репозиторий.
+  if (process.env.VITEST) return process.env.TASKFLOW_TEST_PROJECT_DIR || os.tmpdir();
   try {
     const projectId = (db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(taskId) as
       | { project_id?: string | null }
