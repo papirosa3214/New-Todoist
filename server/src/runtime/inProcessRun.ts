@@ -1,3 +1,4 @@
+import { teamReadTools } from "./teamReadTools.js";
 import { allRoles } from "../roleRouting.js";
 import { roleToolAllowed } from "../lib/roleToolScope.js";
 import { clockLine } from "../lib/clockLine.js";
@@ -763,7 +764,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  const all = [...tools, ...orchestratorTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])];
+  const all = [...tools, ...orchestratorTools(role, T), ...teamReadTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])];
   if (unscoped) return all;
   return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }

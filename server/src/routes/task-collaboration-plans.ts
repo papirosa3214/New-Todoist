@@ -801,7 +801,10 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
   app.get<{ Params: { id: string } }>("/api/tasks/:id/collaboration-plans", { preHandler: authOrApiToken }, async (req: any, reply) => {
     const task = getTaskForRead(req.params.id, req.userId);
     if (!task) return reply.code(404).send({ error: "Not found" });
-    if (!mayManage(req.userId)) return reply.code(403).send({ error: "collaboration plan доступен владельцу или оркестратору" });
+    // Читать план может и любая роль-агент (владелец 14.10.2026): видеть, кто
+    // из коллег за какой этап отвечает и в каком порядке. Править — нет.
+    const roleAccount = !!db.prepare("SELECT 1 FROM users WHERE id = ? AND type = 'ai' AND role_key IS NOT NULL").get(req.userId);
+    if (!mayManage(req.userId) && !roleAccount) return reply.code(403).send({ error: "collaboration plan доступен владельцу, оркестратору и ролям на чтение" });
     const plans = db.prepare("SELECT * FROM task_collaboration_plans WHERE task_id = ? ORDER BY revision DESC").all(task.id) as Plan[];
     return { plans: branchRoot(task.id)!==task.id ? [] : plans.map(present), branch_root_task_id:branchRoot(task.id)!==task.id ? branchRoot(task.id) : null };
   });
