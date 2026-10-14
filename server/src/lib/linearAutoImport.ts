@@ -27,6 +27,7 @@
 // Цикл встроен в процесс сервера (как scheduler.ts и inboxTriageWatcher):
 // никаких внешних таймеров и HTTP-ключей.
 
+import { isLinearTombstoned } from "./linearLifecycle.js";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
@@ -149,6 +150,8 @@ function changedIssueIds(ownerId: string, workspaceId: string, issues: Array<{ i
   for (const issue of issues) {
     // Отменённые и архивные не импортируются и не обновляются.
     if (issue.state.type === "canceled" || issue.archivedAt) continue;
+    // Удалённое в TaskFlow не возвращается (владелец 14.10.2026).
+    if (isLinearTombstoned(ownerId, workspaceId, issue.id)) continue;
     const snapshot = stored.get(issue.id);
     if (!snapshot) {
       // Заводится только задача в работе (владелец 07.10.2026): выполненные,

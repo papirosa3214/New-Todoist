@@ -4673,6 +4673,36 @@ const migrations: Migration[] = [
       db.prepare("UPDATE role_context_overrides SET text = ? WHERE rowid = ?").run(rename(row.text), row.id);
     }
   } },
+  // Архив и удаление карточки, пришедшей из Linear, повторяются в Linear
+  // (владелец 14.10.2026). Очередь не привязана к карточке: удалённая карточка
+  // уносит связь (ON DELETE CASCADE), а задание должно дожить до отправки.
+  // Список «не заводить» — удалённое в TaskFlow автоимпорт больше не создаёт.
+  { id: "146_linear_lifecycle", description: "Linear: очередь архива/возврата/удаления и список «не заводить»", up: () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS linear_lifecycle_queue (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        issue_id TEXT NOT NULL,
+        operation TEXT NOT NULL CHECK(operation IN ('archive','unarchive','delete')),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_linear_lifecycle_pending ON linear_lifecycle_queue(status, next_attempt_at);
+      CREATE TABLE IF NOT EXISTS linear_import_tombstones (
+        owner_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY(owner_id, workspace_id, source_id)
+      );
+    `);
+  } },
 ];
 /**
  * Опции прогона миграций.

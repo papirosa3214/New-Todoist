@@ -152,6 +152,10 @@ export function createLinearPreview(owner: string, snapshot: LinearSnapshot, pro
     items, warnings, create_count: items.filter(i => i.action === "create").length, update_count: items.filter(i => i.action === "update").length };
 }
 
+const OWN_APP_NAME = "TaskFlow";
+function isOwnAppEntry(entry: any): boolean {
+  return entry?.botActor?.name === OWN_APP_NAME || entry?.actor?.name === OWN_APP_NAME;
+}
 function importComment(owner: string, workspace: string, issue: LinearIssue, task: string, kind: string, entry: any, text: string) {
   const old = object(owner, workspace, issue.id, kind, entry.id);
   const current: any = old?.local_id ? db.prepare("SELECT text,task_id FROM comments WHERE id=?").get(old.local_id) : null;
@@ -251,7 +255,9 @@ export function commitLinearPreview(owner: string, previewId: string, options: {
       db.prepare(`INSERT INTO linear_import_tasks(owner_id,workspace_id,source_id,task_id,source_url,snapshot,applied_fields) VALUES(?,?,?,?,?,?,?)
         ON CONFLICT(owner_id,workspace_id,source_id) DO UPDATE SET snapshot=excluded.snapshot,source_url=excluded.source_url,applied_fields=excluded.applied_fields,imported_at=datetime('now')`).run(owner, snapshot.workspace.id, issue.id, task, issue.url, encode(issue), encode(merged.applied));
       for (const entry of issue.comments) importComment(owner, snapshot.workspace.id, issue, task, "comment", entry, commentText("comment", entry));
-      for (const entry of issue.history) importComment(owner, snapshot.workspace.id, issue, task, "history", entry, commentText("history", entry));
+      // Свои же действия (смена статуса, архив от приложения TaskFlow) в ленту
+      // карточки не возвращаем: это эхо, а не новости из Linear (14.10.2026).
+      for (const entry of issue.history) if (!isOwnAppEntry(entry)) importComment(owner, snapshot.workspace.id, issue, task, "history", entry, commentText("history", entry));
       for (const entry of issue.documents) importComment(owner, snapshot.workspace.id, issue, task, "document", entry, commentText("document", entry));
       importComment(owner, snapshot.workspace.id, issue, task, "metadata", { id: "source", createdAt: issue.createdAt }, metadataText(issue));
       importLabels(owner, snapshot.workspace.id, issue, task);

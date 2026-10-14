@@ -153,6 +153,17 @@ export async function updateIssueState(issueId: string, stateId: string): Promis
   if (!data?.issueUpdate?.success) throw new LinearWriteError("Linear не подтвердил смену статуса.");
 }
 
+/** Архив, возврат из архива и удаление в корзину (владелец 14.10.2026) —
+ *  повтор того же действия над карточкой в TaskFlow. */
+async function issueLifecycle(mutation: "issueArchive" | "issueUnarchive" | "issueDelete", issueId: string): Promise<void> {
+  assertUuid(issueId, "id задачи");
+  const data = await graphql(`mutation TaskFlowIssueLifecycle($id: String!) { ${mutation}(id: $id) { success } }`, { id: issueId });
+  if (!data?.[mutation]?.success) throw new LinearWriteError(`Linear не подтвердил ${mutation}.`);
+}
+export const archiveIssue = (id: string) => issueLifecycle("issueArchive", id);
+export const unarchiveIssue = (id: string) => issueLifecycle("issueUnarchive", id);
+export const deleteIssue = (id: string) => issueLifecycle("issueDelete", id);
+
 /** Добавить комментарий к задаче. */
 export async function createComment(issueId: string, body: string): Promise<void> {
   assertUuid(issueId, "id задачи");

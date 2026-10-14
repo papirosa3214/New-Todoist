@@ -17,6 +17,7 @@
 // зависшие «сироты» с активной работой и в очереди. Restore возвращает
 // всё поддерево вместе с `parent_id` — связи сохраняются.
 
+import { enqueueLinearLifecycle } from "./linearLifecycle.js";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { logEvent, releaseSubtaskWork } from "../agentState.js";
@@ -217,7 +218,9 @@ export function archiveTask(taskId: string, actorId: string): {
       archived_subtree_count: subtree.length,
     };
   });
-  return txn(taskId, actorId);
+  const out = txn(taskId, actorId);
+  if (!out.already_archived) enqueueLinearLifecycle(subtreeTaskIds(taskId), "archive");
+  return out;
 }
 
 /**
@@ -303,7 +306,9 @@ export function restoreTask(taskId: string, actorId: string): {
     dropSubtree();
     return { task_id: id, restored_subtree_count: subtree.length };
   });
-  return txn(taskId, actorId);
+  const out = txn(taskId, actorId);
+  if (out.restored_subtree_count) enqueueLinearLifecycle(subtreeTaskIds(taskId), "unarchive");
+  return out;
 }
 
 /**
@@ -416,6 +421,8 @@ export function purgeArchivedTask(taskId: string, actorId: string): {
 
   // Физическая чистка: lib/taskPurge.purgeTasks уже умеет разрывать кольцо
   // «подзадача ↔ план» и чистить журнальные таблицы без каскада.
+  // Связь с Linear удалится вместе с карточкой — задание ставим до чистки.
+  enqueueLinearLifecycle([taskId], "delete");
   purgeTasks([taskId]);
 
   return {

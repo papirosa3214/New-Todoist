@@ -19,6 +19,7 @@
 // backoff и повторами; если простой затянулся больше 30 минут, владелец
 // получает уведомление. Выключатель — в linear_sync_state.
 
+import { runLinearLifecyclePass, type LifecycleWriter } from "./linearLifecycle.js";
 import { raiseIncident } from "./incidents.js";
 import crypto from "node:crypto";
 import { getSetting, onChange, setSetting } from "./serverSettings.js";
@@ -40,7 +41,7 @@ const BATCH_SIZE = 20;
 const BACKOFF_BASE_SEC = 30;
 const BACKOFF_MAX_SEC = 30 * 60;
 
-export type LinearWriter = {
+export type LinearWriter = Partial<LifecycleWriter> & {
   updateIssueState(issueId: string, stateId: string): Promise<void>;
   createComment(issueId: string, body: string): Promise<void>;
   fetchTeamStates(teamId: string): Promise<Array<{ id: string; name: string; type: string }>>;
@@ -50,6 +51,9 @@ const defaultWriter: LinearWriter = {
   updateIssueState: linearWrite.updateIssueState,
   createComment: linearWrite.createComment,
   fetchTeamStates: linearWrite.fetchTeamStates,
+  archiveIssue: linearWrite.archiveIssue,
+  unarchiveIssue: linearWrite.unarchiveIssue,
+  deleteIssue: linearWrite.deleteIssue,
 };
 
 export type DesiredState = { name: string; type: string; blocked: boolean };
@@ -318,6 +322,10 @@ export async function runLinearSyncPass(ownerId?: string, options: { writer?: Li
             .run(attempts, nowIso(now + backoffSeconds(attempts) * 1000), message, job.id);
         }
       }
+    }
+    if (writer.archiveIssue && writer.unarchiveIssue && writer.deleteIssue) {
+      const life = await runLinearLifecyclePass(writer as LifecycleWriter, now);
+      result.sent += life.sent; result.failed += life.failed;
     }
     db.prepare("UPDATE linear_sync_state SET last_success_at=?, last_sent_at=CASE WHEN ? > 0 THEN ? ELSE last_sent_at END, sent_total=sent_total+?, failed_total=failed_total+?, last_error=CASE WHEN ? > 0 THEN last_error ELSE NULL END, last_error_at=CASE WHEN ? > 0 THEN last_error_at ELSE NULL END WHERE owner_id=?")
       .run(nowIso(now), result.sent, nowIso(now), result.sent, result.failed, result.errors.length, result.errors.length, owner.id);
