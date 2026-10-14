@@ -147,6 +147,13 @@ export type OpResultMessage =
       stderr?: string;
       /** Поток обрезан по HOST_MAX_OUTPUT_BYTES. */
       truncated?: boolean;
+      /**
+       * Результат операции объектом: у ls это {path, entries}, у read —
+       * {content}, у find — {entries}. Без этого поля файловые операции
+       * доезжали как «успех с пустым stdout», и роль на удалённой машине видела
+       * бы пустой каталог и пустой файл вместо содержимого.
+       */
+      data?: unknown;
     }
   | {
       type: "op_result";
@@ -232,6 +239,7 @@ export function parseHostMessage(raw: unknown): HostToServer | null {
             stderr:
               typeof сообщение.stderr === "string" ? сообщение.stderr : "",
             truncated: сообщение.truncated === true ? true : undefined,
+            data: сообщение.data,
           }
         : {
             type: "op_result",

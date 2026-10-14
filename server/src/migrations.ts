@@ -4703,6 +4703,30 @@ const migrations: Migration[] = [
       );
     `);
   } },
+
+  // Правка 1 плана taskflow-mac-host: машина, на которой выполняется роль.
+  //
+  // NULL означает «как раньше» — .110. Роль без host_id работает локально, и
+  // ничего в существующем поведении не меняется: откат — одна миграция.
+  //
+  // Таблица одна: «слот» в TaskFlow — это не отдельная таблица, а подзадача с
+  // plan_node_key (plan_node_phases/plan_topic_events описывают этапы плана,
+  // slot_sessions — сессии агентов). Поэтому назначение машины живёт на
+  // подзадаче: это и слот, и шаг в терминах плана.
+  //
+  // ON DELETE SET NULL: отзыв машины не удаляет чужие строки, но роль не
+  // остаётся висеть на несуществующей машине — она получит ошибку словами
+  // (roleHost.roleHostError, правка 2).
+  { id: "147_role_hosts", description: "Машина исполнения роли: subtasks.host_id", up: () => {
+    const cols = new Set(
+      (db.prepare("PRAGMA table_info(subtasks)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!cols.has("host_id")) {
+      db.exec("ALTER TABLE subtasks ADD COLUMN host_id TEXT REFERENCES machines(id) ON DELETE SET NULL");
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_subtasks_host ON subtasks(host_id)");
+  } },
+
 ];
 /**
  * Опции прогона миграций.

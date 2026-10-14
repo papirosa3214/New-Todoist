@@ -82,6 +82,8 @@ export type OperationSuccess = {
   stdout?: string;
   stderr?: string;
   truncated?: boolean;
+  /** Полезная нагрузка операции: {path, entries} / {content} и подобное. */
+  data?: unknown;
 };
 export type OperationFailure = { ok: false; error: string; code?: string };
 export type OperationResult = OperationSuccess | OperationFailure;
@@ -384,6 +386,7 @@ function deliverResult(result: { opId: string } & Record<string, unknown>) {
       stdout: typeof result.stdout === "string" ? result.stdout : "",
       stderr: typeof result.stderr === "string" ? result.stderr : "",
       truncated: pending.truncated || result.truncated === true ? true : undefined,
+      data: result.data,
     });
     return;
   }

@@ -63,6 +63,9 @@ import { buildInProcessTaskContext } from "./taskContextBridge.js";
 import { buildDependencyContext } from "./dependencyContext.js";
 import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
+import { remoteRoleWorkspace } from "./roleWorkspace.js";
+import { resolveRoleHost } from "./roleHost.js";
+import { hostOperations } from "./hostOperations.js";
 import { ensureTaskArtifactFolder } from "../lib/taskArtifactFolder.js";
 import { recordTaskDocument } from "../lib/taskOutcome.js";
 import { isProviderLimitText, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
@@ -1246,7 +1249,14 @@ async function runRoleInProcessUnserialized(input: {
 
   // Репозиторий самого сервера — только в отдельной копии: сохранение файла
   // в живой перезапустило бы сервер вместе с этим ходом (roleWorkspace.ts).
-  let cwd = input.cwd ?? roleWorkspace(taskId, projectRepo(taskId));
+  // Машина роли: null — работаем на .110 как всегда. Назначенная машина
+  // проверяется ДО создания копии: молча уехав на .110, роль отчиталась бы о
+  // работе в папке, которую никто не откроет.
+  const host = resolveRoleHost(taskId, input.subtaskId);
+  let cwd = input.cwd
+    ?? (host
+      ? await remoteRoleWorkspace(host, projectRepo(taskId), taskId)
+      : roleWorkspace(taskId, projectRepo(taskId)));
   const mode = input.mode ?? (role === "critic_verifier" ? "review" : "work");
   const resumed = hasSession(taskId, role, input.subtaskId);
   const dependencyContext = buildDependencyContext(taskId);
@@ -1325,7 +1335,14 @@ try {
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
   const infra = await connectInfraPanel(role).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
   const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...xcode.tools, ...infra.tools];
-  const builtinTools = [...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()].filter(t=>BUILTIN_TOOLS.includes(t.name)).map(t=>({...t,description:composeLayer(role,"tool.builtin."+t.name)?.effective ?? t.description})).map(t=>withTestRunBudget(t,{role,taskId}));
+  // На удалённой машине инструменты те же, но исполняются через шлюз:
+  // у каждого в pi подключаемые операции (createCodingTools принимает
+  // operations). Имена инструментов и промпты роли при этом не меняются.
+  const локальные = [...createCodingTools(cwd), ...createReadOnlyTools(cwd)];
+  const builtinTools = (host
+    ? createCodingTools(cwd, { operations: hostOperations(host, cwd) } as any)
+    : локальные
+  )
   const { session } = await createAgentSession({
     cwd,
     model,

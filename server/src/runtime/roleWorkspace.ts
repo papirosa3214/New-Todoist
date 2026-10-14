@@ -9,10 +9,16 @@
 // трогает. Все роли одной карточки работают в одной копии — QA и Критик
 // видят то, что сделал Разработчик. В живой сервер изменения попадают
 // обычным путём: коммит/слияние ветки `roles/<карточка>` владельцем.
+//
+// Правка 3 плана taskflow-mac-host (14.10.2026): роль может быть назначена на
+// удалённую машину. Мозг роли остаётся на .110 — уезжает только папка с кодом.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runOperation } from "../host/gateway.js";
+import { isMachineOnline, resolveMachine } from "../host/gateway.js";
+import db from "../db.js";
 
 /** Корень репозитория, из которого запущен сам сервер (`server/` — его cwd). */
 export function liveServerRepo(): string {
@@ -41,6 +47,85 @@ function sameDir(a: string, b: string): boolean {
 /** Ветка рабочей копии карточки. */
 export function roleBranch(taskId: string): string {
   return `roles/${taskId}`;
+}
+
+/** Пути репозиториев по машинам: server/scripts/task-context-hosts.json. */
+const HOSTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-hosts.json");
+
+/** Путь репозитория проекта НА МАШИНЕ machineId, или null если не заведён. */
+export function hostRepoPath(taskId: string, machineId: string): string | null {
+  let проект: string;
+  try {
+    const row = db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(taskId) as
+      | { project_id?: string | null }
+      | undefined;
+    проект = row?.project_id ?? "";
+  } catch {
+    return null;
+  }
+  try {
+    const карта: Record<string, Record<string, string>> =
+      JSON.parse(fs.readFileSync(HOSTS_CONFIG, "utf8")).projects ?? {};
+    const найденный = карта[machineId]?.[проект];
+    return typeof найденный === "string" ? найденный : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Рабочая папка роли на удалённой машине.
+ *
+ * Ровно одна операция: создать worktree на той машине и вернуть путь К НЕЙ.
+ * Проверки пути, лимиты и имя ветки уже умеет операция git_worktree хоста —
+ * копировать её в сервер незачем.
+ *
+ * Ошибки не проглатываются. Машина назначена, но офлайн или отозвана — это
+ * внятный отказ, а не тихий возврат на .110: тихий возврат означал бы, что
+ * роль отчитается о работе в папке, которую никто не откроет.
+ */
+export async function remoteRoleWorkspace(
+  machineId: string,
+  repo: string,
+  taskId: string,
+): Promise<string> {
+  const машина = resolveMachine(machineId);
+  if (!машина) throw new Error(`роль назначена на машину, которой нет в реестре: ${machineId}`);
+  if (машина.revoked_at) throw new Error(`ключ машины «${машина.name}» отозван`);
+  if (!isMachineOnline(машина.id)) {
+    throw new Error(`машина «${машина.name}» сейчас офлайн — подключите её и повторите`);
+  }
+
+  // Путь репозитория берём из настройки машин; если её нет — падаем словами,
+  // а не подставляем серверный путь: путь на .110 для хоста не значит ничего.
+  const путьНаМаке = hostRepoPath(taskId, машина.id);
+  if (!путьНаМаке) {
+    throw new Error(
+      `для машины «${машина.name}» не заведён репозиторий проекта (${HOSTS_CONFIG})`,
+    );
+  }
+
+  const результат = await runOperation(машина.id, "git_worktree", {
+    action: "add",
+    repo: путьНаМаке,
+    taskId,
+    branch: roleBranch(taskId),
+  });
+
+  // Путь работы приходит в stdout: отдельного поля data в протоколе нет
+  // (проверено по OpResultMessage в protocol.ts) — операция отдаёт результат
+  // как JSON-строку.
+  const сырое = ((результат as { stdout?: string }).stdout ?? "").trim();
+  if (!сырое) {
+    throw new Error(`хост не вернул путь рабочей копии для машины «${машина.name}»`);
+  }
+  const путь = (JSON.parse(сырое) as { path?: string }).path;
+  if (!путь) {
+    throw new Error(
+      `хост вернул неожиданный ответ для машины «${машина.name}»: ${сырое.slice(0, 120)}`,
+    );
+  }
+  return путь;
 }
 
 /**
