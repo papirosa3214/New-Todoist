@@ -23,5 +23,8 @@
     "tsx": "^4.23.12",
     "typescript": "~6.0.2",
     "vitest": "^4.1.10"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }
