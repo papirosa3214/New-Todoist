@@ -12,6 +12,7 @@ import {
   unwrapRoleEnvelope,
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
+import { chatHandoff } from "./chatHandoff.js";
 
 // Ленивая подготовка: db.prepare с колонкой chat_message_id не должен
 // падать на импорте, если миграция 053 ещё не прошла (index.ts импортирует
@@ -55,6 +56,8 @@ export function formatChatMessage(message: any) {
     is_session_marker: Boolean(message.is_session_marker),
     // Шаги хода роли (владелец 27.09.2026) — JSON-строка в chat_messages.steps.
     steps: message.steps ? savedSteps(message.steps) : null,
+    // Сдача этапа (14.10.2026): главное из отчёта роли — см. chatHandoff.ts.
+    handoff: chatHandoff(message),
     // Конверт ok/output в ответе роли (01.10.2026) — показываем только output.
     text: displayText,
   };
