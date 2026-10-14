@@ -1,0 +1,43 @@
+import {beforeAll,afterAll,it,expect} from "vitest";
+import {buildApp} from "../src/index.js";
+import db from "../src/db.js";
+import {ensureTaskArtifactFolder} from "../src/lib/taskArtifactFolder.js";
+import {formatChatMessage} from "../src/lib/chatMessages.js";
+let app:any; let user:string; let chat:string;
+beforeAll(async()=>{
+ app=await buildApp();
+ db.prepare("INSERT INTO users(id,name,email,password_hash,role,type) VALUES(?,?,?,'!','agent','ai')").run("coordination_agent","Агент","coordination-agent@test.local");
+ user="coordination_owner";
+ db.prepare("INSERT INTO users(id,name,email,password_hash,role) VALUES(?,?,?,'!','owner')").run(user,"Тест","coordination@test.local");
+ chat="coordination_chat";
+ db.prepare("INSERT INTO chats(id,title,kind,created_by) VALUES(?,?,'group',?)").run(chat,"Проверка",user);
+ db.prepare("INSERT INTO chat_members(chat_id,member_id) VALUES(?,?)").run(chat,user);
+});
+afterAll(async()=>{await app?.close();});
+it("system account has no agent role or credential",()=>{
+ const row=db.prepare("SELECT * FROM users WHERE id='taskflow_system'").get() as any;
+ expect(row.name).toBe("Система");expect(row.role_key).toBeNull();expect(row.api_token).toBeNull();
+});
+it("task link keeps message text and is not a proposal",()=>{
+ const m=formatChatMessage({id:"link",text:"Конкретный вопрос",task_id:null,kind:null});
+ expect(m.kind).toBeNull();expect(m.text).toBe("Конкретный вопрос");
+});
+it("proposal kind stays explicit",()=>{
+ expect(formatChatMessage({id:"proposal",text:"Предлагаю",kind:"task_proposal"}).kind).toBe("task_proposal");
+});
+// Правило про длину текста ролей снято целиком (владелец 04.10.2026,
+// миграция 099): сервер больше не считает слова и не режет ответы. Проверяем
+// обратное — что длинное сообщение роли сохраняется, а не пропадает.
+it("long agent message is stored instead of being rejected",()=>{
+ const text=Array(300).fill("слово").join(" ");
+ const id="coordination_long";
+ db.prepare("INSERT INTO chat_messages(id,from_user_id,text,channel,chat_id) VALUES(?,?,?,'chat',?)").run(id,"coordination_agent",text,chat);
+ const row=db.prepare("SELECT length(text) AS n FROM chat_messages WHERE id=?").get(id) as {n:number};
+ expect(row.n).toBe(text.length);
+});
+it("task folder is created once and retained",()=>{
+ db.prepare("INSERT INTO tasks(id,title,creator_id) VALUES('coordination_task','Работа',?)").run(user);
+ const first=ensureTaskArtifactFolder("coordination_task");
+ expect(ensureTaskArtifactFolder("coordination_task")).toBe(first);
+ expect((db.prepare("SELECT artifact_folder_id FROM tasks WHERE id='coordination_task'").get() as any).artifact_folder_id).toBe(first);
+});
