@@ -156,6 +156,8 @@ describe("Читаемый отчёт — часть результата рол
     expect(submit.description).toContain("## Проверки");
   }
   const review=tools.find(t=>t.name==="taskflow_review") as any;
-  expect(review.parameters.properties.report_markdown.type).toBe("string");
+  // Вердикт — только Критику (14.10.2026, roleToolScope).
+  if (role === "critic_verifier") expect(review.parameters.properties.report_markdown.type).toBe("string");
+  else expect(review).toBeUndefined();
  });
 });

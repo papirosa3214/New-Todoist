@@ -1,3 +1,5 @@
+import { allRoles } from "../roleRouting.js";
+import { roleToolAllowed } from "../lib/roleToolScope.js";
 import { clockLine } from "../lib/clockLine.js";
 import { currentChatGeneration, claimMessageDelivery, finishMessageDelivery, fenceMessageDelivery } from "./chatQueue.js";
 import { agentMessagingTools } from "./agentMessaging.js";
@@ -341,7 +343,9 @@ export async function requestPlanStep(role: string, p: any, currentSubtaskId?: s
     план:resp?.plan,связи:resp?.edges};
 }
 
-export function taskflowTools(role: string, model: string | null, taskId?: string, subtaskId?:string) {
+function taskflowToolsUnscoped(role: string) { return taskflowTools(role, null, undefined, undefined, true); }
+
+export function taskflowTools(role: string, model: string | null, taskId?: string, subtaskId?:string, unscoped = false) {
   const activity = (role: string, taskId: string, kind: string, target: string) => postActivity(role, taskId, kind, target, subtaskId);
   const T = (
     name: string,
@@ -759,10 +763,23 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  return [...tools, ...orchestratorTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])].filter(t => (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
+  const all = [...tools, ...orchestratorTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])];
+  if (unscoped) return all;
+  return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }
 
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+
+let knownTools: Set<string> | null = null;
+/** Все инструменты, какие есть хоть у одной роли, — для журнала нехватки. */
+function knownToolNames(): Set<string> {
+  if (!knownTools) {
+    const names = new Set<string>(BUILTIN_TOOLS);
+    for (const r of allRoles()) for (const t of taskflowToolsUnscoped(r.key)) names.add(t.name);
+    knownTools = names;
+  }
+  return knownTools;
+}
 const HEARTBEAT_MS = 90_000;
 
 /** Что агент роли получает на заходе внутри сервера — для экрана «Команда». */
@@ -1360,8 +1377,17 @@ try {
   const KIND: Record<string, string> = {
     read: "read", grep: "search", find: "search", ls: "read", edit: "edit", write: "write", bash: "run",
   };
+  const availableToolNames = new Set<string>([...builtinTools.map((t: any) => t.name), ...customTools.map((t: any) => t.name)]);
+  const missingLogged = new Set<string>();
+  let lastAssistantThought = "";
   const unsubscribeLive = session.subscribe((event: any) => {
     liveTurn.onEvent(event);
+    if (event?.type === "message_end" && event.message?.role === "assistant" && Array.isArray(event.message.content)) {
+      const text = event.message.content
+        .map((c: any) => c?.type === "thinking" ? c.thinking : c?.type === "text" ? c.text : "")
+        .filter(Boolean).join("\n").trim();
+      if (text) lastAssistantThought = text;
+    }
     if(event?.type==="message_end" && runControl.unacknowledgedMessengerMessages.size){
       queueMicrotask(()=>{
         try{
@@ -1381,6 +1407,18 @@ try {
       });
     }
     if (event?.type !== "tool_execution_start") return;
+    // Журнал нехватки (14.10.2026): роль позвала инструмент, которого у неё
+    // нет, — по этим записям возвращаем убранное точечно.
+    if (event.toolName && !availableToolNames.has(event.toolName) && !missingLogged.has(event.toolName)) {
+      missingLogged.add(event.toolName);
+      // Зачем звала: аргументы вызова и последняя мысль роли перед ним —
+      // по ним видно, тупит роль или инструмент ей правда нужен.
+      // «removed» — инструмент есть у других ролей, этой его не дали;
+      // «absent» — его нет ни у кого: кандидат на новый инструмент.
+      const missing = knownToolNames().has(event.toolName) ? "removed" : "absent";
+      const why = JSON.stringify({ missing, args: event.args ?? null, thought: lastAssistantThought.slice(-1200) }).slice(0, 3000);
+      try { logEvent({ taskId, actorId: roleUserId(role), kind: "role_tool_missing", field: role, fromValue: why, toValue: String(event.toolName).slice(0, 100) }); } catch {}
+    }
     const kind=KIND[event.toolName] ?? (event.toolName?.startsWith("mcp__xcode__") ? (event.toolName.includes("write") ? "write" : event.toolName.includes("read") ? "read" : event.toolName.includes("test") ? "test" : "run") : undefined);
     if(!kind) return;
     const a = event.args ?? {};
