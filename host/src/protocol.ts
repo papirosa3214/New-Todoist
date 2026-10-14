@@ -37,7 +37,7 @@ export const HOST_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export const HOST_DEFAULT_TIMEOUT_MS = 600_000;
 
 /** Операции, которые сервер умеет просить у хоста. Список закрытый. */
-export const OP_NAMES = ["bash", "read", "write", "edit", "grep", "find", "ls", "git_worktree"] as const;
+export const OP_NAMES = ["bash", "read", "write", "edit", "grep", "find", "ls", "git_worktree", "git_push"] as const;
 export type OpName = (typeof OP_NAMES)[number];
 
 export type StreamName = "stdout" | "stderr";

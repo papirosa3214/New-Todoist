@@ -2,6 +2,7 @@ import { OP_NAMES, type OpName } from "../protocol.js";
 import { bash } from "./bash.js";
 import { edit } from "./edit.js";
 import { find } from "./find.js";
+import { gitPush } from "./git_push.js";
 import { gitWorktree } from "./git_worktree.js";
 import { grep } from "./grep.js";
 import { ls } from "./ls.js";
@@ -22,6 +23,7 @@ export const OPERATIONS: Record<OpName, Operation> = {
   find,
   ls,
   git_worktree: gitWorktree,
+  git_push: gitPush,
 };
 
 export function isKnownOperation(name: string): name is OpName {
@@ -31,6 +33,7 @@ export function isKnownOperation(name: string): name is OpName {
 export { bash } from "./bash.js";
 export { edit } from "./edit.js";
 export { find } from "./find.js";
+export { gitPush } from "./git_push.js";
 export { gitWorktree, roleBranch } from "./git_worktree.js";
 export { grep } from "./grep.js";
 export { ls } from "./ls.js";

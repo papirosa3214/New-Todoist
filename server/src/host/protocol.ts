@@ -55,6 +55,9 @@ export const HOST_OPERATIONS = [
   "find",
   "ls",
   "git_worktree",
+  // Push ветки роли в общий gitea: без него roleCommitCheck на .110 не увидит
+  // работу, сделанную на маке, и отклонит закрытие шага (правка 12 плана).
+  "git_push",
 ] as const;
 
 export type HostOperation = (typeof HOST_OPERATIONS)[number];
