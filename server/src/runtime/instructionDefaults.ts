@@ -1,21 +1,26 @@
 // Исходные шаблоны TaskFlow; динамические значения подставляет renderInstruction.
 import { newWidgetTypesEnabled } from "../lib/widgetFeatureFlag.js";
+import {
+  NEW_WIDGET_STATES,
+  NEW_WIDGET_TONES,
+  newWidgetTypeLines,
+} from "../lib/widgetContract.js";
 
 // Строки про восемь новых типов попадают в инструкцию роли только при
 // включённом фиче-флаге: пока нативный клиент их не рисует, роль не должна
 // предлагать их в чате (сервер такие блоки принимает всегда — см.
 // lib/widgetFeatureFlag.ts).
+//
+// Перечень типов и их поля не пишутся здесь руками: строки собираются из
+// lib/widgetContract.ts — того же каталога, по которому живут имена типов в
+// нормализаторе. Раньше проза была отдельным списком и разошлась с полями
+// (max уезжал внутрь ячеек heatmap, а должен был быть в корне), а теста на
+// прозу не было вовсе.
 const NEW_WIDGET_TYPES_PROSE: string[] = [
   "Новые типы (14.10.2026), выбирай по смыслу темы, а не по привычке:",
-  "status_board (groups: label, value, tone, share?) — сводка по статусам;",
-  "bars_list (items: label, value, max, tone) — список, где у строки своя доля;",
-  "chain (links: label, state) — цепочка шагов, где видно, где остановка;",
-  "ladder (steps: label, value, state) — этапы разной величины;",
-  "timeline (items: date, label, state) — что за чем и когда;",
-  "calendar_grid (month, cells: date, count) — что в какой день;",
-  "heatmap (weeks, cells: date, value, max) — когда было busiest;",
-  "compare (left/right: label, value, verdict?) — ровно два значения.",
-  "tone/state — из списка: done, inprog, over, future, block, review, free.",
+  ...newWidgetTypeLines(),
+  `tone — из списка: ${NEW_WIDGET_TONES.join(", ")}.`,
+  `state — из списка: ${NEW_WIDGET_STATES.join(", ")}.`,
   "У новых типов в корне не должно быть ключей metrics, chart или checklists:",
   "нормализатор примет такой блок за старый формат и потеряет имя типа.",
   "Данные для календаря, сетки и тепловой карты бери инструментами",

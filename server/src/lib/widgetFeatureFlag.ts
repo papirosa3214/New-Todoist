@@ -14,6 +14,8 @@
 // Выключение по умолчанию: переменная не задана, пуста или любое другое
 // значение — секретарь продолжает работать на шести старых типах.
 
+import { NEW_WIDGET_TYPES } from "./widgetContract.js";
+
 const FLAG_VARS = ["TASKFLOW_WIDGET_NEW_TYPES"];
 
 function readEnv(): string {
@@ -29,14 +31,6 @@ export function newWidgetTypesEnabled(): boolean {
   return ["1", "on", "true", "yes"].includes(readEnv());
 }
 
-/** Список новых типов одной строкой — для подсказок и логов. */
-export const NEW_WIDGET_TYPES = [
-  "status_board",
-  "calendar_grid",
-  "timeline",
-  "ladder",
-  "heatmap",
-  "compare",
-  "chain",
-  "bars_list",
-] as const;
+/** Список новых типов — для подсказок и логов. Источник один:
+ *  lib/widgetContract.ts, оттуда же собирается проза инструкции роли. */
+export { NEW_WIDGET_TYPES };

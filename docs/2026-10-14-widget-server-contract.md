@@ -17,6 +17,7 @@
 | Нормализатор | восемь новых типов в списке канонических | `server/src/lib/widgetNormalize.ts` (`CANONICAL_TYPES`, экспорт `CANONICAL_WIDGET_TYPES`) |
 | Валидатор секретаря | словарь `SCHEMA` на восемь типов, смысловые тона, проверки полей | `roles/secretary/skills/widget-renderer/scripts/validate_widget.py` — **вне git** |
 | Инструкция роли и инструкция секретаря | перечень новых типов и правило выбора — **под фиче-флагом** | `server/src/runtime/instructionDefaults.ts` |
+| Контракт полей | единственный список полей восьми типов; из него собираются и строки инструкции, и имена типов для нормализатора | `server/src/lib/widgetContract.ts` |
 | Данные | срок и приоритет в ролевом ответе, агрегат по дням, календарь | `server/src/runtime/inProcessRun.ts`, `server/src/routes/tasks.ts` |
 | Флаг | `TASKFLOW_WIDGET_NEW_TYPES` | `server/src/lib/widgetFeatureFlag.ts` |
 
@@ -35,7 +36,7 @@
 | `ladder` | `steps` | `steps[]`: `label`, `value`, `state`; опционально `note` |
 | `timeline` | `items` | `items[]`: `date`, `label`, `state`; опционально `meta` |
 | `calendar_grid` | `month`, `cells` | `cells[]`: `date`, `count`; опционально `tone` |
-| `heatmap` | `weeks`, `cells`, `max` | `cells[]`: `date`, `value` |
+| `heatmap` | `weeks`, `cells`, `max` | `cells[]`: `date`, `value` — `max` это поле блока, в ячейке его нет |
 | `compare` | `left`, `right` | объекты `{label, value}`, у каждого опционально `link` (только `https`) |
 
 Значения `tone` и `state` — из смысловой таблицы: `done`, `inprog`, `over`,
