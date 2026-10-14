@@ -1,3 +1,4 @@
+import { clockLine } from "../lib/clockLine.js";
 import { currentChatGeneration, claimMessageDelivery, finishMessageDelivery, fenceMessageDelivery } from "./chatQueue.js";
 import { agentMessagingTools } from "./agentMessaging.js";
 import { WORK_PLAN_INSTRUCTION } from "../lib/subtaskWorkPlan.js";
@@ -1277,6 +1278,7 @@ async function runRoleInProcessUnserialized(input: {
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
     teamStructureText(role),
+    clockLine(),
     ROLE_REPORT_INSTRUCTION,
     ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, SUBMISSION_POLICY] : []),
     // Срез знаний роли (шаг 4 схемы базы знаний, заметка cfa5cdcd): чтобы

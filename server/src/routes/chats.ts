@@ -1,3 +1,4 @@
+import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
@@ -1884,6 +1885,9 @@ async function deliverAgentReply(args: {
       userText,
     });
   }
+
+  // Время — в каждый ход: сессия помнит старое, а час уже другой (14.10.2026).
+  prompt = clockLine() + "\n\n" + prompt;
 
   // Память команды по теме сообщения (02.10.2026) — в каждый ход: тема
   // разговора меняется, и вспоминать надо то, что относится к ней сейчас.
