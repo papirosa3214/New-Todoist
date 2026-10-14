@@ -20,7 +20,7 @@
 // here — see the report for why a real bulk endpoint would be worth adding
 // server-side.
 import { useEffect, useState } from "react";
-import { Icon, ErrorBanner, SheetHandle } from "./UI";
+import { Icon, ErrorBanner, SheetHandle, SheetHeader } from "./UI";
 import { useUpdateTask } from "../api/tasks";
 import { useGuardedCallback } from "../lib/useGuardedCallback";
 import { addDays, todayStr } from "../lib/date";
@@ -215,28 +215,15 @@ export function RescheduleSheet({
             применяются сразу по тапу, без промежуточного подтверждения —
             календарь же требует явного "готово", потому что просто листать
             месяцы не должно ничего применять). */}
-        <div className="flex items-center justify-between pb-2">
-          <button
-            onClick={onClose}
-            aria-label="Закрыть"
-            className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center"
-          >
-            <Icon name="x" size={20} className="text-sub" />
-          </button>
-          {/* Заголовок шторки — 17px, как заголовок вторичного экрана
-              (ScreenHeader variant="compact"): шторка это тот же уровень
-              навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
-              значит «поле ввода, защита от автозума iOS», см. index.css. */}
-          <h3 className="text-[17px] font-semibold text-text">Срок</h3>
-          <button
-            onClick={() => stagedDate && applyDate(stagedDate)}
-            disabled={!stagedDate || busy}
-            aria-label="Подтвердить выбранную дату"
-            className="tap-scale w-11 h-11 -mr-2 rounded-full bg-red flex items-center justify-center disabled:opacity-40"
-          >
-            <Icon name="check" size={18} className="text-white" />
-          </button>
-        </div>
+        <SheetHeader
+          title="Срок"
+          onClose={onClose}
+          actionIcon="check"
+          onAction={() => stagedDate && applyDate(stagedDate)}
+          actionDisabled={!stagedDate || busy}
+          actionAriaLabel="Подтвердить выбранную дату"
+          preventMouseDown
+        />
 
         <div className="flex flex-col">
           {quickOptions.map((opt) => (

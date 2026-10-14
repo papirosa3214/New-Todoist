@@ -23,7 +23,7 @@
 // RescheduleSheet.tsx bottom-sheet shape for the "Вернуть на доработку"
 // comment prompt).
 import { useEffect, useMemo, useState } from "react";
-import { Avatar, Button, ErrorBanner, Icon, SheetHandle } from "./UI";
+import { Avatar, Button, ErrorBanner, Icon, SheetHandle, SheetHeader } from "./UI";
 import { useDialog } from "./Dialog";
 import { useRunTaskAgent, useSetAgentState, useUpdateTask } from "../api/tasks";
 import { useAddComment } from "../api/comments";
@@ -663,37 +663,15 @@ function ReturnToWorkSheet({
       >
         {/* Handle: drag target for dismiss gesture */}
         <SheetHandle dragProps={sheet.dragProps} />
-        <div className="flex items-center justify-between pb-2">
-          <button
-            type="button"
-            // preventDefault на mousedown: тап при открытой клавиатуре иначе
-            // сперва уводит фокус с textarea, клавиатура съезжает, шторка
-            // переезжает — и кнопка уходит из-под пальца между touchstart и
-            // touchend, click не приходит. Тот же приём, что в MicKeyboardBar
-            // и в ReplyForm (SubtaskFeed.tsx).
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={onCancel}
-            aria-label="Отмена"
-            className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center"
-          >
-            <Icon name="x" size={20} className="text-sub" />
-          </button>
-          {/* Заголовок шторки — 17px, как заголовок вторичного экрана
-              (ScreenHeader variant="compact"): шторка это тот же уровень
-              навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
-              значит «поле ввода, защита от автозума iOS», см. index.css. */}
-          <h3 className="text-[17px] font-semibold text-text">{title}</h3>
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={onSubmit}
-            disabled={!value.trim() || busy}
-            aria-label="Отправить"
-            className="tap-scale w-11 h-11 -mr-2 rounded-full bg-red flex items-center justify-center disabled:opacity-40"
-          >
-            <Icon name="check" size={18} className="text-white" />
-          </button>
-        </div>
+        <SheetHeader
+          title={title}
+          onClose={onCancel}
+          actionIcon="check"
+          onAction={onSubmit}
+          actionDisabled={!value.trim() || busy}
+          actionAriaLabel="Отправить"
+          preventMouseDown
+        />
         <p className="text-[13px] text-sub mb-2 px-1">{hint}</p>
         <ErrorBanner
           error={error}

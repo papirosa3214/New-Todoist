@@ -21,6 +21,7 @@ import { useChats } from "../api/chats";
 import { useCurrentUser } from "../api/auth";
 import {
   Avatar,
+  EmptyState,
   ErrorBanner,
   Icon,
   Loading,
@@ -61,7 +62,7 @@ export function ChatsScreen() {
       />
 
       {!isLoading && chats.length === 0 && !isError && (
-        <EmptyState onCreate={openCreate} />
+        <ChatsEmpty onCreate={openCreate} />
       )}
 
       {!isLoading && chats.length > 0 && (
@@ -87,26 +88,17 @@ export function ChatsScreen() {
   );
 }
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
+// Локальный EmptyState заменён на общий `EmptyState` из UI.tsx
+// (DESIGN.md §2.7). Ниже — тонкая обёртка, задающая только иконку
+// и тексты, чтобы раздел сам выбирал «что показать, когда пусто».
+function ChatsEmpty({ onCreate }: { onCreate: () => void }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center px-6 py-16">
-      <div className="w-16 h-16 rounded-full bg-card flex items-center justify-center mb-4">
-        <Icon name="chat" size={28} className="text-sub" />
-      </div>
-      <h2 className="text-[19px] font-semibold text-text mb-1">
-        Чатов пока нет
-      </h2>
-      <p className="text-[14px] text-sub leading-relaxed max-w-[280px] mb-6">
-        Создайте персональный чат с одной ролью или групповой — с
-        несколькими сразу.
-      </p>
-      <button
-        onClick={onCreate}
-        className="h-12 px-6 rounded-xl bg-red text-[15px] font-semibold text-white tap-fade"
-      >
-        Новый чат
-      </button>
-    </div>
+    <EmptyState
+      icon="chat"
+      text="Чатов пока нет"
+      description="Создайте персональный чат с одной ролью или групповой — с несколькими сразу."
+      action={{ label: "Новый чат", onClick: onCreate }}
+    />
   );
 }
 

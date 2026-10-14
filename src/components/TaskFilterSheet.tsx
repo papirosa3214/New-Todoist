@@ -11,7 +11,7 @@
 // sheet's own markup doesn't vary between them at all, only the task list
 // each screen feeds it does.
 import { useEffect, useState } from "react";
-import { Icon, Avatar, SheetHandle } from "./UI";
+import { Icon, Avatar, SheetHandle, SheetHeader, Switch } from "./UI";
 import { Card, FieldRow } from "./TaskFields";
 import { useBottomSheet } from "../lib/useBottomSheet";
 import {
@@ -240,27 +240,15 @@ export function TaskFilterSheet({
       >
         {/* Handle: drag target for dismiss gesture */}
         <SheetHandle dragProps={sheet.dragProps} />
-        <div className="flex items-center justify-between pb-3">
-          <button
-            onClick={onClose}
-            aria-label="Закрыть"
-            className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center"
-          >
-            <Icon name="x" size={20} className="text-sub" />
-          </button>
-          {/* Заголовок шторки — 17px, как заголовок вторичного экрана
-              (ScreenHeader variant="compact"): шторка это тот же уровень
-              навигации. 16px здесь был сиротой вне шкалы — в проекте 16px
-              значит «поле ввода, защита от автозума iOS», см. index.css. */}
-          <h3 className="text-[17px] font-semibold text-text">Фильтры</h3>
-          <button
-            onClick={() => setFilters(DEFAULT_TASK_FILTERS)}
-            disabled={!hasActive}
-            className="text-[13px] text-sub disabled:opacity-40 -mr-1 px-2 h-11"
-          >
-            Сбросить
-          </button>
-        </div>
+        <SheetHeader
+          title="Фильтры"
+          onClose={onClose}
+          textAction={{
+            label: "Сбросить",
+            onClick: () => setFilters(DEFAULT_TASK_FILTERS),
+            disabled: !hasActive,
+          }}
+        />
 
         <div className="flex flex-col gap-3 pb-3">
           <FilterPicker
@@ -390,8 +378,6 @@ export function TaskFilterSheet({
                   showCompleted: !filters.showCompleted,
                 })
               }
-              role="switch"
-              aria-checked={filters.showCompleted}
               className="tap-row w-full flex items-center gap-3 py-3 px-4 text-left"
             >
               <Icon name="check" size={18} className="text-sub shrink-0" />
@@ -399,19 +385,15 @@ export function TaskFilterSheet({
                 Показывать выполненные
               </span>
               {/* Тот же переключатель, что в настройках: 43×25 с белым
-                  кружком — свой второй вид тут заводить незачем. */}
-              <span
-                className={`relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors ${
-                  filters.showCompleted
-                    ? "bg-red"
-                    : "bg-card2 border border-stroke"
-                }`}
-              >
-                <span
-                  className="absolute top-[2.5px] w-[20px] h-[20px] rounded-full bg-white shadow-toggle transition-[right] duration-150"
-                  style={{ right: filters.showCompleted ? "2.5px" : "20.5px" }}
-                />
-              </span>
+                  кружком — общий Switch из UI.tsx, копипасты геометрии
+                  больше нет. */}
+              <Switch
+                checked={filters.showCompleted}
+                onChange={(next) =>
+                  setFilters({ ...filters, showCompleted: next })
+                }
+                ariaLabel="Показывать выполненные"
+              />
             </button>
           </Card>
 
@@ -485,8 +467,6 @@ export function TaskFilterSheet({
                             if (isDisabled) return;
                             plannerProjects.onToggle(p.id);
                           }}
-                          role="switch"
-                          aria-checked={isIn}
                           disabled={isDisabled}
                           aria-disabled={isDisabled}
                           className={
@@ -507,18 +487,19 @@ export function TaskFilterSheet({
                           >
                             {p.name}
                           </span>
-                          <span
-                            className={`relative w-[43px] h-[25px] rounded-full shrink-0 transition-colors ${
-                              isIn
-                                ? "bg-red"
-                                : "bg-card2 border border-stroke"
-                            }`}
-                          >
-                            <span
-                              className="absolute top-[2.5px] w-[20px] h-[20px] rounded-full bg-white shadow-toggle transition-[right] duration-150"
-                              style={{ right: isIn ? "2.5px" : "20.5px" }}
+                          {/* Общий Switch — копипасты геометрии больше
+                              нет. pointer-events-none, чтобы клик уходил
+                              во внешнюю строку: вся строка — тап-зона
+                              «включить проект в ежедневник», а не сам
+                              тумблер по отдельности. */}
+                          <div className="pointer-events-none">
+                            <Switch
+                              checked={isIn}
+                              onChange={() => {}}
+                              disabled={isDisabled}
+                              ariaLabel={`Проект ${p.name}`}
                             />
-                          </span>
+                          </div>
                         </button>
                       );
                     });

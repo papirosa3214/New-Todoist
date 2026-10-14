@@ -22,7 +22,7 @@
 // ли она, незачем.
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import { Icon, SheetHandle, Loading, ErrorBanner } from "./UI";
+import { SheetHandle, SheetHeader, Loading, ErrorBanner } from "./UI";
 import { useBottomSheet } from "../lib/useBottomSheet";
 import type { ApiAttachment } from "../api/types";
 
@@ -110,25 +110,14 @@ export function AttachmentViewerSheet({
         onClick={(e) => e.stopPropagation()}
       >
         <SheetHandle dragProps={sheet.dragProps} />
-        <div className="flex items-center justify-between pb-3">
-          <button
-            onClick={onClose}
-            aria-label="Закрыть"
-            className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center shrink-0"
-          >
-            <Icon name="x" size={20} className="text-sub" />
-          </button>
-          <h3 className="text-[17px] font-semibold text-text truncate px-2">
-            {attachment.file_name}
-          </h3>
-          <button
-            onClick={onDownload}
-            aria-label={`Скачать ${attachment.file_name}`}
-            className="tap-scale w-11 h-11 -mr-2 flex items-center justify-center shrink-0"
-          >
-            <Icon name="arrowDown" size={20} className="text-text" />
-          </button>
-        </div>
+        <SheetHeader
+          title={attachment.file_name}
+          onClose={onClose}
+          actionIcon="arrowDown"
+          onAction={onDownload}
+          actionVariant="plain"
+          actionAriaLabel={`Скачать ${attachment.file_name}`}
+        />
 
         <ErrorBanner
           error={error}

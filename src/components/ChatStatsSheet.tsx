@@ -18,7 +18,7 @@
 // Полоска у строки — доля от самого нагруженного адресата, а не от всех
 // сообщений: сравнивать глазами нужно участников между собой.
 import type { ReactNode } from "react";
-import { ErrorBanner, Icon, Loading, SheetHandle } from "./UI";
+import { ErrorBanner, Loading, SheetHandle, SheetHeader } from "./UI";
 import { useChatStats } from "../api/chat";
 import { useBottomSheet } from "../lib/useBottomSheet";
 
@@ -124,20 +124,7 @@ export function ChatStatsSheet({
         onClick={(e) => e.stopPropagation()}
       >
         <SheetHandle dragProps={sheet.dragProps} />
-        <div className="flex items-center justify-between pb-3">
-          <button
-            onClick={onClose}
-            aria-label="Закрыть"
-            className="tap-scale w-11 h-11 -ml-2 flex items-center justify-center"
-          >
-            <Icon name="x" size={20} className="text-sub" />
-          </button>
-          <h3 className="text-[17px] font-semibold text-text">
-            Кого озадачивают
-          </h3>
-          {/* Пустой блок в ширину кнопки — заголовок остаётся по центру. */}
-          <span className="w-11" />
-        </div>
+        <SheetHeader title="Кого озадачивают" onClose={onClose} />
 
         <ErrorBanner
           error={isError ? error : null}

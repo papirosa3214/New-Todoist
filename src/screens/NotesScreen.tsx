@@ -36,7 +36,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { ScreenHeader, Icon, Loading, ErrorBanner } from "../components/UI";
+import { ScreenHeader, Icon, Loading, ErrorBanner, EmptyState } from "../components/UI";
 import { useDialog } from "../components/Dialog";
 import { ActionsMenu } from "../components/ActionsMenu";
 import {
@@ -769,7 +769,7 @@ export function NotesScreen() {
         )}
 
         {isEmpty && !showCreateFolder ? (
-          <EmptyState onCreateNote={() => void handleCreateNote(null)} />
+          <NotesEmpty onCreateNote={() => void handleCreateNote(null)} />
         ) : (
           <>
             {/* Корень — тоже цель: сюда вытаскивают из папок наружу.
@@ -1184,22 +1184,17 @@ function NoteRow({
 
 // ────────── Пусто ──────────
 
-function EmptyState({ onCreateNote }: { onCreateNote: () => void }) {
+// Локальный EmptyState заменён на общий `EmptyState` из UI.tsx.
+// variant="plain" — без плашки под иконкой, для контентных пустот
+// (заметки), а не для пустого раздела.
+function NotesEmpty({ onCreateNote }: { onCreateNote: () => void }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center pt-16 gap-3">
-      <Icon name="notebook" size={48} className="text-dim" />
-      <p className="text-[16px] font-semibold text-text">Записей пока нет</p>
-      <p className="text-[13px] text-sub max-w-[280px] leading-snug">
-        Заметки складываются в папки — перетаскиванием или сразу при создании.
-      </p>
-      <button
-        type="button"
-        onClick={onCreateNote}
-        className="tap-scale mt-3 h-11 px-5 rounded-xl bg-card2 text-[15px] font-semibold text-text flex items-center gap-2"
-      >
-        <Icon name="plus" size={18} />
-        Создать заметку
-      </button>
-    </div>
+    <EmptyState
+      variant="plain"
+      icon="notebook"
+      text="Записей пока нет"
+      description="Заметки складываются в папки — перетаскиванием или сразу при создании."
+      action={{ label: "Создать заметку", onClick: onCreateNote }}
+    />
   );
 }
