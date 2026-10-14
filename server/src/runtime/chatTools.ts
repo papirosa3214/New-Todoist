@@ -16,6 +16,9 @@ import db from "../db.js";
 import { restartSlotFromOwnerChat } from "./slotRestart.js";
 import { proposeWork } from "./chatWork.js";
 import { collectTaskSummary, parseSummaryRequest } from "../lib/secretaryTaskSummary.js";
+import { buildChatFile, chatFileName, CHAT_FILE_FORMATS, ChatFileError } from "../lib/chatFileExport.js";
+import { saveUploadedFile, UploadRejected } from "../routes/attachments.js";
+import { roleUserId } from "../roleRouting.js";
 
 
 function qs(params: Record<string, string | undefined>): string {
@@ -144,6 +147,29 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           "гаснет через": resp?.["печатает"] ? `${Math.floor((resp?.["гаснет_через_мс"] ?? 0) / 1000)} с` : "—",
         };
       }),
+    // Файл в чат — настоящим вложением, а не ссылкой (владелец 14.10.2026).
+    ...(ownerContext ? [T("taskflow_chat_attach_file",
+      "Приложить файл к ответу в этом чате — владелец скачает его из сообщения. Единственный способ дать файл: ссылки на файлы не выдумывай. format: md, txt, csv, json, html — содержимое как есть; pdf, docx, odt — content пишешь в Markdown, сервер соберёт документ; xlsx, ods — content в CSV (запятая, первая строка — заголовки). caption — подпись к файлу, по желанию.",
+      Type.Object({ file_name: Type.String(), format: Type.String({ enum: [...CHAT_FILE_FORMATS] }), content: Type.String(), caption: S("подпись к файлу") }),
+      async (p) => {
+        const format = String(p.format).toLowerCase().replace(/^\./, "") as any;
+        let built;
+        try { built = await buildChatFile(String(p.content ?? ""), format); }
+        catch (e) { throw new ToolError(e instanceof ChatFileError ? e.message : `не удалось собрать файл: ${String(e)}`); }
+        const fileName = chatFileName(p.file_name, format);
+        let attachmentId: string;
+        try {
+          attachmentId = saveUploadedFile({ body: built.body, name: fileName, mime: built.mime }, (f) =>
+            db.prepare(`INSERT INTO attachments
+               (id, task_id, comment_id, chat_message_id, kind, user_id, file_name, mime, size, stored_name)
+               VALUES (?, NULL, NULL, NULL, comment, ?, ?, ?, ?, ?)`)
+              .run(f.id, roleUserId(role), f.fileName, f.mime, f.size, f.storedName));
+        } catch (e) { throw new ToolError(e instanceof UploadRejected ? e.message : String(e)); }
+        const resp = await asRole(role, "POST", `/api/chats/${ownerContext.chatId}/messages`, {
+          text: String(p.caption ?? "").trim(), attachment_ids: [attachmentId], reply_to_message_id: ownerContext.messageId, work_mode: "work",
+        });
+        return { файл: fileName, размер_байт: built.body.length, сообщение: resp?.message?.id ?? resp?.id, итог: "Файл уже в чате. В ответе не давай на него ссылок — просто скажи, что приложил." };
+      })] : []),
     T("taskflow_project_tasks",
       "Задачи проекта — не только назначенные на агента. Сортировка по сроку: что горит, то сверху. project — название, либо project_id.",
       Type.Object({
