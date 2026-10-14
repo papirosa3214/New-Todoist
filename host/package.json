@@ -1,0 +1,27 @@
+{
+  "name": "taskflow-host",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Демон TaskFlow на маке: сам подключается к шлюзу .110 по WebSocket и выполняет операции ролей",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.12",
+    "typescript": "~6.0.2",
+    "vitest": "^4.1.10"
+  }
+}
