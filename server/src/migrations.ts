@@ -4576,6 +4576,15 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_device_events_device ON device_events(device_id, created_at);
     `);
   } },
+  // Ветка от сообщения (владелец 14.10.2026): отдельный чат с теми же
+  // участниками и своей сессией роли — основной разговор её контекстом не
+  // засоряется. Номер 143: 142 занят реестром машин в соседней ветке.
+  { id: "143_chat_branches", description: "Ветка чата от сообщения: chats.branch_of_chat_id и branch_of_message_id", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>).map(c => c.name));
+    if (!cols.has("branch_of_chat_id")) db.exec("ALTER TABLE chats ADD COLUMN branch_of_chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL");
+    if (!cols.has("branch_of_message_id")) db.exec("ALTER TABLE chats ADD COLUMN branch_of_message_id TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_chat_branches ON chats(branch_of_chat_id)");
+  } },
 ];
 /**
  * Опции прогона миграций.

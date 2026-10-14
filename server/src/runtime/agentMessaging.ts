@@ -29,7 +29,7 @@ export function agentMessagingTools(role: string, context: Context = {}) {
     return {id:result.message.id,chat_id:chatId,отправлено:result.message.text};
   };
   const directChat = (recipientId: string) => db.transaction(() => {
-    const existing = db.prepare(`SELECT c.id FROM chats c WHERE c.kind='direct' AND c.parent_chat_id IS NULL
+    const existing = db.prepare(`SELECT c.id FROM chats c WHERE c.kind='direct' AND c.parent_chat_id IS NULL AND c.branch_of_chat_id IS NULL
       AND c.task_id IS NULL AND (SELECT count(*) FROM chat_members WHERE chat_id=c.id)=2
       AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
       AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?) ORDER BY c.created_at,c.id LIMIT 1`).get(senderId,recipientId) as {id:string}|undefined;

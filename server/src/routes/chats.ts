@@ -267,6 +267,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
     const id=db.transaction(()=>{
       const existing=db.prepare(`SELECT c.id FROM chats c WHERE c.kind='direct'
         AND c.parent_chat_id IS NULL AND c.closed_at IS NULL
+        AND c.branch_of_chat_id IS NULL
         AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
         AND EXISTS(SELECT 1 FROM chat_members WHERE chat_id=c.id AND member_id=?)
         AND (SELECT COUNT(*) FROM chat_members WHERE chat_id=c.id)=2
@@ -341,6 +342,32 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
 
     return { chat: chatRow(id) };
   });
+
+  // Ветка от сообщения (владелец 14.10.2026): новый чат с теми же
+  // участниками, первым сообщением — копия исходного от того же автора.
+  // У ветки своя сессия роли: первый ход получит историю ветки (с этой
+  // копией), а основной разговор её переписку не увидит.
+  app.post<{ Params: { id: string }; Body: { message_id?: string } }>(
+    "/api/chats/:id/branch", { preHandler: authPre }, async (req: any, reply) => {
+      const parentId = req.params.id;
+      if (!isMember(parentId, req.userId)) return reply.code(404).send({ error: "Чат не найден" });
+      const source = db.prepare("SELECT id, from_user_id, text FROM chat_messages WHERE id = ? AND chat_id = ?")
+        .get(String(req.body?.message_id ?? ""), parentId) as { id: string; from_user_id: string; text: string } | undefined;
+      if (!source) return reply.code(404).send({ error: "Сообщение не найдено в этом чате" });
+      const parent = db.prepare("SELECT kind FROM chats WHERE id = ?").get(parentId) as { kind: ChatKind };
+      const firstLine = unwrapRoleEnvelope(source.text).split("\n").map(l => l.replace(/[#*`>_-]/g, "").trim()).find(Boolean) ?? "сообщение";
+      const title = "Ветка: " + (firstLine.length > 60 ? firstLine.slice(0, 59) + "…" : firstLine);
+      const id = uid();
+      db.transaction(() => {
+        db.prepare("INSERT INTO chats (id, title, kind, created_by, branch_of_chat_id, branch_of_message_id) VALUES (?, ?, ?, ?, ?, ?)")
+          .run(id, title, parent.kind, req.userId, parentId, source.id);
+        db.prepare("INSERT INTO chat_members (chat_id, member_id) SELECT ?, member_id FROM chat_members WHERE chat_id = ?").run(id, parentId);
+        db.prepare("INSERT INTO chat_members (chat_id, member_id) VALUES (?, ?) ON CONFLICT DO NOTHING").run(id, req.userId);
+        db.prepare("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id) VALUES (?, ?, ?, 'chat', ?)")
+          .run(uid(), source.from_user_id, unwrapRoleEnvelope(source.text), id);
+      })();
+      return { chat: chatRow(id) };
+    });
 
   // Мои чаты: где я участник. С превью последнего сообщения и числом
   // непрочитанных (владелец 21.09.2026: бейдж в строке списка чатов,
