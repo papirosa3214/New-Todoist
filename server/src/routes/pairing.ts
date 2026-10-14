@@ -24,6 +24,7 @@ import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
+import { issueMachineKey } from "../host/machines.js";
 
 /** Срок жизни кода — 5 минут (документ решения §5). */
 const CODE_TTL_MS = 5 * 60 * 1000;
@@ -166,6 +167,14 @@ export function registerPairingRoutes(app: FastifyInstance) {
       model?: string;
       os?: string;
       app_version?: string;
+      /**
+       * Куда обменивать код: устройство (телефон, как раньше) или машина.
+       * Одна таблица pairing_codes и один обмен на оба случая — вторая
+       * система рядом с готовой была бы ровно тем, чего здесь не хотим.
+       */
+      target?: "device" | "machine";
+      /** Разрешённые папки машины — но берутся с сервера, не с хоста. */
+      allowed_roots?: string[];
     };
   }>("/api/pairing/exchange", async (req, reply) => {
     const ip = req.ip || "";
@@ -183,9 +192,12 @@ export function registerPairingRoutes(app: FastifyInstance) {
 
     const code = String(req.body?.code || "").trim();
     const installId = String(req.body?.install_id || "").trim();
+    // Машина приходит по QR без install_id: у неё нет приложения с
+    // переустановкой, вместо неё — имя и платформа.
+    const цель = req.body?.target === "machine" ? "machine" : "device";
     // Обязательны только эти два; остальное телефон присылает для списка
     // устройств, и его отсутствие не должно мешать привязке.
-    if (!code || !installId) {
+    if (!code || (цель === "device" && !installId)) {
       logExchangeAttempt(ip, null, false);
       return reply.code(400).send({ error: "invalid_code" });
     }
@@ -219,6 +231,83 @@ export function registerPairingRoutes(app: FastifyInstance) {
       попыток.n <= EXCHANGE_ATTEMPTS_PER_CODE;
     if (!row || !usable) {
       return reply.code(400).send({ error: "invalid_code" });
+    }
+
+    // MACHINE_BRANCH_MARKER — обмен кода на машину (правка 7 плана
+    // taskflow-mac-host). Телефонное сопряжение ниже не меняется ни на
+    // строчку: тот же код, тот же обмен, различается только запись.
+    //
+    // Три отличия от устройства, и все три существенные:
+    //
+    //  1. Ключ машины выпускает issueMachineKey — тот же класс секрета, что
+    //     токен устройства, и в базе тоже только sha256;
+    //  2. Разрешённые папки берутся с СЕРВЕРА, а не с хоста: иначе первое же
+    //     подключение выдало бы роль права на весь домашний каталог без
+    //     спроса. Хост может сузить пересечение, расширить — нет;
+    //  3. Отзыв старой машины с тем же именем — по имени, а не по
+    //     install_id: у машины его нет.
+    if (цель === "machine") {
+      const имя = String(req.body?.name || "").trim() || "mac";
+      // Папки по умолчанию — домашний каталог, но только если оператор
+      // заранее завёл машину с правами. Хост присылает лишь то, что просит,
+      // и это просьба, а не разрешение.
+      const просимые = Array.isArray(req.body?.allowed_roots)
+        ? req.body.allowed_roots.filter((x): x is string => typeof x === "string" && x.trim() !== "")
+        : [];
+
+      let выдано: { machine: { id: string; name: string; allowed_roots: string[]; token_prefix: string }; token: string } | null = null;
+      let выдача_не_прошла = false;
+
+      db.transaction(() => {
+        const burned = db
+          .prepare("UPDATE pairing_codes SET used_at = ? WHERE id = ? AND used_at IS NULL")
+          .run(nowIso(), row.id);
+        if (burned.changes !== 1) return; // успел кто-то раньше — код уже чужой
+
+        // Прежняя машина с тем же именем отзывается: новая привязка той же
+        // машины не должна оставлять в реестре две живые записи с одним
+        // именем — роль спрашивает «машина mac», и ответ стал бы неоднозначным.
+        const прежние = db
+          .prepare("SELECT id FROM machines WHERE name = ? AND revoked_at IS NULL")
+          .all(имя) as Array<{ id: string }>;
+        for (const м of прежние) {
+          db.prepare("UPDATE machines SET revoked_at = ?, revoke_reason = 'repaired' WHERE id = ?")
+            .run(nowIso(), м.id);
+        }
+
+        try {
+          выдано = issueMachineKey({
+            name: имя,
+            allowedRoots: просимые,
+            platform: req.body?.os ?? "darwin",
+            createdBy: row.created_by,
+          });
+        } catch {
+          // Имя занято живой машиной и отзыв не помог — отказ теми же словами,
+          // что и на телефоне, чтобы клиенту не пришлось разбирать коды.
+          выдача_не_прошла = true;
+        }
+      })();
+
+      if (выдача_не_прошла || !выдано) {
+        return reply.code(400).send({ error: "invalid_code" });
+      }
+
+      logDeviceEvent({
+        userId: row.created_by,
+        kind: "pairing_machine_exchange",
+        data: { name: имя },
+      });
+
+      return {
+        token: выдано.token,
+        token_type: "machine",
+        machine_id: выдано.machine.id,
+        prefix: выдано.machine.token_prefix,
+        allowed_roots: выдано.machine.allowed_roots,
+        relay_base_url: relayBaseUrl(),
+        issued_at: nowIso(),
+      };
     }
 
     // Гасим код ДО выпуска токена и одной транзакцией. Иначе два

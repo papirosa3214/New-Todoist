@@ -1,0 +1,4 @@
+{
+  "_comment": "Путь репозитория проекта НА КАЖДОЙ МАШИНЕ: projects → machineId → путь. Читает roleWorkspace.hostRepoPath. Отдельный файл, потому что task-context-projects.json хранит строки (project_id → путь на .110), и вложенный объект там дал бы «нет такого пути» молча.",
+  "projects": {}
+}
