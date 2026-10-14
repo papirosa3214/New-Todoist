@@ -9,6 +9,13 @@
 // Сценарии и границы — в `docs/architecture/57c69735-task-archive-contract.md`,
 // §2 (модель, дерево, текущее выполнение) и §3 (API). Тесты —
 // server/test/taskArchive.test.ts.
+//
+// Политика дерева при архивировании (замечание владельца 08.10.2026, шаг
+// builder_2): когда архивируется карточка с дочерними, всё поддерево
+// (корень + дети + внуки) уходит в архив атомарно. Это совпадает с уже
+// работающим `purgeTasks` (`WITH RECURSIVE` по `parent_id`) и снимает
+// зависшие «сироты» с активной работой и в очереди. Restore возвращает
+// всё поддерево вместе с `parent_id` — связи сохраняются.
 
 import crypto from "node:crypto";
 import db from "../db.js";
@@ -20,46 +27,92 @@ import { purgeTasks } from "./taskPurge.js";
 const purgeUid = () => `plg_${crypto.randomUUID()}`;
 
 /**
- * Отправить карточку в архив.
+ * Собрать поддерево задач: сама `rootId` и все её потомки по `parent_id`,
+ * в любом порядке. Используется в `archiveTask` и `restoreTask` —
+ * операция применяется ко всему набору атомарно.
+ *
+ * `parent_id` у найденных узлов сохраняется как есть; это нужно, чтобы
+ * restore возвращал ровно ту же структуру, что была до архивирования.
+ * Каскадной починки внешних ключей не делаем: `tasks.parent_id` ссылается
+ * на `tasks.id` с `ON DELETE CASCADE`, обратной ссылки нет — то есть
+ * самосогласованность поддерева целиком сохраняется.
+ */
+function subtreeTaskIds(rootId: string): string[] {
+  // WITH RECURSIVE — тот же приём, что в `purgeTasks` (lib/taskPurge.ts).
+  // Используем временную таблицу, чтобы переиспользовать набор id и
+  // дальше по нему выполнять UPDATE/SELECT.
+  db.exec("CREATE TEMP TABLE IF NOT EXISTS _arch_subtree(id TEXT PRIMARY KEY)");
+  db.exec("DELETE FROM _arch_subtree");
+  db.prepare("INSERT OR IGNORE INTO _arch_subtree(id) VALUES (?)").run(rootId);
+  db.exec(`
+    WITH RECURSIVE kids(id) AS (
+      SELECT t.id FROM tasks t JOIN _arch_subtree p ON t.parent_id = p.id
+      UNION
+      SELECT t.id FROM tasks t JOIN kids k ON t.parent_id = k.id
+    )
+    INSERT OR IGNORE INTO _arch_subtree(id) SELECT id FROM kids;
+  `);
+  return (db.prepare("SELECT id FROM _arch_subtree").all() as Array<{ id: string }>).map(
+    (r) => r.id,
+  );
+}
+
+/** Снять временную таблицу, если она есть. Безопасно вызывать многократно. */
+function dropSubtree(): void {
+  db.exec("DELETE FROM _arch_subtree");
+  db.exec("DROP TABLE IF EXISTS _arch_subtree");
+}
+
+/**
+ * Отправить карточку в архив (с поддеревом, см. политику выше).
  *
  * Что происходит в одной транзакции:
- *   1. `archived_at`/`archived_by` ставятся (если уже стоят — функция
- *      идемпотентна и возвращает существующее значение без побочных
- *      эффектов; роуты проверяют состояние на 409/200 раздельно).
- *   2. `agent_state` на самой задаче сбрасывается в NULL — глобальная
- *      метка «агент работает» гасится, иначе карточка продолжала бы
- *      показываться в активных уведомлениях/списке.
- *   3. `releaseSubtaskWork(taskId)` освобождает аренду подзадач
- *      (in_progress/blocked → NULL) — отдельная ручка уже отвечает за
- *      правильное «кто отпустил» и снимает lease без потери результата.
- *   4. Все PENDING-задачи в `role_run_jobs` для этой карточки —
- *      cancelled, чтобы планировщик не подхватил архивную карточку после
- *      рестарта. Running-job намеренно не трогаем: для отмены бегущего
- *      шага нужен подтверждённый abort конкретной Pi-сессии — это за
- *      пределами архивирования.
+ *   1. Собирается поддерево `subtreeTaskIds(rootId)` — корень + все
+ *      потомки по `parent_id` (любая глубина).
+ *   2. На каждой записи поддерева в `tasks`:
+ *      - `archived_at = datetime('now')`, `archived_by = actorId`
+ *        (если уже стоят — функция идемпотентна и возвращает
+ *        существующее значение без побочных эффектов; роуты проверяют
+ *        состояние на 409/200 раздельно);
+ *      - `agent_state` сбрасывается в NULL, `agent_heartbeat_at` —
+ *        туда же, `ready_for_pickup = 0`. Глобальная метка «агент
+ *        работает» гасится на всём поддереве, иначе карточка
+ *        продолжала бы показываться в активных уведомлениях/списке.
+ *   3. `releaseSubtaskWork(taskId)` для каждого узла поддерева
+ *      освобождает аренду подзадач (in_progress/blocked → NULL) —
+ *      работа остановлена на всём поддереве.
+ *   4. Все PENDING-задачи в `role_run_jobs` для каждого узла поддерева —
+ *      cancelled, чтобы планировщик не подхватил ни одну из архивных
+ *      карточек после рестарта. Running-job намеренно не трогаем: для
+ *      отмены бегущего шага нужен подтверждённый abort конкретной
+ *      Pi-сессии — это за пределами архивирования.
  *   5. Шаги плана (`subtasks.collaboration_plan_id`) и сам план
  *      (`task_collaboration_plans`) остаются как история, но ни одна
- *      выборка их не возьмёт: подзадачи помечены NOT NULL только на
- *      аренду; выполненные остаются done=1, невыполненные остаются как
- *      были, и при restore их состояние не меняется (это явное решение:
- *      восстановление возвращает карточку, а не возобновляет автоматику).
- *   6. В `task_events` записывается `task:archived` с указанием актора —
- *      для ленты задачи и чтобы журнал был такой же, как у других
- *      переходов.
+ *      выборка их не возьмёт: подзадачи снимаются по аренде;
+ *      выполненные остаются done=1, невыполненные остаются как были,
+ *      и при restore их состояние не меняется (это явное решение:
+ *      восстановление возвращает карточку, а не возобновляет
+ *      автоматику).
+ *   6. В `task_events` пишется `task:archived` для каждого узла
+ *      поддерева с указанием актора и `parent_id` (для связи в ленте).
  *
- * Поведение «дерево не трогаем» зашито здесь: дочерние карточки
- * остаются живыми (сироты). Если их позже тоже архивируют — отдельно,
- * без рекурсии.
+ * `parent_id` у потомков сохраняется, чтобы `restoreTask` вернул ровно
+ * ту же структуру, что была до архивирования.
  *
- * @returns Снимок задачи после изменения (текущая archived_at/archived_by).
+ * @returns Снимок корневой задачи после изменения
+ *   (текущая archived_at/archived_by) и число архивированных потомков.
  */
 export function archiveTask(taskId: string, actorId: string): {
   task_id: string;
   archived_at: string;
   archived_by: string;
   already_archived: boolean;
+  archived_subtree_count: number;
 } {
   const txn = db.transaction((id: string, by: string) => {
+    // Сначала — проверка существования корня. Это делаем ДО subtreeTaskIds,
+    // чтобы неархивируемой не было: сначала убеждаемся, что корень вообще
+    // есть и в каком состоянии.
     const row = db.prepare("SELECT id, archived_at FROM tasks WHERE id = ?").get(id) as
       | { id: string; archived_at: string | null }
       | undefined;
@@ -72,38 +125,49 @@ export function archiveTask(taskId: string, actorId: string): {
     if (row.archived_at) {
       // Идемпотентно. Повторный DELETE (или POST /archive) на архивную
       // задачу — 200, без снятия аренды и без новой метки в журнале.
+      // Поддерево уже тоже в архиве — не трогаем ничего.
       return {
         task_id: id,
         archived_at: row.archived_at,
         archived_by: by,
         already_archived: true,
+        archived_subtree_count: 0,
       };
     }
 
-    const stamp = db
-      .prepare(
-        "UPDATE tasks SET archived_at = datetime('now'), archived_by = ?, " +
-          "agent_state = NULL, agent_heartbeat_at = NULL, ready_for_pickup = 0 " +
-          "WHERE id = ? AND archived_at IS NULL",
-      )
-      .run(by, id);
-    if (stamp.changes !== 1) {
+    const subtree = subtreeTaskIds(id);
+    // Помечаем timestamp раз — чтобы все узлы поддерева получили ровно
+    // одну и ту же метку времени (это видно в ленте и в журнале).
+    const stamp = new Date().toISOString().replace("T", " ").replace("Z", "");
+    const update = db.prepare(
+      "UPDATE tasks SET archived_at = ?, archived_by = ?, " +
+        "agent_state = NULL, agent_heartbeat_at = NULL, ready_for_pickup = 0 " +
+        "WHERE id = ? AND archived_at IS NULL",
+    );
+    let touched = 0;
+    for (const tid of subtree) {
+      const r = update.run(stamp, by, tid);
+      touched += r.changes;
+    }
+    if (touched === 0) {
       // Гонка: параллельный архивирующий успел раньше. Считаем
       // идемпотентно — пусть роут прочитает текущее состояние.
       const current = db
         .prepare("SELECT archived_at, archived_by FROM tasks WHERE id = ?")
         .get(id) as { archived_at: string; archived_by: string } | undefined;
+      dropSubtree();
       return {
         task_id: id,
         archived_at: current?.archived_at ?? "",
         archived_by: current?.archived_by ?? by,
         already_archived: true,
+        archived_subtree_count: 0,
       };
     }
 
     // Аренды подзадач (in_progress/blocked) снимаются — это «работа
-    // остановлена», как и требует §2 контракта.
-    releaseSubtaskWork(id);
+    // остановлена» на всём поддереве.
+    for (const tid of subtree) releaseSubtaskWork(tid);
 
     // Отложенные запуски — cancelled. Если у шага уже был running job,
     // он сам дойдёт до проверки archived и завершится (roleRunWorker
@@ -114,33 +178,50 @@ export function archiveTask(taskId: string, actorId: string): {
       )
       .all(id) as Array<{ id: string }>;
     for (const p of pending) cancelPendingRoleRunJob(p.id);
+    // Дочерние узлы поддерева тоже могут иметь свои pending jobs
+    // (например, комментарий, оставленный в момент архивирования).
+    for (const tid of subtree) {
+      if (tid === id) continue;
+      const kids = db
+        .prepare(
+          "SELECT id FROM role_run_jobs WHERE task_id = ? AND status IN ('queued', 'retry_wait')",
+        )
+        .all(tid) as Array<{ id: string }>;
+      for (const p of kids) cancelPendingRoleRunJob(p.id);
+    }
 
-    // Журнал задачи: один kind на оба случая (DELETE и POST /archive),
-    // потому что для ленты задачи это одно и то же действие.
-    logEvent({
-      taskId: id,
-      actorId: by,
-      kind: "task:archived",
-      field: "archived_at",
-      fromValue: null,
-      toValue: "now",
-    });
+    // Журнал задачи: одно событие на каждый узел поддерева. Так лента
+    // задачи и iOS получают полную картину, что именно ушло в архив
+    // (для секретаря это тоже полезно — он видит, какие дети «ушли
+    // вместе»).
+    for (const tid of subtree) {
+      logEvent({
+        taskId: tid,
+        actorId: by,
+        kind: "task:archived",
+        field: "archived_at",
+        fromValue: null,
+        toValue: "now",
+      });
+    }
 
     const cur = db
       .prepare("SELECT archived_at FROM tasks WHERE id = ?")
       .get(id) as { archived_at: string };
+    dropSubtree();
     return {
       task_id: id,
       archived_at: cur.archived_at,
       archived_by: by,
       already_archived: false,
+      archived_subtree_count: subtree.length,
     };
   });
   return txn(taskId, actorId);
 }
 
 /**
- * Восстановить карточку из архива.
+ * Восстановить карточку из архива (с поддеревом).
  *
  * Условия (кроме прав доступа, которые проверяют ворота):
  *   - карточка в архиве (NOT NULL archived_at), иначе — 409 not_archived;
@@ -149,8 +230,12 @@ export function archiveTask(taskId: string, actorId: string): {
  *     имеет смысла (контракт §3).
  *
  * Что делается:
- *   - `archived_at`/`archived_by` снимаются в NULL;
- *   - в `task_events` пишется `task:restored`;
+ *   - поддерево корня (`subtreeTaskIds(rootId)`) снимается с архива
+ *     атомарно: `archived_at`/`archived_by` → NULL на каждом узле.
+ *     `parent_id` сохраняется — структура дерева возвращается ровно
+ *     такой, какой была до архивирования;
+ *   - в `task_events` пишется `task:restored` для каждого узла
+ *     поддерева;
  *   - existing-работы НЕ возобновляются: план и подзадачи остаются как
  *     были, как требует §2 контракта.
  *
@@ -161,6 +246,7 @@ export function restoreTask(taskId: string, actorId: string): {
   task_id: string;
   project_archived?: boolean;
   reason?: string;
+  restored_subtree_count?: number;
 } {
   const txn = db.transaction((id: string, by: string) => {
     const row = db
@@ -186,24 +272,36 @@ export function restoreTask(taskId: string, actorId: string): {
         return { task_id: id, project_archived: true };
       }
     }
-    const upd = db
-      .prepare(
-        "UPDATE tasks SET archived_at = NULL, archived_by = NULL " +
-          "WHERE id = ? AND archived_at IS NOT NULL",
-      )
-      .run(id);
-    if (upd.changes !== 1) {
+
+    // Поддерево: корень + все архивные потомки (родительский archived
+    // уже подтверждён, дети тоже в архиве — иначе нарушена инвариантность
+    // политики B).
+    const subtree = subtreeTaskIds(id);
+    const upd = db.prepare(
+      "UPDATE tasks SET archived_at = NULL, archived_by = NULL " +
+        "WHERE id = ? AND archived_at IS NOT NULL",
+    );
+    let touched = 0;
+    for (const tid of subtree) {
+      const r = upd.run(tid);
+      touched += r.changes;
+    }
+    if (touched === 0) {
+      dropSubtree();
       return { task_id: id, reason: "not_archived" };
     }
-    logEvent({
-      taskId: id,
-      actorId: by,
-      kind: "task:restored",
-      field: "archived_at",
-      fromValue: "archived",
-      toValue: null,
-    });
-    return { task_id: id };
+    for (const tid of subtree) {
+      logEvent({
+        taskId: tid,
+        actorId: by,
+        kind: "task:restored",
+        field: "archived_at",
+        fromValue: "archived",
+        toValue: null,
+      });
+    }
+    dropSubtree();
+    return { task_id: id, restored_subtree_count: subtree.length };
   });
   return txn(taskId, actorId);
 }
@@ -330,16 +428,29 @@ export function purgeArchivedTask(taskId: string, actorId: string): {
 
 /**
  * Удобный помощник для тестов и роутов: список архивных задач
- * (только владелец, фильтр `archived=true`). Выдаёт строки в формате,
- * пригодном для hydrateTask, плюс `subtask_count` для iOS-чипа «есть
- * подзадачи». Сортировка — `archived_at DESC` (свежие сверху), как
- * требует §3 контракта.
+ * (только владелец, фильтр `archived=true`).
+ *
+ * Политика дерева (см. шапку файла): при архивировании корня всё
+ * поддерево уходит в архив атомарно. Чтобы в UI архива не дублировать
+ * одну и ту же «операцию» N раз (родитель + каждый ребёнок), здесь
+ * отдаются только корни архивных поддеревьев: запись t, у которой
+ * `parent_id IS NULL` либо указывает на не-архивную карточку.
+ * Число архивных потомков корня возвращается как
+ * `archived_subtree_count` — для iOS-чипа «в архиве с детьми».
+ *
+ * Сортировка — `archived_at DESC` (свежие сверху), как требует §3
+ * контракта.
  */
 export function listArchivedTasks(input: {
   projectId?: string | null;
   assigneeId?: string | null;
   limit?: number;
-} = {}): Array<{ id: string; archived_at: string; subtask_count: number }> {
+} = {}): Array<{
+  id: string;
+  archived_at: string;
+  subtask_count: number;
+  archived_subtree_count: number;
+}> {
   const where: string[] = ["t.archived_at IS NOT NULL"];
   const params: unknown[] = [];
   if (input.projectId) {
@@ -350,19 +461,44 @@ export function listArchivedTasks(input: {
     where.push("t.assignee_id = ?");
     params.push(input.assigneeId);
   }
+  // Отбираем только корни: либо нет parent_id, либо parent_id указывает
+  // на НЕархивную карточку. Это исключает «промежуточные» узлы
+  // архивного поддерева.
+  where.push(
+    "(t.parent_id IS NULL OR NOT EXISTS (SELECT 1 FROM tasks p WHERE p.id = t.parent_id AND p.archived_at IS NOT NULL))",
+  );
   const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 200)));
+  // Считаем архивных потомков корня рекурсивно (включая сам корень):
+  // для каждой записи t, у которой выполнен where-предикат «архивный
+  // корень» (см. выше), выдаём 1 + число архивных узлов, чьим
+  // ближайшим предком в архиве является t. Альтернатива — отдельный
+  // рекурсивный проход в JS, но он уступает SQLite CTE по объёму
+  // кода и по гарантии «выполнилось всё в одной транзакции».
   return db
     .prepare(
-      `SELECT t.id, t.archived_at,
-              (SELECT COUNT(*) FROM subtasks s WHERE s.task_id = t.id) AS subtask_count
-         FROM tasks t
-        WHERE ${where.join(" AND ")}
-        ORDER BY t.archived_at DESC
-        LIMIT ?`,
+      `WITH RECURSIVE arch_roots(id) AS (
+         SELECT t.id FROM tasks t WHERE ${where.join(" AND ")}
+       ),
+       arch_subtree(root_id, id) AS (
+         SELECT id, id FROM arch_roots
+         UNION
+         SELECT a.root_id, d.id
+           FROM arch_subtree a
+           JOIN tasks d ON d.parent_id = a.id
+          WHERE d.archived_at IS NOT NULL
+       )
+      SELECT r.id, r.archived_at,
+             (SELECT COUNT(*) FROM subtasks s WHERE s.task_id = r.id) AS subtask_count,
+             (SELECT COUNT(*) FROM arch_subtree s WHERE s.root_id = r.id) AS archived_subtree_count
+        FROM tasks r
+       WHERE r.id IN (SELECT id FROM arch_roots)
+       ORDER BY r.archived_at DESC
+       LIMIT ?`,
     )
     .all(...params, limit) as Array<{
     id: string;
     archived_at: string;
     subtask_count: number;
+    archived_subtree_count: number;
   }>;
 }

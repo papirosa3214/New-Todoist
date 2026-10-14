@@ -468,6 +468,10 @@ export function registerTaskRoutes(app: FastifyInstance) {
         const hydrated = hydrateTask(row) as any;
         if (includeChildrenFlag) {
           hydrated.subtask_count = r.subtask_count;
+          // Число архивных потомков корня поддерева — для iOS-чипа
+          // «в архиве с детьми» (политика B: при архивировании корня всё
+          // поддерево ушло вместе).
+          hydrated.archived_subtree_count = r.archived_subtree_count;
         }
         return hydrated;
       });

@@ -1,0 +1,10 @@
+[
+  {"goto": "/today", "note": "Открываем «Сегодня» — там должны быть задачи с планом"},
+  {"wait": 1500},
+  {"snap": "01-today"},
+  {"click": ".tf-row", "note": "Кликаем первую задачу в списке (если есть)"},
+  {"wait": 1500},
+  {"snap": "02-detail"},
+  {"expect_no_text": "Cannot read properties", "note": "TypeError не должен появиться"},
+  {"expect_no_text": "TypeError", "note": "TypeError в UI"}
+]
