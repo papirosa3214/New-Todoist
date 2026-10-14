@@ -54,7 +54,6 @@ import {
 import { authSessionManager, type AuthSessionView } from "./AuthSession.js";
 import { prepareRoleRunAccess, releaseRoleRunAccess } from "./roleRunAccess.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
-import { logPiEvent } from "../lib/piEventLog.js";
 import {
   ModelNotAvailableError,
   RuntimeUnavailableError,
@@ -848,9 +847,6 @@ export const piRuntime: RuntimeAdapter = {
 
     client.onEvent((event: JsonAgentSessionEvent) => {
       const e = event as unknown as { type: string; [k: string]: unknown };
-      // Лог между нашим кодом и SDK: первое, что видно, — что именно
-      // вернул Pi. Признак лимита провайдера (429) обязан тут ловиться.
-      logPiEvent(input.taskId, e);
       if (e.type === "session_start") {
         // Резервный источник sessionId, если getState() недоступен.
         const sid = (e as { sessionId?: string }).sessionId;
