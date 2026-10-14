@@ -212,10 +212,12 @@ describe("обратная синхронизация TaskFlow → Linear", () =
     const old = new Date(Date.now() - LINEAR_SYNC_STALE_MS - 60_000).toISOString().replace("T", " ").slice(0, 19);
     db.prepare("INSERT INTO linear_sync_queue(id,owner_id,workspace_id,task_id,issue_id,team_id,operation,payload,desired_key,status,created_at) VALUES(?,?,?,?,?,?,?,?,?, 'pending', ?)")
       .run(uuid(), owner, "ws-1", task, uuid(), "team-1", "state", "{}", "Застрявший", old);
-    const before = (db.prepare("SELECT COUNT(*) n FROM notifications WHERE user_id=? AND type='linear_sync_stale'").get(owner) as any).n;
+    const incidents = () => (db.prepare("SELECT COUNT(*) n FROM tasks WHERE incident_key='linear-sync' AND status='active'").get() as any).n;
     expect(notifyLinearSyncStale(owner)).toBe(true);
-    expect((db.prepare("SELECT COUNT(*) n FROM notifications WHERE user_id=? AND type='linear_sync_stale'").get(owner) as any).n).toBe(before + 1);
-    expect(notifyLinearSyncStale(owner)).toBe(false);
+    expect(incidents()).toBe(1);
+    // Повтор, пока поломка открыта, — ни новой карточки, ни уведомления.
+    expect(notifyLinearSyncStale(owner, Date.now() + 2 * 3600_000)).toBe(false);
+    expect(incidents()).toBe(1);
   });
 
   it("ручки синхронизации — только владельцу, выключатель и здоровье очереди отдаются", async () => {

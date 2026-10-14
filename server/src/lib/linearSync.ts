@@ -19,6 +19,7 @@
 // backoff и повторами; если простой затянулся больше 30 минут, владелец
 // получает уведомление. Выключатель — в linear_sync_state.
 
+import { raiseIncident } from "./incidents.js";
 import crypto from "node:crypto";
 import { getSetting, onChange, setSetting } from "./serverSettings.js";
 import db from "../db.js";
@@ -329,7 +330,9 @@ export async function runLinearSyncPass(ownerId?: string, options: { writer?: Li
   }
 }
 
-/** Уведомление владельцу, если самое старое задание висит дольше 30 минут. */
+export const LINEAR_SYNC_INCIDENT_KEY = "linear-sync";
+
+/** Поломка «Linear не принимает статусы», если самое старое задание висит дольше 30 минут. */
 export function notifyLinearSyncStale(ownerId?: string, now = Date.now()): boolean {
   const owner = ownerRow(ownerId);
   if (!owner) return false;
@@ -346,11 +349,12 @@ export function notifyLinearSyncStale(ownerId?: string, now = Date.now()): boole
     latestError?.last_error ? `Последняя ошибка: ${latestError.last_error}` : "Задания очереди ждут отправки.",
     "Карточки TaskFlow продолжают работать. Проверьте подключение Linear (OAuth-приложение TaskFlow) и повторите.",
   ].join("\n");
-  db.prepare("INSERT INTO notifications(id,user_id,type,task_id,text,actor_id) VALUES(?,?,?,NULL,?,NULL)").run(
-    crypto.randomUUID(), owner.id, "linear_sync_stale", text,
-  );
+  // Одна поломка, а не уведомление каждый час (владелец 14.10.2026: 36
+  // одинаковых тревог за сутки). Пока карточка починки открыта, повторов нет;
+  // карточку получает Инженер .110 (diagnosticDispatch).
+  const incident = raiseIncident({ key: LINEAR_SYNC_INCIDENT_KEY, title: "Linear: отправка статусов не проходит", description: text, ownerId: owner.id });
   db.prepare("UPDATE linear_sync_state SET notified_at=? WHERE owner_id=?").run(nowIso(now), owner.id);
-  return true;
+  return incident?.created === true;
 }
 
 /** Раз в минуту; первый проход — через 45 секунд после старта. */
