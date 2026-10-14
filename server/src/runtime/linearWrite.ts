@@ -15,6 +15,7 @@
 // Сам токен нигде не печатается и на диск не пишется.
 
 import { spawn } from "node:child_process";
+import { EnvHttpProxyAgent } from "undici";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -81,6 +82,18 @@ async function accessToken(force = false): Promise<string> {
   return cachedToken.value;
 }
 
+// Прокси — явно на каждый запрос (14.10.2026). В процессе сервера SDK Pi
+// ставит свой глобальный перехват, и NODE_USE_ENV_PROXY перестаёт действовать:
+// запрос уходил напрямую с .110, а Linear с российского адреса отвечает 403
+// «Linear is not available in Russia». Так отправка статусов не прошла ни разу
+// с 06.10. Тот же приём, что у погоды в routes/widgets.ts.
+let proxyDispatcher: EnvHttpProxyAgent | undefined;
+function dispatcher(): EnvHttpProxyAgent | undefined {
+  if (proxyDispatcher) return proxyDispatcher;
+  if (!(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy)) return undefined;
+  try { proxyDispatcher = new EnvHttpProxyAgent(); return proxyDispatcher; } catch { return undefined; }
+}
+
 type GraphqlResponse = { data?: any; errors?: Array<{ message?: string }> };
 
 async function graphql(query: string, variables: Record<string, unknown>, retry = true): Promise<any> {
@@ -92,7 +105,8 @@ async function graphql(query: string, variables: Record<string, unknown>, retry 
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ query, variables }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+      ...(dispatcher() ? { dispatcher: dispatcher() } : {}),
+    } as RequestInit);
   } catch (error) {
     throw new LinearWriteError(`Linear недоступен: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -102,7 +116,11 @@ async function graphql(query: string, variables: Record<string, unknown>, retry 
     await accessToken(true);
     return graphql(query, variables, false);
   }
-  if (!response.ok) throw new LinearWriteError(`Linear отклонил запрос (${response.status}).`);
+  if (!response.ok) {
+    // Причина отказа — в сообщение: «403» без текста неделю скрывал гео-блок.
+    const reason = await response.text().then(t => { try { return JSON.parse(t).error ?? ""; } catch { return ""; } }).catch(() => "");
+    throw new LinearWriteError(`Linear отклонил запрос (${response.status})${reason ? ": " + String(reason).slice(0, 200) : "."}`);
+  }
   let payload: GraphqlResponse;
   try { payload = await response.json() as GraphqlResponse; } catch { throw new LinearWriteError("Linear вернул некорректный ответ."); }
   if (payload.errors?.length) throw new LinearWriteError(`Linear вернул ошибку: ${payload.errors.map(e => e.message || "без описания").join("; ").slice(0, 300)}`);
