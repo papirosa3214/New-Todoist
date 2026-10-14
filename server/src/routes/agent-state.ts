@@ -5,6 +5,8 @@ import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
 import db from "../db.js";
+import { roleUserId } from "../roleRouting.js";
+import { returnPlanToCritic } from "../runtime/planReviewLifecycle.js";
 import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import {
@@ -1193,8 +1195,13 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           // исполнителю (Reviewer 5f292e87: review→in_progress не создаёт
           // inbox). chat_message_id — синтетический (это не сообщение в чат,
           // а сигнал возврата), поэтому для дедупа свой уникальный ключ.
-          const returnInboxId = uid();
-          db.prepare(
+          // Задача по плану: возврат владельца идёт критику, который принял
+          // работу, а не «исполнителю карточки» — его у плана нет (15.10.2026).
+          const toCritic = !String(req.userId).startsWith("role_") && req.userId !== "u-secretary"
+            ? returnPlanToCritic(task.id, req.userId, comment || "")
+            : null;
+          const returnInboxId = toCritic || !task.assignee_id ? null : uid();
+          if (returnInboxId) db.prepare(
             `INSERT INTO agent_inbox
                (id, chat_message_id, to_user_id, body_text, task_id,
                 task_version, kind, event_type, status, created_at)
@@ -1214,11 +1221,12 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
           registryRecord({
             source: "review_return",
             trigger: "POST /api/tasks/:id/state",
-            toUserId: task.assignee_id,
+            toUserId: toCritic ? roleUserId("critic_verifier") : task.assignee_id,
             data: {
               task_id: task.id,
               actor_id: req.userId,
               inbox_id: returnInboxId,
+              critic_step_id: toCritic?.stepId ?? null,
             },
             result: "review→in_progress",
           });

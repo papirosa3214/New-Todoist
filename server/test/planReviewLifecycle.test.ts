@@ -91,4 +91,17 @@ describe('visible final critic and actual rework graph', () => {
         expect(db.prepare('SELECT agent_state FROM tasks WHERE id=?').get(task)).toEqual({agent_state:'blocked'});
     });
 
+    it('owner return of a plan task without assignee goes to the critic, not to agent_inbox', async () => {
+        const { task, plan, critic } = await fixture();
+        completePlanFinalReview(task, 'role_critic_verifier', 'approved', 'ok');
+        db.prepare("UPDATE tasks SET assignee_id=NULL,agent_state='review' WHERE id=?").run(task);
+        const before = (db.prepare("SELECT COUNT(*) n FROM agent_inbox WHERE task_id=?").get(task) as { n: number }).n;
+        const res = await app.inject({ method: 'POST', url: `/api/tasks/${task}/state`, headers: auth, payload: { state: 'in_progress', comment: 'Помощник не показал виджеты' } });
+        expect(res.statusCode, res.body).toBe(200);
+        const step = db.prepare("SELECT n.slot_key, n.instructions, s.agent_state FROM task_collaboration_plan_nodes n JOIN subtasks s ON s.collaboration_plan_id=n.plan_id AND s.plan_node_key=n.slot_key WHERE n.plan_id=? AND n.slot_key LIKE 'owner_return_%'").get(plan) as any;
+        expect(step.instructions).toContain('Помощник не показал виджеты');
+        expect(step.agent_state).toBe('todo');
+        expect(critic.plan_node_key).not.toBe(step.slot_key);
+        expect((db.prepare("SELECT COUNT(*) n FROM agent_inbox WHERE task_id=?").get(task) as { n: number }).n).toBe(before);
+    });
 });

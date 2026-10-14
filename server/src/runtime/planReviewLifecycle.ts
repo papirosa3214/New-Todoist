@@ -227,6 +227,40 @@ function completePlanFinalReviewAtomic(taskId: string, actor: string, verdict: s
         return { planId: plan.id, managed: true };
     })();
 }
+/**
+ * Владелец вернул сданную работу (владелец 15.10.2026): «кто принял работу? критик.
+ * Критик возвращает исполнителям с той формулировкой, с которой я вернул ему».
+ * Раньше возврат искал исполнителя карточки, а у задач по плану его нет — запись
+ * падала на `agent_inbox.to_user_id`. Теперь в план встаёт шаг критика с текстом
+ * владельца и сразу идёт в очередь: критик назначает доработку этапам обычным
+ * путём (completePlanFinalReview → «Доработка N» → «Повторная итоговая проверка»).
+ * null — у задачи нет утверждённого плана.
+ */
+export function returnPlanToCritic(taskId: string, actor: string, comment: string): { stepId: string } | null {
+    const plan = db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=? AND status='approved' ORDER BY revision DESC LIMIT 1").get(taskId) as { id: string } | undefined;
+    if (!plan)
+        return null;
+    const open = ensureOpenOwnerReturn(plan.id, taskId, actor, comment);
+    queuePlanFinalReview(open, actor);
+    return { stepId: open };
+}
+function ensureOpenOwnerReturn(planId: string, taskId: string, actor: string, comment: string): string {
+    const pending = db.prepare(`SELECT s.id FROM subtasks s JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key
+    WHERE s.collaboration_plan_id=? AND s.done=0 AND n.instructions LIKE ? LIMIT 1`).get(planId, `${FINAL_REVIEW_MARKER}%`) as { id: string } | undefined;
+    if (pending)
+        return pending.id;
+    const all = nodes(planId);
+    const cycle = Math.max(0, ...all.map(n => n.iteration ?? 0));
+    const round = all.filter(n => n.slot_key.startsWith("owner_return_")).length + 1;
+    const slot = `owner_return_${crypto.randomUUID().slice(0, 8)}`;
+    const text = comment.trim() || "Владелец не принял результат.";
+    const instructions = `${FINAL_REVIEW_MARKER}\n\nВладелец вернул результат на доработку — твой прошлый вердикт он не принял:\n«${text}»\n\nВерни работу этапам исполнителей (changes_requested) с этой формулировкой владельца и требованием довести результат до того, чтобы он работал так, как описано в задаче, и это можно было проверить живым сценарием владельца.`;
+    const id = addNode(planId, taskId, { slot_key: slot, role_key: "critic_verifier", expected_result: `Возврат владельца ${round}: передать доработку исполнителям`, output_artifact_json: null, instructions, iteration: cycle, skipped_at: null }, slot, "rework", actor, text.slice(0, 500), cycle, null);
+    db.prepare("UPDATE subtasks SET agent_id=? WHERE id=?").run(roleUserId("critic_verifier"), id);
+    bump(planId, taskId, actor, "plan_owner_return", text.slice(0, 500));
+    ensurePlanTopic(taskId);
+    return id;
+}
 export function planReviewRouteContext(taskId: string): string {
     const plan = db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=? AND status='approved' ORDER BY revision DESC LIMIT 1").get(taskId) as {
         id: string;
