@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Сторож голосового Секретаря (taskflow-secretary-voice + xray-secretary-voice).
+Сторож голосового Помощника владельца (taskflow-secretary-voice + xray-secretary-voice).
 
 ЗАЧЕМ. Gemini Live с российского IP .110 не пускают («User location is not
 supported»), поэтому воркер ходит к Google через отдельный xray-выход
@@ -76,7 +76,7 @@ def main():
             problems.append(f"Gemini через {PROXY} → {code} ({hint})")
 
     state = "; ".join(problems) or None
-    print(("Голосовой Секретарь не сможет ответить: " + state) if state else "ок — Gemini через выход отвечает 200")
+    print(("Голосовой Помощник владельца не сможет ответить: " + state) if state else "ок — Gemini через выход отвечает 200")
     if dry:
         return 0
 
@@ -92,7 +92,7 @@ def main():
             db.execute(
                 "INSERT INTO notifications (id, user_id, type, task_id, text, actor_id) VALUES (?,?,?,?,?,NULL)",
                 (str(uuid.uuid4()), owner, "secretary_voice_watch", None,
-                 "Голосовой Секретарь не сможет ответить: " + state),
+                 "Голосовой Помощник владельца не сможет ответить: " + state),
             )
             db.commit()
     json.dump(state, open(STATE_PATH, "w"))

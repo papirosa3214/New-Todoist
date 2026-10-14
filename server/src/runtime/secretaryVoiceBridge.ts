@@ -33,7 +33,7 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
       send(200,{instructions:composeLayer("secretary","secretary.voice")!.effective+"\n\n"+VOICE_TOOLS_GUIDE,greeting:composeLayer("secretary","secretary.greeting")!.effective,manifest:instructionManifest("secretary","voice")}); return;
     }
     if (req.method === "GET" && req.url === "/secretary/tools") {
-      try { send(200,{tools:await voiceToolManifest()}); } catch (error) { app.log.error({err:error},"не собран список инструментов голосового Секретаря"); send(500,{error:"сбой списка инструментов"}); }
+      try { send(200,{tools:await voiceToolManifest()}); } catch (error) { app.log.error({err:error},"не собран список инструментов голосового Помощника владельца"); send(500,{error:"сбой списка инструментов"}); }
       return;
     }
     if (req.method !== "POST" || !["/secretary/tasks", "/secretary/summary", "/secretary/task", "/secretary/roles", "/secretary/tool", "/secretary/owner-chat"].includes(req.url || "")) {
@@ -77,8 +77,8 @@ export async function startSecretaryVoiceBridge(app: FastifyInstance, socketPath
         requires_plan_approval:intake.requiresPlanApproval,dispatched:intake.dispatched,queued:intake.queued});
     } catch (error) {
       if (error instanceof NonTaskInputError) { send(422,{error:error.message,intent:error.intent,task:null}); return; }
-      app.log.error({err:error}, "ошибка локального инструмента голосового Секретаря");
-      if (!res.headersSent) send(500, {error:"сбой инструмента Секретаря"});
+      app.log.error({err:error}, "ошибка локального инструмента голосового Помощника владельца");
+      if (!res.headersSent) send(500, {error:"сбой инструмента Помощника владельца"});
     }
   });
   await new Promise<void>((resolve, reject) => {

@@ -137,7 +137,7 @@ export function claimDraftForParsing(
 }
 
 export function registerTaskIntakeRoutes(app: FastifyInstance): void {
-  // «✓ Идёт» на карточке Секретаря в чате — запустить черновик целиком.
+  // «✓ Идёт» на карточке Помощника владельца в чате — запустить черновик целиком.
   // Только владелец: флаг готовности — его решение.
   app.post<{ Params: { id: string } }>(
     "/api/task-intake/drafts/:id/start",

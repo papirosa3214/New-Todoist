@@ -53,11 +53,11 @@ describe('effective instructions, real precedence and concurrency',()=>{
   });
   try {
    const before=await read();
-   expect(before.instructions).toContain('Секретарь');
+   expect(before.instructions).toContain('Помощник владельца');
    change('role','secretary','secretary.voice','Новая голосовая инструкция');
    const after=await read();
    // Голосовой канал дописывает блок инструментов (VOICE_TOOLS_GUIDE),
-   // чтобы правка характера не лишала Секретаря знания о своих
+   // чтобы правка характера не лишала Помощника владельца знания о своих
    // инструментах. Тест проверяет, что редактируемая часть пришла первой
    // и версия манифеста secretary.voice увеличилась.
    expect(after.instructions).toMatch(/^Новая голосовая инструкция/);

@@ -4,7 +4,7 @@ import db from "../src/db.js";
 import { checkNoteAccessInstrument, __setWatchState, __resetWatchState } from "../src/lib/noteAccessWatcher.js";
 
 // Сторож прибора «учёт обращений к заметкам». Смысл: если счётчик сломан,
-// схема базы знаний слепнет — пометку Секретаря нечем проверить.
+// схема базы знаний слепнет — пометку Помощника владельца нечем проверить.
 describe("сторож счётчика обращений", () => {
   let before: number;
   let app: any;

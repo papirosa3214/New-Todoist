@@ -56,7 +56,7 @@ describe("цепочка базы знаний замкнута", () => {
     expect(note.kb_temp_category, "метку ставит сервер, а не роль").toBeTruthy();
     expect(note.kb_temp_category).toContain("Очередь сообщений роли");
     expect(note.kb_source_task_id).toBe(taskId);
-    expect(note.kb_category, "постоянную категорию ставит только Секретарь").toBeNull();
+    expect(note.kb_category, "постоянную категорию ставит только Помощник владельца").toBeNull();
   });
 
   it("такая заметка попадает в счётчик разбора", async () => {

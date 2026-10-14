@@ -6,7 +6,7 @@
 // Откуда поля:
 //   - документ галереи docs/2026-10-14-widget-gallery-layouts-and-types.md,
 //     раздел 5 («Восемь новых типов») — по одному типу на подраздел;
-//   - словарь SCHEMA валидатора секретаря
+//   - словарь SCHEMA валидатора помощника владельца
 //     (roles/secretary/skills/widget-renderer/scripts/validate_widget.py,
 //     файл вне git) — его блок принимает и отвергает.
 //

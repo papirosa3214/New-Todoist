@@ -557,10 +557,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     app.addHook("onClose", async () => stopReviewHistoryWatcher());
     const stopWorkPlanWatcher = startWorkPlanWatcher();
     app.addHook("onClose", async () => stopWorkPlanWatcher());
-    // Порог разбора заметок: набралось — заводим задачу Секретарю.
+    // Порог разбора заметок: набралось — заводим задачу Помощнику владельца.
     startKbTriageWatcher();
     // Локальная модель: молчит, пока отвечает; забитая очередь или
-    // упавший Ollama — задача Секретарю (владелец 12.10.2026).
+    // упавший Ollama — задача Помощнику владельца (владелец 12.10.2026).
     startOllamaHealthWatcher();
   }
   // Результаты: при закрытии карточки на диагностику/устранение дописывает

@@ -776,8 +776,8 @@ export function registerChatRoutes(app: FastifyInstance) {
     notifyOrchestratorOfDirect(req.userId, routed, taskId);
     maybeRaiseCeilingAlarm(req.userId);
 
-    // «Супер Секретарь» (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/):
-    // Секретарь переехал в настоящую комнату /api/chats/chat-secretary —
+    // «Супер Помощник владельца» (владелец 25.09.2026, docs/ПЛАН Супер Помощник владельца/):
+    // Помощник владельца переехал в настоящую комнату /api/chats/chat-secretary —
     // этот канал (owner) им больше не пользуется, ответ живёт в
     // routes/chats.ts + lib/secretaryReply.ts. Надиктовка в окно постановки
     // задач (10.09.2026, карточка 4396f8c9) — на разбор локальной моделью,

@@ -7,7 +7,7 @@ vi.mock("../src/routes/ai.js",async original=>({...await original<typeof import(
 import { collectTaskSummary, summaryClock, summaryPeriods, validateSummaryFilter, requestTaskSummary } from "../src/lib/secretaryTaskSummary.js";
 const base={is_summary:true,assignee_id:null,groups:["all"],from:null,to:null,date_field:"due_date",question:null};
 const now=new Date("2026-09-27T12:00:00Z");
-describe("единая фактическая сводка Секретаря",()=>{
+describe("единая фактическая сводка Помощника владельца",()=>{
  beforeAll(async()=>{
   const app=await buildApp();await app.close();
   seedRoleAccounts(db);
@@ -56,7 +56,7 @@ describe("единая фактическая сводка Секретаря",(
   expect(()=>validateSummaryFilter({...base,assignee_id:"invented"})).toThrow();
   expect(()=>collectTaskSummary("role_builder",validateSummaryFilter(base),now)).toThrow();
  });
- it("голосовой запрос без отправки ничего не пишет, по просьбе пишет именно в чат Секретаря",async()=>{
+ it("голосовой запрос без отправки ничего не пишет, по просьбе пишет именно в чат Помощника владельца",async()=>{
   model.reply={...base,assignee_id:"role_builder",groups:["stuck"]};
   const count=()=> (db.prepare("SELECT count(*) n FROM chat_messages WHERE chat_id='chat-secretary'").get() as any).n;
   const before=count();
@@ -66,8 +66,8 @@ describe("единая фактическая сводка Секретаря",(
   expect(count()).toBe(before+1);
   expect(db.prepare("SELECT from_user_id,chat_id,text FROM chat_messages WHERE id=?").get((sent as any).message_id)).toMatchObject({from_user_id:"u-secretary",chat_id:"chat-secretary",text:(sent as any).text});
  });
- it("чат Секретаря — обычный путь роли; сводка собирается тем же инструментом",async()=>{
-  // Раньше Секретарь перехватывал сводку в отдельной функции
+ it("чат Помощника владельца — обычный путь роли; сводка собирается тем же инструментом",async()=>{
+  // Раньше Помощник владельца перехватывал сводку в отдельной функции
   // deliverSecretaryReply. Теперь он идёт общим путём ролей, а сводку
   // собирает инструмент taskflow_task_summary поверх того же разбора.
   model.reply={...base,assignee_id:"role_builder",groups:["stuck"]};

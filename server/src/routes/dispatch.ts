@@ -371,9 +371,9 @@ export async function applyIntakeToNewTask(
   const { unitState } = await import("./agent-service.js");
   const alarmOn = (await unitState()).active;
 
-  // Тот же подбор, что у Секретаря (23.09.2026): модель читает карточку и
+  // Тот же подбор, что у Помощника владельца (23.09.2026): модель читает карточку и
   // говорит, кто её делает, почему и где. Личное дело остаётся владельцу —
-  // без флага и раздачи, как у постановки Секретаря.
+  // без флага и раздачи, как у постановки Помощника владельца.
   const exclusions = parseRoleExclusions(task.role_exclusions);
   let modelPick: Awaited<ReturnType<typeof import("./ai.js").pickRoleByModel>> = null;
   if (!assigneeAlreadySet && !task.owner_selected_role) {
@@ -536,7 +536,7 @@ export async function applyIntakeToNewTask(
 /**
  * Родитель со СВОИМИ пунктами тоже исполняется — после дочерних.
  *
- * Владелец 22.09.2026: секретарь завёл родителя с двумя дочерними и пунктом
+ * Владелец 22.09.2026: помощник владельца завёл родителя с двумя дочерними и пунктом
  * у самого родителя («проверить интеграцию…»). Приём флаг родителю не
  * ставит (он контейнер, см. applyIntakeToNewTask), и пункт некому было
  * выполнить — владелец поднял флаг руками, когда обе дочерние сдали работу.

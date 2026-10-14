@@ -1,4 +1,4 @@
-"""Фон для долгих инструментов голосового Секретаря (14.10.2026)."""
+"""Фон для долгих инструментов голосового Помощника владельца (14.10.2026)."""
 import asyncio
 import unittest
 from unittest.mock import MagicMock
@@ -45,6 +45,13 @@ class BackgroundRunnerTest(unittest.IsolatedAsyncioTestCase):
         await runner.run("сводка", work)
         await asyncio.sleep(0.1)
         runner.session.generate_reply.assert_called_once()
+
+
+class GenderInstructionTest(unittest.TestCase):
+    def test_voice_decides_gender(self):
+        from worker import gender_instruction
+        self.assertIn("мужском роде", gender_instruction("Puck"))
+        self.assertIn("женском роде", gender_instruction("Kore"))
 
 
 if __name__ == "__main__":

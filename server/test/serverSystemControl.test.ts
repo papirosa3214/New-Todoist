@@ -74,7 +74,7 @@ describe("Один серверный переключатель Система"
     const id = crypto.randomUUID();
     db.prepare(`INSERT INTO tasks (id,title,creator_id,status,machine_selected_role)
       VALUES (?,'Заведена при включённой Системе','u1','active','builder')`).run(id);
-    // Карточка ждёт обычный путь (создание через /api/tasks или Секретаря
+    // Карточка ждёт обычный путь (создание через /api/tasks или Помощника владельца
     // вызвало бы applyIntakeToNewTask само); прямая вставка в обход этого
     // пути здесь нужна только чтобы проверить, что ИЗБЫТОЧНЫЙ POST on:true
     // (уже было включено) не запускает разбор заново — только переход

@@ -56,7 +56,7 @@ describe("POST /api/secretary/voice-token — только владелец", ()
     expect(body.room.startsWith(`secretary-voice-${ownerId}-`)).toBe(true);
   });
 
-  it("каждый звонок — новая комната (иначе второй звонок подряд остаётся без Секретаря)", async () => {
+  it("каждый звонок — новая комната (иначе второй звонок подряд остаётся без Помощника владельца)", async () => {
     const call = () => app.inject({
       method: "POST",
       url: "/api/secretary/voice-token",

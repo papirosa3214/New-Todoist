@@ -4653,6 +4653,26 @@ const migrations: Migration[] = [
         VALUES ('role_infra_engineer', 'Инженер .110', 'infra-engineer@taskflow.local', '!no-login', 'agent', 'infra_engineer', 'ai', 1, 'infra_engineer', 'И', '#8E8E93')`).run();
     }
   } },
+  // Секретарь → «Помощник владельца» (владелец 14.10.2026): только видимые
+  // имена и тексты; ключи secretary / u-secretary остаются — на них завязаны
+  // данные и клиенты.
+  { id: "145_secretary_owner_assistant", description: "Переименование роли «Секретарь» в «Помощник владельца»", up: () => {
+    const forms: Array<[string, string]> = [
+      ["Секретарём", "Помощником владельца"], ["Секретарю", "Помощнику владельца"], ["Секретаря", "Помощника владельца"],
+      ["Секретаре", "Помощнике владельца"], ["Секретарь", "Помощник владельца"],
+      ["секретарём", "помощником владельца"], ["секретарю", "помощнику владельца"], ["секретаря", "помощника владельца"],
+      ["секретаре", "помощнике владельца"], ["секретарь", "помощник владельца"],
+    ];
+    const rename = (text: string) => forms.reduce((t, [from, to]) => t.split(from).join(to), text);
+    db.prepare("UPDATE roles SET title = ? WHERE key = 'secretary'").run("Помощник владельца");
+    db.prepare("UPDATE users SET name = ?, initials = ? WHERE id = 'u-secretary'").run("Помощник владельца", "ПВ");
+    for (const row of db.prepare("SELECT key, prompt, summary FROM roles WHERE prompt LIKE '%екретар%' OR summary LIKE '%екретар%'").all() as Array<{ key: string; prompt: string | null; summary: string }>) {
+      db.prepare("UPDATE roles SET prompt = ?, summary = ? WHERE key = ?").run(row.prompt === null ? null : rename(row.prompt), rename(row.summary), row.key);
+    }
+    for (const row of db.prepare("SELECT rowid AS id, text FROM role_context_overrides WHERE text LIKE '%екретар%'").all() as Array<{ id: number; text: string }>) {
+      db.prepare("UPDATE role_context_overrides SET text = ? WHERE rowid = ?").run(rename(row.text), row.id);
+    }
+  } },
 ];
 /**
  * Опции прогона миграций.

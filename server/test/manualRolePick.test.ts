@@ -1,4 +1,4 @@
-// Ручная карточка идёт тем же путём, что и постановка Секретаря
+// Ручная карточка идёт тем же путём, что и постановка Помощника владельца
 // (владелец 23.09.2026): роль с причиной от модели, личное дело — владельцу.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
@@ -29,7 +29,7 @@ const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
 const { demoteSeededOwner, seedRoleAccounts } = await import("./helpers/seedOwner.js");
 
-describe("ручная карточка: подбор как у Секретаря", () => {
+describe("ручная карточка: подбор как у Помощника владельца", () => {
   let app: FastifyInstance;
   let ownerAuth: string;
   let ownerId: string;

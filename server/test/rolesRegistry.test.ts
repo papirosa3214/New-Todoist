@@ -11,7 +11,7 @@ describe("реестр ролей", () => {
   beforeAll(async () => { app = await buildApp(); });
   afterAll(async () => { await app.close(); });
 
-  it("начальный состав — девять ролей с Секретарём и Инженером .110, без Синтезатора", () => {
+  it("начальный состав — девять ролей с Помощником владельца и Инженером .110, без Синтезатора", () => {
     expect(ROLE_NAMES).toHaveLength(9);
     expect(ROLE_NAMES).toContain("infra_engineer");
     expect(ROLE_NAMES).toContain("secretary");
@@ -19,7 +19,7 @@ describe("реестр ролей", () => {
     expect(roleTitle("builder")).toBe("Разработчик");
   });
 
-  it("новая роль из таблицы сразу видна списку, Секретарю и маршрутам", () => {
+  it("новая роль из таблицы сразу видна списку, Помощнику владельца и маршрутам", () => {
     db.prepare(
       "INSERT INTO roles (key, title, summary, enabled, position) VALUES ('writer', 'Редактор', 'пишет и правит тексты.', 1, 50)",
     ).run();
@@ -33,7 +33,7 @@ describe("реестр ролей", () => {
     expect(routing.fallbacks.writer).toEqual([]);
   });
 
-  it("отключённая роль пропадает из списка и из инструкции Секретаря", () => {
+  it("отключённая роль пропадает из списка и из инструкции Помощника владельца", () => {
     db.prepare("UPDATE roles SET enabled = 0 WHERE key = 'writer'").run();
     refreshRoles();
     expect(ROLE_NAMES).not.toContain("writer");

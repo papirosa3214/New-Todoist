@@ -1,4 +1,4 @@
-"""Секретарь: голосовой воркер LiveKit. Запуск: см. systemd-юнит
+"""Помощник владельца: голосовой воркер LiveKit. Запуск: см. systemd-юнит
 taskflow-secretary-voice.service. Ручной прогон (dev):
   ~/.venvs/secretary-voice/bin/python3 worker.py dev
 """
@@ -67,7 +67,7 @@ def load_config() -> Config:
 
 
 SECRETARY_INSTRUCTIONS = (
-    "Ты — Секретарь, голосовой помощник Максима в TaskFlow. Отвечай кратко "
+    "Ты — Помощник владельца, голосовой помощник Максима в TaskFlow. Отвечай кратко "
     "и по-русски. Не используй эмодзи и markdown — тебя слушают. "
     "По просьбе создать задачу вызови create_task с полным текстом поручения. "
     "Не превращай его в короткий заголовок: сохрани сроки, время, приоритет, "
@@ -98,6 +98,19 @@ SECRETARY_VOICES = frozenset({"Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda
 def pick_voice(attributes: dict[str, str]) -> str:
     voice = attributes.get("voice")
     return voice if voice in SECRETARY_VOICES else DEFAULT_VOICE
+
+
+# Род речи — по выбранному голосу (владелец 14.10.2026): мужской голос
+# говорит о себе в мужском роде, женский — в женском.
+MALE_VOICES = frozenset({"Puck", "Charon", "Fenrir", "Orus"})
+
+
+def gender_instruction(voice: str) -> str:
+    if voice in MALE_VOICES:
+        return ("Ты говоришь мужским голосом: о себе всегда в мужском роде "
+                "(«я понял», «я принял», «я запустил»), никогда в женском.")
+    return ("Ты говоришь женским голосом: о себе всегда в женском роде "
+            "(«я поняла», «я приняла», «я запустила»), никогда в мужском.")
 
 
 async def create_task_via_api(text: str, socket_path: str, owner_id: str) -> dict:
@@ -136,7 +149,7 @@ async def lookup_via_api(path: str, socket_path: str, owner_id: str, text: str =
             return body
 
 
-# Фон для долгих инструментов (владелец 14.10.2026): раньше Секретарь молча
+# Фон для долгих инструментов (владелец 14.10.2026): раньше Помощник владельца молча
 # ждала инструмент до 2–4 минут, и в звонке была тишина, «как будто сказал в
 # пустоту». Теперь инструмент ждём недолго; не успел — модель сразу получает
 # «принято, выполняется», говорит это владельцу и продолжает разговор, а итог
@@ -144,7 +157,7 @@ async def lookup_via_api(path: str, socket_path: str, owner_id: str, text: str =
 QUICK_ANSWER_SECONDS = 3.0
 BACKGROUND_ACK = (
     "Запрос «{label}» принят и выполняется в фоне. Прямо сейчас одной короткой фразой "
-    "скажи владельцу, что приняла и запустила, и спроси, есть ли что-то ещё. "
+    "скажи владельцу (в своём роде), что запрос принят и запущен, и спроси, есть ли что-то ещё. "
     "Итог придёт сам отдельным сообщением — повторно этот инструмент не вызывай."
 )
 BACKGROUND_RESULT = (
@@ -187,7 +200,7 @@ class BackgroundRunner:
 
 
 async def shared_tools_via_api(socket_path: str, owner_id: str, runner: BackgroundRunner | None = None) -> list:
-    """Общие инструменты Секретаря (те же, что в чате) — как инструменты звонка."""
+    """Общие инструменты Помощника владельца (те же, что в чате) — как инструменты звонка."""
     connector = aiohttp.UnixConnector(path=socket_path)
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
         async with http.get("http://localhost/secretary/tools") as response:
@@ -223,16 +236,16 @@ async def instructions_via_api(socket_path: str) -> dict:
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
         async with http.get("http://localhost/secretary/instructions") as response:
             if response.status != 200:
-                raise RuntimeError("Не удалось получить инструкции Секретаря")
+                raise RuntimeError("Не удалось получить инструкции Помощника владельца")
             body = await response.json()
             if not isinstance(body.get("instructions"), str) or not isinstance(body.get("greeting"), str):
-                raise RuntimeError("Неверный формат инструкций Секретаря")
+                raise RuntimeError("Неверный формат инструкций Помощника владельца")
             return body
 
 
 class Assistant(Agent):
-    def __init__(self, owner_id: str, instructions: str = SECRETARY_INSTRUCTIONS, greeting: str = "поздоровайся коротко и спроси, чем помочь", tools: list | None = None, runner: BackgroundRunner | None = None) -> None:
-        super().__init__(instructions=instructions, tools=tools or [])
+    def __init__(self, owner_id: str, instructions: str = SECRETARY_INSTRUCTIONS, greeting: str = "поздоровайся коротко и спроси, чем помочь", tools: list | None = None, runner: BackgroundRunner | None = None, instructions_suffix: str = "") -> None:
+        super().__init__(instructions=instructions + ("\n\n" + instructions_suffix if instructions_suffix else ""), tools=tools or [])
         self.owner_id = owner_id
         self.greeting = greeting
         self.runner = runner or BackgroundRunner()
@@ -292,7 +305,7 @@ class Assistant(Agent):
 
     @function_tool
     async def send_to_owner_chat(self, context: RunContext, text: str) -> str:
-        """Написать владельцу в его чат с Секретарём: всё, что он просит прислать текстом.
+        """Написать владельцу в его чат с Помощником владельца: всё, что он просит прислать текстом.
 
         Args:
             text: Полный текст сообщения, готовый к чтению.
@@ -332,7 +345,7 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     owner = await ctx.wait_for_participant()
     voice = pick_voice(owner.attributes)
-    logger.info("голос Секретаря: %s", voice)
+    logger.info("голос Помощника владельца: %s", voice)
 
     session = AgentSession(
         llm=RealtimeModel(
@@ -348,11 +361,11 @@ async def entrypoint(ctx: JobContext) -> None:
         shared = await shared_tools_via_api(cfg.taskflow_socket_path, owner.identity, runner)
     except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
         # Звонок важнее полного набора: без общих инструментов остаются базовые.
-        logger.warning("общие инструменты Секретаря недоступны: %s", exc)
+        logger.warning("общие инструменты Помощника владельца недоступны: %s", exc)
         shared = []
-    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=snapshot["greeting"], tools=shared, runner=runner), room=ctx.room)
+    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=snapshot["greeting"], tools=shared, runner=runner, instructions_suffix=gender_instruction(voice)), room=ctx.room)
 
-    # Тап по анимации на телефоне — перебить Секретаря на полуслове.
+    # Тап по анимации на телефоне — перебить Помощника владельца на полуслове.
     @ctx.room.local_participant.register_rpc_method("interrupt")
     async def _interrupt(_data) -> str:
         session.interrupt()

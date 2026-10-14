@@ -232,7 +232,7 @@ export function lastThinkingPhrase(buf: string): string {
   return "";
 }
 
-/** Строка быстрых ответов Секретаря («БЫСТРО: …») — служебная, её
+/** Строка быстрых ответов Помощника владельца («БЫСТРО: …») — служебная, её
  *  разбирает secretaryReply.ts. В живом тексте её не показываем, в том
  *  числе недописанную («БЫС…»), чтобы она не мигала в пузыре. */
 export function stripQuickRepliesLine(text: string): string {
@@ -564,7 +564,7 @@ export function startLiveTurn(args: {
   audience: () => string[];
 }): LiveTurn {
   const key = keyOf(args.chatId, args.userId);
-  // Ход этой роли в чате уже идёт (второе сообщение Секретарю подряд):
+  // Ход этой роли в чате уже идёт (второе сообщение Помощнику владельца подряд):
   // startChatRun всё равно откажет по локу, а живую ленту первого хода
   // трогать нельзя — отдаём немой двойник.
   if (liveTurns.has(key)) return new LiveTurn({ ...args, detached: true });

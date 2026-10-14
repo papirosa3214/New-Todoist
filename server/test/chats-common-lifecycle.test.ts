@@ -125,7 +125,7 @@ function seedRoleAccounts(): void {
 
 function ensureSecretaryAgain(): void {
   // Миграция уже включила secretary; на всякий случай не мешаем повтору.
-  db.prepare("INSERT OR IGNORE INTO roles (key, title, summary, enabled, position) VALUES ('secretary','Секретарь','помощник владельца',1,7)").run();
+  db.prepare("INSERT OR IGNORE INTO roles (key, title, summary, enabled, position) VALUES ('secretary','Помощник владельца','помощник владельца',1,7)").run();
 }
 
 async function tick(ms = 120): Promise<void> {
@@ -183,7 +183,7 @@ describe("Чаты: общий чат, тема задачи, только @", (
     if (app) await app.close();
   });
 
-  it("Секретарь — обычная роль: role_key выставлен, спец-пути больше нет", () => {
+  it("Помощник владельца — обычная роль: role_key выставлен, спец-пути больше нет", () => {
     const row = db.prepare("SELECT role_key, type, role FROM users WHERE id='u-secretary'").get() as any;
     expect(row.role_key).toBe("secretary");
     expect(row.type).toBe("ai");

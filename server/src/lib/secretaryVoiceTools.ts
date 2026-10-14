@@ -1,4 +1,4 @@
-// Инструменты голосового Секретаря: одна задача целиком и загрузка ролей.
+// Инструменты голосового Помощника владельца: одна задача целиком и загрузка ролей.
 // Только чтение фактической БД; формулировки готовы к озвучиванию.
 import db from "../db.js";
 import { isOwner } from "../access.js";
@@ -6,7 +6,7 @@ import { roleTitle } from "../roleRouting.js";
 import { integrationResponsibility } from "./integrationResponsibility.js";
 
 /** Обязательная часть инструкции звонка: дописывается к редактируемому характеру,
- *  чтобы правка характера не лишала Секретаря знания о своих инструментах. */
+ *  чтобы правка характера не лишала Помощника владельца знания о своих инструментах. */
 export const VOICE_TOOLS_GUIDE = [
   "ИНСТРУМЕНТЫ TASKFLOW — обязательная часть, от характера не зависит.",
   "Тебя слушают: без эмодзи и markdown, технические id вслух не произноси.",
@@ -112,8 +112,8 @@ export function roleLoadNow(ownerId: string) {
   return { roles: rows, spoken_text: spoken };
 }
 
-// ── Общие инструменты Секретаря для звонка ──────────────────────────────
-// Те же инструменты, что у Секретаря в чате и в работе: звонок вызывает их
+// ── Общие инструменты Помощника владельца для звонка ──────────────────────────────
+// Те же инструменты, что у Помощника владельца в чате и в работе: звонок вызывает их
 // через мост от имени роли secretary, отдельных голосовых копий нет.
 const VOICE_SHARED_TOOLS = ["taskflow_task", "taskflow_my_tasks", "taskflow_projects", "taskflow_project_tasks", "taskflow_status", "taskflow_agents",
   "taskflow_chat_send", "taskflow_chat_read", "taskflow_chat_reply", "taskflow_comment",

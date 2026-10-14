@@ -18,6 +18,7 @@ import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { connectBuilderXcode } from "./builderXcode.js";
 import { connectInfraPanel } from "./infraPanelMcp.js";
+import { teamStructureText } from "../lib/teamStructure.js";
 import { branchMembership } from "./branchPlan.js";
 import { ensurePlanTopic, topicContext } from "../lib/projectTopics.js";
 import { markPlanFinalReviewerStarted, markPlanFinalReviewerWaiting, hasPendingPlanFinalReview, planReviewRouteContext } from "./planReviewLifecycle.js";
@@ -163,7 +164,7 @@ export function short(t: any): Json {
 
 /** Срок и приоритет задачи в виде, пригодном для виджета. В БД due_date —
  *  текст "YYYY-MM-DD", start_time — "ЧЧ:ММ" (см. routes/tasks.ts). Даты вне
- *  календаря («2026-02-30») и пустые строки отбрасываются: секретарь получит
+ *  календаря («2026-02-30») и пустые строки отбрасываются: помощник владельца получит
  *  прочерк и нарисует пустую ячейку, а не выдуманную дату. */
 export function shortTaskDates(t: any): { due_date?: string; priority?: number } {
   const out: { due_date?: string; priority?: number } = {};
@@ -1275,6 +1276,7 @@ async function runRoleInProcessUnserialized(input: {
       || rolePrompt(role)
       || `Ты — ${roleTitle(role)} в трекере TaskFlow.`,
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
+    teamStructureText(role),
     ROLE_REPORT_INSTRUCTION,
     ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, SUBMISSION_POLICY] : []),
     // Срез знаний роли (шаг 4 схемы базы знаний, заметка cfa5cdcd): чтобы

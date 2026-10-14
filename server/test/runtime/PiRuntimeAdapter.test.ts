@@ -251,8 +251,8 @@ describe("PiRuntimeAdapter", () => {
 
   it("listProfiles returns 8 profiles, all runtime_id = runtime:pi", async () => {
     const profiles = await piRuntime.listProfiles();
-    expect(profiles).toHaveLength(8);
-    expect(profiles.find((p) => p.role === "secretary")?.title).toBe("Секретарь");
+    expect(profiles).toHaveLength(9);
+    expect(profiles.find((p) => p.role === "secretary")?.title).toBe("Помощник владельца");
     for (const p of profiles) expect(p.runtime_id).toBe("runtime:pi");
   });
 

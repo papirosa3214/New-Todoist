@@ -89,10 +89,10 @@ describe("role catalog API", () => {
       "secretary",
       "infra_engineer",
     ]);
-    // У Секретаря нет учётки role_secretary — название всё равно по-русски,
+    // У Помощника владельца нет учётки role_secretary — название всё равно по-русски,
     // из таблицы ролей (владелец 27.09.2026 видел в исполнителях «secretary»).
     const secretary = list.json().roles.find((r: { role: string }) => r.role === "secretary");
-    expect(secretary.title).toBe("Секретарь");
+    expect(secretary.title).toBe("Помощник владельца");
 
     const details = await app.inject({
       method: "GET",

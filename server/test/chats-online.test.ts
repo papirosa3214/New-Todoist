@@ -1032,7 +1032,7 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     expect(prompt).toContain("языком html");
   });
 
-  it("виджет Секретаря (без type) сохраняется уже каноническим", async () => {
+  it("виджет Помощника владельца (без type) сохраняется уже каноническим", async () => {
     const chatId = (await createChat({ kind: "group", member_ids: ["role_architect"] })).json().chat.id;
     const secretarish = [
       "```widget",

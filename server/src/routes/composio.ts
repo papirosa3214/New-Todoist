@@ -67,7 +67,7 @@ export function registerComposioRoutes(app: FastifyInstance) {
       return { ok: true };
     } catch (error) { return reply.code(502).send({ error: (error as Error).message }); }
   });
-  // Белый список отправителей почты: их письма Секретарь читает напрямую.
+  // Белый список отправителей почты: их письма Помощник владельца читает напрямую.
   const ownerOnly = async (req: any, reply: any) => {
     await authOrApiToken(req, reply);
     if (reply.sent) return;

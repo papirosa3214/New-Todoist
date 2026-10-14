@@ -37,7 +37,7 @@ const TITLE_BY_ROLE: Record<string, string> = {
   designer: "# Дизайнер интерфейсов",
   qa: "# Лайф-тестировщик",
   researcher: "# Researcher",
-  secretary: "# Секретарь",
+  secretary: "# Помощник владельца",
   synthesizer: "# Synthesizer",
 };
 
@@ -109,7 +109,7 @@ describe("роль secretary: блок «Лаконичность» в roles.pro
     expect(row!.prompt!.includes("## Лаконичность\n")).toBe(true);
     // Меняем руками prompt на «как было до миграции» (без блока) и применяем
     // логику миграции 103 ещё раз — блок должен появиться снова ровно один раз.
-    const cleaned = row!.prompt!.replace(/^## Лаконичность\n[\s\S]*?(?=\nТы — Секретарь)/, "").replace(/^\n+/, "");
+    const cleaned = row!.prompt!.replace(/^## Лаконичность\n[\s\S]*?(?=\nТы — Помощник владельца)/, "").replace(/^\n+/, "");
     db.prepare("UPDATE roles SET prompt = ? WHERE key = 'secretary'").run(cleaned);
     expect((db.prepare("SELECT prompt FROM roles WHERE key = 'secretary'").get() as { prompt: string }).prompt.includes("## Лаконичность")).toBe(false);
     // Повторяем логику миграции 103 руками (тот же SQL, что в up()).

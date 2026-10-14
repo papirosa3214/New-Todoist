@@ -107,7 +107,7 @@ export function registerNoteRoutes(app: FastifyInstance) {
         .prepare("SELECT * FROM user_notes WHERE id = ?")
         .get(req.params.id) as NoteRow | undefined;
       if (!row) return reply.code(404).send({ error: "Заметка не найдена" });
-      // Учёт обращения: по нему Секретарь проверяет свою пометку «мусор».
+      // Учёт обращения: по нему Помощник владельца проверяет свою пометку «мусор».
       // Модель открыла — значит заметка пригодилась, даже если не как
       // переиспользуемое знание, а просто чтобы держать контекст. Если не
       // открывала — мусор подтверждается (10.10.2026, схема базы знаний).
@@ -181,7 +181,7 @@ export function registerNoteRoutes(app: FastifyInstance) {
       // сразу получает ВРЕМЕННУЮ метку «Из задачи: …» и источник. Иначе
       // цепочка рвётся на первом же шаге: метку не поставил никто, триггер
       // разбора видел ноль, категории не появлялись, срез оставался пустым.
-      // Постоянную категорию проставляет Секретарь — не мы и не роль.
+      // Постоянную категорию проставляет Помощник владельца — не мы и не роль.
       try {
         if (folderId) {
           const owner = db
@@ -235,7 +235,7 @@ export function registerNoteRoutes(app: FastifyInstance) {
       /** Для агентов: markdown вместо TipTap JSON. */
       markdown?: string;
       folder_id?: number | null;
-      /** Схема базы знаний (cfa5cdcd). Разбор ведёт Секретарь. */
+      /** Схема базы знаний (cfa5cdcd). Разбор ведёт Помощник владельца. */
       kb_temp_category?: string | null;
       kb_category?: string | null;
       kb_source_task_id?: string | null;
@@ -252,7 +252,7 @@ export function registerNoteRoutes(app: FastifyInstance) {
     const has = (k: string) =>
       req.body && Object.prototype.hasOwnProperty.call(req.body, k);
 
-    // Схема базы знаний (cfa5cdcd): категории ставит разбор Секретаря.
+    // Схема базы знаний (cfa5cdcd): категории ставит разбор Помощника владельца.
     // Значение приводится к ограниченному списку — чтобы в базу не попало
     // что попало: мусор с чужой пометкой хуже, чем отсутствие категории.
     for (const k of KB_COLUMNS) {

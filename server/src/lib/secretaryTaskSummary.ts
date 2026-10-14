@@ -1,6 +1,6 @@
 import { renderInstruction } from "./roleContextResolver.js";
 import { loadChatMessage } from "./chatMessages.js";
-// Единая сводка из фактической БД для звонка и чата Секретаря.
+// Единая сводка из фактической БД для звонка и чата Помощника владельца.
 import { stopReasonPolicy } from "../stopReasons.js";
 import crypto from "node:crypto";
 import db from "../db.js";
@@ -130,7 +130,7 @@ export function collectTaskSummary(ownerId:string, filter:SummaryFilter, now = n
 export function sendSummaryToSecretaryChat(ownerId:string,text:string) {
   if(!isOwner(ownerId))throw new Error("только владелец");
   const chatId="chat-secretary";
-  if(!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(chatId,ownerId)) throw new Error("владелец не участник чата Секретаря");
+  if(!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(chatId,ownerId)) throw new Error("владелец не участник чата Помощника владельца");
   const id=crypto.randomUUID();
   db.transaction(()=>{
     db.prepare("INSERT INTO chat_messages (id,from_user_id,text,channel,chat_id) VALUES (?,?,?,'chat',?)").run(id,SECRETARY_USER_ID,text,chatId);

@@ -316,7 +316,7 @@ describe("Окно постановки задач (карточка 4396f8c9)",
       .get(draft.task_id) as any;
     expect(reply).toBeTruthy();
     expect(reply.channel).toBe("owner");
-    expect(reply.from_name).toBe("Секретарь");
+    expect(reply.from_name).toBe("Помощник владельца");
     expect(reply.text).toMatch(/флаг готовности/);
   });
 

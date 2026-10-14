@@ -119,7 +119,7 @@ describe("живой ход", () => {
     expect(sent.some((s) => s.event.turn === null)).toBe(false);
   });
 
-  it("строка «БЫСТРО:» Секретаря в живом тексте не видна, даже недописанная", () => {
+  it("строка «БЫСТРО:» Помощника владельца в живом тексте не видна, даже недописанная", () => {
     expect(stripQuickRepliesLine("Ответ\nБЫСТРО: да | нет")).toBe("Ответ");
     expect(stripQuickRepliesLine("Ответ\nБЫС")).toBe("Ответ");
     expect(stripQuickRepliesLine("Ответ\nБыстрый текст")).toBe("Ответ\nБыстрый текст");

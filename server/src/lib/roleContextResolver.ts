@@ -212,9 +212,9 @@ const BLOCK_META: Record<string, [string, string, RunMode[], string[]]> = {
   "task.knowledge": ["Библиотека TaskFlow", "База знаний", ["work", "resume", "subtask", "review"], []],
   "chat.wrapper": ["Чат роли", "Чат", ["chat"], ["roleInstruction", "localPolicy", "roleTitle", "role", "participants", "history", "userText"]],
   "chat.followup": ["Продолжение чата роли", "Чат", ["chat"], ["roleTitle", "role", "history", "userText"]],
-  "secretary.chat": ["Чат и быстрые ответы Секретаря", "Чат", ["chat"], ["roleInstruction", "history", "userText"]],
+  "secretary.chat": ["Чат и быстрые ответы Помощника владельца", "Чат", ["chat"], ["roleInstruction", "history", "userText"]],
   "secretary.summary": ["Разбор сводки", "Контекст", ["summary"], ["today", "timezone", "periods", "users"]],
-  "secretary.voice": ["Голос Секретаря", "Голос", ["voice"], []],
+  "secretary.voice": ["Голос Помощника владельца", "Голос", ["voice"], []],
   "secretary.greeting": ["Приветствие", "Голос", ["voice"], []],
 };
 for (const [key, [title, group, modes, placeholders]] of Object.entries(BLOCK_META)) {

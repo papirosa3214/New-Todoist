@@ -10,7 +10,7 @@
 //      releaseQueuedSuccessors                  — следующая в очереди
 //   4. PATCH /api/tasks/:id ready_for_pickup=1  — флаг владельца
 //   5. POST /api/tasks/:id/run (mode=executor)  — кнопка «Запустить»
-//   6. ownerDraft.admitTreeAutomatically        — допуск дерева Секретаря
+//   6. ownerDraft.admitTreeAutomatically        — допуск дерева Помощника владельца
 //      ownerDraft.startDraftTree                — «✓ Идёт» в чате
 //   7. diagnosticDispatch.dispatchPending…      — диагностические карточки
 //   8. agent-state.ts:~1184                     — повторная раздача после

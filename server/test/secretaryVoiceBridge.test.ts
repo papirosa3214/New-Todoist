@@ -27,7 +27,7 @@ function call(body: unknown, path = "/secretary/tasks") {
     req.on("error",reject); req.end(JSON.stringify(body));
   });
 }
-describe("закрытый инструмент голосового Секретаря", () => {
+describe("закрытый инструмент голосового Помощника владельца", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let stop: () => Promise<void>;
   beforeAll(async()=>{

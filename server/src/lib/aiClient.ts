@@ -174,7 +174,7 @@ export async function callUnifiedAi(opts: {
   } catch (localErr) {
     // Локальная Ollama на .110 периодически залипает и отвечает
     // «server busy (maximum pending requests exceeded)» на ЛЮБУЮ модель: из-за
-    // этого голос Секретаря не мог ни составить задачу, ни найти сводку
+    // этого голос Помощника владельца не мог ни составить задачу, ни найти сводку
     // (владелец 12.10.2026). При таком отказе уходим в облако MiniMax —
     // он быстрый и от локальной машины не зависит.
     if (process.env.CLOUD_FALLBACK === "0") throw localErr;

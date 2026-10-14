@@ -1,5 +1,5 @@
 // Нормализация ```widget-блоков (владелец 02.10.2026: «виджет не разработан»).
-// Проверяем, что схема Секретаря (без type, checklists/check вместо
+// Проверяем, что схема Помощника владельца (без type, checklists/check вместо
 // checklist/done, data/label вместо points/x) приводится к канону, и что
 // канонический JSON не трогается.
 import { describe, expect, it } from "vitest";
@@ -134,7 +134,7 @@ describe("widgetNormalize", () => {
       expect(canonicalizeWidget(c)).toEqual(c);
     });
 
-    it("секретарь-формат metrics с color", () => {
+    it("помощник владельца-формат metrics с color", () => {
       const in_ = {
         title: "Сводка",
         metrics: [
@@ -156,7 +156,7 @@ describe("widgetNormalize", () => {
       expect(items[0].trend).toBe("flat");
     });
 
-    it("секретарь-формат chart: type→kind, data→points", () => {
+    it("помощник владельца-формат chart: type→kind, data→points", () => {
       const in_ = {
         title: "По неделям",
         chart: {
@@ -177,7 +177,7 @@ describe("widgetNormalize", () => {
       expect(points[1]).toEqual({ x: "Вт", y: 5 });
     });
 
-    it("секретарь-формат checklist (ед.): checklists → checklist, checked → done", () => {
+    it("помощник владельца-формат checklist (ед.): checklists → checklist, checked → done", () => {
       const in_ = {
         title: "Главное",
         checklists: [
@@ -200,7 +200,7 @@ describe("widgetNormalize", () => {
       expect(items[1]).toEqual({ text: "Проверить", done: false });
     });
 
-    it("секретарь-формат checklists (мн.): композит из нескольких checklist", () => {
+    it("помощник владельца-формат checklists (мн.): композит из нескольких checklist", () => {
       const in_ = {
         title: "Сводка",
         checklists: [
@@ -250,7 +250,7 @@ describe("widgetNormalize", () => {
   });
 
   describe("normalizeWidgetBlocks", () => {
-    it("приводит секретарь-формат в тексте", () => {
+    it("приводит помощник владельца-формат в тексте", () => {
       const text = [
         "Вот сводка:",
         "```widget",
@@ -325,7 +325,7 @@ describe("widgetNormalize", () => {
 
     it("незарегистрированный тип с корневым chart/metrics/checklists теряет имя типа — это ловушка", () => {
       // Ловушка касается только имён, которых нет в CANONICAL_TYPES:
-      // нормализатор считает такой блок старым форматом секретаря и ищет
+      // нормализатор считает такой блок старым форматом помощника владельца и ищет
       // в корне metrics/chart/checklists. Пока это так, регистрация типа на
       // сервере — обязательный шаг, а не украшение.
       const heatCells = canonicalizeWidget({ type: "heat_cells", chart: { kind: "bar", points: [] } });

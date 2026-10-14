@@ -15,14 +15,14 @@
 //
 // ВАЖНО (факт, проверено тестом widgetNewTypesPreserved): тип, которого нет
 // в CANONICAL_TYPES, нормализатор не «не знает» — он считает его старым
-// форматом секретаря и ищет в корне ключи metrics/chart/checklists. Если
+// форматом помощника владельца и ищет в корне ключи metrics/chart/checklists. Если
 // новый тип содержит такой корень, имя типа теряется молча, блок уезжает в
 // чужую схему, а клиент рисует «виджет не разработан». Поэтому новый тип
-// обязан быть в CANONICAL_TYPES (сервер) и в SCHEMA валидатора секретаря
+// обязан быть в CANONICAL_TYPES (сервер) и в SCHEMA валидатора помощника владельца
 // (roles/secretary/skills/widget-renderer/scripts/validate_widget.py).
 //
 // Раньше роль могла отправить блок без `type` и с альтернативными
-// именами полей (Секретарь использовал `metrics`/`chart`/`checklists`
+// именами полей (Помощник владельца использовал `metrics`/`chart`/`checklists`
 // с `color` вместо `delta`+`trend`, `data:[{label,value,color}]` вместо
 // `points:[{x,y}]`, `checked` вместо `done`). Клиент такого не знает и
 // падает в «виджет не разработан». Сервер при сохранении ответа роли в
@@ -71,7 +71,7 @@ export function widgetTypeOf(json: unknown): string | null {
     return obj.type;
   }
 
-  // 2) Секретарь-формат: один объект с metrics/chart/checklists.
+  // 2) Помощник владельца-формат: один объект с metrics/chart/checklists.
   if (Array.isArray(obj.metrics) || obj.chart || Array.isArray(obj.checklists)) {
     if (Array.isArray(obj.metrics)) return "metrics";
     if (obj.chart) return "chart";
@@ -93,7 +93,7 @@ export function canonicalizeWidget(json: unknown): Record<string, unknown> | nul
     return obj;
   }
 
-  // Секретарь-формат: один блок, тип выводим из того, что заполнено.
+  // Помощник владельца-формат: один блок, тип выводим из того, что заполнено.
   // Если заполнено сразу несколько секций (metrics+chart+checklists) — это
   // композит; раскладываем в несколько виджетов через _composite, иначе
   // клиент iOS нарисует только первую секцию.

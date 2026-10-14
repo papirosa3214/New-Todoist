@@ -49,7 +49,7 @@ export function formatChatMessage(message: any) {
     reply_to_sender_name: message.reply_to_message_id ? (db.prepare("SELECT u.name FROM chat_messages m JOIN users u ON u.id=m.from_user_id WHERE m.id=?").get(message.reply_to_message_id) as {name:string}|undefined)?.name : null,
     reactions: db.prepare("SELECT user_id,emoji FROM chat_message_reactions WHERE message_id=? ORDER BY user_id").all(message.id),
     attachments: attachmentsOf.all(message.id),
-    // Быстрые ответы (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/) —
+    // Быстрые ответы (владелец 25.09.2026, docs/ПЛАН Супер Помощник владельца/) —
     // хранятся JSON-строкой (у SQLite нет своего типа массива).
     quick_replies: message.quick_replies ? JSON.parse(message.quick_replies) : null,
     // SQLite отдаёт 0/1 числом — iOS Decodable для Bool ждёт true/false.

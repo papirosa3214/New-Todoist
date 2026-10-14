@@ -1,3 +1,4 @@
+import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
 import { branchMembership } from "../runtime/branchPlan.js";
 import { taskChatBrief } from "../lib/taskChatBrief.js";
@@ -108,7 +109,7 @@ function previewText(text: string): string {
 
 /** Быстрые ответы (владелец 25.09.2026): модель заканчивает ответ строкой
  *  `БЫСТРО: вариант1 | вариант2 | вариант3` — разбираем и убираем из
- *  текста, который ложится в ленту. Раньше жило только у Секретаря,
+ *  текста, который ложится в ленту. Раньше жило только у Помощника владельца,
  *  теперь это общий формат ответа любой роли. */
 function extractQuickReplies(text: string): { clean: string; replies: string[] | null } {
   const lines = text.split("\n");
@@ -862,7 +863,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       // сохранённое сообщение и не роняют запрос — пользователь уже видит
       // своё сообщение в ленте.
       //
-      // Секретарь (владелец 25.09.2026, docs/ПЛАН Супер Секретарь/) —
+      // Помощник владельца (владелец 25.09.2026, docs/ПЛАН Супер Помощник владельца/) —
       // отдельная ветка: у него нет users.role_key. Его ходы тоже идут
       // через очередь: раньше второе сообщение подряд попадало на занятый
       // лок и молча терялось.
@@ -968,7 +969,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // Новая сессия без удаления истории (владелец 25.09.2026, docs/ПЛАН
-  // Супер Секретарь/): сбрасывает pi_session_id роли в этом чате — агент
+  // Супер Помощник владельца/): сбрасывает pi_session_id роли в этом чате — агент
   // следующим сообщением поднимет разговор с нуля, сама лента остаётся
   // нетронутой. В ленту кладётся видимая метка-разделитель.
   app.post<{ Params: { id: string }; Body: { role_id?: string } }>(
@@ -1866,10 +1867,13 @@ async function deliverAgentReply(args: {
       )
       .all(chatId, trigger.id, trigger.id, CHAT_AGENT_CONTEXT_MESSAGES) as HistoryRow[];
     history.reverse();
-    const roleInstruction =
+    // Состав команды (14.10.2026) — в первый ход сессии, дальше сессия помнит.
+    const roleInstruction = [
       composeLayer(role, "role.prompt")?.effective
         || rolePromptText(role)
-        || `Ты — ${roleTitle} в трекере TaskFlow.`;
+        || `Ты — ${roleTitle} в трекере TaskFlow.`,
+      teamStructureText(role),
+    ].join("\n\n");
     prompt = renderInstruction(role, "chat.wrapper", {
       roleInstruction,
       localPolicy: composeLayer(role, "local_policy")!.effective,
@@ -1977,7 +1981,7 @@ async function deliverAgentReply(args: {
   }
 
   // Быстрые ответы — общий формат ответа роли (раньше — частная логика
-  // Секретаря). Модель заканчивает ответ строкой `БЫСТРО: а | б | в` —
+  // Помощника владельца). Модель заканчивает ответ строкой `БЫСТРО: а | б | в` —
   // разбираем и убираем из текста, который ложится в ленту.
   let quickReplies: string[] | null = null;
   if (replyText && !failure) {
