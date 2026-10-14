@@ -4631,7 +4631,6 @@ const migrations: Migration[] = [
     db.exec("CREATE INDEX IF NOT EXISTS idx_chat_branches ON chats(branch_of_chat_id)");
   } },
 
-  } },
 ];
 /**
  * Опции прогона миграций.
