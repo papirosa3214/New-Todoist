@@ -70,14 +70,14 @@ describe("role catalog API", () => {
     await app.close();
   });
 
-  it("lists eight roles and returns Architect details", async () => {
+  it("lists nine roles (with Инженер .110) and returns Architect details", async () => {
     const list = await app.inject({
       method: "GET",
       url: "/api/roles",
       headers: { authorization: `Bearer ${agentToken}` },
     });
     expect(list.statusCode).toBe(200);
-    expect(list.json().roles).toHaveLength(8);
+    expect(list.json().roles).toHaveLength(9);
     expect(list.json().roles.map((role: { role: string }) => role.role)).toEqual([
       "researcher",
       "analyst",
@@ -87,6 +87,7 @@ describe("role catalog API", () => {
       "qa",
       "designer",
       "secretary",
+      "infra_engineer",
     ]);
     // У Секретаря нет учётки role_secretary — название всё равно по-русски,
     // из таблицы ролей (владелец 27.09.2026 видел в исполнителях «secretary»).

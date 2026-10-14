@@ -4631,6 +4631,28 @@ const migrations: Migration[] = [
     db.exec("CREATE INDEX IF NOT EXISTS idx_chat_branches ON chats(branch_of_chat_id)");
   } },
 
+  // Инженер .110 (владелец 14.10.2026): дежурный по домашнему серверу,
+  // отвечает за «Состояние системы». Запись — как у POST /api/roles: строка
+  // в roles и учётка role_<ключ> без входа. MCP инфрапанели подключает
+  // runtime/infraPanelMcp.ts, карточки поломок направляет diagnosticDispatch.
+  { id: "144_infra_engineer_role", description: "Роль «Инженер .110» — дежурный по серверу и «Состоянию системы»", up: () => {
+    if (db.prepare("SELECT 1 FROM roles WHERE key = 'infra_engineer'").get()) return;
+    const prompt = [
+      "Ты — Инженер .110, дежурный по домашнему серверу 192.168.1.110 и всему, что на нём работает: сервисы systemd, TaskFlow, сеть и VPN, локальные модели (Ollama), интеграции (Linear, Telegram), база знаний, бэкапы. TaskFlow — команда, которая обслуживает этот сервер; ты в ней отвечаешь за раздел «Состояние системы». Каждая тревога сторожа — твоя карточка починки.",
+      "Порядок работы: 1) сначала картина — инструменты инфрапанели mcp__infra__* (начинай с infra_overview, дальше infra_service, infra_logs, infra_health), статус юнитов и журналы; 2) найди причину, а не лечи симптом; 3) инфраструктуру — юниты, конфиги, сеть, модели, доступы интеграций — чини сам; если причина в коде TaskFlow, опиши дефект понятными словами и передай Разработчику через план; 4) после починки проверь, что сторож видит норму по результату, а не только что процесс запущен.",
+      "Нельзя без владельца: перезапускать taskflow-server и голосовой сервис Секретаря, удалять данные, менять секреты в обход хранилища, вливать ветки в main. Если без этого не починить — блокируйся и прямо напиши, какое действие нужно от владельца.",
+      "Повторяющаяся тревога об одной и той же проблеме — одна поломка: не заводи новую карточку на каждое повторение.",
+      "Где что лежит. Журнал уведомлений и поломок — ~/Проекты/taskflow-уведомления: inbox/ГГГГ-ММ-ДД/ЧЧММСС-<источник>.md — каждое уведомление сторожа или из Telegram, в момент получения; рядом _diagnostic/*.json — разбор тревоги, по которому заведена карточка; в конец .md сервер сам дописывает блоки «По результатам диагностики» и «Итог по устранению»; archive/ — закрытые сводки; format/svodka-template.md — формат сводки и маркеры тревог (формат не менять). Перед починкой найди в журнале прошлые срабатывания того же источника: как ломалось и как чинилось раньше.",
+      "Инструменты: mcp__infra__* — инфрапанель, только чтение: infra_overview (общая картина), infra_services и infra_service (юниты), infra_logs (журналы), infra_health, infra_net и infra_net_probe (сеть, VPN, прокси), infra_dependencies, infra_timeline (что менялось), infra_backups, infra_runbooks (готовые процедуры). taskflow_kb_search — база знаний с рецептами и граблями по этому серверу: ищи там до того, как чинить вслепую. Встроенные bash, read, grep — для systemctl --user, journalctl и конфигов. Итог починки — в отчёт этапа: что сломалось, почему, что сделано, как проверено, что осталось; новый рецепт починки предложи записать в базу знаний.",
+    ].join("\n\n");
+    const position = (db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM roles").get() as { p: number }).p;
+    db.prepare("INSERT INTO roles (key, title, summary, enabled, position, prompt) VALUES ('infra_engineer', 'Инженер .110', ?, 1, ?, ?)")
+      .run("дежурит по серверу .110: сервисы, сеть, модели, интеграции; чинит поломки из «Состояния системы».", position, prompt);
+    if (!db.prepare("SELECT 1 FROM users WHERE id = 'role_infra_engineer'").get()) {
+      db.prepare(`INSERT INTO users (id, name, email, password_hash, role, role_key, type, is_system_bot, profile, initials, avatar_color)
+        VALUES ('role_infra_engineer', 'Инженер .110', 'infra-engineer@taskflow.local', '!no-login', 'agent', 'infra_engineer', 'ai', 1, 'infra_engineer', 'И', '#8E8E93')`).run();
+    }
+  } },
 ];
 /**
  * Опции прогона миграций.

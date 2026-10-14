@@ -11,8 +11,9 @@ describe("реестр ролей", () => {
   beforeAll(async () => { app = await buildApp(); });
   afterAll(async () => { await app.close(); });
 
-  it("начальный состав — восемь ролей с Секретарём, без Синтезатора", () => {
-    expect(ROLE_NAMES).toHaveLength(8);
+  it("начальный состав — девять ролей с Секретарём и Инженером .110, без Синтезатора", () => {
+    expect(ROLE_NAMES).toHaveLength(9);
+    expect(ROLE_NAMES).toContain("infra_engineer");
     expect(ROLE_NAMES).toContain("secretary");
     expect(ROLE_NAMES).not.toContain("synthesizer");
     expect(roleTitle("builder")).toBe("Разработчик");

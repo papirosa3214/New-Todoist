@@ -23,6 +23,11 @@ export async function dispatchPendingDiagnosticTasks(): Promise<void> {
 
   for (const task of tasks) {
     try {
+      // Поломки «Состояния системы» — Инженеру .110 (владелец 14.10.2026),
+      // а не роли, угаданной по тексту. Выбор владельца не перебиваем.
+      db.prepare(`UPDATE tasks SET owner_selected_role = 'infra_engineer'
+        WHERE id = ? AND owner_selected_role IS NULL
+          AND EXISTS (SELECT 1 FROM roles WHERE key = 'infra_engineer' AND enabled = 1)`).run(task.id);
       const flagged = db.prepare(`
         UPDATE tasks SET ready_for_pickup = 1, agent_state = NULL,
           ready_set_at = datetime('now'), ready_set_by = ?,

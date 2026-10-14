@@ -17,6 +17,7 @@ import { ensureResultVersionForReview } from "../resultVersions.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
 import { connectBuilderXcode } from "./builderXcode.js";
+import { connectInfraPanel } from "./infraPanelMcp.js";
 import { branchMembership } from "./branchPlan.js";
 import { ensurePlanTopic, topicContext } from "../lib/projectTopics.js";
 import { markPlanFinalReviewerStarted, markPlanFinalReviewerWaiting, hasPendingPlanFinalReview, planReviewRouteContext } from "./planReviewLifecycle.js";
@@ -1297,7 +1298,9 @@ try {
   const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId);
   if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
   const xcode = await connectBuilderXcode(role, mode).catch(async error => { resourceLoader.disposeResources(); await composio.close(); throw error; });
-  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...xcode.tools];
+  // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
+  const infra = await connectInfraPanel(role).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
+  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...xcode.tools, ...infra.tools];
   const builtinTools = [...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()].filter(t=>BUILTIN_TOOLS.includes(t.name)).map(t=>({...t,description:composeLayer(role,"tool.builtin."+t.name)?.effective ?? t.description})).map(t=>withTestRunBudget(t,{role,taskId}));
   const { session } = await createAgentSession({
     cwd,
@@ -1321,7 +1324,7 @@ try {
     customTools: [...builtinTools, ...customTools],
     sessionManager: manager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
-  } as any).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await xcode.close(); throw error; });
+  } as any).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await xcode.close(); await infra.close(); throw error; });
 
   // Миграция persisted thinkingLevel: старая сессия записала "off", а
   // модель теперь reasoning — включим размышления и запишем обратно в
@@ -1491,6 +1494,7 @@ try {
       resourceLoader.disposeResources();
       await composio.close().catch(() => {});
       await xcode.close().catch(() => {});
+      await infra.close().catch(() => {});
       // Шаг плана закончил ход без сдачи: сервер сам продолжает его при прогрессе
       // (до 3 раз) или видимо блокирует. Раньше такой шаг молча оставался
       // «в работе» без запуска (находка А30, 06.10.2026).
