@@ -7,8 +7,34 @@
 // Здесь проверяется именно поведение выбора, а не качество модели:
 // зависит ли роль от смысла задачи, переживает ли ручной выбор владельца
 // повторный подбор, и что происходит, когда подобрать не удалось.
-import { beforeAll, afterAll, describe, expect, it } from "vitest";
+import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
+
+// Модель и сессия роли подменены (14.10.2026): ручной запуск узла сразу
+// поднимает ход роли, и без подмены тест запускал настоящую модель с
+// рабочей папкой в репозитории. Здесь проверяется выбор роли и план, а не ход.
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    createAgentSession: async () => ({
+      session: {
+        subscribe: () => () => {},
+        prompt: async () => {},
+        steer: async () => {},
+        abort: async () => {},
+        dispose: () => {},
+      },
+    }),
+  };
+});
+vi.mock("../src/runtime/PiRuntimeAdapter.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/runtime/PiRuntimeAdapter.js")>();
+  return {
+    ...actual,
+    getModelRuntime: async () => ({ getModel: (_p: string, id: string) => ({ id, provider: "minimax" }) }),
+  };
+});
 
 const { buildApp } = await import("../src/index.js");
 const { default: db } = await import("../src/db.js");
