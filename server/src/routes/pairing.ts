@@ -289,7 +289,10 @@ export function registerPairingRoutes(app: FastifyInstance) {
         }
       })();
 
-      if (выдача_не_прошла || !выдано) {
+      // Промежуточная константа: TypeScript сужает выдано до null проверкой
+      // выше и дальше считает его never, хотя транзакция уже заполнила.
+      const итог = выдано as { machine: { id: string; name: string; allowed_roots: string[]; token_prefix: string }; token: string } | null;
+      if (выдача_не_прошла || !итог) {
         return reply.code(400).send({ error: "invalid_code" });
       }
 
@@ -300,11 +303,11 @@ export function registerPairingRoutes(app: FastifyInstance) {
       });
 
       return {
-        token: выдано.token,
+        token: итог.token,
         token_type: "machine",
-        machine_id: выдано.machine.id,
-        prefix: выдано.machine.token_prefix,
-        allowed_roots: выдано.machine.allowed_roots,
+        machine_id: итог.machine.id,
+        prefix: итог.machine.token_prefix,
+        allowed_roots: итог.machine.allowed_roots,
         relay_base_url: relayBaseUrl(),
         issued_at: nowIso(),
       };
