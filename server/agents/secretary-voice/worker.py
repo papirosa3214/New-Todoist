@@ -4,9 +4,11 @@ taskflow-secretary-voice.service. Ручной прогон (dev):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import json
+from typing import Awaitable, Callable
 from dataclasses import dataclass
 
 import aiohttp
@@ -134,7 +136,57 @@ async def lookup_via_api(path: str, socket_path: str, owner_id: str, text: str =
             return body
 
 
-async def shared_tools_via_api(socket_path: str, owner_id: str) -> list:
+# Фон для долгих инструментов (владелец 14.10.2026): раньше Секретарь молча
+# ждала инструмент до 2–4 минут, и в звонке была тишина, «как будто сказал в
+# пустоту». Теперь инструмент ждём недолго; не успел — модель сразу получает
+# «принято, выполняется», говорит это владельцу и продолжает разговор, а итог
+# по готовности сам подаётся в разговор отдельной репликой.
+QUICK_ANSWER_SECONDS = 3.0
+BACKGROUND_ACK = (
+    "Запрос «{label}» принят и выполняется в фоне. Прямо сейчас одной короткой фразой "
+    "скажи владельцу, что приняла и запустила, и спроси, есть ли что-то ещё. "
+    "Итог придёт сам отдельным сообщением — повторно этот инструмент не вызывай."
+)
+BACKGROUND_RESULT = (
+    "Пришёл результат фонового запроса «{label}». Коротко и по делу сообщи владельцу итог; "
+    "если он сейчас говорит о другом, сначала одной фразой предупреди, что пришёл ответ. Данные: {result}"
+)
+
+
+class BackgroundRunner:
+    """Ответ сразу, если инструмент быстрый; иначе — фон и доклад по готовности."""
+
+    def __init__(self, quick_seconds: float = QUICK_ANSWER_SECONDS) -> None:
+        self.quick_seconds = quick_seconds
+        self.session: AgentSession | None = None
+        self.jobs: set[asyncio.Future] = set()
+
+    async def run(self, label: str, work: Callable[[], Awaitable[str]]) -> str:
+        job = asyncio.ensure_future(work())
+        try:
+            return await asyncio.wait_for(asyncio.shield(job), self.quick_seconds)
+        except asyncio.TimeoutError:
+            pass
+        self.jobs.add(job)
+        job.add_done_callback(lambda done: self._report(label, done))
+        logger.info("инструмент «%s» ушёл в фон", label)
+        return BACKGROUND_ACK.format(label=label)
+
+    def _report(self, label: str, job: asyncio.Future) -> None:
+        self.jobs.discard(job)
+        try:
+            result = job.result()
+        except Exception as exc:  # инструмент сам ловит свои ошибки; это — запас
+            result = f"не получилось: {exc}"
+        if self.session is None:
+            return
+        try:
+            self.session.generate_reply(instructions=BACKGROUND_RESULT.format(label=label, result=result))
+        except Exception as exc:  # звонок уже закончился — сделанное на сервере остаётся
+            logger.warning("итог «%s» не озвучен: %s", label, exc)
+
+
+async def shared_tools_via_api(socket_path: str, owner_id: str, runner: BackgroundRunner | None = None) -> list:
     """Общие инструменты Секретаря (те же, что в чате) — как инструменты звонка."""
     connector = aiohttp.UnixConnector(path=socket_path)
     async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as http:
@@ -145,6 +197,11 @@ async def shared_tools_via_api(socket_path: str, owner_id: str) -> list:
 
     def build(spec: dict):
         async def call(raw_arguments: dict[str, object]) -> str:
+            if runner is None:
+                return await invoke(raw_arguments)
+            return await runner.run(spec["name"], lambda: invoke(raw_arguments))
+
+        async def invoke(raw_arguments: dict[str, object]) -> str:
             inner = aiohttp.UnixConnector(path=socket_path)
             try:
                 async with aiohttp.ClientSession(connector=inner, timeout=aiohttp.ClientTimeout(total=120)) as http:
@@ -174,10 +231,11 @@ async def instructions_via_api(socket_path: str) -> dict:
 
 
 class Assistant(Agent):
-    def __init__(self, owner_id: str, instructions: str = SECRETARY_INSTRUCTIONS, greeting: str = "поздоровайся коротко и спроси, чем помочь", tools: list | None = None) -> None:
+    def __init__(self, owner_id: str, instructions: str = SECRETARY_INSTRUCTIONS, greeting: str = "поздоровайся коротко и спроси, чем помочь", tools: list | None = None, runner: BackgroundRunner | None = None) -> None:
         super().__init__(instructions=instructions, tools=tools or [])
         self.owner_id = owner_id
         self.greeting = greeting
+        self.runner = runner or BackgroundRunner()
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions=self.greeting)
@@ -190,13 +248,14 @@ class Assistant(Agent):
             text: Полный текст поручения со сроком, временем, метками, приоритетом,
                 исполнителем и деталями. Не сокращай его до названия.
         """
-        cfg = load_config()
-        try:
-            result = await create_task_via_api(text, cfg.taskflow_socket_path, self.owner_id)
-        except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
-            return f"Не получилось разобрать поручение: {exc}"
-        return json.dumps(result, ensure_ascii=False)
-
+        async def work() -> str:
+            cfg = load_config()
+            try:
+                result = await create_task_via_api(text, cfg.taskflow_socket_path, self.owner_id)
+            except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+                return f"Не получилось разобрать поручение: {exc}"
+            return json.dumps(result, ensure_ascii=False)
+        return await self.runner.run("постановка задачи", work)
 
     @function_tool
     async def task_summary(self, context: RunContext, text: str, send_to_chat: bool = False) -> str:
@@ -206,12 +265,14 @@ class Assistant(Agent):
             text: Полная просьба, включая исполнителя, статусы и период (неделя, месяц, даты).
             send_to_chat: True только если владелец просит прислать сводку в чат.
         """
-        cfg = load_config()
-        try:
-            result = await summary_via_api(text, cfg.taskflow_socket_path, self.owner_id, send_to_chat)
-        except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
-            return f"Не удалось получить сводку: {exc}"
-        return json.dumps(result, ensure_ascii=False)
+        async def work() -> str:
+            cfg = load_config()
+            try:
+                result = await summary_via_api(text, cfg.taskflow_socket_path, self.owner_id, send_to_chat)
+            except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+                return f"Не удалось получить сводку: {exc}"
+            return json.dumps(result, ensure_ascii=False)
+        return await self.runner.run("сводка задач", work)
 
     @function_tool
     async def task_details(self, context: RunContext, text: str) -> str:
@@ -220,12 +281,14 @@ class Assistant(Agent):
         Args:
             text: Название задачи или слова из него, как их назвал владелец.
         """
-        cfg = load_config()
-        try:
-            result = await lookup_via_api("task", cfg.taskflow_socket_path, self.owner_id, text)
-        except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
-            return f"Не удалось посмотреть задачу: {exc}"
-        return json.dumps(result, ensure_ascii=False)
+        async def work() -> str:
+            cfg = load_config()
+            try:
+                result = await lookup_via_api("task", cfg.taskflow_socket_path, self.owner_id, text)
+            except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+                return f"Не удалось посмотреть задачу: {exc}"
+            return json.dumps(result, ensure_ascii=False)
+        return await self.runner.run("карточка задачи", work)
 
     @function_tool
     async def send_to_owner_chat(self, context: RunContext, text: str) -> str:
@@ -234,22 +297,26 @@ class Assistant(Agent):
         Args:
             text: Полный текст сообщения, готовый к чтению.
         """
-        cfg = load_config()
-        try:
-            result = await lookup_via_api("owner-chat", cfg.taskflow_socket_path, self.owner_id, text)
-        except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
-            return f"Не удалось написать в чат: {exc}"
-        return json.dumps(result, ensure_ascii=False)
+        async def work() -> str:
+            cfg = load_config()
+            try:
+                result = await lookup_via_api("owner-chat", cfg.taskflow_socket_path, self.owner_id, text)
+            except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+                return f"Не удалось написать в чат: {exc}"
+            return json.dumps(result, ensure_ascii=False)
+        return await self.runner.run("сообщение в чат", work)
 
     @function_tool
     async def role_load(self, context: RunContext) -> str:
         """Загрузка ролей: чем сейчас занята каждая роль, что в очереди и что заблокировано."""
-        cfg = load_config()
-        try:
-            result = await lookup_via_api("roles", cfg.taskflow_socket_path, self.owner_id)
-        except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
-            return f"Не удалось посмотреть загрузку ролей: {exc}"
-        return json.dumps(result, ensure_ascii=False)
+        async def work() -> str:
+            cfg = load_config()
+            try:
+                result = await lookup_via_api("roles", cfg.taskflow_socket_path, self.owner_id)
+            except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+                return f"Не удалось посмотреть загрузку ролей: {exc}"
+            return json.dumps(result, ensure_ascii=False)
+        return await self.runner.run("загрузка ролей", work)
 
 
 # LiveKit SDK ignores NO_PROXY when it takes HTTPS_PROXY implicitly.
@@ -275,13 +342,15 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
     snapshot = await instructions_via_api(cfg.taskflow_socket_path)
+    runner = BackgroundRunner()
+    runner.session = session
     try:
-        shared = await shared_tools_via_api(cfg.taskflow_socket_path, owner.identity)
+        shared = await shared_tools_via_api(cfg.taskflow_socket_path, owner.identity, runner)
     except (RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
         # Звонок важнее полного набора: без общих инструментов остаются базовые.
         logger.warning("общие инструменты Секретаря недоступны: %s", exc)
         shared = []
-    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=snapshot["greeting"], tools=shared), room=ctx.room)
+    await session.start(agent=Assistant(owner_id=owner.identity, instructions=snapshot["instructions"], greeting=snapshot["greeting"], tools=shared, runner=runner), room=ctx.room)
 
     # Тап по анимации на телефоне — перебить Секретаря на полуслове.
     @ctx.room.local_participant.register_rpc_method("interrupt")
