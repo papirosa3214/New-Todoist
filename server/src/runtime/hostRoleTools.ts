@@ -10,6 +10,7 @@ import { runOperation } from "../host/gateway.js";
 import { hostRepoPath, roleBranch } from "./roleWorkspace.js";
 import { roleUserId } from "../roleRouting.js";
 import { appRef } from "./inProcessRun.js";
+import db from "../db.js";
 
 const MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
@@ -49,11 +50,17 @@ export function createHostRoleTools(machineId: string, taskId: string, role: str
         const r = (await runOperation(machineId, "read", { path: p.path, encoding: "base64" })) as any;
         if (!r?.ok) throw new Error(`не прочитал ${p.path}: ${String(r?.error ?? "без текста")}`);
         const body = Buffer.from(String(r.data?.content ?? ""), "base64");
-        const name = p.name || path.basename(p.path);
+        const name = `${role}: ${p.name || path.basename(p.path)}`;
         const mime = MIME[name.toLowerCase().split(".").pop() ?? ""] ?? "application/octet-stream";
         const app = appRef();
         if (!app) throw new Error("сервер ещё не поднят");
-        const token = app.jwt.sign({ id: roleUserId(role) }, { expiresIn: "5m" });
+        // Исполнитель шага плана не создатель и не назначенный карточки —
+        // getTaskForWrite пускает только их, и вложение от роли давало 404
+        // (16.10.2026). Проверяем, что роль работает на шаге ЭТОЙ карточки,
+        // и загружаем от служебного оркестратора; роль — в имени файла.
+        const onStep = db.prepare("SELECT 1 FROM subtasks WHERE task_id=? AND agent_id=? AND done=0").get(taskId, roleUserId(role));
+        if (!onStep) throw new Error("вложение доступно только роли, работающей на шаге этой карточки");
+        const token = app.jwt.sign({ id: roleUserId("code_orchestrator") }, { expiresIn: "5m" });
         const res = await app.inject({
           method: "POST",
           url: `/api/tasks/${encodeURIComponent(taskId)}/attachments?kind=task&name=${encodeURIComponent(name)}`,
