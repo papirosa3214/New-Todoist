@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { resolveCwd } from "../pathSafety.js";
+import { естьПесочница, командаЗапуска, подготовитьПрофиль } from "../sandbox.js";
 import {
   BadArgsError,
   CancelledError,
@@ -59,9 +60,28 @@ export const bash: Operation = async (args, context) => {
   if (context.signal.aborted) throw new CancelledError();
 
   return new Promise<BashResult>((resolve, reject) => {
+    // Правка 10: команда идёт под sandbox-exec. Профиль строится по тем же
+    // корням, что проверяет pathSafety, но закрывает не аргументы, а саму
+    // команду: `cat ~/.ssh/id_ed25519` не аргумент операции, а текст, и
+    // resolveCwd её бы не увидел.
+    // На macOS песочница обязательна: если sandbox-exec пропал, роль не
+    // должна получить `bash` без ограничений — лучше явный отказ. На других
+    // платформах её нет по устройству, и там команда идёт как раньше.
+    const нужнаПесочница = process.platform === "darwin";
+    if (нужнаПесочница && !естьПесочница()) {
+      reject(new BadArgsError(`нет /usr/bin/sandbox-exec — команда не выполнена, песочница обязательна`));
+      return;
+    }
+    const профиль = нужнаПесочница ? подготовитьПрофиль(context.roots) : null;
+    if (нужнаПесочница && профиль?.путь == null) {
+      reject(new BadArgsError(профиль?.ошибка ?? "не удалось подготовить профиль песочницы"));
+      return;
+    }
+
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(shell, ["-c", command], {
+      const запуск = командаЗапуска(профиль?.путь ?? null, shell, ["-c", command]);
+      child = spawn(запуск.файлы[0] ?? shell, [...запуск.аргументы], {
         cwd,
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
