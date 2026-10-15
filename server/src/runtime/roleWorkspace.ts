@@ -105,8 +105,11 @@ export async function remoteRoleWorkspace(
     );
   }
 
+  // Имя действия — из протокола хоста (host/src/operations/git_worktree.ts):
+  // create | remove. С «add» хост отказывал, но до 16.10.2026 это не всплывало:
+  // инструменты роли к хосту подключены не были (см. inProcessRun.ts).
   const результат = await runOperation(машина.id, "git_worktree", {
-    action: "add",
+    action: "create",
     repo: путьНаМаке,
     taskId,
     branch: roleBranch(taskId),
@@ -115,6 +118,14 @@ export async function remoteRoleWorkspace(
   // Путь работы приходит в stdout: отдельного поля data в протоколе нет
   // (проверено по OpResultMessage в protocol.ts) — операция отдаёт результат
   // как JSON-строку.
+  // Не-bash операции хоста отдают результат в data (так же читает
+  // hostOperations.ts); stdout — запасной путь для старого хоста.
+  const отказ = результат as { ok?: boolean; error?: unknown };
+  if (отказ.ok === false) {
+    throw new Error(`хост «${машина.name}» не создал рабочую копию: ${String(отказ.error ?? "без текста")}`);
+  }
+  const данные = (результат as { data?: { path?: string } }).data;
+  if (данные?.path) return данные.path;
   const сырое = ((результат as { stdout?: string }).stdout ?? "").trim();
   if (!сырое) {
     throw new Error(`хост не вернул путь рабочей копии для машины «${машина.name}»`);
