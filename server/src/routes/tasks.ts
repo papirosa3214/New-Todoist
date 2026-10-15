@@ -9,7 +9,7 @@ import crypto from "crypto";
 import { purgeTasks } from "../lib/taskPurge.js";
 import { archiveTask, restoreTask, purgeArchivedTask, listArchivedTasks } from "../lib/taskArchive.js";
 import db from "../db.js";
-import { autoProposeCollaborationPlanIfNeeded } from "./task-collaboration-plans.js";
+import { autoProposeCollaborationPlanIfNeeded, autoProposeFromSubtasksOnCreate } from "./task-collaboration-plans.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
@@ -1212,7 +1212,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
       // по-прежнему только владелец. Ошибка здесь не должна ломать
       // создание задачи — отдельный try/catch.
       try {
-        if (!preparation && !isPrivateProject) autoProposeCollaborationPlanIfNeeded(id);
+        // Карточка с подзадачами — план из них (асинхронно: классификатор
+        // ролей локальный, ждать его в ответе на создание незачем).
+        if (!preparation && !isPrivateProject && subtaskTitles.length) {
+          void autoProposeFromSubtasksOnCreate(id).catch((error) =>
+            req.log?.error?.({ err: error, taskId: id }, "auto plan from subtasks failed"));
+        } else if (!preparation && !isPrivateProject) autoProposeCollaborationPlanIfNeeded(id);
       } catch (error) {
         req.log?.error?.({ err: error, taskId: id }, "auto collaboration plan proposal failed");
       }

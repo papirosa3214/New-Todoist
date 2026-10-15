@@ -90,6 +90,21 @@ describe("умная параллелизация подзадач (subtaskRoleF
     return taskId;
   }
 
+  it("карточка, созданная сразу с подзадачами, получает автоплан ИЗ них (16.10.2026)", async () => {
+    const created = await app.inject({ method: "POST", url: "/api/tasks", headers: ownerAuth,
+      payload: { title: "Виджеты на маке", subtasks: ["[builder] написать рендер виджетов", "[qa] проверить сценарии виджетов"] } });
+    expect(created.statusCode).toBeLessThan(300);
+    const taskId = created.json().task.id as string;
+    const subtaskIds = (db.prepare("SELECT id FROM subtasks WHERE task_id=? AND collaboration_plan_id IS NULL").all(taskId) as { id: string }[]).map((r) => r.id);
+    let nodes: { source_subtask_id: string | null }[] = [];
+    for (let i = 0; i < 50 && !nodes.length; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      nodes = db.prepare("SELECT n.source_subtask_id FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id WHERE p.task_id=? AND p.status='draft'").all(taskId) as any[];
+    }
+    expect(nodes.length).toBe(2);
+    expect(nodes.map((n) => n.source_subtask_id).sort()).toEqual([...subtaskIds].sort());
+  });
+
   it("меньше двух открытых подзадач — не предлагает план", async () => {
     const taskId = await makeTaskWithSubtasks("Мелкая правка", "builder", ["[builder] один маленький шаг"]);
     const res = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/suggest-from-subtasks`, headers: ownerAuth });

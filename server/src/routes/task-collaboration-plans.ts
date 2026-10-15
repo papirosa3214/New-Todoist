@@ -775,6 +775,28 @@ export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: {
   return { id:created.id, profile: proposal.profile, revision: created.revision };
 }
 
+/**
+ * Автоплан для карточки, созданной СРАЗУ с подзадачами (владелец 16.10.2026).
+ * Шаблон по словам названия подзадач не видит: на caecdeee узлы плана встали
+ * своими подзадачами, а три написанные помощником остались пустыми. Здесь
+ * план собирается из самих подзадач — узлы займут их (source_subtask_id),
+ * и у владельца появляется выбор «своя подзадача / работа плана». Не вышло
+ * собрать — прежний шаблон.
+ */
+export async function autoProposeFromSubtasksOnCreate(taskId: string): Promise<{ id: string; profile: string; revision: number } | null> {
+  const task = db.prepare("SELECT parent_id FROM tasks WHERE id=?").get(taskId) as { parent_id: string | null } | undefined;
+  if (!task || task.parent_id) return null;
+  const actorId = resolveAutoProposalActorId();
+  if (!actorId) return null;
+  const suggestion = await suggestFanoutFromSubtasks(taskId);
+  if (!suggestion.suggested) return autoProposeCollaborationPlanIfNeeded(taskId);
+  if (db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved')").get(taskId)) return null;
+  const graph = { nodes: suggestion.nodes.map((n) => ({ ...n, required: true, output_artifact: null })), edges: [] };
+  const created = createDraftPlan(taskId, actorId, "manual", suggestion.rationale, null, graph);
+  logEvent({ taskId, actorId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: "manual: subtask fanout (auto on create)" });
+  return { id: created.id, profile: "manual", revision: created.revision };
+}
+
 export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void {
   // PUT …/nodes/:slot/phase — отнести шаг родителя к подготовке («до
   // дочерних») или к итогу («после дочерних»). Владелец или оркестратор.
