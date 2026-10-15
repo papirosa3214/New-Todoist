@@ -26,7 +26,6 @@
 // так читаться в ленте.
 import { restartOccupiedSlot } from "../runtime/slotRestart.js";
 import { forceReleaseSlotSession, isSlotSessionHeld } from "../runtime/slotSession.js";
-import { activeInProcessRun } from "../runtime/inProcessRun.js";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
