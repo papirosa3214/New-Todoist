@@ -77,6 +77,8 @@ plutil -lint "$PLIST" >/dev/null || die "plist не прошёл проверк�
 
 # Старый агент снимаем молча: сначала установка, иначе не сменить Node.
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
+# bootout асинхронный: bootstrap сразу следом падает «5: Input/output error».
+for _ in $(seq 1 20); do launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1 || break; sleep 0.5; done
 launchctl bootstrap "gui/$UID" "$PLIST"
 launchctl enable "gui/$UID/$LABEL" 2>/dev/null || true
 launchctl kickstart -k "gui/$UID/$LABEL"
