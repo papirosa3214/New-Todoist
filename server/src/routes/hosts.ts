@@ -150,7 +150,19 @@ export function registerHostRoutes(app: FastifyInstance): void {
       return reply.code(409).send({ error: `машина «${машина.name}» сейчас офлайн` });
     }
     try {
-      return await runOperation(машина.id, req.body!.op!, req.body?.args ?? {});
+      // Вывод собираем здесь: хост отдаёт его кадрами op_chunk и в op_result
+      // не дублирует, поэтому без onChunk вызывающий получил бы пустой stdout
+      // и счётчики байт — команда выполнилась, а роль не видит ничего.
+      let накоплено = "";
+      const результат = await runOperation(машина.id, req.body!.op!, req.body?.args ?? {}, {
+        onChunk: (часть) => {
+          if (часть.stream === "stdout") накоплено += часть.data;
+        },
+      });
+      if (результат.ok && !результат.stdout) {
+        return { ...результат, stdout: накоплено };
+      }
+      return результат;
     } catch (err) {
       // Хост пропал посреди операции — это связь, а не поломка сервера.
       return reply.code(409).send({
