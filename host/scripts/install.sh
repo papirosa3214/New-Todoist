@@ -39,12 +39,18 @@ echo "Собираю $HOST_DIR"
 mkdir -p "$PLIST_DIR" "$CONFIG_DIR" "$LOG_DIR"
 
 # Конфиг без ключа: ключ живёт в Keychain (D7).
+# Корень — только репозиторий нативного клиента, не весь $HOME: роль под
+# sandbox-exec пишет ровно туда, куда разрешено (владелец 15.10.2026).
+# Рабочие копии ролей — внутри корня (.worktrees в .gitignore), иначе
+# песочница не пустит в них сборку. Переопределяется TASKFLOW_HOST_ROOT.
+ROOT="${TASKFLOW_HOST_ROOT:-$HOME/Проекты/TaskFlowNativeBuild}"
+MACHINE_ID="${TASKFLOW_HOST_MACHINE_ID:-mac}"
 cat > "$CONFIG" <<JSON
 {
   "gatewayUrl": "$GATEWAY_URL",
-  "machineId": "mac",
-  "roots": ["$HOME"],
-  "worktreesBase": "$HOME/.local/state/taskflow-runs/worktrees",
+  "machineId": "$MACHINE_ID",
+  "roots": ["$ROOT"],
+  "worktreesBase": "$ROOT/.worktrees",
   "keychainService": "taskflow-host",
   "keychainAccount": "mac",
   "logLevel": "info"
