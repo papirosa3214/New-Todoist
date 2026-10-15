@@ -64,6 +64,7 @@ import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
 import { isolatedLocalOperations, roleIsolationEnabled } from "./localRoleOperations.js";
 import { createHostRoleTools } from "./hostRoleTools.js";
+import { previousSessionDigest } from "./slotSession.js";
 import { remoteRoleWorkspace } from "./roleWorkspace.js";
 import { resolveRoleHost } from "./roleHost.js";
 import { hostOperations } from "./hostOperations.js";
@@ -1261,7 +1262,11 @@ async function runRoleInProcessUnserialized(input: {
       ? await remoteRoleWorkspace(host, projectRepo(taskId), taskId)
       : roleWorkspace(taskId, projectRepo(taskId)));
   const mode = input.mode ?? (role === "critic_verifier" ? "review" : "work");
-  const resumed = hasSession(taskId, role, input.subtaskId);
+  // Свежий старт (замена исполнителя) — не продолжение: прежняя переписка
+  // не подхватывается, поэтому resumed честно false, а выжимка прежней сессии
+  // уходит новому агенту в задание (16.10.2026).
+  const previousDigest = input.freshSession && input.subtaskId ? previousSessionDigest(taskId, role, input.subtaskId) : null;
+  const resumed = !input.freshSession && hasSession(taskId, role, input.subtaskId);
   const dependencyContext = buildDependencyContext(taskId);
   if (dependencyContext.status === "ok" && dependencyContext.dependencies.length) {
     logEvent({
@@ -1469,9 +1474,12 @@ try {
   let limitHit: string | null = null;
   const work = (async () => {
     try {
-      const task = input.prompt ?? (input.subtaskId
+      const baseTask = input.prompt ?? (input.subtaskId
         ? planSubtaskPrompt(taskId, role, input.subtaskId)
         : (resumed ? resumePrompt(taskId, role) : defaultTaskPrompt(taskId, role)));
+      const task = previousDigest
+        ? `Прежний исполнитель этого шага заменён. Ниже — выжимка его сессии: не повторяй уже проверенное, но его выводы сверь на месте, прежде чем на них опираться.\n\n${previousDigest}\n\n---\n\n${baseTask}`
+        : baseTask;
       // Память команды (02.10.2026): то, что уже известно по теме задачи,
       // приходит в задание само — роли не надо помнить, что надо спросить.
       const about = db.prepare("SELECT title, description, project_id FROM tasks WHERE id = ?").get(taskId) as

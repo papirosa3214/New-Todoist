@@ -49,6 +49,35 @@ export function openSlotSession(taskId:string,role:string,subtaskId:string,fallb
   rememberSlotSession(subtaskId,manager);
   return manager;
 }
+/**
+ * Выжимка прежней сессии шага — для свежего агента при замене исполнителя
+ * (владелец 16.10.2026: «почему у них памяти о прошлых заходах нет»).
+ * Раньше свежий старт выбрасывал всё, что прежний агент выяснил и не записал
+ * в карточку. Без модели: последние выводы агента и его последние действия.
+ */
+export function previousSessionDigest(taskId:string,role:string,subtaskId:string,maxChars=8000):string|null {
+  try {
+    const dir=slotSessionDirectory(taskId,role,subtaskId);
+    if(!fs.existsSync(dir))return null;
+    const saved=db.prepare("SELECT session_file FROM slot_sessions WHERE subtask_id=?").get(subtaskId) as {session_file:string}|undefined;
+    const files=fs.readdirSync(dir).filter(n=>n.endsWith(".jsonl")).map(n=>path.join(dir,n)).sort((a,b)=>fs.statSync(b).mtimeMs-fs.statSync(a).mtimeMs);
+    const file=saved&&fs.existsSync(saved.session_file)?saved.session_file:files[0];
+    if(!file)return null;
+    const thoughts:string[]=[]; const actions:string[]=[];
+    for(const line of fs.readFileSync(file,"utf8").split("\n")){
+      if(!line.trim())continue;
+      let row:any; try{row=JSON.parse(line);}catch{continue;}
+      const m=row?.message; if(m?.role!=="assistant"||!Array.isArray(m.content))continue;
+      for(const c of m.content){
+        if(c?.type==="text"&&String(c.text??"").trim())thoughts.push(String(c.text).trim().slice(0,500));
+        if(c?.type==="toolCall"){const a=c.arguments??{};actions.push(`${c.name}: ${String(a.command??a.path??JSON.stringify(a)).replace(/\s+/g," ").slice(0,180)}`);}
+      }
+    }
+    if(!thoughts.length&&!actions.length)return null;
+    const out=["Выводы и сообщения прежнего исполнителя (последние):",...thoughts.slice(-12).map(t=>"— "+t),"","Его последние действия:",...actions.slice(-25).map(a=>"· "+a)].join("\n");
+    return out.length>maxChars?out.slice(out.length-maxChars):out;
+  } catch { return null; }
+}
 export function rememberSlotSession(subtaskId:string,manager:SessionManager):void {
   const file=manager.getSessionFile();
   if(!file)return;
