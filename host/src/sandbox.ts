@@ -109,6 +109,12 @@ export function собратьПрофиль(roots: string[]): string {
   for (const корень of roots) {
     const абсолютный = path.resolve(развернуть(корень));
     строки.push(`(allow file-read* file-write* (subpath "${экранировать(абсолютный)}"))`);
+    // Метаданные предков корня (stat, не листинг и не содержимое): mkdir -p и
+    // git проходят путь от «/» и спотыкались о запрет на $HOME — «could not
+    // create leading directories» при клонировании пакетов SwiftPM (15.10.2026).
+    for (let предок = path.dirname(абсолютный); предок !== path.dirname(предок); предок = path.dirname(предок)) {
+      строки.push(`(allow file-read-metadata (literal "${экранировать(предок)}"))`);
+    }
   }
   for (const файл of КОНФИГИ) {
     строки.push(`(allow file-read* (subpath "${экранировать(развернуть(файл))}"))`);
