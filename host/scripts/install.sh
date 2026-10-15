@@ -33,8 +33,9 @@ NODE_MAJOR="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]')"
 [[ "$NODE_MAJOR" -ge 22 ]] || die "нужен Node 22+, получено $("$NODE_BIN" -v)"
 
 echo "Собираю $HOST_DIR"
-(cd "$HOST_DIR" && npm ci --omit=dev --silent 2>/dev/null || npm install --silent)
-(cd "$HOST_DIR" && npm run build --silent)
+# Сборке нужен tsc из devDependencies: ставим всё, собираем, потом отрезаем dev.
+(cd "$HOST_DIR" && { npm ci --silent 2>/dev/null || npm install --silent; })
+(cd "$HOST_DIR" && npm run build --silent && npm prune --omit=dev --silent)
 
 mkdir -p "$PLIST_DIR" "$CONFIG_DIR" "$LOG_DIR"
 
