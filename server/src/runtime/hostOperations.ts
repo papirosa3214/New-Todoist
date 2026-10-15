@@ -83,6 +83,14 @@ export function hostBashOperations(machineId: string, defaultCwd: string): BashO
 
 const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
 
+async function hostTest(machineId: string, absolutePath: string, flag: "-r" | "-w"): Promise<void> {
+  const q = "'" + absolutePath.replaceAll("'", "'\\''") + "'";
+  const r = (await runOperation(machineId, "bash", { command: `test -f ${q} && test ${flag} ${q}` })) as unknown as Resultado;
+  if (!r.ok || (r.exitCode ?? 1) !== 0) {
+    throw Object.assign(new Error(`нет доступа к файлу (${flag === "-w" ? "запись" : "чтение"}): ${absolutePath}`), { code: "ENOENT" });
+  }
+}
+
 export function hostReadOperations(machineId: string): ReadOperations {
   return {
     // Целиком и байтами (encoding base64): инструмент read сам режет текст по
@@ -94,10 +102,9 @@ export function hostReadOperations(machineId: string): ReadOperations {
       return Buffer.from(data.content ?? "", data.encoding === "base64" ? "base64" : "utf8");
     },
     detectImageMimeType: async (absolutePath) => IMAGE_TYPES[absolutePath.toLowerCase().split(".").pop() ?? ""] ?? null,
-    access: async (absolutePath) => {
-      const r = (await runOperation(machineId, "ls", { path: absolutePath })) as unknown as Resultado;
-      if (!r.ok) throw fail("access", r);
-    },
+    // Проверка доступа — test -r, а не ls: ls на файл отвечает «не папка»,
+    // и read у роли отвергал ЛЮБОЙ файл (тестировщик caecdeee, 16.10.2026).
+    access: (absolutePath) => hostTest(machineId, absolutePath, "-r"),
   };
 }
 
@@ -128,7 +135,7 @@ export function hostEditOperations(machineId: string): EditOperations {
   return {
     readFile: чтение.readFile,
     writeFile: запись.writeFile,
-    access: чтение.access,
+    access: (absolutePath) => hostTest(machineId, absolutePath, "-w"),
   };
 }
 
