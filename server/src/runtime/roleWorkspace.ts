@@ -53,7 +53,7 @@ export function roleBranch(taskId: string): string {
 export const HOSTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-hosts.json");
 
 /** Путь репозитория проекта НА МАШИНЕ machineId, или null если не заведён. */
-export function hostRepoPath(taskId: string, machineId: string): string | null {
+export function hostRepoPath(taskId: string, machineId: string, machineDefault = true): string | null {
   let проект: string;
   try {
     const row = db.prepare("SELECT project_id FROM tasks WHERE id = ?").get(taskId) as
@@ -67,7 +67,13 @@ export function hostRepoPath(taskId: string, machineId: string): string | null {
     const карта: Record<string, Record<string, string>> =
       JSON.parse(fs.readFileSync(HOSTS_CONFIG, "utf8")).projects ?? {};
     const найденный = карта[machineId]?.[проект];
-    return typeof найденный === "string" ? найденный : null;
+    if (typeof найденный === "string") return найденный;
+    // Шагу машина назначена явно, а проект карточки на ней не заведён — берём
+    // репозиторий машины по умолчанию (16.10.2026, временно до привязки
+    // проектов к машинам из приложения).
+    if (!machineDefault) return null;
+    const поУмолчанию = (JSON.parse(fs.readFileSync(HOSTS_CONFIG, "utf8")).machineDefaults ?? {})[machineId];
+    return typeof поУмолчанию === "string" ? поУмолчанию : null;
   } catch {
     return null;
   }

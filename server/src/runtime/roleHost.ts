@@ -53,7 +53,7 @@ function roleDefaultHost(taskId: string, role: string): string | null {
   try {
     const конфиг = JSON.parse(fs.readFileSync(HOSTS_CONFIG, "utf8")) as { roleDefaults?: Record<string, unknown> };
     const машина = конфиг.roleDefaults?.[role];
-    return typeof машина === "string" && hostRepoPath(taskId, машина) ? машина : null;
+    return typeof машина === "string" && hostRepoPath(taskId, машина, false) ? машина : null;
   } catch {
     return null;
   }
