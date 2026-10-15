@@ -62,6 +62,7 @@ import { buildInProcessTaskContext } from "./taskContextBridge.js";
 import { buildDependencyContext } from "./dependencyContext.js";
 import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
+import { isolatedLocalOperations, roleIsolationEnabled } from "./localRoleOperations.js";
 import { remoteRoleWorkspace } from "./roleWorkspace.js";
 import { resolveRoleHost } from "./roleHost.js";
 import { hostOperations } from "./hostOperations.js";
@@ -1336,10 +1337,18 @@ try {
   // На удалённой машине инструменты те же, но исполняются через шлюз:
   // у каждого в pi подключаемые операции (createCodingTools принимает
   // operations). Имена инструментов и промпты роли при этом не меняются.
-  const локальные = [...createCodingTools(cwd), ...createReadOnlyTools(cwd)];
-  const builtinTools = (host
-    ? createCodingTools(cwd, { operations: hostOperations(host, cwd) } as any)
-    : локальные
+  // Операции — ПО ИНСТРУМЕНТАМ ({ bash: { operations } } и т. д.): общее поле
+  // { operations } движок молча игнорирует. До 16.10.2026 так и было, и роль
+  // «на маке» исполняла bash на .110 (а на мак лезла по ssh в обход хоста).
+  const поИнструментам = (o: any) => ({
+    bash: { operations: o.bash }, read: { operations: o.read }, write: { operations: o.write },
+    edit: { operations: o.edit }, grep: { operations: o.grep }, find: { operations: o.find }, ls: { operations: o.ls },
+  });
+  const операции = host
+    ? поИнструментам(hostOperations(host, cwd))
+    : roleIsolationEnabled() ? поИнструментам(isolatedLocalOperations(cwd)) : undefined;
+  const builtinTools = (
+    [...createCodingTools(cwd, операции), ...createReadOnlyTools(cwd, операции)]
   )
   const { session } = await createAgentSession({
     cwd,
