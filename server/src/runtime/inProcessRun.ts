@@ -63,6 +63,7 @@ import { buildDependencyContext } from "./dependencyContext.js";
 import { buildCollaborationPlanContext } from "./collaborationPlanContext.js";
 import { roleWorkspace } from "./roleWorkspace.js";
 import { isolatedLocalOperations, roleIsolationEnabled } from "./localRoleOperations.js";
+import { createHostRoleTools } from "./hostRoleTools.js";
 import { remoteRoleWorkspace } from "./roleWorkspace.js";
 import { resolveRoleHost } from "./roleHost.js";
 import { hostOperations } from "./hostOperations.js";
@@ -89,6 +90,8 @@ import {
  */
 
 let app: FastifyInstance | null = null;
+/** Ссылка на приложение для инструментов вне этого модуля (hostRoleTools). */
+export function appRef(): FastifyInstance | null { return app; }
 
 /** Подключается при старте сервера (index.ts). */
 export function setInProcessApp(instance: FastifyInstance): void {
@@ -1333,7 +1336,7 @@ try {
   if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
   const infra = await connectInfraPanel(role).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
-  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...infra.tools];
+  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...infra.tools, ...(host ? createHostRoleTools(host, taskId, role) : [])];
   // На удалённой машине инструменты те же, но исполняются через шлюз:
   // у каждого в pi подключаемые операции (createCodingTools принимает
   // operations). Имена инструментов и промпты роли при этом не меняются.
