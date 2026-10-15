@@ -1,3 +1,4 @@
+import { roleHostError } from "../runtime/roleHost.js";
 // MAK-76: кнопки владельца — «Возобновить зависшие шаги» и «Перезапустить сервер».
 // Только владелец. Возобновление не перезапускает сервер: берёт узлы плана
 // «в работе» без живого запуска и без свежего пульса и ведёт тем же путём,
@@ -125,6 +126,37 @@ export function registerOwnerControlRoutes(app: FastifyInstance): void {
       db.prepare("UPDATE subtasks SET model = ? WHERE id = ?").run(value, row.id);
       logEvent({ taskId: row.task_id, actorId: req.userId, kind: "subtask_model_set", field: row.plan_node_key ?? row.id, toValue: value ?? "по настройкам роли" });
       return { ok: true, subtask_id: row.id, model: value };
+    },
+  );
+
+  // Правка 9: машина, на которой выполняется шаг. null — как раньше, локально на .110.
+  // Правила те же, что у модели: владелец или оркестратор, шаг не начат.
+  app.put<{ Params: { id: string }; Body: { host_id?: string | null } }>(
+    "/api/subtasks/:id/host",
+    { preHandler: authOrApiToken },
+    async (req: any, reply) => {
+      if (!isOwner(req.userId) && !isOrchestrator(req.userId)) {
+        return reply.code(403).send({ error: "машину шага задаёт владелец или оркестратор" });
+      }
+      const row = db.prepare("SELECT id, task_id, done, agent_state, plan_node_key FROM subtasks WHERE id = ?").get(req.params.id) as
+        | { id: string; task_id: string; done: number; agent_state: string | null; plan_node_key: string | null }
+        | undefined;
+      if (!row) return reply.code(404).send({ error: "Not found" });
+      if (row.done) return reply.code(409).send({ error: "шаг уже сдан" });
+      if (row.agent_state === "in_progress") return reply.code(409).send({ error: "шаг уже идёт — машина выбирается до запуска" });
+      const raw = req.body?.host_id;
+      let value: string | null = null;
+      if (raw !== null && raw !== undefined) {
+        if (typeof raw !== "string" || !raw.trim()) return reply.code(400).send({ error: "host_id: id машины или null" });
+        value = raw.trim();
+        // Машина должна быть заведена, не отозвана и сейчас на связи — иначе
+        // роль стартует и упадёт на первом же обращении к диску.
+        const причина = roleHostError(value);
+        if (причина) return reply.code(409).send({ error: причина });
+      }
+      db.prepare("UPDATE subtasks SET host_id = ? WHERE id = ?").run(value, row.id);
+      logEvent({ taskId: row.task_id, actorId: req.userId, kind: "subtask_host_set", field: row.plan_node_key ?? row.id, toValue: value ?? "локально на сервере" });
+      return { ok: true, subtask_id: row.id, host_id: value };
     },
   );
 }
