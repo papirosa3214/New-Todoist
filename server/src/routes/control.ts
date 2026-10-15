@@ -25,6 +25,8 @@
 // вызывающий (владелец или оркестратор), не null: это их решение и должно
 // так читаться в ленте.
 import { restartOccupiedSlot } from "../runtime/slotRestart.js";
+import { forceReleaseSlotSession, isSlotSessionHeld } from "../runtime/slotSession.js";
+import { activeInProcessRun } from "../runtime/inProcessRun.js";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
@@ -317,13 +319,44 @@ export function registerControlRoutes(app: FastifyInstance): void {
       }
       const reason = readReason(req.body);
       const result = resetSubtaskAttempt(subtask.id, reason, req.userId);
+      // Живого запуска нет, а слот занят — держатель повис. Без этого /restart
+      // ждал вечно до перезапуска процесса сервера.
+      const slotReleased = !activeInProcessRun(subtask.task_id, subtask.id) && forceReleaseSlotSession(subtask.id);
 
       const fullTask = getFullTask(subtask.task_id);
       broadcastTaskEvent([subtask.task_creator_id, subtask.task_assignee_id], {
         type: "task:updated",
         task: fullTask,
       });
-      return { ok: true, ...result };
+      return { ok: true, ...result, slotReleased };
+    },
+  );
+
+  // ── Состояние слота шага (диагностика зависаний) ─────────────────────
+  // Только чтение: что в БД (агент, пульс, попытка) и что в памяти процесса
+  // (живой запуск, занят ли слот). «Слот занят, запуска нет» = повисший
+  // держатель — лечится /reset, затем /restart.
+  app.get<{ Params: { id: string } }>(
+    "/api/subtasks/:id/slot-status",
+    { preHandler: authPre },
+    async (req: any, reply) => {
+      const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
+      if (!subtask) return reply.code(404).send({ error: "Not found" });
+      if (!isCancellationActor(req.userId)) return reply.code(403).send({ error: "доступно владельцу или оркестратору" });
+      const run = activeInProcessRun(subtask.task_id, subtask.id);
+      const attempt = subtask.current_attempt_id
+        ? db.prepare("SELECT id, started_at, ended_at, outcome FROM attempts WHERE id = ?").get(subtask.current_attempt_id)
+        : null;
+      const held = isSlotSessionHeld(subtask.id);
+      return {
+        subtask_id: subtask.id, done: !!subtask.done, agent_id: subtask.agent_id ?? null,
+        agent_state: subtask.agent_state ?? null, heartbeat_at: subtask.agent_heartbeat_at ?? null,
+        attempt, active_run: run ? { run_id: run.runId, last_activity_at: run.lastActivityAt ?? null } : null,
+        slot_held: held, hung_holder: held && !run,
+        hint: held && !run ? "слот держит повисший запуск: /reset, затем /restart"
+          : !run && subtask.agent_state === "in_progress" ? "шаг числится в работе без живого запуска: /reset, затем /restart"
+          : null,
+      };
     },
   );
 

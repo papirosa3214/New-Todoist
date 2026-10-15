@@ -6,6 +6,14 @@ import db from "../db.js";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 const tails=new Map<string,Promise<void>>();
+/** Занят ли слот: кто-то держит или ждёт сессию шага. Для диагностики. */
+export function isSlotSessionHeld(subtaskId:string):boolean{return tails.has(subtaskId);}
+/** Принудительно отпустить слот, если прежний держатель повис и уже не
+ *  отпустит его сам (поток модели оборвался, completion не разрешился).
+ *  Звать только когда живого запуска шага нет — иначе получим двух писателей.
+ *  Прецедент 15.10.2026, карточка caecdeee: /restart отвечал «Сессия слота
+ *  занята», пока процесс сервера не перезапустили. */
+export function forceReleaseSlotSession(subtaskId:string):boolean{return tails.delete(subtaskId);}
 /** Work and discussion share one writer, including preparation before activeRuns registration. */
 export async function acquireSlotSession(subtaskId:string,signal?:AbortSignal):Promise<()=>void> {
   const previous=tails.get(subtaskId) ?? Promise.resolve();
