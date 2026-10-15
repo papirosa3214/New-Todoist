@@ -402,7 +402,10 @@ export class HostClient extends EventEmitter {
       this.reconnectTimer = undefined;
       void this.connect();
     }, delay);
-    this.reconnectTimer.unref?.();
+    // НЕ unref: пока сокета нет, этот таймер — единственное, что держит
+    // процесс. С unref Node после обрыва честно писал «переподключусь через
+    // мс» и тут же выходил с кодом 0 — мак пропадал до ручного перезапуска
+    // (правка 11, 15.10.2026).
   }
 
   /**
