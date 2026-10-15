@@ -81,13 +81,19 @@ export function hostBashOperations(machineId: string, defaultCwd: string): BashO
   };
 }
 
+const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+
 export function hostReadOperations(machineId: string): ReadOperations {
   return {
+    // Целиком и байтами (encoding base64): инструмент read сам режет текст по
+    // строкам и показывает картинки. Прежний текстовый режим ломал
+    // изображения и отдавал только первые 2000 строк (16.10.2026).
     readFile: async (absolutePath) => {
-      const r = (await runOperation(machineId, "read", { path: absolutePath })) as unknown as Resultado;
-      const data = payload<{ content?: string }>("read", r);
-      return Buffer.from(data.content ?? "", "utf8");
+      const r = (await runOperation(machineId, "read", { path: absolutePath, encoding: "base64" })) as unknown as Resultado;
+      const data = payload<{ content?: string; encoding?: string }>("read", r);
+      return Buffer.from(data.content ?? "", data.encoding === "base64" ? "base64" : "utf8");
     },
+    detectImageMimeType: async (absolutePath) => IMAGE_TYPES[absolutePath.toLowerCase().split(".").pop() ?? ""] ?? null,
     access: async (absolutePath) => {
       const r = (await runOperation(machineId, "ls", { path: absolutePath })) as unknown as Resultado;
       if (!r.ok) throw fail("access", r);

@@ -17,8 +17,31 @@ export interface ReadResult {
 /** Строк за один вызов: роль читает кусками, целиком никто не просит. */
 const MAX_LINES = 2000;
 
+/**
+ * Файл целиком в base64 — для инструмента read у ролей (16.10.2026). Он сам
+ * режет текст по строкам и показывает картинки, ему нужны настоящие байты:
+ * текстовый режим ниже ломал изображения и отдавал лишь первые 2000 строк,
+ * а роль принимала их за весь файл. Потолок — чтобы base64 влез в 4 МБ кадра.
+ */
+const MAX_BINARY_BYTES = 2_900_000;
+
 export const read: Operation = async (args, context) => {
   const target = resolveWithin(context.roots, requireString(args, "path"), { label: "read" });
+  if (args["encoding"] === "base64") {
+    let buf: Buffer;
+    try {
+      buf = await fs.readFile(target);
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === "ENOENT") throw new NotFoundError(`файл не найден: ${target}`);
+      if (code === "EISDIR") throw new BadArgsError(`это папка, а не файл: ${target}`);
+      throw error;
+    }
+    if (buf.length > MAX_BINARY_BYTES) {
+      throw new BadArgsError(`файл ${buf.length} байт больше ${MAX_BINARY_BYTES} — читай его частями через bash`);
+    }
+    return { path: target, content: buf.toString("base64"), encoding: "base64", bytes: buf.length };
+  }
   const startLine = Math.max(1, Math.floor(optionalNumber(args, "offset", 1, { min: 1 })));
   const limit = Math.floor(optionalNumber(args, "limit", MAX_LINES, { min: 1, max: MAX_LINES }));
 
