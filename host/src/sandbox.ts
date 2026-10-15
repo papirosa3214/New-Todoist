@@ -48,6 +48,14 @@ const СИСТЕМНЫЕ_ДЛЯ_ЧТЕНИЯ = [
 const ВРЕМЕННЫЕ = ["/var/folders", "/private/var/folders", "/private/tmp", "/tmp"];
 
 /**
+ * Кэши инструментов сборки в $HOME, куда нужно ПИСАТЬ. SwiftPM кладёт кэш
+ * манифестов в ~/Library/Caches/org.swift.swiftpm по зашитому пути (подмена
+ * HOME не помогает) — без записи «Could not resolve package dependencies».
+ * Секретов там нет: только манифесты и метаданные пакетов (15.10.2026).
+ */
+const КЭШИ_СБОРКИ = ["~/Library/Caches/org.swift.swiftpm", "~/Library/org.swift.swiftpm"];
+
+/**
  * Файлы конфигурации пользователя, без которых git и Xcode не стартуют.
  * Именно файлы, а не каталоги: `~/.config` целиком открывать нельзя.
  */
@@ -112,6 +120,13 @@ export function собратьПрофиль(roots: string[]): string {
     // Метаданные предков корня (stat, не листинг и не содержимое): mkdir -p и
     // git проходят путь от «/» и спотыкались о запрет на $HOME — «could not
     // create leading directories» при клонировании пакетов SwiftPM (15.10.2026).
+    for (let предок = path.dirname(абсолютный); предок !== path.dirname(предок); предок = path.dirname(предок)) {
+      строки.push(`(allow file-read-metadata (literal "${экранировать(предок)}"))`);
+    }
+  }
+  for (const каталог of КЭШИ_СБОРКИ) {
+    const абсолютный = path.resolve(развернуть(каталог));
+    строки.push(`(allow file-read* file-write* (subpath "${экранировать(абсолютный)}"))`);
     for (let предок = path.dirname(абсолютный); предок !== path.dirname(предок); предок = path.dirname(предок)) {
       строки.push(`(allow file-read-metadata (literal "${экранировать(предок)}"))`);
     }
