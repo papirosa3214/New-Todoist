@@ -20,7 +20,6 @@ import { openMidPlanCritic } from "./planSubtaskAdmission.js";
 import { ensureResultVersionForReview } from "../resultVersions.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
-import { connectBuilderXcode } from "./builderXcode.js";
 import { connectInfraPanel } from "./infraPanelMcp.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import { branchMembership } from "./branchPlan.js";
@@ -1252,7 +1251,7 @@ async function runRoleInProcessUnserialized(input: {
   // Машина роли: null — работаем на .110 как всегда. Назначенная машина
   // проверяется ДО создания копии: молча уехав на .110, роль отчиталась бы о
   // работе в папке, которую никто не откроет.
-  const host = resolveRoleHost(taskId, input.subtaskId);
+  const host = resolveRoleHost(taskId, input.subtaskId, role);
   let cwd = input.cwd
     ?? (host
       ? await remoteRoleWorkspace(host, projectRepo(taskId), taskId)
@@ -1331,10 +1330,9 @@ try {
 
   const composio = await connectRoleComposio(role, mode, input.subtaskId ?? taskId);
   if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
-  const xcode = await connectBuilderXcode(role, mode).catch(async error => { resourceLoader.disposeResources(); await composio.close(); throw error; });
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
   const infra = await connectInfraPanel(role).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
-  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...xcode.tools, ...infra.tools];
+  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...infra.tools];
   // На удалённой машине инструменты те же, но исполняются через шлюз:
   // у каждого в pi подключаемые операции (createCodingTools принимает
   // operations). Имена инструментов и промпты роли при этом не меняются.
@@ -1365,7 +1363,7 @@ try {
     customTools: [...builtinTools, ...customTools],
     sessionManager: manager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
-  } as any).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await xcode.close(); await infra.close(); throw error; });
+  } as any).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await infra.close(); throw error; });
 
   // Миграция persisted thinkingLevel: старая сессия записала "off", а
   // модель теперь reasoning — включим размышления и запишем обратно в
@@ -1555,7 +1553,6 @@ try {
       session.dispose();
       resourceLoader.disposeResources();
       await composio.close().catch(() => {});
-      await xcode.close().catch(() => {});
       await infra.close().catch(() => {});
       // Шаг плана закончил ход без сдачи: сервер сам продолжает его при прогрессе
       // (до 3 раз) или видимо блокирует. Раньше такой шаг молча оставался

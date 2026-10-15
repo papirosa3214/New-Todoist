@@ -17,7 +17,9 @@
 // Молчаливого отката нет намеренно. Машина назначена, но офлайн — это ошибка
 // словами («машина «mac» сейчас офлайн»), а не тихий переезд на .110: тихий
 // переезд означал бы, что результат работы окажется не там, куда его ждали.
+import fs from "node:fs";
 import db from "../db.js";
+import { HOSTS_CONFIG, hostRepoPath } from "./roleWorkspace.js";
 import { isMachineOnline, resolveMachine } from "../host/gateway.js";
 
 function subtaskHost(subtaskId: string): string | null {
@@ -35,10 +37,26 @@ function subtaskHost(subtaskId: string): string | null {
  * подзадаче» здесь НЕ читается — оно принадлежит слою, который ставит слоты
  * (правка 9), и молча дублировало бы решение в двух местах.
  */
-export function resolveRoleHost(taskId: string, subtaskId?: string | null): string | null {
+export function resolveRoleHost(taskId: string, subtaskId?: string | null, role?: string): string | null {
   const отПодзадачи = subtaskId ? subtaskHost(subtaskId) : null;
   if (отПодзадачи) return отПодзадачи;
-  return taskHost(taskId);
+  return taskHost(taskId) ?? (role ? roleDefaultHost(taskId, role) : null);
+}
+
+/**
+ * Машина роли по умолчанию (roleDefaults в task-context-hosts.json): разработчик
+ * iOS-клиента собирает на маке через хоста, а не в отдельной копии через
+ * ssh-шлюз (владелец 15.10.2026). Только если у проекта задачи на этой машине
+ * есть путь — иначе роль, как и раньше, работает на .110.
+ */
+function roleDefaultHost(taskId: string, role: string): string | null {
+  try {
+    const конфиг = JSON.parse(fs.readFileSync(HOSTS_CONFIG, "utf8")) as { roleDefaults?: Record<string, unknown> };
+    const машина = конфиг.roleDefaults?.[role];
+    return typeof машина === "string" && hostRepoPath(taskId, машина) ? машина : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Назначение машины на уровне задачи — задел на правку 9. */

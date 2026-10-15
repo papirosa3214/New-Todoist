@@ -50,7 +50,7 @@ export function roleBranch(taskId: string): string {
 }
 
 /** Пути репозиториев по машинам: server/scripts/task-context-hosts.json. */
-const HOSTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-hosts.json");
+export const HOSTS_CONFIG = path.join(process.cwd(), "scripts", "task-context-hosts.json");
 
 /** Путь репозитория проекта НА МАШИНЕ machineId, или null если не заведён. */
 export function hostRepoPath(taskId: string, machineId: string): string | null {
