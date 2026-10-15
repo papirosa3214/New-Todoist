@@ -28,6 +28,9 @@
     <string>__CONFIG__</string>
     <key>TASKFLOW_HOST_LOG_LEVEL</key>
     <string>info</string>
+    <!-- У launchd PATH короткий: без Homebrew роль не находит xcodegen (exit 127). -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 
   <key>WorkingDirectory</key>
