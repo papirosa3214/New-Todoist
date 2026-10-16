@@ -30,6 +30,7 @@ import {
   type PlanOp,
 } from "../runtime/planMutations.js";
 import { suggestFanoutFromSubtasks } from "../runtime/subtaskRoleFanout.js";
+import { pickPlanProfileByJev, type JevPlanProfilePick } from "../lib/planProfileJev.js";
 
 import { ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT } from "../runtime/orchestratedPlan.js";
 const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual", "product_feature", "bug_regression", "orchestrated"]);
@@ -656,7 +657,11 @@ function autoBugRegressionCandidate(text: string): { includeRootCause: boolean; 
   };
 }
 
-export function proposalFor(taskId: string, requested: string, productFeatureFlags?: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }, bugRegressionFlags?: { includeRootCause: boolean; includeQa: boolean }) {
+/** jevPick — выбор JEV (lib/planProfileJev.ts), посчитанный заранее
+ *  асинхронным вызывающим: сама функция синхронная, её зовут и из
+ *  транзакций. Действует ТОЛЬКО там, где раньше решали регулярки по словам
+ *  (`auto`, после баг/фича-шаблонов). Нет выбора — всё как было. */
+export function proposalFor(taskId: string, requested: string, productFeatureFlags?: { includeArchitecture: boolean; includeDesign: boolean; includeQa: boolean }, bugRegressionFlags?: { includeRootCause: boolean; includeQa: boolean }, jevPick?: JevPlanProfilePick | null) {
   if(db.prepare("SELECT 1 FROM tasks WHERE parent_id=?").get(taskId)){
     const root=branchRoot(taskId)===taskId, role=root?'architect':'analyst';
     const task=db.prepare("SELECT title FROM tasks WHERE id=?").get(taskId) as {title:string};
@@ -689,7 +694,8 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
     const t03 = autoProductFeatureCandidate(text);
     if (t03) return { profile: "product_feature", ...productFeatureTemplate(t03) };
   }
-  const profile = requested === "auto"
+  const profile = requested === "auto" && jevPick ? jevPick.profile
+    : requested === "auto"
     ? (/\b(ui|ux|api)\b|дизайн|интерфейс|экран/.test(text) && /исслед|анализ|сравн|вариант/.test(text) ? "full_cycle"
       : /\b(ui|ux|api)\b|сервер|миграц|swift|react|код|интеграц/.test(text) ? "delivery"
       : /исслед|анализ|сравн|вариант|источник/.test(text) ? "research"
@@ -707,7 +713,19 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
     // их результаты, вливает в main и собирает итог. Инструкции — task.orchestrate.
     orchestrated: { nodes: [node(ORCHESTRATE_SLOT, "code_orchestrator", "Разложить работу по ролям и запустить команду"), node(ORCHESTRATE_ASSEMBLE_SLOT, "code_orchestrator", "Принять результаты команды, влить в main и собрать итог")], edges: [edge(ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT)], rationale: "Режим оркестратора: декомпозиция, назначение ролей, приёмка и сборка итога — за Оркестратором." },
   };
-  return { profile, ...templates[profile] };
+  const chosen = templates[profile];
+  if (requested === "auto" && jevPick) {
+    return { profile, ...chosen, rationale: `${chosen.rationale} Состав выбран JEV (уверенность ${Math.round(jevPick.confidence * 100)}%).` };
+  }
+  return { profile, ...chosen };
+}
+
+/** Автоплан при создании карточки — с выбором шаблона через JEV, если он
+ *  включён галочкой. Асинхронная обёртка: JEV — сетевой вызов, а сама
+ *  autoProposeCollaborationPlanIfNeeded синхронная (её зовёт импорт Linear). */
+export async function autoProposeCollaborationPlanWithJev(taskId: string): Promise<{ id: string; profile: string; revision: number } | null> {
+  const jevPick = await pickPlanProfileByJev(taskId).catch(() => null);
+  return autoProposeCollaborationPlanIfNeeded(taskId, undefined, jevPick);
 }
 
 /**
@@ -730,7 +748,7 @@ function resolveAutoProposalActorId(): string | null {
 
 /** Import can request a visible draft even for a single executor. Existing
  * plans are owner work: neither imports nor retries replace their revisions. */
-export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: { actorId: string; imported: true }): { id: string; profile: string; revision: number } | null {
+export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: { actorId: string; imported: true }, jevPick?: JevPlanProfilePick | null): { id: string; profile: string; revision: number } | null {
   const task = db.prepare("SELECT title,status,agent_state,ready_for_pickup,context_version,parent_id FROM tasks WHERE id=?").get(taskId) as any;
   if (options && (!task || task.status === "completed" || task.agent_state || task.ready_for_pickup || db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? LIMIT 1").get(taskId))) return null;
   // Владелец 12.10.2026: «дочерняя задача принудительно… план формируется не тот,
@@ -741,7 +759,7 @@ export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: {
   // при создании обычной (не дочерней) задачи остаётся: это была осознанная
   // договорённость 28.09.2026.
   if (task?.parent_id) return null;
-  let proposal = proposalFor(taskId, "auto");
+  let proposal = proposalFor(taskId, "auto", undefined, undefined, jevPick);
   if (!options && proposal.profile === "single_executor" && !db.prepare("SELECT 1 FROM tasks WHERE parent_id=?").get(taskId)) return null;
   const actorId = options?.actorId ?? resolveAutoProposalActorId();
   if (!actorId) return null;
@@ -789,7 +807,7 @@ export async function autoProposeFromSubtasksOnCreate(taskId: string): Promise<{
   const actorId = resolveAutoProposalActorId();
   if (!actorId) return null;
   const suggestion = await suggestFanoutFromSubtasks(taskId);
-  if (!suggestion.suggested) return autoProposeCollaborationPlanIfNeeded(taskId);
+  if (!suggestion.suggested) return autoProposeCollaborationPlanWithJev(taskId);
   if (db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved')").get(taskId)) return null;
   const graph = { nodes: suggestion.nodes.map((n) => ({ ...n, required: true, output_artifact: null })), edges: [] };
   const created = createDraftPlan(taskId, actorId, "manual", suggestion.rationale, null, graph);
@@ -866,7 +884,8 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     const bugRegressionFlags = requested === "bug_regression"
       ? { includeRootCause: req.body?.include_root_cause === true, includeQa: req.body?.include_qa === true }
       : undefined;
-    const proposal = proposalFor(task.id, requested, productFeatureFlags, bugRegressionFlags);
+    const jevPick = requested === "auto" ? await pickPlanProfileByJev(task.id).catch(() => null) : null;
+    const proposal = proposalFor(task.id, requested, productFeatureFlags, bugRegressionFlags, jevPick);
     const created = createDraftPlan(task.id, req.userId, proposal.profile, proposal.rationale, contextVersion, proposal);
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: `${proposal.profile}: template` });
     return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!), suggested: true });

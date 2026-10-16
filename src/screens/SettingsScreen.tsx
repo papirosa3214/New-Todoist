@@ -961,6 +961,12 @@ export function SettingsScreen() {
             label="Модели и провайдеры"
             onClick={() => navigate("/settings/providers")}
           />
+          <Row
+            icon="sparkles"
+            iconColor="#0EA5E9"
+            label="Оценщик JEV"
+            onClick={() => navigate("/settings/jev")}
+          />
         </FieldGroup>
       </div>
 

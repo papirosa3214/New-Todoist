@@ -74,6 +74,7 @@ import { registerOwnerControlRoutes } from "./routes/owner-controls.js";
 import { reloadServerSettings } from "./lib/serverSettings.js";
 import { registerOwnerCommandRoutes } from "./routes/owner-commands.js";
 import { registerAdminServerSettingsRoutes } from "./routes/admin-server-settings.js";
+import { registerJevRoutes } from "./routes/jev.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerEscalationRoutes } from "./routes/escalation.js";
 import { registerLiveActivityRoutes } from "./routes/live-activity.js";
@@ -492,6 +493,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerMergeMarkerRoutes(app);
   registerOwnerControlRoutes(app);
   registerAdminServerSettingsRoutes(app);
+  registerJevRoutes(app);
   registerServerEventsRoutes(app);
   registerOwnerCommandRoutes(app);
   registerSubtaskArtifactRoutes(app);

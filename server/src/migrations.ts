@@ -4726,6 +4726,23 @@ const migrations: Migration[] = [
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_subtasks_host ON subtasks(host_id)");
   } },
+  { id: "148_jev_settings", description: "Оценщик JEV (TypeSafe): подключение и сценарии — отдельная категория, не провайдер моделей ролей", up: () => {
+    // Одна строка (id=1): JEV — один на трекер, как и его владелец. Ключ
+    // хранится зашифрованным (lib/secretBox.ts), наружу отдаётся только
+    // признак «ключ есть». Сценарии — отдельными флагами, по умолчанию
+    // выключены: без явного включения ни один путь через JEV не идёт.
+    db.exec(`CREATE TABLE IF NOT EXISTS jev_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      base_url TEXT NOT NULL DEFAULT 'https://api.typesafe.ai',
+      model TEXT NOT NULL DEFAULT 'jev-latest',
+      timeout_ms INTEGER NOT NULL DEFAULT 10000,
+      api_key_enc BLOB,
+      plan_profile_enabled INTEGER NOT NULL DEFAULT 0,
+      plan_profile_min_confidence REAL NOT NULL DEFAULT 0.6,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    db.exec("INSERT OR IGNORE INTO jev_settings (id) VALUES (1)");
+  } },
 
 ];
 /**

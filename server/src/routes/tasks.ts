@@ -9,7 +9,8 @@ import crypto from "crypto";
 import { purgeTasks } from "../lib/taskPurge.js";
 import { archiveTask, restoreTask, purgeArchivedTask, listArchivedTasks } from "../lib/taskArchive.js";
 import db from "../db.js";
-import { autoProposeCollaborationPlanIfNeeded, autoProposeFromSubtasksOnCreate } from "./task-collaboration-plans.js";
+import { autoProposeCollaborationPlanIfNeeded, autoProposeCollaborationPlanWithJev, autoProposeFromSubtasksOnCreate } from "./task-collaboration-plans.js";
+import { jevPlanProfileConfig } from "../lib/jev.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { reviewerFirstEnabled } from "../reviewerPolicy.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
@@ -1217,7 +1218,15 @@ export function registerTaskRoutes(app: FastifyInstance) {
         if (!preparation && !isPrivateProject && subtaskTitles.length) {
           void autoProposeFromSubtasksOnCreate(id).catch((error) =>
             req.log?.error?.({ err: error, taskId: id }, "auto plan from subtasks failed"));
-        } else if (!preparation && !isPrivateProject) autoProposeCollaborationPlanIfNeeded(id);
+        } else if (!preparation && !isPrivateProject) {
+          // Галочка «JEV для выбора шаблона плана» включена — шаблон выбирает
+          // он (сетевой вызов, поэтому фоном, как и план из подзадач выше).
+          // Выключена — прежний синхронный путь, ровно как было.
+          if (jevPlanProfileConfig()) {
+            void autoProposeCollaborationPlanWithJev(id).catch((error) =>
+              req.log?.error?.({ err: error, taskId: id }, "auto plan via JEV failed"));
+          } else autoProposeCollaborationPlanIfNeeded(id);
+        }
       } catch (error) {
         req.log?.error?.({ err: error, taskId: id }, "auto collaboration plan proposal failed");
       }
