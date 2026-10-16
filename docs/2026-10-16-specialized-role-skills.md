@@ -42,3 +42,28 @@
 ## Проверки
 
 Ожидается отдельный результат проверки реальным SDK-загрузчиком. Реальные пользовательские задачи и внешние сообщения для проверки не запускались. Установка не доказывает успешный семантический отбор JEV или повышение качества работы роли.
+
+## Результат проверки SDK
+
+20 размещений, 14 уникальных имён: все новые навыки загружены отдельно и в полном наборе роли; диагностик новых навыков: 0. SDK @earendil-works/pi-coding-agent 0.84.4, Node 22.23.1. Семантический выбор JEV и выполнение боевой задачи не проверялись.
+
+- builder: обнаружено 12 навыков.
+- architect: обнаружено 9 навыков.
+- qa: обнаружено 8 навыков.
+- critic_verifier: обнаружено 8 навыков.
+- researcher: обнаружено 4 навыков.
+- analyst: обнаружено 5 навыков.
+- designer: обнаружено 26 навыков.
+
+У исследователя и аналитика меньше 7 навыков: JEV сейчас не фильтрует их набор. Порог и настройки не менялись. В некоторых путях запуска, включая чат, work-контекст не передаётся фильтру; одинаковое порционное подключение во всех путях не подтверждено.
+
+## Прежние ошибки, не изменялись
+
+- /home/maksim/taskflow/roles/builder/skills/chat-message-queue/SKILL.md: description is required.
+- /home/maksim/taskflow/roles/builder/skills/task-archive-purge-defect/SKILL.md: description is required.
+- /home/maksim/taskflow/roles/builder/skills/taskflow-escalation-patterns/SKILL.md: description is required.
+- /home/maksim/taskflow/roles/architect/skills/branch-plan-pulse/SKILL.md: description is required.
+- /home/maksim/taskflow/roles/critic_verifier/skills/verdict-requires-live-scenario/SKILL.md: description is required.
+- /home/maksim/taskflow/roles/researcher/skills/find-skills/SKILL.md: Nested mappings are not allowed in compact mappings at line 2, column 14:.
+
+Архивы источников, SHA256 (первые 16 символов): SwiftUI 0cd96096e8abd56b; Swift Concurrency 2b583f3bb257ead2; Swift Testing 5aabae92ada8c41e; Trail of Bits 9030ea9d1e2e5968.
