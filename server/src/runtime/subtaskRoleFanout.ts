@@ -22,6 +22,7 @@
 import db from "../db.js";
 import { matchRoleForText } from "../lib/semanticEnrich.js";
 import { ROLE_NAMES } from "../roleRouting.js";
+import { pickRolesForSubtasksByJev } from "../lib/subtaskRoleJev.js";
 
 /** Минимальный косинус, чтобы считать подбор роли для подзадачи уверенным.
  *  Не откалибровано на реальных задачах — см. комментарий выше. Поднять
@@ -61,8 +62,8 @@ function slotKeyFor(role: string, index: number, used: Set<string>): string {
 
 export async function suggestFanoutFromSubtasks(taskId: string): Promise<FanoutSuggestion> {
   const task = db
-    .prepare("SELECT assignee_id, machine_selected_role, owner_selected_role FROM tasks WHERE id = ?")
-    .get(taskId) as { assignee_id: string | null; machine_selected_role: string | null; owner_selected_role: string | null } | undefined;
+    .prepare("SELECT title, description, assignee_id, machine_selected_role, owner_selected_role FROM tasks WHERE id = ?")
+    .get(taskId) as { title: string; description: string | null; assignee_id: string | null; machine_selected_role: string | null; owner_selected_role: string | null } | undefined;
   if (!task) return { suggested: false, reason: "карточка не найдена" };
 
   const openSubtasks = db
@@ -76,13 +77,29 @@ export async function suggestFanoutFromSubtasks(taskId: string): Promise<FanoutS
   const used = new Set<string>();
   const nodes: Array<{ slot_key: string; role_key: string; expected_result: string; source_subtask_id: string }> = [];
 
+  // Галочка «Роли для подзадач» в разделе JEV: один запрос на всю карточку.
+  // Где JEV уверен — его роль; где нет (или он выключен/не ответил) —
+  // прежний подбор по эмбеддингам ниже.
+  const jevPicks = await pickRolesForSubtasksByJev(task, openSubtasks).catch(() => new Map());
+  let byJev = 0;
+
   for (const subtask of openSubtasks) {
-    const { matched } = await matchRoleForText(subtask.title, { topK: 1 });
-    const top = matched[0];
-    if (!top || top.score < FANOUT_CONFIDENCE) continue; // неуверенно — оставить как есть, текущий исполнитель сделает сам
+    const jev = jevPicks.get(subtask.id);
+    let top: { role: string; score: number } | undefined;
+    if (jev) {
+      // JEV уверенно считает подзадачу мелким пунктом исполнителя карточки —
+      // не выносим её в отдельный узел.
+      if (jev.separate < 0.5) continue;
+      top = { role: jev.role, score: jev.confidence };
+    } else {
+      const { matched } = await matchRoleForText(subtask.title, { topK: 1 });
+      top = matched[0];
+      if (!top || top.score < FANOUT_CONFIDENCE) continue; // неуверенно — оставить как есть, текущий исполнитель сделает сам
+    }
     if (!ROLE_NAMES.includes(top.role)) continue; // роль сейчас выключена — не назначать на неё узел
     if (top.role === primary) continue; // та же роль, что и так уже ведёт карточку — не парал­лелизм, а шум
 
+    if (jev) byJev++;
     nodes.push({
       slot_key: slotKeyFor(top.role, nodes.length, used),
       role_key: top.role,
@@ -98,7 +115,7 @@ export async function suggestFanoutFromSubtasks(taskId: string): Promise<FanoutS
   const roles = [...new Set(nodes.map((n) => n.role_key))];
   return {
     suggested: true,
-    rationale: `Подзадачи распознаны по ${roles.length > 1 ? "ролям: " + roles.join(", ") : "роли " + roles[0]} — предложены как параллельные узлы плана вместо линейной работы одного исполнителя.`,
+    rationale: `Подзадачи распознаны по ${roles.length > 1 ? "ролям: " + roles.join(", ") : "роли " + roles[0]} — предложены как параллельные узлы плана вместо линейной работы одного исполнителя.${byJev ? ` Роли подобраны JEV: ${byJev} из ${nodes.length}.` : ""}`,
     nodes,
   };
 }

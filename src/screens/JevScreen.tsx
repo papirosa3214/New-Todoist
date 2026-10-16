@@ -150,24 +150,35 @@ export function JevScreen() {
         )}
 
         <SectionHeader>Где использовать</SectionHeader>
-        <FieldGroup>
-          <ListRow
-            label="Выбор шаблона плана"
-            sublabel={
-              data.hasApiKey
-                ? "Состав команды по смыслу, а не по словам"
-                : "Сначала сохраните ключ"
-            }
-            trailing={
-              <Switch
-                ariaLabel="JEV для выбора шаблона плана"
-                checked={data.planProfileEnabled}
-                disabled={!data.hasApiKey || save.isPending}
-                onChange={(next) => save.mutate({ planProfileEnabled: next })}
-              />
-            }
-          />
-        </FieldGroup>
+        {!data.hasApiKey && (
+          <p className="tf-action text-sub px-1">
+            Сначала сохраните ключ — без него галочки не включаются.
+          </p>
+        )}
+        <Scenario
+          title="Выбор шаблона плана"
+          ariaLabel="JEV для выбора шаблона плана"
+          checked={data.planProfileEnabled}
+          disabled={!data.hasApiKey || save.isPending}
+          onChange={(next) => save.mutate({ planProfileEnabled: next })}
+        >
+          Когда карточке предлагается командный план, JEV выбирает готовый
+          состав: один исполнитель, исследование, поставка или полный цикл. Без
+          него шаблон выбирается по словам в названии.
+        </Scenario>
+        <Scenario
+          title="Роли для подзадач"
+          ariaLabel="JEV для подбора ролей подзадачам"
+          checked={data.subtaskRoleEnabled}
+          disabled={!data.hasApiKey || save.isPending}
+          onChange={(next) => save.mutate({ subtaskRoleEnabled: next })}
+        >
+          Когда карточка распараллеливается по подзадачам, JEV читает карточку
+          целиком и решает по каждой подзадаче: какой роли её отдать и стоит ли
+          вообще выносить её отдельно — мелкие пункты остаются исполнителю
+          карточки. Где JEV не уверен, роль подбирается как раньше, по смыслу
+          текста.
+        </Scenario>
 
         {data.hasApiKey && (
           <Button
@@ -180,6 +191,37 @@ export function JevScreen() {
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Сценарий JEV: строка с галочкой и под ней — что он делает. Описание
+ *  отдельным абзацем, а не подписью строки: подпись обрезается по ширине
+ *  телефона, а владельцу нужно прочитать его целиком. */
+function Scenario({
+  title,
+  ariaLabel,
+  checked,
+  disabled,
+  onChange,
+  children,
+}: {
+  title: string;
+  ariaLabel: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-2">
+      <FieldGroup>
+        <ListRow
+          label={title}
+          trailing={<Switch ariaLabel={ariaLabel} checked={checked} disabled={disabled} onChange={onChange} />}
+        />
+      </FieldGroup>
+      <p className="tf-action text-sub px-1">{children}</p>
     </div>
   );
 }

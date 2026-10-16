@@ -13,6 +13,8 @@ type S = {
   hasApiKey: boolean;
   planProfileEnabled: boolean;
   planProfileMinConfidence: number;
+  subtaskRoleEnabled: boolean;
+  subtaskRoleMinConfidence: number;
   updatedAt: string;
 };
 
@@ -24,6 +26,8 @@ async function mockJev(context: BrowserContext, initial: Partial<S> = {}) {
     hasApiKey: false,
     planProfileEnabled: false,
     planProfileMinConfidence: 0.6,
+    subtaskRoleEnabled: false,
+    subtaskRoleMinConfidence: 0.6,
     updatedAt: "2026-10-16 10:00:00",
     ...initial,
   };
@@ -65,6 +69,7 @@ test("без ключа сценарий заперт; ключ сохраняе
   });
   await expect(toggle).toBeDisabled();
   await expect(page.getByText("Сначала сохраните ключ")).toBeVisible();
+  await expect(page.getByRole("switch", { name: "JEV для подбора ролей подзадачам" })).toBeDisabled();
 
   const key = page.getByLabel("Ключ API");
   await expect(key).toHaveAttribute("type", "password");
@@ -95,6 +100,19 @@ test("галочка включает сценарий, проверка под�
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   expect(puts.at(-1)).toEqual({ planProfileEnabled: true });
+
+  const roles = page.getByRole("switch", { name: "JEV для подбора ролей подзадачам" });
+  await roles.click();
+  await expect(roles).toHaveAttribute("aria-checked", "true");
+  expect(puts.at(-1)).toEqual({ subtaskRoleEnabled: true });
+  await expect(page.getByText(/какой роли её отдать/)).toBeVisible();
+  // Последнее описание не прячется под нижней панелью вкладок.
+  const last = page.getByText(/какой роли её отдать/);
+  await page.mouse.wheel(0, 4000);
+  await page.waitForTimeout(400);
+  const textBox = await last.boundingBox();
+  const navTop = await page.locator("nav").last().evaluate((el) => el.getBoundingClientRect().top);
+  expect(textBox!.y + textBox!.height).toBeLessThanOrEqual(navTop);
 
   await page.getByRole("button", { name: "Проверить подключение" }).click();
   await expect(

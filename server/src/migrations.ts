@@ -4743,6 +4743,11 @@ const migrations: Migration[] = [
     )`);
     db.exec("INSERT OR IGNORE INTO jev_settings (id) VALUES (1)");
   } },
+  { id: "149_jev_subtask_roles", description: "JEV: сценарий «роли для подзадач» — своя галочка и порог уверенности", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(jev_settings)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!cols.has("subtask_role_enabled")) db.exec("ALTER TABLE jev_settings ADD COLUMN subtask_role_enabled INTEGER NOT NULL DEFAULT 0");
+    if (!cols.has("subtask_role_min_confidence")) db.exec("ALTER TABLE jev_settings ADD COLUMN subtask_role_min_confidence REAL NOT NULL DEFAULT 0.6");
+  } },
 
 ];
 /**

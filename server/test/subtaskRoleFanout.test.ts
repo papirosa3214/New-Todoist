@@ -3,7 +3,7 @@
 // не из шаблона по ключевым словам карточки. Мок embeddingClient —
 // тот же детерминированный приём, что и в enrichSemantic.test.ts: тесты
 // проверяют логику группировки/порога, а не саму модель.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 const embeddingClientMock = vi.hoisted(() => ({ getEmbeddings: vi.fn() }));
@@ -22,6 +22,7 @@ import db from "../src/db.js";
 import { buildApp } from "../src/index.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
+import { resetJevSettings, saveJevSettings } from "../src/lib/jev.js";
 
 function embeddingFor(text: string): number[] {
   if (text.includes("[qa]")) return [0, 1, 0];
@@ -153,5 +154,66 @@ describe("умная параллелизация подзадач (subtaskRoleF
     expect(res.statusCode).toBe(201);
     expect(res.json().plan.nodes).toHaveLength(1);
     expect(res.json().plan.nodes[0].role_key).toBe("qa");
+  });
+
+  // Галочка «Роли для подзадач» в разделе JEV (16.10.2026). TypeSafe не
+  // зовём: fetch подменён ответом с выбором ролей по каждой подзадаче.
+  describe("JEV подбирает роли подзадачам", () => {
+    const realFetch = globalThis.fetch;
+    afterEach(() => {
+      globalThis.fetch = realFetch;
+      resetJevSettings();
+    });
+
+    function jevAnswers(answers: Record<string, unknown>) {
+      return vi.fn(async () => new Response(JSON.stringify({ model: "jev-1.13.0", answers, usage: { input_tokens: 1, output_tokens: 0 } }), { status: 200 }));
+    }
+
+    it("уверенный выбор JEV назначает роль даже там, где эмбеддинги молчат; мелкий пункт остаётся исполнителю", async () => {
+      saveJevSettings({ apiKey: "apik_test-1234567890", subtaskRoleEnabled: true });
+      globalThis.fetch = jevAnswers({
+        role_0: { type: "choice", choice: "designer", confidence: 0.9, probabilities: {} },
+        separate_0: { type: "noul", noul: 0.95 },
+        role_1: { type: "choice", choice: "qa", confidence: 0.85, probabilities: {} },
+        separate_1: { type: "noul", noul: 0.9 },
+        role_2: { type: "choice", choice: "researcher", confidence: 0.9, probabilities: {} },
+        separate_2: { type: "noul", noul: 0.1 },
+      }) as any;
+      const taskId = await makeTaskWithSubtasks("Экран настроек", "builder", ["нейтральный пункт раз", "нейтральный пункт два", "нейтральный пункт три"]);
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/suggest-from-subtasks`, headers: ownerAuth });
+      expect(res.statusCode).toBe(201);
+      const plan = res.json().plan;
+      expect(plan.nodes.map((n: { role_key: string }) => n.role_key).sort()).toEqual(["designer", "qa"]);
+      expect(plan.rationale).toContain("Роли подобраны JEV: 2 из 2");
+    });
+
+    it("JEV не уверен — по этой подзадаче работает прежний подбор по эмбеддингам", async () => {
+      saveJevSettings({ apiKey: "apik_test-1234567890", subtaskRoleEnabled: true, subtaskRoleMinConfidence: 0.8 });
+      globalThis.fetch = jevAnswers({
+        role_0: { type: "choice", choice: "designer", confidence: 0.4, probabilities: {} },
+        separate_0: { type: "noul", noul: 0.9 },
+        role_1: { type: "choice", choice: "designer", confidence: 0.4, probabilities: {} },
+        separate_1: { type: "noul", noul: 0.9 },
+      }) as any;
+      const taskId = await makeTaskWithSubtasks("Фича", "builder", ["[qa] проверить сценарии", "[researcher] собрать примеры"]);
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/suggest-from-subtasks`, headers: ownerAuth });
+      expect(res.json().plan.nodes.map((n: { role_key: string }) => n.role_key).sort()).toEqual(["qa", "researcher"]);
+      expect(res.json().plan.rationale).not.toContain("JEV");
+    });
+
+    it("JEV упал — всё как раньше; галочка выключена — JEV не зовётся", async () => {
+      saveJevSettings({ apiKey: "apik_test-1234567890", subtaskRoleEnabled: true });
+      globalThis.fetch = vi.fn(async () => new Response("boom", { status: 529 })) as any;
+      const t1 = await makeTaskWithSubtasks("Фича", "builder", ["[qa] проверить", "[researcher] собрать"]);
+      const r1 = await app.inject({ method: "POST", url: `/api/tasks/${t1}/collaboration-plans/suggest-from-subtasks`, headers: ownerAuth });
+      expect(r1.json().plan.nodes.map((n: { role_key: string }) => n.role_key).sort()).toEqual(["qa", "researcher"]);
+
+      saveJevSettings({ subtaskRoleEnabled: false });
+      const spy = vi.fn();
+      globalThis.fetch = spy as any;
+      const t2 = await makeTaskWithSubtasks("Фича 2", "builder", ["[qa] проверить", "[researcher] собрать"]);
+      await app.inject({ method: "POST", url: `/api/tasks/${t2}/collaboration-plans/suggest-from-subtasks`, headers: ownerAuth });
+      expect(spy).not.toHaveBeenCalled();
+    });
   });
 });

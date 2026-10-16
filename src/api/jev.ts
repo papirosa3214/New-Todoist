@@ -11,6 +11,8 @@ export interface JevSettings {
   hasApiKey: boolean;
   planProfileEnabled: boolean;
   planProfileMinConfidence: number;
+  subtaskRoleEnabled: boolean;
+  subtaskRoleMinConfidence: number;
   updatedAt: string;
 }
 

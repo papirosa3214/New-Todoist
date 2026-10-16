@@ -59,6 +59,8 @@ interface JevRow {
   api_key_enc: Buffer | null;
   plan_profile_enabled: number;
   plan_profile_min_confidence: number;
+  subtask_role_enabled: number;
+  subtask_role_min_confidence: number;
   updated_at: string;
 }
 
@@ -70,6 +72,8 @@ export interface JevPublicSettings {
   hasApiKey: boolean;
   planProfileEnabled: boolean;
   planProfileMinConfidence: number;
+  subtaskRoleEnabled: boolean;
+  subtaskRoleMinConfidence: number;
   updatedAt: string;
 }
 
@@ -86,6 +90,8 @@ export function getJevSettings(): JevPublicSettings {
     hasApiKey: Boolean(r.api_key_enc),
     planProfileEnabled: Boolean(r.plan_profile_enabled),
     planProfileMinConfidence: r.plan_profile_min_confidence,
+    subtaskRoleEnabled: Boolean(r.subtask_role_enabled),
+    subtaskRoleMinConfidence: r.subtask_role_min_confidence,
     updatedAt: r.updated_at,
   };
 }
@@ -102,6 +108,8 @@ export function saveJevSettings(input: {
   apiKey?: unknown;
   planProfileEnabled?: unknown;
   planProfileMinConfidence?: unknown;
+  subtaskRoleEnabled?: unknown;
+  subtaskRoleMinConfidence?: unknown;
 }): JevPublicSettings {
   const cur = row();
   const baseUrl =
@@ -135,14 +143,27 @@ export function saveJevSettings(input: {
       : input.planProfileEnabled === true
         ? 1
         : 0;
+  const subtaskMinConf =
+    input.subtaskRoleMinConfidence === undefined
+      ? cur.subtask_role_min_confidence
+      : Number(input.subtaskRoleMinConfidence);
+  if (!Number.isFinite(subtaskMinConf) || subtaskMinConf < 0 || subtaskMinConf > 1)
+    throw new JevSettingsError("Порог уверенности — от 0 до 1");
+  const subtaskEnabled =
+    input.subtaskRoleEnabled === undefined
+      ? cur.subtask_role_enabled
+      : input.subtaskRoleEnabled === true
+        ? 1
+        : 0;
 
   const key = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
   const keyEnc = key ? encryptWebhookSecret(key) : cur.api_key_enc;
 
   db.prepare(
     `UPDATE jev_settings SET base_url=?, model=?, timeout_ms=?, api_key_enc=?,
-       plan_profile_enabled=?, plan_profile_min_confidence=?, updated_at=datetime('now') WHERE id=1`,
-  ).run(baseUrl, model, timeoutMs, keyEnc, enabled, minConf);
+       plan_profile_enabled=?, plan_profile_min_confidence=?,
+       subtask_role_enabled=?, subtask_role_min_confidence=?, updated_at=datetime('now') WHERE id=1`,
+  ).run(baseUrl, model, timeoutMs, keyEnc, enabled, minConf, subtaskEnabled, subtaskMinConf);
   return getJevSettings();
 }
 
@@ -303,4 +324,11 @@ export function jevPlanProfileConfig(): { minConfidence: number } | null {
   const r = row();
   if (!r.plan_profile_enabled || !r.api_key_enc) return null;
   return { minConfidence: r.plan_profile_min_confidence };
+}
+
+/** Только для сценариев: включён ли подбор ролей для подзадач и есть ли ключ. */
+export function jevSubtaskRoleConfig(): { minConfidence: number } | null {
+  const r = row();
+  if (!r.subtask_role_enabled || !r.api_key_enc) return null;
+  return { minConfidence: r.subtask_role_min_confidence };
 }
