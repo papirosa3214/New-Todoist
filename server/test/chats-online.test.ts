@@ -940,6 +940,24 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     ]);
   });
 
+  it("membership changes immediately switch implicit and explicit addressing", async () => {
+    const chatId = (await createChat({kind: "direct", member_ids: ["role_architect"]})).json().chat.id;
+    await send(chatId, "Первый вопрос без упоминания");
+    await vi.waitFor(() => expect(messagesByAuthor(chatId, "role_architect")).toHaveLength(1));
+    const added = await app.inject({method: "POST", url: `/api/chats/${chatId}/members`, headers: ownerAuth,
+      payload: {member_id: "role_qa"}});
+    expect(added.json().chat.kind).toBe("group");
+    await send(chatId, "Без адресата никто не отвечает");
+    await tick(100);
+    expect(fakeClients).toHaveLength(1);
+    await send(chatId, "@qa проверь");
+    await vi.waitFor(() => expect(messagesByAuthor(chatId, "role_qa")).toHaveLength(1));
+    const removed = await app.inject({method: "DELETE", url: `/api/chats/${chatId}/members/role_qa`, headers: ownerAuth});
+    expect(removed.json().chat.kind).toBe("direct");
+    await send(chatId, "Снова без упоминания");
+    await vi.waitFor(() => expect(messagesByAuthor(chatId, "role_architect")).toHaveLength(2));
+  });
+
   it("несколько @упоминаний — отвечает каждая упомянутая роль", async () => {
     const chatId = (
       await createChat({ kind: "group", member_ids: ["role_architect", "role_qa", "role_builder"] })

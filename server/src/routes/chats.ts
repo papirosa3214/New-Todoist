@@ -132,6 +132,16 @@ function extractQuickReplies(text: string): { clean: string; replies: string[] |
 type ChatKind = "direct" | "group";
 const KINDS: ChatKind[] = ["direct", "group"];
 
+/** Обычная комната меняет адресацию вместе с составом. Проектные группы,
+ *  темы задач и системный общий чат сохраняют групповой контракт. */
+function syncChatKindFromMembers(chatId: string): void {
+  db.prepare(`UPDATE chats SET kind = CASE
+      WHEN (SELECT COUNT(*) FROM chat_members WHERE chat_id = chats.id) > 2
+      THEN 'group' ELSE 'direct' END
+    WHERE id = ? AND id <> 'chat-common'
+      AND project_id IS NULL AND parent_chat_id IS NULL AND task_id IS NULL`).run(chatId);
+}
+
 function memberIds(chatId: string): string[] {
   return (
     db
@@ -207,6 +217,14 @@ function chatRow(chatId: string) {
 
 export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   const authPre = authOrApiToken;
+
+  // Исправляем сохранённые раньше direct-комнаты с несколькими собеседниками
+  // и группы, где осталась одна роль. История, участники и сессии сохраняются.
+  db.transaction(() => {
+    const ordinary = db.prepare(`SELECT id FROM chats WHERE id <> 'chat-common'
+      AND project_id IS NULL AND parent_chat_id IS NULL AND task_id IS NULL`).all() as Array<{id: string}>;
+    for (const chat of ordinary) syncChatKindFromMembers(chat.id);
+  })();
 
   function ensureProjectGroup(project: any, userId: string) {
     let group = db.prepare("SELECT id FROM chats WHERE project_id=? AND parent_chat_id IS NULL").get(project.id) as any;
@@ -339,6 +357,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         "INSERT INTO chat_members (chat_id, member_id) VALUES (?, ?)",
       );
       for (const m of all) ins.run(id, m);
+      syncChatKindFromMembers(id);
     });
     txn();
 
@@ -1062,10 +1081,13 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: "нет такого участника" });
       // Новичок не должен получить бейдж на всю историю до его появления:
       // отметка прочтения ставится на момент добавления (миграция 055).
-      db.prepare(
-        `INSERT OR IGNORE INTO chat_members (chat_id, member_id, last_read_at)
-         VALUES (?, ?, datetime('now'))`,
-      ).run(req.params.id, memberId);
+      db.transaction(() => {
+        db.prepare(
+          `INSERT OR IGNORE INTO chat_members (chat_id, member_id, last_read_at)
+           VALUES (?, ?, datetime('now'))`,
+        ).run(req.params.id, memberId);
+        syncChatKindFromMembers(req.params.id);
+      })();
       return { chat: chatRow(req.params.id) };
     },
   );
@@ -1083,10 +1105,13 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(403).send({ error: "менять участников может создатель чата" });
       if (req.params.memberId === req.userId)
         return reply.code(400).send({ error: "себя из чата не убрать" });
-      db.prepare("DELETE FROM chat_members WHERE chat_id = ? AND member_id = ?").run(
-        req.params.id,
-        req.params.memberId,
-      );
+      db.transaction(() => {
+        db.prepare("DELETE FROM chat_members WHERE chat_id = ? AND member_id = ?").run(
+          req.params.id,
+          req.params.memberId,
+        );
+        syncChatKindFromMembers(req.params.id);
+      })();
       return { chat: chatRow(req.params.id) };
     },
   );

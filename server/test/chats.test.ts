@@ -70,11 +70,11 @@ describe("Чаты (этап 1, миграция 053)", () => {
     expect((await put(null)).json().message.reactions).toEqual([]);
   });
 
-  it("создаёт групповой чат и включает создателя в участники", async () => {
+  it("нормализует чат с одним собеседником в личный и включает создателя", async () => {
     const res = await createChat({ title: "Совет", kind: "group", member_ids: [otherId] });
     expect(res.statusCode).toBe(200);
     const chat = res.json().chat;
-    expect(chat.kind).toBe("group");
+    expect(chat.kind).toBe("direct");
     expect(chat.title).toBe("Совет");
     const ids = chat.members.map((m: { id: string }) => m.id);
     expect(ids).toContain(ownerId);
