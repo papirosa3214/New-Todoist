@@ -24,6 +24,7 @@ export function SavingsCalculator() {
   const [principal, setPrincipal] = useState("100000");
   const [annualRate, setAnnualRate] = useState("12");
   const [months, setMonths] = useState("36");
+  const [monthlyContribution, setMonthlyContribution] = useState("0");
   const [compounding, setCompounding] = useState<Compounding>("monthly");
   const [inflation, setInflation] = useState("8");
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
@@ -33,10 +34,12 @@ export function SavingsCalculator() {
     const r = Number(annualRate) || 0;
     const m = Math.max(0, Math.round(Number(months) || 0));
     const inf = Number(inflation) || 0;
-    const projection = project({ principal: p, annualRate: r, months: m, compounding });
+    const add = Math.max(0, Number(monthlyContribution) || 0);
+    const input = { principal: p, annualRate: r, months: m, compounding, monthlyContribution: add };
+    const projection = project(input);
     const real = realValue(projection, inf);
     const ratio = timesInflation(projection, inf);
-    const schedule = monthlySchedule({ principal: p, annualRate: r, months: m, compounding }, startDate);
+    const schedule = monthlySchedule(input, startDate);
     return {
       projection,
       real,
@@ -45,7 +48,7 @@ export function SavingsCalculator() {
       last: schedule[schedule.length - 1] ?? null,
       endDate: addMonths(startDate, m),
     };
-  }, [principal, annualRate, months, compounding, inflation, startDate]);
+  }, [principal, annualRate, months, compounding, inflation, startDate, monthlyContribution]);
 
   return (
     <div className="bg-white border border-ink-200 rounded-xl p-4">
@@ -84,6 +87,17 @@ export function SavingsCalculator() {
             max="600"
             value={months}
             onChange={(e) => setMonths(e.target.value)}
+            className={inputClass}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Докладывать в месяц</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={monthlyContribution}
+            onChange={(e) => setMonthlyContribution(e.target.value)}
             className={inputClass}
           />
         </div>
@@ -131,6 +145,12 @@ export function SavingsCalculator() {
           <div className="text-xs text-accent-600 mt-1">
             прирост +{formatMoney(view.projection.profit)}
           </div>
+          {view.projection.monthlyContribution > 0 ? (
+            <div className="text-xs text-ink-500 mt-1">
+              вложено {formatMoney(view.projection.invested)} · по{" "}
+              {formatMoney(view.projection.monthlyContribution)} в месяц
+            </div>
+          ) : null}
         </div>
         <div className="rounded-lg bg-ink-50 p-3">
           <div className="text-xs text-ink-500">Доходность</div>

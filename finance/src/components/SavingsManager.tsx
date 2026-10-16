@@ -25,6 +25,7 @@ export type SavingsItem = {
   compounding: string;
   startDate: string;
   months: number;
+  monthlyContribution: number;
   note: string | null;
 };
 
@@ -43,6 +44,7 @@ export function SavingsManager({ items }: { items: SavingsItem[] }) {
   const [compounding, setCompounding] = useState<Compounding>("monthly");
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [months, setMonths] = useState("12");
+  const [monthlyContribution, setMonthlyContribution] = useState("0");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,6 +56,7 @@ export function SavingsManager({ items }: { items: SavingsItem[] }) {
           annualRate: item.annualRate,
           months: item.months,
           compounding: item.compounding as Compounding,
+          monthlyContribution: item.monthlyContribution,
         });
         return { ...item, projection, endDate: addMonths(item.startDate, item.months) };
       }),
@@ -68,6 +71,7 @@ export function SavingsManager({ items }: { items: SavingsItem[] }) {
           annualRate: item.annualRate,
           months: item.months,
           compounding: item.compounding as Compounding,
+          monthlyContribution: item.monthlyContribution,
           currency: item.currency,
         })),
       ),
@@ -83,6 +87,7 @@ export function SavingsManager({ items }: { items: SavingsItem[] }) {
     setAnnualRate("12");
     setCompounding("monthly");
     setMonths("12");
+    setMonthlyContribution("0");
     setError(null);
   }
 
@@ -96,6 +101,7 @@ export function SavingsManager({ items }: { items: SavingsItem[] }) {
     setCompounding(item.compounding as Compounding);
     setStartDate(item.startDate);
     setMonths(String(item.months));
+    setMonthlyContribution(String(item.monthlyContribution ?? 0));
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -112,6 +118,7 @@ export function SavingsManager({ items }: { items: SavingsItem[] }) {
       compounding,
       startDate,
       months: Math.max(1, Number(months) || 1),
+      monthlyContribution: Math.max(0, Number(monthlyContribution) || 0),
       note: null,
     };
     try {
@@ -200,6 +207,17 @@ export function SavingsManager({ items }: { items: SavingsItem[] }) {
           />
         </div>
         <div>
+          <label className={labelClass}>Докладывать в месяц</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={monthlyContribution}
+            onChange={(e) => setMonthlyContribution(e.target.value)}
+            className={inputClass}
+          />
+        </div>
+        <div>
           <label className={labelClass}>Ставка, % годовых</label>
           <input
             required
@@ -277,7 +295,7 @@ export function SavingsManager({ items }: { items: SavingsItem[] }) {
               <div className="text-sm text-ink-500">Суммарно по всем вкладам · {cur}</div>
               <div className="text-2xl font-semibold mt-1">{formatMoney(t.finalAmount, cur)}</div>
               <div className="text-xs text-ink-500 mt-1">
-                Сейчас {formatMoney(t.principal, cur)} · прирост{" "}
+                Сейчас {formatMoney(t.principal, cur)} · вложено {formatMoney(t.invested, cur)} · прирост{" "}
                 <span className="text-accent-600">+{formatMoney(t.profit, cur)}</span>
               </div>
             </div>
@@ -320,6 +338,9 @@ export function SavingsManager({ items }: { items: SavingsItem[] }) {
                     <div className="tabular-nums">{row.annualRate}% · {row.months} мес.</div>
                     <div className="text-xs text-ink-500">
                       {compoundingLabel(row.compounding as Compounding)}
+                      {row.monthlyContribution > 0
+                        ? ` · +${formatMoney(row.monthlyContribution, row.currency)}/мес`
+                        : ""}
                     </div>
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">

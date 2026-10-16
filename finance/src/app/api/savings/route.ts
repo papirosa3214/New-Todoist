@@ -17,6 +17,7 @@ const schema = z.object({
   compounding: z.enum(["monthly", "quarterly", "yearly", "none"]),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}/),
   months: z.number().int().min(1).max(600),
+  monthlyContribution: z.number().nonnegative().optional(),
   note: z.string().max(500).optional().nullable(),
 });
 
@@ -50,6 +51,7 @@ export async function POST(req: Request) {
       compounding: parsed.compounding,
       startDate: parsed.startDate.slice(0, 10),
       months: parsed.months,
+      monthlyContribution: parsed.monthlyContribution ?? 0,
       note: parsed.note?.trim() || null,
       archived: false,
       createdAt: new Date().toISOString(),

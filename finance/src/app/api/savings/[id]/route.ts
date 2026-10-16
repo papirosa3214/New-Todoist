@@ -17,6 +17,7 @@ const schema = z.object({
   compounding: z.enum(["monthly", "quarterly", "yearly", "none"]).optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
   months: z.number().int().min(1).max(600).optional(),
+  monthlyContribution: z.number().nonnegative().optional(),
   note: z.string().max(500).optional().nullable(),
 });
 

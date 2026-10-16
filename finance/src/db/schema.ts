@@ -141,6 +141,8 @@ export const savings = sqliteTable("savings", {
     .default("monthly"),
   startDate: text("start_date").notNull(),
   months: integer("months").notNull(),
+  /** Ежемесячное пополнение вклада, учитывается в расчёте сложного процента */
+  monthlyContribution: real("monthly_contribution").notNull().default(0),
   note: text("note"),
   archived: integer("archived", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),

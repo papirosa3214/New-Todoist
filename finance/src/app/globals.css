@@ -55,3 +55,45 @@ body {
     @apply outline-none ring-2 ring-accent-600 ring-offset-2;
   }
 }
+/*
+ * Поле даты в нативном виде рисует тёмную системную иконку календаря и не
+ * наследует шрифт с высотой соседних полей — из-за чего одно поле в форме
+ * выглядит чужим.
+ *
+ * Правила лежат вне @layer намеренно: Tailwind вырезает неиспользуемые
+ * правила внутри слоёв, а эти нужны всегда, независимо от разметки.
+ */
+input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  font-family: inherit;
+  line-height: inherit;
+  color: inherit;
+  min-height: 2.375rem;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+/* Safari рисует сегменты даты своими цветами и отступом — приводим к общему. */
+input[type="date"]::-webkit-datetime-edit {
+  text-align: left;
+}
+
+input[type="date"]::-webkit-datetime-edit-fields-wrapper {
+  padding: 0;
+}
+
+input[type="date"]::-webkit-datetime-edit-text,
+input[type="date"]::-webkit-datetime-edit-year-field,
+input[type="date"]::-webkit-datetime-edit-month-field,
+input[type="date"]::-webkit-datetime-edit-day-field,
+input[type="date"]::-webkit-datetime-edit-hour-field,
+input[type="date"]::-webkit-datetime-edit-minute-field,
+input[type="date"]::-webkit-datetime-edit-ampm-field {
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}

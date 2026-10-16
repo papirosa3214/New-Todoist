@@ -27,6 +27,7 @@ export default async function SavingsPage() {
             compounding: s.compounding,
             startDate: s.startDate,
             months: s.months,
+            monthlyContribution: s.monthlyContribution,
             note: s.note,
           }))}
         />

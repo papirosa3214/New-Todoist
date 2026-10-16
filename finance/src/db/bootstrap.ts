@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS savings (
   compounding TEXT NOT NULL DEFAULT 'monthly',
   start_date TEXT NOT NULL,
   months INTEGER NOT NULL DEFAULT 0,
+  monthly_contribution REAL NOT NULL DEFAULT 0,
   note TEXT,
   archived INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
@@ -145,7 +146,26 @@ export function ensureDatabase(dbPath = DB_PATH): void {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 }
 
+/** Колонки, добавленные к уже созданной базе: CREATE TABLE IF NOT EXISTS их не трогает. */
+const ADDED_COLUMNS: { table: string; column: string; ddl: string }[] = [
+  {
+    table: "savings",
+    column: "monthly_contribution",
+    ddl: "ALTER TABLE savings ADD COLUMN monthly_contribution REAL NOT NULL DEFAULT 0",
+  },
+];
+
+function addMissingColumns(sqlite: Database.Database): void {
+  for (const { table, column, ddl } of ADDED_COLUMNS) {
+    const found = sqlite
+      .prepare("SELECT name FROM pragma_table_info(?) WHERE name = ?")
+      .all(table, column);
+    if (found.length === 0) sqlite.exec(ddl);
+  }
+}
+
 export function applySchema(sqlite: Database.Database): void {
   ensureDatabase(sqlite.name);
   sqlite.exec(SCHEMA_SQL);
+  addMissingColumns(sqlite);
 }

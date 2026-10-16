@@ -63,12 +63,24 @@ export type SavingsInput = {
   annualRate: number;
   months: number;
   compounding: Compounding;
+  /**
+   * Ежемесячное пополнение вклада. Добавляется в конце каждого месяца, поэтому
+   * в первый месяц процентов на него ещё нет, а к последнему месяцу сумма уже
+   * полная. Ноль означает старый расчёт без пополнений.
+   */
+  monthlyContribution?: number;
 };
 
 /** Срок в целых месяцах: отрицательные и дробные значения приводятся к 0. */
 export function normalizeMonths(months: number): number {
   const m = Math.round(safe(months));
   return m > 0 ? m : 0;
+}
+
+/** Ежемесячное пополнение: нечисло и отрицательное значение — ноль. */
+export function normalizeContribution(value: number | undefined): number {
+  const v = Math.round(safe(value ?? 0) * 100) / 100;
+  return v > 0 ? v : 0;
 }
 
 /**
@@ -91,19 +103,52 @@ export function futureValue(
 export function steppedFutureValue(input: SavingsInput): number {
   const principal = safe(input.principal);
   const months = normalizeMonths(input.months);
-  const r = safe(input.annualRate) / 100;
   if (principal <= 0 || months === 0) return round2(principal);
+  return round2(monthlyAccumulation(input).balance);
+}
 
-  const years = months / 12;
+/**
+ * Помесячный набор: одна схема для обоих режимов капитализации.
+ *
+ * Каждый месяц сначала начисляются проценты на то, что уже лежит, и только
+ * потом в конец месяца добавляется пополнение. Поэтому на пополнение первого
+ * месяца процентов ещё не было, а на последнее — уже целый год.
+ *
+ * Сложный процент (perYear > 0): за месяц начисляется perYear / 12 периодах,
+ * ставка периода r / perYear. Без капитализации (perYear = 0) — простые
+ * проценты r / 12 от всего, что на счёте.
+ */
+type MonthlyAccumulation = { balance: number; rows: Omit<ScheduleRow, "date">[] };
+
+function monthlyAccumulation(input: SavingsInput): MonthlyAccumulation {
+  const principal = safe(input.principal);
+  const months = normalizeMonths(input.months);
+  const r = safe(input.annualRate) / 100;
   const perYear = compoundingPerYear(input.compounding);
+  const contribution = normalizeContribution(input.monthlyContribution);
 
-  if (perYear === 0) return round2(principal * (1 + r * years));
+  const rows: Omit<ScheduleRow, "date">[] = [];
+  let balance = principal;
 
-  const periods = perYear * years;
-  const ratePerPeriod = r / perYear;
-  let acc = principal;
-  for (let i = 0; i < periods; i += 1) acc = acc * (1 + ratePerPeriod);
-  return round2(acc);
+  for (let m = 1; m <= months; m += 1) {
+    let interest: number;
+    if (perYear === 0) {
+      interest = (balance * r) / 12;
+    } else {
+      const ratePerPeriod = r / perYear;
+      const periodsThisMonth = perYear / 12;
+      interest = balance * (Math.pow(1 + ratePerPeriod, periodsThisMonth) - 1);
+    }
+    balance = balance + interest;
+    rows.push({ month: m, interest: round2(interest), balance: round2(balance) });
+    // Пополнение приходит в конце месяца: на него проценты начисляются
+    // только со следующего месяца, но в записи графика он уже виден.
+    if (contribution > 0) {
+      balance = balance + contribution;
+      rows[rows.length - 1].balance = round2(balance);
+    }
+  }
+  return { balance, rows };
 }
 
 export type Projection = {
@@ -116,34 +161,52 @@ export type Projection = {
   annualPercent: number;
   months: number;
   years: number;
+  /** Сколько всего вложено: стартовая сумма плюс все пополнения */
+  invested: number;
+  /** Ежемесячное пополнение, ноль если его нет */
+  monthlyContribution: number;
 };
 
 /** Полный расчёт по вкладу: сумма к концу срока, прирост и доходность. */
 export function project(input: SavingsInput): Projection {
   const principal = safe(input.principal);
   const months = normalizeMonths(input.months);
-  const r = safe(input.annualRate) / 100;
   const years = months / 12;
-  const perYear = compoundingPerYear(input.compounding);
+  const contribution = normalizeContribution(input.monthlyContribution);
+  // Сумма, реально внесённая за срок: стартовая плюс все пополнения. Это и есть
+  // база для доходности — иначе пополнения выглядели бы как чистый процент.
+  const invested = round2(principal + contribution * months);
 
   let raw: number;
   if (principal <= 0 || months === 0) {
     raw = principal;
-  } else if (perYear === 0) {
-    raw = principal * (1 + r * years);
+  } else if (contribution > 0) {
+    raw = monthlyAccumulation(input).balance;
   } else {
-    raw = principal * Math.pow(1 + r / perYear, perYear * years);
+    const r = safe(input.annualRate) / 100;
+    const perYear = compoundingPerYear(input.compounding);
+    raw = perYear === 0 ? principal * (1 + r * years) : principal * Math.pow(1 + r / perYear, perYear * years);
   }
 
   const finalAmount = round2(raw);
-  const profit = round2(finalAmount - principal);
-  const periodPercent = principal > 0 ? round2((profit / principal) * 100) : 0;
+  const profit = round2(finalAmount - invested);
+  const periodPercent = invested > 0 ? round2((profit / invested) * 100) : 0;
   const annualPercent =
-    principal > 0 && months > 0
-      ? round2((Math.pow(finalAmount / principal, 12 / months) - 1) * 100)
+    invested > 0 && months > 0
+      ? round2((Math.pow(finalAmount / invested, 12 / months) - 1) * 100)
       : 0;
 
-  return { principal: round2(principal), finalAmount, profit, periodPercent, annualPercent, months, years };
+  return {
+    principal: round2(principal),
+    finalAmount,
+    profit,
+    periodPercent,
+    annualPercent,
+    months,
+    years,
+    invested,
+    monthlyContribution: contribution,
+  };
 }
 
 export type ScheduleRow = {
@@ -166,29 +229,8 @@ export function monthlySchedule(input: SavingsInput, dateStart: string): Schedul
   const months = normalizeMonths(input.months);
   if (principal <= 0 || months === 0) return [];
 
-  const r = safe(input.annualRate) / 100;
-  const perYear = compoundingPerYear(input.compounding);
-  const rows: ScheduleRow[] = [];
-  let balance = principal;
-
-  for (let m = 1; m <= months; m += 1) {
-    let interest: number;
-    if (perYear === 0) {
-      interest = (principal * r) / 12;
-    } else {
-      const ratePerPeriod = r / perYear;
-      const periodsThisMonth = perYear / 12;
-      interest = balance * (Math.pow(1 + ratePerPeriod, periodsThisMonth) - 1);
-    }
-    balance = balance + interest;
-    rows.push({
-      month: m,
-      date: addMonths(dateStart, m),
-      interest: round2(interest),
-      balance: round2(balance),
-    });
-  }
-  return rows;
+  const { rows } = monthlyAccumulation(input);
+  return rows.map((row) => ({ ...row, date: addMonths(dateStart, row.month) }));
 }
 
 /** Реальная сумма после инфляции: сколько покупает накопленное в рублях сегодня. */
@@ -215,6 +257,8 @@ export function timesInflation(projection: Projection, inflationPercent: number)
 
 export type SavingsTotals = {
   principal: number;
+  /** Сколько всего вложено: стартовые суммы плюс все пополнения */
+  invested: number;
   finalAmount: number;
   profit: number;
 };
@@ -228,17 +272,19 @@ export type SavingsTotalsByCurrency = {
 export function summarize(
   items: (SavingsInput & { currency: string })[],
 ): SavingsTotalsByCurrency {
-  const total: SavingsTotals = { principal: 0, finalAmount: 0, profit: 0 };
+  const total: SavingsTotals = { principal: 0, invested: 0, finalAmount: 0, profit: 0 };
   const byCurrency: Record<string, SavingsTotals> = {};
 
   for (const item of items) {
     const p = project(item);
     const cur = item.currency || "RUB";
-    const bucket = (byCurrency[cur] ??= { principal: 0, finalAmount: 0, profit: 0 });
+    const bucket = (byCurrency[cur] ??= { principal: 0, invested: 0, finalAmount: 0, profit: 0 });
     bucket.principal = round2(bucket.principal + p.principal);
+    bucket.invested = round2(bucket.invested + p.invested);
     bucket.finalAmount = round2(bucket.finalAmount + p.finalAmount);
     bucket.profit = round2(bucket.profit + p.profit);
     total.principal = round2(total.principal + p.principal);
+    total.invested = round2(total.invested + p.invested);
     total.finalAmount = round2(total.finalAmount + p.finalAmount);
     total.profit = round2(total.profit + p.profit);
   }
