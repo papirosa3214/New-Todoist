@@ -155,7 +155,9 @@ export function stepDetail(tool: string, args: unknown): string | null {
     case "write":
     case "ls":
       raw = str("path") ?? str("file_path");
-      if (raw) raw = shortPath(raw);
+      // A filesystem path is not one base64 token. Redact each component,
+      // otherwise /roles/.../skills/.../SKILL.md disappears as one long secret.
+      if (raw) return clip(shortPath(raw).split("/").map(part=>redactSecrets(part)).join("/"));
       break;
     case "bash":
       raw = str("command");
