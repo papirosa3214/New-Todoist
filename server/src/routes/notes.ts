@@ -14,34 +14,13 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import db from "../db.js";
+import { KB_CATEGORIES, KB_DROP_MARK, KB_COLUMNS } from "../lib/kbCategories.js";
 
-/**
- * Постоянные категории базы знаний TaskFlow (схема cfa5cdcd).
- *
- * Две половины, смешивать нельзя: первые три — про нас, четвёртая — про
- * внешний мир. Разделение нужно, чтобы можно было сравнивать «как у нас»
- * и «как в мире», а не получать кашу.
- *
- * Помеченное как мусор сюда не входит: у мусора есть отдельная пометка,
- * и решение об удалении принимается по факту обращений ролей, а не
- * жёстким списком.
- */
-export const KB_CATEGORIES = [
-  "Workflows",
-  "Norms",
-  "Roles",
-  "Knowledge Base",
-  "Исследования",
-];
+export { KB_CATEGORIES, KB_DROP_MARK, KB_COLUMNS };
 
-/** Пометка «на удаление» — решение принимает свод по обращениям. */
-export const KB_DROP_MARK = "мусор";
-
-export const KB_COLUMNS = [
-  "kb_temp_category",
-  "kb_category",
-  "kb_source_task_id",
-];
+// Список категорий и пометка «мусор» живут в server/src/lib/kbCategories.ts:
+// теми же значениями пользуется инструмент роли taskflow_kb_categorize,
+// который пишет эти поля напрямую. Смысл категорий — в том же файле.
 import { authOrApiToken } from "../auth.js";
 import { journalPreview } from "../lib/tiptapPlaintext.js";
 import { tiptapToMarkdown } from "../lib/tiptapToMarkdown.js";

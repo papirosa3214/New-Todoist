@@ -15,6 +15,7 @@ import { requireSubmissionReceipt, SUBMISSION_POLICY } from "../lib/submissionRe
 import { ROLE_REPORT_INSTRUCTION } from "../lib/roleReportPolicy.js";
 import { integrationStepContext } from "./integrationHandoff.js";
 import { searchNotes } from "../lib/noteSearch.js";
+import { KB_CATEGORIES, KB_DROP_MARK } from "../lib/kbCategories.js";
 import { secretaryMailTools } from "./secretaryMailTools.js";
 import { openMidPlanCritic } from "./planSubtaskAdmission.js";
 import { ensureResultVersionForReview } from "../resultVersions.js";
@@ -728,6 +729,58 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     T("taskflow_kb_search", "Поиск по внутренней базе знаний TaskFlow: заметки и документация всех проектов. Отвечает отрывками с id заметки; целиком заметку читает taskflow_doc_read. Не нашлось — повтори короче, ключевыми словами.",
       Type.Object({ query: Type.String(), top_k: Type.Optional(Type.Number()) }),
       async (p) => ({ запрос: p.query, куски: searchNotes(String(p.query ?? ""), p.top_k ?? 5).map((r) => ({ название: r.title, папка: r.folder, обновлена: r.updated_at, текст: r.text, id_заметки: r.id })) })),
+    // Разметка базы знаний — то, ради чего очередь разбора и живёт.
+    //
+    // Пишем прямо в user_notes, а не через PATCH /api/notes/:id: HTTP-правка
+    // переписывает автора и дату любой заметки, а «срез по роли» строится по
+    // автору (runtime/roleSlice.ts). Разметка — служебная работа, авторства
+    // у неё нет, поэтому трогаются только колонки категорий. Побочно снимается
+    // временная метка: оставленная метка вернула бы заметку в следующий разбор.
+    T("taskflow_kb_categorize", "Разметить заметку базы знаний. С note_id и category — поставить одну из пяти постоянных категорий (Workflows, Norms, Roles, Knowledge Base, Исследования) и снять временную метку. С note_id и mark — поставить пометку «мусор», если заметка одноразовая, или mark «снять», чтобы убрать метку без пометки. Без note_id — список заметок, ждущих разбора. Текст, название, автор и дата правки заметки не меняются; удалять заметки инструмент не умеет. Повторный вызов по той же заметке безопасен.",
+      Type.Object({
+        note_id: Type.Optional(Type.String()),
+        category: Type.Optional(Type.String()),
+        mark: Type.Optional(Type.String()),
+      }),
+      async (p) => {
+        const id = p.note_id ? String(p.note_id).trim() : "";
+        if (!id) {
+          const pending = db.prepare(
+            "SELECT id, title, kb_temp_category AS mark, kb_category AS category, updated_at FROM user_notes WHERE kb_temp_category IS NOT NULL ORDER BY updated_at DESC LIMIT 50",
+          ).all() as any[];
+          const total = (db.prepare("SELECT COUNT(*) AS n FROM user_notes WHERE kb_temp_category IS NOT NULL").get() as { n: number }).n;
+          return {
+            ждут_разбора: total,
+            показано: pending.length,
+            заметки: pending.map((n) => ({ id: n.id, название: n.title || "без названия", пометка: n.mark, категория: n.category, обновлена: n.updated_at })),
+          };
+        }
+        const note = db.prepare("SELECT id, title, kb_category, kb_temp_category, updated_by, updated_at FROM user_notes WHERE id = ?").get(id) as any;
+        if (!note) throw new ToolError(`заметка ${id} не найдена`);
+        const category = p.category ? String(p.category).trim() : "";
+        const mark = p.mark ? String(p.mark).trim() : "";
+        if (!category && !mark) throw new ToolError("скажи, что поставить: category — одна из пяти категорий, mark — «мусор» или «снять»");
+        if (category && !KB_CATEGORIES.includes(category))
+          throw new ToolError(`неизвестная категория «${category}»; можно: ${KB_CATEGORIES.join(", ")}`);
+        if (mark && mark !== KB_DROP_MARK && mark !== "снять")
+          throw new ToolError(`неизвестная пометка «${mark}»; можно: «${KB_DROP_MARK}» или «снять»`);
+        if (category && mark === KB_DROP_MARK)
+          throw new ToolError("категория и пометка «мусор» противоречат друг другу: выбери одно");
+        if (mark === "снять") {
+          db.prepare("UPDATE user_notes SET kb_temp_category = NULL WHERE id = ?").run(id);
+        } else if (category) {
+          db.prepare("UPDATE user_notes SET kb_category = ?, kb_temp_category = NULL WHERE id = ?").run(category, id);
+        } else {
+          db.prepare("UPDATE user_notes SET kb_category = NULL, kb_temp_category = ? WHERE id = ?").run(mark, id);
+        }
+        const after = db.prepare("SELECT kb_category, kb_temp_category, updated_by, updated_at FROM user_notes WHERE id = ?").get(id) as any;
+        return {
+          готово: id,
+          категория: after.kb_category,
+          пометка: after.kb_temp_category,
+          автор_не_менялся: after.updated_by === note.updated_by && after.updated_at === note.updated_at,
+        };
+      }),
     T("taskflow_library", "Корневая библиотека знаний TaskFlow: список подпапок (Roles, Workflows, Norms, Knowledge Base, Projects) и заметок в каждой.",
       Type.Object({ subfolder: Type.Optional(Type.String()) }),
       async (p) => {

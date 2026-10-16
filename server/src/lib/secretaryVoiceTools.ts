@@ -117,7 +117,7 @@ export function roleLoadNow(ownerId: string) {
 // через мост от имени роли secretary, отдельных голосовых копий нет.
 const VOICE_SHARED_TOOLS = ["taskflow_task", "taskflow_my_tasks", "taskflow_projects", "taskflow_project_tasks", "taskflow_status", "taskflow_agents",
   "taskflow_chat_send", "taskflow_chat_read", "taskflow_chat_reply", "taskflow_comment",
-  "taskflow_kb_search", "taskflow_library", "taskflow_docs", "taskflow_doc_read", "taskflow_doc_write", "taskflow_recall", "taskflow_remember",
+  "taskflow_kb_search", "taskflow_kb_categorize", "taskflow_library", "taskflow_docs", "taskflow_doc_read", "taskflow_doc_write", "taskflow_recall", "taskflow_remember",
   "taskflow_weather", "taskflow_my_stats", "taskflow_runtime",
   "taskflow_mail_accounts", "taskflow_mail_trusted", "taskflow_mail_list", "taskflow_mail_read", "taskflow_mail_attachment", "taskflow_mail_draft", "taskflow_mail_archive", "taskflow_mail_spam", "taskflow_mail_send_to_owner"];
 
