@@ -16,6 +16,10 @@
 // тайм-аут, ошибка провайдера, кривой ответ — всё это `null`, и вызывающий
 // идёт своей прежней дорогой. Исключения отсюда наружу не летят.
 import db from "../db.js";
+import { ProxyAgent } from "undici";
+
+// Existing Xray Claude HTTP inbound; scoped to TypeSafe, never global fetch.
+const typesafeProxy = new ProxyAgent("http://127.0.0.1:10812");
 import { encryptWebhookSecret, decryptWebhookSecret } from "./secretBox.js";
 
 /** instructions — строка или объект: вопрос в одном поле, данные, на которые
@@ -222,6 +226,7 @@ async function call(
 ): Promise<any> {
   const res = await fetch(`${r.base_url}${path}`, {
     method,
+    ...(new URL(r.base_url).hostname === "api.typesafe.ai" ? { dispatcher: typesafeProxy } : {}),
     headers: {
       Authorization: `Bearer ${key}`,
       Accept: "application/json",

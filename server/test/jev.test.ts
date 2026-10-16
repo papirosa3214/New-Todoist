@@ -330,3 +330,12 @@ describe("сценарий: навыки под задачу", () => {
   });
 });
 
+
+
+it("TypeSafe connection uses its dedicated proxy without a global dispatcher", async () => {
+  saveJevSettings({apiKey:"test-key"});
+  const spy=vi.fn(async()=>new Response(JSON.stringify({models:[{name:"jev-latest"}]}),{status:200}));
+  globalThis.fetch=spy as any;
+  expect((await testJevConnection()).ok).toBe(true);
+  expect(spy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({dispatcher:expect.anything()}));
+});
