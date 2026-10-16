@@ -14,7 +14,13 @@ const ONLY: Record<string, string[]> = {
 
 const DENY: Record<string, string[]> = {
   critic_verifier: ["chat_send", "chat_read", "topic_reply", "consult", "claim", "heartbeat", "subtask_add", "library"],
-  secretary: ["claim", "heartbeat", "state", "subtask_work", "subtask_done", "slot_snapshot", "subtask_add", "plan_request", "topic_reply", "topic_send", "topic_read", "rules", "library"],
+  // Помощнику владельца нельзя было закрыть свой шаг: subtask_work и
+  // subtask_done стояли здесь в запрете, и он трижды упирался в отказ по
+  // правам после выполненной работы (карточка kb-triage-mvbb2ecf, 16.10.2026).
+  // Запрет был избыточен: оба инструмента и так привязаны к своему слоту —
+  // inProcessRun отклоняет вызов с чужим id («Работай только в назначенном
+  // текущем слоте»), так что чужие шаги ими закрыть нельзя в принципе.
+  secretary: ["claim", "heartbeat", "state", "slot_snapshot", "subtask_add", "plan_request", "topic_reply", "topic_send", "topic_read", "rules", "library"],
   analyst: ["chat_send", "chat_read", "consult", "claim"],
   researcher: ["chat_read", "consult"],
   designer: ["chat_send", "chat_read"],
