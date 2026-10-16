@@ -43,7 +43,12 @@ export function ensureCoordinationCard(questionId:string,recipientId:string){
  publish(id);
 }
 export function coordinationCardData(row:{steps?:string|null}):Coordination|undefined{
- return parse(row.steps??null).coordination;
+ const c:Coordination|undefined=parse(row.steps??null).coordination;
+ if(!c || c.terminal)return c;
+ const q=db.prepare("SELECT status FROM chat_message_queue WHERE message_id=? AND role_id=?").get(c.question_id,c.recipient_id) as {status:string}|undefined;
+ if(q?.status==="failed" || q?.status==="superseded")return {...c,status:q.status==="failed"?"error":"cancelled",activity:q.status==="failed"?"Не удалось получить ответ":"Обращение отменено или относится к завершённой сессии",terminal:true};
+ if(q?.status==="pending" && !["delivered","busy"].includes(c.status))return {...c,status:"queued",activity:"Вопрос находится в очереди; запуск ещё не подтверждён"};
+ return c;
 }
 export function updateCoordination(questionId:string,recipientId:string,patch:Partial<Coordination>){
  const row=card(questionId,recipientId);if(!row)return;
