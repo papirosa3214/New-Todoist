@@ -1,0 +1,15 @@
+[
+  {"goto": "/tasks", "note": "Открываем список задач"},
+  {"wait": 800},
+  {"snap": "01-list"},
+  {"goto": "/tasks/archive", "note": "Архив — отдельный раздел"},
+  {"wait": 800},
+  {"snap": "02-archive-list"},
+  {"goto": "/tasks/617925cc-dca1-4e0e-9e24-9cf365e3cbdd", "note": "Открываем деталь архивной карточки (parent)"},
+  {"wait": 1500},
+  {"snap": "03-archive-detail"},
+  {"expect_no_text": "Cannot read properties", "note": "TypeError не должен появиться"},
+  {"expect_no_text": "TypeError", "note": "TypeError в UI"},
+  {"expect_visible": "text=Вернуть", "note": "Кнопка «Вернуть» доступна владельцу на архивной"},
+  {"expect_visible": "text=Удалить навсегда", "note": "Кнопка «Удалить навсегда» доступна"}
+]

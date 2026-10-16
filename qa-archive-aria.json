@@ -1,0 +1,12 @@
+[
+  {"goto": "/task/617925cc-dca1-4e0e-9e24-9cf365e3cbdd", "note": "Открываем деталь не-архивной карточки"},
+  {"wait": 2000},
+  {"snap": "01-detail"},
+  {"click": "button[aria-label='Отправить задачу в архив']", "note": "Кликаем по aria-label"},
+  {"wait": 1500},
+  {"snap": "02-after-click"},
+  {"expect_visible": "text=Отправить задачу в архив?", "note": "Появилось подтверждение"},
+  {"click": "text=Отправить", "note": "Подтверждаем"},
+  {"wait": 2000},
+  {"snap": "03-after-confirm"}
+]
