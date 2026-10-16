@@ -1324,7 +1324,10 @@ async function runRoleInProcessUnserialized(input: {
     // и без текущей задачи; пустой срез не вставляется.
     roleSliceBlock(role, taskId),
   ].join("\n\n");
-  const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
+  // Карточка и текущий шаг — для галочки «Навыки под задачу» (раздел JEV).
+  const workCard = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title: string; description: string | null } | undefined;
+  const workStep = input.subtaskId ? (db.prepare("SELECT title FROM subtasks WHERE id = ?").get(input.subtaskId) as { title: string } | undefined)?.title ?? null : null;
+  const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt, workCard ? { ...workCard, step: workStep } : undefined);
 
   // Снимок фактического system prompt, который модель получит в этом запуске.
 // Записывается в tasks.composed_prompt_snapshot — это «что видела модель»,

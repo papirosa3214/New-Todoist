@@ -4748,6 +4748,15 @@ const migrations: Migration[] = [
     if (!cols.has("subtask_role_enabled")) db.exec("ALTER TABLE jev_settings ADD COLUMN subtask_role_enabled INTEGER NOT NULL DEFAULT 0");
     if (!cols.has("subtask_role_min_confidence")) db.exec("ALTER TABLE jev_settings ADD COLUMN subtask_role_min_confidence REAL NOT NULL DEFAULT 0.6");
   } },
+  { id: "150_jev_memory_skills", description: "JEV: отбор памяти для роли, проверка записи в память, навыки под задачу — свои галочки", up: () => {
+    const cols = new Set((db.prepare("PRAGMA table_info(jev_settings)").all() as Array<{ name: string }>).map((c) => c.name));
+    const add = (name: string, ddl: string) => { if (!cols.has(name)) db.exec(`ALTER TABLE jev_settings ADD COLUMN ${name} ${ddl}`); };
+    add("memory_recall_enabled", "INTEGER NOT NULL DEFAULT 0");
+    add("memory_recall_min_confidence", "REAL NOT NULL DEFAULT 0.8");
+    add("memory_write_enabled", "INTEGER NOT NULL DEFAULT 0");
+    add("memory_write_min_confidence", "REAL NOT NULL DEFAULT 0.8");
+    add("skills_enabled", "INTEGER NOT NULL DEFAULT 0");
+  } },
 
 ];
 /**

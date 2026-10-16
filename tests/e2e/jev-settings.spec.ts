@@ -15,6 +15,11 @@ type S = {
   planProfileMinConfidence: number;
   subtaskRoleEnabled: boolean;
   subtaskRoleMinConfidence: number;
+  memoryRecallEnabled: boolean;
+  memoryRecallMinConfidence: number;
+  memoryWriteEnabled: boolean;
+  memoryWriteMinConfidence: number;
+  skillsEnabled: boolean;
   updatedAt: string;
 };
 
@@ -28,6 +33,11 @@ async function mockJev(context: BrowserContext, initial: Partial<S> = {}) {
     planProfileMinConfidence: 0.6,
     subtaskRoleEnabled: false,
     subtaskRoleMinConfidence: 0.6,
+    memoryRecallEnabled: false,
+    memoryRecallMinConfidence: 0.8,
+    memoryWriteEnabled: false,
+    memoryWriteMinConfidence: 0.8,
+    skillsEnabled: false,
     updatedAt: "2026-10-16 10:00:00",
     ...initial,
   };
@@ -106,13 +116,25 @@ test("галочка включает сценарий, проверка под�
   await expect(roles).toHaveAttribute("aria-checked", "true");
   expect(puts.at(-1)).toEqual({ subtaskRoleEnabled: true });
   await expect(page.getByText(/какой роли её отдать/)).toBeVisible();
+  for (const [name, field] of [
+    ["JEV для отбора памяти роли", "memoryRecallEnabled"],
+    ["JEV для проверки записи в память", "memoryWriteEnabled"],
+    ["JEV для подбора навыков под задачу", "skillsEnabled"],
+  ] as const) {
+    const sw = page.getByRole("switch", { name });
+    await sw.click();
+    await expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(puts.at(-1)).toEqual({ [field]: true });
+  }
+
   // Последнее описание не прячется под нижней панелью вкладок.
-  const last = page.getByText(/какой роли её отдать/);
+  const last = page.getByText(/роль получает все навыки/);
   await page.mouse.wheel(0, 4000);
   await page.waitForTimeout(400);
   const textBox = await last.boundingBox();
   const navTop = await page.locator("nav").last().evaluate((el) => el.getBoundingClientRect().top);
   expect(textBox!.y + textBox!.height).toBeLessThanOrEqual(navTop);
+  await page.screenshot({ path: "test-results/jev-settings-bottom.png" });
 
   await page.getByRole("button", { name: "Проверить подключение" }).click();
   await expect(

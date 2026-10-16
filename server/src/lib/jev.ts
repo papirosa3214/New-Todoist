@@ -18,16 +18,20 @@
 import db from "../db.js";
 import { encryptWebhookSecret, decryptWebhookSecret } from "./secretBox.js";
 
+/** instructions — строка или объект: вопрос в одном поле, данные, на которые
+ *  он ссылается (`имя` в обратных кавычках), — в других (docs: API reference). */
+export type JevInstructions = string | Record<string, unknown>;
+
 export type JevQuestion =
   | {
       type: "choice";
-      instructions: string;
+      instructions: JevInstructions;
       criteria: Record<string, string | null>;
     }
-  | { type: "score"; instructions: string; criteria: string[] }
+  | { type: "score"; instructions: JevInstructions; criteria: string[] }
   | {
       type: "noul";
-      instructions: string;
+      instructions: JevInstructions;
       criteria?: { true?: string; false?: string } | null;
     };
 
@@ -52,30 +56,55 @@ export interface JevResult {
   usage?: { input_tokens: number; output_tokens: number };
 }
 
+/** Сценарии JEV: колонка-галочка, колонка-порог (если есть) и имена полей
+ *  наружу. Одна таблица вместо копий кода на каждый сценарий: новый
+ *  сценарий — новая строка здесь и колонки в миграции. */
+const SCENARIOS = [
+  {
+    flag: "plan_profile_enabled",
+    conf: "plan_profile_min_confidence",
+    key: "planProfile",
+  },
+  {
+    flag: "subtask_role_enabled",
+    conf: "subtask_role_min_confidence",
+    key: "subtaskRole",
+  },
+  {
+    flag: "memory_recall_enabled",
+    conf: "memory_recall_min_confidence",
+    key: "memoryRecall",
+  },
+  {
+    flag: "memory_write_enabled",
+    conf: "memory_write_min_confidence",
+    key: "memoryWrite",
+  },
+  { flag: "skills_enabled", conf: null, key: "skills" },
+] as const;
+
+type ScenarioKey = (typeof SCENARIOS)[number]["key"];
+
 interface JevRow {
   base_url: string;
   model: string;
   timeout_ms: number;
   api_key_enc: Buffer | null;
-  plan_profile_enabled: number;
-  plan_profile_min_confidence: number;
-  subtask_role_enabled: number;
-  subtask_role_min_confidence: number;
   updated_at: string;
+  [column: string]: unknown;
 }
 
-/** То, что видит экран настроек: без ключа, только признак его наличия. */
-export interface JevPublicSettings {
+/** То, что видит экран настроек: без ключа, только признак его наличия.
+ *  По сценарию — `<key>Enabled` и, где есть порог, `<key>MinConfidence`. */
+export type JevPublicSettings = {
   baseUrl: string;
   model: string;
   timeoutMs: number;
   hasApiKey: boolean;
-  planProfileEnabled: boolean;
-  planProfileMinConfidence: number;
-  subtaskRoleEnabled: boolean;
-  subtaskRoleMinConfidence: number;
   updatedAt: string;
-}
+} & { [K in `${ScenarioKey}Enabled`]: boolean } & {
+  [K in `${Exclude<ScenarioKey, "skills">}MinConfidence`]: number;
+};
 
 function row(): JevRow {
   return db.prepare("SELECT * FROM jev_settings WHERE id = 1").get() as JevRow;
@@ -83,34 +112,29 @@ function row(): JevRow {
 
 export function getJevSettings(): JevPublicSettings {
   const r = row();
-  return {
+  const out: Record<string, unknown> = {
     baseUrl: r.base_url,
     model: r.model,
     timeoutMs: r.timeout_ms,
     hasApiKey: Boolean(r.api_key_enc),
-    planProfileEnabled: Boolean(r.plan_profile_enabled),
-    planProfileMinConfidence: r.plan_profile_min_confidence,
-    subtaskRoleEnabled: Boolean(r.subtask_role_enabled),
-    subtaskRoleMinConfidence: r.subtask_role_min_confidence,
     updatedAt: r.updated_at,
   };
+  for (const sc of SCENARIOS) {
+    out[`${sc.key}Enabled`] = Boolean(r[sc.flag]);
+    if (sc.conf) out[`${sc.key}MinConfidence`] = r[sc.conf];
+  }
+  return out as JevPublicSettings;
 }
 
 export class JevSettingsError extends Error {}
 
 /** Сохранить настройки. Пустой/отсутствующий apiKey ключ НЕ стирает —
  *  как у Ekko: поле ключа на экране всегда пустое, и сохранение остальных
- *  полей не должно молча отключать подключение. */
-export function saveJevSettings(input: {
-  baseUrl?: unknown;
-  model?: unknown;
-  timeoutMs?: unknown;
-  apiKey?: unknown;
-  planProfileEnabled?: unknown;
-  planProfileMinConfidence?: unknown;
-  subtaskRoleEnabled?: unknown;
-  subtaskRoleMinConfidence?: unknown;
-}): JevPublicSettings {
+ *  полей не должно молча отключать подключение. Поля, которых нет во
+ *  входе, остаются как были. */
+export function saveJevSettings(
+  input: Record<string, unknown>,
+): JevPublicSettings {
   const cur = row();
   const baseUrl =
     input.baseUrl === undefined
@@ -131,40 +155,44 @@ export function saveJevSettings(input: {
     input.timeoutMs === undefined ? cur.timeout_ms : Number(input.timeoutMs);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 500 || timeoutMs > 60000)
     throw new JevSettingsError("Тайм-аут — целое от 500 до 60000 мс");
-  const minConf =
-    input.planProfileMinConfidence === undefined
-      ? cur.plan_profile_min_confidence
-      : Number(input.planProfileMinConfidence);
-  if (!Number.isFinite(minConf) || minConf < 0 || minConf > 1)
-    throw new JevSettingsError("Порог уверенности — от 0 до 1");
-  const enabled =
-    input.planProfileEnabled === undefined
-      ? cur.plan_profile_enabled
-      : input.planProfileEnabled === true
-        ? 1
-        : 0;
-  const subtaskMinConf =
-    input.subtaskRoleMinConfidence === undefined
-      ? cur.subtask_role_min_confidence
-      : Number(input.subtaskRoleMinConfidence);
-  if (!Number.isFinite(subtaskMinConf) || subtaskMinConf < 0 || subtaskMinConf > 1)
-    throw new JevSettingsError("Порог уверенности — от 0 до 1");
-  const subtaskEnabled =
-    input.subtaskRoleEnabled === undefined
-      ? cur.subtask_role_enabled
-      : input.subtaskRoleEnabled === true
-        ? 1
-        : 0;
+
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  for (const sc of SCENARIOS) {
+    const flag = input[`${sc.key}Enabled`];
+    if (flag !== undefined) {
+      sets.push(`${sc.flag}=?`);
+      values.push(flag === true ? 1 : 0);
+    }
+    const conf = sc.conf ? input[`${sc.key}MinConfidence`] : undefined;
+    if (sc.conf && conf !== undefined) {
+      const n = Number(conf);
+      if (!Number.isFinite(n) || n < 0 || n > 1)
+        throw new JevSettingsError("Порог уверенности — от 0 до 1");
+      sets.push(`${sc.conf}=?`);
+      values.push(n);
+    }
+  }
 
   const key = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
   const keyEnc = key ? encryptWebhookSecret(key) : cur.api_key_enc;
 
   db.prepare(
     `UPDATE jev_settings SET base_url=?, model=?, timeout_ms=?, api_key_enc=?,
-       plan_profile_enabled=?, plan_profile_min_confidence=?,
-       subtask_role_enabled=?, subtask_role_min_confidence=?, updated_at=datetime('now') WHERE id=1`,
-  ).run(baseUrl, model, timeoutMs, keyEnc, enabled, minConf, subtaskEnabled, subtaskMinConf);
+       ${sets.map((x) => x + ", ").join("")}updated_at=datetime('now') WHERE id=1`,
+  ).run(baseUrl, model, timeoutMs, keyEnc, ...values);
   return getJevSettings();
+}
+
+/** Сценарий включён и есть ключ — его порог (или 0, если порога нет);
+ *  иначе null: вызывающий идёт прежней дорогой. */
+export function jevScenario(
+  key: ScenarioKey,
+): { minConfidence: number } | null {
+  const r = row();
+  const sc = SCENARIOS.find((x) => x.key === key)!;
+  if (!r[sc.flag] || !r.api_key_enc) return null;
+  return { minConfidence: sc.conf ? Number(r[sc.conf]) : 0 };
 }
 
 /** Удалить ключ и сбросить всё к умолчаниям. */
@@ -190,6 +218,7 @@ async function call(
   method: "GET" | "POST",
   path: string,
   body?: unknown,
+  timeoutMs?: number,
 ): Promise<any> {
   const res = await fetch(`${r.base_url}${path}`, {
     method,
@@ -199,7 +228,7 @@ async function call(
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(r.timeout_ms),
+    signal: AbortSignal.timeout(timeoutMs ?? r.timeout_ms),
   });
   const text = await res.text();
   let parsed: any = text;
@@ -296,15 +325,23 @@ export async function testJevConnection(): Promise<
 export async function evaluateJev(
   state: string | Record<string, unknown>,
   questions: Record<string, JevQuestion>,
+  /** Свой предел ожидания (не больше общего тайм-аута подключения): память
+   *  подбирается на каждом ходу роли, и ждать там 10 с нельзя. */
+  opts: { timeoutMs?: number } = {},
 ): Promise<JevResult | null> {
   const r = row();
   const key = apiKey(r);
   if (!key) return null;
   try {
     const body = { model: r.model, state, questions };
+    const limit = opts.timeoutMs
+      ? Math.min(opts.timeoutMs, r.timeout_ms)
+      : undefined;
     const out = isJevai(r)
-      ? unwrapJevai(await call(r, key, "POST", "/api/v1/decisions", body))
-      : await call(r, key, "POST", "/v1/systemone", body);
+      ? unwrapJevai(
+          await call(r, key, "POST", "/api/v1/decisions", body, limit),
+        )
+      : await call(r, key, "POST", "/v1/systemone", body, limit);
     if (
       !out ||
       typeof out !== "object" ||
@@ -321,14 +358,10 @@ export async function evaluateJev(
 
 /** Только для сценариев: включён ли выбор плана и есть ли чем его делать. */
 export function jevPlanProfileConfig(): { minConfidence: number } | null {
-  const r = row();
-  if (!r.plan_profile_enabled || !r.api_key_enc) return null;
-  return { minConfidence: r.plan_profile_min_confidence };
+  return jevScenario("planProfile");
 }
 
 /** Только для сценариев: включён ли подбор ролей для подзадач и есть ли ключ. */
 export function jevSubtaskRoleConfig(): { minConfidence: number } | null {
-  const r = row();
-  if (!r.subtask_role_enabled || !r.api_key_enc) return null;
-  return { minConfidence: r.subtask_role_min_confidence };
+  return jevScenario("subtaskRole");
 }

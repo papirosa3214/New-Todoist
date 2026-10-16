@@ -17,6 +17,7 @@
 // задание закреплённые записи и самые близкие к теме (memoryBlock).
 import crypto from "node:crypto";
 import db from "../db.js";
+import { filterMemoryByJev, reviewMemoryWriteByJev, MemoryWriteRejected } from "./memorySkillsJev.js";
 
 export type MemoryScope = "team" | "role" | "project";
 export type MemoryKind = "fact" | "lesson" | "preference" | "file";
@@ -198,6 +199,17 @@ export async function remember(input: WriteInput, author: Author): Promise<{ mem
   if (!KINDS.includes(kind) || kind === "file") throw new MemoryError("kind: fact | lesson | preference");
   const where = checkScope(input.scope, input.role_key, input.project_id);
   const title = clean(input.title, 200) || null;
+  // Галочка «Проверка записи в память» (раздел JEV): только записи ролей,
+  // владелец пишет что хочет. JEV уверен, что это разовая деталь, — отказ
+  // с объяснением; не ответил или сомневается — запись идёт как обычно.
+  if (author.kind === "role") {
+    try {
+      await reviewMemoryWriteByJev({ kind, title, text });
+    } catch (err) {
+      if (err instanceof MemoryWriteRejected) throw new MemoryError(err.message);
+      throw err;
+    }
+  }
   const vec = await embed(title ? `${title}\n${text}` : text);
 
   if (vec) {
@@ -415,9 +427,13 @@ export async function recall(args: { roleKey: string | null; projectId?: string 
   }
   // Владелец весомее роли; закреплённое — вперёд.
   items.sort((a, b) => Number(b.pinned) - Number(a.pinned) || (b.score + (b.source === "owner" ? 0.05 : 0)) - (a.score + (a.source === "owner" ? 0.05 : 0)));
+  // Галочка «Отбор памяти для роли» (раздел JEV): из найденного по сходству
+  // JEV убирает уверенно ненужное и ставит полезное вперёд. Не ответил —
+  // исходный порядок.
+  const ordered = (await filterMemoryByJev(query, items)) ?? items;
   const picked: RecallItem[] = [];
   const seenFiles = new Map<string, number>();
-  for (const item of items) {
+  for (const item of ordered) {
     // Из одного файла — не больше двух кусков, иначе он забьёт всё.
     if (item.kind === "file") {
       const n = seenFiles.get(item.id) ?? 0;

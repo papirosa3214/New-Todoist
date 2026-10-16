@@ -179,6 +179,43 @@ export function JevScreen() {
           карточки. Где JEV не уверен, роль подбирается как раньше, по смыслу
           текста.
         </Scenario>
+        <Scenario
+          title="Отбор памяти для роли"
+          ariaLabel="JEV для отбора памяти роли"
+          checked={data.memoryRecallEnabled}
+          disabled={!data.hasApiKey || save.isPending}
+          onChange={(next) => save.mutate({ memoryRecallEnabled: next })}
+        >
+          Перед каждым ходом роль получает записи из памяти команды, похожие на
+          её работу. JEV проверяет до 15 найденных: уверенно ненужные убирает,
+          полезные ставит вперёд. Закреплённые записи не трогает. Ждёт не
+          дольше 3 секунд — иначе память идёт как раньше.
+        </Scenario>
+        <Scenario
+          title="Проверка записи в память"
+          ariaLabel="JEV для проверки записи в память"
+          checked={data.memoryWriteEnabled}
+          disabled={!data.hasApiKey || save.isPending}
+          onChange={(next) => save.mutate({ memoryWriteEnabled: next })}
+        >
+          Когда роль сохраняет факт, урок или предпочтение, JEV проверяет, что
+          это знание на будущее, а не разовая деталь текущей работы. Если он
+          уверен, что это мусор, запись не сохраняется, и роль получает
+          объяснение. Ваши собственные записи не проверяются.
+        </Scenario>
+        <Scenario
+          title="Навыки под задачу"
+          ariaLabel="JEV для подбора навыков под задачу"
+          checked={data.skillsEnabled}
+          disabled={!data.hasApiKey || save.isPending}
+          onChange={(next) => save.mutate({ skillsEnabled: next })}
+        >
+          Когда роль берётся за карточку, она получает не все свои навыки, а
+          только нужные этой работе — JEV отбирает их по карточке и текущему
+          шагу. Работает у ролей, где навыков больше шести (сейчас — дизайнер,
+          разработчик, архитектор). Если JEV ничего не выбрал или не ответил,
+          роль получает все навыки.
+        </Scenario>
 
         {data.hasApiKey && (
           <Button

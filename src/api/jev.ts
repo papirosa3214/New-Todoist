@@ -13,6 +13,11 @@ export interface JevSettings {
   planProfileMinConfidence: number;
   subtaskRoleEnabled: boolean;
   subtaskRoleMinConfidence: number;
+  memoryRecallEnabled: boolean;
+  memoryRecallMinConfidence: number;
+  memoryWriteEnabled: boolean;
+  memoryWriteMinConfidence: number;
+  skillsEnabled: boolean;
   updatedAt: string;
 }
 

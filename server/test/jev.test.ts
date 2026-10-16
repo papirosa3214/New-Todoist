@@ -15,6 +15,7 @@ import {
   testJevConnection,
 } from "../src/lib/jev.js";
 import { pickPlanProfileByJev } from "../src/lib/planProfileJev.js";
+import { filterMemoryByJev, reviewMemoryWriteByJev, selectSkillsByJev, MemoryWriteRejected } from "../src/lib/memorySkillsJev.js";
 import { proposalFor } from "../src/routes/task-collaboration-plans.js";
 import { buildApp } from "../src/index.js";
 
@@ -245,3 +246,87 @@ describe("шлюз jevai.org", () => {
     expect(await testJevConnection()).toEqual({ ok: false, error: "HTTP 502" });
   });
 });
+
+function answers(a: Record<string, unknown>) {
+  return vi.fn(async () => new Response(JSON.stringify({ model: "jev-1.13.0", answers: a, usage: { input_tokens: 1, output_tokens: 0 } }), { status: 200 }));
+}
+
+describe("сценарий: отбор памяти для роли", () => {
+  const mem = (text: string, pinned = false) => ({ text, title: null, pinned });
+
+  it("выключено — null, JEV не зовётся", async () => {
+    saveJevSettings({ apiKey: "apik_test-1234567890" });
+    const spy = vi.fn(); globalThis.fetch = spy as any;
+    expect(await filterMemoryByJev("задача", [mem("a")])).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("уверенно ненужное выкинуто, полезное вперёд, закреплённое не трогается", async () => {
+    saveJevSettings({ apiKey: "apik_test-1234567890", memoryRecallEnabled: true, memoryRecallMinConfidence: 0.8 });
+    globalThis.fetch = answers({ m0: { type: "noul", noul: 0.05 }, m1: { type: "noul", noul: 0.4 }, m2: { type: "noul", noul: 0.95 } }) as any;
+    const pin = mem("закреплено", true);
+    const out = await filterMemoryByJev("задача", [pin, mem("мусор"), mem("сомнительно"), mem("полезно")]);
+    expect(out!.map((m) => m.text)).toEqual(["закреплено", "полезно", "сомнительно"]);
+  });
+
+  it("JEV упал — null, роль получает исходную выдачу", async () => {
+    saveJevSettings({ apiKey: "apik_test-1234567890", memoryRecallEnabled: true });
+    globalThis.fetch = vi.fn(async () => new Response("x", { status: 529 })) as any;
+    expect(await filterMemoryByJev("задача", [mem("a"), mem("b")])).toBeNull();
+  });
+});
+
+describe("сценарий: проверка записи в память", () => {
+  it("уверенно разовая деталь — отказ с объяснением", async () => {
+    saveJevSettings({ apiKey: "apik_test-1234567890", memoryWriteEnabled: true, memoryWriteMinConfidence: 0.8 });
+    globalThis.fetch = answers({ durable: { type: "noul", noul: 0.1 } }) as any;
+    await expect(reviewMemoryWriteByJev({ kind: "fact", title: null, text: "сейчас открыл файл" })).rejects.toBeInstanceOf(MemoryWriteRejected);
+  });
+
+  it("сомнение или отказ JEV — запись проходит", async () => {
+    saveJevSettings({ apiKey: "apik_test-1234567890", memoryWriteEnabled: true, memoryWriteMinConfidence: 0.8 });
+    globalThis.fetch = answers({ durable: { type: "noul", noul: 0.4 } }) as any;
+    await expect(reviewMemoryWriteByJev({ kind: "lesson", title: null, text: "x" })).resolves.toBeUndefined();
+    globalThis.fetch = vi.fn(async () => new Response("x", { status: 500 })) as any;
+    await expect(reviewMemoryWriteByJev({ kind: "lesson", title: null, text: "x" })).resolves.toBeUndefined();
+  });
+
+  it("запись владельца не проверяется, запись роли — через remember отклоняется", async () => {
+    saveJevSettings({ apiKey: "apik_test-1234567890", memoryWriteEnabled: true });
+    globalThis.fetch = answers({ durable: { type: "noul", noul: 0.0 } }) as any;
+    const { remember } = await import("../src/lib/memory.js");
+    await expect(remember({ scope: "team", kind: "fact", text: "разовая деталь" }, { id: "u-x", kind: "role" })).rejects.toThrow(/не сохранена/);
+  });
+});
+
+describe("сценарий: навыки под задачу", () => {
+  const sk = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `s${i}`, description: `навык ${i}` }));
+
+  it("навыков мало (<7) — выбирать не из чего, JEV не зовётся", async () => {
+    saveJevSettings({ apiKey: "apik_test-1234567890", skillsEnabled: true });
+    const spy = vi.fn(); globalThis.fetch = spy as any;
+    expect(await selectSkillsByJev({ title: "t", description: null }, sk(6))).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("оставляет нужные; навык без ответа — оставляет", async () => {
+    saveJevSettings({ apiKey: "apik_test-1234567890", skillsEnabled: true });
+    const a: Record<string, unknown> = {};
+    for (let i = 0; i < 8; i++) a[`s${i}`] = { type: "noul", noul: i < 2 ? 0.9 : 0.1 };
+    delete a.s7;
+    globalThis.fetch = answers(a) as any;
+    const keep = await selectSkillsByJev({ title: "t", description: null }, sk(8));
+    expect([...keep!].sort()).toEqual(["s0", "s1", "s7"]);
+  });
+
+  it("JEV ничего не выбрал или упал — null, роль получает все навыки", async () => {
+    saveJevSettings({ apiKey: "apik_test-1234567890", skillsEnabled: true });
+    const a: Record<string, unknown> = {};
+    for (let i = 0; i < 8; i++) a[`s${i}`] = { type: "noul", noul: 0.0 };
+    globalThis.fetch = answers(a) as any;
+    expect(await selectSkillsByJev({ title: "t", description: null }, sk(8))).toBeNull();
+    globalThis.fetch = vi.fn(async () => new Response("x", { status: 502 })) as any;
+    expect(await selectSkillsByJev({ title: "t", description: null }, sk(8))).toBeNull();
+  });
+});
+

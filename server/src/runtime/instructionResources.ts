@@ -11,6 +11,7 @@ import {
 import {registerInstructionBlock, composeLayer, LAYER_CATALOG, type RunMode} from '../lib/roleContextResolver.js';
 import {INSTRUCTION_DEFAULTS} from './instructionDefaults.js';
 import {ensureRoleHome, roleHomeInstruction} from './roleHome.js';
+import { selectSkillsByJev } from "../lib/memorySkillsJev.js";
 const ROLE_RESOURCE_MODES: RunMode[] = ['work','resume','reply','review','subtask','chat'];
 const keyFor=(file:string)=>'resource.'+crypto.createHash('sha256').update(file).digest('hex').slice(0,20);
 const builtinTools=(cwd:string)=>[...new Map([...createCodingTools(cwd),...createReadOnlyTools(cwd)].map(t=>[t.name,t])).values()];
@@ -118,7 +119,7 @@ export async function discoverChatResources(role:string) {
 }
 
 /** Тот же набор файлов роли; cwd задачи не меняется, executable extensions отключены. */
-export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string):Promise<ResourceLoader & {disposeResources:()=>void}> {
+export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null}):Promise<ResourceLoader & {disposeResources:()=>void}> {
  const home=ensureRoleHome(role);
  const discovered=await discoverChatResources(role);
  let snapshotDir:string|undefined;
@@ -135,12 +136,16 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
   }
   return {...loaded.skills[0],baseDir:skill.baseDir};
  });
+ // Галочка «Навыки под задачу» (раздел JEV): у роли много навыков — JEV
+ // оставляет нужные этой карточке. Не включено/не ответил — все навыки.
+ const keep=work ? await selectSkillsByJev(work,skills.map(s=>({name:s.name,description:s.description}))).catch(()=>null) : null;
+ const usedSkills=keep ? skills.filter(s=>keep.has(s.name)) : skills;
  const loader=new DefaultResourceLoader({
   cwd,agentDir:home.dir,settingsManager:SettingsManager.inMemory(),
   noExtensions:true,noThemes:true,noSkills:true,noPromptTemplates:true,noContextFiles:true,
   systemPrompt:systemPrompt+'\n\n'+roleHomeInstruction(role),
   appendSystemPrompt:[],
-  skillsOverride:()=>({skills,diagnostics:discovered.diagnostics}),
+  skillsOverride:()=>({skills:usedSkills,diagnostics:discovered.diagnostics}),
   agentsFilesOverride:()=>({agentsFiles:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))!.effective}))}),
  });
  await loader.reload();
