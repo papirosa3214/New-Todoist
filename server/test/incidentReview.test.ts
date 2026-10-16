@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { buildApp } from "../src/index.js";
 import db from "../src/db.js";
 import { seedRoleAccounts, demoteSeededOwner } from "./helpers/seedOwner.js";
+import { finishCompletedPlans } from "../src/runtime/planSubtaskAdmission.js";
 import { createResultVersion } from "../src/resultVersions.js";
 
 let app: any, owner: string, critic: string;
@@ -48,4 +49,30 @@ it("обычная задача после одобрения остаётся �
   const res = await approve(f);
   expect(res.statusCode, res.body).toBe(201);
   expect((db.prepare("SELECT status FROM tasks WHERE id=?").get(f.id) as any).status).toBe("active");
+});
+
+it("восстанавливает старую сданную поломку без проверяющего ровно один раз", () => {
+  const f = fixture(true);
+  const plan = (db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=?").get(f.id) as any).id;
+  db.prepare("DELETE FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key='final_review_x'").run(plan);
+  db.prepare("DELETE FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key='final_review_x'").run(plan);
+  finishCompletedPlans();
+  expect(db.prepare("SELECT COUNT(*) n FROM role_run_jobs WHERE task_id=? AND reason='review'").get(f.id)).toEqual({n:1});
+  expect(db.prepare("SELECT COUNT(*) n FROM subtasks WHERE task_id=? AND done=0").get(f.id)).toEqual({n:1});
+  finishCompletedPlans();
+  expect(db.prepare("SELECT COUNT(*) n FROM role_run_jobs WHERE task_id=? AND reason='review'").get(f.id)).toEqual({n:1});
+  expect(db.prepare("SELECT status FROM tasks WHERE id=?").get(f.id)).toEqual({status:'active'});
+});
+
+it("не запускает проверку обычной сданной задачи и незаконченной поломки", () => {
+  const normal = fixture(false), unfinished = fixture(true);
+  for (const f of [normal, unfinished]) {
+    const plan = (db.prepare("SELECT id FROM task_collaboration_plans WHERE task_id=?").get(f.id) as any).id;
+    db.prepare("DELETE FROM subtasks WHERE collaboration_plan_id=? AND plan_node_key='final_review_x'").run(plan);
+    db.prepare("DELETE FROM task_collaboration_plan_nodes WHERE plan_id=? AND slot_key='final_review_x'").run(plan);
+  }
+  db.prepare("UPDATE subtasks SET done=0 WHERE task_id=?").run(unfinished.id);
+  finishCompletedPlans();
+  for (const f of [normal, unfinished])
+    expect(db.prepare("SELECT COUNT(*) n FROM role_run_jobs WHERE task_id=?").get(f.id)).toEqual({n:0});
 });

@@ -286,3 +286,33 @@ export function markPlanFinalReviewerWaiting(taskId: string) {
     db.prepare(`UPDATE subtasks SET agent_state='todo',agent_heartbeat_at=NULL WHERE task_id=? AND done=0 AND EXISTS(SELECT 1 FROM task_collaboration_plan_nodes n WHERE n.plan_id=subtasks.collaboration_plan_id AND n.slot_key=subtasks.plan_node_key AND n.instructions LIKE ?)`)
         .run(taskId, `${FINAL_REVIEW_MARKER}%`);
 }
+
+// Incidents submitted before mandatory final review was introduced can already
+// be in review with no verifier node. Startup recovery must not treat review as
+// proof that a review job exists. Never replay a verdict or unfinished work.
+export function recoverSubmittedIncidentReviews(): number {
+    return db.transaction(() => {
+        const stranded = db.prepare(`
+            SELECT p.id AS plan_id, t.id AS task_id, t.creator_id
+            FROM tasks t JOIN task_collaboration_plans p ON p.task_id=t.id
+            WHERE t.status='active' AND t.agent_state='review'
+              AND t.incident_key IS NOT NULL AND t.archived_at IS NULL
+              AND p.status='approved'
+              AND p.revision=(SELECT MAX(p2.revision) FROM task_collaboration_plans p2
+                              WHERE p2.task_id=t.id AND p2.status='approved')
+              AND EXISTS(SELECT 1 FROM subtasks s WHERE s.collaboration_plan_id=p.id)
+              AND NOT EXISTS(SELECT 1 FROM subtasks s WHERE s.collaboration_plan_id=p.id AND s.done=0)
+              AND NOT EXISTS(SELECT 1 FROM task_collaboration_plan_nodes n
+                             WHERE n.plan_id=p.id AND n.instructions LIKE ?)
+              AND NOT EXISTS(SELECT 1 FROM reviews r WHERE r.task_id=t.id)
+              AND NOT EXISTS(SELECT 1 FROM task_collaboration_plan_ops o WHERE o.plan_id=p.id AND o.status='proposed')
+        `).all(FINAL_REVIEW_MARKER + "%") as Array<{plan_id:string;task_id:string;creator_id:string}>;
+        for (const row of stranded) {
+            const reviewer = ensurePlanFinalReviewer(row.plan_id, row.task_id);
+            queuePlanFinalReview(reviewer.id, row.creator_id);
+            logEvent({taskId:row.task_id, actorId:null, kind:"incident_review_recovered",
+                      field:row.plan_id, toValue:reviewer.id});
+        }
+        return stranded.length;
+    })();
+}

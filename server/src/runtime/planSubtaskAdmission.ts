@@ -4,7 +4,7 @@ export { artifactHasEvidence } from "./planArtifactGate.js";
 import { branchMembership } from "./branchPlan.js";
 import { nodePhase, parentPrepPending } from "./branchPhase.js";
 import { unmetDependencyIds } from "../enricher.js";
-import { ensureBranchAssembler, ensurePlanFinalReviewer, isPlanFinalReviewStep, queuePlanFinalReview, FINAL_REVIEW_MARKER } from "./planReviewLifecycle.js";
+import { recoverSubmittedIncidentReviews, ensureBranchAssembler, ensurePlanFinalReviewer, isPlanFinalReviewStep, queuePlanFinalReview, FINAL_REVIEW_MARKER } from "./planReviewLifecycle.js";
 import crypto from "node:crypto";
 import db from "../db.js";
 import { logEvent } from "../agentState.js";
@@ -741,7 +741,7 @@ export function finishCompletedPlans(): number {
        JOIN tasks t ON t.id = p.task_id
       WHERE p.status = 'approved' AND t.status = 'active' AND COALESCE(t.agent_state, '') <> 'review'`,
   ).all() as Array<{ id: string; task_id: string }>;
-  let finished = 0;
+  let finished = recoverSubmittedIncidentReviews();
   for (const plan of plans) {
     if (finishPlanIfComplete(plan.id, plan.task_id, null)) finished += 1;
   }

@@ -187,3 +187,13 @@ Code: server/src/lib/reviewHistory.ts; migration132_review_history. Startup and 
 | Дата | Что | Что сделано |
 | --- | --- | --- |
 | — | поломок не было | — |
+
+
+## 16.10.2026 — восстановление сданных поломок без Критика
+- Место: finishCompletedPlans → recoverSubmittedIncidentReviews при запуске.
+- Проверка механизма: server/test/incidentReview.test.ts воспроизводит старую
+  поломку в review без узла и проверяет появление одного задания, повтор без дубля,
+  отсутствие вмешательства в обычные и незавершённые задачи.
+- Журнал: incident_review_recovered в task_events; штатная очередь ведёт ошибки запуска.
+- Инцидент: поломка Ollama сдана до внедрения автоприёмки; recovery пропускал review.
+- Разбор: docs/2026-10-16-incident-review-recovery.md.
