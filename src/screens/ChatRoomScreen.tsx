@@ -40,6 +40,7 @@ import {
   ScreenHeader,
 } from "../components/UI";
 import { useDialog } from "../components/Dialog";
+import { SmoothText } from "../components/SmoothText";
 import type { ApiChatRoomMessage } from "../api/types";
 
 // Отступ в px от низа ленты, при котором пользователь считается
@@ -308,7 +309,7 @@ function MessageBubble({
             mine ? "bg-red text-white" : "bg-card text-text"
           }`}
         >
-          {msg.text}
+          <SmoothText text={msg.text} />
         </div>
  <div className="tf-caption text-dim mt-0.5 px-1">
           {formatAbsoluteTime(msg.created_at)}

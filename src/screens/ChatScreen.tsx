@@ -23,6 +23,7 @@ import {
 } from "../components/UI";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatStatsSheet } from "../components/ChatStatsSheet";
+import { SmoothText } from "../components/SmoothText";
 
 /**
  * Кому адресовано — строкой над пузырём (28.08.2026, владелец: «как я должен
@@ -87,7 +88,7 @@ function ChatBubble({
                   : "bg-card text-text"
             }`}
           >
-            {msg.text}
+            <SmoothText text={msg.text} />
           </div>
         )}
         {/* Приложенные файлы. Картинка показывается сразу — за ней чаще
