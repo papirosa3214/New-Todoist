@@ -25,15 +25,25 @@ vi.mock("../src/runtime/inProcessRun.js", async (importOriginal) => {
 
 // Упавший старт новой попытки — отдельный сценарий уведомления
 // (`stalled_restart_failed`), флагом включается только в нужном тесте.
-const admission = vi.hoisted(() => ({ failNext: false }));
+// `holdSlot` воспроизводит обрыв боевой цепочки: слот держит умерший
+// запуск, `acquireSlotSession` ждёт его `release()` и не разрешается
+// никогда — подтверждения старта не будет (дефект D1).
+const admission = vi.hoisted(() => ({ failNext: false, holdSlot: false }));
 vi.mock("../src/runtime/planSubtaskAdmission.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/runtime/planSubtaskAdmission.js")>();
   return {
     ...actual,
-    startPlanSubtaskRun: (subtaskId: string, actorId: string) =>
-      admission.failNext
-        ? Promise.resolve({ ok: false as const, error: "слот держит мёртвый запуск" })
-        : actual.startPlanSubtaskRun(subtaskId, actorId),
+    startPlanSubtaskRun: async (subtaskId: string, actorId: string) => {
+      if (admission.failNext) return { ok: false as const, error: "слот держит мёртвый запуск" };
+      if (admission.holdSlot) {
+        const { acquireSlotSession } = await import("../src/runtime/slotSession.js");
+        // Живая аренда слота, а не заглушка: тест сам занимает её первым,
+        // здесь мы ждём чужой `release()`, которого не будет.
+        await acquireSlotSession(subtaskId);
+        return await new Promise<never>(() => {});
+      }
+      return actual.startPlanSubtaskRun(subtaskId, actorId);
+    },
   };
 });
 
@@ -42,7 +52,7 @@ import { buildApp } from "../src/index.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { runStalledStepWatch } from "../src/runtime/stalledStepWatcher.js";
 import { wakeOrchestratorStalled } from "../src/runtime/orchestratorWake.js";
-import { slotSessionDirectory } from "../src/runtime/slotSession.js";
+import { slotSessionDirectory, acquireSlotSession, forceReleaseSlotSession } from "../src/runtime/slotSession.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
 // Каталог сессий берём из того же корня, что и боевой `slotSessionDirectory`
@@ -186,6 +196,8 @@ describe("stalledStepWatcher", () => {
 
   beforeEach(async () => {
     admission.failNext = false;
+    admission.holdSlot = false;
+    delete process.env.TASKFLOW_STALLED_START_WAIT_MS;
     db.prepare("DELETE FROM notifications WHERE type = 'stalled_blocked'").run();
     db.prepare("DELETE FROM task_events WHERE kind LIKE 'stalled_step_%'").run();
     // Уведомления сторожа живут в личном чате оркестратора и не каскадом
@@ -421,16 +433,110 @@ describe("stalledStepWatcher", () => {
     expect(orchQueue()).toHaveLength(1);
   });
 
-  it("упавший старт новой попытки — сообщение stalled_restart_failed с текстом ошибки", async () => {
+  it("упавший старт новой попытки — после сообщения о зависании приходит stalled_restart_failed с текстом ошибки", async () => {
     admission.failNext = true;
     seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
     const report = await runStalledStepWatch();
     expect(report.restarted).toBe(1);
     const messages = orchMessages();
+    // Первым уходит сообщение о самом зависании — его результат от
+    // старта не зависит, второй несёт уже отказ перезапуска.
+    expect(messages).toHaveLength(2);
+    const key = messages[0].id.replace("orch-stalled_restarted:", "");
+    expect(messages[0].id).toBe(`orch-stalled_restarted:${key}`);
+    expect(messages[1].id).toBe(`orch-stalled_restart_failed:${key}`);
+    expect(messages[1].text).toContain("Запуск не удался");
+    expect(messages[1].text).toContain("слот держит мёртвый запуск");
+    expect(orchQueue()).toHaveLength(2);
+  });
+
+  // Дефект D1 (ревью критика 16.10.2026): уведомление было написано в
+  // .then() ПОСЛЕ await startPlanSubtaskRun, а тот ждёт аренду слота.
+  // Умерший держатель слота не отпускает аренду никогда — сообщения не
+  // было вовсе, а тик сторожа не завершался и тот же флаг busy не
+  // сбрасывался: сторож переставал смотреть за всеми узлами до рестарта
+  // сервера. Ниже — боевая форма: аренду действительно держит «мёртвый»
+  // запуск (тест занимает её первым и не отпускает).
+  it("занятая аренда слота: уведомление уходит сразу, тик не замирает, отказ приходит отдельным сообщением", async () => {
+    const holder = await acquireSlotSession(fixture.subtaskId);
+    admission.holdSlot = true;
+    // Предел ожидания подтверждения старта уменьшаем, чтобы тест не ждал
+    // боевые 4 секунды; проверяется сам факт «тик не завис намертво».
+    process.env.TASKFLOW_STALLED_START_WAIT_MS = "80";
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
+    const started = Date.now();
+    const raced = await Promise.race([
+      runStalledStepWatch().then((report) => ({ report })),
+      new Promise<{ report: null }>((resolve) => setTimeout(() => resolve({ report: null }), 5_000)),
+    ]);
+    try {
+      // Тик завершился, хотя подтверждения старта так и не будет.
+      expect(raced.report).not.toBeNull();
+      expect(raced.report!.restarted).toBe(1);
+      expect(Date.now() - started).toBeLessThan(5_000);
+      // Сообщение о зависании ушло сразу и не обещает «перезапущен».
+      const messages = orchMessages();
+      expect(messages[0].id).toMatch(/^orch-stalled_restarted:/);
+      expect(messages[0].text).toMatch(/Перезапуск запущен/);
+      expect(messages[0].text).not.toMatch(/Новая попытка запущена|перезапущен сервером/);
+      expect(messages[0].text).toContain(fixture.task.id);
+      expect(messages[0].text).toContain("executor");
+      // Событие «старт не подтвердился» попало в журнал событий.
+      const pending = db.prepare("SELECT to_value FROM task_events WHERE task_id = ? AND kind = 'stalled_step_restart_pending'").get(fixture.task.id) as { to_value: string } | undefined;
+      expect(pending?.to_value).toMatch(/подтверждение старта не пришло/);
+      // Отказ старта придёт сам, когда промис развяжется: сейчас его ещё
+      // нет, и второй тик по той же закрытой попытке его не создаст.
+      expect(messages.filter((m) => m.id.startsWith("orch-stalled_restart_failed:"))).toHaveLength(0);
+    } finally {
+      admission.holdSlot = false;
+      holder();
+      forceReleaseSlotSession(fixture.subtaskId);
+    }
+  });
+
+  // Дефект D3 (ревью критика 16.10.2026): уведомление об автоблоке
+  // уходило только если тик сам закрыл текущую попытку (`closed === 1`).
+  // У узла, который умер до первой попытки, `current_attempt_id` пуст и
+  // блок проходил в полной тишине, хотя детерминированный ключ события
+  // (цикл допуска) в этой же функции вычисляется.
+  // Молчание без текущей попытки — тот же класс, что D3, только на
+  // авторестарте: закрывать нечего, но шаг-то мы с умершего запуска
+  // сняли и перезапуск запустили, а сообщить нечем было бы.
+  it("авторестарт узла без текущей попытки — одно сообщение по ключу цикла допуска", async () => {
+    db.prepare("DELETE FROM attempts WHERE subtask_id = ? AND ended_at IS NULL").run(fixture.subtaskId);
+    db.prepare("UPDATE subtasks SET current_attempt_id=NULL, agent_heartbeat_at=datetime('now','-40 minutes') WHERE id=?").run(fixture.subtaskId);
+    const cycle = (db.prepare("SELECT admission_cycle c FROM subtasks WHERE id=?").get(fixture.subtaskId) as { c: number }).c;
+    const report = await runStalledStepWatch();
+    expect(report.restarted).toBe(1);
+    const messages = orchMessages();
     expect(messages).toHaveLength(1);
-    expect(messages[0].id).toMatch(/^orch-stalled_restart_failed:/);
-    expect(messages[0].text).toContain("Запуск не удался");
-    expect(messages[0].text).toContain("слот держит мёртвый запуск");
+    expect(messages[0].id).toBe(`orch-stalled_restarted:cycle:${cycle}`);
+    expect(messages[0].text).toContain("не было текущей попытки");
+    expect(messages[0].text).toMatch(/Перезапуск запущен/);
+    expect(orchQueue()).toHaveLength(1);
+  });
+
+  it("автоблок узла без текущей попытки — сообщение всё равно уходит по ключу цикла допуска", async () => {
+    const ins = db.prepare(
+      `INSERT INTO attempts(id, task_id, subtask_id, executor_id, started_at, ended_at, outcome, reason)
+       VALUES(?, ?, ?, ?, datetime('now', ?), datetime('now', ?), 'auto_restarted', 'setup')`,
+    );
+    ins.run(`att_no_a_${Date.now()}`, fixture.task.id, fixture.subtaskId, roleUserId("builder"), "-110 minutes", "-110 minutes");
+    ins.run(`att_no_b_${Date.now()}_b`, fixture.task.id, fixture.subtaskId, roleUserId("builder"), "-60 minutes", "-60 minutes");
+    // Узел завис, но попытки у него нет: старт не дошёл до попытки.
+    db.prepare("UPDATE subtasks SET current_attempt_id=NULL, agent_heartbeat_at=datetime('now','-40 minutes') WHERE id=?").run(fixture.subtaskId);
+    const cycle = (db.prepare("SELECT admission_cycle c FROM subtasks WHERE id=?").get(fixture.subtaskId) as { c: number }).c;
+    const report = await runStalledStepWatch();
+    expect(report.blocked).toBe(1);
+    expect(subtask(fixture.subtaskId).agent_state).toBe("blocked");
+    const messages = orchMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].id).toBe(`orch-stalled_blocked:cycle:${cycle}`);
+    expect(messages[0].text).toContain(`цикл допуска ${cycle}`);
+    expect(messages[0].text).toMatch(/Разработчик/);
+    expect(messages[0].text).toMatch(/лимит автоперезапуска/);
+    expect(notifications("stalled_blocked")).toHaveLength(1);
+    expect(orchQueue()).toHaveLength(1);
   });
 
   it("автоблок — одно сообщение stalled_blocked с причиной; владельцу по-прежнему ровно одно уведомление", async () => {

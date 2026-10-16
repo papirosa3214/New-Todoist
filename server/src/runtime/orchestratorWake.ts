@@ -99,11 +99,20 @@ export function wakeAndDeliver(subtaskId: string, actorId: string | null, kind: 
 
 export type StalledWakeKind = "stalled_restarted" | "stalled_restart_failed" | "stalled_blocked";
 
+/** Заголовок вида события. `stalled_restarted` уходит сразу после
+ *  закрытия зависшей попытки, до результата старта, поэтому формулировка
+ *  обещает только запуск перезапуска, а не его успех (ревью критика
+ *  16.10.2026, D1). Провал старта — отдельный вид с отдельным ключом. */
 const STALLED_HEADLINE: Record<StalledWakeKind, string> = {
-  stalled_restarted: "завис и был перезапущен сервером",
+  stalled_restarted: "завис, сервер запустил перезапуск",
   stalled_restart_failed: "завис, перезапуск сервером не удался",
   stalled_blocked: "завис и встал в блок",
 };
+
+/** Личность события читается по-разному: у большинства видов это id
+ *  закрытой попытки, но у узла без попытки — цикл допуска. */
+const eventLabel = (attemptKey: string): string =>
+  attemptKey.startsWith("cycle:") ? `цикл допуска ${attemptKey.slice("cycle:".length)}` : `попытка ${attemptKey}`;
 
 /**
  * Сообщение оркестратору о событии сторожа. `attemptKey` — личность
@@ -126,7 +135,7 @@ export function wakeOrchestratorStalled(subtaskId: string, kind: StalledWakeKind
     const text = [
       `Заминка в команде по карточке «${row.task_title}» (${row.task_id}), план ${row.plan_id}.`,
       `Шаг «${row.title}» (${row.slot}, id ${subtaskId}) ${STALLED_HEADLINE[kind]}.`,
-      `Событие сторожа зависших шагов, попытка ${attemptKey}.`,
+      `Событие сторожа зависших шагов, ${eventLabel(attemptKey)}.`,
       detail ? `Подробности: ${detail.slice(0, 600)}` : "",
       ...TAIL,
     ].filter(Boolean).join("\n");
