@@ -1873,7 +1873,10 @@ async function deliverAgentReply(args: {
   if(topic && !slot && (args.subtaskId || trigger.recipient_subtask_id || topicSlotKey(trigger.text))){slotChoiceNotice(chatId,topic.task_id,role,args.triggerMessageId);return null;}
   const activeDelivery=topic && slot ? await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)
     : !topic ? await deliverChatToWork(role,chatId,args.triggerMessageId,userText,args.subtaskId??trigger.recipient_subtask_id??undefined) : "idle";
-  if(activeDelivery!=="idle")throw new MessageForwardedToWork(activeDelivery==="busy");
+  if(activeDelivery!=="idle"){
+    traceCoordination(()=>updateCoordination(args.triggerMessageId,roleUserId,{status:activeDelivery==="busy"?"busy":"delivered",activity:activeDelivery==="busy"?"Адресат занят; вопрос ожидает доставки":"Вопрос доставлен в рабочую сессию; ответ ещё не получен",last_activity_at:new Date().toISOString()}));
+    throw new MessageForwardedToWork(activeDelivery==="busy");
+  }
   const roleTitle = titleOfRole(role);
   const previousSessionId = slot ? null : getChatSessionId(chatId, roleUserId);
   let prompt: string;

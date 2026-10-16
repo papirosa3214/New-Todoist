@@ -1,3 +1,4 @@
+import {coordinationCardData} from "../runtime/chatCoordination.js";
 // Сообщение чата с ролями в том виде, в каком его видит клиент.
 //
 // Один формат на все пути доставки: история (GET /api/chats/:id/messages),
@@ -60,7 +61,7 @@ export function formatChatMessage(message: any) {
     handoff: chatHandoff(message),
     // Конверт ok/output в ответе роли (01.10.2026) — показываем только output.
     text: displayText,
-    ...(message.steps && JSON.parse(message.steps).coordination ? {kind:"coordination",coordination:JSON.parse(message.steps).coordination} : {}),
+    ...(message.steps && JSON.parse(message.steps).coordination ? {kind:"coordination",coordination:coordinationCardData(message)} : {}),
   };
 }
 
