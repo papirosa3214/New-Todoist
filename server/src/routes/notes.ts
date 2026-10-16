@@ -251,6 +251,14 @@ export function registerNoteRoutes(app: FastifyInstance) {
     const params: unknown[] = [];
     const has = (k: string) =>
       req.body && Object.prototype.hasOwnProperty.call(req.body, k);
+    // Разметка базы знаний — служебное действие Помощника владельца, а не
+    // работа над заметкой. Срез по роли собирается по автору и по дате
+    // правки (roleSlice.ts), поэтому общий для всех PATCH хвост
+    // «updated_at + updated_by» уводил бы витрину знаний от ролей, которые
+    // эти заметки создали: разбор 50 заметок сделал бы их автором того, кто
+    // их разбирал. Правка текста, заголовка или папки — обычная работа, и
+    // там хвост остаётся.
+    let kbOnly = true;
 
     // Схема базы знаний (cfa5cdcd): категории ставит разбор Помощника владельца.
     // Значение приводится к ограниченному списку — чтобы в базу не попало
@@ -276,10 +284,12 @@ export function registerNoteRoutes(app: FastifyInstance) {
     }
 
     if (has("title")) {
+      kbOnly = false;
       sets.push("title = ?");
       params.push((req.body.title ?? "").toString().slice(0, 200));
     }
     if (has("markdown") && typeof req.body.markdown === "string") {
+      kbOnly = false;
       sets.push("content = ?");
       params.push(markdownToTiptap(req.body.markdown));
       // Заголовок выводим из текста, если его не прислали явно: иначе в
@@ -289,10 +299,12 @@ export function registerNoteRoutes(app: FastifyInstance) {
         params.push(deriveTitleFromMarkdown(req.body.markdown).slice(0, 200));
       }
     } else if (has("content") && typeof req.body.content === "string") {
+      kbOnly = false;
       sets.push("content = ?");
       params.push(req.body.content);
     }
     if (has("folder_id")) {
+      kbOnly = false;
       const raw = req.body.folder_id;
       if (raw !== null) {
         if (!Number.isFinite(raw))
@@ -308,8 +320,11 @@ export function registerNoteRoutes(app: FastifyInstance) {
     if (sets.length === 0) {
       return db.prepare("SELECT * FROM user_notes WHERE id = ?").get(id);
     }
-    sets.push("updated_at = datetime('now')", "updated_by = ?");
-    params.push(req.userId, id);
+    if (!kbOnly) {
+      sets.push("updated_at = datetime('now')", "updated_by = ?");
+      params.push(req.userId);
+    }
+    params.push(id);
     db.prepare(`UPDATE user_notes SET ${sets.join(", ")} WHERE id = ?`).run(
       ...params,
     );
