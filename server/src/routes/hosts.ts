@@ -1,3 +1,5 @@
+import db from "../db.js";
+import {executeRoleHostTool} from "../runtime/roleHostAccess.js";
 /**
  * Реестр машин по HTTP (тикет 1 «Сервер: реестр машин и шлюз хостов»).
  *
@@ -49,6 +51,12 @@ function publicMachine(машина: Machine) {
 }
 
 export function registerHostRoutes(app: FastifyInstance): void {
+  app.post("/api/role-host/execute",{preHandler:authOrApiToken},async(req:any,reply)=>{
+    const user=db.prepare("SELECT role_key FROM users WHERE id=? AND type='ai'").get(req.userId) as {role_key:string}|undefined;
+    if(!user?.role_key)return reply.code(403).send({error:"Операция доступна зарегистрированной роли"});
+    try{return await executeRoleHostTool({role:user.role_key},req.body??{});}
+    catch(error){return reply.code(409).send({error:(error as Error).message});}
+  });
   app.get("/api/machines", { preHandler: authOrApiToken }, async (req: any, reply) => {
     if (!isOwner(req.userId)) {
       return reply.code(403).send({ error: "реестр машин доступен только владельцу" });
