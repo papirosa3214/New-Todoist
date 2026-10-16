@@ -41,6 +41,7 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
  for(const source of discovered.appendSources)append.push(composeLayer(role,keyFor(source.path))!.effective);
  append.push(composeLayer(role,'rules')!.effective);
  append.push(chatModeInstruction(mode));
+ append.push('ПРОМЕЖУТОЧНЫЕ ПОЯСНЕНИЯ: краткость относится к итогу. Перед содержательной проверкой скажи одной фразой, что проверяешь; между сериями инструментов кратко сообщай значимую находку, изменение подхода или ожидание коллеги. Обычный текст должен быть понятен владельцу без открытия инструментов. Не комментируй каждый вызов и не выдумывай прогресс. Не раскрывай внутренние рассуждения. Это правило уточняет запреты пересказа хода работы в старых инструкциях.');
  append.push(roleHomeInstruction(role));
  const file=path.join(dir,prefix+'.prompt.txt');
  fs.writeFileSync(file,append.join('\n\n'),{mode:0o600});
@@ -90,7 +91,7 @@ export async function chatInstructionArgs(role:string, configPath:string, mode:C
 
 /** Same SDK discovery as chat, with executable extensions disabled while inspecting resources. */
 export async function discoverChatResources(role:string) {
- const home=ensureRoleHome(role);
+ const home=ensureRoleHome(role,{refreshSystem:true});
  const loader=new DefaultResourceLoader({
   cwd:home.workspace,agentDir:home.dir,settingsManager:SettingsManager.inMemory(),
   noExtensions:true,noThemes:true,noSkills:true,noPromptTemplates:true,noContextFiles:true,
@@ -181,5 +182,6 @@ export async function chatSystemPrompt(role:string, mode:ChatWorkMode, cwd:strin
  append.push(composeLayer(role,'rules')!.effective);
  append.push(roleHomeInstruction(role));
  append.push(chatModeInstruction(mode));
+ append.push('ПРОМЕЖУТОЧНЫЕ ПОЯСНЕНИЯ: краткость относится к итогу. Перед содержательной проверкой скажи одной фразой, что проверяешь; между сериями инструментов кратко сообщай значимую находку, изменение подхода или ожидание коллеги. Обычный текст должен быть понятен владельцу без открытия инструментов. Не комментируй каждый вызов и не выдумывай прогресс. Не раскрывай внутренние рассуждения. Это правило уточняет запреты пересказа хода работы в старых инструкциях.');
  return [base,...append].join('\n\n');
 }

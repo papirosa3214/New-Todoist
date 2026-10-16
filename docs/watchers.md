@@ -197,3 +197,6 @@ Code: server/src/lib/reviewHistory.ts; migration132_review_history. Startup and 
 - Журнал: incident_review_recovered в task_events; штатная очередь ведёт ошибки запуска.
 - Инцидент: поломка Ollama сдана до внедрения автоприёмки; recovery пропускал review.
 - Разбор: docs/2026-10-16-incident-review-recovery.md.
+
+## Цепочка обращений в чате (16.10.2026)
+chatCoordination.ts: при старте и каждые15 минут создаёт обращение, возвращает ответ в исходный чат и проверяет чтение в откатываемой транзакции. Проба не запускает роли и не рассылает сообщения. Ошибка — notifications.type=chat_coordination_watch, максимум одна тревога в сутки, без карточек задач.

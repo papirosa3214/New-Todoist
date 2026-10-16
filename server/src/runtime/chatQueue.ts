@@ -1,3 +1,4 @@
+import {ensureCoordinationCard,coordinationDeliveryChanged,traceCoordination} from "./chatCoordination.js";
 // Durable очередь ходов роли в чате и generation fence.
 //
 // До этого модуля очередь ответов жила in-memory в chatSession.ts:
@@ -142,6 +143,7 @@ export function enqueueMessageDelivery(input: EnqueueInput): EnqueueResult {
       payloadJson,
     );
   if (inserted.changes > 0) {
+    if(input.messageId)traceCoordination(()=>ensureCoordinationCard(input.messageId!,input.roleId));
     return { id, created: true, generation };
   }
   const row = db
@@ -211,7 +213,7 @@ export function pendingDeliveriesByGeneration(input: {
 /** Атомарно пометить ход `picked` (взят в работу). Это не fence,
  *  только синхронизация: один pickup на ход. */
 export function claimMessageDelivery(id: string): boolean {
-  return (
+  const changed = (
     db
       .prepare(
         `UPDATE chat_message_queue
@@ -220,6 +222,8 @@ export function claimMessageDelivery(id: string): boolean {
       )
       .run(id).changes === 1
   );
+  if(changed)traceCoordination(()=>coordinationDeliveryChanged(id));
+  return changed;
 }
 
 /** Завершить ход: `done` или `failed`. Ход, чьё generation уже не
@@ -227,7 +231,7 @@ export function claimMessageDelivery(id: string): boolean {
  *  в `superseded` через `fenceMessageDelivery`. */
 export function finishMessageDelivery(id: string, ok: boolean): boolean {
   const status = ok ? "done" : "failed";
-  return (
+  const changed = (
     db
       .prepare(
         `UPDATE chat_message_queue
@@ -236,13 +240,15 @@ export function finishMessageDelivery(id: string, ok: boolean): boolean {
       )
       .run(status, id).changes === 1
   );
+  if(changed)traceCoordination(()=>coordinationDeliveryChanged(id));
+  return changed;
 }
 
 /** Применить fence: пометить ход `superseded` независимо от того,
  *  был ли он `pending` или уже `picked`. Используется, когда
  *  обнаружено, что generation устарел. */
 export function fenceMessageDelivery(id: string): boolean {
-  return (
+  const changed = (
     db
       .prepare(
         `UPDATE chat_message_queue
@@ -251,6 +257,8 @@ export function fenceMessageDelivery(id: string): boolean {
       )
       .run(id).changes === 1
   );
+  if(changed)traceCoordination(()=>coordinationDeliveryChanged(id));
+  return changed;
 }
 
 /** Инкремент generation пары. Все ходы старой generation, что ещё

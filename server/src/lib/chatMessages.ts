@@ -60,6 +60,7 @@ export function formatChatMessage(message: any) {
     handoff: chatHandoff(message),
     // Конверт ok/output в ответе роли (01.10.2026) — показываем только output.
     text: displayText,
+    ...(message.steps && JSON.parse(message.steps).coordination ? {kind:"coordination",coordination:JSON.parse(message.steps).coordination} : {}),
   };
 }
 

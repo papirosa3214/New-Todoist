@@ -1,3 +1,4 @@
+import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 // Живой ход роли в чате (владелец 27.09.2026): пока роль отвечает, окно
 // чата показывает то же, что окно сессии Claude Code, — текст ответа
 // растёт по словам, над ним лента шагов (что читает, что выполняет, что
@@ -351,6 +352,7 @@ export class LiveTurn {
   /** Событие рантайма роли. Всё незнакомое молча пропускаем. */
   readonly onEvent = (event: unknown): void => {
     if (this.closed || !event || typeof event !== "object") return;
+    traceCoordination(()=>coordinationActivity(this.triggerMessageId,this.userId,event));
     const e = event as {
       type?: string;
       toolCallId?: string;
