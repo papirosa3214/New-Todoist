@@ -70,6 +70,10 @@ process.env.OLLAMA_HEALTH_WATCHER_DISABLED ??= "1";
 // и старое состояние скрипта ~/kb не подхватывает (lib/knowledgeSync.ts).
 process.env.TASKFLOW_KB_SYNC_DIR ??= path.join(os.tmpdir(), `taskflow-kb-sync-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
 process.env.TASKFLOW_KB_SYNC_LEGACY_STATE ??= path.join(os.tmpdir(), "taskflow-kb-sync-no-legacy.json");
+// Отметки сторожа разбора заметок (lib/kbTriageWatcher.ts) тоже лежат на
+// диске — на прогоне своя папка, иначе тесты писали бы в боевую
+// ~/.local/state/taskflow-kb-triage и мешали друг другу между прогонами.
+process.env.TASKFLOW_KB_TRIAGE_STATE_DIR ??= path.join(os.tmpdir(), `taskflow-kb-triage-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
 
 // Свой секрет на прогон — без этого ensureJwtSecret() (env.ts) читал бы
 // или писал server/.env настоящего сервера.
@@ -126,6 +130,7 @@ try {
 
 afterAll(() => {
   fs.rmSync(process.env.TASKFLOW_ROLES_DIR!, { recursive: true, force: true });
+  fs.rmSync(process.env.TASKFLOW_KB_TRIAGE_STATE_DIR!, { recursive: true, force: true });
   for (const suffix of ["", "-wal", "-shm"]) {
     try {
       fs.unlinkSync(dbPath + suffix);
