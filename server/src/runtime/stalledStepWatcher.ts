@@ -25,6 +25,7 @@ import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { logStepAbandoned } from "./abandonedStep.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
 import { startPlanSubtaskRun } from "./planSubtaskAdmission.js";
+import { wakeAndDeliverStalled } from "./orchestratorWake.js";
 
 /** Возраст последнего события хода, после которого шаг считается
  *  зависшим и сервер сам перезапускает попытку. Один порог, без
@@ -161,13 +162,28 @@ function lastSessionEventMs(subtask: StalledSubtask, role: string): number | nul
   return latest;
 }
 
-function endAttemptAsAutoRestarted(attemptId: string, reason: string): void {
-  db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'auto_restarted', reason = ? WHERE id = ? AND ended_at IS NULL")
-    .run(reason.slice(0, 500), attemptId);
+/** Закрыть попытку автоперезапуском. Возвращает 1 только если закрыли МЫ:
+ *  `WHERE ended_at IS NULL` делает повторный тик идемпотентным, а значит
+ *  и уведомление оркестратору уходит ровно один раз на попытку. */
+function endAttemptAsAutoRestarted(attemptId: string, reason: string): number {
+  return db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'auto_restarted', reason = ? WHERE id = ? AND ended_at IS NULL")
+    .run(reason.slice(0, 500), attemptId).changes;
 }
 
-function markRestartedAndEnqueue(subtask: StalledSubtask, role: string, reason: string): void {
-  if (subtask.current_attempt_id) endAttemptAsAutoRestarted(subtask.current_attempt_id, reason);
+/** Личность события для сообщения оркестратору: id закрываемой попытки,
+ *  а если попытки не было — цикл допуска (детерминированно в обоих
+ *  случаях, поэтому повторный тик не заведёт второе сообщение). */
+function attemptKeyFor(subtask: StalledSubtask): string {
+  if (subtask.current_attempt_id) return subtask.current_attempt_id;
+  const cycle = db.prepare("SELECT admission_cycle FROM subtasks WHERE id = ?").get(subtask.id) as { admission_cycle: number | null } | undefined;
+  return `cycle:${cycle?.admission_cycle ?? "none"}`;
+}
+
+function markRestartedAndEnqueue(subtask: StalledSubtask, role: string, reason: string): { closed: boolean; attemptKey: string } {
+  const attemptKey = attemptKeyFor(subtask);
+  const closed = subtask.current_attempt_id
+    ? endAttemptAsAutoRestarted(subtask.current_attempt_id, reason) === 1
+    : false;
   db.prepare("UPDATE subtasks SET agent_state = NULL, agent_id = NULL, current_attempt_id = NULL, agent_heartbeat_at = NULL WHERE id = ?")
     .run(subtask.id);
   // Новый dedupe_key обязателен: иначе worker вернёт прежнее задание,
@@ -184,12 +200,15 @@ function markRestartedAndEnqueue(subtask: StalledSubtask, role: string, reason: 
     `«${subtask.title}»: поток событий остановился — перезапускаю попытку (${restartCount(subtask.id) + 1} из ${MAX_RESTARTS_PER_WINDOW}).`,
   );
   logEvent({ taskId: subtask.task_id, actorId: null, kind: "stalled_step_auto_restart", field: subtask.plan_node_key ?? subtask.id, toValue: reason.slice(0, 160) });
+  return { closed, attemptKey };
 }
 
 function blockAsStalled(subtask: StalledSubtask, role: string, reason: string): void {
+  const attemptKey = attemptKeyFor(subtask);
+  let closed = false;
   if (subtask.current_attempt_id) {
-    db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'stalled_blocked', reason = ? WHERE id = ? AND ended_at IS NULL")
-      .run(reason.slice(0, 500), subtask.current_attempt_id);
+    closed = db.prepare("UPDATE attempts SET ended_at = datetime('now'), outcome = 'stalled_blocked', reason = ? WHERE id = ? AND ended_at IS NULL")
+      .run(reason.slice(0, 500), subtask.current_attempt_id).changes === 1;
   }
   db.prepare("UPDATE subtasks SET agent_state = 'blocked', agent_id = ?, current_attempt_id = NULL, agent_heartbeat_at = NULL WHERE id = ?")
     .run(roleUserId(role), subtask.id);
@@ -212,10 +231,21 @@ function blockAsStalled(subtask: StalledSubtask, role: string, reason: string): 
     `⏸ Шаг «${subtask.title}» (${roleTitle(role)}) остановлен: поток событий молчит ${STALL_AFTER_MIN}+ минут, автоперезапуск ${MAX_RESTARTS_PER_WINDOW}/${MAX_RESTARTS_PER_WINDOW} не помог. Задача: «${heads.title}».`,
   );
   logEvent({ taskId: subtask.task_id, actorId: null, kind: "stalled_step_blocked_user", field: subtask.plan_node_key ?? subtask.id, toValue: roleTitle(role) });
+  // Оркестратор ведёт план и должен узнать о зависании сам: молчаливый
+  // автоблок — тот же дефект, что и молчаливый авторестарт (карточка
+  // 2beb2bf2). Пишем один раз на закрытую попытку.
+  if (closed) {
+    wakeAndDeliverStalled(
+      subtask.id,
+      "stalled_blocked",
+      attemptKey,
+      `Роль: ${roleTitle(role)}. Поток событий молчал дольше ${STALL_AFTER_MIN} минут, автоперезапуск ${MAX_RESTARTS_PER_WINDOW}/${MAX_RESTARTS_PER_WINDOW} исчерпан — шаг переведён в blocked, снимок шага и уведомление владельцу записаны. Причина: ${reason}`,
+    );
+  }
 }
 
 function restartAttempt(subtask: StalledSubtask, role: string, sinceMin: number): Promise<void> {
-  markRestartedAndEnqueue(subtask, role, `авто-перезапуск после ${sinceMin} минут без событий хода`);
+  const { closed, attemptKey } = markRestartedAndEnqueue(subtask, role, `авто-перезапуск после ${sinceMin} минут без событий хода`);
   // `enqueueRoleRunJob` положил задание в очередь; стартанём role in-process
   // сами, чтобы ход не ждал следующего тика worker'а — иначе карточка
   // выглядит «тишина в ленте» ещё минуту (Г1-к/Г1-л). Возвращаем Promise,
@@ -224,6 +254,16 @@ function restartAttempt(subtask: StalledSubtask, role: string, sinceMin: number)
   return startPlanSubtaskRun(subtask.id, roleUserId(role)).then((started) => {
     if (!started.ok) {
       logEvent({ taskId: subtask.task_id, actorId: null, kind: "stalled_step_restart_failed", field: subtask.plan_node_key ?? subtask.id, toValue: started.error });
+    }
+    if (!closed) return;
+    // Сообщение правдиво про результат: «перезапущен» — только когда
+    // новый запуск действительно поднялся (риск из контракта fc0ea9a6 §6:
+    // повисший держатель слота не даёт старту завершиться).
+    const fact = `Поток событий молчал ${sinceMin} минут (порог ${STALL_AFTER_MIN}). Роль: ${roleTitle(role)}. Сторож закрыл попытку ${attemptKey}, поставил шаг в очередь и запустил новую попытку (перезапуск ${restartCount(subtask.id) + 1} из ${MAX_RESTARTS_PER_WINDOW}).`;
+    if (started.ok) {
+      wakeAndDeliverStalled(subtask.id, "stalled_restarted", attemptKey, `${fact} Новая попытка запущена.`);
+    } else {
+      wakeAndDeliverStalled(subtask.id, "stalled_restart_failed", attemptKey, `${fact} Запуск не удался: ${started.error}`);
     }
   });
 }

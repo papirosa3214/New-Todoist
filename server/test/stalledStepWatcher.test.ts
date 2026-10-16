@@ -23,10 +23,25 @@ vi.mock("../src/runtime/inProcessRun.js", async (importOriginal) => {
   };
 });
 
+// Упавший старт новой попытки — отдельный сценарий уведомления
+// (`stalled_restart_failed`), флагом включается только в нужном тесте.
+const admission = vi.hoisted(() => ({ failNext: false }));
+vi.mock("../src/runtime/planSubtaskAdmission.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/runtime/planSubtaskAdmission.js")>();
+  return {
+    ...actual,
+    startPlanSubtaskRun: (subtaskId: string, actorId: string) =>
+      admission.failNext
+        ? Promise.resolve({ ok: false as const, error: "слот держит мёртвый запуск" })
+        : actual.startPlanSubtaskRun(subtaskId, actorId),
+  };
+});
+
 import db from "../src/db.js";
 import { buildApp } from "../src/index.js";
 import { roleUserId } from "../src/roleRouting.js";
 import { runStalledStepWatch } from "../src/runtime/stalledStepWatcher.js";
+import { wakeOrchestratorStalled } from "../src/runtime/orchestratorWake.js";
 import { slotSessionDirectory } from "../src/runtime/slotSession.js";
 import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 
@@ -84,6 +99,13 @@ const comments = (taskId: string): Array<{ user_id: string; text: string }> => {
 const notifications = (kind: string): Array<{ text: string }> => {
   return db.prepare("SELECT text FROM notifications WHERE type = ?").all(kind) as Array<{ text: string }>;
 };
+
+/** Сообщения сторожа оркестратору: личный чат «Заминки команды». */
+const ORCH_CHAT = `orchestrator-wake:${roleUserId("code_orchestrator")}`;
+const orchMessages = (): Array<{ id: string; text: string; task_id: string }> =>
+  db.prepare("SELECT id, text, task_id FROM chat_messages WHERE chat_id = ? ORDER BY rowid").all(ORCH_CHAT) as Array<{ id: string; text: string; task_id: string }>;
+const orchQueue = (): Array<{ delivery_id: string; role_id: string; status: string }> =>
+  db.prepare("SELECT delivery_id, role_id, status FROM chat_message_queue WHERE chat_id = ? ORDER BY rowid").all(ORCH_CHAT) as Array<{ delivery_id: string; role_id: string; status: string }>;
 
 /** Создать «журнал» потока событий: каталог с одним .jsonl, mtime которого
  *  отстоит от текущего момента на `minutesAgo` минут. `step` — реальный
@@ -143,6 +165,14 @@ describe("stalledStepWatcher", () => {
     app = await buildApp();
     demoteSeededOwner(db);
     seedRoleAccounts(db);
+    // Уведомление сторожа адресовано учётке `role_code_orchestrator`
+    // (`roleUserId('code_orchestrator')`), а общий `seedRoleAccounts` её не
+    // сеет — без неё побудка молча возвращает null и тест был бы зелёным
+    // вхолостую.
+    db.prepare(
+      `INSERT OR IGNORE INTO users (id,name,email,password_hash,role,role_key,type,avatar_color,initials,status,is_system_bot)
+       VALUES ('role_code_orchestrator','Code Orchestrator','orchestrator@taskflow.local','','agent',NULL,'ai','#8E8E93','O','offline',1)`,
+    ).run();
     // Перед всеми тестами: сбрасываем любые in_progress subtasks, чтобы
     // прошлые запуски этого теста (или соседние test'ы) не подкидывали
     // свои узлы в сторож. Штатные in_progress-узлы других ролей нам
@@ -155,8 +185,14 @@ describe("stalledStepWatcher", () => {
   });
 
   beforeEach(async () => {
+    admission.failNext = false;
     db.prepare("DELETE FROM notifications WHERE type = 'stalled_blocked'").run();
     db.prepare("DELETE FROM task_events WHERE kind LIKE 'stalled_step_%'").run();
+    // Уведомления сторожа живут в личном чате оркестратора и не каскадом
+    // чистятся вместе с карточкой — снимаем их на каждый тест, иначе
+    // счётчики «ровно одно сообщение» копятся между кейсами.
+    db.prepare("DELETE FROM chat_message_queue WHERE chat_id LIKE 'orchestrator-wake:%'").run();
+    db.prepare("DELETE FROM chat_messages WHERE chat_id LIKE 'orchestrator-wake:%'").run();
     // Сначала снимаем аренду со ВСЕХ плановых subtasks, чтобы FK на
     // agent_id/current_attempt_id не упёрся при удалении задач.
     db.prepare(
@@ -318,5 +354,102 @@ describe("stalledStepWatcher", () => {
     expect(report.blocked).toBe(0);
     expect(comments(fixture.task.id).length).toBe(before);
     expect(subtask(fixture.subtaskId).agent_state).toBe("in_progress");
+  });
+
+  /* ── Уведомление оркестратору о зависании (карточка 2beb2bf2, контракт fc0ea9a6) ──
+   *
+   * Суть правки — убрать зависимость от профиля плана: фикстура здесь
+   * профиля `manual`, а `wakeOrchestrator` смотрит только `orchestrated`.
+   * Если этот кейс снова станет зелёным «вхолостую», значит сообщение
+   * уходит мимо проверки. */
+
+  it("план не orchestrated: авторестарт всё равно пишет оркестратору ровно одно сообщение в его чат", async () => {
+    const profile = db.prepare("SELECT profile FROM task_collaboration_plans WHERE id = (SELECT collaboration_plan_id FROM subtasks WHERE id = ?)").get(fixture.subtaskId) as { profile: string };
+    expect(profile.profile).not.toBe("orchestrated");
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
+    const commonBefore = (db.prepare("SELECT count(*) n FROM chat_messages WHERE chat_id='chat-common'").get() as { n: number }).n;
+    const report = await runStalledStepWatch();
+    expect(report.restarted).toBe(1);
+    const messages = orchMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].id).toMatch(/^orch-stalled_restarted:/);
+    expect(messages[0].task_id).toBe(fixture.task.id);
+    // Карточка, шаг, роль и что произошло — всё в одном сообщении.
+    expect(messages[0].text).toContain("Stalled fixture");
+    expect(messages[0].text).toContain(fixture.task.id);
+    expect(messages[0].text).toContain(fixture.subtaskId);
+    expect(messages[0].text).toContain("executor");
+    expect(messages[0].text).toMatch(/Разработчик/);
+    expect(messages[0].text).toMatch(/поток событий молчал|поток собы/i);
+    // Доставка адресована оркестратору как роль, не владельцу.
+    const queue = orchQueue();
+    expect(queue).toHaveLength(1);
+    expect(queue[0].role_id).toBe(roleUserId("code_orchestrator"));
+    expect(queue[0].status).toBe("pending");
+    expect(queue[0].delivery_id).toBe(messages[0].id);
+    // В общий чат событие сторожа не попало: счётчик не вырос и текста
+    // про зависание там нет.
+    expect((db.prepare("SELECT count(*) n FROM chat_messages WHERE chat_id='chat-common'").get() as { n: number }).n).toBe(commonBefore);
+    expect((db.prepare("SELECT count(*) n FROM chat_messages WHERE chat_id='chat-common' AND text LIKE '%поток событий молчал%'").get() as { n: number }).n).toBe(0);
+  });
+
+  it("повторный обход на ту же уже закрытую попытку — второго сообщения нет", async () => {
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
+    await runStalledStepWatch();
+    const first = orchMessages();
+    expect(first).toHaveLength(1);
+    const attemptId = first[0].id.replace("orch-stalled_restarted:", "");
+    // Тот же узел снова «завис» на той же закрытой попытке: закрыть её
+    // повторно нельзя (`ended_at IS NULL`), значит и сообщения быть не должно.
+    db.prepare("UPDATE subtasks SET agent_state='in_progress', current_attempt_id=? WHERE id=?").run(attemptId, fixture.subtaskId);
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
+    await runStalledStepWatch();
+    expect(orchMessages()).toHaveLength(1);
+    expect(orchQueue()).toHaveLength(1);
+  });
+
+  it("детерминированный messageId: тот же ключ события после пересборки не плодит сообщения", async () => {
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
+    await runStalledStepWatch();
+    const key = orchMessages()[0].id.replace("orch-stalled_restarted:", "");
+    const again = wakeOrchestratorStalled(fixture.subtaskId, "stalled_restarted", key, "повтор того же события");
+    expect(again).not.toBeNull();
+    expect(again!.messageId).toBe(`orch-stalled_restarted:${key}`);
+    const messages = orchMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].text).not.toContain("повтор того же события");
+    expect(orchQueue()).toHaveLength(1);
+  });
+
+  it("упавший старт новой попытки — сообщение stalled_restart_failed с текстом ошибки", async () => {
+    admission.failNext = true;
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 12);
+    const report = await runStalledStepWatch();
+    expect(report.restarted).toBe(1);
+    const messages = orchMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].id).toMatch(/^orch-stalled_restart_failed:/);
+    expect(messages[0].text).toContain("Запуск не удался");
+    expect(messages[0].text).toContain("слот держит мёртвый запуск");
+  });
+
+  it("автоблок — одно сообщение stalled_blocked с причиной; владельцу по-прежнему ровно одно уведомление", async () => {
+    seedSessionJournal(fixture.task.id, "builder", fixture.subtaskId, 30);
+    const ins = db.prepare(
+      `INSERT INTO attempts(id, task_id, subtask_id, executor_id, started_at, ended_at, outcome, reason)
+       VALUES(?, ?, ?, ?, datetime('now', ?), datetime('now', ?), 'auto_restarted', 'setup')`,
+    );
+    ins.run(`att_bl_a_${Date.now()}`, fixture.task.id, fixture.subtaskId, roleUserId("builder"), "-110 minutes", "-110 minutes");
+    ins.run(`att_bl_b_${Date.now()}_b`, fixture.task.id, fixture.subtaskId, roleUserId("builder"), "-60 minutes", "-60 minutes");
+    const report = await runStalledStepWatch();
+    expect(report.blocked).toBe(1);
+    const messages = orchMessages();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].id).toMatch(/^orch-stalled_blocked:/);
+    expect(messages[0].text).toMatch(/blocked/);
+    expect(messages[0].text).toContain("лимит автоперезапуска");
+    expect(messages[0].text).toMatch(/Разработчик/);
+    expect(notifications("stalled_blocked")).toHaveLength(1);
+    expect(orchQueue()).toHaveLength(1);
   });
 });
