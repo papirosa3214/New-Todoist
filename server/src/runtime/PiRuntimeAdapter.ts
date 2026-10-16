@@ -1,7 +1,7 @@
+import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
+import { connectInfraPanel } from "./infraPanelMcp.js";
 import { chatModeInstruction, PLANNING_TOOLS, DISCUSSION_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
 import { chatInstructionArgs, chatSystemPrompt, createTaskResourceLoader } from "./instructionResources.js";
-import { chatTools } from "./chatTools.js";
-import { taskflowTools } from "./inProcessRun.js";
 import { parseModelRef } from "../lib/attemptModel.js";
 import { providerAvailable } from "../lib/modelLadder.js";
 import { connectRoleComposio } from "./composioRuntime.js";
@@ -1286,7 +1286,7 @@ export async function startChatRun(
       ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === resolvedModel);
     if (!piModel) throw new ModelNotAvailableError(model, provider);
 
-    const systemPrompt = await chatSystemPrompt(role, mode, cwd);
+    const systemPrompt = (await chatSystemPrompt(role, mode, cwd))+"\n\n"+UNIVERSAL_INSTRUCTION;
     const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt);
     const composio = mode === "discussion" ? {tools:[] as any[],close:async()=>{}} : await connectRoleComposio(role, mode, input.chatId).catch((error) => {
       console.warn(`[chats] Composio для ${role} не подключился:`, error);
@@ -1299,13 +1299,9 @@ export async function startChatRun(
     const builtin = [...new Map([...createCodingTools(cwd), ...createReadOnlyTools(cwd)].map((t) => [t.name, t])).values()]
       .filter((t) => allowed(t.name))
       .map((t) => ({ ...t, description: composeLayer(role, "tool.builtin." + t.name)?.effective ?? t.description }));
-    const custom = new Map<string, any>();
-    const messagingNames=new Set(["taskflow_chat_send","taskflow_chat_reply","taskflow_chat_read"]);
-    const workingTools=taskflowTools(role,resolvedModel);
-    const conversationalTools=chatTools(role,input.messageId ? {chatId:input.chatId,messageId:input.messageId} : undefined);
-    for (const tool of [...workingTools.filter(t=>!messagingNames.has(t.name)), ...conversationalTools, ...workingTools.filter(t=>messagingNames.has(t.name)), ...composio.tools] as any[]) {
-      if (allowed(tool.name) && !custom.has(tool.name)) custom.set(tool.name, tool);
-    }
+    const infra = await connectInfraPanel(role).catch(()=>({tools:[] as any[],close:async()=>{}}));
+    const toolCatalog = buildRoleToolCatalog({role,model:resolvedModel,mode,runId:sessionManager.getSessionId(),chatId:input.chatId,messageId:input.messageId},[...composio.tools,...infra.tools]);
+
 
     let session: any;
     try {
@@ -1322,14 +1318,15 @@ export async function startChatRun(
         // нельзя: ни одно имя не совпадёт, и роль останется без инструментов
         // («у меня нет инструментов», владелец 02.10.2026). Встроенные с
         // описаниями владельца — через customTools: одноимённый перекрывает.
-        tools: [...builtin.map((t) => t.name), ...custom.keys()],
-        customTools: [...builtin, ...custom.values()],
+        tools: [...builtin.map((t) => t.name), ...toolCatalog.activeNames],
+        customTools: [...builtin, ...toolCatalog.customTools],
         sessionManager,
         settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
       } as any));
     } catch (error) {
       resourceLoader.disposeResources();
       await composio.close().catch(() => {});
+      await infra.close().catch(() => {});
       throw error;
     }
 
@@ -1443,6 +1440,7 @@ export async function startChatRun(
       try { session.dispose(); } catch { /* уже закрыта */ }
       resourceLoader.disposeResources();
       await composio.close().catch(() => {});
+      await infra.close().catch(() => {});
       activeChatRuns.delete(runId);
     }
 

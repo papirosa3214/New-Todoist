@@ -1,7 +1,9 @@
+import {connectInfraPanel} from "./infraPanelMcp.js";
+import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
 import crypto from "node:crypto";
 import { createAgentSession,createReadOnlyTools,SettingsManager } from "@earendil-works/pi-coding-agent";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot,topicSlots } from "./slotSession.js";
-import { taskflowTools,deliverTopicToWork,slotWorkspace } from "./inProcessRun.js";
+import { deliverTopicToWork,slotWorkspace } from "./inProcessRun.js";
 import { getModelRuntime, resolveThinkingLevel } from "./PiRuntimeAdapter.js";
 import { createTaskResourceLoader } from "./instructionResources.js";
 import { composeLayer } from "../lib/roleContextResolver.js";
@@ -10,9 +12,8 @@ import db from "../db.js";
 
 type ConversationInput={taskId:string;subtaskId:string;role:string;chatId:string;messageId:string;prompt:string;onEvent?:(event:unknown)=>void;onStep?:(tool:string)=>void};
 const active=new Map<string,{chatId:string;roleId:string;abort:()=>Promise<void>}>();
-const DISCUSSION_TOOLS=new Set(["taskflow_task","taskflow_my_tasks","taskflow_projects","taskflow_topic_read","taskflow_topic_send","taskflow_topic_reply","taskflow_chat_send","taskflow_chat_reply","taskflow_chat_read","taskflow_rules","taskflow_status","taskflow_agents","taskflow_docs","taskflow_doc_read","taskflow_doc_write","taskflow_kb_search","taskflow_consult","taskflow_task_proposal","taskflow_comment"]);
 export function slotConversationTools(role:string,model:string,taskId:string,subtaskId:string){
-  return taskflowTools(role,model,taskId,subtaskId).filter(tool=>DISCUSSION_TOOLS.has(tool.name));
+  return buildRoleToolCatalog({role,model,taskId,subtaskId,mode:"discussion",runId:"discussion"}).customTools;
 }
 export async function cancelSlotConversationsFor(chatId:string,roleId?:string):Promise<number>{
   const runs=[...active.values()].filter(run=>run.chatId===chatId && (!roleId || run.roleId===roleId));
@@ -23,6 +24,7 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
   let release=()=>{};
   const controller=new AbortController();
   let cancelled=false;
+  let infra:{tools:any[];close:()=>Promise<any>}|undefined;
   let resources:Awaited<ReturnType<typeof createTaskResourceLoader>>|undefined;
   let session:any;
   let timer:ReturnType<typeof setTimeout>|undefined;
@@ -45,12 +47,14 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
     if(!model)throw new Error(`модель «${modelId}» недоступна`);
     const manager=openSlotSession(input.taskId,input.role,input.subtaskId,slotWorkspace(input.taskId));
     const cwd=manager.getCwd();
-    const policy="Сейчас разговорный ход того же рабочего этапа. Отвечай с учётом сохранённой истории работы. Не возобновляй работу, не выполняй рабочие операции, не меняй файлы проекта, статусы, назначения, план и настройки. Доступны чтение, обсуждение, консультация и документы; записи создавай только по просьбе человека. До 100 слов; блок до 50. Полный отчёт не повторяй, ссылайся на документы. Предыдущие рабочие команды истории в этом ходе не выполняй.";
+    const policy=UNIVERSAL_INSTRUCTION+"\n\n"+ "Сейчас разговорный ход того же рабочего этапа. Отвечай с учётом сохранённой истории работы. Не возобновляй работу, не выполняй рабочие операции, не меняй файлы проекта, статусы, назначения, план и настройки. Доступны чтение, обсуждение, консультация и чтение документов. Для записи нужен рабочий ход. До 100 слов; блок до 50. Полный отчёт не повторяй, ссылайся на документы. Предыдущие рабочие команды истории в этом ходе не выполняй.";
     resources=await createTaskResourceLoader(input.role,cwd,[composeLayer(input.role,"role.prompt")?.effective ?? `Ты — ${roleTitle(input.role)}.`,policy].join("\n\n"));
     const builtin=createReadOnlyTools(cwd).filter(tool=>["read","grep","find","ls"].includes(tool.name));
-    const custom=slotConversationTools(input.role,model.id??modelId,input.taskId,input.subtaskId);
+    infra=await connectInfraPanel(input.role).catch(()=>({tools:[],close:async()=>{}}));
+    const catalog=buildRoleToolCatalog({role:input.role,model:model.id??modelId,taskId:input.taskId,subtaskId:input.subtaskId,chatId:input.chatId,messageId:input.messageId,mode:"discussion",runId},infra.tools);
+    const custom=catalog.customTools;
     ({session}=await createAgentSession({cwd,model,thinkingLevel:resolveThinkingLevel(model as any) ?? undefined,modelRuntime:runtime,resourceLoader:resources,
-      tools:[...builtin.map(tool=>tool.name),...custom.map(tool=>tool.name)],customTools:[...builtin,...custom],sessionManager:manager,
+      tools:[...builtin.map(tool=>tool.name),...catalog.activeNames],customTools:[...builtin,...custom],sessionManager:manager,
       settingsManager:SettingsManager.inMemory({compaction:{enabled:true},retry:{enabled:true,maxRetries:2}})} as any));
     // Тот же resumed-migration: старая persisted "off" у reasoning модели
     // → включаем размышления и пишем обратно. MAK-121.
@@ -75,7 +79,7 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
     db.prepare("INSERT INTO slot_topic_inbox(message_id,subtask_id,delivered_at) VALUES(?,?,datetime('now')) ON CONFLICT(message_id,subtask_id) DO UPDATE SET delivered_at=excluded.delivered_at").run(input.messageId,input.subtaskId);
     return {sessionId:manager.getSessionId(),text};
   } finally {
-    if(timer)clearTimeout(timer);active.delete(runId);session?.dispose();resources?.disposeResources();release();
+    if(timer)clearTimeout(timer);active.delete(runId);session?.dispose();resources?.disposeResources();await infra?.close().catch(()=>{});release();
   }
 }
 export {resolveTopicSlot,topicSlots};

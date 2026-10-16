@@ -63,10 +63,10 @@ it("ambiguous roles require a slot; explicit targeting cannot select another rol
  const shared=roleProjectSnapshot('builder',null,'shared_task');
  expect(shared).toContain('Исходный блок');expect(shared).toContain('Дополнительный этап');expect(shared).toContain('постоянный участник');
 });
-it("same role can communicate and write documents without workflow transitions",()=>{
+it("discussion uses the common read/messaging policy without workflow transitions",()=>{
  const names=slotConversationTools('builder','test','shared_task','slot_a').map(tool=>tool.name);
  expect(names).toContain('taskflow_doc_read');expect(names).toContain('taskflow_task');
- expect(names).not.toContain('taskflow_claim');expect(names).not.toContain('taskflow_state');expect(names).not.toContain('taskflow_subtask_done');expect(names).toContain('taskflow_doc_write');expect(names).toContain('taskflow_topic_send');expect(names).toContain('taskflow_task_proposal');
+ expect(names).not.toContain('taskflow_claim');expect(names).not.toContain('taskflow_state');expect(names).not.toContain('taskflow_subtask_done');expect(names).not.toContain('taskflow_doc_write');expect(names).toContain('taskflow_topic_send');expect(names).not.toContain('taskflow_task_proposal');expect(names).toContain('taskflow');
 });
 it("conversation continues work file without changing slot state or creating attempts",async()=>{
  const before=db.prepare("SELECT * FROM subtasks WHERE id='slot_a'").get();const attempts=(db.prepare("SELECT count(*) n FROM attempts").get() as any).n;
@@ -75,5 +75,5 @@ it("conversation continues work file without changing slot state or creating att
  expect(reply.text).toBe('Ответ по сохранённому этапу');expect(reply.sessionId).toBe(saved.session_id);
  expect(db.prepare("SELECT * FROM subtasks WHERE id='slot_a'").get()).toEqual(before);expect((db.prepare("SELECT count(*) n FROM attempts").get() as any).n).toBe(attempts);
  expect((db.prepare("SELECT session_file FROM slot_sessions WHERE subtask_id='slot_a'").get() as any).session_file).toBe(saved.session_file);
- expect(harness.options.at(-1).tools).not.toContain('bash');expect(harness.options.at(-1).tools).not.toContain('write');
+ expect(harness.options.at(-1).tools).toContain('taskflow');expect(harness.options.at(-1).tools).not.toContain('taskflow_task');expect(harness.options.at(-1).tools).not.toContain('bash');expect(harness.options.at(-1).tools).not.toContain('write');
 });

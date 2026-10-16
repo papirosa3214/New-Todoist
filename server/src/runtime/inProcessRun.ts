@@ -1,3 +1,5 @@
+import { chatTools } from "./chatTools.js";
+import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
 import { teamReadTools } from "./teamReadTools.js";
 import { allRoles } from "../roleRouting.js";
 import { roleToolAllowed } from "../lib/roleToolScope.js";
@@ -352,9 +354,9 @@ export async function requestPlanStep(role: string, p: any, currentSubtaskId?: s
     план:resp?.plan,связи:resp?.edges};
 }
 
-function taskflowToolsUnscoped(role: string) { return taskflowTools(role, null, undefined, undefined, true); }
+function taskflowToolsUnscoped(role: string) { return taskflowTools(role, null, undefined, undefined, true,{chatId:"",messageId:""}); }
 
-export function taskflowTools(role: string, model: string | null, taskId?: string, subtaskId?:string, unscoped = false) {
+export function taskflowTools(role: string, model: string | null, taskId?: string, subtaskId?:string, unscoped = false, chatContext?: {chatId:string;messageId:string}) {
   const activity = (role: string, taskId: string, kind: string, target: string) => postActivity(role, taskId, kind, target, subtaskId);
   const T = (
     name: string,
@@ -395,7 +397,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
 
   let topicSends=0;
   const tools = [
-    ...agentMessagingTools(role, {taskId,subtaskId}),
+    ...agentMessagingTools(role, {taskId,subtaskId,chatId:chatContext?.chatId,messageId:chatContext?.messageId}),
     T("taskflow_plan_request", PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, p => requestPlanStep(role,p,subtaskId)),
     T("taskflow_task_proposal", "По просьбе человека отправить настоящую карточку задачи для согласования. Для обычного упоминания используй текст со ссылкой. Доступно каждой роли.", Type.Object({chat_id:Type.String(),task_id:Type.String(),text:Type.String()}), async(p)=>asRole(role,"POST",`/api/chats/${p.chat_id}/messages`,{task_id:p.task_id,text:p.text,kind:"task_proposal",work_mode:"work"})),
     T("taskflow_topic_reply", "Ответить на конкретное сообщение темы своей задачи: message_id и короткий text. Сервер определяет автора вопроса и его этап; подходит для ответа человеку и коллеге.",Type.Object({message_id:Type.String(),text:Type.String()}),async(p)=>{
@@ -446,9 +448,9 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       touchTaskActivity(target);
       return result;
     }),
-    T("taskflow_consult", "Получить второе мнение старшей модели по текущему рабочему слоту. Один совет на попытку; совет не меняет граф и приёмку.",Type.Object({question:Type.String(),context:Type.Optional(Type.Any())}),async(p)=>{
-      if(!taskId) throw new ToolError("Нет текущей задачи");
-      return asRole(role,"POST","/api/consult",{question:p.question,context:p.context,task_id:taskId,subtask_id:subtaskId});
+    T("taskflow_consult", "Получить второе мнение старшей модели по текущему рабочему слоту. Один совет на попытку; совет не меняет граф и приёмку.",Type.Object({question:Type.String(),context:Type.Optional(Type.Any()),task_id:Type.Optional(Type.String()),subtask_id:Type.Optional(Type.String())}),async(p)=>{
+      if(subtaskId && ((p.task_id && p.task_id!==taskId)||(p.subtask_id && p.subtask_id!==subtaskId)))throw new ToolError("Консультация относится только к текущему слоту");
+      return asRole(role,"POST","/api/consult",{question:p.question,context:p.context,task_id:taskId??p.task_id,subtask_id:subtaskId??p.subtask_id});
     }),
     T("taskflow_my_tasks", "Мои задачи (назначенные на эту роль). state: free | in_progress | review | blocked.",
       Type.Object({ state: Type.Optional(Type.String()), include_completed: Type.Optional(Type.Boolean()) }),
@@ -824,7 +826,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  const all = [...tools, ...orchestratorTools(role, T), ...teamReadTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])];
+  const all = [...tools, ...chatTools(role,chatContext), ...orchestratorTools(role, T), ...teamReadTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])];
   if (unscoped) return all;
   return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }
@@ -845,7 +847,7 @@ const HEARTBEAT_MS = 90_000;
 
 /** Что агент роли получает на заходе внутри сервера — для экрана «Команда». */
 export function inProcessToolNames(role = ""): string[] {
-  return [...BUILTIN_TOOLS, ...taskflowTools(role, null).map((t) => t.name)];
+  return [...BUILTIN_TOOLS, "taskflow"];
 }
 
 function rolePrompt(role: string): string {
@@ -1370,6 +1372,7 @@ async function runRoleInProcessUnserialized(input: {
     composeLayer(role, "local_policy")?.effective ?? LOCAL_EXECUTION_POLICY,
     teamStructureText(role),
     clockLine(),
+    UNIVERSAL_INSTRUCTION,
     ROLE_REPORT_INSTRUCTION,
     ...(input.subtaskId ? [PLAN_ROLE_HELP_POLICY, SUBMISSION_POLICY] : []),
     // Срез знаний роли (шаг 4 схемы базы знаний, заметка cfa5cdcd): чтобы
@@ -1397,7 +1400,8 @@ try {
   if(db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status='approved'").get(taskId)) ensurePlanTopic(taskId);
   // Инфрапанель не обязательна для хода: не поднялась — роль работает без неё.
   const infra = await connectInfraPanel(role).catch(error => { console.warn(`[infra-panel] ${role}: ${error instanceof Error ? error.message : error}`); return { tools: [] as any[], close: async () => {} }; });
-  const customTools = [...taskflowTools(role, model.id ?? modelId, taskId,input.subtaskId), ...composio.tools, ...infra.tools, ...(host ? createHostRoleTools(host, taskId, role) : [])];
+  const toolCatalog = buildRoleToolCatalog({role,model:model.id??modelId,taskId,subtaskId:input.subtaskId,mode:"work",runId:manager.getSessionId()}, [...composio.tools,...infra.tools,...(host?createHostRoleTools(host,taskId,role):[])]);
+  const customTools = toolCatalog.customTools;
   // На удалённой машине инструменты те же, но исполняются через шлюз:
   // у каждого в pi подключаемые операции (createCodingTools принимает
   // operations). Имена инструментов и промпты роли при этом не меняются.
@@ -1432,7 +1436,7 @@ try {
     // `tools` у SDK — список ИМЁН. Раньше сюда шли объекты, и роль на задаче
     // оставалась без единого инструмента (владелец 02.10.2026). Встроенные с
     // описаниями владельца — через customTools: одноимённый перекрывает.
-    tools: [...builtinTools.map(t=>t.name), ...customTools.map((t: any)=>t.name)],
+    tools: [...builtinTools.map(t=>t.name), ...toolCatalog.activeNames],
     customTools: [...builtinTools, ...customTools],
     sessionManager: manager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),

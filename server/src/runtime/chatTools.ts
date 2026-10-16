@@ -1,5 +1,3 @@
-import { agentMessagingTools } from "./agentMessaging.js";
-import { orchestratorTools } from "./orchestratorTools.js";
 // Инструменты роли в чате — внутри сервера (владелец 02.10.2026: «у нас всё
 // должно быть на сервере», чаты легли на `Unknown option: --mcp-config`).
 //
@@ -10,7 +8,7 @@ import { orchestratorTools } from "./orchestratorTools.js";
 // перенесены из `scripts/mcp_server.py` один в один.
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { asRole, asText, short, ToolError, unwrap, PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, requestPlanStep } from "./inProcessRun.js";
+import { asRole, asText, short, ToolError, unwrap } from "./inProcessRun.js";
 import { composeLayer, registerInstructionBlock } from "../lib/roleContextResolver.js";
 import db from "../db.js";
 import { restartSlotFromOwnerChat } from "./slotRestart.js";
@@ -59,8 +57,6 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
   const None = Type.Object({});
 
   return [
-    ...orchestratorTools(role, T),
-    ...agentMessagingTools(role, {chatId: ownerContext?.chatId,messageId:ownerContext?.messageId}),
     T("taskflow_runtime", "Что реально доступно сейчас в runtime Pi: подключённые провайдеры и их доступные модели. Только факт, без всего каталога.",
       None, async () => {
         const providers = ((await asRole(role, "GET", "/api/runtime/providers"))?.providers ?? []) as any[];
@@ -300,20 +296,9 @@ export function chatTools(role: string, ownerContext?: {chatId:string;messageId:
           })),
         };
       }),
-    T("taskflow_consult",
-      "Посоветоваться с более сильной моделью: перед важным или необратимым решением, когда застрял, когда требования противоречат. В чате — до трёх раз в час. Совет — не приказ.",
-      Type.Object({ question: Type.String(), context: Type.Optional(Type.Any()), task_id: S(), subtask_id: S() }), async (p) => {
-        const question = String(p.question ?? "").trim();
-        if (!question) throw new ToolError("question не может быть пустым");
-        const body: Record<string, unknown> = { question };
-        for (const k of ["context", "task_id", "subtask_id"]) if (p[k]) body[k] = p[k];
-        const resp = await asRole(role, "POST", "/api/consult", body);
-        return { совет: resp?.answer, модель: resp?.model };
-      }),
     ...(ownerContext ? [T("taskflow_slot_restart",
       "По прямой просьбе владельца заменить зависшего исполнителя свежим агентом ТОЙ ЖЕ роли в существующем слоте и запустить. Не добавляет узлы и не меняет связи. Перед вызовом прочитай карточку; укажи точный subtask_id и неизменную роль. Если слотов несколько — уточни у владельца. Не вызывай для обычного сообщения, консультации или простого назначения. Сохраняет историю и передаёт снимок работы в новую сессию.",
       Type.Object({subtask_id:Type.String(),role:Type.String(),reason:Type.String()}),p=>restartSlotFromOwnerChat(ownerContext.chatId,ownerContext.messageId,p))] : []),
-    T("taskflow_plan_request", PLAN_REQUEST_DESCRIPTION, PLAN_REQUEST_PARAMETERS, p => requestPlanStep(role,p)),
     T("taskflow_weather",
       "Погода сейчас и на 4 дня для города — готовый блок виджета для ответа в чате. Блок из поля «виджет» вставить в ответ как есть, цифры не выдумывать.",
       Type.Object({ city: Type.String({ description: "Город, например «Москва»" }) }), async (p) => {

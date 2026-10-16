@@ -1,3 +1,4 @@
+import { TOOL_REQUEST_SCHEMA } from "./runtime/toolRequestStore.js";
 import { installReviewHistory } from "./lib/reviewHistory.js";
 // Версионные миграции — поверх базовой схемы из `db.ts:migrate()`.
 //
@@ -4758,6 +4759,7 @@ const migrations: Migration[] = [
     add("skills_enabled", "INTEGER NOT NULL DEFAULT 0");
   } },
 
+  {id:"151_unified_role_tool_requests",description:"Долговечные запросы единого инструмента ролей",up:()=>{db.exec(TOOL_REQUEST_SCHEMA);}},
 ];
 /**
  * Опции прогона миграций.

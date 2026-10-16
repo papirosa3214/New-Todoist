@@ -197,3 +197,6 @@ Code: server/src/lib/reviewHistory.ts; migration132_review_history. Startup and 
 - Журнал: incident_review_recovered в task_events; штатная очередь ведёт ошибки запуска.
 - Инцидент: поломка Ollama сдана до внедрения автоприёмки; recovery пропускал review.
 - Разбор: docs/2026-10-16-incident-review-recovery.md.
+
+## Единый taskflow: журнал запросов (16.10.2026)
+server/src/runtime/toolRequestStore.ts; миграция151. При старте и каждые15 минут: пробная запись запроса, отсечение дубля, сохранение и чтение результата; транзакция откатывается. Сбой: notifications.type=role_tool_requests_watch, не больше одного уведомления в сутки, без задач на доске.
