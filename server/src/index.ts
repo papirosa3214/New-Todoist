@@ -1,4 +1,5 @@
 import {startToolRequestWatcher} from "./runtime/toolRequestStore.js";
+import {startChatCoordinationWatcher} from "./runtime/chatCoordination.js";
 import { startRoleLoadWatcher } from "./lib/roleLoadWatcher.js";
 import { startReviewHistoryWatcher } from "./lib/reviewHistory.js";
 import { startWorkPlanWatcher } from "./lib/workPlanWatcher.js";
@@ -560,6 +561,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     app.addHook("onClose", async () => stopReviewHistoryWatcher());
     const stopToolRequestWatcher=startToolRequestWatcher();
     app.addHook("onClose",async()=>stopToolRequestWatcher());
+    const stopCoordinationWatcher=startChatCoordinationWatcher();
+    app.addHook("onClose",async()=>stopCoordinationWatcher());
     const stopWorkPlanWatcher = startWorkPlanWatcher();
     app.addHook("onClose", async () => stopWorkPlanWatcher());
     // Порог разбора заметок: набралось — заводим задачу Помощнику владельца.

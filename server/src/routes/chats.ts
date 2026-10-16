@@ -1,3 +1,4 @@
+import {registerCoordinationOrigin,coordinationAnswered,coordinationCardData,updateCoordination,traceCoordination} from "../runtime/chatCoordination.js";
 import { clockLine } from "../lib/clockLine.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import {integrationHandoffContext,isIntegrationHandoff} from "../runtime/integrationHandoff.js";
@@ -840,6 +841,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
         for (const attId of attachmentIds) attach.run(id, attId, req.userId);
       }
 
+      if(senderRole && parentMessage && !outstanding)traceCoordination(()=>registerCoordinationOrigin(id,parentMessage,req.userId));
       const message = loadChatMessage(id);
       // Владелец написал в чат задачи — будим её план: готовые шаги стартуют, замолчавшие
       // перезапускаются той же ролью (runtime/taskNudge.ts). Ответ на сообщение этим не задерживаем.
@@ -1040,6 +1042,24 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       return { message };
     },
   );
+
+  app.post<{Params:{id:string;messageId:string}}>(
+    "/api/chats/:id/coordination/:messageId/stop",{preHandler:authPre},async(req:any,reply)=>{
+      if(!isMember(req.params.id,req.userId))return reply.code(404).send({error:"Чат не найден"});
+      const row=db.prepare("SELECT steps FROM chat_messages WHERE id=? AND chat_id=?").get(req.params.messageId,req.params.id) as {steps:string}|undefined;
+      const c=row?coordinationCardData(row):undefined;
+      if(!c)return reply.code(404).send({error:"Обращение не найдено"});
+      const origin=db.prepare("SELECT from_user_id FROM chat_messages WHERE id=?").get(c.origin_message_id) as {from_user_id:string}|undefined;
+      if(!isOwner(req.userId) && origin?.from_user_id!==req.userId)return reply.code(403).send({error:"Остановить может автор вопроса или владелец"});
+      if(c.terminal)return {stopped:0};
+      const q=db.prepare("SELECT id,status FROM chat_message_queue WHERE message_id=? AND role_id=?").get(c.question_id,c.recipient_id) as {id:string;status:string}|undefined;
+      const live=liveTurnsOfChat(c.child_chat_id).find(t=>t.user_id===c.recipient_id && t.trigger_message_id===c.question_id);
+      if(!q || (q.status==="done" && !live))return reply.code(409).send({error:"Вопрос уже передан в рабочую сессию. Остановить только это обращение отдельно от работы нельзя."});
+      db.prepare("UPDATE chat_message_queue SET status='superseded',finished_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status IN ('pending','picked')").run(q.id);
+      if(live){await cancelChatRunsFor(c.child_chat_id,c.recipient_id);await cancelSlotConversationsFor(c.child_chat_id,c.recipient_id);}
+      updateCoordination(c.question_id,c.recipient_id,{status:"cancelled",activity:"Обращение остановлено",terminal:true,last_activity_at:new Date().toISOString()});
+      return {stopped:1};
+    });
 
   // Остановить ход роли (кнопка «Остановить» в окне чата). Без role_id —
   // все идущие ходы этого чата. Написанное ролью до остановки ложится в
@@ -2051,6 +2071,7 @@ async function deliverAgentReply(args: {
        VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?)`,
     ).run(replyId, roleUserId, replyText, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(steps) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
+    traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure));
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
   }
   } finally {
