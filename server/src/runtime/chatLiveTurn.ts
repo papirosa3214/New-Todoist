@@ -116,6 +116,31 @@ function clip(text: string): string {
   return one.length > DETAIL_MAX ? `${one.slice(0, DETAIL_MAX - 1)}…` : one;
 }
 
+/** The gateway is transport; display the operation it actually invokes.
+ * Keep the outer toolCallId so completion still closes this exact step. */
+export function presentedToolCall(tool:string,args:unknown):{tool:string;args:unknown}{
+ if(!args || typeof args!=="object")return {tool,args};
+ const a=args as Record<string,unknown>;
+ if(tool==="taskflow"){
+  if(a.action==="invoke" && typeof a.operation==="string" && a.operation.trim()){
+   return {tool:a.operation,args:a.arguments && typeof a.arguments==="object"?a.arguments:{}};
+  }
+  if(a.action==="discover")return {tool:"taskflow_discover",args:{query:a.query}};
+  if(a.action==="describe")return {tool:"taskflow_describe",args:{name:a.operation}};
+ }
+ if(tool==="mcp" && typeof a.tool==="string")return {tool:a.tool,args:a.args};
+ return {tool,args};
+}
+function gatewayResult(result:unknown):{ok?:boolean;data?:{state?:string}}|null{
+ if(!result || typeof result!=="object")return null;
+ const text=(result as {content?:Array<{type?:string;text?:string}>}).content?.find(c=>c.type==="text")?.text;
+ if(!text)return null;
+ try{
+  const value=JSON.parse(text);
+  return typeof value?.ok==="boolean"?value:null;
+ }catch{return null;}
+}
+
 /** Короткая подпись шага из аргументов инструмента: путь, команда,
  *  шаблон поиска. Сервер интерпретирует только аргументы — подпись
  *  действия («Читает», «Выполняет») выбирает клиент по имени инструмента. */
@@ -183,6 +208,8 @@ export function stepDetail(tool: string, args: unknown): string | null {
 }
 
 const MCP_TOOL_TITLES: Record<string, string> = {
+  discover: "поиск доступной операции",
+  describe: "параметры операции",
   my_tasks: "мои задачи",
   task: "карточка задачи",
   status: "сводка доски",
@@ -359,6 +386,7 @@ export class LiveTurn {
       toolName?: string;
       args?: unknown;
       isError?: boolean;
+      result?: unknown;
       assistantMessageEvent?: { type?: string; delta?: string };
     };
     const sub = e.type === "message_update" ? e.assistantMessageEvent?.type : undefined;
@@ -381,11 +409,12 @@ export class LiveTurn {
     } else if (e.type === "tool_execution_start" && e.toolName) {
       this.endThinking();
       if (this.items.length >= ITEMS_MAX) return;
+      const presented=presentedToolCall(e.toolName,e.args);
       this.items.push({
         kind: "step",
         id: e.toolCallId || `step-${this.items.length}`,
-        tool: e.toolName,
-        detail: stepDetail(e.toolName, e.args),
+        tool: presented.tool,
+        detail: stepDetail(presented.tool, presented.args),
         status: "running",
         started_at: new Date().toISOString(),
       });
@@ -395,8 +424,11 @@ export class LiveTurn {
         (it) => it.kind === "step" && it.id === e.toolCallId,
       );
       if (step && step.kind === "step") {
-        step.status = e.isError ? "error" : "done";
-        step.ended_at = new Date().toISOString();
+        const result=e.toolName==="taskflow"?gatewayResult(e.result):null;
+        const state=result?.data?.state;
+        step.status=e.isError || result?.ok===false || state==="unknown_outcome" ? "error"
+          : state==="running" || state==="pending" ? "running" : "done";
+        if(step.status!=="running")step.ended_at=new Date().toISOString();
         this.schedule(true);
       }
     }
