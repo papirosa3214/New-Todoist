@@ -40,7 +40,7 @@ function subtaskHost(subtaskId: string): string | null {
 export function resolveRoleHost(taskId: string, subtaskId?: string | null, role?: string): string | null {
   const отПодзадачи = subtaskId ? subtaskHost(subtaskId) : null;
   if (отПодзадачи) return отПодзадачи;
-  return taskHost(taskId) ?? (role ? roleDefaultHost(taskId, role) : null);
+  return taskHost(taskId) ?? (role ? roleDefaultHost(taskId, role) : null) ?? projectDefaultHost(taskId);
 }
 
 /**
@@ -87,4 +87,13 @@ export function taskProjectId(taskId: string): string | null {
     | { project_id?: string | null }
     | undefined;
   return row?.project_id ?? null;
+}
+/** Любая роль работает на машине проекта; никакого согласования плана здесь нет. */
+function projectDefaultHost(taskId:string):string|null {
+ try {
+  const config=JSON.parse(fs.readFileSync(HOSTS_CONFIG,"utf8")).projects??{};
+  const machines=Object.keys(config).filter(id=>hostRepoPath(taskId,id,false));
+  if(machines.length>1)throw new Error("У проекта несколько машин: назначь нужную явно");
+  return machines[0]??null;
+ }catch(error){if(error instanceof SyntaxError || (error as NodeJS.ErrnoException).code==="ENOENT")return null;throw error;}
 }

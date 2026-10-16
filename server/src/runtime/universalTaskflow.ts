@@ -14,7 +14,7 @@ const READ=new Set(["taskflow_team_read","taskflow_plan_read","taskflow_children
 const DISCUSS=new Set(["taskflow_chat_send","taskflow_chat_reply","taskflow_topic_reply","taskflow_topic_send","taskflow_consult"]);
 const CHAT_CONTEXT=new Set(["taskflow_chat_attach_file","taskflow_slot_restart","taskflow_work_start"]);
 const TASK_CONTEXT=new Set(["taskflow_topic_send","taskflow_topic_reply","taskflow_slot_snapshot"]);
-export function isReadOperation(name:string){return READ.has(name) || name.startsWith("mcp__infra__");}
+export function isReadOperation(name:string){return ["taskflow_hosts","taskflow_host_read","taskflow_host_ls","taskflow_host_grep","taskflow_host_find"].includes(name) || READ.has(name) || name.startsWith("mcp__infra__");}
 export function operationRestriction(name:string,c:Context):{code:string;message:string}|undefined{
  if(c.authorize && !c.authorize(name)) return {code:"FORBIDDEN",message:"Эта операция не разрешена роли "+c.role};
  if(c.mode==="plan" && !isReadOperation(name))return {code:"MODE_RESTRICTED",message:"Для изменения нужен режим Работа"};
@@ -28,7 +28,7 @@ function stable(value:any):string {
  return JSON.stringify(value);
 }
 const response=(payload:any,extra:any[]=[])=>({content:[{type:"text",text:JSON.stringify(payload)},...extra],details:{operation:payload.operation,request_id:payload.request_id}});
-export const UNIVERSAL_INSTRUCTION="Серверные возможности доступны через один инструмент taskflow. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем invoke с operation, version и arguments. Для изменения передавай уникальный request_id; при повторе того же действия используй прежний request_id. Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующей без поиска.";
+export const UNIVERSAL_INSTRUCTION="Серверные возможности доступны через один инструмент taskflow. Любая роль может работать с Mac через host: discover taskflow_hosts, затем taskflow_host_read/bash/edit/write/grep/find/ls. Назначение машины этапу и утверждение плана для доступа к host не нужны. При одном проекте машина и проект выбираются автоматически; рабочая копия создаётся в песочнице проекта. Найди действие через discover (по названию или смыслу), получи точные параметры через describe, затем invoke с operation, version и arguments. Для изменения передавай уникальный request_id; при повторе того же действия используй прежний request_id. Состояние запроса: requests.status. Старые имена в истории — совместимые обращения к тем же операциям. Отказ объясняет права, режим или недостающий контекст; не объявляй возможность отсутствующей без поиска.";
 export function createUniversalTaskflow(tools:Tool[],context:Context,store:RequestStore=memoryRequestStore()):Tool {
  const registry=new Map<string,Tool>();
  for(const tool of tools){if(registry.has(tool.name))throw new Error("Duplicate operation: "+tool.name);registry.set(tool.name,tool);}
