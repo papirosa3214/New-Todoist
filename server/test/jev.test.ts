@@ -217,3 +217,31 @@ describe("сценарий: выбор шаблона плана", () => {
     expect(proposalFor(id, "auto").profile).toBe("full_cycle");
   });
 });
+
+describe("шлюз jevai.org", () => {
+  it("адрес jevai.org — POST /api/v1/decisions, ответ разворачивается из data", async () => {
+    saveJevSettings({ apiKey: "jev_secret-1234567890", baseUrl: "https://www.jevai.org", model: "typesafe-ai/jev" });
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ code: 0, message: "ok", data: { answers: { q: { type: "noul", noul: 0.9 } } } }), { status: 200 }),
+    );
+    globalThis.fetch = fetchMock as any;
+    const out = await evaluateJev("x", { q: { type: "noul", instructions: "?" } });
+    expect(out?.answers.q).toEqual({ type: "noul", noul: 0.9 });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://www.jevai.org/api/v1/decisions");
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: "typesafe-ai/jev", state: "x" });
+  });
+
+  it("code≠0 у jevai — null, а проверка подключения показывает текст сервиса", async () => {
+    saveJevSettings({ apiKey: "jev_secret-1234567890", baseUrl: "https://www.jevai.org" });
+    globalThis.fetch = vi.fn(async () => new Response('{"code":-1,"message":"Quota exceeded","data":null}', { status: 200 })) as any;
+    expect(await evaluateJev("x", { q: { type: "noul", instructions: "?" } })).toBeNull();
+    expect(await testJevConnection()).toEqual({ ok: false, error: "Quota exceeded" });
+  });
+
+  it("502 от jevai — честная ошибка проверки, без исключения", async () => {
+    saveJevSettings({ apiKey: "jev_secret-1234567890", baseUrl: "https://www.jevai.org" });
+    globalThis.fetch = vi.fn(async () => new Response("error code: 502", { status: 502 })) as any;
+    expect(await testJevConnection()).toEqual({ ok: false, error: "HTTP 502" });
+  });
+});

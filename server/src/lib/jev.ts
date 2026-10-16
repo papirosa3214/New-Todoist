@@ -201,7 +201,32 @@ async function call(
   return parsed;
 }
 
-/** Кнопка «Проверить подключение»: живой запрос списка моделей. */
+/**
+ * Два шлюза к одной модели JEV, различаются адресом (владелец 16.10.2026
+ * прислал ключ `jev_…` от jevai.org):
+ *   - TypeSafe (api.typesafe.ai): POST /v1/systemone → { model, answers, usage };
+ *     проверка — GET /v1/models.
+ *   - jevai.org (https://www.jevai.org/docs): POST /api/v1/decisions с тем же
+ *     { model?, state, questions } → { code, message, data: { answers, … } },
+ *     code 0 — успех. Списка моделей нет — проверка одним маленьким вопросом.
+ */
+function isJevai(r: JevRow): boolean {
+  return /(^|\.)jevai\.org$/i.test(new URL(r.base_url).hostname);
+}
+
+/** Тело jevai: { code, message, data }. code≠0 — отказ с текстом. */
+function unwrapJevai(out: any): any {
+  if (!out || typeof out !== "object" || out.code !== 0) {
+    throw new Error(
+      typeof out?.message === "string"
+        ? out.message.slice(0, 200)
+        : "Неожиданный ответ jevai.org",
+    );
+  }
+  return out.data;
+}
+
+/** Кнопка «Проверить подключение»: живой запрос к выбранному шлюзу. */
 export async function testJevConnection(): Promise<
   { ok: true; models: string[]; ms: number } | { ok: false; error: string }
 > {
@@ -210,6 +235,20 @@ export async function testJevConnection(): Promise<
   if (!key) return { ok: false, error: "Ключ API не задан" };
   const t0 = Date.now();
   try {
+    if (isJevai(r)) {
+      const data = unwrapJevai(
+        await call(r, key, "POST", "/api/v1/decisions", {
+          model: r.model,
+          state: "Проверка подключения TaskFlow.",
+          questions: {
+            ping: { type: "noul", instructions: "Это проверочный запрос?" },
+          },
+        }),
+      );
+      if (!data?.answers?.ping)
+        return { ok: false, error: "Неожиданный ответ jevai.org" };
+      return { ok: true, models: [r.model], ms: Date.now() - t0 };
+    }
     const out = await call(r, key, "GET", "/v1/models");
     if (!Array.isArray(out?.models))
       return { ok: false, error: "Неожиданный ответ сервера JEV" };
@@ -241,11 +280,10 @@ export async function evaluateJev(
   const key = apiKey(r);
   if (!key) return null;
   try {
-    const out = await call(r, key, "POST", "/v1/systemone", {
-      model: r.model,
-      state,
-      questions,
-    });
+    const body = { model: r.model, state, questions };
+    const out = isJevai(r)
+      ? unwrapJevai(await call(r, key, "POST", "/api/v1/decisions", body))
+      : await call(r, key, "POST", "/v1/systemone", body);
     if (
       !out ||
       typeof out !== "object" ||
