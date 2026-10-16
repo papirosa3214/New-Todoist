@@ -1,0 +1,14 @@
+7a6b8c01-450e-4388-bb43-9a58497ace63|u1|rule|🔔 Правило test.qa.greet@v2 опубликовано
+
+# Правило приветствия QA|test.qa.greet@v2|2026-10-10 21:04:54
+571190de-a52a-43eb-828d-9450b10ba346|u1|rule|✅ QA подтвердил test.qa.greet@v2|test.qa.greet@v2|2026-10-10 21:05:02
+0f1b1426-b26a-481a-a7d7-9a3e9b359c07|u1|rule|🔔 Правило test.qa.greet@v3 опубликовано
+
+# Правило приветствия QA v3|test.qa.greet@v3|2026-10-10 21:05:08
+dc9872e0-4f5c-48c9-a438-ca2cbf4fe1ee|u1|rule|⏫ Правило test.qa.greet@v2 заменило v3. Требуется подтвердить v3.|test.qa.greet@v3|2026-10-10 21:05:08
+1bb4cc22-8e98-46a6-869c-6265cde5b716|u1|rule|🔔 Правило test.wildcard@v1 опубликовано
+
+# Широковещательное правило|test.wildcard@v1|2026-10-10 21:05:29
+89bc36a4-6ce4-4f76-8167-8d7734e27937|u1|rule|🔔 Правило test.default.scope@v1 опубликовано
+
+Без явного scope — wildcard.|test.default.scope@v1|2026-10-10 21:05:34

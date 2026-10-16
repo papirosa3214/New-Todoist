@@ -1,0 +1,1 @@
+{"pending_for_role":[{"ruleId":"test.default.scope","version":1,"preview":"Без явного scope — wildcard.","ref":"test.default.scope@v1"},{"ruleId":"test.wildcard","version":1,"preview":"# Широковещательное правило","ref":"test.wildcard@v1"}]}
