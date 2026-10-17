@@ -510,6 +510,10 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
           _подсказка: "дни без событий в по дням не попадают — это нормально",
         };
       }),
+    T("taskflow_archive", "Поместить карточку или проект в архив. Архивирование сохраняет данные; физическое удаление недоступно.", Type.Object({ kind: Type.Union([Type.Literal("task"), Type.Literal("project")]), id: Type.String({ minLength: 1 }) }), async (p) => {
+      if (p.kind === "task") return asRole(role, "POST", "/api/tasks/" + encodeURIComponent(p.id) + "/archive", {});
+      return asRole(role, "DELETE", "/api/projects/" + encodeURIComponent(p.id));
+    }),
     T("taskflow_task", "Карточка задачи целиком: описание, шаги, лента.", Id, async (p) => {
       const d = await asRole(role, "GET", `/api/tasks/${p.id}`);
       const task = unwrap(d);
@@ -835,7 +839,11 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
     );
   }
 
-  const all = [...tools, ...chatTools(role,chatContext), ...orchestratorTools(role, T), ...teamReadTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])];
+  const chatOperations = chatTools(role, chatContext);
+  const managementOperations = orchestratorTools(role, T).filter((tool) =>
+    !(role === "secretary" && chatContext && tool.name === "taskflow_slot_restart"),
+  );
+  const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])];
   if (unscoped) return all;
   return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }

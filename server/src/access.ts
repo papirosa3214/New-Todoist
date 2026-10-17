@@ -45,10 +45,10 @@
 import db from "./db.js";
 import { isServiceUser } from "./serviceUser.js";
 
-type Caller = { id?: string; role?: string; type?: string; reviewer?: number; profile?: string | null; permissions?: string | null };
+type Caller = { id?: string; role?: string; role_key?: string | null; type?: string; reviewer?: number; profile?: string | null; permissions?: string | null };
 
 function callerOf(userId: string): Caller | undefined {
-  return db.prepare("SELECT id, role, type, reviewer, profile, permissions FROM users WHERE id = ?").get(userId) as
+  return db.prepare("SELECT id, role, role_key, type, reviewer, profile, permissions FROM users WHERE id = ?").get(userId) as
     Caller | undefined;
 }
 
@@ -104,22 +104,28 @@ export function getRole(userId: string): string | null {
   return PROFILE_ROLE[profile] ?? null;
 }
 
-/** Владелец трекера — карт-бланш на чтение и на правку. */
+/** Помощник владельца — отдельная ai-учётка с постоянным role_key. */
+export function isSecretary(userId: string): boolean {
+  const caller = callerOf(userId);
+  return caller?.type === "ai" && (caller.role_key === "secretary" || caller.id === "u-secretary");
+}
+
+/** Владелец трекера и его Помощник — карт-бланш на чтение и правку.
+ * Удаление для Помощника отдельно блокирует общая дверь authOrApiToken. */
 export function isOwner(userId: string): boolean {
-  return callerOf(userId)?.role === "owner";
+  return callerOf(userId)?.role === "owner" || isSecretary(userId);
 }
 
 /**
- * Оркестратор — живая роль диспетчера/контролёра (L4, см. шапку файла).
- *
- * Распорядитель работы ботов. Читает и правит что угодно наравне с
- * владельцем, но не удаляет ничего: он раздаёт и переставляет работу, а
- * решение «этого больше не нужно» остаётся за человеком. Отказ
- * выдаётся раньше роутов — в authOrApiToken (auth.ts), на любой DELETE.
+ * Делегированный доступ без удаления: живой оркестратор и Помощник владельца.
+ * Оба управляют задачами наравне с владельцем; DELETE закрывается общей
+ * дверью authOrApiToken (auth.ts). Секретарь распознаётся по role_key, а
+ * фиксированная legacy-учётка u-secretary остаётся совместимой.
  */
 export function isOrchestrator(userId: string): boolean {
   const caller = callerOf(userId);
   if (caller?.role === "orchestrator") return true;
+  if (isSecretary(userId)) return true;
   if (caller?.role !== "agent" || caller.type !== "ai") return false;
   try { return JSON.parse(caller.permissions ?? "{}").orchestrate === true; }
   catch { return false; }

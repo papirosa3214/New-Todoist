@@ -10,17 +10,11 @@ const ONLY: Record<string, string[]> = {
   taskflow_task_daily: ["secretary"],
   taskflow_calendar_events: ["secretary"],
   taskflow_task_proposal: ["architect", "code_orchestrator", "secretary"],
+  taskflow_archive: ["secretary"],
 };
 
 const DENY: Record<string, string[]> = {
   critic_verifier: ["chat_send", "chat_read", "topic_reply", "consult", "claim", "heartbeat", "subtask_add", "library"],
-  // Помощнику владельца нельзя было закрыть свой шаг: subtask_work и
-  // subtask_done стояли здесь в запрете, и он трижды упирался в отказ по
-  // правам после выполненной работы (карточка kb-triage-mvbb2ecf, 16.10.2026).
-  // Запрет был избыточен: оба инструмента и так привязаны к своему слоту —
-  // inProcessRun отклоняет вызов с чужим id («Работай только в назначенном
-  // текущем слоте»), так что чужие шаги ими закрыть нельзя в принципе.
-  secretary: ["claim", "heartbeat", "state", "slot_snapshot", "subtask_add", "plan_request", "topic_reply", "topic_send", "topic_read", "rules", "library"],
   analyst: ["chat_send", "chat_read", "consult", "claim"],
   researcher: ["chat_read", "consult"],
   designer: ["chat_send", "chat_read"],
@@ -28,6 +22,9 @@ const DENY: Record<string, string[]> = {
 };
 
 export function roleToolAllowed(role: string, tool: string): boolean {
+  // Помощник владельца имеет общий набор TaskFlow-инструментов, кроме
+  // операций удаления/физической очистки. Архивирование остаётся доступно.
+  if (role === "secretary" && /delete|purge|remove/i.test(tool)) return false;
   const only = ONLY[tool];
   if (only && !only.includes(role)) return false;
   return !(DENY[role] ?? []).some((name) => tool === "taskflow_" + name);

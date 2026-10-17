@@ -15,6 +15,14 @@ describe("Набор инструментов по роли", () => {
       expect(roleToolAllowed(role, "taskflow_chat_reply")).toBe(true);
     }
   });
+  it("Помощник владельца получает общие инструменты; удаление закрыто, архив открыт", () => {
+    for (const tool of ["taskflow_state", "taskflow_slot_status", "taskflow_slot_reset", "taskflow_subtask_add", "taskflow_plan_request", "taskflow_topic_send", "taskflow_library", "taskflow_archive"]) {
+      expect(roleToolAllowed("secretary", tool), tool).toBe(true);
+    }
+    for (const tool of ["taskflow_delete", "taskflow_task_purge", "taskflow_project_remove"]) {
+      expect(roleToolAllowed("secretary", tool), tool).toBe(false);
+    }
+  });
   it("новый инструмент по умолчанию достаётся всем", () => {
     expect(roleToolAllowed("builder", "taskflow_new_thing")).toBe(true);
   });

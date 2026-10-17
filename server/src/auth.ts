@@ -1,31 +1,26 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import db, { hashApiToken } from "./db.js";
-import { isOrchestrator } from "./access.js";
+import { isOrchestrator, isSecretary } from "./access.js";
 import { isServiceUser } from "./serviceUser.js";
 import { touchActive } from "./activeAgent.js";
 
 /**
- * Оркестратору удаление запрещено — на любом объекте и любым способом.
- *
- * Формулировка владельца (задача af2107b2, 28.08.2026): «полные права на
- * управление проектами и задачами ботов… право на удаление объектов должно
- * быть запрещено». Проверка стоит здесь, в общей двери авторизации, а не в
- * одиннадцати DELETE-роутах поимённо: через authOrApiToken проходит каждый
- * из них, и роут, дописанный завтра, будет закрыт с рождения — а список,
- * который надо не забыть пополнить, рано или поздно забывают пополнить.
- *
- * 403, а не 404: оркестратор объект видит и правит, отказано ему именно в
- * действии — молчаливое «не найдено» тут только запутает.
+ * Делегированные роли не удаляют объекты. Единственный DELETE-маршрут,
+ * который пропускаем, /api/projects/:id: его обработчик только архивирует
+ * активный проект и никогда не удаляет данные. Purge и остальные DELETE
+ * остаются закрытыми общей дверью авторизации.
  */
 function deleteForbidden(
   req: FastifyRequest,
   reply: FastifyReply,
   userId: string,
 ): boolean {
-  if (req.method !== "DELETE" || !isOrchestrator(userId)) return false;
+  const path = req.url.split("?")[0];
+  const projectArchive = isSecretary(userId) && /^\/api\/projects\/[^/]+$/.test(path);
+  if (req.method !== "DELETE" || !isOrchestrator(userId) || projectArchive) return false;
   reply.code(403).send({
     error:
-      "оркестратор не удаляет объекты: он раздаёт и правит работу, а удаление остаётся за владельцем",
+      "делегированная роль не удаляет объекты: архивирование разрешено, физическое удаление остаётся за владельцем",
   });
   return true;
 }
