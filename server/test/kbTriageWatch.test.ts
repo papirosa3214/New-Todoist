@@ -47,12 +47,12 @@ describe("триггер разбора накопившихся заметок"
     noteSeq = 0;
   });
 
-  function seedPending(n: number) {
+  function seedPending(n: number, mark = "Из задачи: Координация") {
     for (let i = 0; i < n; i++) {
       db.prepare(
         "INSERT INTO user_notes (id, title, content, kb_temp_category, created_at, updated_at) VALUES (?,?,?,?,datetime('now'),datetime('now'))",
       ).run(`kbp-${Date.now()}-${noteSeq++}`, `Заметка ${i}`,
-        JSON.stringify({ type: "doc", content: [{ type: "paragraph" }] }), "Из задачи: Координация");
+        JSON.stringify({ type: "doc", content: [{ type: "paragraph" }] }), mark);
     }
   }
 
@@ -175,6 +175,34 @@ describe("триггер разбора накопившихся заметок"
 
     expect(triageCards().length, "перезапуск не плодит карточки").toBe(1);
     expect(secretarySignals().length, "и не дублирует сигнал").toBe(1);
+  });
+
+  it("помеченные «мусор» в счётчик не входят — очередь доходит до нуля и карточка не заводится", () => {
+    // 30 «мусоров» держали счётчик выше порога 20: очередь не доходила до
+    // нуля, и сторож заводил карточку разбора сразу после закрытия предыдущей.
+    seedPending(30, "мусор");
+    expect(kbPendingCount(), "по «мусору» решение уже принято — ждать нечего").toBe(0);
+    __raiseKbTriage();
+    expect(triageCards().length, "карточка разбора не заводится").toBe(0);
+    expect(secretarySignals().length, "и Помощника владельца не будят").toBe(0);
+    expect(kbTriageState().pending, "на экране состояния честный ноль").toBe(0);
+  });
+
+  it("обычная временная метка по-прежнему попадает в счётчик", () => {
+    seedPending(30, "мусор");
+    seedPending(3, "Из задачи: Координация");
+    expect(kbPendingCount(), "настоящая очередь считается целиком").toBe(3);
+    seedPending(2, "Из задачи: Координация");
+    expect(kbPendingCount(), "и продолжает расти").toBe(5);
+  });
+
+  it("«мусор» не попадает в очередь, даже когда порог достигнут на живых заметках", () => {
+    seedPending(20, "Из задачи: Координация");
+    seedPending(30, "мусор");
+    __raiseKbTriage();
+    expect(triageCards()[0].title, "в счётчике ровно живые 20, а не 50").toContain("20");
+    expect(triageCards()[0].description, "и в описании то же число").toContain("Ждут разбора: 20");
+    expect(triageCards()[0].description, "инструкция про «мусор» осталась").toContain("мусор");
   });
 
   it("состояние сторожа точное: сколько ждёт и какая карточка жива", () => {

@@ -3,6 +3,7 @@ import db from "../db.js";
 import { broadcastToUsers } from "../ws.js";
 import { loadChatMessage } from "./chatMessages.js";
 import { SECRETARY_CHAT_ID } from "./secretaryReply.js";
+import { KB_DROP_MARK } from "./kbCategories.js";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
@@ -132,12 +133,26 @@ export function kbTriageState(): {
   };
 }
 
+/** Сколько заметок ждут разбора.
+ *
+ *  Пометка «мусор» в счётчик НЕ входит: по ней решение уже принято (заметка
+ *  одноразовая, её не удаляют — см. `kbCategories.ts`), разбор повторять
+ *  нечего. Раньше условие было `kb_temp_category IS NOT NULL`, и 30 помеченных
+ *  «мусор» держали счётчик выше порога 20: очередь не доходила до нуля, и
+ *  сторож заводил новую карточку разбора сразу после закрытия предыдущей.
+ *
+ *  Любая ДРУГАЯ временная метка («Из задачи: Координация» и подобные) считается
+ *  по-прежнему: это и есть настоящая очередь разбора.
+ */
 function pendingCount(): number {
   const row = db
     .prepare(
-      "SELECT COUNT(*) AS n FROM user_notes WHERE kb_temp_category IS NOT NULL AND kb_category IS NULL",
+      `SELECT COUNT(*) AS n FROM user_notes
+        WHERE kb_temp_category IS NOT NULL
+          AND kb_category IS NULL
+          AND kb_temp_category <> ?`,
     )
-    .get() as { n: number };
+    .get(KB_DROP_MARK) as { n: number };
   return row.n;
 }
 
@@ -202,7 +217,7 @@ function triageDescription(count: number): string {
       "- Переиспользуемой проставить постоянную категорию: PATCH /api/notes/:id с kb_category.",
       "- Категории: **Workflows** — как принято делать; **Norms** — правила и ограничения; **Roles** — кто что умеет; **Knowledge Base** — как устроено и где грабли; **Исследования** — как это делают снаружи.",
       "- Одноразовую **не удалять**: поставить kb_temp_category = \"мусор\" и снять прежнюю временную метку. Окончательное решение принимается по факту обращений ролей.",
-      "- Метку `kb_temp_category` снимать во всех случаях — иначе заметка попадёт в следующий разбор снова.",
+      "- Метку `kb_temp_category` снимать во всех случаях — иначе заметка попадёт в следующий разбор снова. Исключение — пометка «мусор»: решение по ней уже принято, она в счётчик разбора не входит и повторно не разбирается.",
       "",
       "## Границы",
       "- Удаление заметок — не твоё дело. Ни одной.",
