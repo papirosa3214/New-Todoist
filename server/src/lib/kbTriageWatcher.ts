@@ -133,9 +133,14 @@ export function kbTriageState(): {
 }
 
 function pendingCount(): number {
+  // Пометка «мусор» — это решение по заметке, а не работа в очереди: её
+  // окончательная судьба решается по счётчику обращений (noteAccessWatcher).
+  // Считая её здесь, очередь никогда не доходила до нуля — 30 помеченных
+  // держали счётчик выше порога, и сторож заводил следующую карточку
+  // (решение владельца 17.10.2026).
   const row = db
     .prepare(
-      "SELECT COUNT(*) AS n FROM user_notes WHERE kb_temp_category IS NOT NULL AND kb_category IS NULL",
+      "SELECT COUNT(*) AS n FROM user_notes WHERE kb_temp_category IS NOT NULL AND kb_category IS NULL AND kb_temp_category <> 'мусор'",
     )
     .get() as { n: number };
   return row.n;
