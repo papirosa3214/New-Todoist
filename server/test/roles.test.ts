@@ -8,6 +8,7 @@ import { liveModelOf } from "./helpers/liveRoutingModels.js";
 describe("role catalog API", () => {
   let app: FastifyInstance;
   let ownerToken: string;
+  let ownerId: string;
   let agentToken: string;
   let agentId: string;
 
@@ -40,9 +41,13 @@ describe("role catalog API", () => {
       },
     });
     ownerToken = owner.json().token;
-    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(
-      owner.json().user.id,
-    );
+    ownerId = owner.json().user.id;
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(ownerId);
+    db
+      .prepare(
+        "UPDATE users SET task_intake_mode = 'automatic' WHERE role = 'owner' AND COALESCE(archived, 0) = 0",
+      )
+      .run();
 
     const agent = await app.inject({
       method: "POST",
@@ -68,6 +73,20 @@ describe("role catalog API", () => {
 
   afterAll(async () => {
     await app.close();
+  });
+
+  it("reports a callable role online on the first agents request", async () => {
+    const agents = await app.inject({
+      method: "GET",
+      url: "/api/agents",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(agents.statusCode).toBe(200);
+    expect(agents.json()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "role_architect", online: true }),
+      ]),
+    );
   });
 
   it("lists nine roles (with Инженер .110) and returns Architect details", async () => {

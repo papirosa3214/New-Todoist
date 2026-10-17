@@ -4,7 +4,7 @@ import crypto from "crypto";
 import db, { hashApiToken } from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { snapshotFor } from "../activeAgent.js";
-import { roleKeyHealth } from "./roles.js";
+import { refreshRoleReadiness, roleKeyHealth } from "./roles.js";
 import {
   getProjectForUser,
   getProjectForWrite,
@@ -779,6 +779,10 @@ export function registerProjectLabelRoutes(app: FastifyInstance) {
   // SQL там съедает TypeScript.
     "END)";
   app.get("/api/agents", { preHandler: authPre }, async (req: any) => {
+    // Этот endpoint используют межролевые инструменты и список команды.
+    // Обновляем готовность здесь, чтобы первый запрос после запуска сервера
+    // не показывал все роли офлайн до отдельного GET /api/roles.
+    await refreshRoleReadiness();
     const rows = db
       .prepare(
         `SELECT id, name, role, type, avatar_color, avatar_url,

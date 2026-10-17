@@ -266,16 +266,11 @@ function roleDetails(role: RoleName, piAlive: boolean) {
 }
 
 /**
- * Жив ли исполнитель, которым роли и работают.
+ * Включён ли автоматический приём и запуск задач.
  *
- * Все восемь ролей выполняет один Pi runtime, поднимаемый службой
- * автономки. Служба стоит — исполнять роль некому, какой бы исправной ни
- * была её конфигурация. Отдельного признака у ролей для этого нет и не
- * нужно: он был бы копией того же факта и разъехался бы с ним.
- *
- * Отказ проверки трактуется как «не запущен»: соврать «Готова» и оставить
- * владельца ждать работу, которая не начнётся, хуже, чем показать
- * «Недоступна» лишний раз.
+ * Это режим владельца из unitState(), а не probe процесса Pi. Он остаётся
+ * отдельным общим признаком; /api/agents обновляет его снимок готовности на
+ * каждом холодном старте процесса и не ждёт предварительного открытия каталога.
  */
 async function piAlive(): Promise<boolean> {
   try {
@@ -291,8 +286,40 @@ async function piAlive(): Promise<boolean> {
  *  каждом /api/roles, чтобы /api/agents не делал свой обход ролей.
  *  Присутствие агента = «его можно разбудить», а не «стучался минуту назад». */
 const roleReadiness = new Map<string, boolean>();
+const ROLE_READINESS_TTL_MS = 5_000;
+let roleReadinessCheckedAt = 0;
+let roleReadinessRuntimeReady = false;
+let roleReadinessRefresh: Promise<boolean> | null = null;
+
 export function roleKeyHealth(roleKey: string): boolean {
   return roleReadiness.get(roleKey) ?? false;
+}
+
+/** Обновляет готовность к вызову до ответа /api/agents.
+ *  Этот же снимок используют каталог ролей и межролевые инструменты.
+ *  Короткий TTL сглаживает параллельные запросы, не завися от порядка
+ *  между /api/agents и /api/roles.
+ */
+export async function refreshRoleReadiness(force = false): Promise<boolean> {
+  if (!force && Date.now() - roleReadinessCheckedAt < ROLE_READINESS_TTL_MS) {
+    return roleReadinessRuntimeReady;
+  }
+  if (roleReadinessRefresh) return roleReadinessRefresh;
+
+  roleReadinessRefresh = (async () => {
+    const alive = await piAlive();
+    for (const role of allRoles().map((r) => r.key)) {
+      roleReadiness.set(role, roleDetails(role, alive).status !== "unavailable");
+    }
+    roleReadinessRuntimeReady = alive;
+    roleReadinessCheckedAt = Date.now();
+    return alive;
+  })();
+  try {
+    return await roleReadinessRefresh;
+  } finally {
+    roleReadinessRefresh = null;
+  }
 }
 
 /** Register the role catalog, role prompts, and account-role lookup routes. */
@@ -303,14 +330,8 @@ export function registerRoleRoutes(app: FastifyInstance): void {
     "/api/roles",
     { preHandler: authPre },
     async (req) => {
-      // Здоровье исполнителя спрашивается ОДИН раз на запрос, а не на
-      // каждую из восьми ролей: за ответом стоит вызов systemctl.
-      const alive = await piAlive();
-      // Зеркалим готовность в кэш для /api/agents: там своя выборка
-      // пользователей, обходить роли ещё раз — лишний вызов systemctl.
-      for (const role of allRoles().map((r) => r.key)) {
-        roleReadiness.set(role, roleDetails(role, alive).status !== "unavailable");
-      }
+      // Общий режим читается один раз, готовность ролей строится из того же снимка.
+      const alive = await refreshRoleReadiness(true);
       // ?all=1 — вместе с отключёнными: экрану «Команда» их надо показать,
       // чтобы было что включить обратно. Без него — только рабочие роли.
       const keys = req.query.all === "1" ? allRoles().map((r) => r.key) : ROLE_NAMES;
