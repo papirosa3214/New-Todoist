@@ -37,6 +37,87 @@ export interface RoleEnvelopeV1 {
   needs_human: boolean;
 }
 
+/** Целевой контракт чата с закрытым набором типизированных блоков. */
+export interface StructuredRoleEnvelopeV1 {
+  schema_version: 1;
+  ok: boolean;
+  output: Record<string, unknown>[];
+  artifacts: { kind: string; title: string; ref: string }[];
+  plan_artifact: Record<string, unknown> | null;
+  error: { code: string; message: string; retryable: boolean } | null;
+  next_hint: string | null;
+  needs_human: boolean;
+}
+
+export interface StructuredRoleContractValidation {
+  valid: boolean;
+  errors: string[];
+  envelope: StructuredRoleEnvelopeV1 | null;
+}
+
+const STRUCTURED_BLOCK_FIELDS: Record<string, string[]> = {
+  text: ["type", "text"], heading: ["type", "text", "level"],
+  list: ["type", "items", "ordered"], table: ["type", "title", "columns", "rows"],
+  status: ["type", "code", "title", "text"], progress: ["type", "title", "current", "total", "unit", "label"],
+  chart: ["type", "title", "kind", "unit", "points"], diagram: ["type", "title", "kind", "items"],
+  report: ["type", "report_kind", "sections"], handoff: ["type", "artifact_key", "summary"],
+};
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const isText = (value: unknown, max = 4000): value is string =>
+  typeof value === "string" && value.length <= max;
+const isMaterial = (value: unknown): boolean => isObject(value) &&
+  ["url", "document", "file", "change", "artifact", "log"].includes(String(value.kind)) &&
+  isText(value.title, 1000) && isText(value.ref, 1024);
+
+function structuredBlockErrors(value: unknown, path: string, report = false): string[] {
+  if (!isObject(value)) return [path + ": ожидается объект"];
+  const type = value.type;
+  const fields = typeof type === "string" ? STRUCTURED_BLOCK_FIELDS[type] : undefined;
+  if (!fields || (report && !["text", "heading", "list", "table", "status"].includes(String(type)))) return [path + ".type: неизвестный тип блока"];
+  const errors = Object.keys(value).filter((key) => !fields.includes(key)).map((key) => path + "." + key + ": поле не разрешено");
+  const stringField = (key: string, max = 4000) => { if (!isText(value[key], max)) errors.push(path + "." + key + ": ожидается строка"); };
+  switch (type) {
+    case "text": stringField("text", 65536); break;
+    case "heading": stringField("text", 1000); if (!Number.isInteger(value.level) || Number(value.level) < 1 || Number(value.level) > 3) errors.push(path + ".level: ожидается 1..3"); break;
+    case "list": if (!Array.isArray(value.items) || value.items.length < 1 || value.items.length > 200 || !value.items.every((x) => isText(x))) errors.push(path + ".items: ожидается список строк"); if (value.ordered !== undefined && typeof value.ordered !== "boolean") errors.push(path + ".ordered: ожидается boolean"); break;
+    case "table": if (value.title !== undefined) stringField("title", 1000); if (!Array.isArray(value.columns) || value.columns.length < 1 || value.columns.length > 12 || !value.columns.every((x) => isText(x, 200))) errors.push(path + ".columns: ожидаются названия колонок"); if (!Array.isArray(value.rows) || value.rows.length > 100 || value.rows.some((row) => !Array.isArray(row) || row.length !== (Array.isArray(value.columns) ? value.columns.length : -1) || !row.every((x) => isText(x)))) errors.push(path + ".rows: строки должны совпадать с columns"); break;
+    case "status": stringField("title", 1000); if (!["info", "in_progress", "passed", "failed", "blocked", "skipped"].includes(String(value.code))) errors.push(path + ".code: неизвестный статус"); if (value.text !== undefined) stringField("text"); break;
+    case "progress": stringField("title", 1000); if (typeof value.current !== "number" || value.current < 0 || typeof value.total !== "number" || value.total <= 0 || value.current > value.total) errors.push(path + ": некорректные current/total"); break;
+    case "chart": stringField("title", 1000); if (!["bar", "line"].includes(String(value.kind)) || !Array.isArray(value.points) || !value.points.length || value.points.length > 500 || value.points.some((p) => !isObject(p) || !isText(p.label, 256) || typeof p.value !== "number")) errors.push(path + ": некорректные данные графика"); break;
+    case "diagram": stringField("title", 1000); if (!["chain", "ladder", "timeline"].includes(String(value.kind)) || !Array.isArray(value.items) || !value.items.length || value.items.length > 100 || value.items.some((item) => !isObject(item) || !isText(item.label, 256) || !["queued", "in_progress", "done", "blocked", "failed", "skipped"].includes(String(item.state)))) errors.push(path + ": некорректная схема"); break;
+    case "report": {
+      if (!["intermediate", "final"].includes(String(value.report_kind)) || !isObject(value.sections)) { errors.push(path + ": некорректный отчёт"); break; }
+      const sections = value.sections; const names = ["result", "work", "checks", "limitations", "materials"];
+      if (names.some((key) => !(key in sections)) || Object.keys(sections).some((key) => !names.includes(key))) errors.push(path + ".sections: нужны пять согласованных разделов");
+      for (const key of ["result", "work", "limitations"]) if (!Array.isArray(sections[key]) || sections[key].some((block) => structuredBlockErrors(block, path + "." + key, true).length)) errors.push(path + ".sections." + key + ": недопустимые блоки");
+      if (!Array.isArray(sections.checks) || sections.checks.length > 200 || sections.checks.some((check) => !isObject(check) || !isText(check.label, 1000) || !["passed", "failed", "blocked", "skipped", "not_run"].includes(String(check.status)))) errors.push(path + ".sections.checks: некорректные проверки");
+      if (!Array.isArray(sections.materials) || sections.materials.length > 8 || sections.materials.some((item) => !isMaterial(item))) errors.push(path + ".sections.materials: некорректные материалы");
+      break;
+    }
+    case "handoff": stringField("artifact_key", 128); stringField("summary"); break;
+  }
+  return errors;
+}
+
+export function validateStructuredRoleContractV1(value: unknown): StructuredRoleContractValidation {
+  if (!isObject(value)) return { valid: false, errors: ["конверт должен быть объектом"], envelope: null };
+  const errors: string[] = [];
+  const keys = ["schema_version", "ok", "output", "artifacts", "plan_artifact", "error", "next_hint", "needs_human"];
+  for (const key of keys) if (!(key in value)) errors.push(key + ": обязательное поле отсутствует");
+  for (const key of Object.keys(value)) if (!keys.includes(key)) errors.push(key + ": неизвестное поле");
+  if (value.schema_version !== 1) errors.push("schema_version: поддерживается только 1");
+  if (typeof value.ok !== "boolean") errors.push("ok: ожидается boolean");
+  if (!Array.isArray(value.output) || value.output.length < 1 || value.output.length > 200) errors.push("output: ожидается 1..200 блоков");
+  else value.output.forEach((block, index) => errors.push(...structuredBlockErrors(block, "output[" + index + "]")));
+  if (!Array.isArray(value.artifacts) || value.artifacts.length > 8 || value.artifacts.some((item) => !isMaterial(item))) errors.push("artifacts: ожидается список до 8 материалов");
+  if (value.plan_artifact !== null && (!isObject(value.plan_artifact) || !isText(value.plan_artifact.key, 128) || !isText(value.plan_artifact.type, 128) || value.plan_artifact.format !== "json" || !isText(value.plan_artifact.summary) || !isObject(value.plan_artifact.payload) || !Array.isArray(value.plan_artifact.evidence) || value.plan_artifact.evidence.length > 8 || value.plan_artifact.evidence.some((item) => !isMaterial(item)))) errors.push("plan_artifact: некорректный машинный артефакт");
+  if (value.error !== null && (!isObject(value.error) || !["validation_error", "tool_error", "blocked", "other"].includes(String(value.error.code)) || !isText(value.error.message) || typeof value.error.retryable !== "boolean")) errors.push("error: некорректная ошибка");
+  if (value.next_hint !== null && !isText(value.next_hint)) errors.push("next_hint: ожидается строка или null");
+  if (typeof value.needs_human !== "boolean") errors.push("needs_human: ожидается boolean");
+  return errors.length ? { valid: false, errors, envelope: null } : { valid: true, errors: [], envelope: value as unknown as StructuredRoleEnvelopeV1 };
+}
+
 /** Откуда взят конверт в ответе роли. `plain` — конверта нет, текст обычный. */
 export type RoleAnswerFormat = "v1" | "legacy" | "plain";
 
@@ -45,6 +126,7 @@ export interface ParsedRoleAnswer {
   /** Текст для показа владельцу: у конверта — только `output`. */
   text: string;
   envelope: RoleEnvelopeV1 | null;
+  structuredEnvelope: StructuredRoleEnvelopeV1 | null;
   errors: string[];
   warnings: string[];
 }
@@ -163,7 +245,7 @@ const LEGACY_MARK = /ok\s*:\s*(true|false)/;
 const LEGACY_KEY = /^(artifacts|error|next_hint|needs_human):/;
 const BACKTICK_KEY = /^`((?:ok|output|artifacts|error|next_hint|needs_human):.*)`\s*$/;
 
-/** Кандидат в JSON-конверт: объект с `ok` и строкой `output`. Один `ok`
+/** Кандидат в JSON-конверт: старый строковый output или целевой массив блоков. Один `ok`
  *  без `output` — не конверт (например, пример JSON в обычном ответе). */
 function asV1Candidate(body: string): unknown | null {
   const trimmed = body.trim();
@@ -173,11 +255,36 @@ function asV1Candidate(body: string): unknown | null {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const obj = value as Record<string, unknown>;
     if (!("ok" in obj) || !("output" in obj)) return null;
-    if (typeof obj.output !== "string") return null;
+    if (typeof obj.output !== "string" && !(obj.schema_version === 1 && Array.isArray(obj.output))) return null;
     return value;
   } catch {
     return null;
   }
+}
+
+function structuredOutputText(blocks: Record<string, unknown>[]): string {
+  return blocks.map((block) => {
+    switch (block.type) {
+      case "text": return String(block.text ?? "");
+      case "heading": return "#".repeat(Number(block.level ?? 2)) + " " + String(block.text ?? "");
+      case "list": return (Array.isArray(block.items) ? block.items : []).map((item) => "• " + String(item)).join("\n");
+      case "table": return Array.isArray(block.rows) ? block.rows.map((row) => Array.isArray(row) ? row.join(" | ") : "").join("\n") : "";
+      case "status": return String(block.title ?? "") + (block.text ? ": " + String(block.text) : "");
+      case "progress": return String(block.title ?? "") + ": " + String(block.current ?? "") + " из " + String(block.total ?? "");
+      case "chart": return String(block.title ?? "");
+      case "diagram": return String(block.title ?? "") + ": " + (Array.isArray(block.items) ? block.items.map((item: any) => String(item.label ?? "")).join(" → ") : "");
+      case "report": {
+        const sections = block.sections as Record<string, any> | undefined;
+        if (!sections) return "";
+        return ["result", "work", "checks", "limitations", "materials"].flatMap((key) => {
+          const value = sections[key];
+          return Array.isArray(value) ? value.map((item) => typeof item === "string" ? item : item.text ?? item.label ?? item.title ?? "") : [];
+        }).filter(Boolean).join("\n");
+      }
+      case "handoff": return String(block.summary ?? "");
+      default: return "";
+    }
+  }).filter(Boolean).join("\n\n");
 }
 
 // ── Старый YAML-подобный конверт (01.10.2026) ────────────────────────────
@@ -289,17 +396,28 @@ function legacyEnvelope(body: string, output: string): RoleEnvelopeV1 | null {
  * чем неразобранный.
  */
 export function parseRoleContractV1(text: string): ParsedRoleAnswer {
-  const plain: ParsedRoleAnswer = { format: "plain", text, envelope: null, errors: [], warnings: [] };
+  const plain: ParsedRoleAnswer = { format: "plain", text, envelope: null, structuredEnvelope: null, errors: [], warnings: [] };
   if (!text || !ENVELOPE_MARK.test(text)) return plain;
 
   const errors: string[] = [];
   const warnings: string[] = [];
   let envelope: RoleEnvelopeV1 | null = null;
+  let structuredEnvelope: StructuredRoleEnvelopeV1 | null = null;
   let replaced = false;
   const fenced = text.replace(JSON_FENCE, (whole, lang: string, body: string) => {
     if (lang && !/^(json|jsonc|json5)$/i.test(lang)) return whole;
     const candidate = asV1Candidate(body);
     if (candidate === null) return whole;
+    if (isObject(candidate) && candidate.schema_version !== undefined) {
+      const checked = validateStructuredRoleContractV1(candidate);
+      if (!checked.valid || !checked.envelope) {
+        errors.push(...checked.errors);
+        return whole;
+      }
+      replaced = true;
+      structuredEnvelope ??= checked.envelope;
+      return structuredOutputText(checked.envelope.output);
+    }
     const checked = validateRoleContractV1(candidate);
     warnings.push(...checked.warnings);
     if (!checked.valid || !checked.envelope) {
@@ -311,16 +429,23 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
     return checked.envelope.output;
   });
   if (replaced || errors.length) {
-    return { format: "v1", text: replaced ? fenced : text, envelope, errors, warnings };
+    return { format: "v1", text: replaced ? fenced : text, envelope, structuredEnvelope, errors, warnings };
   }
 
   const bare = asV1Candidate(text.trim());
   if (bare !== null) {
+    if (isObject(bare) && bare.schema_version !== undefined) {
+      const checked = validateStructuredRoleContractV1(bare);
+      if (checked.valid && checked.envelope) {
+        return { format: "v1", text: structuredOutputText(checked.envelope.output), envelope: null, structuredEnvelope: checked.envelope, errors: [], warnings: [] };
+      }
+      return { format: "v1", text, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: [] };
+    }
     const checked = validateRoleContractV1(bare);
     if (checked.valid && checked.envelope) {
-      return { format: "v1", text: checked.envelope.output, envelope: checked.envelope, errors: [], warnings: checked.warnings };
+      return { format: "v1", text: checked.envelope.output, envelope: checked.envelope, structuredEnvelope: null, errors: [], warnings: checked.warnings };
     }
-    return { format: "v1", text, envelope: null, errors: checked.errors, warnings: checked.warnings };
+    return { format: "v1", text, envelope: null, structuredEnvelope: null, errors: checked.errors, warnings: checked.warnings };
   }
 
   const legacy = parseLegacy(text);
@@ -329,6 +454,7 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
       format: "legacy",
       text: legacy.text,
       envelope: legacyEnvelope(legacy.body, legacy.envelopeOutput),
+      structuredEnvelope: null,
       errors: [],
       warnings: [],
     };
@@ -336,15 +462,57 @@ export function parseRoleContractV1(text: string): ParsedRoleAnswer {
   return plain;
 }
 
+function decodeJSONStringPrefix(text: string, quoteAt: number): string | null {
+  if (text[quoteAt] !== '"') return null;
+  let result = "";
+  for (let i = quoteAt + 1; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"') return result;
+    if (ch !== "\\") { result += ch; continue; }
+    i += 1;
+    if (i >= text.length) break;
+    const escape = text[i];
+    const simple: Record<string, string> = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+    if (escape in simple) { result += simple[escape]; continue; }
+    if (escape === "u" && /^[0-9a-fA-F]{4}$/.test(text.slice(i + 1, i + 5))) {
+      result += String.fromCharCode(parseInt(text.slice(i + 1, i + 5), 16));
+      i += 4;
+      continue;
+    }
+    break;
+  }
+  return result;
+}
+
+/** Во время JSON-потока показываем только текущий текстовый блок, не оболочку. */
+function partialStructuredText(text: string): string | null {
+  const output = /"output"\s*:\s*/.exec(text);
+  if (!output) return null;
+  let cursor = output.index + output[0].length;
+  while (/\s/.test(text[cursor] ?? "")) cursor += 1;
+  if (text[cursor] === '"') return decodeJSONStringPrefix(text, cursor);
+  if (text[cursor] !== "[") return null;
+  const tail = text.slice(cursor);
+  const type = /"type"\s*:\s*"text"/.exec(tail);
+  if (!type) return null;
+  const field = /"text"\s*:\s*"/.exec(tail.slice(type.index + type[0].length));
+  if (!field) return null;
+  const quoteAt = cursor + type.index + type[0].length + field.index + field[0].length - 1;
+  return decodeJSONStringPrefix(text, quoteAt);
+}
+
 /** Текст для показа владельцу: конверт снят, обычный ответ не тронут. */
 export function unwrapRoleEnvelopeText(text: string): string {
-  return parseRoleContractV1(text).text;
+  const parsed = parseRoleContractV1(text);
+  if (parsed.format === "plain") return partialStructuredText(text) ?? parsed.text;
+  return parsed.text;
 }
 
 /** Конверт для поля сообщения чата (`role_envelope`) либо null. */
-export function roleEnvelopeField(text: unknown): RoleEnvelopeV1 | null {
+export function roleEnvelopeField(text: unknown): RoleEnvelopeV1 | StructuredRoleEnvelopeV1 | null {
   if (typeof text !== "string") return null;
-  return parseRoleContractV1(text).envelope;
+  const parsed = parseRoleContractV1(text);
+  return parsed.structuredEnvelope ?? parsed.envelope;
 }
 
 /** Набор правил одной строкой — для инструкции роли и документации. */

@@ -13,7 +13,7 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { chatHandoff } from "./chatHandoff.js";
-import { parseRoleContractV1, type RoleEnvelopeV1 } from "./roleContractV1.js";
+import { parseRoleContractV1 } from "./roleContractV1.js";
 
 // Ленивая подготовка: db.prepare с колонкой chat_message_id не должен
 // падать на импорте, если миграция 053 ещё не прошла (index.ts импортирует
@@ -67,7 +67,7 @@ export function formatChatMessage(message: any) {
     // Конверт роли (JSON-контракт v1, 17.10.2026): нормализованные поля
     // `ok/output/artifacts/error/next_hint/needs_human` для клиента. У сообщений
     // без конверта поля нет — старые ответы приходят как приходили.
-    role_envelope: (parsed?.envelope ?? null) as RoleEnvelopeV1 | null,
+    role_envelope: parsed?.structuredEnvelope ?? parsed?.envelope ?? null,
     // Конверт ok/output в ответе роли (01.10.2026) — показываем только output.
     text: displayText,
     ...(message.steps && JSON.parse(message.steps).coordination ? {kind:"coordination",coordination:coordinationCardData(message)} : {}),

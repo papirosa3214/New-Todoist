@@ -7,6 +7,7 @@ import {
   ROLE_CONTRACT_V1,
   unwrapRoleEnvelopeText,
   validateRoleContractV1,
+  validateStructuredRoleContractV1,
 } from "../src/lib/roleContractV1.js";
 import { unwrapRoleEnvelope } from "../src/runtime/chatLiveTurn.js";
 import { buildApp } from "../src/index.js";
@@ -137,6 +138,28 @@ describe("JSON-контракт роли v1: разбор ответа роли"
     expect(plain.envelope).toMatchObject({ ok: false, output: "Не смог.", needs_human: true });
   });
 
+  it("целевой JSON с типизированными блоками проходит проверку и становится полем envelope", () => {
+    const value = {
+      schema_version: 1, ok: true,
+      output: [{ type: "text", text: "Результат готов." }, { type: "status", title: "Проверка", code: "passed" }, { type: "table", columns: ["Этап"], rows: [["1"]] }],
+      artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: false,
+    };
+    expect(validateStructuredRoleContractV1(value)).toMatchObject({ valid: true });
+    const parsed = parseRoleContractV1(JSON.stringify(value));
+    expect(parsed.text).toBe("Результат готов.\n\nПроверка\n\n1");
+    expect(parsed.structuredEnvelope).toEqual(value);
+    expect(parsed.envelope).toBeNull();
+  });
+
+  it("неизвестный блок отклоняется, а неполный live JSON показывает только текстовый префикс", () => {
+    const invalid = {
+      schema_version: 1, ok: true, output: [{ type: "html", html: "<b>x</b>" }],
+      artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: false,
+    };
+    expect(validateStructuredRoleContractV1(invalid).valid).toBe(false);
+    expect(unwrapRoleEnvelopeText('{"schema_version":1,"ok":true,"output":[{"type":"text","text":"Печатается \\u043e')).toBe("Печатается о");
+  });
+
   it.each([
     ["Пример:\n```json\n{\"ok\": true}\n```", "JSON без output — не конверт"],
     ["Вот:\n```ts\nconst ok = true;\n```", "код не конверт"],
@@ -188,6 +211,13 @@ describe("JSON-контракт роли v1: чат и сдача этапа", {
     const v1 = formatChatMessage(chatRow(JSON.stringify({ ok: true, output: "Виджет нарисован.", artifacts: ["https://example.test/док"], needs_human: false })));
     expect(v1.role_envelope).toEqual({ contract: "role.v1", ok: true, output: "Виджет нарисован.", artifacts: ["https://example.test/док"], error: null, next_hint: null, needs_human: false });
     expect(v1.text).toBe("Виджет нарисован.");
+
+    const structured = formatChatMessage(chatRow(JSON.stringify({
+      schema_version: 1, ok: true, output: [{ type: "text", text: "Блоковый результат." }],
+      artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: false,
+    })));
+    expect(structured.role_envelope).toMatchObject({ schema_version: 1, output: [{ type: "text", text: "Блоковый результат." }] });
+    expect(structured.text).toBe("Блоковый результат.");
 
     const legacy = formatChatMessage(chatRow("```\nok: true\noutput: |\n  Старый вид.\n```"));
     expect(legacy.text).toBe("Старый вид.");
