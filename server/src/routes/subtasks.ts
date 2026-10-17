@@ -9,6 +9,7 @@ import db from "../db.js";
 import { planNodeAgentRefusal, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { closeStaleInboxForSubtask } from "../runtime/topicInbox.js";
 import { logStepOutcome } from "../runtime/stepOutcome.js";
+import { announceStepState } from "../runtime/stepTopicProgress.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
 import { getTaskForRead, getTaskForWrite, getTaskForComment } from "../access.js";
@@ -546,6 +547,11 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
               message: result ?? subtask.result,
             });
           }
+          // Карточка 7efcc173: смена отметки шага — одна строка прогресса
+          // в теме задачи. Отметка — сдача, снятие отметки владельцем —
+          // возврат на доработку.
+          if (done === true) announceStepState(subtask.id, "submitted");
+          else announceStepState(subtask.id, "returned");
         }
 
         // ЗАКРЫТ ПОСЛЕДНИЙ ШАГ — ЗАДАЧА САМА УХОДИТ НА ПРИЁМКУ.
@@ -1033,6 +1039,18 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
             toValue: blockedHelp.detail,
           });
         }
+      }
+
+      // Карточка 7efcc173: смена состояния шага — строка прогресса в теме
+      // задачи. Словарь ровно четыре: начал, сдал, заблокирован, вернулся
+      // на доработку. Служебные переходы (отпустить шаг, уйти в review,
+      // todo) молчат — лишних строк владельцу не нужно.
+      if (state === "blocked") {
+        announceStepState(subtask.id, "blocked", (result ?? subtask.result) as string | null);
+      } else if (state === "in_progress") {
+        announceStepState(subtask.id, "started");
+      } else if (state === null && subtask.agent_state === "review") {
+        announceStepState(subtask.id, "returned");
       }
 
       // MAK-98: сигнал по типизированному блоку шага — владельцу или

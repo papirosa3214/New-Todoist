@@ -9,6 +9,7 @@ import { logEvent } from "../agentState.js";
 import { broadcastTaskEvent } from "../ws.js";
 import { startPlanSubtaskRun, unlockReadyPlanSubtasks } from "../runtime/planSubtaskAdmission.js";
 import { saveSlotSnapshot } from "../runtime/slotWorkSnapshot.js";
+import { announceStepState } from "../runtime/stepTopicProgress.js";
 import { getFullTask, getSubtaskWithTaskForUser } from "./subtasks.js";
 
 /**
@@ -124,6 +125,9 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
       db.prepare("UPDATE subtasks SET current_attempt_id = NULL WHERE id = ?").run(current.id);
     }
     logEvent({ taskId: current.task_id, actorId: req.userId, kind: "plan_subtask_artifact_submitted", field: current.plan_node_key, toValue: contract.key + " v" + versionNo });
+    // Карточка 7efcc173: сдача артефакта закрывает узел — одна строка
+    // прогресса в теме задачи.
+    announceStepState(current.id,"submitted");
     })();
     await unlockReadyPlanSubtasks(current.collaboration_plan_id, current.task_id, req.userId);
     const fullTask = getFullTask(current.task_id);
@@ -162,6 +166,10 @@ export function registerSubtaskArtifactRoutes(app: FastifyInstance): void {
       // автоматически — роль возьмётся сама через taskflow_subtask_work,
       // как при обычном возврате шага.
       db.prepare("UPDATE subtasks SET done = 0, agent_state = NULL, agent_heartbeat_at = NULL WHERE id = ?").run(current.id);
+      // Карточка 7efcc173: вердикт вернул узел на доработку — строка
+      // прогресса в теме задачи. Причину в текст не несём: по контракту
+      // она идёт только в блок.
+      announceStepState(current.id,"returned");
       logEvent({ taskId: current.task_id, actorId: req.userId, kind: eventKind, field: current.plan_node_key, fromValue: artifact.artifact_key + " v" + artifact.version_no, toValue: reason || kind });
       const fullTask = getFullTask(current.task_id);
       broadcastTaskEvent([current.task_creator_id, current.task_assignee_id], { type: "task:updated", task: fullTask });
