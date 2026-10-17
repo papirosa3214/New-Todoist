@@ -73,11 +73,20 @@ def notify(text):
         telegram(text)
 
 
+TERMINAL_CHAT_QUEUE_STATUSES = ("done", "failed", "superseded")
+
+
+def pending_chat_deliveries(con):
+    placeholders = ",".join("?" for _ in TERMINAL_CHAT_QUEUE_STATUSES)
+    query = f"SELECT count(*) FROM chat_message_queue WHERE status NOT IN ({placeholders})"
+    return con.execute(query, TERMINAL_CHAT_QUEUE_STATUSES).fetchone()[0]
+
+
 def busy():
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     try:
         runs = con.execute("SELECT count(*) FROM attempts WHERE ended_at IS NULL AND heartbeat_at > datetime('now','-10 minutes')").fetchone()[0]
-        queue = con.execute("SELECT count(*) FROM chat_message_queue WHERE status NOT IN ('done','failed')").fetchone()[0]
+        queue = pending_chat_deliveries(con)
     finally:
         con.close()
     return runs, queue
