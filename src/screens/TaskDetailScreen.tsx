@@ -46,6 +46,7 @@ import { TemplateStore } from "../lib/templates";
 import { AttachmentView } from "../components/AttachmentView";
 import { AttemptLadderBadge } from "../components/AttemptLadderBadge";
 import { CollaborationPlanPanel } from "../components/CollaborationPlanPanel";
+import { ParentPlanPulse } from "../components/ParentPlanPulse";
 import type { ApiAttachment } from "../api/types";
 import { SubtaskFeed } from "../components/SubtaskFeed";
 import {
@@ -687,7 +688,20 @@ export function TaskDetailScreen() {
         )}
         <AgentStatusRow task={task} />
         <AttemptLadderBadge task={task} />
-        <CollaborationPlanPanel taskId={task.id} />
+        {/* Граф плана: дочерняя (нет children) — CollaborationPlanPanel,
+            родительская с дочерними — ParentPlanPulse. Без дочерних
+            поведение прежнее. Спека 2b130833, 2026-10-07. */}
+        {task.children && task.children.length > 0 ? (
+          <ParentPlanPulse
+            parentId={task.id}
+            childList={task.children.map((c: any) => ({
+              id: c.id,
+              title: c.title,
+            }))}
+          />
+        ) : (
+          <CollaborationPlanPanel taskId={task.id} />
+        )}
       </div>
 
       {/* Owner actions — agent-work protocol (AGENT-PROTOCOL.md): visible

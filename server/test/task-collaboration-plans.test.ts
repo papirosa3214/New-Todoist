@@ -565,4 +565,41 @@ describe("collaboration plans", () => {
     const forbidden = await app.inject({ method: "DELETE", url: `/api/tasks/${taskId}/collaboration-plans/${created2.json().plan.id}`, headers: { authorization: researcherAuth } });
     expect(forbidden.statusCode).toBe(403);
   });
+
+  it("D-3.1: child в ветке с собственным approved планом получает его вместо пустого списка", async () => {
+    // Родитель в корне ветки — пусть имеет только draft, без approved.
+    const parent = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `D-3.1 parent ${crypto.randomUUID()}` } });
+    const parentId = parent.json().task.id as string;
+    const child = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `D-3.1 child ${crypto.randomUUID()}`, parent_id: parentId } });
+    const childId = child.json().task.id as string;
+
+    // Дочерняя имеет собственный approved план. Серверный POST /approve
+    // блокирует план на child (ограничение «согласуется в общем плане
+    // родителя»), но в живой системе child получает approved из ветки
+    // branch_root; правка D-3.1 в GET-роуте возвращает own approved план,
+    // если он есть. Воспроизводим такое состояние прямой вставкой approved
+    // плана в БД — тестируем именно GET-фильтр.
+    const planId = crypto.randomUUID();
+    db.prepare("INSERT INTO task_collaboration_plans (id, task_id, profile, rationale, status, revision, version, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT id FROM users WHERE role='owner' LIMIT 1))")
+      .run(planId, childId, "delivery", "own approved план", "approved", 1, 1);
+    db.prepare("INSERT INTO task_collaboration_plan_nodes (plan_id, slot_key, role_key, required, expected_result, origin, iteration) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(planId, "delivery", "builder", 1, "Сделано", "template", 0);
+    const stored = db.prepare("SELECT task_id, status FROM task_collaboration_plans WHERE id=?").get(planId) as { task_id: string; status: string };
+    expect(stored).toEqual({ task_id: childId, status: "approved" });
+
+    // На родителе план ветки остаётся draft — это инвариант «план ветки живёт в корне».
+    // Здесь для теста проверим только child: он в ветке (branch_root === parentId),
+    // у child есть own approved, GET должен вернуть именно его, а не пустой список.
+    const getChild = await app.inject({ method: "GET", url: `/api/tasks/${childId}/collaboration-plans`, headers: { authorization: ownerAuth } });
+    expect(getChild.json().plans).toHaveLength(1);
+    expect(getChild.json().plans[0].status).toBe("approved");
+    expect(getChild.json().branch_root_task_id).toBe(parentId);
+
+    // Контр-кейс — дочерняя в той же ветке без own approved получает пустой список и branch_root_task_id.
+    const sibling = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `D-3.1 sibling ${crypto.randomUUID()}`, parent_id: parentId } });
+    const siblingId = sibling.json().task.id as string;
+    const getSibling = await app.inject({ method: "GET", url: `/api/tasks/${siblingId}/collaboration-plans`, headers: { authorization: ownerAuth } });
+    expect(getSibling.json().plans).toEqual([]);
+    expect(getSibling.json().branch_root_task_id).toBe(parentId);
+  });
 });
