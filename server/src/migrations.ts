@@ -225,6 +225,30 @@ function addBugRegressionProfile(): void {
  * режим «Оркестратор» (владелец 13.10.2026): Оркестратор раскладывает работу
  * по ролям в живом плане и сам собирает итог. Тот же rebuild, что у 137.
  */
+/** Rebuild the closed profile CHECK using the existing migration pattern.
+ * Keep all columns, rows, indexes and triggers; failures roll back before commit. */
+export function addTemplateProfiles(): void {
+  const ddl=(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='task_collaboration_plans'").get() as {sql:string}|undefined)?.sql;
+  if (!ddl) throw new Error("task_collaboration_plans отсутствует");
+  const missing=["ux_concept","api_integration","audit"].filter(p=>!ddl.includes("'"+p+"'"));
+  if (!missing.length) return;
+  const next=ddl.replace(/CHECK\s*\(\s*profile\s+IN\s*\(([^)]*)\)\s*\)/i,(_m,list:string)=>`CHECK (profile IN (${list},${missing.map(p=>"'"+p+"'").join(",")}))`)
+    .replace(/CREATE TABLE\s+"?task_collaboration_plans"?/i,'CREATE TABLE "task_collaboration_plans_new"');
+  if (!next.includes('CREATE TABLE "task_collaboration_plans_new"') || missing.some(p=>!next.includes("'"+p+"'"))) throw new Error("Небезопасная схема шаблонов");
+  const objects=db.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='task_collaboration_plans' AND type IN ('index','trigger') AND sql IS NOT NULL").all() as {sql:string}[];
+  const foreignKeys=db.pragma("foreign_keys",{simple:true});
+  db.pragma("foreign_keys=OFF");
+  try { db.transaction(()=>{
+    db.exec(next);
+    db.exec('INSERT INTO task_collaboration_plans_new SELECT * FROM task_collaboration_plans');
+    db.exec('DROP TABLE task_collaboration_plans');
+    db.exec('ALTER TABLE task_collaboration_plans_new RENAME TO task_collaboration_plans');
+    for(const object of objects) db.exec(object.sql);
+    const broken=(db.pragma("foreign_key_check") as {parent:string}[]).filter(x=>x.parent==="task_collaboration_plans");
+    if(broken.length) throw new Error("Нарушены ссылки на планы после миграции шаблонов");
+  })(); } finally { db.pragma("foreign_keys="+(foreignKeys ? "ON" : "OFF")); }
+}
+
 function addOrchestratedProfile(): void {
   const ddl =
     (
@@ -4777,6 +4801,7 @@ const migrations: Migration[] = [
     const columns = new Set((db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>).map((column) => column.name));
     if (!columns.has("role_envelope_json")) db.exec("ALTER TABLE chat_messages ADD COLUMN role_envelope_json TEXT");
   } },
+  { id: "154_collaboration_template_packages", description: "UX-концепция, API-интеграция и аудит: профили командного плана", noTransaction: true, up: addTemplateProfiles },
 ];
 /**
  * Опции прогона миграций.

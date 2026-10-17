@@ -118,3 +118,23 @@ describe("инструментарий роли в обоих видах зап�
     expect(composeLayer("builder", key)).toBeNull();
   });
 });
+
+// SDK integration: packet delivery is real; no model or live role is started.
+describe("template stage resources",()=>{
+ it("delivers only stage skills and its prompt; missing skills never restore the whole pack",async()=>{
+   const selected=path.join(builder.skills,"verify-after-edit","SKILL.md");
+   fs.mkdirSync(path.dirname(selected),{recursive:true});
+   fs.writeFileSync(selected,"---\nname: verify-after-edit\ndescription: Verify the edited change\n---\nCheck the actual scenario.\n");
+   const {templateInstructions}=await import("../src/lib/collaborationTemplates.js");
+   const stage=templateInstructions("bug_regression",{slot_key:"fix",role_key:"builder",expected_result:"Исправление"},"API");
+   const loader=await createTaskResourceLoader("builder",project,"Базовая инструкция",{title:"API",description:null,step:"Исправление",stageInstructions:stage});
+   try {
+     expect(loader.getSkills().skills.map(s=>s.name)).toEqual(["verify-after-edit"]);
+     expect(loader.getSystemPrompt()).toContain("bug_regression@1");
+     expect(loader.getSystemPrompt()).toContain("Недоступные навыки этапа: diagnosing-bugs");
+     expect(loader.getSystemPrompt()).not.toContain("build: Updated build instructions");
+   } finally {loader.disposeResources();fs.rmSync(path.dirname(selected),{recursive:true,force:true});}
+   const missing=await createTaskResourceLoader("builder",project,"База",{title:"API",description:null,stageInstructions:stage});
+   try {expect(missing.getSkills().skills).toEqual([]);} finally {missing.disposeResources();}
+ });
+});

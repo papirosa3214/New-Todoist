@@ -162,9 +162,9 @@ describe("collaboration plans", () => {
     ])).statusCode).toBe(400);
   });
 
-  it("T03 product_feature: минимальный маршрут A1→V1 без флагов", async () => {
+  it("T03 product_feature: минимальный маршрут A1→V1 с явным отключением дополнительных этапов", async () => {
     const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 minimal ${crypto.randomUUID()}` } });
-    const proposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "product_feature" } });
+    const proposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "product_feature", include_architecture: false, include_design: false, include_qa: false } });
     expect(proposal.statusCode).toBe(201);
     const plan = proposal.json().plan;
     expect(plan.profile).toBe("product_feature");
@@ -209,7 +209,7 @@ describe("collaboration plans", () => {
     const task2 = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T03 qa only ${crypto.randomUUID()}` } });
     const proposal2 = await app.inject({
       method: "POST", url: `/api/tasks/${task2.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth },
-      payload: { profile: "product_feature", include_qa: true },
+      payload: { profile: "product_feature", include_architecture: false, include_design: false, include_qa: true },
     });
     const plan2 = proposal2.json().plan;
     expect(plan2.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "delivery", "qa"]);
@@ -224,9 +224,9 @@ describe("collaboration plans", () => {
     expect(["architecture", "design", "delivery", "qa"].every((key) => subtasks[key].agent_state === null && subtasks[key].done === 0)).toBe(true);
   });
 
-  it("T05 bug_regression: минимальный маршрут A1→V1 без флагов", async () => {
+  it("T05 bug_regression: минимальный маршрут A1→V1 с явным отключением дополнительных этапов", async () => {
     const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T05 minimal ${crypto.randomUUID()}` } });
-    const proposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "bug_regression" } });
+    const proposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "bug_regression", include_root_cause: false, include_qa: false } });
     expect(proposal.statusCode).toBe(201);
     const plan = proposal.json().plan;
     expect(plan.profile).toBe("bug_regression");
@@ -268,7 +268,7 @@ describe("collaboration plans", () => {
     const task2 = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T05 qa only ${crypto.randomUUID()}` } });
     const proposal2 = await app.inject({
       method: "POST", url: `/api/tasks/${task2.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth },
-      payload: { profile: "bug_regression", include_qa: true },
+      payload: { profile: "bug_regression", include_root_cause: false, include_qa: true },
     });
     const plan2 = proposal2.json().plan;
     expect(plan2.nodes.map((n: { slot_key: string }) => n.slot_key).sort()).toEqual(["analysis", "fix", "regression_test"]);
@@ -283,7 +283,7 @@ describe("collaboration plans", () => {
 
   it("T05 bug_regression: PROFILES принимает profile через /propose (через 422 не отлуплено)", async () => {
     const task = await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: ownerAuth }, payload: { title: `T05 accepted ${crypto.randomUUID()}` } });
-    const proposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "bug_regression" } });
+    const proposal = await app.inject({ method: "POST", url: `/api/tasks/${task.json().task.id}/collaboration-plans/propose`, headers: { authorization: ownerAuth }, payload: { profile: "bug_regression", include_root_cause: false, include_qa: false } });
     expect(proposal.statusCode).toBe(201);
     expect(proposal.json().plan.profile).toBe("bug_regression");
   });

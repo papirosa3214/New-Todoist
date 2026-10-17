@@ -1,3 +1,4 @@
+import { TEMPLATE_PROFILES, additionalTemplate, templateInstructions } from "../lib/collaborationTemplates.js";
 import {requireIntegrationResponsibility} from '../lib/integrationResponsibility.js';
 import { submissionReceipt } from "../lib/submissionReceipt.js";
 import { roleResultDocument } from "../lib/roleResultReport.js";
@@ -33,7 +34,7 @@ import { suggestFanoutFromSubtasks } from "../runtime/subtaskRoleFanout.js";
 import { pickPlanProfileByJev, type JevPlanProfilePick } from "../lib/planProfileJev.js";
 
 import { ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT } from "../runtime/orchestratedPlan.js";
-const PROFILES = new Set(["single_executor", "research", "delivery", "full_cycle", "manual", "product_feature", "bug_regression", "orchestrated"]);
+const PROFILES = new Set<string>([...TEMPLATE_PROFILES, "manual"]);
 const CONDITIONS = new Set(["submitted", "accepted", "artifact_ready"]);
 const SLOT_KEY = /^[a-z][a-z0-9_]{1,63}$/;
 
@@ -53,9 +54,9 @@ type Plan = {
 };
 
 type ArtifactContract = { key: string; type: string; format: "json"; required_fields: string[] };
-type NodeInput = { slot_key?: unknown; role_key?: unknown; required?: unknown; expected_result?: unknown; output_artifact?: unknown; source_subtask_id?: unknown };
+type NodeInput = { instructions?: unknown; slot_key?: unknown; role_key?: unknown; required?: unknown; expected_result?: unknown; output_artifact?: unknown; source_subtask_id?: unknown };
 type EdgeInput = { from_slot_key?: unknown; to_slot_key?: unknown; start_condition?: unknown; artifact_key?: unknown };
-type Node = { slot_key: string; role_key: string; required: boolean; expected_result: string; output_artifact: ArtifactContract | null; source_subtask_id: string | null };
+type Node = { instructions?: string | null; slot_key: string; role_key: string; required: boolean; expected_result: string; output_artifact: ArtifactContract | null; source_subtask_id: string | null };
 type Edge = { from_slot_key: string; to_slot_key: string; start_condition: string; artifact_key: string | null };
 
 function mayManage(userId: string): boolean {
@@ -248,6 +249,7 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }, taskId?: string)
   if (Array.isArray(body.edges) && body.edges.length > 48) throw new Error("слишком много edges");
 
   const nodes = (body.nodes as NodeInput[]).map((raw) => ({
+    instructions: raw.instructions === undefined ? undefined : raw.instructions === null ? null : String(raw.instructions),
     slot_key: String(raw.slot_key ?? "").trim(),
     role_key: String(raw.role_key ?? "").trim(),
     required: raw.required !== false,
@@ -260,6 +262,7 @@ function parseGraph(body: { nodes?: unknown; edges?: unknown }, taskId?: string)
   const sourceArtifacts = new Map<string, ArtifactContract>();
   const sourceSubtaskIds = new Set<string>();
   for (const node of nodes) {
+    if ((node.instructions?.length ?? 0) > 4000) throw new Error("instructions длиннее 4000 символов");
     if (!SLOT_KEY.test(node.slot_key)) throw new Error("некорректный slot_key");
     if (!ROLE_NAMES.includes(node.role_key)) throw new Error("unknown role");
     if (node.expected_result.length > 1000) throw new Error("expected_result длиннее 1000 символов");
@@ -481,8 +484,10 @@ export function createDraftPlan(taskId: string, createdBy: string, profile: stri
   db.transaction(() => {
     db.prepare(`INSERT INTO task_collaboration_plans (id, task_id, revision, profile, rationale, context_version, created_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, taskId, revision, profile, rationale, contextVersion, createdBy);
-    const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-    for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id ?? null);
+    const card = db.prepare("SELECT title,description FROM tasks WHERE id=?").get(taskId) as {title:string;description:string|null};
+    const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id ?? null,
+      node.instructions ?? templateInstructions(profile,node,card.title+"\n"+(card.description??"")));
     markBranchPrep(id);
     const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
     for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
@@ -679,11 +684,13 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
       nodes:[{slot_key:'work',role_key:branchAssignmentRole(card.title),required:true,
         expected_result:card.title,output_artifact:{key:'card_result',type:'result_pack',format:'json',required_fields:['summary','evidence','document_refs']},source_subtask_id:null}] as Node[],edges:[] as Edge[]};
   }
+  const extra = additionalTemplate(requested);
+  if (extra) return {profile: requested, ...extra};
   if (requested === "bug_regression") {
-    return { profile: "bug_regression", ...bugRegressionTemplate(bugRegressionFlags ?? { includeRootCause: false, includeQa: true }) };
+    return { profile: "bug_regression", ...bugRegressionTemplate(bugRegressionFlags ?? { includeRootCause: true, includeQa: true }) };
   }
   if (requested === "product_feature") {
-    return { profile: "product_feature", ...productFeatureTemplate(productFeatureFlags ?? { includeArchitecture: false, includeDesign: false, includeQa: false }) };
+    return { profile: "product_feature", ...productFeatureTemplate(productFeatureFlags ?? { includeArchitecture: true, includeDesign: true, includeQa: true }) };
   }
   const task = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title: string; description: string | null };
   const text = `${task.title}\n${task.description ?? ""}`.toLowerCase();
@@ -713,7 +720,7 @@ export function proposalFor(taskId: string, requested: string, productFeatureFla
     // их результаты, вливает в main и собирает итог. Инструкции — task.orchestrate.
     orchestrated: { nodes: [node(ORCHESTRATE_SLOT, "code_orchestrator", "Разложить работу по ролям и запустить команду"), node(ORCHESTRATE_ASSEMBLE_SLOT, "code_orchestrator", "Принять результаты команды, влить в main и собрать итог")], edges: [edge(ORCHESTRATE_SLOT, ORCHESTRATE_ASSEMBLE_SLOT)], rationale: "Режим оркестратора: декомпозиция, назначение ролей, приёмка и сборка итога — за Оркестратором." },
   };
-  const chosen = templates[profile];
+  const chosen = additionalTemplate(profile) ?? templates[profile];
   if (requested === "auto" && jevPick) {
     return { profile, ...chosen, rationale: `${chosen.rationale} Состав выбран JEV (уверенность ${Math.round(jevPick.confidence * 100)}%).` };
   }
@@ -788,7 +795,7 @@ export function autoProposeCollaborationPlanIfNeeded(taskId: string, options?: {
   }
   const created = createDraftPlan(taskId, actorId, proposal.profile, proposal.rationale, options ? task.context_version ?? null : null, proposal);
   if (!options) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='auto_template' WHERE plan_id=?").run(created.id);
-  if (options) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='linear_import',instructions=?,added_by=? WHERE plan_id=?").run(instructions, actorId, created.id);
+  if (options) db.prepare("UPDATE task_collaboration_plan_nodes SET origin='linear_import',instructions=CASE WHEN instructions IS NULL THEN ? ELSE instructions || char(10) || ? END,added_by=? WHERE plan_id=?").run(instructions, instructions, actorId, created.id);
   logEvent({ taskId, actorId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: `${proposal.profile}: ${options ? "Linear import draft" : "auto on create"}` });
   return { id:created.id, profile: proposal.profile, revision: created.revision };
 }
@@ -884,14 +891,13 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     if (requested !== "auto" && !PROFILES.has(requested)) return reply.code(422).send({ error: "unknown collaboration profile" });
     const contextVersion = req.body?.context_version === undefined ? null : Number(req.body.context_version);
     if (contextVersion !== null && (!Number.isInteger(contextVersion) || contextVersion < 1)) return reply.code(400).send({ error: "context_version должен быть положительным целым" });
-    // T03: H1/D1/Q1 включаются только явным булевым флагом владельца, а не
-    // текстовой эвристикой selector-а — тот же принцип, что и в остальном
-    // auto-подборе, но проговорённый Task 4 отдельно для product_feature.
+    // Явный выбор пакета включает полный стандарт без повторного выбора маршрута.
+    // Старые API-клиенты могут явно отключить этапы через false. Auto-подбор сохраняет свою политику.
     const productFeatureFlags = requested === "product_feature"
-      ? { includeArchitecture: req.body?.include_architecture === true, includeDesign: req.body?.include_design === true, includeQa: req.body?.include_qa === true }
+      ? { includeArchitecture: req.body?.include_architecture !== false, includeDesign: req.body?.include_design !== false, includeQa: req.body?.include_qa !== false }
       : undefined;
     const bugRegressionFlags = requested === "bug_regression"
-      ? { includeRootCause: req.body?.include_root_cause === true, includeQa: req.body?.include_qa === true }
+      ? { includeRootCause: req.body?.include_root_cause !== false, includeQa: req.body?.include_qa !== false }
       : undefined;
     const jevPick = requested === "auto" ? await pickPlanProfileByJev(task.id).catch(() => null) : null;
     const proposal = proposalFor(task.id, requested, productFeatureFlags, bugRegressionFlags, jevPick);
@@ -1075,10 +1081,12 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
       if (sets.length) db.prepare(`UPDATE task_collaboration_plans SET ${sets.join(", ")} WHERE id = ?`).run(...values, plan.id);
       db.prepare("UPDATE task_collaboration_plan_nodes SET origin='owner' WHERE plan_id=? AND origin IN ('auto_template','linear_import','auto_preparation')").run(plan.id);
       if (graph) {
+        const prior = db.prepare("SELECT slot_key,role_key,instructions FROM task_collaboration_plan_nodes WHERE plan_id=?").all(plan.id) as Array<{slot_key:string;role_key:string;instructions:string|null}>;
         db.prepare("DELETE FROM task_collaboration_plan_edges WHERE plan_id = ?").run(plan.id);
         db.prepare("DELETE FROM task_collaboration_plan_nodes WHERE plan_id = ?").run(plan.id);
-        const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-        for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id);
+        const insertNode = db.prepare("INSERT INTO task_collaboration_plan_nodes (id, plan_id, slot_key, role_key, required, expected_result, output_artifact_json, source_subtask_id, instructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        for (const node of graph.nodes) insertNode.run("tcpn_" + crypto.randomUUID(), plan.id, node.slot_key, node.role_key, node.required ? 1 : 0, node.expected_result, node.output_artifact === null ? null : JSON.stringify(node.output_artifact), node.source_subtask_id,
+          node.instructions === undefined ? prior.find(n=>n.slot_key===node.slot_key && n.role_key===node.role_key)?.instructions ?? null : node.instructions);
         const insertEdge = db.prepare("INSERT INTO task_collaboration_plan_edges (id, plan_id, from_slot_key, to_slot_key, start_condition, artifact_key) VALUES (?, ?, ?, ?, ?, ?)");
         for (const edge of graph.edges) insertEdge.run("tcpe_" + crypto.randomUUID(), plan.id, edge.from_slot_key, edge.to_slot_key, normalizePlanStartCondition(edge.start_condition), edge.artifact_key);
       }

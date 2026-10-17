@@ -918,6 +918,21 @@ function artifactContractNote(subtaskId: string): string {
   ].join("\n");
 }
 
+/** Final review jobs belong to the card and do not carry subtaskId. Recover
+ * their marked active slot explicitly so they retain the same template packet. */
+export function stageInstructionsForRun(taskId:string,role:string,subtaskId?:string,mode?:string):string|null {
+  if(subtaskId) return (db.prepare(`SELECT n.instructions FROM subtasks s
+    JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key
+    WHERE s.id=? AND s.task_id=? AND n.role_key=?`).get(subtaskId,taskId,role) as {instructions:string|null}|undefined)?.instructions ?? null;
+  if(role!=="critic_verifier" || mode!=="review") return null;
+  return (db.prepare(`SELECT n.instructions FROM subtasks s
+    JOIN task_collaboration_plan_nodes n ON n.plan_id=s.collaboration_plan_id AND n.slot_key=s.plan_node_key
+    JOIN task_collaboration_plans p ON p.id=n.plan_id
+    WHERE s.task_id=? AND s.done=0 AND s.agent_state IN ('todo','in_progress')
+      AND n.role_key='critic_verifier' AND p.status='approved' AND n.instructions LIKE '[taskflow:final-review]%'
+    ORDER BY s.position DESC LIMIT 1`).get(taskId) as {instructions:string|null}|undefined)?.instructions ?? null;
+}
+
 export function planSubtaskPrompt(taskId: string, role: string, subtaskId: string): string {
   const subtask = db.prepare("SELECT title FROM subtasks WHERE id = ?").get(subtaskId) as { title?: string } | undefined;
   // Режим «Оркестратор»: два его шага получают регламент координации вместо
@@ -1400,7 +1415,8 @@ async function runRoleInProcessUnserialized(input: {
   // Карточка и текущий шаг — для галочки «Навыки под задачу» (раздел JEV).
   const workCard = db.prepare("SELECT title, description FROM tasks WHERE id = ?").get(taskId) as { title: string; description: string | null } | undefined;
   const workStep = input.subtaskId ? (db.prepare("SELECT title FROM subtasks WHERE id = ?").get(input.subtaskId) as { title: string } | undefined)?.title ?? null : null;
-  const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt, workCard ? { ...workCard, step: workStep } : undefined);
+  const stageInstructions = stageInstructionsForRun(taskId,role,input.subtaskId,input.mode);
+  const resourceLoader = await createTaskResourceLoader(role, cwd, systemPrompt, workCard ? { ...workCard, step: workStep, stageInstructions } : undefined);
 
   // Снимок фактического system prompt, который модель получит в этом запуске.
 // Записывается в tasks.composed_prompt_snapshot — это «что видела модель»,

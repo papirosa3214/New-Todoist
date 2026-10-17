@@ -222,7 +222,7 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
 
   const terminalCritic = node.role_key === "critic_verifier" && !db.prepare("SELECT 1 FROM task_collaboration_plan_edges WHERE plan_id=? AND from_slot_key=?").get(current.collaboration_plan_id,current.plan_node_key);
   if ((terminalCritic || isPlanFinalReviewStep(current.id)) && !options.freshSession) {
-    db.prepare("UPDATE task_collaboration_plan_nodes SET instructions=? WHERE plan_id=? AND slot_key=?").run(FINAL_REVIEW_MARKER,current.collaboration_plan_id,current.plan_node_key);
+    db.prepare("UPDATE task_collaboration_plan_nodes SET instructions=? || char(10) || COALESCE(instructions,'') WHERE plan_id=? AND slot_key=?").run(FINAL_REVIEW_MARKER,current.collaboration_plan_id,current.plan_node_key);
     return queuePlanFinalReview(current.id,actorId);
   }
 
@@ -949,7 +949,7 @@ function openReworkFromCritic(
     const newSlot = `${bySlot.get(t)?.role_key ?? "fix"}_fix_${crypto.randomUUID().slice(0, 8)}`;
     clone.set(t, newSlot);
     const node = bySlot.get(t)!;
-    addPlanReworkNode(planId, taskId, { ...node, expected_result: `Доработка ${iteration + 1}: ${node.expected_result}`, instructions: `${findings}\n\nПолучите обновлённые результаты предшествующих этапов и выполните свой этап повторно.` }, newSlot, actor, findings.slice(0, 500), iteration + 1, t);
+    addPlanReworkNode(planId, taskId, { ...node, expected_result: `Доработка ${iteration + 1}: ${node.expected_result}`, instructions: `${node.instructions ?? ""}\n\nЗамечания к доработке: ${findings}\n\nПолучите обновлённые результаты предшествующих этапов и выполните свой этап повторно.` }, newSlot, actor, findings.slice(0, 500), iteration + 1, t);
   }
   for (const t of target) {
     addPlanReworkEdge(planId, critic.plan_node_key ?? "", clone.get(t)!);

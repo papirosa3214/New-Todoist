@@ -1,3 +1,4 @@
+import { stageSkillNames } from "../lib/collaborationTemplates.js";
 import { PLANNING_TOOLS, chatModeInstruction, type ChatWorkMode } from "./chatWorkMode.js";
 import fs from 'node:fs';
 import path from 'node:path';
@@ -120,7 +121,7 @@ export async function discoverChatResources(role:string) {
 }
 
 /** Тот же набор файлов роли; cwd задачи не меняется, executable extensions отключены. */
-export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null}):Promise<ResourceLoader & {disposeResources:()=>void}> {
+export async function createTaskResourceLoader(role:string,cwd:string,systemPrompt:string,work?:{title:string;description:string|null;step?:string|null;stageInstructions?:string|null}):Promise<ResourceLoader & {disposeResources:()=>void}> {
  const home=ensureRoleHome(role);
  const discovered=await discoverChatResources(role);
  let snapshotDir:string|undefined;
@@ -138,13 +139,19 @@ export async function createTaskResourceLoader(role:string,cwd:string,systemProm
   return {...loaded.skills[0],baseDir:skill.baseDir};
  });
  // Галочка «Навыки под задачу» (раздел JEV): у роли много навыков — JEV
- // оставляет нужные этой карточке. Не включено/не ответил — все навыки.
- const keep=work ? await selectSkillsByJev(work,skills.map(s=>({name:s.name,description:s.description}))).catch(()=>null) : null;
- const usedSkills=keep ? skills.filter(s=>keep.has(s.name)) : skills;
+ // уточняет набор этапа. Не включено/не ответил — кандидаты этапа;
+ // у индивидуального/старого плана без пакета сохраняется прежний набор роли.
+ const names=stageSkillNames(work?.stageInstructions);
+ const candidates=names === null ? skills : skills.filter(s=>names.includes(s.name));
+ const missing=names?.filter(name=>!skills.some(s=>s.name===name)) ?? [];
+ const keep=work ? await selectSkillsByJev({...work,step:[work.step,work.stageInstructions].filter(Boolean).join("\n")},candidates.map(s=>({name:s.name,description:s.description}))).catch(()=>null) : null;
+ const usedSkills=keep ? candidates.filter(s=>keep.has(s.name)) : candidates;
+ const stagePrompt=work?.stageInstructions ? "\n\nЗадание текущего этапа:\n"+work.stageInstructions : "";
+ const missingPrompt=missing.length ? "\n\nНедоступные навыки этапа: "+missing.join(", ")+". Не утверждай, что они подключены; укажи ограничение в результате." : "";
  const loader=new DefaultResourceLoader({
   cwd,agentDir:home.dir,settingsManager:SettingsManager.inMemory(),
   noExtensions:true,noThemes:true,noSkills:true,noPromptTemplates:true,noContextFiles:true,
-  systemPrompt:systemPrompt+'\n\n'+roleHomeInstruction(role),
+  systemPrompt:systemPrompt+'\n\n'+roleHomeInstruction(role)+stagePrompt+missingPrompt,
   appendSystemPrompt:[],
   skillsOverride:()=>({skills:usedSkills,diagnostics:discovered.diagnostics}),
   agentsFilesOverride:()=>({agentsFiles:discovered.agentsFiles.map(f=>({path:f.path,content:composeLayer(role,keyFor(f.path))!.effective}))}),
