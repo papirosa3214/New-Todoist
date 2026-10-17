@@ -24,6 +24,7 @@ import { roleTitle, roleUserId } from "../roleRouting.js";
 import { technicalSlotSnapshot } from "./slotWorkSnapshot.js";
 import { logStepAbandoned } from "./abandonedStep.js";
 import { enqueueRoleRunJob } from "./roleRunQueue.js";
+import { announceStepState } from "./stepTopicProgress.js";
 import { startPlanSubtaskRun } from "./planSubtaskAdmission.js";
 import { wakeAndDeliverStalled } from "./orchestratorWake.js";
 
@@ -211,8 +212,13 @@ function blockAsStalled(subtask: StalledSubtask, role: string, reason: string): 
   }
   db.prepare("UPDATE subtasks SET agent_state = 'blocked', agent_id = ?, current_attempt_id = NULL, agent_heartbeat_at = NULL WHERE id = ?")
     .run(roleUserId(role), subtask.id);
+  const blockedReason = `нет событий хода дольше ${STALL_AFTER_MIN} минут; автоперезапуск ${MAX_RESTARTS_PER_WINDOW}/${MAX_RESTARTS_PER_WINDOW} исчерпан. ${reason}`.slice(0, 600);
+  // Карточка 7efcc173: автоблок шага виден владельцу в чате. АвтоРЕСТАРТ
+  // выше по коду строки не пишет (перезапуск попытки — не смена состояния),
+  // а автоблок — та же смена, что и блок ролью.
+  announceStepState(subtask.id, "blocked", blockedReason);
   technicalSlotSnapshot(subtask.id, "blocked", {
-    blocker: `нет событий хода дольше ${STALL_AFTER_MIN} минут; автоперезапуск ${MAX_RESTARTS_PER_WINDOW}/${MAX_RESTARTS_PER_WINDOW} исчерпан. ${reason}`.slice(0, 600),
+    blocker: blockedReason,
     attemptId: subtask.current_attempt_id,
   });
   postRoleNote(

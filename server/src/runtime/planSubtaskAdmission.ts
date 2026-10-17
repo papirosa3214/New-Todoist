@@ -23,6 +23,7 @@ import { classifyFailureReason, failureReasonLabel, type FailureReasonCode } fro
 import { decideFailureAction, failurePolicy } from "./failurePolicy.js";
 import { logStepAbandoned } from "./abandonedStep.js";
 import { closeStaleInboxForSubtask } from "./topicInbox.js";
+import { announceStepState } from "./stepTopicProgress.js";
 
 /**
  * Узлы collaboration plan — обычные `subtasks` с `collaboration_plan_id` +
@@ -251,6 +252,10 @@ export async function startPlanSubtaskRun(subtaskId: string, actorId: string, op
     });
     const changed=db.prepare(`UPDATE subtasks SET agent_state='in_progress',agent_id=?,current_attempt_id=?,agent_heartbeat_at=datetime('now'),admission_cycle=COALESCE(admission_cycle,0)+1,admission_fingerprint=? WHERE id=? AND done=0 AND agent_state IS NULL AND (admission_fingerprint IS NULL OR admission_fingerprint = ?)`).run(roleUserId(node.role_key),attemptId,newFingerprint,current.id,expectedFingerprint);
     if(changed.changes!==1)throw new Error("Слот уже запущен или его входные данные изменились");
+    // Карточка 7efcc173: одна строка прогресса в теме задачи на допуск
+    // шага. Транзакция ещё открыта, но announceStepState пишет в ту же БД,
+    // поэтому откат уносит и строку, и её дедупликатор.
+    announceStepState(current.id,"started");
     return true;
   })();
   if(!acquired)return {ok:false,error:"Слот уже запущен или его входные данные изменились"};
@@ -837,6 +842,9 @@ export function closeOpenCriticPlanNode(
   db.prepare(
     "UPDATE subtasks SET done = 1, agent_state = NULL, current_attempt_id = NULL, agent_heartbeat_at = NULL, result = ? WHERE id = ?",
   ).run(`${verdict}: ${findings}`, row.id);
+  // Вердикт закрыл узел плана — это та же сдача шага, что и сдача ролью:
+  // одна строка прогресса в теме задачи (карточка 7efcc173).
+  announceStepState(row.id,"submitted");
   logEvent({
     taskId,
     actorId: null,

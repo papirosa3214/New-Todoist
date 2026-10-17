@@ -4758,8 +4758,21 @@ const migrations: Migration[] = [
     add("memory_write_min_confidence", "REAL NOT NULL DEFAULT 0.8");
     add("skills_enabled", "INTEGER NOT NULL DEFAULT 0");
   } },
+{id:"151_unified_role_tool_requests",description:"Долговечные запросы единого инструмента ролей",up:()=>{db.exec(TOOL_REQUEST_SCHEMA);}},
 
-  {id:"151_unified_role_tool_requests",description:"Долговечные запросы единого инструмента ролей",up:()=>{db.exec(TOOL_REQUEST_SCHEMA);}},
+  // Карточка 66b0aa5f, этап fix: реализация из карточки 7efcc173
+  // (коммит 08958501) перенесена на текущий main. Номер 151 в main уже
+  // занят `151_unified_role_tool_requests`, поэтому здесь 152 — иначе два
+  // разных миграционных id с одинаковым номером и путаница в журнале.
+  { id: "152_step_topic_progress", description: "Дедупликатор сообщений темы задачи о смене состояния шага плана (карточки 7efcc173 и 66b0aa5f, контракт 73bf5e8d)", up: () => db.exec(`
+    CREATE TABLE IF NOT EXISTS step_topic_progress (
+      subtask_id TEXT NOT NULL REFERENCES subtasks(id) ON DELETE CASCADE,
+      notice_key TEXT NOT NULL,
+      message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (subtask_id, notice_key)
+    );
+  `) },
 ];
 /**
  * Опции прогона миграций.
