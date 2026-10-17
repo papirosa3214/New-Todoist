@@ -645,13 +645,21 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if (taskId) touchTaskActivity(taskId);
         return result;
       }),
-    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. report_markdown — отчёт для владельца с разделами ## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы; правила отчёта — в системной инструкции. " + SUBMISSION_POLICY,
+    T("taskflow_subtask_done", "Закрыть шаг с итогом (result — одно-два предложения). Сервер сам сохранит технический снимок при сдаче — отдельный snapshot не нужен. Если шаг — узел плана с контрактом на структурный артефакт (feature_spec и т.п.), передай artifact вместо простого закрытия галочкой: summary, payload (объект с required_fields) и evidence. report_markdown — отчёт для владельца с разделами ## Результат, ## Что сделано, ## Проверки, ## Ограничения, ## Материалы; правила отчёта — в системной инструкции. contract_v1 — необязательный конверт роли (ok, output, artifacts, error, next_hint, needs_human): сервер проверит его и возьмёт output как result, если result не передан; result, report_markdown и artifact работают как раньше. " + SUBMISSION_POLICY,
       Type.Object({
         id: Type.String(),
         result: Type.Optional(Type.String()),
         report_markdown: Type.Optional(Type.String()),
         done: Type.Optional(Type.Boolean()),
         snapshot: Type.Optional(SNAPSHOT_SHAPE),
+        contract_v1: Type.Optional(Type.Object({
+          ok: Type.Boolean(),
+          output: Type.String(),
+          artifacts: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())])),
+          error: Type.Optional(Type.String()),
+          next_hint: Type.Optional(Type.String()),
+          needs_human: Type.Optional(Type.Boolean()),
+        })),
         artifact: Type.Optional(Type.Object({ summary: Type.String(), payload: Type.Any(), report_markdown: Type.String(), evidence: Type.Optional(Type.Array(Type.Any())) })),
       }),
       async (p) => {
@@ -668,6 +676,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         const body: Json = { done };
         if (p.result) body.result = p.result;
         if (p.report_markdown) body.report_markdown = p.report_markdown;
+        if (p.contract_v1) body.contract_v1 = p.contract_v1;
         if (p.snapshot) body.snapshot = p.snapshot;
         const row = await asRole(role, "PATCH", `/api/subtasks/${p.id}`, body);
         if (done && row.task_id) void activity(role, row.task_id, "edit", `шаг «${row.title ?? ""}»: закрыл`);

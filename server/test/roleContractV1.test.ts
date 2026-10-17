@@ -1,0 +1,268 @@
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import crypto from "node:crypto";
+vi.mock("../src/runtime/inProcessRun.js", async original => ({...await original<any>(), runRoleInProcess: vi.fn(async()=>({runId:"contract-v1-test",completion:Promise.resolve()}))}));
+import {
+  normalizeRoleContractV1,
+  parseRoleContractV1,
+  ROLE_CONTRACT_V1,
+  unwrapRoleEnvelopeText,
+  validateRoleContractV1,
+} from "../src/lib/roleContractV1.js";
+import { unwrapRoleEnvelope } from "../src/runtime/chatLiveTurn.js";
+import { buildApp } from "../src/index.js";
+import db from "../src/db.js";
+import { formatChatMessage } from "../src/lib/chatMessages.js";
+import { roleUserId } from "../src/roleRouting.js";
+import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
+
+// Карточка 237d6f34 «Внедрить JSON-контракт роли v1 на сервере»: валидатор
+// конверта, совместимость старого YAML-подобного вида и доставка конверта в
+// чат и на путь сдачи этапа.
+
+describe("JSON-контракт роли v1: валидатор", () => {
+  it("принимает полный конверт и приводит его к нормализованному виду", () => {
+    const checked = validateRoleContractV1({
+      ok: true,
+      output: "Виджет нарисован, отчёт сдан.",
+      artifacts: ["https://example.test/док", "  ", "https://example.test/кадр"],
+      error: null,
+      next_hint: "Перенести в main",
+      needs_human: false,
+    });
+    expect(checked.valid).toBe(true);
+    expect(checked.envelope).toEqual({
+      contract: ROLE_CONTRACT_V1,
+      ok: true,
+      output: "Виджет нарисован, отчёт сдан.",
+      artifacts: ["https://example.test/док", "https://example.test/кадр"],
+      error: null,
+      next_hint: "Перенести в main",
+      needs_human: false,
+    });
+  });
+
+  it("минимум — ok и output; остальные поля необязательны", () => {
+    const checked = validateRoleContractV1({ ok: false, output: "Сбой сборки." });
+    expect(checked.valid).toBe(true);
+    expect(checked.envelope).toMatchObject({
+      ok: false,
+      artifacts: [],
+      error: null,
+      next_hint: null,
+      needs_human: false,
+    });
+  });
+
+  it.each([
+    [{ output: "Есть текст" }, "ok"],
+    [{ ok: true }, "output"],
+    [{ ok: "true", output: "Строка вместо флага" }, "ok"],
+    [{ ok: true, output: "   " }, "output"],
+    [{ ok: true, output: "Текст", artifacts: 42 }, "artifacts"],
+    [{ ok: true, output: "Текст", needs_human: "нет" }, "needs_human"],
+    [{ ok: true, output: "Текст", error: { code: 1 } }, "error"],
+    [{ ok: true, output: "Текст", next_hint: ["a"] }, "next_hint"],
+    [{ ok: true, output: "Текст", contract: "role.v2" }, "contract"],
+  ])("отклоняет битый конверт и объясняет поле: %j", (value, field) => {
+    const checked = validateRoleContractV1(value);
+    expect(checked.valid).toBe(false);
+    expect(checked.envelope).toBeNull();
+    expect(checked.errors.join(" ")).toContain(field);
+  });
+
+  it.each([[null], [42], ["ок"], [[]]])("не объект — не конверт: %j", (value) => {
+    const checked = validateRoleContractV1(value);
+    expect(checked.valid).toBe(false);
+    expect(checked.errors).toHaveLength(1);
+  });
+
+  it("поле будущей версии — предупреждение, а не отказ", () => {
+    const checked = validateRoleContractV1({ ok: true, output: "Текст", priority: "high" });
+    expect(checked.valid).toBe(true);
+    expect(checked.warnings.join(" ")).toContain("priority");
+  });
+
+  it("бросающая обёртка отдаёт конверт или понятную ошибку", () => {
+    expect(normalizeRoleContractV1({ ok: true, output: "Готово" }).output).toBe("Готово");
+    expect(() => normalizeRoleContractV1({ ok: true })).toThrow(/output/);
+  });
+});
+
+describe("JSON-контракт роли v1: разбор ответа роли", () => {
+  it("конверт JSON в блоке кода: владельцу показывается output", () => {
+    const text = [
+      "Сделано.",
+      "```json",
+      JSON.stringify({ ok: true, output: "Виджет нарисован.", artifacts: "https://example.test/док", needs_human: false }),
+      "```",
+      "Спросите, если что.",
+    ].join("\n");
+    const parsed = parseRoleContractV1(text);
+    expect(parsed.format).toBe("v1");
+    expect(parsed.text).toBe("Сделано.\nВиджет нарисован.\nСпросите, если что.");
+    expect(parsed.envelope).toMatchObject({ contract: "role.v1", artifacts: ["https://example.test/док"] });
+    expect(unwrapRoleEnvelope(text)).toBe(parsed.text);
+  });
+
+  it("конверт JSON без обрамления и с error/needs_human", () => {
+    const parsed = parseRoleContractV1(
+      JSON.stringify({ ok: false, output: "Перенос не выполнен.", error: "нет прав на main", next_hint: "Ждать владельца", needs_human: true }),
+    );
+    expect(parsed.format).toBe("v1");
+    expect(parsed.envelope).toMatchObject({
+      ok: false,
+      error: "нет прав на main",
+      next_hint: "Ждать владельца",
+      needs_human: true,
+    });
+  });
+
+  it("битый JSON-конверт не теряется: текст показан как есть, претензии рядом", () => {
+    const text = '```json\n{"ok": "да", "output": "Текст"}\n```';
+    const parsed = parseRoleContractV1(text);
+    expect(parsed.format).toBe("v1");
+    expect(parsed.envelope).toBeNull();
+    expect(parsed.text).toBe(text);
+    expect(parsed.errors.join(" ")).toContain("ok");
+  });
+
+  it("старый YAML-подобный конверт работает как раньше и тоже даёт v1-конверт", () => {
+    const parsed = parseRoleContractV1("```\nok: true\noutput: |\n  Готово.\n  Дальше.\nartifacts: []\n```");
+    expect(parsed.format).toBe("legacy");
+    expect(parsed.text).toBe("Готово.\nДальше.");
+    expect(parsed.envelope).toMatchObject({ contract: "role.v1", ok: true, artifacts: [] });
+
+    const plain = parseRoleContractV1("ok: false\n\noutput: |\n Не смог.\nartifacts: null\nneeds_human: true");
+    expect(plain.format).toBe("legacy");
+    expect(plain.envelope).toMatchObject({ ok: false, output: "Не смог.", needs_human: true });
+  });
+
+  it.each([
+    ["Пример:\n```json\n{\"ok\": true}\n```", "JSON без output — не конверт"],
+    ["Вот:\n```ts\nconst ok = true;\n```", "код не конверт"],
+    ["```yaml\nok: maybe\n```", "не-конвертный ok"],
+    ["Сервер ответил ok: true — всё хорошо.", "ok в прозе"],
+    ["Просто ответ без полей.", "обычный текст"],
+    ["", "пустой ответ"],
+  ])("обычный ответ не меняется: %s", (text) => {
+    expect(parseRoleContractV1(text).format).toBe("plain");
+    expect(unwrapRoleEnvelope(text)).toBe(text);
+  });
+
+  it("недописанный конверт живого хода по-прежнему даёт пустой текст, а не сырой блок", () => {
+    expect(unwrapRoleEnvelopeText("```\nok: true\noutput: |\n  Решение зафикс")).toBe("Решение зафикс");
+    expect(unwrapRoleEnvelopeText("```\nok: true\nout")).toBe("");
+    // Старый конверт и новый — одна функция: поведение прежнее.
+    expect(unwrapRoleEnvelope("```\nok: true\noutput: |\n  Готово.\n```")).toBe("Готово.");
+  });
+});
+
+describe("JSON-контракт роли v1: чат и сдача этапа", { timeout: 20000 }, () => {
+  let app: any, owner: string, builder: string, project: string;
+
+  beforeAll(async () => {
+    app = await buildApp();
+    demoteSeededOwner(db);
+    seedRoleAccounts(db);
+    const u = (await app.inject({ method: "POST", url: "/api/auth/register", payload: { name: "Contract owner", email: crypto.randomUUID() + "@test", password: "password123" } })).json();
+    db.prepare("UPDATE users SET role='owner' WHERE id=?").run(u.user.id);
+    owner = "Bearer " + u.token;
+    builder = "Bearer " + app.jwt.sign({ id: roleUserId("builder") });
+    project = (await app.inject({ method: "POST", url: "/api/projects", headers: { authorization: owner }, payload: { name: "Contract v1 project" } })).json().id;
+  });
+
+  const chatRow = (text: string) => ({
+    id: crypto.randomUUID(),
+    chat_id: "chat-contract-v1",
+    from_user_id: roleUserId("builder"),
+    message_type: "chat",
+    text,
+    task_id: null,
+    subtask_id: null,
+    reply_to_message_id: null,
+    quick_replies: null,
+    steps: null,
+  });
+
+  it("конверт роли доезжает в сообщение чата отдельным полем, текст остаётся человеческим", () => {
+    const v1 = formatChatMessage(chatRow(JSON.stringify({ ok: true, output: "Виджет нарисован.", artifacts: ["https://example.test/док"], needs_human: false })));
+    expect(v1.role_envelope).toEqual({ contract: "role.v1", ok: true, output: "Виджет нарисован.", artifacts: ["https://example.test/док"], error: null, next_hint: null, needs_human: false });
+    expect(v1.text).toBe("Виджет нарисован.");
+
+    const legacy = formatChatMessage(chatRow("```\nok: true\noutput: |\n  Старый вид.\n```"));
+    expect(legacy.text).toBe("Старый вид.");
+    expect(legacy.role_envelope).toMatchObject({ contract: "role.v1", output: "Старый вид." });
+
+    const plain = formatChatMessage(chatRow("Просто ответ, без конверта."));
+    expect(plain.text).toBe("Просто ответ, без конверта.");
+    expect(plain.role_envelope).toBeNull();
+  });
+
+  async function fixture() {
+    const task = (await app.inject({ method: "POST", url: "/api/tasks", headers: { authorization: owner }, payload: { title: "Конверт роли " + crypto.randomUUID(), project_id: project } })).json().task;
+    const plan = (await app.inject({
+      method: "POST",
+      url: `/api/tasks/${task.id}/collaboration-plans`,
+      headers: { authorization: owner },
+      payload: { profile: "manual", nodes: [{ slot_key: "work", role_key: "builder", expected_result: "Результат работы" }], edges: [] },
+    })).json().plan;
+    await app.inject({ method: "PATCH", url: `/api/tasks/${task.id}/integration-responsibility`, headers: { authorization: owner }, payload: { mode: "manual", owner_id: roleUserId("builder") } });
+    await app.inject({ method: "POST", url: `/api/tasks/${task.id}/collaboration-plans/${plan.id}/approve`, headers: { authorization: owner }, payload: {} });
+    const step = (db.prepare("SELECT * FROM subtasks WHERE task_id=?").all(task.id) as any[]).find((s) => s.plan_node_key === "work");
+    return { task, step };
+  }
+
+  const patch = (id: string, payload: any) => app.inject({ method: "PATCH", url: `/api/subtasks/${id}`, headers: { authorization: builder }, payload });
+
+  const REPORT = [
+    "## Результат",
+    "Конверт роли внедрён.",
+    "## Что сделано",
+    "Валидатор и адаптер на сервере.",
+    "## Проверки",
+    "Прогон тестов на временной базе.",
+    "## Ограничения",
+    "Клиент конверт пока не рисует.",
+    "## Материалы",
+    "Коммит ветки роли.",
+  ].join("\n\n");
+
+  it("сдача с одним конвертом закрывает шаг: output становится итогом", async () => {
+    const f = await fixture();
+    const res = await patch(f.step.id, {
+      done: true,
+      report_markdown: REPORT,
+      contract_v1: { ok: true, output: "Виджет нарисован, отчёт сдан.", artifacts: ["https://example.test/док"], needs_human: false },
+    });
+    if (res.statusCode !== 200) console.log("DEBUG-DONE", JSON.stringify(res.json()));
+    expect(res.statusCode).toBe(200);
+    expect(res.json().role_contract_v1).toMatchObject({ contract: "role.v1", output: "Виджет нарисован, отчёт сдан." });
+    expect((db.prepare("SELECT result, done FROM subtasks WHERE id=?").get(f.step.id) as any)).toMatchObject({ result: "Виджет нарисован, отчёт сдан.", done: 1 });
+    const receipt = (await app.inject({ method: "GET", url: `/api/subtasks/${f.step.id}/submission-receipt`, headers: { authorization: builder } })).json();
+    expect(receipt).toMatchObject({ confirmed: true, authority: "primary" });
+  });
+
+  it("битый конверт отклоняется, а обычная сдача рядом с ним не ломается", async () => {
+    const f = await fixture();
+    const bad = await patch(f.step.id, { done: true, result: "Готово.", report_markdown: REPORT, contract_v1: { ok: "да", output: "Текст" } });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toContain("contract_v1");
+    expect((db.prepare("SELECT done FROM subtasks WHERE id=?").get(f.step.id) as any).done).toBe(0);
+
+    const good = await patch(f.step.id, { done: true, result: "Готово.", report_markdown: REPORT });
+    expect(good.statusCode).toBe(200);
+    expect(good.json().role_contract_v1).toBeUndefined();
+    expect((db.prepare("SELECT result FROM subtasks WHERE id=?").get(f.step.id) as any).result).toBe("Готово.");
+    expect((db.prepare("SELECT done FROM subtasks WHERE id=?").get(f.step.id) as any).done).toBe(1);
+  });
+
+  it("прежняя сдача с отчётом из пяти разделов не изменилась", async () => {
+    const f = await fixture();
+    const res = await patch(f.step.id, { done: true, result: "Конверт роли внедрён.", report_markdown: REPORT });
+    expect(res.statusCode).toBe(200);
+    const note = db.prepare("SELECT to_value AS id FROM task_events WHERE kind='role_result_report' AND field=? ORDER BY rowid DESC LIMIT 1").get(f.step.id) as any;
+    expect(note?.id).toBeTruthy();
+    const receipt = (await app.inject({ method: "GET", url: `/api/subtasks/${f.step.id}/submission-receipt`, headers: { authorization: builder } })).json();
+    expect(receipt).toMatchObject({ confirmed: true, authority: "primary", document_id: note.id });
+  });
+});

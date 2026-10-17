@@ -2,6 +2,7 @@ import { wakeAndDeliver } from "../runtime/orchestratorWake.js";
 import { readWorkPlan, saveWorkPlan, validateWorkPlan } from "../lib/subtaskWorkPlan.js";
 import { sandboxSubmissionError } from "../lib/submissionReceipt.js";
 import { validateRoleReport, saveRoleResultReport } from "../lib/roleResultReport.js";
+import { validateRoleContractV1 } from "../lib/roleContractV1.js";
 import { effectiveRules } from "../lib/roleContextResolver.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "crypto";
@@ -304,6 +305,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       title?: string;
       position?: number;
       result?: string;
+      contract_v1?: unknown;
     };
   }>("/api/subtasks/:id", {
     preHandler: authPre,
@@ -311,9 +313,32 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
       if (!subtask) return reply.code(404).send({ error: "Not found" });
 
-      const { done, title, position, result } = req.body || {};
+      const { done, title, position } = req.body || {};
+      let { result } = req.body || {};
       if (position !== undefined && !Number.isInteger(position)) {
         return reply.code(400).send({ error: "position must be an integer" });
+      }
+
+      // JSON-КОНТРАКТ РОЛИ v1 НА ПУТИ СДАЧИ (карточка 237d6f34).
+      //
+      // Роль может приложить конверт рядом с обычной сдачей — это
+      // дополнительный вход, а не замена: result, report_markdown и
+      // artifact/evidence работают ровно как раньше. Конверт проверяется
+      // тем же валидатором, что и чат (lib/roleContractV1.ts), и при
+      // нарушении сдача отклоняется понятной строкой, а не падает.
+      // Если роль прислала только конверт, его `output` становится итогом
+      // шага: иначе закрытие упало бы на «result обязателен» из-за формы,
+      // а не из-за сути работы.
+      let contractEnvelope: import("../lib/roleContractV1.js").RoleEnvelopeV1 | null = null;
+      if (req.body?.contract_v1 !== undefined && req.body?.contract_v1 !== null) {
+        const checked = validateRoleContractV1(req.body.contract_v1);
+        if (!checked.valid) {
+          return reply.code(400).send({
+            error: `contract_v1 не проходит валидатор: ${checked.errors.join("; ")}`,
+          });
+        }
+        contractEnvelope = checked.envelope;
+        if (!result && contractEnvelope?.output) result = contractEnvelope.output;
       }
 
       // ЗАКРЫТИЕ ШАГА АГЕНТОМ ОБЯЗАНО НЕСТИ ИТОГ.
@@ -698,9 +723,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         type: "task:updated",
         task: fullTask,
       });
-      return withSubtaskState(
+      const updated = withSubtaskState(
         db.prepare("SELECT * FROM subtasks WHERE id = ?").get(req.params.id),
       );
+      return contractEnvelope ? { ...updated, role_contract_v1: contractEnvelope } : updated;
     },
   });
 

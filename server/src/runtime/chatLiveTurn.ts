@@ -18,8 +18,8 @@ import {coordinationActivity,traceCoordination} from "./chatCoordination.js";
 // открыть целиком после хода. `id`/`tool`/`status` у него есть нарочно —
 // клиент, который про размышления ещё не знает, разбирает его как шаг и не
 // роняет весь снимок.
-import { parse as parseYaml } from "yaml";
 import { broadcastToUsers } from "../ws.js";
+import { unwrapRoleEnvelopeText } from "../lib/roleContractV1.js";
 
 export const LIVE_BROADCAST_MS = 150;
 const DETAIL_MAX = 140;
@@ -283,59 +283,16 @@ export function stepDetailFallback(tool: string, detail: string | null): string 
   return mcpToolTitle(tool);
 }
 
-// ── Конверт ответа роли ─────────────────────────────────────────────────
-
-// Промпты ролей (scripts/role-prompts/*.md) велят сдавать работу по задаче
-// конвертом `ok / output / artifacts / error / next_hint / needs_human`, и в
-// чате роли по привычке заворачивают в него ответ — блоком кода. Владелец
-// 01.10.2026 видел это «кодовым окном». В чате показываем только `output`.
-const FENCE_RE = /```[\w-]*[ \t]*\n([\s\S]*?)(?:\n[ \t]*```[ \t]*(?=\n|$)|$)/g;
-
-const ENVELOPE_KEY = /^(artifacts|error|next_hint|needs_human):/;
-
-function envelopeOutput(body: string): string | null {
-  const first = body.split("\n").find((l) => l.trim());
-  if (!first || !/^ok:\s*(true|false)\s*$/.test(first.trim())) return null;
-  try {
-    const doc = parseYaml(body) as unknown;
-    if (doc && typeof doc === "object" && typeof (doc as { output?: unknown }).output === "string") {
-      return ((doc as { output: string }).output).trim();
-    }
-  } catch {
-    // Конверт ещё не дописан (живой ход) — ниже вынимаем output руками.
-  }
-  const lines = body.split("\n");
-  const at = lines.findIndex((l) => /^output:/.test(l));
-  if (at < 0) return "";
-  const inline = lines[at].replace(/^output:\s*/, "");
-  if (inline && !/^[|>][-+]?\s*$/.test(inline)) {
-    return inline.replace(/^["']|["']$/g, "").trim();
-  }
-  // output идёт до следующего поля конверта: без обрамления кодом роль
-  // пишет его и без отступа.
-  const block: string[] = [];
-  for (const line of lines.slice(at + 1)) {
-    if (ENVELOPE_KEY.test(line)) break;
-    block.push(line);
-  }
-  const indents = block.filter((l) => l.trim()).map((l) => l.match(/^\s*/)![0].length);
-  const cut = indents.length ? Math.min(...indents) : 0;
-  return block.map((l) => l.slice(cut)).join("\n").trim();
-}
+// ── Конверт ответа роли ───────────────────────────────────────────────
+//
+// Разбор конверта (JSON-контракт роли v1 и старый YAML-подобный вид) живёт в
+// одном месте — src/lib/roleContractV1.ts, чтобы чат, живой ход, сдача этапа
+// и предпросмотр списка чатов понимали ответ одинаково. Здесь остаётся тонкая
+// обёртка: прежнее имя и прежнее поведение (снять конверт, оставить текст).
 
 /** Снять конверт `ok/output/...` с ответа роли, оставив текст `output`. */
 export function unwrapRoleEnvelope(text: string): string {
-  if (!text || !/ok:\s*(true|false)/.test(text)) return text;
-  const fenced = text.replace(FENCE_RE, (whole, body: string) => envelopeOutput(body) ?? whole);
-  if (fenced !== text) return fenced;
-  // Конверт без обрамления кодом — весь ответ, иногда поля в `кавычках`.
-  const lines = text.split("\n").map((line) => {
-    const m = line.match(/^`((?:ok|output|artifacts|error|next_hint|needs_human):.*)`\s*$/);
-    return m ? m[1] : line;
-  });
-  const first = lines.findIndex((l) => l.trim());
-  if (first < 0 || !/^ok:\s*(true|false)\s*$/.test(lines[first].trim())) return text;
-  return envelopeOutput(lines.slice(first).join("\n")) ?? text;
+  return unwrapRoleEnvelopeText(text);
 }
 
 // ── Сам ход ─────────────────────────────────────────────────────────────

@@ -10,10 +10,10 @@ import {coordinationCardData} from "../runtime/chatCoordination.js";
 import db from "../db.js";
 import {
   stepDetailFallback,
-  unwrapRoleEnvelope,
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { chatHandoff } from "./chatHandoff.js";
+import { parseRoleContractV1, type RoleEnvelopeV1 } from "./roleContractV1.js";
 
 // Ленивая подготовка: db.prepare с колонкой chat_message_id не должен
 // падать на импорте, если миграция 053 ещё не прошла (index.ts импортирует
@@ -37,7 +37,12 @@ export function formatChatMessage(message: any) {
       WHERE chat_message_id = ? ORDER BY created_at`,
   );
   const event=message.message_type==='system' || !!db.prepare("SELECT 1 FROM plan_topic_events WHERE message_id=?").get(message.id);
-  let displayText=typeof message.text==="string" ? unwrapRoleEnvelope(message.text) : message.text;
+  // Один разбор ответа роли на оба поля: конверт снимается с текста и,
+  // если он был, уходит клиенту структурным полем (карточка 237d6f34,
+  // JSON-контракт роли v1). Старый YAML-подобный вид даёт тот же конверт,
+  // обычный ответ — null, то есть сообщение выходит ровно как раньше.
+  const parsed = typeof message.text === "string" ? parseRoleContractV1(message.text) : null;
+  let displayText = parsed ? parsed.text : message.text;
   if(typeof displayText==="string" && message.task_id) displayText=displayText.replace(/\[slot: ([^\]]+)\]/g,(_match:string,key:string)=>{
     const row=db.prepare("SELECT s.title FROM subtasks s WHERE s.task_id=? AND s.plan_node_key=? ORDER BY s.rowid DESC LIMIT 1").get(message.task_id,key) as {title:string}|undefined;
     return `[этап: ${row?.title ?? key}]`;
@@ -59,6 +64,10 @@ export function formatChatMessage(message: any) {
     steps: message.steps ? savedSteps(message.steps) : null,
     // Сдача этапа (14.10.2026): главное из отчёта роли — см. chatHandoff.ts.
     handoff: chatHandoff(message),
+    // Конверт роли (JSON-контракт v1, 17.10.2026): нормализованные поля
+    // `ok/output/artifacts/error/next_hint/needs_human` для клиента. У сообщений
+    // без конверта поля нет — старые ответы приходят как приходили.
+    role_envelope: (parsed?.envelope ?? null) as RoleEnvelopeV1 | null,
     // Конверт ok/output в ответе роли (01.10.2026) — показываем только output.
     text: displayText,
     ...(message.steps && JSON.parse(message.steps).coordination ? {kind:"coordination",coordination:coordinationCardData(message)} : {}),
