@@ -1,0 +1,40 @@
+--- a/autonomy-report.py
++++ b/autonomy-report.py
+@@ -259,13 +259,22 @@
+     честно попадает в оба журнала. Поэтому показываем раздельно — у кого не ушло и на
+     чём именно сорвалось.
+     """
+-    senders = _recent(UNDELIVERED, hours)
++    # Журнал «недоставленного» на самом деле журнал КАЖДОЙ отправки: alert_send.py
++    # пишет в него строку и когда тревога дошла (error="", reserve="дошёл (через
++    # n8n)"). Поэтому потеря — это запись с непустой причиной, а не просто строка.
++    # 16.10.2026: так в сводку легло «у отправителей НЕ УШЛО 11» при одиннадцати
++    # успешных доставках — карточка на диагностику каждый день.
++    attempts = _recent(UNDELIVERED, hours)
++    senders = [r for r in attempts
++               if (r.get("error") or "").strip() or r.get("reserve") == "не дошёл"]
+     relay = _recent(RELAY_JOURNAL, hours)
+     lost_relay = [r for r in relay if r.get("status") == "lost"]
+     shaky = [r for r in relay if r.get("status") == "recovered"]
+ 
+     if not senders and not lost_relay:
+-        tail = f", посредник вытянул повтором: {len(shaky)}" if shaky else ""
++        tail = f" — тревог отправлено: {len(attempts)}" if attempts else ""
++        if shaky:
++            tail += f", посредник вытянул повтором: {len(shaky)}"
+         return f"доставка тревог: потерь за {hours} ч нет{tail}"
+ 
+     parts = []
+@@ -276,9 +285,12 @@
+         кто = ", ".join(f"{k}: {v}" for k, v in sorted(by_src.items(), key=lambda x: -x[1]))
+         # Дошло ли хотя бы предупреждение по запасной дороге — это отдельная беда.
+         немых = sum(1 for r in senders if r.get("reserve") == "не дошёл")
++        придушено = sum(1 for r in senders if r.get("reserve") == "промолчал")
+         parts.append(f"у отправителей НЕ УШЛО {len(senders)} ({кто})")
+         if немых:
+             parts.append(f"из них без предупреждения даже запасной дорогой: {немых}")
++        if придушено:
++            parts.append(f"предупреждение о сбое придушено частотой: {придушено}")
+     if lost_relay:
+         parts.append(f"сорвалось у посредника: {len(lost_relay)}")
+         причина = (lost_relay[-1].get("error") or "").strip()
