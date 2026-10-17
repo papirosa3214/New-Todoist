@@ -481,6 +481,21 @@ export class LiveTurn {
     });
   }
 
+  /** Replace the final live draft with the validated text that will be saved. */
+  replaceFinalText(text: string): void {
+    if (this.closed) return;
+    for (let index = this.items.length - 1; index >= 0; index -= 1) {
+      const item = this.items[index];
+      if (item.kind === "text") {
+        item.text = text;
+        this.schedule(true);
+        return;
+      }
+    }
+    this.appendText(text);
+    this.schedule(true);
+  }
+
   /** Ход закончен (успешно или нет): убрать живой снимок у всех и отдать
    *  то, что сохранится в истории. Последний текстовый кусок — это сам
    *  ответ, он ляжет пузырём, поэтому в шаги не идёт. Ни шагов, ни

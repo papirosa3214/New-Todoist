@@ -41,14 +41,20 @@ export function formatChatMessage(message: any) {
   // если он был, уходит клиенту структурным полем (карточка 237d6f34,
   // JSON-контракт роли v1). Старый YAML-подобный вид даёт тот же конверт,
   // обычный ответ — null, то есть сообщение выходит ровно как раньше.
-  const parsed = typeof message.text === "string" ? parseRoleContractV1(message.text) : null;
+  const storedEnvelope = typeof message.role_envelope_json === "string"
+    ? parseRoleContractV1(message.role_envelope_json)
+    : null;
+  const parsed = storedEnvelope?.structuredEnvelope
+    ? storedEnvelope
+    : typeof message.text === "string" ? parseRoleContractV1(message.text) : null;
+  const { role_envelope_json: _roleEnvelopeJSON, ...messageFields } = message;
   let displayText = parsed ? parsed.text : message.text;
   if(typeof displayText==="string" && message.task_id) displayText=displayText.replace(/\[slot: ([^\]]+)\]/g,(_match:string,key:string)=>{
     const row=db.prepare("SELECT s.title FROM subtasks s WHERE s.task_id=? AND s.plan_node_key=? ORDER BY s.rowid DESC LIMIT 1").get(message.task_id,key) as {title:string}|undefined;
     return `[этап: ${row?.title ?? key}]`;
   });
   return {
-    ...message,
+    ...messageFields,
     sequence: (db.prepare("SELECT rowid AS sequence FROM chat_messages WHERE id=?").get(message.id) as {sequence:number}|undefined)?.sequence ?? null,
     kind:event?'system':message.message_type ?? message.kind,
     ...(event?{from_user_id:'taskflow_system',from_user_name:'Система',from_user_initials:'С',from_user_avatar_url:null}:{}),

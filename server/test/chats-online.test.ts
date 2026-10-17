@@ -32,6 +32,7 @@ import {
   resetModelRuntime,
   _resetActiveChatRunsForTests,
 } from "../src/runtime/PiRuntimeAdapter.js";
+import { unwrapRoleEnvelope } from "../src/runtime/chatLiveTurn.js";
 import {
   acquireChatRoleLock,
   isChatRoleLocked,
@@ -280,7 +281,7 @@ function chatMessageCount(chatId: string): number {
 }
 
 function messagesByAuthor(chatId: string, fromUserId: string) {
-  return db
+  const rows = db
     .prepare(
       `SELECT id, text, channel, chat_id, reply_to_message_id FROM chat_messages
         WHERE chat_id = ? AND from_user_id = ? ORDER BY created_at ASC`,
@@ -292,6 +293,7 @@ function messagesByAuthor(chatId: string, fromUserId: string) {
       chat_id: string;
       reply_to_message_id: string | null;
     }>;
+  return rows.map((row) => ({ ...row, text: unwrapRoleEnvelope(row.text) }));
 }
 
 async function tick(ms = 50): Promise<void> {
@@ -433,6 +435,20 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     const archMessages = messagesByAuthor(chatId, "role_architect");
     expect(archMessages).toHaveLength(1);
     expect(archMessages[0].text).toBe("ответил агент");
+    const history = await app.inject({
+      method: "GET",
+      url: `/api/chats/${chatId}/messages`,
+      headers: ownerAuth,
+    });
+    const apiReply = history.json().messages.find((message: any) => message.from_user_id === "role_architect");
+    expect(apiReply.text).toBe("ответил агент");
+    expect(apiReply.role_envelope).toMatchObject({
+      schema_version: 1,
+      output: [{ type: "text", text: "ответил агент" }],
+    });
+    const stored = db.prepare("SELECT text, role_envelope_json FROM chat_messages WHERE id=?").get(apiReply.id) as { text: string; role_envelope_json: string };
+    expect(stored.text).toBe("ответил агент");
+    expect(JSON.parse(stored.role_envelope_json)).toMatchObject({ schema_version: 1, ok: true });
     expect(archMessages[0].channel).toBe("chat");
     expect(archMessages[0].chat_id).toBe(chatId);
 
@@ -458,6 +474,36 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     expect(fakeClients).toHaveLength(1);
     const client = lastClient();
     expect(client.options.args ?? []).not.toContain("--session-id");
+  });
+
+  it("валидный JSON v1 сохраняет типизированные блоки, материалы и плановый артефакт", async () => {
+    const chatId = (await createChat({ kind: "direct", member_ids: ["role_architect"] })).json().chat.id;
+    const planArtifact = {
+      key: "root-cause-1",
+      type: "root_cause_analysis",
+      format: "json",
+      summary: "Причина установлена.",
+      payload: { cause: "сброс очереди" },
+      evidence: [{ kind: "log", title: "Лог", ref: "docs/run.log" }],
+    };
+    replyTextFor = () => JSON.stringify({
+      schema_version: 1,
+      ok: true,
+      output: [{ type: "text", text: "Причина установлена." }],
+      artifacts: [{ kind: "document", title: "Отчёт", ref: "docs/report.md" }],
+      plan_artifact: planArtifact,
+      error: null,
+      next_hint: null,
+      needs_human: false,
+    });
+
+    await send(chatId, "@architect проверь");
+    await vi.waitFor(async () => {
+      const history = await app.inject({ method: "GET", url: `/api/chats/${chatId}/messages`, headers: ownerAuth });
+      const reply = history.json().messages.find((message: any) => message.from_user_id === "role_architect");
+      expect(reply?.role_envelope?.plan_artifact).toEqual(planArtifact);
+      expect(reply?.role_envelope?.artifacts).toEqual([{ kind: "document", title: "Отчёт", ref: "docs/report.md" }]);
+    });
   });
 
   it("во время хода роли chats:typing несёт tool из toolcall_start", async () => {
@@ -590,7 +636,7 @@ describe("Чаты (этап 2, онлайн-сессия Пи)", () => {
     const original = db.prepare.bind(db);
     let injected = false;
     const spy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
-      if (!injected && sql.includes("INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, quick_replies")) {
+      if (!injected && sql.includes("INSERT INTO chat_messages (id, from_user_id, text, role_envelope_json, channel, chat_id, quick_replies")) {
         injected = true;
         throw new Error("temporary reply write failure");
       }

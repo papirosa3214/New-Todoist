@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 vi.mock("../src/runtime/inProcessRun.js", async original => ({...await original<any>(), runRoleInProcess: vi.fn(async()=>({runId:"contract-v1-test",completion:Promise.resolve()}))}));
 import {
   normalizeRoleContractV1,
+  normalizeRoleReplyV1,
   parseRoleContractV1,
   ROLE_CONTRACT_V1,
   unwrapRoleEnvelopeText,
@@ -19,6 +20,48 @@ import { demoteSeededOwner, seedRoleAccounts } from "./helpers/seedOwner.js";
 // Карточка 237d6f34 «Внедрить JSON-контракт роли v1 на сервере»: валидатор
 // конверта, совместимость старого YAML-подобного вида и доставка конверта в
 // чат и на путь сдачи этапа.
+
+describe("нормализация финального ответа в JSON v1", () => {
+  it("сохраняет валидный структурированный ответ без изменений", () => {
+    const source = {
+      schema_version: 1, ok: true, output: [{ type: "heading", text: "Итог", level: 1 }, { type: "text", text: "Готово." }],
+      artifacts: [], plan_artifact: null, error: null, next_hint: null, needs_human: false,
+    };
+    const normalized = normalizeRoleReplyV1(JSON.stringify(source));
+    expect(normalized.normalizedByServer).toBe(false);
+    expect(normalized.envelope).toEqual(source);
+    expect(normalized.displayText).toContain("Готово.");
+    expect(validateStructuredRoleContractV1(normalized.envelope).valid).toBe(true);
+  });
+
+  it("оборачивает обычный текст в разрешённый text-блок и сохраняет его", () => {
+    const normalized = normalizeRoleReplyV1("Ответ без конверта.");
+    expect(normalized.normalizedByServer).toBe(true);
+    expect(normalized.validationErrors).toContain("Ответ не содержит JSON v1 конверт");
+    expect(normalized.envelope.output).toEqual([{ type: "text", text: "Ответ без конверта." }]);
+    expect(normalized.displayText).toBe("Ответ без конверта.");
+    expect(validateStructuredRoleContractV1(normalized.envelope).valid).toBe(true);
+  });
+
+  it("сохраняет битый JSON буквально как текст, не теряя ответ", () => {
+    const raw = '{"schema_version":1,"output":';
+    const normalized = normalizeRoleReplyV1(raw);
+    expect(normalized.normalizedByServer).toBe(true);
+    expect(normalized.displayText).toBe(raw);
+    expect(validateStructuredRoleContractV1(normalized.envelope).valid).toBe(true);
+  });
+
+  it("переводит старый конверт и сохраняет материалы", () => {
+    const normalized = normalizeRoleReplyV1(JSON.stringify({
+      ok: true, output: "Отчёт готов.", artifacts: ["https://example.test/report"], error: null, next_hint: null, needs_human: false,
+    }));
+    expect(normalized.envelope).toMatchObject({
+      schema_version: 1, ok: true, output: [{ type: "text", text: "Отчёт готов." }],
+      artifacts: [{ kind: "artifact", ref: "https://example.test/report" }],
+    });
+    expect(validateStructuredRoleContractV1(normalized.envelope).valid).toBe(true);
+  });
+});
 
 describe("JSON-контракт роли v1: валидатор", () => {
   it("принимает полный конверт и приводит его к нормализованному виду", () => {

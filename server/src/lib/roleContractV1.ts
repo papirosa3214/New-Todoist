@@ -262,7 +262,7 @@ function asV1Candidate(body: string): unknown | null {
   }
 }
 
-function structuredOutputText(blocks: Record<string, unknown>[]): string {
+export function structuredOutputText(blocks: Record<string, unknown>[]): string {
   return blocks.map((block) => {
     switch (block.type) {
       case "text": return String(block.text ?? "");
@@ -520,3 +520,64 @@ export const ROLE_CONTRACT_V1_RULE =
   `JSON-контракт роли v1 (${ROLE_CONTRACT_V1}): один объект с полями ok (да/нет), ` +
   `output (текст для владельца), artifacts (список ссылок), error (строка или null), ` +
   `next_hint (строка или null), needs_human (да/нет). Старый вид ok:/output: тоже принимается.`;
+
+export interface NormalizedRoleReplyV1 {
+  envelope: StructuredRoleEnvelopeV1;
+  /** User-facing text derived from the normalized output blocks. */
+  displayText: string;
+  /** True when the server had to wrap an answer that was not valid JSON v1. */
+  normalizedByServer: boolean;
+  validationErrors: string[];
+}
+
+/**
+ * Normalize a completed role reply to the closed chat v1 envelope. This is a
+ * server-side boundary guarantee: it does not constrain how the provider
+ * generated the original text. Invalid or plain-text replies are preserved
+ * verbatim inside a text block, so validation never discards an answer.
+ */
+export function normalizeRoleReplyV1(text: string): NormalizedRoleReplyV1 {
+  const parsed = parseRoleContractV1(text);
+  if (parsed.structuredEnvelope) {
+    return {
+      envelope: parsed.structuredEnvelope,
+      displayText: structuredOutputText(parsed.structuredEnvelope.output),
+      normalizedByServer: false,
+      validationErrors: [],
+    };
+  }
+
+  if (parsed.envelope) {
+    const legacy = parsed.envelope;
+    const displayText = legacy.output || text.trim();
+    const envelope: StructuredRoleEnvelopeV1 = {
+      schema_version: 1,
+      ok: legacy.ok,
+      output: [{ type: "text", text: displayText }],
+      artifacts: legacy.artifacts.map((ref, index) => ({ kind: "artifact", title: "Материал " + (index + 1), ref })),
+      plan_artifact: null,
+      error: legacy.error ? { code: "other", message: legacy.error, retryable: false } : null,
+      next_hint: legacy.next_hint,
+      needs_human: legacy.needs_human,
+    };
+    return { envelope, displayText, normalizedByServer: true, validationErrors: parsed.warnings };
+  }
+
+  const validationErrors = parsed.errors.length
+    ? parsed.errors
+    : parsed.format === "plain"
+      ? ["Ответ не содержит JSON v1 конверт"]
+      : ["Ответ не удалось разобрать как JSON v1"];
+  const preservedText = text.trim() || "Ответ не содержит текста.";
+  const envelope: StructuredRoleEnvelopeV1 = {
+    schema_version: 1,
+    ok: true,
+    output: [{ type: "text", text: preservedText }],
+    artifacts: [],
+    plan_artifact: null,
+    error: null,
+    next_hint: null,
+    needs_human: false,
+  };
+  return { envelope, displayText: preservedText, normalizedByServer: true, validationErrors };
+}

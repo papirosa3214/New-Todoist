@@ -83,6 +83,14 @@ describe("живой ход", () => {
     expect(sent[2].event.turn.items[1].status).toBe("done");
   });
 
+  it("обновляет черновик финальным проверенным текстом перед закрытием", () => {
+    const turn = newTurn();
+    turn.onEvent(text("черновик"));
+    turn.replaceFinalText("Ответ после проверки.");
+    expect(liveTurnsOfChat("c1")[0].items).toEqual([{ kind: "text", text: "Ответ после проверки." }]);
+    expect(turn.partialText()).toBe("Ответ после проверки.");
+  });
+
   it("finish: убирает снимок у всех, последний текст уходит в пузырь, шаги — в историю", () => {
     const turn = newTurn();
     turn.onEvent(text("Смотрю файл"));

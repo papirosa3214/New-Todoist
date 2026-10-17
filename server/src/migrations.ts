@@ -4773,6 +4773,10 @@ const migrations: Migration[] = [
       PRIMARY KEY (subtask_id, notice_key)
     );
   `) },
+  { id: "153_role_envelope_json", description: "Структурированный JSON v1 ответа роли в чате", up: () => {
+    const columns = new Set((db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>).map((column) => column.name));
+    if (!columns.has("role_envelope_json")) db.exec("ALTER TABLE chat_messages ADD COLUMN role_envelope_json TEXT");
+  } },
 ];
 /**
  * Опции прогона миграций.

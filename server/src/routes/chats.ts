@@ -52,6 +52,7 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { formatChatMessage, loadChatMessage } from "../lib/chatMessages.js";
+import { normalizeRoleReplyV1, structuredOutputText } from "../lib/roleContractV1.js";
 import { roleProjectContext } from "../runtime/roleProjectContext.js";
 import { roleSlotSnapshotsBlock } from "../runtime/slotWorkSnapshot.js";
 import { normalizeWidgetBlocks } from "../lib/widgetNormalize.js";
@@ -2017,34 +2018,48 @@ async function deliverAgentReply(args: {
     failure = error;
   }
   const partial = live.partialText();
-  const steps: SavedSteps | null = live.finish({ deferAnnounce: true });
-
   const cancelled = (failure as { code?: string } | null)?.code === "CHAT_RUN_CANCELLED";
+  let storedRoleEnvelope: string | null = null;
+  let quickReplies: string[] | null = null;
   replyText = cancelled && partial
     ? `${partial}\n\n_Остановлено._`
     : failure
       ? chatRunFailureText(failure)
-      : unwrapRoleEnvelope((reply?.text || "").trim()).trim();
+      : "";
+
+  if (!cancelled && !failure) {
+    const rawAnswer = (reply?.text || "").trim();
+    if (rawAnswer) {
+      const normalized = normalizeRoleReplyV1(rawAnswer);
+      if (normalized.normalizedByServer) {
+        console.warn("[chats] ответ роли нормализован в JSON v1:", {
+          role,
+          chatId,
+          validationErrors: normalized.validationErrors,
+        });
+      }
+      const replies: string[] = [];
+      normalized.envelope.output = normalized.envelope.output.map((block) => {
+        if (block.type !== "text" || typeof block.text !== "string") return block;
+        const widgetsNormalized = normalizeWidgetBlocks(block.text);
+        const extracted = extractQuickReplies(widgetsNormalized);
+        if (extracted.replies) replies.push(...extracted.replies);
+        return { ...block, text: extracted.clean };
+      });
+      quickReplies = replies.length ? replies.slice(0, 4) : null;
+      storedRoleEnvelope = JSON.stringify(normalized.envelope);
+      replyText = structuredOutputText(normalized.envelope.output).trim();
+    }
+  }
 
   // A terminal run must leave a visible result even if the provider returned no final text.
   if (!replyText && !failure) {
     replyText = partial || "Ход завершился без текста ответа. Отправьте сообщение ещё раз.";
     if (!partial) failure = Object.assign(new Error("модель завершила ход без текста ответа"), { code: "CHAT_RUN_EMPTY" });
   }
+  if (!failure && !cancelled) live.replaceFinalText(replyText);
+  const steps: SavedSteps | null = live.finish({ deferAnnounce: true });
 
-  // Быстрые ответы — общий формат ответа роли (раньше — частная логика
-  // Помощника владельца). Модель заканчивает ответ строкой `БЫСТРО: а | б | в` —
-  // разбираем и убираем из текста, который ложится в ленту.
-  let quickReplies: string[] | null = null;
-  if (replyText && !failure) {
-    const extracted = extractQuickReplies(replyText);
-    replyText = extracted.clean;
-    quickReplies = extracted.replies;
-  }
-  if (!replyText && !failure) {
-    replyText = "Ход завершился без текста ответа. Отправьте сообщение ещё раз.";
-    failure = Object.assign(new Error("модель завершила ход без текста ответа"), { code: "CHAT_RUN_EMPTY" });
-  }
   // Сообщение о сбое хода — не для общего чата (инвариант п. 3): сбой идёт
   // в личную переписку роли, в общем чате ему места нет.
   if (replyText && failure) {
@@ -2058,21 +2073,14 @@ async function deliverAgentReply(args: {
     }
   }
 
-  // Никакой обрезки и никаких «перепиши»: ответ роли сохраняется ровно
-  // таким, каким его написала модель (владелец 04.10.2026). Прежние правила
-  // (лимит 800 символов на уровне БД и подмена/отмена ответа в коде) съедали
-  // сообщения целиком — в чате не появлялось ничего. Ограничивать длину
-  // должен не сервер, а сама роль; сервер обязан доставить то, что написали.
-  // ```widget-блоки от роли приводим к канонической схеме (владелец
-  // 02.10.2026: «виджет не разработан» из-за несовпадения имён полей и
-  // отсутствия type). Нераспознанный блок остаётся в тексте как есть.
-  if (replyText && !failure) replyText = normalizeWidgetBlocks(replyText);
+  // Ответ пользователя остаётся без потери: валидный JSON v1 сохраняем
+  // структурированным, а plain/invalid ответ — без изменений внутри text-блока.
   if (replyText) {
     replyId = uid();
     db.prepare(
-      `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, quick_replies, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id)
-       VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(replyId, roleUserId, replyText, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(steps) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null);
+      `INSERT INTO chat_messages (id, from_user_id, text, role_envelope_json, channel, chat_id, quick_replies, steps, reply_to_message_id,task_id,subtask_id,recipient_subtask_id)
+       VALUES (?, ?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(replyId, roleUserId, replyText, storedRoleEnvelope, chatId, quickReplies ? JSON.stringify(quickReplies) : null, steps ? JSON.stringify(steps) : null,trigger.id,slot?.task_id ?? topic?.task_id ?? null,slot?.id ?? null,trigger.subtask_id ?? null);
     db.prepare("UPDATE chats SET updated_at = datetime('now') WHERE id = ?").run(chatId);
     traceCoordination(()=>coordinationAnswered(trigger.id,roleUserId,replyText,!!failure));
     broadcastToUsers(memberIds(chatId), { type: "chat:new", message: loadChatMessage(replyId) });
