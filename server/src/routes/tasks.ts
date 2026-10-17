@@ -131,6 +131,26 @@ function isValidDuration(n: unknown): boolean {
 // больше не так, не опирайтесь на это как на инвариант. Сам фильтр !s.done
 // оставлен: он ничего не стоит и держит роллап честным на старых базах,
 // куда миграция ещё не доехала.
+/** Цепочка предков задачи от корня к непосредственному родителю.
+    Рекурсивный CTE в одном запросе: клиенту больше не нужно ходить вверх по
+    дереву и дёргать задачу на каждого предка (владелец 17.10.2026 — карточка
+    открывалась долго именно из-за этой очереди запросов). Защита от цикла в
+    дереве — повторный id в цепочке обрывает подъём. */
+function taskAncestors(taskId: string): Array<{ id: string; title: string; parent_id: string | null }> {
+  return db
+    .prepare(
+      `WITH RECURSIVE chain(id, title, parent_id, depth) AS (
+         SELECT id, title, parent_id, 0 FROM tasks WHERE id = ?
+         UNION ALL
+         SELECT t.id, t.title, t.parent_id, chain.depth + 1
+           FROM tasks t JOIN chain ON t.id = chain.parent_id
+          WHERE chain.depth < 20
+       )
+       SELECT id, title, parent_id FROM chain WHERE depth > 0 ORDER BY depth DESC`,
+    )
+    .all(taskId) as Array<{ id: string; title: string; parent_id: string | null }>;
+}
+
 export function withAgentStale(task: any, subtasks?: any[], children?: any[]) {
   let agent_state = task.agent_state;
   let agent_heartbeat_at = task.agent_heartbeat_at;
@@ -855,6 +875,12 @@ export function registerTaskRoutes(app: FastifyInstance) {
         labels,
         subtasks,
         children,
+        // Вся цепочка предков одним запросом. Раньше клиент шёл вверх по
+        // дереву и дёргал задачу на каждого предка по очереди — на глубоких
+        // карточках это 5–15 последовательных запросов, и карточка открывалась
+        // долго (владелец 17.10.2026). Порядок — от корня к непосредственному
+        // родителю; первые два нужны экрану карточки (родитель и его название).
+        ancestors: taskAncestors(task.id),
         comments,
         // Чаты, привязанные к этой задаче. Нужны карточке, чтобы дать переход
         // в переписку («Чат по задаче»); сам чат в карточке не заводится и не
