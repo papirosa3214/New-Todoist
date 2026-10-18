@@ -44,7 +44,7 @@ import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
 import { finalizeWorktreeError } from "../lib/worktree/finalize.js";
-import { enqueueMerge, isOrchestratedFinalStep } from "../runtime/worktreeMergeQueue.js";
+import { enqueueMerge, isOrchestratedFinalStep, requeueMerge } from "../runtime/worktreeMergeQueue.js";
 import { isIntegrationPlanStep } from "../runtime/integrationHandoff.js";
 import {
   SNAPSHOT_REASONS,
@@ -562,8 +562,14 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         // он последний незакрытый в своём плане.
         if (done === true && !subtask.done) {
           try {
-            if (isIntegrationPlanStep(req.params.id)) enqueueMerge(subtask.task_id, "integration_step");
-            else if (isOrchestratedFinalStep(req.params.id)) enqueueMerge(subtask.task_id, "orchestrator_step");
+            // Повторная сдача шага интеграции после конфликта — это
+            // осознанное «починил, пробуй снова»: возвращаем карточку
+            // в очередь из состояния конфликта или красных тестов.
+            if (isIntegrationPlanStep(req.params.id)) {
+              if (!enqueueMerge(subtask.task_id, "integration_step")) requeueMerge(subtask.task_id);
+            } else if (isOrchestratedFinalStep(req.params.id)) {
+              if (!enqueueMerge(subtask.task_id, "orchestrator_step")) requeueMerge(subtask.task_id);
+            }
           } catch (error) {
             logEvent({taskId:subtask.task_id,actorId:req.userId,kind:"merge_queue_error",field:req.params.id,toValue:error instanceof Error ? error.message : String(error)});
           }

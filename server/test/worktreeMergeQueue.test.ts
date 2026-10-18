@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import db from "../src/db.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge } from "../src/runtime/worktreeMergeQueue.js";
+import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, requeueMerge, sweepUnmergedBranches } from "../src/runtime/worktreeMergeQueue.js";
 import { reloadServerSettings, setSetting } from "../src/lib/serverSettings.js";
 
 // Хук `test/setup.ts` запрещает коммиты в живом репозитории и цепляется
@@ -189,6 +189,35 @@ describe("очередь автослияния", () => {
     } finally {
       setSetting("auto_merge_mode", "on", null, "возврат боевого режима");
     }
+  });
+
+  it("развертка не стирает диагноз: «красные тесты» остаются видны", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-keep-state");
+    seedTask("t-keep-state");
+    hooks.runTests = async () => ({ ok: false, output: "FAIL test/y" });
+    enqueueMerge("t-keep-state", "integration_step");
+    await processMerge("t-keep-state");
+    expect(mergeQueueRow("t-keep-state")?.state).toBe("test_failed");
+    // Следующая развертка не должна возвращать карточку в «queued» и
+    // стирать причину: иначе отказ невозможно увидеть и починить.
+    sweepUnmergedBranches();
+    expect(mergeQueueRow("t-keep-state")?.state).toBe("test_failed");
+    expect(mergeQueueRow("t-keep-state")?.error).toContain("FAIL");
+  });
+
+  it("повторная сдача шага после конфликта возвращает карточку в очередь", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-retry");
+    seedTask("t-retry");
+    enqueueMerge("t-retry", "integration_step");
+    fs.writeFileSync(path.join(repo.live, "a.txt"), "ушёл вперёд\n");
+    git(repo.live, "commit", "-q", "-am", "правка main");
+    await processMerge("t-retry");
+    expect(mergeQueueRow("t-retry")?.state).toBe("conflict");
+    // Роль починила конфликт и сдала шаг снова — система переоформляет.
+    expect(requeueMerge("t-retry")).toBe(true);
+    expect(mergeQueueRow("t-retry")?.state).toBe("queued");
   });
 
   it("режим off: очередь не наполняется, проход пуст", async () => {

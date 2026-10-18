@@ -208,13 +208,12 @@ export function enqueueMerge(taskId: string, trigger: MergeTrigger): boolean {
     | { state: string }
     | undefined;
   if (existing) {
-    // Успех — не трогаем. Неуспех — пробуем снова: конфликт мог быть
-    // разрешён интегратором, а «грязный main» — убран человеком.
-    if (["merged", "conflict", "test_failed"].includes(existing.state) && existing.state !== "queued") {
-      if (existing.state !== "conflict") return false;
-    }
+    // Строку, которая уже в работе или уже разобрана, развертка не
+    // трогает: иначе причина отказа («красные тесты», «грязный main»,
+    // «грязная копия») стирается и её невозможно увидеть.
+    if (existing.state !== "queued") return false;
     db.prepare(
-      "UPDATE worktree_merge_queue SET state = 'queued', error = NULL, trigger = ?, updated_at = datetime('now') WHERE task_id = ?",
+      "UPDATE worktree_merge_queue SET trigger = ?, updated_at = datetime('now') WHERE task_id = ?",
     ).run(trigger, taskId);
     return true;
   }
@@ -222,6 +221,18 @@ export function enqueueMerge(taskId: string, trigger: MergeTrigger): boolean {
     "INSERT INTO worktree_merge_queue(task_id, trigger, state) VALUES (?, ?, 'queued')",
   ).run(taskId, trigger);
   return true;
+}
+
+/**
+ * Переоформить строку в `queued` после того, как ответственный за
+ * интеграцию починил конфликт (сдача шага). Единственный путь,
+ * возвращающий карточку в работу осознанно.
+ */
+export function requeueMerge(taskId: string): boolean {
+  const changed = db
+    .prepare("UPDATE worktree_merge_queue SET state = 'queued', error = NULL, updated_at = datetime('now') WHERE task_id = ? AND state IN ('conflict', 'test_failed', 'blocked_dirty_main', 'dirty_worktree')")
+    .run(taskId).changes;
+  return changed > 0;
 }
 
 export function mergeQueueRow(taskId: string): MergeRow | undefined {
@@ -437,8 +448,9 @@ export function sweepUnmergedBranches(limit = 20): number {
     const taskId = ref.replace(/^roles\//, "");
     const state = inspectWorktree(taskId, "main", live);
     if (!state.branch_exists || state.merged_into_base || state.ahead_count === 0) continue;
-    const already = mergeQueueRow(taskId);
-    if (already && ["merged", "conflict", "test_failed"].includes(already.state)) continue;
+    // Строка уже есть — состояние не трогаем: у неё либо свой диагноз,
+    // либо она уже в очереди. Развертка только добавляет новые.
+    if (mergeQueueRow(taskId)) continue;
     try {
       if (enqueueMerge(taskId, "sweep")) queued += 1;
     } catch {
