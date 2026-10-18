@@ -1,5 +1,6 @@
 import { applyOverride, revision } from "../lib/roleContextResolver.js";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
@@ -301,7 +302,10 @@ function roleDetails(role: RoleName, piAlive: boolean) {
     runtime_ready: piAlive,
     problems,
     prompt,
-    skills,
+    // Посчитано выше как `навыки`; в ответе API поле называется skills —
+    // без явного переименования сборка не проходит (ошибка была в коммите
+    // c04564a7 от 18.10.2026, до правок по Things3).
+    skills: навыки,
     tools,
     tools_detail: roleToolDetails(role, tools),
     permissions: account?.permissions ?? null,
