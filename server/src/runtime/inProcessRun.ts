@@ -841,9 +841,15 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   }
 
   const chatOperations = chatTools(role, chatContext);
-  const managementOperations = orchestratorTools(role, T).filter((tool) =>
-    !(role === "secretary" && chatContext && tool.name === "taskflow_slot_restart"),
-  );
+  // Один и тот же инструмент может прийти из обоих наборов: перезапуск слота
+  // есть и в чате (chatTools), и среди инструментов управления планом
+  // (orchestratorTools — только при orchestrate). Дубль ломает ход целиком:
+  // реестр отказывается строить «taskflow» («Duplicate operation»), роль не
+  // отвечает ни на что. Исключение знали только для секретаря — оркестратор
+  // молчал в чате с 17.10.2026. Оставляем чатовую копию: действие у них одно,
+  // а в чате у неё есть контекст сообщения.
+  const chatOperationNames = new Set(chatOperations.map((tool) => tool.name));
+  const managementOperations = orchestratorTools(role, T).filter((tool) => !chatOperationNames.has(tool.name));
   const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? [...secretaryMailTools(T), ...secretaryThings3Tools({role,subtaskId})] : [])];
   if (unscoped) return all;
   return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
