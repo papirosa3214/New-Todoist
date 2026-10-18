@@ -158,14 +158,14 @@ const STATUS_TITLES_RU: Record<RoleStatus, string> = {
  *  MCP-профиля: у ролей, работающих внутри сервера, MCP нет вовсе, а список
  *  имён не объясняет ничего (владелец 12.10.2026: «чтобы у меня на айфоне
  *  все это отображалось… что какой инструмент, что делает»). */
-function roleToolDetails(role: RoleName, names: string[]): Array<{ name: string; description: string | null }> {
+function roleToolDetails(role: RoleName, names?: string[]): Array<{ name: string; description: string | null }> {
   let descriptions = new Map<string, string>();
   try {
     descriptions = new Map(taskflowTools(role, null).map((t) => [t.name, String(t.description ?? "")]));
   } catch {
     // Определения не собрались — отдаём имена без описаний, а не роняем экран.
   }
-  return names.map((name) => ({ name, description: descriptions.get(name) ?? null }));
+  return (names ?? [...descriptions.keys()]).map((name) => ({ name, description: descriptions.get(name) ?? null }));
 }
 
 /** Навыки роли из папки: имя — имя каталога, описание — поле description
@@ -308,6 +308,8 @@ function roleDetails(role: RoleName, piAlive: boolean) {
     skills: навыки,
     tools,
     tools_detail: roleToolDetails(role, tools),
+    // Descriptions of operations inside the same universal taskflow tool.
+    operations_detail: roleToolDetails(role),
     permissions: account?.permissions ?? null,
     model,
     default_shell: routing.defaults[role],

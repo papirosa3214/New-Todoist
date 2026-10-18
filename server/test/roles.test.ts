@@ -75,6 +75,18 @@ describe("role catalog API", () => {
     await app.close();
   });
 
+  it("exposes shared external operations behind the universal tool", async () => {
+    const result = await app.inject({method: "GET", url: "/api/roles/secretary",
+      headers: {authorization: `Bearer ${ownerToken}`}});
+    expect(result.statusCode).toBe(200);
+    expect(result.json().operations_detail).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: "taskflow_things3", description: expect.any(String)}),
+      expect.objectContaining({name: "taskflow_mail_list", description: expect.any(String)}),
+      expect.objectContaining({name: "taskflow_mail_draft", description: expect.any(String)})
+    ]));
+    expect(result.json().tools).toContain("taskflow");
+  });
+
   it("reports a callable role online on the first agents request", async () => {
     const agents = await app.inject({
       method: "GET",
