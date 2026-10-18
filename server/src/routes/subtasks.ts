@@ -43,7 +43,8 @@ import { withSubtaskState, getTaskRow } from "./tasks.js";
 import { readAttemptId, attemptMismatchReason } from "../lib/attemptCheck.js";
 import { currentResultVersion, ensureResultVersionForReview, resultFromSubtasks } from "../resultVersions.js";
 import { enqueueRoleRunJob } from "../runtime/roleRunQueue.js";
-import { commitGuardError } from "../lib/roleCommitCheck.js";
+import { finalizeWorktreeError } from "../lib/worktree/finalize.js";
+import { enqueueMerge, isOrchestratedFinalStep } from "../runtime/worktreeMergeQueue.js";
 import { isIntegrationPlanStep } from "../runtime/integrationHandoff.js";
 import {
   SNAPSHOT_REASONS,
@@ -433,7 +434,9 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
           // проекта (живущего вне `server/..`) у сервера нет ни ветки, ни
           // понятия, как туда коммитить — там гард дал бы ложный отказ.
           // Шаг интеграции сам вливает ветку в main: после этого поверх main коммитов нет.
-          const guardError = isIntegrationPlanStep(subtask.id) ? null : commitGuardError(subtask.task_id);
+          const guardError = isIntegrationPlanStep(subtask.id)
+            ? null
+            : finalizeWorktreeError(subtask.task_id);
           if (guardError) {
             return reply.code(400).send({ error: guardError });
           }
@@ -553,6 +556,18 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
         // отметку). Пишем только при реальной смене, чтобы повторный
         // PATCH тем же значением не плодил одинаковые строки.
         if (done === true && !subtask.done) logEvent({taskId:subtask.task_id,actorId:req.userId,kind:"subtask_submission_confirmed",field:subtask.id});
+        // Шаг интеграции закрыт — работа роли признана принятой, дальше
+        // переносит система (LOCK-WORKTREE-MANAGER-20261019). То же для
+        // плана orchestrated: там вливает шаг сборки Оркестратора, и
+        // он последний незакрытый в своём плане.
+        if (done === true && !subtask.done) {
+          try {
+            if (isIntegrationPlanStep(req.params.id)) enqueueMerge(subtask.task_id, "integration_step");
+            else if (isOrchestratedFinalStep(req.params.id)) enqueueMerge(subtask.task_id, "orchestrator_step");
+          } catch (error) {
+            logEvent({taskId:subtask.task_id,actorId:req.userId,kind:"merge_queue_error",field:req.params.id,toValue:error instanceof Error ? error.message : String(error)});
+          }
+        }
         if (!!subtask.done !== !!done) {
           logEvent({
             taskId: subtask.task_id,

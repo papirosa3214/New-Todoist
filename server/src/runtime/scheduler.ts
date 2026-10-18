@@ -22,6 +22,7 @@ import { expireRoleQuestions } from "./roleMessageWait.js";
 // в момент правки всё равно стоит перезапустить процесс — обновление
 // таймера делается на следующем цикле после истечения текущего.
 import { getSetting, onChange } from "../lib/serverSettings.js";
+import { worktreeMaintenancePass } from "./worktreeMergeQueue.js";
 import {
   defaultSteps,
   parseSteps,
@@ -494,7 +495,7 @@ function newId(): string {
   return (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36));
 }
 
-export type SchedulerCounts = { retry: number; dead: number; scheduled: number; repeat: number; deferred: number; questions: number; overdue: number; cleanup: number };
+export type SchedulerCounts = { retry: number; dead: number; scheduled: number; repeat: number; deferred: number; questions: number; overdue: number; cleanup: number; merges: number };
 
 /** Один обход доски. Сбой ветки не валит остальные. */
 export async function runSchedulerPass(app: FastifyInstance, now: Date = new Date()): Promise<SchedulerCounts> {
@@ -518,6 +519,11 @@ export async function runSchedulerPass(app: FastifyInstance, now: Date = new Dat
     questions: await safe("ветка 7", async () => expireRoleQuestions(now)),
     overdue: await safe("ветка 8 (напоминания)", () => notifyOverdue(api, now)),
     cleanup: await safe("ветка 9 (housekeeping)", async () => escalationCleanupTick(now)),
+    // Ветка 10 (LOCK-WORKTREE-MANAGER-20261019): очередь автослияния,
+    // уборка подтверждённых копий и хвост неслитых веток. Проход
+    // пропускает, если `auto_merge_mode = off` — тогда живой остаётся
+    // только уборка уже слитого.
+    merges: await safe("ветка 10 (автослияние)", () => worktreeMaintenancePass()),
   };
   try {
     const file = schedulerHeartbeatPath();

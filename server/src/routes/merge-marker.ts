@@ -23,33 +23,24 @@
 // Все три доступны только владельцу: и влитие, и уборка — его
 // единоличное решение, агенты в эти ручки не лезут (владелец 04.10.2026:
 // «ветки и копии удаляются только по списку, одобренному владельцем»).
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken } from "../auth.js";
 import { isOwner } from "../access.js";
 import { liveServerRepo } from "../runtime/roleWorkspace.js";
+import { git as runGit, gitOrNull, worktreesBase as baseOf } from "../lib/worktree/paths.js";
+import { mergeMode, mergeQueueRows } from "../runtime/worktreeMergeQueue.js";
+import { getSetting, setSetting } from "../lib/serverSettings.js";
 import { logEvent } from "../agentState.js";
 
 function git(cwd: string, args: string[]): string | null {
-  try {
-    return execFileSync("git", ["-C", cwd, ...args], {
-      encoding: "utf8",
-      timeout: 30_000,
-    }).trim();
-  } catch {
-    return null;
-  }
+  return gitOrNull(cwd, args, 30_000);
 }
 
 function worktreesBase(): string {
-  return (
-    process.env.TASKFLOW_ROLE_WORKTREES ||
-    path.join(os.homedir(), ".local", "state", "taskflow-runs", "worktrees")
-  );
+  return baseOf();
 }
 
 interface MergeState {
@@ -215,6 +206,56 @@ export function registerMergeMarkerRoutes(app: FastifyInstance): void {
       toValue: String(body.merged ?? ""),
     });
     return loadMergeState(req.params.id);
+  });
+
+  // ── Автослияние: наблюдение и аварийный откат (LOCK-WORKTREE-MANAGER-20261019)
+  //
+  // Ручки не «влить» — вливает система сама после сдачи шага интеграции.
+  // Здесь владелец смотрит состояние очереди и может вернуть уже слитое
+  // обратно одним коммитом-откатом.
+  app.get("/api/merges/queue", ownerOnly, async (req: any, reply) => {
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "только владелец" });
+    return {
+      mode: mergeMode(),
+      test_timeout_min: getSetting("auto_merge_test_timeout_min"),
+      live_repo: process.env.MAK70_LIVE_REPO || liveServerRepo(),
+      rows: mergeQueueRows(100),
+    };
+  });
+
+  app.post("/api/merges/mode", ownerOnly, async (req: any, reply) => {
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "только владелец" });
+    const mode = req.body?.mode;
+    if (!["off", "dry", "on"].includes(mode)) {
+      return reply.code(400).send({ error: "допустимо: off, dry, on" });
+    }
+    setSetting("auto_merge_mode", mode, req.userId, `режим автослияния: ${mode}`);
+    return { mode };
+  });
+
+  app.post<{ Body: { task_id?: string } }>("/api/merges/roll-back", ownerOnly, async (req: any, reply) => {
+    if (!isOwner(req.userId)) return reply.code(403).send({ error: "только владелец" });
+    const taskId = String(req.body?.task_id ?? "");
+    const task = db
+      .prepare("SELECT merged_at, merged_into_commit FROM tasks WHERE id = ?")
+      .get(taskId) as { merged_at: string | null; merged_into_commit: string | null } | undefined;
+    if (!task?.merged_at || !task.merged_into_commit) {
+      return reply.code(400).send({ error: "карточка не зафиксирована как слитая" });
+    }
+    const live = process.env.MAK70_LIVE_REPO || liveServerRepo();
+    const dirty = gitOrNull(live, ["status", "--porcelain"], 30_000) ?? "";
+    if (dirty.trim()) {
+      return reply.code(409).send({ error: "в main есть незакоммиченное — сначала разберитесь с ними" });
+    }
+    try {
+      // Откат коммитом, а не сбросом ветки: main не переписывается, у
+      // отката остаётся автор и время в истории.
+      runGit(live, ["revert", "--no-edit", "-m", "1", task.merged_into_commit]);
+    } catch (error) {
+      return reply.code(500).send({ error: `откат не выполнен: ${error instanceof Error ? error.message : String(error)}` });
+    }
+    logEvent({ taskId, actorId: req.userId, kind: "merge_marker_changed", field: "merged_at", toValue: "откат" });
+    return { task_id: taskId, main: gitOrNull(live, ["rev-parse", "--short", "main"], 30_000) };
   });
 
   app.get("/api/admin/role-branches", ownerOnly, async (req: any, reply) => {

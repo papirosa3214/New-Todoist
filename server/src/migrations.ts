@@ -4802,6 +4802,22 @@ const migrations: Migration[] = [
     if (!columns.has("role_envelope_json")) db.exec("ALTER TABLE chat_messages ADD COLUMN role_envelope_json TEXT");
   } },
   { id: "154_collaboration_template_packages", description: "UX-концепция, API-интеграция и аудит: профили командного плана", noTransaction: true, up: addTemplateProfiles },
+  { id: "155_worktree_merge_queue", description: "Очередь автослияния веток ролей в main: состояние, SHA до/после, причина отказа (LOCK-WORKTREE-MANAGER-20261019)", up: () => db.exec(`
+    CREATE TABLE IF NOT EXISTS worktree_merge_queue (
+      task_id TEXT PRIMARY KEY,
+      trigger TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'queued',
+      main_sha_before TEXT,
+      result_sha TEXT,
+      error TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS worktree_merge_queue_state
+      ON worktree_merge_queue(state, created_at);
+  `) },
 ];
 /**
  * Опции прогона миграций.
