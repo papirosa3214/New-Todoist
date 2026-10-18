@@ -167,11 +167,66 @@ function roleToolDetails(role: RoleName, names: string[]): Array<{ name: string;
   return names.map((name) => ({ name, description: descriptions.get(name) ?? null }));
 }
 
+/** Навыки роли из папки: имя — имя каталога, описание — поле description
+ *  из шапки SKILL.md. Читается синхронно и дёшево: файлы маленькие, роли
+ *  десятки. Папки-симлинки раскрываем (роль получает навыки ссылками). */
+function mergeRoleSkills(
+  role: RoleName,
+  изБазы: Array<{ skill_name: string; description: string | null }>,
+): Array<{ skill_name: string; description: string | null }> {
+  const root = path.resolve(
+    process.env.TASKFLOW_ROLES_DIR || path.join(os.homedir(), "taskflow", "roles"),
+  );
+  const skillsDir = path.join(root, role, "skills");
+  const found = new Map<string, string | null>();
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(skillsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+      .map((entry) => entry.name);
+  } catch {
+    names = [];
+  }
+  for (const name of names.sort()) {
+    let text: string;
+    try {
+      text = fs.readFileSync(path.join(skillsDir, name, "SKILL.md"), "utf8");
+    } catch {
+      continue;
+    }
+    found.set(name, skillDescription(text));
+  }
+  for (const row of изБазы) {
+    if (!found.has(row.skill_name)) found.set(row.skill_name, row.description);
+  }
+  return [...found.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([skill_name, description]) => ({ skill_name, description }));
+}
+
+/** Описание навыка из YAML-шапки: `description:` и всё, что под ним до
+ *  следующего поля верхнего уровня или конца шапки. */
+function skillDescription(markdown: string): string | null {
+  const head = markdown.split(/^---$/m).slice(1, 2)[0] ?? "";
+  const match = head.match(/^description:\s*(.*)$/m);
+  if (!match) return null;
+  const tail = head.slice(match.index! + match[0].length);
+  const rest = tail.split(/\n(?=[a-zA-Z_]+:)/)[0];
+  const value = [match[1], rest].join("\n").trim();
+  return value || null;
+}
+
 function roleDetails(role: RoleName, piAlive: boolean) {
   const routing = loadRoleRouting();
   const problems: string[] = [];
 
-  const skills = db
+  // Навыки роли для интерфейса. Источник — папка роли skills/<имя>/SKILL.md:
+  // именно её рантайм читает в начале хода, и именно её владелец видит в
+  // приложении (экран роли). Раньше отдавались строки из role_skills — там
+  // по две-три служебные метки на роль, из-за чего список выглядел пустым и
+  // не совпадал с тем, что реально работает. Записи из базы не теряем:
+  // добавляем их к файловым, если таких навыков в папке нет.
+  const навыкиИзБазы = db
     .prepare(
       `SELECT skill_name, description
          FROM role_skills
@@ -179,6 +234,7 @@ function roleDetails(role: RoleName, piAlive: boolean) {
         ORDER BY skill_name`,
     )
     .all(role) as Array<{ skill_name: string; description: string | null }>;
+  const навыки = mergeRoleSkills(role, навыкиИзБазы);
 
   let tools: string[] = [];
   try {
