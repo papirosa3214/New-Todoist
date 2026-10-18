@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
 import { asRole, setInProcessApp, taskflowTools } from "../src/runtime/inProcessRun.js";
 import { buildRoleToolCatalog } from "../src/runtime/roleToolCatalog.js";
-import { voiceToolManifest } from "../src/lib/secretaryVoiceTools.js";
+import { voiceToolManifest, runVoiceTool } from "../src/lib/secretaryVoiceTools.js";
 import { isOwner, isSecretary } from "../src/access.js";
 import db from "../src/db.js";
 
@@ -35,9 +35,16 @@ describe("Помощник владельца — единые инструме�
     expect(taskNames.has("taskflow_slot_status")).toBe(true);
     expect(taskNames.has("taskflow_archive")).toBe(true);
 
-    const voiceNames = new Set((await voiceToolManifest()).map((tool) => tool.name));
-    expect(voiceNames.has("taskflow_slot_status")).toBe(true);
-    expect(voiceNames.has("taskflow_archive")).toBe(true);
+    // Голос получает один инструмент taskflow; доступность операций проверяется через него.
+    const manifest = await voiceToolManifest();
+    expect(manifest.map((tool) => tool.name)).toEqual(["taskflow"]);
+    const discover = async (query: string) =>
+      JSON.parse((await runVoiceTool("u-secretary", "taskflow", { action: "discover", query, limit: 20 })).result as string);
+    for (const operation of ["taskflow_slot_status", "taskflow_slot_reset", "taskflow_archive"]) {
+      const found = (await discover(operation)).data.operations.filter((entry: { operation: string }) => entry.operation === operation);
+      expect(found).toHaveLength(1);
+      expect(found[0].available).toBe(true);
+    }
   });
 
   it("слоты и архивные действия доходят до серверных маршрутов; физическое удаление закрыто", async () => {
