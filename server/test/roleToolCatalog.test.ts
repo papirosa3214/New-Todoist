@@ -4,6 +4,7 @@ import {runMigrations} from "../src/migrations.js";
 import {seedRoleAccounts} from "./helpers/seedOwner.js";
 import {allRoles} from "../src/roleRouting.js";
 import {buildRoleToolCatalog} from "../src/runtime/roleToolCatalog.js";
+import {secretaryThings3Tools} from "../src/runtime/secretaryThings3Tools.js";
 beforeAll(()=>{migrate();runMigrations();seedRoleAccounts(db);});
 const decode=(r:any)=>JSON.parse(r.content[0].text);
 it("every configured role uses one active tool with a unique common registry in chat/work/discussion",()=>{
@@ -18,6 +19,14 @@ it("every configured role uses one active tool with a unique common registry in 
   }
   expect(chat.operations.map(t=>t.name)).toEqual(work.operations.map(t=>t.name));
  }
+});
+it("secretary chat keeps Things 3 as one tool alongside the rest of her catalog",()=>{
+ const things3=secretaryThings3Tools({role:"secretary",chatId:"chat",messageId:"message"});
+ const chat=buildRoleToolCatalog({role:"secretary",mode:"work",runId:"test",chatId:"chat",messageId:"message"},things3);
+ expect(chat.operations.filter(t=>t.name==="taskflow_things3")).toHaveLength(1);
+ expect(chat.operations.some(t=>t.name==="taskflow_task")).toBe(true);
+ const work=buildRoleToolCatalog({role:"secretary",mode:"work",runId:"test",taskId:"task"});
+ expect(work.operations.filter(t=>t.name==="taskflow_things3")).toHaveLength(1);
 });
 it("secretary cannot regain plan_request through chat additions",async()=>{
  const c=buildRoleToolCatalog({role:"secretary",mode:"work",runId:"test",chatId:"chat",messageId:"msg"});

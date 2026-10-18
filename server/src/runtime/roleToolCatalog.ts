@@ -10,7 +10,12 @@ export function buildRoleToolCatalog(input:CatalogContext,adapters:Tool[]=[]){
  const context:Context={...input,actor:roleUserId(input.role),authorize:(name)=>
   roleToolAllowed(input.role,name) && (!input.subtaskId || name!=="taskflow_claim") &&
   (input.role!=="critic_verifier" || name!=="taskflow_subtask_done")};
- const operations=[...taskflowTools(input.role,input.model??null,input.taskId,input.subtaskId,true,{chatId:input.chatId??"",messageId:input.messageId??""}),...roleHostAccessTools(input),...adapters];
+ const taskflowOperations=taskflowTools(input.role,input.model??null,input.taskId,input.subtaskId,true,{chatId:input.chatId??"",messageId:input.messageId??""});
+ // Things 3 is also a normal TaskFlow operation for work runs. Chat entrypoints
+ // pass its chat-aware adapter; prefer that adapter and keep every other
+ // duplicate operation visible as an error.
+ const hasChatThings3Adapter=input.role==="secretary" && adapters.some(tool=>tool.name==="taskflow_things3");
+ const operations=[...taskflowOperations.filter(tool=>!(hasChatThings3Adapter && tool.name==="taskflow_things3")),...roleHostAccessTools(input),...adapters];
  const universal=createUniversalTaskflow(operations,context,toolRequestStore);
  // Aliases remain registered for SDK/history compatibility, but only taskflow is active.
  const aliases=operations.filter(t=>!operationRestriction(t.name,context)).map(tool=>({...tool,execute:async(id:string,args:any,signal?:AbortSignal,onUpdate?:any)=>{
