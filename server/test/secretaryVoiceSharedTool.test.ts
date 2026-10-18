@@ -1,11 +1,27 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
+import { request } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildApp } from "../src/index.js";
 import { setInProcessApp } from "../src/runtime/inProcessRun.js";
 import { buildRoleToolCatalog } from "../src/runtime/roleToolCatalog.js";
+import { startSecretaryVoiceBridge } from "../src/runtime/secretaryVoiceBridge.js";
 import { voiceToolManifest, runVoiceTool } from "../src/lib/secretaryVoiceTools.js";
 
 const decode = (result: any) => JSON.parse(result.content[0].text);
+
+const get = (socketPath: string, path: string) =>
+  new Promise<any>((resolve, reject) => {
+    const call = request({ socketPath, path, method: "GET" }, (response) => {
+      let data = "";
+      response.on("data", (chunk) => (data += chunk));
+      response.on("end", () => resolve(JSON.parse(data)));
+    });
+    call.on("error", reject);
+    call.end();
+  });
 
 describe("голосовой Помощник владельца работает через общий инструмент TaskFlow", () => {
   let app: FastifyInstance;
@@ -65,6 +81,18 @@ describe("голосовой Помощник владельца работае�
     expect((await describe(voice)).data.inputSchema.properties.tool.enum).toContain("things_add");
   });
 
+  it("голос не получает отдельного имени операции, а удаление закрыто как в тексте", async () => {
+    await expect(runVoiceTool("u-secretary", "taskflow_things3", {})).rejects.toThrow("неизвестный инструмент");
+
+    const voice = buildRoleToolCatalog({ role: "secretary", mode: "voice", runId: "voice" });
+    expect(voice.operations.some((tool) => /delete|purge|remove/i.test(tool.name))).toBe(false);
+
+    // Физическое удаление остаётся недоступным: роль секретаря его не видит в каталоге.
+    const purged = decode(await voice.customTools[0].execute("x", { action: "describe", operation: "taskflow_tasks_purge" }));
+    expect(purged.ok).toBe(false);
+    expect(purged.error.code).toBe("UNKNOWN_OPERATION");
+  });
+
   it("вызов Things 3 из голоса идёт тем же execute, что и из текста", async () => {
     const voiceCall = (requestId: string, arguments_: Record<string, unknown>) =>
       runVoiceTool("u-secretary", "taskflow", {
@@ -99,15 +127,44 @@ describe("голосовой Помощник владельца работае�
     );
   });
 
-  it("голос не получает отдельного имени операции, а удаление закрыто как в тексте", async () => {
-    await expect(runVoiceTool("u-secretary", "taskflow_things3", {})).rejects.toThrow("неизвестный инструмент");
+  it("режим обсуждения не изменился: он и раньше получал тот же taskflow", async () => {
+    const discussion = buildRoleToolCatalog({ role: "secretary", mode: "discussion", runId: "discussion", taskId: "task", subtaskId: "slot", chatId: "chat", messageId: "msg" });
+    expect(discussion.activeNames).toEqual(["taskflow"]);
+    const write = decode(await discussion.customTools[0].execute("x", {
+      action: "invoke",
+      operation: "taskflow_slot_reset",
+      version: 1,
+      arguments: {},
+      request_id: "discussion-reset",
+    }));
+    expect(write.ok).toBe(false);
+    expect(write.error.code).toBe("MODE_RESTRICTED");
 
-    const voice = buildRoleToolCatalog({ role: "secretary", mode: "voice", runId: "voice" });
-    expect(voice.operations.some((tool) => /delete|purge|remove/i.test(tool.name))).toBe(false);
-
-    // Физическое удаление остаётся недоступным: роль секретаря его не видит в каталоге.
-    const purged = decode(await voice.customTools[0].execute("x", { action: "describe", operation: "taskflow_tasks_purge" }));
-    expect(purged.ok).toBe(false);
-    expect(purged.error.code).toBe("UNKNOWN_OPERATION");
+    // Голос — не обсуждение: в нём та же операция доступна для изменения.
+    const voiceDescribe = JSON.parse((await runVoiceTool("u-secretary", "taskflow", { action: "describe", operation: "taskflow_slot_reset" })).result as string);
+    expect(voiceDescribe.ok).toBe(true);
+    expect(voiceDescribe.data.operation).toBe("taskflow_slot_reset");
+    expect(voiceDescribe.data.effects).toBe("write");
+    expect(buildRoleToolCatalog({ role: "secretary", mode: "voice", runId: "voice" }).activeNames).toEqual(["taskflow"]);
   });
+
+  it("живой голосовой мост отдаёт один общий инструмент, а инструкция ведёт к Things", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-live-"));
+  const socket = join(directory, "voice.sock");
+  const app = await buildApp();
+  const stop = await startSecretaryVoiceBridge(app, socket);
+  try {
+    const tools = await get(socket, "/secretary/tools");
+    expect(tools.tools.map((tool: { name: string }) => tool.name)).toEqual(["taskflow"]);
+    expect(tools.tools[0].parameters.properties.action.enum).toEqual(["discover", "describe", "invoke"]);
+
+    const instructions = await get(socket, "/secretary/instructions");
+    expect(instructions.instructions).toContain("taskflow_things3");
+    expect(instructions.instructions).toContain("один инструмент taskflow");
+  } finally {
+    await stop();
+    await app.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 });
