@@ -180,6 +180,19 @@ export function revokeMachine(id: string, reason?: string | null): boolean {
   return true;
 }
 
+/** Удалить запись машины насовсем. Отзыв — это «погасить доступ», он
+    мягкий и повторно не проходит (revokeMachine бьёт по `revoked_at IS
+    NULL`), поэтому отозванные тестовые записи висели в списке вечно и
+    убрать их было нечем (владелец 18.10.2026). Здесь строка и её события
+    уходят физически; живой хост предварительно отключается вызывающим. */
+export function purgeMachine(id: string): boolean {
+  const живая = db.prepare("SELECT 1 FROM machines WHERE id = ?").get(id);
+  if (!живая) return false;
+  db.prepare("DELETE FROM machine_events WHERE machine_id = ?").run(id);
+  const сколько = db.prepare("DELETE FROM machines WHERE id = ?").run(id).changes;
+  return сколько > 0;
+}
+
 export function listMachines(): Machine[] {
   const rows = db
     .prepare(`SELECT ${SELECT_COLUMNS} FROM machines ORDER BY created_at DESC`)

@@ -22,6 +22,8 @@ import { authOrApiToken } from "../auth.js";
 import { isOwner } from "../access.js";
 import { isHostOperation } from "../host/protocol.js";
 import { isMachineOnline, revokeHostMachine, runOperation } from "../host/gateway.js";
+import { purgeMachine } from "../host/machines.js";
+import { disconnectMachine } from "../host/gateway.js";
 import {
   getMachine,
   issueMachineKey,
@@ -123,6 +125,17 @@ export function registerHostRoutes(app: FastifyInstance): void {
       }
       const машина = getMachine(req.params.id);
       if (!машина) return reply.code(404).send({ error: "машины нет" });
+
+      // Отозванную машину повторно отозвать нельзя — отзыв срабатывает
+      // один раз. Чтобы тестовые и устаревшие записи не висели в списке
+      // вечно, для них «удалить» означает убрать запись насовсем (владелец
+      // 18.10.2026). Живой хост перед этим отключается.
+      if (машина.revoked_at) {
+        disconnectMachine(машина.id);
+        const убрана = purgeMachine(машина.id);
+        if (!убрана) return reply.code(500).send({ error: "запись машины не удалилась" });
+        return { purged: true, machine: null };
+      }
 
       const отозван = revokeHostMachine(машина.id, req.body?.reason ?? null);
       return {
