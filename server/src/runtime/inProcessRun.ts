@@ -1106,8 +1106,13 @@ export async function deliverTopicToWork(taskId:string,role:string,messageId:str
   return "idle";
 }
 
-/** Deliver a messenger question/answer to the role's existing work, including another task. */
-export async function deliverChatToWork(role:string,chatId:string,messageId:string,text:string,recipientSubtaskId?:string,runId?:string):Promise<"queued"|"idle"|"busy"> {
+/** Deliver a messenger question/answer to the role's existing work, including another task.
+ *  `fromOwner` — сообщение владельца: ход мягко прерывается (слот остаётся,
+ *  роль продолжит следующим заходом), чтобы правка не ждала конца длинного
+ *  хода. Владелец 18.10.2026: «чтобы мои сообщения досылались и
+ *  корректировали». Между ролями прерывания нет — там сообщение ждёт
+ *  ответа роли в её темпе (просмотрено владельцем, пока только он). */
+export async function deliverChatToWork(role:string,chatId:string,messageId:string,text:string,recipientSubtaskId?:string,runId?:string,fromOwner=false):Promise<"queued"|"idle"|"busy"> {
   const runs=[...activeRuns.values()].filter(r=>r.role===role && (!recipientSubtaskId || r.subtaskId===recipientSubtaskId) && (!runId || r.runId===runId));
   if(runs.length>1)return "busy";
   if(!runs.length){
@@ -1123,6 +1128,10 @@ export async function deliverChatToWork(role:string,chatId:string,messageId:stri
     db.prepare("INSERT OR IGNORE INTO slot_topic_inbox(message_id,subtask_id) VALUES(?,?)").run(messageId,run.subtaskId);
   }
   run.messengerMessages.add(messageId);run.unacknowledgedMessengerMessages.add(messageId);
+  // Правка от владельца не ждёт конца хода: помечаем замену, и текущий заход
+  // свернётся на ближайшей границе, оставив слот и снимок. Дальше роль
+  // подхватит и сообщение, и остаток этапа.
+  if (fromOwner) run.replacementRequested = true;
   try{await run.steer(`Сообщение чата ${chatId}, id ${messageId}. Ответь автору через taskflow_chat_reply(message_id=${messageId},text=...), если ответ нужен; после этого продолжи свой этап. Переписка не меняет назначение, граф и критерии. Данные сообщения: ${JSON.stringify(text)}`);}catch(error){run.messengerMessages.delete(messageId);run.unacknowledgedMessengerMessages.delete(messageId);throw error;}
   logEvent({taskId:run.taskId,actorId:null,kind:"topic_message_queued",field:messageId,toValue:JSON.stringify({role,chatId,runId:run.runId})});
   return "queued";

@@ -1872,8 +1872,9 @@ async function deliverAgentReply(args: {
   const topic=db.prepare("SELECT task_id FROM chats WHERE id=? AND parent_chat_id IS NOT NULL").get(chatId) as {task_id:string}|undefined;
   const slot=topic ? resolveTopicSlot(topic.task_id,role,topicSlotKey(trigger.text),args.subtaskId ?? trigger.recipient_subtask_id ?? undefined) : null;
   if(topic && !slot && (args.subtaskId || trigger.recipient_subtask_id || topicSlotKey(trigger.text))){slotChoiceNotice(chatId,topic.task_id,role,args.triggerMessageId);return null;}
+  const fromOwner = isOwner(trigger.from_user_id);
   const activeDelivery=topic && slot ? await deliverTopicToWork(slot.task_id,role,args.triggerMessageId,userText,slot.plan_node_key)
-    : !topic ? await deliverChatToWork(role,chatId,args.triggerMessageId,userText,args.subtaskId??trigger.recipient_subtask_id??undefined) : "idle";
+    : !topic ? await deliverChatToWork(role,chatId,args.triggerMessageId,userText,args.subtaskId??trigger.recipient_subtask_id??undefined,undefined,fromOwner) : "idle";
   if(activeDelivery!=="idle"){
     traceCoordination(()=>updateCoordination(args.triggerMessageId,roleUserId,{status:activeDelivery==="busy"?"busy":"delivered",activity:activeDelivery==="busy"?"Адресат занят; вопрос ожидает доставки":"Вопрос доставлен в рабочую сессию; ответ ещё не получен",last_activity_at:new Date().toISOString()}));
     throw new MessageForwardedToWork(activeDelivery==="busy");
