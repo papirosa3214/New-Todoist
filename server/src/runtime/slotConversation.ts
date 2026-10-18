@@ -1,5 +1,6 @@
 import {connectInfraPanel} from "./infraPanelMcp.js";
 import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
+import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import crypto from "node:crypto";
 import { createAgentSession,createReadOnlyTools,SettingsManager } from "@earendil-works/pi-coding-agent";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot,topicSlots } from "./slotSession.js";
@@ -51,7 +52,10 @@ export async function startSlotConversation(input:ConversationInput):Promise<{se
     resources=await createTaskResourceLoader(input.role,cwd,[composeLayer(input.role,"role.prompt")?.effective ?? `Ты — ${roleTitle(input.role)}.`,policy].join("\n\n"));
     const builtin=createReadOnlyTools(cwd).filter(tool=>["read","grep","find","ls"].includes(tool.name));
     infra=await connectInfraPanel(input.role).catch(()=>({tools:[],close:async()=>{}}));
-    const catalog=buildRoleToolCatalog({role:input.role,model:model.id??modelId,taskId:input.taskId,subtaskId:input.subtaskId,chatId:input.chatId,messageId:input.messageId,mode:"discussion",runId},infra.tools);
+    // Дела владельца нужны и в обсуждении: вопрос «что у меня в Things3» —
+  // обычный разговорный вопрос, а не рабочая задача.
+  const secretary=input.role==="secretary"?secretaryThings3Tools({role:input.role,taskId:input.taskId,subtaskId:input.subtaskId,chatId:input.chatId,messageId:input.messageId}):[];
+  const catalog=buildRoleToolCatalog({role:input.role,model:model.id??modelId,taskId:input.taskId,subtaskId:input.subtaskId,chatId:input.chatId,messageId:input.messageId,mode:"discussion",runId},[...infra.tools,...secretary]);
     const custom=catalog.customTools;
     ({session}=await createAgentSession({cwd,model,thinkingLevel:resolveThinkingLevel(model as any) ?? undefined,modelRuntime:runtime,resourceLoader:resources,
       tools:[...builtin.map(tool=>tool.name),...catalog.activeNames],customTools:[...builtin,...custom],sessionManager:manager,

@@ -13,7 +13,9 @@ export const PLANNING_TOOLS = [
   "taskflow_runtime", "taskflow_weather",
 ];
 /** Internal conversational turn: read and messaging, no workflow or file mutations. */
-export const DISCUSSION_TOOLS = [...PLANNING_TOOLS,"taskflow_chat_send","taskflow_chat_reply","taskflow_topic_read","taskflow_consult"];
+// taskflow_things3 — дела владельца: обсуждение о задаче часто сводится к
+// «а что у меня в Things3», и без этого список закрыт вопросом вместо ответа.
+export const DISCUSSION_TOOLS = [...PLANNING_TOOLS,"taskflow_chat_send","taskflow_chat_reply","taskflow_topic_read","taskflow_consult","taskflow_things3"];
 export function chatModeInstruction(mode: ChatWorkMode): string {
   switch (mode) {
     case "discussion": return "Режим этого хода: Обсуждение с коллегой. Читай контекст и отвечай по существу. Можно задать отдельный вопрос коллеге инструментом мессенджера; нельзя менять файлы, задачи, планы, состояния, настройки и запускать рабочие этапы. Итоговый ответ сервер вернёт автору вопроса автоматически.";

@@ -19,6 +19,7 @@ import { integrationStepContext } from "./integrationHandoff.js";
 import { searchNotes } from "../lib/noteSearch.js";
 import { KB_CATEGORIES, KB_DROP_MARK } from "../lib/kbCategories.js";
 import { secretaryMailTools } from "./secretaryMailTools.js";
+import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import { openMidPlanCritic } from "./planSubtaskAdmission.js";
 import { ensureResultVersionForReview } from "../resultVersions.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
@@ -843,7 +844,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   const managementOperations = orchestratorTools(role, T).filter((tool) =>
     !(role === "secretary" && chatContext && tool.name === "taskflow_slot_restart"),
   );
-  const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? secretaryMailTools(T) : [])];
+  const all = [...tools, ...chatOperations, ...managementOperations, ...teamReadTools(role, T), ...(role === "secretary" ? [...secretaryMailTools(T), ...secretaryThings3Tools({role,subtaskId})] : [])];
   if (unscoped) return all;
   return all.filter(t => roleToolAllowed(role, t.name) && (!subtaskId || t.name !== "taskflow_claim") && (role !== "critic_verifier" || t.name !== "taskflow_subtask_done"));
 }

@@ -58,6 +58,10 @@ export const HOST_OPERATIONS = [
   // Push ветки роли в общий gitea: без него roleCommitCheck на .110 не увидит
   // работу, сделанную на маке, и отклонит закрытие шага (правка 12 плана).
   "git_push",
+  // Things3 (18.10.2026): дела владельца для Помощника. Приложение живёт на
+  // маке, роль — на сервере, поэтому операция зовёт хост, а тот уже знает
+  // things_mcp_server.py. Без неё в списке шлюз отверг бы op как неизвестный.
+  "things3",
 ] as const;
 
 export type HostOperation = (typeof HOST_OPERATIONS)[number];

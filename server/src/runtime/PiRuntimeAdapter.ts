@@ -1,4 +1,5 @@
 import { buildRoleToolCatalog, UNIVERSAL_INSTRUCTION } from "./roleToolCatalog.js";
+import { secretaryThings3Tools } from "./secretaryThings3Tools.js";
 import { connectInfraPanel } from "./infraPanelMcp.js";
 import { chatModeInstruction, PLANNING_TOOLS, DISCUSSION_TOOLS, type ChatWorkMode } from "./chatWorkMode.js";
 import { chatInstructionArgs, chatSystemPrompt, createTaskResourceLoader } from "./instructionResources.js";
@@ -1300,7 +1301,10 @@ export async function startChatRun(
       .filter((t) => allowed(t.name))
       .map((t) => ({ ...t, description: composeLayer(role, "tool.builtin." + t.name)?.effective ?? t.description }));
     const infra = await connectInfraPanel(role).catch(()=>({tools:[] as any[],close:async()=>{}}));
-    const toolCatalog = buildRoleToolCatalog({role,model:resolvedModel,mode,runId:sessionManager.getSessionId(),chatId:input.chatId,messageId:input.messageId},[...composio.tools,...infra.tools]);
+    // Дела владельца в комнате чата: у Помощника это один из каналов, где с ним
+  // говорят, поэтому инструмент должен быть и здесь.
+  const secretary=role==="secretary"?secretaryThings3Tools({role,chatId:input.chatId,messageId:input.messageId}):[];
+  const toolCatalog = buildRoleToolCatalog({role,model:resolvedModel,mode,runId:sessionManager.getSessionId(),chatId:input.chatId,messageId:input.messageId},[...composio.tools,...infra.tools,...secretary]);
 
 
     let session: any;
