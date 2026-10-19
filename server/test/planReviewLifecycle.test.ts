@@ -64,6 +64,8 @@ describe('visible final critic and actual rework graph', () => {
         expect(v2.id).not.toBe(v1.id);
         expect(v2.version_no).toBe(2);
         expect(() => planReworkGraph(plan,cycle[2].slot_key,['research'])).toThrow('исторический');
+        expect(() => planReworkGraph(plan,cycle[2].slot_key,['research'])).toThrow(`Допустимые rework_steps текущего цикла:`);
+        expect(() => planReworkGraph(plan,cycle[2].slot_key,['research'])).toThrow(cycle[1].slot_key);
         const recheckJobs = db.prepare("SELECT COUNT(*) n FROM role_run_jobs WHERE task_id=? AND reason='review'").get(task);
         expect(recheckJobs).toEqual({ n: 2 });
     });

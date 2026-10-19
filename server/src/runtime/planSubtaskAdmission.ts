@@ -926,11 +926,15 @@ function openReworkFromCritic(
   const target = requestedTargets.length > 0
     ? requestedTargets
     : [candidates.filter((n) => segment.has(n.slot_key)).at(-1)?.slot_key ?? candidates.at(-1)?.slot_key ?? ""];
+  // Роль не видит граф плана: без списка допустимых этапов она перебирала
+  // ключи вслепую (карточка 65fb1128 — 22 отказа за 14 часов).
+  const allowed = candidates.filter((n) => segment.has(n.slot_key)).map((n) => `${n.slot_key} (${n.role_key})`).join(", ") || "нет";
+  const choose = ` Допустимые rework_steps текущего цикла: ${allowed}. Укажи ключ первого дефектного этапа из этого списка; несколько — только для независимых параллельных веток.`;
   if (target.some((slot) => !segment.has(slot) && bySlot.has(slot))) {
-    throw new Error("Выберите этап текущего цикла, а не исторический результат");
+    throw new Error("Выберите этап текущего цикла, а не исторический результат." + choose);
   }
   if (target.some((t) => !bySlot.has(t))) {
-    throw new Error("Укажите существующие рабочие этапы для доработки");
+    throw new Error("Укажите существующие рабочие этапы для доработки." + choose);
   }
   // Находим iteration от critic — равен max(iteration) в плане.
   const iteration = Math.max(0, ...allNodes.map((n) => n.iteration ?? 0));

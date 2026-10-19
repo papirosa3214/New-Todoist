@@ -149,7 +149,10 @@ export function planReworkGraph(planId: string, reviewSlot: string, targets: str
         }
     };
     backwards(reviewSlot);
-    if (targets.some(slot => !currentSegment.has(slot))) throw new Error("Выберите этап текущего цикла, а не исторический результат");
+    if (targets.some(slot => !currentSegment.has(slot))) {
+        const allowed = [...currentSegment].map(s => `${s} (${bySlot.get(s)?.role_key})`).join(", ") || "нет";
+        throw new Error(`Выберите этап текущего цикла, а не исторический результат. Допустимые rework_steps текущего цикла: ${allowed}. Укажи ключ первого дефектного этапа из этого списка; несколько — только для независимых параллельных веток.`);
+    }
     if (!targets.length || new Set(targets).size !== targets.length || targets.some(t => !bySlot.has(t) || t === reviewSlot || bySlot.get(t)?.role_key === "critic_verifier"))
         throw new Error("Укажите существующие рабочие этапы для доработки");
     for (const a of targets)
