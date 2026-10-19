@@ -778,7 +778,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const inTopicBranch=(stageTask:string)=>stageTask===chatTaskId || (!!chatTaskId && !!branchMembership(chatTaskId) && branchMembership(stageTask)?.root_plan_id===branchMembership(chatTaskId)?.root_plan_id);
       if(sourceSlot){
         const source=db.prepare("SELECT task_id FROM subtasks WHERE id=? AND agent_id=?").get(sourceSlot,req.userId) as {task_id:string}|undefined;
-        if(!source || (chat.parent_chat_id && !inTopicBranch(source.task_id)))return reply.code(403).send({error:"Отправитель не назначен на этап этой ветки"});
+        if(!source || (chat.parent_chat_id && !inTopicBranch(source.task_id)))return reply.code(403).send({error:"Этап твоего хода не закреплён за тобой или относится к другой ветке — сообщение не отправлено. Дальше: проверь taskflow_my_tasks; если этап с тебя сняли — заверши ход и коротко опиши итог в ответе; если этап твой — пиши в тему его ветки (taskflow_topic_send). Повтор того же вызова даст тот же отказ."});
       }
       if(recipientSlot){
         const recipient=db.prepare("SELECT task_id,agent_id FROM subtasks WHERE id=?").get(recipientSlot) as {task_id:string;agent_id:string}|undefined;

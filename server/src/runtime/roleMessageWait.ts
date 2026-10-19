@@ -108,21 +108,21 @@ export function evaluateRecipientAvailability(input: {
     return {
       ok: false,
       code: "recipient_unavailable",
-      error: "шаг адресата не найден — сообщение некому принять",
+      error: "шаг адресата не найден — сообщение некому принять. Дальше: если вопрос к роли — дождись её следующего этапа или задай его владельцу (taskflow_chat_send); если это итог для тех, кто придёт после, — запиши в документ задачи (taskflow_doc_write) или в результат своего шага. Повторять отправку не нужно.",
     };
   }
   if (slot.done) {
     return {
       ok: false,
       code: "recipient_unavailable",
-      error: "шаг адресата уже закрыт — сообщение некому принять",
+      error: "шаг адресата уже закрыт — сообщение некому принять. Дальше: если вопрос к роли — дождись её следующего этапа или задай его владельцу (taskflow_chat_send); если это итог для тех, кто придёт после, — запиши в документ задачи (taskflow_doc_write) или в результат своего шага. Повторять отправку не нужно.",
     };
   }
   if (slot.skipped_at) {
     return {
       ok: false,
       code: "recipient_unavailable",
-      error: "шаг адресата пропущен планом — сообщение некому принять",
+      error: "шаг адресата пропущен планом — сообщение некому принять. Дальше: если вопрос к роли — дождись её следующего этапа или задай его владельцу (taskflow_chat_send); если это итог для тех, кто придёт после, — запиши в документ задачи (taskflow_doc_write) или в результат своего шага. Повторять отправку не нужно.",
     };
   }
   if (slot.role_key && !roleUserId(slot.role_key)) {
@@ -298,4 +298,17 @@ export function expireRoleQuestions(now: Date = new Date()): number {
     }
   }
   return expired;
+}
+
+/** Этап адресата для taskflow_topic_send. Роль не видит граф плана: без списка
+ *  этапов в отказе она подбирала slot_key наугад (разбор 19.10.2026). */
+export function pickRecipientSlot(to: string, requested: string | undefined, slots: string[]): { slot: string } | { refusal: string } {
+  const list = slots.length
+    ? `Этапы ${to} в этом плане: ${slots.join(", ")}.`
+    : `У ${to} нет этапов в утверждённом плане этой карточки — напиши владельцу через taskflow_chat_send.`;
+  if (requested) {
+    return slots.includes(requested) ? { slot: requested } : { refusal: `Этап «${requested}» не принадлежит ${to}. ${list} Повтори с одним из них в slot_key.` };
+  }
+  if (slots.length === 1) return { slot: slots[0]! };
+  return { refusal: slots.length ? `У ${to} несколько этапов — укажи slot_key. ${list}` : list };
 }

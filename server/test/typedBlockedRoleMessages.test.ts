@@ -295,11 +295,21 @@ describe("MAK-98: типизированный blocked и срок жизни в
     db.prepare("DELETE FROM chat_messages WHERE chat_id = ?").run(chatId);
   });
 
+  it("этап адресата: отказ перечисляет этапы роли", async () => {
+    const { pickRecipientSlot } = await import("../src/runtime/roleMessageWait.js");
+    expect(pickRecipientSlot("qa", undefined, ["qa-1"])).toEqual({ slot: "qa-1" });
+    expect(pickRecipientSlot("qa", "qa-2", ["qa-1", "qa-2"])).toEqual({ slot: "qa-2" });
+    expect((pickRecipientSlot("qa", undefined, ["qa-1", "qa-2"]) as { refusal: string }).refusal).toContain("qa-1, qa-2");
+    expect((pickRecipientSlot("qa", "чужой", ["qa-1"]) as { refusal: string }).refusal).toContain("Этапы qa в этом плане: qa-1");
+    expect((pickRecipientSlot("qa", undefined, []) as { refusal: string }).refusal).toContain("taskflow_chat_send");
+  });
+
   it("быстрый отказ: закрытый шаг адресата недоступен", async () => {
     const { evaluateRecipientAvailability } = await import("../src/runtime/roleMessageWait.js");
     const missing = evaluateRecipientAvailability({ recipientSubtaskId: "нет-такого-шага" });
     expect(missing.ok).toBe(false);
     expect(missing).toMatchObject({ code: "recipient_unavailable" });
+    expect((missing as { error: string }).error).toContain("taskflow_chat_send");
     expect(evaluateRecipientAvailability({ recipientSubtaskId: null, toUserId: ownerId }).ok).toBe(true);
   });
 

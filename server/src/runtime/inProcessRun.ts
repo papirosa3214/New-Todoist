@@ -24,6 +24,7 @@ import { openMidPlanCritic } from "./planSubtaskAdmission.js";
 import { ensureResultVersionForReview } from "../resultVersions.js";
 import { PLAN_ROLE_HELP_POLICY } from "./instructionDefaults.js";
 import { acquireSlotSession,openSlotSession,rememberSlotSession,resolveTopicSlot } from "./slotSession.js";
+import { pickRecipientSlot } from "./roleMessageWait.js";
 import { connectInfraPanel } from "./infraPanelMcp.js";
 import { teamStructureText } from "../lib/teamStructure.js";
 import { branchMembership } from "./branchPlan.js";
@@ -440,12 +441,10 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
         if(target===taskId && (!own || !p.slot_key || own.plan_node_key===p.slot_key)) throw new ToolError("Не адресуй сообщение своему слоту");
       }
       if(!db.prepare("SELECT 1 FROM chat_members WHERE chat_id=? AND member_id=?").get(topic.id,roleUserId(p.to))) throw new ToolError("Роль не участвует в теме");
-      if(p.slot_key && !db.prepare(`SELECT 1 FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id WHERE p.task_id=? AND p.status='approved' AND n.role_key=? AND n.slot_key=? AND n.skipped_at IS NULL`).get(target,p.to,p.slot_key)) throw new ToolError("Слот не относится к текущему участнику");
       const targetSlots=db.prepare("SELECT n.slot_key FROM task_collaboration_plan_nodes n JOIN task_collaboration_plans p ON p.id=n.plan_id WHERE p.task_id=? AND p.status='approved' AND n.role_key=? AND n.skipped_at IS NULL").all(target,p.to) as {slot_key:string}[];
-      if(!p.slot_key) {
-        if(targetSlots.length!==1) throw new ToolError("Укажи конкретный слот адресата");
-        p.slot_key=targetSlots[0].slot_key;
-      }
+      const pick=pickRecipientSlot(p.to,p.slot_key,targetSlots.map(t=>t.slot_key));
+      if("refusal" in pick) throw new ToolError(pick.refusal);
+      p.slot_key=pick.slot;
       if(p.reply_to_message_id) {
         const original=db.prepare("SELECT from_user_id FROM chat_messages WHERE id=? AND chat_id=?").get(p.reply_to_message_id,topic.id) as {from_user_id:string}|undefined;
         if(!original || original.from_user_id!==roleUserId(p.to)) throw new ToolError("Ответ адресуй автору исходного вопроса");
