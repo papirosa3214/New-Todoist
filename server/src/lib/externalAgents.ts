@@ -34,6 +34,8 @@ export interface KnownAgent {
   localIcons?: string[];
   /** Логотип simpleicons.org (slug), если локальной нет. */
   simpleIcon?: string;
+  /** Модели для пилюли в окне ввода чата (id уходит агенту в --model). */
+  models?: Array<{ id: string; title: string }>;
 }
 
 const HOME = os.homedir();
@@ -50,6 +52,7 @@ export const KNOWN_AGENTS: KnownAgent[] = [
     color: "#D97757",
     initials: "CC",
     simpleIcon: "claude",
+    models: [{ id: "opus", title: "Opus" }, { id: "sonnet", title: "Sonnet" }, { id: "haiku", title: "Haiku" }],
   },
   {
     runtime: "codex",

@@ -42,6 +42,8 @@ export interface CliSessionInput {
   command?: string;
   /** Добавки к окружению агента (например, TASKFLOW_TOKEN участника). */
   env?: Record<string, string>;
+  /** Агент сообщил, на какой модели работает (из начала хода). */
+  onModel?: (model: string) => void;
   /** Продолжить прежнюю сессию агента (чат между сообщениями). */
   resumeSessionId?: string | null;
 }
@@ -61,6 +63,7 @@ export interface CliAgentSession {
 /** Переводчик одной строки stream-json в события Pi. Отдельно — чтобы проверять без процесса. */
 export class StreamJsonTranslator {
   sessionId: string | null = null;
+  model: string | null = null;
   result: { isError: boolean; text: string } | null = null;
   private partialText = false;
   private partialThinking = false;
@@ -73,6 +76,7 @@ export class StreamJsonTranslator {
     if (!msg || typeof msg !== "object") return;
     if (msg.type === "system" && msg.subtype === "init" && typeof msg.session_id === "string") {
       this.sessionId = msg.session_id;
+      if (typeof msg.model === "string") this.model = msg.model;
       return;
     }
     if (msg.type === "stream_event") {
@@ -128,6 +132,7 @@ export async function createCliAgentSession(input: CliSessionInput): Promise<Cli
   const listeners = new Set<Listener>();
   const messages: any[] = [];
   let sessionId: string | null = input.resumeSessionId ?? null;
+  let reportedModel: string | null = null;
   let child: ChildProcessWithoutNullStreams | null = null;
   let aborted = false;
   let disposed = false;
@@ -192,6 +197,7 @@ export async function createCliAgentSession(input: CliSessionInput): Promise<Cli
           translator.line(out.slice(0, nl));
           out = out.slice(nl + 1);
           if (translator.sessionId) sessionId = translator.sessionId;
+          if (translator.model && translator.model !== reportedModel) { reportedModel = translator.model; try { input.onModel?.(reportedModel); } catch { /* не роняет ход */ } }
           // Ход закончен — закрываем ввод, CLI выйдет сам.
           if (translator.result && !proc.stdin.destroyed) proc.stdin.end();
         }

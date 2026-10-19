@@ -1081,6 +1081,8 @@ export interface StartChatRunInput {
   /** id ролевой учётки (role_<role>) — будет автором сообщения-ответа. */
   roleId: string;
   prompt: string;
+  /** Модель, выбранная в окне ввода на этот ход; не задана — модель роли. */
+  model?: string;
   /** Сохранённый ранее pi_session_id — продолжит ту же сессию. Если
    *  null/undefined — стартует новую. */
   sessionId?: string | null;
@@ -1261,7 +1263,8 @@ export async function startChatRun(
     // ни кто-либо ещё. `pickFailoverModel` живёт в ветке шагов задачи и в чат
     // не заходит. Теперь идём по цепочке [основная, ...запасные] и берём
     // первую модель, чей провайдер сейчас не помечен как упёршийся в лимит.
-    const chain = [model, ...(routing.fallbacks[role] ?? [])].filter(Boolean) as string[];
+    // Выбор в окне ввода чата — первым в цепочке (только на этот ход).
+    const chain = [input.model, model, ...(routing.fallbacks[role] ?? [])].filter(Boolean) as string[];
     const match = chain.map(findInCatalog).find((m): m is NonNullable<typeof m> => {
       if (!m) return false;
       const ref = parseModelRef(m.id);
@@ -1493,6 +1496,8 @@ async function runExternalChat(input: StartChatRunInput, runId: string): Promise
     cwd, command,
     env: token ? { TASKFLOW_TOKEN: token } : undefined,
     resumeSessionId: input.sessionId ?? null,
+    model: input.model,
+    onModel: (model) => { db.prepare("UPDATE roles SET last_model = ? WHERE key = ?").run(model, role); },
     systemPrompt: `${externalAgentBoost(roleTitle(role), operations)}\n\n${await chatSystemPrompt(role, mode, cwd)}`,
     onTurnEnd: actionTurnHandler(operations, runId),
   });

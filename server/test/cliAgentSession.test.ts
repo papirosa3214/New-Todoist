@@ -7,7 +7,7 @@ describe("StreamJsonTranslator", () => {
   it("переводит поток Claude Code в события Pi", () => {
     const events: any[] = [];
     const t = new StreamJsonTranslator((e) => events.push(e));
-    t.line(JSON.stringify({ type: "system", subtype: "init", session_id: "s-1" }));
+    t.line(JSON.stringify({ type: "system", subtype: "init", session_id: "s-1", model: "claude-sonnet-5" }));
     t.line(JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "При" } } }));
     t.line(JSON.stringify({ type: "assistant", message: { content: [
       { type: "text", text: "При" },
@@ -17,6 +17,7 @@ describe("StreamJsonTranslator", () => {
     t.line(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu1", is_error: true }] } }));
     t.line(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "готово" }));
     expect(t.sessionId).toBe("s-1");
+    expect(t.model).toBe("claude-sonnet-5");
     expect(t.result).toEqual({ isError: false, text: "готово" });
     // текст пришёл частично — целиком второй раз не дублируется
     expect(events.filter((e) => e.assistantMessageEvent?.type === "text_delta")).toHaveLength(1);

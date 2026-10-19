@@ -4835,6 +4835,12 @@ const migrations: Migration[] = [
     const columns = new Set((db.prepare("PRAGMA table_info(roles)").all() as Array<{ name: string }>).map((c) => c.name));
     if (!columns.has("runtime")) db.exec("ALTER TABLE roles ADD COLUMN runtime TEXT NOT NULL DEFAULT 'pi'");
   } },
+  { id: "158_chat_message_model", description: "Модель, выбранная пилюлей в окне ввода чата (на один ход), и модель, на которой внешний агент отработал последним", up: () => {
+    const msg = new Set((db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!msg.has("model")) db.exec("ALTER TABLE chat_messages ADD COLUMN model TEXT");
+    const roles = new Set((db.prepare("PRAGMA table_info(roles)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!roles.has("last_model")) db.exec("ALTER TABLE roles ADD COLUMN last_model TEXT");
+  } },
 ];
 /**
  * Опции прогона миграций.

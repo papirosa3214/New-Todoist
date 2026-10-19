@@ -756,7 +756,7 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
   // пользовательский текст уже в ленте и не потеряется).
   app.post<{
     Params: { id: string };
-    Body: { text?: string; attachment_ids?: string[]; task_id?: string; kind?: string; reply_to_message_id?: string; subtask_id?: string; recipient_subtask_id?: string; work_mode?: ChatWorkMode };
+    Body: { text?: string; attachment_ids?: string[]; task_id?: string; kind?: string; reply_to_message_id?: string; subtask_id?: string; recipient_subtask_id?: string; work_mode?: ChatWorkMode; model?: string };
   }>(
     "/api/chats/:id/messages",
     { preHandler: authPre },
@@ -857,9 +857,9 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       const id = uid();
       db.transaction(()=>{
       db.prepare(
-        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,message_type,reply_to_message_id,subtask_id,recipient_subtask_id)
-         VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, req.userId, text, chatId, taskId, mode,req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
+        `INSERT INTO chat_messages (id, from_user_id, text, channel, chat_id, task_id, work_mode,model,message_type,reply_to_message_id,subtask_id,recipient_subtask_id)
+         VALUES (?, ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, req.userId, text, chatId, taskId, mode, chatModelChoice(req.body?.model),req.body?.kind==="task_proposal"&&taskId?"task_proposal":null,replyTo,sourceSlot,recipientSlot);
       if(outstanding && ["pending","picked"].includes(outstanding.status)){
         pickDurableDelivery(outstanding.id);completeDurableDelivery(outstanding.id,true);
         db.prepare("UPDATE slot_topic_inbox SET delivered_at=datetime('now') WHERE message_id=? AND subtask_id IN (SELECT id FROM subtasks WHERE agent_id=?)").run(replyTo,req.userId);
@@ -1644,6 +1644,11 @@ function messengerAmbiguityNotice(chatId:string,roleId:string,messageId:string):
   broadcastToUsers(memberIds(chatId),{type:"chat:new",message:loadChatMessage(id)});
 }
 
+/** Модель из пилюли окна ввода: короткая строка или null («как у роли»). */
+function chatModelChoice(value: unknown): string | null {
+  return typeof value === "string" && /^[\w.:\/-]{1,120}$/.test(value.trim()) ? value.trim() : null;
+}
+
 async function dispatchRoleReplies(args: {
   chatId: string;
   messageId: string;
@@ -2046,6 +2051,7 @@ async function deliverAgentReply(args: {
       role,
       roleId: roleUserId,
       prompt,
+      model: (db.prepare("SELECT model FROM chat_messages WHERE id = ?").get(trigger.id) as { model: string | null } | undefined)?.model ?? undefined,
       sessionId: previousSessionId,
       onStep: (tool) => typing(true, tool),
       onEvent: live.onEvent,

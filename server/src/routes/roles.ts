@@ -5,7 +5,8 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken, ownerOrApiToken } from "../auth.js";
-import { agentBinary, discoverExternalAgents, syncExternalAgents } from "../lib/externalAgents.js";
+import { piRuntime } from "../runtime/index.js";
+import { agentBinary, discoverExternalAgents, knownAgent, syncExternalAgents } from "../lib/externalAgents.js";
 import {
   ROLE_NAMES,
   allRoles,
@@ -264,7 +265,10 @@ function roleDetails(role: RoleName, piAlive: boolean) {
   const account = roleAccount(role);
   if (!account) problems.push("нет учётки роли в системе");
 
-  const model = external ? null : routing.models[role];
+  // Внешний агент: модель, которую он сам назвал в последнем ходе.
+  const model = external
+    ? ((db.prepare("SELECT last_model FROM roles WHERE key = ?").get(role) as { last_model: string | null } | undefined)?.last_model ?? null)
+    : routing.models[role];
   if (!external && !model) problems.push("в маршрутизации не задана модель");
 
   const work = currentWorkOf(role);
@@ -406,6 +410,23 @@ export function registerRoleRoutes(app: FastifyInstance): void {
   // заведён участником. «Обновить» заводит найденных участниками сама.
   app.get("/api/external-agents", { preHandler: authPre }, async () => ({ agents: discoverExternalAgents() }));
   app.post("/api/external-agents/refresh", { preHandler: ownerOrApiToken }, async () => ({ agents: await syncExternalAgents() }));
+  // Модели для пилюли в окне ввода чата: у внешнего агента — его каталог,
+  // у роли Pi — доступные модели Pi. current — чем роль работает сейчас.
+  app.get<{ Params: { role: string } }>("/api/roles/:role/models", { preHandler: authPre }, async (req, reply) => {
+    const role = req.params.role;
+    if (!allRoles().some((r) => r.key === role)) return reply.code(404).send({ error: "роль не найдена" });
+    const external = externalRuntime(role);
+    if (external) {
+      const last = (db.prepare("SELECT last_model FROM roles WHERE key = ?").get(role) as { last_model: string | null } | undefined)?.last_model ?? null;
+      return { current: last, models: knownAgent(external)?.models ?? [] };
+    }
+    const models = await piRuntime.listModels().catch(() => []);
+    return {
+      current: loadRoleRouting().models[role] ?? null,
+      // Ход чата ищет модель по id без провайдера (findInCatalog) — так и отдаём.
+      models: [...new Map(models.filter((m) => m.available).map((m) => [m.id, { id: m.id, title: m.name ?? m.id }])).values()],
+    };
+  });
 
   app.get<{ Querystring: { all?: string } }>(
     "/api/roles",
