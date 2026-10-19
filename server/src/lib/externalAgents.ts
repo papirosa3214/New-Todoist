@@ -272,8 +272,9 @@ export async function syncExternalAgents(
             avatar,
           );
         } else {
+          // Аватарку, поставленную владельцем руками, не трогаем — меняем только свою авто-иконку.
           db.prepare(
-            "UPDATE users SET avatar_url = ?, archived = 0 WHERE id = ?",
+            "UPDATE users SET archived = 0, avatar_url = CASE WHEN avatar_url IS NULL OR avatar_url LIKE '/api/avatars/agent-%' THEN ? ELSE avatar_url END WHERE id = ?",
           ).run(avatar, userId);
         }
       })();
