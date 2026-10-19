@@ -41,7 +41,29 @@ export type FanoutSuggestion =
       suggested: true;
       rationale: string;
       nodes: Array<{ slot_key: string; role_key: string; expected_result: string; source_subtask_id: string }>;
+      edges: Array<{ from_slot_key: string; to_slot_key: string; start_condition: "submitted" }>;
     };
+
+/** Этап узла в плане: сначала работа, потом проверка, Критик последним. */
+function stageOf(role: string): number {
+  if (role === "critic_verifier") return 2;
+  if (role === "qa") return 1;
+  return 0;
+}
+
+/** Связи по этапам: каждый узел этапа ждёт все узлы ближайшего предыдущего
+ *  непустого этапа. Внутри этапа — параллельно. Без связей проверка и
+ *  Критик стартовали сразу, не дожидаясь разработки (владелец 19.10.2026). */
+export function stageEdges(nodes: Array<{ slot_key: string; role_key: string }>) {
+  const stages = [0, 1, 2].map((st) => nodes.filter((n) => stageOf(n.role_key) === st)).filter((g) => g.length);
+  const edges: Array<{ from_slot_key: string; to_slot_key: string; start_condition: "submitted" }> = [];
+  for (let i = 1; i < stages.length; i++) {
+    for (const to of stages[i]) for (const from of stages[i - 1]) {
+      edges.push({ from_slot_key: from.slot_key, to_slot_key: to.slot_key, start_condition: "submitted" });
+    }
+  }
+  return edges;
+}
 
 function primaryRole(task: { assignee_id: string | null; machine_selected_role: string | null; owner_selected_role: string | null }): string | null {
   if (task.assignee_id?.startsWith("role_")) return task.assignee_id.slice("role_".length);
@@ -86,18 +108,19 @@ export async function suggestFanoutFromSubtasks(taskId: string): Promise<FanoutS
   for (const subtask of openSubtasks) {
     const jev = jevPicks.get(subtask.id);
     let top: { role: string; score: number } | undefined;
+    // Подзадача, которую раньше оставляли «текущему исполнителю» (мелкий
+    // пункт, неуверенный подбор, та же роль), теперь становится узлом
+    // основной роли. После утверждения карточку ведёт план, и подзадача вне
+    // плана оставалась ничьей: 19.10.2026 из пяти подзадач план взял две,
+    // три разработческие повисли (владелец: «болтаются, хуй по никак»).
     if (jev) {
-      // JEV уверенно считает подзадачу мелким пунктом исполнителя карточки —
-      // не выносим её в отдельный узел.
-      if (jev.separate < 0.5) continue;
-      top = { role: jev.role, score: jev.confidence };
+      top = jev.separate < 0.5 && primary ? { role: primary, score: 1 } : { role: jev.role, score: jev.confidence };
     } else {
       const { matched } = await matchRoleForText(subtask.title, { topK: 1 });
-      top = matched[0];
-      if (!top || top.score < FANOUT_CONFIDENCE) continue; // неуверенно — оставить как есть, текущий исполнитель сделает сам
+      top = matched[0] && matched[0].score >= FANOUT_CONFIDENCE ? matched[0] : primary ? { role: primary, score: 0 } : undefined;
+      if (!top) continue; // нет ни уверенной роли, ни основной — оставить как есть
     }
     if (!ROLE_NAMES.includes(top.role)) continue; // роль сейчас выключена — не назначать на неё узел
-    if (top.role === primary) continue; // та же роль, что и так уже ведёт карточку — не парал­лелизм, а шум
 
     if (jev) byJev++;
     nodes.push({
@@ -108,7 +131,8 @@ export async function suggestFanoutFromSubtasks(taskId: string): Promise<FanoutS
     });
   }
 
-  if (nodes.length < 1) {
+  // Все узлы — одна основная роль: распределять не на кого, план не нужен.
+  if (nodes.length < 1 || nodes.every((n) => n.role_key === primary)) {
     return { suggested: false, reason: "все открытые подзадачи уверенно совпали с текущим исполнителем или не распознались — параллелить некого" };
   }
 
@@ -117,5 +141,6 @@ export async function suggestFanoutFromSubtasks(taskId: string): Promise<FanoutS
     suggested: true,
     rationale: `Подзадачи распознаны по ${roles.length > 1 ? "ролям: " + roles.join(", ") : "роли " + roles[0]} — предложены как параллельные узлы плана вместо линейной работы одного исполнителя.${byJev ? ` Роли подобраны JEV: ${byJev} из ${nodes.length}.` : ""}`,
     nodes,
+    edges: stageEdges(nodes),
   };
 }

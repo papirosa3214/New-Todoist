@@ -816,7 +816,7 @@ export async function autoProposeFromSubtasksOnCreate(taskId: string): Promise<{
   const suggestion = await suggestFanoutFromSubtasks(taskId);
   if (!suggestion.suggested) return autoProposeCollaborationPlanWithJev(taskId);
   if (db.prepare("SELECT 1 FROM task_collaboration_plans WHERE task_id=? AND status IN ('draft','approved')").get(taskId)) return null;
-  const graph = { nodes: suggestion.nodes.map((n) => ({ ...n, required: true, output_artifact: null })), edges: [] };
+  const graph = { nodes: suggestion.nodes.map((n) => ({ ...n, required: true, output_artifact: null })), edges: suggestion.edges.map((e) => ({ ...e, artifact_key: null })) };
   const created = createDraftPlan(taskId, actorId, "manual", suggestion.rationale, null, graph);
   logEvent({ taskId, actorId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: "manual: subtask fanout (auto on create)" });
   return { id: created.id, profile: "manual", revision: created.revision };
@@ -921,7 +921,7 @@ export function registerTaskCollaborationPlanRoutes(app: FastifyInstance): void 
     const suggestion = await suggestFanoutFromSubtasks(task.id);
     if (!suggestion.suggested) return { suggested: false, reason: suggestion.reason };
 
-    const graph = { nodes: suggestion.nodes.map((n) => ({ ...n, required: true, output_artifact: null })), edges: [] };
+    const graph = { nodes: suggestion.nodes.map((n) => ({ ...n, required: true, output_artifact: null })), edges: suggestion.edges.map((e) => ({ ...e, artifact_key: null })) };
     const created = createDraftPlan(task.id, req.userId, "manual", suggestion.rationale, contextVersion, graph);
     logEvent({ taskId: task.id, actorId: req.userId, kind: "collaboration_plan_proposed", field: `revision:${created.revision}`, toValue: "manual: subtask fanout" });
     return reply.code(201).send({ plan: present(planForTask(task.id, created.id)!), suggested: true });

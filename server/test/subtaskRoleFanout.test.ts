@@ -130,11 +130,14 @@ describe("умная параллелизация подзадач (subtaskRoleF
     const plan = res.json().plan;
     expect(plan.status).toBe("draft");
     expect(plan.profile).toBe("manual");
-    // Совпавшая с текущим исполнителем (builder) подзадача НЕ стала узлом —
-    // остаётся обычной подзадачей, её делает уже назначенный builder.
-    expect(plan.nodes.map((n: { role_key: string }) => n.role_key).sort()).toEqual(["qa", "researcher"]);
+    // Подзадача основной роли (builder) тоже стала узлом: после утверждения
+    // карточку ведёт план, и вне плана она осталась бы ничьей (19.10.2026).
+    expect(plan.nodes.map((n: { role_key: string }) => n.role_key).sort()).toEqual(["builder", "qa", "researcher"]);
     expect(plan.nodes.every((n: { source_subtask_id: string | null }) => n.source_subtask_id)).toBe(true);
-    expect(plan.edges).toEqual([]); // без принудительного порядка — оба стартуют сразу параллельно
+    // Порядок по этапам: проверка ждёт всю работу (builder и researcher).
+    const slot = (role: string) => plan.nodes.find((n: { role_key: string }) => n.role_key === role).slot_key;
+    expect(plan.edges.map((e: { from_slot_key: string; to_slot_key: string }) => `${e.from_slot_key}>${e.to_slot_key}`).sort())
+      .toEqual([`${slot("builder")}>${slot("qa")}`, `${slot("researcher")}>${slot("qa")}`].sort());
 
     const subtasksBefore = await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth });
     expect(subtasksBefore.json()).toHaveLength(3); // ещё draft — дубля нет
@@ -145,15 +148,14 @@ describe("умная параллелизация подзадач (subtaskRoleF
     expect(approved.statusCode).toBe(200);
     const subtasksAfter = (await app.inject({ method: "GET", url: `/api/tasks/${taskId}/subtasks`, headers: ownerAuth })).json() as Array<{ collaboration_plan_id: string | null }>;
     expect(subtasksAfter).toHaveLength(3); // approve тоже не создал дублей — те же 3 строки
-    expect(subtasksAfter.filter((s) => s.collaboration_plan_id).length).toBe(2); // ровно 2 стали узлами плана
+    expect(subtasksAfter.filter((s) => s.collaboration_plan_id).length).toBe(3); // все 3 стали узлами плана, ничьих нет
   });
 
-  it("слабый, ни на что не похожий сигнал — подзадача остаётся как есть, не становится узлом", async () => {
+  it("слабый, ни на что не похожий сигнал — подзадача уходит основной роли, а не повисает", async () => {
     const taskId = await makeTaskWithSubtasks("Разное", "builder", ["[qa] нормальный сигнал", "нечто совсем нейтральное без ключевых слов"]);
     const res = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/suggest-from-subtasks`, headers: ownerAuth });
     expect(res.statusCode).toBe(201);
-    expect(res.json().plan.nodes).toHaveLength(1);
-    expect(res.json().plan.nodes[0].role_key).toBe("qa");
+    expect(res.json().plan.nodes.map((n: { role_key: string }) => n.role_key).sort()).toEqual(["builder", "qa"]);
   });
 
   // Галочка «Роли для подзадач» в разделе JEV (16.10.2026). TypeSafe не
@@ -183,8 +185,9 @@ describe("умная параллелизация подзадач (subtaskRoleF
       const res = await app.inject({ method: "POST", url: `/api/tasks/${taskId}/collaboration-plans/suggest-from-subtasks`, headers: ownerAuth });
       expect(res.statusCode).toBe(201);
       const plan = res.json().plan;
-      expect(plan.nodes.map((n: { role_key: string }) => n.role_key).sort()).toEqual(["designer", "qa"]);
-      expect(plan.rationale).toContain("Роли подобраны JEV: 2 из 2");
+      // Мелкий пункт (separate < 0.5) — узел основной роли, а не ничья подзадача.
+      expect(plan.nodes.map((n: { role_key: string }) => n.role_key).sort()).toEqual(["builder", "designer", "qa"]);
+      expect(plan.rationale).toContain("Роли подобраны JEV: 3 из 3");
     });
 
     it("JEV не уверен — по этой подзадаче работает прежний подбор по эмбеддингам", async () => {
