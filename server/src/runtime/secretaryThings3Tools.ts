@@ -1,6 +1,7 @@
 import { Type } from "typebox";
+import contract from "./things_tools_contract.json" with { type: "json" };
 import { listMachines } from "../host/machines.js";
-import { isMachineOnline, resolveMachine, runOperation } from "../host/gateway.js";
+import { isMachineOnline, runOperation } from "../host/gateway.js";
 import type { Tool } from "./universalTaskflow.js";
 
 /**
@@ -21,19 +22,7 @@ import type { Tool } from "./universalTaskflow.js";
  */
 
 /** Инструменты `things_mcp_server.TOOLS`. Хост отвергнет имя не из списка. */
-export const THINGS3_TOOLS = [
-  "things_today",
-  "things_inbox",
-  "things_upcoming",
-  "things_anytime",
-  "things_someday",
-  "things_search",
-  "things_projects",
-  "things_areas",
-  "things_add",
-  "things_complete",
-  "things_show",
-] as const;
+export const THINGS3_TOOLS = contract.tools.map((tool) => tool.name);
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }], details: {} });
 
@@ -41,6 +30,7 @@ const text = (s: string) => ({ content: [{ type: "text" as const, text: s }], de
 function машинаСВещами(): { id: string; name: string } | null {
   for (const машина of listMachines()) {
     if (машина.revoked_at) continue;
+    if (!/^(darwin|macos|mac)$/i.test(машина.platform ?? "")) continue;
     if (!isMachineOnline(машина.id)) continue;
     return { id: машина.id, name: машина.name };
   }
@@ -60,21 +50,18 @@ export function secretaryThings3Tools(context: Things3ToolContext): Tool[] {
     {
       name: "taskflow_things3",
       description:
-        "Список дел в Things3 владельца. tool — что сделать: things_today (на сегодня), " +
-        "things_inbox (входящие), things_upcoming (с дедлайном), things_anytime, things_someday, " +
-        "things_projects, things_areas, things_search (поиск по названию и заметкам). " +
-        "Создание и закрытие: things_add (title обязателен, list: inbox|today|upcoming|anytime|someday, " +
-        "плюс notes, due, when), things_complete, things_show (открыть в приложении). " +
-        "Пример: {tool: \"things_today\"} или {tool: \"things_add\", arguments: {title: \"купить хлеб\", list: \"today\"}}. " +
-        "Доступно только тебе — Помощнику владельца.",
-      parameters: Type.Object({
-        tool: Type.String({
-          description: "Инструмент Things3",
-          enum: THINGS3_TOOLS as unknown as string[],
-        }),
-        arguments: Type.Optional(
-          Type.Unsafe<Record<string, unknown>>({ description: "Поля выбранного инструмента" }),
-        ),
+        "Things 3 владельца через TaskFlow Host на Mac. Структурированное чтение и поддержанные записи. " +
+        "Недоступные свойства не означают пустые: смотри availability в записи. " +
+        "Для неподдержанной записи инструмент возвращает причину и требуемую настройку. " +
+        "Повторы нельзя изменять через публичный API Things. " +
+        contract.tools.map((tool) => `${tool.name}: ${tool.description}`).join("; "),
+      parameters: Type.Unsafe<{ tool: string; arguments?: Record<string, unknown> }>({
+        anyOf: contract.tools.map((tool) => ({
+          type: "object",
+          properties: { tool: { const: tool.name, type: "string" }, arguments: tool.inputSchema },
+          required: ["tool"],
+          additionalProperties: false,
+        })),
       }),
       execute: async (_id: string, p: { tool: string; arguments?: Record<string, unknown> }) => {
         const имя = String(p.tool ?? "").trim();
@@ -97,7 +84,8 @@ export function secretaryThings3Tools(context: Things3ToolContext): Tool[] {
         })) as any;
 
         if (!ответ?.ok) throw new Error(`Хост не выполнил: ${String(ответ?.error ?? "без текста")}`);
-        const data = ответ.data as { tool?: string; result?: string } | undefined;
+        const data = ответ.data as { ok?: boolean; error?: string; tool?: string; result?: string } | undefined;
+        if (data?.ok === false) throw new Error(`Things3: ${data.error ?? data.result ?? "операция не выполнена"}`);
         return text(data?.result ?? JSON.stringify(ответ));
       },
     },

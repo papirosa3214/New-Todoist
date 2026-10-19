@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index.js";
-import { asRole, setInProcessApp, taskflowTools } from "../src/runtime/inProcessRun.js";
+import { asRole, setInProcessApp } from "../src/runtime/inProcessRun.js";
 import { buildRoleToolCatalog } from "../src/runtime/roleToolCatalog.js";
-import { voiceToolManifest } from "../src/lib/secretaryVoiceTools.js";
+import { runVoiceTool, voiceToolManifest } from "../src/lib/secretaryVoiceTools.js";
 import { isOwner, isSecretary } from "../src/access.js";
 import db from "../src/db.js";
 
@@ -24,20 +24,37 @@ describe("Помощник владельца — единые инструме�
     expect(isOwner("u-secretary")).toBe(true);
   });
 
-  it("общий каталог и голос включают инструменты слотов и архивирования", async () => {
-    const catalog = buildRoleToolCatalog({ role: "secretary", mode: "chat", runId: "secretary-parity" });
-    const chatNames = new Set(catalog.operations.map((tool) => tool.name));
-    expect(chatNames.has("taskflow_slot_status")).toBe(true);
-    expect(chatNames.has("taskflow_slot_reset")).toBe(true);
-    expect(chatNames.has("taskflow_archive")).toBe(true);
+  it("голос публикует ровно тот универсальный taskflow, который собирает каталог чата", async () => {
+    const catalog = buildRoleToolCatalog({ role: "secretary", mode: "work", runId: "secretary-parity" });
+    const universal = catalog.customTools.find((tool) => tool.name === "taskflow");
+    expect(universal).toBeDefined();
+    expect(catalog.operations.some((tool) => tool.name === "taskflow_slot_status")).toBe(true);
+    expect(catalog.operations.some((tool) => tool.name === "taskflow_archive")).toBe(true);
 
-    const taskNames = new Set(taskflowTools("secretary", null).map((tool) => tool.name));
-    expect(taskNames.has("taskflow_slot_status")).toBe(true);
-    expect(taskNames.has("taskflow_archive")).toBe(true);
+    const manifest = await voiceToolManifest();
+    expect(manifest).toHaveLength(1);
+    expect(manifest[0].name).toBe("taskflow");
+    expect(manifest[0].description).toBe(universal!.description);
+    expect(manifest[0].parameters.properties.action).toEqual({ type: "string", enum: ["discover", "describe", "invoke"] });
+    expect(manifest[0].parameters.properties.request_id).toMatchObject({ type: "string" });
+    expect(manifest[0].parameters.properties.arguments).toMatchObject({ type: "string" });
+  });
 
-    const voiceNames = new Set((await voiceToolManifest()).map((tool) => tool.name));
-    expect(voiceNames.has("taskflow_slot_status")).toBe(true);
-    expect(voiceNames.has("taskflow_archive")).toBe(true);
+  it("голос передаёт вызов в универсальный execute и сохраняет его error envelope и request_id", async () => {
+    const ownerId = "u-secretary";
+    const requestId = "voice-contract-probe-20261019";
+    const response = await runVoiceTool(ownerId, "taskflow", {
+      action: "invoke", operation: "taskflow_task", version: 1,
+      arguments: "{\"id\":\"voice-contract-missing-task\"}", request_id: requestId,
+    });
+    expect(response.ok).toBe(true);
+    const envelope = JSON.parse(response.result);
+    expect(envelope).toMatchObject({
+      ok: false,
+      operation: "taskflow_task",
+      request_id: requestId,
+      error: { code: "OPERATION_FAILED", hint: expect.any(String) },
+    });
   });
 
   it("слоты и архивные действия доходят до серверных маршрутов; физическое удаление закрыто", async () => {

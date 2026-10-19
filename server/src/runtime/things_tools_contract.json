@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "source": "Cultured Code Things public AppleScript and URL Scheme APIs; no direct SQLite writes",
+  "tools": [
+    {"name":"things_today","description":"List Today to-dos.","inputSchema":{"type":"object","properties":{}}},
+    {"name":"things_inbox","description":"List Inbox to-dos.","inputSchema":{"type":"object","properties":{}}},
+    {"name":"things_upcoming","description":"List Upcoming to-dos.","inputSchema":{"type":"object","properties":{}}},
+    {"name":"things_anytime","description":"List Anytime to-dos.","inputSchema":{"type":"object","properties":{}}},
+    {"name":"things_someday","description":"List Someday to-dos.","inputSchema":{"type":"object","properties":{}}},
+    {"name":"things_list","description":"List to-dos by Things list name.","inputSchema":{"type":"object","properties":{"list":{"type":"string","enum":["today","inbox","upcoming","anytime","someday","logbook","trash"]}},"required":["list"]}},
+    {"name":"things_search","description":"Search Things to-dos by title or notes.","inputSchema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}},
+    {"name":"things_get","description":"Read one item by full ID or unique ID prefix.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+    {"name":"things_projects","description":"List active Things projects as structured records.","inputSchema":{"type":"object","properties":{}}},
+    {"name":"things_areas","description":"List Things areas as structured records.","inputSchema":{"type":"object","properties":{}}},
+    {"name":"things_project_add","description":"Create a project using documented AppleScript fields.","inputSchema":{"type":"object","properties":{"title":{"type":"string"},"notes":{"type":"string"},"deadline":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"area_id":{"type":"string"}},"required":["title"]}},
+    {"name":"things_project_update","description":"Update documented AppleScript project fields by ID.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"patch":{"type":"object","properties":{"title":{"type":"string"},"notes":{"type":"string"},"deadline":{"type":["string","null"]},"tags":{"type":"array","items":{"type":"string"}},"area_id":{"type":["string","null"]},"status":{"type":"string","enum":["open","completed","canceled"]},"start_date":{"type":["string","null"]}}}},"required":["id","patch"]}},
+    {"name":"things_add","description":"Create a to-do using documented AppleScript fields. Reminder time, heading, checklist and repeat require a configured Things Shortcut/URL handler and are rejected if unavailable.","inputSchema":{"type":"object","properties":{"title":{"type":"string"},"notes":{"type":"string"},"due":{"type":"string"},"when":{"type":"string"},"reminder_time":{"type":"string"},"checklist":{"type":"array","items":{"type":"string"}},"heading_id":{"type":"string"},"recurrence":{},"list":{"type":"string","enum":["inbox","today","upcoming","anytime","someday"]},"tags":{"type":"array","items":{"type":"string"}},"project_id":{"type":"string"},"area_id":{"type":"string"}},"required":["title"]}},
+    {"name":"things_update","description":"Update documented AppleScript to-do fields. Advanced reminder/checklist/heading requires a configured Shortcut or authorized URL Scheme; repeat writes are unsupported.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"patch":{"type":"object","properties":{"title":{"type":"string"},"notes":{"type":"string"},"deadline":{"type":["string","null"]},"start_date":{"type":["string","null"]},"tags":{"type":"array","items":{"type":"string"}},"project_id":{"type":["string","null"]},"area_id":{"type":["string","null"]},"status":{"type":"string","enum":["open","completed","canceled"]},"reminder":{"type":["string","null"]},"checklist":{"type":"array"},"heading_id":{"type":["string","null"]},"recurrence":{}}}},"required":["id","patch"]}},
+    {"name":"things_complete","description":"Complete a to-do by ID or unique title match.","inputSchema":{"type":"object","properties":{"id_or_title":{"type":"string"},"yes":{"type":"boolean","default":false}},"required":["id_or_title"]}},
+    {"name":"things_cancel","description":"Cancel a to-do by ID.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+    {"name":"things_reopen","description":"Reopen a completed or canceled to-do by ID.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+    {"name":"things_delete","description":"Move a to-do to Things Trash.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+    {"name":"things_show","description":"Reveal a to-do in Things UI.","inputSchema":{"type":"object","properties":{"id_or_title":{"type":"string"}},"required":["id_or_title"]}}
+  ]
+}

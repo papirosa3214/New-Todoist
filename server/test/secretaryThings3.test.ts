@@ -52,7 +52,7 @@ describe("secretaryThings3Tools", () => {
 
   it("онлайн-машина: уходит ровно одна операция things3", async () => {
     (listMachines as any).mockReturnValue([
-      { id: "mac", name: "macbook", revoked_at: null },
+      { id: "mac", name: "macbook", platform: "darwin", revoked_at: null },
     ]);
     (isMachineOnline as any).mockReturnValue(true);
     (runOperation as any).mockClear();
@@ -80,7 +80,7 @@ describe("secretaryThings3Tools", () => {
   });
 
   it("отказ хоста доходит до роли текстом, а не молчанием", async () => {
-    (listMachines as any).mockReturnValue([{ id: "mac", name: "macbook", revoked_at: null }]);
+    (listMachines as any).mockReturnValue([{ id: "mac", name: "macbook", platform: "darwin", revoked_at: null }]);
     (isMachineOnline as any).mockReturnValue(true);
     (runOperation as any).mockResolvedValue({ ok: false, error: "Машина недоступна" });
 
@@ -105,4 +105,21 @@ describe("secretaryThings3Tools", () => {
       /офлайн|offline/i,
     );
   });
+  it("не отправляет Things на онлайн Linux", async () => {
+    vi.mocked(listMachines).mockReturnValue([{ id: "linux", name: "server", platform: "linux", revoked_at: null }] as any);
+    vi.mocked(isMachineOnline).mockReturnValue(true);
+    vi.mocked(runOperation).mockClear();
+    const { secretaryThings3Tools } = await import("../src/runtime/secretaryThings3Tools.js");
+    await expect(secretaryThings3Tools({ role: "secretary" })[0].execute("1", { tool: "things_today" }, undefined as any)).rejects.toThrow(/офлайн|offline/i);
+    expect(runOperation).not.toHaveBeenCalled();
+  });
+
+  it("не превращает ошибку вложенной операции в успех", async () => {
+    vi.mocked(listMachines).mockReturnValue([{ id: "mac", name: "macbook", platform: "darwin", revoked_at: null }] as any);
+    vi.mocked(isMachineOnline).mockReturnValue(true);
+    vi.mocked(runOperation).mockResolvedValue({ ok: true, data: { ok: false, error: "Operation not permitted" } } as any);
+    const { secretaryThings3Tools } = await import("../src/runtime/secretaryThings3Tools.js");
+    await expect(secretaryThings3Tools({ role: "secretary" })[0].execute("1", { tool: "things_today" }, undefined as any)).rejects.toThrow(/Operation not permitted/);
+  });
+
 });
