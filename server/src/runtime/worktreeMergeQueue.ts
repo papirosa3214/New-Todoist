@@ -229,8 +229,8 @@ export function enqueueMerge(taskId: string, trigger: MergeTrigger): boolean {
 
 /**
  * Переоформить строку в `queued` после того, как ответственный за
- * интеграцию починил конфликт (сдача шага). Для ручных разборов —
- * единственный путь, возвращающий карточку в работу осознанно.
+ * интеграцию починил конфликт (сдача шага). Единственный путь,
+ * возвращающий карточку в работу осознанно.
  */
 export function requeueMerge(taskId: string): boolean {
   const changed = db
@@ -427,53 +427,6 @@ function tail(output: string, limit = 4000): string {
 }
 
 /**
- * Вернуть в очередь строки, остановленные ВНЕШНЕЙ помехой, как только
- * помеха снята: main стал чистым — `blocked_dirty_main` снова `queued`,
- * копия роли чистая — `dirty_worktree` снова `queued`.
- *
- * Помеха здесь не в руках роли: пока main грязный чужой правкой или копия
- * не закоммичена, сдавать шаг заново нечего — шаг уже сдан. Ждать
- * повторной сдачи значит ждать человека, который про строку вообще не
- * знает: 19.10.2026 карточка так пролежала в `blocked_dirty_main` с 14:45
- * до 21:17 UTC, хотя main к тому моменту почистили.
- *
- * `conflict` и `test_failed` сюда НЕ входят: там нужен разбор человека
- * (починить и сдать шаг), иначе система будет снова и снова упираться в
- * одно и то же. `dirty_worktree` тоже ждёт, пока копия не вернётся на
- * диск: ушедшая копия — это потерянные правки, решать это владельцу.
- */
-export function retryClearedObstructions(limit = 20): string[] {
-  if (worktreesDisabled() || mergeMode() === "off") return [];
-  const live = liveRepo();
-  if (!refExists(live, "HEAD")) return [];
-  const rows = db
-    .prepare(
-      `SELECT task_id, state FROM worktree_merge_queue
-        WHERE state IN ('blocked_dirty_main', 'dirty_worktree')
-        ORDER BY created_at LIMIT ?`,
-    )
-    .all(limit) as Array<{ task_id: string; state: string }>;
-  if (!rows.length) return [];
-  const mainClean = dirtyFiles(live).length === 0;
-  const requeued: string[] = [];
-  for (const row of rows) {
-    const cleared =
-      row.state === "blocked_dirty_main"
-        ? mainClean
-        : (() => {
-            const state = inspectWorktree(row.task_id, "main", live);
-            return state.worktree_exists && state.dirty.length === 0;
-          })();
-    if (!cleared) continue;
-    if (!requeueMerge(row.task_id)) continue;
-    requeued.push(row.task_id);
-    journal({ task_id: row.task_id, state: "requeued", from: row.state, cleared });
-    safeLogEvent(row.task_id, "merge_unblocked", row.state, "queued");
-  }
-  return requeued;
-}
-
-/**
  * Один проход очереди: не больше `limit` карточек за раз. Возвращает
  * разобранные строки — планировщик пишет их в лог, тесты читают.
  */
@@ -587,12 +540,9 @@ export async function worktreeMaintenancePass(): Promise<number> {
   if (mergeMode() !== "off" && (!baseline || baseline.main_sha !== mainSha)) {
     await refreshBaseline(hooks.runTests, getSetting("auto_merge_test_timeout_min") * 60_000, liveNow);
   }
-  // Возврат снятых помех — до разбора: вернувшаяся строка сразу же
-  // разбирается тем же проходом, а не следующим через 5 минут.
-  const unblocked = retryClearedObstructions().length;
   const merged = (await drainMergeQueue(1)).filter((row) => row.state === "merged").length;
   const queued = mergeMode() === "off" ? 0 : sweepUnmergedBranches();
   const cleaned = await sweepMergedWorkspaces();
   const leftovers = sweepTestLeftovers();
-  return unblocked + merged + queued + cleaned + leftovers;
+  return merged + queued + cleaned + leftovers;
 }

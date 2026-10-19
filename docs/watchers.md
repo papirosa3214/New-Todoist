@@ -232,7 +232,7 @@ chatCoordination.ts: при старте и каждые15 минут созда
 | **Как часто** | При старте сервера и раз в 30 минут; при `auto_merge_mode = off` молчит |
 | **При поломке** | Уведомление в «Состояние системы» (`raiseIncident`, ключ `worktree-merge`), не чаще одной в сутки, все причины одним списком |
 | **Выключатель** | `WORKTREE_MERGE_WATCHER_DISABLED=1` |
-| **Тесты** | `server/test/worktreeMergeWatcher.test.ts` (6), `server/test/worktreePushHosts.test.ts` (3): молчит на живой очереди, ловит застрявшие строки, протухшую базу, подсказка про снятие помехи обещает автовозврат, молчит при `off` |
+| **Тесты** | `server/test/worktreeMergeWatcher.test.ts` (5), `server/test/worktreePushHosts.test.ts` (3): молчит на живой очереди, ловит застрявшие строки, протухшую базу, молчит при `off` |
 | **Добавлен** | 19.10.2026, LOCK-WORKTREE-MANAGER-20261019 |
 
 ### Инциденты
