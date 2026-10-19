@@ -1,25 +1,22 @@
 // Сессия внешнего агента Claude Code с той же поверхностью, что у сессии Pi
 // (subscribe / prompt / steer / abort / dispose / state.messages), — чтобы
 // runRoleInProcess, live-ход, сторож тишины и снимки слота работали без
-// изменений. Роль переводится на внешнего агента записью модели
-// `claude-code/<модель>` в role-routing (sonnet, opus, …).
+// изменений.
 //
-// Ключей TaskFlow не хранит: CLI работает под своим логином на машине.
-// Инструменты TaskFlow приходят через cliToolBridge (stdio-MCP), встроенные
-// инструменты CLI (Bash, Read, Edit…) работают в cwd worktree карточки.
+// Внешний агент — самостоятельный участник (roles.runtime, заводится кнопкой
+// «Обновить» из каталога externalAgents.ts), а не подмена модели во внутренней
+// роли (владелец 19.10.2026). Он работает в своём окружении целиком: своя
+// модель, память, CLAUDE.md, скиллы, свои MCP — TaskFlow ничего не отключает
+// и не подменяет. От TaskFlow он получает только инструкцию-буст и задание;
+// действия на доске отдаёт блоком `taskflow-actions` (externalAgentActions.ts),
+// сервер выполняет их сам и возвращает итог следующим сообщением.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { BRIDGE_SERVER_NAME, startToolBridge, type BridgeTool, type ToolBridge } from "./cliToolBridge.js";
-
-export const CLI_PROVIDER = "claude-code";
 
 /** Встроенные инструменты Claude Code → имена Pi (их понимают live-ход и журнал активности). */
 const BUILTIN_NAMES: Record<string, string> = {
   Bash: "bash", Read: "read", Edit: "edit", MultiEdit: "edit", Write: "write", Grep: "grep", Glob: "find", LS: "ls",
 };
-const MCP_PREFIX = `mcp__${BRIDGE_SERVER_NAME}__`;
-
 export function piToolName(name: string): string {
-  if (name.startsWith(MCP_PREFIX)) return name.slice(MCP_PREFIX.length);
   return BUILTIN_NAMES[name] ?? name;
 }
 
@@ -33,12 +30,18 @@ export function cliEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv 
 
 export interface CliSessionInput {
   cwd: string;
-  /** Модель для `--model` (alias вроде sonnet или полное имя). */
-  model: string;
+  /** Модель для `--model`; не задана — своя модель агента по умолчанию. */
+  model?: string;
+  /** Инструкция-буст TaskFlow: добавляется к собственному системному промпту агента. */
   systemPrompt: string;
-  tools: BridgeTool[];
-  /** Для тестов: другой бинарник. */
+  /** После хода: разобрать ответ и вернуть сообщение с итогами действий или null — ход окончен. */
+  onTurnEnd?: (text: string) => Promise<string | null>;
+  /** Сколько раз подряд можно вернуть агенту итоги действий за один prompt. */
+  maxFollowUps?: number;
+  /** Бинарник агента (из каталога); по умолчанию claude. */
   command?: string;
+  /** Добавки к окружению агента (например, TASKFLOW_TOKEN участника). */
+  env?: Record<string, string>;
 }
 
 export interface CliAgentSession {
@@ -120,7 +123,6 @@ export class StreamJsonTranslator {
 }
 
 export async function createCliAgentSession(input: CliSessionInput): Promise<CliAgentSession> {
-  const bridge: ToolBridge = await startToolBridge(input.tools);
   const listeners = new Set<Listener>();
   const messages: any[] = [];
   let sessionId: string | null = null;
@@ -137,21 +139,45 @@ export async function createCliAgentSession(input: CliSessionInput): Promise<Cli
     get sessionId() { return sessionId; },
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     async prompt(text) {
+      let next: string | null = text;
+      for (let turn = 0; next !== null && turn <= (input.maxFollowUps ?? 3); turn++) {
+        await runTurn(next);
+        const last = messages[messages.length - 1];
+        if (aborted || last?.stopReason !== "stop" || !input.onTurnEnd) return;
+        const answer = (last.content ?? []).map((c: any) => c?.text ?? "").join("\n");
+        next = await input.onTurnEnd(answer);
+      }
+    },
+    steer(text) {
+      if (child && !child.stdin.destroyed) child.stdin.write(userLine(text));
+    },
+    async abort() {
+      aborted = true;
+      child?.kill("SIGTERM");
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      child?.kill("SIGTERM");
+      listeners.clear();
+    },
+  };
+
+  async function runTurn(text: string): Promise<void> {
       if (disposed) throw new Error("сессия внешнего агента закрыта");
       if (child) throw new Error("внешний агент уже выполняет ход");
       aborted = false;
       messages.push({ role: "user", content: [{ type: "text", text }] });
       const args = [
         "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-        "--model", input.model,
         "--append-system-prompt", input.systemPrompt,
-        "--mcp-config", bridge.configPath, "--strict-mcp-config",
-        // Роль на Pi тоже ходит без подтверждений; границы — worktree карточки и права учётки роли.
+        // Без подтверждений, как роль на Pi: в фоне спросить некого.
         "--permission-mode", "bypassPermissions",
       ];
+      if (input.model) args.push("--model", input.model);
       // Следующий prompt той же сессии (например, резюме при остановке) продолжает разговор.
       if (sessionId) args.push("--resume", sessionId);
-      const proc = spawn(input.command ?? "claude", args, { cwd: input.cwd, env: cliEnv(), stdio: ["pipe", "pipe", "pipe"] });
+      const proc = spawn(input.command ?? "claude", args, { cwd: input.cwd, env: { ...cliEnv(), ...input.env }, stdio: ["pipe", "pipe", "pipe"] });
       child = proc;
       const translator = new StreamJsonTranslator(emit);
       let out = "";
@@ -189,21 +215,6 @@ export async function createCliAgentSession(input: CliSessionInput): Promise<Cli
         ...(errorMessage ? { errorMessage } : {}),
       });
       if (!aborted && !result) throw new Error(`внешний агент не ответил: ${errorMessage}`.slice(0, 500));
-    },
-    steer(text) {
-      if (child && !child.stdin.destroyed) child.stdin.write(userLine(text));
-    },
-    async abort() {
-      aborted = true;
-      child?.kill("SIGTERM");
-    },
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      child?.kill("SIGTERM");
-      listeners.clear();
-      void bridge.close().catch(() => {});
-    },
-  };
+  }
   return session;
 }

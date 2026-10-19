@@ -5,6 +5,7 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import db from "../db.js";
 import { authOrApiToken, ownerOrApiToken } from "../auth.js";
+import { discoverExternalAgents, syncExternalAgents } from "../lib/externalAgents.js";
 import {
   ROLE_NAMES,
   allRoles,
@@ -387,6 +388,11 @@ export async function refreshRoleReadiness(force = false): Promise<boolean> {
 /** Register the role catalog, role prompts, and account-role lookup routes. */
 export function registerRoleRoutes(app: FastifyInstance): void {
   const authPre = authOrApiToken;
+
+  // Внешние агенты (Claude Code, Codex, …): что установлено на машине и кто
+  // заведён участником. «Обновить» заводит найденных участниками сама.
+  app.get("/api/external-agents", { preHandler: authPre }, async () => ({ agents: discoverExternalAgents() }));
+  app.post("/api/external-agents/refresh", { preHandler: ownerOrApiToken }, async () => ({ agents: await syncExternalAgents() }));
 
   app.get<{ Querystring: { all?: string } }>(
     "/api/roles",

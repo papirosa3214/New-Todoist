@@ -61,6 +61,13 @@ function withChatTools(list: string): string {
   return names.join(",");
 }
 
+/** Пропуск участника на время запуска (JWT, как у ролей). Внешний агент получает
+ *  его в TASKFLOW_TOKEN — и его собственный MCP TaskFlow ходит от имени участника,
+ *  а не под чужой учёткой. null — подпись ещё не подключена. */
+export function roleRunToken(role: string, expiresIn = "12h"): string | null {
+  return signer ? signer({ id: roleUserId(role) }, { expiresIn }) : null;
+}
+
 /** Выдать запуску доступ роли. Возвращает путь к временному файлу
  *  подключения для `pi --mcp-config`; null — роль не из списка или
  *  подпись ещё не подключена (тогда запуск идёт без инструментов трекера). */

@@ -4831,6 +4831,10 @@ const migrations: Migration[] = [
     CREATE INDEX IF NOT EXISTS idx_chat_checklist_items_message
       ON chat_checklist_items(message_id);
   `) },
+  { id: "157_external_agent_runtime", description: "Внешние агенты как самостоятельные участники: roles.runtime (pi | claude-code | …), участников заводит кнопка «Обновить» (lib/externalAgents.ts)", up: () => {
+    const columns = new Set((db.prepare("PRAGMA table_info(roles)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!columns.has("runtime")) db.exec("ALTER TABLE roles ADD COLUMN runtime TEXT NOT NULL DEFAULT 'pi'");
+  } },
 ];
 /**
  * Опции прогона миграций.
