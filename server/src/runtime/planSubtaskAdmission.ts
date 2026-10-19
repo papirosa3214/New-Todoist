@@ -194,7 +194,7 @@ export function planNodeAgentRefusal(subtaskId: string, userId: string, starting
   if (starting) {
     const plan = db.prepare("SELECT status FROM task_collaboration_plans WHERE id=?").get(row.collaboration_plan_id) as {status:string} | undefined;
     if (plan?.status !== "approved") return "план ещё не утверждён";
-    if (!canPlanSubtaskBecomeReady(row)) return "шаг плана ещё ждёт предшественников — он откроется сам, когда они сдадут работу";
+    if (!canPlanSubtaskBecomeReady(row)) return "шаг плана ещё ждёт предшественников — он откроется сам, когда они сдадут работу. Дальше: ничего не делай, заверши ход — сервер сам запустит тебя, когда этап откроется. Повтор этого вызова даст тот же отказ.";
   }
   return null;
 }

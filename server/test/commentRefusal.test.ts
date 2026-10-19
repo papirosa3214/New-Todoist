@@ -47,4 +47,26 @@ describe("отказ в комментарии", () => {
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe("Not found");
   });
+  it("id карточки вместо id шага — отказ называет открытые шаги", async () => {
+    db.prepare("INSERT INTO subtasks (id, task_id, title, done, position) VALUES (?, ?, 'Открытый шаг', 0, 1)").run(`${live}-s1`, live);
+    const res = await app.inject({ method: "PATCH", url: `/api/subtasks/${live}`, headers: as("role_builder"), payload: { done: true, result: "x" } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toContain("Это id карточки, а не шага");
+    expect(res.json().error).toContain(`${live}-s1`);
+  });
+
+  it("смена состояния удалённой карточки — объяснение вместо Not found; человеку — прежний 404", async () => {
+    const res = await app.inject({ method: "POST", url: "/api/tasks/нет-такой/state", headers: as("role_infra_engineer"), payload: { state: "in_progress" } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toContain("Карточки с таким id нет");
+    const human404 = await app.inject({ method: "POST", url: "/api/tasks/нет-такой/state", headers: as(human), payload: { state: "in_progress" } });
+    expect(human404.json().error).toBe("Not found");
+  });
+
+  it("запрещённый переход — откуда, куда можно и почему", async () => {
+    const { transitionRefusal } = await import("../src/agentState.js");
+    const text = transitionRefusal("in_progress", "in_progress", { isOwner: false, isExecutor: true }, "state");
+    expect(text).toContain("Отсюда тебе можно: blocked, review");
+    expect(transitionRefusal(null, "review", { isOwner: false, isExecutor: false }, "state")).toContain("Ты не исполнитель");
+  });
 });

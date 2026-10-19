@@ -15,6 +15,7 @@ import {
   getTaskForWrite,
   isOwner as isTrackerOwner,
   isReviewer as isTaskReviewer,
+  aiNotFound,
 } from "../access.js";
 import { unmetDependencyIds } from "../enricher.js";
 import { isServiceUser } from "../serviceUser.js";
@@ -42,6 +43,7 @@ import {
   AGENT_STATES,
   AgentState,
   canTransition,
+  transitionRefusal,
   commentRequiredFor,
   isStale,
   leaseExpiresAt,
@@ -517,7 +519,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
               "задача на проверке у владельца, вернуть её в работу может только он",
           });
         }
-        return reply.code(400).send({ error: "invalid transition" });
+        return reply.code(400).send({ error: transitionRefusal(from, "in_progress", who, "claim") });
       }
 
       let claimRejection: { code: number; error: string } | null = null;
@@ -771,7 +773,10 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
       if (!task && state === "blocked" && isServiceUser(req.userId)) {
         task = getTaskForRead(req.params.id, req.userId);
       }
-      if (!task) return reply.code(404).send({ error: "Not found" });
+      if (!task) {
+        const refusal = aiNotFound(req.params.id, "task", req.userId);
+        return reply.code(refusal.status).send({ error: refusal.error });
+      }
 
       // Шаг 3 карточки 8ca87c61: тот же мягкий enforcement attempt_id,
       // что и в heartbeat (см. комментарий там).
@@ -890,7 +895,7 @@ export function registerAgentStateRoutes(app: FastifyInstance) {
         requiresReviewerReview: reviewerFirstEnabled(),
       };
       if (!canTransition(from, state, who, "state")) {
-        return reply.code(400).send({ error: "invalid transition" });
+        return reply.code(400).send({ error: transitionRefusal(from, state, who, "state") });
       }
 
       // Карточка cd10bf34, п. 2: blocked от агента по решаемой причине без

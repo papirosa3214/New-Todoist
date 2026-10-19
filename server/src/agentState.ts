@@ -118,6 +118,30 @@ export function canTransition(
   return false;
 }
 
+/** Текст отказа вместо голого «invalid transition»: откуда, куда нельзя, куда
+ *  можно этому вызывающему и что делать (разбор отказов ролей 19.10.2026). */
+export function transitionRefusal(
+  from: AgentState | null,
+  to: AgentState | null,
+  who: Caller,
+  via: TransitionVia,
+): string {
+  const name = (s: AgentState | null) => s ?? "свободна";
+  const allowed = (["in_progress", "blocked", "review", null] as Array<AgentState | null>)
+    .filter((t) => t !== from && canTransition(from, t, who, via))
+    .map(name);
+  const head = `Переход «${name(from)}» → «${name(to)}» тебе не разрешён.`;
+  const can = allowed.length ? ` Отсюда тебе можно: ${allowed.join(", ")}.` : " Отсюда тебе сейчас никуда нельзя.";
+  const why = !who.isExecutor && !who.isOwner && !who.isReviewer
+    ? " Ты не исполнитель этой карточки: работай в своём шаге (taskflow_my_tasks), а состояние карточки меняет её исполнитель или сервер."
+    : from === "review"
+      ? " Карточка на проверке — вернуть её в работу может владелец или проверяющий."
+      : to === "review" || to === "blocked"
+        ? " В review и blocked переводят из in_progress: сначала возьми задачу в работу."
+        : "";
+  return head + can + why + " Тот же вызов без изменений не повторяй.";
+}
+
 /**
  * Comment is mandatory not just by destination state but by the (from, to)
  * pair (AGENT-PROTOCOL.md, "Что нельзя сделать молча" + the `review ->

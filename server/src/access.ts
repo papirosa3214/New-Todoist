@@ -712,6 +712,31 @@ export function commentRefusal(taskId:string,userId:string):{status:number;error
   };
 }
 
+/** 404 по карточке или шагу. Людям — прежний «Not found». ИИ-роли объясняем
+ *  частые путаницы: id карточки вместо id шага и наоборот, удалённая карточка,
+ *  чужая карточка (разбор отказов 19.10.2026). Скрытое роли не раскрываем:
+ *  о найденной записи говорим, только если роль может её читать. */
+export function aiNotFound(id:string,expected:"task"|"subtask",userId:string):{status:number;error:string} {
+  const notFound = { status: 404, error: "Not found" };
+  if (callerOf(userId)?.type !== "ai") return notFound;
+  const fresh = " Актуальные карточки и шаги — taskflow_my_tasks.";
+  const task = getTaskForRead(id, userId) as any;
+  const step = db.prepare("SELECT id, task_id, title FROM subtasks WHERE id = ?").get(id) as { id: string; task_id: string; title: string } | undefined;
+  const stepVisible = step && getTaskForRead(step.task_id, userId);
+  if (expected === "subtask") {
+    if (task) {
+      const steps = db.prepare("SELECT id, title FROM subtasks WHERE task_id = ? AND done = 0 ORDER BY position LIMIT 8").all(id) as Array<{ id: string; title: string }>;
+      const list = steps.length ? ` Открытые шаги этой карточки: ${steps.map((x) => `${x.id} «${x.title.slice(0, 60)}»`).join("; ")}.` : " Открытых шагов у этой карточки нет.";
+      return { status: 404, error: `Это id карточки, а не шага.${list} Повтори с id шага.` };
+    }
+    if (stepVisible) return { status: 403, error: "Этот шаг закреплён не за тобой — сдавать и менять его может только его исполнитель." + fresh };
+    return { status: 404, error: "Шага с таким id нет — он удалён или id неверный." + fresh };
+  }
+  if (task) return { status: 403, error: "Карточка есть, но её состояние меняет исполнитель, а ты им не являешься. Работай в своём шаге: taskflow_subtask_work / taskflow_subtask_done." + fresh };
+  if (stepVisible) return { status: 404, error: `Это id шага, а не карточки; его карточка — ${step!.task_id}. Состояние шага меняют taskflow_subtask_work и taskflow_subtask_done.` };
+  return { status: 404, error: "Карточки с таким id нет — она удалена или id неверный. Не повторяй вызов." + fresh };
+}
+
 export function getTaskForComment(taskId:string,userId:string):any|undefined {
   const viaWrite = getTaskForWrite(taskId,userId);
   if (viaWrite) return viaWrite;

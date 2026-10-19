@@ -13,7 +13,7 @@ import { logStepOutcome } from "../runtime/stepOutcome.js";
 import { announceStepState } from "../runtime/stepTopicProgress.js";
 import { bumpContextVersion } from "../runtime/taskContextVersion.js";
 import { authOrApiToken, sessionOf } from "../auth.js";
-import { getTaskForRead, getTaskForWrite, getTaskForComment, commentRefusal } from "../access.js";
+import { getTaskForRead, getTaskForWrite, getTaskForComment, commentRefusal, aiNotFound } from "../access.js";
 import { isServiceUser } from "../serviceUser.js";
 import {
   blockedHelpError,
@@ -155,7 +155,11 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
     if (!subtask) return reply.code(404).send({error:"Not found"});
     if (subtask.agent_id !== req.userId || subtask.agent_state !== "in_progress" || subtask.done)
-      return reply.code(403).send({error:"План обновляет только текущий исполнитель работающего слота"});
+      return reply.code(403).send({error: subtask.agent_id !== req.userId
+        ? "План этапа ведёт только его исполнитель, а этот этап закреплён не за тобой. Дальше: найди свой этап в taskflow_my_tasks и обновляй план там."
+        : subtask.done
+          ? "Этап уже сдан — план закрытого этапа не меняют. Если работа продолжается, она идёт в новом этапе или через доработку."
+          : "План обновляют только во время работы над этапом. Дальше: сначала taskflow_subtask_work(state=\"in_progress\"), затем повтори обновление плана с новым request_id."});
     const session = sessionOf(req);
     if (session && subtask.agent_session_id && session !== subtask.agent_session_id)
       return reply.code(409).send({error:"Сессия исполнителя уже сменилась"});
@@ -313,7 +317,10 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
     preHandler: authPre,
     handler: async (req: any, reply) => {
       const subtask = getSubtaskWithTaskForUser(req.params.id, req.userId);
-      if (!subtask) return reply.code(404).send({ error: "Not found" });
+      if (!subtask) {
+        const refusal = aiNotFound(req.params.id, "subtask", req.userId);
+        return reply.code(refusal.status).send({ error: refusal.error });
+      }
 
       const { done, title, position } = req.body || {};
       let { result } = req.body || {};
@@ -824,7 +831,7 @@ export function registerSubtaskCommentRoutes(app: FastifyInstance) {
       const caller = db
         .prepare("SELECT type FROM users WHERE id = ?")
         .get(req.userId) as { type?: string } | undefined;
-      if(caller?.type==="ai"&&subtask.agent_id!==req.userId&&(subtask.collaboration_plan_id || subtask.task_assignee_id!==req.userId))return reply.code(403).send({error:"Роль выполняет только назначенный сервером слот"});
+      if(caller?.type==="ai"&&subtask.agent_id!==req.userId&&(subtask.collaboration_plan_id || subtask.task_assignee_id!==req.userId))return reply.code(403).send({error:"Этот этап закреплён не за тобой — роль работает только в этапах, которые назначил ей сервер. Дальше: свой этап найди в taskflow_my_tasks; если твоего этапа на этой карточке нет — тебя не звали, заверши ход. Чужой этап не бери."});
       const refusal = subtaskWorkRefusal({
         from: subtask.agent_state ?? null,
         to: state,
