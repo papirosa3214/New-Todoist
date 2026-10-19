@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import db from "../src/db.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, requeueMerge, sweepUnmergedBranches } from "../src/runtime/worktreeMergeQueue.js";
+import { drainMergeQueue, enqueueMerge, hooks, mergeQueueRow, processMerge, requeueMerge, retryClearedObstructions, sweepUnmergedBranches, worktreeMaintenancePass } from "../src/runtime/worktreeMergeQueue.js";
 import { reloadServerSettings, setSetting } from "../src/lib/serverSettings.js";
 import { saveBaseline } from "../src/lib/worktree/testGate.js";
 
@@ -208,6 +208,77 @@ describe("очередь автослияния", () => {
     sweepUnmergedBranches();
     expect(mergeQueueRow("t-keep-state")?.state).toBe("test_failed");
     expect(mergeQueueRow("t-keep-state")?.error).toContain("новые падения");
+  });
+
+  it("снятая помеха в main: проход обслуживания сам возвращает строку в очередь и сливает", async () => {
+    const repo = freshRepo();
+    const dir = seedBranch(repo, "t-unblock-main");
+    seedTask("t-unblock-main");
+    fs.writeFileSync(path.join(repo.live, "черновик.txt"), "чужая правка\n");
+    enqueueMerge("t-unblock-main", "integration_step");
+    expect((await processMerge("t-unblock-main")).state).toBe("blocked_dirty_main");
+    // Помеха снята (человек разобрался с чужим незакоммиченным) — роль
+    // про это не знает и шаг заново не сдаёт: возвращать должен проход.
+    fs.rmSync(path.join(repo.live, "черновик.txt"));
+    expect(retryClearedObstructions()).toEqual(["t-unblock-main"]);
+    expect(mergeQueueRow("t-unblock-main")?.state).toBe("queued");
+    expect(mergeQueueRow("t-unblock-main")?.error).toBeNull();
+    await worktreeMaintenancePass();
+    expect(mergeQueueRow("t-unblock-main")?.state).toBe("merged");
+    expect(git(repo.live, "log", "--oneline", "main")).toContain("работа роли");
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  it("очищенная копия роли: строка возвращается в очередь сама", async () => {
+    const repo = freshRepo();
+    const dir = seedBranch(repo, "t-unblock-copy");
+    seedTask("t-unblock-copy");
+    fs.writeFileSync(path.join(dir, "заметка.md"), "черновик роли\n");
+    enqueueMerge("t-unblock-copy", "integration_step");
+    expect((await processMerge("t-unblock-copy")).state).toBe("dirty_worktree");
+    // Незакоммиченное в копии закоммитили — помеха снята.
+    git(dir, "add", "заметка.md");
+    git(dir, "commit", "-q", "-m", "заметка роли");
+    await worktreeMaintenancePass();
+    expect(mergeQueueRow("t-unblock-copy")?.state).toBe("merged");
+    expect(fs.existsSync(path.join(repo.live, "заметка.md"))).toBe(true);
+  });
+
+  it("пока помеха не снята, строка остаётся в стороне и main не трогается", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-still-dirty");
+    seedTask("t-still-dirty");
+    fs.writeFileSync(path.join(repo.live, "черновик.txt"), "чужая правка\n");
+    enqueueMerge("t-still-dirty", "integration_step");
+    await processMerge("t-still-dirty");
+    expect(retryClearedObstructions()).toEqual([]);
+    await worktreeMaintenancePass();
+    expect(mergeQueueRow("t-still-dirty")?.state).toBe("blocked_dirty_main");
+    expect(mergeQueueRow("t-still-dirty")?.error).toContain("незакоммиченное");
+    expect(git(repo.live, "log", "--oneline", "main")).not.toContain("работа роли");
+  });
+
+  it("конфликт и красные тесты остаются ручными: проход их не переоформляет", async () => {
+    const repo = freshRepo();
+    seedBranch(repo, "t-manual-conflict");
+    seedTask("t-manual-conflict");
+    fs.writeFileSync(path.join(repo.live, "a.txt"), "ушёл вперёд\n");
+    git(repo.live, "commit", "-q", "-am", "правка main");
+    enqueueMerge("t-manual-conflict", "integration_step");
+    expect((await processMerge("t-manual-conflict")).state).toBe("conflict");
+
+    seedBranch(repo, "t-manual-red");
+    seedTask("t-manual-red");
+    hooks.runTests = async () => ({ ok: false, output: " ❯ test/roles.test.ts (2 tests | 1 failed)" });
+    enqueueMerge("t-manual-red", "integration_step");
+    expect((await processMerge("t-manual-red")).state).toBe("test_failed");
+
+    const mainBefore = git(repo.live, "rev-parse", "main");
+    expect(retryClearedObstructions()).toEqual([]);
+    await worktreeMaintenancePass();
+    expect(mergeQueueRow("t-manual-conflict")?.state).toBe("conflict");
+    expect(mergeQueueRow("t-manual-red")?.state).toBe("test_failed");
+    expect(git(repo.live, "rev-parse", "main")).toBe(mainBefore);
   });
 
   it("повторная сдача шага после конфликта возвращает карточку в очередь", async () => {
