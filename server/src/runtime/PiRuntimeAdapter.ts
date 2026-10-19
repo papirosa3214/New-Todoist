@@ -59,6 +59,7 @@ import {
   ModelNotAvailableError,
   RuntimeUnavailableError,
 } from "./errors.js";
+import { CLI_PROVIDER } from "./cliAgentSession.js";
 
 const ROLE_PROMPTS_DIR = process.env.TASKFLOW_ROLE_PROMPTS_DIR
   ?? path.join(process.cwd(), "scripts", "role-prompts");
@@ -1042,6 +1043,9 @@ export async function getAvailableModelIds(): Promise<Set<string>> {
  *  не-основных провайдеров, иначе провайдер угадывался бы по имени и выходил MiniMax. */
 export async function modelExists(ref: string): Promise<boolean> {
   const value = ref.trim();
+  // Внешний агент Claude Code — не из каталога Pi: модель (sonnet, opus, haiku
+  // или полное имя) проверяет сам CLI при запуске (cliAgentSession.ts).
+  if (value.startsWith(`${CLI_PROVIDER}/`) && value.length > CLI_PROVIDER.length + 1) return true;
   const catalog = await loadModelCatalog();
   if (catalog.some((m) => m.id === value)) return true;
   const slash = value.indexOf("/");
