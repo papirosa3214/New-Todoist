@@ -25,6 +25,7 @@ import { getSetting } from "../lib/serverSettings.js";
 import { inspectWorktree } from "../lib/worktree/inspect.js";
 import { cleanupWorktree, sweepTestLeftovers } from "../lib/worktree/cleanup.js";
 import { checkForRegression, loadBaseline, refreshBaseline } from "../lib/worktree/testGate.js";
+import { pushMainToHosts, type PushStatus } from "../lib/worktree/pushHosts.js";
 import {
   GitError,
   dirtyFiles,
@@ -71,6 +72,8 @@ const LOCK_STALE_MS = 30 * 60_000;
 
 /** Крюк для тестов: реальный запуск `npm test` занимает минуты. */
 export const hooks = {
+  /** Отправка main во все git-хосты после слияния; тесты подменяют. */
+  pushHosts: (live: string): PushStatus => pushMainToHosts(live),
   runTests: async (cwd: string, timeoutMs: number): Promise<{ ok: boolean; output: string }> => {
     const command = process.env.TASKFLOW_AUTO_MERGE_TEST_CMD || "npm test";
     return runShell(command, cwd, timeoutMs);
@@ -406,6 +409,16 @@ export async function processMerge(taskId: string): Promise<MergeOutcome> {
   writeState(taskId, { state: "merged", result_sha: mergedSha, error: null, finished_at: null });
   journal({ task_id: taskId, state: "merged", main_sha_before: mainShaBefore, result_sha: mergedSha });
   safeLogEvent(taskId, "auto_merged", branch, mergedSha);
+
+  // 6. main — на все хосты: только fast-forward, с бэкапом вершины хоста.
+  // Отказ не отменяет слияние: он уходит в журнал и в push-status.json,
+  // оттуда его поднимает сторож автослияния.
+  try {
+    const push = hooks.pushHosts(live);
+    journal({ task_id: taskId, state: "push", main_sha: push.main_sha, results: push.results });
+  } catch (error) {
+    journal({ task_id: taskId, state: "push", error: String(error) });
+  }
   return outcome;
 }
 

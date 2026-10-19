@@ -18,6 +18,7 @@ import db from "../db.js";
 import { getSetting } from "./serverSettings.js";
 import { raiseIncident } from "./incidents.js";
 import { loadBaseline } from "./worktree/testGate.js";
+import { loadPushStatus } from "./worktree/pushHosts.js";
 import {
   dirtyFiles,
   gitOrNull,
@@ -171,6 +172,17 @@ export function checkWorktreeMerge(): MergeWatchResult {
     );
   }
 
+  // Отправка main на хосты после слияния: отказ или расхождение в последнем
+  // проходе — main не доехал, и сам по себе он туда уже не уедет.
+  const push = loadPushStatus();
+  const badHosts = push?.results.filter((r) => r.state === "failed" || r.state === "diverged") ?? [];
+  if (badHosts.length) {
+    problems.push(
+      `main ${push!.main_sha.slice(0, 8)} не отправлен на хосты: ` +
+        badHosts.map((r) => `${r.remote} — ${r.state === "diverged" ? "расхождение" : "отказ"} (${r.detail ?? ""})`).join("; "),
+    );
+  }
+
   return { ok: problems.length === 0, problems };
 }
 
@@ -196,6 +208,7 @@ function raise(problems: string[]) {
     "- Грязный main — закоммитить или убрать чужие правки в `~/Проекты/New-Todoist`, очередь продолжит сама.",
     "- База падений не снимается — смотреть `merge-baseline.json` и прогон `npm test` в `server/`.",
     "- Конфликт / красные тесты — это решение ответственного за интеграцию: починить в копии и сдать шаг снова.",
+    "- main не доехал до хоста — `~/.local/state/taskflow-runs/worktrees/push-status.json`; после починки `~/infra-ops/git-sync/git-sync.sh ~/Проекты/New-Todoist`. Расхождение без слова владельца не форсить.",
   ].join("\n");
   raiseIncident({ key: INCIDENT_KEY, title, description, priority: PRIORITY });
 }

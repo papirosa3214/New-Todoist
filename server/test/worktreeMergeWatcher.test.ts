@@ -128,4 +128,34 @@ describe("сторож автослияния", () => {
     setSetting("auto_merge_mode", "off", null, "тест сторожа слияния");
     expect(checkWorktreeMerge().ok).toBe(true);
   });
+
+  it("видит, что main не доехал до хоста после слияния", () => {
+    const file = path.join(
+      process.env.TASKFLOW_ROLE_WORKTREES!,
+      "push-status.json",
+    );
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        at: new Date().toISOString(),
+        main_sha: "abcdef1234",
+        results: [
+          { remote: "origin", state: "pushed" },
+          { remote: "github", state: "failed", detail: "Permission denied" },
+        ],
+      }),
+    );
+    const { ok, problems } = checkWorktreeMerge();
+    expect(ok).toBe(false);
+    expect(problems.join("\n")).toContain("github — отказ");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        at: "",
+        main_sha: "",
+        results: [{ remote: "origin", state: "in_sync" }],
+      }),
+    );
+    expect(checkWorktreeMerge().ok).toBe(true);
+  });
 });
