@@ -59,11 +59,28 @@ export interface LiveTurnSnapshot {
   thinking: string | null;
 }
 
+/** Расход хода (владелец 19.10.2026): строка под ответом в чате —
+ *  скорость, входные/выходные токены, попадание в кэш, ориентировочная
+ *  цена. `input` — без кэша; цена null — модель её не сообщает. */
+export interface TurnUsage {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  cost_usd: number | null;
+  /** Время генерации (от первого токена до конца ответа) — для скорости. */
+  generation_ms: number | null;
+  model: string | null;
+}
+
 /** То, что ложится в chat_messages.steps вместе с ответом. */
 export interface SavedSteps {
   duration_ms: number;
   items: LiveItem[];
+  usage?: TurnUsage;
 }
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 const liveTurns = new Map<string, LiveTurn>();
 const keyOf = (chatId: string, userId: string) => `${chatId}\u0000${userId}`;
@@ -310,6 +327,9 @@ export class LiveTurn {
   private thinkingItem: Extract<LiveItem, { kind: "thinking" }> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private usage: TurnUsage | null = null;
+  /** Первый токен идущего ответа модели — начало генерации. */
+  private genStartedAt: number | null = null;
   /** finish({ deferAnnounce }) отработал, «ход закончен» ещё не разослан. */
   private endPending = false;
   /** Ход-двойник: для этой пары уже идёт живой ход, этот ничего не
@@ -349,6 +369,8 @@ export class LiveTurn {
       assistantMessageEvent?: { type?: string; delta?: string };
     };
     const sub = e.type === "message_update" ? e.assistantMessageEvent?.type : undefined;
+    if (sub && this.genStartedAt === null) this.genStartedAt = Date.now();
+    if (e.type === "message_end" || e.type === "turn_usage") this.addUsage(event);
     if (sub === "thinking_start") {
       this.endThinking();
       this.startThinking();
@@ -392,6 +414,48 @@ export class LiveTurn {
       }
     }
   };
+
+  /** Pi: message_end ответа модели несёт usage; внешний агент шлёт
+   *  turn_usage итогом своего хода. Ходов модели за один ход чата
+   *  бывает несколько (шаги с инструментами) — складываем. */
+  private addUsage(event: unknown): void {
+    const e = event as { type?: string; usage?: any; message?: any };
+    let add: TurnUsage | null = null;
+    if (e.type === "turn_usage" && e.usage) {
+      const u = e.usage;
+      add = {
+        input: num(u.input), output: num(u.output),
+        cache_read: num(u.cacheRead), cache_write: num(u.cacheWrite),
+        cost_usd: typeof u.costUsd === "number" ? u.costUsd : null,
+        generation_ms: typeof u.generationMs === "number" ? u.generationMs : null,
+        model: typeof u.model === "string" ? u.model : null,
+      };
+    } else if (e.message?.role === "assistant" && e.message.usage) {
+      const u = e.message.usage;
+      const cost = u.cost && typeof u.cost.total === "number" ? u.cost.total : null;
+      add = {
+        input: num(u.input), output: num(u.output),
+        cache_read: num(u.cacheRead), cache_write: num(u.cacheWrite),
+        cost_usd: cost,
+        generation_ms: this.genStartedAt === null ? null : Date.now() - this.genStartedAt,
+        model: typeof e.message.model === "string" ? e.message.model : null,
+      };
+    }
+    this.genStartedAt = null;
+    if (!add) return;
+    const prev = this.usage;
+    this.usage = prev
+      ? {
+          input: prev.input + add.input,
+          output: prev.output + add.output,
+          cache_read: prev.cache_read + add.cache_read,
+          cache_write: prev.cache_write + add.cache_write,
+          cost_usd: prev.cost_usd === null && add.cost_usd === null ? null : (prev.cost_usd ?? 0) + (add.cost_usd ?? 0),
+          generation_ms: prev.generation_ms === null && add.generation_ms === null ? null : (prev.generation_ms ?? 0) + (add.generation_ms ?? 0),
+          model: add.model ?? prev.model,
+        }
+      : add;
+  }
 
   private startThinking(): Extract<LiveItem, { kind: "thinking" }> | null {
     if (this.items.length >= ITEMS_MAX) return null;
@@ -523,8 +587,13 @@ export class LiveTurn {
         it.ended_at = now;
       }
     }
-    if (!items.some((it) => it.kind !== "text")) return null;
-    return { duration_ms: Date.now() - this.startedAt.getTime(), items };
+    const usage = this.usage && this.usage.input + this.usage.output > 0 ? this.usage : null;
+    if (!usage && !items.some((it) => it.kind !== "text")) return null;
+    return {
+      duration_ms: Date.now() - this.startedAt.getTime(),
+      items,
+      ...(usage ? { usage } : {}),
+    };
   }
 
   /** Разослать «ход закончен» после finish({ deferAnnounce: true }).

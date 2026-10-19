@@ -312,3 +312,35 @@ describe("конверт ответа роли (01.10.2026)", () => {
     expect(liveTurnsOfChat("c1")[0].items).toEqual([{ kind: "text", text: "Готово." }]);
   });
 });
+
+describe("расход хода под ответом", () => {
+  beforeEach(() => _resetLiveTurnsForTests());
+  const start = () => startLiveTurn({ chatId: "cu", userId: "r", name: "R", audience: () => [] });
+  const piEnd = (usage: any) => ({ type: "message_end", message: { role: "assistant", model: "m1", usage } });
+
+  it("складывает расход всех ответов модели за ход, цена из Pi", () => {
+    const turn = start();
+    turn.onEvent(text("а"));
+    turn.onEvent(piEnd({ input: 100, output: 20, cacheRead: 900, cacheWrite: 0, cost: { total: 0.01 } }));
+    turn.onEvent(text("б"));
+    turn.onEvent(piEnd({ input: 50, output: 30, cacheRead: 1000, cacheWrite: 10, cost: { total: 0.02 } }));
+    turn.onEvent({ type: "message_end", message: { role: "user", usage: { input: 999 } } });
+    const saved = turn.finish();
+    expect(saved?.items).toEqual([]);
+    expect(saved?.usage).toMatchObject({ input: 150, output: 50, cache_read: 1900, cache_write: 10, model: "m1" });
+    expect(saved?.usage?.cost_usd).toBeCloseTo(0.03);
+    expect(saved?.usage?.generation_ms).not.toBeNull();
+  });
+
+  it("внешний агент: итог turn_usage", () => {
+    const turn = start();
+    turn.onEvent({ type: "turn_usage", usage: { input: 3, output: 40, cacheRead: 5000, cacheWrite: 200, costUsd: 0.05, generationMs: 2000, model: "opus" } });
+    expect(turn.finish()?.usage).toEqual({ input: 3, output: 40, cache_read: 5000, cache_write: 200, cost_usd: 0.05, generation_ms: 2000, model: "opus" });
+  });
+
+  it("без расхода и шагов — по-прежнему null", () => {
+    const turn = start();
+    turn.onEvent(text("привет"));
+    expect(turn.finish()).toBeNull();
+  });
+});
