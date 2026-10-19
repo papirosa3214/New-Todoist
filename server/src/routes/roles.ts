@@ -331,8 +331,9 @@ function roleDetails(role: RoleName, piAlive: boolean) {
     /** pi — внутренняя роль; иначе внешний агент (claude-code, …) в своём окружении. */
     runtime: external ?? "pi",
     avatar_url: account?.avatar_url ?? null,
-    fallbacks: routing.fallbacks[role],
-    attempt_policy: model ? attemptPolicyFor(model) : null,
+    // iOS разбирает fallbacks и attempt_policy как обязательные списки: null уронил бы всю «Команду».
+    fallbacks: routing.fallbacks[role] ?? [],
+    attempt_policy: model ? attemptPolicyFor(model) : [],
     current_task: work
       ? { id: work.id, title: work.title, state: work.agent_state }
       : null,
