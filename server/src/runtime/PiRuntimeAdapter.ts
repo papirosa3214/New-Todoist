@@ -7,6 +7,7 @@ import { parseModelRef } from "../lib/attemptModel.js";
 import { providerAvailable } from "../lib/modelLadder.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { ensureRoleHome, prepareChatSessionDirectory } from "./roleHome.js";
+import { homedir } from "node:os";
 import { createCliAgentSession } from "./cliAgentSession.js";
 import { actionTurnHandler, externalAgentBoost, stripActions } from "./externalAgentActions.js";
 import { agentBinary } from "../lib/externalAgents.js";
@@ -1487,7 +1488,8 @@ async function runExternalChat(input: StartChatRunInput, runId: string): Promise
   const command = agentBinary(runtimeKey);
   if (!command) throw new Error(`внешний агент «${roleTitle(role)}» не найден на машине — нажми «Найти агентов» в «Команде»`);
   const mode: ChatWorkMode = input.mode ?? "work";
-  const cwd = ensureRoleHome(role).workspace;
+  // Домашняя папка, как при обычном запуске агента, а не песочница роли.
+  const cwd = homedir();
   const allowed = (name: string) => mode === "discussion" ? DISCUSSION_TOOLS.includes(name) : mode !== "plan" || PLANNING_TOOLS.includes(name);
   const catalog = buildRoleToolCatalog({ role, model: null, mode, runId, chatId: input.chatId, messageId: input.messageId });
   const operations = catalog.customTools.filter((t: any) => t.name !== "taskflow" && allowed(t.name));
@@ -1498,7 +1500,8 @@ async function runExternalChat(input: StartChatRunInput, runId: string): Promise
     resumeSessionId: input.sessionId ?? null,
     model: input.model,
     onModel: (model) => { db.prepare("UPDATE roles SET last_model = ? WHERE key = ?").run(model, role); },
-    systemPrompt: `${externalAgentBoost(roleTitle(role), operations)}\n\n${await chatSystemPrompt(role, mode, cwd)}`,
+    // Только буст: правила внутренних ролей (песочница, назначение, host-инструменты) внешнему агенту не передаются.
+    systemPrompt: externalAgentBoost(roleTitle(role), operations, "chat"),
     onTurnEnd: actionTurnHandler(operations, runId),
   });
   const run: ActiveChatRun = { runId, chatId: input.chatId, role, roleId: input.roleId, abort: () => session.abort(), startedAt: new Date().toISOString(), cancelled: false };

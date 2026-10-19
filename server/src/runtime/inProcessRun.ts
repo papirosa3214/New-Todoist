@@ -1502,7 +1502,8 @@ try {
         const token = roleRunToken(role);
         return createCliAgentSession({
           cwd, command, env: token ? { TASKFLOW_TOKEN: token } : undefined,
-          systemPrompt: `${externalAgentBoost(roleTitle(role), operations)}\n\n${systemPrompt}`,
+          // Только буст и задание (в первом сообщении): правила внутренних ролей не передаются.
+          systemPrompt: externalAgentBoost(roleTitle(role), operations, "card"),
           onTurnEnd: actionTurnHandler(operations, manager.getSessionId()),
         }).then(s => ({ session: s as any }));
       })()

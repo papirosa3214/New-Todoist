@@ -11,6 +11,8 @@
 // действия на доске отдаёт блоком `taskflow-actions` (externalAgentActions.ts),
 // сервер выполняет их сам и возвращает итог следующим сообщением.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 
 /** Встроенные инструменты Claude Code → имена Pi (их понимают live-ход и журнал активности). */
 const BUILTIN_NAMES: Record<string, string> = {
@@ -25,7 +27,13 @@ type Listener = (event: any) => void;
 /** Окружение CLI без чужих ключей: ANTHROPIC_* у сервера — для Pi, и CLI с ними
  *  ушёл бы на оплату по ключу вместо своего входа (или в «Not logged in»). */
 export function cliEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(env).filter(([k]) => !/^(ANTHROPIC_|CLAUDE_CODE_|CLAUDECODE$)/.test(k)));
+  const out = Object.fromEntries(Object.entries(env).filter(([k]) => !/^(ANTHROPIC_|CLAUDE_CODE_|CLAUDECODE$)/.test(k)));
+  // У systemd-сервиса PATH короткий: без этих папок агент не видит своих инструментов (gh, graft, hermes…).
+  const home = os.homedir();
+  const extra = [path.join(home, ".local/bin"), path.join(home, ".npm-global/bin"), "/usr/local/bin"];
+  const have = (out.PATH ?? "").split(":").filter(Boolean);
+  out.PATH = [...have, ...extra.filter((d) => !have.includes(d))].join(":");
+  return out;
 }
 
 export interface CliSessionInput {
