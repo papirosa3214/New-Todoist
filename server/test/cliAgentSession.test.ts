@@ -75,3 +75,11 @@ describe("cliToolBridge", () => {
     }
   });
 });
+
+describe("modelExists для внешнего агента", () => {
+  it("claude-code/<модель> проходит без каталога Pi, пустая модель — нет", async () => {
+    const { modelExists } = await import("../src/runtime/PiRuntimeAdapter.js");
+    expect(await modelExists("claude-code/haiku")).toBe(true);
+    expect(await modelExists("claude-code/")).not.toBe(true);
+  });
+});
