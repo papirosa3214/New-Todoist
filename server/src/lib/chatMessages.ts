@@ -14,6 +14,7 @@ import {
 } from "../runtime/chatLiveTurn.js";
 import { chatHandoff } from "./chatHandoff.js";
 import { parseRoleContractV1 } from "./roleContractV1.js";
+import { checklistStateOfMessage } from "./chatChecklist.js";
 
 // Ленивая подготовка: db.prepare с колонкой chat_message_id не должен
 // падать на импорте, если миграция 053 ещё не прошла (index.ts импортирует
@@ -60,6 +61,10 @@ export function formatChatMessage(message: any) {
     ...(event?{from_user_id:'taskflow_system',from_user_name:'Система',from_user_initials:'С',from_user_avatar_url:null}:{}),
     reply_to_sender_name: message.reply_to_message_id ? (db.prepare("SELECT u.name FROM chat_messages m JOIN users u ON u.id=m.from_user_id WHERE m.id=?").get(message.reply_to_message_id) as {name:string}|undefined)?.name : null,
     reactions: db.prepare("SELECT user_id,emoji FROM chat_message_reactions WHERE message_id=? ORDER BY user_id").all(message.id),
+    // Отметки пунктов checklist-виджета (карточка 21842242): клиент рисует их
+    // по этим данным, а taskflow_chat_read отдаёт то же самое роли. Пустой
+    // массив — отметок не было; у сообщения без виджета поля тоже нет.
+    checklist_state: checklistStateOfMessage(message.id),
     attachments: attachmentsOf.all(message.id),
     // Быстрые ответы (владелец 25.09.2026, docs/ПЛАН Супер Помощник владельца/) —
     // хранятся JSON-строкой (у SQLite нет своего типа массива).

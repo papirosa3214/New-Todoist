@@ -52,6 +52,12 @@ import {
   type SavedSteps,
 } from "../runtime/chatLiveTurn.js";
 import { formatChatMessage, loadChatMessage } from "../lib/chatMessages.js";
+import {
+  ChecklistItemError,
+  checklistStateOfChat,
+  checklistStateOfMessage,
+  setChecklistItem,
+} from "../lib/chatChecklist.js";
 import { normalizeRoleReplyV1, structuredOutputText } from "../lib/roleContractV1.js";
 import { roleProjectContext } from "../runtime/roleProjectContext.js";
 import { roleSlotSnapshotsBlock } from "../runtime/slotWorkSnapshot.js";
@@ -695,6 +701,43 @@ export async function registerChatsRoutes(app: FastifyInstance): Promise<void> {
       if(emoji===null) db.prepare("DELETE FROM chat_message_reactions WHERE message_id=? AND user_id=?").run(req.params.messageId,req.userId);
       else db.prepare("INSERT INTO chat_message_reactions(message_id,user_id,emoji) VALUES(?,?,?) ON CONFLICT(message_id,user_id) DO UPDATE SET emoji=excluded.emoji").run(req.params.messageId,req.userId,emoji);
       return {message:loadChatMessage(req.params.messageId)};
+    });
+
+  // Отметка пункта checklist-виджета (карточка 21842242, владелец 19.10.2026:
+  // «Отметки в виджете checklist должны доезжать до роли»). Устроено как
+  // реакция на сообщение: клиент шлёт widget_key (id блока или его номер),
+  // item_key (id пункта или его номер) и done. Сервер сверяет, что пункт
+  // действительно есть в тексте сообщения, и кладёт строку в
+  // chat_checklist_items — оттуда её читает роль (taskflow_checklist_state)
+  // и видит клиент в истории сообщений (поле checklist_state).
+  app.post<{Params:{id:string;messageId:string};Body:{widget_key?:unknown;item_key?:unknown;item_index?:unknown;done?:unknown}}>(
+    "/api/chats/:id/messages/:messageId/checklist", {preHandler:authPre}, async (req:any,reply)=> {
+      if(!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
+      const message=db.prepare("SELECT id,text FROM chat_messages WHERE id=? AND chat_id=?").get(req.params.messageId,req.params.id) as {id:string;text:string}|undefined;
+      if(!message) return reply.code(404).send({error:"Сообщение не найдено"});
+      const done=req.body?.done;
+      if(typeof done!=="boolean") return reply.code(400).send({error:"Нужно done: true или false"});
+      const widgetKey=String(req.body?.widget_key??"0").trim()||"0";
+      const itemKey=String(req.body?.item_key??req.body?.item_index??"").trim();
+      if(!itemKey) return reply.code(400).send({error:"Нужен item_key (id пункта) или item_index (номер пункта)"});
+      try{
+        setChecklistItem({messageId:message.id,text:message.text,widgetKey,itemKey,done,userId:req.userId});
+      }catch(error){
+        if(error instanceof ChecklistItemError) return reply.code(400).send({error:error.message});
+        throw error;
+      }
+      return {checklist_state:checklistStateOfMessage(message.id),message:loadChatMessage(message.id)};
+    });
+
+  // Состояние отметок чата — то же, что видит роль, для клиента и отладки.
+  app.get<{Params:{id:string};Querystring:{only_done?:string}}>(
+    "/api/chats/:id/checklist", {preHandler:authPre}, async (req:any,reply)=> {
+      if(!isMember(req.params.id,req.userId)) return reply.code(404).send({error:"Чат не найден"});
+      const onlyDone=req.query?.only_done==="1"||req.query?.only_done==="true";
+      const checklists=checklistStateOfChat(req.params.id);
+      return {checklists:onlyDone
+        ? checklists.map(m=>({...m,widgets:m.widgets.map(w=>({...w,items:w.items.filter(i=>i.done)}))})).filter(m=>m.widgets.some(w=>w.items.length))
+        : checklists};
     });
 
   // Сообщение в чат. Логика:

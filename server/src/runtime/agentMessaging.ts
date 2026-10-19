@@ -88,5 +88,15 @@ export function agentMessagingTools(role: string, context: Context = {}) {
       const list=await asRole(role,"GET","/api/chats");
       return p.task_id ? {chats:list.chats.filter((c:any)=>c.task_id===p.task_id)} : list;
     }),
+    tool("taskflow_checklist_state","Что владелец отметил в виджетах checklist этого чата: подпись пункта, ключ и done. chat_id — переписка (без него текущий чат хода); only_done — только отмеченные. Отвечай по подписям пунктов: они соответствуют задачам, которые владелец закрывает.",Type.Object({chat_id:optional("Чат"),only_done:Type.Optional(Type.Boolean({description:"Только отмеченные пункты"}))}),async p=>{
+      const chatId=p.chat_id??context.chatId;
+      if(!chatId) throw new ToolError("Укажи chat_id: операция читает отметки конкретного чата");
+      const data=await asRole(role,"GET",`/api/chats/${chatId}/checklist${p.only_done?"?only_done=1":""}`) as any;
+      const messages:any[]=data.checklists??[];
+      let done=0,total=0;
+      const list=messages.map(m=>({message_id:m.message_id,task_id:m.task_id,widgets:m.widgets.map((w:any)=>({widget_key:w.widget_key,title:w.title,items:w.items.map((i:any)=>{total++;if(i.done)done++;return {item_key:i.key,label:i.label,done:Boolean(i.done)};})}))}));
+      if(!messages.length) return {отмечено:0,всего:0,пункты:[],подсказка:"В этом чате пока никто не отмечал пункты checklist-виджетов"};
+      return {отмечено:done,всего:total,сообщения:list};
+    }),
   ];
 }

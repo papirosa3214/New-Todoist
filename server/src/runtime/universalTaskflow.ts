@@ -10,7 +10,7 @@ export function memoryRequestStore():RequestStore {
  return {get:(a,id)=>records.get(key(a,id)),begin:r=>{if(records.has(key(r.actor,r.id)))return false;records.set(key(r.actor,r.id),r);return true;},
  finish:(a,id,state,result)=>{Object.assign(records.get(key(a,id))!,{state,result});}};
 }
-const READ=new Set(["taskflow_team_read","taskflow_plan_read","taskflow_children","taskflow_runtime","taskflow_status","taskflow_agents","taskflow_project_tasks","taskflow_my_stats","taskflow_task_summary","taskflow_recall","taskflow_weather","taskflow_my_tasks","taskflow_task_daily","taskflow_calendar_events","taskflow_task","taskflow_rules","taskflow_projects","taskflow_docs","taskflow_doc_read","taskflow_kb_search","taskflow_library","taskflow_chat_read","taskflow_topic_read","web_search","web_get","ocr","youtube","local_model"]);
+const READ=new Set(["taskflow_team_read","taskflow_plan_read","taskflow_children","taskflow_runtime","taskflow_status","taskflow_agents","taskflow_project_tasks","taskflow_my_stats","taskflow_task_summary","taskflow_recall","taskflow_weather","taskflow_my_tasks","taskflow_task_daily","taskflow_calendar_events","taskflow_task","taskflow_rules","taskflow_projects","taskflow_docs","taskflow_doc_read","taskflow_kb_search","taskflow_library","taskflow_chat_read","taskflow_checklist_state","taskflow_topic_read","web_search","web_get","ocr","youtube","local_model"]);
 const DISCUSS=new Set(["taskflow_chat_send","taskflow_chat_reply","taskflow_topic_reply","taskflow_topic_send","taskflow_consult"]);
 const CHAT_CONTEXT=new Set(["taskflow_chat_attach_file","taskflow_slot_restart","taskflow_work_start"]);
 const TASK_CONTEXT=new Set(["taskflow_topic_send","taskflow_topic_reply","taskflow_slot_snapshot"]);

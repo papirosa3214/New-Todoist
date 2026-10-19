@@ -4818,6 +4818,19 @@ const migrations: Migration[] = [
     CREATE INDEX IF NOT EXISTS worktree_merge_queue_state
       ON worktree_merge_queue(state, created_at);
   `) },
+  { id: "156_chat_checklist_items", description: "Отметки пунктов checklist-виджета в чате: клиент шлёт состояние, роль читает его операцией taskflow_checklist_state (карточка 21842242)", up: () => db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_checklist_items (
+      message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+      widget_key TEXT NOT NULL,
+      item_key TEXT NOT NULL,
+      done INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
+      updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (message_id, widget_key, item_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_checklist_items_message
+      ON chat_checklist_items(message_id);
+  `) },
 ];
 /**
  * Опции прогона миграций.
