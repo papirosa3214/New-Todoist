@@ -78,6 +78,7 @@ import { recordTaskDocument } from "../lib/taskOutcome.js";
 import { isProviderLimitText, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 import { logStepOutcome } from "./stepOutcome.js";
 import { withTestRunBudget } from "./testRunBudget.js";
+import { CLI_PROVIDER, createCliAgentSession } from "./cliAgentSession.js";
 import {
   logServerEvent,
   normalizeServerError,
@@ -1355,9 +1356,12 @@ async function runRoleInProcessUnserialized(input: {
   const modelRef = pickStartModel(routing, role, input.model);
   const { provider: modelProvider, id: modelId } = parseModelRef(modelRef);
   const runtime: any = await getModelRuntime();
-  const model =
-    runtime.getModel?.(modelProvider, modelId) ??
-    ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === modelId);
+  // Внешний агент (claude-code/<модель>) — не модель Pi: каталог Pi его не знает.
+  const external = modelProvider === CLI_PROVIDER;
+  const model = external
+    ? { id: modelId, provider: CLI_PROVIDER, name: `Claude Code ${modelId}`, reasoning: false }
+    : runtime.getModel?.(modelProvider, modelId) ??
+      ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === modelId);
   if (!model) throw new Error(`модель «${modelRef}» недоступна`);
   try {
     recordAttemptModel({ taskId, subtaskId: input.subtaskId, modelId, provider: modelProvider });
@@ -1479,7 +1483,12 @@ try {
   const builtinTools = (
     [...createCodingTools(cwd, операции), ...createReadOnlyTools(cwd, операции)]
   )
-  const { session } = await createAgentSession({
+  // На удалённой машине встроенные инструменты CLI исполнялись бы на .110, а не там:
+  // запуск внешнего агента через хост — отдельный этап (операция agent_spawn в host/).
+  if (external && host) throw new Error("внешний агент пока запускается только на .110, не через хост");
+  const { session } = await (external
+    ? createCliAgentSession({ cwd, model: modelId, systemPrompt, tools: customTools.filter((t: any) => toolCatalog.activeNames.includes(t.name)) }).then(s => ({ session: s as any }))
+    : createAgentSession({
     cwd,
     model,
     // Уровень размышлений по реальной capability модели, а не жёсткое
@@ -1501,7 +1510,7 @@ try {
     customTools: [...builtinTools, ...customTools],
     sessionManager: manager,
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
-  } as any).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await infra.close(); throw error; });
+  } as any)).catch(async error => { resourceLoader.disposeResources(); await composio.close(); await infra.close(); throw error; });
 
   // Миграция persisted thinkingLevel: старая сессия записала "off", а
   // модель теперь reasoning — включим размышления и запишем обратно в
