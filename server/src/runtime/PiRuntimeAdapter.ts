@@ -7,6 +7,11 @@ import { parseModelRef } from "../lib/attemptModel.js";
 import { providerAvailable } from "../lib/modelLadder.js";
 import { connectRoleComposio } from "./composioRuntime.js";
 import { ensureRoleHome, prepareChatSessionDirectory } from "./roleHome.js";
+import { createCliAgentSession } from "./cliAgentSession.js";
+import { actionTurnHandler, externalAgentBoost, stripActions } from "./externalAgentActions.js";
+import { agentBinary } from "../lib/externalAgents.js";
+import { roleRunToken } from "./roleRunAccess.js";
+import { externalRuntime } from "../roleRouting.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -1231,6 +1236,11 @@ export async function startChatRun(
 
   const runId = makeChatRunId();
 
+  if (externalRuntime(role)) {
+    try { return await runExternalChat(input, runId); }
+    finally { releaseChatRoleLock(input.chatId, input.roleId); }
+  }
+
   try {
     // Модель/провайдер берём из routing роли — ровно как в startRun.
     // Различие: input.provider/model не предусмотрены, чат ходит всегда
@@ -1458,6 +1468,58 @@ export async function startChatRun(
     return { runId, sessionId: finalSessionId, text: finalText };
   } finally {
     releaseChatRoleLock(input.chatId, input.roleId);
+  }
+}
+
+/**
+ * Ход внешнего агента (Claude Code и т. п.) в живом чате. Агент работает в
+ * своём окружении; от TaskFlow — инструкция-буст, правила чата, пропуск
+ * участника (его собственный MCP TaskFlow действует от его имени) и блок
+ * taskflow-actions, который сервер исполняет шлюзом ролей. Сессия агента
+ * продолжается между сообщениями: её id хранится в chat_sessions, как у Pi.
+ */
+async function runExternalChat(input: StartChatRunInput, runId: string): Promise<StartChatRunResult> {
+  const role = input.role;
+  const runtimeKey = externalRuntime(role)!;
+  const command = agentBinary(runtimeKey);
+  if (!command) throw new Error(`внешний агент «${roleTitle(role)}» не найден на машине — нажми «Найти агентов» в «Команде»`);
+  const mode: ChatWorkMode = input.mode ?? "work";
+  const cwd = ensureRoleHome(role).workspace;
+  const allowed = (name: string) => mode === "discussion" ? DISCUSSION_TOOLS.includes(name) : mode !== "plan" || PLANNING_TOOLS.includes(name);
+  const catalog = buildRoleToolCatalog({ role, model: null, mode, runId, chatId: input.chatId, messageId: input.messageId });
+  const operations = catalog.customTools.filter((t: any) => t.name !== "taskflow" && allowed(t.name));
+  const token = roleRunToken(role);
+  const session = await createCliAgentSession({
+    cwd, command,
+    env: token ? { TASKFLOW_TOKEN: token } : undefined,
+    resumeSessionId: input.sessionId ?? null,
+    systemPrompt: `${externalAgentBoost(roleTitle(role), operations)}\n\n${await chatSystemPrompt(role, mode, cwd)}`,
+    onTurnEnd: actionTurnHandler(operations, runId),
+  });
+  const run: ActiveChatRun = { runId, chatId: input.chatId, role, roleId: input.roleId, abort: () => session.abort(), startedAt: new Date().toISOString(), cancelled: false };
+  activeChatRuns.set(runId, run);
+  const unsubscribe = session.subscribe((event: any) => {
+    if (event?.type === "tool_execution_start") input.onStep?.(event.toolName);
+    try { input.onEvent?.(event); } catch (error) { console.warn("[chats] onEvent живого хода упал:", error); }
+  });
+  const timeoutMs = resolveChatRunTimeout(input.timeoutMs);
+  let ceilingTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      session.prompt(input.mode ? chatModeInstruction(input.mode) + "\n\n" + input.prompt : input.prompt),
+      new Promise<never>((_, reject) => { ceilingTimer = setTimeout(() => { void session.abort(); reject(new ChatRunTimeoutError("CHAT_RUN_CEILING", timeoutMs)); }, timeoutMs); }),
+    ]);
+    if (run.cancelled) throw chatRunCancelledError();
+    const last = session.state.messages[session.state.messages.length - 1];
+    if (last?.stopReason === "error") throw Object.assign(new Error(last.errorMessage || "внешний агент вернул ошибку"), { code: "CHAT_RUN_MODEL_ERROR" });
+    const text = stripActions((last?.content ?? []).map((c: any) => c?.text ?? "").join("\n")).trim();
+    if (session.sessionId) upsertChatSession(input.chatId, input.roleId, session.sessionId);
+    return { runId, sessionId: session.sessionId, text };
+  } finally {
+    clearTimeout(ceilingTimer);
+    unsubscribe();
+    session.dispose();
+    activeChatRuns.delete(runId);
   }
 }
 

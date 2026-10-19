@@ -42,6 +42,8 @@ export interface CliSessionInput {
   command?: string;
   /** Добавки к окружению агента (например, TASKFLOW_TOKEN участника). */
   env?: Record<string, string>;
+  /** Продолжить прежнюю сессию агента (чат между сообщениями). */
+  resumeSessionId?: string | null;
 }
 
 export interface CliAgentSession {
@@ -125,7 +127,7 @@ export class StreamJsonTranslator {
 export async function createCliAgentSession(input: CliSessionInput): Promise<CliAgentSession> {
   const listeners = new Set<Listener>();
   const messages: any[] = [];
-  let sessionId: string | null = null;
+  let sessionId: string | null = input.resumeSessionId ?? null;
   let child: ChildProcessWithoutNullStreams | null = null;
   let aborted = false;
   let disposed = false;
