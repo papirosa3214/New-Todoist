@@ -1,4 +1,4 @@
-import {describe,it,expect,vi} from "vitest";
+import {beforeAll,describe,it,expect,vi} from "vitest";
 import {Type} from "typebox";
 import {createUniversalTaskflow} from "../src/runtime/universalTaskflow.js";
 
@@ -77,5 +77,29 @@ describe("инструкция инструмента", () => {
     expect(UNIVERSAL_INSTRUCTION).toMatch(/фон/i);
     expect(UNIVERSAL_INSTRUCTION).toMatch(/nohup/);
     expect(UNIVERSAL_INSTRUCTION).toMatch(/тайм-аут/i);
+  });
+});
+
+// Владелец 19.10.2026: «у помощника голосового нет инструмента для веб-поиска,
+// сделай ему его». Проверяем, что поиск и чтение страницы есть у обоих.
+import { taskflowTools } from "../src/runtime/inProcessRun.js";
+import db, { migrate } from "../src/db.js";
+import { runMigrations } from "../src/migrations.js";
+import { seedRoleAccounts } from "./helpers/seedOwner.js";
+beforeAll(() => { migrate(); runMigrations(); seedRoleAccounts(db); });
+describe("веб-инструменты ролей", () => {
+  const имена = (role: string) => taskflowTools(role, null, undefined, undefined, true, undefined).map((t: any) => t.name);
+  it("Помощнику владельца доступны web_search и web_get", () => {
+    const список = имена("secretary");
+    expect(список).toContain("web_search");
+    expect(список).toContain("web_get");
+  });
+  it("остальные исследовательские инструменты помощнику не достаются", () => {
+    const список = имена("secretary");
+    for (const лишний of ["ocr", "youtube", "local_model"]) expect(список).not.toContain(лишний);
+  });
+  it("у Исследователя набор не изменился", () => {
+    const список = имена("researcher");
+    for (const нужный of ["web_search", "web_get", "ocr", "youtube", "local_model"]) expect(список).toContain(нужный);
   });
 });

@@ -367,7 +367,7 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
   ) => {
     const key = "tool.runtime." + name;
     registerInstructionBlock({key,title:name,group:"Возможности",scope:"command",modes:["work","resume","reply","review","subtask"],sourceKind:"code",originRef:"inProcessRun.ts:taskflowTools:"+name,readOnly:false,
-      ...(["web_search","web_get","ocr","youtube","local_model","taskflow_report"].includes(name)?{roles:["researcher"]}:{})},description);
+      ...(["web_search","web_get"].includes(name)?{roles:["researcher","secretary"]}:["ocr","youtube","local_model","taskflow_report"].includes(name)?{roles:["researcher"]}:{})},description);
     return defineTool({
       name,
       label: name,
@@ -813,11 +813,11 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       }),
   ];
 
-  // Пять специальных инструментов Исследователя — см. callResearchTool выше.
-  // Только для этой роли: другим они не нужны и не были для них заведены
-  // (researcher.json, сервер research — владелец 21.09.2026: «это НЕ общие
-  // инструменты TaskFlow»).
-  if (role === "researcher") {
+  // Веб-поиск и чтение страницы — Исследователю и Помощнику владельца
+  // (владелец 19.10.2026: «у него нет инструмента для веб-поиска, сделай
+  // ему его»). Остальные инструменты исследования — только Исследователю:
+  // они не нужны помощнику и не были для него заведены.
+  if (role === "researcher" || role === "secretary") {
     tools.push(
       T("web_search", "Найти в интернете: сначала Tavily, при недоступности — Brave. Возвращает список результатов со ссылками и выжимками. Текст страницы потом бери через web_get.",
         Type.Object({ query: Type.String(), max_results: Type.Optional(Type.Number()) }),
@@ -825,6 +825,10 @@ export function taskflowTools(role: string, model: string | null, taskId?: strin
       T("web_get", "Скачать страницу и вернуть её основное содержимое чистым markdown — без меню, рекламы и скриптов. Для PDF и сканов — ocr.",
         Type.Object({ url: Type.String(), max_chars: Type.Optional(Type.Number()) }),
         (p) => callResearchTool("web_get", p)),
+    );
+  }
+  if (role === "researcher") {
+    tools.push(
       T("ocr", "Распознать текст из изображения или PDF (в том числе скан без текстового слоя), русский+английский. Источник — attachment_id вложения задачи или path файла на машине.",
         Type.Object({ attachment_id: Type.Optional(Type.String()), path: Type.Optional(Type.String()), langs: Type.Optional(Type.String()), max_chars: Type.Optional(Type.Number()) }),
         (p) => callResearchTool("ocr", p)),
