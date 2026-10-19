@@ -22,6 +22,8 @@ export type RoleRecord = {
   summary: string;
   enabled: boolean;
   position: number;
+  /** Чем исполняется участник: pi — внутренняя роль, claude-code — внешний агент со своим окружением. */
+  runtime?: string;
 };
 
 /** Начальный состав — до миграции 056 (свежая база в тестах) и для её посева. */
@@ -38,12 +40,22 @@ export const DEFAULT_ROLES: ReadonlyArray<{ key: string; title: string; summary:
 export const ROLE_NAMES: string[] = DEFAULT_ROLES.map((r) => r.key);
 let registry: RoleRecord[] = DEFAULT_ROLES.map((r, i) => ({ ...r, enabled: true, position: i }));
 
+function rolesHaveRuntime(): boolean {
+  return (db.prepare("PRAGMA table_info(roles)").all() as Array<{ name: string }>).some((c) => c.name === "runtime");
+}
+
+/** Внешний агент (не Pi): его рантайм, иначе null. */
+export function externalRuntime(key: string): string | null {
+  const runtime = registry.find((r) => r.key === key)?.runtime;
+  return runtime && runtime !== "pi" ? runtime : null;
+}
+
 /** Перечитать роли из таблицы. Таблицы ещё нет — остаётся начальный состав. */
 export function refreshRoles(): void {
   try {
     const rows = db
-      .prepare("SELECT key, title, summary, enabled, position FROM roles ORDER BY position, key")
-      .all() as Array<{ key: string; title: string; summary: string; enabled: number; position: number }>;
+      .prepare(`SELECT key, title, summary, enabled, position, ${rolesHaveRuntime() ? "runtime" : "'pi' AS runtime"} FROM roles ORDER BY position, key`)
+      .all() as Array<{ key: string; title: string; summary: string; enabled: number; position: number; runtime: string }>;
     registry = rows.map((r) => ({ ...r, enabled: r.enabled === 1 }));
     ROLE_NAMES.splice(0, ROLE_NAMES.length, ...registry.filter((r) => r.enabled).map((r) => r.key));
   } catch {

@@ -78,7 +78,11 @@ import { recordTaskDocument } from "../lib/taskOutcome.js";
 import { isProviderLimitText, lastAssistantLimitError, pickFailoverModel, pickStartModel } from "./providerFailover.js";
 import { logStepOutcome } from "./stepOutcome.js";
 import { withTestRunBudget } from "./testRunBudget.js";
-import { CLI_PROVIDER, createCliAgentSession } from "./cliAgentSession.js";
+import { createCliAgentSession } from "./cliAgentSession.js";
+import { actionTurnHandler, externalAgentBoost } from "./externalAgentActions.js";
+import { agentBinary } from "../lib/externalAgents.js";
+import { externalRuntime } from "../roleRouting.js";
+import { roleRunToken } from "./roleRunAccess.js";
 import {
   logServerEvent,
   normalizeServerError,
@@ -1353,13 +1357,14 @@ async function runRoleInProcessUnserialized(input: {
   const routing = loadRoleRouting();
   // MAK-77: модель может быть записана как «провайдер/модель» (opencode-go/qwen3.8-flash);
   // запись без префикса работает по-старому.
-  const modelRef = pickStartModel(routing, role, input.model);
-  const { provider: modelProvider, id: modelId } = parseModelRef(modelRef);
+  // Внешний агент (участник с roles.runtime ≠ pi) работает на своей модели:
+  // ни routing ролей, ни каталог Pi его не касаются.
+  const external = externalRuntime(role);
+  const modelRef = external ? `${external}/default` : pickStartModel(routing, role, input.model);
+  const { provider: modelProvider, id: modelId } = external ? { provider: external, id: "default" } : parseModelRef(modelRef);
   const runtime: any = await getModelRuntime();
-  // Внешний агент (claude-code/<модель>) — не модель Pi: каталог Pi его не знает.
-  const external = modelProvider === CLI_PROVIDER;
   const model = external
-    ? { id: modelId, provider: CLI_PROVIDER, name: `Claude Code ${modelId}`, reasoning: false }
+    ? { id: modelId, provider: external, name: roleTitle(role), reasoning: false }
     : runtime.getModel?.(modelProvider, modelId) ??
       ((await runtime.getAvailable?.()) ?? []).find((m: any) => m.id === modelId);
   if (!model) throw new Error(`модель «${modelRef}» недоступна`);
@@ -1487,7 +1492,20 @@ try {
   // запуск внешнего агента через хост — отдельный этап (операция agent_spawn в host/).
   if (external && host) throw new Error("внешний агент пока запускается только на .110, не через хост");
   const { session } = await (external
-    ? createCliAgentSession({ cwd, model: modelId, systemPrompt, tools: customTools.filter((t: any) => toolCatalog.activeNames.includes(t.name)) }).then(s => ({ session: s as any }))
+    ? (() => {
+        const command = agentBinary(external);
+        if (!command) throw new Error(`внешний агент «${roleTitle(role)}» не найден на машине — нажми «Обновить» в списке агентов`);
+        // Операции TaskFlow агент вызывает блоком taskflow-actions, сервер исполняет их теми же
+        // обёртками шлюза, что у ролей (права и лента — от учётки участника).
+        const operations = customTools.filter((t: any) => t.name !== "taskflow");
+        // Пропуск участника: его собственный MCP TaskFlow (если подключён) ходит от имени участника.
+        const token = roleRunToken(role);
+        return createCliAgentSession({
+          cwd, command, env: token ? { TASKFLOW_TOKEN: token } : undefined,
+          systemPrompt: `${externalAgentBoost(roleTitle(role), operations)}\n\n${systemPrompt}`,
+          onTurnEnd: actionTurnHandler(operations, manager.getSessionId()),
+        }).then(s => ({ session: s as any }));
+      })()
     : createAgentSession({
     cwd,
     model,

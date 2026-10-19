@@ -13,8 +13,6 @@ export const KNOWN_MODEL_PROVIDERS = [
   "openai",
   "kimi-coding",
   "ollama",
-  // Внешний агент Claude Code (CLI на машине, своя подписка): не Pi, см. cliAgentSession.ts.
-  "claude-code",
 ] as const;
 
 export type ModelRef = { provider: string; id: string };
