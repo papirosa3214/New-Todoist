@@ -95,7 +95,7 @@ export function createUniversalTaskflow(tools:Tool[],context:Context,store:Reque
   // проверка схемы его не считала лишним.
   const {request_id:изАргументов,...args}=({...(p.arguments??{})} as Record<string,unknown>);
   const requestId=(typeof p.request_id==="string"&&p.request_id?p.request_id:typeof изАргументов==="string"?изАргументов:undefined);
-  if(!Check(tool.parameters,args))return fail("INVALID_ARGUMENTS","Аргументы не соответствуют inputSchema; получи describe и исправь arguments");
+  if(!Check(tool.parameters,args))return fail("INVALID_ARGUMENTS","Аргументы не соответствуют inputSchema: пришли ключи ["+Object.keys(args).join(", ")+"], ждём ["+((tool.parameters as any).properties?Object.keys((tool.parameters as any).properties).join(", "):"?")+"]"+((tool.parameters as any).required?"; обязательны: "+((tool.parameters as any).required as string[]).join(", "):""));
   if(write && (typeof requestId!=="string" || !requestId.trim() || requestId.length>200))return fail("INVALID_ARGUMENTS","Для изменения нужен request_id длиной 1..200");
   const hash=crypto.createHash("sha256").update(stable({operation:tool.name,version:p.version,arguments:args})).digest("hex");
   if(write){
