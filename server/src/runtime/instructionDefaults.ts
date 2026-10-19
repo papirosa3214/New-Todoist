@@ -4,6 +4,8 @@ import {
   NEW_WIDGET_STATES,
   NEW_WIDGET_TONES,
   newWidgetTypeLines,
+  widgetExampleFence,
+  widgetTypeLines,
 } from "../lib/widgetContract.js";
 
 // Строки про восемь новых типов попадают в инструкцию роли только при
@@ -29,6 +31,38 @@ const NEW_WIDGET_TYPES_PROSE: string[] = [
 
 function newTypeLines(): string[] {
   return newWidgetTypesEnabled() ? [...NEW_WIDGET_TYPES_PROSE] : [];
+}
+
+/**
+ * Строка инструкции ролям «как оформлять ответ» (карточка cea8d997).
+ *
+ * Собирается из каталога lib/widgetContract.ts — того же, по которому идёт
+ * проверка на сервере. Раньше шесть базовых типов были прозой здесь, а словарь
+ * валидатора помощника владельца лежал вне git; эти вещи разошлись, и роль,
+ * собравшая блок по инструкции, получала от сервера ошибку со своим же
+ * примером (дефект D1). Теперь перечень, поля и образец берутся из одного места.
+ *
+ * Подключается всем ролям (task.start, task.plan, task.resume, chat.wrapper,
+ * chat.followup), а не только чату: формат ответа роли один во всём
+ * приложении — чат, лента, комментарий, результат шага, описание, итог.
+ */
+function roleFormatLines(): string[] {
+  return [
+    "",
+    "ФОРМАТ ОТВЕТА (один во всём приложении). Текст — Markdown. Данные,",
+    "которые нагляднее таблицей или графиком, подавай блоком ```widget с JSON,",
+    "а не текстом: таблица Markdown и ряд «название: число» сервер заменяет на",
+    "блок сам, остальное возвращает с понятной ошибкой и образцом — перепиши и",
+    "сдай заново. Типы и поля (в корне блока; у элемента — свои поля):",
+    // Восемь новых типов по-прежнему перечисляются только при включённом
+    // флаге: пока клиент их не рисует, роль не должна предлагать их в чате
+    // (lib/widgetFeatureFlag.ts). Базовые — всегда.
+    ...widgetTypeLines({ includeNew: newWidgetTypesEnabled() }),
+    "Образец блока table:",
+    widgetExampleFence("table"),
+    "Образец блока chart:",
+    widgetExampleFence("chart"),
+  ];
 }
 export const PLAN_ROLE_HELP_POLICY = [
   "ПРАВИЛО НЕХВАТАЮЩЕЙ РОЛИ В ЗАПУЩЕННОМ ПЛАНЕ (сильнее общего совета вернуть чужую работу):",
@@ -66,6 +100,7 @@ export const INSTRUCTION_DEFAULTS: Record<string, string> = {
     "",
     "Правила:",
     "{rules}",
+    ...roleFormatLines(),
   ].join("\n"),
 "task.plan": [
     `Ты — {roleTitle} в трекере TaskFlow. Задача {taskId}. Твой шаг плана {subtaskId}: «{subtaskTitle}».`,
@@ -138,6 +173,7 @@ export const INSTRUCTION_DEFAULTS: Record<string, string> = {
     "",
     "Правила:",
     "{rules}",
+    ...roleFormatLines(),
   ].join("\n"),
 "task.orchestrate": [
     `Ты — {roleTitle} в трекере TaskFlow, режим «Оркестратор». Задача {taskId}. Твой шаг {subtaskId}: «Разложить работу по ролям и запустить команду».`,
@@ -217,6 +253,7 @@ export const INSTRUCTION_DEFAULTS: Record<string, string> = {
     `Продолжай работу по задаче {taskId}. С прошлого захода могло что-то измениться — владелец мог ответить в ленте.`,
     "Перечитай карточку и ленту (taskflow_task). Закрытые шаги не повторяй. Всё сделано — сдай (taskflow_state state=review);",
     "упёрся — taskflow_state state=blocked с причиной.",
+    ...roleFormatLines(),
   ].join("\n"),
 "task.review": [
     `Ты — {roleTitle}. Проверь сданную работу по задаче {taskId}: «{title}».`,
@@ -243,6 +280,7 @@ export const INSTRUCTION_DEFAULTS: Record<string, string> = {
     `Ты — {roleTitle}. По твоей задаче {taskId} («{title}») владелец написал в ленте.`,
     "Прочитай карточку и ленту (taskflow_task) и ответь ему комментарием (taskflow_comment).",
     "Работу не продолжай и состояние задачи не меняй — только ответ.",
+    ...roleFormatLines(),
   ].join("\n"),
 "chat.wrapper": [
     "{roleInstruction}",
@@ -258,17 +296,18 @@ export const INSTRUCTION_DEFAULTS: Record<string, string> = {
     "Участники чата:",
     "{participants}",
     "",
-    "Оформление: Markdown — заголовки, списки, таблицы",
-    "(| Колонка | Колонка |). Когда данные нагляднее карточкой, вставь",
-    "виджет — блок кода с языком widget и JSON внутри, например:",
+    "Оформление: Markdown — заголовки, списки. Когда данные нагляднее таблицей",
+    "или графиком, вставь блок ```widget с JSON внутри, например:",
     "```widget",
     `{"type":"metrics","title":"Итоги недели","items":[{"label":"Задач","value":"12","delta":"+3","trend":"up"}]}`,
     "```",
-    "Типы: metrics (items: label, value, delta, trend up|down|flat);",
-    "progress (title, items: label, value 0–100, note); checklist (title,",
-    "items: text, done); card (title, subtitle, body, rows: label/value,",
-    "link: title/url); chart (title, kind bar|line, unit, points: x/y);",
-    "weather — только готовый блок из taskflow_weather.",
+    "Таблицу Markdown и ряд «название: число» сервер заменяет на блок сам;",
+    "остальное вернёт с понятной ошибкой и образцом — перепиши и сдай снова.",
+    // Перечень типов и их полей не пишется здесь руками: строки собираются
+    // из lib/widgetContract.ts — того же каталога, по которому идёт проверка
+    // на сервере (карточка cea8d997). Раньше шесть базовых типов были прозой
+    // здесь, а проверяющий словарь лежал вне git — они разошлись (дефект D1).
+    ...widgetTypeLines({ includeNew: false }),
     ...newTypeLines(),
     "Виджет дополняет",
     "ответ, а не заменяет его; цифры в нём — только настоящие.",
