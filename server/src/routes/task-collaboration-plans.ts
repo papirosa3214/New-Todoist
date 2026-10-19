@@ -1,4 +1,5 @@
 import { TEMPLATE_PROFILES, additionalTemplate, templateInstructions } from "../lib/collaborationTemplates.js";
+import { SCHEDULER_USER_ID } from "../serviceUser.js";
 import {requireIntegrationResponsibility} from '../lib/integrationResponsibility.js';
 import { submissionReceipt } from "../lib/submissionReceipt.js";
 import { roleResultDocument } from "../lib/roleResultReport.js";
@@ -366,6 +367,10 @@ export async function startSingleExecutorPlan(
   opts: { roleKey: string; expectedResult?: string; rationale?: string; system?: boolean },
 ): Promise<StartPlanOutcome> {
   const role = String(opts.roleKey ?? "").trim();
+  // В ленту автозапуск пишется от «Системы», а не от владельца: раньше
+  // владелец видел «Максим запустил», хотя ничего не нажимал (20.10.2026).
+  // Полномочия (created_by, approved_by) остаются за actorId.
+  const eventActor = opts.system ? SCHEDULER_USER_ID : actorId;
   if (!ROLE_NAMES.includes(role)) {
     return { ok: false, code: 400, error: `неизвестная роль «${role}»` };
   }
@@ -396,7 +401,7 @@ export async function startSingleExecutorPlan(
   if (opts.system === true) {
     const mode = ownerIntakeMode();
     if (mode !== "automatic") {
-      logEvent({ taskId, actorId, kind: "single_executor_plan_admission_refused", field: "manual", toValue: role });
+      logEvent({ taskId, actorId: eventActor, kind: "single_executor_plan_admission_refused", field: "manual", toValue: role });
       return {
         ok: false,
         code: 409,
@@ -420,7 +425,7 @@ export async function startSingleExecutorPlan(
   };
   const created = createDraftPlan(taskId, actorId, "single_executor", rationale.slice(0, 2000), null, graph);
   db.prepare("UPDATE task_collaboration_plan_nodes SET origin='single_executor' WHERE plan_id=?").run(created.id);
-  logEvent({ taskId, actorId, kind: "single_executor_plan_proposed", field: `revision:${created.revision}`, toValue: role });
+  logEvent({ taskId, actorId: eventActor, kind: "single_executor_plan_proposed", field: `revision:${created.revision}`, toValue: role });
 
   // Утверждение плана + материализация корневого узла. Тело утверждения —
   // то же, что и в /approve, без HTTP-слоя: наша функция — внутренний
@@ -444,13 +449,13 @@ export async function startSingleExecutorPlan(
         return { id: subtaskId, slotKey: "executor" };
       })();
     } catch (error) {
-      logEvent({ taskId, actorId, kind: "single_executor_plan_approve_failed", field: created.id, toValue: error instanceof Error ? error.message : String(error) });
+      logEvent({ taskId, actorId: eventActor, kind: "single_executor_plan_approve_failed", field: created.id, toValue: error instanceof Error ? error.message : String(error) });
       return null;
     }
   })();
   if (!rootSubtask) return { ok: false, code: 409, error: "Не удалось утвердить план из одного шага" };
 
-  const started = await startPlanSubtaskRun(rootSubtask.id, actorId);
+  const started = await startPlanSubtaskRun(rootSubtask.id, eventActor);
   if (!started.ok) return { ok: false, code: 409, error: started.error };
   // MAK-68: раньше assignee_id и dispatched_role выставлял dispatchTaskToPi,
   // который при переходе на план из одного шага вырезан. Без них карточка
@@ -465,7 +470,7 @@ export async function startSingleExecutorPlan(
             dispatched_by = ?, updated_at = datetime('now')
       WHERE id = ? AND assignee_id IS NULL`,
   ).run(roleUserId(role), role, actorId, taskId);
-  logEvent({ taskId, actorId, kind: "single_executor_plan_started", field: created.id, toValue: role });
+  logEvent({ taskId, actorId: eventActor, kind: "single_executor_plan_started", field: created.id, toValue: role });
   return { ok: true, planId: created.id, subtaskId: rootSubtask.id, runId: started.runId };
 }
 
