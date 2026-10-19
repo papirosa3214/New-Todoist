@@ -91,4 +91,3 @@ describe("веб-инструменты ролей", () => {
     for (const нужный of ["web_search", "web_get", "ocr", "youtube", "local_model"]) expect(список).toContain(нужный);
   });
 });
-=======
